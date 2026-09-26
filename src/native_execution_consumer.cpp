@@ -6389,20 +6389,19 @@ std::optional<NativeCurrentRefusal> NativeExecutionConsumer::validate_current_ex
     } else if (!std::holds_alternative<native_order::Flatten>(request.intent)) {
         return Refusal::UnsupportedRequest;
     }
+    // A BindCohort roster is read at the match, never fixed at the command:
+    // the evaluation's current shape (native_order.cpp current_shape) admits
+    // no such owner, so a cohort close is refused here, before its point is
+    // taken, rather than left unevaluated there (R5 lane PAR-ORDERS-2).
     if (!std::holds_alternative<native_order::Independent>(request.owner)
         && !std::holds_alternative<native_order::BindOpening>(request.owner)
-        && !std::holds_alternative<native_order::BindOpenings>(request.owner)
-        && !std::holds_alternative<native_order::BindCohort>(request.owner))
+        && !std::holds_alternative<native_order::BindOpenings>(request.owner))
         return Refusal::UnsupportedRequest;
     const auto target = read_target(engine, live);
     if (std::holds_alternative<native_order::OpeningClose>(live->authority)) {
         if (!target.opening || !target.opening->has_live_matching_lot) return Refusal::UnreadyOwner;
     } else if (std::holds_alternative<native_order::OpeningsClose>(live->authority)) {
         if (target.openings.empty()) return Refusal::InvalidSelection;
-        bool any_live = false;
-        for (const auto& row : target.openings) any_live |= row.has_live_matching_lot;
-        if (!any_live) return Refusal::UnreadyOwner;
-    } else if (std::holds_alternative<native_order::CohortClose>(live->authority)) {
         bool any_live = false;
         for (const auto& row : target.openings) any_live |= row.has_live_matching_lot;
         if (!any_live) return Refusal::UnreadyOwner;

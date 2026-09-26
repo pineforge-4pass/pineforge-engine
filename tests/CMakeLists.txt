@@ -1362,6 +1362,10 @@ list(APPEND TEST_SOURCES test_aggregated_entry_bar_index_tape)
 list(APPEND TEST_SOURCES test_magnified_aggregated_tape)
 #   G2-23 every condition that keeps request.security on the source evaluator.
 list(APPEND TEST_SOURCES test_adapter_security_route_conditions)
+# R5 lane PAR-ORDERS-2: a current execution refuses a request bound to a host
+# roster (BindCohort) instead of failing the run. Source-free, so it also runs
+# in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_current_cohort_refusal)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

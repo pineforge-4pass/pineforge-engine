@@ -249,7 +249,10 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # 282 = those 281 plus the one source-free TU of R5 lane K-OCA-KEEP
 # (test_native_group_keep_handle; INT26 pick, summed). It registers in release
 # too.
-KERNEL_MIN_TESTS = 282
+# 283 = those 282 plus R5 lane PAR-ORDERS-2's source-free
+# test_native_current_cohort_refusal (it registers in release too; INT26
+# pick, summed).
+KERNEL_MIN_TESTS = 283
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -378,7 +381,10 @@ KERNEL_MIN_TESTS = 282
 # 694 = those 693 plus the one R5 lane K-OCA-KEEP row KERNEL_MIN_TESTS lists
 # above; the C replace takes no options, so the lane adds no C row (INT26
 # pick, summed).
-RELEASE_MIN_TESTS = 694
+# 695 = those 694 plus R5 lane PAR-ORDERS-2's
+# test_native_current_cohort_refusal (see KERNEL_MIN_TESTS; INT26 pick,
+# summed).
+RELEASE_MIN_TESTS = 695
 # R5 lane H-DOCGATES (AUDIT4-opus perf N-7) raises both floors by one more:
 # test_native_runtime_ambient_lifo, the runtime blocks' LIFO death row, is
 # source-free, so it registers and runs in the kernel profile (279 -> 280) and

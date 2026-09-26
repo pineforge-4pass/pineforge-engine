@@ -23,8 +23,9 @@
 // entry filled whole in one slice (the control, which passed before the fix),
 // in three slices, or in two with the third still working at the close; no
 // sibling, an OCA pair of roster closes under either group effect, or a
-// bracket on the second entry. The host's terms facts and a read-only preview
-// of the same close name each member once. Source-free: the kernel-only
+// bracket on the second entry. The host's terms facts name each member once;
+// a read-only preview of the roster close is refused, as its execution is,
+// where the same selection's preview settles. Source-free: the kernel-only
 // profile registers the row.
 #include <pineforge/native_host.hpp>
 
@@ -520,8 +521,13 @@ void judge(const Shape& shape, bool show) {
     if (show) print_rows("rows, cohort | per-entry", cohort, per_entry);
 }
 
-// A read-only preview of the cohort close answers what the same selection's
-// preview answers, and the run it previews in completes either way.
+// A read-only preview of the cohort close is refused as its execution is: a
+// current execution admits no roster owner, whose members are read at the
+// match (R5 lane PAR-ORDERS-2; expectation corrected: the cohort preview
+// answered the selection's settlement -> it is refused as UnsupportedRequest,
+// because the preview settled a request whose execute_current failed the run,
+// "native current evaluated allowance mismatch"). The same selection's preview
+// settles, and the run each preview is taken in completes either way.
 long previews = 0;
 void preview(Side side, Others others) {
     Shape shape;
@@ -538,21 +544,11 @@ void preview(Side side, Others others) {
     if (!cohort.preview || !selected.preview) return;
     const auto& x = *cohort.preview;
     const auto& y = *selected.preview;
-    CHECK(!x.refusal && !y.refusal);
-    CHECK(!x.terms_rejection && !y.terms_rejection);
+    CHECK(x.refusal == NativeCurrentRefusal::UnsupportedRequest);
+    CHECK(!x.terms_rejection && !x.settlement_readiness && x.closed_row_pnl.empty());
+    CHECK(!y.refusal && !y.terms_rejection);
     CHECK(y.settlement_readiness == ex::Status::Applied);
-    CHECK(x.settlement_readiness == y.settlement_readiness);
-    if (x.settlement_readiness != y.settlement_readiness) {
-        std::printf("  [%s] cohort preview readiness=%d, selected preview readiness=%d\n",
-                    scenario.c_str(),
-                    x.settlement_readiness ? int(*x.settlement_readiness) : -1,
-                    y.settlement_readiness ? int(*y.settlement_readiness) : -1);
-    }
-    CHECK(x.closed_row_pnl == y.closed_row_pnl);
-    CHECK(x.closed_row_pnl.size() == (others == Others::Enrolled ? 4u : 3u));
-    CHECK(x.account.realized_balance == y.account.realized_balance);
-    CHECK(x.account.marked_equity == y.account.marked_equity);
-    CHECK(x.account.signed_units_after == y.account.signed_units_after);
+    CHECK(y.closed_row_pnl.size() == (others == Others::Enrolled ? 4u : 3u));
     ++previews;
 }
 
