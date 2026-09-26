@@ -16,30 +16,36 @@ stderr.
 
 ## Pull (prebuilt)
 
-Each push to `main` (and every semver tag `vX.Y.Z`) publishes a
-multi-arch image to GitHub Container Registry:
+This repository's workflows publish no image. The prebuilt image of this
+harness is the release hub's, `ghcr.io/pineforge-4pass/pineforge-release`:
+pineforge-release builds it from each engine release's static-lib tarball
+with the `pineforge-codegen` of the same version, for Linux `amd64` and
+`arm64`.
 
 ```bash
-docker pull ghcr.io/pineforge-4pass/pineforge-engine:latest
+docker pull ghcr.io/pineforge-4pass/pineforge-release:latest
 # or pin a release:
-docker pull ghcr.io/pineforge-4pass/pineforge-engine:0.1.0
+docker pull ghcr.io/pineforge-4pass/pineforge-release:X.Y.Z
 ```
 
-Available tags: `latest`, `main`, `vX.Y.Z`, `X.Y`, and `sha-<short>`.
-Linux `amd64` + `arm64`. Image must be marked public in the repo's
-package settings for anonymous pulls; otherwise `docker login ghcr.io`
-with a PAT (`read:packages` scope) first.
+A stable release is tagged `X.Y.Z`, `X.Y`, `latest`,
+`engine<E>-codegen<C>` and `sha-<short>`; a release candidate only its exact
+version (for example `1.0.0-rc.1`), `engine<E>-codegen<C>` and
+`sha-<short>`, never `latest`.
 
 ## Build (from source)
 
-```bash
-docker build -t pineforge -f docker/Dockerfile .
-```
+This tree keeps the harness the image runs (`docker/entrypoint.sh`,
+`docker/run_json.py`) but no Dockerfile: the engine is a library and its
+release builds no image (#38). The image's Dockerfile is pineforge-release's
+`docker/Dockerfile`. It vendors this harness from the pinned engine release,
+fetches that release's static-lib tarball, and adds `g++`, Eigen, `python3`
+and the `pineforge-codegen` transpiler; clone that repository to build the
+image yourself. Per-run transpile+compile is ~1 second.
 
-Multi-stage build: stage 1 compiles `libpineforge.a`, stage 2 keeps only the
-static lib, public headers, `g++`, `python3`, the `pineforge-codegen`
-transpiler, and the JSON harness. One-time cost; per-run transpile+compile is
-~1 second.
+The examples below call the image `pineforge`: tag the pulled one that way
+(`docker tag ghcr.io/pineforge-4pass/pineforge-release:latest pineforge`) or
+write its full name.
 
 ## Run
 
@@ -321,4 +327,6 @@ docker run --rm \
   must resolve at compile time because `<pineforge/engine.hpp>`
   transitively includes it.
 - Reproducibility: the libpineforge inside the image is pinned by the
-  image SHA. Tag releases (`pineforge:0.1.0`) for stable backtests.
+  image SHA, and its `io.pineforge.engine.version` /
+  `io.pineforge.codegen.version` labels name the pair. Pull a release tag
+  (`ghcr.io/pineforge-4pass/pineforge-release:X.Y.Z`) for stable backtests.

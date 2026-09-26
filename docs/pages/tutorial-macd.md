@@ -85,21 +85,25 @@ Numbers depend on the OHLCV snapshot — refresh with
 
 ## Path B — Docker
 
-Mount the strategy + OHLCV into the published runtime image; get a JSON
-report on stdout.
+Mount the strategy + OHLCV into the release hub's image,
+`ghcr.io/pineforge-4pass/pineforge-release` (this runtime plus the
+`pineforge-codegen` of the same version; this repository publishes no image
+of its own); get a JSON report on stdout.
 
 ```bash
 docker run --rm \
-  -v "$(pwd)/tutorial/macd/generated.cpp:/in/strategy.cpp:ro" \
+  -v "$(pwd)/tutorial/macd/strategy.pine:/in/strategy.pine:ro" \
   -v "$(pwd)/tutorial/data/btcusdt_15m_7d.csv:/in/ohlcv.csv:ro" \
-  ghcr.io/pineforge-4pass/pineforge-engine:latest > report.json
+  ghcr.io/pineforge-4pass/pineforge-release:latest > report.json
 
 jq '.summary' report.json
 ```
 
-Same engine, identical numbers. Build the image locally instead with
-`docker build -t pineforge -f docker/Dockerfile .` if you don't want to
-pull from GHCR.
+The image transpiles the `.pine` with its own codegen and runs it on its own
+engine, so the image tagged with this tree's release gives Path A's numbers.
+To build the image yourself, use pineforge-release's `docker/Dockerfile`,
+which vendors this tree's `docker/` harness; this repository ships no
+Dockerfile.
 
 ## Inside run.py — annotated walkthrough
 
