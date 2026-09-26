@@ -16564,10 +16564,34 @@ void PineExecutionAdapter::flush_pooc_marketable_limit_entry_fills(
     // a lone marketable entry: when a second entry of this bar is marketable at
     // the same close, which fills first is unmeasured, and the stops keep the
     // next open's both-marketable arbitration (lane L9b's P0-B shapes).
+    // A pure stop entry placed while the book held the other side fills at
+    // that close as well, sized as its row is: a plain reversal here, and one
+    // a same-bar strategy.close or close_all of the held side precedes right
+    // after that close fills (fill_pooc_close_entries from on_applied), as
+    // TradingView books both (R5 lane PAR-ORDERS-2: lab tv
+    // pa2-i3-rev-s-{chart,mag} and pa2-i3-flip-{s,l}-{chart,mag}, corpus probe
+    // 96, which filled it at the next open; pa2-i3-flip-unreached-* keep an
+    // unreached one resting). Only without calc_on_order_fills, the route the
+    // tapes cover.
     if (!config_.process_orders_on_close || stream_mode_ || coof_recalc_active_) return;
-    if (detail::run_position(require_host()).signed_units != 0.0) return;
-    const double raw_close = bar.close;
+    fill_pooc_close_entries(bar.close, context, /*after_close=*/false);
+}
+
+void PineExecutionAdapter::fill_pooc_close_entries(
+        double raw_close, const NativeDecisionContext& context, bool after_close) {
+    const double book_before = detail::run_position(require_host()).signed_units;
     if (!finite_positive(raw_close)) return;
+    // A same-bar close of the held side fills at this close after this pass:
+    // the reversing stops it precedes wait for its fill.
+    const bool close_follows = !after_close && std::any_of(
+        live_handles_.begin(), live_handles_.end(),
+        [&](const native_order::RequestHandle& handle) {
+            const auto found = placement_.find(handle.incarnation);
+            return found != placement_.end()
+                && (found->second.family == PineOrderFamily::Close
+                    || found->second.family == PineOrderFamily::CloseAll)
+                && found->second.projection_created_bar == projection_bar_index(context);
+        });
     const double tick = staged_.syminfo.mintick;
     const double close_tick = source_bar_fill_tick(raw_close, tick);
     std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>> marketable;
@@ -16578,16 +16602,23 @@ void PineExecutionAdapter::flush_pooc_marketable_limit_entry_fills(
         if (row.family != PineOrderFamily::Entry || !row.opening) continue;
         if (row.birth.from_fill()) continue;
         if (row.projection_created_bar != projection_bar_index(context)) continue;
-        if (row.projection_position_side
-            != static_cast<std::int32_t>(PositionSide::FLAT)) continue;
         const bool pure_limit = !config_.calc_on_order_fills
             && finite_positive(row.exit_levels.limit)
             && !std::isfinite(row.exit_levels.stop);
         const bool pure_stop = finite_positive(row.exit_levels.stop)
             && !std::isfinite(row.exit_levels.limit);
         if (!pure_limit && !pure_stop) continue;
-        if (row.direction_gate || row.terms_priced_reverse
-            || row.paired_flat_market_candidate) continue;
+        const bool placed_flat = row.projection_position_side
+            == static_cast<std::int32_t>(PositionSide::FLAT);
+        const bool placed_against = row.projection_position_side
+            == static_cast<std::int32_t>(row.is_long ? PositionSide::SHORT
+                                                     : PositionSide::LONG);
+        const bool reversing_stop = placed_against && pure_stop
+            && !config_.calc_on_order_fills && (after_close || !close_follows)
+            && (book_before == 0.0 || (book_before > 0.0) != row.is_long);
+        if (placed_flat ? (after_close || book_before != 0.0) : !reversing_stop) continue;
+        if (row.direction_gate || row.paired_flat_market_candidate) continue;
+        if (row.terms_priced_reverse && !reversing_stop) continue;
         const bool at_close = pure_limit
             ? (row.is_long ? raw_close <= row.exit_levels.limit
                            : raw_close >= row.exit_levels.limit)
@@ -16603,11 +16634,13 @@ void PineExecutionAdapter::flush_pooc_marketable_limit_entry_fills(
             }), marketable.end());
     }
     for (auto& candidate : marketable) {
-        // An earlier fill of this pass leaves the book non-flat; the owner's
-        // later rows are then ordinary pending orders again.
-        if (detail::run_position(require_host()).signed_units != 0.0) break;
+        // An earlier fill of this pass moves the book; the owner's later rows
+        // are then ordinary pending orders again.
+        if (detail::run_position(require_host()).signed_units != book_before) break;
         const auto& row = candidate.second;
-        const bool host_sized = row.deferred_cohort
+        // A reversal's frozen transaction is resolved by the host, as at the
+        // next open (resolve_execution_terms reads the copied row).
+        const bool host_sized = row.deferred_cohort || row.terms_priced_reverse
             || row.qty_type == static_cast<int>(QtyType::CASH)
             || row.qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY);
         if (!host_sized && !finite_positive(row.requested_qty)) continue;
@@ -16636,6 +16669,13 @@ void PineExecutionAdapter::flush_pooc_marketable_limit_entry_fills(
         const auto accepted = submit_or_replace(
             std::move(request), std::move(immediate), true, row.source_id);
         if (accepted) {
+            // The replacement is the row's own order executed at this close:
+            // it keeps the side and carried units it was placed against,
+            // which its reversal sizing reads, when a same-bar close has
+            // flattened the book since.
+            auto& placed = placement_.at(accepted->incarnation);
+            placed.projection_position_side = row.projection_position_side;
+            placed.projection_tv_carry_qty = row.projection_tv_carry_qty;
             (void)require_host().execute_current(
                 {*accepted, NativeCurrentPriceRule::NearestTick});
         }
@@ -18447,6 +18487,18 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 }
             }
         }
+    }
+    // A same-bar strategy.close or close_all that fills at a
+    // process_orders_on_close close is followed there by the reversing stop
+    // entries the close pass left for it (R5 lane PAR-ORDERS-2).
+    if (placement_snapshot && event.closed_units > 0.0
+        && (placement_snapshot->family == PineOrderFamily::Close
+            || placement_snapshot->family == PineOrderFamily::CloseAll)
+        && placement_snapshot->projection_created_bar == projection_bar_index(context)
+        && config_.process_orders_on_close && !config_.calc_on_order_fills
+        && !stream_mode_ && !coof_recalc_active_
+        && event.cursor.point.path_phase == NativePathPhase::Close) {
+        fill_pooc_close_entries(event.raw_price, context, /*after_close=*/true);
     }
 }
 

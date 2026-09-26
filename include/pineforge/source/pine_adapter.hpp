@@ -1963,6 +1963,10 @@ private:
     void admit_deferred_open_marketable_sells();
     void rearm_throttled_reopens();
     void flush_pooc_marketable_limit_entry_fills(const Bar&, const NativeDecisionContext&);
+    // The close pass's fills at a close tick: its own pass, or (after_close)
+    // the reversing stops a same-bar close's fill releases.
+    void fill_pooc_close_entries(double raw_close, const NativeDecisionContext&,
+                                 bool after_close);
     void flush_pooc_marketable_exit_fills(const Bar&, const NativeDecisionContext&);
     void record_market_review(admission::Checkpoint, int,
                               const std::vector<native_order::RequestHandle>&);

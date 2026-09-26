@@ -1,0 +1,16 @@
+{
+  "title": "PA2 I3 rev-s-chart",
+  "slug": "pa2-i3-rev-s-chart",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T00:56:30.405Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-07-08"
+  },
+  "pine_sha256": "c36485be842883780e340f451a874089247883fde3c319676a68cb42a598d39d",
+  "tv_trades_sha256": "e4d9c73535ca8fb6fb98bf23951822c3fcbe9a5742575182a1aa1894715669e5",
+  "tv_trades_rows": 44
+}

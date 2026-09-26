@@ -153,7 +153,7 @@ What each gate refuses:
 
 `ci_verify.py` counts the CTest rows that actually **ran** and fails below a
 floor — `KERNEL_MIN_TESTS` ci_verify.py:255 and `RELEASE_MIN_TESTS`
-ci_verify.py:391.
+ci_verify.py:393.
 A deleted or silently skipped row is a failure, not a quieter run. If your
 change adds rows, raise the floor in the same commit and say by how much; if it
 legitimately removes one, lower it deliberately and say why. `--min-tests`

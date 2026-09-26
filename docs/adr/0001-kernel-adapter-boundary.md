@@ -245,7 +245,7 @@ kernel and own these quirks, each at its site:
   quantities leave no remnant row on a `lab tv` tape, which the Pine host books row for row
   while a bare host books four 2.8e-17-unit dust rows beside them.
 - **Close reservations.** `strategy.close` callsite batching, two-call provenance and the entry-id
-  ledger (`close_logical_units_` `pine_adapter.hpp:2024-2035`); the POOC reservation-growth population predicate
+  ledger (`close_logical_units_` `pine_adapter.hpp:2028-2039`); the POOC reservation-growth population predicate
   (`select_reservation_growth_sources` src/compat/pine/reservation_expansion.cpp:9).
 - **Margin.** The kernel owns the margin *mechanism* — the level solve, the check points, the
   kernel request, its re-pricing, the receipt — and the adapter answers its three policy hooks
@@ -261,7 +261,7 @@ kernel and own these quirks, each at its site:
   margin since F7), while the roll point measures at the remaining path's adverse mark (MG-FX:
   0.4116 @ 97 there against TradingView's 0.3996 @ 100). What has no kernel check point at all
   stays adapter-side: the `process_orders_on_close` chronology exception
-  (`non_pooc_commissioned_short` `pine_adapter.cpp:16923`) and
+  (`non_pooc_commissioned_short` `pine_adapter.cpp:16963`) and
   the 1x-long money call — plus the TV admission scopes
   (`explicit_pair_scope` `src/compat/pine/market_admission.cpp:33-46`) and the review fold they feed
   (`awaits_pair_review` `:67-72`, `fold_admission_history` `:79-136`).
@@ -337,7 +337,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   the lines 73-180 earlier drafts cited are and were live code (`ClosedLotExcursionFacts`,
   `PyramidEntry`, `Trade`, each with its own doc). The arithmetic is
   adapter-side (`source_money_round` `pine_adapter.cpp:454-460`). `strategy.close` batching and the entry-id ledger
-  are **gone** from the kernel — the ledger is adapter state (`close_logical_units_` `pine_adapter.hpp:2024-2035`) and
+  are **gone** from the kernel — the ledger is adapter state (`close_logical_units_` `pine_adapter.hpp:2028-2039`) and
   only names survive in comments. The TradingView margin-call toggle remains source-owned as
   `source::PineStrategyHost::set_margin_call_enabled` (`pine_strategy_host.hpp:424`);
   what enables the generic model is the presence of `NativeRunSpec::margin`. So is the string-sentinel decoding of adapter-written comments:
