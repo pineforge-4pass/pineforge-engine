@@ -312,7 +312,11 @@ Since R5 lane PAR-MARGIN the adapter keeps the placement quantity above
 100 % as well: eight `lab tv` tapes of a 390-400 % stop on NYSE:F
 (`tests/fixtures/margin_entry_bar/pm-m10-*`) open the placement quotient, never
 the fill's (`tests/test_adapter_margin_schedule_differential.cpp`, "M10 on
-tapes").
+tapes"). The margin call those tapes book at a half-cent low is TradingView's
+market execution at that print, so since R5 lane PAR-MARGIN-2 the pre-open
+slice books the print's nearest tick (12.105 books 12.11), where a stop or
+limit crossed at its own off-grid level keeps the directional tick
+(`tests/fixtures/half_tick_rounding`).
 
 ```text
 design-declined-reversal-close-leg: called at the KI-54 reversal-decline

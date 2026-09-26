@@ -72,6 +72,9 @@
  *     TradingView intrabars: its own request.security_lower_tf "2" arrays
  *       equal the feed's minute pairs owned by the chart bar of their last
  *       minute;
+ *     half-tick fills: a stop or limit at a half-tick level books the
+ *       directional tick, a fill at a half-cent print books its nearest tick,
+ *       on NYSE:F and CME_MINI:ES1! -- the margin call is the second kind.
  *
  * Source-bound (includes pineforge/source): release profile only.
  */
@@ -112,6 +115,7 @@ struct FeedBar {
 #include "fixtures/intrabar_margin/bars_1m.inc"
 #include "fixtures/margin_entry_bar/pm2_bars.inc"
 #include "fixtures/intrabar_margin/pm2_bars_1m.inc"
+#include "fixtures/half_tick_rounding/bars.inc"
 
 // ------------------------------------------------------------ TV policy
 // The twin's TradingView money and slice (test_native_margin_hooks_twin.cpp,
@@ -1055,19 +1059,19 @@ void m7_tradingview_tapes() {
 // fill, and so did the adapter until R5 lane PAR-MARGIN: 0 of 8 books (3481,
 // 4385, 3200, 3358; 3842, 3430, 3947, 3728), with margin calls sized to match
 // or fired where TradingView fired none. It now freezes above 100 % too and
-// books every tape's rows: the same bars, quantities and signals, and the
-// same prices but two.
-//   The two (recorded, open): a margin call at an exact half-cent low -- 1007's
-//   12.105, 0501's 10.025 -- books a tick below TradingView (12.10 and 10.02
-//   against 12.11 and 10.03). Both decimals are stored a hair above the half
-//   cent, and TradingView rounds the stored value to its nearest tick; 0424's
-//   9.815, stored a hair below, books 9.81 on both sides.
+// books every tape's rows: the same bars, quantities, signals and prices.
+//   Two of the prices came with R5 lane PAR-MARGIN-2: a margin call at an
+//   exact half-cent low -- 1007's 12.105, 0501's 10.025 -- booked a tick below
+//   TradingView (12.10 and 10.02 against 12.11 and 10.03). TradingView's
+//   margin call is a MARKET execution at that print and books the print's
+//   nearest tick (its raw report: 12.11); the pre-open slice took the stop
+//   level's adverse tick instead. 0424's 9.815, stored a hair below the half
+//   cent, books 9.81 either way. The prices are compared exactly now.
 struct M10Tape {
     const char* slug;
     const FeedBar* bars;
     double percent;
     bool marketable;
-    int half_cent_row;   // the row booked a tick below the tape's; -1: none
 };
 
 double tape_entry_price(const char* slug) {
@@ -1086,14 +1090,14 @@ double tape_entry_price(const char* slug) {
 
 void m10_tradingview_tapes() {
     const M10Tape tapes[] = {
-        {"pm-m10-f-k4-0402", kM10_k4_0402, 400.0, true, -1},
-        {"pm-m10-f-k4-0410", kM10_k4_0410, 400.0, true, -1},
-        {"pm-m10-f-k4-1007", kM10_k4_1007, 400.0, true, 0},
-        {"pm-m10-f-k4-0309", kM10_k4_0309, 400.0, true, -1},
-        {"pm-m10-f-gapup-0501", kM10_gapup_0501, 390.0, false, 0},
-        {"pm-m10-f-gapup-0331", kM10_gapup_0331, 390.0, false, -1},
-        {"pm-m10-f-gapup-0424", kM10_gapup_0424, 390.0, false, -1},
-        {"pm-m10-f-gapup-0527", kM10_gapup_0527, 390.0, false, -1},
+        {"pm-m10-f-k4-0402", kM10_k4_0402, 400.0, true},
+        {"pm-m10-f-k4-0410", kM10_k4_0410, 400.0, true},
+        {"pm-m10-f-k4-1007", kM10_k4_1007, 400.0, true},
+        {"pm-m10-f-k4-0309", kM10_k4_0309, 400.0, true},
+        {"pm-m10-f-gapup-0501", kM10_gapup_0501, 390.0, false},
+        {"pm-m10-f-gapup-0331", kM10_gapup_0331, 390.0, false},
+        {"pm-m10-f-gapup-0424", kM10_gapup_0424, 390.0, false},
+        {"pm-m10-f-gapup-0527", kM10_gapup_0527, 390.0, false},
     };
     for (const M10Tape& tape : tapes) {
         std::printf("-- M10 tape %s (%.0f %%, a stop %s when placed)\n", tape.slug, tape.percent,
@@ -1142,12 +1146,7 @@ void m10_tradingview_tapes() {
             CHECK(adapter[i].bar == tv[i].bar);
             CHECK(std::abs(adapter[i].qty - tv[i].qty) <= 5e-5);
             CHECK((tv[i].signal == "Margin call") == (adapter[i].signal == "Margin call"));
-            if (static_cast<int>(i) == tape.half_cent_row) {
-                // Recorded: a tick below the tape's price.
-                CHECK(std::abs(adapter[i].price - (tv[i].price - 0.01)) <= 5e-3);
-            } else {
-                CHECK(std::abs(adapter[i].price - tv[i].price) <= 5e-3);
-            }
+            CHECK(std::abs(adapter[i].price - tv[i].price) <= 1e-9);
         }
     }
 }
@@ -1834,6 +1833,53 @@ void tradingview_intrabars() {
     }
 }
 
+// ---- item 2: the half tick (tests/fixtures/half_tick_rounding)
+// A margin call at an exact half-cent low booked a tick below TradingView
+// (12.105 -> 12.10 where TradingView books 12.11; 10.025 -> 10.02 against
+// 10.03) because the pre-open slice's fill took the stop-level rule
+// (directional_tick, adverse) while TradingView's margin call is a MARKET
+// execution at the print, which books the print's nearest tick. The two
+// rules are both TradingView's, each for its own fill:
+//   pm2-round-f / -es     a stop or limit crossed at a half-tick LEVEL books
+//                         the directional tick (stop adverse, limit
+//                         favourable), on NYSE:F (mintick 0.01) and
+//                         CME_MINI:ES1! (mintick 0.25), 8 of 8 -- as the
+//                         adapter always did;
+//   pm2-round-f-print     a market order, and a stop already through the open,
+//                         filled at a half-cent PRINT books its nearest tick,
+//                         3 of 3 -- as the adapter always did too.
+// So the helper stays; the margin slice now takes the print rule
+// (source_margin_fill_price), and the M10 tapes above book 12.11 and 10.03.
+struct RoundTape {
+    const char* slug;
+    const FeedBar* bars;
+    int n;
+    double mintick;
+};
+
+void half_tick_fills_on_tapes() {
+    const std::string dir = std::string(PINEFORGE_HM_M7A_FIXTURE_DIR) + "/../half_tick_rounding";
+    const RoundTape tapes[] = {
+        {"pm2-round-f", kRound_f, static_cast<int>(sizeof kRound_f / sizeof kRound_f[0]), 0.01},
+        {"pm2-round-es", kRound_es, static_cast<int>(sizeof kRound_es / sizeof kRound_es[0]), 0.25},
+        {"pm2-round-f-print", kRound_f_print,
+         static_cast<int>(sizeof kRound_f_print / sizeof kRound_f_print[0]), 0.01},
+    };
+    for (const RoundTape& tape : tapes) {
+        std::printf("-- half-tick fills %s\n", tape.slug);
+        const std::string at = dir + "/" + tape.slug;
+        const ProbeScript ps = parse_probe(at + "/strategy.pine");
+        REQUIRE(ps.entries.size() >= 3);
+        const auto adapter = run_probe(ps, feed_bars(tape.bars, tape.n), false, 0.0, tape.mintick);
+        const auto tv = tape_exit_rows(at);
+        print_exits("tape", tv);
+        print_exits("adapter", adapter);
+        // Every trade, its entry (where the half tick is) and its exit.
+        CHECK(adapter.size() == ps.entries.size());
+        CHECK(same_exits(adapter, tv));
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -1855,6 +1901,7 @@ int main() {
     test("PAR-MARGIN-2 M7 shapes", m7_shapes_on_tapes);
     test("PAR-MARGIN-2 intrabar shapes", intrabar_shapes_on_tapes);
     test("PAR-MARGIN-2 TradingView intrabars", tradingview_intrabars);
+    test("PAR-MARGIN-2 half-tick fills", half_tick_fills_on_tapes);
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

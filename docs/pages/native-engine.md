@@ -1483,7 +1483,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:14103-14136`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:14119-14152`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -1547,7 +1547,11 @@ minute on the corpus, so six tapes part where the two grids resolve a crossing
 differently -- recorded, not fixed here: sampling the magnifier at
 TradingView's intrabar timeframe moves every magnified fill, not only margin
 calls. A full-margin long (its one-contract money call) and a short under
-`process_orders_on_close` keep their routes there.
+`process_orders_on_close` keep their routes there. A margin call is a market
+execution at the print it fired at, so an off-grid print books its nearest
+tick (12.105 books 12.11), as every TradingView market fill does, while a stop
+or limit crossed at its own off-grid level keeps its directional tick
+(`tests/fixtures/half_tick_rounding`).
 
 ### Risk limits
 

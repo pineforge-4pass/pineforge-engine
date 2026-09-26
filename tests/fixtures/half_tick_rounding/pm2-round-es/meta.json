@@ -1,0 +1,16 @@
+{
+  "title": "pm2-round-es",
+  "slug": "pm2-round-es",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T01:09:53.413Z",
+  "chart": {
+    "symbol": "CME_MINI:ES1!",
+    "interval": "15",
+    "from": "2025-10-05",
+    "to": "2025-10-10"
+  },
+  "pine_sha256": "e727be14dc2888fab447251ca85bf0c77d58229aa5d1d9245441b16a2c7334df",
+  "tv_trades_sha256": "9774fca0167ddff8804630438639d79e2010f21a3d4b05fb2fea6bf4ac874366",
+  "tv_trades_rows": 8
+}

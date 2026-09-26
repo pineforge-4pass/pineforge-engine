@@ -1,0 +1,16 @@
+{
+  "title": "pm2-round-f",
+  "slug": "pm2-round-f",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T01:11:14.496Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-09-29",
+    "to": "2025-10-10"
+  },
+  "pine_sha256": "ad92f7cceacc7cac1f63cf6f4870d0f6a74386852a7a512f62d2010e4308c75c",
+  "tv_trades_sha256": "e8377a83d2be83c41386e8892d9f33e1cd80c9d821a83e3cb346e2c1323b2cd4",
+  "tv_trades_rows": 8
+}

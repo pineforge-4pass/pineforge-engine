@@ -1,0 +1,19 @@
+// R5 lane PAR-MARGIN-2 item 2: how TradingView fills an order at a sub-tick PRINT (NYSE:F, mintick 0.01,
+// half-cent opens): a market order, and a stop already marketable when placed, each filled at the next
+// bar's half-cent open, closed 2 bars later.
+//@version=6
+strategy("pm2-round-f-print", overlay=true, initial_capital=1000000,
+     default_qty_type=strategy.fixed, default_qty_value=100, pyramiding=1,
+     commission_value=0, slippage=0, process_orders_on_close=false)
+if time == timestamp("UTC", 2025, 9, 11, 18, 30) and strategy.position_size == 0
+    strategy.entry("MS", strategy.short)
+if strategy.position_size != 0 and strategy.opentrades.entry_id(0) == "MS" and bar_index - strategy.opentrades.entry_bar_index(0) >= 2
+    strategy.close("MS", comment = "t")
+if time == timestamp("UTC", 2025, 9, 12, 13, 45) and strategy.position_size == 0
+    strategy.entry("GS", strategy.short, stop = close + 0.10)
+if strategy.position_size != 0 and strategy.opentrades.entry_id(0) == "GS" and bar_index - strategy.opentrades.entry_bar_index(0) >= 2
+    strategy.close("GS", comment = "t")
+if time == timestamp("UTC", 2025, 10, 24, 19, 30) and strategy.position_size == 0
+    strategy.entry("MB", strategy.long)
+if strategy.position_size != 0 and strategy.opentrades.entry_id(0) == "MB" and bar_index - strategy.opentrades.entry_bar_index(0) >= 2
+    strategy.close("MB", comment = "t")

@@ -60,6 +60,17 @@ double tv_nearest_tick(double value, double tick) {
     const double k = std::floor(value / tick + 0.5);
     return k * tick == value ? value : k * tick;
 }
+// source_bar_fill_tick (pine_adapter.cpp): a print on the ladder is its own
+// tick, any other books its nearest one as the decimal quotient k / (1 / tick).
+double tv_bar_fill_tick(double value, double tick) {
+    if (!std::isfinite(value) || !(tick > 0.0)) return value;
+    const double k = std::floor(value / tick + 0.5);
+    if (k * tick == value) return value;
+    const double inverse = 1.0 / tick;
+    const double n = std::floor(inverse + 0.5);
+    if (n > 0.0 && std::abs(inverse - n) <= 1e-6 * n) return k / n;
+    return k * tick;
+}
 double tv_directional_tick(double value, double tick, bool upward) {
     if (!std::isfinite(value) || !(tick > 0.0)) return value;
     const double scaled = value / tick;
@@ -216,7 +227,10 @@ struct TvNativeHost final : Host {
         // as the adapter builds its forced price from its own mark_price.
         const double fire = facts.trigger_level ? *facts.trigger_level : facts.raw_price;
         if (config.slippage == 0) {
-            return {fire, std::nullopt, no::OpeningShape::Transact};
+            // A margin call is a MARKET execution at its print: the print's
+            // nearest tick (R5 lane PAR-MARGIN-2), the identity on the ladder.
+            return {tv_bar_fill_tick(fire, config.mintick), std::nullopt,
+                    no::OpeningShape::Transact};
         }
         const bool close_is_buy = facts.position.signed_units < 0.0;
         const double rounded = tv_nearest_tick(fire, config.mintick);
@@ -496,7 +510,10 @@ void twin_rounded_money_and_whole_drop() {
     const auto rows = run_twin("MG-B/G", config, bars, &plain);
     REQUIRE(rows.size() == 1);
     CHECK(rows[0].units == 1.0);
-    CHECK(rows[0].price == 99.999999996);
+    // Booked at the print's nearest tick: TradingView's margin call is a
+    // market execution at the print it fired at (R5 lane PAR-MARGIN-2,
+    // tests/fixtures/half_tick_rounding). The raw 99.999999996 until then.
+    CHECK(rows[0].price == 100.0);
     // The kernel's own money never makes this call.
     CHECK(plain.empty());
 }

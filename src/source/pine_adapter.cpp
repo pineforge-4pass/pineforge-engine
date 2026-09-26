@@ -12120,7 +12120,18 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         const bool open_gapped = (!non_open || armed_after_open_fill)
             && std::isfinite(level)
             && (facts.is_buy ? open_px >= level : open_px <= level);
-        if (!open_gapped) return source_stop_fill();
+        // The pre-open margin slice rests at the raw adverse print
+        // (schedule_preopen_margin_slice) but is TradingView's margin call, a
+        // MARKET execution at that print: the print's nearest tick, then the
+        // exit side's slippage (source_margin_fill_price), not a stop level's
+        // adverse tick -- 12.105 books 12.11 (lab tv tapes pm-m10-f-k4-1007
+        // and -gapup-0501, R5 lane PAR-MARGIN-2). A stop crossed at its own
+        // off-grid LEVEL keeps the directional rule (pm2-round-f, -es).
+        if (!open_gapped) {
+            return source.family == PineOrderFamily::Margin
+                ? source_margin_fill_price(level, facts.is_buy)
+                : source_stop_fill();
+        }
         // ab9714be try_exit_open_gap_fill books bar.open (the script-bar
         // open), even when the matching sample is a later one-price tick.
         const double rounded = source_bar_fill_tick(
@@ -14124,10 +14135,15 @@ double PineExecutionAdapter::source_margin_units(
 // The forced execution price of a liquidation that fired at `fire`: the fire
 // price on the chart tick ladder, then the EXIT side's own market slippage
 // (ab9714be pine_fills.cpp:1712-1726 and :2649-2658). Reducing a long is a
-// sell (slippage subtracts); reducing a short is a buy (it adds). At zero
-// slippage this is the identity on the ladder.
+// sell (slippage subtracts); reducing a short is a buy (it adds). A margin
+// call is a MARKET execution at the print it fired at, so an off-ladder print
+// (a half-cent low) books its nearest tick, as every TradingView market fill
+// at a print does -- 12.105 books 12.11, 9.815 books 9.81 (lab tv tapes
+// tests/fixtures/margin_entry_bar/pm-m10-f-k4-1007, -gapup-0501, -gapup-0424
+// and, beyond margin calls, pm2-round-f-print; R5 lane PAR-MARGIN-2). A print
+// on the ladder is its own tick (source_bar_fill_tick is idempotent there).
 double PineExecutionAdapter::source_margin_fill_price(double fire, bool close_is_buy) const {
-    if (config_.slippage == 0) return fire;
+    if (config_.slippage == 0) return source_bar_fill_tick(fire, staged_.syminfo.mintick);
     const double rounded = source_bar_fill_tick(fire, staged_.syminfo.mintick);
     const double slipped = rounded + (close_is_buy ? 1.0 : -1.0)
         * config_.slippage * staged_.syminfo.mintick;

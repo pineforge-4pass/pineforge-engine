@@ -1,0 +1,23 @@
+// R5 lane PAR-MARGIN-2 item 2: how TradingView fills a stop or a limit whose level is a HALF TICK
+// (CME_MINI:ES1!, mintick 0.25). Each order is placed on a signal close, not marketable there, at a half-tick
+// level strictly inside the next bar's range on its crossing side (never gapped), and closed 2 bars later.
+//@version=6
+strategy("pm2-round-es", overlay=true, initial_capital=1000000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1,
+     commission_value=0, slippage=0, process_orders_on_close=false)
+if time == timestamp("UTC", 2025, 10, 7, 9, 15) and strategy.position_size == 0
+    strategy.entry("BS", strategy.long, stop = 6785.625)
+if strategy.position_size != 0 and strategy.opentrades.entry_id(0) == "BS" and bar_index - strategy.opentrades.entry_bar_index(0) >= 2
+    strategy.close("BS", comment = "t")
+if time == timestamp("UTC", 2025, 10, 7, 10, 15) and strategy.position_size == 0
+    strategy.entry("SS", strategy.short, stop = 6786.625)
+if strategy.position_size != 0 and strategy.opentrades.entry_id(0) == "SS" and bar_index - strategy.opentrades.entry_bar_index(0) >= 2
+    strategy.close("SS", comment = "t")
+if time == timestamp("UTC", 2025, 10, 7, 11, 15) and strategy.position_size == 0
+    strategy.entry("BL", strategy.long, limit = 6785.375)
+if strategy.position_size != 0 and strategy.opentrades.entry_id(0) == "BL" and bar_index - strategy.opentrades.entry_bar_index(0) >= 2
+    strategy.close("BL", comment = "t")
+if time == timestamp("UTC", 2025, 10, 7, 12, 15) and strategy.position_size == 0
+    strategy.entry("SL", strategy.short, limit = 6791.625)
+if strategy.position_size != 0 and strategy.opentrades.entry_id(0) == "SL" and bar_index - strategy.opentrades.entry_bar_index(0) >= 2
+    strategy.close("SL", comment = "t")
