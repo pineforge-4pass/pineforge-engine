@@ -236,8 +236,14 @@ The adapter does not declare the kernel's quantity tolerance (ADR-0001,
 "Kernel capabilities the Pine adapter does not declare"): its FIFO endpoint
 test settles a snapped prefix as a selected `Flatten`, charged the lots it
 holds, where the tolerance charges a `Reduce` its request, and its sweep
-erases dust without a row, where the kernel books every lot it closes. Whether
-the adapter can move onto the tolerance is a measurement for a later lane.
+erases dust without a row, where the kernel books every lot it closes. R5
+lane H-THIN measured the sweep with every other quantity epsilon of the Pine
+host and adapter, 85 comparisons, each evaluated in its epsilon form and its
+exact form over 5,500 seeded runs and the 610 CTest rows that link the
+library (design §3.9): 32 decide somewhere, 50 never do, three are reached
+by nothing. Made exact, the sweep moves 30 of the runs and fails its tape
+row, as do the lot floor's, the percent-exit floor's and the margin restore's
+`+1e-6` slack on theirs. The adapter keeps all of them.
 
 ## Reversal to an exact exposure
 

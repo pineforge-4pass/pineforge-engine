@@ -322,6 +322,17 @@ v19fix-cancel-at-1000, v19fix-gapped-stop-cancel and
 v19fix-gapped-stop-cancel-after-pair show TradingView never does; the values
 the tree pins were re-pinned once more, each marked "expectation corrected
 (V19-FIX, ...)".
+R5 lane H-THIN moves them once more, inside the unreleased v19 epoch and with
+the source extension still v4, in one hash step. The Pine host no longer owns
+lot excursions: it keeps the kernel's `owns_lot_excursions()` default, so the
+extension's fold no longer carries the retired host model's state (its
+excursion caches and level fills), and every value that folds the extension
+moves. A default `strategy.exit(from_entry)` under FIFO now reserves its
+entry's own quantity, the oldest lots first, as TradingView's pyramiding tape
+books it, so the witnesses whose seeded storms exercise it move their trades
+too. The corpus moves only where the excursion cells moved toward TradingView
+(19 probes); the values the tree pins were re-pinned once more, each marked
+"expectation corrected (H-THIN, ...)" with the value's cause.
 Stable `RunIdentity` / `RequestHandle` / `Birth` remain
 `native_order_v1`; request, core, and event values own `native_order_v7`.
 Terms receipts, attempted terms, deferred
