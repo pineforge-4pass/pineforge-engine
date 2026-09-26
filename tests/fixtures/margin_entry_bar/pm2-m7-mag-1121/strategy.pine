@@ -1,0 +1,12 @@
+// R5 lane PAR-MARGIN-2 (M7 under the bar magnifier): a leveraged long (margin 5, 16 x equity)
+// placed on the signal bar 2025-11-21 07:15 UTC, filled at the next bar's open, whose 1-minute lows breach.
+// Magnifier ON. Timeout close 3 bars after the entry bar.
+//@version=6
+strategy("pm2-m7-mag-1121", overlay=true, initial_capital=1000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1,
+     margin_long=5, margin_short=5, commission_value=0, slippage=0,
+     process_orders_on_close=false, use_bar_magnifier=true)
+if time == timestamp("UTC", 2025, 11, 21, 7, 15) and strategy.position_size == 0
+    strategy.entry("L", strategy.long, qty = math.floor(16 * strategy.equity / close * 1000) / 1000)
+if strategy.position_size > 0 and bar_index - strategy.opentrades.entry_bar_index(0) >= 3
+    strategy.close("L", comment="timeout")

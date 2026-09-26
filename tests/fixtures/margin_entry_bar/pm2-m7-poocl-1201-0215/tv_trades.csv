@@ -1,0 +1,5 @@
+﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)
+1,Exit long,2025-12-01 10:30,Margin call,2824.6,1.7024,4841.2,-32.60096,-0.67,0,0,0.00,-32.60096,-0.67,-32.60096,-3.26,0
+1,Entry long,2025-12-01 10:30,L,2843.75,1.7024,4841.2,-32.60096,-0.67,0,0,0.00,-32.60096,-0.67,-32.60096,-3.26,0
+2,Exit long,2025-12-01 11:15,timeout,2826.4,4.9076,13955.9875,-85.14686,-0.61,0,37.248684,0.27,-152.08652,-1.09,-117.74782,-11.77,3
+2,Entry long,2025-12-01 10:30,L,2843.75,4.9076,13955.9875,-85.14686,-0.61,0,37.248684,0.27,-152.08652,-1.09,-117.74782,-11.77,3

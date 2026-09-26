@@ -21,10 +21,10 @@
  *
  *   M7  (G2-09) scheduling. The kernel's AfterApplied point after a
  *       leveraged opening is admitted on the opening's own entry bar since
- *       R5 lane PAR-MARGIN (TradingView's tapes below), so the adapter books
- *       what the kernel books there. Its AfterApplied point after an add to
- *       a carried book, and its BarOpen point on a carried POOC short with
- *       fees, are points the adapter still refuses; the kernel books there.
+ *       R5 lane PAR-MARGIN (TradingView's tapes below), and after an add to
+ *       a carried book since R5 lane PAR-MARGIN-2, so the adapter books what
+ *       the kernel books there. Its BarOpen point on a carried POOC short
+ *       with fees is a point the adapter still refuses; the kernel books there.
  *   M8  (G2-10) checkpoints as market executions. A gap-open breach: the
  *       adapter executes at the open, sized at the open; the kernel has no
  *       check kind that does -- its mark check rests at the adverse extreme,
@@ -58,10 +58,12 @@
  *       pinned); it now books TradingView's rows on all four tapes.
  *   R5 lane PAR-MARGIN-2, each section replaying the lane's `lab tv` tapes from
  *   the fixture's own strategy.pine:
- *     M7 shapes: limit openings, long and short, leveraged and 1x -- 12 tapes,
- *       all TradingView's rows (the kernel's post-fill point now measures from
- *       the fill's own waypoint: a limit filled on its way down faces the
- *       bar's low, a short filled on its way up its high);
+ *     M7 shapes: calc_on_order_fills openings, limit openings with and without
+ *       process_orders_on_close, short limit openings (leveraged and 1x), POOC
+ *       market openings, limit and market adds to a carried book, magnified
+ *       openings -- 36 tapes, all TradingView's rows (the kernel's post-fill
+ *       point now measures from the fill's own waypoint: a limit filled on its
+ *       way down faces the bar's low, a short filled on its way up its high);
  *
  * Source-bound (includes pineforge/source): release profile only.
  */
@@ -430,14 +432,16 @@ void m7_leveraged_opening_entry_bar() {
 // B. A carried 10 @100 long (50 %, capital 1050) adds 10 @95 on a buy limit
 // filled on the H->L leg of bar 2 (O100 H101 L80 C81; high-first). After the
 // add the rest of the path runs down to the low 80: 700 against 800.
-//   kernel: AfterApplied at the add's point books 4 x 100 / 40 = 10 at 80 --
-//           ab9714be's answer too (the post-add book at the bar's own low).
-//           Until R5 lane PAR-MARGIN-2 the kernel's post-fill mark scanned only
-//           the waypoints after the fill's own -- the fill is presented at the
-//           low it was falling toward -- so it booked 4 x 90 / 40.5 = 8.888..
-//           at the close 81;
-//   adapter: the point is refused (no scheduling after an add to a carried
-//           book), and bar 3 (O100) is solvent -- no margin row at all.
+//   kernel: AfterApplied at the add's point books 4 x 100 / 40 = 10 at 80;
+//   adapter: admits that point for an add to a carried leveraged book, so it
+//           books the same 10 @80.
+// That is ab9714be's answer too (the post-add book at the bar's own low), and
+// TradingView's on the class (tests/fixtures/margin_entry_bar/pm2-m7b-lim-*,
+// the "M7 shapes" section below). Until R5 lane PAR-MARGIN-2 the kernel's
+// post-fill mark scanned only the waypoints after the fill's own -- the fill
+// is presented at the low it was falling toward -- so it booked 4 x 90 / 40.5
+// = 8.888.. at the close 81, and the adapter refused the point: no margin row
+// at all (bar 3, O100, is solvent). Both pins flipped with the fix.
 void m7_mid_bar_add() {
     std::printf("-- M7-B mid-bar pyramid add: the add's AfterApplied point\n");
     Config c;
@@ -463,11 +467,13 @@ void m7_mid_bar_add() {
     const auto native = margin_fills(kernel);
     print_side("kernel", native, kernel.position(), kernel.balance());
 
-    CHECK(adapter.empty());
-    CHECK(pine.position() == 20.0);
     REQUIRE(native.size() == 1);
     check_fill(native[0], 2, NativePathPhase::Low, 10.0, 80.0, true);
     CHECK(same_value(kernel.position(), 10.0));
+    REQUIRE(adapter.size() == 1);
+    check_fill(adapter[0], 2, NativePathPhase::Low, 10.0, 80.0, true);
+    CHECK(adapter[0].label == "__margin_call__");
+    CHECK(same_value(pine.position(), 10.0));
 }
 
 // C. A carried POOC short 9.5 @100 (100 %, 0.1 % fee) whose bar 1 reaches
@@ -1515,9 +1521,10 @@ void print_exits(const char* side, const std::vector<ProbeExit>& rows) {
 }
 
 // ---- the M7 shapes (tests/fixtures/margin_entry_bar/pm2-*)
-// A leveraged opening, on the bar it fills. TradingView books the
+// A leveraged opening or add, on the bar it fills. TradingView books the
 // margin call on that bar over the rest of its path, sized on the book the
 // fill left:
+//   pm2-m7-coof-*  calc_on_order_fills, M7-A's events: the M7-A rows, 4 of 4;
 //   pm2-m7-lim-*   a limit opening filled on its way down: the call at that
 //                  bar's LOW, 4 of 4 (the kernel's post-fill point scanned the
 //                  waypoints after the fill's own, so it missed the low -- the
@@ -1525,6 +1532,14 @@ void print_exits(const char* side, const std::vector<ProbeExit>& rows) {
 //   pm2-m7-slim-*, pm2-m7-s1lim-*  a SHORT limit opening filled on its way up,
 //                  leveraged (margin 5) and at full margin (1x): the call at
 //                  that bar's HIGH, 8 of 8 (none was booked before);
+//   pm2-m7-poocl-* the same limits under process_orders_on_close, 4 of 4;
+//   pm2-m7b-lim-*  a limit ADD to a carried book, 4 of 4, on the combined book
+//                  (the first-in lot first);
+//   pm2-m7b-mkt-*  a market add at the open, 4 of 4 (booked before the lane);
+//   pm2-m7-poocm-* a POOC market opening at the signal close, the call on the
+//                  next bar, 4 of 4 (booked before the lane);
+//   pm2-m7-mag-*   M7-A's events magnified: the call at the first crossing
+//                  1-minute low of the entry bar, 4 of 4 (booked before).
 struct ShapeTape {
     const char* slug;
     const FeedBar* bars;
@@ -1534,12 +1549,24 @@ struct ShapeTape {
 void m7_shapes_on_tapes() {
     const std::string dir = PINEFORGE_HM_M7A_FIXTURE_DIR;
     const ShapeTape tapes[] = {
+        {"pm2-m7-coof-0621", kM7a_m5_k16_0621, 6}, {"pm2-m7-coof-0922", kM7a_m5_k16_0922, 6},
+        {"pm2-m7-coof-1121", kM7a_m5_k16_1121, 6}, {"pm2-m7-coof-1010", kM7a_m20_k4_1010, 6},
         {"pm2-m7-lim-0402-1945", kPm2Chart_0402_1945, 6}, {"pm2-m7-lim-0402-2000", kPm2Chart_0402_2000, 6},
         {"pm2-m7-lim-0801-0030", kPm2Chart_0801_0030, 6}, {"pm2-m7-lim-1201-0215", kPm2Chart_1201_0215, 6},
         {"pm2-m7-slim-0402-1330", kPm2Chart_0402_1330, 6}, {"pm2-m7-slim-0509-1100", kPm2Chart_0509_1100, 6},
         {"pm2-m7-slim-0709-1930", kPm2Chart_0709_1930, 6}, {"pm2-m7-slim-1001-0830", kPm2Chart_1001_0830, 6},
         {"pm2-m7-s1lim-0402-1330", kPm2Chart_0402_1330, 6}, {"pm2-m7-s1lim-0509-1100", kPm2Chart_0509_1100, 6},
         {"pm2-m7-s1lim-0709-1930", kPm2Chart_0709_1930, 6}, {"pm2-m7-s1lim-1001-0830", kPm2Chart_1001_0830, 6},
+        {"pm2-m7-poocl-0402-1945", kPm2Chart_0402_1945, 6}, {"pm2-m7-poocl-0402-2000", kPm2Chart_0402_2000, 6},
+        {"pm2-m7-poocl-0801-0030", kPm2Chart_0801_0030, 6}, {"pm2-m7-poocl-1201-0215", kPm2Chart_1201_0215, 6},
+        {"pm2-m7-poocm-0105-1415", kPm2Chart_0105_1415, 6}, {"pm2-m7-poocm-0402-1945", kPm2Chart_0402_1945, 6},
+        {"pm2-m7-poocm-0702-0100", kPm2Chart_0702_0100, 6}, {"pm2-m7-poocm-1002-1445", kPm2Chart_1002_1445, 6},
+        {"pm2-m7b-lim-0402-1930", kPm2Add_0402_1930, 9}, {"pm2-m7b-lim-0402-1945", kPm2Add_0402_1945, 9},
+        {"pm2-m7b-lim-0801-0015", kPm2Add_0801_0015, 9}, {"pm2-m7b-lim-1207-1345", kPm2Add_1207_1345, 9},
+        {"pm2-m7b-mkt-0105-1400", kPm2Add_0105_1400, 9}, {"pm2-m7b-mkt-0402-1930", kPm2Add_0402_1930, 9},
+        {"pm2-m7b-mkt-0702-0045", kPm2Add_0702_0045, 9}, {"pm2-m7b-mkt-1002-1430", kPm2Add_1002_1430, 9},
+        {"pm2-m7-mag-0621", kPm2Mag_0621, 90}, {"pm2-m7-mag-0922", kPm2Mag_0922, 90},
+        {"pm2-m7-mag-1010", kPm2Mag_1010, 90}, {"pm2-m7-mag-1121", kPm2Mag_1121, 90},
     };
     for (const ShapeTape& tape : tapes) {
         std::printf("-- M7 shape %s\n", tape.slug);

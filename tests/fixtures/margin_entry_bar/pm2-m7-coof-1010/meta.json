@@ -1,0 +1,16 @@
+{
+  "title": "pm2-m7-coof-1010",
+  "slug": "pm2-m7-coof-1010",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T00:39:54.343Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "f5f5fa1839592fb12de4cfa73ea51dc515444e81ad19d3cffdd2c4b1e965a4a1",
+  "tv_trades_sha256": "5904c2624a0219b943b699f38334453f61ebac1ecd6f5361c9ac6278d091149b",
+  "tv_trades_rows": 4
+}

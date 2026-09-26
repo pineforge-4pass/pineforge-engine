@@ -29,12 +29,18 @@
 // margin call on the entry bar instead of a bar later; the other 105 values
 // are unchanged.
 //
-// R5 lane PAR-MARGIN-2 re-harvested one more the same way, on its tree: chains
-// seed 1570937, whose limit long filled on its way down is now called on its
-// own bar at the low (46 @106 on bar 25, a bar earlier) -- the kernel's
-// post-fill point measures from the fill's own waypoint, TradingView's rule on
-// its tapes (tests/fixtures/margin_entry_bar/pm2-m7-lim-*). The other 107
-// values are unchanged.
+// R5 lane PAR-MARGIN-2 re-harvested five more the same way, on its tree, each
+// a leveraged configuration whose margin call moves onto the bar its fill was
+// on, or is re-sized there on the book that fill left -- TradingView's rule on
+// its tapes (tests/fixtures/margin_entry_bar/pm2-*):
+//   chains seed 1570937: a limit long filled on its way down is called on its
+//     own bar at the low (46 @106 on bar 25, a bar earlier) -- the kernel's
+//     post-fill point now measures from the fill's own waypoint;
+//   chains seed 2199311 and reversals seed 2199309 (process_orders_on_close),
+//   reversals seed 1570935 (adds to a carried book) and reversals seed 314187
+//   (calc_on_order_fills; its trades are unchanged, one more request placed):
+//     the adapter now admits the post-fill point on those fills' bars.
+// The other 103 values are unchanged.
 
 // R5 lane PAR-ORDERS re-harvested it the same way on its tree (29 of 108 digests
 // move; see the lane's hash commit for why each moves).
@@ -60,7 +66,7 @@
 constexpr std::uint64_t kTranscriptDigests[] = {
     17062111550189209216ull,  // reversals seed 104729, 131 trades, 397 commands, 431 rows placed
     3937583110602879389ull,  // reversals seed 209458, 126 trades, 382 commands, 409 rows placed
-    4920319354091947109ull,  // reversals seed 314187, 208 trades, 684 commands, 651 rows placed
+    9508064597864072295ull,  // reversals seed 314187, 208 trades, 684 commands, 652 rows placed
     14691229822702022375ull,  // reversals seed 418916, 105 trades, 378 commands, 361 rows placed
     201369272286234124ull,  // reversals seed 523645, 104 trades, 417 commands, 357 rows placed
     12651613190033426865ull,  // reversals seed 628374, 138 trades, 410 commands, 399 rows placed
@@ -72,13 +78,13 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     9826242374101611623ull,  // reversals seed 1256748, 118 trades, 402 commands, 362 rows placed
     4883135135199369800ull,  // reversals seed 1361477, 105 trades, 413 commands, 349 rows placed
     6980972530369447172ull,  // reversals seed 1466206, 151 trades, 372 commands, 393 rows placed
-    11252195188350860763ull,  // reversals seed 1570935, 92 trades, 362 commands, 328 rows placed
+    17000758005854428354ull,  // reversals seed 1570935, 92 trades, 362 commands, 329 rows placed
     15023244533711012002ull,  // reversals seed 1675664, 124 trades, 398 commands, 405 rows placed
     3425020382181293193ull,  // reversals seed 1780393, 196 trades, 702 commands, 629 rows placed
     4513324373166417315ull,  // reversals seed 1885122, 113 trades, 393 commands, 388 rows placed
     18393465585117555058ull,  // reversals seed 1989851, 180 trades, 430 commands, 448 rows placed
     6120235323624511436ull,  // reversals seed 2094580, 92 trades, 384 commands, 340 rows placed
-    12203651668804466516ull,  // reversals seed 2199309, 127 trades, 398 commands, 375 rows placed
+    9639971099840596709ull,  // reversals seed 2199309, 127 trades, 398 commands, 375 rows placed
     7979846979225294549ull,  // reversals seed 2304038, 149 trades, 412 commands, 418 rows placed
     16092912242308174488ull,  // reversals seed 2408767, 139 trades, 415 commands, 404 rows placed
     1517737495207721277ull,  // reversals seed 2513496, 110 trades, 390 commands, 394 rows placed
@@ -150,7 +156,7 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     8033768331525115464ull,  // chains seed 1885124, 66 trades, 360 commands, 304 rows placed
     8033691744657508662ull,  // chains seed 1989853, 73 trades, 353 commands, 373 rows placed
     10675979410645833515ull,  // chains seed 2094582, 75 trades, 321 commands, 355 rows placed
-    11831052386180063129ull,  // chains seed 2199311, 56 trades, 327 commands, 278 rows placed
+    13103985213974940416ull,  // chains seed 2199311, 54 trades, 326 commands, 285 rows placed
     9463870180619581974ull,  // chains seed 2304040, 81 trades, 342 commands, 353 rows placed
     1057624106564667840ull,  // chains seed 2408769, 67 trades, 347 commands, 374 rows placed
     1646636678506043505ull,  // chains seed 2513498, 66 trades, 336 commands, 332 rows placed

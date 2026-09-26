@@ -1480,7 +1480,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:14100-14133`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:14103-14136`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -1524,12 +1524,14 @@ tapes (`tests/fixtures/margin_entry_bar`) book TradingView's margin call on
 that bar at its low, as the kernel's `AfterApplied` point does, and since R5
 lane PAR-MARGIN the adapter admits that point for a leveraged opening's entry
 bar and books the tapes' rows (before it, the call came a bar late or not at
-all). The admission covers the run shapes `ab9714be`'s entry-bar pass covered;
-a `process_orders_on_close`, `calc_on_order_fills`, magnified or
-timestamped-FX run keeps its own route, unmeasured against TradingView, the
-`AfterApplied` point after an add to a carried book is still refused, and a
-default-percent stop entry taken at its bar's open keeps the pre-open slice's
-verdict. Under the bar magnifier the adapter admits the kernel's
+all). Since R5 lane PAR-MARGIN-2 the admission also covers a limit opening
+filled on its way down to the bar's low, `process_orders_on_close` and
+`calc_on_order_fills` runs, and an add to a book carried in from an earlier
+bar, on the combined book: twenty more tapes book the call on that bar at its
+low (`tests/fixtures/margin_entry_bar`: `pm2-m7-coof-*`, `pm2-m7-lim-*`,
+`pm2-m7-poocl-*`, `pm2-m7b-*`). A magnified or timestamped-FX run keeps
+its own route, and a default-percent stop entry taken at its bar's open keeps
+the pre-open slice's verdict. Under the bar magnifier the adapter admits the kernel's
 `IntrabarSample` points on a leveraged book: TradingView's magnified broker
 books its call at the first lower-timeframe low that crosses and again at each
 later one that crosses the reduced book's line (`tests/fixtures/intrabar_margin`,

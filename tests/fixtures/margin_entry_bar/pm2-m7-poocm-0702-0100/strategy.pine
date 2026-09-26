@@ -1,0 +1,12 @@
+// R5 lane PAR-MARGIN-2 (M7 under process_orders_on_close, market): a leveraged long (margin 5, 17.66 x equity)
+// placed and filled at the close of the signal bar 2025-07-02 01:00 UTC; the next bar's low breaches the
+// maintenance line and its close recovers. Timeout close 3 bars after the entry bar.
+//@version=6
+strategy("pm2-m7-poocm-0702-0100", overlay=true, initial_capital=1000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1,
+     margin_long=5, margin_short=5, commission_value=0, slippage=0,
+     process_orders_on_close=true)
+if time == timestamp("UTC", 2025, 7, 2, 1, 0) and strategy.position_size == 0
+    strategy.entry("L", strategy.long, qty = math.floor(17.66 * strategy.equity / close * 1000) / 1000)
+if strategy.position_size > 0 and bar_index - strategy.opentrades.entry_bar_index(0) >= 3
+    strategy.close("L", comment="timeout")

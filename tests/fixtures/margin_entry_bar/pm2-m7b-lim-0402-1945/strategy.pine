@@ -1,0 +1,15 @@
+// R5 lane PAR-MARGIN-2 (M7-B, a limit add): a carried long L1 (margin 5, 4 x equity) and a LIMIT add L2
+// (10.15 x equity, limit 0.997 x close) placed on L1's entry bar 2025-04-02 20:00 UTC and filled on the next bar
+// on its way down; that bar's low breaches the combined line (L1 alone never does), its close recovers.
+// Timeout close_all 4 bars after L1's entry bar.
+//@version=6
+strategy("pm2-m7b-lim-0402-1945", overlay=true, initial_capital=1000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=2,
+     margin_long=5, margin_short=5, commission_value=0, slippage=0,
+     process_orders_on_close=false)
+if time == timestamp("UTC", 2025, 4, 2, 19, 45) and strategy.position_size == 0
+    strategy.entry("L1", strategy.long, qty = math.floor(4 * strategy.equity / close * 1000) / 1000)
+if time == timestamp("UTC", 2025, 4, 2, 20, 0) and strategy.position_size > 0
+    strategy.entry("L2", strategy.long, qty = math.floor(10.15 * strategy.equity / close * 1000) / 1000, limit = math.round(close * 0.997, 2))
+if strategy.position_size > 0 and bar_index - strategy.opentrades.entry_bar_index(0) >= 4
+    strategy.close_all(comment="timeout")

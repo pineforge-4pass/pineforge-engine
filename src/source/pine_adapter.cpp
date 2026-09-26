@@ -4874,12 +4874,15 @@ void PineExecutionAdapter::apply_fx_opening_margin_slice(
 }
 
 // Whether on_applied admits the kernel's post-fill point on a leveraged
-// opening's entry bar (the run shapes ab9714be took the entry-bar suffix on,
-// pine_fills.cpp:1014-1023, less a timestamped-FX run, whose path checks
-// on_bar_open does not schedule either).
+// opening's entry bar: the run shapes ab9714be took the entry-bar suffix on
+// (pine_fills.cpp:1014-1023), and process_orders_on_close and
+// calc_on_order_fills, where TradingView books the same call on the same bar
+// (R5 lane PAR-MARGIN-2: tests/fixtures/margin_entry_bar/pm2-m7-coof-* and
+// pm2-m7-poocl-*). Not a timestamped-FX run, whose path checks on_bar_open
+// does not schedule either, nor a magnified one, whose later samples the
+// kernel's IntrabarSample point checks (intrabar_sample_checked).
 bool PineExecutionAdapter::leveraged_entry_bar_checked() const noexcept {
-    return !config_.process_orders_on_close && !config_.calc_on_order_fills
-        && !bar_magnifier_ && staged_.account_fx_effective_from_ms.empty();
+    return !bar_magnifier_ && staged_.account_fx_effective_from_ms.empty();
 }
 
 // The opening schedule_preopen_margin_slice answers for: a default-percent
@@ -18409,7 +18412,6 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             }
         } else if (!full_margin_opening && !placement_snapshot->has_full_entry_bracket
                    && !preopen_margin_already_scheduled && stable_opening_fx
-                   && position_open_script_bar_ == context.script_bar_open_ms
                    && leveraged_entry_bar_checked()
                    && !preopen_slice_class(*placement_snapshot, context)) {
             // A leveraged opening (margin below 100) has no fill-price trim,
@@ -18418,15 +18420,19 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             // book the margin call at that bar's low, as ab9714be's
             // entry-bar pass did (pine_fills.cpp:1025-1063 and :1535-1546,
             // the suffix after the opening's fill). The run shapes ab9714be
-            // took no such suffix on keep their own routes here, unmeasured
-            // against TradingView (leveraged_entry_bar_checked), and so does
-            // the opening schedule_preopen_margin_slice answers for, sliced or
-            // not (preopen_slice_class). Admit the kernel's post-fill point
-            // for this driver point: it measures the same suffix and sizes
-            // the call with TradingView's money and slice
+            // took no such suffix on keep their own routes here
+            // (leveraged_entry_bar_checked), and so does the opening
+            // schedule_preopen_margin_slice answers for, sliced or not
+            // (preopen_slice_class). Admit the kernel's post-fill point for
+            // this driver point: it measures the same suffix and sizes the
+            // call with TradingView's money and slice
             // (resolve_margin_requirement, resolve_margin_call_units). Every
-            // opening fill of the entry bar is admitted, so an add re-sizes a
-            // call armed on the smaller book.
+            // opening-side fill is admitted on its own bar -- the position's
+            // first, an add on the same bar, and an add to a book carried in
+            // from an earlier bar, which TradingView checks over the rest of
+            // its bar on the combined book too (R5 lane PAR-MARGIN-2,
+            // pm2-m7b-lim-* and pm2-m7b-mkt-*) -- so an add re-sizes a call
+            // armed on the smaller book.
             (void)schedule_margin_call_path(policy_script_bar_, context);
         }
         schedule_intraday_loss_path(policy_script_bar_, context);

@@ -1,0 +1,16 @@
+{
+  "title": "pm2-m7b-mkt-0402-1930",
+  "slug": "pm2-m7b-mkt-0402-1930",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T00:41:30.777Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-03-30",
+    "to": "2025-04-05"
+  },
+  "pine_sha256": "4bbdad728989f4b83a853c84936eff2d866a1cecd30a7ebd0ca6f2f9c385e648",
+  "tv_trades_sha256": "a5f4d89f44b0fa938d2a2e8c150a83feba37cfd6b2b2bad61721f9dc1ead87a8",
+  "tv_trades_rows": 6
+}

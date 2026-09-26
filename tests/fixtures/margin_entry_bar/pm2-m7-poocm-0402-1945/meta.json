@@ -1,0 +1,16 @@
+{
+  "title": "pm2-m7-poocm-0402-1945",
+  "slug": "pm2-m7-poocm-0402-1945",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T00:40:59.500Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-03-30",
+    "to": "2025-04-05"
+  },
+  "pine_sha256": "bdf9318ad0c727bc94be5d728bfde18446adfce1c291f68dac477f58ce1010fa",
+  "tv_trades_sha256": "b7e708608a5cea3777433c0f6bd64f790e1a5993833dccb1b3f90720910a9d56",
+  "tv_trades_rows": 4
+}

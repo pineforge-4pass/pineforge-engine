@@ -1,0 +1,16 @@
+{
+  "title": "pm2-m7-mag-0621",
+  "slug": "pm2-m7-mag-0621",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T00:40:22.422Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-06-19",
+    "to": "2025-06-23"
+  },
+  "pine_sha256": "c811e8b2435cb1e25c51c89c3d49382b7606f34f5d2e74031cf5be4248b10f2e",
+  "tv_trades_sha256": "82afdec0f73135dfa1af943f73db2cd6ee01a1fa2125935355b5a65cc7e85ca0",
+  "tv_trades_rows": 2
+}
