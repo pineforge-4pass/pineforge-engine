@@ -130,6 +130,24 @@ prerelease included.
   `NativeMarginCheckKind::IntrabarSample` (C
   `PF_NATIVE_MARGIN_CHECK_INTRABAR_SAMPLE`, 4). A requirement hook sees it; a
   host that switches on the kind must handle it.
+- **A current execution refuses a request bound to a host roster.**
+  `execute_current` on a request whose owner is a host roster (`BindCohort`)
+  answers `NativeCurrentRefusal::UnsupportedRequest` (C
+  `PF_NATIVE_REFUSAL_UNSUPPORTED_REQUEST`, 5) before its point is taken; the
+  request stays queued and fills at the next match like any queued close.
+  When the roster held a live lot it used to fail the run. To close a
+  cohort's lots at once, bind the request to its openings (`BindOpenings`).
+- **The post-fill margin check measures the fill's own segment.** The
+  kernel's `AfterApplied` margin point measures from the waypoint a fill was
+  reached on the way to, with the fill price as that point's mark, so a limit
+  or stop filled on the way to a bar's extreme is checked at that extreme on
+  its own bar. A host with a margin model can book a margin call a bar
+  earlier than before; a requirement hook sees that point.
+- **Two C++ calendar queries.** `NativeStrategyHost::native_aggregates_input_bars()`
+  says whether the run's script bars are buckets the kernel gathers from its
+  input bars, and `native_calendar::native_civil_date` / `native_civil_days`
+  convert between days since the epoch and a civil date. Neither has a C
+  spelling (the 1.0 C boundary table).
 - **The C callback table's marker must be zero.** A C host built against the
   current `pf_native_callbacks_v1` leaves its trailing `reserved1` at 0:
   `strategy_native_host_create_v1` returns NULL for any other value. Tables of
@@ -159,27 +177,60 @@ TradingView behaviour it matches.
 - A margin call never revives an exit the script cancelled (4b00da92, #287),
   whether the exit was live, dormant, or a gapped stop a declined reversal
   had parked for the next margin call (#289).
-- Margin: a leveraged position (margin below 100 %) is checked on its own
-  entry bar, so its margin call lands at that bar's low as TradingView books
-  it, not a bar later or never (outside `process_orders_on_close`,
-  `calc_on_order_fills`, the bar magnifier and a timestamped FX curve, which
-  keep their own schedule). A default `percent_of_equity` stop entry
-  sized above 100 % keeps the quantity it was sized at when placed (at the
-  signal close, or at the snapped stop level when not yet marketable), as
-  TradingView does; it was re-sized at the fill. Under the bar magnifier
-  (without `process_orders_on_close` or `calc_on_order_fills`), a leveraged
-  position's margin call lands at the first lower-timeframe low that crosses
-  its line, and again at each later low that crosses the reduced position's
-  line.
+- Margin: a leveraged position (margin below 100 %) is checked on the rest of
+  the bar its fill was on, from the fill to the extreme it was heading for
+  (the low for a long, the high for a short), so its margin call lands where
+  TradingView books it, not a bar later or never. This holds for an opening
+  and for an add to a carried position, under `process_orders_on_close` and
+  `calc_on_order_fills` too; a timestamped FX curve keeps its own schedule. A
+  default `percent_of_equity` stop entry sized above 100 % keeps the quantity
+  it was sized at when placed (at the signal close, or at the snapped stop
+  level when not yet marketable), as TradingView does; it was re-sized at the
+  fill. A gap-open stop entry's margin slice is sized by the rule every other
+  margin call takes, its one-contract minimum included. Under the bar
+  magnifier, the margin call of a leveraged long, or of a short at any margin,
+  lands at the first lower-timeframe price that crosses its line, and again at
+  each later one that crosses the reduced position's line, under
+  `calc_on_order_fills` too and, for a long, under `process_orders_on_close`.
+  A margin call books the nearest tick of the price it fired at, as
+  TradingView's market fill does; stop and limit fills keep their directional
+  rounding.
 - A trailing `strategy.exit` placed while its entry is still pending starts
   its running best at the activation, as TradingView's does; on TradingView's
   tapes it exited 1 to 24 bars late.
+- `calc_on_order_fills`: a market order or a `strategy.close` that a
+  recalculation places at a fill on a bar's second high or low fills there,
+  as TradingView does; an order an earlier fill of the same bar pushed onto
+  that extreme still waits for the close or the next open.
 - `process_orders_on_close`: a stop entry whose stop the placing bar's close
   already reached, and the bar's only entry marketable there, fills at that
   close (slippage applied), on the chart, an aggregated chart and under the
-  bar magnifier; it filled at the next open.
+  bar magnifier, and so does one placed while the position still holds the
+  other side, once a `strategy.close` on the same bar has closed it; each
+  filled at the next open.
   An add can no longer exceed `pyramiding` because an opposite entry was
-  resting from an earlier bar. One corpus probe moves toward its TradingView
-  tape (`order-deferred-flip-pooc-cross-bar-01`).
+  resting from an earlier bar. The corpus probe
+  `order-deferred-flip-pooc-cross-bar-01` now books all 792 of its
+  TradingView tape's trades as TradingView does.
 - An aggregated chart under the bar magnifier dates every fill at its chart
   bar's open, as TradingView does.
+- A closed trade's run-up and drawdown (`strategy.closedtrades.max_runup` /
+  `max_drawdown` and the report's columns) come from the kernel's per-lot
+  sampler for Pine strategies, as for every other host. In 19 corpus probes
+  the excursions of 335 trades move: 324 now equal TradingView's and 11 are
+  closer.
+- Under FIFO closing, a default `strategy.exit(from_entry)` reserves its own
+  entry's quantity, oldest lots first, not the whole position, as
+  TradingView does; where it closed lots of other entries, the trade rows
+  split differently.
+- A `percent_of_equity` default quantity under a cash commission sizes from
+  `strategy.equity`, with the open entries' fees charged, and keeps back the
+  fee its own order pays, as TradingView does: per order
+  `floor((pct × equity − fee) / (price × point value))`, per contract
+  `floor(pct × equity / (price × point value + fee))`. It used to size too
+  large. The corpus probe `order-percent-equity-cash-commission-01` now books
+  355 of its tape's 366 quantities within TradingView's 0.0001 cell (none
+  before).
+- `strategy.margin_liquidation_price` reads `na` when margin calls are
+  switched off (`set_margin_call_enabled(false)`, which TradingView has no
+  counterpart for); it used to return a price.
