@@ -4298,15 +4298,13 @@ bool PineExecutionAdapter::compute_exit_reservation(
         const SourceId& exit_id, const SourceId& from_entry,
         double requested_qty, double& qty_percent, double live_basis,
         double& reserved_qty) const {
-    constexpr double kQuantityEpsilon = 1e-10;
-    constexpr double kFullPercentEpsilon = 1e-9;
     qty_percent = std::isfinite(qty_percent)
         ? std::clamp(qty_percent, 0.0, 100.0) : 100.0;
     reserved_qty = kNaN;
-    if (!(live_basis > kQuantityEpsilon)) {
+    if (!(live_basis > internal::kQtyEpsilon)) {
         if (std::isfinite(requested_qty)) {
             reserved_qty = std::abs(requested_qty);
-            return reserved_qty > kQuantityEpsilon;
+            return reserved_qty > internal::kQtyEpsilon;
         }
         return true;
     }
@@ -4389,12 +4387,12 @@ bool PineExecutionAdapter::compute_exit_reservation(
             continue;
         }
         if (std::isfinite(reservation.units)) already_reserved += reservation.units;
-        if (reservation.percent >= 100.0 - kFullPercentEpsilon) other_full_exit = true;
+        if (reservation.percent >= 100.0 - internal::kFullPercentEps) other_full_exit = true;
     }
     const double available = std::max(0.0, live_basis - already_reserved);
     if (std::isfinite(requested_qty)) {
         reserved_qty = std::min(std::abs(requested_qty), available);
-    } else if (qty_percent < 100.0 - kFullPercentEpsilon
+    } else if (qty_percent < 100.0 - internal::kFullPercentEps
                && std::isfinite(preserved_reserved)) {
         reserved_qty = std::min(preserved_reserved, live_basis);
     } else {
@@ -4402,14 +4400,14 @@ bool PineExecutionAdapter::compute_exit_reservation(
         // that exposure by 100/100 can round down by one binary64 step and
         // turn the legacy execute_market_exit branch into a dust reduction
         // (ab9714be:src/source/pine_fills.cpp:6893-6932; A33).
-        double requested = qty_percent >= 100.0 - kFullPercentEpsilon
+        double requested = qty_percent >= 100.0 - internal::kFullPercentEps
             ? live_basis : live_basis * qty_percent / 100.0;
-        if (qty_percent < 100.0 - kFullPercentEpsilon) {
+        if (qty_percent < 100.0 - internal::kFullPercentEps) {
             requested = quantize_percent_exit_units(requested, available);
         }
         reserved_qty = std::min(requested, available);
     }
-    if (!(reserved_qty > kQuantityEpsilon)) return false;
+    if (!(reserved_qty > internal::kQtyEpsilon)) return false;
     qty_percent = reserved_qty / live_basis * 100.0;
     const bool partial = reserved_qty < live_basis - 1e-9;
     if (partial && other_full_exit) return false;
@@ -4418,9 +4416,7 @@ bool PineExecutionAdapter::compute_exit_reservation(
 
 void PineExecutionAdapter::reconcile_deferred_exit_reservations(
         const SourceId& from_entry, double live_basis) {
-    constexpr double kQuantityEpsilon = 1e-10;
-    constexpr double kFullPercentEpsilon = 1e-9;
-    if (!(live_basis > kQuantityEpsilon)) return;
+    if (!(live_basis > internal::kQtyEpsilon)) return;
 
     struct Family {
         std::uint64_t key = 0;
@@ -4564,7 +4560,7 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
             // the enlarged net position (ab9714be:pine_strategy_commands.cpp
             // :2739-2811 and test_exit_bracket_pending_entry_leg).
             units = std::min(std::abs(family.explicit_requested), available);
-        } else if (family.percent < 100.0 - kFullPercentEpsilon
+        } else if (family.percent < 100.0 - internal::kFullPercentEps
             && std::isfinite(family.existing)) {
             units = std::min(family.existing, available);
         } else {
@@ -4574,14 +4570,14 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
             // land one binary64 step low and strand a sub-lot dust remainder
             // that never flattens (ab9714be pine_fills.cpp:1618 spells the
             // same whole-position coverage as `qty - kQtyEpsilon`).
-            double requested = family.percent >= 100.0 - kFullPercentEpsilon
+            double requested = family.percent >= 100.0 - internal::kFullPercentEps
                 ? live_basis : live_basis * family.percent / 100.0;
-            if (family.percent < 100.0 - kFullPercentEpsilon) {
+            if (family.percent < 100.0 - internal::kFullPercentEps) {
                 requested = quantize_percent_exit_units(requested, available);
             }
             units = std::min(requested, available);
         }
-        if (!(units > kQuantityEpsilon)) {
+        if (!(units > internal::kQtyEpsilon)) {
             cancel.insert(cancel.end(), family.handles.begin(), family.handles.end());
             for (const auto index : family.queued) {
                 if (index < pending_bracket_legs_.size())
@@ -4601,7 +4597,7 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
             found->second.qty_percent = normalized_percent;
             found->second.fixed_exit_reservation =
                 std::isfinite(family.explicit_requested)
-                || family.percent < 100.0 - kFullPercentEpsilon
+                || family.percent < 100.0 - internal::kFullPercentEps
                 || std::isfinite(family.existing);
             found->second.reservation_deferred_to_pending_entry = false;
         }
@@ -4612,7 +4608,7 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
             snapshot.qty_percent = normalized_percent;
             snapshot.fixed_exit_reservation =
                 std::isfinite(family.explicit_requested)
-                || family.percent < 100.0 - kFullPercentEpsilon
+                || family.percent < 100.0 - internal::kFullPercentEps
                 || std::isfinite(family.existing);
             snapshot.reservation_deferred_to_pending_entry = false;
         }
@@ -4623,7 +4619,7 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
             snapshot.qty_percent = normalized_percent;
             snapshot.fixed_exit_reservation =
                 std::isfinite(family.explicit_requested)
-                || family.percent < 100.0 - kFullPercentEpsilon
+                || family.percent < 100.0 - internal::kFullPercentEps
                 || std::isfinite(family.existing);
             snapshot.reservation_deferred_to_pending_entry = false;
         }
@@ -7117,7 +7113,6 @@ double PineExecutionAdapter::close_reserved_other_units(
 bool PineExecutionAdapter::enqueue_pooc_fifo_close(
         const SourceId& id, const std::string& comment,
         std::uint64_t token, std::uint64_t) {
-    constexpr double epsilon = 1e-10;
     const auto point = detail::callback_point(require_host());
     const int bar = point ? point->decision.coordinate.interval_index : -1;
     if (close_batch_bar_ != bar) {
@@ -7177,8 +7172,8 @@ bool PineExecutionAdapter::enqueue_pooc_fifo_close(
     const double persistent_available = std::max(0.0, held - persistent_other);
     const double available = std::max(0.0, persistent_available - pending_reserved);
     const double target = std::min(unclosed, available);
-    if (!(target > epsilon)) {
-        if (unclosed > epsilon && !(persistent_available > epsilon)) {
+    if (!(target > internal::kQtyEpsilon)) {
+        if (unclosed > internal::kQtyEpsilon && !(persistent_available > internal::kQtyEpsilon)) {
             if (token == 0) {
                 close_logical_units_.erase(id);
                 close_reserved_units_.erase(id);
@@ -7199,7 +7194,7 @@ bool PineExecutionAdapter::enqueue_pooc_fifo_close(
     close_batch_pending_debt_ += target;
     pending_same_bar_close_qty_ += target;
     if (token != 0) close_batch_admitted_total_ += target - replaced_target;
-    const bool retire_whole = unclosed > persistent_available + epsilon;
+    const bool retire_whole = unclosed > persistent_available + internal::kQtyEpsilon;
 
     auto& site = close_batch_callsites_[token];
     if (!site.active) {
