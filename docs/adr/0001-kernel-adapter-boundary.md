@@ -66,7 +66,7 @@ this runtime **on** the kernel; it did **not** move it to codegen.
 
 Subclass `NativeStrategyHost`: a **zero-argument** host (`native_host.hpp:845`) carrying the
 callbacks, the answering hooks and the request API. The `CapAttachment` constructor belongs
-to the adapter class `PineStrategyHost` (`pine_strategy_host.hpp:242`), not here. The whole
+to the adapter class `PineStrategyHost` (`pine_strategy_host.hpp:257`), not here. The whole
 surface, field by field, is `docs/pages/native-engine.md`; this section is the boundary's
 summary of it.
 
@@ -323,7 +323,7 @@ kernel and own these quirks, each at its site:
 - **Pine language state and harness flags.** Series, the tick-level barstate flags and
   position-view freezing (`PineLanguageState` `pine_language_state.hpp:12`); the three session flags,
   `PineStrategyHost` members since R5 lane F5 (`session_ismarket_`
-  `pine_strategy_host.hpp:849`), which `scheduler_update_session_state`
+  `pine_strategy_host.hpp:872`), which `scheduler_update_session_state`
   (`pine_strategy_host.cpp:1385`) selects from the kernel's session-day facts before each source
   callback — the host computes no session-day rule of its own. Generated code reads two of them;
   a generated `session.ismarket` still calls the time-of-day predicate
@@ -332,8 +332,8 @@ kernel and own these quirks, each at its site:
   kernel's fact matches TradingView on every bar (R5 lane H-MEASURE,
   `tests/test_session_ismarket_tape.cpp`; routing it is a codegen change); `barstate_islast_`, still a
   `BacktestEngine` member (`engine.hpp:378`) only this host writes; the live-tail /
-  probe-suppress overrides (`set_realtime_tail` `pine_strategy_host.hpp:439`,
-  `set_probe_suppress_tail_logic` `pine_strategy_host.hpp:465`), whose live-probe protocol is
+  probe-suppress overrides (`set_realtime_tail` `pine_strategy_host.hpp:461`,
+  `set_probe_suppress_tail_logic` `pine_strategy_host.hpp:487`), whose live-probe protocol is
   also the one Pine policy left over the session flags: its batch's final bar reads the kernel's
   open-ended close.
 
@@ -374,7 +374,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   adapter-side (`source_money_round` `pine_adapter.cpp:370-376`). `strategy.close` batching and the entry-id ledger
   are **gone** from the kernel — the ledger is adapter state (`close_logical_units_` `pine_adapter.hpp:2027-2038`) and
   only names survive in comments. The TradingView margin-call toggle remains source-owned as
-  `source::PineStrategyHost::set_margin_call_enabled` (`pine_strategy_host.hpp:417`);
+  `source::PineStrategyHost::set_margin_call_enabled` (`pine_strategy_host.hpp:439`);
   what enables the generic model is the presence of `NativeRunSpec::margin`. So is the string-sentinel decoding of adapter-written comments:
   `closed_trade_close_cause` (`src/engine_trade_accessors.cpp:158`) reads a typed
   `execution::CloseCause` off the row, compares no string, and answers `3` for a *kernel*

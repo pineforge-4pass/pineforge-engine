@@ -1401,6 +1401,11 @@ list(APPEND TEST_SOURCES test_cash_fee_sizing_tapes)
 # tests/fixtures/pooc_stop_reentry_bracket (README.md there names them) replayed
 # through the Pine adapter. Source-bound.
 list(APPEND TEST_SOURCES test_pooc_stop_reentry_bracket_tapes)
+# R5 K-RUNERR: a plain request.security finer than the finest feed the host
+# supplied ("5S" beside a 1m auxiliary slice) reads na on every chart bar
+# instead of stopping the run; a chart fed without intrabar bars still
+# refuses. Source-bound.
+list(APPEND TEST_SOURCES test_security_finer_than_feed)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

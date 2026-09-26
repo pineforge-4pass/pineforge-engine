@@ -619,7 +619,7 @@ pump's operation (`Input` or `Stream`) and ordinal 0; until then the run goes on
 with the configuration it wrote, fills and notifications included.
 
 Generated Pine code runs on this same consumer: `source::PineStrategyHost`
-derives from `NativeStrategyHost` (`pine_strategy_host.hpp:242`) and lowers
+derives from `NativeStrategyHost` (`pine_strategy_host.hpp:257`) and lowers
 every `strategy.*` command into the native requests above. What the source
 layer keeps on top of them is TradingView's *policy* — the command batching,
 the priority and activation quirks, the money rounding — never a second
@@ -4310,7 +4310,7 @@ The standalone native host has no Pine decision path at runtime, and the
 constructor/member cut has since landed: `engine.hpp` has **zero** references to
 `CapAttachment`, `OrderPriority` or `IntradayCap`. `NativeStrategyHost` is
 zero-argument (`native_host.hpp:845`); the `CapAttachment` constructor belongs
-to `source::PineStrategyHost` (`pine_strategy_host.hpp:241-244`), and the cap
+to `source::PineStrategyHost` (`pine_strategy_host.hpp:256-259`), and the cap
 type itself lives in the adapter (`IntradayCap` `intraday_cap.hpp:83`).
 
 Nor is there a build-level one. The two source sets are disjoint:

@@ -101,6 +101,7 @@ const Mutation kMutations[] = {
      [](source::PineSecurityEvalState& s) { s.publish_gate_tf_seconds = 300; }},
     {"calling_close_completes_partial",
      [](source::PineSecurityEvalState& s) { s.calling_close_completes_partial = true; }},
+    {"no_loaded_bars", [](source::PineSecurityEvalState& s) { s.no_loaded_bars = true; }},
     {"heikinashi", [](source::PineSecurityEvalState& s) { s.heikinashi = true; }},
     {"ha_prev_open", [](source::PineSecurityEvalState& s) { s.ha_prev_open = 101.5; }},
     {"ha_prev_close", [](source::PineSecurityEvalState& s) { s.ha_prev_close = 102.5; }},

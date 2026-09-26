@@ -735,6 +735,9 @@ void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const
             f.b(pine.gaps_on);
             f.i(pine.publish_gate_tf_seconds);
             f.b(pine.calling_close_completes_partial);
+            // Folded only when set: every site that loads bars keeps the
+            // digest it had.
+            if (pine.no_loaded_bars) f.b(pine.no_loaded_bars);
             f.b(pine.heikinashi);
             f.d(pine.ha_prev_open);
             f.d(pine.ha_prev_close);

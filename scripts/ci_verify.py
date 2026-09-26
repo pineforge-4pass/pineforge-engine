@@ -390,7 +390,10 @@ KERNEL_MIN_TESTS = 286
 # 703 = those 702 plus INT26 round 2's source-bound tape row,
 # test_pooc_stop_reentry_bracket_tapes (the gate sweep's lost re-entry
 # bracket); 703 registered is 703 run.
-RELEASE_MIN_TESTS = 703
+# 704 = those 703 plus lane K-RUNERR's test_security_finer_than_feed: its TU
+# reaches the source layer, so it registers in release only and the kernel
+# floor does not move. No release row skips, so 704 registered is 704 run.
+RELEASE_MIN_TESTS = 704
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
