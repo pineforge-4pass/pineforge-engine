@@ -239,28 +239,22 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #                  extracted from the page and run)
 # All six register in release too; RATIO-HARDEN, V19-FIX and K-IDX add no row.
 # 278 registered, 277 run: the WebSocket row still skips on a system libcurl.
-# 278 run = those 277 plus the one source-free row of R5 lane H-MEASURE
-# (INT26; summed at the pick, recounted with ctest -N at INT26 (iv)):
-#   +1 H-MEASURE test_native_acid_composite (the G1 acid composite, C++ and C)
-# Its other eleven rows reach the source layer (see RELEASE_MIN_TESTS). 279
-# registered, 278 run: the WebSocket row still skips on a system libcurl.
-# 279 = those 278 plus R5 lane H-DOCGATES' test_doc_reverts (the doc-revert
-# gate's self-test, a Python row every profile registers; INT26 pick, summed).
-# 282 = those 281 plus the one source-free TU of R5 lane K-OCA-KEEP
-# (test_native_group_keep_handle; INT26 pick, summed). It registers in release
-# too.
-# 283 = those 282 plus R5 lane PAR-ORDERS-2's source-free
-# test_native_current_cohort_refusal (it registers in release too; INT26
-# pick, summed).
-# 284 = those 283 plus R5 lane PAR-MARGIN's source-free row (INT26 pick,
-# summed):
-#   +1 PAR-MARGIN test_native_margin_intrabar_samples (IntrabarSample, item 3)
-# It registers in release too.
-# 285 = those 284 plus R5 lane PAR-MARGIN-2's source-free row (INT26 pick,
-# summed):
-#   +1 PAR-MARGIN-2 test_native_margin_post_fill_path (the post-fill margin
-#                   check measures from the fill's own waypoint)
-# It registers in release too.
+# 285 run = those 277 plus the eight source-free rows of wave H (INT26),
+# counted with ctest -N on the integrated tree:
+#   +1 H-MEASURE    test_native_acid_composite (the G1 acid composite, C++
+#                   and C)
+#   +3 H-DOCGATES   test_doc_reverts and test_kernel_seam_rows (the two gates'
+#                   self-tests, Python rows every profile registers) and
+#                   test_native_runtime_ambient_lifo (the runtime blocks' LIFO
+#                   death row)
+#   +1 K-OCA-KEEP   test_native_group_keep_handle
+#   +1 PAR-ORDERS-2 test_native_current_cohort_refusal
+#   +1 PAR-MARGIN   test_native_margin_intrabar_samples
+#   +1 PAR-MARGIN-2 test_native_margin_post_fill_path
+# REL10 renames F6's row (test_deprecated_public_spellings ->
+# test_removed_public_spellings); PAR-ORDERS and CI-FLAKE add no row. All
+# eight register in release too. 286 registered, 285 run: the WebSocket row
+# still skips on a system libcurl.
 KERNEL_MIN_TESTS = 285
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
@@ -369,10 +363,10 @@ KERNEL_MIN_TESTS = 285
 # wave-G lane adds a source-bound row (the K-ULP4 and K-ULP5 C checks and
 # V19-FIX's scaling rows are rows inside existing TUs). No release row skips,
 # so 678 registered is 678 run.
-# 690 = those 678 plus the twelve rows of R5 lane H-MEASURE (AUDIT4 X14 and
-# A4-ACID-COVERAGE; INT26, summed at the pick, recounted at INT26 (iv)): the
-# one KERNEL_MIN_TESTS lists above, which registers here too, plus eleven
-# source-bound ones the kernel profile does not build:
+# 700 = those 678 plus wave H's twenty-two (INT26), counted with ctest -N on
+# the integrated tree: the eight KERNEL_MIN_TESTS lists above, which register
+# here too, H-MEASURE's eleven source-bound rows the kernel profile does not
+# build (AUDIT4 X14) and PAR-ORDERS-2's three tape rows:
 #   +1 G2-09/-10/-12/-13, E20 f1  test_adapter_margin_schedule_differential
 #   +3 G2-15, G2-18, E5/E14       test_pyramiding_count_differential,
 #                                 test_zero_trail_sibling_stop,
@@ -384,37 +378,13 @@ KERNEL_MIN_TESTS = 285
 #   +3 F1(e), F1 magnified, G2-23 test_aggregated_entry_bar_index_tape,
 #                                 test_magnified_aggregated_tape,
 #                                 test_adapter_security_route_conditions
-# No release row skips, so 690 registered is 690 run.
-# 691 = those 690 plus R5 lane H-DOCGATES' test_doc_reverts (see
-# KERNEL_MIN_TESTS; INT26 pick, summed).
-# 694 = those 693 plus the one R5 lane K-OCA-KEEP row KERNEL_MIN_TESTS lists
-# above; the C replace takes no options, so the lane adds no C row (INT26
-# pick, summed).
-# 695 = those 694 plus R5 lane PAR-ORDERS-2's
-# test_native_current_cohort_refusal (see KERNEL_MIN_TESTS; INT26 pick,
-# summed).
-# 696 = those 695 plus R5 lane PAR-ORDERS-2's test_flat_coof_exit_tapes
-# (source-bound; INT26 pick, summed).
-# 697 = those 696 plus R5 lane PAR-ORDERS-2's test_second_extreme_order_tapes
-# (source-bound; INT26 pick, summed).
-# 698 = those 697 plus R5 lane PAR-ORDERS-2's test_pooc_reversing_stop_tapes
-# (source-bound; INT26 pick, summed).
-# 699 = those 698 plus R5 lane PAR-MARGIN's kernel row above (INT26 pick,
-# summed). The lane's own count of 680 also counted H-MEASURE's
-# test_adapter_margin_schedule_differential, which it had cherry-picked for its
-# pins; H-MEASURE's twelve above already count that row.
-# 700 = those 699 plus R5 lane PAR-MARGIN-2's kernel row above (INT26 pick,
-# summed).
+#   +3 PAR-ORDERS-2 items 1-3     test_flat_coof_exit_tapes,
+#                                 test_second_extreme_order_tapes,
+#                                 test_pooc_reversing_stop_tapes
+# PAR-MARGIN's own count also held the margin differential, which that lane
+# had cherry-picked for its pins; it counts once, as H-MEASURE's. No release
+# row skips, so 700 registered is 700 run.
 RELEASE_MIN_TESTS = 700
-# R5 lane H-DOCGATES (AUDIT4-opus perf N-7) raises both floors by one more:
-# test_native_runtime_ambient_lifo, the runtime blocks' LIFO death row, is
-# source-free, so it registers and runs in the kernel profile (279 -> 280) and
-# in release (691 -> 692; INT26 pick, summed). Recorded below both floors so
-# neither floor's line moves: CONTRIBUTING.md and contributing-llm.md cite
-# them by line.
-# R5 lane H-DOCGATES (AUDIT4-opus X10) raises both by one more:
-# test_kernel_seam_rows, the kernel seam-row gate's self-test, is a Python row
-# every profile registers (280 -> 281, 692 -> 693; INT26 pick, summed).
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
@@ -435,9 +405,12 @@ ADR_RULED_TEXTS_MIN = 40
 # PR-only registration floors: the complete CTest populations of the three
 # excluded profiles at INT25, counted with ctest -N on the integrated tree --
 # 653/653/662 at 91d65ad6 (INT24) plus wave G's six rows (C-SURFACE-1 +1,
-# KERNEL-EDGE +1, K-ULP4 +2, K-ULP5 +1, DOC-TRUTH-4 +1) in each. An excluded
-# run must still discover at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 659, 'sanitizers': 659, 'native': 668}
+# KERNEL-EDGE +1, K-ULP4 +2, K-ULP5 +1, DOC-TRUTH-4 +1) in each; 681/681/690
+# at INT26, each with wave H's twenty-two rows of RELEASE_MIN_TESTS (H-MEASURE
+# +12, H-DOCGATES +3, K-OCA-KEEP +1, PAR-ORDERS-2 +4, PAR-MARGIN +1,
+# PAR-MARGIN-2 +1), counted the same way. An excluded run must still discover
+# at least this many rows before -LE.
+EXCLUDED_REGISTERED_MIN = {'debug': 681, 'sanitizers': 681, 'native': 690}
 # The ctest stage's bound. A full sanitizers run (push to main, a manual
 # dispatch, the maintainers' verification) ran out of its 30 minutes twice on
 # main's four-core runner before every row had finished, so it gets an hour; a

@@ -2575,6 +2575,7 @@ set(PINEFORGE_PR_SLOW_TESTS
     test_native_direct_mutation
     test_native_event_retention
     test_native_group_absorption
+    test_native_group_keep_handle
     test_native_handle_stable_replace
     test_native_host_reads
     test_native_lookup_memos

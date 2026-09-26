@@ -596,7 +596,7 @@ Superseded pull-request runs are canceled. Main/post-merge and manual CI runs
 use distinct concurrency groups and remain uncanceled. A PR runs preflight,
 both Release jobs, kernel-only and the parity subset with their full sets;
 both Debug jobs, sanitizers and native-live run the registered set excluding
-the 28 CTest rows labelled `slow` in `tests/CMakeLists.txt`. The first 27 were
+the 29 CTest rows labelled `slow` in `tests/CMakeLists.txt`. The first 27 were
 chosen from INT23/INT24 job logs: over 60 seconds in either sanitizer run or
 over 30 seconds in either Debug run. Preflight and all proof jobs start in
 parallel. The advisory `build` aggregate succeeds only if every job succeeds.
@@ -610,7 +610,12 @@ run on the same host and is the 28th. The largest unlabelled rows there were
 `test_adapter_quiet_bar_differential` (39.3 s sanitizers),
 `test_native_state_continuation` (34.7 s sanitizers, 18.9 s Debug) and
 `test_adapter_lookup_index_scaling` (24.3 s sanitizers); the whole sanitizers
-set took 7.9 min of wall time, the PR set 614 s of summed test time.
+set took 7.9 min of wall time, the PR set 614 s of summed test time. INT26 read
+wave H's new rows from the lanes' own sanitizers and Debug runs on the same
+hosts: K-OCA-KEEP's `test_native_group_keep_handle` took 89.0 s under
+sanitizers (20.3 s Debug) and is the 29th; no other new row comes near a
+threshold (the largest, `test_magnified_aggregated_tape`, 3.4 s under
+sanitizers).
 
 A push to `main` and a manual dispatch of `ci.yml` run every profile without
 the exclusion. Their sanitizers CTest stage gets an hour (`ci_verify.py`

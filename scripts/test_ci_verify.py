@@ -1331,7 +1331,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
 
     def test_pr_exclusion_proves_registered_minus_labelled_equals_ran(self):
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
-                         {'debug': 659, 'sanitizers': 659, 'native': 668})
+                         {'debug': 681, 'sanitizers': 681, 'native': 690})
         for profile, registered in ci_verify.EXCLUDED_REGISTERED_MIN.items():
             with self.subTest(profile=profile):
                 code, summary, scripted, _ = self.run_profile(
