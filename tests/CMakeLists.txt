@@ -252,6 +252,9 @@ set(TEST_SOURCES
     test_ta_window_underapplied
     test_ta_window_round10
     test_ta_na_source_rules
+    test_ta_series_length_extremes
+    test_ta_series_length_supertrend
+    test_ta_simple_length
     test_matrix
     test_matrix_identity
     test_matrix_na

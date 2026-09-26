@@ -106,7 +106,7 @@ set(PINEFORGE_SOURCE_LAYER_SOURCES
     src/source/pine_aux_security.cpp
     src/source/pine_security_eval.cpp
     src/source/pine_state_hash.cpp
-)
+    src/source/pine_ta_length.cpp)
 
 # The kernel: the independent backtest + forward-execution state machine.
 # These TUs never reach the source layer, so they also stand alone as
