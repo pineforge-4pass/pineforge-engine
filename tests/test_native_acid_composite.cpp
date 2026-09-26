@@ -1953,20 +1953,20 @@ void driving_section(const Run& b, const Run& s, const Run& cut) {
 // Facts this witness measured that no requested feature asserts: printed, not
 // checked, so the row stays a coverage witness and the finding goes to a lane.
 void findings(const Run& plain, const Run& mag) {
-    int bar_open = 0, after = 0, other = 0;
+    int bar_open = 0, after = 0, sample = 0, other = 0;
     for (const auto& c : mag.host->checks) {
         if (c.p.kind == NativeMarginCheckKind::BarOpen) ++bar_open;
         else if (c.p.kind == NativeMarginCheckKind::AfterApplied) ++after;
+        else if (c.p.kind == NativeMarginCheckKind::IntrabarSample) ++sample;
         else ++other;
     }
     const auto* pc = plain.host->calls.empty() ? nullptr : &plain.host->calls.front();
     const auto* mc = mag.host->calls.empty() ? nullptr : &mag.host->calls.front();
-    out(fmt("FINDING intrabar-margin: lower_tf run offers %d BarOpen + %d AfterApplied (+%d other) margin points for %d "
-            "script bars / %lld samples -- no per-sample point; the spike that crosses L inside bar %d is liquidated "
+    out(fmt("FINDING intrabar-margin: lower_tf run offers %d BarOpen + %d AfterApplied + %d IntrabarSample (+%d other) "
+            "margin points for %d script bars / %lld samples; the spike that crosses L inside bar %d is liquidated "
             "at bar %d, price %s, in %zu slices (unmagnified: bar %d, price %s, %zu slice) "
-            "[docs claim per-sample re-evaluation: native-engine.md:1261-1262, native_run_spec.hpp:389-391, "
-            "native_execution_consumer.cpp:3076-3077]",
-            bar_open, after, other, static_cast<int>(mag.host->bars.size()),
+            "[per-sample re-evaluation: NativeMarginCheckKind::IntrabarSample, native_host.hpp]",
+            bar_open, after, sample, other, static_cast<int>(mag.host->bars.size()),
             (ll)mag.report.magnifier_sample_ticks_total, G_SPIKE,
             mc ? mc->cursor.point.interval_index : -1, mc ? D(mc->mark).c_str() : "-", mag.host->calls.size(),
             pc ? pc->cursor.point.interval_index : -1, pc ? D(pc->mark).c_str() : "-", plain.host->calls.size()));

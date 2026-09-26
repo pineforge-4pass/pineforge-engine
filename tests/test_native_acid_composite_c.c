@@ -61,7 +61,7 @@ static double ceil_tick(double p) { return ceil(p / ACID_TICK) * ACID_TICK; }
 static double buy_fill(double open) { return ceil_tick(open) + ACID_TICK; }
 
 /* ── Records ────────────────────────────────────────────────────────── */
-enum { MAX_FILLS = 32, MAX_TFS = 128, MAX_RECALC = 32, MAX_CHECKS = 256, MAX_REQS = 64,
+enum { MAX_FILLS = 32, MAX_TFS = 128, MAX_RECALC = 32, MAX_CHECKS = 4096, MAX_REQS = 1024,
        MAX_CALLS = 8, MAX_LOT_SNAPS = 16, MAX_LOTS = 8, MAX_WSNAPS = 8, MAX_WROWS = 8,
        MAX_TAGGED = 16, MAX_REFUSALS = 16, MAX_ANCHORS = 8, MAX_TRAILS = 8, MAX_APPENDS = 4,
        MAX_XREP = 16 };
