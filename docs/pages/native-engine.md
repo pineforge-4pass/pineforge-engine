@@ -1244,7 +1244,8 @@ point's own instant, on the curve's own step semantics — a step is in force
 from its timestamp onward, and the run's scalar `account_fx` holds before the
 first one. It is the rate BOTH terms convert at, the requirement and the
 marked equity it is compared with, and the rate `L` is solved at; at every
-check kind (`BarOpen`, `AfterApplied`, `Calculation`, `FxRoll`), in batch and
+check kind (`BarOpen`, `AfterApplied`, `Calculation`, `FxRoll`,
+`IntrabarSample`), in batch and
 in stream alike. A run that declares no curve has one rate at every instant,
 so the rule is inert there by construction.
 

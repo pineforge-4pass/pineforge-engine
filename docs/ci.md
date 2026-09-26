@@ -418,7 +418,7 @@ The subset job checks the submodule out with `GIT_LFS_SKIP_SMUDGE=1` and
 restores `corpus/data` from a cache keyed by the gitlink, so the ~176 MB feed
 is fetched at most once per pin rather than once per push; the restored bytes
 are then checked against the sha256 in the corpus's own Git-LFS pointer, so a
-stale or corrupt cache fails as "the feed is wrong" and not as "30 probes
+stale or corrupt cache fails as "the feed is wrong" and not as "54 probes
 drifted".
 
 ## Documentation guards
