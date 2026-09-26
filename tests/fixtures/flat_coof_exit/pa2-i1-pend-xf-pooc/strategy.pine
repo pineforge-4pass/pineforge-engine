@@ -1,0 +1,42 @@
+//@version=6
+// PAR-ORDERS-2 (R5 lane) item 1, the rule for an exit whose id has no filled entry.
+// Market entry E fills at bar j's open and its exit TX sits inside bar j's first leg,
+// so TX flattens the book mid-leg (cycles j = 2, 30, 41; levels read off those bars).
+// The recalculation that fill starts places a buy LIMIT entry L 2c below and its exit XF
+// (a bracket 50c either side, never touched); on bar j+3 everything is closed.
+// NYSE:F 15m, the three replayed days of tests/fixtures/session_islastbar
+// (2025-07-02, 07-03 half day, 07-07); k counts chart bars from 2025-07-02
+// 09:30 ET. No order is placed after 07-07 15:45 ET; whatever is open then is
+// closed on the next bar, outside the replay.
+strategy("PA2 I1 pend-xf-pooc", overlay=true,
+     initial_capital=100000, default_qty_type=strategy.fixed, default_qty_value=100,
+     pyramiding=1, commission_type=strategy.commission.percent, commission_value=0.01,
+     slippage=0, process_orders_on_close=true, calc_on_order_fills=true,
+     margin_long=100, margin_short=100, use_bar_magnifier=false)
+
+t0 = timestamp("America/New_York", 2025, 7, 2, 9, 30)
+tEnd = timestamp("America/New_York", 2025, 7, 7, 16, 0)
+var int b0 = na
+if na(b0) and time >= t0
+    b0 := bar_index
+k = na(b0) ? -1 : bar_index - b0
+units = strategy.position_size
+t = math.floor(close * 100 + 0.000001)
+n = strategy.closedtrades
+justFlat = units == 0 and n > 0 and strategy.closedtrades.exit_id(n - 1) == "TX" and strategy.closedtrades.exit_bar_index(n - 1) == bar_index
+lvl = k == 1 ? 11.46 : k == 29 ? 11.85 : k == 40 ? 11.66 : na
+if k >= 0 and time < tEnd
+    if not na(lvl) and units == 0
+        strategy.entry("E", strategy.long)
+        if k == 40
+            strategy.exit("TX", "E", stop=lvl)
+        else
+            strategy.exit("TX", "E", limit=lvl)
+    if justFlat
+        strategy.entry("L", strategy.long, limit=(t - 2) / 100)
+        strategy.exit("XF", "L", limit=(t + 50) / 100, stop=(t - 50) / 100)
+    if (k == 5 or k == 33 or k == 44) and units != 0
+        strategy.close_all()
+if time >= tEnd and strategy.position_size != 0
+    strategy.cancel_all()
+    strategy.close_all(comment="after-window")

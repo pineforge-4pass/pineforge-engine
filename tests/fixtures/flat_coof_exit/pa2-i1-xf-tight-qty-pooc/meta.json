@@ -1,0 +1,16 @@
+{
+  "title": "PA2 I1 xf-tight-qty-pooc",
+  "slug": "pa2-i1-xf-tight-qty-pooc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T00:58:58.495Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-07-08"
+  },
+  "pine_sha256": "864d4f5230d071f2bbe294165da28d0443b170a8004b9f037200c4a4a93437ae",
+  "tv_trades_sha256": "c78b18abe1bd4af3d01c40b7c1705d3d7a20505796e449b699515a590c1c5fce",
+  "tv_trades_rows": 18
+}

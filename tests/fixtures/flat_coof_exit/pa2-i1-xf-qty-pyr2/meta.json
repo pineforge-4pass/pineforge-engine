@@ -1,0 +1,16 @@
+{
+  "title": "PA2 I1 xf-qty-pyr2",
+  "slug": "pa2-i1-xf-qty-pyr2",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T00:55:29.896Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-07-08"
+  },
+  "pine_sha256": "efefa06ead78eb08591f0ed9814a9bef1e48dae8349910c1819f790c026dc5bc",
+  "tv_trades_sha256": "d127e5c29b28963fd10614a25dcc8f9e646269b76a5e49a36b08ae22b7bd60bd",
+  "tv_trades_rows": 18
+}

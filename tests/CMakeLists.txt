@@ -1366,6 +1366,11 @@ list(APPEND TEST_SOURCES test_adapter_security_route_conditions)
 # roster (BindCohort) instead of failing the run. Source-free, so it also runs
 # in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_current_cohort_refusal)
+# R5 lane PAR-ORDERS-2: TradingView's own trades (`lab tv` tapes under
+# tests/fixtures/, each directory's README.md names them) replayed through the
+# Pine adapter. All source-bound.
+#   A calc_on_order_fills exit placed while flat, for a pending or a filled parent.
+list(APPEND TEST_SOURCES test_flat_coof_exit_tapes)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
@@ -2107,7 +2112,9 @@ foreach(_pf_hm_row IN ITEMS
         "test_session_ismarket_tape|PINEFORGE_G236_FIXTURE_DIR|session_ismarket"
         "test_aggregated_entry_bar_index_tape|PINEFORGE_HM_F1E_FIXTURE_DIR|aggregated_entry_bar_index"
         "test_magnified_aggregated_tape|PINEFORGE_HM_MAG_FIXTURE_DIR|magnified_aggregated"
-        "test_adapter_margin_schedule_differential|PINEFORGE_HM_M7A_FIXTURE_DIR|margin_entry_bar")
+        "test_adapter_margin_schedule_differential|PINEFORGE_HM_M7A_FIXTURE_DIR|margin_entry_bar"
+        # R5 lane PAR-ORDERS-2's tape rows.
+        "test_flat_coof_exit_tapes|PINEFORGE_PA2_FLAT_COOF_FIXTURE_DIR|flat_coof_exit")
     string(REPLACE "|" ";" _pf_hm_fields "${_pf_hm_row}")
     list(GET _pf_hm_fields 0 _pf_hm_target)
     list(GET _pf_hm_fields 1 _pf_hm_macro)

@@ -1,0 +1,16 @@
+{
+  "title": "PA2 I1 xf-tight-qty-nocoof-pooc",
+  "slug": "pa2-i1-xf-tight-qty-nocoof-pooc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T00:59:02.251Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-07-08"
+  },
+  "pine_sha256": "11877d4c5c9032a8f281b31bcc26cfdf8b9cb90a9580557aebf0b50377ea6e3a",
+  "tv_trades_sha256": "3999af4912a43d9cc4e5f13697b1016a09bb7f5fcda33c656c8321b7c8ea330a",
+  "tv_trades_rows": 12
+}

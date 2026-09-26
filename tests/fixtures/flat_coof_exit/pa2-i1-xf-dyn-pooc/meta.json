@@ -1,0 +1,16 @@
+{
+  "title": "PA2 I1 xf-dyn-pooc",
+  "slug": "pa2-i1-xf-dyn-pooc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T00:55:17.416Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-07-08"
+  },
+  "pine_sha256": "b3d579a8ecf57f050215a823519161064e7e3615f4678aeed5916b7a35b7c770",
+  "tv_trades_sha256": "c78b18abe1bd4af3d01c40b7c1705d3d7a20505796e449b699515a590c1c5fce",
+  "tv_trades_rows": 18
+}

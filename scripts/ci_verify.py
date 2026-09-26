@@ -384,7 +384,9 @@ KERNEL_MIN_TESTS = 283
 # 695 = those 694 plus R5 lane PAR-ORDERS-2's
 # test_native_current_cohort_refusal (see KERNEL_MIN_TESTS; INT26 pick,
 # summed).
-RELEASE_MIN_TESTS = 695
+# 696 = those 695 plus R5 lane PAR-ORDERS-2's test_flat_coof_exit_tapes
+# (source-bound; INT26 pick, summed).
+RELEASE_MIN_TESTS = 696
 # R5 lane H-DOCGATES (AUDIT4-opus perf N-7) raises both floors by one more:
 # test_native_runtime_ambient_lifo, the runtime blocks' LIFO death row, is
 # source-free, so it registers and runs in the kernel profile (279 -> 280) and
