@@ -53,7 +53,11 @@ strategy_set_override(s, "close_entries_rule",     "FIFO"); /* or "ANY" */
 
 These mirror the parameters of Pine's `strategy(...)` declaration.
 Setting them via the C ABI **overrides** the script-defined defaults
-for this run.
+for this run. A script that omits `initial_capital`, `default_qty_type`
+or `default_qty_value` runs with TradingView's Pine v6 defaults, 100000,
+`percent_of_equity` and 100, which the generated constructor declares;
+code generated before TradingView's 2026-09-24 change leaves them to the
+source host's own defaults, 1000000, `fixed` and 1.
 
 ## Runtime knobs
 

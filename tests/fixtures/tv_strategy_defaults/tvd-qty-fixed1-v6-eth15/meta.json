@@ -1,0 +1,17 @@
+{
+  "title": "TVD qty fixed1 v6",
+  "slug": "tvd-qty-fixed1-v6-eth15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T03:48:28.239Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01",
+    "timeoutMs": 90000
+  },
+  "pine_sha256": "ad000272084231af02d485ff5393ef906a96bf626c71b5a40015f2f00ee528b0",
+  "tv_trades_sha256": "df7cc20f01d8a81a2b4f202d17ab280c935d04be2e7a5e772485e4cff206edb8",
+  "tv_trades_rows": 116
+}

@@ -1,0 +1,8 @@
+//@version=6
+strategy("TVD all omit v6", overlay = true)
+fast = ta.sma(close, 10)
+slow = ta.sma(close, 30)
+if ta.crossover(fast, slow)
+    strategy.entry("L", strategy.long)
+if ta.crossunder(fast, slow)
+    strategy.close("L")

@@ -46,15 +46,20 @@ Always check `strategy_get_last_error(s)` after. `report_free(&out)` to free.
 ## 1.2 `strategy()` params — runtime-overrideable via `strategy_set_override`
 
 Baked from the `.pine` at compile-time; these 9 can be overridden at runtime.
-Sentinels for "not overridden": `NaN` (doubles), `-1` (ints).
+Sentinels for "not overridden": `NaN` (doubles), `-1` (ints). "Default" is
+what a Pine v6 script that omits the argument runs with. TradingView changed
+three of them on 2026-09-24, and the generated constructor declares them;
+`PineStrategyConfig`'s own member defaults (a hand-built host, or code
+generated before the change) keep the previous values, shown as "host:",
+which are also Pine v5's.
 
 | Key | Default | Values |
 |---|---|---|
-| `initial_capital` | 1,000,000 | decimal |
+| `initial_capital` | 100,000 (host: 1,000,000) | decimal |
 | `commission_value` | 0 | decimal |
 | `commission_type` | percent(0) | `percent`/`0`, `cash_per_order`/`1`, `cash_per_contract`/`2` |
-| `default_qty_value` | 1 | decimal |
-| `default_qty_type` | fixed(0) | `fixed`/`0`, `percent_of_equity`/`1`, `cash`/`2` |
+| `default_qty_value` | 100, whatever the type (host: 1) | decimal |
+| `default_qty_type` | percent_of_equity(1) (host: fixed(0)) | `fixed`/`0`, `percent_of_equity`/`1`, `cash`/`2` |
 | `pyramiding` | 1 | int |
 | `slippage` | 0 | int (ticks) |
 | `process_orders_on_close` | false | `true`/`1`/`false`/`0` |

@@ -1,0 +1,8 @@
+//@version=6
+strategy("TVD qty value1 v6", overlay = true, initial_capital = 1000000, default_qty_value = 1)
+fast = ta.sma(close, 10)
+slow = ta.sma(close, 30)
+if ta.crossover(fast, slow)
+    strategy.entry("L", strategy.long)
+if ta.crossunder(fast, slow)
+    strategy.close("L")
