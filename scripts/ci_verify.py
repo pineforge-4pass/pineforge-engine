@@ -257,7 +257,14 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # test_removed_public_spellings); PAR-ORDERS and CI-FLAKE add no row. All
 # nine register in release too. 287 registered, 286 run: the WebSocket row
 # still skips on a system libcurl.
-KERNEL_MIN_TESTS = 286
+# 287 run = those 286 plus lane PERF-ZONED:
+#   +1 PERF-ZONED   test_native_session_day_zoned (session-day facts on a
+#                   certified cycle of an exchange zone without a calendar
+#                   interval per bar: certificates at real transitions, the
+#                   POSIX twin's facts at every decision point, the cost
+#                   pinned)
+# It registers in release too. 288 registered, 287 run.
+KERNEL_MIN_TESTS = 287
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -393,7 +400,9 @@ KERNEL_MIN_TESTS = 286
 # 704 = those 703 plus lane K-RUNERR's test_security_finer_than_feed: its TU
 # reaches the source layer, so it registers in release only and the kernel
 # floor does not move. No release row skips, so 704 registered is 704 run.
-RELEASE_MIN_TESTS = 704
+# 705 = those 704 plus PERF-ZONED's source-free row KERNEL_MIN_TESTS lists
+# above, which registers here too.
+RELEASE_MIN_TESTS = 705
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
@@ -418,9 +427,10 @@ ADR_RULED_TEXTS_MIN = 40
 # at INT26, each with wave H's twenty-four rows of RELEASE_MIN_TESTS
 # (H-MEASURE +12, H-DOCGATES +3, K-OCA-KEEP +1, PAR-ORDERS-2 +4, PAR-MARGIN
 # +1, PAR-MARGIN-2 +1, PERF-KEDGE +1, PAR-CASHFEE +1), counted the same way;
-# 684/684/693 with INT26 round 2's tape row.
+# 684/684/693 with INT26 round 2's tape row; 686/686/695 with lane
+# K-RUNERR's and lane PERF-ZONED's rows (+1 each).
 # An excluded run must still discover at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 684, 'sanitizers': 684, 'native': 693}
+EXCLUDED_REGISTERED_MIN = {'debug': 686, 'sanitizers': 686, 'native': 695}
 # The ctest stage's bound. A full sanitizers run (push to main, a manual
 # dispatch, the maintainers' verification) ran out of its 30 minutes twice on
 # main's four-core runner before every row had finished, so it gets an hour; a

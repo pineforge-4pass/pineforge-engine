@@ -1024,12 +1024,45 @@ private:
     // holding `ms` (`ms` itself when the calendar has no such interval): what
     // present_session_day reads for an instant, the interval resolved first.
     SessionPoint eligible_session_point(int64_t ms) const;
-    // Whether calendar_ is UTC (native_calendar::utc_calendar), asked once
-    // per calendar: present_session_day reads it at every bar.
-    bool calendar_is_utc() const {
-        if (!calendar_utc_) calendar_utc_ = native_calendar::utc_calendar(calendar_, calendar_memo_);
-        return *calendar_utc_;
+    // A certified session day of calendar_
+    // (native_calendar::cycle_certificate), whose instants present_session_day
+    // reads off the day itself, or a stretch of instants read the exact way.
+    struct CertifiedCycle {
+        // [origin_ms, next_origin_ms); empty until something is read into it.
+        int64_t origin_ms = 0;
+        int64_t next_origin_ms = 0;
+        bool certified = false;
+        int64_t ordinal = 0;
+        // native_calendar::fixed_bucket_ms(script_tf_).
+        int64_t bucket_ms = 0;
+        std::vector<std::pair<int64_t, int64_t>> spans;
+    };
+    // The certified cycle holding `ms`, or nullptr when it is not certified:
+    // the entry asked last, else the last few, else a certificate.
+    const CertifiedCycle* certified_cycle_of(int64_t ms) const {
+        const CertifiedCycle& last = certified_cycles_[certified_cycle_last_];
+        if (last.origin_ms <= ms && ms < last.next_origin_ms)
+            return last.certified ? &last : nullptr;
+        return certify_cycle(ms);
     }
+    const CertifiedCycle* certify_cycle(int64_t ms) const;
+    // The session point present_session_day reads for `ms` on its certified
+    // cycle, into `point`, when the cycle alone decides it: in session in a
+    // span, out of session when the script interval holding `ms` meets none.
+    // false for an interval that reaches a span from outside every span: the
+    // calendar then answers.
+    bool certified_point(const CertifiedCycle& cycle, int64_t ms, SessionPoint& point) const {
+        for (const auto& span : cycle.spans) {
+            if (span.first <= ms && ms < span.second) {
+                point = {true, cycle.ordinal};
+                return true;
+            }
+        }
+        if (certified_interval_meets_span(cycle, ms)) return false;
+        point = {false, cycle.ordinal};
+        return true;
+    }
+    bool certified_interval_meets_span(const CertifiedCycle& cycle, int64_t ms) const;
     struct SessionPointMemo {
         bool held = false;
         int64_t ms = 0;
@@ -1555,8 +1588,12 @@ private:
     // folded; a point whose resolution threw is never held.
     mutable std::array<SessionPointMemo, 2> session_points_{};
     mutable std::size_t session_point_next_ = 0;
-    // calendar_is_utc()'s answer for calendar_. Derived, never folded.
-    mutable std::optional<bool> calendar_utc_;
+    // The last few entries certify_cycle made, certified or not (a bar asks
+    // for its own day and its neighbours'), and the one asked last. Derived,
+    // never folded.
+    mutable std::array<CertifiedCycle, 4> certified_cycles_{};
+    mutable std::size_t certified_cycle_next_ = 0;
+    mutable std::size_t certified_cycle_last_ = 0;
     // Forget every memo over the calendar and the lookups it keys: called
     // wherever calendar_ is rebuilt.
     void reset_calendar_memos() const noexcept {
@@ -1564,7 +1601,9 @@ private:
         calendar_memo_.reset();
         session_points_ = {};
         session_point_next_ = 0;
-        calendar_utc_.reset();
+        for (CertifiedCycle& cycle : certified_cycles_) cycle.origin_ms = cycle.next_origin_ms = 0;
+        certified_cycle_next_ = 0;
+        certified_cycle_last_ = 0;
         interval_cache_.forget_priors();
     }
     Bar forming_{};

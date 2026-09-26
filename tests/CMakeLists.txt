@@ -872,6 +872,11 @@ list(APPEND TEST_SOURCES test_native_margin_post_fill_path)
 # decision point, and the per-bar resolution cost pinned. Source-free, so it
 # also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_session_day_utc)
+# R5 PERF-ZONED: on a certified cycle of an exchange zone the facts read an
+# instant off its session day -- certificates at real transitions, the POSIX
+# twin's facts at every decision point, the per-bar cost pinned. Source-free,
+# so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_session_day_zoned)
 
 # R5 F5: the Pine adapter selects those facts instead of computing its own:
 # the same tapes flag for flag through the adapter, its live-probe tail

@@ -7315,18 +7315,31 @@ void NativeExecutionConsumer::present_session_day(NativeDecisionContext& context
     // its first eligible instant and next input opening from the calendar,
     // even when a FeedTolerant host partitions by raw provider labels.
     //
-    // R5 lane PERF-KEDGE: on a UTC calendar an instant that is itself in
-    // session reads exactly as its interval's first eligible instant does, so
-    // neither the bar's interval nor a neighbour's is resolved for it. The
-    // day's cycles tile (utc_calendar), so the instant, its interval's open
-    // and that first eligible instant share the one session day holding the
-    // instant: the eligible instant is the first in-session instant of
-    // [open, instant], in session on that day, and every session point of
-    // them is that day's. Only an instant out of session, the walk and the
-    // scheduled close below resolve an interval. Any other zone asks the
-    // calendar in the order it always did, because a libc zone's mktime
-    // answer can depend on what was asked before it.
-    const bool utc = calendar_is_utc();
+    // R5 lanes PERF-KEDGE and PERF-ZONED: on a certified cycle
+    // (native_calendar::cycle_certificate) every lookup of every instant is
+    // the cycle's own day, no other day holds any of them, and the
+    // calendar's answers there do not depend on the order they are asked in.
+    // An instant in one of the day's spans then reads in session on the
+    // day's ordinal: its interval, when the calendar has one, is the day's
+    // bucket holding it, whose first eligible instant is on that day, in
+    // session. An instant whose bucket meets no span reads out of session:
+    // its interval's first eligible instant, or the instant itself, is in no
+    // span. Neither resolves anything (certified_point). A UTC or fixed
+    // offset certifies every cycle; a TZif zone, every cycle whose
+    // neighbourhood has only small transitions, far apart, none a backward
+    // move that keeps the daylight-saving flag. Every other instant (among
+    // them a bucket that reaches a span from outside one: whether the
+    // calendar has its interval at all turns on finding the next input
+    // slot), the walk and the scheduled close below make the calls they
+    // always made, in the same order, and a certificate refused asks the
+    // calendar nothing. The memo may then hold other days than it did at the
+    // base, because certified cycles skip lookups; that moves no answer. A
+    // day resolves the same whenever it is resolved, except where a civil
+    // time falls in a backward move that keeps the flag, and there glibc's
+    // mktime starts from its last answer's offset: every certified cycle
+    // keeps such a move 22 days away, and before one is reached the run has
+    // made the base's own calls for weeks, so the offset it starts from is
+    // the base's.
     std::optional<native_calendar::NativeInterval> slot;
     bool slot_resolved = false;
     const auto resolve_slot = [&] {
@@ -7336,8 +7349,8 @@ void NativeExecutionConsumer::present_session_day(NativeDecisionContext& context
         slot_resolved = true;
     };
     SessionPoint here;
-    if (utc) here = session_point(label);
-    if (!here.in_session) {
+    const CertifiedCycle* cycle = certified_cycle_of(label);
+    if (!cycle || !certified_point(*cycle, label, here)) {
         resolve_slot();
         here = session_point(slot ? slot->eligible_open_ms : label);
     }
@@ -7346,8 +7359,9 @@ void NativeExecutionConsumer::present_session_day(NativeDecisionContext& context
     // In session on this bar's own session day.
     const auto same_day = [&](int64_t other) {
         SessionPoint there;
-        if (utc) there = session_point(other);
-        if (!there.in_session) there = eligible_session_point(other);
+        const CertifiedCycle* other_cycle = certified_cycle_of(other);
+        if (!other_cycle || !certified_point(*other_cycle, other, there))
+            there = eligible_session_point(other);
         return there.in_session && there.ordinal && here.ordinal
             && *there.ordinal == *here.ordinal;
     };
@@ -7420,12 +7434,72 @@ void NativeExecutionConsumer::present_session_day(NativeDecisionContext& context
 }
 
 // Out of line, so the neighbour reading present_session_day inlines stays the
-// session point alone on its UTC shortcut.
+// certified cycle's point alone.
 [[gnu::noinline]] NativeExecutionConsumer::SessionPoint
 NativeExecutionConsumer::eligible_session_point(int64_t ms) const {
     const auto slot = native_calendar::interval_containing(
         calendar_, script_tf_, input_tf_, ms, calendar_memo_);
     return session_point(slot ? slot->eligible_open_ms : ms);
+}
+
+// The entry holding `ms` among the last few, else a new one: its certified
+// cycle, or, when the calendar certifies none there (nothing is resolved for
+// it then), the day from `ms` on, read the exact way. present_session_day
+// returns before asking for a calendar script timeframe, so the calendar
+// either has no interval for an instant (a timeframe is not valid: the instant
+// is read at itself) or keys it to its day's fixed bucket, which is what
+// certified_point mirrors. A throw: nullptr, the exact path.
+[[gnu::noinline]] const NativeExecutionConsumer::CertifiedCycle*
+NativeExecutionConsumer::certify_cycle(int64_t ms) const {
+    for (std::size_t i = 0; i < certified_cycles_.size(); ++i) {
+        const CertifiedCycle& cycle = certified_cycles_[i];
+        if (cycle.origin_ms <= ms && ms < cycle.next_origin_ms) {
+            certified_cycle_last_ = i;
+            return cycle.certified ? &cycle : nullptr;
+        }
+    }
+    try {
+        auto certificate = native_calendar::cycle_certificate(calendar_, ms, calendar_memo_);
+        CertifiedCycle entry;
+        if (certificate) {
+            entry.certified = true;
+            entry.origin_ms = certificate->origin_ms;
+            entry.next_origin_ms = certificate->next_origin_ms;
+            entry.ordinal = certificate->ordinal;
+            entry.bucket_ms = native_calendar::fixed_bucket_ms(script_tf_);
+            entry.spans = std::move(certificate->spans);
+        } else {
+            constexpr int64_t kDayMs = 86'400'000;
+            entry.origin_ms = ms;
+            entry.next_origin_ms = ms <= std::numeric_limits<int64_t>::max() - kDayMs
+                ? ms + kDayMs : std::numeric_limits<int64_t>::max();
+        }
+        CertifiedCycle& kept = certified_cycles_[certified_cycle_next_];
+        certified_cycle_last_ = certified_cycle_next_;
+        certified_cycle_next_ = (certified_cycle_next_ + 1) % certified_cycles_.size();
+        kept = std::move(entry);
+        return kept.certified ? &kept : nullptr;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+// Whether the script interval holding the out-of-session instant `ms` meets
+// a span of its certified cycle: the day's bucket holding `ms`, then
+// first_overlap_open's test. interval_containing answers nothing for a
+// timeframe that is not valid or a bucket past the last representable
+// instant, and `ms` is then read at itself, out of session.
+bool NativeExecutionConsumer::certified_interval_meets_span(const CertifiedCycle& cycle,
+                                                            int64_t ms) const {
+    const int64_t bucket = cycle.bucket_ms;
+    if (bucket <= 0 || !input_tf_.valid()) return false;
+    const int64_t open = cycle.origin_ms + ((ms - cycle.origin_ms) / bucket) * bucket;
+    if (open > std::numeric_limits<int64_t>::max() - bucket) return false;
+    const int64_t raw_end = open + bucket;
+    for (const auto& span : cycle.spans) {
+        if (std::max(open, span.first) < std::min(raw_end, span.second)) return true;
+    }
+    return false;
 }
 
 // (in session, session-day ordinal) of one instant, through the memo of the
