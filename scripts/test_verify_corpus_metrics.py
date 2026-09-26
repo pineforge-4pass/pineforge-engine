@@ -9,7 +9,8 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from datetime import timezone
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -673,6 +674,58 @@ class FragmentConsolidationIdentityTests(unittest.TestCase):
         self.assertFalse(result.distinct_entry_identity_ok)
         self.assertEqual(result.distinct_entry_mismatches, 1)
         self.assertEqual(result.label, "strong")
+
+
+class CoofCascadeIdentityTapeTests(unittest.TestCase):
+    """TradingView's tape of a calc_on_order_fills refill cascade and the
+    engine's trades for it (tests/fixtures/coof_cascade_identity/README.md)."""
+
+    PROBE = (Path(__file__).resolve().parents[1] / "tests" / "fixtures"
+             / "coof_cascade_identity" / "w7-coof-cascade-identity")
+
+    def test_tape_holds_one_signal_entries_beside_proven_keys(self) -> None:
+        tv = parse_trades(self.PROBE / "tv_trades.csv",
+                          tz=timezone(timedelta(hours=8)))
+        proven = distinct_entry_fill_keys(tv)
+        neighbours = {
+            (t.entry_time, t.entry_price, t.direction) for t in tv
+            if (t.entry_time, t.entry_price, t.direction) not in proven
+            and any(key[0] == t.entry_time and key[2] == t.direction
+                    and relative_max(key[1], t.entry_price)
+                    < STRICT_ENTRY_DELTA for key in proven)
+        }
+
+        self.assertEqual(len(tv), 72)
+        self.assertEqual(len(proven), 18)
+        self.assertEqual(sorted(price for _, price, _ in neighbours),
+                         [83566.72, 83757.42])
+
+    def test_refill_cascade_tape_catches_a_merged_entry(self) -> None:
+        tv = parse_trades(self.PROBE / "tv_trades.csv",
+                          tz=timezone(timedelta(hours=8)))
+        engine = parse_trades(self.PROBE / "engine_trades.csv",
+                              tz=timezone.utc)
+        proven = distinct_entry_fill_keys(tv)
+        bar = int(datetime(2025, 4, 5, 8, 45, tzinfo=timezone.utc).timestamp())
+        tv_bar = [t for t in tv if t.entry_time == bar]
+        merged = [
+            replace(t, entry_identity="41") if t.entry_identity == "42" else t
+            for t in engine if t.entry_time == bar
+        ]
+
+        self.assertEqual(sorted(t.entry_identity for t in merged),
+                         ["41", "41", "43", "44"])
+        self.assertEqual(
+            distinct_entry_fill_mismatches(tv_bar, merged, proven), 1)
+
+    def test_refill_cascade_tape_certifies_every_physical_entry(self) -> None:
+        result = analyze_strategy(self.PROBE)
+
+        self.assertEqual((result.tv_count, result.eng_count), (72, 72))
+        self.assertEqual(result.count_abs_delta, 0)
+        self.assertTrue(result.distinct_entry_identity_ok)
+        self.assertEqual(result.distinct_entry_mismatches, 0)
+        self.assertEqual(result.label, "excellent")
 
 
 class FragmentedFifoEligibilityTests(unittest.TestCase):
