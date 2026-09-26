@@ -146,16 +146,20 @@ and `<pineforge/native_module.hpp>` (@ref native_engine).
 ## The 1.0 C-surface boundary
 
 The C surface is a documented subset of the native C++ API in 1.0, not its
-twin. What a C host cannot reach, each exclusion with its reason, is listed in
-@ref native_engine, section *Driving the kernel from C*. The `[--]` rows of
-`native_c_api.h`'s COVERAGE block and the exclusions
-`scripts/check_native_c_api_surface.py` declares hold that list: the checker
-fails when a public `NativeStrategyHost` member has no row, or when a C
-enumeration is neither twinned to its kernel enumeration nor declared C-only.
-Four additions are planned for 1.1.0: a non-mutating execution preview, the
+twin. What a C host cannot reach is the table *The 1.0 C boundary* in
+@ref native_engine (section *Driving the kernel from C*): every C++ capability
+the 1.0 C surface does not expose, with its reason, the C route where there is
+one, and the checker row that pins it -- a `[--]` row of `native_c_api.h`'s
+COVERAGE block, a named `ENUM_TWINS` exclusion, or a `C_V1_EXCLUSIONS` row of
+`scripts/check_native_c_api_surface.py`. The checker fails when a public
+`NativeStrategyHost` member has no COVERAGE row, when a C enumeration is
+neither twinned to its kernel enumeration nor declared C-only, when a
+`C_V1_EXCLUSIONS` row's C++ declaration goes or its C spelling appears, and
+when that table cites a `C_V1_EXCLUSIONS` row once too few or too many.
+Four of its rows are planned for 1.1.0: a non-mutating execution preview, the
 origin and label of an applied event, a closed-trade entry-comment accessor
 and a replace-options word. Nothing in 1.0 promises C and C++ parity beyond
-that list.
+the fields and calls the C surface declares.
 
 ## Pairing with codegen
 
