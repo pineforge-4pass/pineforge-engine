@@ -394,6 +394,9 @@ set(TEST_SOURCES
     test_pointvalue
     test_metrics
     test_drawing
+    test_drawing_checkpoint
+    test_coof_drawing_checkpoint_cost
+    test_coof_drawing_rollback_tape
     test_margin_call
     test_high_value_fractional_money_margin
     test_margin_call_intrabar_chronology
@@ -2248,6 +2251,13 @@ endif()
 if(TARGET test_tv_strategy_defaults)
     target_compile_definitions(test_tv_strategy_defaults PRIVATE
         PINEFORGE_TVD_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tv_strategy_defaults")
+endif()
+
+# K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape
+# through the Pine host; source-bound.
+if(TARGET test_coof_drawing_rollback_tape)
+    target_compile_definitions(test_coof_drawing_rollback_tape PRIVATE
+        PINEFORGE_K_DRAWSNAP_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_drawing_rollback")
 endif()
 
 # R5 F5 replays the same tapes through a bare host; kernel-only, so this row
