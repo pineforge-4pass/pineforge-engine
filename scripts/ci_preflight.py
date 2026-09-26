@@ -36,14 +36,16 @@ ACTIONLINT_VERSION = '1.7.12'
 PR_SLOW_ROWS_SHA256 = 'e8bddea797abc46ca0deb671d5d35db3491b67a82e1413d08278530d12f7b67b'
 # A larger runner bills the organization even for a public repository, so only
 # an event no fork can raise -- a push, the schedule, a maintainer's dispatch --
-# or a pull request event whose head is this repository runs the heavy jobs on
-# the organization's 16-core Linux runner or GitHub's M2 runner for the
-# macos-26 image. Any other event, a fork's pull_request or pull_request_target,
-# a comment, a review or a workflow_run among them, gets the standard runner.
-# In a workflow_call the github context is the caller's.
+# or a pull_request whose head is a branch of this repository runs the heavy
+# jobs on the organization's 16-core Linux runner or GitHub's M2 runner for the
+# macos-26 image. Any other event -- a fork's pull request, any
+# pull_request_target, a review or review comment (anyone can post one on a
+# public repository's pull request), a comment, a workflow_run -- gets the
+# standard runner. In a workflow_call the github context is the caller's.
 TRUSTED_EVENT = ("github.event_name == 'push' || github.event_name == 'schedule' || "
                  "github.event_name == 'workflow_dispatch' || "
-                 "github.event.pull_request.head.repo.full_name == github.repository")
+                 "(github.event_name == 'pull_request' && "
+                 "github.event.pull_request.head.repo.full_name == github.repository)")
 LINUX_RUNNER = '${{ (' + TRUSTED_EVENT + ") && 'pf-linux-x64-16' || 'ubuntu-24.04' }}"
 MATRIX_RUNNER = '${{ (' + TRUSTED_EVENT + ') && matrix.larger_runner || matrix.os }}'
 # The build job's whole strategy, exactly (comments and blank lines aside): an
@@ -84,9 +86,9 @@ TRUSTED_ONLY_EVENTS = {'push', 'schedule', 'workflow_dispatch'}
 # One stage's bound. The verifier self-tests (test_ci_verify.py) drive the real
 # literal-aware parity, receipt and submodule guards in one serial process. On
 # the maintainers' verification hosts they took 475 s at 0d76a099's tree (458 s
-# at this change's first commit, the same suite), and those hosts ran them
-# 1.93-1.94 times as fast as the standard hosted runner on the same trees
-# (91d65ad6, 53d36551): about 920 s there. The stage starts within a minute of
+# in this change's own run, which leaves the suite alone), and those hosts ran
+# them 1.93-1.95 times as fast as the standard hosted runner on the same trees
+# (91d65ad6, 1a0e7ea1): about 925 s there. The stage starts within a minute of
 # the preflight job, so its bound fits inside the job's limit and a stuck
 # verifier-tests is logged here rather than cut off with the job.
 STAGE_TIMEOUT_SECONDS = 2400
@@ -141,7 +143,10 @@ def _unparsed(workflow: str) -> list[str]:
 def _key_value(line: str, key: str) -> str | None:
     """The value after `key:` on this line, the key bare or quoted; else None."""
     match = re.match(r'(["\']?)' + re.escape(key) + r'\1[ \t]*:(?:[ \t]+(.*)|$)', line.strip())
-    return None if match is None else match.group(2) or ''
+    if match is None:
+        return None
+    value = match.group(2) or ''
+    return '' if value.startswith('#') else value
 
 
 def _job_values(body: str, key: str) -> list[str]:
@@ -181,33 +186,69 @@ def _job_block(body: str, key: str) -> list[str]:
                 if follow.strip() and _indent(follow) <= depth:
                     break
                 block.append(follow)
-            return _code('\n'.join(block))
+            return [re.sub(r'\s+#.*$', '', line) for line in _code('\n'.join(block))]
     return []
 
 
 def _commands(body: str) -> list[str]:
-    """A job's code lines, trailing comments dropped and continuations joined."""
-    lines, pending = [], ''
-    for line in _code(body):
-        line = re.sub(r'\s+#.*$', '', line)
-        if line.endswith('\\'):
-            pending += line[:-1] + ' '
+    """The shell lines a job's run steps execute, as the shell reads them.
+
+    A run value on its key's line is one command; a literal block's lines are
+    commands, backslash continuations joined; a folded block is one command.
+    Comments are dropped.
+    """
+    lines, commands, index = body.split('\n'), [], 0
+    while index < len(lines):
+        match = re.match(r'^(\s*(?:-\s+)?)run:[ \t]*(.*)$', lines[index])
+        index += 1
+        if not match:
             continue
-        lines.append(pending + line)
+        value = re.sub(r'\s+#.*$', '', match.group(2)).strip()
+        if value[:1] not in ('|', '>'):
+            commands.append(value)
+            continue
+        column, block = len(match.group(1)), []
+        while index < len(lines) and (not lines[index].strip() or _indent(lines[index]) > column):
+            block.append(lines[index])
+            index += 1
+        shell = [re.sub(r'\s+#.*$', '', line).strip() for line in _code('\n'.join(block))]
+        if value[0] == '>':
+            commands.append(' '.join(shell))
+            continue
         pending = ''
-    return lines + ([pending] if pending else [])
+        for line in shell:
+            if line.endswith('\\'):
+                pending += line[:-1] + ' '
+            else:
+                commands.append(pending + line)
+                pending = ''
+        commands += [pending] if pending else []
+    return commands
+
+
+def _runs_verify(command: str) -> bool:
+    """Whether a shell line runs ci_verify: as a script, a path, or a module."""
+    return bool(re.search(r'\bpython[0-9.]*\s+(?:-\S+\s+)*(?:\S*\bci_verify\.py\b|-m\s+ci_verify\b)'
+                          r'|^\S*\bci_verify\.py\b', command))
+
+
+def _sized(line: str) -> int:
+    """How many times a line asks ci_verify for the runner's core count."""
+    return line.count(f'--jobs {CORES}') + line.count(f'--jobs={CORES}')
 
 
 def _events(workflow: str) -> set[str] | None:
     """The events that start a workflow, or None when the on key cannot be read."""
-    match = _ON_KEY.search(workflow)
-    if not match:
+    matches = list(_ON_KEY.finditer(workflow))
+    if len(matches) != 1:
         return None
+    match = matches[0]
     inline = match.group(1).strip()
     if inline:
-        if inline[0] in '[{' and inline[-1] != {'[': ']', '{': '}'}[inline[0]]:
+        if inline[0] in '>|&*!' or (inline[0] in '[{'
+                                     and inline[-1] != {'[': ']', '{': '}'}[inline[0]]):
             return None
-        return set(re.findall(r'[A-Za-z_]+', inline))
+        return set(re.findall(r'[A-Za-z_]+', inline)) or None
     block = workflow[match.end():]
     after = re.search(r'^[^\s#]', block, re.MULTILINE)
     block = block[:after.start()] if after else block
@@ -252,17 +293,18 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 findings.append(f'{name} job {job} must allow {minutes} minutes')
             # A job on 16 cores that still asks for 4 wastes the runner it pays for.
             # Every line counts, a multi-line run block's included; comments do not.
-            lines = _commands(body)
-            started = [re.sub(r'^(?:-\s+)?run:\s*', '', line.strip()).strip() for line in lines]
-            sized = [line for line in lines if VERIFY in line and f'--jobs {CORES}' in line]
-            if (any(len(_JOBS_FLAG.findall(line)) != line.count(f'--jobs {CORES}')
-                    or (VERIFY in line and not _JOBS_FLAG.search(line)) for line in lines)
-                    or any((re.search(r'\bJOBS\s*[:=]', line) or PARITY in line)
-                           and not start.startswith(PARITY_COMMAND)
-                           for line, start in zip(lines, started))
+            code = [re.sub(r'\s+#.*$', '', line) for line in _code(body)]
+            commands = _commands(body)
+            sized = [line for line in commands
+                     if _runs_verify(line) and _sized(line) and len(_JOBS_FLAG.findall(line)) == 1]
+            if (any(len(_JOBS_FLAG.findall(line)) != _sized(line) for line in code + commands)
+                    or any(_runs_verify(line) and not _sized(line) for line in commands)
+                    or any(re.search(r'\bJOBS\s*:', line) for line in code)
+                    or any((re.search(r'\bJOBS\s*=', line) or PARITY in line)
+                           and not line.startswith(PARITY_COMMAND) for line in commands)
                     or (command == VERIFY and not sized)
                     or (command == PARITY
-                        and not any(start.startswith(PARITY_COMMAND) for start in started))):
+                        and not any(line.startswith(PARITY_COMMAND) for line in commands))):
                 findings.append(f'{name} job {job} must size its parallelism to the runner')
     build = _jobs(workflows.get('ci.yml', '')).get('build', '')
     if _job_block(build, 'strategy') != _code(BUILD_STRATEGY):

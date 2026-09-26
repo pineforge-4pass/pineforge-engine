@@ -679,14 +679,15 @@ arm64 image on an M2, 5 cores, 14 GB). A larger runner bills the organization
 even for a public repository, so a pull request from a fork runs the same jobs
 on the free standard runners, `ubuntu-24.04` (4 vCPU, 16 GB) and `macos-26`
 (M1, 3 cores, 7 GB). Every heavy job selects its runner with one test that
-names what it trusts: a push, the schedule, a manual dispatch, or a pull
-request event whose head is in this repository. Every other event gets the
-standard runner, whether a fork can raise it (`pull_request`,
-`pull_request_target`, a review, a comment, a `workflow_run`) or it is merely
-unlisted (`merge_group`).
+names what it trusts: a push, the schedule, a manual dispatch, or a
+`pull_request` whose head is a branch of this repository. Every other event
+gets the standard runner, whether a fork can raise it (a fork's pull request,
+`pull_request_target`, a review or review comment -- anyone can post one on a
+public repository's pull request -- a comment, a `workflow_run`) or it is
+merely unlisted (`merge_group`).
 
 ```yaml
-runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
+runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
 ```
 
 The `build` matrix pairs each image with its `larger_runner` and names its legs
@@ -706,7 +707,11 @@ subset); a pull request that touches the corpus pin or the parity tooling also
 starts the whole sweep there, an eighth. A second run that overlaps them waits
 for a runner. Larger runners bill the organization's Actions budget: with no
 payment method or a spending limit of zero, their jobs wait for a runner that
-never comes, since GitHub does not fall back to a standard one.
+never comes, since GitHub does not fall back to a standard one. The test keeps
+a fork's pull request that leaves the workflows alone off the larger runners;
+one that edits them runs its own copy, which preflight reports but does not
+stop, so the repository's approval rule for workflow runs from outside
+contributors is what bounds that case.
 
 `scripts/ci_preflight.py` (`ci-workflow-contract`) pins every job's runner,
 time limit and parallelism in the three workflows a CI run starts, the `build`
@@ -728,9 +733,10 @@ the day before. Preflight's `verifier-tests` stage runs the same suite on its
 own: 394-542 s on the standard runner through 1a0e7ea1, and still running
 593 s in at 0d76a099, when the old ten-minute limit cancelled main's
 preflight. At that tree it takes 475 s on the maintainers' verification hosts
-(458 s at this change's first commit, the same suite), which ran it 1.93-1.94
-times as fast as the standard runner on the same trees (91d65ad6, 53d36551):
-about 15 min there. The full corpus sweep's run phase is serial as well.
+(458 s in this change's own run, which leaves the suite alone), which ran it
+1.93-1.95 times as fast as the standard runner on the same trees (91d65ad6,
+1a0e7ea1): about 15 min there. The full corpus sweep's run phase is serial as
+well.
 
 The verifier's own bounds bind before these limits. CTest gets 30 minutes in
 every run but a full sanitizers one, and `test_ci_verify` alone took up to
@@ -753,7 +759,7 @@ bounds the M2 from above.
 | --- | --- | --- |
 | `preflight` | 45 (was 10) | 7.3-9.8 min on the standard runner through 1a0e7ea1; cancelled at 10.3 min at 0d76a099, 593 s into `verifier-tests`, which takes about 15 min there at that tree (above), so preflight about 16 min. 4.8-8.2 min on the verification hosts. Each stage is bounded at 40 min (2400 s) inside it. |
 | `build` | 75 (was 45) | A Release leg runs its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets 17.2-17.7 min. On the larger Linux runner a full leg is its build plus the serial `test_ci_verify` row, 976-1288 s: about 30 min. The M1's 37.0 min bounds the M2. 11.1-18.4 min on the verification hosts. |
-| `sanitizers` | 120 | The verifier bounds a full run's CTest stage at 60 min after the build, a pull-request set's at 30 min. A fork's pull-request set took 35.2 min on the standard runner, whose compile alone took 1277-1335 s of the verifier's 1800-s build bound (53d36551, 0d76a099). Full runs now land only on the larger runner; on the standard runner they took 34.0-69.4 min (at 0d76a099 30 min of build and ABI providers, then 39 min of CTest, 1768 s of it the serial `test_ci_verify` row), so about 40 min there with a faster build, and 18.2-19.0 min on the verification hosts. |
+| `sanitizers` | 120 | The verifier bounds a full run's CTest stage at 60 min after the build, a pull-request set's at 30 min. A fork's pull-request set took 35.2 min on the standard runner, whose compile alone took 1277-1335 s of the verifier's 1800-s build bound (pull-request run 36139176292, and main at 0d76a099). Full runs now land only on the larger runner; on the standard runner they took 34.0-69.4 min (at 0d76a099 30 min of build and ABI providers, then 39 min of CTest, 1768 s of it the serial `test_ci_verify` row), so about 40 min there with a faster build, and 18.2-19.0 min on the verification hosts. |
 | `kernel-only` | 60 (was 45) | Every event runs the whole kernel set: 7.9-22.3 min on the standard runner, 6.5-9.8 min on the verification hosts. |
 | `native-live` | 60 (was 45) | Only the larger runner runs the full set, which is its build plus the serial `test_ci_verify` row (1034 s on the standard runner at 0d76a099): about 25 min, against 14.1-31.4 min for the full set on the standard runner. The verification hosts' release profile, the nearest they run, took 11.2-18.4 min. A fork's pull request runs the set without that row: 3.4 min on the standard runner. |
 | `corpus-parity` | 120 | 16.3-26.2 min on the standard runner, 10.1-10.3 min on the verification hosts. |

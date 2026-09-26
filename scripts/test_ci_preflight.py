@@ -140,6 +140,11 @@ class PreflightFailures(unittest.TestCase):
             (1, 'native-live', "github.event_name == 'workflow_dispatch'",
              "github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request_target'",
              'native-live.yml job native-live must run on'),
+            # The head test counts only for a pull_request: anyone can review one.
+            (0, 'sanitizers', "(github.event_name == 'pull_request' && "
+             "github.event.pull_request.head.repo.full_name == github.repository)",
+             'github.event.pull_request.head.repo.full_name == github.repository',
+             'ci.yml job sanitizers must run on'),
             (0, 'native-live', 'uses: ./.github/workflows/native-live.yml',
              'uses: someone/else/.github/workflows/native-live.yml@main',
              'ci.yml job native-live calls a workflow the runner contract cannot see'),
@@ -224,6 +229,15 @@ class PreflightFailures(unittest.TestCase):
              'ci.yml job kernel-only must size'),
             (0, 'kernel-only', f'run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs {CORES} --ccache',
              'run: $VERIFY', 'ci.yml job kernel-only must size'),
+            (0, 'kernel-only', f'run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs {CORES} --ccache\n',
+             f'run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs {CORES} --ccache\n\n'
+             '      - run: PYTHONPATH=scripts python3 -m ci_verify kernel --build-dir build-kernel --ccache\n',
+             'ci.yml job kernel-only must size'),
+            (0, 'kernel-only', f'      - name: Verify (kernel)\n        run: python3 scripts/ci_verify.py kernel '
+             f'--build-dir build-kernel --jobs {CORES} --ccache',
+             f'      - name: python3 scripts/ci_verify.py kernel --jobs {CORES}\n'
+             '        run: python3 -m ci_verify kernel --build-dir build-kernel --ccache',
+             'ci.yml job kernel-only must size'),
             (4, 'corpus-parity-subset', f'run: JOBS={CORES} ./scripts/check_corpus_parity.sh --subset',
              'run: |\n          JOBS=4 ./scripts/check_corpus_parity.sh --subset',
              'corpus-parity.yml job corpus-parity-subset must size'),
@@ -256,6 +270,17 @@ class PreflightFailures(unittest.TestCase):
                 (4, 'corpus-parity-subset', f'run: JOBS={CORES} ./scripts/check_corpus_parity.sh --subset',
                  f'run: |\n          JOBS={CORES} ./scripts/check_corpus_parity.sh --subset'),
                 (5, 'build', '    runs-on: ubuntu-latest\n', '    runs-on: "ubuntu-latest"\n'),
+                (0, 'build', '        os: [ubuntu-24.04, macos-26]\n',
+                 '        os: [ubuntu-24.04, macos-26]  # the images\n'),
+                (0, 'build', '    strategy:\n', '    strategy:  # the legs\n'),
+                (0, 'build', '-${{ matrix.build_type }}-${{ github.sha }}',
+                 "-${{ matrix.build_type }}-${{ hashFiles('scripts/ci_verify.py') }}-${{ github.sha }}"),
+                (0, 'kernel-only', '      - name: Verify (kernel)\n',
+                 '      - name: Verify (kernel) with scripts/ci_verify.py\n'),
+                (0, 'sanitizers', f'run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs {CORES}',
+                 'run: >-\n          python3 scripts/ci_verify.py sanitizers --build-dir build-asan\n'
+                 f'          --jobs {CORES}'),
+                (1, 'native-live', f'--jobs {CORES}', f'--jobs={CORES}'),
                 (2, 'promote', '    runs-on: ubuntu-latest\n', '    runs-on:\n      ubuntu-latest\n')):
             changed[index] = in_job(changed[index], job, before, after)
         changed[0] = changed[0].replace('\n  preflight:\n', '\n  preflight:  # the fast gate\n', 1)
@@ -286,6 +311,7 @@ class PreflightFailures(unittest.TestCase):
                 ('pull_request_target', 'macos-26-xlarge', True),
                 ('\n  pull_request:\n', '\n      group: pineforge-ci-large', True),
                 ('[push,\n  pull_request]', 'pf-linux-x64-16', True),
+                ('>-\n  pull_request', 'macos-26-xlarge', True),
                 ('[pull_request]', 'ubuntu-latest', False),
                 ('\n  workflow_dispatch:\n', 'pf-linux-x64-16', False)):
             with self.subTest(on=on, runner=runner):
@@ -293,6 +319,11 @@ class PreflightFailures(unittest.TestCase):
                     *original, others=dict(others, **{'lint.yml': new.format(on=on, runner=runner)}))
                 self.assertEqual(any('lint.yml job lint must stay on a standard runner' in line
                                      for line in findings), refused, findings)
+        # A decoy on key inside a multi-line string is no exemption.
+        decoy = ('name: "lint\non: push"\non:\n  pull_request:\njobs:\n  lint:\n'
+                 '    runs-on: pf-linux-x64-16\n    steps:\n      - run: "true"\n')
+        self.assertTrue(any('lint.yml job lint must stay on a standard runner' in line for line in
+                            ci_workflow_findings(*original, others=dict(others, **{'lint.yml': decoy}))))
 
     def test_a_stage_times_out_inside_the_preflight_job(self):
         # Five minutes stay for the runner setup and the other stages, so the
@@ -300,8 +331,8 @@ class PreflightFailures(unittest.TestCase):
         job_seconds = JOB_RUNNERS['ci.yml']['preflight'][1] * 60
         self.assertLessEqual(STAGE_TIMEOUT_SECONDS + 300, job_seconds)
         # And at least twice the stage's standard-runner time at 0d76a099's
-        # tree: 475 s on the verification hosts, 1.94 times as fast.
-        self.assertGreaterEqual(STAGE_TIMEOUT_SECONDS, 2 * 475 * 1.94)
+        # tree: 475 s on the verification hosts, up to 1.95 times as fast.
+        self.assertGreaterEqual(STAGE_TIMEOUT_SECONDS, 2 * 475 * 1.95)
 
     def contract_stage(self, mutation):
         """Run the ci-workflow-contract stage's argv in a copy of the tree."""
