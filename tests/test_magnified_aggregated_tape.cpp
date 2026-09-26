@@ -28,7 +28,7 @@
  * v0 (plain), v1 (process_orders_on_close), v2 (calc_on_order_fills), v4
  * (slippage 2, pyramiding 3), v5 (process_orders_on_close, slippage 2,
  * pyramiding 3); controls: the chart and plain-aggregated paths against
- * hm-chart-diff-v0 / v1 / v4 / v5.
+ * hm-chart-diff-v0 / v1 / v2 / v4 / v5.
  *
  * v1 and v5 (R5 lane PAR-ORDERS): under process_orders_on_close a stop entry
  * whose stop the placing close already reached fills at that close, the
@@ -38,12 +38,18 @@
  * quiet-bar gate read the script-bar index where the pass reads the input
  * slot, and skipped it on every such run. The same stop entries under
  * calc_on_order_fills fill there too: v3 (all three paths) and v7 (chart and
- * aggregated) book them at TradingView's bar and price. Their other rows are
- * RECORDED divergences, each asserted to differ, so a fix flips them
- * deliberately:
- *   - v3 / v7 row 5 (chart, aggregated): the calc_on_order_fills market entry
- *     the fill at bar 19's high re-issues books the close (11.71 / 11.73)
- *     where TradingView books that high (11.72 / 11.74);
+ * aggregated) book them at TradingView's bar and price.
+ *
+ * Row 5 of v2, v3 and v7 (chart, aggregated; R5 lane PAR-ORDERS-2, H-MEASURE
+ * Finding 6d): the calc_on_order_fills market entry the fill at bar 19's high
+ * re-issues books that high (11.72 / 11.72 / 11.74), as TradingView does: the
+ * fill is the matcher's, PX's limit at its own level on the leg to the bar's
+ * second extreme, and a market order its recalculation places fills at that
+ * extreme. It used to book the close (11.71 / 11.73) under
+ * process_orders_on_close and the next open without it.
+ *
+ * The other rows below are RECORDED divergences, each asserted to differ, so a
+ * fix flips them deliberately:
  *   - v7 rows 8 and 9 (chart, aggregated): after bar 33's close_all and
  *     same-bar add TradingView keeps the add (ML 11.86) and fills bar 38's
  *     stop entry at 11.83, the engine drops the add and books 11.82;
@@ -391,8 +397,9 @@ int main() {
         replay("hm-chart-diff-v1", v1, path);
         replay("hm-chart-diff-v4", v4, path);
         replay("hm-chart-diff-v5", v5, path);
-        replay("hm-chart-diff-v3", v3, path, rows({5}));
-        replay("hm-chart-diff-v7", v7, path, rows({5, 8, 9}));
+        replay("hm-chart-diff-v2", v2, path);
+        replay("hm-chart-diff-v3", v3, path);
+        replay("hm-chart-diff-v7", v7, path, rows({8, 9}));
     }
     // 3. the pyramiding cap
     pyramiding_cap_holds(all);

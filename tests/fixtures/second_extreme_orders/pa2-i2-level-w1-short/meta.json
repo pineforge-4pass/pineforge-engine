@@ -1,0 +1,16 @@
+{
+  "title": "PA2 I2 level-w1 short",
+  "slug": "pa2-i2-level-w1-short",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T01:54:31.502Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-07-08"
+  },
+  "pine_sha256": "c4c67c052c31d61dc41182bf504cfa77f0478a322cfa403b2dd25c3a6fbb2aec",
+  "tv_trades_sha256": "8d4893ade201e54203b7723abe267e211a26c92480620fea341d73882f12014d",
+  "tv_trades_rows": 12
+}

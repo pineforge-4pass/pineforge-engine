@@ -1,0 +1,16 @@
+{
+  "title": "PA2 I2 exit-w2 long-pooc",
+  "slug": "pa2-i2-exit-w2-long-pooc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T01:09:42.099Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-07-08"
+  },
+  "pine_sha256": "35d3a5e1d3809676d319833f2bfdb882a63967786739882f225f7376d4c801e5",
+  "tv_trades_sha256": "1b21b85bc50a052cee2749d2745c5d67cb434c9c8eb534aa1b22648bd00abc03",
+  "tv_trades_rows": 16
+}

@@ -1371,6 +1371,8 @@ list(APPEND TEST_SOURCES test_native_current_cohort_refusal)
 # Pine adapter. All source-bound.
 #   A calc_on_order_fills exit placed while flat, for a pending or a filled parent.
 list(APPEND TEST_SOURCES test_flat_coof_exit_tapes)
+#   An order a recalculation places on a bar's second extreme.
+list(APPEND TEST_SOURCES test_second_extreme_order_tapes)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
@@ -2114,7 +2116,8 @@ foreach(_pf_hm_row IN ITEMS
         "test_magnified_aggregated_tape|PINEFORGE_HM_MAG_FIXTURE_DIR|magnified_aggregated"
         "test_adapter_margin_schedule_differential|PINEFORGE_HM_M7A_FIXTURE_DIR|margin_entry_bar"
         # R5 lane PAR-ORDERS-2's tape rows.
-        "test_flat_coof_exit_tapes|PINEFORGE_PA2_FLAT_COOF_FIXTURE_DIR|flat_coof_exit")
+        "test_flat_coof_exit_tapes|PINEFORGE_PA2_FLAT_COOF_FIXTURE_DIR|flat_coof_exit"
+        "test_second_extreme_order_tapes|PINEFORGE_PA2_SECOND_EXTREME_FIXTURE_DIR|second_extreme_orders")
     string(REPLACE "|" ";" _pf_hm_fields "${_pf_hm_row}")
     list(GET _pf_hm_fields 0 _pf_hm_target)
     list(GET _pf_hm_fields 1 _pf_hm_macro)

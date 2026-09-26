@@ -1847,6 +1847,7 @@ private:
     void stage_flat_children_before_parent(const SourceId&, std::int32_t,
                                            std::int64_t);
     bool defer_coof_tail() const noexcept;
+    bool coof_fill_at_second_extreme() const noexcept;
     bool source_path_uses_high_first(const Bar&) const noexcept;
     bool coof_fill_on_path_point() const noexcept;
     bool coof_fill_at_path_point(double waypoint) const noexcept;
@@ -2057,6 +2058,11 @@ private:
     bool source_batch_mutated_ = false;
     bool coof_recalc_active_ = false;
     bool coof_first_open_ = false;
+    // Whether the recalculating fill booked the forced_execution_price the
+    // adapter set on its request (a fill AT a path point), not the matcher's
+    // own price (R5 lane PAR-ORDERS-2). It sits in the padding before the
+    // next 8-byte member, so the class layout does not move.
+    bool coof_fill_forced_ = false;
     std::uint64_t coof_market_entry_recalc_incarnation_ = 0;
     std::uint64_t coof_market_entry_recalc_fill_seq_ = 0;
     std::uint64_t coof_current_fill_seq_ = 0;

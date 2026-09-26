@@ -469,6 +469,7 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     // Live only inside a fill recalculation (NaN otherwise); folded then so
     // the idle digest keeps its prior form.
     if (coof_recalc_active_) f.d(coof_fill_cursor_t_);
+    if (coof_recalc_active_) f.b(coof_fill_forced_);
     const auto& coof_coord = coof_context_.coordinate;
     f.u(coof_coord.ordinal); f.i(coof_coord.interval_index); f.i(coof_coord.open_ms);
     f.i(coof_coord.eligible_open_ms); f.i(coof_coord.last_traded_close_ms);

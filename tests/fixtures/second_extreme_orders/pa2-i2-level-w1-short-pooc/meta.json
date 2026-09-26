@@ -1,0 +1,16 @@
+{
+  "title": "PA2 I2 level-w1 short pooc",
+  "slug": "pa2-i2-level-w1-short-pooc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T01:54:34.844Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-07-08"
+  },
+  "pine_sha256": "05533896f2b23d374a53a7e6b1951f08ad44be782c1082dfc82972bc29e1802e",
+  "tv_trades_sha256": "c092e35ad56281fdc114e0923e9e24e3c47ea7f7a93ddce883b2cde07d69fd99",
+  "tv_trades_rows": 10
+}

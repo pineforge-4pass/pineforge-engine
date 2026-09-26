@@ -23,6 +23,7 @@ window 2025-07-01 .. 2025-07-08), byte-identical.
 | `hm-chart-diff-v1` | process_orders_on_close, magnifier off | 12 | `27174a6b560b84c0c8f7ce541b66a6e0db648d4c1880d684059b6b050087d12c` | `tv-tape-hm-chart-diff-v1-27174a6b` |
 | `hm-chart-diff-v4` | slippage 2, pyramiding 3, magnifier off | 14 | `5293cc0c2bc88dabba65ff73a024d88b28292845c537f0f4ccf58922e4d502a1` | `tv-tape-hm-chart-diff-v4-5293cc0c` |
 | `hm-chart-diff-v5` | process_orders_on_close, slippage 2, pyramiding 3, magnifier off | 14 | `0080877d820ae0df81ec7eedab24b7d3a20df9f819f1e6101ff51b6049a6b44d` | `tv-tape-hm-chart-diff-v5-0080877d` |
+| `hm-chart-diff-v2` | calc_on_order_fills, magnifier off | 12 | `3b3fb4c3dee2309df5f6340b5c9aef2580e62787020e82bbde8ec77fe8d4a5a3` | `tv-tape-hm-chart-diff-v2-3b3fb4c3` |
 | `hm-chart-diff-v3` | process_orders_on_close, calc_on_order_fills, magnifier off | 12 | `4d45cbcd76d2949a706469307ecba90e5e5b878d84033ac8b704ec906152cdae` | `tv-tape-hm-chart-diff-v3-4d45cbcd` |
 | `hm-chart-diff-v7` | process_orders_on_close, calc_on_order_fills, slippage 2, pyramiding 3, magnifier off | 14 | `f5a88e1e51e749a95eef40b094fe44b4637f4426e2b43796a9f7c5242457c581` | `tv-tape-hm-chart-diff-v7-f5a88e1e` |
 
@@ -36,3 +37,9 @@ flat book, where the engine once opened 85 lots on one bar with pyramiding=1.
 the same source) witness the process_orders_on_close stop entry that its placing
 close already reached: TradingView fills it at that close on every path, with or
 without calc_on_order_fills.
+
+`hm-chart-diff-v2` (added by R5 lane PAR-ORDERS-2 from lane PAR-ORDERS' evidence,
+`exec/PAR-ORDERS-scratch/mag/tapes`) and row 5 of `hm-chart-diff-v3` / `-v7` witness
+H-MEASURE Finding 6d: the market entry a calc_on_order_fills recalculation places at
+the matcher's fill on bar 19's high fills at that high, with or without
+process_orders_on_close.

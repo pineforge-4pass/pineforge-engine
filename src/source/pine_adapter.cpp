@@ -2171,6 +2171,7 @@ void PineExecutionAdapter::reset_for_run() {
     source_batch_mutated_ = false;
     coof_recalc_active_ = false;
     coof_first_open_ = false;
+    coof_fill_forced_ = false;
     coof_market_entry_recalc_incarnation_ = 0;
     coof_market_entry_recalc_fill_seq_ = 0;
     coof_current_fill_seq_ = 0;
@@ -5617,20 +5618,23 @@ void PineExecutionAdapter::begin_coof_recalc(
     coof_fill_cursor_t_ = event.cursor.t;
     coof_market_entry_recalc_fill_seq_ = source_fill_sequence;
     coof_market_entry_recalc_incarnation_ = 0;
+    const auto placement = placement_.find(event.handle().incarnation);
     if (event.opened_units != 0.0
         && std::holds_alternative<native_order::Market>(event.request().trigger)) {
-        const auto placement = placement_.find(event.handle().incarnation);
         if (placement != placement_.end()
             && placement->second.family == PineOrderFamily::Entry) {
             coof_market_entry_recalc_incarnation_ = event.handle().incarnation;
         }
     }
+    coof_fill_forced_ = placement != placement_.end()
+        && finite_positive(placement->second.forced_execution_price);
     coof_context_ = context;
 }
 
 void PineExecutionAdapter::end_coof_recalc() noexcept {
     coof_recalc_active_ = false;
     coof_first_open_ = false;
+    coof_fill_forced_ = false;
     coof_market_entry_recalc_incarnation_ = 0;
     coof_market_entry_recalc_fill_seq_ = 0;
     coof_current_fill_seq_ = 0;
@@ -5683,13 +5687,32 @@ bool PineExecutionAdapter::defer_coof_tail() const noexcept {
     const auto phase = coof_context_.coordinate.path_phase;
     if (phase == NativePathPhase::Close || phase == NativePathPhase::None)
         return true;
-    if (!coof_script_bar_valid_) return false;
+    // A fill the adapter forced onto the second extreme leaves the
+    // recalculation the close point alone; the matcher's own fill there
+    // does not (coof_fill_at_second_extreme, H-MEASURE Finding 6d).
+    return coof_fill_forced_ && coof_fill_at_second_extreme();
+}
+
+// The recalculating fill sits AT the bar's second extreme, the end of its
+// approach leg (the high of a low-first bar, the low of a high-first one).
+// Two fills book that point, and TradingView answers the recalculation's
+// market orders differently for them. The matcher's fill of a resting
+// request at its own level there ends the approach leg: those orders fill at
+// the extreme (hm-chart-diff-v2 / -v3 / -v6 / -v7 bar 19, lab tv
+// pa2-i2-exit-w2-* and pa2-i4-close-w2-*). A request an earlier
+// recalculation of the bar placed, which the adapter forced onto the extreme
+// it gap-fills at (coof_fill_forced_: forced_execution_price), fills at the
+// point itself: they advance to the close, as ab9714be's endpoint rule has
+// it (corpus bracket-rivet-calc-on-fill-01 trades 350 and 516; R5 lane
+// PAR-ORDERS-2).
+bool PineExecutionAdapter::coof_fill_at_second_extreme() const noexcept {
+    if (!coof_recalc_active_ || coof_first_open_ || !coof_script_bar_valid_) return false;
     const bool high_first = source_path_uses_high_first(coof_script_bar_);
     const NativePathPhase second = high_first
         ? NativePathPhase::Low : NativePathPhase::High;
-    const double endpoint = high_first
-        ? coof_script_bar_.low : coof_script_bar_.high;
-    return phase == second && coof_fill_at_path_point(endpoint);
+    const double endpoint = high_first ? coof_script_bar_.low : coof_script_bar_.high;
+    return coof_context_.coordinate.path_phase == second
+        && coof_fill_at_path_point(endpoint);
 }
 
 bool PineExecutionAdapter::coof_fill_on_path_point() const noexcept {
@@ -6363,14 +6386,23 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     const auto coof_native_state = detail::run_state(require_host());
     const bool coof_lower_path = coof_native_state.spec
         && coof_native_state.spec->intrabar.lower();
+    // A matcher fill AT the bar's second extreme: the recalculation's market
+    // entry fills there, at that extreme. ab9714be advanced every endpoint
+    // fill to the following waypoint, the close, which admits no cascade
+    // order, and filled the entry at the next open; TradingView books it on
+    // the fill's own bar at the extreme (hm-chart-diff-v2 / -v6 bar 19: 11.72
+    // / 11.74 at the high, and under process_orders_on_close -v3 / -v7 alike
+    // -- R5 lane PAR-ORDERS). A fill the adapter forced there still advances
+    // (coof_fill_at_second_extreme; R5 lane PAR-ORDERS-2).
     bool coof_market_next_open = false;
-    if (coof_recalc_active_ && !coof_first_open_ && !coof_lower_path && !priced) {
-        const bool high_first = source_path_uses_high_first(coof_script_bar_);
-        const NativePathPhase second = high_first
-            ? NativePathPhase::Low : NativePathPhase::High;
-        const double endpoint = high_first ? coof_script_bar_.low : coof_script_bar_.high;
-        coof_market_next_open = coof_context_.coordinate.path_phase == second
-            && coof_fill_at_path_point(endpoint);
+    bool coof_market_at_second_extreme = false;
+    double coof_second_extreme = kNaN;
+    if (coof_recalc_active_ && !coof_first_open_ && !coof_lower_path && !priced
+        && coof_fill_at_second_extreme()) {
+        coof_second_extreme = source_path_uses_high_first(coof_script_bar_)
+            ? coof_script_bar_.low : coof_script_bar_.high;
+        coof_market_next_open = coof_fill_forced_;
+        coof_market_at_second_extreme = !coof_fill_forced_;
     }
     double native_limit = limit_price;
     double native_stop = stop_price;
@@ -6399,13 +6431,16 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     if (coof_recalc_active_ && !coof_first_open_ && !coof_market_next_open
         && coof_script_bar_valid_
         && std::holds_alternative<native_order::Market>(request.trigger)
-        && !defer_coof_tail()) {
+        && (coof_market_at_second_extreme || !defer_coof_tail())) {
         // ab9714be pine_scheduler.cpp:398-619: a MARKET request born by a
         // non-first-open fill recalc waits for the next unconsumed waypoint.
         // A mid-segment fill retains that segment's endpoint; an endpoint
-        // fill advances to the following waypoint.
+        // fill advances to the following waypoint -- but the second
+        // extreme's own (above).
         int next_extreme_index = -1;
-        const double next_extreme = coof_next_waypoint(&next_extreme_index);
+        const double next_extreme = coof_market_at_second_extreme
+            ? coof_second_extreme : coof_next_waypoint(&next_extreme_index);
+        if (coof_market_at_second_extreme) next_extreme_index = 2;
         const auto point = detail::callback_point(require_host());
         const double current_quote = point ? point->price : kNaN;
         coof_market_fill = source_bar_fill_tick(
@@ -7123,7 +7158,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             {std::move(request), std::move(snapshot), id, true, 0, true});
         return;
     }
-    if (defer_coof_tail()) {
+    if (defer_coof_tail() && !coof_market_at_second_extreme) {
         pending_coof_requests_.push_back({std::move(request), std::move(snapshot), id, true, 0});
         return;
     }

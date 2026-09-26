@@ -148,7 +148,8 @@ void test_r1_cascade_bracket_does_not_exact_fill_on_w2_c_segment() {
 // A cascade MARKET re-entry born at W2 (only C remains). Path (H near):
 // O=100 -> W1=101 -> W2=90 -> C=95. E@100 (bar-open) -> stop bracket @90 exits
 // at W2 -> re-enter E (cascade market): the fixed-budget engine fills it at
-// the C tick (95); the new rule rolls it to the next bar's open (96).
+// the C tick (95); ab9714be's rule rolled it to the next bar's open (96), and
+// it fills at W2 (90) since R5 lane PAR-ORDERS-2 (below).
 class CascadeMarketRollProbe final : public CoofBase {
 public:
     void on_source_bar(const Bar&) override {
@@ -185,11 +186,17 @@ void test_r2_cascade_market_only_c_remains_rolls_to_next_open() {
         CHECK(near(p.get_trade(0).entry_price, 100.0));
         CHECK(near(p.get_trade(0).exit_price, 90.0));
     }
-    // The rolled cascade re-entry fills at bar 2's OPEN (96), not the bar-1 C
-    // tick (95) the fixed budget would have used.
+    // The pin of this row a later lane moved on purpose (R5 lane PAR-ORDERS-2,
+    // H-MEASURE Finding 6d; tests/test_second_extreme_order_tapes.cpp):
+    // expectation corrected: the re-entry's lot 96 (bar 2's open) -> 90 (bar
+    // 1's W2), because X's stop is the matcher's fill at its own level on the
+    // leg to W2, and TradingView fills the market order such a fill's
+    // recalculation places at that extreme (lab tv pa2-i2-exit-w2-*,
+    // hm-chart-diff-v2 / -v3 / -v7 row 5) -- neither at the C tick (95) the
+    // fixed budget used nor at the next open.
     CHECK(p.open_lot_count() == 1);
     if (p.open_lot_count() == 1) {
-        CHECK(near(p.open_lot_prices().front(), 96.0));   // RED vs budget (95.0)
+        CHECK(near(p.open_lot_prices().front(), 90.0));
     }
     CHECK(near(p.signed_size(), 1.0));
 }

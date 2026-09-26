@@ -1,0 +1,16 @@
+{
+  "title": "PA2 I2 exit-w2 short",
+  "slug": "pa2-i2-exit-w2-short",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T01:09:46.799Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-07-08"
+  },
+  "pine_sha256": "1d05b28d250c7f27df151cf1d49434fae2e773a8a655b50da61f04b10991aab1",
+  "tv_trades_sha256": "6864d39da5adfd779657801af3be47c7940783b14c4df0bc8af3e58f4624dd39",
+  "tv_trades_rows": 14
+}

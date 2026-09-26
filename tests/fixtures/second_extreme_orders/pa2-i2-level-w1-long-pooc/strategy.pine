@@ -1,0 +1,40 @@
+//@version=6
+// PAR-ORDERS-2 (R5 lane) item 2, the boundary of H-MEASURE Finding 6d: a LEVEL fill
+// on a bar's FIRST extreme. Lot A is a limit entry at bar j's low, the first
+// extreme of a low-first bar, so A's fill ends the leg to it; the calc_on_order_fills
+// recalculation it starts places strategy.exit("AX", "A", limit) with the limit
+// between the two extremes; the recalculation AX's fill starts places the market
+// entry C. Everything is closed on bar j+2.
+// Cycles j = 4, 25, 40 (levels read off those bars).
+// NYSE:F 15m, the three replayed days of tests/fixtures/session_islastbar
+// (2025-07-02, 07-03 half day, 07-07); k counts chart bars from 2025-07-02
+// 09:30 ET. No order is placed after 07-07 15:45 ET; whatever is open then is
+// closed on the next bar, outside the replay.
+strategy("PA2 I2 level-w1 long pooc", overlay=true,
+     initial_capital=100000, default_qty_type=strategy.fixed, default_qty_value=100,
+     pyramiding=1, commission_type=strategy.commission.percent, commission_value=0.01,
+     slippage=0, process_orders_on_close=true, calc_on_order_fills=true,
+     margin_long=100, margin_short=100, use_bar_magnifier=false)
+
+t0 = timestamp("America/New_York", 2025, 7, 2, 9, 30)
+tEnd = timestamp("America/New_York", 2025, 7, 7, 16, 0)
+var int b0 = na
+if na(b0) and time >= t0
+    b0 := bar_index
+k = na(b0) ? -1 : bar_index - b0
+units = strategy.position_size
+closedNow = strategy.closedtrades - nz(strategy.closedtrades[1])
+aLimit = k == 3 ? 11.46 : k == 24 ? 11.73 : k == 39 ? 11.61 : na
+axLimit = k == 4 ? 11.50 : k == 25 ? 11.76 : k == 40 ? 11.70 : na
+if k >= 0 and time < tEnd
+    if not na(aLimit) and units == 0
+        strategy.entry("A", strategy.long, limit=aLimit)
+    if not na(axLimit) and units > 0
+        strategy.exit("AX", "A", limit=axLimit)
+    if not na(axLimit) and units == 0 and closedNow == 1
+        strategy.entry("C", strategy.long)
+    if (k == 6 or k == 27 or k == 42) and units != 0
+        strategy.close_all()
+if time >= tEnd and strategy.position_size != 0
+    strategy.cancel_all()
+    strategy.close_all(comment="after-window")

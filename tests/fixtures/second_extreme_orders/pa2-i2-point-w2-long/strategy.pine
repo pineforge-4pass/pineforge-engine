@@ -1,0 +1,44 @@
+//@version=6
+// PAR-ORDERS-2 (R5 lane) item 2, the boundary of H-MEASURE Finding 6d: a POINT fill
+// on a bar's SECOND extreme. Lot P is open with a stop exit PX between bar j's open
+// and its low, the first extreme of a low-first bar: PX fills on the leg to it,
+// and the calc_on_order_fills recalculation it starts places the market entry A,
+// which fills at the low itself; the recalculation A's fill starts places
+// strategy.exit("AX", "A", limit) with the limit between the two extremes; the
+// recalculation AX's fill starts places the market entry C. Everything is closed on
+// bar j+2. Cycles j = 3, 41 (levels read off those bars).
+// NYSE:F 15m, the three replayed days of tests/fixtures/session_islastbar
+// (2025-07-02, 07-03 half day, 07-07); k counts chart bars from 2025-07-02
+// 09:30 ET. No order is placed after 07-07 15:45 ET; whatever is open then is
+// closed on the next bar, outside the replay.
+strategy("PA2 I2 point-w2 long", overlay=true,
+     initial_capital=100000, default_qty_type=strategy.fixed, default_qty_value=100,
+     pyramiding=1, commission_type=strategy.commission.percent, commission_value=0.01,
+     slippage=0, process_orders_on_close=false, calc_on_order_fills=true,
+     margin_long=100, margin_short=100, use_bar_magnifier=false)
+
+t0 = timestamp("America/New_York", 2025, 7, 2, 9, 30)
+tEnd = timestamp("America/New_York", 2025, 7, 7, 16, 0)
+var int b0 = na
+if na(b0) and time >= t0
+    b0 := bar_index
+k = na(b0) ? -1 : bar_index - b0
+units = strategy.position_size
+closedNow = strategy.closedtrades - nz(strategy.closedtrades[1])
+pxStop = k == 2 ? 11.44 : k == 40 ? 11.66 : na
+axLimit = k == 3 ? 11.47 : k == 41 ? 11.70 : na
+if k >= 0 and time < tEnd
+    if not na(pxStop) and units == 0
+        strategy.entry("P", strategy.long)
+        strategy.exit("PX", "P", stop=pxStop)
+    if not na(axLimit) and units == 0 and closedNow == 1
+        strategy.entry("A", strategy.long)
+    if not na(axLimit) and units > 0 and strategy.opentrades.entry_id(0) == "A"
+        strategy.exit("AX", "A", limit=axLimit)
+    if not na(axLimit) and units == 0 and closedNow == 2
+        strategy.entry("C", strategy.long)
+    if (k == 5 or k == 43) and units != 0
+        strategy.close_all()
+if time >= tEnd and strategy.position_size != 0
+    strategy.cancel_all()
+    strategy.close_all(comment="after-window")
