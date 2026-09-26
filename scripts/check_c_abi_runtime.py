@@ -13,8 +13,9 @@ Two inventories, pinned independently so neither can drift into the other:
      include/pineforge/native_c_api.h and its implementations in
      src/native_c_host.cpp, so they do not move the counts above; they are
      pinned by EXPECTED_NATIVE_C_API instead. Adding or removing a symbol
-     there without updating that list fails every CI matrix job at the "C ABI
-     runtime source check" step, exactly as it does for c_abi.cpp.
+     there without updating that list fails this script's stage,
+     source-guard-c-abi (ci_preflight and every ci_verify profile), exactly as
+     it does for c_abi.cpp.
 """
 
 from __future__ import annotations

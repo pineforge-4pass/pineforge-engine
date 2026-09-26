@@ -75,11 +75,13 @@ If `scripts/run_corpus.sh` reports any parity drift or failures, investigate the
 
 ## SOP: adding a runtime `PF_API` export (CI gate — recurring failure)
 
-CI runs `python3 scripts/check_c_abi_runtime.py` after build+test. It pins the
-exact set of `PF_API` symbols implemented in `src/c_abi.cpp` against the
-hardcoded `EXPECTED_RUNTIME` frozenset in that script. Adding (or removing) a
-runtime export WITHOUT updating that list fails ALL CI matrix jobs at the
-"C ABI runtime source check" step, even though build and ctest are green.
+CI runs `python3 scripts/check_c_abi_runtime.py` as the `source-guard-c-abi`
+stage of `scripts/ci_preflight.py` and of every `scripts/ci_verify.py` profile,
+before anything is built. It pins the exact set of `PF_API` symbols implemented
+in `src/c_abi.cpp` against the hardcoded `EXPECTED_RUNTIME` frozenset in that
+script. Adding (or removing) a runtime export WITHOUT updating that list fails
+the `source-guard-c-abi` stage, and with it preflight and every profile, even
+though the build and ctest would be green.
 
 Checklist when touching runtime exports — update ALL of these together:
 
