@@ -58,9 +58,10 @@ prerelease included.
   equality alone does not make a pair.
 - **State hashes are new, and v19's.** The broker-state hash, the per-bar hash
   rows, the stream fingerprint and the native continuation hash did not exist
-  in 0.13.1; their values are the v19 epoch's (#282, #283, #284, #286), and a
-  value recorded by a development build before 1.0.0 is not comparable. From
-  1.0.0 their recipe is fixed for all of 1.x.
+  in 0.13.1; their values are the v19 epoch's as the release candidates fix
+  them (#282, #283, #284, #286, #289), and a value recorded by a development
+  build before 1.0.0 is not comparable. From 1.0.0 their recipe is fixed for
+  all of 1.x.
 - **Event retention defaults to a window.** `NativeRunSpec::event_retention`
   defaults to `NativeEventRetention::Window`, which keeps the command journal
   only until every reader has consumed it (#283). A C++ host that reads the
@@ -70,7 +71,10 @@ prerelease included.
   every translation unit that links `PineForge::pineforge` or
   `PineForge::kernel` (#282); 0.13.1 compiled the library alone with it. A
   build outside CMake compiles generated strategy code with
-  `-ffp-contract=off` itself (docs/pages/integration-cmake.md).
+  `-ffp-contract=off` itself (docs/pages/integration-cmake.md). The package
+  also hands every Clang-compiled consumer `-fbracket-depth=1024`, so the
+  deeply nested C++ codegen emits for deep Pine compiles; a Clang build
+  outside CMake adds that flag itself.
 - **One header moved.** `<pineforge/pine_float_compare.hpp>` is now
   `<pineforge/source/pine_float_compare.hpp>`, a source-layer header
   (e71e589c); new code includes `<pineforge/ta_compare_band.hpp>`. A
@@ -85,6 +89,51 @@ prerelease included.
   `PineForge_VERSION_FULL` and `pf_version_string()`, so
   `find_package(PineForge 1.0.0 EXACT)` also accepts `1.0.0-rc.N`. The CMake
   smoke consumer (`cmake/smoke_consumer`) prints `pf_version_string()`.
+
+### What a native host must handle
+
+- **An unrepresentable quantity is a refusal, not a failed run.** A request
+  the settlement cannot book exactly in binary64 (a close that would leave a
+  sub-ulp rest, an opening a surviving dust lot absorbs) is refused with
+  `MatchRejectReason::UnrepresentableQuantity` (C
+  `PF_NATIVE_MATCH_REJECT_UNREPRESENTABLE_QUANTITY`, 10) and the run goes on.
+  Handle it where you handle the other match rejections (#289).
+- **Quantity tolerance is opt-in.** `NativeRunSpec::quantity_tolerance` (C:
+  the sixth `pf_native_run_spec_ext_v1` layout, flag
+  `PF_NATIVE_SPEC_EXT_QUANTITY_TOLERANCE`) lets a close within that distance
+  of a FIFO lot boundary end on it; leave it unset and nothing changes. On a
+  quantity grid, a whole-scope `ScopeFraction` and a close of one lot's own
+  size are on the grid (#289).
+- **OCA groups never stop a run on binary64 dust.** A sibling deduction too
+  small to move the sibling's units is absorbed and recorded with a zero
+  deduction (#289). A sibling re-priced with `ReplaceOptions::keep_handle`
+  inside a group no longer fails the run when another member fills; the run
+  records what a plain replace records. On a quantity grid, a request whose
+  pending group deduction its units absorb settles in one fill, so a
+  whole-scope close closes its lot whole.
+- **Aggregated runs count script bars.** When the script timeframe aggregates
+  the input, `NativeCoordinate::interval_index` and every lot, trade-row and
+  metric index are script-bar indices; read the input slot from
+  `NativeCoordinate::input_interval_index` (#289).
+- **Report points at the host's cadence.** Under
+  `NativeReportPolicy::KernelRecordedAtHostMarks`, a C++ host calls
+  `NativeStrategyHost::mark_native_report_point` from its own callbacks; it
+  returns `false` outside such a run. The C surface has no such call (#289).
+- **Final calendar buckets calculate.** A batch, or `stream_end(true)`,
+  calculates its last pending script bucket when that bucket's last input
+  reached the session close, so the final daily bucket of an hourly feed now
+  calculates; warmup and `stream_end(false)` still carry it (#289).
+- **A new margin check kind.** On a continuous intrabar path
+  (`IntrabarPath::lower_tf` with its default `ContinuousSegments`
+  eligibility) the kernel checks the margin model at every later sample of
+  the bar, at that sample's price:
+  `NativeMarginCheckKind::IntrabarSample` (C
+  `PF_NATIVE_MARGIN_CHECK_INTRABAR_SAMPLE`, 4). A requirement hook sees it; a
+  host that switches on the kind must handle it.
+- **The C callback table's marker must be zero.** A C host built against the
+  current `pf_native_callbacks_v1` leaves its trailing `reserved1` at 0:
+  `strategy_native_host_create_v1` returns NULL for any other value. Tables of
+  the three earlier published lengths keep working (#289).
 
 ### Behaviour that moves results against 0.13.1
 
@@ -107,4 +156,30 @@ TradingView behaviour it matches.
   session-day facts, a session ends at the session day, and an aggregated
   chart and a stream's realtime bar read `session.islastbar` as TradingView
   does (c68fab7e, b531a8d9, 8b843499, be19463d).
-- A margin call never revives an exit the script cancelled (4b00da92, #287).
+- A margin call never revives an exit the script cancelled (4b00da92, #287),
+  whether the exit was live, dormant, or a gapped stop a declined reversal
+  had parked for the next margin call (#289).
+- Margin: a leveraged position (margin below 100 %) is checked on its own
+  entry bar, so its margin call lands at that bar's low as TradingView books
+  it, not a bar later or never (outside `process_orders_on_close`,
+  `calc_on_order_fills`, the bar magnifier and a timestamped FX curve, which
+  keep their own schedule). A default `percent_of_equity` stop entry
+  sized above 100 % keeps the quantity it was sized at when placed (at the
+  signal close, or at the snapped stop level when not yet marketable), as
+  TradingView does; it was re-sized at the fill. Under the bar magnifier
+  (without `process_orders_on_close` or `calc_on_order_fills`), a leveraged
+  position's margin call lands at the first lower-timeframe low that crosses
+  its line, and again at each later low that crosses the reduced position's
+  line.
+- A trailing `strategy.exit` placed while its entry is still pending starts
+  its running best at the activation, as TradingView's does; on TradingView's
+  tapes it exited 1 to 24 bars late.
+- `process_orders_on_close`: a stop entry whose stop the placing bar's close
+  already reached, and the bar's only entry marketable there, fills at that
+  close (slippage applied), on the chart, an aggregated chart and under the
+  bar magnifier; it filled at the next open.
+  An add can no longer exceed `pyramiding` because an opposite entry was
+  resting from an earlier bar. One corpus probe moves toward its TradingView
+  tape (`order-deferred-flip-pooc-cross-bar-01`).
+- An aggregated chart under the bar magnifier dates every fill at its chart
+  bar's open, as TradingView does.
