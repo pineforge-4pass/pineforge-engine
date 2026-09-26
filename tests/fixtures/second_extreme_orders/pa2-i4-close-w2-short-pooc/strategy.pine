@@ -1,0 +1,38 @@
+//@version=6
+// PAR-ORDERS-2 (R5 lane) item 4: strategy.close in the shape of H-MEASURE Finding 6d.
+// Lot A is open; lot B is a stop entry placed exactly on bar j's SECOND extreme
+// (a sell stop at the low of a high-first bar),
+// so the calc_on_order_fills recalculation B's fill starts runs on that point with
+// A still open, and calls strategy.close("A"). pyramiding=2; everything is closed
+// on bar j+1. Cycles j = 5, 30, 46, 51 (levels read off those bars).
+// NYSE:F 15m, the three replayed days of tests/fixtures/session_islastbar
+// (2025-07-02, 07-03 half day, 07-07); k counts chart bars from 2025-07-02
+// 09:30 ET. No order is placed after 07-07 15:45 ET; whatever is open then is
+// closed on the next bar, outside the replay.
+strategy("PA2 I4 close-w2 short-pooc", overlay=true,
+     initial_capital=100000, default_qty_type=strategy.fixed, default_qty_value=100,
+     pyramiding=2, commission_type=strategy.commission.percent, commission_value=0.01,
+     slippage=0, process_orders_on_close=true, calc_on_order_fills=true,
+     margin_long=100, margin_short=100, use_bar_magnifier=false)
+
+t0 = timestamp("America/New_York", 2025, 7, 2, 9, 30)
+tEnd = timestamp("America/New_York", 2025, 7, 7, 16, 0)
+var int b0 = na
+if na(b0) and time >= t0
+    b0 := bar_index
+k = na(b0) ? -1 : bar_index - b0
+units = strategy.position_size
+t = math.floor(close * 100 + 0.000001)
+bStop = k == 4 ? 11.44 : k == 29 ? 11.795 : k == 45 ? 11.61 : k == 50 ? 11.49 : na
+if k >= 0 and time < tEnd
+    if (k == 3 or k == 28 or k == 44 or k == 49) and units == 0
+        strategy.entry("A", strategy.short)
+    if not na(bStop)
+        strategy.entry("B", strategy.short, stop=bStop)
+    if (k == 6 or k == 31 or k == 47 or k == 52) and units != 0
+        strategy.close_all()
+    if math.abs(units) > 150
+        strategy.close("A")
+if time >= tEnd and strategy.position_size != 0
+    strategy.cancel_all()
+    strategy.close_all(comment="after-window")

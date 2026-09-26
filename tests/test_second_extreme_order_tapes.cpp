@@ -1,5 +1,5 @@
 /*
- * test_second_extreme_order_tapes.cpp -- R5 lane PAR-ORDERS-2 (item 2).
+ * test_second_extreme_order_tapes.cpp -- R5 lane PAR-ORDERS-2 (items 2 and 4).
  *
  * Under calc_on_order_fills, the recalculation a fill starts may sit exactly
  * on the bar's SECOND extreme -- the end of the leg that approaches it, the
@@ -8,7 +8,8 @@
  * extreme, where ab9714be (and this engine until lane PAR-ORDERS-2) advanced
  * it to the close, which admits no cascade order, and so to the next open
  * (tests/test_magnified_aggregated_tape.cpp row 5). The same holds for the
- * orders beside it: an exit the recalculation places is live from that point.
+ * orders beside it: an exit the recalculation places is live from that point,
+ * and a strategy.close fills there.
  *
  * The lane's own synthetic script, NYSE:F 15m over the three days of
  * tests/fixtures/session_islastbar (`lab tv`, ws-report-v1, rangeProof covered;
@@ -18,13 +19,14 @@
  * and that recalculation
  *   pa2-i2-exit-w2-*   places strategy.exit("AX", "A", stop, qty=100) with the
  *                      stop between the bar's close and the extreme: reached on
- *                      the extreme -> close leg.
+ *                      the extreme -> close leg;
+ *   pa2-i4-close-w2-*  calls strategy.close("A").
  * Long lots on low-first bars (cycles j = 7, 19, 26, 42), short lots on
  * high-first ones (j = 5, 30, 46, 51); with and without
  * process_orders_on_close. Everything is closed on bar j+1.
  *
  * TradingView, on every long cycle and the first short one: A's exit fills on
- * bar j. The short
+ * bar j, and A's close fills at the extreme's booked tick on bar j. The short
  * tapes are compared on their first cycle only: on bar 30 TradingView never
  * fills B's sell stop at the off-grid 11.795 (the bar's low) and fills it on
  * bar 38 instead, while this engine fills it on bar 30 -- a separate stop-touch
@@ -76,7 +78,8 @@
  *
  * Fail-before, this TU against the lane's base (6945fc19): every row of the
  * long exit tapes (8 of 8; 7 of 8 with process_orders_on_close) exits A at the
- * next open.
+ * next open, and every close tape row closes A at the next open (or, under
+ * process_orders_on_close, at the bar's close, then B by the re-issued close).
  */
 
 #include <pineforge/bar.hpp>
@@ -418,6 +421,10 @@ int main() {
         {"pa2-i2-exit-w2-long-pooc", true, true, true, 8, rows({5, 7})},
         {"pa2-i2-exit-w2-short", false, true, false, 2, rows({1})},
         {"pa2-i2-exit-w2-short-pooc", false, true, true, 2, rows({1})},
+        {"pa2-i4-close-w2-long", true, false, false, 8, 0u},
+        {"pa2-i4-close-w2-long-pooc", true, false, true, 8, 0u},
+        {"pa2-i4-close-w2-short", false, false, false, 2, 0u},
+        {"pa2-i4-close-w2-short-pooc", false, false, true, 2, 0u},
         {"pa2-i2-level-w1-long", true, true, false, 6, rows({1, 2, 3, 4, 5, 6}),
          Probe::LevelFirstExtreme},
         {"pa2-i2-level-w1-long-pooc", true, true, true, 6, rows({1, 2, 3, 4, 5, 6}),

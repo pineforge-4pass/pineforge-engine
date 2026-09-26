@@ -8164,22 +8164,31 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     request.label = "__close__" + id;
     request.comment = comment;
     double coof_close_fill = kNaN;
+    // A matcher fill AT the bar's second extreme: the close fills there, at
+    // that extreme, as the market entry does (H-MEASURE Finding 6d). ab9714be
+    // advanced it to the close point, which admits no cascade order, and so to
+    // the next open; TradingView books it on the fill's own bar at the extreme
+    // (lab tv pa2-i4-close-w2-long / -pooc). A fill the adapter forced there
+    // still advances (coof_fill_at_second_extreme; R5 lane PAR-ORDERS-2).
     bool coof_close_next_open = false;
+    bool coof_close_at_second_extreme = false;
     if (coof_recalc_active_ && !coof_first_open_ && !immediately) {
         const auto state = detail::run_state(require_host());
         const bool lower_path = state.spec && state.spec->intrabar.lower();
-        if (!lower_path) {
-            const bool high_first = source_path_uses_high_first(coof_script_bar_);
-            const NativePathPhase second = high_first
-                ? NativePathPhase::Low : NativePathPhase::High;
-            const double endpoint = high_first
-                ? coof_script_bar_.low : coof_script_bar_.high;
-            coof_close_next_open = coof_context_.coordinate.path_phase == second
-                && coof_fill_at_path_point(endpoint);
+        if (!lower_path && coof_fill_at_second_extreme()) {
+            coof_close_next_open = coof_fill_forced_;
+            coof_close_at_second_extreme = !coof_fill_forced_;
+            if (coof_close_at_second_extreme) {
+                const double endpoint = source_path_uses_high_first(coof_script_bar_)
+                    ? coof_script_bar_.low : coof_script_bar_.high;
+                const bool buy = current < 0.0;
+                coof_close_fill = source_bar_fill_tick(endpoint, staged_.syminfo.mintick)
+                    + (buy ? 1.0 : -1.0) * config_.slippage * staged_.syminfo.mintick;
+            }
         }
     }
     if (coof_recalc_active_ && !coof_first_open_ && !immediately
-        && !coof_close_next_open
+        && !coof_close_next_open && !coof_close_at_second_extreme
         && coof_script_bar_valid_) {
         int next_waypoint_index = -1;
         const double next_waypoint = coof_next_waypoint(&next_waypoint_index);
