@@ -93,35 +93,46 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str) -> list
             or '  workflow_dispatch:' not in native
             or "${{ inputs.exclude_slow && '--exclude-label slow' || '' }}" not in native):
         findings.append('native-live must default to full rows for dispatch and push')
-    if ('  statuses: read' not in promote or '  checks: read' in promote
+    # Baseline promotion is pineforge-workflow's campaign/ci/promote-baseline.yml,
+    # installed unchanged. Main's own copy runs on the closed PR
+    # (pull_request_target, never the PR's copy) and runs no PR code; the
+    # engine axis needs the newest pineforge/verify and pineforge/parity
+    # statuses on the PR head.
+    if ('  pull_request_target:\n    types: [closed]' not in promote
+            or re.search(r'^  pull_request:', promote, re.MULTILINE)
+            or '  statuses: read' not in promote
+            or '  id-token: write' not in promote
+            or 'ref: ${{ github.event.pull_request.head' in promote
             or '/commits/$HEAD_SHA/statuses?per_page=100' not in promote
             or 'gh api --paginate' not in promote
             or 'reduce (.[][]) as $s' not in promote
             or 'if has($s.context) then . else .[$s.context] = $s.state end' not in promote
             or '.["pineforge/verify"] == "success"' not in promote
             or '.["pineforge/parity"] == "success"' not in promote
-            or '/check-runs' in promote):
-        findings.append('baseline promotion must require the latest two head statuses')
+            or promote.count('echo "green=false" >> "$GITHUB_OUTPUT"; exit 0') != 2):
+        findings.append("baseline promotion must run main's copy and require the latest two head statuses")
     # PRs are squash-merged, so the PR head is never an ancestor of the base
     # branch. The merge commit (the event's merge_commit_sha, or the dispatch
-    # input) must be on the base branch, carry the verified PR head's tree and
-    # still be the base branch's tree; every skip exits before promotion.
+    # input) must be on the base branch and carry the gated PR head's tree; the
+    # campaign tool gets that tree and promotes only the pair the merge gate's
+    # verdict measured for it. Every skip exits green before promotion.
     merge_env = ('MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha'
                  ' || github.event.inputs.merge_commit }}')
-    head_env = 'HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head }}'
+    head_env = 'HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.head_sha }}'
     if (promote.count(merge_env) != 2 or promote.count(head_env) != 3
             or 'github.event.pull_request.head.sha || github.event.inputs.merge_commit' in promote
-            or '      pr_head:\n' not in promote
+            or '      head_sha:\n' not in promote
             or 'git merge-base --is-ancestor "$MERGE_SHA" "origin/$BASE_REF"' not in promote
             or '--is-ancestor "$HEAD_SHA"' in promote
             or 'merge_tree=$(git rev-parse "$MERGE_SHA^{tree}")' not in promote
             or 'head_tree=$(git rev-parse "$HEAD_SHA^{tree}")' not in promote
-            or 'base_tree=$(git rev-parse "origin/$BASE_REF^{tree}")' not in promote
             or 'if [ "$merge_tree" != "$head_tree" ]; then' not in promote
-            or 'if [ "$base_tree" != "$merge_tree" ]; then' not in promote
-            or promote.count('echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0') != 4
-            or '--merge-commit "$MERGE_SHA" --head-sha "$HEAD_SHA" --ci-head "$HEAD_SHA"'
-            not in promote):
+            or promote.count('echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0') != 2
+            or 'MERGE_TREE: ${{ steps.exacttree.outputs.merge_tree }}' not in promote
+            or '--merge-commit "$MERGE_SHA" --head-sha "$HEAD_SHA" --merge-tree "$MERGE_TREE"'
+            not in promote
+            or '--ci-head "$HEAD_SHA" --ci-green' not in promote
+            or 'if [ "$code" = "2" ]; then' not in promote):
         findings.append('baseline promotion must admit a squash merge by tree equality only')
     blocks = re.findall(r'^set\(PINEFORGE_PR_SLOW_TESTS\n(.*?)^\)', cmake,
                         re.MULTILINE | re.DOTALL)

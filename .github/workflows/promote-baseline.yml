@@ -4,18 +4,28 @@
 #   pineforge-engine/.github/workflows/promote-baseline.yml
 #   pineforge-codegen-oss/.github/workflows/promote-baseline.yml
 #
-# On a merged PR it advances the campaign baseline one axis to the merged
-# composite, reusing the snapshot from the pr-gate run that already cleared
-# it. It promotes ONLY when the merge is exact-tree (the merge commit on the
-# base branch carries the gated PR head's tree, and the base has not moved past
-# it), both maintainer verification statuses are green on the PR head, and a
-# PASS verdict binds the full (engine, codegen) pair. Otherwise it exits green
-# without promoting. PRs are squash-merged, so the PR head is never an ancestor
-# of the base branch: the merge commit is the event's merge_commit_sha, and the
-# guard compares trees rather than asking for ancestry.
+# On a merged PR it advances the campaign baseline one axis, reusing the
+# snapshot the gate already measured. It promotes ONLY when the merge commit
+# now on the base branch carries the gated PR head's TREE (a squash merge mints
+# a new commit; the strict up-to-date rule keeps its tree the head's), the gate
+# is green on that head, and `lab promote` finds the verdict that binds it:
+#   engine   pineforge/verify and pineforge/parity success on the PR head;
+#            lab promote adopts the pair the merge gate's parity verdict
+#            measured — the merged engine with the codegen the sweep measured
+#            (ruling R2, 2026-09-26), PASS or neutral alike
+#   codegen  no failing check-run on the PR head; lab promote needs a pr-gate
+#            PASS binding (baseline engine, merged codegen), exact head
+# Otherwise it exits green without promoting.
 #
-# The gate logic is exact-tree + pineforge/verify + pineforge/parity +
-# baseline-promote.mjs. The plane is now GCP: the
+# It runs on `pull_request_target`: MAIN's own copy of this file (ref
+# refs/heads/main), never the PR's. The promotion identity's workload-identity
+# condition admits only `<repo>/.github/workflows/promote-baseline.yml@refs/heads/main`
+# in a run of refs/heads/main (terraform/gcp/github-wif.tf), so a pull request
+# that edits this file cannot mint it — and a `pull_request` trigger, which
+# runs the PR's copy, mints nothing at all. It checks out and runs no PR code:
+# it fetches the PR head's objects only to compare trees.
+#
+# The plane is GCP: the
 # promotion reads the active baseline and the gate ledger from the Postgres
 # registry through a cloud-sql-proxy, streams the pinned documents from the
 # GCS evidence bucket, and appends the new baseline row — authenticated by
@@ -43,10 +53,10 @@
 #          Cloud Run role: this workflow executes no job. Nothing is left for
 #          an operator to grant by hand.
 #
-# This file's PATH is part of the identity: the WIF provider admits only
-# `<owner>/<repo>/.github/workflows/promote-baseline.yml@…`, so installing it
-# under another name mints no token — and no other workflow in the repo can
-# mint one either.
+# This file's PATH and REF are part of the identity: the WIF provider admits
+# only `<owner>/<repo>/.github/workflows/promote-baseline.yml@refs/heads/main`,
+# so installing it under another name, or running another branch's copy,
+# mints no token — and no other workflow in the repo can mint one either.
 #
 # (Optionally pin WORKFLOW_REF, defaults to main; and PINEFORGE_EVIDENCE_BUCKET,
 #  defaults to pineforge-workflow-evidence.)
@@ -54,19 +64,20 @@
 name: promote-baseline
 
 on:
-  pull_request:
+  # Main's own copy of this workflow, with the merged PR's payload
+  # (merge_commit_sha, head.sha, number, html_url, merged_at).
+  pull_request_target:
     types: [closed]
-  # Manual re-fire for a merge whose pull_request event already passed (e.g. a
-  # PR merged before this workflow was installed, or a rebase-merge whose PR
-  # head was orphaned): pass the exact commit now on the base branch and the
-  # PR head the maintainers verified.
+  # Manual re-fire, from main, for a merge whose event already passed (e.g. a
+  # PR merged before this workflow was installed): the commit now on the base
+  # branch, the PR head the gate cleared, and the PR.
   workflow_dispatch:
     inputs:
       merge_commit:
         description: "40-hex commit now on the base branch to promote"
         required: true
-      pr_head:
-        description: "40-hex PR head the verification statuses were posted on (the merge commit itself for an exact-head merge)"
+      head_sha:
+        description: "40-hex PR head the gate cleared (the merge commit must carry its tree)"
         required: true
       pr_number:
         description: "the PR number"
@@ -80,9 +91,10 @@ on:
 
 permissions:
   contents: read
-  # The two required merge-gate verdicts are commit statuses, not Actions
-  # check-runs. Inspect the PR head commit's statuses before promotion.
+  # The engine's gate is two commit statuses (pineforge/verify,
+  # pineforge/parity): `statuses`. The codegen axis reads check-runs: `checks`.
   statuses: read
+  checks: read
   # Workload identity federation mints the GCP credential from the job's own
   # OIDC token; nothing here can promote without this repo's identity.
   id-token: write
@@ -100,76 +112,79 @@ jobs:
             *)         echo "repo=engine"  >> "$GITHUB_OUTPUT" ;;
           esac
 
+      # The base branch, never the PR (pull_request_target checks out main).
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Exact-tree is the safety property: the snapshot describes the gated PR
-      # head's tree, so we promote only if the merge commit is on the base
-      # branch, carries exactly that tree, and is still the base branch's
-      # tree. A squash merge mints a new commit whose tree is the PR head's; a
-      # merge that rewrote the tree, or a base that moved on, is skipped —
-      # those must be re-gated.
-      - name: Verify exact-tree merge
-        id: exacthead
+      # The safety property is the TREE: the snapshot describes the gated
+      # head's tree, so we promote only when the merge commit now on the base
+      # branch carries exactly that tree. A base that moved before the merge,
+      # or a rewrite, is skipped — those must be re-gated.
+      - name: Verify the merged tree is the gated tree
+        id: exacttree
         env:
           MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.event.inputs.merge_commit }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.head_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
           BASE_REF: ${{ github.event.pull_request.base.ref || 'main' }}
         run: |
           set -euo pipefail
-          git fetch --quiet origin "$BASE_REF"
+          # The PR head's objects, to read its tree: fetched, never checked out or run.
+          git fetch --quiet origin "$BASE_REF" "+refs/pull/$PR_NUMBER/head:refs/remotes/origin/pr-head"
           if ! git merge-base --is-ancestor "$MERGE_SHA" "origin/$BASE_REF"; then
             echo "::notice::merge commit $MERGE_SHA is not on origin/$BASE_REF; skipping"
-            echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          # A squashed PR head is on no branch; fetch it by its sha.
-          if ! git cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null \
-              && ! git fetch --quiet --no-tags origin "$HEAD_SHA"; then
-            echo "::notice::PR head $HEAD_SHA cannot be fetched; skipping"
             echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           merge_tree=$(git rev-parse "$MERGE_SHA^{tree}")
           head_tree=$(git rev-parse "$HEAD_SHA^{tree}")
           if [ "$merge_tree" != "$head_tree" ]; then
-            echo "::notice::merge tree != PR head tree — the merge rewrote the gated tree; re-gate. skipping"
+            echo "::notice::merge commit tree $merge_tree != gated head tree $head_tree — the base moved before the merge; re-gate. skipping"
             echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          base_tree=$(git rev-parse "origin/$BASE_REF^{tree}")
-          if [ "$base_tree" != "$merge_tree" ]; then
-            echo "::notice::base tree != merge tree — the base moved on from the merged tree; re-gate. skipping"
-            echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
+          echo "merge_tree=$merge_tree" >> "$GITHUB_OUTPUT"
           echo "ok=true" >> "$GITHUB_OUTPUT"
 
-      - name: Confirm the merge gate on the merged PR head
+      - name: Confirm the gate on the PR head
         id: ci
-        if: steps.exacthead.outputs.ok == 'true'
+        if: steps.exacttree.outputs.ok == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.head_sha }}
+          AXIS: ${{ steps.axis.outputs.repo }}
         run: |
           set -euo pipefail
-          # GitHub lists newest statuses first. Keep the first occurrence of
-          # each context across pages, so an older success cannot mask a
-          # newer failure or pending verdict on this exact commit.
-          statuses=$(gh api --paginate \
-            "repos/${{ github.repository }}/commits/$HEAD_SHA/statuses?per_page=100")
-          if ! jq -es '
-            reduce (.[][]) as $s ({};
-              if has($s.context) then . else .[$s.context] = $s.state end)
-            | .["pineforge/verify"] == "success"
-              and .["pineforge/parity"] == "success"
-          ' <<< "$statuses" >/dev/null; then
-            echo "::notice::pineforge/verify and pineforge/parity must both be success on $HEAD_SHA — skipping"
-            echo "green=false" >> "$GITHUB_OUTPUT"; exit 0
+          if [ "$AXIS" = engine ]; then
+            # The engine merge gate. GitHub lists newest statuses first; keep
+            # the first occurrence of each context across pages, so an older
+            # success cannot mask a newer failure or pending verdict.
+            statuses=$(gh api --paginate \
+              "repos/${{ github.repository }}/commits/$HEAD_SHA/statuses?per_page=100")
+            if ! jq -es '
+              reduce (.[][]) as $s ({};
+                if has($s.context) then . else .[$s.context] = $s.state end)
+              | .["pineforge/verify"] == "success"
+                and .["pineforge/parity"] == "success"
+            ' <<< "$statuses" >/dev/null; then
+              echo "::notice::pineforge/verify and pineforge/parity must both be success on $HEAD_SHA — skipping"
+              echo "green=false" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+          else
+            bad=$(gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs" \
+              --jq '[.check_runs[] | select(.conclusion=="failure" or .conclusion=="cancelled" or .conclusion=="timed_out" or .conclusion=="action_required")] | length')
+            if [ "$bad" != "0" ]; then
+              echo "::notice::$bad failing check-run(s) on $HEAD_SHA — not green; skipping"
+              echo "green=false" >> "$GITHUB_OUTPUT"; exit 0
+            fi
           fi
           echo "green=true" >> "$GITHUB_OUTPUT"
 
       # The campaign tooling lives in the private pineforge-workflow repo. Rather
       # than a long-lived PAT, mint a short-lived, read-only token from the org
       # App already installed here (the same app-id/private-key release.yml
-      # uses), scoped to just that one repo.
+      # uses), scoped to just that one repo and to reading its contents: without
+      # a permission-* input the token would carry every permission the App's
+      # installation has, and only the checkout below uses it.
       - name: Mint an org App token to read the campaign tooling
         id: app
         if: steps.ci.outputs.green == 'true'
@@ -179,6 +194,7 @@ jobs:
           private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
           owner: pineforge-4pass
           repositories: pineforge-workflow
+          permission-contents: read
 
       - name: Checkout campaign tooling (pineforge-workflow)
         if: steps.ci.outputs.green == 'true'
@@ -238,7 +254,8 @@ jobs:
           # federated gcloud credential explicitly.
           PINEFORGE_GCP_TOKEN_CMD: gcloud auth print-access-token
           MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.event.inputs.merge_commit }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.head_sha }}
+          MERGE_TREE: ${{ steps.exacttree.outputs.merge_tree }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
           PR_URL: ${{ github.event.pull_request.html_url || github.event.inputs.pr_url }}
           MERGED_AT: ${{ github.event.pull_request.merged_at || github.event.inputs.merged_at }}
@@ -248,22 +265,20 @@ jobs:
           set +e
           node .workflow/campaign/src/baseline-promote.mjs \
             --repo "${{ steps.axis.outputs.repo }}" \
-            --merge-commit "$MERGE_SHA" --head-sha "$HEAD_SHA" --ci-head "$HEAD_SHA" --ci-green \
+            --merge-commit "$MERGE_SHA" --head-sha "$HEAD_SHA" --merge-tree "$MERGE_TREE" \
+            --ci-head "$HEAD_SHA" --ci-green \
             --pr-number "$PR_NUMBER" --pr-url "$PR_URL" --merged-at-ms "$ms"
           code=$?
           set -e
-          # Exit 2 is `refuse`: no PASS verdict binds this merge as a single-axis
+          # Exit 2 is `refuse`: no verdict binds this merge as a single-axis
           # advance -- a cross-cutting engine+codegen change (gated as a composite
-          # the single axis cannot complete), an ungated merge, or a merge commit
-          # the campaign tooling does not accept for the gated head (the squash
-          # commit is passed as --merge-commit and the verified PR head as
-          # --head-sha / --ci-head; the tree equality above is this workflow's
-          # proof that they carry one tree). Defer green, do not fail CI; a
-          # cross-cutting pair is promoted by hand with `lab promote --composite`
-          # once both repos merge (see the baseline-promote skill). Any other
-          # non-zero is a real error.
+          # the single axis cannot complete), an ungated merge, a squash-merged
+          # codegen PR (exact head only there), or an engine merge the diff rule
+          # cleared (nothing measured). Defer green, do not fail CI; a cross-cutting pair is promoted by
+          # hand with `lab promote --composite` once both repos merge (see the
+          # baseline-promote skill). Any other non-zero is a real error.
           if [ "$code" = "2" ]; then
-            echo "::notice::baseline not promoted (deferred): the campaign tool refused this merge (its reason is printed above) -- no PASS verdict binds it as a single-axis advance, or it is a squash merge commit the tool does not accept for the verified PR head. If this was a cross-cutting engine+codegen change, run the composite promote by hand once both repos are merged. Nothing was changed."
+            echo "::notice::baseline not promoted (deferred): no verdict binds this merge as a single-axis advance (see the lab promote refusal above). If this was a cross-cutting engine+codegen change, run the composite promote by hand once both repos are merged. Nothing was changed."
             exit 0
           fi
           exit "$code"

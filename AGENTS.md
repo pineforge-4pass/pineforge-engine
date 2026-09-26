@@ -140,9 +140,11 @@ dispatch run the full CI profiles. A campaign PASS verdict still binds the
 exact engine and codegen HEADs for baseline promotion.
 
 Merged single-axis PRs advance the campaign baseline automatically through
-`.github/workflows/promote-baseline.yml` only when the exact-tree guard (the
-merge commit on `main` carries the verified PR head's tree, and `main` has not
-moved past it), both required statuses on the PR head, and the campaign verdict
-pass. PRs are squash-merged, so the workflow hands the campaign tool the squash
-commit and the verified PR head; while that tool requires the merge commit to be
-the gated head itself, a squash defers promotion and needs new verification.
+`.github/workflows/promote-baseline.yml`, pineforge-workflow's
+`campaign/ci/promote-baseline.yml` installed unchanged. `main`'s own copy runs
+on the closed PR (`pull_request_target`) and runs no PR code. It promotes only
+when the merge commit on `main` carries the gated PR head's tree (PRs are
+squash-merged, so the head itself never lands on `main`), both required
+statuses are success on that head, and `lab promote` finds the merge gate's
+parity verdict for that tree; it then adopts the pair that verdict measured.
+Anything else exits green without promoting.
