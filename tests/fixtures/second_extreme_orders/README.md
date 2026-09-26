@@ -28,6 +28,16 @@ X2 already through) -- the two shapes ab9714be's rows pin (long j = 2, 32, 44 on
 bars; short j = 4, 25, 40 on low-first ones); and the control, a point fill forced onto the
 first extreme (P's stop exit on the leg to it, the market entry A, then B).
 
+The `int27-*` tapes (INT27 round 2) are that rule's boundary on a fill the adapter forces
+onto the first extreme through an exit limit, the shape of the gate sweep's regressed
+probe: lot E's exit limit X, placed at bar j-1's close beyond bar j's first extreme, fills
+at bar j's open; X's recalculation re-enters E, which fills at the open too; E's
+recalculation places the exit limit X2 at X's level, already through, which the path
+gap-fills at the first extreme; X2's recalculation re-enters E (pyramiding 1; long j = 28,
+61 on low-first bars, short j = 13, 44 on high-first ones). The `-at-` variant puts the
+level exactly on the extreme, the `xbracket` one adds a far stop. TradingView books the
+last re-entry at the second extreme on all six. They were exported with `--no-note`.
+
 Each directory is one `lab tv` export (pineforge-workflow, channel `ws-report-v1`,
 `rangeProof: covered`, NYSE:F 15, window 2025-07-01 .. 2025-07-08), byte-identical:
 `strategy.pine`, `tv_trades.csv` (times UTC+8), `meta.json`, `metrics.json`. The
@@ -72,3 +82,9 @@ scripts count chart bars from 2025-07-02 09:30 ET, the first bar of
 | `pa3-f4-xlimit-w1-reentry-tp-short` | the same, short | 6 | `3c4561c2b5a4fe900e368c14b244ea8019be64cc95f6f90b7294dcb5a6abd90b` | `tv-tape-pa3-f4-xlimit-w1-reentry-tp-short-3c4561c2` |
 | `pa3-f4-point-w1-mkt-long` | point fill forced onto the first extreme, market entry B, long | 6 | `4a0c3d450ec01bb70b6e8341391e9babf4319a7eb53316a523d7c7cf3a323d35` | `tv-tape-pa3-f4-point-w1-mkt-long-4a0c3d45` |
 | `pa3-f4-point-w1-mkt-short` | the same, short | 6 | `b85b054c0c53200c9db1f8fd5c0c1bb6008bb38277034ed05ba0d5f3155666ff` | `tv-tape-pa3-f4-point-w1-mkt-short-b85b054c` |
+| `int27-open-xlimit-w1-reentry-long` | X2 gap-filled at the first extreme, market re-entry, long | 6 | `d713d16b9f389f7a23793fbf549e61fec349a8311e5a2d150eef8a51618308ac` | none (`--no-note`) |
+| `int27-open-xlimit-w1-reentry-short` | the same, short | 6 | `3fe435c0fc809ecca244e78609a7faec59a8041807231c02b22b4ff9e857e9f8` | none (`--no-note`) |
+| `int27-open-xlimit-at-w1-reentry-long` | the same, X's level exactly on the first extreme, long | 6 | `d713d16b9f389f7a23793fbf549e61fec349a8311e5a2d150eef8a51618308ac` | none (`--no-note`) |
+| `int27-open-xlimit-at-w1-reentry-short` | the same, short | 6 | `3fe435c0fc809ecca244e78609a7faec59a8041807231c02b22b4ff9e857e9f8` | none (`--no-note`) |
+| `int27-open-xbracket-w1-reentry-long` | the same, X and X2 brackets with a far stop, long | 6 | `d713d16b9f389f7a23793fbf549e61fec349a8311e5a2d150eef8a51618308ac` | none (`--no-note`) |
+| `int27-open-xbracket-w1-reentry-short` | the same, short | 6 | `3fe435c0fc809ecca244e78609a7faec59a8041807231c02b22b4ff9e857e9f8` | none (`--no-note`) |

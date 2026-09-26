@@ -5574,8 +5574,25 @@ void PineExecutionAdapter::begin_coof_recalc(
             coof_market_entry_recalc_incarnation_ = event.handle().incarnation;
         }
     }
+    // An exit limit already through where a recalculation of the open's
+    // refill placed it is armed at the first extreme, which satisfies its
+    // level (exit(): StopLimit{W1, level}), and gap-fills at that point: a
+    // fill forced onto the extreme, not the matcher's at the limit's own
+    // level, even with that level exactly on it -- the orders its
+    // recalculation places start the next leg, as TradingView books them
+    // (lab tv int27-open-x*-w1-reentry-*).
+    const auto* armed_limit = placement != placement_.end()
+            && placement->second.family == PineOrderFamily::ExitLimit
+        ? std::get_if<native_order::StopLimit>(&event.request().trigger) : nullptr;
+    const bool armed_limit_gap_fill = armed_limit
+        && (placement->second.projection_position_side
+                == static_cast<std::int32_t>(PositionSide::LONG)
+            ? armed_limit->stop >= armed_limit->limit
+            : armed_limit->stop <= armed_limit->limit)
+        && coof_fill_at_path_point(armed_limit->stop);
     coof_fill_forced_ = placement != placement_.end()
-        && finite_positive(placement->second.forced_execution_price);
+        && (finite_positive(placement->second.forced_execution_price)
+            || armed_limit_gap_fill);
     coof_context_ = context;
 }
 

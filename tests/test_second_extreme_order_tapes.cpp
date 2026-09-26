@@ -83,6 +83,21 @@
  * used to be forced onto the close's tick. Every compared row is exact: side,
  * instants, prices, quantity, signals, bars.
  *
+ * INT27 round 2 pins that rule's boundary on a fill the adapter forces onto
+ * the first extreme through an exit limit (the shape of the gate sweep's
+ * regressed probe, on four lanes):
+ *   int27-open-x{limit,limit-at,bracket}-w1-reentry-*  E's exit limit X fills
+ *       at bar j's open; X's recalculation re-enters E, which fills at the
+ *       open too; E's recalculation places the exit limit X2 already through
+ *       -- beyond the first extreme, exactly on it, or the limit leg of a
+ *       bracket with a far stop -- which exit() arms at that extreme, where
+ *       the path gap-fills it; X2's recalculation re-enters E (pyramiding 1;
+ *       long j = 28, 61 on low-first bars, short j = 13, 44 on high-first
+ *       ones).
+ * TradingView books that re-entry at the SECOND extreme, as after the
+ * control's forced fill: the gap fill is not the matcher's at the limit's own
+ * level, even with that level exactly on the extreme.
+ *
  * Fail-before, this TU against R5 lane PAR-ORDERS-2's base (6945fc19): every
  * row of the long exit tapes (8 of 8; 7 of 8 with process_orders_on_close)
  * exits A at the next open, and every close tape row closes A at the next open
@@ -90,7 +105,9 @@
  * re-issued close). Against R5 lane PAR-ORDERS-3's base (9f7a025c): 82 of 288
  * checks fail -- every level-w1 row, point-w2 long's rows 2, 3, 5, 6 (2, 3, 5
  * under process_orders_on_close), the exit tapes' rows 5, 7 / 1, and every
- * pa3-f4 order but the point-w1 controls'.
+ * pa3-f4 order but the point-w1 controls'. Against INT27's d3b753c1: 12 of 342
+ * checks fail -- rows 3 and 6 of every int27 tape re-enter at the first
+ * extreme.
  */
 
 #include <pineforge/bar.hpp>
@@ -206,13 +223,24 @@ enum class Probe {
     // then the market re-entry E -- and that re-entry's own exit limit X2
     // between the extremes, already marketable at its price.
     StopFirstMarket, ExitLimitFirstReentry, ExitLimitFirstReentryTp,
+    // INT27 round 2: E's exit limit X fills at the open, X's recalculation
+    // re-enters E there, and E's recalculation places the exit limit X2
+    // already through -- beyond the first extreme, exactly on it, or the
+    // limit leg of a bracket with a far stop -- which gap-fills at that
+    // extreme; then the market re-entry.
+    OpenExitLimitFirstReentry, OpenExitLimitAtFirstReentry, OpenBracketFirstReentry,
 };
+bool open_reentry_probe(Probe p) {
+    return p == Probe::OpenExitLimitFirstReentry || p == Probe::OpenExitLimitAtFirstReentry
+        || p == Probe::OpenBracketFirstReentry;
+}
 bool first_extreme_probe(Probe p) {
     return p == Probe::LevelFirstMarket || p == Probe::LevelFirstClose
         || p == Probe::LevelFirstCloseAll || p == Probe::LevelFirstOrder
         || p == Probe::LevelFirstExitStop || p == Probe::LevelFirstStopEntry
         || p == Probe::PointFirstMarket || p == Probe::StopFirstMarket
-        || p == Probe::ExitLimitFirstReentry || p == Probe::ExitLimitFirstReentryTp;
+        || p == Probe::ExitLimitFirstReentry || p == Probe::ExitLimitFirstReentryTp
+        || open_reentry_probe(p);
 }
 
 struct Variant {
@@ -236,7 +264,7 @@ public:
         c.default_qty_type = static_cast<int>(QtyType::FIXED);
         c.default_qty_value = 100;
         c.pyramiding = v.probe == Probe::ExitLimitFirstReentry
-                || v.probe == Probe::ExitLimitFirstReentryTp ? 1
+                || v.probe == Probe::ExitLimitFirstReentryTp || open_reentry_probe(v.probe) ? 1
             : v.probe == Probe::SecondExtremeStop || first_extreme_probe(v.probe) ? 2 : 1;
         c.process_orders_on_close = v.pooc;
         c.calc_on_order_fills = true;
@@ -380,6 +408,10 @@ private:
             first_extreme_pinned_shapes(k, units);
             return;
         }
+        if (open_reentry_probe(v_.probe)) {
+            open_reentry(k, units);
+            return;
+        }
         const bool point = v_.probe == Probe::PointFirstMarket;
         static const int kLevelLong[] = {4, 25, 40};
         static const double kLevelLongA[] = {11.46, 11.73, 11.61};
@@ -470,6 +502,39 @@ private:
                     && closed == 1)
                     strategy_exit("X2", "E", tp[c], kNaN);
             }
+            if (k == j + 2 && units != 0.0) {
+                strategy_cancel_all();
+                strategy_close("");
+            }
+        }
+    }
+
+    void open_reentry(int k, double units) {
+        // A sell limit below (or at) the low of a low-first bar (long), a buy
+        // limit above (or at) the high of a high-first one (short); the
+        // bracket's stop is never reached.
+        static const int kLong[] = {28, 61};
+        static const double kLongLimit[] = {11.83, 11.54};
+        static const double kLongLow[] = {11.84, 11.55};
+        static const int kShort[] = {13, 44};
+        static const double kShortLimit[] = {11.69, 11.73};
+        static const double kShortHigh[] = {11.68, 11.72};
+        const bool at_extreme = v_.probe == Probe::OpenExitLimitAtFirstReentry;
+        const int* js = v_.is_long ? kLong : kShort;
+        const double* limit = v_.is_long ? (at_extreme ? kLongLow : kLongLimit)
+                                         : (at_extreme ? kShortHigh : kShortLimit);
+        const double stop = v_.probe == Probe::OpenBracketFirstReentry
+            ? (v_.is_long ? 11.00 : 12.50) : kNaN;
+        const int closed = closed_now(k);
+        const double held = v_.is_long ? 100.0 : -100.0;
+        for (int c = 0; c < 2; ++c) {
+            const int j = js[c];
+            if (k == j - 3 && units == 0.0) strategy_entry("E", v_.is_long);
+            if (k == j - 1 && units == held && closed == 0)
+                strategy_exit("X", "E", limit[c], stop);
+            if (k == j && units == 0.0 && closed >= 1) strategy_entry("E", v_.is_long);
+            if (k == j && units == held && closed == 1)
+                strategy_exit("X2", "E", limit[c], stop);
             if (k == j + 2 && units != 0.0) {
                 strategy_cancel_all();
                 strategy_close("");
@@ -590,6 +655,18 @@ int main() {
          Probe::ExitLimitFirstReentryTp},
         {"pa3-f4-point-w1-mkt-long", true, true, false, 6, 0u, Probe::PointFirstMarket},
         {"pa3-f4-point-w1-mkt-short", false, true, false, 6, 0u, Probe::PointFirstMarket},
+        {"int27-open-xlimit-w1-reentry-long", true, true, false, 6, 0u,
+         Probe::OpenExitLimitFirstReentry},
+        {"int27-open-xlimit-w1-reentry-short", false, true, false, 6, 0u,
+         Probe::OpenExitLimitFirstReentry},
+        {"int27-open-xlimit-at-w1-reentry-long", true, true, false, 6, 0u,
+         Probe::OpenExitLimitAtFirstReentry},
+        {"int27-open-xlimit-at-w1-reentry-short", false, true, false, 6, 0u,
+         Probe::OpenExitLimitAtFirstReentry},
+        {"int27-open-xbracket-w1-reentry-long", true, true, false, 6, 0u,
+         Probe::OpenBracketFirstReentry},
+        {"int27-open-xbracket-w1-reentry-short", false, true, false, 6, 0u,
+         Probe::OpenBracketFirstReentry},
     };
     for (const Variant& v : variants) replay(v);
     std::printf("\n%s second-extreme order tapes: %d checks, %d failures\n",
