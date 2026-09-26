@@ -1458,7 +1458,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:14155-14179`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:14133-14157`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -1490,13 +1490,18 @@ that row. On the same money the pre-open slice and the kernel's
 `AfterApplied` point part on the one-contract band, on the restore's `+1e-6`
 floor and on the frozen signal-time units. The opening gate parts both ways:
 the kernel declines a 1× long whose entry fee the adapter admits, and admits a
-gap-up add the adapter refuses against its signal-time equity. And the
-scheduling misses one class the kernel reaches: a leveraged opening (margin
-below 100 %) is never checked on its own entry bar. Four `lab tv` tapes
-(`tests/fixtures/margin_entry_bar`) book TradingView's margin call on that
-bar at its low, as the kernel's `AfterApplied` point does; the adapter books
-it a bar late or not at all. The row pins that divergence as recorded, not
-ruled.
+gap-up add the adapter refuses against its signal-time equity. A leveraged
+opening (margin below 100 %) is checked on its own entry bar: four `lab tv`
+tapes (`tests/fixtures/margin_entry_bar`) book TradingView's margin call on
+that bar at its low, as the kernel's `AfterApplied` point does, and since R5
+lane PAR-MARGIN the adapter admits that point for a leveraged opening's entry
+bar and books the tapes' rows (before it, the call came a bar late or not at
+all). The admission covers the run shapes `ab9714be`'s entry-bar pass covered;
+a `process_orders_on_close`, `calc_on_order_fills`, magnified or
+timestamped-FX run keeps its own route, unmeasured against TradingView, the
+`AfterApplied` point after an add to a carried book is still refused, and a
+default-percent stop entry taken at its bar's open keeps the pre-open slice's
+verdict.
 
 ### Risk limits
 

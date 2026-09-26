@@ -20,6 +20,14 @@
 #pragma once
 
 // K-IDX Option A re-pins the v19 transcript digests once for the script/input coordinate fold.
+//
+// R5 lane PAR-MARGIN re-harvested three values the same way, on its tree:
+// reversals seeds 1570935, 2827683 and 3456057, the leveraged (margin 25,
+// default 700 %) configurations whose openings breach on their own entry bar.
+// on_applied now admits the kernel's post-fill margin point there
+// (TradingView's rule: tests/fixtures/margin_entry_bar), so each books that
+// margin call on the entry bar instead of a bar later; the other 105 values
+// are unchanged.
 
 // R5 lane PAR-ORDERS re-harvested it the same way on its tree (29 of 108 digests
 // move; see the lane's hash commit for why each moves).
@@ -57,7 +65,7 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     9826242374101611623ull,  // reversals seed 1256748, 118 trades, 402 commands, 362 rows placed
     4883135135199369800ull,  // reversals seed 1361477, 105 trades, 413 commands, 349 rows placed
     6980972530369447172ull,  // reversals seed 1466206, 151 trades, 372 commands, 393 rows placed
-    419860461863827083ull,  // reversals seed 1570935, 77 trades, 357 commands, 297 rows placed
+    11252195188350860763ull,  // reversals seed 1570935, 92 trades, 362 commands, 328 rows placed
     15023244533711012002ull,  // reversals seed 1675664, 124 trades, 398 commands, 405 rows placed
     3425020382181293193ull,  // reversals seed 1780393, 196 trades, 702 commands, 629 rows placed
     4513324373166417315ull,  // reversals seed 1885122, 113 trades, 393 commands, 388 rows placed
@@ -69,13 +77,13 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     1517737495207721277ull,  // reversals seed 2513496, 110 trades, 390 commands, 394 rows placed
     1610718425964291349ull,  // reversals seed 2618225, 105 trades, 411 commands, 371 rows placed
     4868757197565921069ull,  // reversals seed 2722954, 150 trades, 390 commands, 428 rows placed
-    8640229404818843386ull,  // reversals seed 2827683, 72 trades, 339 commands, 277 rows placed
+    13294227884245356190ull,  // reversals seed 2827683, 48 trades, 347 commands, 215 rows placed
     8135938306046315211ull,  // reversals seed 2932412, 96 trades, 360 commands, 318 rows placed
     9738428349677663372ull,  // reversals seed 3037141, 114 trades, 405 commands, 377 rows placed
     2670083654842814989ull,  // reversals seed 3141870, 66 trades, 332 commands, 248 rows placed
     14261337452491704800ull,  // reversals seed 3246599, 156 trades, 469 commands, 484 rows placed
     14583498249706098574ull,  // reversals seed 3351328, 108 trades, 414 commands, 345 rows placed
-    13691690510990974075ull,  // reversals seed 3456057, 88 trades, 373 commands, 334 rows placed
+    7833467542887485857ull,  // reversals seed 3456057, 87 trades, 373 commands, 334 rows placed
     14092552094636276530ull,  // reversals seed 3560786, 147 trades, 413 commands, 444 rows placed
     4203447471686931733ull,  // reversals seed 3665515, 133 trades, 394 commands, 397 rows placed
     16581004868667265691ull,  // reversals seed 3770244, 53 trades, 339 commands, 245 rows placed

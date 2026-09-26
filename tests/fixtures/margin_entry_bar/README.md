@@ -5,7 +5,10 @@ does TradingView check a LEVERAGED opening (margin below 100 %) on the bar its
 entry fills, where the adapter's `margin_check_allowed` refuses the kernel's
 AfterApplied point? `tests/test_adapter_margin_schedule_differential.cpp`
 (section "M7 on tapes") replays every tape through the Pine adapter and through
-a bare kernel host with TradingView's money and slice.
+a bare kernel host with TradingView's money and slice. TradingView does, on 4
+of 4; since R5 lane PAR-MARGIN `on_applied` admits that point for a leveraged
+opening's entry bar, and the section asserts the adapter books each tape's
+rows (lane H-MEASURE had pinned the adapter's late or missing call instead).
 
 Each directory is one `lab tv` export (pineforge-workflow, channel
 `ws-report-v1`, `rangeProof: covered`), byte-identical: `strategy.pine`,

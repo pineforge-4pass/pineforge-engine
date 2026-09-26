@@ -19,9 +19,12 @@
  * Each section prints both sides' margin executions (bar, phase, time, units,
  * price, origin) and final book, then asserts the measured difference.
  *
- *   M7  (G2-09) scheduling. The kernel's AfterApplied point after an opening
- *       or an add, and its BarOpen point on a carried POOC short with fees,
- *       are points the adapter refuses; the kernel books there.
+ *   M7  (G2-09) scheduling. The kernel's AfterApplied point after a
+ *       leveraged opening is admitted on the opening's own entry bar since
+ *       R5 lane PAR-MARGIN (TradingView's tapes below), so the adapter books
+ *       what the kernel books there. Its AfterApplied point after an add to
+ *       a carried book, and its BarOpen point on a carried POOC short with
+ *       fees, are points the adapter still refuses; the kernel books there.
  *   M8  (G2-10) checkpoints as market executions. A gap-open breach: the
  *       adapter executes at the open, sized at the open; the kernel has no
  *       check kind that does -- its mark check rests at the adverse extreme,
@@ -40,8 +43,9 @@
  *   M7 on TradingView's tapes (tests/fixtures/margin_entry_bar): a leveraged
  *       opening whose entry bar breaches. TradingView books the margin call
  *       on the entry bar at its low (4 of 4 tapes), and so does the kernel's
- *       AfterApplied point with TradingView's money; the adapter checks the
- *       entry bar of a leveraged opening never -- a RECORDED divergence, pinned.
+ *       AfterApplied point with TradingView's money. Until R5 lane PAR-MARGIN
+ *       the adapter never checked that bar (a recorded divergence H-MEASURE
+ *       pinned); it now books TradingView's rows on all four tapes.
  *
  * Source-bound (includes pineforge/source): release profile only.
  */
@@ -346,9 +350,10 @@ no::Request stop_buy(double units, double level, const char* label) {
 // the book is 680 against 736.
 //   kernel: the AfterApplied point after the fill measures the remaining path
 //           at 92 and books 4 x floor(56 / 18.4) = 12 there;
-//   adapter: margin_check_allowed refuses that point (no opening checkpoint
-//           for a leveraged opening without a full bracket), so the entry bar
-//           is never checked and bar 2 (O105) is solvent -- no margin row.
+//   adapter: since R5 lane PAR-MARGIN on_applied admits that point on a
+//           leveraged opening's entry bar, so it books the same 12 @92 (until
+//           then margin_check_allowed refused it: no margin row at all, as
+//           the run gated to BarOpen below still shows).
 void m7_leveraged_opening_entry_bar() {
     std::printf("-- M7-A leveraged market opening: the entry bar's AfterApplied point\n");
     Config c;
@@ -378,15 +383,17 @@ void m7_leveraged_opening_entry_bar() {
     open_only.run_bars(pine_margin_spec("m7-a-open", c, 0.0), bars);
     print_side("k-BarOpen", margin_fills(open_only), open_only.position(), open_only.balance());
 
-    CHECK(adapter.empty());
-    CHECK(pine.position() == 40.0);
     REQUIRE(native.size() == 1);
     check_fill(native[0], 1, NativePathPhase::Low, 12.0, 92.0, true);
     CHECK(kernel.position() == 28.0);
-    // The whole difference is the one point: gated to BarOpen, the kernel
-    // books exactly what the adapter books.
+    REQUIRE(adapter.size() == 1);
+    check_fill(adapter[0], 1, NativePathPhase::Low, 12.0, 92.0, true);
+    CHECK(adapter[0].label == "__margin_call__");
+    CHECK(pine.position() == 28.0);
+    // The whole difference was the one point: gated to BarOpen, the kernel
+    // books what the adapter booked before PAR-MARGIN -- nothing.
     CHECK(margin_fills(open_only).empty());
-    CHECK(open_only.position() == pine.position());
+    CHECK(open_only.position() == 40.0);
 }
 
 // B. A carried 10 @100 long (50 %, capital 1050) adds 10 @95 on a buy limit
@@ -538,6 +545,10 @@ void m8_gap_open() {
 //            after the open fill, with the twin's slice.
 // ab9714be books the kernel's numbers on the stop entry in every case below
 // (1 @90 band, 1 @88 fudge, 1 @90 frozen); only the pre-open slice parts.
+// The stop entry's own entry bar stays the pre-open slice's where it slices
+// nothing (the band): R5 lane PAR-MARGIN admits the kernel's AfterApplied
+// point for a leveraged opening's entry bar (M7) everywhere but on the
+// opening this slice answers for (preopen_slice_class).
 struct M10Case {
     const char* label;
     double capital;
@@ -817,13 +828,15 @@ void e20_probe_tail_margin_call() {
 //   of 4 (the whole book on the three 16x tapes, 0.4544 of 1.074 on the 4x);
 //   the kernel's AfterApplied point, with TradingView's money and slice (the
 //   twin's hooks above), books the same rows;
-//   the adapter never checks the entry bar of a leveraged opening
-//   (margin_check_allowed refuses the opening's AfterApplied point): it books
-//   its first margin call at the NEXT bar's open, or none at all when that bar
-//   has recovered (the 4x tape). These are RECORDED divergences: every adapter
-//   row is pinned at exactly its bar, price and quantity, and asserted to
-//   differ from the tape, so the rows fail the day the adapter checks the
-//   entry bar and must be re-pinned deliberately.
+//   the adapter books the same rows since R5 lane PAR-MARGIN, which admits
+//   that point on a leveraged opening's entry bar. Lane H-MEASURE pinned what
+//   it booked before -- the entry bar never checked, the first margin call at
+//   the NEXT bar's open or none at all when that bar had recovered:
+//     0621: bar 2 2.2748 @2297.51 'Margin call', bar 5 4.5672 @2301.62
+//     0922: bar 2 0.668  @4152.54 'Margin call', bar 5 3.125  @4190.01
+//     1121: bar 2 2.9012 @2701.42 'Margin call', bar 5 2.9048 @2734.82
+//     1010: bar 5 1.074  @3895 (no margin call)
+//   and those pins flipped to the tape's rows with the fix.
 struct TapeFill {
     int bar;
     double price;
@@ -835,7 +848,6 @@ struct M7Tape {
     const FeedBar* bars;
     double margin;
     double leverage;   // quantity = leverage x equity / signal close
-    std::vector<TapeFill> adapter;   // the adapter's pinned rows (exit bar, price, qty)
 };
 
 // "YYYY-MM-DD HH:MM" in the tape's UTC+8 -> UTC milliseconds.
@@ -911,14 +923,10 @@ void print_rows(const char* side, const std::vector<TapeFill>& rows) {
 
 void m7_tradingview_tapes() {
     const M7Tape tapes[] = {
-        {"hm-m7a-eth-m5-k16-0621", kM7a_m5_k16_0621, 5.0, 16.0,
-         {{2, 2297.51, 2.2747999999999999, "Margin call"}, {5, 2301.62, 4.5671999999999997, ""}}},
-        {"hm-m7a-eth-m5-k16-0922", kM7a_m5_k16_0922, 5.0, 16.0,
-         {{2, 4152.54, 0.66800000000000004, "Margin call"}, {5, 4190.01, 3.125, ""}}},
-        {"hm-m7a-eth-m5-k16-1121", kM7a_m5_k16_1121, 5.0, 16.0,
-         {{2, 2701.42, 2.9012000000000002, "Margin call"}, {5, 2734.82, 2.9047999999999998, ""}}},
-        {"hm-m7a-eth-m20-k4-1010", kM7a_m20_k4_1010, 20.0, 4.0,
-         {{5, 3895.0, 1.0740000000000001, ""}}},
+        {"hm-m7a-eth-m5-k16-0621", kM7a_m5_k16_0621, 5.0, 16.0},
+        {"hm-m7a-eth-m5-k16-0922", kM7a_m5_k16_0922, 5.0, 16.0},
+        {"hm-m7a-eth-m5-k16-1121", kM7a_m5_k16_1121, 5.0, 16.0},
+        {"hm-m7a-eth-m20-k4-1010", kM7a_m20_k4_1010, 20.0, 4.0},
     };
     for (const M7Tape& tape : tapes) {
         std::printf("-- M7 tape %s (margin %.0f%%, %.0fx)\n", tape.slug, tape.margin, tape.leverage);
@@ -966,16 +974,14 @@ void m7_tradingview_tapes() {
         CHECK(std::abs(tv[0].price - bars[1].low) <= 5e-3);
         // The kernel's own AfterApplied point books TradingView's rows.
         CHECK(same_rows(native, tv));
-        // The adapter: pinned, and a recorded divergence from the tape.
-        CHECK(!same_rows(adapter, tv));
-        REQUIRE(adapter.size() == tape.adapter.size());
-        for (std::size_t i = 0; i < adapter.size(); ++i) {
-            CHECK(adapter[i].bar == tape.adapter[i].bar);
-            CHECK(same_value(adapter[i].price, tape.adapter[i].price));
-            CHECK(std::abs(adapter[i].qty - tape.adapter[i].qty) <= 1e-9);
-            CHECK(adapter[i].signal == tape.adapter[i].signal);
-            CHECK(adapter[i].bar != 1);   // never on the entry bar
-        }
+        // So does the adapter, its margin call on the entry bar at its low
+        // with TradingView's own signal.
+        CHECK(same_rows(adapter, tv));
+        REQUIRE(!adapter.empty());
+        CHECK(adapter[0].bar == 1);
+        CHECK(adapter[0].signal == "Margin call");
+        CHECK(same_value(adapter[0].price, bars[1].low));
+        CHECK(same_value(adapter[0].qty, native[0].qty));
     }
 }
 

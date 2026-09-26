@@ -1737,6 +1737,9 @@ private:
     void apply_fx_opening_margin_slice(const native_order::ExecutionAppliedEvent&,
                                        const NativeDecisionContext&);
     void schedule_preopen_margin_slice(const Bar&, const NativeDecisionContext&);
+    bool leveraged_entry_bar_checked() const noexcept;
+    bool preopen_slice_class(const PlacementSnapshot&,
+                             const NativeDecisionContext&) const noexcept;
     bool submit_margin_call_slice(double mark_price, const NativeDecisionContext&,
                                   bool opening_checkpoint = false);
     bool submit_margin_call_units(double mark_price, const NativeDecisionContext&,
