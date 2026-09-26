@@ -17657,6 +17657,48 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         && event.opened_units > 0.0) {
         purge_brackets_after_applied_reversal(*placement_snapshot);
     }
+    // A from_entry="" exit the script placed while the reversed position was
+    // open belongs to that position, as every exit a flattening close
+    // outlives does (retire_in_position_exits_at_flat): TradingView never
+    // applies it to the side the reversal opens, on its entry bar or later,
+    // in either direction (lane TVDEF-DROPS, tests/fixtures/tvdef_drops R3).
+    // The kernel binds such a close to the book it first evaluates against;
+    // one evaluated before this fill was already cancelled with that book
+    // and waits for its terminal receipt: a cancel of it would record a
+    // NotWorking event, so only a leg still working is cancelled here.
+    if (placement_snapshot && placement_snapshot->opening
+        && placement_snapshot->reverse_to && event.closed_units > 0.0
+        && event.opened_units != 0.0) {
+        const auto reversed_side = static_cast<std::int32_t>(
+            event.opened_units > 0.0 ? PositionSide::SHORT : PositionSide::LONG);
+        std::vector<native_order::RequestHandle> reversed_global_exits;
+        for (const auto& handle : live_handles_) {
+            const auto found = placement_.find(handle.incarnation);
+            if (found == placement_.end()) continue;
+            const auto& row = found->second;
+            const bool exit = row.family == PineOrderFamily::ExitLimit
+                || row.family == PineOrderFamily::ExitStop
+                || row.family == PineOrderFamily::ExitTrail;
+            // The reversal advanced the cycle above; the reversed position's
+            // is the one before it.
+            if (exit && row.from_entry.empty() && row.projection_position_side == reversed_side
+                && row.placement_cycle == current_position_cycle_ - 1) {
+                reversed_global_exits.push_back(handle);
+            }
+        }
+        if (!reversed_global_exits.empty()) {
+            const auto working = require_host().native_working_requests();
+            for (const auto& handle : reversed_global_exits) {
+                const bool still_working = std::any_of(working.begin(), working.end(),
+                    [&](const NativeWorkingRequest& request) {
+                        return request.definition->handle == handle;
+                    });
+                if (!still_working) continue;
+                const auto result = require_host().cancel(handle);
+                if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
+            }
+        }
+    }
     if (placement_snapshot && placement_snapshot->family == PineOrderFamily::Margin
         && event.closed_units > 0.0) {
         refresh_pending_sizing_after_margin(event, context);

@@ -3,7 +3,7 @@
  *
  * Pine v6's default order size is 100% of equity (lane TV-DEFAULTS), so many
  * scripts that used to trade one contract now size every entry from the
- * account. Pine adapter rules broke under it, each lost when R4 slice C
+ * account. Three Pine adapter rules broke under it, each lost when R4 slice C
  * lowered ab9714be's source broker onto the native kernel:
  *
  *   R1  A default percent_of_equity (<= 100) pure STOP entry that reverses a
@@ -16,14 +16,19 @@
  *       priced an explicit qty=1 reversal at the default value (100 units),
  *       declined it and cancelled the from_entry bracket TradingView scratches
  *       at the reversal's open.
+ *   R3  A from_entry="" exit placed while a position is open belongs to that
+ *       position: when a MARKET entry reverses it, TradingView never applies
+ *       the exit to the new side. Under a non-fixed default the lowered
+ *       reversal reached the kernel ahead of the bar's re-issued exit, which
+ *       then bound to the new position and closed it at its entry open.
  *
  * Each row replays TradingView's own tape of a synthetic probe
  * (tests/fixtures/tvdef_drops, lab tv exports on BINANCE:ETHUSDT.P 15) through
  * the Pine adapter under the configuration the generated constructor declares
  * for it, over the corpus 15m bars embedded in bars.inc, and requires every
  * trade the tape closes inside those bars to be the engine's: entry and exit
- * time, side, price and quantity. The rule tapes the lowering missed, and
- * the declared-size control of each rule that it already booked, are
+ * time, side, price and quantity. The three rule tapes the lowering missed,
+ * and the declared-size control of each rule that it already booked, are
  * replayed alike.
  */
 
@@ -170,7 +175,7 @@ Tape tape_trades(const std::string& tape, std::int64_t end_ms) {
     return out;
 }
 
-enum class Probe { R1, R2 };
+enum class Probe { R1, R2, R3 };
 
 // The probes, as their generated TUs lower them (fixtures/.../strategy.pine).
 class ProbeHost final : public source::PineStrategyHost {
@@ -186,6 +191,7 @@ public:
         switch (probe_) {
         case Probe::R1: stop_reversal(t); break;
         case Probe::R2: explicit_reversal_bracket(t); break;
+        case Probe::R3: reversal_voids_global_exit(t); break;
         }
     }
 
@@ -218,6 +224,22 @@ private:
             strategy_exit("B-X", "B-S", 1300.0, 1470.0, kNaN, kNaN, kNaN, 100.0, "B bracket",
                           kNaN, "", kNaN, kNaN);
         }
+        if (t == at(8, 2, 0) || t == at(9, 2, 0)) cleanup();
+    }
+
+    void reversal_voids_global_exit(std::int64_t t) {
+        if (t == at(8, 0, 0)) strategy_entry("A-S", false, kNaN, kNaN, kNaN, "A seed short");
+        if (t == at(8, 0, 15)) strategy_entry("A-L", true, kNaN, kNaN, kNaN, "A reverse long");
+        if (t == at(9, 0, 0)) strategy_entry("B-L", true, kNaN, kNaN, kNaN, "B seed long");
+        if (t == at(9, 0, 15)) strategy_entry("B-S", false, kNaN, kNaN, kNaN, "B reverse short");
+        // strategy.position_avg_price: na while flat.
+        const double avg = signed_position_size() == 0.0 ? kNaN : position_entry_price_;
+        if (signed_position_size() < 0.0)
+            strategy_exit("XS", "", avg - 15.0, avg + 15.0, kNaN, kNaN, kNaN, 100.0, "short exit",
+                          kNaN, "", kNaN, kNaN);
+        if (signed_position_size() > 0.0)
+            strategy_exit("XL", "", avg + 20.0, avg - 20.0, kNaN, kNaN, kNaN, 100.0, "long exit",
+                          kNaN, "", kNaN, kNaN);
         if (t == at(8, 2, 0) || t == at(9, 2, 0)) cleanup();
     }
 
@@ -290,6 +312,12 @@ int main() {
          config(kPercent, 100.0), 4},
         {"tdd-r2-explicit-reversal-bracket-fixed1", Probe::R2, "fixed, 1",
          config(kFixed, 1.0), 4},
+        {"tdd-r3-reversal-voids-global-exit", Probe::R3, "nothing (v6: percent_of_equity, 100)",
+         config(kPercent, 100.0), 6},
+        {"tdd-r3-reversal-voids-global-exit-half", Probe::R3, "percent_of_equity, 50",
+         config(kPercent, 50.0), 4},
+        {"tdd-r3-reversal-voids-global-exit-fixed1", Probe::R3, "fixed, 1",
+         config(kFixed, 1.0), 4},
     };
 
     std::map<std::string, Tape> tapes;
@@ -337,6 +365,22 @@ int main() {
                 CHECK(std::get<0>(all.trades[i]) == std::get<4>(all.trades[i]));
                 CHECK(std::get<2>(all.trades[i]) == std::get<5>(all.trades[i]));
                 CHECK(all.signals[i].find("bracket") != std::string::npos);
+            }
+        }
+    }
+    {
+        // R3: no position a reversal opens is closed by the reversed side's
+        // exit, under any sizing: each exits by its own side's exit, later.
+        for (const char* name : {"tdd-r3-reversal-voids-global-exit",
+                                 "tdd-r3-reversal-voids-global-exit-half",
+                                 "tdd-r3-reversal-voids-global-exit-fixed1"}) {
+            const Tape& tape = tapes[name];
+            for (std::size_t i = 0; i < tape.trades.size(); ++i) {
+                const bool opened_by_reversal = std::get<0>(tape.trades[i]) == at(8, 0, 30)
+                    || std::get<0>(tape.trades[i]) == at(9, 0, 30);
+                if (!opened_by_reversal || tape.signals[i] == "Margin call") continue;
+                CHECK(std::get<4>(tape.trades[i]) > std::get<0>(tape.trades[i]));
+                CHECK(tape.signals[i] == (std::get<1>(tape.trades[i]) ? "long exit" : "short exit"));
             }
         }
     }

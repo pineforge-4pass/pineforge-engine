@@ -1,0 +1,31 @@
+//@version=6
+strategy("TVDEF-DROPS R3 reversal voids global exit", overlay=true)
+
+// Lane TVDEF-DROPS, rule R3. The order size is Pine v6's default (100% of
+// equity). While a side is held the script re-issues a from_entry="" exit for
+// it every bar; on the bar a MARKET entry for the other side is placed, that
+// exit is issued again after the entry, still for the held side. At the
+// reversal's open fill its levels are marketable against the new side, yet
+// they belonged to the reversed position: TradingView does not apply them.
+
+if time == timestamp("UTC", 2025, 4, 8, 0, 0)
+    strategy.entry("A-S", strategy.short, comment="A seed short")
+if time == timestamp("UTC", 2025, 4, 8, 0, 15)
+    strategy.entry("A-L", strategy.long, comment="A reverse long")
+if time == timestamp("UTC", 2025, 4, 9, 0, 0)
+    strategy.entry("B-L", strategy.long, comment="B seed long")
+if time == timestamp("UTC", 2025, 4, 9, 0, 15)
+    strategy.entry("B-S", strategy.short, comment="B reverse short")
+
+if strategy.position_size < 0
+    strategy.exit("XS", from_entry="", limit=strategy.position_avg_price - 15.0,
+         stop=strategy.position_avg_price + 15.0, comment="short exit")
+if strategy.position_size > 0
+    strategy.exit("XL", from_entry="", limit=strategy.position_avg_price + 20.0,
+         stop=strategy.position_avg_price - 20.0, comment="long exit")
+
+cleanup = time == timestamp("UTC", 2025, 4, 8, 2, 0) or
+     time == timestamp("UTC", 2025, 4, 9, 2, 0)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

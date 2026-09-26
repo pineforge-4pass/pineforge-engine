@@ -1,0 +1,16 @@
+{
+  "title": "TVDEF-DROPS R3 reversal voids global exit fixed1",
+  "slug": "tdd-r3-reversal-voids-global-exit-fixed1",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T18:13:14.042Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "0e7510d2ec1c01c9b358194a4779cab5f1520819e2f831fb97bc48493bdd0341",
+  "tv_trades_sha256": "c4856aabf8d16a69f33a3699de44a16407b82fab24520fd0ecae26788347966f",
+  "tv_trades_rows": 8
+}
