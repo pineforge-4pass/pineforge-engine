@@ -105,31 +105,46 @@
 //   rebuilt/1: hash=16942810041893704776 -> hash=5316201723780989919
 //   rebuilt/2: hash=13831511007419341774 -> hash=496593797863776142
 //   rebuilt/3: hash=16942810041893704776 -> hash=5316201723780989919
+// expectation corrected (INT26 v19 hash re-pin): every run's broker-state hash moved once more, because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary;
+// trades, trade digests, net profits and errors did not move:
+//   batch/A: hash=496593797863776142 -> hash=14113207875665531755 [H-THIN]
+//   batch/B: hash=5316201723780989919 -> hash=3001060687180726304 [H-THIN]
+//   stream/A: hash=4351362905685696693 -> hash=1927432040325474646 [H-THIN]
+//   stream/B: hash=1033336853289890500 -> hash=13106388348010577033 [H-THIN]
+//   interleaved/A: hash=4351362905685696693 -> hash=1927432040325474646 [H-THIN]
+//   interleaved/B: hash=1033336853289890500 -> hash=13106388348010577033 [H-THIN]
+//   round_robin/A1: hash=4351362905685696693 -> hash=1927432040325474646 [H-THIN]
+//   round_robin/B: hash=1033336853289890500 -> hash=13106388348010577033 [H-THIN]
+//   round_robin/A2: hash=4351362905685696693 -> hash=1927432040325474646 [H-THIN]
+//   rebuilt/0: hash=496593797863776142 -> hash=14113207875665531755 [H-THIN]
+//   rebuilt/1: hash=5316201723780989919 -> hash=3001060687180726304 [H-THIN]
+//   rebuilt/2: hash=496593797863776142 -> hash=14113207875665531755 [H-THIN]
+//   rebuilt/3: hash=5316201723780989919 -> hash=3001060687180726304 [H-THIN]
 constexpr Pinned kPinned[] = {
     {"batch/A",
-     "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=496593797863776142 error=''"},
+     "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=14113207875665531755 error=''"},
     {"batch/B",
-     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=5316201723780989919 error=''"},
+     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=3001060687180726304 error=''"},
     {"stream/A",
-     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=4351362905685696693 error=''"},
+     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=1927432040325474646 error=''"},
     {"stream/B",
-     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=1033336853289890500 error=''"},
+     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=13106388348010577033 error=''"},
     {"interleaved/A",
-     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=4351362905685696693 error=''"},
+     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=1927432040325474646 error=''"},
     {"interleaved/B",
-     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=1033336853289890500 error=''"},
+     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=13106388348010577033 error=''"},
     {"round_robin/A1",
-     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=4351362905685696693 error=''"},
+     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=1927432040325474646 error=''"},
     {"round_robin/B",
-     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=1033336853289890500 error=''"},
+     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=13106388348010577033 error=''"},
     {"round_robin/A2",
-     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=4351362905685696693 error=''"},
+     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=1927432040325474646 error=''"},
     {"rebuilt/0",
-     "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=496593797863776142 error=''"},
+     "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=14113207875665531755 error=''"},
     {"rebuilt/1",
-     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=5316201723780989919 error=''"},
+     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=3001060687180726304 error=''"},
     {"rebuilt/2",
-     "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=496593797863776142 error=''"},
+     "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=14113207875665531755 error=''"},
     {"rebuilt/3",
-     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=5316201723780989919 error=''"},
+     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=3001060687180726304 error=''"},
 };

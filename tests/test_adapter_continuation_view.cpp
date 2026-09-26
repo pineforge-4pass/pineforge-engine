@@ -346,14 +346,19 @@ void emit(const char* name, const std::vector<std::uint64_t>& reads) {
 //   4370795498617211977ull -> 2898399952537902865ull
 //   10361542891827113526ull -> 8964175343669296125ull
 //   4370795498617211977ull -> 2898399952537902865ull
+// expectation corrected (INT26 v19 hash re-pin, k_chart, 4 of 7 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+//   17778912298194596574ull -> 2540222023230692795ull [H-THIN]
+//   8941018855024971093ull -> 7277266162097189602ull [H-THIN]
+//   2898399952537902865ull -> 13929697350787785222ull [H-THIN]
+//   2898399952537902865ull -> 13929697350787785222ull [H-THIN]
 constexpr std::uint64_t k_chart[] = {
     5575980828577033360ull,
-    17778912298194596574ull,
+    2540222023230692795ull,
     16463834114134690168ull,
-    8941018855024971093ull,
-    2898399952537902865ull,
+    7277266162097189602ull,
+    13929697350787785222ull,
     8964175343669296125ull,
-    2898399952537902865ull,
+    13929697350787785222ull,
 };
 // expectation corrected (k_magnifier, 7 of 7 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19):
 //   10072028075855707823ull -> 2055499121853794215ull
@@ -391,14 +396,19 @@ constexpr std::uint64_t k_chart[] = {
 //   15984354419168920510ull -> 13581436790443683042ull
 //   16607038826027722339ull -> 14737345821341801219ull
 //   15984354419168920510ull -> 13581436790443683042ull
+// expectation corrected (INT26 v19 hash re-pin, k_magnifier, 4 of 7 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+//   14738067743722080804ull -> 10187142414804555211ull [H-THIN]
+//   2917741806179085516ull -> 13316113226488762715ull [H-THIN]
+//   13581436790443683042ull -> 489358674406674971ull [H-THIN]
+//   13581436790443683042ull -> 489358674406674971ull [H-THIN]
 constexpr std::uint64_t k_magnifier[] = {
     4430826578646987126ull,
-    14738067743722080804ull,
+    10187142414804555211ull,
     2077753189921542836ull,
-    2917741806179085516ull,
-    13581436790443683042ull,
+    13316113226488762715ull,
+    489358674406674971ull,
     14737345821341801219ull,
-    13581436790443683042ull,
+    489358674406674971ull,
 };
 // expectation corrected (k_aggregated, 5 of 5 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19):
 //   15579341700060222430ull -> 7408940017323371281ull
@@ -421,12 +431,16 @@ constexpr std::uint64_t k_magnifier[] = {
 //   4995545673543620333ull -> 6906214955679447270ull
 //   9893483468656556008ull -> 10543459672655655434ull
 //   4995545673543620333ull -> 6906214955679447270ull
+// expectation corrected (INT26 v19 hash re-pin, k_aggregated, 3 of 5 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+//   13031512803108236715ull -> 12703961494282243636ull [H-THIN]
+//   6906214955679447270ull -> 4636245846172056503ull [H-THIN]
+//   6906214955679447270ull -> 4636245846172056503ull [H-THIN]
 constexpr std::uint64_t k_aggregated[] = {
     16542564830293500828ull,
-    13031512803108236715ull,
-    6906214955679447270ull,
+    12703961494282243636ull,
+    4636245846172056503ull,
     10543459672655655434ull,
-    6906214955679447270ull,
+    4636245846172056503ull,
 };
 // expectation corrected (k_aggregated_magnifier, 5 of 5 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19):
 //   12594241837591534357ull -> 2376229218543853263ull
@@ -453,12 +467,16 @@ constexpr std::uint64_t k_aggregated[] = {
 //   10607093485200722581ull -> 7363580706773703120ull
 //   22607172627576334ull -> 5380311451522306220ull
 //   22607172627576334ull -> 5380311451522306220ull
+// expectation corrected (INT26 v19 hash re-pin, k_aggregated_magnifier, 3 of 5 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+//   7363580706773703120ull -> 6822321611223800121ull [H-THIN]
+//   5380311451522306220ull -> 1968062868302397607ull [H-THIN]
+//   5380311451522306220ull -> 1968062868302397607ull [H-THIN]
 constexpr std::uint64_t k_aggregated_magnifier[] = {
     14031106247497767919ull,
-    7363580706773703120ull,
-    5380311451522306220ull,
+    6822321611223800121ull,
+    1968062868302397607ull,
     12265832737220737843ull,
-    5380311451522306220ull,
+    1968062868302397607ull,
 };
 // expectation corrected (k_coof, 10 of 10 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19):
 //   10454171698854540065ull -> 8160477046829279565ull
@@ -507,17 +525,23 @@ constexpr std::uint64_t k_aggregated_magnifier[] = {
 //   10916717879615654635ull -> 784137025905909089ull
 //   17916071608255404005ull -> 11981249830754474578ull
 //   10916717879615654635ull -> 784137025905909089ull
+// expectation corrected (INT26 v19 hash re-pin, k_coof, 5 of 10 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+//   1856715264914641232ull -> 17725898018428294595ull [H-THIN]
+//   9115044940243703863ull -> 8234685298969568092ull [PAR-ORDERS-2, H-THIN]
+//   9198850018143016781ull -> 13907186164657073030ull [H-THIN]
+//   784137025905909089ull -> 5915100548425272856ull [H-THIN]
+//   784137025905909089ull -> 5915100548425272856ull [H-THIN]
 constexpr std::uint64_t k_coof[] = {
     16820608513549156800ull,
     9462991605602344175ull,
     12220673217690837314ull,
-    1856715264914641232ull,
+    17725898018428294595ull,
     12811765853164186626ull,
-    9115044940243703863ull,
-    9198850018143016781ull,
-    784137025905909089ull,
+    8234685298969568092ull,
+    13907186164657073030ull,
+    5915100548425272856ull,
     11981249830754474578ull,
-    784137025905909089ull,
+    5915100548425272856ull,
 };
 // expectation corrected (k_recording, 71 of 72 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19):
 //   2196150024938657215ull -> 2543779130970217232ull
@@ -857,78 +881,147 @@ constexpr std::uint64_t k_coof[] = {
 //   5548300568428407565ull -> 4010960734010157804ull
 //   4191735526950747220ull -> 5172512134487820157ull
 //   4370795498617211977ull -> 2898399952537902865ull
+// expectation corrected (INT26 v19 hash re-pin, k_recording, 68 of 72 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+//   16309388099732889217ull -> 13909724611150684752ull [H-THIN]
+//   14697449118452563264ull -> 6058006111773907271ull [H-THIN]
+//   2898399952537902865ull -> 13929697350787785222ull [H-THIN]
+//   2898399952537902865ull -> 13929697350787785222ull [H-THIN]
+//   11912929120179152844ull -> 14971695095207148331ull [H-THIN]
+//   7111499071038382551ull -> 10535748930949530126ull [H-THIN]
+//   14395892391241930212ull -> 12991008539092747157ull [H-THIN]
+//   9034635987304089269ull -> 15956762843095239782ull [H-THIN]
+//   7745035282290493167ull -> 2607245150229644476ull [H-THIN]
+//   9653978480792136139ull -> 2184445209065093070ull [H-THIN]
+//   6575784925310671623ull -> 2897664079743275822ull [H-THIN]
+//   16756306850270906652ull -> 4157996150621490761ull [H-THIN]
+//   6791844355462743637ull -> 10537503143714109070ull [H-THIN]
+//   9752175874850418240ull -> 13754546407945448507ull [H-THIN]
+//   5581794927458177019ull -> 16440431375654315850ull [H-THIN]
+//   16367531041072987671ull -> 7003661191077414576ull [H-THIN]
+//   5499206076623092635ull -> 11353048097065184288ull [H-THIN]
+//   16891823664600062531ull -> 12848736740973846400ull [H-THIN]
+//   15306266440153708710ull -> 3161842879106046797ull [H-THIN]
+//   8382791724770590634ull -> 10847056918133263985ull [H-THIN]
+//   4926336483410460532ull -> 8350647617751486789ull [H-THIN]
+//   12823090459845782834ull -> 1856794670313281419ull [H-THIN]
+//   10217177223946990874ull -> 3189033237966511301ull [H-THIN]
+//   12680312482263936655ull -> 9556919139953515754ull [H-THIN]
+//   15032085204869760060ull -> 5681429441061062241ull [H-THIN]
+//   7696336452231268012ull -> 10425853480784439841ull [H-THIN]
+//   6819477884530924764ull -> 12097190747565164239ull [H-THIN]
+//   13932522791731114426ull -> 12637836836690018377ull [H-THIN]
+//   15842817164955438950ull -> 14424918618138801803ull [H-THIN]
+//   4250764768037495411ull -> 17903030095845904958ull [H-THIN]
+//   1760469320874157114ull -> 15510962773836543503ull [H-THIN]
+//   7565330933885892856ull -> 16031650111081263649ull [H-THIN]
+//   3348650657119335616ull -> 15453192344610479715ull [H-THIN]
+//   16026642042438818681ull -> 12604736624722151438ull [H-THIN]
+//   15336121108426360137ull -> 17308957480242505390ull [H-THIN]
+//   12610087835245307199ull -> 452142121530738962ull [H-THIN]
+//   3169655936610324835ull -> 6150193546982553982ull [H-THIN]
+//   18005345939863936504ull -> 12917335185226580263ull [H-THIN]
+//   10374887129263366256ull -> 3249697982624166735ull [H-THIN]
+//   3316605285128650350ull -> 3343978410969230181ull [H-THIN]
+//   10411230090089985874ull -> 16247831777829745607ull [H-THIN]
+//   2321647345879300563ull -> 7514289197254818298ull [H-THIN]
+//   9282855342318040804ull -> 17972948283988009341ull [H-THIN]
+//   8782939554936041465ull -> 4872902272073809254ull [H-THIN]
+//   9270809468617755726ull -> 16118270799549857939ull [H-THIN]
+//   9705564861311910669ull -> 14672005653726242528ull [H-THIN]
+//   1984027035687621850ull -> 2133921838620278979ull [H-THIN]
+//   5309816640440296119ull -> 13677532362142245502ull [H-THIN]
+//   61906512444861614ull -> 7883065542401673469ull [H-THIN]
+//   18408253739502061131ull -> 7126839422434123000ull [H-THIN]
+//   2900636347809437670ull -> 3907128035298066349ull [H-THIN]
+//   8590510826456084479ull -> 4948527793100784708ull [H-THIN]
+//   16739036358771975930ull -> 142644456983149613ull [H-THIN]
+//   3846505090147632664ull -> 14555917326272639085ull [H-THIN]
+//   13346518438036570112ull -> 5212018862612370299ull [H-THIN]
+//   3939181335635768762ull -> 865072719653853777ull [H-THIN]
+//   1996675722330704212ull -> 14621783374817857573ull [H-THIN]
+//   271113896427528122ull -> 12663926541947072239ull [H-THIN]
+//   1511893874670543988ull -> 7631475035369278017ull [H-THIN]
+//   15973548105797383183ull -> 951171557373679674ull [H-THIN]
+//   4392899708297163730ull -> 9891512222295021637ull [H-THIN]
+//   11467883812317724901ull -> 14067535954397498792ull [H-THIN]
+//   11051413718335140252ull -> 14311549026741467081ull [H-THIN]
+//   903533060614176790ull -> 775415503723595045ull [H-THIN]
+//   14466209299323094098ull -> 2025287021890762573ull [H-THIN]
+//   4010960734010157804ull -> 5576052922734185379ull [H-THIN]
+//   5172512134487820157ull -> 1575805364117614574ull [H-THIN]
+//   2898399952537902865ull -> 13929697350787785222ull [H-THIN]
 constexpr std::uint64_t k_recording[] = {
     5575980828577033360ull,
-    16309388099732889217ull,
+    13909724611150684752ull,
     16463834114134690168ull,
-    14697449118452563264ull,
-    2898399952537902865ull,
+    6058006111773907271ull,
+    13929697350787785222ull,
     8964175343669296125ull,
-    2898399952537902865ull,
-    11912929120179152844ull,
-    7111499071038382551ull,
-    14395892391241930212ull,
-    9034635987304089269ull,
-    7745035282290493167ull,
-    9653978480792136139ull,
-    6575784925310671623ull,
-    16756306850270906652ull,
-    6791844355462743637ull,
-    9752175874850418240ull,
-    5581794927458177019ull,
-    16367531041072987671ull,
-    5499206076623092635ull,
-    16891823664600062531ull,
-    15306266440153708710ull,
-    8382791724770590634ull,
-    4926336483410460532ull,
-    12823090459845782834ull,
-    10217177223946990874ull,
-    12680312482263936655ull,
-    15032085204869760060ull,
-    7696336452231268012ull,
-    6819477884530924764ull,
-    13932522791731114426ull,
-    15842817164955438950ull,
-    4250764768037495411ull,
-    1760469320874157114ull,
-    7565330933885892856ull,
-    3348650657119335616ull,
-    16026642042438818681ull,
-    15336121108426360137ull,
-    12610087835245307199ull,
-    3169655936610324835ull,
-    18005345939863936504ull,
-    10374887129263366256ull,
-    3316605285128650350ull,
-    10411230090089985874ull,
-    2321647345879300563ull,
-    9282855342318040804ull,
-    8782939554936041465ull,
-    9270809468617755726ull,
-    9705564861311910669ull,
-    1984027035687621850ull,
-    5309816640440296119ull,
-    61906512444861614ull,
-    18408253739502061131ull,
-    2900636347809437670ull,
-    8590510826456084479ull,
-    16739036358771975930ull,
-    3846505090147632664ull,
-    13346518438036570112ull,
-    3939181335635768762ull,
-    1996675722330704212ull,
-    271113896427528122ull,
-    1511893874670543988ull,
-    15973548105797383183ull,
-    4392899708297163730ull,
-    11467883812317724901ull,
-    11051413718335140252ull,
-    903533060614176790ull,
-    14466209299323094098ull,
-    4010960734010157804ull,
-    5172512134487820157ull,
-    2898399952537902865ull,
+    13929697350787785222ull,
+    14971695095207148331ull,
+    10535748930949530126ull,
+    12991008539092747157ull,
+    15956762843095239782ull,
+    2607245150229644476ull,
+    2184445209065093070ull,
+    2897664079743275822ull,
+    4157996150621490761ull,
+    10537503143714109070ull,
+    13754546407945448507ull,
+    16440431375654315850ull,
+    7003661191077414576ull,
+    11353048097065184288ull,
+    12848736740973846400ull,
+    3161842879106046797ull,
+    10847056918133263985ull,
+    8350647617751486789ull,
+    1856794670313281419ull,
+    3189033237966511301ull,
+    9556919139953515754ull,
+    5681429441061062241ull,
+    10425853480784439841ull,
+    12097190747565164239ull,
+    12637836836690018377ull,
+    14424918618138801803ull,
+    17903030095845904958ull,
+    15510962773836543503ull,
+    16031650111081263649ull,
+    15453192344610479715ull,
+    12604736624722151438ull,
+    17308957480242505390ull,
+    452142121530738962ull,
+    6150193546982553982ull,
+    12917335185226580263ull,
+    3249697982624166735ull,
+    3343978410969230181ull,
+    16247831777829745607ull,
+    7514289197254818298ull,
+    17972948283988009341ull,
+    4872902272073809254ull,
+    16118270799549857939ull,
+    14672005653726242528ull,
+    2133921838620278979ull,
+    13677532362142245502ull,
+    7883065542401673469ull,
+    7126839422434123000ull,
+    3907128035298066349ull,
+    4948527793100784708ull,
+    142644456983149613ull,
+    14555917326272639085ull,
+    5212018862612370299ull,
+    865072719653853777ull,
+    14621783374817857573ull,
+    12663926541947072239ull,
+    7631475035369278017ull,
+    951171557373679674ull,
+    9891512222295021637ull,
+    14067535954397498792ull,
+    14311549026741467081ull,
+    775415503723595045ull,
+    2025287021890762573ull,
+    5576052922734185379ull,
+    1575805364117614574ull,
+    13929697350787785222ull,
     8ull,
 };
 // expectation corrected (k_stream, 54 of 54 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19):
@@ -1191,61 +1284,101 @@ constexpr std::uint64_t k_recording[] = {
 //   8444087394523764362ull -> 971242319250035563ull
 //   14079671624423886806ull -> 6931684686417541656ull
 //   8444087394523764362ull -> 971242319250035563ull
+// expectation corrected (INT26 v19 hash re-pin, k_stream, 39 of 54 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+//   16458853630937199693ull -> 6675987432147888000ull [H-THIN]
+//   15852567477617018112ull -> 15316836834528354089ull [H-THIN]
+//   8395254103899656747ull -> 122347678355491576ull [H-THIN]
+//   9137153746257222586ull -> 17060189170921966279ull [H-THIN]
+//   4321243615010347791ull -> 12998233506120003610ull [H-THIN]
+//   4335032133758631355ull -> 5790160451626852554ull [H-THIN]
+//   3418642895666580588ull -> 8747488118396803171ull [H-THIN]
+//   15778603109418817912ull -> 11301555486053984887ull [H-THIN]
+//   8082887755714141501ull -> 16019190197976852534ull [H-THIN]
+//   18272796975887582060ull -> 14554266247005678391ull [H-THIN]
+//   4620349392656757831ull -> 9863308761378043570ull [H-THIN]
+//   11681022048666484124ull -> 3981212442403576087ull [H-THIN]
+//   1110410394930231379ull -> 16893712934576968012ull [H-THIN]
+//   8353289200898942510ull -> 17103134812120181635ull [H-THIN]
+//   5464661787014092283ull -> 2716679541586828074ull [H-THIN]
+//   17913569146247237990ull -> 2142815117417671925ull [H-THIN]
+//   14252084119842247317ull -> 1297101144475427900ull [H-THIN]
+//   14984524306684102418ull -> 17860190683404402179ull [H-THIN]
+//   8427843384471180011ull -> 12743930332679229528ull [H-THIN]
+//   12312569890916686665ull -> 13672064593010625780ull [H-THIN]
+//   7806471840435792838ull -> 15322331001617686957ull [H-THIN]
+//   10841176947711978698ull -> 2540452936526860029ull [H-THIN]
+//   15796138674937755121ull -> 5707160760001918266ull [H-THIN]
+//   4930499034900633496ull -> 17256519628932910437ull [H-THIN]
+//   11894749826123257324ull -> 1265742856577179629ull [H-THIN]
+//   6209022505833017115ull -> 8935675646451046114ull [H-THIN]
+//   13004202639896233962ull -> 1995113508368758049ull [H-THIN]
+//   1029059189446661931ull -> 12126669220334860080ull [H-THIN]
+//   9236479431486641300ull -> 13100650686759242355ull [H-THIN]
+//   5209128789544115679ull -> 1320523439935521014ull [H-THIN]
+//   5582126543454279956ull -> 10835572324283436971ull [H-THIN]
+//   16435999169585034112ull -> 411402308123821837ull [H-THIN]
+//   2858404675926398753ull -> 18325644631502656152ull [H-THIN]
+//   2863207613356019619ull -> 6533533400826708814ull [H-THIN]
+//   1651019462700250297ull -> 11035145778810736216ull [H-THIN]
+//   9342015881796079139ull -> 4664106270365911266ull [H-THIN]
+//   971242319250035563ull -> 6512545530849110454ull [H-THIN]
+//   971242319250035563ull -> 6512545530849110454ull [H-THIN]
+//   971242319250035563ull -> 6512545530849110454ull [H-THIN]
 constexpr std::uint64_t k_stream[] = {
-    16458853630937199693ull,
+    6675987432147888000ull,
     10534014544629119321ull,
-    15852567477617018112ull,
-    8395254103899656747ull,
-    9137153746257222586ull,
-    4321243615010347791ull,
+    15316836834528354089ull,
+    122347678355491576ull,
+    17060189170921966279ull,
+    12998233506120003610ull,
     2464381025353933752ull,
-    4335032133758631355ull,
-    3418642895666580588ull,
+    5790160451626852554ull,
+    8747488118396803171ull,
     12043850726481513634ull,
-    15778603109418817912ull,
+    11301555486053984887ull,
     7422979898823356625ull,
-    8082887755714141501ull,
-    18272796975887582060ull,
-    4620349392656757831ull,
+    16019190197976852534ull,
+    14554266247005678391ull,
+    9863308761378043570ull,
     11062470475981718812ull,
-    11681022048666484124ull,
-    1110410394930231379ull,
-    8353289200898942510ull,
-    5464661787014092283ull,
+    3981212442403576087ull,
+    16893712934576968012ull,
+    17103134812120181635ull,
+    2716679541586828074ull,
     18042314908697358845ull,
-    17913569146247237990ull,
-    14252084119842247317ull,
+    2142815117417671925ull,
+    1297101144475427900ull,
     13951402111806527659ull,
-    14984524306684102418ull,
+    17860190683404402179ull,
     4929388494852177725ull,
-    8427843384471180011ull,
-    12312569890916686665ull,
-    7806471840435792838ull,
-    10841176947711978698ull,
+    12743930332679229528ull,
+    13672064593010625780ull,
+    15322331001617686957ull,
+    2540452936526860029ull,
     14141658027994245481ull,
-    15796138674937755121ull,
-    4930499034900633496ull,
-    11894749826123257324ull,
+    5707160760001918266ull,
+    17256519628932910437ull,
+    1265742856577179629ull,
     331885767850924737ull,
-    6209022505833017115ull,
-    13004202639896233962ull,
-    1029059189446661931ull,
+    8935675646451046114ull,
+    1995113508368758049ull,
+    12126669220334860080ull,
     9179914352160302837ull,
-    9236479431486641300ull,
-    5209128789544115679ull,
-    5582126543454279956ull,
+    13100650686759242355ull,
+    1320523439935521014ull,
+    10835572324283436971ull,
     14370442711223214011ull,
-    16435999169585034112ull,
-    2858404675926398753ull,
-    2863207613356019619ull,
+    411402308123821837ull,
+    18325644631502656152ull,
+    6533533400826708814ull,
     4197841241754323017ull,
-    1651019462700250297ull,
-    9342015881796079139ull,
-    971242319250035563ull,
+    11035145778810736216ull,
+    4664106270365911266ull,
+    6512545530849110454ull,
     6367780246848246992ull,
-    971242319250035563ull,
+    6512545530849110454ull,
     6931684686417541656ull,
-    971242319250035563ull,
+    6512545530849110454ull,
 };
 // expectation corrected (k_stream_aborted, 35 of 35 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19):
 //   1675429297538291515ull -> 9926360377267477400ull
@@ -1417,42 +1550,68 @@ constexpr std::uint64_t k_stream[] = {
 //   12788838416146221578ull -> 4930499034900633496ull
 //   6600350751158217016ull -> 6596242839819495123ull
 //   12788838416146221578ull -> 4930499034900633496ull
+// expectation corrected (INT26 v19 hash re-pin, k_stream_aborted, 25 of 35 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+//   16458853630937199693ull -> 6675987432147888000ull [H-THIN]
+//   15852567477617018112ull -> 15316836834528354089ull [H-THIN]
+//   8395254103899656747ull -> 122347678355491576ull [H-THIN]
+//   9137153746257222586ull -> 17060189170921966279ull [H-THIN]
+//   4321243615010347791ull -> 12998233506120003610ull [H-THIN]
+//   4335032133758631355ull -> 5790160451626852554ull [H-THIN]
+//   3418642895666580588ull -> 8747488118396803171ull [H-THIN]
+//   15778603109418817912ull -> 11301555486053984887ull [H-THIN]
+//   8082887755714141501ull -> 16019190197976852534ull [H-THIN]
+//   18272796975887582060ull -> 14554266247005678391ull [H-THIN]
+//   4620349392656757831ull -> 9863308761378043570ull [H-THIN]
+//   11681022048666484124ull -> 3981212442403576087ull [H-THIN]
+//   1110410394930231379ull -> 16893712934576968012ull [H-THIN]
+//   8353289200898942510ull -> 17103134812120181635ull [H-THIN]
+//   5464661787014092283ull -> 2716679541586828074ull [H-THIN]
+//   17913569146247237990ull -> 2142815117417671925ull [H-THIN]
+//   14252084119842247317ull -> 1297101144475427900ull [H-THIN]
+//   14984524306684102418ull -> 17860190683404402179ull [H-THIN]
+//   8427843384471180011ull -> 12743930332679229528ull [H-THIN]
+//   12312569890916686665ull -> 13672064593010625780ull [H-THIN]
+//   7806471840435792838ull -> 15322331001617686957ull [H-THIN]
+//   10841176947711978698ull -> 2540452936526860029ull [H-THIN]
+//   15796138674937755121ull -> 5707160760001918266ull [H-THIN]
+//   4930499034900633496ull -> 17256519628932910437ull [H-THIN]
+//   4930499034900633496ull -> 17256519628932910437ull [H-THIN]
 constexpr std::uint64_t k_stream_aborted[] = {
-    16458853630937199693ull,
+    6675987432147888000ull,
     10534014544629119321ull,
-    15852567477617018112ull,
-    8395254103899656747ull,
-    9137153746257222586ull,
-    4321243615010347791ull,
+    15316836834528354089ull,
+    122347678355491576ull,
+    17060189170921966279ull,
+    12998233506120003610ull,
     2464381025353933752ull,
-    4335032133758631355ull,
-    3418642895666580588ull,
+    5790160451626852554ull,
+    8747488118396803171ull,
     12043850726481513634ull,
-    15778603109418817912ull,
+    11301555486053984887ull,
     7422979898823356625ull,
-    8082887755714141501ull,
-    18272796975887582060ull,
-    4620349392656757831ull,
+    16019190197976852534ull,
+    14554266247005678391ull,
+    9863308761378043570ull,
     11062470475981718812ull,
-    11681022048666484124ull,
-    1110410394930231379ull,
-    8353289200898942510ull,
-    5464661787014092283ull,
+    3981212442403576087ull,
+    16893712934576968012ull,
+    17103134812120181635ull,
+    2716679541586828074ull,
     18042314908697358845ull,
-    17913569146247237990ull,
-    14252084119842247317ull,
+    2142815117417671925ull,
+    1297101144475427900ull,
     13951402111806527659ull,
-    14984524306684102418ull,
+    17860190683404402179ull,
     4929388494852177725ull,
-    8427843384471180011ull,
-    12312569890916686665ull,
-    7806471840435792838ull,
-    10841176947711978698ull,
+    12743930332679229528ull,
+    13672064593010625780ull,
+    15322331001617686957ull,
+    2540452936526860029ull,
     14141658027994245481ull,
-    15796138674937755121ull,
-    4930499034900633496ull,
+    5707160760001918266ull,
+    17256519628932910437ull,
     6596242839819495123ull,
-    4930499034900633496ull,
+    17256519628932910437ull,
 };
 // expectation corrected (k_aborted, 6 of 6 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19):
 //   2196150024938657215ull -> 2543779130970217232ull
@@ -1485,13 +1644,17 @@ constexpr std::uint64_t k_stream_aborted[] = {
 //   12415576349368044635ull -> 12754404695042992156ull
 //   14564863596030526264ull -> 8825354032181240290ull
 //   12415576349368044635ull -> 12754404695042992156ull
+// expectation corrected (INT26 v19 hash re-pin, k_aborted, 3 of 6 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+//   17778912298194596574ull -> 2540222023230692795ull [H-THIN]
+//   12754404695042992156ull -> 8965275888317139301ull [H-THIN]
+//   12754404695042992156ull -> 8965275888317139301ull [H-THIN]
 constexpr std::uint64_t k_aborted[] = {
     5575980828577033360ull,
-    17778912298194596574ull,
+    2540222023230692795ull,
     16463834114134690168ull,
-    12754404695042992156ull,
+    8965275888317139301ull,
     8825354032181240290ull,
-    12754404695042992156ull,
+    8965275888317139301ull,
 };
 // expectation corrected (k_reused, 15 of 15 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19):
 //   2196150024938657215ull -> 2543779130970217232ull
@@ -1565,22 +1728,32 @@ constexpr std::uint64_t k_aborted[] = {
 //   3498362567022607364ull -> 4620349392656757831ull
 //   9810780513184341561ull -> 7040750059417794475ull
 //   3498362567022607364ull -> 4620349392656757831ull
+// expectation corrected (INT26 v19 hash re-pin, k_reused, 9 of 15 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+//   17778912298194596574ull -> 2540222023230692795ull [H-THIN]
+//   8941018855024971093ull -> 7277266162097189602ull [H-THIN]
+//   17778912298194596574ull -> 2540222023230692795ull [H-THIN]
+//   8941018855024971093ull -> 7277266162097189602ull [H-THIN]
+//   2898399952537902865ull -> 13929697350787785222ull [H-THIN]
+//   2898399952537902865ull -> 13929697350787785222ull [H-THIN]
+//   4063572268643314481ull -> 3045160088509885646ull [H-THIN]
+//   4620349392656757831ull -> 9863308761378043570ull [H-THIN]
+//   4620349392656757831ull -> 9863308761378043570ull [H-THIN]
 constexpr std::uint64_t k_reused[] = {
     5575980828577033360ull,
-    17778912298194596574ull,
+    2540222023230692795ull,
     16463834114134690168ull,
-    8941018855024971093ull,
+    7277266162097189602ull,
     5575980828577033360ull,
-    17778912298194596574ull,
+    2540222023230692795ull,
     16463834114134690168ull,
-    8941018855024971093ull,
-    2898399952537902865ull,
+    7277266162097189602ull,
+    13929697350787785222ull,
     8964175343669296125ull,
-    2898399952537902865ull,
-    4063572268643314481ull,
-    4620349392656757831ull,
+    13929697350787785222ull,
+    3045160088509885646ull,
+    9863308761378043570ull,
     7040750059417794475ull,
-    4620349392656757831ull,
+    9863308761378043570ull,
 };
 // expectation corrected (k_refused, 11 of 11 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19):
 //   9578444851499107596ull -> 5623648009772522091ull
@@ -1636,18 +1809,25 @@ constexpr std::uint64_t k_reused[] = {
 //   4370795498617211977ull -> 2898399952537902865ull
 //   10361542891827113526ull -> 8964175343669296125ull
 //   4370795498617211977ull -> 2898399952537902865ull
+// expectation corrected (INT26 v19 hash re-pin, k_refused, 6 of 11 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+//   2898399952537902865ull -> 13929697350787785222ull [H-THIN]
+//   2898399952537902865ull -> 13929697350787785222ull [H-THIN]
+//   17778912298194596574ull -> 2540222023230692795ull [H-THIN]
+//   8941018855024971093ull -> 7277266162097189602ull [H-THIN]
+//   2898399952537902865ull -> 13929697350787785222ull [H-THIN]
+//   2898399952537902865ull -> 13929697350787785222ull [H-THIN]
 constexpr std::uint64_t k_refused[] = {
     8964175343669296125ull,
-    2898399952537902865ull,
+    13929697350787785222ull,
     8964175343669296125ull,
-    2898399952537902865ull,
+    13929697350787785222ull,
     5575980828577033360ull,
-    17778912298194596574ull,
+    2540222023230692795ull,
     16463834114134690168ull,
-    8941018855024971093ull,
-    2898399952537902865ull,
+    7277266162097189602ull,
+    13929697350787785222ull,
     8964175343669296125ull,
-    2898399952537902865ull,
+    13929697350787785222ull,
 };
 // P1_PINNED_DATA_END
 
