@@ -256,6 +256,139 @@ class FragmentConsolidationIdentityTests(unittest.TestCase):
             distinct_entry_fill_mismatches(
                 tv_rows, consolidated, preserve), 0)
 
+    # A calc_on_order_fills refill cascade of unique-id adds, as TradingView
+    # exported it (tests/fixtures/coof_cascade_identity, BINANCE:BTCUSDT 15,
+    # the 2025-04-05 08:45 UTC bar): L0 and L1 fill at the open, L2 at the
+    # high one tick above it, L3 at the low. The open is a proven two-Signal
+    # key; the high is a one-Signal key inside the strict entry tolerance.
+    CASCADE_OPEN, CASCADE_HIGH, CASCADE_LOW = 83566.71, 83566.72, 83505.69
+
+    def cascade_tv_rows(self) -> list[TradePair]:
+        return [
+            trade(1, 100, self.CASCADE_OPEN, 200, 83600.0, entry_signal="L0"),
+            trade(2, 100, self.CASCADE_OPEN, 200, 83600.0, entry_signal="L1"),
+            trade(3, 100, self.CASCADE_HIGH, 200, 83600.0, entry_signal="L2"),
+            trade(4, 100, self.CASCADE_LOW, 200, 83600.0, entry_signal="L3"),
+        ]
+
+    def test_exact_unproven_neighbour_keeps_its_own_entry(self) -> None:
+        tv_rows = self.cascade_tv_rows()
+        self.assertLess(
+            relative_max(self.CASCADE_OPEN, self.CASCADE_HIGH),
+            STRICT_ENTRY_DELTA)
+        engine_rows = [
+            trade(1, 100, self.CASCADE_OPEN, 200, 83600.0,
+                  entry_identity="41"),
+            trade(2, 100, self.CASCADE_OPEN, 200, 83600.0,
+                  entry_identity="42"),
+            trade(3, 100, self.CASCADE_HIGH, 200, 83600.0,
+                  entry_identity="43"),
+            trade(4, 100, self.CASCADE_LOW, 200, 83600.0,
+                  entry_identity="44"),
+        ]
+
+        preserve = distinct_entry_fill_keys(tv_rows)
+        self.assertEqual(preserve, {(100, self.CASCADE_OPEN, "long")})
+        self.assertEqual(
+            distinct_entry_fill_mismatches(tv_rows, engine_rows, preserve), 0)
+
+    def test_exact_unproven_neighbour_cannot_hide_a_merged_entry(self) -> None:
+        tv_rows = self.cascade_tv_rows()
+        engine_rows = [
+            trade(1, 100, self.CASCADE_OPEN, 200, 83600.0, qty=2.0,
+                  entry_identity="41"),
+            trade(3, 100, self.CASCADE_HIGH, 200, 83600.0,
+                  entry_identity="43"),
+            trade(4, 100, self.CASCADE_LOW, 200, 83600.0,
+                  entry_identity="44"),
+        ]
+
+        preserve = distinct_entry_fill_keys(tv_rows)
+        self.assertEqual(
+            distinct_entry_fill_mismatches(tv_rows, engine_rows, preserve), 1)
+
+    def test_drifted_neighbour_cannot_hide_a_merged_entry(self) -> None:
+        tv_rows = self.cascade_tv_rows()
+        drifted = self.CASCADE_HIGH + 0.001
+        self.assertLess(
+            relative_max(self.CASCADE_OPEN, drifted), STRICT_ENTRY_DELTA)
+        self.assertLess(
+            relative_max(self.CASCADE_HIGH, drifted), STRICT_ENTRY_DELTA)
+        engine_rows = [
+            trade(1, 100, self.CASCADE_OPEN, 200, 83600.0, qty=2.0,
+                  entry_identity="41"),
+            trade(3, 100, drifted, 200, 83600.0, entry_identity="43"),
+            trade(4, 100, self.CASCADE_LOW, 200, 83600.0,
+                  entry_identity="44"),
+        ]
+
+        preserve = distinct_entry_fill_keys(tv_rows)
+        self.assertEqual(
+            distinct_entry_fill_mismatches(tv_rows, engine_rows, preserve), 1)
+
+    def test_drifted_correct_engine_fails_closed_as_ambiguous(self) -> None:
+        tv_rows = self.cascade_tv_rows()
+        drifted = self.CASCADE_HIGH + 0.001
+        engine_rows = [
+            trade(1, 100, self.CASCADE_OPEN, 200, 83600.0,
+                  entry_identity="41"),
+            trade(2, 100, self.CASCADE_OPEN, 200, 83600.0,
+                  entry_identity="42"),
+            trade(3, 100, drifted, 200, 83600.0, entry_identity="43"),
+            trade(4, 100, self.CASCADE_LOW, 200, 83600.0,
+                  entry_identity="44"),
+        ]
+
+        preserve = distinct_entry_fill_keys(tv_rows)
+        self.assertEqual(
+            distinct_entry_fill_mismatches(tv_rows, engine_rows, preserve), 1)
+
+    def test_extra_entry_at_exact_neighbour_is_not_merged_away(self) -> None:
+        tv_csv = ["Trade #,Type,Date and time,Signal,Price,Qty,Net PnL"]
+        engine_csv = ["Trade #,Type,Date and time,Price,Qty,Net PnL,"
+                      "Engine entry incarnation"]
+        number = 0
+
+        def add(entry: str, exit_: str, price: float, signal: str,
+                identities: list[str]) -> None:
+            nonlocal number
+            tv_number = len(tv_csv) // 2 + 1
+            tv_csv.append(f"{tv_number},Exit long,{exit_},X,{price + 1},1,1")
+            tv_csv.append(f"{tv_number},Entry long,{entry},{signal},{price},"
+                          f"1,1")
+            for identity in identities:
+                number += 1
+                engine_csv.append(f"{number},Exit long,{exit_},{price + 1},"
+                                  f"1,1,")
+                engine_csv.append(f"{number},Entry long,{entry},{price},1,1,"
+                                  f"{identity}")
+
+        for hour in range(40):
+            day = f"2025-01-0{1 + hour // 24}"
+            add(f"{day} {hour % 24:02d}:00", f"{day} {hour % 24:02d}:30",
+                50.0 + hour, f"F{hour}", [str(1000 + hour)])
+        add("2025-01-03 00:00", "2025-01-03 00:30", 100.0, "L0", ["41"])
+        add("2025-01-03 00:00", "2025-01-03 00:30", 100.0, "L1", ["42"])
+        add("2025-01-03 00:00", "2025-01-03 00:30", 100.005, "L2",
+            ["43", "44"])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            strategy = Path(tmp) / "extra-neighbour-entry"
+            strategy.mkdir()
+            (strategy / "inputs.json").write_text(
+                json.dumps({"tv_trades_csv_tz": "utc"}), encoding="utf-8")
+            (strategy / "tv_trades.csv").write_text(
+                "\n".join(tv_csv) + "\n", encoding="utf-8")
+            (strategy / "engine_trades.csv").write_text(
+                "\n".join(engine_csv) + "\n", encoding="utf-8")
+
+            result = analyze_strategy(strategy)
+
+        self.assertTrue(result.distinct_entry_identity_ok)
+        self.assertEqual((result.tv_count, result.eng_count), (43, 44))
+        self.assertEqual(result.count_abs_delta, 1)
+        self.assertNotEqual(result.label, "excellent")
+
     def test_tolerant_projection_keeps_time_and_direction_exact(self) -> None:
         tv_rows = [
             trade(1, 100, 100.0, 200, 102.0, entry_signal="A"),
