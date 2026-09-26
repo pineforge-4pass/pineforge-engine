@@ -7768,9 +7768,31 @@ void NativeExecutionConsumer::deliver_intrabar_script(
             // A retained lower bar already supplies its four exact turning
             // points. Continuous eligibility traverses those segments directly;
             // likewise, a path containing several retained lower bars has no
-            // missing intrabar detail for a synthetic sampler to recover.
-            internal::sample_price_path_ordered(sub, high_first, 4,
-                                                MagnifierDistribution::ENDPOINTS, samples);
+            // missing intrabar detail for a synthetic sampler to recover. A
+            // bar the direct four-sample path declines -- a leg of zero
+            // length, an open at its own low -- keeps its four turning points
+            // too, the repeated one included, rather than the general
+            // sampler's uniform fill: every sample is a check point of the
+            // margin model (IntrabarSample below), so a sample off the bar's
+            // own ticks would measure a price the bar never printed there,
+            // and a call armed at an open that is also the low is reached by
+            // the (zero-length) segment into that low (R5 lane MAG-INTRABAR).
+            // A bar that traded nothing at one price (volume 0, open = high =
+            // low = close) is one print, walked once as a discrete point: it
+            // has no path, and a request born at it waits for the next point
+            // (R5 lane MAG-INTRABAR: a host marks the script bar's own open
+            // and close in its lower path this way).
+            double corners[4];
+            if (lower && sub.volume == 0.0 && sub.high == sub.open && sub.low == sub.open
+                && sub.close == sub.open) {
+                samples.assign(1, sub.open);
+            } else if (internal::sample_endpoints4(sub, high_first, corners)) {
+                internal::sample_price_path_ordered(sub, high_first, 4,
+                                                    MagnifierDistribution::ENDPOINTS, samples);
+            } else {
+                samples.assign({sub.open, high_first ? sub.high : sub.low,
+                                high_first ? sub.low : sub.high, sub.close});
+            }
         } else if (volume_weighted) {
             internal::sample_price_path_volume_weighted_ordered(
                 sub, high_first, sample_count, mean_volume, volume_weighted_min_samples,

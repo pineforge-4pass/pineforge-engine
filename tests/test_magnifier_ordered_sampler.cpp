@@ -24,7 +24,9 @@
 //   3. Runs under each declared order, with a synthesized and a
 //      lower-timeframe path, walk exactly the base routine's samples in that
 //      order: every driver point's price, in sequence, is the samples of its
-//      script bar or the corners of its sub-bar.
+//      script bar or the corners of its sub-bar -- since R5 lane
+//      MAG-INTRABAR a sub-bar with a zero-length leg too, its repeated
+//      corner included, where the base routine fills one uniformly.
 //
 // Fail-before: at the lane's base engine_internal.hpp declares neither
 // sample_price_path_ordered nor sample_price_path_volume_weighted_ordered, so
@@ -161,9 +163,19 @@ void runs_walk_the_declared_order() {
                 for (std::size_t k = 0; k < subs; ++k) {
                     const Bar& sub = path == k3_book::Path::Lower ? tape.minutes[bar * 5 + k]
                                                                   : tape.bars[bar];
-                    const auto samples = base::sample(
-                        sub, base::override_high_first(order, sub), 4,
-                        MagnifierDistribution::ENDPOINTS);
+                    const bool high_first = base::override_high_first(order, sub);
+                    // A sub-bar whose turning times are not four distinct ones
+                    // (a zero-length leg) is walked through its four corners,
+                    // the repeated one included (R5 lane MAG-INTRABAR), not
+                    // the general routine's uniform fill.
+                    if (path == k3_book::Path::Lower && !base::four_distinct_times(sub, high_first)) {
+                        const double corners[4] = {sub.open, high_first ? sub.high : sub.low,
+                                                   high_first ? sub.low : sub.high, sub.close};
+                        expected.insert(expected.end(), corners, corners + 4);
+                        continue;
+                    }
+                    const auto samples = base::sample(sub, high_first, 4,
+                                                      MagnifierDistribution::ENDPOINTS);
                     expected.insert(expected.end(), samples.begin(), samples.end());
                 }
             }

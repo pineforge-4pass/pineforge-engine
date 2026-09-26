@@ -882,6 +882,12 @@ list(APPEND TEST_SOURCES test_native_session_day_utc)
 # twin's facts at every decision point, the per-bar cost pinned. Source-free,
 # so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_session_day_zoned)
+# R5 lane MAG-INTRABAR: a retained lower bar the direct four-sample path
+# declines (a zero-length leg, an open at its own low) is still walked through
+# its four turning points, so a margin call armed at such an open is booked
+# there, and a bar that traded nothing at one price is one point. Source-free,
+# so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_intrabar_turning_points)
 
 # R5 F5: the Pine adapter selects those facts instead of computing its own:
 # the same tapes flag for flag through the adapter, its live-probe tail

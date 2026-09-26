@@ -279,7 +279,11 @@ script bar:
   waypoint (`NativeMarginCheckKind::IntrabarSample`, below).
   `IntrabarPath::SampleEligibility::ContinuousSegments` (default) keeps
   continuous matching between generated samples; `DistributionSamples`
-  restricts eligibility to the sample points themselves.
+  restricts eligibility to the sample points themselves. Each retained bar is
+  walked through its own four turning points, a repeated one included when a
+  leg has zero length (an open at its own low), and a bar that traded nothing
+  at one price (volume 0, open = high = low = close) is one discrete point,
+  walked once (`tests/test_native_intrabar_turning_points.cpp`).
 - `IntrabarPath::synthesized{…}` — the same sampler over the script bar's own
   OHLC path, with no retained feed. Its eligibility is point-only by
   construction, so it carries no `sample_eligibility` member and delivers no
@@ -2099,7 +2103,7 @@ default, set while no run is active — because each row is a full
 the live state, not the run's length: the closed rows enter through a running
 digest). With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:7910`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:7857`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
@@ -2910,7 +2914,7 @@ Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator
 aggregates with, and the one the kernel's `script_bucket_completions` query
 feeds when the Pine scheduler asks how its input span buckets
-(`TimeframeAggregator` `native_execution_consumer.cpp:7992`). What it does
+(`TimeframeAggregator` `native_execution_consumer.cpp:7939`). What it does
 **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the

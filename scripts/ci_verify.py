@@ -264,7 +264,11 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #                   POSIX twin's facts at every decision point, the cost
 #                   pinned)
 # It registers in release too. 288 registered, 287 run.
-KERNEL_MIN_TESTS = 287
+# 288 run = those 287 plus lane MAG-INTRABAR:
+#   +1 MAG-INTRABAR test_native_intrabar_turning_points (a retained lower bar
+#                   walked through its four turning points; one print, once)
+# It registers in release too. 289 registered, 288 run.
+KERNEL_MIN_TESTS = 288
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -405,7 +409,9 @@ KERNEL_MIN_TESTS = 287
 # 706 = those 705 plus lane TV-DEFAULTS' source-bound
 # test_tv_strategy_defaults (TradingView's Pine v6 strategy() defaults, replayed
 # under the configuration the generated constructor declares).
-RELEASE_MIN_TESTS = 706
+# 707 = those 706 plus MAG-INTRABAR's kernel row KERNEL_MIN_TESTS lists above,
+# which registers here too.
+RELEASE_MIN_TESTS = 707
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
@@ -430,10 +436,11 @@ ADR_RULED_TEXTS_MIN = 40
 # at INT26, each with wave H's twenty-four rows of RELEASE_MIN_TESTS
 # (H-MEASURE +12, H-DOCGATES +3, K-OCA-KEEP +1, PAR-ORDERS-2 +4, PAR-MARGIN
 # +1, PAR-MARGIN-2 +1, PERF-KEDGE +1, PAR-CASHFEE +1), counted the same way;
-# 684/684/693 with INT26 round 2's tape row; 687/687/696 with lane
-# K-RUNERR's, lane PERF-ZONED's and lane TV-DEFAULTS' rows (+1 each).
+# 684/684/693 with INT26 round 2's tape row; 688/688/697 with lane
+# K-RUNERR's, lane PERF-ZONED's and lane TV-DEFAULTS' rows and lane
+# MAG-INTRABAR's kernel row (+1 each).
 # An excluded run must still discover at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 687, 'sanitizers': 687, 'native': 696}
+EXCLUDED_REGISTERED_MIN = {'debug': 688, 'sanitizers': 688, 'native': 697}
 # The ctest stage's bound. A full sanitizers run (push to main, a manual
 # dispatch, the maintainers' verification) ran out of its 30 minutes twice on
 # main's four-core runner before every row had finished, so it gets an hour; a
