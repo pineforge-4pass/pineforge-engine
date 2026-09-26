@@ -235,6 +235,16 @@ foreach(_pf_library ${PINEFORGE_LIBRARY_TARGETS})
     # library's own flags above stay exactly as they are. install(EXPORT)
     # carries it into PineForgeTargets.cmake.
     target_compile_options(${_pf_library} INTERFACE -ffp-contract=off)
+    # Clang stops parsing at 256 nested brackets, parentheses and braces
+    # (-fbracket-depth), and codegen transpiles Pine whose C++ nests deeper:
+    # nested calls, long `+` / `and` chains and nested blocks fail past about
+    # 250 levels, `not` chains past about 125. Every clang-compiled consumer
+    # TU gets 1024. Measured on the 312 corpus strategy TUs: byte-identical
+    # objects with and without it (clang 18 on spark, Apple clang 17) and the
+    # same compile time (summed CPU-time ratio 1.0002 and 0.9998 in the two
+    # orders on spark's idle cores). GCC has no such limit and no such flag.
+    target_compile_options(${_pf_library} INTERFACE
+        $<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-fbracket-depth=1024>)
 
     target_include_directories(${_pf_library}
         PUBLIC
