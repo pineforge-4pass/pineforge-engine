@@ -64,6 +64,14 @@
  *       openings -- 36 tapes, all TradingView's rows (the kernel's post-fill
  *       point now measures from the fill's own waypoint: a limit filled on its
  *       way down faces the bar's low, a short filled on its way up its high);
+ *     intrabar shapes: the magnifier under COOF and POOC and on a full-margin
+ *       short -- TradingView checks at its own 2-minute intrabars (a model of
+ *       which books all 16 tapes' calls), the adapter at the host's 1-minute
+ *       samples (the same model on those books the adapter's); 10 agree, six
+ *       recorded, plus 8 chart controls;
+ *     TradingView intrabars: its own request.security_lower_tf "2" arrays
+ *       equal the feed's minute pairs owned by the chart bar of their last
+ *       minute;
  *
  * Source-bound (includes pineforge/source): release profile only.
  */
@@ -75,6 +83,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <functional>
 #include <initializer_list>
@@ -102,6 +111,7 @@ struct FeedBar {
 #include "fixtures/margin_entry_bar/m10_bars.inc"
 #include "fixtures/intrabar_margin/bars_1m.inc"
 #include "fixtures/margin_entry_bar/pm2_bars.inc"
+#include "fixtures/intrabar_margin/pm2_bars_1m.inc"
 
 // ------------------------------------------------------------ TV policy
 // The twin's TradingView money and slice (test_native_margin_hooks_twin.cpp,
@@ -1584,6 +1594,246 @@ void m7_shapes_on_tapes() {
     }
 }
 
+// ---- TradingView's bar magnifier on a 15-minute chart samples 2-MINUTE
+// intrabars (TradingView's own table: chart 15 -> intrabar 2; "15 / 2 yields
+// 7.5 bars, which is rounded down to 7"), epoch-aligned, each owned by the
+// chart bar that holds its LAST minute: request.security_lower_tf(..., "2",
+// ...) prints [14, 16, .., 28] for a :15 chart bar and [30, .., 42] for a :30
+// one (tests/fixtures/intrabar_margin/pm2-ltf-*). The model below is that
+// broker's margin check -- at each sample's adverse extreme, TradingView's
+// money and slice (the twin's) -- and, with one-minute samples, the adapter's.
+struct ModelCall {
+    std::int64_t bar;
+    double price;
+    double qty;
+};
+
+double tv_slice(double held, double mark, double equity0, double entry, double margin,
+                bool is_long) {
+    const double equity = equity0 + (is_long ? 1.0 : -1.0) * held * (mark - entry);
+    const double required = held * mark * margin;
+    if (!(required > equity)) return 0.0;
+    const double raw = (required - equity) / (mark * margin);
+    const double minimum = std::floor(raw / 0.0001) * 0.0001;
+    double units = std::floor(4.0 * minimum / 0.0001 + 1e-6) * 0.0001;
+    if (!(units > 0.0) && raw > 0.0 && raw < 1.0) units = std::min(1.0, held);
+    return std::min(held, units);
+}
+
+std::vector<ModelCall> tv_intrabar_model(const std::vector<Bar>& one, std::int64_t first_bar,
+                                         std::int64_t end, double held, double entry,
+                                         double margin, bool is_long, bool two_minute) {
+    const std::int64_t minute = 60000;
+    const std::int64_t chart = 15 * minute;
+    struct Sample { std::int64_t bar; double high; double low; };
+    std::vector<Sample> samples;
+    for (std::size_t i = 0; i < one.size(); ++i) {
+        const Bar& b = one[i];
+        if (!two_minute) {
+            const std::int64_t owner = b.timestamp - b.timestamp % chart;
+            if (owner >= first_bar && owner < end) samples.push_back({owner, b.high, b.low});
+            continue;
+        }
+        if (b.timestamp % (2 * minute) != 0 || i + 1 >= one.size()) continue;
+        const Bar& next = one[i + 1];
+        const std::int64_t owner = next.timestamp - next.timestamp % chart;
+        if (owner >= first_bar && owner < end)
+            samples.push_back({owner, std::max(b.high, next.high), std::min(b.low, next.low)});
+    }
+    double equity = 1000.0;
+    std::vector<ModelCall> out;
+    for (const Sample& s : samples) {
+        const double mark = is_long ? s.low : s.high;
+        const double units = tv_slice(held, mark, equity, entry, margin, is_long);
+        if (!(units > 0.0)) continue;
+        out.push_back({s.bar, mark, units});
+        equity += (is_long ? 1.0 : -1.0) * units * (mark - entry);
+        held -= units;
+        if (!(held > 1e-12)) break;
+    }
+    return out;
+}
+
+bool same_calls(const std::vector<ModelCall>& model, const std::vector<ProbeExit>& rows) {
+    std::vector<ProbeExit> calls;
+    for (const auto& r : rows) if (r.margin_call) calls.push_back(r);
+    if (calls.size() != model.size()) return false;
+    auto sorted = model;
+    std::sort(sorted.begin(), sorted.end(), [](const ModelCall& a, const ModelCall& b) {
+        return a.bar != b.bar ? a.bar < b.bar : a.qty < b.qty;
+    });
+    for (std::size_t i = 0; i < calls.size(); ++i) {
+        if (calls[i].bar != sorted[i].bar || std::abs(calls[i].price - sorted[i].price) > 5e-3
+            || std::abs(calls[i].qty - sorted[i].qty) > 5e-5) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void print_model(const char* side, const std::vector<ModelCall>& rows) {
+    std::printf("  %-8s", side);
+    for (const auto& r : rows) std::printf(" | %s %.17g @ %.4f MC", utc_text(r.bar).c_str(), r.qty, r.price);
+    std::printf("\n");
+}
+
+// ---- item 3's shapes on tapes (tests/fixtures/intrabar_margin)
+// A carried book under the magnifier crossing its line at an intrabar sample:
+//   pm-i3-eth-mag-*       lane PAR-MARGIN's plain leveraged long;
+//   pm2-i3-coof-*         the same scripts under calc_on_order_fills: the SAME
+//                         rows as without it, 4 of 4;
+//   pm2-i3-pooc-mag-*     a leveraged long under process_orders_on_close;
+//   pm2-i3-s1x-mag-*      a full-margin (1x) short;
+// and the chart-path controls pm2-i3-pooc-chart-* / pm2-i3-s1x-chart-*, one
+// call at the chart bar's extreme, which the adapter books as before (8 of 8).
+// On every magnified tape here (16) TradingView's calls are the model's at
+// its 2-minute intrabars; the adapter books the model's at the feed's 1-minute
+// samples (the lane admits the kernel's IntrabarSample point under POOC,
+// COOF and on a full-margin short, as it was on the plain leveraged long). The
+// two sample grids agree on 10 of the 16 (and on the four pm2-m7-mag-* above)
+// and part on six -- 0130 plain and COOF (TradingView's 01:42-01:43 intrabar
+// has one low, 2673.33; the feed's 01:42 minute crosses at 2690 first), pooc
+// 0109, 0402 (the straddling 20:14-20:16 intrabar's 1908.17 is the signal
+// bar's last minute), 0707 and s1x 0623 -- which stay recorded: the adapter
+// samples what its host feeds (1 minute), not TradingView's intrabar
+// timeframe. Landing that is a magnifier capability (every magnified fill, not
+// only margin), not this lane's.
+struct IntrabarShape {
+    const char* slug;
+    const FeedBar* one;          // 90 one-minute bars from the signal bar
+};
+
+void intrabar_shapes_on_tapes() {
+    const std::string dir = std::string(PINEFORGE_HM_M7A_FIXTURE_DIR) + "/../intrabar_margin";
+    const IntrabarShape tapes[] = {
+        {"pm-i3-eth-mag-0622", kI3_0622}, {"pm-i3-eth-mag-0130", kI3_0130},
+        {"pm-i3-eth-mag-0824", kI3_0824}, {"pm-i3-eth-mag-0406", kI3_0406},
+        {"pm2-i3-coof-0622", kI3_0622}, {"pm2-i3-coof-0130", kI3_0130},
+        {"pm2-i3-coof-0824", kI3_0824}, {"pm2-i3-coof-0406", kI3_0406},
+        {"pm2-i3-pooc-mag-0109-0115", kPm2Pooc_0109_0115}, {"pm2-i3-pooc-mag-0402-2000", kPm2Pooc_0402_2000},
+        {"pm2-i3-pooc-mag-0707-1600", kPm2Pooc_0707_1600}, {"pm2-i3-pooc-mag-1010-1900", kPm2Pooc_1010_1900},
+        {"pm2-i3-s1x-mag-0201-1100", kPm2S1x_0201_1100}, {"pm2-i3-s1x-mag-0407-1145", kPm2S1x_0407_1145},
+        {"pm2-i3-s1x-mag-0623-2130", kPm2S1x_0623_2130}, {"pm2-i3-s1x-mag-1104-2130", kPm2S1x_1104_2130},
+        {"pm2-i3-pooc-chart-0109-0115", kPm2Pooc_0109_0115}, {"pm2-i3-pooc-chart-0402-2000", kPm2Pooc_0402_2000},
+        {"pm2-i3-pooc-chart-0707-1600", kPm2Pooc_0707_1600}, {"pm2-i3-pooc-chart-1010-1900", kPm2Pooc_1010_1900},
+        {"pm2-i3-s1x-chart-0201-1100", kPm2S1x_0201_1100}, {"pm2-i3-s1x-chart-0407-1145", kPm2S1x_0407_1145},
+        {"pm2-i3-s1x-chart-0623-2130", kPm2S1x_0623_2130}, {"pm2-i3-s1x-chart-1104-2130", kPm2S1x_1104_2130},
+    };
+    int agree = 0;
+    int recorded = 0;
+    for (const IntrabarShape& tape : tapes) {
+        std::printf("-- intrabar shape %s\n", tape.slug);
+        const std::string at = dir + "/" + tape.slug;
+        const ProbeScript ps = parse_probe(at + "/strategy.pine");
+        REQUIRE(ps.entries.size() == 1);
+        const auto one = feed_bars(tape.one, 90);
+        const auto adapter = run_probe(ps, one, true, 0.0001, 0.01);
+        const auto tv = tape_exit_rows(at);
+        print_exits("tape", tv);
+        print_exits("adapter", adapter);
+        if (!ps.magnifier) {
+            CHECK(same_exits(adapter, tv));
+            continue;
+        }
+        // The book the scripts open: K x the equity at the signal close, filled
+        // at the entry bar's open (the signal close under POOC).
+        const std::int64_t chart = 15 * 60000LL;
+        const ProbeEntry& e = ps.entries.front();
+        const double signal_close = one[14].close;
+        const double held = std::floor(e.K * ps.capital / signal_close * 1000.0) / 1000.0;
+        const double entry = ps.pooc ? signal_close : one[15].open;
+        const std::int64_t first = e.at + chart;
+        const std::int64_t end = e.at + (ps.pooc ? 4 : 5) * chart;
+        const auto tv_rule = tv_intrabar_model(one, first, end, held, entry, ps.margin / 100.0,
+                                               e.is_long, true);
+        const auto feed_rule = tv_intrabar_model(one, first, end, held, entry, ps.margin / 100.0,
+                                                 e.is_long, false);
+        print_model("2m", tv_rule);
+        print_model("1m", feed_rule);
+        // TradingView's rule, on all 20: the per-sample check at its intrabars.
+        CHECK(same_calls(tv_rule, tv));
+        // The adapter's calls: the same rule at the feed's one-minute samples.
+        CHECK(same_calls(feed_rule, adapter));
+        bool grids_agree = tv_rule.size() == feed_rule.size();
+        for (std::size_t i = 0; grids_agree && i < tv_rule.size(); ++i) {
+            grids_agree = tv_rule[i].bar == feed_rule[i].bar
+                && std::abs(tv_rule[i].price - feed_rule[i].price) <= 5e-3
+                && std::abs(tv_rule[i].qty - feed_rule[i].qty) <= 5e-5;
+        }
+        if (grids_agree) {
+            ++agree;
+            CHECK(same_exits(adapter, tv));
+        } else {
+            ++recorded;
+            // Recorded: the call lands on TradingView's bar, at a sample the
+            // one-minute grid resolves differently.
+            CHECK(!adapter.empty() && adapter.front().margin_call);
+            CHECK(!tv.empty() && tv.front().margin_call);
+            CHECK(!adapter.empty() && !tv.empty() && adapter.front().bar == tv.front().bar);
+        }
+    }
+    std::printf("  magnified tapes: %d on both grids, %d recorded (2-minute intrabars)\n", agree,
+                recorded);
+    CHECK(agree == 10);
+    CHECK(recorded == 6);
+}
+
+// ---- TradingView's own intrabars (tests/fixtures/intrabar_margin/pm2-ltf-*):
+// request.security_lower_tf(syminfo.tickerid, "2", time/open/high/low/close)
+// inside six chart bars, printed as order comments. Each array equals the
+// feed's one-minute bars paired from an even minute, owned by the chart bar
+// holding the pair's second minute.
+std::vector<double> printed_array(const std::string& cell, const char* tag) {
+    std::vector<double> out;
+    if (cell.rfind(tag, 0) != 0) return out;
+    std::stringstream in(cell.substr(std::strlen(tag) + 1));   // past "<tag>["
+    std::string item;
+    while (std::getline(in, item, ',')) out.push_back(std::atof(item.c_str()));
+    return out;
+}
+
+void tradingview_intrabars() {
+    const std::string dir = std::string(PINEFORGE_HM_M7A_FIXTURE_DIR) + "/../intrabar_margin";
+    struct Probe { const char* slug; std::int64_t bar; const FeedBar* one; };
+    const Probe probes[] = {
+        {"pm2-ltf-0402", utc_ms(2025, 4, 2, 20, 15), kPm2Pooc_0402_2000},
+        {"pm2-ltf-0109", utc_ms(2026, 1, 9, 1, 30), kPm2Pooc_0109_0115},
+        {"pm2-ltf-0707", utc_ms(2025, 7, 7, 16, 15), kPm2Pooc_0707_1600},
+        {"pm2-ltf-0623", utc_ms(2025, 6, 23, 22, 0), kPm2S1x_0623_2130},
+        {"pm2-ltf-0130", utc_ms(2026, 1, 30, 1, 30), kI3_0130},
+        {"pm2-ltf-1010", utc_ms(2025, 10, 10, 19, 15), kPm2Pooc_1010_1900},
+    };
+    for (const Probe& p : probes) {
+        std::map<std::string, std::vector<double>> printed;
+        for (const auto& cell : tape_rows(dir + "/" + p.slug)) {
+            if (cell.size() < 4 || cell[1].rfind("Entry", 0) != 0) continue;
+            for (const char* tag : {"T", "O", "H", "L", "C"}) {
+                auto values = printed_array(cell[3], tag);
+                if (!values.empty() && cell[3][1] == '[') printed[tag] = values;
+            }
+        }
+        // The feed's pairs owned by this chart bar.
+        std::vector<double> t, o, h, l, c;
+        for (int i = 0; i + 1 < 90; ++i) {
+            const FeedBar& a = p.one[i];
+            const FeedBar& b = p.one[i + 1];
+            if (a.ts % 120000 != 0 || b.ts - b.ts % 900000 != p.bar) continue;
+            t.push_back(static_cast<double>((a.ts % 3600000) / 60000));
+            o.push_back(a.open);
+            h.push_back(std::max(a.high, b.high));
+            l.push_back(std::min(a.low, b.low));
+            c.push_back(b.close);
+        }
+        std::printf("-- TradingView 2m intrabars %s: %zu printed, %zu from the feed\n", p.slug,
+                    printed["T"].size(), t.size());
+        CHECK(printed["T"] == t);
+        CHECK(printed["O"] == o);
+        CHECK(printed["H"] == h);
+        CHECK(printed["L"] == l);
+        CHECK(printed["C"] == c);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -1603,6 +1853,8 @@ int main() {
     test("M10 TradingView tapes", m10_tradingview_tapes);
     test("intrabar margin tapes", intrabar_margin_tapes);
     test("PAR-MARGIN-2 M7 shapes", m7_shapes_on_tapes);
+    test("PAR-MARGIN-2 intrabar shapes", intrabar_shapes_on_tapes);
+    test("PAR-MARGIN-2 TradingView intrabars", tradingview_intrabars);
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

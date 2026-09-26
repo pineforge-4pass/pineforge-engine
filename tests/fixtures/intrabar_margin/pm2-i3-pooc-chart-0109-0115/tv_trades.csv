@@ -1,0 +1,5 @@
+﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)
+1,Exit long,2026-01-09 09:30,Margin call,3077.46,0.2864,898.777616,-17.393072,-1.94,0,2.809584,0.31,-17.393072,-1.94,-17.393072,-1.74,1
+1,Entry long,2026-01-09 09:15,L,3138.19,0.2864,898.777616,-17.393072,-1.94,0,2.809584,0.31,-17.393072,-1.94,-17.393072,-1.74,1
+2,Exit long,2026-01-09 10:00,timeout,3122.09,1.2576,3946.587744,-20.24736,-0.51,0,12.337056,0.31,-76.37405,-1.94,-37.64043,-3.76,3
+2,Entry long,2026-01-09 09:15,L,3138.19,1.2576,3946.587744,-20.24736,-0.51,0,12.337056,0.31,-76.37405,-1.94,-37.64043,-3.76,3

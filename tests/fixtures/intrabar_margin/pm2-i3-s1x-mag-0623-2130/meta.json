@@ -1,0 +1,16 @@
+{
+  "title": "pm2-i3-s1x-mag-0623-2130",
+  "slug": "pm2-i3-s1x-mag-0623-2130",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T00:39:43.034Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-06-21",
+    "to": "2025-06-25"
+  },
+  "pine_sha256": "befca40c1e4d043e4f44c8c664e9cf549c324db31b4452a7ddfacc227f61cace",
+  "tv_trades_sha256": "924d02a624c08979b9a6f4ad997f8bb2225fc4902ea053986513f792c06e791a",
+  "tv_trades_rows": 6
+}

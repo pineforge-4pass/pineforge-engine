@@ -1,0 +1,16 @@
+{
+  "title": "pm2-ltf-0402",
+  "slug": "pm2-ltf-0402",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T00:51:13.582Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-03-31",
+    "to": "2025-04-04"
+  },
+  "pine_sha256": "fb973cb6e32055d5b4cdfa926d71ce4cca534178d1a92b2b82957536964d9e63",
+  "tv_trades_sha256": "24f3cae40c441e68ab2370ec3f2ddbef6e34808ab73aeccdeaa99d1289e71150",
+  "tv_trades_rows": 18
+}

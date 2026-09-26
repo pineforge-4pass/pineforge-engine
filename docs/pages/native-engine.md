@@ -1312,7 +1312,10 @@ and after fills only: a request armed at a discrete point is matched only at a
 later one, so a reduction re-armed at every sample would never be. The same
 money under the magnifier on TradingView books its call at the first
 lower-timeframe low that crosses, sized there
-(`tests/fixtures/intrabar_margin`).
+(`tests/fixtures/intrabar_margin`). TradingView's lower timeframe is its own:
+on a 15-minute chart its bar magnifier walks 2-minute intrabars, each owned by
+the chart bar that holds its last minute, so the samples a run declares decide
+where its calls land.
 
 `basis` chooses the equity side of that comparison, at every check point.
 `MarkedEquity` (the default) is `marked_equity(mark)` itself, which the open
@@ -1531,14 +1534,20 @@ bar, on the combined book: twenty more tapes book the call on that bar at its
 low (`tests/fixtures/margin_entry_bar`: `pm2-m7-coof-*`, `pm2-m7-lim-*`,
 `pm2-m7-poocl-*`, `pm2-m7b-*`). A magnified or timestamped-FX run keeps
 its own route, and a default-percent stop entry taken at its bar's open keeps
-the pre-open slice's verdict. Under the bar magnifier the adapter admits the kernel's
-`IntrabarSample` points on a leveraged book: TradingView's magnified broker
-books its call at the first lower-timeframe low that crosses and again at each
-later one that crosses the reduced book's line (`tests/fixtures/intrabar_margin`,
-every row on 3 of 4 tapes; on the fourth TradingView books its second call a
-minute after the low the check books it at, a recorded divergence). A
-full-margin book and the `process_orders_on_close` and `calc_on_order_fills`
-runs keep their routes there, unmeasured.
+the pre-open slice's verdict. Under the bar magnifier the adapter admits the
+kernel's `IntrabarSample` points: TradingView's magnified broker books its call
+at the first lower-timeframe low that crosses and again at each later one that
+crosses the reduced book's line, on a leveraged long (plain, under
+`process_orders_on_close` or under `calc_on_order_fills`) and on a short at any
+margin, plain or under `calc_on_order_fills` (`tests/fixtures/intrabar_margin`,
+20 magnified tapes). It checks at its own 2-minute intrabars (above), which
+TradingView's `request.security_lower_tf` prints, and a model of that check
+books all 20 tapes' calls; the adapter checks the samples its host feeds, one
+minute on the corpus, so six tapes part where the two grids resolve a crossing
+differently -- recorded, not fixed here: sampling the magnifier at
+TradingView's intrabar timeframe moves every magnified fill, not only margin
+calls. A full-margin long (its one-contract money call) and a short under
+`process_orders_on_close` keep their routes there.
 
 ### Risk limits
 

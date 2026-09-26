@@ -1,0 +1,30 @@
+// R5 lane PAR-MARGIN-2: TradingView's own intrabars inside the 15m bar 2025-10-10 19:15 UTC,
+// read through request.security_lower_tf at "2" (the bar magnifier's intrabar timeframe for a
+// 15-minute chart in TradingView's table) and at "1", printed as order comments (Signal column).
+//@version=6
+strategy("pm2-ltf-1010", overlay=true, initial_capital=1000,
+     default_qty_type=strategy.fixed, default_qty_value=0.001, pyramiding=10)
+t2 = request.security_lower_tf(syminfo.tickerid, "2", time)
+o2 = request.security_lower_tf(syminfo.tickerid, "2", open)
+h2 = request.security_lower_tf(syminfo.tickerid, "2", high)
+l2 = request.security_lower_tf(syminfo.tickerid, "2", low)
+c2 = request.security_lower_tf(syminfo.tickerid, "2", close)
+l1 = request.security_lower_tf(syminfo.tickerid, "1", low)
+h1 = request.security_lower_tf(syminfo.tickerid, "1", high)
+mins(a) =>
+    out = array.new_float()
+    for v in a
+        array.push(out, (v % 3600000) / 60000)
+    out
+if time == timestamp("UTC", 2025, 10, 10, 19, 15)
+    strategy.entry("T", strategy.long, comment = "T" + str.tostring(mins(t2)))
+    strategy.entry("O", strategy.long, comment = "O" + str.tostring(o2))
+    strategy.entry("H", strategy.long, comment = "H" + str.tostring(h2))
+    strategy.entry("L", strategy.long, comment = "L" + str.tostring(l2))
+    strategy.entry("C", strategy.long, comment = "C" + str.tostring(c2))
+    strategy.entry("A", strategy.long, comment = "l1a" + str.tostring(array.slice(l1, 0, math.min(8, array.size(l1)))))
+    strategy.entry("B", strategy.long, comment = "l1b" + str.tostring(array.slice(l1, math.min(8, array.size(l1)), array.size(l1))))
+    strategy.entry("D", strategy.long, comment = "h1a" + str.tostring(array.slice(h1, 0, math.min(8, array.size(h1)))))
+    strategy.entry("E", strategy.long, comment = "h1b" + str.tostring(array.slice(h1, math.min(8, array.size(h1)), array.size(h1))))
+if time == timestamp("UTC", 2025, 10, 10, 19, 30)
+    strategy.close_all(comment = "n2=" + str.tostring(array.size(l2)) + " n1=" + str.tostring(array.size(l1)))

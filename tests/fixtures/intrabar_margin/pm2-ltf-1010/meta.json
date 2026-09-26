@@ -1,0 +1,16 @@
+{
+  "title": "pm2-ltf-1010",
+  "slug": "pm2-ltf-1010",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T00:51:32.045Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-10-08",
+    "to": "2025-10-12"
+  },
+  "pine_sha256": "8572a6f1b97a41f02e8b135b4d2d9dfdd225a26dc41a0e60095f452ac46aa259",
+  "tv_trades_sha256": "01b82dc91bf8bbed3ff40469dc1d2c4927a1ea83d744a8e997896d36392dc659",
+  "tv_trades_rows": 18
+}

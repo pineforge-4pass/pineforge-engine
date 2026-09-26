@@ -1,0 +1,16 @@
+{
+  "title": "pm2-i3-coof-0824",
+  "slug": "pm2-i3-coof-0824",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T00:37:35.893Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-08-22",
+    "to": "2025-08-26"
+  },
+  "pine_sha256": "7d2be5b6b0e9620e29b97b08cdc277c6a6dbaf075af5878431d4973ee9d90c96",
+  "tv_trades_sha256": "f0e1b58462313b44a5727e0d9ecc952238de677cf6db3ad3ecdc0192d04d8d4a",
+  "tv_trades_rows": 4
+}

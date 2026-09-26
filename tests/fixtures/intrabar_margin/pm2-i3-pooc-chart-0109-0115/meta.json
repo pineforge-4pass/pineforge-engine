@@ -1,0 +1,16 @@
+{
+  "title": "pm2-i3-pooc-chart-0109-0115",
+  "slug": "pm2-i3-pooc-chart-0109-0115",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T00:37:40.264Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2026-01-07",
+    "to": "2026-01-11"
+  },
+  "pine_sha256": "3f0be80a1ec4eb3bd1b6a76f7ecf9d15a7d949e00792c58b001f4fada24651bb",
+  "tv_trades_sha256": "4dea9978d6d5e8869ccd2b11e87e22ca57f7f466c99b58e5fa822532452f9a4e",
+  "tv_trades_rows": 4
+}

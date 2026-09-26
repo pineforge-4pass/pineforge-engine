@@ -1,0 +1,13 @@
+// R5 lane PAR-MARGIN-2 (item 3 for a full-margin book): one 1x short (margin 100, 0.996 x equity)
+// placed on the signal bar 2026-02-01 11:00 UTC, filled at the next bar's open and carried into a bar that
+// first crosses the maintenance line at an early 1-minute high and reaches a higher high later.
+// Magnifier OFF. Timeout close 3 bars after the entry bar.
+//@version=6
+strategy("pm2-i3-s1x-chart-0201-1100", overlay=true, initial_capital=1000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1,
+     margin_long=100, margin_short=100, commission_value=0, slippage=0,
+     process_orders_on_close=false)
+if time == timestamp("UTC", 2026, 2, 1, 11, 0) and strategy.position_size == 0
+    strategy.entry("S", strategy.short, qty = math.floor(0.996 * strategy.equity / close * 1000) / 1000)
+if strategy.position_size < 0 and bar_index - strategy.opentrades.entry_bar_index(0) >= 3
+    strategy.close("S", comment="timeout")

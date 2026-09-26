@@ -14228,20 +14228,25 @@ bool PineExecutionAdapter::margin_check_allowed(
     return !source_margin_rounded_tie_veto();
 }
 
-// Where the per-sample check is TradingView's as measured: a plain magnified
-// run (the tapes run neither process_orders_on_close nor calc_on_order_fills)
-// holding a leveraged book -- a full-margin book keeps its own checkpoints,
-// unmeasured under the magnifier -- and no slice of the adapter's own resting
-// (the pre-open slice keeps its verdict for its bar, as on the chart path).
-// A flat book is admitted: the kernel then withdraws what it had resting.
+// Where the per-sample check is TradingView's as measured, on a magnified run
+// with no slice of the adapter's own resting (the pre-open slice keeps its
+// verdict for its bar, as on the chart path): a leveraged long, plain, under
+// process_orders_on_close or under calc_on_order_fills, and a short at any
+// margin, plain or under calc_on_order_fills (lab tv tapes
+// tests/fixtures/intrabar_margin: pm-i3-eth-mag-* for the plain leveraged long,
+// R5 lane PAR-MARGIN; pm2-i3-pooc-mag-*, pm2-i3-coof-* and the full-margin
+// short pm2-i3-s1x-mag-*, R5 lane PAR-MARGIN-2). Not a full-margin long, whose
+// one-contract money call owns the book (resolve_margin_call_units refuses
+// it), nor a short under process_orders_on_close, whose carried slice is the
+// post-script checkpoint's (schedule_margin_call_path), unmeasured here. A
+// flat book is admitted: the kernel then withdraws what it had resting.
 bool PineExecutionAdapter::intrabar_sample_checked(
         const NativeMarginCheckPoint& point) const {
-    if (!bar_magnifier_ || config_.process_orders_on_close || config_.calc_on_order_fills)
-        return false;
+    if (!bar_magnifier_) return false;
     const double held = point.position.signed_units;
     if (held == 0.0) return true;
-    const double margin = held > 0.0 ? config_.margin_long : config_.margin_short;
-    if (!(margin < 100.0)) return false;
+    if (held > 0.0 ? !(config_.margin_long < 100.0) : config_.process_orders_on_close)
+        return false;
     return !any_live_row(live_handles_, placement_, [](const PlacementSnapshot& row) {
         return row.family == PineOrderFamily::Margin;
     });
