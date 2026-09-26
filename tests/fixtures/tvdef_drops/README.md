@@ -39,6 +39,22 @@ TradingView keeps only the closing leg (ab9714be
 `pine_strategy_commands.cpp:408-419`). The lowering dropped the whole order,
 so the long was held to the end of the range. At 50% the short funds.
 
+## R2: an explicit quantity is never a declined reversal
+
+| tape | trades | `strategy()` declares | TradingView | tv_trades.csv sha256 |
+|---|---:|---|---|---|
+| `tdd-r2-explicit-reversal-bracket` | 4 | nothing (v6: percent_of_equity, 100) | each qty=1 reversal opens and its from_entry bracket scratches it at the reversal's open | `1e6e1c5de83a75a62781dcf1778e4dfbf356d44352e4c097e920dd9e69b336d2` |
+| `tdd-r2-explicit-reversal-bracket-fixed1` | 4 | `default_qty_type = strategy.fixed, default_qty_value = 1` | the same rows: the two tapes are one file | `1e6e1c5de83a75a62781dcf1778e4dfbf356d44352e4c097e920dd9e69b336d2` |
+
+Every entry names `qty=1`. The bracket's stop is already through at the
+reversal's open fill (1556 above the 1553.57 open for the long, 1470 below the
+1473.01 open for the short), so TradingView exits the new side there. Only a
+default quantity can be declined at the open (ab9714be
+`pine_fills.cpp:5227-5235` scopes the decline to `frozen_default_qty`, which
+`pine_strategy_commands.cpp:596-601` sets only when qty is omitted); the
+lowering priced the one-unit reversal at the default value (100 units),
+declined it and cancelled the bracket.
+
 ## Bars
 
 `bars.inc` holds the replayed bars, 2025-04-07 00:00 .. 2025-04-10 12:00 UTC,

@@ -1,0 +1,28 @@
+//@version=6
+strategy("TVDEF-DROPS R2 explicit reversal bracket fixed1", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane TVDEF-DROPS, rule R2. Every entry names qty=1 while the declaration
+// leaves the order size at Pine v6's default (100% of equity). A reversal
+// entry and a from_entry bracket for it are placed together; at the entry's
+// open fill the bracket's stop is already through, so TradingView scratches
+// the new side there. The one-unit reversal is funded whatever the default.
+
+// A -- SHORT -> LONG, the long's stop above the reversal open.
+if time == timestamp("UTC", 2025, 4, 8, 0, 0)
+    strategy.entry("A-S", strategy.short, qty=1, comment="A seed short")
+if time == timestamp("UTC", 2025, 4, 8, 0, 15)
+    strategy.entry("A-L", strategy.long, qty=1, comment="A reverse long")
+    strategy.exit("A-X", from_entry="A-L", stop=1556.0, limit=1700.0, comment="A bracket")
+
+// B -- LONG -> SHORT, the short's stop below the reversal open.
+if time == timestamp("UTC", 2025, 4, 9, 0, 0)
+    strategy.entry("B-L", strategy.long, qty=1, comment="B seed long")
+if time == timestamp("UTC", 2025, 4, 9, 0, 15)
+    strategy.entry("B-S", strategy.short, qty=1, comment="B reverse short")
+    strategy.exit("B-X", from_entry="B-S", stop=1470.0, limit=1300.0, comment="B bracket")
+
+cleanup = time == timestamp("UTC", 2025, 4, 8, 2, 0) or
+     time == timestamp("UTC", 2025, 4, 9, 2, 0)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

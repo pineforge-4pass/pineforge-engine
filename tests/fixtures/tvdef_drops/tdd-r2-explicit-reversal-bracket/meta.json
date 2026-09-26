@@ -1,0 +1,16 @@
+{
+  "title": "TVDEF-DROPS R2 explicit reversal bracket",
+  "slug": "tdd-r2-explicit-reversal-bracket",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T18:13:09.480Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "6fd79c950d7212efda26f49faacffea5cd693d2950222bf2779c92b311652179",
+  "tv_trades_sha256": "1e6e1c5de83a75a62781dcf1778e4dfbf356d44352e4c097e920dd9e69b336d2",
+  "tv_trades_rows": 8
+}

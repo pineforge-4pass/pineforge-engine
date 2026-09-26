@@ -14752,9 +14752,15 @@ bool PineExecutionAdapter::declined_reversal_at_open(const Bar& bar) const {
         const auto found = placement_.find(handle.incarnation);
         if (found == placement_.end()) continue;
         const auto& candidate = found->second;
+        // Only a default quantity can be declined here: ab9714be scopes the
+        // fill-time decline to a frozen default quantity
+        // (pine_fills.cpp:5227-5235, set by pine_strategy_commands.cpp:596-601
+        // only when qty is omitted). An explicit qty is never priced as the
+        // default value (lane TVDEF-DROPS, tests/fixtures/tvdef_drops R2).
         if (!candidate.opening || candidate.family != PineOrderFamily::Entry
             || candidate.is_long == (position.signed_units > 0.0)
-            || !candidate.reverse_to || candidate.projection_after_close) {
+            || !candidate.reverse_to || candidate.projection_after_close
+            || std::isfinite(candidate.requested_qty)) {
             continue;
         }
         double units = candidate.sizing.frozen_units;
@@ -14785,9 +14791,11 @@ void PineExecutionAdapter::defer_declined_reversal_exits_at_adverse(
         const auto found = placement_.find(handle.incarnation);
         if (found == placement_.end()) continue;
         const auto& candidate = found->second;
+        // As in declined_reversal_at_open: an explicit qty is never declined.
         if (!candidate.opening || candidate.family != PineOrderFamily::Entry
             || candidate.is_long == (position.signed_units > 0.0)
-            || !candidate.reverse_to || candidate.projection_after_close) {
+            || !candidate.reverse_to || candidate.projection_after_close
+            || std::isfinite(candidate.requested_qty)) {
             continue;
         }
         double units = candidate.sizing.frozen_units;

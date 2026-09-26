@@ -11,6 +11,11 @@
  *       keeps its closing leg: TradingView closes the long at the stop and
  *       opens nothing (ab9714be pine_strategy_commands.cpp:408-419). The
  *       lowering dropped the whole order, so the long was held to the end.
+ *   R2  Only a default quantity can be a declined reversal at the open
+ *       (ab9714be pine_fills.cpp:5227-5235, frozen_default_qty). The lowering
+ *       priced an explicit qty=1 reversal at the default value (100 units),
+ *       declined it and cancelled the from_entry bracket TradingView scratches
+ *       at the reversal's open.
  *
  * Each row replays TradingView's own tape of a synthetic probe
  * (tests/fixtures/tvdef_drops, lab tv exports on BINANCE:ETHUSDT.P 15) through
@@ -165,7 +170,7 @@ Tape tape_trades(const std::string& tape, std::int64_t end_ms) {
     return out;
 }
 
-enum class Probe { R1 };
+enum class Probe { R1, R2 };
 
 // The probes, as their generated TUs lower them (fixtures/.../strategy.pine).
 class ProbeHost final : public source::PineStrategyHost {
@@ -180,6 +185,7 @@ public:
         const std::int64_t t = current_bar_.timestamp;
         switch (probe_) {
         case Probe::R1: stop_reversal(t); break;
+        case Probe::R2: explicit_reversal_bracket(t); break;
         }
     }
 
@@ -197,6 +203,22 @@ private:
         if (t == at(10, 0, 15))
             strategy_entry("C-S", false, kNaN, 1640.0, kNaN, "C reverse short stop", "", 0, -1);
         if (t == at(8, 2, 0) || t == at(10, 2, 0)) cleanup();
+    }
+
+    void explicit_reversal_bracket(std::int64_t t) {
+        if (t == at(8, 0, 0)) strategy_entry("A-S", false, kNaN, kNaN, 1, "A seed short", "", 0, -1);
+        if (t == at(8, 0, 15)) {
+            strategy_entry("A-L", true, kNaN, kNaN, 1, "A reverse long", "", 0, -1);
+            strategy_exit("A-X", "A-L", 1700.0, 1556.0, kNaN, kNaN, kNaN, 100.0, "A bracket",
+                          kNaN, "", kNaN, kNaN);
+        }
+        if (t == at(9, 0, 0)) strategy_entry("B-L", true, kNaN, kNaN, 1, "B seed long", "", 0, -1);
+        if (t == at(9, 0, 15)) {
+            strategy_entry("B-S", false, kNaN, kNaN, 1, "B reverse short", "", 0, -1);
+            strategy_exit("B-X", "B-S", 1300.0, 1470.0, kNaN, kNaN, kNaN, 100.0, "B bracket",
+                          kNaN, "", kNaN, kNaN);
+        }
+        if (t == at(8, 2, 0) || t == at(9, 2, 0)) cleanup();
     }
 
     Probe probe_;
@@ -257,12 +279,17 @@ struct Case {
 int main() {
     const std::int64_t end_ms = kEth15[sizeof(kEth15) / sizeof(kEth15[0]) - 1].ts;
     constexpr QtyType kPercent = QtyType::PERCENT_OF_EQUITY;
+    constexpr QtyType kFixed = QtyType::FIXED;
 
     const Case cases[] = {
         {"tdd-r1-stop-reversal-close-only", Probe::R1, "nothing (v6: percent_of_equity, 100)",
          config(kPercent, 100.0), 2},
         {"tdd-r1-stop-reversal-half", Probe::R1, "percent_of_equity, 50",
          config(kPercent, 50.0), 4},
+        {"tdd-r2-explicit-reversal-bracket", Probe::R2, "nothing (v6: percent_of_equity, 100)",
+         config(kPercent, 100.0), 4},
+        {"tdd-r2-explicit-reversal-bracket-fixed1", Probe::R2, "fixed, 1",
+         config(kFixed, 1.0), 4},
     };
 
     std::map<std::string, Tape> tapes;
@@ -297,6 +324,20 @@ int main() {
         if (half.trades.size() == 4) {
             CHECK(!std::get<1>(half.trades[1]));
             CHECK(!std::get<1>(half.trades[3]));
+        }
+    }
+    {
+        // R2: the one-unit reversal opens and its bracket scratches it at the
+        // reversal's open, whatever the default size (the two tapes are one).
+        const Tape& all = tapes["tdd-r2-explicit-reversal-bracket"];
+        CHECK(all.trades == tapes["tdd-r2-explicit-reversal-bracket-fixed1"].trades);
+        CHECK(all.trades.size() == 4);
+        if (all.trades.size() == 4) {
+            for (const std::size_t i : {std::size_t{1}, std::size_t{3}}) {
+                CHECK(std::get<0>(all.trades[i]) == std::get<4>(all.trades[i]));
+                CHECK(std::get<2>(all.trades[i]) == std::get<5>(all.trades[i]));
+                CHECK(all.signals[i].find("bracket") != std::string::npos);
+            }
         }
     }
 
