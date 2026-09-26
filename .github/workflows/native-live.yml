@@ -27,13 +27,14 @@ env:
   CURL_VERSION: "8.14.1"
   CURL_SHA256: "f4619a1e2474c4bbfedc88a7c2191209c8334b48fa1f4e53fd584cc12e9120dd"
 
-# The organization's 16-core larger runner for every event except a pull
-# request from a fork, which runs on the free standard runner. In a
-# workflow_call the github context is the caller's, so a fork's pull request
+# The organization's 16-core larger runner for a push, the schedule, a
+# dispatch and a pull request from a branch of this repository; every other
+# event, a fork's pull request above all, runs on the free standard runner. In
+# a workflow_call the github context is the caller's, so a fork's pull request
 # through CI lands there too. scripts/ci_preflight.py pins the runner and limit.
 jobs:
   native-live:
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
     # The full set waits on the test_ci_verify CTest row, 1034 s on the
     # standard runner at 0d76a099, which more cores do not shorten.
     timeout-minutes: 60

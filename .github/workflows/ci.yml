@@ -23,19 +23,20 @@ env:
   CCACHE_MAXSIZE: 500M
 
 # The heavy jobs run on the organization's 16-core larger runner, and the macOS
-# legs on GitHub's M2 runner for the macos-26 image, for every event except a
-# pull request from a fork: a larger runner bills the organization even for a
-# public repository, so a fork's pull request runs on the free standard runner.
+# legs on GitHub's M2 runner for the macos-26 image, for a push, the schedule, a
+# dispatch and a pull request from a branch of this repository. A larger runner
+# bills the organization even for a public repository, so every other event --
+# a fork's pull request above all -- runs on the free standard runner.
 # Each verification sizes its parallelism to the runner that took it.
 # scripts/ci_preflight.py pins every runner, time limit and job count, and
 # docs/ci.md gives each limit's measured basis.
 jobs:
   preflight:
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
-    # Its verifier-tests stage is one serial process: 458-475 s at 0d76a099's
-    # tree on the maintainers' verification hosts, which ran it 1.93-1.94
-    # times as fast as the standard runner on the same trees, so about 15 min
-    # here. Ten minutes cancelled main's run at 0d76a099 593 s into it.
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
+    # Its verifier-tests stage is one serial process: 475 s at 0d76a099's tree
+    # on the maintainers' verification hosts, which ran it 1.93-1.94 times as
+    # fast as the standard runner on the same trees, so about 15 min here. Ten
+    # minutes cancelled main's run at 0d76a099 593 s into it.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -98,7 +99,7 @@ jobs:
 
     # matrix.os is the standard runner a fork's pull request gets; its
     # larger_runner runs the same image with more cores.
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && matrix.larger_runner || matrix.os }}
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && matrix.larger_runner || matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
@@ -166,10 +167,11 @@ jobs:
   # instrumentation propagates into every test binary (CMakeLists.txt option
   # PINEFORGE_ENABLE_SANITIZERS).
   sanitizers:
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
     # A full run (push to main, manual dispatch) gives its CTest stage an hour
-    # after the build; the PR set keeps its 30-minute stage, after a build of
-    # about 30 minutes on the standard runner a fork's pull request gets.
+    # after the build; the PR set keeps its 30-minute stage, after about 30
+    # minutes of build and ABI providers on the standard runner a fork's pull
+    # request gets.
     timeout-minutes: 120
     env:
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
@@ -219,7 +221,7 @@ jobs:
   # modules are built from the kernel alone, and every examples/native host
   # runs as an example_* row asserting both its exit code and its summary line.
   kernel-only:
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
     # 22.3 min on the standard runner at 0d76a099, where a fork's pull request
     # still runs the whole kernel set.
     timeout-minutes: 60
