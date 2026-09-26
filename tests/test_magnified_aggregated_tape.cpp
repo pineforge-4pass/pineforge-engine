@@ -46,15 +46,25 @@
  * fill is the matcher's, PX's limit at its own level on the leg to the bar's
  * second extreme, and a market order its recalculation places fills at that
  * extreme. It used to book the close (11.71 / 11.73) under
- * process_orders_on_close and the next open without it.
+ * process_orders_on_close and the next open without it. The magnified v2 and
+ * v3 book it there too: since R5 lane MAG-INTRABAR the fill lands on the high
+ * of TradingView's 2-minute intrabar, that intrabar's second extreme, and a
+ * market order the matcher's own fill there re-issues fills at it, not at the
+ * next intrabar's open, where a forced fill's order goes (INT27,
+ * PineScheduler::next_input_waypoint).
  *
  * The other rows below are RECORDED divergences, each asserted to differ, so a
  * fix flips them deliberately:
  *   - v7 rows 8 and 9 (chart, aggregated): after bar 33's close_all and
  *     same-bar add TradingView keeps the add (ML 11.86) and fills bar 38's
- *     stop entry at 11.83, the engine drops the add and books 11.82;
- *   - v3 row 2 (magnified): a fill recalculation's market entry books 11.58
- *     where TradingView books 11.54.
+ *     stop entry at 11.83, the engine drops the add and books 11.82.
+ * v3 row 2 (magnified) was recorded too: its fill recalculation's market entry
+ * booked 11.58 where TradingView books 11.54. PX's limit fills on the leg to
+ * the high of a sub-bar that opens at its own low (bar 6, 11:01 ET); since
+ * R5 lane MAG-INTRABAR the kernel walks such a bar through its own four
+ * turning points instead of the sampler's uniform fill, so the entry books
+ * that high, 11.54, as TradingView does -- on the 1-minute path and on
+ * TradingView's 2-minute intrabars alike (INT27).
  * v7's magnified run is not replayed: TradingView books two more ML rows at
  * bar 59 there (16 against 14).
  *
@@ -390,7 +400,7 @@ int main() {
     replay("hm-mag-diff-v2", v2, Path::Magnified);
     replay("hm-mag-diff-v4", v4, Path::Magnified);
     replay("hm-mag-diff-v5", v5, Path::Magnified);
-    replay("hm-mag-diff-v3", v3, Path::Magnified, rows({2}));
+    replay("hm-mag-diff-v3", v3, Path::Magnified);
     // 2. controls: the chart and plain-aggregated paths against the magnifier-off tapes
     for (const Path path : {Path::Chart, Path::Aggregated}) {
         replay("hm-chart-diff-v0", v0, path);

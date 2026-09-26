@@ -245,6 +245,16 @@ std::optional<PineScheduler::InputWaypoint> PineScheduler::next_input_waypoint(
         // waypoint, not short of it.
         if (index > 0 && index < 3 && !host.adapter_.coof_fill_at_path_point(price[index]))
             return InputWaypoint{price[index], false};
+        // The matcher's fill of a resting request at its own level AT the
+        // intrabar's second extreme ends the leg there, and the
+        // recalculation's market order fills at that extreme, as on a chart
+        // bar (PineExecutionAdapter::coof_fill_at_second_extreme, H-MEASURE
+        // Finding 6d): TradingView's hm-mag-diff-v2 / -v3 bar 19 book ML at
+        // 11.72, where PX's limit filled on the 2-minute intrabar's high. A
+        // fill the adapter forced there -- a cascade's market order -- still
+        // takes the next intrabar's open (R5 lane INT27).
+        if (index == 2 && !host.adapter_.coof_fill_forced_)
+            return InputWaypoint{price[index], false};
         if (index < 2) return InputWaypoint{price[index + 1], false};
         return next_open;
     }
