@@ -79,9 +79,12 @@ JOB_RUNNERS = {
     'corpus-parity.yml': {'corpus-parity': (LINUX_RUNNER, 120, PARITY),
                           'corpus-parity-subset': (LINUX_RUNNER, 30, PARITY)},
 }
-# Every other workflow a pull request (a fork's included) can start keeps its
-# jobs on these. One that only a push, the schedule or a dispatch starts is free.
+# Every other workflow keeps its jobs on these. release.yml is exempt by name,
+# while its on: block names only events no fork can raise (a push, the
+# schedule, a dispatch; a dispatch alone today); any other workflow file is
+# checked, whatever starts it.
 STANDARD_RUNNERS = ('ubuntu-24.04', 'ubuntu-latest')
+TRUSTED_ONLY_WORKFLOWS = ('release.yml',)
 TRUSTED_ONLY_EVENTS = {'push', 'schedule', 'workflow_dispatch'}
 # One stage's bound. The verifier self-tests (test_ci_verify.py) drive the real
 # literal-aware parity, receipt and submodule guards in one serial process. On
@@ -96,8 +99,10 @@ STAGE_TIMEOUT_SECONDS = 2400
 _JOB_HEADER = re.compile(r'^  ([A-Za-z_][A-Za-z0-9_-]*):[ \t]*(?:#.*)?$', re.MULTILINE)
 _JOBS_KEY = re.compile(r'^jobs:[ \t]*(?:#.*)?$', re.MULTILINE)
 _ON_KEY = re.compile(r'^(?:on|"on"|\'on\')[ \t]*:[ \t]*([^#\n]*)', re.MULTILINE)
-# --jobs and every abbreviation argparse accepts for it in ci_verify.py.
+# --jobs and every abbreviation argparse accepts for it in ci_verify.py, and a
+# call of ci_verify itself, as a script or a module.
 _JOBS_FLAG = re.compile(r'(?<![\w-])--j(?:o|ob|obs)?(?=[\s=]|$)')
+_VERIFY_CALL = re.compile(r'\bci_verify\.py\b|-m\s+ci_verify\b')
 
 
 def _jobs_text(workflow: str) -> str | None:
@@ -190,51 +195,33 @@ def _job_block(body: str, key: str) -> list[str]:
     return []
 
 
-def _commands(body: str) -> list[str]:
-    """The shell lines a job's run steps execute, as the shell reads them.
+def _counted_text(body: str) -> str:
+    """A job's code for the core-count rule: comments, step names and the
+    hashFiles() arguments of cache keys -- names of files, not commands -- out."""
+    lines = [re.sub(r'\s+#.*$', '', line) for line in _code(body)
+             if not re.match(r'\s*(?:-\s+)?name\s*:', line)]
+    return re.sub(r'hashFiles\([^)]*\)', '', '\n'.join(lines))
 
-    A run value on its key's line is one command; a literal block's lines are
-    commands, backslash continuations joined; a folded block is one command.
-    Comments are dropped.
+
+def _sized(text: str, command: str | None) -> bool:
+    """Whether a job's work runs at the runner's core count.
+
+    Counted over the whole job, in order, so no line, block or chaining form
+    matters: every ci_verify call carries one core-count --jobs before the next
+    call, no other --jobs spelling appears, and every JOBS and parity-script
+    mention is part of the one parity command.
     """
-    lines, commands, index = body.split('\n'), [], 0
-    while index < len(lines):
-        match = re.match(r'^(\s*(?:-\s+)?)run:[ \t]*(.*)$', lines[index])
-        index += 1
-        if not match:
-            continue
-        value = re.sub(r'\s+#.*$', '', match.group(2)).strip()
-        if value[:1] not in ('|', '>'):
-            commands.append(value)
-            continue
-        column, block = len(match.group(1)), []
-        while index < len(lines) and (not lines[index].strip() or _indent(lines[index]) > column):
-            block.append(lines[index])
-            index += 1
-        shell = [re.sub(r'\s+#.*$', '', line).strip() for line in _code('\n'.join(block))]
-        if value[0] == '>':
-            commands.append(' '.join(shell))
-            continue
-        pending = ''
-        for line in shell:
-            if line.endswith('\\'):
-                pending += line[:-1] + ' '
-            else:
-                commands.append(pending + line)
-                pending = ''
-        commands += [pending] if pending else []
-    return commands
-
-
-def _runs_verify(command: str) -> bool:
-    """Whether a shell line runs ci_verify: as a script, a path, or a module."""
-    return bool(re.search(r'\bpython[0-9.]*\s+(?:-\S+\s+)*(?:\S*\bci_verify\.py\b|-m\s+ci_verify\b)'
-                          r'|^\S*\bci_verify\.py\b', command))
-
-
-def _sized(line: str) -> int:
-    """How many times a line asks ci_verify for the runner's core count."""
-    return line.count(f'--jobs {CORES}') + line.count(f'--jobs={CORES}')
+    marks = sorted([(match.start(), 'C') for match in _VERIFY_CALL.finditer(text)]
+                   + [(match.start(), 'F' if text.startswith(
+                       (f'--jobs {CORES}', f'--jobs={CORES}'), match.start()) else 'U')
+                      for match in _JOBS_FLAG.finditer(text)])
+    calls = ''.join(kind for _, kind in marks)
+    parity = text.count(PARITY_COMMAND)
+    return (re.fullmatch(r'(?:CF)*', calls) is not None
+            and len(re.findall(r'\bJOBS\s*[:=]', text)) == parity
+            and text.count(PARITY) == parity
+            and (command != VERIFY or bool(calls))
+            and (command != PARITY or parity > 0))
 
 
 def _events(workflow: str) -> set[str] | None:
@@ -265,7 +252,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
     for name, workflow in workflows.items():
         pinned = JOB_RUNNERS.get(name, {})
         events = _events(workflow)
-        if not pinned and events is not None and events <= TRUSTED_ONLY_EVENTS:
+        if (not pinned and name in TRUSTED_ONLY_WORKFLOWS and events is not None
+                and events <= TRUSTED_ONLY_EVENTS):
             continue
         if _unparsed(workflow):
             findings.append(f'{name} has jobs lines the runner contract cannot read')
@@ -292,19 +280,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             if _job_values(body, 'timeout-minutes') != [str(minutes)]:
                 findings.append(f'{name} job {job} must allow {minutes} minutes')
             # A job on 16 cores that still asks for 4 wastes the runner it pays for.
-            # Every line counts, a multi-line run block's included; comments do not.
-            code = [re.sub(r'\s+#.*$', '', line) for line in _code(body)]
-            commands = _commands(body)
-            sized = [line for line in commands
-                     if _runs_verify(line) and _sized(line) and len(_JOBS_FLAG.findall(line)) == 1]
-            if (any(len(_JOBS_FLAG.findall(line)) != _sized(line) for line in code + commands)
-                    or any(_runs_verify(line) and not _sized(line) for line in commands)
-                    or any(re.search(r'\bJOBS\s*:', line) for line in code)
-                    or any((re.search(r'\bJOBS\s*=', line) or PARITY in line)
-                           and not line.startswith(PARITY_COMMAND) for line in commands)
-                    or (command == VERIFY and not sized)
-                    or (command == PARITY
-                        and not any(line.startswith(PARITY_COMMAND) for line in commands))):
+            if not _sized(_counted_text(body), command):
                 findings.append(f'{name} job {job} must size its parallelism to the runner')
     build = _jobs(workflows.get('ci.yml', '')).get('build', '')
     if _job_block(build, 'strategy') != _code(BUILD_STRATEGY):

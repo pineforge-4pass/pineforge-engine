@@ -15,6 +15,8 @@ from ci_preflight import (CORES, JOB_RUNNERS, LINUX_RUNNER, MATRIX_RUNNER,
                           ci_workflow_findings, run_checks)
 
 ROOT = Path(__file__).resolve().parents[1]
+KERNEL_VERIFY = ('run: python3 scripts/ci_verify.py kernel --build-dir build-kernel '
+                 '--jobs "$(getconf _NPROCESSORS_ONLN)" --ccache')
 # ci_workflow_findings' arguments, in order.
 CI_SOURCES = ('.github/workflows/ci.yml', '.github/workflows/native-live.yml',
               '.github/workflows/promote-baseline.yml', 'tests/CMakeLists.txt',
@@ -233,6 +235,34 @@ class PreflightFailures(unittest.TestCase):
              f'run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs {CORES} --ccache\n\n'
              '      - run: PYTHONPATH=scripts python3 -m ci_verify kernel --build-dir build-kernel --ccache\n',
              'ci.yml job kernel-only must size'),
+            # A second, unsized call however it is chained, blocked or carried.
+            (0, 'kernel-only', KERNEL_VERIFY,
+             f'run: >-\n          python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs {CORES} --ccache'
+             '\n\n          python3 scripts/ci_verify.py release --build-dir build-rel --ccache',
+             'ci.yml job kernel-only must size'),
+            (0, 'kernel-only', KERNEL_VERIFY + '\n',
+             KERNEL_VERIFY + '\n\n      - uses: nick-fields/retry@v3\n        with:\n'
+             '          command: python3 scripts/ci_verify.py release --build-dir build-rel --ccache\n',
+             'ci.yml job kernel-only must size'),
+            (0, 'kernel-only', KERNEL_VERIFY,
+             KERNEL_VERIFY + ' && python3 scripts/ci_verify.py release --build-dir build-rel --ccache',
+             'ci.yml job kernel-only must size'),
+            (0, 'kernel-only', KERNEL_VERIFY,
+             KERNEL_VERIFY + '; python3 scripts/ci_verify.py release --build-dir build-rel --ccache',
+             'ci.yml job kernel-only must size'),
+            (0, 'kernel-only', KERNEL_VERIFY + '\n',
+             KERNEL_VERIFY + '\n\n      - run: python3 -X dev scripts/ci_verify.py release --build-dir build-rel --ccache\n',
+             'ci.yml job kernel-only must size'),
+            (0, 'kernel-only', KERNEL_VERIFY + '\n',
+             KERNEL_VERIFY + '\n\n      - run: $pythonLocation/bin/python3 scripts/ci_verify.py release '
+             '--build-dir build-rel --ccache\n',
+             'ci.yml job kernel-only must size'),
+            (0, 'kernel-only', KERNEL_VERIFY, KERNEL_VERIFY + " ${{ '--jobs 4' }}",
+             'ci.yml job kernel-only must size'),
+            (4, 'corpus-parity-subset', f'run: JOBS={CORES} ./scripts/check_corpus_parity.sh --subset',
+             f'run: JOBS={CORES} ./scripts/check_corpus_parity.sh --subset'
+             ' && JOBS=4 ./scripts/check_corpus_parity.sh --subset',
+             'corpus-parity.yml job corpus-parity-subset must size'),
             (0, 'kernel-only', f'      - name: Verify (kernel)\n        run: python3 scripts/ci_verify.py kernel '
              f'--build-dir build-kernel --jobs {CORES} --ccache',
              f'      - name: python3 scripts/ci_verify.py kernel --jobs {CORES}\n'
@@ -256,9 +286,9 @@ class PreflightFailures(unittest.TestCase):
                 self.assertTrue(any(finding in line for line in findings), findings)
 
     def test_harmless_spellings_are_not_findings(self):
-        changed, others = self.ci_sources(), self.other_sources()
-        verify = f'run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs {CORES} --ccache'
-        for index, job, before, after in (
+        original, others = self.ci_sources(), self.other_sources()
+        verify = KERNEL_VERIFY
+        edits = (
                 (0, 'kernel-only', '    steps:\n',
                  '    # Was --jobs 4, and JOBS: "4", on the standard runner.\n    steps:\n'),
                 (0, 'build', '        include:\n', '        include:\n\n          # one per image\n'),
@@ -281,9 +311,24 @@ class PreflightFailures(unittest.TestCase):
                  'run: >-\n          python3 scripts/ci_verify.py sanitizers --build-dir build-asan\n'
                  f'          --jobs {CORES}'),
                 (1, 'native-live', f'--jobs {CORES}', f'--jobs={CORES}'),
-                (2, 'promote', '    runs-on: ubuntu-latest\n', '    runs-on:\n      ubuntu-latest\n')):
-            changed[index] = in_job(changed[index], job, before, after)
-        changed[0] = changed[0].replace('\n  preflight:\n', '\n  preflight:  # the fast gate\n', 1)
+                (0, 'kernel-only', '      - name: Verify (kernel)\n',
+                 '      - name: Verify (kernel), no longer --jobs 4\n'),
+                (0, 'kernel-only', KERNEL_VERIFY,
+                 'uses: nick-fields/retry@v3\n        with:\n          command: python3 scripts/ci_verify.py '
+                 f'kernel --build-dir build-kernel --jobs {CORES} --ccache'),
+                (2, 'promote', '    runs-on: ubuntu-latest\n', '    runs-on:\n      ubuntu-latest\n'),
+                (0, None, '\n  preflight:\n', '\n  preflight:  # the fast gate\n'))
+        # Each edit alone, then every one that composes (a line one edit
+        # rewrites is left to the edit that came first).
+        for index, job, before, after in edits:
+            with self.subTest(file=CI_SOURCES[index], job=job, after=after):
+                changed = original.copy()
+                changed[index] = in_job(changed[index], job, before, after)
+                self.assertEqual(ci_workflow_findings(*changed, others=others), [])
+        changed = original.copy()
+        for index, job, before, after in edits:
+            if before in (changed[index] if job is None else _jobs(changed[index]).get(job, '')):
+                changed[index] = in_job(changed[index], job, before, after)
         self.assertEqual(ci_workflow_findings(*changed, others=others), [])
 
     def test_a_finding_is_reported_once(self):
@@ -313,7 +358,9 @@ class PreflightFailures(unittest.TestCase):
                 ('[push,\n  pull_request]', 'pf-linux-x64-16', True),
                 ('>-\n  pull_request', 'macos-26-xlarge', True),
                 ('[pull_request]', 'ubuntu-latest', False),
-                ('\n  workflow_dispatch:\n', 'pf-linux-x64-16', False)):
+                # Only release.yml is exempt, by name: a new workflow is checked
+                # whatever starts it, so no on: spelling can exempt one.
+                ('\n  workflow_dispatch:\n', 'pf-linux-x64-16', True)):
             with self.subTest(on=on, runner=runner):
                 findings = ci_workflow_findings(
                     *original, others=dict(others, **{'lint.yml': new.format(on=on, runner=runner)}))

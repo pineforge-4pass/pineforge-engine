@@ -713,17 +713,20 @@ one that edits them runs its own copy, which preflight reports but does not
 stop, so the repository's approval rule for workflow runs from outside
 contributors is what bounds that case.
 
-`scripts/ci_preflight.py` (`ci-workflow-contract`) pins every job's runner,
-time limit and parallelism in the three workflows a CI run starts, the `build`
-strategy block included, and keeps every other workflow a pull request can
-start -- `docs.yml`, `promote-baseline.yml` and any new one -- on standard
-runners; one that only a push, the schedule or a dispatch starts
-(`release.yml`) is exempt. A heavy job moved back to the standard runner, a
-test or matrix entry that lets a fork's pull request onto a larger runner, a
-call to a workflow outside `.github/workflows/`, a changed time limit, or any
-`--jobs` or `JOBS` value but the core count fails preflight, and so does a
-jobs line or `runs-on` the check cannot read; `scripts/test_ci_preflight.py`
-holds the mutations.
+`scripts/ci_preflight.py` (`ci-workflow-contract`) pins every job's runner, time
+limit and parallelism in the three workflows a CI run starts, the `build`
+strategy block included, and keeps every other workflow -- `docs.yml`,
+`promote-baseline.yml` and any new one -- on standard runners. Only
+`release.yml` is exempt, by name and while its `on:` block names only events no
+fork can raise (a push, the schedule, a dispatch; a dispatch alone today). A
+heavy job moved back to the standard runner, a test or matrix entry that lets a
+fork's pull request onto a larger runner, a call to a workflow outside
+`.github/workflows/`, a changed time limit, a `ci_verify.py` call without
+exactly one core-count `--jobs` (counted over the whole job, however its
+commands are chained, blocked or carried, with the flag and its value on one
+line), or any other `--jobs` or `JOBS` value fails preflight, and so does a jobs
+line or `runs-on` the check cannot read; `scripts/test_ci_preflight.py` holds
+the mutations.
 
 More cores do not shorten every job. The `test_ci_verify` CTest row
 (`scripts/test_ci_verify.py`) is one Python process, and in the main run at
