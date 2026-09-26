@@ -28,7 +28,9 @@
 //      12:30), overnight, weekday-masked and late-origin sessions, script
 //      timeframes over finer inputs, Canonical and FeedTolerant labels with
 //      gaps, off-grid provider stamps and stamps inside a declared break,
-//      batch runs, confirmed-bar streams ended both ways and printed streams.
+//      batch runs, and confirmed-bar and printed streams -- and on the other
+//      delivery paths: the magnifier's synthesized path, a bucket that does
+//      not divide the session day, a seconds timeframe and an undetected one.
 //      Both runs must also end with the same error text (usually none).
 //   3. Cost: a UTC FeedTolerant batch -- the Pine adapter's shape -- resolves
 //      at most one interval for its facts (its final bar's scheduled close),
@@ -89,9 +91,9 @@ int failed = 0;
 constexpr std::int64_t kSecond = 1000;
 constexpr std::int64_t kMinute = 60 * kSecond;
 constexpr std::int64_t kDay = 1440 * kMinute;
-// Thursday 2025-07-03 00:00 UTC: the tapes run Thursday through Tuesday, so
-// every one crosses a weekend and a weekday mask has days to drop.
-constexpr std::int64_t kThu = 1751500800000LL;
+// Friday 2025-07-04 00:00 UTC: the tapes run Friday through Tuesday, so every
+// one crosses a weekend and a weekday mask has days to drop.
+constexpr std::int64_t kFri = 1751587200000LL;
 
 // ── 1. the UTC decision ────────────────────────────────────────────────────
 
@@ -190,7 +192,7 @@ struct Pairing {
 };
 
 const Pairing kPairings[] = {
-    {"2", "2", 2 * kMinute},    {"5", "5", 5 * kMinute},   {"1", "5", kMinute},
+    {"5", "5", 5 * kMinute},    {"10", "10", 10 * kMinute}, {"3", "15", 3 * kMinute},
     {"30", "60", 30 * kMinute}, {"60", "60", 60 * kMinute}, {"15", "240", 15 * kMinute},
 };
 
@@ -206,12 +208,13 @@ const char* tape_name(Tape tape) {
     return "?";
 }
 
-enum class Mode { Batch, StreamOpen, StreamFinal, Prints };
+// Both streams end with stream_end(true), which also seals and presents a
+// final bucket the calendar has closed.
+enum class Mode { Batch, Stream, Prints };
 const char* mode_name(Mode mode) {
     switch (mode) {
     case Mode::Batch: return "batch";
-    case Mode::StreamOpen: return "stream-end(false)";
-    case Mode::StreamFinal: return "stream-end(true)";
+    case Mode::Stream: return "stream";
     case Mode::Prints: return "prints";
     }
     return "?";
@@ -222,17 +225,18 @@ Bar bar_at(std::int64_t ts, int i) {
     return {price, price + 0.75, price - 0.75, price + 0.25, 1.0, ts};
 }
 
-// Input bars on the input grid wherever the session is open, over five and a
+// Input bars on the input grid wherever the session is open, over four and a
 // half days -- Days stops at Tuesday 00:00 UTC instead, so a batch's final bar
 // and (see warmup_for) a stream's last warmup bar end a session day on the
 // sessions that roll at midnight or close before it. Gaps drops every seventh
-// bar and the whole of Friday; OffGrid moves every third stamp a little inside
+// bar and the whole of Monday; OffGrid moves every third stamp a little inside
 // its own slot (FeedTolerant only); InBreak adds a stamp inside each day's
 // closed time (FeedTolerant only).
-std::vector<Bar> tape_for(const nc::SessionCalendar& calendar, const Pairing& pairing, Tape tape) {
+std::vector<Bar> tape_for(const nc::SessionCalendar& calendar, const Pairing& pairing, Tape tape,
+                          std::int64_t span = 4 * kDay + 12 * 60 * kMinute) {
     std::vector<Bar> bars;
-    const std::int64_t first = kThu;
-    const std::int64_t last = kThu + 5 * kDay + (tape == Tape::Days ? 0 : 12 * 60 * kMinute);
+    const std::int64_t first = kFri;
+    const std::int64_t last = kFri + (tape == Tape::Days ? 4 * kDay : span);
     const std::int64_t nudge = pairing.step >= 5 * kMinute ? 2 * kMinute : 20 * kSecond;
     int i = 0;
     for (std::int64_t ts = first; ts < last; ts += pairing.step) {
@@ -244,7 +248,7 @@ std::vector<Bar> tape_for(const nc::SessionCalendar& calendar, const Pairing& pa
             }
             continue;
         }
-        if (tape == Tape::Gaps && (i % 7 == 3 || (ts >= kThu + kDay && ts < kThu + 2 * kDay))) {
+        if (tape == Tape::Gaps && (i % 7 == 3 || (ts >= kFri + 3 * kDay && ts < kFri + 4 * kDay))) {
             ++i;
             continue;
         }
@@ -254,12 +258,30 @@ std::vector<Bar> tape_for(const nc::SessionCalendar& calendar, const Pairing& pa
     return bars;
 }
 
+// Input bars at the calendar's own slot labels for `tf` wherever the slot has
+// an instant in session: the grid restarts at every session-day origin, which
+// a timeframe that does not divide the day needs for Canonical labels.
+std::vector<Bar> calendar_grid_tape(const nc::SessionCalendar& calendar, const char* tf,
+                                    std::int64_t span) {
+    const auto timeframe = nc::parse_timeframe(tf);
+    std::vector<Bar> bars;
+    int i = 0;
+    for (std::int64_t t = kFri; timeframe && t < kFri + span;) {
+        const auto interval = nc::interval_containing(calendar, *timeframe, t);
+        if (!interval || interval->next_period_open_ms <= t) break;
+        if (interval->last_traded_close_ms > interval->eligible_open_ms)
+            bars.push_back(bar_at(interval->open_ms, i++));
+        t = interval->next_period_open_ms;
+    }
+    return bars;
+}
+
 // A stream's warmup: half the tape, or on Days every bar before Sunday 00:00.
 int warmup_for(const std::vector<Bar>& bars, Tape tape) {
     if (tape != Tape::Days) return static_cast<int>(bars.size()) / 2;
     int warmup = 0;
     while (warmup < static_cast<int>(bars.size())
-           && bars[static_cast<std::size_t>(warmup)].timestamp < kThu + 3 * kDay) ++warmup;
+           && bars[static_cast<std::size_t>(warmup)].timestamp < kFri + 2 * kDay) ++warmup;
     return warmup;
 }
 
@@ -269,6 +291,7 @@ NativeRunSpec spec_for(const Session& session, const char* zone, const Pairing& 
     spec.identity = {"perf-kedge-utc", 1};
     spec.input_tf = pairing.input;
     spec.script_tf = pairing.script;
+    spec.timeframe_undetected = spec.input_tf.empty();
     spec.tickerid = "TEST:KEDGE";
     spec.timezone = zone;
     spec.session = session.text;
@@ -303,13 +326,12 @@ Outcome drive(const NativeRunSpec& spec, const std::vector<Bar>& bars, Mode mode
     case Mode::Batch:
         host.run(bars.data(), n);
         break;
-    case Mode::StreamOpen:
-    case Mode::StreamFinal:
+    case Mode::Stream:
         if (host.stream_begin(bars.data(), warmup, spec.input_tf, spec.script_tf)) {
             for (int i = warmup; i < n; ++i) {
                 if (!host.stream_push_bar(bars[static_cast<std::size_t>(i)])) break;
             }
-            (void)host.stream_end(mode == Mode::StreamFinal);
+            (void)host.stream_end(true);
         }
         break;
     case Mode::Prints:
@@ -381,8 +403,7 @@ void test_same_facts_as_the_zone_path() {
                         && (tape == Tape::OffGrid || tape == Tape::InBreak)) continue;
                     const auto bars = tape_for(*calendar, pairing, tape);
                     const int warmup = warmup_for(bars, tape);
-                    for (const Mode mode : {Mode::Batch, Mode::StreamOpen, Mode::StreamFinal,
-                                            Mode::Prints}) {
+                    for (const Mode mode : {Mode::Batch, Mode::Stream, Mode::Prints}) {
                         const Outcome utc = drive(spec_for(session, "UTC", pairing, labels), bars,
                                                   mode, warmup);
                         const Outcome zone = drive(spec_for(session, "UTC0", pairing, labels), bars,
@@ -423,6 +444,73 @@ void test_same_facts_as_the_zone_path() {
     CHECK(tally.ticks > 0 && tally.refills > 0);
 }
 
+// The other paths a script bar is delivered on: the magnifier's synthesized
+// path (deliver_intrabar_script), over a chart and an aggregated bar, a
+// 7-minute bucket, which does not divide a session day, so the day's last
+// bucket runs past the next origin (its bars at the calendar's own labels), a
+// 30-second timeframe, and an undetected timeframe, which takes one bar and
+// partitions by its raw label -- batch and stream (the undetected one batch
+// only), UTC against UTC0.
+void test_other_delivery_paths() {
+    std::printf("test_other_delivery_paths\n");
+    struct Variant {
+        const char* name;
+        Pairing pairing;
+        bool magnifier;
+        bool calendar_grid;
+        std::int64_t span;
+    };
+    const Variant variants[] = {
+        {"magnifier", {"5", "5", 5 * kMinute}, true, false, 2 * kDay + 12 * 60 * kMinute},
+        {"magnifier-aggregated", {"5", "15", 5 * kMinute}, true, false, 2 * kDay + 12 * 60 * kMinute},
+        {"7-minute", {"7", "7", 7 * kMinute}, false, true, 2 * kDay + 12 * 60 * kMinute},
+        {"30-second", {"30S", "30S", 30 * kSecond}, false, false, kDay + 2 * 60 * kMinute},
+        {"undetected", {"", "", 15 * kMinute}, false, false, 12 * 60 * kMinute},
+    };
+    int runs = 0, completed = 0, mismatches = 0;
+    for (const Session& session : {kSessions[0], kSessions[2], kSessions[3]}) {
+        const auto calendar = nc::parse_session(session.text, "UTC");
+        CHECK(calendar.has_value());
+        if (!calendar) continue;
+        for (const Variant& variant : variants) {
+            auto bars = variant.calendar_grid
+                ? calendar_grid_tape(*calendar, variant.pairing.input, variant.span)
+                : tape_for(*calendar, variant.pairing, Tape::Whole, variant.span);
+            if (variant.pairing.input[0] == '\0' && bars.size() > 1) bars.resize(1);
+            for (const auto labels : {NativeSlotLabelPolicy::Canonical,
+                                      NativeSlotLabelPolicy::FeedTolerant}) {
+                for (const Mode mode : {Mode::Batch, Mode::Stream}) {
+                    if (variant.pairing.input[0] == '\0' && mode != Mode::Batch) continue;
+                    auto utc_spec = spec_for(session, "UTC", variant.pairing, labels);
+                    auto zone_spec = spec_for(session, "UTC0", variant.pairing, labels);
+                    if (variant.magnifier) {
+                        utc_spec.intrabar.value = IntrabarPath::synthesized{};
+                        zone_spec.intrabar.value = IntrabarPath::synthesized{};
+                    }
+                    const int warmup = static_cast<int>(bars.size()) / 2;
+                    const Outcome utc = drive(utc_spec, bars, mode, warmup);
+                    const Outcome zone = drive(zone_spec, bars, mode, warmup);
+                    ++runs;
+                    const bool same = utc.bar_opens == zone.bar_opens && utc.bars == zone.bars
+                        && utc.refills == zone.refills && utc.applied == zone.applied
+                        && utc.error == zone.error;
+                    CHECK(same);
+                    if (!same && ++mismatches <= 5) {
+                        std::fprintf(stderr, "  MISMATCH %s %s %s %s: bars %zu/%zu error '%s' / '%s'\n",
+                                     session.name, variant.name,
+                                     labels == NativeSlotLabelPolicy::Canonical ? "canonical" : "tolerant",
+                                     mode_name(mode), utc.bars.size(), zone.bars.size(),
+                                     utc.error.c_str(), zone.error.c_str());
+                    }
+                    if (utc.error.empty() && !utc.bars.empty()) ++completed;
+                }
+            }
+        }
+    }
+    std::printf("  %d runs (%d completed with bars); %d mismatches\n", runs, completed, mismatches);
+    CHECK(completed * 4 >= runs * 3);
+}
+
 // A 60-minute bar whose label sits in a declared break reads the break's
 // reopening: in session, neither opening nor closing its day. On UTC that
 // label is out of session, so it takes the interval path inside the shortcut.
@@ -445,7 +533,7 @@ void test_break_label_reads_its_reopening() {
         CHECK(!f.opens);
         CHECK(!f.closes);
     }
-    // Thursday, Friday, Monday and the Tuesday half-day tape each have one.
+    // Friday through Monday each have one (the session has no weekday mask).
     CHECK(noon >= 4);
 }
 
@@ -478,6 +566,7 @@ void test_utc_tolerant_batch_resolves_no_interval_per_bar() {
 int main() {
     test_utc_decision();
     test_same_facts_as_the_zone_path();
+    test_other_delivery_paths();
     test_break_label_reads_its_reopening();
     test_utc_tolerant_batch_resolves_no_interval_per_bar();
     std::printf("\n%d passed, %d failed\n", passed, failed);
