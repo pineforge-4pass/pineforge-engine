@@ -365,7 +365,7 @@ KERNEL_MIN_TESTS = 286
 # wave-G lane adds a source-bound row (the K-ULP4 and K-ULP5 C checks and
 # V19-FIX's scaling rows are rows inside existing TUs). No release row skips,
 # so 678 registered is 678 run.
-# 701 = those 678 plus wave H's twenty-three (INT26), counted with ctest -N on
+# 702 = those 678 plus wave H's twenty-four (INT26), counted with ctest -N on
 # the integrated tree: the nine KERNEL_MIN_TESTS lists above, which register
 # here too, H-MEASURE's eleven source-bound rows the kernel profile does not
 # build (AUDIT4 X14) and PAR-ORDERS-2's three tape rows:
@@ -383,10 +383,11 @@ KERNEL_MIN_TESTS = 286
 #   +3 PAR-ORDERS-2 items 1-3     test_flat_coof_exit_tapes,
 #                                 test_second_extreme_order_tapes,
 #                                 test_pooc_reversing_stop_tapes
+#   +1 PAR-CASHFEE                test_cash_fee_sizing_tapes
 # PAR-MARGIN's own count also held the margin differential, which that lane
 # had cherry-picked for its pins; it counts once, as H-MEASURE's. No release
-# row skips, so 701 registered is 701 run.
-RELEASE_MIN_TESTS = 701
+# row skips, so 702 registered is 702 run.
+RELEASE_MIN_TESTS = 702
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
@@ -407,12 +408,12 @@ ADR_RULED_TEXTS_MIN = 40
 # PR-only registration floors: the complete CTest populations of the three
 # excluded profiles at INT25, counted with ctest -N on the integrated tree --
 # 653/653/662 at 91d65ad6 (INT24) plus wave G's six rows (C-SURFACE-1 +1,
-# KERNEL-EDGE +1, K-ULP4 +2, K-ULP5 +1, DOC-TRUTH-4 +1) in each; 682/682/691
-# at INT26, each with wave H's twenty-three rows of RELEASE_MIN_TESTS
+# KERNEL-EDGE +1, K-ULP4 +2, K-ULP5 +1, DOC-TRUTH-4 +1) in each; 683/683/692
+# at INT26, each with wave H's twenty-four rows of RELEASE_MIN_TESTS
 # (H-MEASURE +12, H-DOCGATES +3, K-OCA-KEEP +1, PAR-ORDERS-2 +4, PAR-MARGIN
-# +1, PAR-MARGIN-2 +1, PERF-KEDGE +1), counted the same way. An excluded run
-# must still discover at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 682, 'sanitizers': 682, 'native': 691}
+# +1, PAR-MARGIN-2 +1, PERF-KEDGE +1, PAR-CASHFEE +1), counted the same way.
+# An excluded run must still discover at least this many rows before -LE.
+EXCLUDED_REGISTERED_MIN = {'debug': 683, 'sanitizers': 683, 'native': 692}
 # The ctest stage's bound. A full sanitizers run (push to main, a manual
 # dispatch, the maintainers' verification) ran out of its 30 minutes twice on
 # main's four-core runner before every row had finished, so it gets an hour; a
