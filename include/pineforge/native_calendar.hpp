@@ -115,6 +115,13 @@ struct TimeframeCompatibility {
 
 TimeframeCompatibility compatibility(const Timeframe& input, const Timeframe& script);
 
+// Whether the pairing's script bars are buckets the kernel gathers from the
+// input (a same-unit or fixed multiple, a fixed or calendar input under a
+// calendar script bar -- a multiple of one included), rather than the input
+// bars themselves (byte-identical literals, Passthrough). False for a finer or
+// indivisible script and an invalid pair, which a run cannot hold.
+bool pairing_aggregates(const TimeframeCompatibility& pairing) noexcept;
+
 // Stream input M/nM is the existing refusal (engine_stream requires a fixed
 // positive duration). Batch monthly remains accepted via compatibility().
 TimeframeCompatibility stream_compatibility(const Timeframe& input, const Timeframe& script);

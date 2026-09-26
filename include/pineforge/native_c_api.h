@@ -155,6 +155,10 @@
  *   [C]  physical_position                 strategy_native_position_v1
  *   [C]  native_marked_equity              strategy_native_marked_equity_v1
  *   [C]  native_liquidation_price          strategy_native_liquidation_price_v1
+ *   [--] native_aggregates_input_bars      its one reader is the Pine host, which re-dates a closed row
+ *                                          onto the aggregated script bar TradingView reports; a C host
+ *                                          reads the rows the kernel books as they are, and names both
+ *                                          timeframes in its own spec
  *   [C]  native_risk_state                 strategy_native_risk_state_v1
  *   [C]  native_events                     strategy_native_events_v1
  *   [C]  native_acknowledge_events         strategy_native_acknowledge_events_v1

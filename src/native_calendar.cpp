@@ -1367,6 +1367,23 @@ TimeframeCompatibility compatibility(const Timeframe& input, const Timeframe& sc
     return out;
 }
 
+bool pairing_aggregates(const TimeframeCompatibility& pairing) noexcept {
+    switch (pairing.pairing) {
+    case TimeframePairing::SameUnitMultiple:
+    case TimeframePairing::FixedDivisible:
+    case TimeframePairing::FixedToCalendar:
+    case TimeframePairing::CalendarToCalendar:
+        return true;
+    case TimeframePairing::Passthrough:
+    case TimeframePairing::ScriptFiner:
+    case TimeframePairing::IndivisibleFixed:
+    case TimeframePairing::StreamMonthlyInputRefused:
+    case TimeframePairing::Invalid:
+        return false;
+    }
+    return false;
+}
+
 TimeframeCompatibility stream_compatibility(const Timeframe& input, const Timeframe& script) {
     if (!input.valid() || !script.valid()) {
         TimeframeCompatibility out;

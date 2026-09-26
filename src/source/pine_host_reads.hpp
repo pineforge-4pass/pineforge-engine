@@ -71,10 +71,6 @@ inline const NativeCurrentPointView* callback_point(const NativeStrategyHost& ho
     return run_consumer(host).current_point();
 }
 
-// A chart whose script bar aggregates several input bars
-// (pine_strategy_host.cpp): the spec overload of aggregates_input_bars.
-bool aggregates_input_bars(const NativeRunSpec* spec);
-
 // The source layer's state parked with the consumer for one run (R5 lane
 // PERF-P7's NativeHostCache: the adapter's lookup index derives from this,
 // pine_adapter.cpp). The consumer drops it at every run begin and never reads
@@ -101,10 +97,12 @@ inline PineRunCache* run_cache(const NativeExecutionConsumer& consumer, const vo
     return facts->owner == owner && facts->run == run ? facts : nullptr;
 }
 
-// aggregates_input_bars(native_state()) for the adapter at `owner` in run
-// `run`: while the run runs, the answer taken at its begin; otherwise, or
-// when the consumer keeps no host cache (set_host_cache(false), the reference
-// tests/test_adapter_in_place_reads.cpp compares against), computed from the spec.
+// Whether a script bar of the chart gathers several input bars -- the
+// kernel's answer (NativeStrategyHost::native_aggregates_input_bars) -- for the
+// adapter at `owner` in run `run`: while the run runs, the answer taken at its
+// begin; otherwise, or when the consumer keeps no host cache
+// (set_host_cache(false), the reference tests/test_adapter_in_place_reads.cpp
+// compares against), asked of the consumer.
 inline bool run_aggregates_input_bars(const NativeExecutionConsumer& consumer,
                                       const void* owner, std::uint64_t run) {
     if (consumer.running()) {
@@ -114,7 +112,7 @@ inline bool run_aggregates_input_bars(const NativeExecutionConsumer& consumer,
             return *facts->aggregates_input_bars;
         }
     }
-    return aggregates_input_bars(consumer.state_spec());
+    return consumer.aggregates_input();
 }
 
 // Takes the facts above for the run that has just begun (on_native_run_begin).

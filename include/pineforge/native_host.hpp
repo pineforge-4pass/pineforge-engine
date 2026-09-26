@@ -1318,6 +1318,12 @@ public:
     /// no margin model, the side has no maintenance fraction, the book is flat,
     /// or no finite price solves the breach (a long at full maintenance).
     std::optional<double> native_liquidation_price() const;
+    /// Whether the configured run's script bars are buckets the kernel gathers
+    /// from its input bars -- native_calendar::pairing_aggregates of the
+    /// pairing it resolved for the spec's input and script timeframes -- rather
+    /// than the input bars themselves. False for a chart-timeframe run
+    /// (byte-identical literals), an undetected timeframe, or no configured spec.
+    bool native_aggregates_input_bars() const;
     /// The run's generic risk ledger. Every field is its zero for a run that
     /// declares no NativeRunSpec::risk; observation only, it moves nothing.
     NativeRiskState native_risk_state() const;

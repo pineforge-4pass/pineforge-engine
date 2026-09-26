@@ -78,42 +78,6 @@ void validate_source_begin_bars(const NativeBeginArgs& args) {
 
 }  // namespace
 
-namespace source::detail {
-
-// A chart whose script bar aggregates several input bars: the input timeframe
-// is finer than the script's (PineScheduler::run_begin's needs_aggregation).
-// There the kernel's interval index names the SCRIPT bar (26 for the 26th
-// 15m bar of a 1m feed), while NativeCoordinate::input_interval_index keeps
-// the input slot for hosts that need it. Pine therefore reads the same public
-// script-bar index without a projection-time restamp.
-//
-// The host and the scheduler ask this in their per-bar callbacks, of a spec
-// that cannot change inside the run, so it must not cost a parse of both
-// literals each time. Equal literals -- every chart that does not aggregate --
-// need none: tf_ratio(x, x) is -1 exactly when tf_to_seconds(x) is negative,
-// and a configured spec's literal passed native_calendar::parse_timeframe
-// ([1-9][0-9]*[SDWM]? or a bare D, W or M), so one of at most four characters
-// cannot overflow that int product and is negative only when it is monthly.
-// Every other pair keeps tf_ratio. The host's and the scheduler's per-bar
-// callbacks read its answer for the running spec once per run
-// (run_aggregates_input_bars, pine_host_reads.hpp, R5 lane D2-C); the view
-// overload's linkage lets tests/test_aggregates_input_bars_literals.cpp judge
-// it against tf_ratio. Not part of the installed API.
-bool aggregates_input_bars(const NativeRunSpec* spec) {
-    if (!spec || spec->timeframe_undetected) return false;
-    const std::string& input = spec->input_tf;
-    const std::string& script = spec->script_tf;
-    if (input == script && !script.empty() && script.size() <= 4) return script.back() == 'M';
-    const int ratio = tf_ratio(input, script);
-    return ratio > 1 || ratio == -1;
-}
-
-bool aggregates_input_bars(const NativeStateView& state) {
-    return aggregates_input_bars(state.spec);
-}
-
-}  // namespace source::detail
-
 source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
     : NativeStrategyHost(),
       adapter_(*this, cap),

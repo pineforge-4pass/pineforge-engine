@@ -10732,6 +10732,10 @@ std::optional<double> NativeStrategyHost::native_liquidation_price() const {
         .host_liquidation_price(*this);
 }
 
+bool NativeStrategyHost::native_aggregates_input_bars() const {
+    return NativeExecutionConsumer::bound(*this).aggregates_input();
+}
+
 NativeRiskState NativeStrategyHost::native_risk_state() const {
     return NativeExecutionConsumer::bound(*this)
         .risk_state();

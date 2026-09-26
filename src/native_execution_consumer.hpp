@@ -127,6 +127,11 @@ public:
     // (NativeStrategyHost::native_state, out of line and by value). running()
     // is the branch view() takes.
     bool running() const noexcept { return running_spec_ != nullptr; }
+    // Whether the configured spec's script bars are buckets gathered from its
+    // input under the resolved pairing (native_aggregates_input_bars).
+    bool aggregates_input() const noexcept {
+        return native_calendar::pairing_aggregates(pairing_);
+    }
     NativeLifecycleKind state_kind() const {
         return running_spec_ ? NativeLifecycleKind::Running : view().kind;
     }

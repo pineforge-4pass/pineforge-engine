@@ -5,9 +5,10 @@
 // The source layer reads the run's lifecycle, spec and phase, the callback's
 // point, the book and the bound consumer through src/source/pine_host_reads.hpp
 // instead of native_state(), current_execution_point(), physical_position()
-// and execution_consumer(), and reads aggregates_input_bars once per run,
-// kept in the adapter's host cache (pd::PineRunCache, taken at
-// on_native_run_begin). For every D2-C scenario
+// and execution_consumer(), and reads the kernel's aggregation answer
+// (native_aggregates_input_bars, since R5 lane H-THIN; the adapter's own
+// literal predicate before) once per run, kept in the adapter's host cache
+// (pd::PineRunCache, taken at on_native_run_begin). For every D2-C scenario
 // (tests/pine_d2c_scenarios_fixture.hpp: magnifier off/on, aggregated charts,
 // calc_on_order_fills re-entries, warm-up switches, kernel-routed and
 // host-driven request.security sites, the auxiliary lower-timeframe array,
@@ -16,9 +17,9 @@
 //   1. The host compares, at every script bar it publishes, in every
 //      request.security evaluation and at the run's script preparation, each
 //      in-place read against its accessor -- field for field, the point by
-//      its digest -- and the kept fact against
-//      pd::aggregates_input_bars(native_state()); and again before the
-//      run (Unconfigured) and after it (Completed).
+//      its digest -- and the kept fact against the host's
+//      native_aggregates_input_bars(); and again before the run
+//      (Unconfigured) and after it (Completed).
 //   2. The scenario runs with the consumer's host cache (shipped) and without
 //      it (set_host_cache(false): nothing kept, every read of the fact
 //      computes it, the PERF-P7 lookups walk): the transcripts -- every read
@@ -135,7 +136,7 @@ public:
             digest = point_digest(*point);
             CHECK(digest == point_digest(*point_in_place));
         }
-        const bool aggregates = pd::aggregates_input_bars(view.spec);
+        const bool aggregates = native_aggregates_input_bars();
         if (const pd::PineRunCache* facts = kept();
             facts != nullptr && view.kind == NativeLifecycleKind::Running) {
             CHECK(facts->aggregates_input_bars.has_value());

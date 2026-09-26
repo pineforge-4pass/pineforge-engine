@@ -1353,7 +1353,7 @@ void detail::take_run_facts(NativeExecutionConsumer& consumer,
                             const PineExecutionAdapter& adapter, std::uint64_t run) {
     if (!consumer.running()) return;
     if (auto* index = adapter_lookup_index(&consumer, &adapter, run))
-        index->aggregates_input_bars = aggregates_input_bars(consumer.state_spec());
+        index->aggregates_input_bars = consumer.aggregates_input();
 }
 
 IExecutionConsumer* PineExecutionAdapter::bound_consumer() const noexcept {
