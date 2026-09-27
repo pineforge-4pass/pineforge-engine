@@ -1,0 +1,26 @@
+//@version=6
+strategy("w4-f08r-pooc", overlay=true, process_orders_on_close=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W4-ENG-POOC-SAMEPASS, family F08: an exit the script re-issues on every
+// bar with an unchanged level, naming an entry that holds no lot yet (the
+// every-bar "exit per side" pattern). X: a long held; on bar 00:30 of 04-08 a
+// strategy.close of it and the short entry the exit names. Y: flat; on bar
+// 04:30 the long entry the exit names. Each exit level is fixed at its cell's
+// first bar and already through the entry bar's close.
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+inX = time >= timestamp("UTC", 2025, 4, 8, 0, 0) and time < timestamp("UTC", 2025, 4, 8, 2, 0)
+inY = time >= timestamp("UTC", 2025, 4, 8, 4, 0) and time < timestamp("UTC", 2025, 4, 8, 6, 0)
+if cell(8, 0, 0)
+    strategy.entry("X-L", strategy.long, comment="X long")
+if cell(8, 0, 30)
+    strategy.close("X-L", comment="X close")
+    strategy.entry("X-S", strategy.short, comment="X short")
+if cell(8, 4, 30)
+    strategy.entry("Y-L", strategy.long, comment="Y long")
+if inX
+    strategy.exit("X-XS", from_entry="X-S", stop=1550.0, comment="X short stop")
+if inY
+    strategy.exit("Y-XL", from_entry="Y-L", stop=1600.0, comment="Y long stop")
+if cell(8, 2, 0) or cell(8, 6, 0)
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

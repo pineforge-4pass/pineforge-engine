@@ -166,7 +166,7 @@ std::vector<TapeTrade> tape_trades(const std::string& tape, double lot, std::int
     return out;
 }
 
-enum class Script { Main, Interact, Sizing, HalfCent };
+enum class Script { Main, Interact, Sizing, HalfCent, Reissue };
 
 struct Case {
     const char* tape;
@@ -208,6 +208,7 @@ public:
         case Script::Interact: interaction_cells(); break;
         case Script::Sizing: sizing_cells(); break;
         case Script::HalfCent: half_cent_cells(); break;
+        case Script::Reissue: reissue_cells(); break;
         }
     }
 
@@ -362,6 +363,22 @@ private:
         }
     }
 
+    // w4-f08r-*: an exit re-issued on every bar with an unchanged level,
+    // naming an entry that holds no lot yet, then that entry.
+    void reissue_cells() {
+        if (t_ == at(8, 0, 0)) entry("X-L", true, "X long");
+        if (t_ == at(8, 0, 30)) {
+            strategy_close("X-L", "X close", kNaN, kNaN, false, 68719476755ULL);
+            entry("X-S", false, "X short");
+        }
+        if (t_ == at(8, 4, 30)) entry("Y-L", true, "Y long");
+        if (t_ >= at(8, 0, 0) && t_ < at(8, 2, 0))
+            bracket("X-XS", "X-S", kNaN, 1550.0, "X short stop");
+        if (t_ >= at(8, 4, 0) && t_ < at(8, 6, 0))
+            bracket("Y-XL", "Y-L", kNaN, 1600.0, "Y long stop");
+        if (t_ == at(8, 2, 0) || t_ == at(8, 6, 0)) cleanup();
+    }
+
     // w4-f08t-pooc: exit levels 0.002 from half-cent closes (NYSE:F).
     void half_cent_cells() {
         if (t_ == ford(13, 45)) {
@@ -509,6 +526,8 @@ int main() {
         {"w4-f08s-pooc-pct50", Script::Sizing, true, false, kPercent, 50.0, 0, none},
         {"w4-f08s-pooc-v6", Script::Sizing, true, false, kPercent, 100.0, 0, none},
         {"w4-f08t-pooc", Script::HalfCent, true, false, kFixed, 1.0, 0, none},
+        {"w4-f08r-pooc", Script::Reissue, true, false, kFixed, 1.0, 0, none},
+        {"w4-f08r-plain", Script::Reissue, false, false, kFixed, 1.0, 0, none},
     };
     for (const Case& c : cases) replay(c);
 
@@ -581,6 +600,13 @@ int main() {
         exits(t, "S2 short", "S2 limit", ford(15, 30));
         exits(t, "L3 long", "L3 stop", ford(16, 30));
         exits(t, "H1 long", "H1 stop", ford(17, 45));
+    }
+    {
+        // An exit re-issued on every bar before its entry exists is that
+        // entry's exit once the entry is placed: at the close that fills it.
+        const auto& r = tapes["w4-f08r-pooc"];
+        exits(r, "X short", "X short stop", at(8, 0, 30));
+        exits(r, "Y long", "Y long stop", at(8, 4, 30));
     }
     {
         // A stop exit at the close is slipped, a limit exit is not.

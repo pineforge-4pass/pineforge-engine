@@ -1,0 +1,16 @@
+{
+  "title": "w4-f08r-pooc",
+  "slug": "w4-f08r-pooc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T16:20:09.239Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "6ad59a303c7478506825c1d329ce79c26b62360953487d48c1bd3d26f268310c",
+  "tv_trades_sha256": "337d49c911641118071f121613575b9a49b052ff80588b4e9b544dcbb37f40fa",
+  "tv_trades_rows": 6
+}

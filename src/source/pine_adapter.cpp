@@ -9223,8 +9223,14 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             || (family == PineOrderFamily::ExitStop
                     && same_double_bits(prior.exit_levels.stop, level));
     };
+    // Only a live bracket: a leg whose from_entry holds no lot rested dormant
+    // on the bars before, so re-issuing it on the calculation that places its
+    // entry is a new exit of that entry, decided with it (lab tv
+    // w4-f08r-pooc cells X and Y; wayward-bison's every-bar "Short Stop";
+    // lane W4-ENG-POOC-SAMEPASS).
     const bool plain_dynamic_bracket = dynamic && !coof_recalc_active_
         && !materializing_relative_ && !config_.calc_on_order_fills
+        && (from_entry.empty() || cohort_exposure_for(from_entry) > 0.0)
         && physical.signed_units != 0.0 && std::isnan(trail_points)
         && std::isnan(trail_offset) && std::isnan(trail_price)
         && std::isnan(profit_ticks) && std::isnan(loss_ticks)

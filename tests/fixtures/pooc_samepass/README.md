@@ -27,6 +27,8 @@ replays every tape.
 | `w4-f08s-pooc-pct50` | POOC, percent_of_equity 50 | 7 | `0638a86847ce715aed151529caf84251f6d02d8c599870ad3e97149b74c7c678` |
 | `w4-f08s-pooc-v6` | POOC, v6 default (percent_of_equity 100) | 8 | `412b176b1d437eb0ce00279db92afeab07b982b23390fd9d4167bc362f1f86b9` |
 | `w4-f08t-pooc` | POOC, fixed 1 (NYSE:F) | 8 | `5e640888d5007b74d2d9be33f7facfcb1b91abd51fa4bb89fcfd126fa53ffa49` |
+| `w4-f08r-pooc` | POOC, fixed 1 | 3 | `337d49c911641118071f121613575b9a49b052ff80588b4e9b544dcbb37f40fa` |
+| `w4-f08r-plain` | fixed 1 | 3 | `f5ec2d1eeb793cc4d82257db93f841a77cb270867f3a57b9e5b4af9d197b37c2` |
 
 What they show:
 
@@ -50,6 +52,10 @@ What they show:
   TradingView compares the close's tick (11.465 -> 11.47 fills a sell limit at
   11.467; 11.445 -> 11.45 leaves a sell stop at 11.447 resting), on either side,
   for a fresh and a held position.
+- `w4-f08r-*`: an exit the script re-issues on every bar with an unchanged level,
+  naming an entry that holds no lot yet, is that entry's exit once the entry is
+  placed: it fills at the close that fills the entry (X after a
+  `strategy.close` of the held long, Y from flat).
 
 ## Bars
 
