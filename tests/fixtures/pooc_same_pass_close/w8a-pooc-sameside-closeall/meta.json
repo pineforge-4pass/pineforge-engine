@@ -1,0 +1,16 @@
+{
+  "title": "w8a-nq same-side entry after a same-pass close: margin admission",
+  "slug": "w8a-pooc-sameside-closeall",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T16:26:13.938Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "575baae2d74db30e68fcd3fe832122d0b8ada22b85de94ea45b024d037a2dc44",
+  "tv_trades_sha256": "d6a435a486a154d25d79374586ad559c3fa48c6650b113aab513548ff1c4f0d6",
+  "tv_trades_rows": 1178
+}

@@ -1,0 +1,65 @@
+//@version=6
+strategy("w8a-nq same-side entry after a same-pass close: margin admission", overlay=true, initial_capital=10000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=0, process_orders_on_close=true, margin_long=100, margin_short=100, commission_value=0, slippage=0)
+
+// Synthetic (written from scratch) for W8A-SIGSTATE-1 group nq.
+// Daily cells, BINANCE:ETHUSDT.P 15m. Each cell opens a held position H worth 60% of equity
+// at the 10:00 UTC bar close; one action bar later (10:15 UTC; Saturday 16:00 UTC) it calls a
+// close FIRST and then ONE strategy.entry in the same POOC pass. Flat again at 11:00 / 17:00 UTC.
+// Question: is the new entry's margin admission charged for the held position the same-pass
+// close is about to flatten, i.e. (held + own) * close * margin > equity -> entry dropped?
+int dow = dayofweek(time, "UTC")
+int hm = hour(time, "UTC") * 60 + minute(time, "UTC")
+bool live = time >= timestamp("UTC", 2025, 4, 2, 0, 0) and time < timestamp("UTC", 2026, 4, 30, 0, 0)
+float step = 0.001
+float eqv = strategy.equity
+float q60 = math.floor(0.60 * eqv / close / step) * step
+float q50 = math.floor(0.50 * eqv / close / step) * step
+float q30 = math.floor(0.30 * eqv / close / step) * step
+float held = math.abs(strategy.position_size)
+float mid = (strategy.position_avg_price + close) / 2
+float qv = math.floor((eqv - held * mid) / close / step) * step
+
+bool sat = dow == dayofweek.saturday
+bool open_bar = live and hm == 600
+bool act_bar = live and ((not sat and hm == 615) or (sat and hm == 960))
+bool flat_bar = live and ((not sat and hm == 660) or (sat and hm == 1020))
+
+if open_bar and strategy.position_size == 0
+    if dow == dayofweek.friday
+        strategy.entry("H", strategy.short, qty=q60, comment="H")
+    else
+        strategy.entry("H", strategy.long, qty=q60, comment="H")
+
+if act_bar and strategy.position_size != 0
+    if dow == dayofweek.monday
+        // A: long held 0.60 + same-side 0.50 > equity -> expected DROPPED
+        strategy.close_all(comment="CA")
+        strategy.entry("A", strategy.long, qty=q50, comment="A")
+    else if dow == dayofweek.tuesday
+        // B: control, held 0.60 + same-side 0.30 < equity -> expected FILLED
+        strategy.close_all(comment="CB")
+        strategy.entry("B", strategy.long, qty=q30, comment="B")
+    else if dow == dayofweek.wednesday
+        // C: control, opposite side 0.50 (a reversal of the held long) -> expected FILLED
+        strategy.close_all(comment="CC")
+        strategy.entry("C", strategy.short, qty=q50, comment="C")
+    else if dow == dayofweek.thursday
+        // D: strategy.close("H") instead of close_all, same-side 0.50 -> open question
+        strategy.close("H", comment="CD")
+        strategy.entry("D", strategy.long, qty=q50, comment="D")
+    else if dow == dayofweek.friday
+        // E: short mirror of A -> expected DROPPED
+        strategy.close_all(comment="CE")
+        strategy.entry("E", strategy.short, qty=q50, comment="E")
+    else if dow == dayofweek.sunday
+        // D2: control for D, strategy.close("H") then same-side 0.30 (affordable) -> filled?
+        strategy.close("H", comment="CD2")
+        strategy.entry("D2", strategy.long, qty=q30, comment="D2")
+    else if sat
+        // V: own = (equity - held*(avg+close)/2)/close: over equity iff the held lots are
+        // valued at the mark and close > avg (or at avg and close < avg)
+        strategy.close_all(comment="CV")
+        strategy.entry("V", strategy.long, qty=qv, comment="V")
+
+if flat_bar and strategy.position_size != 0
+    strategy.close_all(comment="X")

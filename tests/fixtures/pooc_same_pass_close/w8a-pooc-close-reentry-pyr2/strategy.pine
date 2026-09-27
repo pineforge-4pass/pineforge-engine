@@ -1,0 +1,23 @@
+//@version=6
+strategy("w8a POOC close(id) then same-bar re-entry, pyramiding=2", overlay=true, pyramiding=2, process_orders_on_close=true, initial_capital=100000, default_qty_type=strategy.fixed, default_qty_value=1, commission_value=0, slippage=0)
+
+// Synthetic, lane W8A-SIGSTATE-1: the shape of test_integration's
+// test_strategy_close_pooc_cancels_same_bar_market_reentry on a real chart.
+// Daily cells 2025-04-02 .. 04-11 UTC: 10:00 entry L; at 10:15 on even days
+// close("L") then entry("L_add"), on odd days entry("L_add") then close("L");
+// 11:00 close_all.
+int hm = hour(time, "UTC") * 60 + minute(time, "UTC")
+bool live = time >= timestamp("UTC", 2025, 4, 2, 0, 0) and time < timestamp("UTC", 2025, 4, 12, 0, 0)
+bool p_day = dayofmonth(time, "UTC") % 2 == 0
+
+if live and hm == 600 and strategy.position_size == 0
+    strategy.entry("L", strategy.long)
+if live and hm == 615 and strategy.position_size > 0
+    if p_day
+        strategy.close("L")
+        strategy.entry("L_add", strategy.long)
+    else
+        strategy.entry("L_add", strategy.long)
+        strategy.close("L")
+if live and hm == 660 and strategy.position_size != 0
+    strategy.close_all()

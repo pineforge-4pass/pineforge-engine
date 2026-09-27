@@ -5609,8 +5609,8 @@ static void test_strategy_close_pooc_missing_id_noops() {
     CHECK(near(strat.get_signed_position_size(), 1.0, 1e-9));
 }
 
-static void test_strategy_close_pooc_cancels_same_bar_market_reentry() {
-    std::printf("test_strategy_close_pooc_cancels_same_bar_market_reentry\n");
+static void test_strategy_close_pooc_keeps_same_bar_market_reentry() {
+    std::printf("test_strategy_close_pooc_keeps_same_bar_market_reentry\n");
 
     class Strat : public pineforge::source::PineStrategyHost {
     public:
@@ -5642,8 +5642,12 @@ static void test_strategy_close_pooc_cancels_same_bar_market_reentry() {
     };
     strat.run(bars, 3);
 
+    // TradingView keeps the re-entry: under process_orders_on_close the close
+    // of L fills and L_add opens at the same close, whichever of the two calls
+    // comes first (lab tv tape w8a-pooc-close-reentry-pyr2, BINANCE:ETHUSDT.P
+    // 15, pyramiding=2; lane W8A-SIGSTATE-1 R2).
     CHECK(strat.trade_count() == 1);
-    CHECK(near(strat.get_signed_position_size(), 0.0, 1e-9));
+    CHECK(near(strat.get_signed_position_size(), 1.0, 1e-9));
 }
 
 static void test_strategy_close_pooc_keeps_same_bar_market_reversal() {
@@ -6299,7 +6303,7 @@ int main() {
     test_strategy_close_cancels_prior_pending_entries_but_keeps_same_pass_reversal();
     test_strategy_close_any_non_matching_keeps_pending_entry_live();
     test_strategy_close_pooc_missing_id_noops();
-    test_strategy_close_pooc_cancels_same_bar_market_reentry();
+    test_strategy_close_pooc_keeps_same_bar_market_reentry();
     test_strategy_close_pooc_keeps_same_bar_market_reversal();
     test_strategy_close_immediate_cancels_prior_same_bar_market_reentry();
     test_strategy_close_pooc_keeps_same_bar_pending_entry();

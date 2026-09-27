@@ -6369,9 +6369,18 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             break;
         }
     }
+    // Under process_orders_on_close a close the script issued earlier in the
+    // same pass settles before this entry: an entry after closes that flatten
+    // the position is not a same-side add, and a same-side entry's margin is
+    // judged against the position that close flattens (lane W8A-SIGSTATE-1
+    // R2, tests/fixtures/pooc_same_pass_close).
+    const bool pooc_pass = config_.process_orders_on_close
+        && !config_.calc_on_order_fills && !coof_recalc_active_;
+    const bool pooc_pass_flattens = pooc_pass && close_precedes_entry && current != 0.0
+        && preceding_close_qty + internal::kQtyEpsilon >= std::abs(current);
     if (!same_bar_market_candidate && current != 0.0
         && ((current > 0.0) == is_long) && config_.pyramiding == 0
-        && !(priced && config_.process_orders_on_close)) {
+        && !(priced && config_.process_orders_on_close) && !pooc_pass_flattens) {
         // A zero pyramiding setting permits the flat opening but makes a
         // same-direction MARKET reissue a source no-op.  It must be dropped
         // before native matching so IntradayCap's factor-A policy observes no
@@ -7062,7 +7071,15 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         }
         const double held = reverses ? 0.0
             : std::max(0.0, std::abs(current) - preceding_close_qty);
-        const double required = (held + std::abs(own_units)) * signal * staged_.syminfo.pointvalue
+        double charged_held = held;
+        if ((pooc_pass && close_all_precedes) || pooc_pass_flattens) {
+            // The position before this pass's closes: the script's own view,
+            // which an ordinary close_all froze when it filled at its call.
+            const auto* pine_host = pine_view_of(&require_host());
+            const double before = pine_host ? pine_host->signed_position_size() : current;
+            charged_held = before != 0.0 && ((before > 0.0) == is_long) ? std::abs(before) : 0.0;
+        }
+        const double required = (charged_held + std::abs(own_units)) * signal * staged_.syminfo.pointvalue
             * snapshot.sizing.fx * margin / 100.0;
         const double epsilon = std::max(1e-9, std::abs(snapshot.sizing.equity) * 1e-12);
         snapshot.projection_affordability_equity = snapshot.sizing.equity;
@@ -7702,17 +7719,11 @@ void PineExecutionAdapter::flush_pending_closes() {
         // ab9714be pine_orders.cpp:344: close within kQtyEpsilon of held position executes Flatten action
         const bool closes_full = target >= available - internal::kQtyEpsilon;
         if (closes_full) {
+            // The pass's entries on the closed side survive the close and open
+            // after it, whichever call came first: entry() already refused the
+            // ones over the cap (lane W8A-SIGSTATE-1 R2,
+            // tests/fixtures/pooc_same_pass_close).
             cancel_exit_orders_for_full_close(site.id);
-            const bool held_long = physical.signed_units > 0.0;
-            pending_entries_.erase(std::remove_if(
-                pending_entries_.begin(), pending_entries_.end(),
-                [&](const PendingEntry& pending) {
-                    const auto& entry = pending.snapshot;
-                    return entry.opening && entry.family == PineOrderFamily::Entry
-                        && entry.is_long == held_long
-                        && !finite_positive(entry.exit_levels.limit)
-                        && !finite_positive(entry.exit_levels.stop);
-                }), pending_entries_.end());
         }
 
         // ab9714be pine_orders.cpp:29-70 / :340-347: a partial close whose

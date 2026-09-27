@@ -1,0 +1,16 @@
+{
+  "title": "w8a POOC close(id) then same-bar re-entry, pyramiding=2",
+  "slug": "w8a-pooc-close-reentry-pyr2",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T18:46:04.559Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "6232b92b77820f326d74d6bce9752595a6c7be9926b14807feebdb64ee2393d9",
+  "tv_trades_sha256": "5fb317f671ed54e623d800d8362e344e48f74c019a266315d0acc04084601590",
+  "tv_trades_rows": 40
+}

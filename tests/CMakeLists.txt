@@ -929,6 +929,11 @@ list(APPEND TEST_SOURCES test_intraday_loss_open_fill_tape)
 # (tests/fixtures/pyramiding_open_order), on TradingView's tape.
 list(APPEND TEST_SOURCES test_pyramiding_open_order_tape)
 
+# Lane W8A-SIGSTATE-1 R2: an entry after a same-pass close under
+# process_orders_on_close (tests/fixtures/pooc_same_pass_close), on
+# TradingView's tape.
+list(APPEND TEST_SOURCES test_pooc_same_pass_close_tape)
+
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bare_host_contracts)
@@ -2440,6 +2445,13 @@ endif()
 if(TARGET test_pyramiding_open_order_tape)
     target_compile_definitions(test_pyramiding_open_order_tape PRIVATE
         PINEFORGE_PYRAMIDING_OPEN_ORDER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pyramiding_open_order")
+endif()
+
+# Lane W8A-SIGSTATE-1 R2 reads its TradingView tape and 15m bars from the
+# fixture tree; source-bound.
+if(TARGET test_pooc_same_pass_close_tape)
+    target_compile_definitions(test_pooc_same_pass_close_tape PRIVATE
+        PINEFORGE_POOC_SAME_PASS_CLOSE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_same_pass_close")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape
