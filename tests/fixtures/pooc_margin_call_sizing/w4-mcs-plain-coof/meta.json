@@ -1,0 +1,16 @@
+{
+  "title": "w4-mcs-plain-coof",
+  "slug": "w4-mcs-plain-coof",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:08:38.635Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "a6c222af7b793c21a7ad03d1ab177be66b581b47f799ce56ea1df2a067cd6376",
+  "tv_trades_sha256": "7a369bf87509308d3f9d8c6a4cae9b9c976c39ad3df20260176b2208d7301e50",
+  "tv_trades_rows": 22
+}

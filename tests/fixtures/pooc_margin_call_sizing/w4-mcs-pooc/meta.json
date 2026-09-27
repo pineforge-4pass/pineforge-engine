@@ -1,0 +1,16 @@
+{
+  "title": "w4-mcs-pooc",
+  "slug": "w4-mcs-pooc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:08:40.146Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "a4dce22746fd5d7cf61d6619cd8b2a360afc8e6896624ebc8e3b48020d4bb8d9",
+  "tv_trades_sha256": "2a82552b0e8afbb00979f684d095d1ae5918f68f31b04cbcc31e245994ba8896",
+  "tv_trades_rows": 24
+}

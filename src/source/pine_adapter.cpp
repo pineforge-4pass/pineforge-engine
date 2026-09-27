@@ -13031,6 +13031,15 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         const auto* published = std::get_if<native_order::RemainingUnits>(&facts.remaining);
         if (!published) throw std::logic_error("core-sized quantity without the core's quotient");
         result.units = default_sizing_lot_floor(published->q);
+        // A margin call that filled after the command, on its calculation's
+        // bar, revised the source sizing to the equity after it
+        // (refresh_pending_sizing_after_margin); the quotient the core froze
+        // at acceptance is the equity before it. TradingView sizes the entry
+        // on the equity after the call (lane W4-ENG-POOC-SAMEPASS).
+        if (source.market_admission.sizing_revision()
+            && finite_positive(source.sizing.frozen_units)) {
+            result.units = source.sizing.frozen_units;
+        }
     } else if (finite_positive(source.sizing.frozen_units) && !source.sizing.at_fill
                && (!(source.family == PineOrderFamily::Entry
                      && finite_positive(source.exit_levels.stop)

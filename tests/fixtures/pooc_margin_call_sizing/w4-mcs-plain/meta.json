@@ -1,0 +1,16 @@
+{
+  "title": "w4-mcs-plain",
+  "slug": "w4-mcs-plain",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:08:38.242Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "21452fbc242f1c2fb1576538d9ea5978831986ba821c927adc2627814eac75e2",
+  "tv_trades_sha256": "7a369bf87509308d3f9d8c6a4cae9b9c976c39ad3df20260176b2208d7301e50",
+  "tv_trades_rows": 22
+}

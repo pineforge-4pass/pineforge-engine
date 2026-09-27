@@ -1,0 +1,30 @@
+//@version=6
+strategy("w4-mcs-plain", overlay=true, process_orders_on_close=false)
+
+// Lane W4-ENG-POOC-SAMEPASS, margin-call sizing. Each cell shorts at 100 % of
+// equity, then on a later bar whose high margin-calls the short above that
+// bar's close enters the long; flattened two hours after the flip.
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+
+// A: short, then strategy.close and the long entry on the margin-called bar
+if cell(3, 4, 0)
+    strategy.entry("A-S", strategy.short, comment="A short")
+if cell(3, 4, 45)
+    strategy.close("A-S", comment="A close")
+    strategy.entry("A-L", strategy.long, comment="A long")
+// B: the same shape, a later bar
+if cell(3, 12, 45)
+    strategy.entry("B-S", strategy.short, comment="B short")
+if cell(3, 13, 30)
+    strategy.close("B-S", comment="B close")
+    strategy.entry("B-L", strategy.long, comment="B long")
+// C: short, then the long entry alone reverses it on the margin-called bar
+if cell(3, 17, 45)
+    strategy.entry("C-S", strategy.short, comment="C short")
+if cell(3, 18, 45)
+    strategy.entry("C-L", strategy.long, comment="C long")
+
+cleanup = cell(3, 6, 45) or cell(3, 15, 30) or cell(3, 20, 45)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")
