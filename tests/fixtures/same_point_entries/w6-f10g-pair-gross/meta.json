@@ -1,0 +1,16 @@
+{
+  "title": "W6 F10g opposite pair gross admission",
+  "slug": "w6-f10g-pair-gross",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:33:06.598Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "298e93644a2e568d9620ef984761cdf9b1bb53a2051e2c13d38f5dacdf543655",
+  "tv_trades_sha256": "7af593068f16e6259412bf818a2d5b5bea715940c3dd362735a5687a8ab16d06",
+  "tv_trades_rows": 76
+}

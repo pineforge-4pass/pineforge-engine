@@ -6152,6 +6152,17 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                 units = typed_quantity_units(
                     percent_commission_live_equity(mark) * std::abs(qty) / 100.0, true, mark, fx);
             }
+            // The later of two opposite calls on one flat bar is one
+            // transaction of its own quantity plus the earlier pending market
+            // call's, and TradingView costs that transaction at the signal:
+            // past the equity it drops the later call (lab tv
+            // w6-f10g-pair-gross; the KI-65 NQ probe on CME_MINI:NQ1! 15).
+            if (current == 0.0 && explicit_fixed && source_point
+                && same_bar_market_tx_scope()) {
+                const double pending = pending_opposite_market_units(
+                    is_long, source_point->decision.script_bar_open_ms);
+                if (std::isfinite(pending)) units += pending;
+            }
             const double required = units * mark
                 * staged_.syminfo.pointvalue * fx * margin / 100.0;
             // R4-D L10ad: ab9714be pine_strategy_commands.cpp:344-346 gates the

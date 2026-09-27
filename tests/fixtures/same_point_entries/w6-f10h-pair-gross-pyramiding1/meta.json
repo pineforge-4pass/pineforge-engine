@@ -1,0 +1,16 @@
+{
+  "title": "W6 F10h opposite pair gross admission, pyramiding 1",
+  "slug": "w6-f10h-pair-gross-pyramiding1",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:37:25.423Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "63910c2667d25468a693db4628694a1078699c48c1b1f5c1d7f929e9145826d9",
+  "tv_trades_sha256": "7af593068f16e6259412bf818a2d5b5bea715940c3dd362735a5687a8ab16d06",
+  "tv_trades_rows": 76
+}

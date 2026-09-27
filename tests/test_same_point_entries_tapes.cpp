@@ -14,6 +14,8 @@
  *        lends it nothing), and the earlier call trades only its own, so a
  *        buy that fills first opens both quantities as one lot the sell then
  *        partly closes: the tape's two rows of the buy's signal.
+ *        TradingView costs that transaction at the signal, and past the
+ *        equity it drops the later call.
  *
  * Each row replays one tape through the Pine adapter under the configuration
  * the generated constructor declares for its probe, over the corpus 15m bars
@@ -220,6 +222,12 @@ const std::vector<Cell> kSameSide = {
     {{false, 'S', 1, "SM-S-1"}, {false, 'M', 2, "SM-S-2"}},
     {{false, 'M', 1, "MS-S-1"}, {false, 'S', 2, "MS-S-2"}},
 };
+const std::vector<Cell> kGross = {
+    {{true, 'M', 1, "MM-LF-1"}, {false, 'M', 1, "MM-LF-2"}},
+    {{false, 'M', 1, "MM-SF-1"}, {true, 'M', 1, "MM-SF-2"}},
+    {{true, 'M', 1, "MS-LF-1"}, {false, 'S', 1, "MS-LF-2"}},
+    {{false, 'M', 1, "MS-SF-1"}, {true, 'S', 1, "MS-SF-2"}},
+};
 enum class Probe { Pair };
 
 // The probes, as their generated TUs lower them (fixtures/.../strategy.pine).
@@ -360,6 +368,11 @@ int main() {
          fixed_config(0, false, false), all14, 40},
         {"w6-f10b-limit-class", Probe::Pair, &kLimitClass, 2, "fixed 1, pyramiding 0",
          fixed_config(0, false, false), all8, 24},
+        {"w6-f10g-pair-gross", Probe::Pair, &kGross, 7, "fixed 1, pyramiding 0, capital 3000",
+         fixed_config(0, false, false, 3000.0), {0, 1, 2, 3}, 38},
+        {"w6-f10h-pair-gross-pyramiding1", Probe::Pair, &kGross, 7,
+         "fixed 1, pyramiding 1, capital 3000", fixed_config(1, false, false, 3000.0),
+         {0, 1, 2, 3}, 38},
     };
 
     for (const Case& c : cases) {
@@ -399,6 +412,8 @@ int main() {
         {"w6-f10a-open-pair", &kOpenPair, 28},
         {"w6-f10b-limit-class", &kLimitClass, 16},
         {"w6-f10c-same-side-class", &kSameSide, 16},
+        {"w6-f10g-pair-gross", &kGross, 10},
+        {"w6-f10h-pair-gross-pyramiding1", &kGross, 10},
     };
     for (const PairTape& pt : pair_tapes) {
         const Tape tape = tape_trades(pt.tape, end_ms);

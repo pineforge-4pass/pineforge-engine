@@ -1,0 +1,46 @@
+//@version=6
+strategy("W6 F10h opposite pair gross admission, pyramiding 1", overlay=true,
+     initial_capital=3000, pyramiding=1,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     commission_type=strategy.commission.percent, commission_value=0,
+     slippage=0, margin_long=100, margin_short=100,
+     process_orders_on_close=false, calc_on_order_fills=false)
+
+// Lane W6-ENG-FILL-ORDER, family F10 (w6-f10g at pyramiding 1). From flat,
+// two opposite one-contract
+// strategy.entry calls on one bar, both marketable at the next open. Each
+// call alone costs about half the 3000 of equity; the later call trades its
+// own contract plus the pending market's, which costs more than the equity
+// whenever the close is above about 1500. The tape shows when TradingView
+// keeps that later call. Cell names: E1 kind, E2 kind (M market, S stop),
+// then LF (E1 long) or SF (E1 short). Each cell is flattened 30 minutes later.
+
+int t0 = timestamp("UTC", 2025, 4, 8, 0, 0)
+int stepMs = 2 * 60 * 60 * 1000
+int nCells = 4
+int rel = time - t0
+bool inRange = rel >= 0 and rel < 7 * nCells * stepMs
+bool eventBar = inRange and rel % stepMs == 0
+bool cleanupBar = inRange and rel % stepMs == 30 * 60 * 1000
+int cell = inRange ? (rel - rel % stepMs) / stepMs % nCells : -1
+
+float lo = close * 0.5
+float hi = close * 2.0
+
+if eventBar and strategy.position_size == 0
+    if cell == 0
+        strategy.entry("E1", strategy.long, qty=1, comment="MM-LF-1")
+        strategy.entry("E2", strategy.short, qty=1, comment="MM-LF-2")
+    else if cell == 1
+        strategy.entry("E1", strategy.short, qty=1, comment="MM-SF-1")
+        strategy.entry("E2", strategy.long, qty=1, comment="MM-SF-2")
+    else if cell == 2
+        strategy.entry("E1", strategy.long, qty=1, comment="MS-LF-1")
+        strategy.entry("E2", strategy.short, qty=1, stop=hi, comment="MS-LF-2")
+    else if cell == 3
+        strategy.entry("E1", strategy.short, qty=1, comment="MS-SF-1")
+        strategy.entry("E2", strategy.long, qty=1, stop=lo, comment="MS-SF-2")
+
+if cleanupBar
+    strategy.cancel_all()
+    strategy.close_all(comment="FLT")

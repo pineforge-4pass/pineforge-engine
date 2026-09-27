@@ -668,7 +668,10 @@ static void test_MM_scope_predicates_do_not_pair_or_gross_gate() {
     CHECK(oca.queued == 2 && oca.metadata_clean);
     CHECK(slippage.queued == 2 && slippage.metadata_clean);
     CHECK(zero_qty.queued == 2 && zero_qty.metadata_clean);
-    CHECK(non_p2.queued == 2 && non_p2.metadata_clean);
+    // pyramiding 1 is not excluded: TradingView costs the later call's own
+    // quantity plus the pending market's there too and drops it past the
+    // equity (lab tv w6-f10h-pair-gross-pyramiding1, lane W6-ENG-FILL-ORDER).
+    CHECK(non_p2.queued == 1 && non_p2.metadata_clean);
     CHECK(custom_margin.queued == 2 && custom_margin.metadata_clean);
     CHECK(risk_rule.queued == 2 && risk_rule.metadata_clean);
     CHECK(three_calls.queued == 3 && three_calls.metadata_clean);

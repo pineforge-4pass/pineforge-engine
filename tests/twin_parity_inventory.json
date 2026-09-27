@@ -209,9 +209,9 @@
     },
     "test_dual_entry_placement_sizing": {
       "baseAssertions": 172,
-      "reason": "two observable rewrites -- the MS-SF-A row follows the W6-ENG-FILL-ORDER TradingView tapes (w6-f10a-open-pair MS-SF): a marketable buy stop placed after a sell market on one flat bar fills first, as one buy of both quantities, so the closed trade is a slice of the buy's long closed by the sell; and lane W3B-ENG-GRID: the pair's percent exits for LAY-L are issued before LAY-L's entry call, while LAY-L neither exists nor rests, and TradingView voids such an exit (lab tv w3f05-s18, w3f05-s21, w3bf05-v1 in tests/fixtures/exit_queue): nothing rests for them after the pair, where the adapter froze 1.0 and 1.5",
+      "reason": "two observable rewrites -- the MS-SF-A row and the pyramiding-1 fence follow the W6-ENG-FILL-ORDER TradingView tapes: a marketable buy stop placed after a sell market on one flat bar fills first, as one buy of both quantities, so the closed trade is a slice of the buy's long closed by the sell (w6-f10a-open-pair MS-SF); and the later call of a flat opposite pair is costed as its own quantity plus the pending market's at pyramiding 1 as at 0, so past the equity it is dropped (w6-f10h-pair-gross-pyramiding1); and lane W3B-ENG-GRID: the pair's percent exits for LAY-L are issued before LAY-L's entry call, while LAY-L neither exists nor rests, and TradingView voids such an exit (lab tv w3f05-s18, w3f05-s21, w3bf05-v1 in tests/fixtures/exit_queue): nothing rests for them after the pair, where the adapter froze 1.0 and 1.5",
       "twin": "test_dual_entry_placement_sizing_l4b.cpp",
-      "twinAssertionSha256": "db15a4367a1065264c2593ef174ac6462f7c53cfb1a6e7b4410052717382701f",
+      "twinAssertionSha256": "e310460cb609017087f3ddcaae33d0e785df8f9d76eed21e61e58c9469d3f880",
       "twinAssertions": 173
     },
     "test_engine_risk": {

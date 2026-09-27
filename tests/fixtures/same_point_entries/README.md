@@ -61,6 +61,21 @@ marketable flat explicit-quantity entries in TradingView's order (a keep-handle
 re-price), and a marketable buy stop placed after a sell market is one
 `Transact` of both quantities.
 
+## F10: the later call is costed with the pending market
+
+| tape | trades | `strategy()` declares | tv_trades.csv sha256 |
+|---|---:|---|---|
+| `w6-f10g-pair-gross` | 38 | fixed 1, pyramiding 0, capital 3000 | `7af593068f16e6259412bf818a2d5b5bea715940c3dd362735a5687a8ab16d06` |
+| `w6-f10h-pair-gross-pyramiding1` | 38 | fixed 1, pyramiding 1, capital 3000 | `7af593068f16e6259412bf818a2d5b5bea715940c3dd362735a5687a8ab16d06` |
+
+One-contract pairs (`MM-LF`, `MM-SF`, `MS-LF`, `MS-SF`, seven passes) on 3000
+of equity: each call alone costs about half of it, the later call's
+transaction (its own contract plus the pending market's) costs more than the
+equity whenever the close is above about 1500. TradingView keeps the later
+call exactly when that transaction, priced at the signal close, is within the
+equity; past it only the earlier call trades. Pyramiding 1 is the same tape.
+The engine had costed the later call's own contract only.
+
 ## Cells TradingView and the engine still book differently
 
 The test leaves these out; the tapes stay as evidence.
