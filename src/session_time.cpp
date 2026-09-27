@@ -629,16 +629,40 @@ static bool is_allday_session(const std::string& session) {
     return (start4 == "0000" && (end4 == "2400" || end4 == "0000"));
 }
 
-// True when the first "HHMM-HHMM" window of `windows` has start == end —
-// TradingView's spelling of a 24-hour session ("1700-1700" on OANDA forex,
-// "0000-0000"). Such a window spans the whole day, not zero minutes.
-static bool first_window_is_full_day(const std::string& windows) {
-    std::size_t dash = windows.find('-');
-    if (dash == std::string::npos || dash < 4 || windows.size() < dash + 5)
-        return false;
-    int sm = hhmm_to_minutes(windows.substr(dash - 4, 4));
-    int em = hhmm_to_minutes(windows.substr(dash + 1, 4));
-    return sm >= 0 && em >= 0 && sm == em;
+// The session day's first open and last close, in minutes of the local day,
+// over EVERY "HHMM-HHMM" window of `windows` (the session without its day
+// mask), in whatever order they are written: what session.ispremarket and
+// session.ispostmarket are measured from. False when the session has no
+// pre- or post-market: no window parses, one spans 24 hours (start == end, as
+// TradingView spells it on OANDA forex, or "0000-2400"), or one wraps
+// midnight, so the session day opens on the previous date. TradingView flags
+// no bar of such a session pre- or post-market (CME_MINI:ES1!, CBOT:ZC1!,
+// OANDA:XAUUSD / EURUSD, BINANCE:ETHUSDT.P; lane K-SESSION-WINDOWS F6).
+static bool extended_hours_bounds(const std::string& windows, int& first_open,
+                                  int& last_close) {
+    bool any = false;
+    std::size_t pos = 0;
+    while (pos <= windows.size()) {
+        const std::size_t comma = windows.find(',', pos);
+        std::string win = windows.substr(pos, comma == std::string::npos
+                                                  ? std::string::npos : comma - pos);
+        pos = comma == std::string::npos ? windows.size() + 1 : comma + 1;
+        trim_inplace(win);
+        const std::size_t dash = win.find('-');
+        if (dash == std::string::npos || dash < 4 || win.size() < dash + 5)
+            continue;
+        const int sm = hhmm_to_minutes(win.substr(dash - 4, 4));
+        const std::string end = win.substr(dash + 1, 4);
+        const int em = end == "2400" ? 24 * 60 : hhmm_to_minutes(end);
+        if (sm < 0 || em < 0)
+            continue;
+        if (sm == em || (sm == 0 && em == 24 * 60) || em < sm)
+            return false;
+        if (!any || sm < first_open) first_open = sm;
+        if (!any || em > last_close) last_close = em;
+        any = true;
+    }
+    return any;
 }
 
 }  // anonymous namespace
@@ -744,18 +768,11 @@ bool session_in_premarket(const std::string& session,
     std::unordered_set<int> day_filter;
     parse_day_filter(session, windows, &day_filter);
 
-    std::string rth_open_str;
-    {
-        std::size_t dash = windows.find('-');
-        if (dash >= 4)
-            rth_open_str = windows.substr(0, 4);
-    }
-    int rth_open_min = hhmm_to_minutes(rth_open_str);
-    if (rth_open_min < 0)
-        return false;
-    // start == end is a 24-hour session (see local_time_in_session_windows):
-    // the market never closes, so there is no pre-market.
-    if (first_window_is_full_day(windows))
+    // From 04:00 to the session day's first open, over every window: a
+    // break between two windows is not before the open.
+    int first_open = 0;
+    int last_close = 0;
+    if (!extended_hours_bounds(windows, first_open, last_close))
         return false;
 
     int pre_open_min = 4 * 60;
@@ -768,7 +785,7 @@ bool session_in_premarket(const std::string& session,
         return false;
 
     int mod = local_tm.tm_hour * 60 + local_tm.tm_min;
-    return (mod >= pre_open_min && mod < rth_open_min);
+    return (mod >= pre_open_min && mod < first_open);
 }
 
 bool session_in_postmarket(const std::string& session,
@@ -781,17 +798,11 @@ bool session_in_postmarket(const std::string& session,
     std::unordered_set<int> day_filter;
     parse_day_filter(session, windows, &day_filter);
 
-    std::string rth_close_str;
-    {
-        std::size_t dash = windows.find('-');
-        if (dash != std::string::npos && dash + 4 < windows.size())
-            rth_close_str = windows.substr(dash + 1, 4);
-    }
-    int rth_close_min = hhmm_to_minutes(rth_close_str);
-    if (rth_close_min < 0)
-        return false;
-    // start == end is a 24-hour session: no post-market either.
-    if (first_window_is_full_day(windows))
+    // From the session day's last close, over every window, to 20:00: a
+    // break between two windows is not after the close.
+    int first_open = 0;
+    int last_close = 0;
+    if (!extended_hours_bounds(windows, first_open, last_close))
         return false;
 
     int post_close_min = 20 * 60;
@@ -804,7 +815,7 @@ bool session_in_postmarket(const std::string& session,
         return false;
 
     int mod = local_tm.tm_hour * 60 + local_tm.tm_min;
-    return (mod >= rth_close_min && mod < post_close_min);
+    return (mod >= last_close && mod < post_close_min);
 }
 
 // Chart-timeframe forms (see session_time.hpp): a D/W/M chart bar is the

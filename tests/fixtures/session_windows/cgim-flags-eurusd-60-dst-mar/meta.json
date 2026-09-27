@@ -1,0 +1,16 @@
+{
+  "title": "CG-ISMARKET session flags",
+  "slug": "cgim-flags-eurusd-60-dst-mar",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T21:55:58.879Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "60",
+    "from": "2025-03-02",
+    "to": "2025-03-14"
+  },
+  "pine_sha256": "78898de72eeff09ef33a75e40f94da2b8ec9fbc301264183ba048e2e5f130225",
+  "tv_trades_sha256": "b40fbc81f290140da74127637c705c1d35872c92d10a7aa95e7228e8a791d25b",
+  "tv_trades_rows": 440
+}

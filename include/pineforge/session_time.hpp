@@ -151,11 +151,11 @@ int64_t session_trading_day_open_ms(int64_t bar_ms,
 // in the current architecture.  Future work: add SymInfo.regular_session
 // field for strict RTH separation (deferred — separate sprint).
 //
-// Pre/post-market predicates assume standard US ETH windows:
-//   premarket : 04:00 – RTH_open  (RTH_open parsed from session string)
-//   postmarket: RTH_close – 20:00
-// For exchanges with non-standard ETH (e.g. LSE auctions), accuracy may
-// degrade.  This is documented behaviour, not a bug.
+// Pre/post-market predicates assume standard US ETH windows around the day:
+//   premarket : 04:00 – its first open, postmarket: its last close – 20:00,
+// over every window in any order; a break between windows is neither, and an
+// overnight or 24-hour session has neither (TradingView's TSE, HKEX, CBOT, CME
+// and OANDA tapes, tests/test_session_prepost_windows_tape.cpp).
 // ---------------------------------------------------------------------------
 
 bool session_in_market(const std::string& session,

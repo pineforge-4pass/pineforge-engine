@@ -1,0 +1,16 @@
+{
+  "title": "CG-ISMARKET session flags",
+  "slug": "cgim-flags-xauusd-60-dst-mar",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T21:56:01.968Z",
+  "chart": {
+    "symbol": "OANDA:XAUUSD",
+    "interval": "60",
+    "from": "2025-03-02",
+    "to": "2025-03-14"
+  },
+  "pine_sha256": "78898de72eeff09ef33a75e40f94da2b8ec9fbc301264183ba048e2e5f130225",
+  "tv_trades_sha256": "308b250a01e1c2e77a74019d61f89e822305a9e76974bcd2b2e1b939a4cadb7e",
+  "tv_trades_rows": 420
+}

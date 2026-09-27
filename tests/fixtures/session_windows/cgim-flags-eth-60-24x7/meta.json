@@ -1,0 +1,16 @@
+{
+  "title": "CG-ISMARKET session flags",
+  "slug": "cgim-flags-eth-60-24x7",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T21:56:04.777Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "60",
+    "from": "2025-03-07",
+    "to": "2025-03-11"
+  },
+  "pine_sha256": "78898de72eeff09ef33a75e40f94da2b8ec9fbc301264183ba048e2e5f130225",
+  "tv_trades_sha256": "0a077e8b7af95d0a9279b0182d7024c140240ecd47d0d648a82e81cbbc61a5fe",
+  "tv_trades_rows": 194
+}

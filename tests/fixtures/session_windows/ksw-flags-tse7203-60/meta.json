@@ -1,0 +1,16 @@
+{
+  "title": "K-SESSION-WINDOWS session flags",
+  "slug": "ksw-flags-tse7203-60",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:56:18.933Z",
+  "chart": {
+    "symbol": "TSE:7203",
+    "interval": "60",
+    "from": "2025-03-03",
+    "to": "2025-03-15"
+  },
+  "pine_sha256": "1a78deccefb408d955112da398240e8fc5b146d126c40e514ee24078e4af83d4",
+  "tv_trades_sha256": "8ab368d71a6e8a87e27c6b2c0f312a2e911261de73100761a1ba4e27ce6ec657",
+  "tv_trades_rows": 140
+}

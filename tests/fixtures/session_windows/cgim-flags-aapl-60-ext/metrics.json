@@ -1,0 +1,40 @@
+{
+  "validationEligible": true,
+  "strategy": "cgim-flags-aapl-60-ext",
+  "symbol": "NASDAQ:AAPL",
+  "interval": "60",
+  "from": "2025-03-03",
+  "to": "2025-03-15",
+  "deepBacktesting": true,
+  "trades": 160,
+  "tvTradesCsv": "tv_trades.csv",
+  "tapeChannel": "ws-report-v1",
+  "sourceCanonicalization": "pine-facade-v1",
+  "sourceArtifactHash": "78898de72eeff09ef33a75e40f94da2b8ec9fbc301264183ba048e2e5f130225",
+  "tvTradesCsvHash": "c61119c7077dcf01cf89b13c77931a52bff4c1078e63c0e58c3e687f93db0802",
+  "wsProvenance": {
+    "schemaVersion": 1,
+    "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+    "authUser": "luisleo52655",
+    "accountType": "pro_premium_expert",
+    "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+    "pineVersion": "0.75013",
+    "symbol": "NASDAQ:AAPL",
+    "interval": "60",
+    "requestedRange": {
+      "from": 1740960000000,
+      "to": 1741996800000
+    },
+    "returnedRange": {
+      "from": 1740992400000,
+      "to": 1741993200000
+    },
+    "rangeProof": "covered",
+    "rawFrameSha256": "55ee4da9971f54d1caaae026cd3b8bc059cfe91b404a4918a015016bc08639b8",
+    "decodedReportSha256": "5d9828426423bde547079e129fbf268d8cd09fa8ccb5a21b61715ced47a052f5",
+    "closedTrades": 160,
+    "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+    "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+  },
+  "backtestedAt": "2026-09-25T23:04:04.258Z"
+}

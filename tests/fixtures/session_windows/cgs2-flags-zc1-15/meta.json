@@ -1,0 +1,16 @@
+{
+  "title": "CG-ISMARKET session flags",
+  "slug": "cgs2-flags-zc1-15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T09:28:16.538Z",
+  "chart": {
+    "symbol": "CBOT:ZC1!",
+    "interval": "15",
+    "from": "2025-03-03",
+    "to": "2025-03-15"
+  },
+  "pine_sha256": "78898de72eeff09ef33a75e40f94da2b8ec9fbc301264183ba048e2e5f130225",
+  "tv_trades_sha256": "7a69b0f608ad98aa0055cf16fa201505792dfa1e7dbd2288cffc019a9f528e49",
+  "tv_trades_rows": 1420
+}

@@ -1,0 +1,16 @@
+{
+  "title": "K-SESSION-WINDOWS session flags",
+  "slug": "ksw-flags-zc1-240",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:56:33.030Z",
+  "chart": {
+    "symbol": "CBOT:ZC1!",
+    "interval": "240",
+    "from": "2025-03-03",
+    "to": "2025-03-15"
+  },
+  "pine_sha256": "1a78deccefb408d955112da398240e8fc5b146d126c40e514ee24078e4af83d4",
+  "tv_trades_sha256": "64b998d56cf824a6f1fcbbc04c5ced77a3fd0c85661956c413457cb5f0310231",
+  "tv_trades_rows": 100
+}

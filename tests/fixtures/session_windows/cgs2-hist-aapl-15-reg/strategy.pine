@@ -1,0 +1,43 @@
+// CG-SESSION-2: what do TradingView's session.* flags read with a history
+// offset? process_orders_on_close=true: every bar reverses the position at
+// its own close, so every trade's ENTRY is one chart bar (TradingView dates a
+// process_orders_on_close fill at the bar's open) and the entry's Signal (its
+// comment) carries seven-bit groups in the flag order M session.ismarket,
+// P session.ispremarket, Q session.ispostmarket, F session.isfirstbar,
+// L session.islastbar, f session.isfirstbar_regular, l session.islastbar_regular:
+// "C" the flags on this bar, "H" the flags [1], "T" the flags [2], then one bit
+// each: "B" session.ispremarket[1] read inside a block run on every third bar
+// (held between runs), "U" session.ispostmarket[1] read by a function called on
+// odd bars only, "Z" session.islastbar[1] on the lazy right side of an `and`
+// reached on even bars only, "K" session.isfirstbar[k] with k = 1 or 2 by bar,
+// "D" session.ismarket[0], "W" session.ismarket[64].
+//@version=6
+strategy("CG-SESSION-2 session history", overlay=true, initial_capital=1000000000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+     process_orders_on_close=true, margin_long=100, margin_short=100)
+
+bit(bool x) => x ? "1" : "0"
+now = "C" + bit(session.ismarket) + bit(session.ispremarket) + bit(session.ispostmarket)
+     + bit(session.isfirstbar) + bit(session.islastbar)
+     + bit(session.isfirstbar_regular) + bit(session.islastbar_regular)
+one = "H" + bit(session.ismarket[1]) + bit(session.ispremarket[1]) + bit(session.ispostmarket[1])
+     + bit(session.isfirstbar[1]) + bit(session.islastbar[1])
+     + bit(session.isfirstbar_regular[1]) + bit(session.islastbar_regular[1])
+two = "T" + bit(session.ismarket[2]) + bit(session.ispremarket[2]) + bit(session.ispostmarket[2])
+     + bit(session.isfirstbar[2]) + bit(session.islastbar[2])
+     + bit(session.isfirstbar_regular[2]) + bit(session.islastbar_regular[2])
+var bool blk = false
+if bar_index % 3 == 0
+    blk := session.ispremarket[1]
+post1() => session.ispostmarket[1]
+fn = bar_index % 2 == 1 ? post1() : false
+lz = bar_index % 2 == 0 and session.islastbar[1]
+k = bar_index % 2 + 1
+flag = now + one + two + "B" + bit(blk) + "U" + bit(fn) + "Z" + bit(lz)
+     + "K" + bit(session.isfirstbar[k]) + "D" + bit(session.ismarket[0])
+     + "W" + bit(session.ismarket[64])
+if bar_index % 2 == 0
+    strategy.entry("L", strategy.long, comment=flag)
+else
+    strategy.entry("S", strategy.short, comment=flag)

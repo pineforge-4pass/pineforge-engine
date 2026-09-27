@@ -1,0 +1,16 @@
+{
+  "title": "K-SESSION-WINDOWS session flags",
+  "slug": "ksw-flags-hkex700-60",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:56:15.619Z",
+  "chart": {
+    "symbol": "HKEX:700",
+    "interval": "60",
+    "from": "2025-03-03",
+    "to": "2025-03-15"
+  },
+  "pine_sha256": "1a78deccefb408d955112da398240e8fc5b146d126c40e514ee24078e4af83d4",
+  "tv_trades_sha256": "2ec27bec172e1955cb9b3859c3b0c7831d30a8c64718e9c8aa1c3eb6bb0074a2",
+  "tv_trades_rows": 120
+}
