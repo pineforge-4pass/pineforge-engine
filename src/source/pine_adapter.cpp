@@ -231,6 +231,23 @@ double directional_tick(double value, double tick, bool upward) noexcept {
     return (upward ? std::ceil(scaled - 1e-9) : std::floor(scaled + 1e-9)) * tick;
 }
 
+// A same-side default MARKET add as TradingView judges it when it is placed:
+// the held units and its own, at the signal close's tick, against the
+// placement equity, with the one-lot slack the same-direction add arm keeps
+// at the fill (validate_precommit's admission_guard;
+// test_reversal_admission_float_guard pin E) (lane W5-ENG-MARGIN-V6; entry()
+// and apply_open_market_admission). `lot` is the quantity grid, 0 without one.
+bool add_margin_exceeds_equity(double held_units, const PineSizingSnapshot& sizing,
+                               double margin_pct, double mintick, double pointvalue,
+                               double lot) noexcept {
+    const double signal = nearest_tick(sizing.mark, mintick);
+    const double unit_margin = signal * pointvalue * sizing.fx * margin_pct / 100.0;
+    const double required = (held_units + sizing.frozen_units) * unit_margin;
+    const double slack = std::max({1e-9, std::abs(sizing.equity) * 1e-12, lot * unit_margin});
+    return margin_pct > 0.0 && std::isfinite(required) && std::isfinite(sizing.equity)
+        && required > sizing.equity + slack;
+}
+
 int price_grid_decimals(double tick) noexcept {
     if (!finite_positive(tick)) return -1;
     double scaled = tick;
@@ -6927,6 +6944,32 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             }
             return;
         }
+    }
+    // A default percent_of_equity (<= 100) MARKET add to a held position of
+    // its own side is judged at placement against the held units plus its
+    // own, as the explicit, fixed and cash sizes above are: TradingView drops
+    // an add whose combined margin exceeds the equity, even where an exit
+    // empties the position at the open the add would fill at, ahead of it
+    // (lab tv tapes tests/fixtures/margin_v6 w5-m1-addexit-p100 and -p60 drop
+    // every add; lane W5-ENG-MARGIN-V6). Without this the add opened from flat
+    // behind the exit whenever the exit's leg took the open first. An over-cap
+    // add the cap check above lets through stays a request, as it was: it is
+    // judged where it could become executable (apply_open_market_admission).
+    if (!affordability_scope && default_sized && !priced && !reverses
+        && !same_bar_market_candidate && !short_seed_final_candidate
+        && !paired_all_in_reentry && !default_gross_over_cap_candidate
+        && !close_precedes_entry && !close_all_precedes
+        && !config_.process_orders_on_close && !config_.calc_on_order_fills
+        && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        && config_.default_qty_value <= 100.0
+        && current != 0.0 && ((current > 0.0) == is_long)
+        && finite_positive(snapshot.sizing.frozen_units)
+        && finite_positive(snapshot.sizing.mark)
+        && add_margin_exceeds_equity(std::abs(current), snapshot.sizing,
+                                     is_long ? config_.margin_long : config_.margin_short,
+                                     staged_.syminfo.mintick, staged_.syminfo.pointvalue,
+                                     staged_.quantity_grid ? *staged_.quantity_grid : 0.0)) {
+        return;
     }
     if (default_stop_scope && finite_positive(snapshot.sizing.frozen_units)
         && finite_positive(snapshot.sizing.mark)) {
@@ -15586,7 +15629,34 @@ void PineExecutionAdapter::apply_open_market_admission(
     // opposite command in this broker batch can move the account before its
     // turn.  This retires the live-LONG pair's first no-op while preserving
     // the ordinary priced/raw/carried-book controls where the later request
-    // becomes a reversal after its earlier sibling fills.
+    // becomes a reversal after its earlier sibling fills. In a batch of this
+    // bar's market entries and closes alone -- no priced, raw or carried order
+    // beside them, the controls that keep their ordinary fills -- a default
+    // percent_of_equity (<= 100) add whose margin on top of the held side's
+    // exceeded the equity when it was placed is not one of them: TradingView
+    // dropped it there (entry(): the same rule inside the cap), so it never
+    // reverses the book back once its sibling has reversed it (the
+    // van007trader-quick-reversal-candles-dyna tapes; lane W5-ENG-MARGIN-V6).
+    const double held = detail::run_position(require_host()).signed_units;
+    const auto dropped_at_placement = [&](const PlacementSnapshot& row) {
+        return !foreign_live_order
+            && !config_.process_orders_on_close && !config_.calc_on_order_fills
+            && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+            && config_.default_qty_value <= 100.0
+            && row.deferred_cohort && !std::isfinite(row.requested_qty)
+            && !row.projection_after_close
+            && close_all_pending_script_bar_ != row.placement_script_open_ms
+            && held != 0.0 && (held > 0.0) == row.is_long
+            && finite_positive(row.sizing.frozen_units) && finite_positive(row.sizing.mark)
+            && add_margin_exceeds_equity(std::abs(held), row.sizing,
+                                         row.is_long ? config_.margin_long : config_.margin_short,
+                                         staged_.syminfo.mintick, staged_.syminfo.pointvalue,
+                                         staged_.quantity_grid ? *staged_.quantity_grid : 0.0)
+            && std::none_of(delayed_market_orders_.begin(), delayed_market_orders_.end(),
+                            [&](const DelayedMarketOrder& delayed) {
+                                return delayed.snapshot.projection_created_bar == source_bar;
+                            });
+    };
     for (std::size_t index = 0; index < market.size(); ++index) {
         if (!market[index].snapshot->projection_over_pyramiding) continue;
         bool earlier_opposite = false;
@@ -15596,7 +15666,8 @@ void PineExecutionAdapter::apply_open_market_admission(
                 break;
             }
         }
-        if (!earlier_opposite) cancel_later(market[index].handle);
+        if (!earlier_opposite || dropped_at_placement(*market[index].snapshot))
+            cancel_later(market[index].handle);
     }
     std::vector<native_order::RequestHandle> review_handles;
     review_handles.reserve(market.size());

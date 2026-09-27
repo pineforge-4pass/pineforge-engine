@@ -38,6 +38,19 @@ passes.
 | `w5-rv-global-held` | 2 | `initial_capital=10000`, percent 100, margin 100 | the V19D-P1 shape with the stop exit placed `from_entry=""` on the bar after the short fills: the 05-02 09:30 margin call (12 @10.39) revives it and it closes the rest (928 @10.39) | `bdf3d470c8b75f9c53f1ffe0872ef90d2d016657fe74c9b3716172f28a9b68a2` |
 | `w5-rv-named-control` | 2 | the same | the control: the exit named `"S"` with the entry; the same file | `bdf3d470c8b75f9c53f1ffe0872ef90d2d016657fe74c9b3716172f28a9b68a2` |
 
+## M1: an add is admitted on its combined margin
+
+| tape | trades | `strategy()` declares | TradingView | tv_trades.csv sha256 |
+|---|---:|---|---|---|
+| `w5-m1-addexit-p100` | 8 | `pyramiding=10` | each same-side default add, placed with an exit the next open is already through, is dropped at placement: the held side plus the add need twice the equity, and the exit alone fills at that open | `422ca54ad24b341cf82046b689f4d4ced6ee4e7409759d226020567fdfabab41` |
+| `w5-m1-addexit-p60` | 5 | `pyramiding=10`, percent 60 | the control: 60% + 60% exceeds the equity too, so every add is dropped | `3058803d4ca04a0beb3c67d90ee4be5aa5ac1eafbbdc609323fb1fcfe328ad1b` |
+| `w5-m1-addclose` | 4 | `pyramiding=2` | an add followed on the same bar by `strategy.close` of the held id (A, and C on a short) or by `strategy.close_all` (B): the close empties the book at the next open and the add never opens | `a2ccf3a3af3ee4fb11770b78317c3eb942eb012021455f75f7fae81cd74dd0f0` |
+
+The lowering let the add reach the kernel; where the exit's leg or the close
+took the open first, the add then opened a new position from flat. An add
+whose shortfall stays within one lot is still admitted, as the fill-time add
+arm admits it (`tests/test_reversal_admission_float_guard_l4c.cpp` pin E).
+
 ## Bars
 
 `bars.inc` is the corpus 15m chart feed `scripts/derive_corpus_feeds.py`

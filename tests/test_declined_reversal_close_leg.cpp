@@ -253,8 +253,14 @@ static void test_R5_close_all_freeze() {
 // a held-side close is pending — the close fires first and the add re-opens
 // from flat. That makes a same_dir decline + held-side close structurally
 // unreachable, so the `reversal==true` guard is only ever exercised on genuine
-// reversals; this row pins the fix's inertness on the same-direction shape
-// (close fires, add re-opens LONG 100 — byte-identical to HEAD).
+// reversals; this row pins the fix's inertness on the same-direction shape.
+// Expectation corrected (lane W5-ENG-MARGIN-V6, M1): the all-in add does not
+// re-open from flat. TradingView judges a default percent_of_equity add at
+// placement on the held units plus its own and drops one whose margin exceeds
+// the equity, whatever the close does at the next open (tests/fixtures/
+// margin_v6 w5-m1-addclose: an add followed by strategy.close of the held id,
+// or by strategy.close_all, never opens). The close fires and the book is
+// flat; before the lane the add re-opened LONG 100.
 static void test_R6_same_dir_shape_fix_inert() {
     std::printf("-- R6: same-direction add + close: fix inert (close fires) --\n");
     Probe p(/*pyramiding=*/2);
@@ -271,8 +277,8 @@ static void test_R6_same_dir_shape_fix_inert() {
         mk(4000, 100, 100, 100, 100),
     };
     p.run(bars.data(), (int)bars.size());
-    CHECK(p.position_side_ == PositionSide::LONG);   // close fired, add re-opened
-    CHECK_NEAR(p.position_qty_, 100.0, 1e-9);
+    CHECK(p.position_side_ == PositionSide::FLAT);   // close fired, add dropped
+    CHECK_NEAR(p.position_qty_, 0.0, 1e-9);
     CHECK(p.trade_count() == 1);                     // the original L round-trip
 }
 

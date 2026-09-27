@@ -1,0 +1,16 @@
+{
+  "title": "W5 M1 add+exit same open (pct 60)",
+  "slug": "w5-m1-addexit-p60",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:44:27.497Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "c92810abda7aa5d1eeab546cdef5e148daf9b7efd6045289545e125cd6a83925",
+  "tv_trades_sha256": "3058803d4ca04a0beb3c67d90ee4be5aa5ac1eafbbdc609323fb1fcfe328ad1b",
+  "tv_trades_rows": 10
+}

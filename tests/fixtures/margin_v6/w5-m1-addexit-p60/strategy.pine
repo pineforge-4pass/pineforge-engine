@@ -1,0 +1,51 @@
+//@version=6
+strategy("W5 M1 add+exit same open (pct 60)", overlay=true, pyramiding=10, default_qty_type=strategy.percent_of_equity, default_qty_value=60)
+
+// Lane W5-ENG-MARGIN-V6, mechanism M1. A position is open; on one bar the
+// script adds to it (strategy.entry, same direction, default size) AND sets a
+// strategy.exit whose stop/limit the next open is already through. Which of
+// the two does TradingView execute at that open?
+avg = strategy.position_avg_price
+
+// A -- SHORT, add declared before the exit (2025-04-04, the 07:45 open fill).
+if time == timestamp("UTC", 2025, 4, 4, 7, 30)
+    strategy.entry("AS", strategy.short, comment="A seed short")
+if time == timestamp("UTC", 2025, 4, 4, 7, 45)
+    strategy.entry("AS", strategy.short, comment="A add short")
+    strategy.exit("AX", from_entry="AS", stop=avg + 0.04, limit=avg - 0.05, comment="A exit")
+
+// B -- SHORT, exit declared before the add (2025-04-09).
+if time == timestamp("UTC", 2025, 4, 9, 7, 30)
+    strategy.entry("BS", strategy.short, comment="B seed short")
+if time == timestamp("UTC", 2025, 4, 9, 7, 45)
+    strategy.exit("BX", from_entry="BS", stop=avg + 0.04, limit=avg - 0.05, comment="B exit")
+    strategy.entry("BS", strategy.short, comment="B add short")
+
+// C -- LONG, add declared before the exit (2025-04-15).
+if time == timestamp("UTC", 2025, 4, 15, 7, 30)
+    strategy.entry("CL", strategy.long, comment="C seed long")
+if time == timestamp("UTC", 2025, 4, 15, 7, 45)
+    strategy.entry("CL", strategy.long, comment="C add long")
+    strategy.exit("CX", from_entry="CL", stop=avg - 0.04, limit=avg + 0.05, comment="C exit")
+
+// D -- SHORT, add with no exit (control: is the add itself admitted?) (2025-04-18).
+if time == timestamp("UTC", 2025, 4, 18, 7, 30)
+    strategy.entry("DS", strategy.short, comment="D seed short")
+if time == timestamp("UTC", 2025, 4, 18, 7, 45)
+    strategy.entry("DS", strategy.short, comment="D add short")
+
+// E -- SHORT, add + whole strategy.close_all on the same bar (2025-04-23).
+if time == timestamp("UTC", 2025, 4, 23, 7, 30)
+    strategy.entry("ES", strategy.short, comment="E seed short")
+if time == timestamp("UTC", 2025, 4, 23, 7, 45)
+    strategy.entry("ES", strategy.short, comment="E add short")
+    strategy.close_all(comment="E close all")
+
+cleanup = time == timestamp("UTC", 2025, 4, 4, 9, 0) or
+     time == timestamp("UTC", 2025, 4, 9, 9, 0) or
+     time == timestamp("UTC", 2025, 4, 15, 9, 0) or
+     time == timestamp("UTC", 2025, 4, 18, 9, 0) or
+     time == timestamp("UTC", 2025, 4, 23, 9, 0)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

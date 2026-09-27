@@ -193,6 +193,13 @@
       "twinAssertionSha256": "4fe9c2736bc13f4489d9600c0fbbb11e3890e531418dab2a994db7e2012e81a3",
       "twinAssertions": 242
     },
+    "test_declined_reversal_close_leg": {
+      "baseAssertions": 39,
+      "reason": "R6's all-in same-side add co-queued with a close of the held id follows the R5 lane W5-ENG-MARGIN-V6 TradingView tapes (tests/fixtures/margin_v6 w5-m1-addclose): TradingView drops the add at placement, its margin on top of the held side's exceeding the equity, so the close leaves the book flat instead of the add re-opening LONG 100",
+      "twin": "test_declined_reversal_close_leg_l4c.cpp",
+      "twinAssertionSha256": "9d3de860d030fbdc20240090c20e2b3717b3701444707896f17e42085b0ac087",
+      "twinAssertions": 39
+    },
     "test_direct_short_reversal_affordability": {
       "baseAssertions": 48,
       "reason": "owner-seeded margin fixtures are rebuilt as public command tapes",

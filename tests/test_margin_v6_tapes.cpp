@@ -10,6 +10,10 @@
  *   MR  A from_entry="" exit is the held position's: a same-bar declined
  *       reversal holds it, and a margin call revives it, as it holds and
  *       revives a named bracket of that side.
+ *   M1  A default percent_of_equity (<= 100) MARKET add to a held position is
+ *       judged at placement against the held units plus its own: TradingView
+ *       drops an add whose combined margin exceeds the equity, even where an
+ *       exit empties the position at the open the add would fill at.
  *
  * Each row replays one lab tv tape (tests/fixtures/margin_v6) through the
  * Pine adapter under the configuration the generated constructor declares for
@@ -154,6 +158,8 @@ enum class Probe {
     MrGlobal, MrNamed,             // w5-mr-global / -named
     MrOnceGlobal, MrOnceNamed,     // w5-mr-once-global / -once-named
     RvGlobalHeld, RvNamed,         // w5-rv-global-held / -named-control (NYSE:F)
+    AddExit,                       // w5-m1-addexit-p100 / -p60
+    AddClose,                      // w5-m1-addclose
 };
 
 class ProbeHost final : public source::PineStrategyHost {
@@ -180,6 +186,8 @@ public:
         case Probe::MrOnceNamed: declined_reversal_exit_once(t, avg, "S"); break;
         case Probe::RvGlobalHeld: revival(t, false); break;
         case Probe::RvNamed: revival(t, true); break;
+        case Probe::AddExit: add_and_exit(t, avg); break;
+        case Probe::AddClose: add_and_close(t); break;
         }
     }
 
@@ -228,6 +236,53 @@ private:
             strategy_entry("L", true);
             strategy_close("S", "Reverse to Long");
         }
+    }
+
+    void add_and_exit(std::int64_t t, double avg) {
+        // A -- short, add declared before the exit.
+        if (t == at(4, 7, 30)) strategy_entry("AS", false, kNaN, kNaN, kNaN, "A seed short");
+        if (t == at(4, 7, 45)) {
+            strategy_entry("AS", false, kNaN, kNaN, kNaN, "A add short");
+            strategy_exit("AX", "AS", avg - 0.05, avg + 0.04, kNaN, kNaN, kNaN, 100.0, "A exit",
+                          kNaN, "", kNaN, kNaN);
+        }
+        // B -- short, exit declared before the add.
+        if (t == at(9, 7, 30)) strategy_entry("BS", false, kNaN, kNaN, kNaN, "B seed short");
+        if (t == at(9, 7, 45)) {
+            strategy_exit("BX", "BS", avg - 0.05, avg + 0.04, kNaN, kNaN, kNaN, 100.0, "B exit",
+                          kNaN, "", kNaN, kNaN);
+            strategy_entry("BS", false, kNaN, kNaN, kNaN, "B add short");
+        }
+        // C -- long, add declared before the exit.
+        if (t == at(15, 7, 30)) strategy_entry("CL", true, kNaN, kNaN, kNaN, "C seed long");
+        if (t == at(15, 7, 45)) {
+            strategy_entry("CL", true, kNaN, kNaN, kNaN, "C add long");
+            strategy_exit("CX", "CL", avg + 0.05, avg - 0.04, kNaN, kNaN, kNaN, 100.0, "C exit",
+                          kNaN, "", kNaN, kNaN);
+        }
+        // D and E lie beyond the replayed bars.
+        if (t == at(4, 9, 0) || t == at(9, 9, 0) || t == at(15, 9, 0)) cleanup();
+    }
+
+    // An add, then a close of the held position on the same bar: of its id
+    // (A, C) or of every position (B).
+    void add_and_close(std::int64_t t) {
+        if (t == at(8, 0, 0)) strategy_entry("A", true, kNaN, kNaN, kNaN, "A seed long");
+        if (t == at(8, 0, 30)) {
+            strategy_entry("A2", true, kNaN, kNaN, kNaN, "A add long");
+            strategy_close("A", "A close", kNaN, kNaN, false);
+        }
+        if (t == at(9, 0, 0)) strategy_entry("B", true, kNaN, kNaN, kNaN, "B seed long");
+        if (t == at(9, 0, 30)) {
+            strategy_entry("B2", true, kNaN, kNaN, kNaN, "B add long");
+            close_all("B close all");
+        }
+        if (t == at(10, 0, 0)) strategy_entry("C", false, kNaN, kNaN, kNaN, "C seed short");
+        if (t == at(10, 0, 30)) {
+            strategy_entry("C2", false, kNaN, kNaN, kNaN, "C add short");
+            strategy_close("C", "C close", kNaN, kNaN, false);
+        }
+        if (t == at(8, 2, 0) || t == at(9, 2, 0) || t == at(10, 2, 0)) close_all("cleanup");
     }
 
     Probe probe_;
@@ -334,6 +389,10 @@ int main() {
          config(false, 0.0, 0, 100.0, 1, 10000.0), true, 2},
         {"MR control", "w5-rv-named-control", Probe::RvNamed,
          config(false, 0.0, 0, 100.0, 1, 10000.0), true, 2},
+        {"M1", "w5-m1-addexit-p100", Probe::AddExit, config(false, 0.0, 0, 100.0, 10), false, 5},
+        {"M1 control", "w5-m1-addexit-p60", Probe::AddExit, config(false, 0.0, 0, 60.0, 10),
+         false, 3},
+        {"M1", "w5-m1-addclose", Probe::AddClose, config(false, 0.0, 0, 100.0, 2), false, 4},
     };
 
     for (const Case& c : cases) {

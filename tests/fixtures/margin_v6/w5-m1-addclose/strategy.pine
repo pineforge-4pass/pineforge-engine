@@ -1,0 +1,33 @@
+//@version=6
+strategy("W5 M1 add then close on the same bar", overlay=true, pyramiding=2)
+
+// Lane W5-ENG-MARGIN-V6, mechanism M1. v6 defaults (100% of equity, margin
+// 100) with pyramiding 2. A position is open; on one bar the script adds to it
+// (a default MARKET entry of the same side) and then closes the held position
+// (A: strategy.close of the held id; B: strategy.close_all; C: a short). At the
+// next open the close empties the book. Does TradingView then open the add
+// from flat, or was it dropped when it was placed (its margin on top of the
+// held side's exceeding the equity)?
+if time == timestamp("UTC", 2025, 4, 8, 0, 0)
+    strategy.entry("A", strategy.long, comment="A seed long")
+if time == timestamp("UTC", 2025, 4, 8, 0, 30)
+    strategy.entry("A2", strategy.long, comment="A add long")
+    strategy.close("A", comment="A close")
+if time == timestamp("UTC", 2025, 4, 8, 2, 0)
+    strategy.close_all(comment="cleanup")
+
+if time == timestamp("UTC", 2025, 4, 9, 0, 0)
+    strategy.entry("B", strategy.long, comment="B seed long")
+if time == timestamp("UTC", 2025, 4, 9, 0, 30)
+    strategy.entry("B2", strategy.long, comment="B add long")
+    strategy.close_all(comment="B close all")
+if time == timestamp("UTC", 2025, 4, 9, 2, 0)
+    strategy.close_all(comment="cleanup")
+
+if time == timestamp("UTC", 2025, 4, 10, 0, 0)
+    strategy.entry("C", strategy.short, comment="C seed short")
+if time == timestamp("UTC", 2025, 4, 10, 0, 30)
+    strategy.entry("C2", strategy.short, comment="C add short")
+    strategy.close("C", comment="C close")
+if time == timestamp("UTC", 2025, 4, 10, 2, 0)
+    strategy.close_all(comment="cleanup")

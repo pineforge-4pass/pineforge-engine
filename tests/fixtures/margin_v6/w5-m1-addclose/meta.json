@@ -1,0 +1,16 @@
+{
+  "title": "W5 M1 add then close on the same bar",
+  "slug": "w5-m1-addclose",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:25:09.248Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "c75f6d31f0de68f12d44fe5aeb6d74d6b0a788abfed569c3921dc0a2a0fd273c",
+  "tv_trades_sha256": "a2ccf3a3af3ee4fb11770b78317c3eb942eb012021455f75f7fae81cd74dd0f0",
+  "tv_trades_rows": 8
+}
