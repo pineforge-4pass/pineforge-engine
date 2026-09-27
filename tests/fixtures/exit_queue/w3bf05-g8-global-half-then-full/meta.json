@@ -1,0 +1,16 @@
+{
+  "title": "W3B F05 g8 POOC global half stop then global full target",
+  "slug": "w3bf05-g8-global-half-then-full",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T18:35:59.926Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "23831bc4a817c3eab8c6e39d87397fc862546fee78db334cae5bc5d76c8afc2f",
+  "tv_trades_sha256": "98dbc59b3ffbeaa33f8d3604a095a83909c3a178cab4cf9281858a1c4fbe3859",
+  "tv_trades_rows": 20
+}

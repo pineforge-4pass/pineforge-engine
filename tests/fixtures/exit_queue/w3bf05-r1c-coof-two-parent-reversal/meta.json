@@ -1,0 +1,16 @@
+{
+  "title": "W3B F05 r1c COOF two-parent reversal voids the global exit",
+  "slug": "w3bf05-r1c-coof-two-parent-reversal",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T18:36:06.141Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "d5786b7f378827b8353ea618a8d4edc882129c36f27de2d50452c62940d4d17e",
+  "tv_trades_sha256": "55e1b1eb2f53667aa602fc3f5545def569e12042b851c8ac179cc175700904c8",
+  "tv_trades_rows": 20
+}

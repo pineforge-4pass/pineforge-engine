@@ -1,0 +1,29 @@
+//@version=6
+strategy("W3B F05 p1 the front exit raises its percentage", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W3B-ENG-GRID (review finding of lane W3-ENG-EXIT-ALLOC): exits queue
+// by creation, so an exit in front that raises its qty_percent takes the
+// position ahead of the one behind it. One long of 2 per cell (filled at the
+// next open); a cleanup close_all ends every cell six hours after its entry.
+// While the long is held, every bar: target A first -- 50% at a far level
+// for the first three bars after the entry, then 100% at a marketable level
+// (close - 10) -- and stop B for 50% far below.
+
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+entryCell = cell(8, 0, 0) or cell(9, 0, 0) or cell(10, 0, 0) or cell(11, 0, 0) or cell(14, 0, 0)
+cleanup = cell(8, 6, 0) or cell(9, 6, 0) or cell(10, 6, 0) or cell(11, 6, 0) or cell(14, 6, 0)
+
+var float ref = na
+var int entryBar = na
+if entryCell
+    strategy.entry("L", strategy.long, qty=2, comment="L")
+    ref := close
+    entryBar := bar_index
+if not na(ref) and (strategy.position_size > 0 or entryCell)
+    age = bar_index - entryBar
+    raised = age >= 3
+    strategy.exit("A", from_entry="L", qty_percent=raised ? 100 : 50, limit=raised ? close - 10.0 : ref + 1000.0, comment="A target")
+    strategy.exit("B", from_entry="L", qty_percent=50, stop=ref - 1000.0, comment="B stop")
+
+if cleanup
+    strategy.close_all(comment="cleanup")

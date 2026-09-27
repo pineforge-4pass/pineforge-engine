@@ -1,0 +1,23 @@
+//@version=6
+strategy("W3B F05 g8 POOC global half stop then global full target", overlay=true, process_orders_on_close=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W3B-ENG-GRID (review finding of lane W3-ENG-EXIT-ALLOC): lane W3's
+// s8 with both exits for every entry (from_entry=""). One long per cell
+// (qty=1, filled at the signal close); a cleanup close_all ends every cell
+// six hours after its entry. Every bar: stop A for 50% of the position, then
+// target B without qty.
+
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+entryCell = cell(8, 0, 0) or cell(9, 0, 0) or cell(10, 0, 0) or cell(11, 0, 0) or cell(14, 0, 0)
+cleanup = cell(8, 6, 0) or cell(9, 6, 0) or cell(10, 6, 0) or cell(11, 6, 0) or cell(14, 6, 0)
+
+var float ref = na
+if entryCell
+    strategy.entry("L", strategy.long, qty=1, comment="L")
+    ref := close
+if not na(ref)
+    strategy.exit("A", from_entry="", qty_percent=50, stop=ref - 40.0, comment="A stop")
+    strategy.exit("B", from_entry="", limit=ref + 4.0, comment="B target")
+
+if cleanup
+    strategy.close_all(comment="cleanup")

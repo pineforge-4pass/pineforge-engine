@@ -193,6 +193,8 @@ enum class Probe {
     CancelFirst,            // s12: A then B every bar held; A cancelled after an hour
     StandingExit,           // v1: a void call over an exit issued while its entry was
                             //     resting or open
+    GlobalHalfThenFull,     // g8: s8 with both exits from_entry=""
+    FrontRaisesPercent,     // p1: A 50% far, then 100% marketable; B 50% behind it
 };
 
 bool entry_cell(std::int64_t t) {
@@ -251,6 +253,20 @@ public:
             if (cell) strategy_entry("L", true, kNaN, kNaN, 1, "L", "", 0, -1);
             if (cleanup_cell(t)) strategy_close("", "cleanup", kNaN, kNaN, false);
             return;
+        case Probe::FrontRaisesPercent:
+            if (cell) {
+                strategy_entry("L", true, kNaN, kNaN, 2, "L", "", 0, -1);
+                ref_ = close;
+                entry_bar_ = pine_bar_index();
+            }
+            if (!std::isnan(ref_) && (signed_position_size() > 0.0 || cell)) {
+                const bool raised = pine_bar_index() - entry_bar_ >= 3;
+                exit("A", "L", raised ? close - 10.0 : ref_ + 1000.0, kNaN,
+                     raised ? 100.0 : 50.0, "A target");
+                exit("B", "L", kNaN, ref_ - 1000.0, 50.0, "B stop");
+            }
+            if (cleanup_cell(t)) strategy_close("", "cleanup", kNaN, kNaN, false);
+            return;
         default: break;
         }
         if (cell) {
@@ -284,6 +300,12 @@ public:
             if (have_ref) {
                 exit("A", "L", kNaN, ref_ - 40.0, 50.0, "A stop");
                 exit("B", "L", ref_ + 4.0, kNaN, 100.0, "B target");
+            }
+            break;
+        case Probe::GlobalHalfThenFull:
+            if (have_ref) {
+                exit("A", "", kNaN, ref_ - 40.0, 50.0, "A stop");
+                exit("B", "", ref_ + 4.0, kNaN, 100.0, "B target");
             }
             break;
         case Probe::FullThenHalf:
@@ -459,9 +481,11 @@ void show(const char* tag, const std::vector<Row>& rows) {
 
 // Every probe omits the capital (v6: 100000) and declares strategy.fixed 1,
 // but r1, which sizes 40% of equity.
-source::PineStrategyConfig config(bool process_orders_on_close, QtyType type, double value) {
+source::PineStrategyConfig config(bool process_orders_on_close, QtyType type, double value,
+                                  bool calc_on_order_fills = false) {
     source::PineStrategyConfig c{};
     c.process_orders_on_close = process_orders_on_close;
+    c.calc_on_order_fills = calc_on_order_fills;
     c.initial_capital = 100000.0;
     c.default_qty_type = static_cast<int>(type);
     c.default_qty_value = value;
@@ -475,6 +499,7 @@ struct Case {
     std::size_t closed;  // tape trades closed inside the bars
     QtyType type = QtyType::FIXED;
     double value = 1.0;
+    bool coof = false;
     // Trades entered before this are TradingView's evidence only, not
     // compared with the engine's (v1: its first two cells are an open
     // finding, see the fixture README).
@@ -526,7 +551,16 @@ int main() {
         // Lane W3B-ENG-GRID: a void call places nothing and leaves a standing
         // exit as it is; an exit does not outlive its trade.
         {"w3bf05-v1-void-call-over-standing-exit", Probe::StandingExit, false, 6,
-         QtyType::FIXED, 1.0, at(10, 0, 0)},
+         QtyType::FIXED, 1.0, false, at(10, 0, 0)},
+        // Lane W3B-ENG-GRID: a full global exit behind a partial one gets what
+        // the partial one leaves.
+        {"w3bf05-g8-global-half-then-full", Probe::GlobalHalfThenFull, true, 10},
+        // Lane W3B-ENG-GRID, residuals of lane W3's review with no trade
+        // effect on TradingView's tapes: the reservation caps' queue order
+        // (p1) and rule C's recalculation queue (r1c).
+        {"w3bf05-p1-front-raises-percent", Probe::FrontRaisesPercent, false, 5},
+        {"w3bf05-r1c-coof-two-parent-reversal", Probe::TwoParentReversal, false, 10,
+         QtyType::PERCENT_OF_EQUITY, 40.0, true},
     };
 
     std::map<std::string, Tape> tapes;
@@ -536,7 +570,7 @@ int main() {
         tapes[c.tape] = tape;
         CHECK(tape.trades.size() == c.closed);
 
-        const Run lane = run(c.probe, config(c.pooc, c.type, c.value), end_ms);
+        const Run lane = run(c.probe, config(c.pooc, c.type, c.value, c.coof), end_ms);
         CHECK(lane.error.empty());
         const std::vector<Row> want = entered_from(tape.trades, c.compare_from);
         const std::vector<Row> got = entered_from(lane.trades, c.compare_from);
@@ -610,6 +644,18 @@ int main() {
             CHECK(v1.signals[4] == "flat");
             CHECK(v1.signals[5] == "cleanup");
         }
+        // Exits for every entry queue like named ones: behind the 50% stop A,
+        // the full target B takes the other half, never the whole position
+        // (s8's rows on the named exits, byte for byte).
+        const Tape& g8 = tapes["w3bf05-g8-global-half-then-full"];
+        CHECK(g8.trades == tapes["w3f05-s8-pooc-qty-half-then-full"].trades);
+        CHECK(count_signal(g8, "B target") == 4);
+        for (std::size_t i = 0; i < g8.trades.size(); ++i)
+            CHECK(std::get<3>(g8.trades[i]) == lots(0.5));
+        // A front exit raising its percentage takes the whole position ahead
+        // of the one behind it (p1: A fills 2 every day, B never).
+        CHECK(count_signal(tapes["w3bf05-p1-front-raises-percent"], "A target") == 5);
+        CHECK(count_signal(tapes["w3bf05-p1-front-raises-percent"], "B stop") == 0);
         // A from_entry="" exit of the side a reversal ends never closes the
         // new side, even beside a second entry of the reversal bar.
         const Tape& reversal = tapes["w3f05-r1-two-parent-reversal-global-exit"];

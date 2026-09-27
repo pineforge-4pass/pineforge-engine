@@ -103,6 +103,33 @@ TradingView's 04-08 rule. `tests/test_exit_queue_tapes.cpp` compares v1's
 engine trades from 04-10 on and reads the first two cells off TradingView's
 rows only.
 
+## A full global exit behind a partial one gets what the partial one leaves (lane W3B-ENG-GRID)
+
+Rule B above cancels the exits for every entry behind a full one at the
+opening. A full one behind partial ones kept its dynamic reservation of the
+whole position (lane W3's review finding: the global form of s8), and filled
+it all when its level came first. The queue now hands the position out to
+such a set as it does to a named entry's exits
+(reconcile_deferred_exit_reservations with an empty from_entry).
+
+| tape | TradingView | tv_trades.csv sha256 |
+|---|---|---|
+| `w3bf05-g8-global-half-then-full` | s8 with both exits `from_entry=""`: stop A for 50%, then target B without qty: B takes the other half, never the whole position (s8's rows, byte for byte; the engine closed 1 by B on four of the five days) | `98dbc59b3ffbeaa33f8d3604a095a83909c3a178cab4cf9281858a1c4fbe3859` |
+
+## Review residuals with no trade effect on TradingView's tapes (lane W3B-ENG-GRID)
+
+Lane W3's review named two more gaps; on these tapes the engine already books
+TradingView's rows, so they stay open, pinned:
+
+| tape | TradingView | tv_trades.csv sha256 |
+|---|---|---|
+| `w3bf05-p1-front-raises-percent` | the reservation caps count the other exits of an entry whatever their place in the queue: a long of 2 without `process_orders_on_close`; every bar held, target A first -- 50% at a far level for three bars, then 100% at a marketable `close - 10` -- and stop B for 50% far below: A, in front, takes the whole position the bar it is raised | `de547cf075174f167ec3bb1a192f63f3d24594519248ab27d9366515e419fb06` |
+| `w3bf05-r1c-coof-two-parent-reversal` | rule C clears the parked legs from the delayed-market and pending-bracket queues, not from the recalculation queue: r1 with `calc_on_order_fills`: every short exits by XS or the cleanup, never by XL | `55e1b1eb2f53667aa602fc3f5545def569e12042b851c8ac179cc175700904c8` |
+
+Rule B also cancels an exit without asking the kernel whether it still works;
+cancelling one the kernel has already ended records a not-working event (a
+hash change, no trade). No tape reaches it; s11 and g8 cover the rule's trades.
+
 ## Bars
 
 `bars.inc` holds the replayed bars, 2025-04-07 00:00 .. 2025-04-14 12:00 UTC,

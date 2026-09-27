@@ -18007,13 +18007,18 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // Exits for every entry (from_entry="") armed before this opening
         // queue for the position the same way: behind a full one created
         // earlier, a later one is left nothing (lane W3-ENG-EXIT-ALLOC, tape
-        // w3f05-s11-pooc-qty-any-entry). The full one keeps its dynamic
-        // reservation; only the ones behind it are cancelled.
+        // w3f05-s11-pooc-qty-any-entry): the front full one keeps its dynamic
+        // reservation and the unreserved ones behind it are cancelled. A full
+        // one behind partial ones gets what they leave (lane W3B-ENG-GRID,
+        // w3bf05-g8): the queue then hands the position out as it does for a
+        // named entry's exits.
         if (physical_exposure > 0.0) {
             struct GlobalExit {
                 std::uint64_t key = 0;
                 std::uint64_t rank = 0;
                 bool full = true;
+                bool reserved = false;
+                double units = 0.0;
                 std::vector<native_order::RequestHandle> handles;
             };
             std::vector<GlobalExit> armed;
@@ -18024,22 +18029,28 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 const bool exit = row.family == PineOrderFamily::ExitLimit
                     || row.family == PineOrderFamily::ExitStop
                     || row.family == PineOrderFamily::ExitTrail;
-                if (!exit || !row.from_entry.empty()
-                    || std::isfinite(row.projection_remaining_qty)) {
-                    continue;
-                }
+                if (!exit || !row.from_entry.empty()) continue;
+                const bool reserved = std::isfinite(row.projection_remaining_qty);
                 const bool full = !std::isfinite(row.requested_qty)
                     && (!std::isfinite(row.qty_percent)
                         || row.qty_percent >= 100.0 - internal::kFullPercentEps);
+                // What a partial exit holds: its reservation, else its
+                // explicit or percent share of the new position.
+                const double units = reserved ? std::max(0.0, row.projection_remaining_qty)
+                    : std::isfinite(row.requested_qty) ? std::abs(row.requested_qty)
+                    : physical_exposure * (std::isfinite(row.qty_percent)
+                        ? std::clamp(row.qty_percent, 0.0, 100.0) : 100.0) / 100.0;
                 const auto key = key_for(row.source_id, row.from_entry);
                 const auto rank = exit_queue_rank(placement_, row);
                 auto family = std::find_if(armed.begin(), armed.end(),
                     [&](const GlobalExit& value) { return value.key == key; });
                 if (family == armed.end()) {
-                    armed.push_back({key, rank, full, {handle}});
+                    armed.push_back({key, rank, full, reserved, units, {handle}});
                 } else {
                     family->rank = std::min(family->rank, rank);
                     family->full = family->full && full;
+                    family->reserved = family->reserved || reserved;
+                    family->units = std::max(family->units, units);
                     family->handles.push_back(handle);
                 }
             }
@@ -18050,15 +18061,32 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                     });
                 std::vector<native_order::RequestHandle> behind;
                 bool behind_full = false;
+                bool partial_ahead_of_full = false;
+                double ahead = 0.0;
                 for (const auto& family : armed) {
-                    if (behind_full)
-                        behind.insert(behind.end(), family.handles.begin(), family.handles.end());
-                    else if (family.full)
-                        behind_full = true;
+                    if (behind_full) {
+                        if (!family.reserved)
+                            behind.insert(behind.end(), family.handles.begin(), family.handles.end());
+                        continue;
+                    }
+                    if (!family.full) {
+                        ahead += family.units;
+                        continue;
+                    }
+                    // A full exit already holding a reservation is its own
+                    // family's business (reconcile_deferred_exit_reservations).
+                    if (family.reserved) continue;
+                    behind_full = true;
+                    if (ahead > internal::kQtyEpsilon) partial_ahead_of_full = true;
                 }
-                for (const auto& handle : behind) {
-                    const auto result = require_host().cancel(handle);
-                    if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
+                if (partial_ahead_of_full) {
+                    reconcile_deferred_exit_reservations({}, physical_exposure);
+                } else {
+                    for (const auto& handle : behind) {
+                        const auto result = require_host().cancel(handle);
+                        if (result.status == native_order::CancelStatus::Cancelled)
+                            retire(handle);
+                    }
                 }
             }
         }

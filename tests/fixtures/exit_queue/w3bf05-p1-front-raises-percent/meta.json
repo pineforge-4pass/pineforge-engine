@@ -1,0 +1,16 @@
+{
+  "title": "W3B F05 p1 the front exit raises its percentage",
+  "slug": "w3bf05-p1-front-raises-percent",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T18:36:03.000Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "59481c4f7206a4a46a0b0e3af6ff7e7c78b41466b7503ca1caaa9f77edbfdf79",
+  "tv_trades_sha256": "de547cf075174f167ec3bb1a192f63f3d24594519248ab27d9366515e419fb06",
+  "tv_trades_rows": 10
+}
