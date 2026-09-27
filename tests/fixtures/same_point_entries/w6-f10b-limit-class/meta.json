@@ -1,0 +1,16 @@
+{
+  "title": "W6 F10b limit legs at one open",
+  "slug": "w6-f10b-limit-class",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:37:59.133Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "9451f80623fc84f46fc90f4ae10560a43c20e46cf5f365a758c582d3a61ac3fe",
+  "tv_trades_sha256": "2a3f906b05037f148f4b3be8d53a2267a5c2031c29acc86400f249b0a54228a6",
+  "tv_trades_rows": 48
+}

@@ -1,0 +1,16 @@
+{
+  "title": "W6 F10a opposite pair at one open",
+  "slug": "w6-f10a-open-pair",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:35:25.422Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "010cb92377674870f0b59274b2f0ce960ab3781552f5aa9194a86aed550f3923",
+  "tv_trades_sha256": "b93840d8a6a8f35a379d975017b1a5ff90366ab672764da4339bde0dfc981295",
+  "tv_trades_rows": 80
+}

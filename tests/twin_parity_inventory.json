@@ -209,10 +209,10 @@
     },
     "test_dual_entry_placement_sizing": {
       "baseAssertions": 172,
-      "reason": "lane W3B-ENG-GRID: the pair's percent exits for LAY-L are issued before LAY-L's entry call, while LAY-L neither exists nor rests, and TradingView voids such an exit (lab tv w3f05-s18, w3f05-s21, w3bf05-v1 in tests/fixtures/exit_queue): nothing rests for them after the pair, where the adapter froze 1.0 and 1.5",
+      "reason": "two observable rewrites -- the MS-SF-A row follows the W6-ENG-FILL-ORDER TradingView tapes (w6-f10a-open-pair MS-SF): a marketable buy stop placed after a sell market on one flat bar fills first, as one buy of both quantities, so the closed trade is a slice of the buy's long closed by the sell; and lane W3B-ENG-GRID: the pair's percent exits for LAY-L are issued before LAY-L's entry call, while LAY-L neither exists nor rests, and TradingView voids such an exit (lab tv w3f05-s18, w3f05-s21, w3bf05-v1 in tests/fixtures/exit_queue): nothing rests for them after the pair, where the adapter froze 1.0 and 1.5",
       "twin": "test_dual_entry_placement_sizing_l4b.cpp",
-      "twinAssertionSha256": "1584d05750571a66283c1234fac0b5dc6cbe7bde0bf2ab46637051ddd327db3b",
-      "twinAssertions": 172
+      "twinAssertionSha256": "db15a4367a1065264c2593ef174ac6462f7c53cfb1a6e7b4410052717382701f",
+      "twinAssertions": 173
     },
     "test_engine_risk": {
       "baseAssertions": 56,

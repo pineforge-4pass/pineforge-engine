@@ -6728,8 +6728,22 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                 return prior != placement_.end()
                     && is_opposite_market_predecessor(prior->second);
             });
-        // ab9714be pine_pending_intent.hpp:507-537: placement_has_opposite_market_predecessor reverses against same-bar predecessor
-        if (snapshot.projection_opposite_market_predecessor) {
+        // A marketable buy stop outranks the sell market it follows at their
+        // shared fill point (order_same_point_entries): TradingView fills it
+        // first, as one buy of its own quantity plus the market's, and the
+        // market then sells only its own (lab tv w6-f10a-open-pair MS-SF).
+        const bool fills_ahead = snapshot.projection_opposite_market_predecessor
+            && same_bar_market_tx_scope() && explicit_fixed && is_long
+            && pure_stop_entry && finite_positive(current_point->price)
+            && stop_price <= current_point->price;
+        const double predecessor_units = fills_ahead
+            ? pending_opposite_market_units(
+                is_long, current_point->decision.script_bar_open_ms)
+            : kNaN;
+        if (fills_ahead && finite_positive(predecessor_units)) {
+            request.intent = native_order::Transact{normalized_qty + predecessor_units};
+        } else if (snapshot.projection_opposite_market_predecessor) {
+            // ab9714be pine_pending_intent.hpp:507-537: placement_has_opposite_market_predecessor reverses against same-bar predecessor
             request.intent = native_order::HostSized{native_order::HostSizedKind::Open,
                 is_long ? native_order::Side::Long : native_order::Side::Short};
             snapshot.terms_priced_reverse = true;
@@ -20115,6 +20129,137 @@ int PendingIntentView::short_seed_collision_role(int index) const noexcept {
 int PendingIntentView::last_bar_dual_entry_path() const noexcept { return owner_ ? owner_->last_bar_dual_entry_path_ : 0; }
 double PendingIntentView::trail_best_price() const noexcept {
     return owner_ && owner_->host_ ? owner_->host_->trail_best_price() : kNaN;
+}
+
+// R5 lane W6-ENG-FILL-ORDER, family F10: the own units of the opposite MARKET
+// entries this source bar placed that are still pending (batched or live), or
+// NaN when one of them carries no explicit quantity. TradingView adds them to
+// the later call's transaction.
+double PineExecutionAdapter::pending_opposite_market_units(
+        bool is_long, std::int64_t script_open_ms) const {
+    double units = 0.0;
+    bool unsized = false;
+    const auto add = [&](const PlacementSnapshot& row, double own) {
+        if (!row.opening || row.family != PineOrderFamily::Entry || row.is_long == is_long
+            || row.placement_script_open_ms != script_open_ms
+            || finite_positive(row.exit_levels.limit)
+            || finite_positive(row.exit_levels.stop)
+            || finite_positive(row.exit_levels.trail_points)
+            || finite_positive(row.exit_levels.trail_price)
+            || finite_positive(row.exit_levels.trail_offset)) {
+            return;
+        }
+        if (finite_positive(own)) units += own;
+        else unsized = true;
+    };
+    for (const auto& prior : pending_same_bar_commands_) {
+        add(prior.snapshot, finite_positive(prior.snapshot.frozen_market_own_units)
+            ? prior.snapshot.frozen_market_own_units : prior.snapshot.requested_qty);
+    }
+    for (const auto& prior : pending_entries_) add(prior.snapshot, kNaN);
+    for (const auto& handle : live_handles_) {
+        const auto prior = placement_.find(handle.incarnation);
+        if (prior != placement_.end()) add(prior->second, prior->second.requested_qty);
+    }
+    return unsized ? kNaN : units;
+}
+
+// R5 lane W6-ENG-FILL-ORDER, family F10. TradingView fills the entries that
+// reach one fill point in a fixed order of side and kind -- buy market, buy
+// stop, sell market, sell stop, buy limit, sell limit -- and entries of one
+// rank in the order they were placed (lab tv w6-f10a-open-pair,
+// w6-f10b-limit-class and w6-f10c-same-side-class, tests/fixtures/
+// same_point_entries). The kernel breaks a tie at one cursor oldest request
+// first, so after a source evaluation this queues the flat entries it placed
+// in that order: every request from the first one out of order on is
+// re-priced in place (ReplaceOptions::keep_handle), which keeps its handle
+// and ranks it newest. Only entries already marketable at the evaluation's
+// price can share the next fill point, and a pure-stop book is
+// defer_open_marketable_sells' at that open. The scope is the flat
+// explicit-quantity family same_bar_market_tx_scope() settles as one broker
+// batch of frozen transactions, which is what the tapes measure.
+void PineExecutionAdapter::order_same_point_entries() {
+    if (!host_ || live_handles_.size() < 2 || !same_bar_market_tx_scope()) return;
+    auto& host = require_host();
+    if (detail::run_position(host).signed_units != 0.0) return;
+    const auto point = detail::callback_point(host);
+    if (!point || !finite_positive(point->price)) return;
+    const int bar = projection_bar_index(point->decision);
+    const double signal = point->price;
+    struct Candidate {
+        native_order::RequestHandle handle;
+        int rank = 0;
+        std::uint64_t queue = 0;
+    };
+    std::vector<Candidate> candidates;
+    bool pure_stops = true;
+    for (const auto& handle : live_handles_) {
+        const auto found = placement_.find(handle.incarnation);
+        if (found == placement_.end()) continue;
+        const auto& row = found->second;
+        const bool stop = finite_positive(row.exit_levels.stop);
+        const bool limit = finite_positive(row.exit_levels.limit);
+        if (row.family != PineOrderFamily::Entry || !row.opening
+            || row.projection_created_bar != bar
+            || row.projection_position_side != static_cast<std::int32_t>(PositionSide::FLAT)
+            || !finite_positive(row.requested_qty)
+            || !(row.qty_type < 0 || row.qty_type == static_cast<int>(QtyType::FIXED))
+            || !row.oca_name.empty() || row.birth.from_fill() || (stop && limit)
+            || finite_positive(row.exit_levels.trail_points)
+            || finite_positive(row.exit_levels.trail_price)
+            || finite_positive(row.exit_levels.trail_offset)
+            || (stop && (row.is_long ? row.exit_levels.stop > signal
+                                     : row.exit_levels.stop < signal))
+            || (limit && (row.is_long ? row.exit_levels.limit < signal
+                                      : row.exit_levels.limit > signal))) {
+            continue;
+        }
+        pure_stops = pure_stops && stop;
+        candidates.push_back({handle, limit ? (row.is_long ? 4 : 5)
+                                            : (stop ? (row.is_long ? 1 : 3)
+                                                    : (row.is_long ? 0 : 2)), 0});
+    }
+    if (candidates.size() < 2 || pure_stops) return;
+    const auto working = host.native_working_requests();
+    const auto definition = [&](const native_order::RequestHandle& handle) {
+        const auto row = std::find_if(working.begin(), working.end(),
+            [&](const NativeWorkingRequest& request) {
+                return request.definition->handle == handle;
+            });
+        return row == working.end() ? nullptr : row->definition.get();
+    };
+    for (auto& candidate : candidates) {
+        const auto* live = definition(candidate.handle);
+        if (!live) return;
+        candidate.queue = live->priority != 0 ? live->priority : live->handle.incarnation;
+    }
+    std::stable_sort(candidates.begin(), candidates.end(),
+                     [](const Candidate& left, const Candidate& right) {
+                         if (left.rank != right.rank) return left.rank < right.rank;
+                         return left.queue < right.queue;
+                     });
+    std::size_t first = candidates.size();
+    std::uint64_t highest = 0;
+    for (std::size_t index = 0; index < candidates.size(); ++index) {
+        if (candidates[index].queue < highest) {
+            first = index;
+            break;
+        }
+        highest = candidates[index].queue;
+    }
+    native_order::ReplaceOptions in_place;
+    in_place.keep_handle = true;
+    for (std::size_t index = first; index < candidates.size(); ++index) {
+        const auto& handle = candidates[index].handle;
+        const auto* live = definition(handle);
+        if (!live) return;
+        const native_order::Request request = live->request;
+        const auto result = host.replace(handle, request, in_place);
+        if (result.status != native_order::ReplaceStatus::Replaced) return;
+        live_handles_.erase(std::remove(live_handles_.begin(), live_handles_.end(), handle),
+                            live_handles_.end());
+        live_handles_.push_back(handle);
+    }
 }
 
 } // namespace pineforge::source

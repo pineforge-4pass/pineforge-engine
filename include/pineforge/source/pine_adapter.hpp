@@ -2241,6 +2241,10 @@ private:
         }
     };
     RetiredRowScratch retired_row_scratch_;
+    // R5 lane W6: after a source evaluation, queue this bar's marketable
+    // flat entries in TradingView's order at their shared fill point.
+    void order_same_point_entries();
+    double pending_opposite_market_units(bool is_long, std::int64_t script_open_ms) const;
 };
 
 } // namespace pineforge::source

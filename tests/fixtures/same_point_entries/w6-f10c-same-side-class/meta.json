@@ -1,0 +1,16 @@
+{
+  "title": "W6 F10c same-side legs at one open",
+  "slug": "w6-f10c-same-side-class",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:38:02.587Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "8ad7fd034e678f58d1a6c6dc490aba309526da807ad33f4f1c20c717131806ea",
+  "tv_trades_sha256": "7bac616e77cbe1817679ad796fd18a8592b4d79abbafd9f7900333484b546b0e",
+  "tv_trades_rows": 64
+}

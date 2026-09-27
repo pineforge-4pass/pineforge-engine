@@ -173,9 +173,10 @@ static void test_R1_ms_lf_a_short_held() {
 // ─────────────────────────────────────────────────────────────────────
 // R2 — MS-SF-A: E1 short MARKET, then E2 long STOP (marketable @50), same
 // bar, from flat. TV holds net +1 long (the buy-side E2 leg). Engine HEAD:
-// close-only-flat (net 0). The engine fills E1 (short) first by seq, so the
-// trade decomposition differs from TV's buy-first split (E2 long x2); we pin
-// the NET position, which is the 782-event divergence the pin names.
+// close-only-flat (net 0). TradingView fills the buy stop first, as one buy
+// of both quantities (E2 long x2), and the market then sells its own one:
+// the closed trade is a slice of E2's long, closed by E1 (lab tv
+// w6-f10a-open-pair MS-SF, lane W6-ENG-FILL-ORDER).
 // ─────────────────────────────────────────────────────────────────────
 static void test_R2_ms_sf_a_long_held() {
     std::printf("test_R2_ms_sf_a_long_held\n");
@@ -191,11 +192,12 @@ static void test_R2_ms_sf_a_long_held() {
     p.run(bars, 3);
 
     CHECK(near(p.pos(), 1.0));                   // HEAD: 0.0 (close-only-flat)
-    CHECK(p.trade_count() == 1);                 // E1 short round-trip, dur-0
+    CHECK(p.trade_count() == 1);                 // E2 long slice, dur-0
     if (p.trade_count() == 1) {
         const Trade& t = p.get_trade(0);
-        CHECK(!t.is_long);
-        CHECK(t.entry_id == "E1");
+        CHECK(t.is_long);
+        CHECK(t.entry_id == "E2");
+        CHECK(t.exit_id == "E1");
         CHECK(t.exit_bar_index == 1);
     }
 }

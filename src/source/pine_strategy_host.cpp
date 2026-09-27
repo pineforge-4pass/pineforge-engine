@@ -1679,6 +1679,7 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
                                               && adapter_.pending_relative_exits_.empty())) {
         adapter_.anchor_relative_exits();
     }
+    adapter_.order_same_point_entries();
     if (advance_source_index) {
         scheduler_mark_report_point(bar.timestamp);
         prev_bar_timestamp_ = bar.timestamp;

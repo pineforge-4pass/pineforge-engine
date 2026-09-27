@@ -877,6 +877,11 @@ list(APPEND TEST_SOURCES test_grid_close_tapes)
 # defaults (tests/fixtures/margin_v6), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_margin_v6_tapes)
 
+# Lane W6-ENG-FILL-ORDER: which order fills first at one fill point -- a flat
+# opposite entry pair, a reversing stop against a protective stop
+# (tests/fixtures/same_point_entries), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_same_point_entries_tapes)
+
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bare_host_contracts)
@@ -2323,6 +2328,12 @@ endif()
 if(TARGET test_margin_v6_tapes)
     target_compile_definitions(test_margin_v6_tapes PRIVATE
         PINEFORGE_MARGIN_V6_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_v6")
+endif()
+
+# Lane W6-ENG-FILL-ORDER reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_same_point_entries_tapes)
+    target_compile_definitions(test_same_point_entries_tapes PRIVATE
+        PINEFORGE_SAME_POINT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/same_point_entries")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape
