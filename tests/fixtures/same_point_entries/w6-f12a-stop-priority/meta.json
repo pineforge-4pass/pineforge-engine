@@ -1,0 +1,16 @@
+{
+  "title": "W6 F12a reversal stop vs protective stop",
+  "slug": "w6-f12a-stop-priority",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:44:18.339Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "189afb4a5cea06b629e3dd4c21fe94cf997a667a8828242237196341d02d3be7",
+  "tv_trades_sha256": "c4da60fa033b174a545878f01b5e4f72c07003dc4237879c235b8461572c4c6f",
+  "tv_trades_rows": 34
+}

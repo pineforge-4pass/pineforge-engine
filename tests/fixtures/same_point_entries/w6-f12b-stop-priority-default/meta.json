@@ -1,0 +1,16 @@
+{
+  "title": "W6 F12b reversal stop vs protective stop (v6 default size)",
+  "slug": "w6-f12b-stop-priority-default",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:44:23.911Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "91648566ee33b40d8d6f399de206b5abd4fab3b638e01106a23fffe0dba5c5d3",
+  "tv_trades_sha256": "8f80409878ba8a5b5aca2683e1cacb476a00576557a4ff41677d9241a96cabc4",
+  "tv_trades_rows": 22
+}

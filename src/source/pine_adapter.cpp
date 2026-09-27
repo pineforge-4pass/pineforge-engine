@@ -15095,7 +15095,13 @@ void PineExecutionAdapter::defer_declined_reversal_exits_at_adverse(
         const bool adverse_reaches = position.signed_units > 0.0
             ? adverse <= snapshot.exit_levels.stop
             : adverse >= snapshot.exit_levels.stop;
-        if (adverse_reaches) stops.push_back({handle, snapshot});
+        // A stop the open is already through fills at that open, ahead of
+        // the declined reversal: TradingView exits there (lab tv
+        // w6-f12b-stop-priority-default B2, lane W6-ENG-FILL-ORDER).
+        const bool through_at_open = position.signed_units > 0.0
+            ? bar.open <= snapshot.exit_levels.stop
+            : bar.open >= snapshot.exit_levels.stop;
+        if (adverse_reaches && !through_at_open) stops.push_back({handle, snapshot});
     }
     for (auto& deferred : stops) {
         if (!margin_scheduled) {

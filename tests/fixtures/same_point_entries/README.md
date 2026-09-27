@@ -91,6 +91,35 @@ market pair (`apply_terminal_explicit_market_policy`) had kept source order
 with a reversing second call; a sell-then-buy pair now fills the buy first as
 one transaction of both quantities.
 
+## F12: a reversing stop and a protective stop on one bar
+
+| tape | trades | `strategy()` declares | tv_trades.csv sha256 |
+|---|---:|---|---|
+| `w6-f12a-stop-priority` | 17 | fixed 1, capital 1000000 | `c4da60fa033b174a545878f01b5e4f72c07003dc4237879c235b8461572c4c6f` |
+| `w6-f12b-stop-priority-default` | 11 | nothing (v6: percent_of_equity, 100) | `8f80409878ba8a5b5aca2683e1cacb476a00576557a4ff41677d9241a96cabc4` |
+| `w6-f12c-stop-priority-magnifier` | 17 | fixed 1, capital 1000000, use_bar_magnifier | `ac013fa7cffeba59ba0d93575539c4ce407510a951eda6987faec9ec440608dc` |
+
+A held position carries a protective `strategy.exit` stop X while an opposite
+`strategy.entry` stop Y rests on the same side of the price, and one bar
+reaches both. A1/A2 (long, Y above X, a falling bar whose open is nearer the
+high / the low) and B1 (the short mirror): the reversal fills at Y first and
+the exit is void. A3 (X above Y): the exit fills at X, then the entry opens at
+Y from flat with its frozen quantity (2: its own plus the position it was
+placed against). A4/A5/B2 (both already through when placed, so both reach
+the next open; entry placed first / exit placed first): the exit fills first
+at the open, whichever was placed first, and the entry then trades its frozen
+quantity from flat. A6 (only Y through): the reversal at the open. A7 (only X
+through): the exit at the open. The magnifier tape books the same trades
+(only the excursion columns differ). The engine books every fixed-size cell.
+
+Under the v6 default size (`w6-f12b`), A1/A2 keep only the reversal's closing
+leg (lane TVDEF-DROPS R1) and A3's entry cannot fund its frozen quantity after
+the exit. In B2 the short was partly margin-called on its entry bar, its
+reversal is declined at the open, and TradingView still fills the protective
+stop there. `PineExecutionAdapter::defer_declined_reversal_exits_at_adverse`
+had cancelled that stop (or moved it to the bar's adverse extreme); a stop the
+open is already through now fills at that open.
+
 ## Cells TradingView and the engine still book differently
 
 The test leaves these out; the tapes stay as evidence.
@@ -106,6 +135,10 @@ The test leaves these out; the tapes stay as evidence.
 - `w6-f10f-coof-pair`, calc_on_order_fills without process_orders_on_close:
   every cell. The engine neither orders the pair nor adds the pending market's
   quantity outside `same_bar_market_tx_scope()`.
+- `w6-f12b-stop-priority-default` A4: after the exit, TradingView opens the
+  reversal's frozen 2x short at the open and liquidates it at once by a margin
+  call at the same price; the engine refuses the fill. A margin-model rule,
+  not an ordering one.
 
 ## Bars
 

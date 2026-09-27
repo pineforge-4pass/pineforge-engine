@@ -18,6 +18,13 @@
  *        equity it drops the later call.
  *        Under process_orders_on_close a market pair fills at the close in
  *        the same order.
+ *   F12  A held position's protective strategy.exit stop and a reversing
+ *        strategy.entry stop on the same side of the price: the level the
+ *        bar's path reaches first fills first, the magnifier changes nothing,
+ *        and when both are already through at one opening the exit fills
+ *        first and the entry then trades its own frozen quantity from flat.
+ *        Under the v6 default size the exit fills at that opening even when
+ *        the reversal it outranks is declined there.
  *
  * Each row replays one tape through the Pine adapter under the configuration
  * the generated constructor declares for its probe, over the corpus 15m bars
@@ -241,7 +248,7 @@ const std::vector<Cell> kClosePair = {
     {{false, 'M', 1, "ML-SF-1"}, {true, 'L', 1, "ML-SF-2"}},
 };
 
-enum class Probe { Pair, GuardedPair };
+enum class Probe { Pair, GuardedPair, Stops };
 
 // The probes, as their generated TUs lower them (fixtures/.../strategy.pine).
 class ProbeHost final : public source::PineStrategyHost {
@@ -254,7 +261,10 @@ public:
         set_syminfo_metadata("qty_step", kLot);
     }
 
-    void on_source_bar(const Bar&) override { pair(current_bar_.timestamp); }
+    void on_source_bar(const Bar&) override {
+        if (probe_ == Probe::Stops) stops(current_bar_.timestamp);
+        else pair(current_bar_.timestamp);
+    }
 
 private:
     // A buy stop / sell limit at half the close, a sell stop / buy limit at
@@ -289,6 +299,52 @@ private:
             acted_bar_ = pine_bar_index();
             strategy_cancel_all();
             strategy_close("", "FLT", kNaN, kNaN, false);
+        }
+    }
+
+    void arm(bool reverse_first, double reverse_stop, double exit_stop, bool long_held,
+             const char* reverse, const char* exit) {
+        const char* held = long_held ? "L" : "S";
+        const char* entry = long_held ? "S" : "L";
+        const char* exit_id = long_held ? "LX" : "SX";
+        if (reverse_first)
+            strategy_entry(entry, !long_held, kNaN, reverse_stop, kNaN, reverse, "", 0, -1);
+        strategy_exit(exit_id, held, kNaN, exit_stop, kNaN, kNaN, kNaN, 100.0, exit, kNaN, "",
+                      kNaN, kNaN);
+        if (!reverse_first)
+            strategy_entry(entry, !long_held, kNaN, reverse_stop, kNaN, reverse, "", 0, -1);
+    }
+
+    // w6-f12a/b/c: each cell seeds a position, arms a protective exit stop and
+    // a reversing entry stop on the next bar, and is flattened later.
+    void stops(std::int64_t t) {
+        const double c = current_bar_.close;
+        const bool long_held = signed_position_size() > 0.0;
+        const bool short_held = signed_position_size() < 0.0;
+        if (t == at(8, 13, 0)) strategy_entry("L", true, kNaN, kNaN, kNaN, "A1 seed");
+        if (t == at(8, 13, 15) && long_held) arm(true, 1570.0, 1560.0, true, "A1 reverse", "A1 stop");
+        if (t == at(7, 13, 45)) strategy_entry("L", true, kNaN, kNaN, kNaN, "A2 seed");
+        if (t == at(7, 14, 0) && long_held) arm(true, 1575.0, 1560.0, true, "A2 reverse", "A2 stop");
+        if (t == at(8, 16, 0)) strategy_entry("L", true, kNaN, kNaN, kNaN, "A3 seed");
+        if (t == at(8, 16, 15) && long_held) arm(true, 1500.0, 1510.0, true, "A3 reverse", "A3 stop");
+        if (t == at(9, 0, 0)) strategy_entry("L", true, kNaN, kNaN, kNaN, "A4 seed");
+        if (t == at(9, 0, 15) && long_held) arm(true, c * 1.02, c * 1.01, true, "A4 reverse", "A4 stop");
+        if (t == at(9, 2, 0)) strategy_entry("L", true, kNaN, kNaN, kNaN, "A5 seed");
+        if (t == at(9, 2, 15) && long_held) arm(false, c * 1.02, c * 1.01, true, "A5 reverse", "A5 stop");
+        if (t == at(9, 4, 0)) strategy_entry("L", true, kNaN, kNaN, kNaN, "A6 seed");
+        if (t == at(9, 4, 15) && long_held) arm(true, c * 1.02, c * 0.9, true, "A6 reverse", "A6 stop");
+        if (t == at(9, 6, 0)) strategy_entry("L", true, kNaN, kNaN, kNaN, "A7 seed");
+        if (t == at(9, 6, 15) && long_held) arm(true, c * 0.9, c * 1.01, true, "A7 reverse", "A7 stop");
+        if (t == at(8, 17, 0)) strategy_entry("S", false, kNaN, kNaN, kNaN, "B1 seed");
+        if (t == at(8, 17, 15) && short_held) arm(true, 1468.0, 1478.0, false, "B1 reverse", "B1 stop");
+        if (t == at(9, 8, 0)) strategy_entry("S", false, kNaN, kNaN, kNaN, "B2 seed");
+        if (t == at(9, 8, 15) && short_held) arm(true, c * 0.98, c * 0.99, false, "B2 reverse", "B2 stop");
+        const bool cleanup = t == at(8, 14, 0) || t == at(7, 14, 45) || t == at(8, 16, 45)
+            || t == at(9, 1, 0) || t == at(9, 3, 0) || t == at(9, 5, 0) || t == at(9, 7, 0)
+            || t == at(8, 18, 0) || t == at(9, 9, 0);
+        if (cleanup) {
+            strategy_cancel_all();
+            strategy_close("", "cleanup", kNaN, kNaN, false);
         }
     }
 
@@ -346,6 +402,15 @@ source::PineStrategyConfig fixed_config(int pyramiding, bool pooc, bool coof,
     return c;
 }
 
+source::PineStrategyConfig v6_default_config() {
+    source::PineStrategyConfig c{};
+    c.initial_capital = 100000.0;  // omitted: v6's defaults
+    c.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
+    c.default_qty_value = 100.0;
+    c.pyramiding = 0;
+    return c;
+}
+
 // The pair cell an entry time belongs to (its two-hour slot), -1 outside.
 int pair_cell(std::int64_t entry_ms, std::size_t cells, int passes) {
     const std::int64_t rel = entry_ms - at(8, 0, 0);
@@ -362,6 +427,8 @@ struct Case {
     source::PineStrategyConfig lane;   // what its generated constructor declares
     std::vector<int> covered;          // the cells this row requires (empty: every trade)
     std::size_t closed;                // tape trades closed inside the bars
+    // Entry-time windows [from, to) of cells this row leaves out (README).
+    std::vector<std::pair<std::int64_t, std::int64_t>> left_out = {};
 };
 
 std::vector<Row> covered_rows(const std::vector<Row>& rows, const Case& c) {
@@ -371,6 +438,8 @@ std::vector<Row> covered_rows(const std::vector<Row>& rows, const Case& c) {
         bool keep = c.covered.empty();
         for (const int wanted : c.covered)
             if (pair_cell(entry, c.cells->size(), c.passes) == wanted) keep = true;
+        for (const auto& [from, to] : c.left_out)
+            if (entry >= from && entry < to) keep = false;
         if (keep) out.push_back(row);
     }
     return out;
@@ -399,6 +468,14 @@ int main() {
         {"w6-f10e-pooc-coof-pair", Probe::GuardedPair, &kClosePair, 2,
          "fixed 1, pyramiding 0, process_orders_on_close, calc_on_order_fills",
          fixed_config(0, true, true), {0, 1, 6}, 26},
+        {"w6-f12a-stop-priority", Probe::Stops, nullptr, 0, "fixed 1",
+         fixed_config(0, false, false), {}, 17},
+        {"w6-f12c-stop-priority-magnifier", Probe::Stops, nullptr, 0,
+         "fixed 1, use_bar_magnifier (the tape equals w6-f12a's rows)",
+         fixed_config(0, false, false), {}, 17},
+        {"w6-f12b-stop-priority-default", Probe::Stops, nullptr, 0,
+         "nothing (v6: percent_of_equity, 100)", v6_default_config(), {}, 11,
+         {{at(9, 0, 0), at(9, 1, 0)}}},
     };
 
     for (const Case& c : cases) {

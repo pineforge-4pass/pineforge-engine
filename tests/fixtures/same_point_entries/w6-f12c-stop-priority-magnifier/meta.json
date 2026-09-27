@@ -1,0 +1,16 @@
+{
+  "title": "W6 F12c reversal stop vs protective stop (magnifier)",
+  "slug": "w6-f12c-stop-priority-magnifier",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:44:37.297Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "7b7d901dc54d37830beb4aacd7918cf1ed9820b322586dd9be00d8175cbe0de8",
+  "tv_trades_sha256": "ac013fa7cffeba59ba0d93575539c4ce407510a951eda6987faec9ec440608dc",
+  "tv_trades_rows": 34
+}

@@ -1,0 +1,81 @@
+//@version=6
+strategy("W6 F12a reversal stop vs protective stop", overlay=true,
+     pyramiding=0,
+     initial_capital=1000000, default_qty_type=strategy.fixed, default_qty_value=1,
+     commission_type=strategy.commission.percent, commission_value=0,
+     slippage=0, margin_long=100, margin_short=100,
+     process_orders_on_close=false, calc_on_order_fills=false,
+     use_bar_magnifier=false)
+
+// Lane W6-ENG-FILL-ORDER, family F12. A held position carries a protective
+// strategy.exit stop (X) while an opposite strategy.entry stop (Y) rests on
+// the same side of the price; one bar reaches both. A: long, Y above X, a
+// falling bar (A1 open nearer the high, A2 nearer the low); A3: X above Y;
+// A4/A5: both already through at placement (both fill at the next open;
+// entry placed first / exit placed first); A6: only Y through; A7: only X
+// through. B: the short mirror (B1 path, B2 both through). Every cell is
+// flattened on the bar 30 minutes after its test bar.
+
+ts(d, h, m) => timestamp("UTC", 2025, 4, d, h, m)
+seed(d, h, m) => time == ts(d, h, m)
+
+if seed(8, 13, 0)
+    strategy.entry("L", strategy.long, comment="A1 seed")
+if time == ts(8, 13, 15) and strategy.position_size > 0
+    strategy.entry("S", strategy.short, stop=1570.0, comment="A1 reverse")
+    strategy.exit("LX", from_entry="L", stop=1560.0, comment="A1 stop")
+
+if seed(7, 13, 45)
+    strategy.entry("L", strategy.long, comment="A2 seed")
+if time == ts(7, 14, 0) and strategy.position_size > 0
+    strategy.entry("S", strategy.short, stop=1575.0, comment="A2 reverse")
+    strategy.exit("LX", from_entry="L", stop=1560.0, comment="A2 stop")
+
+if seed(8, 16, 0)
+    strategy.entry("L", strategy.long, comment="A3 seed")
+if time == ts(8, 16, 15) and strategy.position_size > 0
+    strategy.entry("S", strategy.short, stop=1500.0, comment="A3 reverse")
+    strategy.exit("LX", from_entry="L", stop=1510.0, comment="A3 stop")
+
+if seed(9, 0, 0)
+    strategy.entry("L", strategy.long, comment="A4 seed")
+if time == ts(9, 0, 15) and strategy.position_size > 0
+    strategy.entry("S", strategy.short, stop=close * 1.02, comment="A4 reverse")
+    strategy.exit("LX", from_entry="L", stop=close * 1.01, comment="A4 stop")
+
+if seed(9, 2, 0)
+    strategy.entry("L", strategy.long, comment="A5 seed")
+if time == ts(9, 2, 15) and strategy.position_size > 0
+    strategy.exit("LX", from_entry="L", stop=close * 1.01, comment="A5 stop")
+    strategy.entry("S", strategy.short, stop=close * 1.02, comment="A5 reverse")
+
+if seed(9, 4, 0)
+    strategy.entry("L", strategy.long, comment="A6 seed")
+if time == ts(9, 4, 15) and strategy.position_size > 0
+    strategy.entry("S", strategy.short, stop=close * 1.02, comment="A6 reverse")
+    strategy.exit("LX", from_entry="L", stop=close * 0.9, comment="A6 stop")
+
+if seed(9, 6, 0)
+    strategy.entry("L", strategy.long, comment="A7 seed")
+if time == ts(9, 6, 15) and strategy.position_size > 0
+    strategy.entry("S", strategy.short, stop=close * 0.9, comment="A7 reverse")
+    strategy.exit("LX", from_entry="L", stop=close * 1.01, comment="A7 stop")
+
+if seed(8, 17, 0)
+    strategy.entry("S", strategy.short, comment="B1 seed")
+if time == ts(8, 17, 15) and strategy.position_size < 0
+    strategy.entry("L", strategy.long, stop=1468.0, comment="B1 reverse")
+    strategy.exit("SX", from_entry="S", stop=1478.0, comment="B1 stop")
+
+if seed(9, 8, 0)
+    strategy.entry("S", strategy.short, comment="B2 seed")
+if time == ts(9, 8, 15) and strategy.position_size < 0
+    strategy.entry("L", strategy.long, stop=close * 0.98, comment="B2 reverse")
+    strategy.exit("SX", from_entry="S", stop=close * 0.99, comment="B2 stop")
+
+cleanup = time == ts(8, 14, 0) or time == ts(7, 14, 45) or time == ts(8, 17, 0) - 15 * 60000 or
+     time == ts(9, 1, 0) or time == ts(9, 3, 0) or time == ts(9, 5, 0) or time == ts(9, 7, 0) or
+     time == ts(8, 18, 0) or time == ts(9, 9, 0)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")
