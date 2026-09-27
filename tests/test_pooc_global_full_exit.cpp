@@ -3,6 +3,12 @@
  * high-level MARKET strategy.entry on a POOC bar must cover the position that
  * exists after that queued entry fills. Freezing the exit reservation at the
  * pre-add live quantity strands the new pyramid slice when the bracket fires.
+ *
+ * Expectations corrected by R5 lane W4-ENG-POOC-SAMEPASS: TradingView sizes a
+ * from_entry "" exit without a quantity, the book's only exit, on the position
+ * it fills against, so every add filled before that fill -- a same-id
+ * replacement, a later bar's entry, a same-bar add placed after the exit -- is
+ * closed with it (lab tv w4-f19a-pooc cells A, B and F).
  */
 
 #include <pineforge/engine.hpp>
@@ -462,10 +468,13 @@ void test_same_id_add_replacement_after_exit_clears_dynamic_sizing() {
           "post-exit same-id replacement clears dynamic sizing");
     CHECK(!probe.exit_qty_is_nan() && near(probe.exit_qty(), 1.0),
           "same-id replacement retains the finite pre-add fallback");
-    CHECK(probe.trade_count() == 1,
-          "replacement add is not counted as a bound pre-exit fill");
-    CHECK(near(probe.position_size(), 1.0),
-          "finite fallback leaves the unbound replacement add open");
+    // expectation corrected (R5 lane W4-ENG-POOC-SAMEPASS): 1 trade with the
+    // replacement add left open -> 2 trades and flat, as TradingView sizes the
+    // exit at its fill (lab tv w4-f19a-pooc).
+    CHECK(probe.trade_count() == 2,
+          "the exit closes the base and the replacement add at its fill");
+    CHECK(near(probe.position_size(), 0.0),
+          "the exit sized at its fill leaves the book flat");
 }
 
 void test_later_bar_entry_clears_resting_dynamic_sizing() {
@@ -478,10 +487,14 @@ void test_later_bar_entry_clears_resting_dynamic_sizing() {
           "later-bar admitted entry clears resting dynamic sizing");
     CHECK(near(probe.post_fill_exit_qty(), 2.0),
           "filled pre-exit add grows finite reservation before invalidation");
-    CHECK(probe.trade_count() == 2,
-          "finite exit closes base and the covered pre-exit add");
-    CHECK(near(probe.position_size(), 1.0),
-          "finite exit leaves the later unbound add open");
+    // expectation corrected (R5 lane W4-ENG-POOC-SAMEPASS): 2 trades with the
+    // later bar's add left open -> 3 trades and flat, as TradingView closes an
+    // add filled on a later bar than the exit's placement (lab tv
+    // w4-f19a-pooc cell F).
+    CHECK(probe.trade_count() == 3,
+          "the exit closes the base, the pre-exit add and the later add");
+    CHECK(near(probe.position_size(), 0.0),
+          "the exit sized at its fill leaves no later add open");
 }
 
 void test_samebar_later_add_does_not_erase_preexit_add_coverage() {
@@ -495,10 +508,13 @@ void test_samebar_later_add_does_not_erase_preexit_add_coverage() {
           "post-exit same-bar add clears dynamic sizing before fills");
     CHECK(near(probe.post_fill_exit_qty(), 2.0),
           "pre-exit bound add still grows finite reservation at fill");
-    CHECK(probe.trade_count() == 2,
-          "bounded reservation closes base and pre-exit add only");
-    CHECK(near(probe.position_size(), 1.0),
-          "same-bar post-exit add remains outside bounded coverage");
+    // expectation corrected (R5 lane W4-ENG-POOC-SAMEPASS): 2 trades with the
+    // post-exit add left open -> 3 trades and flat, as TradingView closes an
+    // add placed after the exit (lab tv w4-f19a-pooc cell B).
+    CHECK(probe.trade_count() == 3,
+          "the exit closes the base and both same-bar adds");
+    CHECK(near(probe.position_size(), 0.0),
+          "the same-bar post-exit add is closed with the rest");
 }
 
 void test_later_bar_sibling_sees_grown_finite_reservation() {
