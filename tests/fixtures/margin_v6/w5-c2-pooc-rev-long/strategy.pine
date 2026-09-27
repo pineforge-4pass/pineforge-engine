@@ -1,0 +1,99 @@
+//@version=6
+strategy("W5 C2 POOC reversal to long (comm 0.05 slip 1)", overlay=true, process_orders_on_close=true, commission_type=strategy.commission.percent, commission_value=0.05, slippage=1)
+
+// Lane W5-ENG-MARGIN-V6, mechanism C2. A 100%-of-equity SHORT fills at the
+// close one bar before each cell of w5-m2-pooc-short-open; at the cell's close
+// the script reverses to a 100%-of-equity LONG, whose size leaves the short's
+// closing commission unfunded. Does TradingView call the long at its close
+// fill, or at the next open, and how much?
+
+if time == timestamp("UTC", 2025, 4, 2, 0, 0) - 15 * 60000
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 2, 0, 0)
+    strategy.entry("L", strategy.long, comment="reverse to long")
+if time == timestamp("UTC", 2025, 4, 2, 0, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 2, 3, 0) - 15 * 60000
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 2, 3, 0)
+    strategy.entry("L", strategy.long, comment="reverse to long")
+if time == timestamp("UTC", 2025, 4, 2, 3, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 2, 6, 0) - 15 * 60000
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 2, 6, 0)
+    strategy.entry("L", strategy.long, comment="reverse to long")
+if time == timestamp("UTC", 2025, 4, 2, 6, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 2, 9, 0) - 15 * 60000
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 2, 9, 0)
+    strategy.entry("L", strategy.long, comment="reverse to long")
+if time == timestamp("UTC", 2025, 4, 2, 9, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 2, 18, 0) - 15 * 60000
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 2, 18, 0)
+    strategy.entry("L", strategy.long, comment="reverse to long")
+if time == timestamp("UTC", 2025, 4, 2, 18, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 3, 21, 0) - 15 * 60000
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 3, 21, 0)
+    strategy.entry("L", strategy.long, comment="reverse to long")
+if time == timestamp("UTC", 2025, 4, 3, 21, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 4, 12, 0) - 15 * 60000
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 4, 12, 0)
+    strategy.entry("L", strategy.long, comment="reverse to long")
+if time == timestamp("UTC", 2025, 4, 4, 12, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 3, 0) - 15 * 60000
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 5, 3, 0)
+    strategy.entry("L", strategy.long, comment="reverse to long")
+if time == timestamp("UTC", 2025, 4, 5, 3, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 9, 0) - 15 * 60000
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 5, 9, 0)
+    strategy.entry("L", strategy.long, comment="reverse to long")
+if time == timestamp("UTC", 2025, 4, 5, 9, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 12, 0) - 15 * 60000
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 5, 12, 0)
+    strategy.entry("L", strategy.long, comment="reverse to long")
+if time == timestamp("UTC", 2025, 4, 5, 12, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 15, 0) - 15 * 60000
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 5, 15, 0)
+    strategy.entry("L", strategy.long, comment="reverse to long")
+if time == timestamp("UTC", 2025, 4, 5, 15, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 21, 0) - 15 * 60000
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 5, 21, 0)
+    strategy.entry("L", strategy.long, comment="reverse to long")
+if time == timestamp("UTC", 2025, 4, 5, 21, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 6, 9, 0) - 15 * 60000
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 6, 9, 0)
+    strategy.entry("L", strategy.long, comment="reverse to long")
+if time == timestamp("UTC", 2025, 4, 6, 9, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 6, 12, 0) - 15 * 60000
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 6, 12, 0)
+    strategy.entry("L", strategy.long, comment="reverse to long")
+if time == timestamp("UTC", 2025, 4, 6, 12, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 6, 15, 0) - 15 * 60000
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 6, 15, 0)
+    strategy.entry("L", strategy.long, comment="reverse to long")
+if time == timestamp("UTC", 2025, 4, 6, 15, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")

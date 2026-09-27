@@ -1,0 +1,16 @@
+{
+  "title": "W5 C2 POOC long opening call (comm 0.05 slip 1)",
+  "slug": "w5-c2-pooc-long-open",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T16:03:43.824Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "3af66cae4c0a4ce1a0b16a40d1ce33c291f8ca5761ef314b33d8fb8531b49cf8",
+  "tv_trades_sha256": "da9c35656009a9624ed20d468687666bb91859a18ae4869bad4f5996a0c093ff",
+  "tv_trades_rows": 30
+}

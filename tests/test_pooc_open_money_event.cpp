@@ -195,9 +195,15 @@ void compatibility_scopes() {
             double total = 0;
             for (const auto& row : p.rows()) {
                 total += row.qty;
-                // An existing opening-budget event may still fire at entry C.
-                // None of these unproven classes acquires the new next-O event.
-                if (row.exit_comment == "Margin call") CHECK(row.exit_time == 1000);
+                // An existing opening-budget event may still fire at entry C;
+                // under a commission it waits for the next open instead (lane
+                // W5-ENG-MARGIN-V6, C2: TradingView calls a commissioned
+                // process_orders_on_close opening there, never at its close
+                // fill -- tests/fixtures/margin_v6 w5-c2-pooc-flat-explicit-*).
+                // None of these unproven classes acquires the new next-O money
+                // event.
+                if (row.exit_comment == "Margin call")
+                    CHECK(row.exit_time == (guard == Guard::Fee && !coof ? 2000 : 1000));
             }
             CHECK(near(total, qty));
             CHECK(near(p.remaining(), 0));

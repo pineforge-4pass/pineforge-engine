@@ -83,6 +83,17 @@ replays them from those rules on.
 | `w5-qp-pooc-reissue` | 5 | `process_orders_on_close`, commission 0.05 %, slippage 1 | a 100% short of 62.3911 called 0.0028 and 1.6712 before its TP1/TP2 (35 % each, re-issued every bar) are placed: each closes 21.8368, 35 % of the entry, the called units included | `5f694054f0ddafa47047e9a3cdfb3bd2fca5fa45ea9e3ee35b22477efd91d0a4` |
 | `w5-qp-pooc-once` | 5 | the same | the control: placed once at the entry; the same file | `5f694054f0ddafa47047e9a3cdfb3bd2fca5fa45ea9e3ee35b22477efd91d0a4` |
 
+## C2: a commissioned process_orders_on_close opening is called at the next open
+
+| tape | trades | `strategy()` declares | TradingView | tv_trades.csv sha256 |
+|---|---:|---|---|---|
+| `w5-c2-pooc-rev-long` | 72 | `process_orders_on_close`, commission 0.05 %, slippage 1 | fifteen shorts reversed to 100% longs at a close; the short's closing commission leaves each long short of margin, and TradingView calls it at the next open, never at the fill | `04843c08a9b1276630f19297f7824f505a580816a5d3582631d5c0685f7bd835` |
+| `w5-c2-pooc-rev-long-noslip` | 59 | `process_orders_on_close`, commission 0.05 % | the same without slippage: the commission alone, called at the next open | `6945ab5309665b433291d01e18fd285d3a460936ebd4ed575c854697ada8e7d8` |
+| `w5-c2-pooc-rev-short` | 60 | `process_orders_on_close`, commission 0.05 %, slippage 1 | the mirror: each reversed short is called at the next open, sized at the close's mark (M2) | `ada511643ae1f119c065f3d1d53d4ff7b3b74424a8874a334fa4fa4439b1a164` |
+| `w5-c2-pooc-long-open` | 15 | the same | the control: a 100% long from flat is funded and never called | `da9c35656009a9624ed20d468687666bb91859a18ae4869bad4f5996a0c093ff` |
+| `w5-c2-pooc-flat-explicit-long` | 30 | `process_orders_on_close`, commission 0.1 % | at each cell a long of explicit quantity `strategy.equity / close`, short of margin by its entry fee: called at the next open, never at the fill | `0e0e1898bcad50f930f756f6e2d0db4ad50cd57d4deb4e441f27d1cb1a10c415` |
+| `w5-c2-pooc-flat-explicit-short` | 42 | the same | the short mirror: called at the next open, at the close's mark (M2) | `4312203f64510b1f0e8a50ea187517ccfa7e28ab237f6122f7b8e6b1ff357920` |
+
 ## Bars
 
 `bars.inc` is the corpus 15m chart feed `scripts/derive_corpus_feeds.py`

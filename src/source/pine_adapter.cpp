@@ -16507,6 +16507,18 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     const auto opening_position = detail::run_position(require_host());
     const bool long_full_margin = opening_position.signed_units > 0.0
         && std::abs(config_.margin_long - 100.0) < 1e-12;
+    // A full-margin long that a commissioned process_orders_on_close fill
+    // opened at the previous bar's close is called at this open, not at that
+    // fill (on_applied, called_at_next_open): the units the fill's checkpoint
+    // would have taken, executed here (lab tv tapes tests/fixtures/margin_v6
+    // w5-c2-pooc-rev-long and -rev-long-noslip; lane W5-ENG-MARGIN-V6).
+    if (long_full_margin && config_.process_orders_on_close
+        && !config_.calc_on_order_fills && config_.commission_value != 0.0
+        && !context.driver_statistics.intrabar_path_enabled && context.sub_index == 0
+        && prior_policy_bar_valid && position_open_phase_ == NativePathPhase::Close
+        && position_open_script_bar_ == prior_policy_bar.timestamp) {
+        (void)submit_margin_call_slice(nearest_tick(bar.open, staged_.syminfo.mintick), context);
+    }
     bool marketable_limit_at_open = false;
     if (long_full_margin) {
         for (const auto& handle : live_handles_) {
@@ -18655,11 +18667,25 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                     }
                     return false;
                 }();
+            // TradingView takes no call at the close fill that opens (or
+            // reverses into) a commissioned process_orders_on_close position:
+            // it calls that book at the next open instead (on_bar_open) --
+            // a long for the units this checkpoint would take here, a short
+            // at the close's mark (lab tv tapes tests/fixtures/margin_v6
+            // w5-c2-pooc-rev-long, -rev-long-noslip and -rev-short: every
+            // reversal's call at the next open, fifteen cells each; lane
+            // W5-ENG-MARGIN-V6).
+            const bool called_at_next_open = config_.process_orders_on_close
+                && !config_.calc_on_order_fills && config_.commission_value != 0.0
+                && !context.driver_statistics.intrabar_path_enabled
+                && context.coordinate.path_phase == NativePathPhase::Close
+                && position_open_phase_ == NativePathPhase::Close
+                && position_open_script_bar_ == context.script_bar_open_ms;
             // The 10-significant-digit long residual is same-currency,
             // pointvalue-one policy.  A non-unit point value does not inherit
             // an exact-money opening slice merely because the generic
             // floating ledger rounds its fill cost differently.
-            if (!zero_fee_true_flat_default
+            if (!zero_fee_true_flat_default && !called_at_next_open
                 && !short_preempted_by_priced_exit
                 && !flat_dual_stop_member && !prearmed_entry_bar_margin
                 && !(long_full_margin

@@ -23,6 +23,9 @@
  *       the next open, and checks again at its slipped fill.
  *   QP  A qty_percent exit's basis is its entry's quantity: the units margin
  *       calls took from the position count.
+ *   C2  The close fill that opens or reverses into a commissioned
+ *       process_orders_on_close position is not called there: TradingView
+ *       calls it at the next open.
  *
  * Each row replays one lab tv tape (tests/fixtures/margin_v6) through the
  * Pine adapter under the configuration the generated constructor declares for
@@ -174,6 +177,10 @@ enum class Probe {
     SeenSize,                      // w5-c1-seen-size
     CarriedClose, CarriedNone,     // w5-m2-pooc-carried-close / -none
     QpReissue, QpOnce,             // w5-qp-pooc-reissue / -once
+    RevToLong, RevToShort,         // w5-c2-pooc-rev-long / -rev-short
+    LongOpen,                      // w5-c2-pooc-long-open
+    FlatExplicitLong, FlatExplicitShort, // w5-c2-pooc-flat-explicit-long / -short
+    CarriedReverse,                // w5-m2-pooc-carried-reverse
 };
 
 // The fifteen signal closes of w5-m2-pooc-short-open, shared by its siblings.
@@ -217,6 +224,12 @@ public:
         case Probe::CarriedNone: carried(t, 4); break;
         case Probe::QpReissue: qty_percent_exits(t, at(15, 19, 15), false); break;
         case Probe::QpOnce: qty_percent_exits(t, at(15, 19, 15), true); break;
+        case Probe::RevToLong: cells(t, -15, "S", false, "L", "reverse to long", 30, true); break;
+        case Probe::RevToShort: cells(t, -15, "L", true, "S", "reverse to short", 30); break;
+        case Probe::LongOpen: cells(t, 0, nullptr, false, "L", "long", 30, true); break;
+        case Probe::FlatExplicitLong: flat_explicit(t, true); break;
+        case Probe::FlatExplicitShort: flat_explicit(t, false); break;
+        case Probe::CarriedReverse: carried(t, 3); break;
         }
     }
 
@@ -341,7 +354,7 @@ private:
 
     // The carried short of 2025-04-04 12:00, called again at the 12:30 high;
     // at that bar's close the script reverses by the size it reads (1),
-    // closes (2) or only cancels (4).
+    // closes (2), reverses (3) or only cancels (4).
     void carried(std::int64_t t, int shape) {
         if (t == at(4, 12, 0)) strategy_entry("S", false, kNaN, kNaN, kNaN, "short");
         if (t == at(4, 12, 30)) {
@@ -350,6 +363,7 @@ private:
                                "reverse by the size seen");
             }
             if (shape == 2) close_all("close at the called bar");
+            if (shape == 3) strategy_entry("L", true, kNaN, kNaN, kNaN, "reverse at the called bar");
             if (shape == 4) strategy_cancel_all();
         }
         if (t == at(4, 13, 30)) close_all("cleanup");
@@ -372,6 +386,20 @@ private:
                           kNaN, kNaN);
         }
         if (t == utc(4, 16, 6, 0)) cleanup();
+    }
+
+    // w5-c2-pooc-flat-explicit-*: at each cell an entry of explicit quantity
+    // math.floor(strategy.equity / close * 10000) / 10000.
+    void flat_explicit(std::int64_t t, bool is_long) {
+        for (const std::int64_t cell : kCells) {
+            if (t == cell) {
+                const double equity = current_equity() + open_profit(current_bar_.close);
+                strategy_entry(is_long ? "L" : "S", is_long, kNaN, kNaN,
+                               std::floor(equity / current_bar_.close * 10000.0) / 10000.0,
+                               is_long ? "long" : "short");
+            }
+            if (t == cell + 30 * kMinute) close_all("cleanup");
+        }
     }
 
     Probe probe_;
@@ -492,6 +520,16 @@ int main() {
         {"C1", "w5-m2-pooc-carried-none", Probe::CarriedNone, config(true, 0.05, 1), false, 4},
         {"QP", "w5-qp-pooc-reissue", Probe::QpReissue, config(true, 0.05, 1), false, 5},
         {"QP control", "w5-qp-pooc-once", Probe::QpOnce, config(true, 0.05, 1), false, 5},
+        {"C2", "w5-c2-pooc-rev-long", Probe::RevToLong, config(true, 0.05, 1), false, 72},
+        {"C2", "w5-c2-pooc-rev-long-noslip", Probe::RevToLong, config(true, 0.05, 0), false, 59},
+        {"C2", "w5-c2-pooc-rev-short", Probe::RevToShort, config(true, 0.05, 1), false, 60},
+        {"C2 control", "w5-c2-pooc-long-open", Probe::LongOpen, config(true, 0.05, 1), false, 15},
+        {"C2", "w5-c2-pooc-flat-explicit-long", Probe::FlatExplicitLong, config(true, 0.1, 0),
+         false, 30},
+        {"C2", "w5-c2-pooc-flat-explicit-short", Probe::FlatExplicitShort, config(true, 0.1, 0),
+         false, 42},
+        {"C1+C2", "w5-m2-pooc-carried-reverse", Probe::CarriedReverse, config(true, 0.05, 1),
+         false, 6},
     };
 
     for (const Case& c : cases) {

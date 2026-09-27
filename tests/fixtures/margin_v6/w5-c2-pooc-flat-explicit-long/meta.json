@@ -1,0 +1,16 @@
+{
+  "title": "W5 C2 POOC flat explicit long (comm 0.1)",
+  "slug": "w5-c2-pooc-flat-explicit-long",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:23:14.801Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "5c6f4dffcfffe9123cacfce8df210cad89564be3f727c66b1913dfe130ca525e",
+  "tv_trades_sha256": "0e0e1898bcad50f930f756f6e2d0db4ad50cd57d4deb4e441f27d1cb1a10c415",
+  "tv_trades_rows": 60
+}

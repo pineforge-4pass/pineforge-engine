@@ -1,0 +1,16 @@
+{
+  "title": "W5 C2 POOC reversal to long (comm 0.05 slip 1)",
+  "slug": "w5-c2-pooc-rev-long",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T16:04:54.514Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "d60bbd36200567d94aae43871de4a6bea3896fe379f804d890456aabb88b3d12",
+  "tv_trades_sha256": "04843c08a9b1276630f19297f7824f505a580816a5d3582631d5c0685f7bd835",
+  "tv_trades_rows": 144
+}

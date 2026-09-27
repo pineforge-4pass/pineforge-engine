@@ -305,6 +305,13 @@
       "twinAssertionSha256": "5fd3bc55d5be90041fc35f45a26d9e5d2f38e45563576655d57a3d1a080dfcbe",
       "twinAssertions": 54
     },
+    "test_margin_call_1x_long_entry_fill": {
+      "baseAssertions": 62,
+      "reason": "F's process_orders_on_close opening-budget trim follows the R5 lane W5-ENG-MARGIN-V6 TradingView tapes (tests/fixtures/margin_v6 w5-c2-pooc-flat-explicit-long): a commissioned process_orders_on_close opening is called at the next open, never at its close fill, so the 0.1996 @100 trim lands on bar 1",
+      "twin": "test_margin_call_1x_long_entry_fill_l4a.cpp",
+      "twinAssertionSha256": "eb87c55121b2368e727136aee1df26af82c8c1bfd4c8b3836747e9cfd5d38e4e",
+      "twinAssertions": 62
+    },
     "test_order_birth_provenance": {
       "baseAssertions": 60,
       "reason": "retired order objects are rewritten to adapter birth receipts",
@@ -318,6 +325,13 @@
       "twin": "test_percent_equity_open_entry_fee_l4b.cpp",
       "twinAssertionSha256": "cb694da6f8211cab98bb19411d0a06a5ccd90c8ab87be9e7f5d7332d976f1ce0",
       "twinAssertions": 23
+    },
+    "test_pooc_open_money_event": {
+      "baseAssertions": 57,
+      "reason": "the fee compatibility scope's opening event follows the R5 lane W5-ENG-MARGIN-V6 TradingView tapes (tests/fixtures/margin_v6 w5-c2-pooc-flat-explicit-long): under a commission a process_orders_on_close opening is called at the next open, so outside calc_on_order_fills its event is at 2000, not at the entry close",
+      "twin": "test_pooc_open_money_event_l4b.cpp",
+      "twinAssertionSha256": "e9c3dea8f5b33e8420f6b9f9865137eac1178c9e549fe6b1906d520f758cc3f5",
+      "twinAssertions": 57
     },
     "test_prearmed_exit_path_cursor": {
       "baseAssertions": 96,

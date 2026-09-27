@@ -38,7 +38,8 @@
  *      END-OF-BAR placement (identical rows pre/post fix), survivor held.
  *   E. Commissioned SHORT mirror is untouched (LONG-only extension): the
  *      stop still closes the full position, no Margin-call row.
- *   F. POOC: the opening check keeps its end-of-bar placement.
+ *   F. POOC: the opening check waits for the next open (lane
+ *      W5-ENG-MARGIN-V6, C2).
  *   G. Emulator off -> nothing fires (full stop close).
  *   H. Handle reuse: a rerun reproduces the same rows.
  */
@@ -292,13 +293,17 @@ static void test_short_one_x_mirror_untouched() {
     CHECK(near(eng.position_size(), 0.0));
 }
 
-// ---- F: POOC keeps the end-of-bar placement --------------------------------
+// ---- F: POOC calls the opening at the next open ----------------------------
 
 static void test_pooc_keeps_end_of_bar_event() {
     std::printf("test_pooc_keeps_end_of_bar_event\n");
-    // Under process_orders_on_close the entry fills at the bar-0 close; the
-    // opening check still runs end-of-bar (unchanged) and trims 0.1996 @100.
-    // The far stop never fills, pinning only the event placement.
+    // Under process_orders_on_close the entry fills at the bar-0 close. The
+    // opening check trims 0.1996 @100 at bar 1's open, not at that fill:
+    // TradingView takes no call at a commissioned process_orders_on_close
+    // fill (lane W5-ENG-MARGIN-V6, C2; tests/fixtures/margin_v6
+    // w5-c2-pooc-flat-explicit-long, fifteen explicit-quantity longs short of
+    // margin by their 0.1 % fee, each called at the next open). The far stop
+    // never fills, pinning only the event placement.
     CommissionedProbe eng(/*is_long=*/true, /*stop=*/80.0, /*pooc=*/true);
     std::vector<Bar> bars = {
         mk_bar(1000, 100, 100, 100, 100),          // 0: signal + close fill
@@ -311,7 +316,7 @@ static void test_pooc_keeps_end_of_bar_event() {
     CHECK(eng.exit_comment(0) == std::string("Margin call"));
     CHECK(near(eng.trade_size(0), 0.1996));
     CHECK(near(eng.exit_price(0), 100.0));
-    CHECK(eng.exit_bar(0) == 0);                   // end-of-bar on the fill bar
+    CHECK(eng.exit_bar(0) == 1);                   // the next bar's open
     CHECK(near(eng.position_size(), 99.7504));
 }
 

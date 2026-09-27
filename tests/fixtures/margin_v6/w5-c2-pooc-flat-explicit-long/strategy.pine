@@ -1,0 +1,69 @@
+//@version=6
+strategy("W5 C2 POOC flat explicit long (comm 0.1)", overlay=true, process_orders_on_close=true, commission_type=strategy.commission.percent, commission_value=0.1, slippage=0)
+
+// Lane W5-ENG-MARGIN-V6, mechanism C2 (from flat). At each cell of
+// w5-m2-pooc-short-open a LONG of explicit quantity equity / close fills at
+// that close (process_orders_on_close, commission 0.1 %, no slippage): its
+// entry fee leaves it short of margin. Does TradingView call it at the fill
+// or at the next open?
+
+if time == timestamp("UTC", 2025, 4, 2, 0, 0)
+    strategy.entry("L", strategy.long, qty=math.floor(strategy.equity / close * 10000) / 10000, comment="long")
+if time == timestamp("UTC", 2025, 4, 2, 0, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 2, 3, 0)
+    strategy.entry("L", strategy.long, qty=math.floor(strategy.equity / close * 10000) / 10000, comment="long")
+if time == timestamp("UTC", 2025, 4, 2, 3, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 2, 6, 0)
+    strategy.entry("L", strategy.long, qty=math.floor(strategy.equity / close * 10000) / 10000, comment="long")
+if time == timestamp("UTC", 2025, 4, 2, 6, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 2, 9, 0)
+    strategy.entry("L", strategy.long, qty=math.floor(strategy.equity / close * 10000) / 10000, comment="long")
+if time == timestamp("UTC", 2025, 4, 2, 9, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 2, 18, 0)
+    strategy.entry("L", strategy.long, qty=math.floor(strategy.equity / close * 10000) / 10000, comment="long")
+if time == timestamp("UTC", 2025, 4, 2, 18, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 3, 21, 0)
+    strategy.entry("L", strategy.long, qty=math.floor(strategy.equity / close * 10000) / 10000, comment="long")
+if time == timestamp("UTC", 2025, 4, 3, 21, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 4, 12, 0)
+    strategy.entry("L", strategy.long, qty=math.floor(strategy.equity / close * 10000) / 10000, comment="long")
+if time == timestamp("UTC", 2025, 4, 4, 12, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 3, 0)
+    strategy.entry("L", strategy.long, qty=math.floor(strategy.equity / close * 10000) / 10000, comment="long")
+if time == timestamp("UTC", 2025, 4, 5, 3, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 9, 0)
+    strategy.entry("L", strategy.long, qty=math.floor(strategy.equity / close * 10000) / 10000, comment="long")
+if time == timestamp("UTC", 2025, 4, 5, 9, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 12, 0)
+    strategy.entry("L", strategy.long, qty=math.floor(strategy.equity / close * 10000) / 10000, comment="long")
+if time == timestamp("UTC", 2025, 4, 5, 12, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 15, 0)
+    strategy.entry("L", strategy.long, qty=math.floor(strategy.equity / close * 10000) / 10000, comment="long")
+if time == timestamp("UTC", 2025, 4, 5, 15, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 21, 0)
+    strategy.entry("L", strategy.long, qty=math.floor(strategy.equity / close * 10000) / 10000, comment="long")
+if time == timestamp("UTC", 2025, 4, 5, 21, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 6, 9, 0)
+    strategy.entry("L", strategy.long, qty=math.floor(strategy.equity / close * 10000) / 10000, comment="long")
+if time == timestamp("UTC", 2025, 4, 6, 9, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 6, 12, 0)
+    strategy.entry("L", strategy.long, qty=math.floor(strategy.equity / close * 10000) / 10000, comment="long")
+if time == timestamp("UTC", 2025, 4, 6, 12, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 6, 15, 0)
+    strategy.entry("L", strategy.long, qty=math.floor(strategy.equity / close * 10000) / 10000, comment="long")
+if time == timestamp("UTC", 2025, 4, 6, 15, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
