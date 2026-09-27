@@ -1,0 +1,14 @@
+//@version=6
+strategy("PF W8C ltf lookahead_on chart-open read-out", overlay = true, pyramiding = 0, default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 1000000)
+string t = syminfo.tickerid
+int tOn = request.security(t, "15", time, lookahead = barmerge.lookahead_on)
+int tOn1 = request.security(t, "15", time[1], lookahead = barmerge.lookahead_on)
+int tOff = request.security(t, "15", time)
+int tGOn = request.security(t, "15", time, gaps = barmerge.gaps_on, lookahead = barmerge.lookahead_on)
+float cOn1 = request.security(t, "15", close[1], lookahead = barmerge.lookahead_on)
+m(int x) => na(x) ? "na" : str.tostring((x - time) / 60000)
+string id = m(tOn) + "|" + m(tOn1) + "|" + m(tOff) + "|" + m(tGOn) + "|" + str.tostring(cOn1)
+if bar_index % 2 == 0
+    strategy.entry(id, strategy.long)
+else
+    strategy.entry(id, strategy.short)

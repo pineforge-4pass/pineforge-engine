@@ -1,0 +1,16 @@
+{
+  "title": "PF W8C ltf lookahead_on chart-open read-out",
+  "slug": "w8c-ltfon-eth1d",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:23:43.169Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "c95c40241a98d6efcb2c3b1c0866e519944ec1175837bd9d862f0d745af4224f",
+  "tv_trades_sha256": "744c26845c67093ae86d096d435337763219817fd5929dbe6d38a3c43a8d933a",
+  "tv_trades_rows": 790
+}

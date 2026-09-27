@@ -1,0 +1,16 @@
+{
+  "title": "PF W8C ltf lookahead_on chart-open read-out",
+  "slug": "w8c-ltfon-eur1d",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:24:36.099Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "c95c40241a98d6efcb2c3b1c0866e519944ec1175837bd9d862f0d745af4224f",
+  "tv_trades_sha256": "d6453e3711c141fba7263865d9752c813a9bd5c897fef5cc4086ab2029a5406f",
+  "tv_trades_rows": 560
+}

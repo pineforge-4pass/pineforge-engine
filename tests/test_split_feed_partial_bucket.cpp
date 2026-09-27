@@ -29,9 +29,9 @@
 // aggregator still holds a partial bucket finalizes and publishes it, once.
 // The next chart bar's first sub-bar resets the bucket without re-emitting
 // it, the ``[1]`` history is the previous bucket exactly as on a dense tail,
-// lookahead_on keeps its own gated publication untouched (one bucket behind
-// on this shape, as before -- the tape pins lookahead_off only), and the
-// legacy path without an auxiliary slice is byte-identical.
+// and the legacy path without an auxiliary slice is byte-identical. The
+// lookahead_on twin reads the bucket opening at or before the 17:00 ET stamp
+// (lane W8C-SECURITY's tape; case (e) below).
 //
 // Data: tests/test_split_feed_partial_bucket_data.hpp -- the registry's 1m
 // finer feed b2389ad2 and 1D feed 79cdcfb671e5 (lab bars). The expected RSI
@@ -245,25 +245,30 @@ void test_singleton_tail_reads_at_the_daily_close() {
     // bucket, the forced tail included, so no bucket advanced the RSI twice.
     CHECK(probe.dispatches_off == 1301, "one evaluator dispatch per published bucket");
 
-    // (e) The lookahead_on twin reads the calling bar's FIRST intrabar
-    // (calling_open_latches_first, round 7 r7-ltf-lookahead; lab tv
-    // notrade-ltf-sample-btc1d): every 3m bucket is published, in the same
-    // order as the lookahead_off twin's, and the chart body runs right
-    // after the slice's first bucket -- so each daily bar reads its own
-    // first bucket, not the previous day's last one, and the Thanksgiving
-    // singleton tail (a lookahead_off pin) does not concern it.
+    // (e) The lookahead_on twin reads the 3m bucket opening at or before the
+    // calling bar's time (calling_open_latches_first; lane W8C-SECURITY, lab
+    // tv w8c-ltfon-3m-xau1d, tests/fixtures/ltf_lookahead_calling_open). The
+    // 17:00 ET daily stamp sits in the OANDA break, so no bucket of the
+    // bar's own slice opens by then: each body reads the previous slice's
+    // last bucket -- TradingView's 16:57 ET, close 4163.575 on Thanksgiving
+    // and the 21:57Z singleton, close 4158.8, on Black Friday, whose pending
+    // tail is finalized before the body -- and the range's first bar reads
+    // nothing. Every 3m bucket is still published once, in the same order as
+    // the lookahead_off twin's.
     CHECK(probe.on.size() == probe.off.size(), "lookahead_on publishes every 3m bucket, like lookahead_off");
     for (std::size_t i = 0; i < probe.on.size(); ++i) {
         CHECK(probe.on[i].label == probe.off[i].label, "the lookahead_on publications are the same buckets, in order");
     }
-    CHECK(dense.on_count == 1, "the 11-25 body runs after its slice's first 3m bucket");
-    CHECK(thanks.on_count == 459 + 1, "the Thanksgiving body runs after the dense day's 459 buckets and its own first");
-    CHECK(friday.on_count == 459 + 438 + 1, "the Black Friday body runs after its own first bucket");
-    CHECK(dense.last_on.label == probe.off[0].label, "11-25 reads its first bucket");
-    CHECK(thanks.last_on.label == probe.off[459].label, "Thanksgiving reads its first bucket");
-    CHECK(friday.last_on.label == probe.off[459 + 438].label, "Black Friday reads its first bucket");
-    CHECK(friday.last_on.label >= utc(2025, 11, 27, 23, 0), "Black Friday's first bucket opens in its own session (18:00 ET)");
-    CHECK(within(friday.last_on.rsi, probe.off[459 + 438].rsi, 1e-9), "the first bucket's RSI, as the lookahead_off twin published it");
+    CHECK(dense.on_count == 0, "the range's first body runs before any 3m bucket");
+    CHECK(thanks.on_count == 459, "the Thanksgiving body runs after the dense day's 459 buckets, before its own");
+    CHECK(friday.on_count == 459 + 438, "the Black Friday body runs after Thanksgiving's 438, the finalized singleton included");
+    CHECK(thanks.last_on.label == probe.off[458].label, "Thanksgiving reads the dense day's last bucket");
+    CHECK(thanks.last_on.label == utc(2025, 11, 26, 21, 57), "the 16:57 ET bucket");
+    CHECK(within(thanks.last_on.close, 4163.575, 1e-9), "TradingView's lookahead_on close on the Thanksgiving bar");
+    CHECK(friday.last_on.label == probe.off[459 + 437].label, "Black Friday reads Thanksgiving's last bucket");
+    CHECK(friday.last_on.label == utc(2025, 11, 27, 21, 57), "the 21:57Z singleton");
+    CHECK(within(friday.last_on.close, 4158.8, 1e-9), "TradingView's lookahead_on close on the Black Friday bar");
+    CHECK(within(friday.last_on.rsi, probe.off[459 + 437].rsi, 1e-9), "the singleton's RSI, as the lookahead_off twin published it");
 }
 
 // ---- the 2-minute shape -----------------------------------------------------

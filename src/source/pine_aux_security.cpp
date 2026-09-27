@@ -261,6 +261,11 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
     if (begin == missing || end == missing) return;
 
     security_calling_close_ms_ = aux_security_calling_close_ms();
+    // The calling chart bar's time, where TradingView merges a finer
+    // lookahead_on request (calling_open_latches_first).
+    const Bar* calling_bar = scheduler_.current_script_bar();
+    const int64_t calling_open_ms =
+        calling_bar != nullptr ? calling_bar->timestamp : current_bar_.timestamp;
 
     // A first-bucket-latched evaluator (calling_open_latches_first) starts
     // every chart bar's slice live and is deferred once its first bucket of
@@ -289,12 +294,46 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
         for (auto& state : security_eval_states_) {
             PineSecurityEvalState& pine = pine_security_state(state.sec_id);
             if (!pine.lower_tf_array_requested) {
+                // TradingView merges the requested bar opening at or before
+                // the calling bar's time. When none does -- OANDA stamps its
+                // daily bars at 17:00 ET, inside the break before the 18:00
+                // session they carry -- it reads the one before, the previous
+                // slice's last bucket, so the chart body runs before this
+                // slice is fed (lab tv w8c-ltfon-xau1d: 278/278 daily bars
+                // read the 16:45 ET bucket, or Friday's on the Sunday stamp).
+                // A last bucket no rule completed (the Thanksgiving "3"
+                // singleton) is that bar too (lab tv w8c-ltfon-3m-xau1d, the
+                // Black Friday bar): finalize and publish it first; lookahead_on
+                // evaluated it on its sub-bars, so it rewrites that slot.
+                // Heikin-Ashi sites keep the path below.
+                if (pine.calling_open_latches_first && !pine.heikinashi
+                    && !pine.first_bucket_published
+                    && state.aggregator.bucket_open_ms(aux_bar.timestamp)
+                           > calling_open_ms) {
+                    if (state.aggregator.has_pending_partial()) {
+                        AggregatedBar tail = state.aggregator.complete_pending_partial();
+                        if (tail.is_complete) {
+                            state.current_sub_bar_count =
+                                std::max(tail.sub_bar_count, 2);
+                            substitute_native_security_bar(state, tail.bar);
+                            state.current_bar = tail.bar;
+                            state.eval_complete_count++;
+                            pine.last_published_label = tail.bar.timestamp;
+                            internal::AmbientEmaSeedingScope tail_warmup_scope(
+                                NativeExecutionConsumer::bound(*this).pump_ambient(),
+                                security_range_start_na_warmup_);
+                            dispatch_security_eval(state, tail.bar, true,
+                                                   state.eval_complete_count - 1);
+                        }
+                    }
+                    pine.first_bucket_published = true;
+                }
                 if (pine.calling_open_latches_first
                     && pine.first_bucket_published) {
-                    // TradingView reads the calling bar's FIRST intrabar:
-                    // the chart body runs on the first bucket's
-                    // publication, the rest of the slice follows it
-                    // (feed_deferred_aux_security_for_chart_bar).
+                    // The latch is closed (the slice's first bucket is
+                    // published, or none opens at or before the calling
+                    // bar's time): the rest of the slice follows the chart
+                    // body (feed_deferred_aux_security_for_chart_bar).
                     pine.deferred_aux.push_back(
                         {aux_bar, security_next_input_ms_,
                          calling_bar_complete});

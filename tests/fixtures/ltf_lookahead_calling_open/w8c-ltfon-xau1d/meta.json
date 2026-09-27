@@ -1,0 +1,16 @@
+{
+  "title": "PF W8C ltf lookahead_on chart-open read-out",
+  "slug": "w8c-ltfon-xau1d",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:22:55.630Z",
+  "chart": {
+    "symbol": "OANDA:XAUUSD",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "c95c40241a98d6efcb2c3b1c0866e519944ec1175837bd9d862f0d745af4224f",
+  "tv_trades_sha256": "c5e9c95da6b47511a4d6442c0afb35782fb42089c4712bedca4323c6e2c47e9b",
+  "tv_trades_rows": 556
+}

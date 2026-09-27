@@ -1,0 +1,14 @@
+//@version=6
+strategy("PF W8C ltf lookahead_on 3m read-out", overlay = true, pyramiding = 0, default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 1000000)
+string t = syminfo.tickerid
+float tOn = request.security(t, "3", time, lookahead = barmerge.lookahead_on)
+float cOn = request.security(t, "3", close, lookahead = barmerge.lookahead_on)
+float cOn1 = request.security(t, "3", close[1], lookahead = barmerge.lookahead_on)
+float tOff = request.security(t, "3", time)
+float cOff = request.security(t, "3", close)
+m(float x) => na(x) ? "na" : str.tostring((x - time) / 60000)
+string id = m(tOn) + "|" + str.tostring(cOn) + "|" + str.tostring(cOn1) + "|" + m(tOff) + "|" + str.tostring(cOff)
+if bar_index % 2 == 0
+    strategy.entry(id, strategy.long)
+else
+    strategy.entry(id, strategy.short)

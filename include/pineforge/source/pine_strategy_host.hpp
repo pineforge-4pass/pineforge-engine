@@ -241,8 +241,8 @@ struct PineSecurityEvalState {
     std::vector<Bar> lower_tf_input_buffer;
     // Plain ``request.security`` with a requested TF strictly finer than
     // script_tf, served by the auxiliary finer feed (the split-feed
-    // path), under ``lookahead_on``: TradingView's merge takes the FIRST
-    // intrabar of the calling chart bar and holds it for the bar -- on
+    // path), under ``lookahead_on``: TradingView merges the requested bar
+    // opening at or before the calling bar's time and holds it -- on
     // the BINANCE:BTCUSDT 1D chart ``request.security(tickerid, "15",
     // ta.rsi(close, 14)[1], lookahead_on)`` reads, on every daily bar,
     // the 15m RSI of the previous day's LAST bucket, i.e. ``rsi[1]``
