@@ -1,0 +1,16 @@
+{
+  "title": "RH diag first bar 2",
+  "slug": "rh-diag-firstbar2-eth15full",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T19:00:28.347Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "f32ba5f7dbf6cf099f33b1bad756d31a4af7bfa51d19ffcc67e8633684c25dba",
+  "tv_trades_sha256": "f8e5740f2e475de52a7b9b1aa2d8d033636ddd3026c4b2e66619b8b42eea3325",
+  "tv_trades_rows": 4
+}

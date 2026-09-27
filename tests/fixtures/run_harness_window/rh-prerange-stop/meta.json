@@ -1,0 +1,16 @@
+{
+  "title": "RH prerange stop",
+  "slug": "rh-prerange-stop",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T18:58:39.371Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-08"
+  },
+  "pine_sha256": "0faa9fd56a4c1892112cf4be8fc717e83c5f8c99cc54aa613fc822dbd2038bd5",
+  "tv_trades_sha256": "a44585e8dcb09098c7fccb8f29b30d822dda00e9a1b4e2b698ecb47b2827e693",
+  "tv_trades_rows": 0
+}

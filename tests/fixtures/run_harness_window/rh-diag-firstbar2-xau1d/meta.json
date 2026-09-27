@@ -1,0 +1,16 @@
+{
+  "title": "RH diag first bar 2",
+  "slug": "rh-diag-firstbar2-xau1d",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T19:00:46.814Z",
+  "chart": {
+    "symbol": "OANDA:XAUUSD",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2025-05-15"
+  },
+  "pine_sha256": "f32ba5f7dbf6cf099f33b1bad756d31a4af7bfa51d19ffcc67e8633684c25dba",
+  "tv_trades_sha256": "770f9fb8eb907404b6892e32c38e07b86aa42fc00db6718fa1deebbcc7623631",
+  "tv_trades_rows": 4
+}

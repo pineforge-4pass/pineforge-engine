@@ -1,0 +1,5 @@
+﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)
+1,Exit long,2025-04-01 22:15,B0_X,9.9,1,10.08,-0.18,-1.79,0,0,0.00,-0.19,-1.88,-0.18,0.00,2
+1,Entry long,2025-04-01 21:45,B0,10.08,1,10.08,-0.18,-1.79,0,0,0.00,-0.19,-1.88,-0.18,0.00,2
+2,Exit long,2025-04-01 23:00,D1_X,9.94,5,49.9,-0.2,-0.40,0,0,0.00,-0.45,-0.90,-0.38,0.00,1
+2,Entry long,2025-04-01 22:45,D1,9.98,5,49.9,-0.2,-0.40,0,0,0.00,-0.45,-0.90,-0.38,0.00,1

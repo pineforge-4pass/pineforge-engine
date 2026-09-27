@@ -1,0 +1,16 @@
+{
+  "title": "RH in-range preplaced",
+  "slug": "rh-inrange-preplaced",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T18:58:49.939Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-08"
+  },
+  "pine_sha256": "69623228cf9d0d724e269e95d450af0443448d40b32e7e05c6beb2230f41c2f3",
+  "tv_trades_sha256": "7108fd25ce4bf7a78d8575ceffc0f18bbeb1c3a57febcc7e08dfc8bc7d5ad0b0",
+  "tv_trades_rows": 4
+}

@@ -1,0 +1,37 @@
+//@version=6
+strategy("RH diag first bar", overlay=true, initial_capital=1000000000000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1,
+     commission_value=0, slippage=0, process_orders_on_close=false)
+
+// How much history does the deep backtest compute before its range start?
+// Encoded in quantities of in-range trades:
+//   D1 qty = bar_index + 1 on the first bar at or after 2025-04-01 00:00 UTC
+//   D2 qty = 1 + the number of 15-minute steps from the first computed bar to
+//            that bar (= D1 on a gapless feed)
+//   D3 qty = 1 + the number of bars whose time is before 2025-04-01 00:00 UTC
+var int firstTime = na
+var int preBars = 0
+var int step = 0
+if na(firstTime)
+    firstTime := time
+fromMs = timestamp("UTC", 2025, 4, 1, 0, 0)
+if time < fromMs
+    preBars += 1
+if time >= fromMs and step == 0
+    step := 1
+    strategy.entry("D1", strategy.long, qty=bar_index + 1)
+else if step == 1
+    step := 2
+    strategy.close("D1", comment="D1_X")
+else if step == 2
+    step := 3
+    strategy.entry("D2", strategy.long, qty=1 + (time[2] - firstTime) / 900000)
+else if step == 3
+    step := 4
+    strategy.close("D2", comment="D2_X")
+else if step == 4
+    step := 5
+    strategy.entry("D3", strategy.long, qty=1 + preBars)
+else if step == 5
+    step := 6
+    strategy.close("D3", comment="D3_X")

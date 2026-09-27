@@ -1,0 +1,11 @@
+//@version=6
+strategy("RH prerange stop", overlay=true, initial_capital=1000000000000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1,
+     commission_value=0, slippage=0, process_orders_on_close=false)
+
+// A long stop placed on a bar BEFORE the deep-backtest range start
+// (2025-04-01 00:00 UTC), above every high until 2025-04-01 06:xx UTC.
+if time == timestamp("UTC", 2025, 3, 31, 18, 0)
+    strategy.entry("P_STOP", strategy.long, qty=1, stop=1850.0)
+if time == timestamp("UTC", 2025, 4, 1, 12, 0)
+    strategy.close("P_STOP", comment="P_STOP_X")

@@ -1,0 +1,11 @@
+//@version=6
+strategy("RH prerange limit", overlay=true, initial_capital=1000000000000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1,
+     commission_value=0, slippage=0, process_orders_on_close=false)
+
+// A long limit placed on a bar BEFORE the deep-backtest range start
+// (2025-04-01 00:00 UTC), below every low until 2025-04-02 22:xx UTC.
+if time == timestamp("UTC", 2025, 3, 31, 18, 0)
+    strategy.entry("P_LIMIT", strategy.long, qty=2, limit=1812.0)
+if time == timestamp("UTC", 2025, 4, 3, 12, 0)
+    strategy.close("P_LIMIT", comment="P_LIMIT_X")

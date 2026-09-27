@@ -1,0 +1,16 @@
+{
+  "title": "RH prerange limit",
+  "slug": "rh-prerange-limit",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T18:58:43.159Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-08"
+  },
+  "pine_sha256": "1e69440ada8ce687bf6f9ef8b7252936e7df3e07633e5f4d587e0c892ddc15ad",
+  "tv_trades_sha256": "a44585e8dcb09098c7fccb8f29b30d822dda00e9a1b4e2b698ecb47b2827e693",
+  "tv_trades_rows": 0
+}

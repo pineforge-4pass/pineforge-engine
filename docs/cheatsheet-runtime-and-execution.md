@@ -462,6 +462,12 @@ Audited gaps a forward/real-time executor must know (beyond per-order fills).
   ABI directly for `strategy()` overrides. CLI flags `--trace-json` and
   `--disable-trading-before-window` (→ `strategy_set_trade_start_time`) affect
   the run.
+- With a TradingView tape the order gate opens on the bar before TradingView's
+  first entry, or, when the run's feed starts on TradingView's first computed
+  bar (metrics.json `wsProvenance.returnedRange.from`), on that bar — unless
+  that run enters before TradingView's first entry, when it runs again from the
+  signal bar. Rows are written from one bar before TradingView's first entry
+  either way.
 
 ## ⚠️ Possible bug (flagged, not confirmed)
 

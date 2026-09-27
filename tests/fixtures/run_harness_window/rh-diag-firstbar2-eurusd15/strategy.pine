@@ -1,0 +1,21 @@
+//@version=6
+strategy("RH diag first bar 2", overlay=true, initial_capital=1000000000000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1,
+     commission_value=0, slippage=0, process_orders_on_close=false)
+
+// B0: a market entry placed on the first computed bar (bar_index 0); it
+// fills at bar 1's open and closes two bars later, so the tape's first
+// entry stamps TradingView's second computed bar.
+// D1: qty = bar_index + 1 on the first bar at or after 2025-04-01 00:00 UTC.
+var int step = 0
+if bar_index == 0
+    strategy.entry("B0", strategy.long, qty=1)
+if bar_index == 2
+    strategy.close("B0", comment="B0_X")
+fromMs = timestamp("UTC", 2025, 4, 1, 0, 0)
+if bar_index >= 4 and time >= fromMs and step == 0
+    step := 1
+    strategy.entry("D1", strategy.long, qty=bar_index + 1)
+else if step == 1
+    step := 2
+    strategy.close("D1", comment="D1_X")

@@ -1,0 +1,16 @@
+{
+  "title": "RH diag first bar 2",
+  "slug": "rh-diag-firstbar2-f15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T19:00:36.294Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-15"
+  },
+  "pine_sha256": "f32ba5f7dbf6cf099f33b1bad756d31a4af7bfa51d19ffcc67e8633684c25dba",
+  "tv_trades_sha256": "9cc5b18b5b0ccf3cfe0fd2ce14b724715e0403385b28cd00ac8f98a30db3fae9",
+  "tv_trades_rows": 4
+}

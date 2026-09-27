@@ -1,0 +1,16 @@
+{
+  "title": "RH prerange fills",
+  "slug": "rh-prerange-fills",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T18:58:46.351Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-08"
+  },
+  "pine_sha256": "a9b13bcc431bd118268548f40efa4618b54e39e7b960c2fd6cb455087a71c89a",
+  "tv_trades_sha256": "8e6cc1cb00734bd1fd73f56dfcd2afd9aa781c07b983a33e1af190c88d07c567",
+  "tv_trades_rows": 2
+}

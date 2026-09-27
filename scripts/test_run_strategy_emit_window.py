@@ -19,6 +19,14 @@ start, never later (_tv_entry_emit_window). Trades keep being reported
 from the old bound: the first entry's fill on TV's first entry bar is
 written, a fill on the signal bar itself (which TV did not report) is not,
 and on a gapless feed nothing changes at all.
+
+Lane RUN-HARNESS: TradingView's deep backtest computes the script from its
+first bar (metrics.json wsProvenance.returnedRange.from) and no earlier one,
+its broker live from there, so an order placed hours before the signal bar
+can make TV's first fill (tests/fixtures/run_harness_window). A run whose
+feed starts on that bar opens its window there -- unless it enters before
+TV's first entry, where TV filled nothing, when it runs again from the
+signal bar; a warmed or later-starting feed keeps the signal bar.
 """
 
 from __future__ import annotations
@@ -134,22 +142,29 @@ class _FakeStrategy:
     def __init__(self, so_path: Path) -> None:
         self.lib = None
 
+    # Trades per call when a test hands several lists (a run repeated from
+    # the signal bar); else ``trades`` for every call.
+    trades_by_call: list[list[dict]] | None = None
+
     def run(self, bars_csv: Path, params=None, **kwargs) -> dict:
         _FakeStrategy.calls.append({"bars_csv": bars_csv, **kwargs})
+        trades = (_FakeStrategy.trades if _FakeStrategy.trades_by_call is None
+                  else _FakeStrategy.trades_by_call[len(_FakeStrategy.calls) - 1])
         return {
-            "trades": [dict(t) for t in _FakeStrategy.trades],
+            "trades": [dict(t) for t in trades],
             "trace": [], "trace_names": [],
-            "net_profit": sum(t["pnl"] for t in _FakeStrategy.trades),
+            "net_profit": sum(t["pnl"] for t in trades),
             "input_bars_processed": 0,
         }
 
 
 def _run_main(strategy_dir: Path, feed: Path, out: Path, trades: list[dict],
-              *extra: str) -> str:
+              *extra: str, trades_by_call: list[list[dict]] | None = None) -> str:
     """Drive run_strategy.main() end to end with the engine stubbed out;
     returns everything it printed."""
     _FakeStrategy.calls.clear()
     _FakeStrategy.trades = trades
+    _FakeStrategy.trades_by_call = trades_by_call
     argv = ["run_strategy.py", str(strategy_dir), "--ohlcv", str(feed),
             "-o", str(out), *extra]
     buf = io.StringIO()
@@ -436,6 +451,185 @@ class TapeSpanTests(unittest.TestCase):
 
 # --- main() end to end -------------------------------------------------
 
+# --- a run that starts on TradingView's first computed bar ---------------
+
+# BINANCE:ETHUSDT.P 15 over 2025-04-01 .. 2025-04-08, as lab tv exported
+# rh-inrange-preplaced (tests/fixtures/run_harness_window): TradingView
+# computed from 2025-04-01 00:00 UTC (its returnedRange.from; bar_index 0
+# there, rh-diag-firstbar) and filled S1 at 06:30 UTC from a stop the script
+# placed at 01:00 UTC.
+ETH_FIRST_BAR = _utc_ms(2025, 4, 1)
+ETH_METRICS = {
+    "symbol": "BINANCE:ETHUSDT.P", "interval": "15",
+    "from": "2025-04-01", "to": "2025-04-08",
+    "deepBacktesting": True, "tapeChannel": "ws-report-v1",
+    "wsProvenance": {
+        "schemaVersion": 1,
+        "requestedRange": {"from": ETH_FIRST_BAR, "to": _utc_ms(2025, 4, 8)},
+        "returnedRange": {"from": ETH_FIRST_BAR, "to": _utc_ms(2025, 4, 8)},
+        "rangeProof": "covered",
+    },
+}
+S1_PLACED = _utc_ms(2025, 4, 1, 1)
+S1_FILL = _utc_ms(2025, 4, 1, 6, 30)
+S1_EXIT = _utc_ms(2025, 4, 1, 12, 15)
+L1_FILL = _utc_ms(2025, 4, 2, 22, 45)
+L1_EXIT = _utc_ms(2025, 4, 3, 12, 15)
+
+
+WINDOW_TAPES = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "run_harness_window"
+
+
+def _tape_trades(directory: Path) -> list[dict]:
+    """The tape's trades in number order: entry/exit UTC ms, signal, price, qty."""
+    tz = timezone(timedelta(hours=8))
+    trades: dict[int, dict] = {}
+    with (directory / "tv_trades.csv").open(encoding="utf-8-sig") as f:
+        for row in csv.DictReader(f):
+            when = int(datetime.strptime(row["Date and time"], "%Y-%m-%d %H:%M")
+                       .replace(tzinfo=tz).timestamp() * 1000)
+            side = "entry" if row["Type"].startswith("Entry") else "exit"
+            price = next(v for k, v in row.items() if k.startswith("Price"))
+            trades.setdefault(int(row["Trade number"]), {})[side] = {
+                "ms": when, "signal": row["Signal"], "price": float(price),
+                "qty": float(row["Size (qty)"])}
+    return [trades[n] for n in sorted(trades)]
+
+
+class TradingViewFirstBarTapeTests(unittest.TestCase):
+    """TradingView's rule, read off its own tapes (lab tv --no-note exports of
+    synthetic probes, tests/fixtures/run_harness_window)."""
+
+    def test_the_first_computed_bar_is_the_returned_range_start(self) -> None:
+        # rh-diag-firstbar2: a market entry on bar_index 0 fills at bar 1's
+        # open, so TradingView's first entry is its first computed bar plus
+        # one chart bar -- on every lane, the returnedRange.from it records.
+        lanes = {
+            "eth15full": (_utc_ms(2025, 4, 1), MIN15),
+            "eurusd15": (_utc_ms(2025, 4, 1), MIN15),
+            "xauusd15": (_utc_ms(2025, 4, 1), MIN15),
+            "es115": (_utc_ms(2025, 4, 1), MIN15),
+            "f15": (_utc_ms(2025, 4, 1, 13, 30), MIN15),
+            "nifty15": (_utc_ms(2025, 4, 1, 3, 45), MIN15),
+            "btc1d": (_utc_ms(2025, 4, 1), DAY),
+            "xau1d": (_utc_ms(2025, 4, 1, 21), DAY),
+        }
+        for lane, (first_bar, bar) in lanes.items():
+            with self.subTest(lane=lane):
+                d = WINDOW_TAPES / f"rh-diag-firstbar2-{lane}"
+                metrics = json.loads((d / "metrics.json").read_text(encoding="utf-8"))
+                self.assertEqual(metrics["wsProvenance"]["requestedRange"]["from"],
+                                 _utc_ms(2025, 4, 1))
+                self.assertEqual(run_strategy._tv_first_bar(d, {})[0], first_bar)
+                b0 = _tape_trades(d)[0]["entry"]
+                self.assertEqual(b0["signal"], "B0")
+                self.assertEqual(b0["ms"], first_bar + bar)
+                # D1 fires on bar_index 4, the first bar at/after 00:00 UTC
+                # once four bars exist: no bar precedes the returned start.
+                self.assertEqual(_tape_trades(d)[1]["entry"]["qty"], 5)
+
+    def test_no_bar_before_the_range_start(self) -> None:
+        d = WINDOW_TAPES / "rh-diag-firstbar"
+        self.assertEqual(run_strategy._tv_first_bar(d, {})[0], ETH_FIRST_BAR)
+        trades = _tape_trades(d)
+        self.assertEqual([t["entry"]["signal"] for t in trades], ["D1", "D2", "D3"])
+        # bar_index + 1, the steps from the first bar, the pre-range bars + 1.
+        self.assertEqual([t["entry"]["qty"] for t in trades], [1, 1, 1])
+        self.assertEqual(trades[0]["entry"]["ms"], ETH_FIRST_BAR + MIN15)
+        # Orders a script places on 2025-03-31 bars never exist.
+        self.assertEqual(_tape_trades(WINDOW_TAPES / "rh-prerange-stop"), [])
+        self.assertEqual(_tape_trades(WINDOW_TAPES / "rh-prerange-limit"), [])
+        fills = _tape_trades(WINDOW_TAPES / "rh-prerange-fills")
+        self.assertEqual([t["entry"]["signal"] for t in fills], ["IN"])
+        self.assertEqual(fills[0]["entry"]["ms"], _utc_ms(2025, 4, 2, 0, 15))
+
+    def test_an_order_placed_before_the_first_fill_makes_it(self) -> None:
+        # S1's stop was placed at 01:00 UTC, before the 06:15 signal bar.
+        trades = _tape_trades(WINDOW_TAPES / "rh-inrange-preplaced")
+        self.assertEqual([(t["entry"]["signal"], t["entry"]["ms"], t["entry"]["price"])
+                          for t in trades],
+                         [("S1", S1_FILL, 1850.0), ("L1", L1_FILL, 1790.0)])
+        self.assertLess(S1_PLACED, S1_FILL - MIN15)
+
+
+class TvFirstBarTests(unittest.TestCase):
+    def test_read_from_the_ws_report_range(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "metrics.json").write_text(json.dumps(ETH_METRICS), encoding="utf-8")
+            self.assertEqual(run_strategy._tv_first_bar(d, {}), (
+                ETH_FIRST_BAR, "metrics.json wsProvenance.returnedRange.from"))
+            # A session-bound lane: NYSE:F's range opens at 13:30 UTC.
+            (d / "metrics.json").write_text(json.dumps(WS_METRICS), encoding="utf-8")
+            self.assertEqual(run_strategy._tv_first_bar(d, {})[0], _utc_ms(2025, 4, 1, 13, 30))
+
+    def test_none_without_a_returned_range(self) -> None:
+        browser = {"symbol": "BINANCE:ETHUSDT.P", "interval": "15",
+                   "from": "2025-04-01", "to": "2026-05-01", "deepBacktesting": True}
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            self.assertIsNone(run_strategy._tv_first_bar(d, {}))
+            for metrics in (browser, {"wsProvenance": {"returnedRange": None}},
+                            {"wsProvenance": {"returnedRange": {"from": True}}},
+                            {"wsProvenance": {"returnedRange": {"from": "1743465600000"}}},
+                            {"wsProvenance": {"returnedRange": {"from": 0}}}, []):
+                with self.subTest(metrics=metrics):
+                    (d / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+                    self.assertIsNone(run_strategy._tv_first_bar(d, {}))
+            (d / "metrics.json").write_text("{not json", encoding="utf-8")
+            self.assertIsNone(run_strategy._tv_first_bar(d, {}))
+
+    def test_the_window_opens_on_tvs_first_bar_when_the_feed_starts_there(self) -> None:
+        feed = list(range(ETH_FIRST_BAR, _utc_ms(2025, 4, 4) + 1, MIN15))
+        w = _tv_entry_emit_window(feed, S1_FILL, L1_FILL, MIN15, ETH_FIRST_BAR)
+        self.assertEqual(w, TvEntryWindow(
+            start_ms=ETH_FIRST_BAR, end_ms=L1_FILL, report_start_ms=S1_FILL - MIN15,
+            first_entry_ms=S1_FILL, fill_bar_ms=S1_FILL, signal_bar_ms=S1_FILL - MIN15,
+            tv_first_bar_ms=ETH_FIRST_BAR))
+        # S1's stop, placed at 01:00, is inside the window; the signal bar
+        # alone (06:15) put it outside.
+        self.assertLessEqual(w.start_ms, S1_PLACED)
+        self.assertGreater(_tv_entry_emit_window(feed, S1_FILL, L1_FILL, MIN15).start_ms,
+                           S1_PLACED)
+        self.assertEqual(
+            _describe_tv_entry_window(w),
+            "start 2025-04-01 00:00 UTC = TV's first computed bar, where this run's feed "
+            "starts (orders placed before TV's first entry bar 2025-04-01 06:30 UTC are "
+            "live, as on TV); entries reported from 2025-04-01 06:15 UTC to "
+            "2025-04-02 22:45 UTC")
+
+    def test_a_feed_with_bars_before_tvs_first_bar_keeps_the_signal_bar(self) -> None:
+        # A warmed full-history (or from-1d padded) feed: its script state
+        # before TradingView's first bar is not TradingView's.
+        feed = list(range(_utc_ms(2025, 3, 30), _utc_ms(2025, 4, 4) + 1, MIN15))
+        w = _tv_entry_emit_window(feed, S1_FILL, L1_FILL, MIN15, ETH_FIRST_BAR)
+        self.assertEqual(w.start_ms, S1_FILL - MIN15)
+        self.assertIsNone(w.tv_first_bar_ms)
+        self.assertIn("not earlier: unchanged", _describe_tv_entry_window(w))
+
+    def test_a_feed_starting_after_tvs_first_bar_keeps_the_signal_bar(self) -> None:
+        feed = list(range(_utc_ms(2025, 4, 1, 3), _utc_ms(2025, 4, 4) + 1, MIN15))
+        w = _tv_entry_emit_window(feed, S1_FILL, L1_FILL, MIN15, ETH_FIRST_BAR)
+        self.assertEqual(w.start_ms, S1_FILL - MIN15)
+        self.assertIsNone(w.tv_first_bar_ms)
+
+    def test_a_first_fill_on_tvs_first_bar_keeps_the_earlier_start(self) -> None:
+        # Widen-only: the old start (one interval before the fill) is earlier.
+        feed = list(range(ETH_FIRST_BAR, _utc_ms(2025, 4, 2) + 1, MIN15))
+        w = _tv_entry_emit_window(feed, ETH_FIRST_BAR, S1_FILL, MIN15, ETH_FIRST_BAR)
+        self.assertEqual(w.start_ms, ETH_FIRST_BAR - MIN15)
+        self.assertIsNone(w.signal_bar_ms)
+        self.assertIn("is on the loaded feed's first bar", _describe_tv_entry_window(w))
+
+    def test_session_lane_first_bar(self) -> None:
+        # NYSE:F 15: TradingView's range opens on the 13:30 UTC session bar.
+        feed = _rth_15m_stamps([(2025, 4, 1), (2025, 4, 2)])
+        fill = _utc_ms(2025, 4, 2, 14, 0)
+        w = _tv_entry_emit_window(feed, fill, fill, MIN15, _utc_ms(2025, 4, 1, 13, 30))
+        self.assertEqual(w.start_ms, _utc_ms(2025, 4, 1, 13, 30))
+        self.assertEqual(w.report_start_ms, fill - MIN15)
+
+
 class MainEmitWindowTests(unittest.TestCase):
     F_1D = EmitWindowRuleTests.F_1D
     MONDAY = EmitWindowRuleTests.MONDAY
@@ -564,6 +758,107 @@ class MainEmitWindowTests(unittest.TestCase):
             # Entries up to TV's last (= first) entry only: none of the
             # engine's trades, as before.
             self.assertEqual(_entry_rows(out), [])
+
+    def _eth_tape(self) -> list[tuple[int, str, str, str, str]]:
+        return [(2, "Exit long", _taipei(L1_EXIT), "L1_X", "1797.78"),
+                (2, "Entry long", _taipei(L1_FILL), "L1", "1790"),
+                (1, "Exit long", _taipei(S1_EXIT), "S1_X", "1868.83"),
+                (1, "Entry long", _taipei(S1_FILL), "S1", "1850")]
+
+    def _eth_engine_trades(self) -> list[dict]:
+        return [
+            _trade(_utc_ms(2025, 4, 1, 3), _utc_ms(2025, 4, 1, 4)),  # before the report bound
+            _trade(S1_FILL, S1_EXIT),
+            _trade(L1_FILL, L1_EXIT),
+        ]
+
+    def test_a_run_trimmed_to_tvs_first_bar_trades_from_it(self) -> None:
+        # The verifier's start-of-window candidate: the feed trimmed at the
+        # tape's from (00:00 UTC), which is TradingView's first bar. The
+        # engine fills nothing before TV's first entry, as TV did not.
+        stamps = list(range(_utc_ms(2025, 3, 30), _utc_ms(2025, 4, 4) + 1, MIN15))
+        tv_like = self._eth_engine_trades()[1:]
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            feed, out = _probe(d, stamps, self._eth_tape(), metrics=ETH_METRICS,
+                               inputs={"ohlcv_start_ms": ETH_FIRST_BAR})
+            printed = _run_main(d, feed, out, tv_like, "--disable-trading-before-window")
+            self.assertEqual(len(_FakeStrategy.calls), 1)
+            call = _FakeStrategy.calls[0]
+            self.assertEqual(call["ohlcv_start_ms"], ETH_FIRST_BAR)
+            self.assertEqual(call["trade_start_time_ms"], ETH_FIRST_BAR)
+            self.assertIn("= TV's first computed bar, where this run's feed starts", printed)
+            self.assertNotIn("run again from", printed)
+            # Reported rows: from one bar before TV's first entry, as always.
+            self.assertEqual(_entry_rows(out), ["2025-04-02 22:45", "2025-04-01 06:30"])
+            # The same feed, warmed from 2025-03-30: the signal-bar start.
+            feed, out = _probe(d, stamps, self._eth_tape(), metrics=ETH_METRICS)
+            _run_main(d, feed, out, tv_like, "--disable-trading-before-window")
+            self.assertEqual(len(_FakeStrategy.calls), 1)
+            self.assertEqual(_FakeStrategy.calls[0]["trade_start_time_ms"], S1_FILL - MIN15)
+            self.assertEqual(_entry_rows(out), ["2025-04-02 22:45", "2025-04-01 06:30"])
+
+    def test_an_entry_before_tvs_first_entry_runs_again_from_the_signal_bar(self) -> None:
+        # The run from TradingView's first bar entered at 03:00, hours before
+        # TV's first entry (06:30), where TV filled nothing: its state is not
+        # TV's, so the probe runs again from the signal bar and reports that.
+        stamps = list(range(_utc_ms(2025, 3, 30), _utc_ms(2025, 4, 4) + 1, MIN15))
+        early = self._eth_engine_trades()
+        again = self._eth_engine_trades()[1:2]
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            feed, out = _probe(d, stamps, self._eth_tape(), metrics=ETH_METRICS,
+                               inputs={"ohlcv_start_ms": ETH_FIRST_BAR})
+            printed = _run_main(d, feed, out, [], "--disable-trading-before-window",
+                                trades_by_call=[early, again])
+            self.assertEqual([c["trade_start_time_ms"] for c in _FakeStrategy.calls],
+                             [ETH_FIRST_BAR, S1_FILL - MIN15])
+            self.assertIn(
+                "  emit-window: the run from TV's first computed bar entered at "
+                "2025-04-01 03:00 UTC, before TV's first entry, where TV filled nothing: "
+                "run again from 2025-04-01 06:15 UTC", printed)
+            # The rows written are the second run's.
+            self.assertEqual(_entry_rows(out), ["2025-04-01 06:30"])
+            # An entry ON the report bound (one bar before TV's first entry)
+            # is a reported row, not an early one: no second run.
+            at_bound = [_trade(S1_FILL - MIN15, S1_EXIT)] + self._eth_engine_trades()[2:]
+            printed = _run_main(d, feed, out, at_bound, "--disable-trading-before-window")
+            self.assertEqual(len(_FakeStrategy.calls), 1)
+            self.assertNotIn("run again from", printed)
+            # --allow-trading-before-window keeps no gate and never re-runs.
+            _run_main(d, feed, out, early, "--allow-trading-before-window")
+            self.assertEqual([c["trade_start_time_ms"] for c in _FakeStrategy.calls], [None])
+
+    def test_no_rerun_when_the_signal_bar_gate_admits_every_bar(self) -> None:
+        # TradingView's first fill on the feed's third bar (00:30): the signal
+        # bar is 00:15, and the engine admits commands one bar before a gate,
+        # so the signal-bar gate admits the first bar too -- a re-run would
+        # repeat the same run. The early 00:00 entry is simply not reported.
+        stamps = list(range(ETH_FIRST_BAR, _utc_ms(2025, 4, 2) + 1, MIN15))
+        fill = ETH_FIRST_BAR + 2 * MIN15
+        tape = [(1, "Exit long", _taipei(fill + HOUR), "X", "10.5"),
+                (1, "Entry long", _taipei(fill), "L", "10")]
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            feed, out = _probe(d, stamps, tape, metrics=ETH_METRICS)
+            printed = _run_main(d, feed, out, [_trade(ETH_FIRST_BAR, fill),
+                                               _trade(fill, fill + HOUR)],
+                                "--disable-trading-before-window")
+            self.assertEqual([c["trade_start_time_ms"] for c in _FakeStrategy.calls],
+                             [ETH_FIRST_BAR])
+            self.assertNotIn("run again from", printed)
+            self.assertEqual(_entry_rows(out), ["2025-04-01 00:30"])
+
+    def test_a_browser_tape_keeps_the_signal_bar(self) -> None:
+        # No returned range: TradingView's first bar is not on record.
+        stamps = list(range(ETH_FIRST_BAR, _utc_ms(2025, 4, 4) + 1, MIN15))
+        browser = {k: v for k, v in ETH_METRICS.items()
+                   if k not in ("tapeChannel", "wsProvenance")}
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            feed, out = _probe(d, stamps, self._eth_tape(), metrics=browser)
+            _run_main(d, feed, out, self._eth_engine_trades())
+            self.assertEqual(_FakeStrategy.calls[0]["trade_start_time_ms"], S1_FILL - MIN15)
 
     def test_explicit_emit_window_reports_what_it_gates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -949,6 +949,11 @@ list(APPEND TEST_SOURCES test_same_bar_reissue_tapes)
 # (tests/fixtures/open_fill_order), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_open_fill_order_tapes)
 
+# Lane RUN-HARNESS: TradingView computes a deep backtest from its first bar and
+# no earlier one, its broker live from there (tests/fixtures/run_harness_window),
+# replayed with run_strategy.py's window for a run that starts on that bar.
+list(APPEND TEST_SOURCES test_run_harness_window_tapes)
+
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bare_host_contracts)
@@ -2487,6 +2492,12 @@ endif()
 if(TARGET test_open_fill_order_tapes)
     target_compile_definitions(test_open_fill_order_tapes PRIVATE
         PINEFORGE_OPEN_FILL_ORDER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/open_fill_order")
+endif()
+
+# Lane RUN-HARNESS reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_run_harness_window_tapes)
+    target_compile_definitions(test_run_harness_window_tapes PRIVATE
+        PINEFORGE_RUN_HARNESS_WINDOW_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/run_harness_window")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape
