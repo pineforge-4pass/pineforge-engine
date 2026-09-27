@@ -1,0 +1,16 @@
+{
+  "title": "W6B P2b limit class at one open, pyramiding 2",
+  "slug": "w6b-p2b-limit-class-pyramiding2",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:32:03.299Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "25543ae8e043ea58283a785d108cac5570a28b37045e20948bcb78ff6ec90d4c",
+  "tv_trades_sha256": "2a3f906b05037f148f4b3be8d53a2267a5c2031c29acc86400f249b0a54228a6",
+  "tv_trades_rows": 48
+}

@@ -2638,7 +2638,8 @@ bool PineExecutionAdapter::core_sizing_price_matches(
 }
 
 bool PineExecutionAdapter::same_bar_market_tx_scope() const {
-    return config_.commission_value == 0.0 && same_point_pair_scope();
+    return config_.commission_value == 0.0 && config_.pyramiding <= 1
+        && same_point_pair_scope();
 }
 
 // R5 lane W6B-ENG-PAIRS: where the flat-pair rules of W6-ENG-FILL-ORDER hold
@@ -2646,7 +2647,8 @@ bool PineExecutionAdapter::same_bar_market_tx_scope() const {
 // quantity plus the pending market's, and that transaction's admission. The
 // zero-cost batch above is its subset; TradingView books a commissioned pair
 // the same way, the admission leaving the commission out (lab tv w6-f10i,
-// w6-f10j, w6b-p1b/p1c/p1d, tests/fixtures/same_point_entries).
+// w6-f10j, w6b-p1b/p1c/p1d), and a pair under any pyramiding, same-side lots
+// by rank too (w6-f10c, w6b-p2a/p2b/p2c; tests/fixtures/same_point_entries).
 bool PineExecutionAdapter::same_point_pair_scope() const {
     const bool all_in_percent = config_.default_qty_type
         == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
@@ -2657,8 +2659,7 @@ bool PineExecutionAdapter::same_point_pair_scope() const {
             && config_.default_qty_value < 100.0);
     const bool variable_short_seed = variable_default && short_seed_context_is_live();
     if (!host_ || config_.process_orders_on_close || config_.calc_on_order_fills
-        || coof_recalc_active_ || config_.close_entries_rule_any
-        || config_.pyramiding > 1 || all_in_percent
+        || coof_recalc_active_ || config_.close_entries_rule_any || all_in_percent
         || (!fixed_default && !variable_short_seed)
         || config_.slippage != 0
         || risk_.direction != 0 || risk_.max_cons_loss_days != 0
@@ -6167,9 +6168,13 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             // call's, and TradingView costs that transaction at the signal:
             // past the equity it drops the later call (lab tv
             // w6-f10g-pair-gross; the KI-65 NQ probe on CME_MINI:NQ1! 15),
-            // the commission left out (w6b-p1b/p1c-pair-gross-*).
+            // the commission left out (w6b-p1b/p1c-pair-gross-*). A market
+            // call under pyramiding 2 is the batch's, whose exact pair is
+            // admitted when it is finalized (p2_explicit_pair).
             if (current == 0.0 && explicit_fixed && source_point
-                && same_point_pair_scope()) {
+                && same_point_pair_scope() && !(config_.pyramiding == 2 && !priced)
+                && (config_.pyramiding <= 1 || same_point_two_leg_book(
+                        id, source_point->decision.script_bar_open_ms))) {
                 const double pending = pending_opposite_market_units(
                     is_long, source_point->decision.script_bar_open_ms, id);
                 if (std::isfinite(pending)) units += pending;
@@ -6235,7 +6240,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         }
         if (flat_pending_opposite_market_units > 0.0
             && pending_same_bar_commands_.size() == 1U)
-            flush_pending_same_bar_commands();
+            flush_pending_same_bar_commands(/*flat_pair_follows=*/true);
         else if (pending_same_bar_commands_.size() != 1U)
             flat_pending_opposite_market_units = 0.0;
     }
@@ -6514,7 +6519,9 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     // pending market call's (lab tv w6-f10j-pair-commission-per-order MM-LF).
     if (!priced && !same_bar_market_candidate && current == 0.0 && explicit_fixed
         && finite_positive(qty) && oca_name.empty() && source_point
-        && same_point_pair_scope()) {
+        && same_point_pair_scope()
+        && (config_.pyramiding <= 1
+            || same_point_two_leg_book(id, source_point->decision.script_bar_open_ms))) {
         const double pending = pending_opposite_market_units(
             is_long, source_point->decision.script_bar_open_ms, id);
         if (finite_positive(pending)) {
@@ -6770,7 +6777,9 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         const bool fills_ahead = snapshot.projection_opposite_market_predecessor
             && same_point_pair_scope() && explicit_fixed && is_long
             && pure_stop_entry && finite_positive(current_point->price)
-            && stop_price <= current_point->price;
+            && stop_price <= current_point->price
+            && (config_.pyramiding <= 1 || same_point_two_leg_book(
+                    id, current_point->decision.script_bar_open_ms));
         const double predecessor_units = fills_ahead
             ? pending_opposite_market_units(
                 is_long, current_point->decision.script_bar_open_ms, id)
@@ -10961,7 +10970,7 @@ void PineExecutionAdapter::flush_pending_entries() {
     }
 }
 
-void PineExecutionAdapter::flush_pending_same_bar_commands() {
+void PineExecutionAdapter::flush_pending_same_bar_commands(bool flat_pair_follows) {
     auto queued = std::move(pending_same_bar_commands_);
     pending_same_bar_commands_.clear();
     pending_same_bar_close_qty_ = 0.0;
@@ -11066,7 +11075,46 @@ void PineExecutionAdapter::flush_pending_same_bar_commands() {
                 key_for(right.snapshot.source_id)) != live_by_source_key_.end();
             return left_replaces && !right_replaces;
         });
-        for (auto& command : queued) {
+        // From flat, a call with an opposite entry on its bar trades its
+        // frozen transaction -- its own quantity plus any pending opposite
+        // market's -- and is never re-sized at the fill into a reversal of
+        // what the other leg opened first (lab tv w6b-p2a-open-pair-pyramiding2
+        // SM-LF and MS-SF, the tape of w6-f10a-open-pair; lane W6B-ENG-PAIRS).
+        // Only the exact book the tapes measure: one market call beside one
+        // priced opposite call of its bar, nothing replaced or cancelled and
+        // no entry resting from an earlier bar; every other book keeps the
+        // ordinary route below.
+        std::vector<bool> flat_pair_member(queued.size(), false);
+        if (batch_start == 0.0 && same_point_pair_scope() && !source_batch_mutated_
+            && queued.size() == 1U && queued[0].opening
+            && queued[0].snapshot.family == PineOrderFamily::Entry) {
+            const auto& row = queued[0].snapshot;
+            std::size_t opposite = 0;
+            bool foreign = false;
+            for (const auto& handle : live_handles_) {
+                const auto found = placement_.find(handle.incarnation);
+                if (found == placement_.end() || !found->second.opening
+                    || (found->second.family != PineOrderFamily::Entry
+                        && found->second.family != PineOrderFamily::Order)) {
+                    continue;
+                }
+                const auto& leg = found->second;
+                const bool priced_leg = finite_positive(leg.exit_levels.stop)
+                    != finite_positive(leg.exit_levels.limit);
+                const bool this_bar = leg.family == PineOrderFamily::Entry
+                    && leg.placement_script_open_ms == row.placement_script_open_ms
+                    && leg.is_long != row.is_long && priced_leg
+                    && finite_positive(leg.requested_qty) && leg.oca_name.empty()
+                    && !leg.birth.from_fill()
+                    && (leg.qty_type < 0 || leg.qty_type == static_cast<int>(QtyType::FIXED));
+                if (this_bar) ++opposite;
+                else foreign = true;
+            }
+            flat_pair_member[0] = !foreign
+                && (flat_pair_follows ? opposite == 0 : opposite == 1);
+        }
+        for (std::size_t i = 0; i < queued.size(); ++i) {
+            auto& command = queued[i];
             auto request = std::move(command.request);
             auto snapshot = std::move(command.snapshot);
             snapshot.paired_flat_market_candidate = false;
@@ -11076,7 +11124,12 @@ void PineExecutionAdapter::flush_pending_same_bar_commands() {
             snapshot.frozen_market_instruction = false;
             const double own = finite_positive(snapshot.frozen_market_own_units)
                 ? snapshot.frozen_market_own_units : snapshot.requested_qty;
-            if (command.opening && finite_positive(own)) {
+            if (command.opening && finite_positive(own) && flat_pair_member[i]) {
+                const double units = finite_positive(snapshot.frozen_market_transaction_units)
+                    ? snapshot.frozen_market_transaction_units : own;
+                request.intent = native_order::Transact{snapshot.is_long ? units : -units};
+                snapshot.reverse_to = false;
+            } else if (command.opening && finite_positive(own)) {
                 request.intent = native_order::HostSized{
                     native_order::HostSizedKind::Open,
                     snapshot.is_long ? native_order::Side::Long
@@ -20268,6 +20321,33 @@ bool PineExecutionAdapter::same_point_pair_fill_follows(
         });
 }
 
+// R5 lane W6B-ENG-PAIRS, item 2: under pyramiding above 1 the pending
+// market's quantity joins the later call's transaction on the book the tapes
+// measure only (w6b-p2a, w6b-p2b): the call and one other entry-like order,
+// both of this script bar, nothing resting from an earlier one. A larger book
+// keeps its legacy route (test_dual_entry_placement_sizing_l4b MM cases).
+bool PineExecutionAdapter::same_point_two_leg_book(
+        const SourceId& id, std::int64_t script_open_ms) const {
+    std::size_t others = 0;
+    bool foreign = false;
+    const auto count = [&](const PlacementSnapshot& row) {
+        if (!row.opening || (row.family != PineOrderFamily::Entry
+                             && row.family != PineOrderFamily::Order)
+            || row.source_id == id) {
+            return;
+        }
+        if (row.placement_script_open_ms == script_open_ms) ++others;
+        else foreign = true;
+    };
+    for (const auto& prior : pending_same_bar_commands_) count(prior.snapshot);
+    for (const auto& prior : pending_entries_) count(prior.snapshot);
+    for (const auto& handle : live_handles_) {
+        const auto found = placement_.find(handle.incarnation);
+        if (found != placement_.end()) count(found->second);
+    }
+    return !foreign && others == 1;
+}
+
 // R5 lane W6-ENG-FILL-ORDER, family F10. TradingView fills the entries that
 // reach one fill point in a fixed order of side and kind -- buy market, buy
 // stop, sell market, sell stop, buy limit, sell limit -- and entries of one
@@ -20325,6 +20405,34 @@ void PineExecutionAdapter::order_same_point_entries() {
                                                     : (row.is_long ? 0 : 2)), 0});
     }
     if (candidates.size() < 2 || pure_stops) return;
+    // Under pyramiding above 1 the rank covers the books lane W6B-ENG-PAIRS
+    // measured -- a two-leg pair, or legs of one side -- and nothing else:
+    // a third entry-like order of either side, one resting from an earlier
+    // bar, or a replaced or cancelled call keeps the legacy source order its
+    // pinned cases assert (test_dual_entry_placement_sizing_l4b MM cases).
+    if (config_.pyramiding > 1) {
+        if (source_batch_mutated_) return;
+        for (const auto& candidate : candidates) {
+            const auto found = placement_.find(candidate.handle.incarnation);
+            if (found != placement_.end() && found->second.replaced_opening) return;
+        }
+        const auto buys = [](const Candidate& c) { return c.rank == 0 || c.rank == 1 || c.rank == 4; };
+        const auto buy_count = std::count_if(candidates.begin(), candidates.end(), buys);
+        const bool both_sides = buy_count != 0
+            && buy_count != static_cast<std::ptrdiff_t>(candidates.size());
+        if (both_sides && candidates.size() > 2) return;
+        for (const auto& handle : live_handles_) {
+            const auto found = placement_.find(handle.incarnation);
+            if (found == placement_.end() || !found->second.opening
+                || (found->second.family != PineOrderFamily::Entry
+                    && found->second.family != PineOrderFamily::Order)) {
+                continue;
+            }
+            const bool candidate = std::any_of(candidates.begin(), candidates.end(),
+                [&](const Candidate& c) { return c.handle == handle; });
+            if (!candidate) return;
+        }
+    }
     const auto working = host.native_working_requests();
     const auto definition = [&](const native_order::RequestHandle& handle) {
         const auto row = std::find_if(working.begin(), working.end(),

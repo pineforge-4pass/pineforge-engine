@@ -1,0 +1,16 @@
+{
+  "title": "W6B P2a opposite pair at one open, pyramiding 2",
+  "slug": "w6b-p2a-open-pair-pyramiding2",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:31:59.703Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "48f1c9876388d0bec46108105b426c0d86029bfb6cdf2d5b4fbf6085203f1cfb",
+  "tv_trades_sha256": "b93840d8a6a8f35a379d975017b1a5ff90366ab672764da4339bde0dfc981295",
+  "tv_trades_rows": 80
+}

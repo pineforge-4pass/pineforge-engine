@@ -134,6 +134,33 @@ A pending opposite market the tapes do not measure -- a re-issue of the
 caller's own id, which replaces it, a cash or percent quantity, an OCA name,
 one placed by a fill recalculation -- keeps the legacy route.
 
+## F10 under pyramiding above 1 (lane W6B-ENG-PAIRS, item 2)
+
+| tape | trades | `strategy()` declares | tv_trades.csv sha256 |
+|---|---:|---|---|
+| `w6b-p2a-open-pair-pyramiding2` | 40 | `w6-f10a-open-pair`'s cells, pyramiding 2 | `b93840d8a6a8f35a379d975017b1a5ff90366ab672764da4339bde0dfc981295` |
+| `w6b-p2b-limit-class-pyramiding2` | 24 | `w6-f10b-limit-class`'s cells, pyramiding 2 | `2a3f906b05037f148f4b3be8d53a2267a5c2031c29acc86400f249b0a54228a6` |
+| `w6b-p2c-same-side-pyramiding3` | 72 | fixed 1, pyramiding 3 | `28bf6c14db3f7f0611dc3f179ada1cd018d0411d735734b1b2bf61e1d6dc43ed` |
+
+Under pyramiding 2 TradingView books both W6 pair tapes byte for byte as
+under pyramiding 0 (`w6b-p2a`, `w6b-p2b`), and two legs of one side fill by
+rank (`w6-f10c-same-side-class`). `w6b-p2c` places three legs of one side --
+a market, a stop and a limit, in each of the six orders, 1, 2 and 3 units in
+placement order -- under pyramiding 3: the market fills first, then the stop,
+then the limit, every time.
+
+The engine kept placement order between same-side lots, and booked a
+pyramiding-2 pair with a priced leg through its legacy route for a book that
+is not an exact market pair (`flush_pending_same_bar_commands`), which
+re-sizes the market leg into a full reversal at the fill: a sell market after
+a buy stop reversed the stop's long instead of closing it (`SM-LF`). The pair
+scope now covers any pyramiding, and that route keeps the market leg's frozen
+transaction when the book is exactly the pair. Books the tapes do not
+measure -- a third entry-like order of either side, one resting from an
+earlier bar, a replaced or cancelled call -- keep the legacy source order the
+pyramiding-2 MM cases of `test_dual_entry_placement_sizing_l4b` pin, and a
+pyramiding-2 market pair keeps its admission at the batch's finalization.
+
 ## F12: a reversing stop and a protective stop on one bar
 
 | tape | trades | `strategy()` declares | tv_trades.csv sha256 |
@@ -167,9 +194,6 @@ open is already through now fills at that open.
 
 The test leaves these out; the tapes stay as evidence.
 
-- `w6-f10c-same-side-class`, pyramiding 2: every cell. The engine keeps
-  placement order between two same-side lots at one open; TradingView fills
-  the market lot, then the stop, then the limit (the tape reading holds it).
 - `w6-f10d-pooc-pair` / `w6-f10e-pooc-coof-pair`: the cells with a priced leg
   (`MS-SF`, `SM-SF`, `LM-SF`, `LM-LF`, `ML-SF`). Under
   process_orders_on_close a priced leg placed at the close fills at that close

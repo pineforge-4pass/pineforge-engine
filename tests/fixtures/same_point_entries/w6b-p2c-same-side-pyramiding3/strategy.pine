@@ -1,0 +1,82 @@
+//@version=6
+strategy("W6B P2c three same-side legs at one open, pyramiding 3", overlay=true,
+     initial_capital=1000000, pyramiding=3,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     commission_type=strategy.commission.percent, commission_value=0,
+     slippage=0, margin_long=100, margin_short=100,
+     process_orders_on_close=false, calc_on_order_fills=false)
+
+// Lane W6B-ENG-PAIRS, item 2. From flat, pyramiding 3: three strategy.entry
+// calls of ONE side on one bar, a market, a stop and a limit in every order,
+// all marketable at the next open (a buy stop / sell limit at half the
+// close, a sell stop / buy limit at twice it) with quantities 1, 2, 3 in
+// placement order. The order of the trade rows shows which leg TradingView
+// fills first. Cell names: the three kinds in placement order (M market,
+// S stop, L limit), then L (long) or S (short). Each cell is flattened 30
+// minutes later.
+
+int t0 = timestamp("UTC", 2025, 4, 8, 0, 0)
+int stepMs = 2 * 60 * 60 * 1000
+int nCells = 12
+int rel = time - t0
+bool inRange = rel >= 0 and rel < 2 * nCells * stepMs
+bool eventBar = inRange and rel % stepMs == 0
+bool cleanupBar = inRange and rel % stepMs == 30 * 60 * 1000
+int cell = inRange ? (rel - rel % stepMs) / stepMs % nCells : -1
+
+float lo = close * 0.5
+float hi = close * 2.0
+
+if eventBar and strategy.position_size == 0
+    if cell == 0
+        strategy.entry("E1", strategy.long, qty=1, comment="MSL-L-1")
+        strategy.entry("E2", strategy.long, qty=2, stop=lo, comment="MSL-L-2")
+        strategy.entry("E3", strategy.long, qty=3, limit=hi, comment="MSL-L-3")
+    else if cell == 1
+        strategy.entry("E1", strategy.long, qty=1, comment="MLS-L-1")
+        strategy.entry("E2", strategy.long, qty=2, limit=hi, comment="MLS-L-2")
+        strategy.entry("E3", strategy.long, qty=3, stop=lo, comment="MLS-L-3")
+    else if cell == 2
+        strategy.entry("E1", strategy.long, qty=1, stop=lo, comment="SML-L-1")
+        strategy.entry("E2", strategy.long, qty=2, comment="SML-L-2")
+        strategy.entry("E3", strategy.long, qty=3, limit=hi, comment="SML-L-3")
+    else if cell == 3
+        strategy.entry("E1", strategy.long, qty=1, stop=lo, comment="SLM-L-1")
+        strategy.entry("E2", strategy.long, qty=2, limit=hi, comment="SLM-L-2")
+        strategy.entry("E3", strategy.long, qty=3, comment="SLM-L-3")
+    else if cell == 4
+        strategy.entry("E1", strategy.long, qty=1, limit=hi, comment="LMS-L-1")
+        strategy.entry("E2", strategy.long, qty=2, comment="LMS-L-2")
+        strategy.entry("E3", strategy.long, qty=3, stop=lo, comment="LMS-L-3")
+    else if cell == 5
+        strategy.entry("E1", strategy.long, qty=1, limit=hi, comment="LSM-L-1")
+        strategy.entry("E2", strategy.long, qty=2, stop=lo, comment="LSM-L-2")
+        strategy.entry("E3", strategy.long, qty=3, comment="LSM-L-3")
+    else if cell == 6
+        strategy.entry("E1", strategy.short, qty=1, comment="MSL-S-1")
+        strategy.entry("E2", strategy.short, qty=2, stop=hi, comment="MSL-S-2")
+        strategy.entry("E3", strategy.short, qty=3, limit=lo, comment="MSL-S-3")
+    else if cell == 7
+        strategy.entry("E1", strategy.short, qty=1, comment="MLS-S-1")
+        strategy.entry("E2", strategy.short, qty=2, limit=lo, comment="MLS-S-2")
+        strategy.entry("E3", strategy.short, qty=3, stop=hi, comment="MLS-S-3")
+    else if cell == 8
+        strategy.entry("E1", strategy.short, qty=1, stop=hi, comment="SML-S-1")
+        strategy.entry("E2", strategy.short, qty=2, comment="SML-S-2")
+        strategy.entry("E3", strategy.short, qty=3, limit=lo, comment="SML-S-3")
+    else if cell == 9
+        strategy.entry("E1", strategy.short, qty=1, stop=hi, comment="SLM-S-1")
+        strategy.entry("E2", strategy.short, qty=2, limit=lo, comment="SLM-S-2")
+        strategy.entry("E3", strategy.short, qty=3, comment="SLM-S-3")
+    else if cell == 10
+        strategy.entry("E1", strategy.short, qty=1, limit=lo, comment="LMS-S-1")
+        strategy.entry("E2", strategy.short, qty=2, comment="LMS-S-2")
+        strategy.entry("E3", strategy.short, qty=3, stop=hi, comment="LMS-S-3")
+    else if cell == 11
+        strategy.entry("E1", strategy.short, qty=1, limit=lo, comment="LSM-S-1")
+        strategy.entry("E2", strategy.short, qty=2, stop=hi, comment="LSM-S-2")
+        strategy.entry("E3", strategy.short, qty=3, comment="LSM-S-3")
+
+if cleanupBar
+    strategy.cancel_all()
+    strategy.close_all(comment="FLT")

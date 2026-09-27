@@ -1863,7 +1863,7 @@ private:
                          bool include_next_open = false);
     native_order::Owner owner_for_close(const SourceId&, bool dynamic) const;
     bool same_bar_market_tx_scope() const;
-    void flush_pending_same_bar_commands();
+    void flush_pending_same_bar_commands(bool flat_pair_follows = false);
     // The placement-time default quantity: the core's own conversion, read as
     // a query (NativeStrategyHost::native_sized_units) and floored by the
     // source.  The source's money band and affordability gates consume the
@@ -2248,6 +2248,7 @@ private:
     // R5 lane W6B-ENG-PAIRS: the configurations those flat-pair rules cover,
     // and whether a pair's opposite member fills next at the same price.
     bool same_point_pair_scope() const;
+    bool same_point_two_leg_book(const SourceId& id, std::int64_t script_open_ms) const;
     bool same_point_pair_fill_follows(const PlacementSnapshot& filled,
                                       const native_order::RequestHandle& filled_handle,
                                       double price) const;

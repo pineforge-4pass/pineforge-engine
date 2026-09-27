@@ -1,0 +1,16 @@
+{
+  "title": "W6B P2c three same-side legs at one open, pyramiding 3",
+  "slug": "w6b-p2c-same-side-pyramiding3",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:45:59.057Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "06b9c0cadb84522486f06917d47fb01256adee04f7f744bab3dae0f7c3b046c7",
+  "tv_trades_sha256": "28bf6c14db3f7f0611dc3f179ada1cd018d0411d735734b1b2bf61e1d6dc43ed",
+  "tv_trades_rows": 144
+}

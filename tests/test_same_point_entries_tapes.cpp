@@ -21,7 +21,9 @@
  *        With a commission (lane W6B-ENG-PAIRS) the order and the one
  *        transaction are the same: its fee is split across the rows it books
  *        by quantity, and its admission against the equity leaves the fee
- *        out, however little of the equity the fee would leave.
+ *        out, however little of the equity the fee would leave. Under
+ *        pyramiding 2 a pair books as under 0, and same-side lots fill by
+ *        rank too, three of them under pyramiding 3.
  *   F12  A held position's protective strategy.exit stop and a reversing
  *        strategy.entry stop on the same side of the price: the level the
  *        bar's path reaches first fills first, the magnifier changes nothing,
@@ -43,6 +45,7 @@
 #include <pineforge/bar.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -202,6 +205,7 @@ struct Leg {
 };
 struct Cell {
     Leg first, second;
+    std::vector<Leg> more = {};  // w6b-p2c: a third leg
 };
 
 // The probes' cell tables, as their strategy.pine sources declare them.
@@ -256,6 +260,35 @@ const std::vector<Cell> kClosePair = {
     {{true, 'L', 1, "LM-LF-1"}, {false, 'M', 1, "LM-LF-2"}},
     {{false, 'M', 2, "MM-SF-Q2-1"}, {true, 'M', 3, "MM-SF-Q3-2"}},
     {{false, 'M', 1, "ML-SF-1"}, {true, 'L', 1, "ML-SF-2"}},
+};
+
+// w6b-p2c: three same-side legs, a market, a stop and a limit in every order,
+// quantities 1, 2 and 3 in placement order, under pyramiding 3.
+const std::vector<Cell> kSameSideTriple = {
+    {{true, 'M', 1, "MSL-L-1"}, {true, 'S', 2, "MSL-L-2"},
+     {{true, 'L', 3, "MSL-L-3"}}},
+    {{true, 'M', 1, "MLS-L-1"}, {true, 'L', 2, "MLS-L-2"},
+     {{true, 'S', 3, "MLS-L-3"}}},
+    {{true, 'S', 1, "SML-L-1"}, {true, 'M', 2, "SML-L-2"},
+     {{true, 'L', 3, "SML-L-3"}}},
+    {{true, 'S', 1, "SLM-L-1"}, {true, 'L', 2, "SLM-L-2"},
+     {{true, 'M', 3, "SLM-L-3"}}},
+    {{true, 'L', 1, "LMS-L-1"}, {true, 'M', 2, "LMS-L-2"},
+     {{true, 'S', 3, "LMS-L-3"}}},
+    {{true, 'L', 1, "LSM-L-1"}, {true, 'S', 2, "LSM-L-2"},
+     {{true, 'M', 3, "LSM-L-3"}}},
+    {{false, 'M', 1, "MSL-S-1"}, {false, 'S', 2, "MSL-S-2"},
+     {{false, 'L', 3, "MSL-S-3"}}},
+    {{false, 'M', 1, "MLS-S-1"}, {false, 'L', 2, "MLS-S-2"},
+     {{false, 'S', 3, "MLS-S-3"}}},
+    {{false, 'S', 1, "SML-S-1"}, {false, 'M', 2, "SML-S-2"},
+     {{false, 'L', 3, "SML-S-3"}}},
+    {{false, 'S', 1, "SLM-S-1"}, {false, 'L', 2, "SLM-S-2"},
+     {{false, 'M', 3, "SLM-S-3"}}},
+    {{false, 'L', 1, "LMS-S-1"}, {false, 'M', 2, "LMS-S-2"},
+     {{false, 'S', 3, "LMS-S-3"}}},
+    {{false, 'L', 1, "LSM-S-1"}, {false, 'S', 2, "LSM-S-2"},
+     {{false, 'M', 3, "LSM-S-3"}}},
 };
 
 // w6-f10i / w6-f10j: the pairs with a commission.
@@ -326,6 +359,8 @@ private:
             const Cell& cell = (*cells_)[static_cast<std::size_t>((rel / step_ms_) % n)];
             place("E1", cell.first);
             place("E2", cell.second);
+            for (std::size_t k = 0; k < cell.more.size(); ++k)
+                place("E" + std::to_string(3 + k), cell.more[k]);
         }
         if (cleanup && (!guarded || signed_position_size() != 0.0)) {
             acted_bar_ = pine_bar_index();
@@ -533,6 +568,7 @@ int main() {
     const std::vector<int> all14 = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};
     const std::vector<int> all8 = {0, 1, 2, 3, 4, 5, 6, 7};
     const std::vector<int> all9 = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+    const std::vector<int> all12 = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
     const std::vector<int> all4 = {0, 1, 2, 3};
     const auto per_order = CommissionType::CASH_PER_ORDER;
     const auto percent = CommissionType::PERCENT;
@@ -585,6 +621,17 @@ int main() {
          "fixed 1, capital 10000, commission 1 percent",
          commissioned(fixed_config(0, false, false, 10000.0), percent, 1.0), all9, 30, {},
          kHourMs, -0.01, true},
+        // Item 2: pyramiding above 1.
+        {"w6-f10c-same-side-class", Probe::Pair, &kSameSide, 2, "fixed 1, pyramiding 2",
+         fixed_config(2, false, false), all8, 32},
+        {"w6b-p2a-open-pair-pyramiding2", Probe::Pair, &kOpenPair, 2,
+         "fixed 1, pyramiding 2 (the tape equals w6-f10a's)", fixed_config(2, false, false),
+         all14, 40},
+        {"w6b-p2b-limit-class-pyramiding2", Probe::Pair, &kLimitClass, 2,
+         "fixed 1, pyramiding 2 (the tape equals w6-f10b's)", fixed_config(2, false, false),
+         all8, 24},
+        {"w6b-p2c-same-side-pyramiding3", Probe::Pair, &kSameSideTriple, 2,
+         "fixed 1, pyramiding 3", fixed_config(3, false, false), all12, 72},
     };
 
     for (const Case& c : cases) {
@@ -644,6 +691,8 @@ int main() {
         {"w6-f10i-pair-commission-percent", &kCommissionPair, 8},
         {"w6-f10j-pair-commission-per-order", &kCommissionPair, 8},
         {"w6b-p1d-open-pair-per-order", &kOpenPair, 28},
+        {"w6b-p2a-open-pair-pyramiding2", &kOpenPair, 28},
+        {"w6b-p2b-limit-class-pyramiding2", &kLimitClass, 16},
     };
     for (const PairTape& pt : pair_tapes) {
         const Tape tape = tape_trades(pt.tape, end_ms);
@@ -676,6 +725,31 @@ int main() {
         }
         std::printf("   %s: %zu cells with both legs traded\n", pt.tape, both);
         CHECK(both == pt.both_traded);
+    }
+
+    // Three same-side legs under pyramiding 3 (w6b-p2c): the rows follow the
+    // legs' rank -- market, stop, limit -- whatever order they were placed in.
+    {
+        const Tape tape = tape_trades("w6b-p2c-same-side-pyramiding3", end_ms);
+        std::map<std::int64_t, std::vector<std::size_t>> slots;
+        for (std::size_t i = 0; i < tape.trades.size(); ++i) {
+            const std::int64_t rel = std::get<0>(tape.trades[i]) - at(8, 0, 0);
+            if (rel >= 0) slots[rel / kStepMs].push_back(i);
+        }
+        std::size_t ordered = 0;
+        for (const auto& [slot, rows] : slots) {
+            const Cell& cell = kSameSideTriple[static_cast<std::size_t>(slot) % kSameSideTriple.size()];
+            std::vector<Leg> legs = {cell.first, cell.second, cell.more.front()};
+            std::stable_sort(legs.begin(), legs.end(),
+                             [&](const Leg& a, const Leg& b) { return rank(a) < rank(b); });
+            bool same = rows.size() == legs.size();
+            for (std::size_t k = 0; same && k < legs.size(); ++k)
+                same = tape.entries[rows[k]] == legs[k].comment;
+            CHECK(same);
+            if (same) ++ordered;
+        }
+        std::printf("   w6b-p2c-same-side-pyramiding3: %zu cells in rank order\n", ordered);
+        CHECK(ordered == 24);
     }
 
     // The gross-admission bands, on TradingView's own rows: the later call
