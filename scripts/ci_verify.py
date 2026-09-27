@@ -271,7 +271,17 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #                   previous arena, the cost pins)
 # All three register in release too. 290 registered, 289 run: the WebSocket
 # row still skips on a system libcurl.
-KERNEL_MIN_TESTS = 289
+# 291 run = those 289 plus lane XSYM-D's two source-free rows, counted with
+# ctest -N on the lane's tree:
+#   +1 test_native_instrument_feed (another symbol's bars merged by interval:
+#      a foreign session, a daily close seen a day late, weekend carry and its
+#      clearing, a lower-timeframe feed under lookahead, history before the
+#      first input, the raw label partition)
+#   +1 test_run_strategy_requests (the harness's probe request data: the
+#      manifest, the sha256 pins, the refusals by name)
+# Both register in release too. 292 registered, 291 run: the WebSocket row
+# still skips on a system libcurl.
+KERNEL_MIN_TESTS = 291
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -426,7 +436,15 @@ KERNEL_MIN_TESTS = 289
 #                   (ta.* with a simple or series length, on TradingView's
 #                   tapes)
 # No release row skips, so 716 registered is 716 run.
-RELEASE_MIN_TESTS = 716
+# 720 = those 716 plus lane XSYM-D's four, counted with ctest -N on the lane's
+# tree: the two KERNEL_MIN_TESTS rows above, which register here too, and two
+# source-bound rows the kernel profile does not build:
+#   +1 test_native_instrument_feed_twin (the Pine adapter's request sites of
+#      another symbol against the kernel's delivery rule)
+#   +1 test_symbol_request_data (the symbol-data C ABI, the recorded series
+#      store, the stream refusal)
+# No release row skips, so 720 registered is 720 run.
+RELEASE_MIN_TESTS = 720
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
@@ -454,9 +472,10 @@ ADR_RULED_TEXTS_MIN = 40
 # 684/684/693 with INT26 round 2's tape row; 697/697/706 at INT27, each with
 # INT27's thirteen rows of RELEASE_MIN_TESTS (K-RUNERR +1, PERF-ZONED +1,
 # TV-DEFAULTS +1, MAG-INTRABAR +3, PAR-ORDERS-3 +1, K-DRAWSNAP +3,
-# K-TA-DYNLEN +3), counted the same way.
+# K-TA-DYNLEN +3), counted the same way; 701/701/710 with lane XSYM-D's four
+# rows of RELEASE_MIN_TESTS in each, counted the same way.
 # An excluded run must still discover at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 697, 'sanitizers': 697, 'native': 706}
+EXCLUDED_REGISTERED_MIN = {'debug': 701, 'sanitizers': 701, 'native': 710}
 # The ctest stage's bound. A full sanitizers run (push to main, a manual
 # dispatch, the maintainers' verification) ran out of its 30 minutes twice on
 # main's four-core runner before every row had finished, so it gets an hour; a
