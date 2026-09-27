@@ -1,0 +1,16 @@
+{
+  "title": "W3 F05 s16 POOC stop first ever, target first in later trades",
+  "slug": "w3f05-s16-pooc-qty-first-ever-stop",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:47:27.222Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "b2565b44afa3429b9ba09b4598182ff89b50d2ab39fc170a1accfe7549bca5e9",
+  "tv_trades_sha256": "d21cbeacd02510906b27e850eac1631b1bc901a25c06eb41e3ce45ff43873503",
+  "tv_trades_rows": 10
+}

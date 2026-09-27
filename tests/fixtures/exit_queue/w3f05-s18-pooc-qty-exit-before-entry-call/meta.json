@@ -1,0 +1,16 @@
+{
+  "title": "W3 F05 s18 POOC exit issued before its entry call",
+  "slug": "w3f05-s18-pooc-qty-exit-before-entry-call",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:58:48.090Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "5ba6a2e3eeaa361b3b098bf5ef0f252c23f5bfd6511efd36891f7c1dc7f2b4f9",
+  "tv_trades_sha256": "8396c7e265cd69e1549265167cc84df57fe1391c37ed4c20631d18aa5ace0646",
+  "tv_trades_rows": 10
+}

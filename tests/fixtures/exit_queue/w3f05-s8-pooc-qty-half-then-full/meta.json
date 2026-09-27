@@ -1,0 +1,16 @@
+{
+  "title": "W3 F05 s8 POOC half stop then full target",
+  "slug": "w3f05-s8-pooc-qty-half-then-full",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:44:30.273Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "5812f8337b01c90c6259857788dc2330bbb2fe70f326a6fbc10c13859c1b0a23",
+  "tv_trades_sha256": "98dbc59b3ffbeaa33f8d3604a095a83909c3a178cab4cf9281858a1c4fbe3859",
+  "tv_trades_rows": 20
+}

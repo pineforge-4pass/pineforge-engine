@@ -1,0 +1,16 @@
+{
+  "title": "W3 F05 s14 POOC stop issued once, target every bar",
+  "slug": "w3f05-s14-pooc-qty-stop-once",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:44:20.897Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "610422b4fe0989b88a2cb83ae220b7f72fc84b1baeedf65d28c62c9e53a012aa",
+  "tv_trades_sha256": "744eb973818d1ae82e8b1ad7b5ed02bb18fcd21abf5af5a72d34020d12adaf57",
+  "tv_trades_rows": 10
+}

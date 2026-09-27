@@ -1,0 +1,16 @@
+{
+  "title": "W3 F05 s7 POOC half stop and half target",
+  "slug": "w3f05-s7-pooc-qty-half-each",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:44:25.381Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "567287a5d8af2e0317114a23f97e0d4823c5bcf2a6ee9e0e149690551bcdc55b",
+  "tv_trades_sha256": "98dbc59b3ffbeaa33f8d3604a095a83909c3a178cab4cf9281858a1c4fbe3859",
+  "tv_trades_rows": 20
+}

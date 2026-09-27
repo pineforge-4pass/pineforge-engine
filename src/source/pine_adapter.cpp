@@ -418,6 +418,26 @@ bool throttled_rearm_already_queued(
     return false;
 }
 
+// An exit's place in TradingView's exit queue (lane W3-ENG-EXIT-ALLOC, F05).
+// TradingView reserves an entry's quantity for its exits in the order they
+// were created: re-issuing a strategy.exit modifies that order in place, it
+// does not queue it again, and a later-created exit gets only what the
+// earlier ones leave. Here a re-issue is a replacement chain, whose first
+// row's source_sequence remember() keeps as chain_origin_sequence. A leg
+// staged before remember() names its predecessor (still in the table while
+// its retirement is pending) or carries the source_sequence it retained; one
+// with neither is new, at the back of the queue.
+std::uint64_t exit_queue_rank(const PlacementTable& table,
+                              const PlacementSnapshot& row) noexcept {
+    if (row.chain_origin_sequence != 0) return row.chain_origin_sequence;
+    if (row.projection_predecessor != 0 && table.contains(row.projection_predecessor)) {
+        const std::uint64_t origin = table.at(row.projection_predecessor).chain_origin_sequence;
+        if (origin != 0) return origin;
+    }
+    if (row.source_sequence != 0) return row.source_sequence;
+    return std::numeric_limits<std::uint64_t>::max();
+}
+
 
 // True when the placement row of some live handle satisfies `row`: the
 // quiet-bar gates' scan (pine_quiet_bar.hpp). It reads and allocates nothing
@@ -4374,13 +4394,17 @@ bool PineExecutionAdapter::compute_exit_reservation(
         double percent = 100.0;
         bool explicit_units = false;
         std::vector<std::uint64_t> origins;
+        // The family's place in the exit queue (exit_queue_rank); a
+        // strategy.close reservation has none and always holds its units.
+        std::uint64_t rank = std::numeric_limits<std::uint64_t>::max();
+        bool queued_exit = false;
     };
     std::vector<Reservation> reservations;
     auto observe = [&](const PlacementSnapshot& snapshot) {
-        const bool exit = snapshot.family == PineOrderFamily::ExitLimit
+        const bool queued_exit = snapshot.family == PineOrderFamily::ExitLimit
             || snapshot.family == PineOrderFamily::ExitStop
-            || snapshot.family == PineOrderFamily::ExitTrail
-            || snapshot.family == PineOrderFamily::Close;
+            || snapshot.family == PineOrderFamily::ExitTrail;
+        const bool exit = queued_exit || snapshot.family == PineOrderFamily::Close;
         if (!exit || snapshot.from_entry != from_entry) return;
         // ab9714be pine_orders.cpp:599-602: close reservations only apply to positions matching active position_cycle_seq_
         if (snapshot.family == PineOrderFamily::Close
@@ -4403,6 +4427,8 @@ bool PineExecutionAdapter::compute_exit_reservation(
                 : live_basis * (percent / 100.0));
         const bool explicit_units = std::isfinite(snapshot.requested_qty);
         const auto origin = snapshot.bracket_origin.incarnation;
+        const auto rank = queued_exit ? exit_queue_rank(placement_, snapshot)
+                                      : std::numeric_limits<std::uint64_t>::max();
         if (row == reservations.end()) {
             Reservation next;
             next.family = family;
@@ -4410,6 +4436,8 @@ bool PineExecutionAdapter::compute_exit_reservation(
             next.percent = percent;
             next.explicit_units = explicit_units;
             if (explicit_units) next.origins.push_back(origin);
+            next.rank = rank;
+            next.queued_exit = queued_exit;
             reservations.push_back(std::move(next));
         } else {
             if (explicit_units && row->explicit_units
@@ -4422,6 +4450,8 @@ bool PineExecutionAdapter::compute_exit_reservation(
             }
             row->explicit_units = row->explicit_units || explicit_units;
             row->percent = std::max(row->percent, percent);
+            row->rank = std::min(row->rank, rank);
+            row->queued_exit = row->queued_exit && queued_exit;
         }
     };
     for (const auto& handle : live_handles_) {
@@ -4433,6 +4463,13 @@ bool PineExecutionAdapter::compute_exit_reservation(
     for (const auto& delayed : delayed_market_orders_) observe(delayed.snapshot);
 
     const auto this_family = key_for(exit_id, from_entry);
+    // A re-issued exit keeps its place in the queue (exit_queue_rank): an exit
+    // created after it holds nothing ahead of it, however it was re-issued
+    // since. A new exit is at the back and yields to every one already there.
+    std::uint64_t this_rank = std::numeric_limits<std::uint64_t>::max();
+    for (const auto& reservation : reservations) {
+        if (reservation.family == this_family) this_rank = reservation.rank;
+    }
     double already_reserved = 0.0;
     double preserved_reserved = kNaN;
     bool other_full_exit = false;
@@ -4445,6 +4482,7 @@ bool PineExecutionAdapter::compute_exit_reservation(
             }
             continue;
         }
+        if (reservation.queued_exit && reservation.rank > this_rank) continue;
         if (std::isfinite(reservation.units)) already_reserved += reservation.units;
         if (reservation.percent >= 100.0 - internal::kFullPercentEps) other_full_exit = true;
     }
@@ -4480,6 +4518,7 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
     struct Family {
         std::uint64_t key = 0;
         std::uint64_t command_sequence = 0;
+        std::uint64_t rank = std::numeric_limits<std::uint64_t>::max();
         double percent = 100.0;
         double existing = kNaN;
         double explicit_requested = kNaN;
@@ -4504,6 +4543,7 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
             Family next;
             next.key = key;
             next.command_sequence = snapshot.command_sequence;
+            next.rank = exit_queue_rank(placement_, snapshot);
             next.percent = std::isfinite(snapshot.qty_percent)
                 ? std::clamp(snapshot.qty_percent, 0.0, 100.0) : 100.0;
             next.existing = snapshot.projection_remaining_qty;
@@ -4514,6 +4554,7 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
         } else {
             family->command_sequence = std::min(family->command_sequence,
                                                 snapshot.command_sequence);
+            family->rank = std::min(family->rank, exit_queue_rank(placement_, snapshot));
             family->handles.push_back(handle);
             if (std::isfinite(snapshot.projection_remaining_qty)) {
                 family->existing = std::isfinite(family->existing)
@@ -4541,6 +4582,7 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
             Family next;
             next.key = key;
             next.command_sequence = snapshot.command_sequence;
+            next.rank = exit_queue_rank(placement_, snapshot);
             next.percent = std::isfinite(snapshot.qty_percent)
                 ? std::clamp(snapshot.qty_percent, 0.0, 100.0) : 100.0;
             next.existing = snapshot.projection_remaining_qty;
@@ -4551,6 +4593,7 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
         } else {
             family->command_sequence = std::min(family->command_sequence,
                                                 snapshot.command_sequence);
+            family->rank = std::min(family->rank, exit_queue_rank(placement_, snapshot));
             family->queued.push_back(index);
             if (std::isfinite(snapshot.projection_remaining_qty)) {
                 family->existing = std::isfinite(family->existing)
@@ -4578,6 +4621,7 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
             Family next;
             next.key = key;
             next.command_sequence = snapshot.command_sequence;
+            next.rank = exit_queue_rank(placement_, snapshot);
             next.percent = std::isfinite(snapshot.qty_percent)
                 ? std::clamp(snapshot.qty_percent, 0.0, 100.0) : 100.0;
             next.existing = snapshot.projection_remaining_qty;
@@ -4588,6 +4632,7 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
         } else {
             family->command_sequence = std::min(family->command_sequence,
                                                 snapshot.command_sequence);
+            family->rank = std::min(family->rank, exit_queue_rank(placement_, snapshot));
             family->delayed.push_back(index);
             if (std::isfinite(snapshot.projection_remaining_qty)) {
                 family->existing = std::isfinite(family->existing)
@@ -4602,8 +4647,11 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
             }
         }
     }
+    // The live position goes to the exits in their queue order
+    // (exit_queue_rank), each taking what the ones before it leave.
     std::stable_sort(families.begin(), families.end(),
         [](const Family& left, const Family& right) {
+            if (left.rank != right.rank) return left.rank < right.rank;
             return left.command_sequence < right.command_sequence;
         });
 

@@ -1,0 +1,16 @@
+{
+  "title": "W3 F05 s5 POOC stop declared before target",
+  "slug": "w3f05-s5-pooc-qty-stop-then-target",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:44:01.830Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "75e8d26775c4f69e67f0718d4b6b1922b4553945c5f33c74647995b0fcbd7bcb",
+  "tv_trades_sha256": "744eb973818d1ae82e8b1ad7b5ed02bb18fcd21abf5af5a72d34020d12adaf57",
+  "tv_trades_rows": 10
+}

@@ -1,0 +1,16 @@
+{
+  "title": "W3 F05 s15 POOC stop cancelled then issued again",
+  "slug": "w3f05-s15-pooc-qty-cancel-then-redeclare",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:47:20.620Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "ebb9f9490d6c3945aec645dee1f817efc32d6e698499879430589a8430d19c02",
+  "tv_trades_sha256": "f59409eb0f0ba90ba2509c96340435a35bde9857641eb8566b940d4173c1cf5a",
+  "tv_trades_rows": 10
+}

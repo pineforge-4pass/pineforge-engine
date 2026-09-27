@@ -864,6 +864,11 @@ list(APPEND TEST_SOURCES test_tv_strategy_defaults)
 # (tests/fixtures/tvdef_drops), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_tvdef_drops_tapes)
 
+# Lane W3-ENG-EXIT-ALLOC: strategy.exit orders reserve an entry's quantity in
+# the order they were created (tests/fixtures/exit_queue), on TradingView's
+# tapes.
+list(APPEND TEST_SOURCES test_exit_queue_tapes)
+
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bare_host_contracts)
@@ -2291,6 +2296,12 @@ endif()
 if(TARGET test_tvdef_drops_tapes)
     target_compile_definitions(test_tvdef_drops_tapes PRIVATE
         PINEFORGE_TVDEF_DROPS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tvdef_drops")
+endif()
+
+# Lane W3-ENG-EXIT-ALLOC reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_exit_queue_tapes)
+    target_compile_definitions(test_exit_queue_tapes PRIVATE
+        PINEFORGE_EXIT_QUEUE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_queue")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape

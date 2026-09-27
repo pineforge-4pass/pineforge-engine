@@ -1,0 +1,25 @@
+//@version=6
+strategy("W3 F05 s1 stop declared before target", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W3-ENG-EXIT-ALLOC, family F05: two strategy.exit calls on one entry.
+// One long per cell (qty=1, filled at the next open); a cleanup
+// close_all ends every cell six hours after its entry.
+// From the first entry on, two full-quantity exits are issued every bar,
+// flat or not: first a far stop A, then a near target B.
+
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+entryCell = cell(8, 0, 0) or cell(9, 0, 0) or cell(10, 0, 0) or cell(11, 0, 0) or cell(14, 0, 0)
+cleanup = cell(8, 6, 0) or cell(9, 6, 0) or cell(10, 6, 0) or cell(11, 6, 0) or cell(14, 6, 0)
+
+var float ref = na
+var int entryBar = na
+if entryCell
+    strategy.entry("L", strategy.long, qty=1, comment="L")
+    ref := close
+    entryBar := bar_index
+if not na(ref)
+    strategy.exit("A", from_entry="L", stop=ref - 40.0, comment="A stop")
+    strategy.exit("B", from_entry="L", limit=ref + 4.0, comment="B target")
+
+if cleanup
+    strategy.close_all(comment="cleanup")

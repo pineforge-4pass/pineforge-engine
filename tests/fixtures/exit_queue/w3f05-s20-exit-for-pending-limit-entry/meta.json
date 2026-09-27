@@ -1,0 +1,16 @@
+{
+  "title": "W3 F05 s20 exit issued once for a pending limit entry",
+  "slug": "w3f05-s20-exit-for-pending-limit-entry",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:00:23.731Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "37ab5e75170a91d0136527a77ec7c06238078da7b7f46ab754572b78f3268f64",
+  "tv_trades_sha256": "6b29fea54cb7b2293dfcb9c83883363c5cb1aeced3b8ffb1ac906bf825979f2f",
+  "tv_trades_rows": 8
+}

@@ -1,0 +1,16 @@
+{
+  "title": "W3 F05 s13 POOC stop and target share an OCA name",
+  "slug": "w3f05-s13-pooc-qty-shared-oca",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:44:18.405Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "f67d592e76a0e908e23f0c379e286284db270f3db2da356d337f4ca8ae026b94",
+  "tv_trades_sha256": "744eb973818d1ae82e8b1ad7b5ed02bb18fcd21abf5af5a72d34020d12adaf57",
+  "tv_trades_rows": 10
+}

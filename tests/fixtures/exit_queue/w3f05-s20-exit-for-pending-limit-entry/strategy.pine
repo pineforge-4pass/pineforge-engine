@@ -1,0 +1,24 @@
+//@version=6
+strategy("W3 F05 s20 exit issued once for a pending limit entry", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W3-ENG-EXIT-ALLOC, family F05: an exit issued while its entry is a
+// resting limit order. Each cell places a limit long 15 below the close
+// (qty=1); on the next bar, while that entry still rests, target B (the
+// entry limit + 20) is issued once and never again. A cleanup cancels and
+// closes everything six hours after each cell.
+
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+entryCell = cell(8, 0, 0) or cell(9, 0, 0) or cell(10, 0, 0) or cell(11, 0, 0) or cell(14, 0, 0)
+nextCell = cell(8, 0, 15) or cell(9, 0, 15) or cell(10, 0, 15) or cell(11, 0, 15) or cell(14, 0, 15)
+cleanup = cell(8, 6, 0) or cell(9, 6, 0) or cell(10, 6, 0) or cell(11, 6, 0) or cell(14, 6, 0)
+
+var float lvl = na
+if entryCell
+    lvl := close - 15.0
+    strategy.entry("L", strategy.long, qty=1, limit=lvl, comment="L")
+if nextCell and strategy.position_size == 0
+    strategy.exit("B", from_entry="L", limit=lvl + 20.0, comment="B target")
+
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

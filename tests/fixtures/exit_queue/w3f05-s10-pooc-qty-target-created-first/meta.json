@@ -1,0 +1,16 @@
+{
+  "title": "W3 F05 s10 POOC target created first, stop called first",
+  "slug": "w3f05-s10-pooc-qty-target-created-first",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:44:15.981Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "eb7cf8bff984ae4104adfbf67926d96b7a47b3de2ed24902189ec2d9a90d3110",
+  "tv_trades_sha256": "b9dc8f33383aab4d8c9033ccde1f49c8b76a892ad7c2c4031e897d8b0c8a48ae",
+  "tv_trades_rows": 10
+}

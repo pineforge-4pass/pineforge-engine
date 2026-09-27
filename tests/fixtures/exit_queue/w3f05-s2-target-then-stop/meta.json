@@ -1,0 +1,16 @@
+{
+  "title": "W3 F05 s2 target declared before stop",
+  "slug": "w3f05-s2-target-then-stop",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:44:22.365Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "df71d61221d6bdafccc9418be668f4d988aa4cbe57d81a767f7b30587f2d1038",
+  "tv_trades_sha256": "825cb56c60a945465fdae39aa3222822d6510840a2ca8f0ae780803109dfdbd6",
+  "tv_trades_rows": 10
+}

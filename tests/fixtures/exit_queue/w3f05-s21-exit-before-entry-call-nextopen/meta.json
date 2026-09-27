@@ -1,0 +1,16 @@
+{
+  "title": "W3 F05 s21 exit issued before its entry call",
+  "slug": "w3f05-s21-exit-before-entry-call-nextopen",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:31:17.959Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "63e11af7fdae417550ed5f705e1859b779d204afe3bc4da9e0574a54eca893e7",
+  "tv_trades_sha256": "56b1bb4e8d41a48253d2c798ab878fcce5d2441cb7a16f2f9afede101675b508",
+  "tv_trades_rows": 10
+}

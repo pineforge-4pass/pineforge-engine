@@ -1,0 +1,32 @@
+//@version=6
+strategy("W3 F05 s16 POOC stop first ever, target first in later trades", overlay=true, process_orders_on_close=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W3-ENG-EXIT-ALLOC, family F05: two strategy.exit calls on one entry.
+// One long per cell (qty=1, filled at the signal close); a cleanup
+// close_all ends every cell six hours after its entry.
+// The first trade only ever issues stop A (ref - 8). Every later trade
+// issues target B (ref + 40) alone on its entry bar, then, while the long is
+// held, stop A (ref - 8) first and B again.
+
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+entryCell = cell(8, 0, 0) or cell(9, 0, 0) or cell(10, 0, 0) or cell(11, 0, 0) or cell(14, 0, 0)
+cleanup = cell(8, 6, 0) or cell(9, 6, 0) or cell(10, 6, 0) or cell(11, 6, 0) or cell(14, 6, 0)
+
+var float ref = na
+var int entryBar = na
+var int trades = 0
+if entryCell
+    strategy.entry("L", strategy.long, qty=1, comment="L")
+    ref := close
+    entryBar := bar_index
+    trades += 1
+inTrade = strategy.position_size > 0 or entryCell
+if inTrade and trades == 1
+    strategy.exit("A", from_entry="L", stop=ref - 8.0, comment="A stop")
+if inTrade and trades > 1 and bar_index > entryBar
+    strategy.exit("A", from_entry="L", stop=ref - 8.0, comment="A stop")
+if inTrade and trades > 1
+    strategy.exit("B", from_entry="L", limit=ref + 40.0, comment="B target")
+
+if cleanup
+    strategy.close_all(comment="cleanup")

@@ -1,0 +1,35 @@
+//@version=6
+strategy("W3 F05 s15 POOC stop cancelled then issued again", overlay=true, process_orders_on_close=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W3-ENG-EXIT-ALLOC, family F05: two strategy.exit calls on one entry.
+// One long per cell (qty=1, filled at the signal close); a cleanup
+// close_all ends every cell six hours after its entry.
+// Every bar the long is held: stop A first (ref - 40), then a target B that
+// is never reached (ref + 100). One hour after the entry A is cancelled and
+// not issued for an hour; from two hours after the entry it is issued again
+// with its stop above the market (close + 50), so it fills at once if it
+// holds any quantity.
+
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+entryCell = cell(8, 0, 0) or cell(9, 0, 0) or cell(10, 0, 0) or cell(11, 0, 0) or cell(14, 0, 0)
+cleanup = cell(8, 6, 0) or cell(9, 6, 0) or cell(10, 6, 0) or cell(11, 6, 0) or cell(14, 6, 0)
+
+var float ref = na
+var int entryBar = na
+if entryCell
+    strategy.entry("L", strategy.long, qty=1, comment="L")
+    ref := close
+    entryBar := bar_index
+age = bar_index - entryBar
+inTrade = strategy.position_size > 0 or entryCell
+if inTrade and age == 4
+    strategy.cancel("A")
+if inTrade and age < 4
+    strategy.exit("A", from_entry="L", stop=ref - 40.0, comment="A stop")
+if inTrade and age >= 8
+    strategy.exit("A", from_entry="L", stop=close + 50.0, comment="A stop again")
+if inTrade
+    strategy.exit("B", from_entry="L", limit=ref + 100.0, comment="B target")
+
+if cleanup
+    strategy.close_all(comment="cleanup")

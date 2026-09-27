@@ -1,0 +1,26 @@
+//@version=6
+strategy("W3 F05 s14 POOC stop issued once, target every bar", overlay=true, process_orders_on_close=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W3-ENG-EXIT-ALLOC, family F05: two strategy.exit calls on one entry.
+// One long per cell (qty=1, filled at the signal close); a cleanup
+// close_all ends every cell six hours after its entry.
+// Stop A is issued once, on the entry bar, then target B; B is issued again
+// on every bar the long is held.
+
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+entryCell = cell(8, 0, 0) or cell(9, 0, 0) or cell(10, 0, 0) or cell(11, 0, 0) or cell(14, 0, 0)
+cleanup = cell(8, 6, 0) or cell(9, 6, 0) or cell(10, 6, 0) or cell(11, 6, 0) or cell(14, 6, 0)
+
+var float ref = na
+var int entryBar = na
+if entryCell
+    strategy.entry("L", strategy.long, qty=1, comment="L")
+    ref := close
+    entryBar := bar_index
+if entryCell
+    strategy.exit("A", from_entry="L", stop=ref - 40.0, comment="A stop")
+if strategy.position_size > 0 or entryCell
+    strategy.exit("B", from_entry="L", limit=ref + 4.0, comment="B target")
+
+if cleanup
+    strategy.close_all(comment="cleanup")
