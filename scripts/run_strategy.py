@@ -1337,6 +1337,463 @@ def _reads_derived_feed(params, strategy_dir: Path, ohlcv: Path,
     return any(derived in feed.resolve().parents for feed in feeds)
 
 
+
+# --- pinned request data of other symbols (lane XSYM-D) ---------------------
+#
+# A case that pins external data for a probe sets the RUNNER environment
+# PINEFORGE_REQUESTS_ROOT=<dir>, holding <dir>/<slug>/requests.json
+# (pineforge-probe-requests/v1) and <dir>/<slug>/files/<sha256> -- workflow
+# docs/xsym-requests.md, "The environment contract". The frozen verifier
+# (pineforge-lab 3bac0b7b scripts/verify-engine-local.py) names each probe's
+# build directory ``bd = BUILD / slug`` (:1695) and hands ``str(bd)`` to this
+# script (:1593-1596, :1614-1617) through ``_run_timed`` (:190-193), whose
+# subprocess.run passes no env=, so the variable reaches this process and the
+# probe is the basename of the strategy directory. Only that probe's own
+# manifest and files are read: never another slug's directory, and never the
+# case-wide PINEFORGE_PINE_LIBRARIES (a library the manifest pins is verified
+# by its sha here and read by the transpiler, not by this harness). With the
+# variable unset, or no manifest for the probe, nothing here runs.
+REQUESTS_ROOT_ENV = "PINEFORGE_REQUESTS_ROOT"
+REQUESTS_SCHEMA = "pineforge-probe-requests/v1"
+_REQUESTS_FEED_BASE_COLUMNS = (
+    "timestamp", "time_close", "open", "high", "low", "close", "volume")
+_REQUESTS_RECORDED_COLUMNS = ("chart_open_ms", "value")
+_REQUESTS_RECORDED_FUNCTIONS = ("earnings", "dividends", "splits", "financial")
+_REQUESTS_RECORDED_FIELDS = {
+    "earnings": ("actual", "estimate", "standardized"),
+    "dividends": ("gross", "net"),
+    "splits": ("denominator", "numerator"),
+}
+_REQUESTS_FINANCIAL_PERIODS = ("FQ", "FY", "FH", "TTM")
+_REQUESTS_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_REQUESTS_SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_REQUESTS_EXTRA_COLUMN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_REQUESTS_IMPORT_PATH = re.compile(r"^[A-Za-z0-9_]+/[A-Za-z0-9_]+/[1-9][0-9]{0,3}$")
+_REQUESTS_LIBRARY_ID = re.compile(r"^PUB;[0-9a-f]{32}$")
+_REQUESTS_LIBRARY_VERSION = re.compile(r"^[1-9][0-9]{0,3}\.[0-9]{1,3}$")
+_REQUESTS_FINANCIAL_ID = re.compile(r"^[A-Z][A-Z0-9_]{0,95}$")
+_REQUESTS_TIMEFRAME = re.compile(r"^(?:[1-9][0-9]{0,4}|[1-9][0-9]{0,3}[DWMS])$")
+_REQUESTS_MAX_SYMBOL = 256
+_REQUESTS_MAX_ENTRIES = 256
+# The four setters the manifest's data is installed through (pineforge.h).
+_REQUESTS_EXPORTS = (
+    "strategy_set_symbol_feed", "strategy_set_symbol_feed_column",
+    "strategy_set_symbol_facts", "strategy_set_recorded_series")
+
+
+class RequestsManifestError(ValueError):
+    """A probe's requests manifest, or a file it names, this build refuses."""
+
+
+def _requests_refuse(label: str, message: str):
+    raise RequestsManifestError(f"{label}: {message}")
+
+
+def _requests_object(value, what: str, label: str) -> dict:
+    if not isinstance(value, dict):
+        _requests_refuse(label, f"{what} must be an object")
+    return value
+
+
+def _requests_exact_keys(value: dict, keys: tuple, what: str, label: str) -> None:
+    if sorted(value) != sorted(keys):
+        _requests_refuse(
+            label, f"{what} must carry exactly {{{', '.join(keys)}}}, got "
+                   f"{{{', '.join(value)}}}")
+
+
+def _requests_sha(value, what: str, label: str) -> str:
+    if not isinstance(value, str) or not _REQUESTS_SHA256.match(value):
+        _requests_refuse(label, f"{what} must be a lowercase 64-hex sha256")
+    return value
+
+
+def _requests_text(value, what: str, label: str, *, limit: int = 512,
+                   nullable: bool = False):
+    if value is None and nullable:
+        return None
+    if not isinstance(value, str) or len(value) > limit or "\x00" in value:
+        _requests_refuse(label, f"{what} must be a string of at most {limit} characters")
+    return value
+
+
+def _requests_symbol(value, what: str, label: str) -> str:
+    if (not isinstance(value, str) or not value or len(value) > _REQUESTS_MAX_SYMBOL
+            or any(ord(c) < 0x20 for c in value)):
+        _requests_refuse(label, f"{what} {value!r} must be a non-empty symbol string")
+    return value
+
+
+def _requests_array(value, what: str, label: str) -> list:
+    if not isinstance(value, list) or len(value) > _REQUESTS_MAX_ENTRIES:
+        _requests_refuse(label, f"{what} must be an array of at most "
+                                f"{_REQUESTS_MAX_ENTRIES} entries")
+    return value
+
+
+def _requests_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _requests_recorded_key(key, label: str, where: str) -> dict:
+    """The parts of a recorded key, or a refusal: the key grammar of
+    workflow campaign/src/probe-requests.mjs formatRecordedKey, round-trip
+    canonical (``<fn>|<symbol>|<field-or-id>|<period-or->|gaps_*|lookahead_*``)."""
+    if not isinstance(key, str):
+        _requests_refuse(label, f"{where} key must be a string")
+    parts = key.split("|")
+    if len(parts) != 6:
+        _requests_refuse(label, f"{where} key {key!r} must have six '|'-separated parts")
+    fn, symbol, field, period, gaps_part, lookahead_part = parts
+    gaps = re.match(r"^gaps_(on|off)$", gaps_part)
+    lookahead = re.match(r"^lookahead_(on|off)$", lookahead_part)
+    if not gaps or not lookahead:
+        _requests_refuse(label, f"{where} key {key!r} must end gaps_<on|off>|lookahead_<on|off>")
+    if fn not in _REQUESTS_RECORDED_FUNCTIONS:
+        _requests_refuse(label, f"{where} key {key!r} names no recorded function")
+    _requests_symbol(symbol, f"{where} key symbol", label)
+    if fn == "financial":
+        if not _REQUESTS_FINANCIAL_ID.match(field):
+            _requests_refuse(label, f"{where} key {key!r} names no financial id")
+        if period not in _REQUESTS_FINANCIAL_PERIODS:
+            _requests_refuse(label, f"{where} key {key!r} names no financial period")
+        if lookahead.group(1) != "off":
+            _requests_refuse(label, f"{where} key {key!r}: request.financial takes no lookahead")
+    else:
+        if field not in _REQUESTS_RECORDED_FIELDS[fn]:
+            _requests_refuse(label, f"{where} key {key!r} names no {fn} field")
+        if period != "-":
+            _requests_refuse(label, f"{where} key {key!r}: {fn} takes no period")
+    return {"fn": fn, "symbol": symbol, "field": field,
+            "period": None if period == "-" else period,
+            "gaps": gaps.group(1), "lookahead": lookahead.group(1)}
+
+
+def validate_probe_requests(document, label: str = "requests manifest") -> list[dict]:
+    """Hold a parsed manifest to pineforge-probe-requests/v1 (the refusals of
+    the workflow's validateProbeRequests) and return the files it names:
+    ``[{"sha256", "role": "feed"|"recorded"|"library", "ref"}]``."""
+    doc = _requests_object(document, "requests manifest", label)
+    if doc.get("schemaVersion") != REQUESTS_SCHEMA:
+        _requests_refuse(label, f"unsupported schema {doc.get('schemaVersion')!r} "
+                                f"(this build reads {REQUESTS_SCHEMA})")
+    _requests_exact_keys(doc, ("schemaVersion", "probe", "window", "symbols", "feeds",
+                               "recorded", "libraries"), "requests manifest", label)
+    probe = _requests_object(doc["probe"], "probe", label)
+    _requests_exact_keys(probe, ("probeId", "slug", "symbol", "timeframe", "strategySha256"),
+                         "probe", label)
+    _requests_text(probe["probeId"], "probe.probeId", label)
+    if not isinstance(probe["slug"], str) or not _REQUESTS_SAFE_NAME.match(probe["slug"]):
+        _requests_refuse(label, "probe.slug is not a safe input name")
+    _requests_symbol(probe["symbol"], "probe.symbol", label)
+    if not isinstance(probe["timeframe"], str) or not _REQUESTS_TIMEFRAME.match(probe["timeframe"]):
+        _requests_refuse(label, f"probe.timeframe {probe['timeframe']!r} is not canonical")
+    _requests_sha(probe["strategySha256"], "probe.strategySha256", label)
+    window = _requests_object(doc["window"], "window", label)
+    _requests_exact_keys(window, ("fromMs", "toMs"), "window", label)
+    if (not _requests_int(window["fromMs"]) or not _requests_int(window["toMs"])
+            or window["fromMs"] < 0 or window["toMs"] <= window["fromMs"]):
+        _requests_refuse(label, "window must be {fromMs, toMs} epoch milliseconds with "
+                                "fromMs < toMs")
+    symbols = _requests_object(doc["symbols"], "symbols", label)
+    if len(symbols) > _REQUESTS_MAX_ENTRIES:
+        _requests_refuse(label, f"symbols must name at most {_REQUESTS_MAX_ENTRIES} strings")
+    for requested, entry in symbols.items():
+        _requests_symbol(requested, "symbols key", label)
+        where = f"symbols[{requested!r}]"
+        _requests_object(entry, where, label)
+        _requests_exact_keys(entry, ("canonical", "valid", "facts", "factsSha256"), where, label)
+        if not isinstance(entry["valid"], bool):
+            _requests_refuse(label, f"{where}.valid must be a boolean")
+        _requests_sha(entry["factsSha256"], f"{where}.factsSha256", label)
+        if entry["valid"]:
+            _requests_symbol(entry["canonical"], f"{where}.canonical", label)
+            facts = _requests_object(entry["facts"], f"{where}.facts", label)
+            _requests_exact_keys(facts, ("type", "timezone", "session", "currency", "mintick"),
+                                 f"{where}.facts", label)
+            for field in ("type", "timezone", "session", "currency"):
+                _requests_text(facts[field], f"{where}.facts.{field}", label, limit=128)
+            mintick = facts["mintick"]
+            if (isinstance(mintick, bool) or not isinstance(mintick, (int, float))
+                    or not math.isfinite(mintick) or mintick <= 0):
+                _requests_refuse(label, f"{where}.facts.mintick must be a positive finite number")
+        elif entry["canonical"] is not None or entry["facts"] is not None:
+            _requests_refuse(label, f"{where} is invalid, so its canonical and facts must be null")
+
+    def valid_symbol(value, where):
+        _requests_symbol(value, where, label)
+        if not isinstance(symbols.get(value), dict) or symbols[value].get("valid") is not True:
+            _requests_refuse(label, f"{where} {value!r} is not a valid entry of symbols")
+
+    files: list[dict] = []
+    feed_keys = set()
+    for index, raw in enumerate(_requests_array(doc["feeds"], "feeds", label)):
+        where = f"feeds[{index}]"
+        feed = _requests_object(raw, where, label)
+        _requests_exact_keys(feed, ("symbol", "timeframe", "sha256", "bytes", "columns",
+                                    "provenanceSha256"), where, label)
+        valid_symbol(feed["symbol"], f"{where}.symbol")
+        if not isinstance(feed["timeframe"], str) or not _REQUESTS_TIMEFRAME.match(feed["timeframe"]):
+            _requests_refuse(label, f"{where}.timeframe {feed['timeframe']!r} is not canonical")
+        _requests_sha(feed["sha256"], f"{where}.sha256", label)
+        _requests_sha(feed["provenanceSha256"], f"{where}.provenanceSha256", label)
+        if not _requests_int(feed["bytes"]) or feed["bytes"] < 1:
+            _requests_refuse(label, f"{where}.bytes must be a positive integer")
+        columns = feed["columns"]
+        if (not isinstance(columns, list) or not 7 <= len(columns) <= 32
+                or tuple(columns[:7]) != _REQUESTS_FEED_BASE_COLUMNS):
+            _requests_refuse(label, f"{where}.columns must start "
+                                    f"{','.join(_REQUESTS_FEED_BASE_COLUMNS)}")
+        extras = columns[7:]
+        if (any(not isinstance(n, str) or not _REQUESTS_EXTRA_COLUMN.match(n)
+                or n in _REQUESTS_FEED_BASE_COLUMNS for n in extras)
+                or len(set(extras)) != len(extras)):
+            _requests_refuse(label, f"{where}.columns extras must be distinct lowercase names")
+        key = (feed["symbol"], feed["timeframe"])
+        if key in feed_keys:
+            _requests_refuse(label, f"{where} repeats the feed {feed['symbol']}@{feed['timeframe']}")
+        feed_keys.add(key)
+        files.append({"sha256": feed["sha256"], "role": "feed",
+                      "ref": f"{feed['symbol']}@{feed['timeframe']}"})
+    recorded_keys = set()
+    for index, raw in enumerate(_requests_array(doc["recorded"], "recorded", label)):
+        where = f"recorded[{index}]"
+        entry = _requests_object(raw, where, label)
+        _requests_exact_keys(entry, ("key", "sha256", "columns", "provenanceSha256"), where, label)
+        parsed = _requests_recorded_key(entry["key"], label, where)
+        valid_symbol(parsed["symbol"], f"{where} key symbol")
+        if entry["key"] in recorded_keys:
+            _requests_refuse(label, f"{where} repeats the key {entry['key']}")
+        recorded_keys.add(entry["key"])
+        _requests_sha(entry["sha256"], f"{where}.sha256", label)
+        _requests_sha(entry["provenanceSha256"], f"{where}.provenanceSha256", label)
+        if entry["columns"] != list(_REQUESTS_RECORDED_COLUMNS):
+            _requests_refuse(label, f"{where}.columns must be {list(_REQUESTS_RECORDED_COLUMNS)}")
+        files.append({"sha256": entry["sha256"], "role": "recorded", "ref": entry["key"]})
+    imports = {}
+    for index, raw in enumerate(_requests_array(doc["libraries"], "libraries", label)):
+        where = f"libraries[{index}]"
+        lib = _requests_object(raw, where, label)
+        _requests_exact_keys(lib, ("import", "id", "version", "access", "sha256", "licenseLine",
+                                   "requires", "provenanceSha256"), where, label)
+        if not isinstance(lib["import"], str) or not _REQUESTS_IMPORT_PATH.match(lib["import"]):
+            _requests_refuse(label, f"{where}.import must be <user>/<name>/<version>")
+        if lib["import"] in imports:
+            _requests_refuse(label, f"{where} repeats the import {lib['import']}")
+        if not isinstance(lib["id"], str) or not _REQUESTS_LIBRARY_ID.match(lib["id"]):
+            _requests_refuse(label, f"{where}.id must be a PUB;<32 hex> publication id")
+        if (not isinstance(lib["version"], str) or not _REQUESTS_LIBRARY_VERSION.match(lib["version"])
+                or lib["version"].split(".")[0] != lib["import"].split("/")[2]):
+            _requests_refuse(label, f"{where}.version must be the served <major>.<minor> "
+                                    "of the imported major")
+        if not isinstance(lib["access"], str) or not lib["access"].startswith("open"):
+            _requests_refuse(label, f"{where}.access {lib['access']!r} is not an open script access")
+        _requests_sha(lib["sha256"], f"{where}.sha256", label)
+        _requests_sha(lib["provenanceSha256"], f"{where}.provenanceSha256", label)
+        _requests_text(lib["licenseLine"], f"{where}.licenseLine", label, nullable=True)
+        requires = lib["requires"]
+        if (not isinstance(requires, list)
+                or any(not isinstance(p, str) or not _REQUESTS_IMPORT_PATH.match(p) for p in requires)
+                or len(set(requires)) != len(requires) or lib["import"] in requires):
+            _requests_refuse(label, f"{where}.requires must be distinct import paths other "
+                                    "than its own")
+        imports[lib["import"]] = lib
+        files.append({"sha256": lib["sha256"], "role": "library", "ref": lib["import"]})
+    for lib in imports.values():
+        for path in lib["requires"]:
+            if path not in imports:
+                _requests_refuse(label, f"library {lib['import']} requires {path}, which the "
+                                        "manifest does not pin")
+    return files
+
+
+def _requests_float(text: str, *, empty_is_nan: bool) -> float:
+    if text == "" or text == "NaN":
+        if empty_is_nan:
+            return math.nan
+        raise ValueError("empty value")
+    return float(text)
+
+
+def _parse_requests_feed(data: bytes, columns: list, label: str, ref: str):
+    """A feed file's bars, closes and named columns, strictly: the header is
+    the manifest's columns, every row has one field per column, the stamps
+    are integers, the prices finite; an empty (or NaN) volume or extra value
+    is a value the symbol does not publish."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        _requests_refuse(label, f"feed {ref} is not UTF-8")
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    if not lines or lines[0].split(",") != list(columns):
+        _requests_refuse(label, f"feed {ref} header is not {','.join(columns)}")
+    count = len(lines) - 1
+    bars = (BarC * count)()
+    close_ms = (ctypes.c_int64 * count)()
+    extras = [(name, (ctypes.c_double * count)()) for name in columns[7:]]
+    for row_index, line in enumerate(lines[1:]):
+        fields = line.split(",")
+        if len(fields) != len(columns):
+            _requests_refuse(label, f"feed {ref} row {row_index + 1} has {len(fields)} fields, "
+                                    f"not {len(columns)}")
+        try:
+            timestamp = int(fields[0])
+            closes_at = int(fields[1])
+            open_, high, low, close = (_requests_float(v, empty_is_nan=False)
+                                       for v in fields[2:6])
+            volume = _requests_float(fields[6], empty_is_nan=True)
+            values = [_requests_float(v, empty_is_nan=True) for v in fields[7:]]
+        except ValueError:
+            _requests_refuse(label, f"feed {ref} row {row_index + 1} does not parse")
+        if not all(math.isfinite(v) for v in (open_, high, low, close)):
+            _requests_refuse(label, f"feed {ref} row {row_index + 1} carries a non-finite price")
+        bars[row_index].open = open_
+        bars[row_index].high = high
+        bars[row_index].low = low
+        bars[row_index].close = close
+        bars[row_index].volume = volume
+        bars[row_index].timestamp = timestamp
+        close_ms[row_index] = closes_at
+        for (_, array), value in zip(extras, values):
+            array[row_index] = value
+    return bars, close_ms, count, extras
+
+
+def _parse_requests_tape(data: bytes, label: str, ref: str):
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        _requests_refuse(label, f"recorded series {ref} is not UTF-8")
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    if not lines or lines[0].split(",") != list(_REQUESTS_RECORDED_COLUMNS):
+        _requests_refuse(label, f"recorded series {ref} header is not "
+                                f"{','.join(_REQUESTS_RECORDED_COLUMNS)}")
+    count = len(lines) - 1
+    open_ms = (ctypes.c_int64 * count)()
+    values = (ctypes.c_double * count)()
+    for row_index, line in enumerate(lines[1:]):
+        fields = line.split(",")
+        if len(fields) != 2:
+            _requests_refuse(label, f"recorded series {ref} row {row_index + 1} has "
+                                    f"{len(fields)} fields, not 2")
+        try:
+            open_ms[row_index] = int(fields[0])
+            values[row_index] = _requests_float(fields[1], empty_is_nan=True)
+        except ValueError:
+            _requests_refuse(label, f"recorded series {ref} row {row_index + 1} does not parse")
+    return open_ms, values, count
+
+
+def load_probe_requests(strategy_dir: Path, environ=None) -> dict | None:
+    """The probe's pinned request data, verified and parsed, or None.
+
+    None when PINEFORGE_REQUESTS_ROOT is unset or holds no manifest for this
+    probe (the basename of ``strategy_dir``). Otherwise the manifest is held
+    to its schema and to this probe, every file it names is read from the
+    probe's own ``files/`` and verified against its sha256 (and a feed
+    against its byte count), and the feeds, recorded series and symbol facts
+    are parsed for installation. Any refusal raises RequestsManifestError,
+    naming the manifest and what it refuses.
+    """
+    env = os.environ if environ is None else environ
+    root_text = env.get(REQUESTS_ROOT_ENV)
+    if not root_text:
+        return None
+    slug = Path(strategy_dir).name
+    probe_dir = Path(root_text) / slug
+    manifest_path = probe_dir / "requests.json"
+    if not manifest_path.is_file():
+        return None
+    label = str(manifest_path)
+    manifest_bytes = manifest_path.read_bytes()
+    try:
+        document = json.loads(manifest_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        _requests_refuse(label, "requests manifest is not valid UTF-8 JSON")
+    files = validate_probe_requests(document, label)
+    if document["probe"]["slug"] != slug:
+        _requests_refuse(label, f"probe.slug {document['probe']['slug']!r} is not this "
+                                f"probe's {slug!r}")
+    contents = {}
+    for entry in files:
+        sha = entry["sha256"]
+        if sha in contents:
+            continue
+        path = probe_dir / "files" / sha
+        if not path.is_file():
+            _requests_refuse(label, f"{entry['role']} {entry['ref']} names files/{sha}, which "
+                                    "is missing")
+        data = path.read_bytes()
+        if hashlib.sha256(data).hexdigest() != sha:
+            _requests_refuse(label, f"{entry['role']} {entry['ref']}: files/{sha} does not "
+                                    "hash to its name")
+        contents[sha] = data
+    feeds = []
+    for feed in document["feeds"]:
+        ref = f"{feed['symbol']}@{feed['timeframe']}"
+        data = contents[feed["sha256"]]
+        if len(data) != feed["bytes"]:
+            _requests_refuse(label, f"feed {ref} is {len(data)} bytes, the manifest says "
+                                    f"{feed['bytes']}")
+        bars, close_ms, count, extras = _parse_requests_feed(data, feed["columns"], label, ref)
+        feeds.append({"symbol": feed["symbol"], "timeframe": feed["timeframe"],
+                      "sha256": feed["sha256"], "bytes": feed["bytes"],
+                      "columns": list(feed["columns"][7:]), "bars": count,
+                      "bar_array": bars, "close_ms": close_ms, "extras": extras})
+    recorded = []
+    for entry in document["recorded"]:
+        open_ms, values, count = _parse_requests_tape(contents[entry["sha256"]], label,
+                                                      entry["key"])
+        recorded.append({"key": entry["key"], "sha256": entry["sha256"], "rows": count,
+                         "open_ms": open_ms, "values": values})
+    symbols = []
+    for requested in sorted(document["symbols"]):
+        entry = document["symbols"][requested]
+        facts = []
+        if entry["valid"]:
+            facts.append(("canonical", entry["canonical"]))
+            facts.append(("valid", "true"))
+            for field in ("type", "timezone", "session", "currency"):
+                facts.append((field, entry["facts"][field]))
+            facts.append(("mintick", repr(float(entry["facts"]["mintick"]))))
+        else:
+            facts.append(("valid", "false"))
+        symbols.append({"symbol": requested, "valid": entry["valid"],
+                        "facts_sha256": entry["factsSha256"], "facts": facts})
+    libraries = [{"import": lib["import"], "sha256": lib["sha256"]}
+                 for lib in document["libraries"]]
+    return {"manifest": str(manifest_path),
+            "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+            "slug": slug, "probe_id": document["probe"]["probeId"],
+            "window": dict(document["window"]),
+            "feeds": feeds, "recorded": recorded, "symbols": symbols,
+            "libraries": libraries}
+
+
+def probe_requests_provenance(requests: dict) -> dict:
+    """What the run was handed, for the run provenance: each (key, sha,
+    bars), as the aux and native security feeds record theirs."""
+    return {
+        "manifest_path": requests["manifest"],
+        "manifest_sha256": requests["manifest_sha256"],
+        "slug": requests["slug"],
+        "probe_id": requests["probe_id"],
+        "window": requests["window"],
+        "feeds": [{"symbol": f["symbol"], "timeframe": f["timeframe"],
+                   "sha256": f["sha256"], "bytes": f["bytes"], "bars": f["bars"],
+                   "columns": f["columns"]} for f in requests["feeds"]],
+        "recorded": [{"key": r["key"], "sha256": r["sha256"], "rows": r["rows"]}
+                     for r in requests["recorded"]],
+        "symbols": [{"symbol": s["symbol"], "valid": s["valid"],
+                     "facts_sha256": s["facts_sha256"]} for s in requests["symbols"]],
+        "libraries": list(requests["libraries"]),
+    }
+
+
 class Strategy:
     """Thin ctypes wrapper around one strategy.so."""
 
@@ -1555,6 +2012,25 @@ class Strategy:
                 ctypes.c_void_p, ctypes.c_char_p, ctypes.POINTER(BarC),
                 ctypes.c_int]
             L.strategy_set_native_security_feed.restype = ctypes.c_int
+        if hasattr(L, "strategy_set_symbol_feed"):
+            L.strategy_set_symbol_feed.argtypes = [
+                ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p,
+                ctypes.POINTER(BarC), ctypes.POINTER(ctypes.c_int64), ctypes.c_int]
+            L.strategy_set_symbol_feed.restype = ctypes.c_int
+        if hasattr(L, "strategy_set_symbol_feed_column"):
+            L.strategy_set_symbol_feed_column.argtypes = [
+                ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p,
+                ctypes.POINTER(ctypes.c_double), ctypes.c_int]
+            L.strategy_set_symbol_feed_column.restype = ctypes.c_int
+        if hasattr(L, "strategy_set_symbol_facts"):
+            L.strategy_set_symbol_facts.argtypes = [
+                ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
+            L.strategy_set_symbol_facts.restype = ctypes.c_int
+        if hasattr(L, "strategy_set_recorded_series"):
+            L.strategy_set_recorded_series.argtypes = [
+                ctypes.c_void_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int64),
+                ctypes.POINTER(ctypes.c_double), ctypes.c_int]
+            L.strategy_set_recorded_series.restype = ctypes.c_int
         if hasattr(L, "strategy_set_syminfo_mintick"):
             L.strategy_set_syminfo_mintick.argtypes = [ctypes.c_void_p, ctypes.c_double]
             L.strategy_set_syminfo_mintick.restype = None
@@ -1565,6 +2041,39 @@ class Strategy:
             L.pf_version_get.restype = PfVersionC
         if hasattr(L, "pf_version_string"):
             L.pf_version_string.restype = ctypes.c_char_p
+
+    def _install_probe_requests(self, state, requests: dict) -> None:
+        """Install a probe's pinned request data through the four symbol-data
+        setters (lane XSYM-D): every symbol's facts, every feed with its named
+        columns, every recorded series. A refusal names what was refused."""
+        def refused(what: str):
+            detail = ""
+            if hasattr(self.lib, "strategy_get_last_error"):
+                err_ptr = self.lib.strategy_get_last_error(state)
+                if err_ptr:
+                    detail = err_ptr.decode("utf-8", "replace")
+            raise RuntimeError(f"engine rejected {what}" + (f": {detail}" if detail else ""))
+        for symbol in requests["symbols"]:
+            for field, value in symbol["facts"]:
+                if self.lib.strategy_set_symbol_facts(
+                        state, symbol["symbol"].encode(), field.encode(),
+                        str(value).encode()) != 0:
+                    refused(f"symbol fact {symbol['symbol']}.{field}")
+        for feed in requests["feeds"]:
+            key, timeframe = feed["symbol"].encode(), feed["timeframe"].encode()
+            if self.lib.strategy_set_symbol_feed(
+                    state, key, timeframe, feed["bar_array"], feed["close_ms"],
+                    feed["bars"]) != 0:
+                refused(f"symbol feed {feed['symbol']}@{feed['timeframe']}")
+            for name, values in feed["extras"]:
+                if self.lib.strategy_set_symbol_feed_column(
+                        state, key, timeframe, name.encode(), values, feed["bars"]) != 0:
+                    refused(f"feed column {feed['symbol']}@{feed['timeframe']}.{name}")
+        for series in requests["recorded"]:
+            if self.lib.strategy_set_recorded_series(
+                    state, series["key"].encode(), series["open_ms"], series["values"],
+                    series["rows"]) != 0:
+                refused(f"recorded series {series['key']}")
 
     def _probe_fill_qty(self, state, index: int, price: float) -> dict | None:
         """One strategy_pending_order_fill_qty probe -> {price, qty, close_only,
@@ -1711,6 +2220,7 @@ class Strategy:
             magnifier_distribution: str = "ENDPOINTS",
             magnifier_volume_weighted: bool = False,
             preloaded_bars: "tuple | None" = None,
+            probe_requests: dict | None = None,
             on_report=None) -> dict:
         """Read OHLCV from CSV, drive the engine, return a report dict.
 
@@ -1813,6 +2323,12 @@ class Strategy:
                     "source_file_sha256": feed_file_sha256,
                     "source_values_sha256": feed_values_sha256,
                 }
+        if probe_requests is not None:
+            missing = [name for name in _REQUESTS_EXPORTS if not hasattr(self.lib, name)]
+            if missing:
+                raise RuntimeError(
+                    "strategy library lacks the symbol-data request setters "
+                    f"({', '.join(missing)}); rebuild it")
         params = params or {}
         params_json = json.dumps(params).encode()
 
@@ -1975,6 +2491,8 @@ class Strategy:
                     raise RuntimeError(
                         f"engine rejected native request.security feed {feed_tf}"
                         + (f": {detail}" if detail else ""))
+            if probe_requests is not None:
+                self._install_probe_requests(state, probe_requests)
             self.lib.run_backtest_full(
                 state, bars, n,
                 input_tf_b, script_tf_b,  # empty -> auto-detect input_tf, default script_tf=input_tf
@@ -2053,6 +2571,8 @@ class Strategy:
                     aux_source_feed_sha256 or "")
             if native_feed_report:
                 result["native_security_feeds"] = native_feed_report
+            if probe_requests is not None:
+                result["probe_requests"] = probe_requests_provenance(probe_requests)
             return result
         finally:
             self.lib.report_free(ctypes.byref(report))
@@ -3128,6 +3648,14 @@ def main() -> int:
     ohlcv_path, run_kwargs = inputs_run_kwargs(
         params, strategy_dir, args.ohlcv.resolve(),
         default_chart_tz=args.chart_tz or "")
+    # Lane XSYM-D: the probe's pinned request data, when the case runner
+    # pinned any (PINEFORGE_REQUESTS_ROOT). Unset or no manifest: nothing.
+    try:
+        probe_requests = load_probe_requests(strategy_dir)
+    except RequestsManifestError as error:
+        sys.exit(f"error: refused requests manifest {error}")
+    if probe_requests is not None:
+        run_kwargs["probe_requests"] = probe_requests
     # emit_window gates the engine (trade_start_time) and the trace;
     # report_window selects the trades written. They differ only for a TV
     # tape (_tv_entry_emit_window), whose window is set below once the
@@ -3205,6 +3733,11 @@ def main() -> int:
             sys.exit(
                 "error: --runner docker does not support native "
                 "request.security feeds; use --runner ctypes with a freshly "
+                "built strategy library.")
+        if run_kwargs.get("probe_requests") is not None:
+            sys.exit(
+                "error: --runner docker does not support pinned request data "
+                f"({REQUESTS_ROOT_ENV}); use --runner ctypes with a freshly "
                 "built strategy library.")
         if args.realtime_tail is not None:
             sys.exit(
@@ -3409,6 +3942,8 @@ def main() -> int:
                     report["native_security_feeds"]
             runtime = build_runtime_provenance(
                 runtime_kwargs, trade_start_ms)
+            if report.get("probe_requests"):
+                runtime["requests"] = report["probe_requests"]
             fp = build_fingerprint(build_provenance(
                 engine_version(strat.lib),
                 cpp_path if cpp_path.exists() else None,

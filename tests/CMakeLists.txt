@@ -1773,6 +1773,13 @@ add_test(
             ${PROJECT_SOURCE_DIR}/scripts/test_run_strategy_aux_feed.py
 )
 
+# Lane XSYM-D: the probe's pinned request data (PINEFORGE_REQUESTS_ROOT).
+add_test(
+    NAME test_run_strategy_requests
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_run_strategy_requests.py
+)
+
 add_test(
     NAME test_run_strategy_emit_window
     COMMAND ${Python3_EXECUTABLE}
