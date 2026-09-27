@@ -13,6 +13,14 @@
  * the order the script placed them in, so the close-then-entry bar was one
  * fill and the cap tripped a bar late (rule CAP-ORDER).
  *
+ * The three candidate switches of the Pine cap (a held-direction entry that
+ * pyramiding makes a no-op is not a fill; the cap's close for a same-bar
+ * process_orders_on_close fill is taken at the next open; a full close is a
+ * fill) are TradingView's count, so a script's own
+ * strategy.risk.max_intraday_filled_orders statement now turns on every
+ * switch its host did not declare (rule CAP-ON). The base engine left them
+ * off unless declared, and counted the no-op entries of day A as fills.
+ *
  * Each row replays TradingView's own tape of a synthetic probe
  * (tests/fixtures/intraday_cap_tv, lab tv exports on BINANCE:ETHUSDT.P 15)
  * through the Pine adapter under the configuration the generated
@@ -310,6 +318,21 @@ int main() {
                                       std::pair<const char*, Probe>{"w10-cap-rev", Probe::Rev}}) {
         std::printf("-- %s, switches declared\n", name);
         const Run lane = run(probe, true, end_ms);
+        CHECK(lane.error.empty());
+        CHECK(lane.trades == tapes[name].trades);
+        if (lane.trades != tapes[name].trades) {
+            show("tape", tapes[name].trades);
+            show("engine", lane.trades);
+        }
+    }
+
+    // The run declares nothing, as a generated strategy's host does: the
+    // script's own strategy.risk.max_intraday_filled_orders statement counts
+    // as TradingView does (rule CAP-ON).
+    for (const auto& [name, probe] : {std::pair<const char*, Probe>{"w10-cap-abc", Probe::Abc},
+                                      std::pair<const char*, Probe>{"w10-cap-rev", Probe::Rev}}) {
+        std::printf("-- %s, nothing declared\n", name);
+        const Run lane = run(probe, false, end_ms);
         CHECK(lane.error.empty());
         CHECK(lane.trades == tapes[name].trades);
         if (lane.trades != tapes[name].trades) {

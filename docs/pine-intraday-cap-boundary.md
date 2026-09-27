@@ -58,7 +58,20 @@ not claimed to have disappeared from the codebase.
 
 ## Preserved financial decisions
 
-All independent A/B/C combinations retain their existing defaults and scope.
+All independent A/B/C combinations retain their existing defaults and scope
+for a component selected directly (`enable_pine_intraday_cap()`, an explicit
+`CapAttachment::LegacySource`, or the protected legacy assignment). A Pine
+script's own `strategy.risk.max_intraday_filled_orders` statement
+(`PineStrategyHost::set_pine_risk_max_intraday_filled_orders`, which generated
+code calls) turns on each of the three its host did not declare through
+metadata, because together they are TradingView's count: TradingView's own
+tapes of synthetic probes (`tests/fixtures/intraday_cap_tv`, lane
+W10-DIAG-UNKNOWN rule CAP-ON) charge neither a held-direction no-op entry nor
+anything but the fills, take the cap's process-on-close close at the next
+open, and charge a filled `strategy.close`. A declared switch keeps its value.
+C's slot transfer goes only to an opposite MARKET entry the script placed
+before the close (rule CAP-ORDER): one placed after it opens from flat and is a
+fill of its own.
 No strategy name, winning-probe selector or alternate unused reducer is used.
 
 * A filters only a same-direction MARKET attempt at live pyramiding capacity.

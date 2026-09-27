@@ -9,6 +9,7 @@
 #include "../../session_time.hpp"
 #include "../../timeframe.hpp"
 #include <cmath>
+#include <cstdint>
 #include <string>
 #include <variant>
 #include <vector>
@@ -118,13 +119,29 @@ public:
         // A later explicit legacy assignment therefore preserves metadata sent
         // before the first risk statement, without a second buffer or replay.
         const bool enabled = std::isfinite(value) && value > 0.0;
-        if (key == "intraday_cap_skip_noop_market_fills")
+        if (key == "intraday_cap_skip_noop_market_fills") {
             configuration_.skip_noop_market = enabled;
-        else if (key == "intraday_cap_defer_pooc_close")
+            declared_ |= kDeclaredSkipNoopMarket;
+        } else if (key == "intraday_cap_defer_pooc_close") {
             configuration_.defer_pooc_close = enabled;
-        else if (key == "intraday_cap_count_pooc_full_close_fills")
+            declared_ |= kDeclaredDeferPoocClose;
+        } else if (key == "intraday_cap_count_pooc_full_close_fills") {
             configuration_.count_pooc_full_close = enabled;
+            declared_ |= kDeclaredCountPoocFullClose;
+        }
     }
+    // A Pine script's own strategy.risk.max_intraday_filled_orders statement
+    // counts as TradingView does: every candidate switch its host did not
+    // declare is on (lane W10-DIAG-UNKNOWN rule CAP-ON,
+    // tests/fixtures/intraday_cap_tv). A declared switch keeps its value, and
+    // a component selected any other way keeps the defaults above.
+    void adopt_script_count() {
+        if (!(declared_ & kDeclaredSkipNoopMarket)) configuration_.skip_noop_market = true;
+        if (!(declared_ & kDeclaredDeferPoocClose)) configuration_.defer_pooc_close = true;
+        if (!(declared_ & kDeclaredCountPoocFullClose))
+            configuration_.count_pooc_full_close = true;
+    }
+    std::uint8_t declared() const { return declared_; }
     static bool uses_chart_clock(const std::string& session) {
         return !(session.size() >= 9 && session[4] == '-'
             && hhmm_to_minutes(session.substr(0, 4)) >= 0
@@ -233,8 +250,12 @@ private:
         return c.process_on_close && !c.calc_on_fills && !c.magnifier
             && !c.stream_warmup && c.stream_idle;
     }
+    static constexpr std::uint8_t kDeclaredSkipNoopMarket = 1;
+    static constexpr std::uint8_t kDeclaredDeferPoocClose = 2;
+    static constexpr std::uint8_t kDeclaredCountPoocFullClose = 4;
     CapAttachment attachment_;
     CapConfiguration configuration_;
+    std::uint8_t declared_ = 0;
     IntradayOrderBudget budget_;
     std::optional<CloseCause> due_cause_;
     uint64_t next_action_ = 1;

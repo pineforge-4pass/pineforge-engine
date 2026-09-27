@@ -43,12 +43,26 @@ bar was one fill and the cap tripped at 02:00 instead. The slot now passes
 only to an opposite entry placed BEFORE the close (day D), whose reversal is
 what closed the position.
 
+Days A, B and C are rule CAP-ON: without any declaration, the base engine
+left all three switches off. It charged day A's three held-direction entry
+calls, so the cap tripped at 00:30 on the long; it closed each cap trip at the
+fill instead of the next open; and it did not charge the closes of days B and
+C. A Pine script's own `strategy.risk.max_intraday_filled_orders` statement
+now turns on every switch its host did not declare (a declared switch keeps
+its value; a component selected any other way keeps its defaults), so an
+undeclared run books TradingView's rows. The population probe that showed it is
+`officialjackofalltrades-regime-execution-strategy-joat` (process_orders_on_close,
+cap 6): XAUUSD 15 and EURUSD 15 become byte-identical to their tapes.
+
 `tests/test_intraday_cap_tv_tapes.cpp` replays both tapes through the Pine
 adapter under the configuration the generated constructor declares, trading
 from 2025-04-07 23:45 UTC, with TradingView's 0.0001 lot as the `qty_step`,
 and requires each trade the tape closes inside the replayed bars (entry and
 exit time, side, price in ticks of 0.01, quantity in lots of 0.0001) to be the
-engine's. It also reads the count off TradingView's own rows.
+engine's, once with the three switches declared and once with nothing
+declared. It also reads the count off TradingView's own rows. Fail-before:
+CAP-ORDER on c0eaf496 110 passed, 2 failed (the declared runs, days C and F);
+CAP-ON on 23840a41 153 passed, 2 failed (the undeclared runs).
 
 `bars.inc` holds the corpus 15m chart feed rows 2025-04-07 00:00 .. 2025-04-13
 07:00 UTC (sha256 `27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026`,

@@ -628,6 +628,7 @@ void source::PineStrategyHost::set_pine_risk_max_intraday_loss(double value, boo
 }
 
 void source::PineStrategyHost::set_pine_risk_max_intraday_filled_orders(int limit) {
+    if (limit > 0) adapter_.cap.adopt_script_count();
     adapter_.cap = limit;
 }
 

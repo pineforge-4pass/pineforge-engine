@@ -573,6 +573,9 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.i(static_cast<std::int64_t>(cap.attachment())); f.i(cap.configuration().limit);
     f.b(cap.configuration().skip_noop_market); f.b(cap.configuration().defer_pooc_close);
     f.b(cap.configuration().count_pooc_full_close);
+    // Which switches the host declared (rule CAP-ON) decides only an active
+    // cap's count, so it folds only while one is active.
+    if (cap.active()) f.u(cap.declared());
     const auto& cap_budget = cap.budget();
     f.b(cap_budget.day().has_value());
     if (cap_budget.day()) f.i(cap_budget.day()->key);
