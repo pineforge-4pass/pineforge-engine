@@ -1,0 +1,29 @@
+//@version=6
+strategy("w4-f19c-long-pooc-coof", overlay=true, process_orders_on_close=true, calc_on_order_fills=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W4-ENG-POOC-SAMEPASS, family F19. Three cells; the exit of each is
+// placed on every calculation that holds its position, off the average price.
+// LA: a stop already through at the fill; LB and LC: a limit and a stop
+// the entry bar reaches after its open (a bar whose path takes the target, and
+// one whose path takes the stop).
+cell(h, m) => time == timestamp("UTC", 2025, 4, 11, h, m)
+var string active = ""
+if cell(0, 30)
+    strategy.entry("LC", strategy.long, comment="LC")
+    active := "LC"
+if cell(1, 15)
+    strategy.entry("LB", strategy.long, comment="LB")
+    active := "LB"
+if cell(2, 45)
+    strategy.entry("LA", strategy.long, comment="LA")
+    active := "LA"
+if strategy.position_size > 0
+    if active == "LA"
+        strategy.exit("LA-X", "LA", stop=strategy.position_avg_price + 1 * 1, comment="LA stop through")
+    if active == "LB"
+        strategy.exit("LB-X", "LB", limit=strategy.position_avg_price + 1 * 10, stop=strategy.position_avg_price - 1 * 5, comment="LB exit")
+    if active == "LC"
+        strategy.exit("LC-X", "LC", limit=strategy.position_avg_price + 1 * 5, stop=strategy.position_avg_price - 1 * 10, comment="LC exit")
+if cell(1, 0) or cell(2, 15) or cell(4, 0)
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

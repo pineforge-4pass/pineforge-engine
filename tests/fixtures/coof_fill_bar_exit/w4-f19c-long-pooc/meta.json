@@ -1,0 +1,16 @@
+{
+  "title": "w4-f19c-long-pooc",
+  "slug": "w4-f19c-long-pooc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:33:30.909Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "834d3a4f5ed3d0e72d6751355e02c31170b390f05c7a307f76471661c9f677da",
+  "tv_trades_sha256": "5909cb9bf6356e1b509c21c56b9884b9a91722a31d6ca8cd9db43f1c54acbd51",
+  "tv_trades_rows": 6
+}

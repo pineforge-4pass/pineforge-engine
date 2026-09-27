@@ -908,6 +908,10 @@ list(APPEND TEST_SOURCES test_global_exit_fill_size_tapes)
 # re-issues unchanged keeps resting at its level
 # (tests/fixtures/coof_reissued_exit), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_coof_reissued_exit_tapes)
+# ... and under calc_on_order_fills the exit its entry's fill recalculation
+# places is live for the rest of that bar (tests/fixtures/coof_fill_bar_exit),
+# on TradingView's tapes.
+list(APPEND TEST_SOURCES test_coof_fill_bar_exit_tapes)
 
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
@@ -2394,6 +2398,10 @@ endif()
 if(TARGET test_coof_reissued_exit_tapes)
     target_compile_definitions(test_coof_reissued_exit_tapes PRIVATE
         PINEFORGE_W4_REISSUED_EXIT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_reissued_exit")
+endif()
+if(TARGET test_coof_fill_bar_exit_tapes)
+    target_compile_definitions(test_coof_fill_bar_exit_tapes PRIVATE
+        PINEFORGE_W4_COOF_FILL_BAR_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_fill_bar_exit")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape

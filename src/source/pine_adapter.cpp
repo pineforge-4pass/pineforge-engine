@@ -9455,6 +9455,25 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 }
             }
         }
+        // A stop that the recalculation of the bar's first open fill places
+        // already through that fill is executed at the fill: the rest of the
+        // entry bar is live for the exits its recalculation places, so
+        // TradingView books it at the open it was born at (lab tv
+        // w4-f19c-{long,short}-plain-coof cells LA and SA; lane
+        // W4-ENG-POOC-SAMEPASS), where the adapter held it for the next bar.
+        if (coof_recalc_active_ && coof_first_open_ && family == PineOrderFamily::ExitStop
+            && finite_positive(stop_price) && physical.signed_units != 0.0) {
+            const auto native = detail::run_state(require_host());
+            const auto point = detail::callback_point(require_host());
+            const bool ordinary_path = !native.spec || native.spec->intrabar.is_none();
+            if (ordinary_path && point && finite_positive(point->price)
+                && (physical.signed_units > 0.0 ? stop_price > point->price
+                                                : stop_price < point->price)) {
+                trigger = native_order::Stop{point->price};
+                coof_stop_waypoint_price = point->price;
+                coof_stop_at_leg_end = true;
+            }
+        }
         if (pooc_short_tick_scope) {
             const double tick = staged_.syminfo.mintick;
             // The short exit is a buy.  rounded(low) <= limit and
