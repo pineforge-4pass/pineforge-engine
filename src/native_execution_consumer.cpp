@@ -7326,10 +7326,10 @@ void NativeExecutionConsumer::present_session_day(NativeDecisionContext& context
         context.closes_session_day_open_ended = true;
         return;
     }
-    // The nominal script label may itself be in a declared break (an hourly
-    // interval can reopen at 13:30 while its grid label is 13:00). Resolve
-    // its first eligible instant and next input opening from the calendar,
-    // even when a FeedTolerant host partitions by raw provider labels.
+    // A bar reads at its label, or at its interval's first eligible instant
+    // when that is later (an hourly interval can reopen at 13:30 while its grid
+    // label is 13:00); a FeedTolerant label past that instant is the bar's own
+    // open, so the instants before it are not the bar's (lane K-SESSION F1).
     //
     // R5 lanes PERF-KEDGE and PERF-ZONED: on a certified cycle
     // (native_calendar::cycle_certificate) every lookup of every instant is
@@ -7368,7 +7368,7 @@ void NativeExecutionConsumer::present_session_day(NativeDecisionContext& context
     const CertifiedCycle* cycle = certified_cycle_of(label);
     if (!cycle || !certified_point(*cycle, label, here)) {
         resolve_slot();
-        here = session_point(slot ? slot->eligible_open_ms : label);
+        here = session_point(slot ? std::max(label, slot->eligible_open_ms) : label);
     }
     if (!here.in_session) return;
     context.in_session = true;
@@ -7455,7 +7455,7 @@ void NativeExecutionConsumer::present_session_day(NativeDecisionContext& context
 NativeExecutionConsumer::eligible_session_point(int64_t ms) const {
     const auto slot = native_calendar::interval_containing(
         calendar_, script_tf_, input_tf_, ms, calendar_memo_);
-    return session_point(slot ? slot->eligible_open_ms : ms);
+    return session_point(slot ? std::max(ms, slot->eligible_open_ms) : ms);
 }
 
 // The entry holding `ms` among the last few, else a new one: its certified

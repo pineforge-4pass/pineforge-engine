@@ -1976,7 +1976,9 @@ session-day facts (R5 lane F5): `in_session` (`market_driver.hpp:161`),
 `closes_session_day_open_ended`. They read the run's own calendar and
 session day — the cycle that rolls at the session's first window start,
 keyed to its trading date, so an overnight session is one day across local
-midnight — and the bar before or after the script bar: the one the run
+midnight — each bar at its own label, or at its interval's first eligible
+instant when that is later (a bar opening inside a declared break), and the
+bar before or after the script bar: the one the run
 holds (its batch input or stream warmup), otherwise the calendar's previous
 or next eligible input slot, across declared breaks. A run's first bar opens
 its session day and a batch's

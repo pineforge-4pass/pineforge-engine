@@ -135,7 +135,8 @@ struct NativeDecisionContext {
     // day across local midnight). Every callback of the bar carries the same
     // four: its open, its sub-bars and ticks, its calculation, and every fill
     // and recalculation on it.
-    //   in_session         the script bar has an eligible instant in session.
+    //   in_session         in session at the bar's label, or at its interval's
+    //                      first eligible instant when later (a break's reopen).
     //   opens_session_day  in session, and the bar before it is not, or is on
     //                      another session day.
     //   closes_session_day in session, and the bar after it is not, or is on
@@ -143,9 +144,8 @@ struct NativeDecisionContext {
     // "The bar before / after" is the one the run holds — the batch input or
     // stream warmup being consumed — and otherwise the calendar's previous
     // or next eligible input slot, across declared breaks. At the run's own
-    // edges nothing is held: its first bar
-    // opens its session day, and a batch's final bar closes it, because a
-    // batch is complete input; a stream reads on, because it continues.
+    // edges nothing is held: its first bar opens its session day, and a
+    // batch's final bar closes it (complete input); a stream reads on.
     //   closes_session_day_open_ended
     //                      closes_session_day for a run whose input goes on
     //                      past it: a batch's final bar, which nothing held

@@ -1039,9 +1039,9 @@ private:
         return session_point_resolved(ms);
     }
     SessionPoint session_point_resolved(int64_t ms) const;
-    // The session point of the first eligible instant of the script interval
-    // holding `ms` (`ms` itself when the calendar has no such interval): what
-    // present_session_day reads for an instant, the interval resolved first.
+    // The session point of `ms`, or of the first eligible instant of the
+    // script interval holding it when that is later (a bar opening in a
+    // break): what present_session_day reads for an instant.
     SessionPoint eligible_session_point(int64_t ms) const;
     // A certified session day of calendar_
     // (native_calendar::cycle_certificate), whose instants present_session_day
