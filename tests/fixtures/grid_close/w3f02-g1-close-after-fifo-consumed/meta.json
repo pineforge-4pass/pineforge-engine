@@ -1,0 +1,16 @@
+{
+  "title": "W3 F02 g1 close after FIFO consumed",
+  "slug": "w3f02-g1-close-after-fifo-consumed",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:04:10.302Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "c7bf91c75fb411f163e37c486bc9a4aacb15809f0fab9f6322f8c06f74db1ef5",
+  "tv_trades_sha256": "daf5a60a1ae4b48809f96b24fb6a77f49f1f901ca0f68ee020efaecd5c7e4b06",
+  "tv_trades_rows": 18
+}

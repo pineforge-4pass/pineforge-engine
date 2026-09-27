@@ -7798,12 +7798,23 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         return;
     }
     const auto openings = openings_for(id);
-    const bool logical_pooc_fifo = config_.process_orders_on_close
-        && !config_.close_entries_rule_any && !immediately
-        && std::isnan(qty) && std::isnan(qty_percent)
-        && fixture_close_logical_units(id) > 0.0;
+    // A default FIFO close sizes from the id's close ledger: the units
+    // entered under the id that no fill has booked, whether or not the FIFO
+    // rule has already closed the lots that carried it (tapes w3f02-g1,
+    // w3bf02-d1, -d2, -f2).
+    const bool ledger_sized = !config_.close_entries_rule_any && !immediately
+        && std::isnan(qty) && std::isnan(qty_percent);
+    // The ledger is a running sum of fills: where it differs from the id's own
+    // live lots only by rounding, the lots are the quantity, so the close
+    // leaves no dust behind them.
+    const double ledger_units = [&] {
+        if (!ledger_sized) return 0.0;
+        const double ledger = fixture_close_logical_units(id);
+        const double own = cohort_exposure_for(id);
+        return own > 0.0 && std::abs(ledger - own) <= internal::kQtyEpsilon ? own : ledger;
+    }();
     // P-DA3: strategy.close against an empty cohort is dropped at the command.
-    if (openings.empty() && !logical_pooc_fifo) {
+    if (openings.empty() && !(ledger_units > 0.0)) {
         record_dropped_close(id, comment, qty, qty_percent, immediately, callsite_token);
         return;
     }
@@ -7814,7 +7825,8 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         pending_same_bar_commands_.begin(), pending_same_bar_commands_.end(),
         [&](const PendingSameBarCommand& pc) { return pc.snapshot.source_id == id; });
     // ab9714be pine_strategy_commands.cpp:2254-2256: compute_close_target_qty drops close when target unclosed quantity is zero
-    if (!config_.process_orders_on_close && !id.empty() && !(cohort_exposure_for(id) > 0.0)
+    const double closable = ledger_sized ? ledger_units : cohort_exposure_for(id);
+    if (!config_.process_orders_on_close && !id.empty() && !(closable > 0.0)
         && !has_pending_entry) {
         record_dropped_close(id, comment, qty, qty_percent, immediately, callsite_token);
         return;
@@ -7934,8 +7946,10 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         const auto point = detail::callback_point(require_host());
         const std::int64_t bar_key = point ? point->decision.script_bar_open_ms
                                            : require_host().native_decision_floor();
-        const double source_basis = cohort_exposure_for(id);
         const double fallback_basis = std::abs(detail::run_position(require_host()).signed_units);
+        const bool ledger_basis = ledger_sized && !config_.process_orders_on_close;
+        const double source_basis = ledger_basis
+            ? std::min(ledger_units, fallback_basis) : cohort_exposure_for(id);
         const double script_basis = source_basis > 0.0 ? source_basis : fallback_basis;
         if (pooc_close_basis_count_ == 0 || bar_key != pooc_close_basis_last_bar_) {
             BrokerStateHashSink fold;
@@ -7948,8 +7962,10 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         }
         frozen_qty = quantize_close_units(script_basis, requested_percent);
     }
-    const double close_basis = cohort_exposure_for(id) > 0.0
-        ? cohort_exposure_for(id) : std::abs(current);
+    const double close_basis = ledger_sized && !config_.process_orders_on_close
+        && ledger_units > 0.0
+        ? std::min(ledger_units, std::abs(current))
+        : cohort_exposure_for(id) > 0.0 ? cohort_exposure_for(id) : std::abs(current);
     const bool closes_full_position = close_basis > 0.0
         && ((std::isfinite(frozen_qty) && frozen_qty >= close_basis - 1e-10)
             || (std::isnan(effective_qty) && requested_percent >= 100.0 - 1e-9));
@@ -8318,6 +8334,22 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
             std::move(request), std::move(snapshot), replacement_key,
             false, 0, true});
         return;
+    }
+    // A later call of the same call site on this bar re-sizes the site's
+    // order; its fill books against the id of the site's first call (tape
+    // w3bf02-d1).
+    if (default_fifo_close && !config_.process_orders_on_close && callsite_token != 0) {
+        const auto prior = live_by_source_key_.find(key_for(replacement_key));
+        const auto point = detail::callback_point(require_host());
+        if (prior != live_by_source_key_.end() && point) {
+            const auto row = placement_.find(prior->second.incarnation);
+            if (row != placement_.end() && row->second.family == PineOrderFamily::Close
+                && row->second.placement_script_open_ms == point->decision.script_bar_open_ms) {
+                const SourceId& first = row->second.close_first_id.empty()
+                    ? row->second.source_id : row->second.close_first_id;
+                if (first != id) snapshot.close_first_id = first;
+            }
+        }
     }
     const PlacementSnapshot shadow_snapshot = snapshot;
     const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false, replacement_key);

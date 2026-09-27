@@ -175,6 +175,7 @@ std::vector<Row> tape_trades(const std::string& tape, std::int64_t end_ms) {
 //   C  strategy.close(id) through call site `site`, with comment `comment`
 //   Q  strategy.close(id, qty) through call site `site`
 //   O  strategy.order(id, short, qty): a sell that names no entry
+//   X  strategy.exit(id, from_entry=site's entry, limit=close * qty)
 //   A  strategy.close_all (strategy.close with an empty id)
 struct Event {
     unsigned day;
@@ -184,6 +185,7 @@ struct Event {
     double qty;
     std::uint64_t site;
     std::string comment;
+    std::string from = {};
 };
 
 struct Probe {
@@ -223,6 +225,10 @@ public:
                 break;
             case 'O':
                 strategy_order(e.id, false, e.qty, kNaN, kNaN, "", 0);
+                break;
+            case 'X':
+                strategy_exit(e.id, e.from, current_bar_.close * e.qty, kNaN, kNaN, kNaN,
+                              kNaN, 100.0, e.comment, kNaN, "", kNaN, kNaN);
                 break;
             case 'A':
                 strategy_close("", e.comment, kNaN, kNaN, false);
@@ -294,10 +300,10 @@ Event cleanup(unsigned day, int step) { return {day, step, 'A', "", kNaN, 0, "cl
 
 // w3f02-x1 / -x2: a grid bot's order sequence; entries L<n> through one
 // call site, closes through one loop site, cleanup at step 20 (UTC 05:00).
-Probe grid_sequence(const char* tape,
+Probe grid_sequence(const char* tape, bool pooc,
                     const std::vector<std::tuple<int, int, double>>& entries,
                     const std::vector<std::pair<int, int>>& closes) {
-    Probe p{tape, true, 200, {}};
+    Probe p{tape, pooc, 200, {}};
     for (int step = 0; step <= 20; ++step) {
         for (const auto& [bar, n, qty] : entries)
             if (bar == step)
@@ -334,8 +340,9 @@ Probe close_sequence(const char* tape, bool pooc, int pyramiding, const std::vec
 
 // The w3f02-g probes: every cell runs on 2025-04-08, 09 and 10 (UTC), each
 // strategy.close line its own call site; cleanup at 05:00.
-Probe cells(const char* tape, int pyramiding, const std::vector<Event>& day_events) {
-    Probe p{tape, true, pyramiding, {}};
+Probe cells(const char* tape, bool pooc, int pyramiding,
+            const std::vector<Event>& day_events) {
+    Probe p{tape, pooc, pyramiding, {}};
     for (unsigned day : {8u, 9u, 10u}) {
         for (Event e : day_events) {
             e.day = day;
@@ -349,12 +356,12 @@ int hm(int hour, int minute) { return (hour * 60 + minute) / 15; }
 
 std::vector<Probe> probes() {
     std::vector<Probe> out;
-    out.push_back(grid_sequence("w3f02-x2-min-5call",
+    out.push_back(grid_sequence("w3f02-x2-min-5call", true,
         {{0, 38, 0.19}, {0, 39, 0.2}, {0, 40, 0.2}, {0, 41, 0.2}, {0, 42, 0.2}, {0, 43, 0.2},
          {1, 44, 0.21}, {1, 45, 0.21}, {1, 46, 0.21},
          {2, 47, 0.21}, {2, 48, 0.22}, {2, 49, 0.22}},
         {{3, 45}, {3, 46}, {3, 47}, {3, 48}, {3, 49}, {13, 38}}));
-    out.push_back(grid_sequence("w3f02-x1-xlm-sequence",
+    out.push_back(grid_sequence("w3f02-x1-xlm-sequence", true,
         {{0, 38, 0.19}, {0, 39, 0.2}, {0, 40, 0.2}, {0, 41, 0.2}, {0, 42, 0.2}, {0, 43, 0.2},
          {1, 44, 0.21}, {1, 45, 0.21}, {1, 46, 0.21},
          {2, 47, 0.21}, {2, 48, 0.22}, {2, 49, 0.22},
@@ -406,12 +413,34 @@ std::vector<Probe> probes() {
          close_at(8, 5, "B", 22, "SOLE_B"), close_at(8, 7, "A", 23, "SOLE_A"),
          close_at(8, 9, "C", 24, "SOLE_C"), cleanup(8, 20)}});
 
-    // w3f02-g2 .. g9 (lane W3-ENG-EXIT-ALLOC): the single-unit controls.
-    out.push_back(cells("w3f02-g2-pooc-close-after-fifo-consumed", 5,
+    // Without process_orders_on_close (orders fill at the next open): x2
+    // (d1), a1 (d2), and an exit for B instead of a close (f2).
+    out.push_back(grid_sequence("w3bf02-d1-nopooc-five-call", false,
+        {{0, 38, 0.19}, {0, 39, 0.2}, {0, 40, 0.2}, {0, 41, 0.2}, {0, 42, 0.2}, {0, 43, 0.2},
+         {1, 44, 0.21}, {1, 45, 0.21}, {1, 46, 0.21},
+         {2, 47, 0.21}, {2, 48, 0.22}, {2, 49, 0.22}},
+        {{3, 45}, {3, 46}, {3, 47}, {3, 48}, {3, 49}, {13, 38}}));
+    out.push_back(close_sequence("w3bf02-d2-nopooc-spill-oldest-record", false, 200,
+        {{0, 'E', "B", 0.1}, {1, 'E', "A", 0.2}, {2, 'E', "C", 0.3}, {2, 'E', "D", 0.5},
+         {3, 'C', "C", 0}, {3, 'C', "D", 0}, {5, 'S', "A", 0}, {7, 'S', "B", 0},
+         {9, 'S', "D", 0}}));
+    out.push_back(Probe{"w3bf02-f2-nopooc-exit-reduce", false, 200,
+        {entry(8, 0, "A", 0.1, "BUY_A"), entry(8, 1, "B", 0.2, "BUY_B"),
+         entry(8, 2, "C", 0.3, "BUY_C"), Event{8, 3, 'X', "X", 0.95, 0, "EXIT_B", "B"},
+         close_at(8, 6, "A", 31, "SOLE_A"), close_at(8, 8, "B", 32, "SOLE_B"),
+         close_at(8, 10, "C", 33, "SOLE_C"), cleanup(8, 20)}});
+    // w3f02-g1 (lane W3-ENG-EXIT-ALLOC): g2 without process_orders_on_close.
+    out.push_back(cells("w3f02-g1-close-after-fifo-consumed", false, 5,
         {entry(0, hm(0, 0), "A", 1, "A"), entry(0, hm(1, 0), "B", 2, "B"),
          close_at(0, hm(2, 0), "B", 1, "close B first"), close_at(0, hm(3, 0), "A", 2, "close A"),
          close_at(0, hm(4, 0), "B", 3, "close B again")}));
-    out.push_back(cells("w3f02-g3-pooc-close-remaining-fragment", 5,
+
+    // w3f02-g2 .. g9 (lane W3-ENG-EXIT-ALLOC): the single-unit controls.
+    out.push_back(cells("w3f02-g2-pooc-close-after-fifo-consumed", true, 5,
+        {entry(0, hm(0, 0), "A", 1, "A"), entry(0, hm(1, 0), "B", 2, "B"),
+         close_at(0, hm(2, 0), "B", 1, "close B first"), close_at(0, hm(3, 0), "A", 2, "close A"),
+         close_at(0, hm(4, 0), "B", 3, "close B again")}));
+    out.push_back(cells("w3f02-g3-pooc-close-remaining-fragment", true, 5,
         {entry(0, hm(0, 0), "A", 2, "A"), entry(0, hm(1, 0), "B", 1, "B"),
          close_at(0, hm(2, 0), "B", 1, "close B"), close_at(0, hm(3, 0), "A", 2, "close A")}));
     const std::vector<Event> four = {
@@ -421,25 +450,25 @@ std::vector<Probe> probes() {
         base.insert(base.end(), more.begin(), more.end());
         return base;
     };
-    out.push_back(cells("w3f02-g4-pooc-loop-close-consumed-ids", 5, with(four,
+    out.push_back(cells("w3f02-g4-pooc-loop-close-consumed-ids", true, 5, with(four,
         {close_at(0, hm(2, 0), "L3", 1, "close L3"), close_at(0, hm(2, 15), "L4", 2, "close L4"),
          close_at(0, hm(4, 0), "L1", 3, "loop close L1"),
          close_at(0, hm(4, 0), "L2", 3, "loop close L2")})));
-    out.push_back(cells("w3f02-g5-pooc-two-sites-close-consumed-ids", 5, with(four,
+    out.push_back(cells("w3f02-g5-pooc-two-sites-close-consumed-ids", true, 5, with(four,
         {close_at(0, hm(2, 0), "L3", 1, "close L3"), close_at(0, hm(2, 15), "L4", 2, "close L4"),
          close_at(0, hm(4, 0), "L1", 3, "close L1"), close_at(0, hm(4, 0), "L2", 4, "close L2")})));
-    out.push_back(cells("w3f02-g6-pooc-close-id-loop-survivor-consumed", 5, with(four,
+    out.push_back(cells("w3f02-g6-pooc-close-id-loop-survivor-consumed", true, 5, with(four,
         {close_at(0, hm(2, 0), "L3", 1, "loop close L3"),
          close_at(0, hm(2, 0), "L4", 1, "loop close L4"),
          close_at(0, hm(3, 0), "L1", 2, "close L1")})));
-    out.push_back(cells("w3f02-g7-pooc-close-id-sole-close-consumed", 5, with(four,
+    out.push_back(cells("w3f02-g7-pooc-close-id-sole-close-consumed", true, 5, with(four,
         {close_at(0, hm(2, 0), "L4", 1, "close L4"), close_at(0, hm(3, 0), "L1", 2, "close L1")})));
     const std::vector<Event> three = {
         entry(0, hm(0, 0), "L1", 1, "L1"), entry(0, hm(0, 0), "L2", 1, "L2"),
         entry(0, hm(0, 0), "L3", 1, "L3")};
-    out.push_back(cells("w3f02-g8-pooc-loop-entries-close-first", 5, with(three,
+    out.push_back(cells("w3f02-g8-pooc-loop-entries-close-first", true, 5, with(three,
         {close_at(0, hm(2, 0), "L3", 1, "close L3"), close_at(0, hm(3, 0), "L1", 2, "close L1")})));
-    out.push_back(cells("w3f02-g9-pooc-loop-entries-close-second", 5, with(three,
+    out.push_back(cells("w3f02-g9-pooc-loop-entries-close-second", true, 5, with(three,
         {close_at(0, hm(2, 0), "L3", 1, "close L3"), close_at(0, hm(3, 0), "L2", 2, "close L2")})));
     return out;
 }
@@ -528,6 +557,22 @@ int main() {
         CHECK(closed_at(f3, 3) == 1000);
         CHECK(closed_at(f3, 5) == 1000);
         CHECK(closed_at(f3, 7) == 1000);
+        // Without process_orders_on_close the same ledger sizes the close,
+        // filled at the next open: d1 closes L38's 0.18 (x2's rows a bar
+        // later), d2 A's 0.1 (a1's), and in f2 the exit for B books B's
+        // units although it closes A's lot, so close("A") closes A's 0.1 and
+        // close("B") nothing. g1: close("A") closes 1 after close("B") took
+        // A's lot.
+        CHECK(closed_at(tapes["w3bf02-d1-nopooc-five-call"], 14) == 1800);
+        CHECK(closed_at(tapes["w3bf02-d2-nopooc-spill-oldest-record"], 6) == 1000);
+        const auto& f2 = tapes["w3bf02-f2-nopooc-exit-reduce"];
+        CHECK(closed_at(f2, 4) == 2000);
+        CHECK(closed_at(f2, 7) == 1000);
+        CHECK(closed_at(f2, 9) == 0);
+        long long g1_close_a = 0;
+        for (const Row& r : tapes["w3f02-g1-close-after-fifo-consumed"])
+            if (std::get<6>(r) == "close A") g1_close_a += std::get<3>(r);
+        CHECK(g1_close_a == 30000);
     }
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);

@@ -1,0 +1,30 @@
+//@version=6
+strategy("W3B F02 f2 a strategy.exit for B reduces the position", overlay=true, pyramiding=200, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W3B-ENG-GRID, family F02: which entries' close ledger does a
+// strategy.exit fill use up? BINANCE:ETHUSDT.P 15 bars from 2025-04-08 00:00
+// UTC, one step per 15 minutes, orders filling at the next bar's open.
+// Entries A 0.1, B 0.2, C 0.3; at step 3 strategy.exit("X", from_entry="B")
+// with a limit 5% under the close, so it fills at the next open; then
+// close("A") at step 6, close("B") at step 8 and close("C") at step 10, each
+// at its own call site. A cleanup close_all runs at step 20.
+
+start = timestamp("UTC", 2025, 4, 8, 0, 0)
+step = (time - start) / (15 * 60 * 1000)
+
+if step == 0
+    strategy.entry("A", strategy.long, qty=0.1, comment="BUY_A")
+if step == 1
+    strategy.entry("B", strategy.long, qty=0.2, comment="BUY_B")
+if step == 2
+    strategy.entry("C", strategy.long, qty=0.3, comment="BUY_C")
+if step == 3
+    strategy.exit("X", from_entry="B", limit=close * 0.95, comment="EXIT_B")
+if step == 6
+    strategy.close("A", comment="SOLE_A")
+if step == 8
+    strategy.close("B", comment="SOLE_B")
+if step == 10
+    strategy.close("C", comment="SOLE_C")
+if step == 20
+    strategy.close_all(comment="cleanup")

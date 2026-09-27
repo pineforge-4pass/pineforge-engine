@@ -1,0 +1,16 @@
+{
+  "title": "W3B F02 d1 x2 without process_orders_on_close",
+  "slug": "w3bf02-d1-nopooc-five-call",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:33:48.354Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "8fdd9b5ff462883491e6c77aac7ff9a53561e7d729f345210761581e17b0bbbb",
+  "tv_trades_sha256": "0a4dcf48a702c2d4307e9fa2292562ed4f4b90c641b55e0d1c10620af78719e5",
+  "tv_trades_rows": 28
+}

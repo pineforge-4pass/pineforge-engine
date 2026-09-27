@@ -1,0 +1,39 @@
+//@version=6
+strategy("W3B F02 d1 x2 without process_orders_on_close", overlay=true, pyramiding=200, process_orders_on_close=false, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W3B-ENG-GRID, family F02: strategy.close(id) under the default FIFO
+// close_entries_rule, replayed on BINANCE:ETHUSDT.P 15 bars from 2025-04-08
+// 00:00 UTC, one step per 15 minutes. Entries go through one strategy.entry
+// call site in a loop; closes go through one strategy.close call site in a
+// loop (the grid bots' shape) or through a second, sole call site. A cleanup
+// close_all runs at step 20.
+
+
+start = timestamp("UTC", 2025, 4, 8, 0, 0)
+step = (time - start) / (15 * 60 * 1000)
+var entryBar = array.from(0, 0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 2)
+var entryId = array.from("L38", "L39", "L40", "L41", "L42", "L43", "L44", "L45", "L46", "L47", "L48", "L49")
+var entryQty = array.from(0.19, 0.2, 0.2, 0.2, 0.2, 0.2, 0.21, 0.21, 0.21, 0.21, 0.22, 0.22)
+var closeBar = array.from(3, 3, 3, 3, 3, 13)
+var closeId = array.from("L45", "L46", "L47", "L48", "L49", "L38")
+var soleBar = array.new_int(0)
+var soleId = array.new_string(0)
+
+if time >= start and array.size(entryBar) > 0
+    for k = 0 to array.size(entryBar) - 1
+        if array.get(entryBar, k) == step
+            id = array.get(entryId, k)
+            strategy.entry(id, strategy.long, qty=array.get(entryQty, k), comment="BUY_" + id)
+if time >= start and array.size(closeBar) > 0
+    for k = 0 to array.size(closeBar) - 1
+        if array.get(closeBar, k) == step
+            id = array.get(closeId, k)
+            strategy.close(id, comment="TP_" + id)
+if time >= start and array.size(soleBar) > 0
+    for k = 0 to array.size(soleBar) - 1
+        if array.get(soleBar, k) == step
+            id = array.get(soleId, k)
+            strategy.close(id, comment="SOLE_" + id)
+
+if time == start + 20 * 15 * 60 * 1000
+    strategy.close_all(comment="cleanup")

@@ -66,6 +66,19 @@ The host's `strategy_order` takes no comment (nor does the generated call), so
 the engine books f1's `TRIM` exit unsigned; the test compares that row without
 its signal.
 
+## Without process_orders_on_close (the engine sized the close from the id's lots)
+
+The same ledger sizes the close when orders fill at the next open. The adapter
+sized a strategy.close(id) there from the lots still carrying the id and
+dropped the call when the FIFO rule had closed them all.
+
+| tape | TradingView | tv_trades.csv sha256 |
+|---|---|---|
+| `w3f02-g1-close-after-fifo-consumed` | g2 without `process_orders_on_close`: `close("A")` still closes 1 at the next open (the engine dropped it) | `daf5a60a1ae4b48809f96b24fb6a77f49f1f901ca0f68ee020efaecd5c7e4b06` |
+| `w3bf02-d1-nopooc-five-call` | x2 without `process_orders_on_close`: the loop's order fills 0.22 at the next open, booked against L45, and `close("L38")` closes 0.18 at step 14 (the engine dropped it) | `0a4dcf48a702c2d4307e9fa2292562ed4f4b90c641b55e0d1c10620af78719e5` |
+| `w3bf02-d2-nopooc-spill-oldest-record` | a1 without `process_orders_on_close`: `close("A")` closes the 0.1 the spill left (the engine dropped it) | `b3a9866683f73a51ea063045356948b6e9271f5fccafe18476722d5a0597a5a7` |
+| `w3bf02-f2-nopooc-exit-reduce` | A 0.1, B 0.2, C 0.3; at step 3 `strategy.exit("X", from_entry="B")` with a limit 5% under the close fills 0.2 at the next open, A's lot and half of B's, but books B's units: `close("A")` closes 0.1 (the engine dropped it), `close("B")` nothing | `4ae4027fb07609c71b123fe6acc08ace00197432a889cb5761bc8eeec4ba75c5` |
+
 ## The controls (the engine already booked them)
 
 | tape | TradingView | tv_trades.csv sha256 |

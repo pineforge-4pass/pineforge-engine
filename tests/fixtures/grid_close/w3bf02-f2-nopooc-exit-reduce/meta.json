@@ -1,0 +1,16 @@
+{
+  "title": "W3B F02 f2 a strategy.exit for B reduces the position",
+  "slug": "w3bf02-f2-nopooc-exit-reduce",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T18:02:31.635Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "dd77baf10db8506e08abdcc3f6ce4b37dfb9e0ddfc4766d8b2c9f76ee1b6fe7c",
+  "tv_trades_sha256": "4ae4027fb07609c71b123fe6acc08ace00197432a889cb5761bc8eeec4ba75c5",
+  "tv_trades_rows": 8
+}
