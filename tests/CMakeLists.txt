@@ -1402,6 +1402,8 @@ list(APPEND TEST_SOURCES test_session_prepost_windows_tape)
 list(APPEND TEST_SOURCES test_native_session_day_bar_open)
 #   K-SESSION-WINDOWS F2: the chart's session day and the regular one.
 list(APPEND TEST_SOURCES test_session_extended_day_tape)
+#   K-SESSION-WINDOWS F7: an aggregated bar opening inside a session break.
+list(APPEND TEST_SOURCES test_session_break_open_bar_tape)
 #   F1(e) an aggregated process_orders_on_close script reading entry_bar_index.
 list(APPEND TEST_SOURCES test_aggregated_entry_bar_index_tape)
 #   F1's magnified residual on the aggregated chart.
@@ -2229,7 +2231,8 @@ if(TARGET test_pooc_stop_reentry_bracket_tapes)
 endif()
 # R5 lane K-SESSION-WINDOWS reads TradingView's session-flag tapes.
 foreach(_pf_ksw_target IN ITEMS test_session_prepost_windows_tape
-        test_native_session_day_bar_open test_session_extended_day_tape)
+        test_native_session_day_bar_open test_session_extended_day_tape
+        test_session_break_open_bar_tape)
     if(TARGET ${_pf_ksw_target})
         target_compile_definitions(${_pf_ksw_target} PRIVATE
             PINEFORGE_KSW_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_windows")
