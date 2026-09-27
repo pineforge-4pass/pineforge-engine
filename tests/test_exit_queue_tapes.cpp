@@ -15,9 +15,13 @@
  * first exit re-issued there lost the whole position to the stale later one,
  * which then filled instead (a stop never fired; its target did).
  *
- * Exits for every entry (from_entry="") armed before an opening queue for the
- * new position the same way; the adapter had left each reserving all of it
- * (s11).
+ * Two companions ride on the same tapes. Exits for every entry
+ * (from_entry="") armed before an opening queue for the new position the same
+ * way; the adapter had left each reserving all of it (s11). And a reversed
+ * side's from_entry="" exit that the reversal's fill parked off the book,
+ * beside a second entry of the reversal bar, is void like one still on the
+ * book (lane TVDEF-DROPS, R3); the adapter released it at the next open
+ * against the new side (r1).
  *
  * Each row replays TradingView's own tape of a synthetic probe
  * (tests/fixtures/exit_queue, lab tv exports on BINANCE:ETHUSDT.P 15) through
@@ -184,6 +188,7 @@ enum class Probe {
     FirstEverStop,          // s16: A alone in the first trade; B first in later ones
     ExitBeforeEntryCall,    // s18 / s21: B once on the entry bar, before the entry
     PendingLimitParent,     // s20: B once while its limit entry rests
+    TwoParentReversal,      // r1: two short entries reverse a long that re-issues XL
 };
 
 bool entry_cell(std::int64_t t) {
@@ -197,6 +202,15 @@ bool next_cell(std::int64_t t) {
 bool cleanup_cell(std::int64_t t) {
     return t == at(8, 6, 0) || t == at(9, 6, 0) || t == at(10, 6, 0) || t == at(11, 6, 0)
         || t == at(14, 6, 0);
+}
+// r1 reverses at 00:30 and cleans up at 02:00.
+bool reversal_cell(std::int64_t t) {
+    return t == at(8, 0, 30) || t == at(9, 0, 30) || t == at(10, 0, 30) || t == at(11, 0, 30)
+        || t == at(14, 0, 30);
+}
+bool early_cleanup_cell(std::int64_t t) {
+    return t == at(8, 2, 0) || t == at(9, 2, 0) || t == at(10, 2, 0) || t == at(11, 2, 0)
+        || t == at(14, 2, 0);
 }
 
 // The probes, as their generated TUs lower them (fixtures/.../strategy.pine).
@@ -214,6 +228,7 @@ public:
         const bool cell = entry_cell(t);
         switch (probe_) {
         case Probe::PendingLimitParent: pending_limit_parent(t, close, cell); return;
+        case Probe::TwoParentReversal: two_parent_reversal(t, close); return;
         case Probe::ExitBeforeEntryCall:
             if (cell) {
                 exit("B", "L", close + 6.0, kNaN, 100.0, "B target");
@@ -309,6 +324,24 @@ private:
                       kNaN, kNaN);
     }
 
+    void two_parent_reversal(std::int64_t t, double close) {
+        if (entry_cell(t)) strategy_entry("L", true, kNaN, kNaN, kNaN, "L");
+        if (reversal_cell(t)) {
+            strategy_entry("S1", false, kNaN, kNaN, kNaN, "S1");
+            strategy_entry("S2", false, kNaN, kNaN, kNaN, "S2");
+        }
+        // strategy.position_avg_price: na while flat.
+        const double avg = signed_position_size() == 0.0 ? kNaN : position_entry_price_;
+        if (signed_position_size() > 0.0)
+            exit("XL", "", close + 20.0, close - 20.0, 100.0, "long exit");
+        if (signed_position_size() < 0.0)
+            exit("XS", "", avg - 15.0, avg + 15.0, 100.0, "short exit");
+        if (early_cleanup_cell(t)) {
+            strategy_cancel_all();
+            strategy_close("", "cleanup", kNaN, kNaN, false);
+        }
+    }
+
     void pending_limit_parent(std::int64_t t, double close, bool cell) {
         if (cell) {
             level_ = close - 15.0;
@@ -363,13 +396,14 @@ void show(const char* tag, const std::vector<Row>& rows) {
                     std::get<5>(r));
 }
 
-// Every probe declares strategy.fixed 1 and omits the capital: v6's 100000.
-source::PineStrategyConfig config(bool process_orders_on_close) {
+// Every probe omits the capital (v6: 100000) and declares strategy.fixed 1,
+// but r1, which sizes 40% of equity.
+source::PineStrategyConfig config(bool process_orders_on_close, QtyType type, double value) {
     source::PineStrategyConfig c{};
     c.process_orders_on_close = process_orders_on_close;
     c.initial_capital = 100000.0;
-    c.default_qty_type = static_cast<int>(QtyType::FIXED);
-    c.default_qty_value = 1.0;
+    c.default_qty_type = static_cast<int>(type);
+    c.default_qty_value = value;
     return c;
 }
 
@@ -378,6 +412,8 @@ struct Case {
     Probe probe;
     bool pooc;
     std::size_t closed;  // tape trades closed inside the bars
+    QtyType type = QtyType::FIXED;
+    double value = 1.0;
 };
 
 // Every trade of the tape that exits by `signal`.
@@ -409,6 +445,8 @@ int main() {
         {"w3f05-s18-pooc-qty-exit-before-entry-call", Probe::ExitBeforeEntryCall, true, 5},
         {"w3f05-s20-exit-for-pending-limit-entry", Probe::PendingLimitParent, false, 4},
         {"w3f05-s21-exit-before-entry-call-nextopen", Probe::ExitBeforeEntryCall, false, 5},
+        {"w3f05-r1-two-parent-reversal-global-exit", Probe::TwoParentReversal, false, 10,
+         QtyType::PERCENT_OF_EQUITY, 40.0},
     };
 
     std::map<std::string, Tape> tapes;
@@ -418,7 +456,7 @@ int main() {
         tapes[c.tape] = tape;
         CHECK(tape.trades.size() == c.closed);
 
-        const Run lane = run(c.probe, config(c.pooc), end_ms);
+        const Run lane = run(c.probe, config(c.pooc, c.type, c.value), end_ms);
         CHECK(lane.error.empty());
         CHECK(lane.trades == tape.trades);
         if (lane.trades != tape.trades) {
@@ -461,6 +499,16 @@ int main() {
         CHECK(count_signal(tapes["w3f05-s18-pooc-qty-exit-before-entry-call"], "B target") == 0);
         CHECK(count_signal(tapes["w3f05-s21-exit-before-entry-call-nextopen"], "B target") == 0);
         CHECK(count_signal(tapes["w3f05-s20-exit-for-pending-limit-entry"], "B target") == 2);
+        // A from_entry="" exit of the side a reversal ends never closes the
+        // new side, even beside a second entry of the reversal bar.
+        const Tape& reversal = tapes["w3f05-r1-two-parent-reversal-global-exit"];
+        std::size_t shorts = 0;
+        for (std::size_t i = 0; i < reversal.trades.size(); ++i) {
+            if (std::get<1>(reversal.trades[i])) continue;
+            ++shorts;
+            CHECK(reversal.signals[i] != "long exit");
+        }
+        CHECK(shorts == 5);
     }
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);

@@ -1,0 +1,16 @@
+{
+  "title": "W3 F05 r1 two-parent reversal voids the global exit",
+  "slug": "w3f05-r1-two-parent-reversal-global-exit",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:47:18.094Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "115b9cf1bf32defbf0e61df21a3a3c7c88a89230dc07281969352d7c65a28bb5",
+  "tv_trades_sha256": "d9ff1213bab859847f81bb0a968e2eb655975a719246c68d4b0acf638e33c07f",
+  "tv_trades_rows": 20
+}

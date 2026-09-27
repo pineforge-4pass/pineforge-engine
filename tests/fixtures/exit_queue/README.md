@@ -60,6 +60,19 @@ TradingView's own rows.
 | `w3f05-s21-exit-before-entry-call-nextopen` | s18 without `process_orders_on_close`: void | `56b1bb4e8d41a48253d2c798ab878fcce5d2441cb7a16f2f9afede101675b508` |
 | `w3f05-s20-exit-for-pending-limit-entry` | a limit entry 15 below the close; B (the limit + 20) issued once on the next bar while the entry rests: B is the entry's when it fills | `6b29fea54cb7b2293dfcb9c83883363c5cb1aeced3b8ffb1ac906bf825979f2f` |
 
+## A reversal voids the reversed side's global exit off the book too
+
+| tape | TradingView | tv_trades.csv sha256 |
+|---|---|---|
+| `w3f05-r1-two-parent-reversal-global-exit` | `default_qty_type = strategy.percent_of_equity, default_qty_value = 40`; a long at 00:00 re-issues exit XL (`from_entry=""`, limit `close + 20`, stop `close - 20`) every bar; at 00:30 two short entries S1 and S2, then XL again; while short, exit XS (`from_entry=""`, `avg -/+ 15`); cleanup at 02:00: every short exits by XS or the cleanup, never by XL | `d9ff1213bab859847f81bb0a968e2eb655975a719246c68d4b0acf638e33c07f` |
+
+Lane TVDEF-DROPS's rule R3 (`tests/fixtures/tvdef_drops`) cancels a reversed
+side's `from_entry=""` exit that still works on the book. With a second entry
+of the reversal bar still pending, the reversal's fill parks the exit's legs
+marketable against the new side for the next open instead, off the book; the
+engine released them there and closed the short (population:
+`job-2436-williamcleves-double-tap` on OANDA:XAUUSD 15, 2026-01-16).
+
 ## Bars
 
 `bars.inc` holds the replayed bars, 2025-04-07 00:00 .. 2025-04-14 12:00 UTC,

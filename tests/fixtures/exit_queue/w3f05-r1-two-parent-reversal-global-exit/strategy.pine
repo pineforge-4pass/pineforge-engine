@@ -1,0 +1,30 @@
+//@version=6
+strategy("W3 F05 r1 two-parent reversal voids the global exit", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=40)
+
+// Lane W3-ENG-EXIT-ALLOC, family F05: a from_entry="" exit of the reversed
+// side when the reversal bar places two MARKET entries for the new side.
+// Each cell enters a long at 00:00 UTC (filled at the next open). While the
+// long is held the script re-issues exit XL (from_entry="", limit close + 20,
+// stop close - 20: new levels every bar); at 00:30 it places two short
+// entries S1 and S2 and issues XL once more after them. While the short is
+// held it re-issues exit XS (from_entry="", limit avg - 15, stop avg + 15).
+// A cleanup cancels and closes everything at 02:00.
+
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+day = cell(8, 0, 0) or cell(9, 0, 0) or cell(10, 0, 0) or cell(11, 0, 0) or cell(14, 0, 0)
+rev = cell(8, 0, 30) or cell(9, 0, 30) or cell(10, 0, 30) or cell(11, 0, 30) or cell(14, 0, 30)
+cleanup = cell(8, 2, 0) or cell(9, 2, 0) or cell(10, 2, 0) or cell(11, 2, 0) or cell(14, 2, 0)
+
+if day
+    strategy.entry("L", strategy.long, comment="L")
+if rev
+    strategy.entry("S1", strategy.short, comment="S1")
+    strategy.entry("S2", strategy.short, comment="S2")
+if strategy.position_size > 0
+    strategy.exit("XL", from_entry="", limit=close + 20.0, stop=close - 20.0, comment="long exit")
+if strategy.position_size < 0
+    strategy.exit("XS", from_entry="", limit=strategy.position_avg_price - 15.0,
+         stop=strategy.position_avg_price + 15.0, comment="short exit")
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

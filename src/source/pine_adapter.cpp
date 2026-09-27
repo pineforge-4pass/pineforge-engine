@@ -17746,6 +17746,26 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
             }
         }
+        // The same exit may already wait off the book: a leg this fill found
+        // marketable beside a second parent of the bar was parked for the next
+        // open, its request cancelled (lane W3-ENG-EXIT-ALLOC, tape
+        // w3f05-r1-two-parent-reversal-global-exit). It is void as well, and
+        // leaving the queue records no kernel event.
+        const auto reversed_global_leg = [&](const PlacementSnapshot& row) {
+            return (row.family == PineOrderFamily::ExitLimit
+                    || row.family == PineOrderFamily::ExitStop
+                    || row.family == PineOrderFamily::ExitTrail)
+                && row.from_entry.empty() && row.projection_position_side == reversed_side
+                && row.placement_cycle == current_position_cycle_ - 1;
+        };
+        delayed_market_orders_.erase(std::remove_if(
+            delayed_market_orders_.begin(), delayed_market_orders_.end(),
+            [&](const auto& order) { return reversed_global_leg(order.snapshot); }),
+            delayed_market_orders_.end());
+        pending_bracket_legs_.erase(std::remove_if(
+            pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
+            [&](const PendingBracketLeg& leg) { return reversed_global_leg(leg.snapshot); }),
+            pending_bracket_legs_.end());
     }
     if (placement_snapshot && placement_snapshot->family == PineOrderFamily::Margin
         && event.closed_units > 0.0) {
