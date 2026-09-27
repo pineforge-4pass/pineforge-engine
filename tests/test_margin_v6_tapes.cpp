@@ -18,6 +18,9 @@
  *       is called at the bar's high before the script runs at the close: the
  *       script reads the called book, and its close fills meet what the call
  *       left.
+ *   M2  A short process_orders_on_close fills at a signal close is margined
+ *       at that close: TradingView sizes the call there and executes it at
+ *       the next open, and checks again at its slipped fill.
  *
  * Each row replays one lab tv tape (tests/fixtures/margin_v6) through the
  * Pine adapter under the configuration the generated constructor declares for
@@ -165,6 +168,16 @@ enum class Probe {
     AddExit,                       // w5-m1-addexit-p100 / -p60
     AddClose,                      // w5-m1-addclose
     PoocShortComm,                 // w5-m2-pooc-short-comm
+    PoocShortOpen, PoocShortPlain, // w5-m2-pooc-short-open / -plain
+    SeenSize,                      // w5-c1-seen-size
+    CarriedClose, CarriedNone,     // w5-m2-pooc-carried-close / -none
+};
+
+// The fifteen signal closes of w5-m2-pooc-short-open, shared by its siblings.
+const std::int64_t kCells[] = {
+    at(2, 0, 0), at(2, 3, 0), at(2, 6, 0), at(2, 9, 0), at(2, 18, 0),
+    at(3, 21, 0), at(4, 12, 0), at(5, 3, 0), at(5, 9, 0), at(5, 12, 0),
+    at(5, 15, 0), at(5, 21, 0), at(6, 9, 0), at(6, 12, 0), at(6, 15, 0),
 };
 
 class ProbeHost final : public source::PineStrategyHost {
@@ -194,6 +207,11 @@ public:
         case Probe::AddExit: add_and_exit(t, avg); break;
         case Probe::AddClose: add_and_close(t); break;
         case Probe::PoocShortComm: pooc_shorts(t, false); break;
+        case Probe::PoocShortOpen: cells(t, 0, nullptr, false, "S", "short", 30); break;
+        case Probe::PoocShortPlain: pooc_shorts(t, true); break;
+        case Probe::SeenSize: carried(t, 1); break;
+        case Probe::CarriedClose: carried(t, 2); break;
+        case Probe::CarriedNone: carried(t, 4); break;
         }
     }
 
@@ -299,6 +317,37 @@ private:
         if (with_d && t == at(7, 0, 0)) strategy_entry("D", false, kNaN, kNaN, kNaN, "D short");
         if (t == at(10, 18, 30) || t == at(2, 15, 0) || (with_d && t == at(7, 1, 30)))
             cleanup();
+    }
+
+    // One of the fifteen-cell scripts: an optional seed entry `seed_offset`
+    // minutes before each cell (named `seed`, long when `seed_long`), the
+    // cell's own entry at the cell, and a close_all `cleanup_after` minutes
+    // after it.
+    void cells(std::int64_t t, int seed_offset, const char* seed, bool seed_long,
+               const char* id, const char* comment, int cleanup_after,
+               bool cell_long = false) {
+        for (const std::int64_t cell : kCells) {
+            if (seed && t == cell + seed_offset * kMinute)
+                strategy_entry(seed, seed_long, kNaN, kNaN, kNaN, seed_long ? "long" : "short");
+            if (t == cell) strategy_entry(id, cell_long, kNaN, kNaN, kNaN, comment);
+            if (t == cell + cleanup_after * kMinute) close_all("cleanup");
+        }
+    }
+
+    // The carried short of 2025-04-04 12:00, called again at the 12:30 high;
+    // at that bar's close the script reverses by the size it reads (1),
+    // closes (2) or only cancels (4).
+    void carried(std::int64_t t, int shape) {
+        if (t == at(4, 12, 0)) strategy_entry("S", false, kNaN, kNaN, kNaN, "short");
+        if (t == at(4, 12, 30)) {
+            if (shape == 1) {
+                strategy_entry("L", true, kNaN, kNaN, std::abs(signed_position_size()),
+                               "reverse by the size seen");
+            }
+            if (shape == 2) close_all("close at the called bar");
+            if (shape == 4) strategy_cancel_all();
+        }
+        if (t == at(4, 13, 30)) close_all("cleanup");
     }
 
     Probe probe_;
@@ -410,6 +459,12 @@ int main() {
          false, 3},
         {"M1", "w5-m1-addclose", Probe::AddClose, config(false, 0.0, 0, 100.0, 2), false, 4},
         {"C1", "w5-m2-pooc-short-comm", Probe::PoocShortComm, config(true, 0.05, 1), false, 6},
+        {"M2", "w5-m2-pooc-short-open", Probe::PoocShortOpen, config(true, 0.05, 1), false, 46},
+        {"M2 control", "w5-m2-pooc-short-plain", Probe::PoocShortPlain, config(true, 0.0, 0),
+         false, 8},
+        {"C1", "w5-c1-seen-size", Probe::SeenSize, config(true, 0.05, 1), false, 5},
+        {"C1", "w5-m2-pooc-carried-close", Probe::CarriedClose, config(true, 0.05, 1), false, 4},
+        {"C1", "w5-m2-pooc-carried-none", Probe::CarriedNone, config(true, 0.05, 1), false, 4},
     };
 
     for (const Case& c : cases) {

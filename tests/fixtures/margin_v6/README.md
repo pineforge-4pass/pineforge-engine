@@ -69,6 +69,13 @@ the equity before it. Each carried tape also needs the 12:15 opening call
 (M2), and `w5-m2-pooc-carried-reverse` its new long's call (C2): the test
 replays them from those rules on.
 
+## M2: a process_orders_on_close short is margined at its signal close
+
+| tape | trades | `strategy()` declares | TradingView | tv_trades.csv sha256 |
+|---|---:|---|---|---|
+| `w5-m2-pooc-short-open` | 46 | `process_orders_on_close`, commission 0.05 %, slippage 1 | fifteen 100% shorts, each filled one tick under its signal close: TradingView sizes the call at that close and executes it at the next open (the open one tick above, at or below the close), then calls again at that bar's high | `3ddb052ee1d76e39e6b7224cd5b39daf4e7c86bd5f9595ce8fd1712baf631593` |
+| `w5-m2-pooc-short-plain` | 11 | `process_orders_on_close` | the control, fee- and slippage-free | `7aee513fff2aa14be7319f167b495a99811849eb4024b1291bd5fca2872988c2` |
+
 ## Bars
 
 `bars.inc` is the corpus 15m chart feed `scripts/derive_corpus_feeds.py`

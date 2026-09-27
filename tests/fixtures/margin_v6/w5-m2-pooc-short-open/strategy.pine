@@ -1,0 +1,69 @@
+//@version=6
+strategy("W5 M2 POOC short opening call (comm 0.05 slip 1)", overlay=true, process_orders_on_close=true, commission_type=strategy.commission.percent, commission_value=0.05, slippage=1)
+
+// Lane W5-ENG-MARGIN-V6, mechanism M2 (the opening call). A 100%-of-equity
+// SHORT process_orders_on_close fills one tick under a signal close, and the
+// entry's commission leaves it short of margin. The next bar opens one tick
+// above that close, at it, or one tick below. At which price does TradingView
+// size its call there -- the signal close or the open -- and does it call
+// again at its own slipped fill?
+if time == timestamp("UTC", 2025, 4, 2, 0, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 2, 0, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 2, 3, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 2, 3, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 2, 6, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 2, 6, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 2, 9, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 2, 9, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 2, 18, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 2, 18, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 3, 21, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 3, 21, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 4, 12, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 4, 12, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 3, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 5, 3, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 9, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 5, 9, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 12, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 5, 12, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 15, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 5, 15, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 21, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 5, 21, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 6, 9, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 6, 9, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 6, 12, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 6, 12, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 6, 15, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 6, 15, 0) + 30 * 60000
+    strategy.close_all(comment="cleanup")

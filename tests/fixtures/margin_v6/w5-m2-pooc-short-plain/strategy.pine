@@ -1,0 +1,23 @@
+//@version=6
+strategy("W5 M2 POOC short open+extreme calls (no fees)", overlay=true, process_orders_on_close=true)
+
+// Lane W5-ENG-MARGIN-V6, mechanism M2. A 100%-of-equity SHORT filled at a
+// signal close (process_orders_on_close), fee- and slippage-free. On B and C
+// the next bar opens a few ticks above the fill (a call at the open) and then
+// rises further; on A it opens at the fill price.
+if time == timestamp("UTC", 2025, 4, 10, 17, 0)
+    strategy.entry("A", strategy.short, comment="A short")
+if time == timestamp("UTC", 2025, 4, 2, 13, 30)
+    strategy.entry("B", strategy.short, comment="B short")
+if time == timestamp("UTC", 2025, 4, 22, 13, 15)
+    strategy.entry("C", strategy.short, comment="C short")
+if time == timestamp("UTC", 2025, 4, 7, 0, 0)
+    strategy.entry("D", strategy.short, comment="D short")
+
+cleanup = time == timestamp("UTC", 2025, 4, 10, 18, 30) or
+     time == timestamp("UTC", 2025, 4, 2, 15, 0) or
+     time == timestamp("UTC", 2025, 4, 22, 14, 45) or
+     time == timestamp("UTC", 2025, 4, 7, 1, 30)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

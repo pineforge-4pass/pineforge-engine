@@ -16312,6 +16312,11 @@ void PineExecutionAdapter::apply_terminal_explicit_market_policy(
 }
 
 void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionContext& context) {
+    // The script bar this opening follows, before it is replaced below: a
+    // short process_orders_on_close filled at its close is margined at that
+    // close (the opening slice below).
+    const Bar prior_policy_bar = policy_script_bar_;
+    const bool prior_policy_bar_valid = policy_script_bar_valid_;
     // Terminal entry refusals have no Applied notification.  Consume their
     // generic receipt before the next matching point so their deferred
     // per-origin bracket legs cannot close a different cohort member.
@@ -16555,9 +16560,37 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         whole_market_close_waits = whole_market_close_waits
             && !opposite_entry_waits;
         const double opening_mark = nearest_tick(bar.open, staged_.syminfo.mintick);
+        // A short process_orders_on_close filled at the previous bar's close
+        // is margined at that close: TradingView sizes the call there (the
+        // slipped fill and the entry's commission leave it short of margin)
+        // and executes it at this open, re-sized at the open only when it no
+        // longer covers the open's own shortfall. Every first opening call of
+        // the 258 such shorts in lab tv tape
+        // officialjackofalltrades-caldera-meridian-strategy-joat (ETHUSDT.P 15,
+        // commission 0.05 %, slippage 1) follows this; marking at the open
+        // alone books 118 (lab tv tapes tests/fixtures/margin_v6
+        // w5-m2-pooc-short-comm; lane W5-ENG-MARGIN-V6).
+        double close_margined_units = 0.0;
+        if (config_.process_orders_on_close && !config_.calc_on_order_fills
+            && opening_position.signed_units < 0.0 && prior_policy_bar_valid
+            && context.sub_index == 0 && !context.driver_statistics.intrabar_path_enabled
+            && position_open_phase_ == NativePathPhase::Close
+            && position_open_script_bar_ == prior_policy_bar.timestamp
+            && finite_positive(prior_policy_bar.close)
+            && !source_margin_rounded_tie_veto()) {
+            const double at_close_units = source_margin_units(
+                source_margin_money(prior_policy_bar.close, context.sub_bar_open_ms), false);
+            const auto at_open = source_margin_money(opening_mark, context.sub_bar_open_ms);
+            const double open_shortfall = at_open.valid && at_open.required > at_open.equity
+                ? (at_open.required - at_open.equity) / at_open.unit_margin : 0.0;
+            if (at_close_units > 0.0 && at_close_units >= open_shortfall)
+                close_margined_units = at_close_units;
+        }
         const bool opening_margin_applied =
             !whole_market_close_waits
-            && submit_margin_call_slice(opening_mark, context);
+            && (close_margined_units > 0.0
+                ? submit_margin_call_units(opening_mark, context, close_margined_units)
+                : submit_margin_call_slice(opening_mark, context));
         // pine_fills.cpp:2525-2678 gives an opening slice priority over the
         // remaining path.  The surviving book is then evaluated over the
         // suffix: a restored bracket at an earlier level wins naturally, while
@@ -18416,12 +18449,26 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 && policy_script_bar_valid_
                 && policy_script_bar_.timestamp == context.script_bar_open_ms
                 && after_margin.signed_units != 0.0 && !one_x_long) {
+                // The opening call of a short process_orders_on_close filled
+                // at the previous close is checked again at its own slipped
+                // fill: TradingView calls again there while the survivor is
+                // still short of margin (the second opening calls of lab tv
+                // tape officialjackofalltrades-caldera-meridian-strategy-joat,
+                // 1 or 4 x the lot remainder; lane W5-ENG-MARGIN-V6). The
+                // re-check's own slice re-enters here until it covers.
+                const bool recheck_at_fill = config_.process_orders_on_close
+                    && !config_.calc_on_order_fills && config_.slippage != 0
+                    && after_margin.signed_units < 0.0
+                    && position_open_phase_ == NativePathPhase::Close
+                    && position_open_script_bar_ != context.script_bar_open_ms
+                    && finite_positive(event.resolved_price);
                 // ab9714be pine_fills.cpp:2525-2678 then :1266-1751:
                 // after an opening slice, the survivor is checked over the
                 // unconsumed bar suffix.  Submission from this Applied point
                 // uses A35 remaining-path eligibility and sizes from the
                 // already-reduced physical book.
-                (void)schedule_margin_call_path(policy_script_bar_, context);
+                if (!recheck_at_fill || !submit_margin_call_slice(event.resolved_price, context))
+                    (void)schedule_margin_call_path(policy_script_bar_, context);
             }
         }
         if (pooc_close_checkpoint_deferred_ms_ == context.script_bar_open_ms

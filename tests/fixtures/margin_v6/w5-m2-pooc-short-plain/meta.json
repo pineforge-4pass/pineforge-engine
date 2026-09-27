@@ -1,0 +1,16 @@
+{
+  "title": "W5 M2 POOC short open+extreme calls (no fees)",
+  "slug": "w5-m2-pooc-short-plain",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:44:32.586Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "03fdf2311272ed4017b9f51493d9ef67933b7a3d6b1e35bc9947a9e5dcced2ff",
+  "tv_trades_sha256": "7aee513fff2aa14be7319f167b495a99811849eb4024b1291bd5fca2872988c2",
+  "tv_trades_rows": 22
+}
