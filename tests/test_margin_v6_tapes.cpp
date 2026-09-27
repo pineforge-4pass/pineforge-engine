@@ -21,6 +21,8 @@
  *   M2  A short process_orders_on_close fills at a signal close is margined
  *       at that close: TradingView sizes the call there and executes it at
  *       the next open, and checks again at its slipped fill.
+ *   QP  A qty_percent exit's basis is its entry's quantity: the units margin
+ *       calls took from the position count.
  *
  * Each row replays one lab tv tape (tests/fixtures/margin_v6) through the
  * Pine adapter under the configuration the generated constructor declares for
@@ -171,6 +173,7 @@ enum class Probe {
     PoocShortOpen, PoocShortPlain, // w5-m2-pooc-short-open / -plain
     SeenSize,                      // w5-c1-seen-size
     CarriedClose, CarriedNone,     // w5-m2-pooc-carried-close / -none
+    QpReissue, QpOnce,             // w5-qp-pooc-reissue / -once
 };
 
 // The fifteen signal closes of w5-m2-pooc-short-open, shared by its siblings.
@@ -212,6 +215,8 @@ public:
         case Probe::SeenSize: carried(t, 1); break;
         case Probe::CarriedClose: carried(t, 2); break;
         case Probe::CarriedNone: carried(t, 4); break;
+        case Probe::QpReissue: qty_percent_exits(t, at(15, 19, 15), false); break;
+        case Probe::QpOnce: qty_percent_exits(t, at(15, 19, 15), true); break;
         }
     }
 
@@ -350,7 +355,27 @@ private:
         if (t == at(4, 13, 30)) close_all("cleanup");
     }
 
+    // w5-qp-*: TP1/TP2 close 35 % each and TP3 the rest; `once` places them
+    // at the entry bar only, otherwise every bar while short.
+    void qty_percent_exits(std::int64_t t, std::int64_t entry_bar, bool once) {
+        if (t == at(15, 19, 0)) placed_ = false;
+        const bool entry = t == entry_bar;
+        if (entry) strategy_entry("S", false, kNaN, kNaN, kNaN, "short");
+        const bool short_held = signed_position_size() < 0.0;
+        if (once ? ((short_held || entry) && !placed_) : short_held) {
+            placed_ = true;
+            strategy_exit("TP1", "S", 1577.0, 1700.0, kNaN, kNaN, kNaN, 35.0, "TP1", kNaN, "",
+                          kNaN, kNaN);
+            strategy_exit("TP2", "S", 1552.0, 1700.0, kNaN, kNaN, kNaN, 35.0, "TP2", kNaN, "",
+                          kNaN, kNaN);
+            strategy_exit("TP3", "S", 1500.0, 1700.0, kNaN, kNaN, kNaN, 100.0, "TP3", kNaN, "",
+                          kNaN, kNaN);
+        }
+        if (t == utc(4, 16, 6, 0)) cleanup();
+    }
+
     Probe probe_;
+    bool placed_ = false;
 };
 
 std::vector<Bar> eth_feed() {
@@ -465,6 +490,8 @@ int main() {
         {"C1", "w5-c1-seen-size", Probe::SeenSize, config(true, 0.05, 1), false, 5},
         {"C1", "w5-m2-pooc-carried-close", Probe::CarriedClose, config(true, 0.05, 1), false, 4},
         {"C1", "w5-m2-pooc-carried-none", Probe::CarriedNone, config(true, 0.05, 1), false, 4},
+        {"QP", "w5-qp-pooc-reissue", Probe::QpReissue, config(true, 0.05, 1), false, 5},
+        {"QP control", "w5-qp-pooc-once", Probe::QpOnce, config(true, 0.05, 1), false, 5},
     };
 
     for (const Case& c : cases) {

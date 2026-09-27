@@ -9174,9 +9174,30 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     // entry's own quantity -- the oldest lots first -- not the whole book
     // (tests/test_pyramiding_count_differential.cpp, P10 on its lab tv tape).
     const bool fifo_named_entry = !config_.close_entries_rule_any && !from_entry.empty();
-    const double book_basis = fifo_named_entry
+    // TradingView sizes a percent exit on the quantity its entry filled: the
+    // slices margin calls took from the position are not taken off it (lab tv
+    // tapes tests/fixtures/margin_v6 w5-qp-*: 35 % of the 62.3911 a short
+    // filled, though margin calls of 0.0028 and 1.6712 precede the exit's
+    // placement; lane W5-ENG-MARGIN-V6).
+    double margin_sliced_units = 0.0;
+    if (std::isnan(qty) && std::isfinite(requested_qty_percent)
+        && requested_qty_percent < 100.0 && physical.signed_units != 0.0
+        && position_open_script_bar_ != std::numeric_limits<std::int64_t>::min()) {
+        const auto& host = require_host();
+        for (int k = host.trade_count() - 1; k >= 0; --k) {
+            const Trade& trade = host.get_trade(k);
+            if (trade.exit_time < position_open_script_bar_) break;
+            if (trade.exit_id != kMarginCallLabel
+                || trade.is_long != (physical.signed_units > 0.0)
+                || (fifo_named_entry && trade.entry_id != from_entry)) {
+                continue;
+            }
+            margin_sliced_units += trade.qty;
+        }
+    }
+    const double book_basis = (fifo_named_entry
         ? std::min(std::abs(physical.signed_units), cohort_exposure_for(from_entry))
-        : std::abs(physical.signed_units);
+        : std::abs(physical.signed_units)) + margin_sliced_units;
     const double live_reservation_basis = binds_pending_reversal_entry ? 0.0
         : std::max(0.0, book_basis
                          - pending_same_bar_close_qty_ + pending_parent_units);

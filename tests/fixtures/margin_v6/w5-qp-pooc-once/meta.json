@@ -1,0 +1,16 @@
+{
+  "title": "W5 QP POOC qty_percent after calls",
+  "slug": "w5-qp-pooc-once",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:23:46.237Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "3d02834c22dfb2afca33fee794e4e9c64ab46a6c304e8da7ff3a91c0bfea2c11",
+  "tv_trades_sha256": "5f694054f0ddafa47047e9a3cdfb3bd2fca5fa45ea9e3ee35b22477efd91d0a4",
+  "tv_trades_rows": 10
+}

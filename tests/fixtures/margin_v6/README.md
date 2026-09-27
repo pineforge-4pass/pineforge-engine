@@ -76,6 +76,13 @@ replays them from those rules on.
 | `w5-m2-pooc-short-open` | 46 | `process_orders_on_close`, commission 0.05 %, slippage 1 | fifteen 100% shorts, each filled one tick under its signal close: TradingView sizes the call at that close and executes it at the next open (the open one tick above, at or below the close), then calls again at that bar's high | `3ddb052ee1d76e39e6b7224cd5b39daf4e7c86bd5f9595ce8fd1712baf631593` |
 | `w5-m2-pooc-short-plain` | 11 | `process_orders_on_close` | the control, fee- and slippage-free | `7aee513fff2aa14be7319f167b495a99811849eb4024b1291bd5fca2872988c2` |
 
+## QP: a qty_percent exit counts the units margin calls took
+
+| tape | trades | `strategy()` declares | TradingView | tv_trades.csv sha256 |
+|---|---:|---|---|---|
+| `w5-qp-pooc-reissue` | 5 | `process_orders_on_close`, commission 0.05 %, slippage 1 | a 100% short of 62.3911 called 0.0028 and 1.6712 before its TP1/TP2 (35 % each, re-issued every bar) are placed: each closes 21.8368, 35 % of the entry, the called units included | `5f694054f0ddafa47047e9a3cdfb3bd2fca5fa45ea9e3ee35b22477efd91d0a4` |
+| `w5-qp-pooc-once` | 5 | the same | the control: placed once at the entry; the same file | `5f694054f0ddafa47047e9a3cdfb3bd2fca5fa45ea9e3ee35b22477efd91d0a4` |
+
 ## Bars
 
 `bars.inc` is the corpus 15m chart feed `scripts/derive_corpus_feeds.py`
