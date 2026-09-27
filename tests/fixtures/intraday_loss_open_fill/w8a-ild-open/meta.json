@@ -1,0 +1,16 @@
+{
+  "title": "w8a-joat-ild-open",
+  "slug": "w8a-ild-open",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T16:38:27.671Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "e31d9ef862d35a3b39522f35986beacb29f8dbc16313f91323de96dafa80a9a3",
+  "tv_trades_sha256": "ce7ae2c5f56fb663cf7c4961d2fedeaf4a20c7bbc905b15b4183128b644011ca",
+  "tv_trades_rows": 10
+}

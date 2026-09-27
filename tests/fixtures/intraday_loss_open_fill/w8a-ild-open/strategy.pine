@@ -1,0 +1,38 @@
+//@version=6
+strategy("w8a-joat-ild-open", overlay=true, initial_capital=100000, default_qty_type=strategy.fixed, default_qty_value=1, commission_type=strategy.commission.percent, commission_value=0.01)
+
+// Lane W8A-SIGSTATE-1, group joat. BINANCE:ETHUSDT.P 1D, 2025-04-01 .. 2026-05-01.
+// Question: does strategy.risk.max_intraday_loss count the P&L of a winner closed at a day's
+// FIRST tick (the open, by an order carried from the previous close) as an intraday loss of
+// that day? Each cell closes a ~2.4% winner at a day's open and rests a buy limit that fills
+// later that day and is ~2% of equity under water at the day's low.
+strategy.risk.max_intraday_loss(1.5, strategy.percent_of_equity)
+cell(y, m, d) => time == timestamp("UTC", y, m, d, 0, 0)
+
+// K (control: the rule is armed): long 15 from the 2025-10-07 open; that day's low is 5.6% under it.
+if cell(2025, 10, 6)
+    strategy.entry("K", strategy.long, qty=15, comment="K long")
+if cell(2025, 10, 7)
+    strategy.close_all(comment="K cleanup")
+
+// P (winner closed at the open by a PRICED exit): short 4.8 from the 2025-11-03 open; on the 11-12
+// close a buy limit above the market closes it at the 11-13 open; PL rests at 3400 (below that open).
+if cell(2025, 11, 2)
+    strategy.entry("P", strategy.short, qty=4.8, comment="P short")
+if cell(2025, 11, 12)
+    strategy.exit("PX", from_entry="P", limit=3500.0, comment="P limit exit")
+    strategy.order("PL", strategy.long, qty=8.3, limit=3400.0, comment="PL long")
+if cell(2025, 11, 13)
+    strategy.cancel_all()
+    strategy.close_all(comment="P cleanup")
+
+// W (the probe's shape: winner closed at the open by a carried MARKET close): short 3.7064 from the
+// 2026-01-31 open, strategy.close on the 02-06 close fills at the 02-07 open; WL rests at 2062.
+if cell(2026, 1, 30)
+    strategy.entry("W", strategy.short, qty=3.7064, comment="W short")
+if cell(2026, 2, 6)
+    strategy.close("W", comment="W close")
+    strategy.order("WL", strategy.long, qty=29.8, limit=2062.0, comment="WL long")
+if cell(2026, 2, 7)
+    strategy.cancel_all()
+    strategy.close_all(comment="W cleanup")

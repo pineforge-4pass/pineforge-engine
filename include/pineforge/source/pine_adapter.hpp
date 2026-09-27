@@ -1217,6 +1217,9 @@ struct SourceDayLedger {
     int consecutive_loss_days = 0;
     std::int64_t intraday_loss_day = std::numeric_limits<std::int64_t>::min();
     double intraday_start_equity = std::numeric_limits<double>::quiet_NaN();
+    // The script bar whose open captured intraday_start_equity: fills at that
+    // open point precede the day (lane W8A-SIGSTATE-1 R4).
+    std::int64_t intraday_start_script_bar = std::numeric_limits<std::int64_t>::min();
     double intraday_realized = 0.0;
     std::uint64_t observed_applied_ordinal = 0;
 };

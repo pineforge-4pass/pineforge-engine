@@ -552,6 +552,9 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.i(day_ledger_.current_day); f.i(day_ledger_.last_loss_day); f.i(day_ledger_.consecutive_loss_days);
     f.i(day_ledger_.intraday_loss_day); f.d(day_ledger_.intraday_start_equity);
     f.d(day_ledger_.intraday_realized); f.u(day_ledger_.observed_applied_ordinal);
+    // Decision state only under an intraday loss rule (lane W8A-SIGSTATE-1
+    // R4); folded only then, so every run without one keeps its digest.
+    if (risk_.max_intraday_loss > 0.0) f.i(day_ledger_.intraday_start_script_bar);
     f.i(risk_.direction); f.i(risk_.max_cons_loss_days); f.d(risk_.max_drawdown);
     f.b(risk_.max_drawdown_percent); f.d(risk_.max_intraday_loss);
     f.b(risk_.max_intraday_loss_percent); f.d(risk_.max_position_size); f.b(risk_.halted);

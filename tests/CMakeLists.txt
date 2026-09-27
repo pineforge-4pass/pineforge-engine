@@ -919,6 +919,11 @@ list(APPEND TEST_SOURCES test_pooc_margin_call_sizing_tapes)
 # close fits (tests/fixtures/pooc_short_slip_admission), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_pooc_short_slip_admission_tapes)
 
+# Lane W8A-SIGSTATE-1 R4: a fill at the day's first tick does not trip
+# strategy.risk.max_intraday_loss (tests/fixtures/intraday_loss_open_fill), on
+# TradingView's tape.
+list(APPEND TEST_SOURCES test_intraday_loss_open_fill_tape)
+
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bare_host_contracts)
@@ -2416,6 +2421,13 @@ endif()
 if(TARGET test_pooc_short_slip_admission_tapes)
     target_compile_definitions(test_pooc_short_slip_admission_tapes PRIVATE
         PINEFORGE_W4_SHORT_SLIP_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_short_slip_admission")
+endif()
+
+# Lane W8A-SIGSTATE-1 R4 reads its TradingView tape and daily bars from the
+# fixture tree; source-bound.
+if(TARGET test_intraday_loss_open_fill_tape)
+    target_compile_definitions(test_intraday_loss_open_fill_tape PRIVATE
+        PINEFORGE_INTRADAY_LOSS_OPEN_FILL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/intraday_loss_open_fill")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape

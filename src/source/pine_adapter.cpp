@@ -16706,6 +16706,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     if (day_ledger_.intraday_loss_day != day_ledger_.current_day) {
         day_ledger_.intraday_loss_day = day_ledger_.current_day;
         day_ledger_.intraday_start_equity = require_host().native_marked_equity(bar.open);
+        day_ledger_.intraday_start_script_bar = context.script_bar_open_ms;
         day_ledger_.intraday_realized = 0.0;
     }
     // Quiet: no filled-orders cap close is due.
@@ -17723,8 +17724,17 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         }
     }
     bool preclose_intraday_loss = false;
+    // A fill at the open point that captured the day's start equity closes an
+    // order carried from the previous day: its P&L is already in that equity,
+    // so TradingView does not count it as the day's loss, market or priced
+    // (lab tv tape tests/fixtures/intraday_loss_open_fill; lane W8A-SIGSTATE-1
+    // R4). An intrabar fill keeps the own-fill exclusion
+    // (test_risk_max_intraday_loss_tv t1).
+    const bool day_open_fill = context.coordinate.path_phase == NativePathPhase::Open
+        && context.sub_index == 0
+        && context.script_bar_open_ms == day_ledger_.intraday_start_script_bar;
     if (event.closed_trade_count > 0 && risk_.max_intraday_loss > 0.0
-        && !intraday_loss_orders_blocked()
+        && !intraday_loss_orders_blocked() && !day_open_fill
         && std::isfinite(day_ledger_.intraday_start_equity)) {
         double closed_pnl = 0.0;
         const auto& host = require_host();
