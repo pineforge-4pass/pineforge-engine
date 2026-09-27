@@ -131,17 +131,18 @@ directly, so a Pine-layer symbol reaching one is a link error.
 
 ## API at a glance
 
-The public C surface is **113 `PF_API` declarations** across two headers:
+The public C surface is **114 `PF_API` declarations** across two headers:
 
-- `<pineforge/pineforge.h>` — **70**: 62 runtime implementations plus eight
-  per-strategy generated exports. This is what a compiled strategy `.so`
-  exports and what a harness calls.
+- `<pineforge/pineforge.h>` — **71**: 62 runtime implementations plus nine
+  per-strategy generated exports (`strategy_declares_bar_magnifier` only in a
+  script that declares `use_bar_magnifier = true`). This is what a compiled
+  strategy `.so` exports and what a harness calls.
 - `<pineforge/native_c_api.h>` (included by `pineforge.h`) — **43**: the other
   direction, where the host drives the kernel itself. Submit, replace, cancel,
   execute, read the book, read the lots. Additive: no symbol, struct or
   behaviour of the first set changes.
 
-`scripts/check_c_abi_runtime.py` pins both symbol inventories (70 and 43);
+`scripts/check_c_abi_runtime.py` pins both symbol inventories (71 and 43);
 `scripts/check_native_c_api_surface.py` separately pins the host COVERAGE block.
 
 | Group | Symbols | Reference |
@@ -157,7 +158,8 @@ The public C surface is **113 `PF_API` declarations** across two headers:
 
 A built PineForge strategy `.so` exports 113 `PF_API` symbols (70 compiled-strategy
 declarations plus 41 `strategy_native_*` declarations and two
-`strategy_configure_native_ext_*` declarations) and the toolchain
+`strategy_configure_native_ext_*` declarations; 114 with
+`strategy_declares_bar_magnifier` in a script that declares the magnifier) and the toolchain
 `std::piecewise_construct` symbol; no project-internal C++ symbol is exported — see
 **[ABI stability](@ref abi_stability)** for the full guarantee.
 

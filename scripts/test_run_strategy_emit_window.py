@@ -137,6 +137,7 @@ def _trade(entry_ms: int, exit_ms: int, *, is_long: bool = True) -> dict:
 class _FakeStrategy:
     """Stands in for Strategy: records the run kwargs, returns ``trades``."""
     calls: list[dict] = []
+    declares_bar_magnifier = False
     trades: list[dict] = []
 
     def __init__(self, so_path: Path) -> None:

@@ -468,6 +468,10 @@ Audited gaps a forward/real-time executor must know (beyond per-order fills).
   that run enters before TradingView's first entry, when it runs again from the
   signal bar. Rows are written from one bar before TradingView's first entry
   either way.
+- A library exporting `strategy_declares_bar_magnifier()` (a script declaring
+  `use_bar_magnifier = true`) runs on the 1m feed named by
+  `PINEFORGE_RUN_MAGNIFIER_FEED` with the magnifier on, on an intraday chart
+  coarser than 1m; on a daily or coarser chart it prints `declared-not-run`.
 
 ## ⚠️ Possible bug (flagged, not confirmed)
 

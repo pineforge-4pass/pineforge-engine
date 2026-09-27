@@ -1,0 +1,16 @@
+{
+  "title": "w9mag-fx-eth-15-off",
+  "slug": "w9mag-fx-eth-15-off",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T18:07:15.598Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2026-01-29",
+    "to": "2026-02-01"
+  },
+  "pine_sha256": "14f80b038086fc9cdbf582effc82ba043fb1ebe7eeafb7d6824d3cd11e43baef",
+  "tv_trades_sha256": "c1091b17b9d6aa73dc0c0806ee5fcbc27f8aaaad0988b5d29d5e4fc37249db37",
+  "tv_trades_rows": 48
+}

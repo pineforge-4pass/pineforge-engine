@@ -30,6 +30,12 @@
 //    of the 72 cascades is TradingView's. Walking the feed's own minutes with
 //    the chart bar's waypoint rule (the adapter before the lane) books none
 //    of the 72.
+// 4. The declaration's twin (lane RUN-HARNESS): w9mag-fx-eth-15-off is
+//    mi-fx-eth-15's script declared use_bar_magnifier=false. TradingView
+//    enters on the same bars and parts on 7 of the 23 exits; replayed on the
+//    15m chart bars, as run_strategy.py runs a script that does not declare
+//    the magnifier, the adapter books every exit of the twin -- and section 2
+//    books mi-fx-eth-15's magnified -- so the declaration picks the run.
 //
 // Source-bound (includes pineforge/source): release profile only.
 #include "native_margin_hooks_fixture.hpp"
@@ -435,12 +441,89 @@ void refill_cascades_on_tapes() {
     }
 }
 
+// ---------------------------------------------------- 4. the declaration's twin
+// The minutes aggregated into 15m chart bars: the chart feed a script that
+// does not declare the magnifier runs on.
+std::vector<Bar> chart_15m(const std::vector<Bar>& minutes) {
+    std::vector<Bar> out;
+    for (const Bar& m : minutes) {
+        const std::int64_t open = m.timestamp - m.timestamp % 900000;
+        if (out.empty() || out.back().timestamp != open) {
+            out.push_back({m.open, m.high, m.low, m.close, m.volume, open});
+        } else {
+            Bar& b = out.back();
+            b.high = std::max(b.high, m.high);
+            b.low = std::min(b.low, m.low);
+            b.close = m.close;
+            b.volume += m.volume;
+        }
+    }
+    return out;
+}
+
+void declaration_twin_on_tapes() {
+    std::map<int, TapeRow> on_entries, on_exits, off_entries, off_exits;
+    for (const TapeRow& row : tape("mi-fx-eth-15")) (row.entry ? on_entries : on_exits)[row.trade] = row;
+    for (const TapeRow& row : tape("w9mag-fx-eth-15-off"))
+        (row.entry ? off_entries : off_exits)[row.trade] = row;
+    REQUIRE(!off_entries.empty() && off_entries.size() == on_entries.size());
+    // TradingView: the same entries, 7 of the replayed exits apart.
+    const std::int64_t range_end = std::prev(off_exits.end())->second.time;
+    int apart = 0;
+    for (const auto& [n, entry] : off_entries) {
+        CHECK(entry.time == on_entries[n].time);
+        CHECK(std::abs(entry.price - on_entries[n].price) <= 1e-9);
+        const TapeRow& off = off_exits[n];
+        const TapeRow& on = on_exits[n];
+        if (off.time >= range_end) continue;
+        if (off.time != on.time || std::abs(off.price - on.price) > 1e-9) ++apart;
+    }
+    std::printf("  TradingView's twins part on %d exits\n", apart);
+    CHECK(apart == 7);
+    // The twin on the chart path: every replayed exit is its own.
+    const auto chart = chart_15m(bars_of(kMiFxEth15, std::size(kMiFxEth15)));
+    BracketSide pine("24x7", "UTC", 0.01, 400);
+    for (const auto& [n, row] : off_entries) {
+        const auto it = std::lower_bound(chart.begin(), chart.end(), row.time,
+                                         [](const Bar& b, std::int64_t t) { return b.timestamp < t; });
+        if (it != chart.begin() && it != chart.end() && it->timestamp == row.time)
+            pine.signal_bars.insert((it - 1)->timestamp);
+    }
+    pine.run(chart.data(), static_cast<int>(chart.size()), "15", "15", false);
+    CHECK(pine.last_error().empty());
+    std::map<std::int64_t, const Trade*> by_entry;
+    for (int i = 0; i < pine.trade_count(); ++i) by_entry[pine.get_trade(i).entry_time] = &pine.get_trade(i);
+    int replayed = 0;
+    int equal = 0;
+    for (const auto& [n, entry] : off_entries) {
+        const TapeRow& exit = off_exits[n];
+        if (exit.time >= range_end || exit.signal.empty()) continue;   // the range end
+        ++replayed;
+        const auto found = by_entry.find(entry.time);
+        const bool same = found != by_entry.end()
+            && std::abs(found->second->entry_price - entry.price) <= 1e-9
+            && found->second->exit_time == exit.time
+            && std::abs(found->second->exit_price - exit.price) <= 1e-9;
+        if (same) {
+            ++equal;
+        } else {
+            std::printf("  trade %d: tape %.4f -> %.4f at %lld, chart path %s\n", n, entry.price,
+                        exit.price, static_cast<long long>(exit.time),
+                        found == by_entry.end() ? "none" : "differs");
+        }
+    }
+    std::printf("  %d of %d exits are the twin's on the chart path\n", equal, replayed);
+    CHECK(replayed == 23);
+    CHECK(equal == replayed);
+}
+
 }  // namespace
 
 int main() {
     test("MAG-INTRABAR TradingView intrabars", intrabars_on_tapes);
     test("MAG-INTRABAR bracket tapes", brackets_on_tapes);
     test("MAG-INTRABAR refill cascades", refill_cascades_on_tapes);
+    test("RUN-HARNESS declaration twin", declaration_twin_on_tapes);
     std::printf("test_adapter_magnifier_intrabar_tapes: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

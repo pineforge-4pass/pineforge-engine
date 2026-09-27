@@ -1838,6 +1838,13 @@ class Strategy:
         _check_abi(self.lib)
         self._setup_signatures()
 
+    @property
+    def declares_bar_magnifier(self) -> bool:
+        """True when the script declares ``use_bar_magnifier = true``: its
+        library exports ``strategy_declares_bar_magnifier`` returning 1."""
+        return (hasattr(self.lib, "strategy_declares_bar_magnifier")
+                and self.lib.strategy_declares_bar_magnifier() == 1)
+
     def _setup_signatures(self) -> None:
         L = self.lib
         L.strategy_create.argtypes = [ctypes.c_char_p]
@@ -2004,6 +2011,11 @@ class Strategy:
             L.strategy_set_magnifier_volume_weighted.argtypes = [
                 ctypes.c_void_p, ctypes.c_int]
             L.strategy_set_magnifier_volume_weighted.restype = None
+        # A script that declares strategy(..., use_bar_magnifier = true)
+        # exports this (returning 1); every other library lacks it.
+        if hasattr(L, "strategy_declares_bar_magnifier"):
+            L.strategy_declares_bar_magnifier.argtypes = []
+            L.strategy_declares_bar_magnifier.restype = ctypes.c_int
         # Symbol metadata plumbing (#19). Exchange tz / session feed
         # session.ismarket / time(session); the metadata setter injects
         # fundamental fields (shares_outstanding_*, target_price_*, ...).
@@ -3557,6 +3569,121 @@ def _infer_bar_interval_ms(csv_path: Path) -> int:
             prev = ts
     return 15 * 60 * 1000
 
+
+# --- a declared bar magnifier ------------------------------------------
+
+# The case runner names the lane's 1m feed (and its sha256) here for every
+# case; a script that declares use_bar_magnifier = true is run on it.
+MAGNIFIER_FEED_ENV = "PINEFORGE_RUN_MAGNIFIER_FEED"
+MAGNIFIER_FEED_SHA256_ENV = "PINEFORGE_RUN_MAGNIFIER_FEED_SHA256"
+
+
+def _tf_seconds(tf: str) -> int:
+    """tf_to_seconds (src/timeframe.cpp) for a Pine timeframe string: minutes
+    for a bare number, n * 86400 / 604800 for "nD" / "nW", n for "nS", -1 for a
+    calendar month ("nM"), 0 for an empty or unreadable string."""
+    tf = str(tf or "").strip()
+    if not tf:
+        return 0
+    unit = tf[-1]
+    count = tf[:-1] if unit in "DWMS" else tf
+    try:
+        n = int(count) if count else 1
+    except ValueError:
+        return 0
+    if unit == "M":
+        return -1
+    if unit == "D":
+        return n * 86400
+    if unit == "W":
+        return n * 604800
+    if unit == "S":
+        return n if count else 0
+    return n * 60
+
+
+class MagnifierPlan(NamedTuple):
+    """How a script declaring use_bar_magnifier = true is run
+    (_declared_magnifier_plan)."""
+    status: str               # "declared" (run magnified) or "declared-not-run"
+    detail: str               # the one line main() logs after the status
+    ohlcv_path: Path          # the feed the engine is fed
+    run_kwargs: dict          # Strategy.run's kwargs for that feed
+
+
+def _declared_magnifier_plan(params: dict, chart_ohlcv: Path, run_kwargs: dict,
+                             env=None) -> MagnifierPlan:
+    """Run a script that declares ``strategy(..., use_bar_magnifier = true)``
+    the way TradingView backtests it: with its bar magnifier.
+
+    TradingView fills such a script's orders on its own intrabars (15m chart:
+    2m bars; tests/fixtures/magnifier_intrabars), which the engine builds from
+    a finer input (MAG-INTRABAR). So on an intraday chart coarser than 1m
+    the run's input becomes the lane's 1m feed -- ``MAGNIFIER_FEED_ENV``,
+    held to ``MAGNIFIER_FEED_SHA256_ENV`` when that is set -- with
+    ``input_tf = "1"``, ``script_tf`` = the chart timeframe and the
+    magnifier on; the chart feed still defines TradingView's window
+    (_tv_entry_emit_window walks it). The 1m run reads exactly the chart
+    feed's loaded bars (both of the run's bounds applied): from the first
+    chart bar's open to the last minute of the last chart bar, so a 1m feed
+    that starts earlier warms nothing the chart run does not, and the final
+    bar (TradingView's last, at a range-end bound) is whole. TradingView's tape of
+    a declaring script (mi-fx-eth-15) and of the same script declared off
+    (w9mag-fx-eth-15-off) enter alike and part on 7 of the 23 exits
+    tests/fixtures/magnifier_intrabars replays.
+
+    ``declared-not-run`` otherwise, saying why: the probe turns the
+    magnifier off (``runtime_overrides.bar_magnifier`` false), no magnifier
+    feed was named, the run already reads an auxiliary request.security
+    feed, the chart is not coarser than 1m, or the chart is daily, weekly or
+    monthly -- TradingView keeps its own daily bars as the chart bars there
+    (OANDA:XAUUSD's daily bar opens at 21:00 UTC, the 1m aggregate's at
+    22:00), and no engine input yet keeps chart bars with a 1m intrabar
+    source. A not-run plan leaves the run exactly as it was."""
+    env = os.environ if env is None else env
+
+    def not_run(why: str) -> MagnifierPlan:
+        return MagnifierPlan("declared-not-run", why, chart_ohlcv, run_kwargs)
+
+    overrides = params.get("runtime_overrides")
+    if isinstance(overrides, dict) and overrides.get("bar_magnifier") is False:
+        return not_run("runtime_overrides.bar_magnifier is false")
+    feed_value = str(env.get(MAGNIFIER_FEED_ENV) or "").strip()
+    if not feed_value:
+        return not_run(f"no magnifier feed ({MAGNIFIER_FEED_ENV} unset)")
+    if run_kwargs.get("aux_security_ohlcv_csv") is not None:
+        return not_run("the run reads an auxiliary request.security feed")
+    chart_tf = str(params.get("script_tf") or "").strip()
+    if not chart_tf:
+        chart_tf = str(_infer_bar_interval_ms(chart_ohlcv) // 60_000)
+    chart_seconds = _tf_seconds(chart_tf)
+    if chart_seconds < 0 or chart_seconds >= 86400:
+        return not_run(f"chart {chart_tf} is daily or coarser")
+    if chart_seconds <= 60:
+        return not_run(f"chart {chart_tf} is not coarser than the 1m feed")
+    chart_ts = _feed_timestamps(chart_ohlcv,
+                                ohlcv_start_ms=run_kwargs.get("ohlcv_start_ms"),
+                                ohlcv_end_ms=run_kwargs.get("ohlcv_end_ms"))
+    if not chart_ts:
+        return not_run("the chart feed has no bar in the run's bounds")
+    feed = Path(feed_value).resolve()
+    if not feed.is_file():
+        raise FileNotFoundError(f"{MAGNIFIER_FEED_ENV} names no file: {feed}")
+    feed_sha = _sha256_file(feed)
+    expected = str(env.get(MAGNIFIER_FEED_SHA256_ENV) or "").strip().lower()
+    if expected and feed_sha != expected:
+        raise ValueError(
+            f"{MAGNIFIER_FEED_ENV} sha256 {feed_sha} != {MAGNIFIER_FEED_SHA256_ENV} {expected}")
+    magnified = dict(run_kwargs)
+    magnified.update(input_tf="1", script_tf=chart_tf, bar_magnifier=True,
+                     ohlcv_start_ms=chart_ts[0],
+                     ohlcv_end_ms=chart_ts[-1] + chart_seconds * 1000 - 1)
+    return MagnifierPlan(
+        "declared",
+        f"run on the 1m feed {feed.name} (sha256 {feed_sha}), input_tf=1 "
+        f"script_tf={chart_tf}, magnifier on",
+        feed, magnified)
+
 # --- docker runner (pineforge-release image) ---------------------------
 
 def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
@@ -3603,7 +3730,9 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
     }
     # syminfo from runtime_overrides. apply_syminfo covers mintick/pointvalue/
     # timezone/session; syminfo_metadata (fundamentals) is NOT covered — 0 corpus
-    # probes use it (documented gap).
+    # probes use it (documented gap) -- nor is a declared bar magnifier (the
+    # image runs generated.cpp, so the library's export is never read), which
+    # main() says when the environment names a magnifier feed.
     syminfo: dict = {}
     if run_kwargs.get("syminfo_timezone"):
         syminfo["timezone"] = run_kwargs["syminfo_timezone"]
@@ -3851,6 +3980,7 @@ def main() -> int:
         if tv_window_used or args.disable_trading_before_window:
             trade_start_ms = emit_window[0]
 
+    run_ohlcv = ohlcv_path   # the feed the engine reads (a declared magnifier's 1m feed)
     if args.runner == "docker":
         if args.trace_json is not None:
             sys.exit("error: --trace-json needs --emit-plots (deferred); not supported with --runner docker.")
@@ -3897,6 +4027,9 @@ def main() -> int:
                 "error: --runner docker does not support --dump-book; "
                 "use --runner ctypes with a freshly built strategy library.")
         strat = None
+        if os.environ.get(MAGNIFIER_FEED_ENV):
+            print("note: --runner docker does not honour a declared bar magnifier; "
+                  "use --runner ctypes", file=sys.stderr)
 
         def run_engine(start_ms):
             return _run_via_docker(strategy_dir, ohlcv_path, params, run_kwargs,
@@ -3950,9 +4083,15 @@ def main() -> int:
                 sys.exit(
                     "error: --path-order requires strategy_set_path_order "
                     "(strategy.so predates ABI v4 spec section 3.3; rebuild the engine)")
+        if strat.declares_bar_magnifier:
+            # use_bar_magnifier = true: TradingView's window stays the chart
+            # feed's (above); the engine's input may become the 1m feed.
+            plan = _declared_magnifier_plan(params, ohlcv_path, run_kwargs)
+            run_ohlcv, run_kwargs = plan.ohlcv_path, plan.run_kwargs
+            print(f"  magnifier: {plan.status}: {plan.detail}")
 
         def run_engine(start_ms):
-            return strat.run(ohlcv_path, params=params,
+            return strat.run(run_ohlcv, params=params,
                              trace_enabled=args.trace_json is not None,
                              trade_start_time_ms=start_ms,
                              realtime_tail_horizon=args.realtime_tail,
@@ -3988,7 +4127,7 @@ def main() -> int:
         with args.trace_json.open("w", encoding="utf-8") as f:
             json.dump({
                 "strategy": str(strategy_dir),
-                "ohlcv": str(ohlcv_path),
+                "ohlcv": str(run_ohlcv),
                 "emit_window": None if emit_window is None else {"start_ms": emit_window[0], "end_ms": emit_window[1]},
                 "report_start_ms": None if report_window is None else report_window[0],
                 "trace_names": report["trace_names"],
@@ -4041,7 +4180,7 @@ def main() -> int:
         with bsh_path.open("w", encoding="utf-8") as f:
             json.dump({
                 "strategy": str(strategy_dir),
-                "ohlcv": str(ohlcv_path),
+                "ohlcv": str(run_ohlcv),
                 "script_bars_processed": report["script_bars_processed"],
                 "entries": entries,
             }, f)
@@ -4061,7 +4200,7 @@ def main() -> int:
             with args.dump_book.open("w", encoding="utf-8") as f:
                 json.dump({
                     "strategy": str(strategy_dir),
-                    "ohlcv": str(ohlcv_path),
+                    "ohlcv": str(run_ohlcv),
                     "struct_version": PENDING_ORDER_STRUCT_VERSION,
                     # The runtime's own field table, so a consumer can tell
                     # which fields this engine build emitted.

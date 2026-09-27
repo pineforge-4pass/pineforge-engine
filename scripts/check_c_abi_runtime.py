@@ -91,7 +91,7 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_set_recorded_series",
 })
 
-EXPECTED_PUBLIC_DECLARATIONS = 70
+EXPECTED_PUBLIC_DECLARATIONS = 71
 EXPECTED_RUNTIME_IMPLEMENTATIONS = 62
 
 # Runtime setters whose data a stream cannot take: the source host refuses

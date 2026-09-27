@@ -1894,6 +1894,12 @@ add_test(
             ${PROJECT_SOURCE_DIR}/scripts/test_run_strategy_dump_book.py
 )
 
+add_test(
+    NAME test_run_strategy_magnifier
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_run_strategy_magnifier.py
+)
+
 # The live-flags lane's own pure bookkeeping (strip_open_at_end,
 # interior_diff, hash_diff_reason, fold_reasons) against synthetic
 # rows/hash arrays -- complements test_live_flags_lane_positive's engine-

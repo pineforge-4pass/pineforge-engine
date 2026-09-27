@@ -660,6 +660,16 @@ PF_API void strategy_set_override(pf_strategy_t s,
 PF_API void strategy_set_magnifier_volume_weighted(pf_strategy_t s,
                                                    int on);
 
+/** Report the script's `strategy(..., use_bar_magnifier = true)` declaration.
+ *
+ *  Exported only by a strategy whose declaration is that literal; every
+ *  other `.so` lacks the symbol. TradingView backtests such a script on its
+ *  bar magnifier, so a host runs it on a finer input with the magnifier on
+ *  (#run_backtest_full).
+ *
+ *  @return 1. */
+PF_API int strategy_declares_bar_magnifier(void);
+
 #endif /* PINEFORGE_NO_STRATEGY_DECLS */
 
 /* ───────────────────────────────────────────────────────────────────

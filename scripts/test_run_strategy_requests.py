@@ -392,6 +392,7 @@ class InstallRequests(unittest.TestCase):
 
 class _FakeStrategy:
     calls: list[dict] = []
+    declares_bar_magnifier = False
 
     def __init__(self, so_path: Path) -> None:
         self.lib = None

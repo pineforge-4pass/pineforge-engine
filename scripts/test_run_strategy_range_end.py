@@ -476,6 +476,7 @@ class _FakeStrategy:
     """Stands in for Strategy: records the run kwargs, returns ``trades``
     (ENGINE_TRADES unless _run_main was handed another list)."""
     calls: list[dict] = []
+    declares_bar_magnifier = False
     trades: list[dict] = ENGINE_TRADES
 
     def __init__(self, so_path: Path) -> None:

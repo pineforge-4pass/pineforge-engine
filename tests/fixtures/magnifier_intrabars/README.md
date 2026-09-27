@@ -55,6 +55,22 @@ price; walking the feed's own minutes (the adapter before the lane) parts on
 | `mi-fx-eth-30` | ETH 30, K = 600 | 2026-01-29 .. 2026-02-01 | 11 | `45b52ab30ec2c87b` |
 | `mi-fx-nifty-15b` | NSE:NIFTY 15, K = 400 | 2026-01-30 .. 2026-02-03 | 11 | `4ad8cd8cc38baaa8` |
 
+## `w9mag-fx-eth-15-off`: the declaration's twin
+
+The same script as `mi-fx-eth-15` declared `use_bar_magnifier=false` (lane
+CG-W9-MISC's `lab tv --no-note` export, copied byte-identical from
+pineforge-codegen-oss `tests/fixtures/bar_magnifier` at e8f6648). TradingView
+enters on the same bars at the same prices and parts on 7 of the 23 replayed
+exits: magnified, the bracket leg the intrabar path reaches first fills; off, the
+chart bar's own rule decides. Replayed on the 15m chart bars (the minutes
+aggregated), as `scripts/run_strategy.py` runs a script that does not declare the
+magnifier, every exit is the twin's; so a host must run a declaring script
+magnified (lane RUN-HARNESS: `strategy_declares_bar_magnifier`).
+
+| probe | chart | window | trades replayed | tvTradesCsvHash |
+|---|---|---|---|---|
+| `w9mag-fx-eth-15-off` | ETH 15, K = 400 | 2026-01-29 .. 2026-02-01 | 23 | `c1091b17b9d6aa73` |
+
 ## `mi-coof-refill*`: `calc_on_order_fills` cascades
 
 At a signal bar one market long, then every fill's recalculation adds one while

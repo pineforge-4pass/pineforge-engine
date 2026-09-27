@@ -35,7 +35,7 @@ The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pinefo
 - **Open runtime.** The engine and native live runner are Apache-2.0. The separately distributed [PineForge compiler](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) uses PolyForm Noncommercial terms with additional personal-trading permission; commercial use requires a separate license. Public reference strategies, benchmarks and validation tooling are available in their respective repositories; the community-script test set is not redistributed.
 - **Fast.** In-process, no interpreter: median **15× faster than PyneCore** on 196 timed strategies (a median 603k bars/s per strategy with the bar magnifier on). Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
 - **Deterministic to the bit.** Two runs with the same inputs produce identical trade lists. Same on Linux and macOS.
-- **Yours to embed.** 113 `extern "C"` functions across two headers — 70 compiled-strategy declarations and 43 native-host declarations — append-only ABI. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
+- **Yours to embed.** 114 `extern "C"` functions across two headers — 71 compiled-strategy declarations and 43 native-host declarations — append-only ABI. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
 
 ---
 
@@ -438,7 +438,9 @@ is in [CHANGELOG.md](CHANGELOG.md).
 
 A built strategy `.so` exposes 70 compiled-strategy `PF_API` declarations
 (62 runtime implementations plus eight generated exports) plus 43 native-host
-declarations: 113 `PF_API` exports in total. `nm -gU` also shows libc++'s
+declarations: 113 `PF_API` exports in total; a script that declares
+`use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, the
+71st declaration of `pineforge.h`. `nm -gU` also shows libc++'s
 `std::piecewise_construct`; no project-internal C++ symbol is exported. The two
 inventories are pinned by `scripts/check_c_abi_runtime.py`:
 
@@ -450,6 +452,7 @@ inventories are pinned by `scripts/check_c_abi_runtime.py`:
 | `strategy_closed_trade_entry_incarnation` | Per-run physical entry provenance of a closed trade |
 | `strategy_set_input` / `strategy_set_override` | Override a Pine `input.*()` value / a `strategy(...)` declaration parameter |
 | `strategy_set_magnifier_volume_weighted` | Toggle the volume-weighted magnifier |
+| `strategy_declares_bar_magnifier` | Present (returning 1) only in a script that declares `use_bar_magnifier = true`: the host runs it magnified |
 | `strategy_set_trace_enabled` | Toggle per-bar trace recording |
 | `strategy_set_trade_start_time` | Suppress historical order placement before a time |
 | `strategy_stream_begin` / `_push_tick` / `_push_ticks` / `_advance_time` / `_end` / `_fill_report` | Warm on OHLCV, then run realtime on ordered trades |

@@ -56,7 +56,9 @@ Three layers:
 
 A built strategy `.so` exposes 70 compiled-strategy `PF_API` declarations
 (62 runtime implementations plus eight generated exports) plus 43 native-host
-declarations: 113 `PF_API` exports in total. `nm -gU` also reports libc++'s
+declarations: 113 `PF_API` exports in total; a script that declares
+`use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, the
+71st declaration of `pineforge.h`. `nm -gU` also reports libc++'s
 `std::piecewise_construct`; no project-internal C++ symbol is exported. The historical 28-symbol module
 sentence was not a current module count; the grouped table below is a guide,
 not the complete inventory:
