@@ -25,11 +25,12 @@
  * through the Pine adapter under the configuration its generated constructor
  * declares, and requires every trade the tape closes inside the replayed bars
  * -- entry and exit time, side, price in ticks, quantity in lots -- to be the
- * engine's. Two cells are outside this rule and are left out of the
- * comparison: cell I (an exit placed before the entry it names, which
- * TradingView never applies) on every w4-f08 tape, and cell H of w4-f08-plain
- * (without process_orders_on_close, the exit placed with a close + reversal).
- * Their TradingView rows are asserted below all the same.
+ * engine's. One cell is outside this rule and is left out of the comparison:
+ * cell I (an exit placed before the entry it names, which TradingView never
+ * applies) on every w4-f08 tape; its TradingView rows are asserted below all
+ * the same. Cell H of w4-f08-plain also pins the batched strategy.close's
+ * flat: the exit placed after its reversal entry survives it and fills at the
+ * next open, where the engine removed it with the closed side's exits.
  *
  * Fail-before, this TU against the lane's base (r5/wavej-base 8633d944):
  * see the lane report (every POOC "through" cell but G, and F under
@@ -497,7 +498,7 @@ int main() {
     const Case cases[] = {
         {"w4-f08-pooc", Script::Main, true, false, kFixed, 1.0, 0, {"I long"}},
         {"w4-f08-pooc-coof", Script::Main, true, true, kFixed, 1.0, 0, {"I long"}},
-        {"w4-f08-plain", Script::Main, false, false, kFixed, 1.0, 0, {"I long", "H short"}},
+        {"w4-f08-plain", Script::Main, false, false, kFixed, 1.0, 0, {"I long"}},
         {"w4-f08-plain-coof", Script::Main, false, true, kFixed, 1.0, 0, {"I long"}},
         {"w4-f08b-pooc", Script::Interact, true, false, kFixed, 1.0, 0, none},
         {"w4-f08b-pooc-coof", Script::Interact, true, true, kFixed, 1.0, 0, none},

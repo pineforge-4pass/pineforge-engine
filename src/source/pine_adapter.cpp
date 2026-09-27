@@ -5339,26 +5339,40 @@ void PineExecutionAdapter::retire_in_position_exits_at_flat(
     // A transient flat between two same-point reversal transactions does not
     // end the pending parent's lifecycle, so the parent's own brackets are
     // kept (the same exclusion the flat cleanup below applies per owner).
+    // A batched strategy.close takes its command sequence when the batch
+    // flushes, after the commands its calculation placed behind it, so the
+    // bracket that follows the close's paired entry -- the one that opens the
+    // other side -- in that calculation is also behind the close: TradingView
+    // fills it for the entry (lab tv w4-f14-pooc-pct50 cell F, w4-f08-plain
+    // cell H; lane W4-ENG-POOC-SAMEPASS).
     const auto pending_parent = [&](const PlacementSnapshot& row) {
         if (!preserve_pending_parents || row.from_entry.empty()) return false;
         if (paired_close != nullptr
-            && (row.projection_created_bar
-                    != paired_close->projection_created_bar
-                || row.command_sequence <= paired_close->command_sequence)) {
+            && row.projection_created_bar != paired_close->projection_created_bar) {
             return false;
         }
         const SourceId& owner = row.from_entry;
+        const auto admits = [&](const PlacementSnapshot& parent) {
+            return paired_close == nullptr
+                || row.command_sequence > paired_close->command_sequence
+                || (parent.projection_created_bar == row.projection_created_bar
+                    && row.command_sequence > parent.command_sequence
+                    && paired_close->projection_position_side
+                        == static_cast<std::int32_t>(parent.is_long ? PositionSide::SHORT
+                                                                    : PositionSide::LONG));
+        };
         for (const auto& handle : live_handles_) {
             const auto found = placement_.find(handle.incarnation);
             if (found != placement_.end() && found->second.opening
                 && found->second.family == PineOrderFamily::Entry
-                && found->second.source_id == owner) {
+                && found->second.source_id == owner && admits(found->second)) {
                 return true;
             }
         }
         return std::any_of(pending_entries_.begin(), pending_entries_.end(),
             [&](const PendingEntry& entry) {
-                return entry.snapshot.opening && entry.snapshot.source_id == owner;
+                return entry.snapshot.opening && entry.snapshot.source_id == owner
+                    && admits(entry.snapshot);
             });
     };
     const auto matches = [&](const PlacementSnapshot& snapshot) {
