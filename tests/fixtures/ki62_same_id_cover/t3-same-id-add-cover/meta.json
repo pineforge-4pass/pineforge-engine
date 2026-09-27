@@ -1,0 +1,16 @@
+{
+  "title": "w8e-t3-same-id-add-cover",
+  "slug": "t3-same-id-add-cover",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T16:01:57.666Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "e43f65f65d11f34deb4031d2497e29b997d35b591c950d7481942ef66bc8e6d0",
+  "tv_trades_sha256": "55e26cccf4be556d44c70909fb293a1f96b3c9d2cafc9592b8f6def5c77fabc5",
+  "tv_trades_rows": 4
+}

@@ -19039,7 +19039,21 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 adds.push_back(*opened);
                 units += lot.qty;
             }
-            if (!adds.empty() && units > 0.0) {
+            // The cover stands behind the leg's own reduction of an OLDER lot
+            // of the id: a leg whose fill reduced only the add, or (FIFO) a
+            // lot of another id, keeps to its own quantity
+            // (tests/fixtures/ki62_same_id_cover).
+            bool drained_older = false;
+            for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
+                const std::size_t row = event.first_trade_index + i;
+                drained_older = drained_older || (row < pine->trades_.size()
+                    && pine->trades_[row].entry_id == placement_snapshot->from_entry
+                    && std::none_of(adds.begin(), adds.end(),
+                        [&](const native_order::RequestHandle& add) {
+                            return add.incarnation == pine->trades_[row].entry_incarnation;
+                        }));
+            }
+            if (!adds.empty() && units > 0.0 && drained_older) {
                 native_order::Request request;
                 request.intent = native_order::Reduce{native_order::ExplicitUnits{units}};
                 request.label = placement_snapshot->source_id;

@@ -1,0 +1,16 @@
+{
+  "title": "w8e-t4-fifo-other-id-drain",
+  "slug": "t4-fifo-other-id-drain",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:05:10.669Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "0423d4750de983d0b9efcbc360f30d0c86f19e30d196f29eeaef7e74ba9563f4",
+  "tv_trades_sha256": "17a9d88eafc91b5dba23bd86ff1d3a8471f5d92da749d37ecd126871bf11f462",
+  "tv_trades_rows": 4
+}

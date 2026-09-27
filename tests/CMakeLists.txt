@@ -892,6 +892,10 @@ list(APPEND TEST_SOURCES test_ltf_lookahead_calling_open_tapes)
 # TradingView's tapes.
 list(APPEND TEST_SOURCES test_coof_refill_waypoint_tapes)
 
+# Lane W8E-EXITS: the KI-62 cover takes only a same-id pyramid add
+# (tests/fixtures/ki62_same_id_cover), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_ki62_same_id_cover)
+
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bare_host_contracts)
@@ -2356,6 +2360,12 @@ endif()
 if(TARGET test_coof_refill_waypoint_tapes)
     target_compile_definitions(test_coof_refill_waypoint_tapes PRIVATE
         PINEFORGE_COOF_REFILL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_refill_waypoint")
+endif()
+
+# Lane W8E-EXITS reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_ki62_same_id_cover)
+    target_compile_definitions(test_ki62_same_id_cover PRIVATE
+        PINEFORGE_KI62_SAME_ID_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ki62_same_id_cover")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape
