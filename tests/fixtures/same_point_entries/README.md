@@ -1,7 +1,7 @@
-# Which order fills first at one fill point (lane W6-ENG-FILL-ORDER)
+# Which order fills first at one fill point (lanes W6-ENG-FILL-ORDER, W6B-ENG-PAIRS)
 
 Each directory is one `lab tv --no-note` export (channel `ws-report-v1`,
-`rangeProof` covered) of a synthetic probe written for this lane, byte for
+`rangeProof` covered) of a synthetic probe written for these lanes, byte for
 byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json`,
 `meta.json`. `metrics.json` `tvTradesCsvHash` is the sha256 of
 `tv_trades.csv`. Every probe runs on BINANCE:ETHUSDT.P 15, 2025-04-01 ..
@@ -15,9 +15,10 @@ probe, over the corpus 15m bars of `../tvdef_drops/bars.inc`, trading from the
 bar before TradingView's first entry as `run_strategy.py` does for a corpus
 tape, with TradingView's 0.0001 lot as the `qty_step`, and requires each trade
 the tape closes in the row's cells -- entry and exit time, side, price in
-ticks of 0.01, quantity in lots of 0.0001 -- to be the engine's. It also reads
-the order off TradingView's own rows on every pair tape, the ones it does not
-replay included.
+ticks of 0.01, quantity in lots of 0.0001 -- to be the engine's, and on a
+commissioned tape each trade's commission too. It also reads the order off
+TradingView's own rows on every pair tape, the ones it does not replay
+included.
 
 ## F10: a flat pair of entries at one open
 
@@ -90,6 +91,48 @@ calc_on_order_fills alone. The adapter's close pass for a flat explicit
 market pair (`apply_terminal_explicit_market_policy`) had kept source order
 with a reversing second call; a sell-then-buy pair now fills the buy first as
 one transaction of both quantities.
+
+## F10 with a commission (lane W6B-ENG-PAIRS, item 1)
+
+| tape | trades | `strategy()` declares | tv_trades.csv sha256 |
+|---|---:|---|---|
+| `w6-f10i-pair-commission-percent` | 16 | fixed 1, pyramiding 0, commission 0.1 percent | `3512d6ddc8d2f7a5dcdd6160f033e11766e4f7dfb471bcdd92296fdc770c64ca` |
+| `w6-f10j-pair-commission-per-order` | 16 | fixed 1, pyramiding 0, commission 5 per order | `2f2d25db4f96825a3de773d3a09a2a5a48ba9c0791ac874ec4ff95b9e61af303` |
+| `w6b-p1d-open-pair-per-order` | 40 | `w6-f10a-open-pair`'s cells, commission 5 per order | `27007967844d293305a5452e4c6aca8c36c67c5acd376628b9e7c446fe1f0936` |
+| `w6b-p1a-pair-gross-commission-off` | 30 | fixed 1, capital 10000, no commission | `892f587ac099126720c78375e75d0c63da05c8f25300e6a07f87293ab3ef5648` |
+| `w6b-p1b-pair-gross-per-order` | 30 | fixed 1, capital 10000, commission 50 per order | `794c67900f8f22a69d48f3895eb68bcb039c98e2f0a68aaa63b489f693cdd9af` |
+| `w6b-p1c-pair-gross-percent` | 30 | fixed 1, capital 10000, commission 1 percent | `e1ee69a332c9c1fc9a87c245eebe51d54e57f48440e7756d474b50e21e8433d4` |
+
+`w6-f10i` and `w6-f10j` are lane W6's scratch exports, `w6b-p1d` is
+`w6-f10a-open-pair` with a commission. With a commission TradingView fills a
+flat pair in the same order and trades the later call as the same one
+transaction; that order's fee is split across the rows it books by quantity
+(`w6-f10j` MM-SF: a buy of 2 at 5 per order charges 2.5 to each of the two
+rows it opens, and the sell of 1 that closes one of them charges it 5).
+
+The `w6b-p1` tapes size each pair's transaction off `strategy.equity` at the
+signal close, every hour from 2025-04-08 00:00 UTC: well under the equity
+(W, two fees under), under it by less than the order's fee (U, half a fee
+under) or just over it (O, half a fee over), for an `MM-LF`, `MM-SF` and
+`MS-SF` pair (cells `<pair>-<band>`, twice). With and without a commission,
+TradingView trades the later call in every W and U cell and drops it in every
+O cell: the admission compares the transaction at the signal close with the
+equity and leaves the commission out. It then books the `MM-SF` and `MS-SF`
+U pairs, whose first fill is the whole transaction, with no margin call
+although the fee leaves the equity short of that fill's cost: it checks the
+margin once both legs have filled.
+
+The engine had kept the pair rules to the zero-cost family
+`same_bar_market_tx_scope()` batches, and so booked a commissioned pair in
+placement order with its own quantities. They now hold on
+`PineExecutionAdapter::same_point_pair_scope()`, the same configurations with
+a commission: the later market call outside the batch is one `Transact` of
+both quantities, and the opening margin checkpoint of a pair's first fill
+waits for the opposite leg that fills at the same price
+(`same_point_pair_fill_follows`). The batch itself keeps its zero-cost scope.
+A pending opposite market the tapes do not measure -- a re-issue of the
+caller's own id, which replaces it, a cash or percent quantity, an OCA name,
+one placed by a fill recalculation -- keeps the legacy route.
 
 ## F12: a reversing stop and a protective stop on one bar
 

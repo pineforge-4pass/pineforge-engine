@@ -1,0 +1,48 @@
+//@version=6
+strategy("W6B P1 pair gross admission, a per-order commission", overlay=true,
+     initial_capital=10000, pyramiding=0,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     commission_type=strategy.commission.cash_per_order, commission_value=50,
+     slippage=0, margin_long=100, margin_short=100,
+     process_orders_on_close=false, calc_on_order_fills=false)
+
+// Lane W6B-ENG-PAIRS, item 1. From flat, the later of two opposite
+// strategy.entry calls on one bar trades its own quantity plus the earlier
+// pending market call's. Each cell sizes that transaction off
+// strategy.equity at the signal close: well under the equity (W), under it by
+// less than the order's commission (U), or just over it (O). The tape shows
+// which later calls TradingView keeps with this commission. Each cell is
+// flattened 30 minutes later; cells are one hour apart.
+
+float feeEst = 50.0
+int t0 = timestamp("UTC", 2025, 4, 8, 0, 0)
+int stepMs = 60 * 60 * 1000
+int nCells = 9
+int rel = time - t0
+bool inRange = rel >= 0 and rel < 2 * nCells * stepMs
+bool eventBar = inRange and rel % stepMs == 0
+bool cleanupBar = inRange and rel % stepMs == 30 * 60 * 1000
+int cell = inRange ? (rel - rel % stepMs) / stepMs % nCells : -1
+
+float lo = close * 0.5
+int gapClass = cell % 3
+float gap = gapClass == 0 ? 2 * feeEst : gapClass == 1 ? 0.5 * feeEst : -0.5 * feeEst
+float total = math.floor((strategy.equity - gap) / close * 10000) / 10000
+float qa = math.floor(total / 2 * 10000) / 10000
+float qb = math.round((total - qa) * 10000) / 10000
+string tag = gapClass == 0 ? "W" : gapClass == 1 ? "U" : "O"
+
+if eventBar and strategy.position_size == 0
+    if cell < 3
+        strategy.entry("E1", strategy.long, qty=qa, comment="MM-LF-" + tag + "-1")
+        strategy.entry("E2", strategy.short, qty=qb, comment="MM-LF-" + tag + "-2")
+    else if cell < 6
+        strategy.entry("E1", strategy.short, qty=qa, comment="MM-SF-" + tag + "-1")
+        strategy.entry("E2", strategy.long, qty=qb, comment="MM-SF-" + tag + "-2")
+    else
+        strategy.entry("E1", strategy.short, qty=qa, comment="MS-SF-" + tag + "-1")
+        strategy.entry("E2", strategy.long, qty=qb, stop=lo, comment="MS-SF-" + tag + "-2")
+
+if cleanupBar
+    strategy.cancel_all()
+    strategy.close_all(comment="FLT")

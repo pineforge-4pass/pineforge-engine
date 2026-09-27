@@ -2244,7 +2244,13 @@ private:
     // R5 lane W6: after a source evaluation, queue this bar's marketable
     // flat entries in TradingView's order at their shared fill point.
     void order_same_point_entries();
-    double pending_opposite_market_units(bool is_long, std::int64_t script_open_ms) const;
+    double pending_opposite_market_units(bool is_long, std::int64_t script_open_ms, const SourceId& id) const;
+    // R5 lane W6B-ENG-PAIRS: the configurations those flat-pair rules cover,
+    // and whether a pair's opposite member fills next at the same price.
+    bool same_point_pair_scope() const;
+    bool same_point_pair_fill_follows(const PlacementSnapshot& filled,
+                                      const native_order::RequestHandle& filled_handle,
+                                      double price) const;
 };
 
 } // namespace pineforge::source

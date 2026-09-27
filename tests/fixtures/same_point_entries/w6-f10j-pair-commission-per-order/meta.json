@@ -1,0 +1,16 @@
+{
+  "title": "W6 F10j opposite pair with a per-order commission",
+  "slug": "w6-f10j-pair-commission-per-order",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T16:38:00.484Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "47061206e0bd49651d9fae0695576389fc3da8b827522930af05b2c48c04946f",
+  "tv_trades_sha256": "2f2d25db4f96825a3de773d3a09a2a5a48ba9c0791ac874ec4ff95b9e61af303",
+  "tv_trades_rows": 32
+}

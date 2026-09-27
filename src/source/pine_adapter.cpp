@@ -2638,6 +2638,16 @@ bool PineExecutionAdapter::core_sizing_price_matches(
 }
 
 bool PineExecutionAdapter::same_bar_market_tx_scope() const {
+    return config_.commission_value == 0.0 && same_point_pair_scope();
+}
+
+// R5 lane W6B-ENG-PAIRS: where the flat-pair rules of W6-ENG-FILL-ORDER hold
+// -- the order at one fill point, the later call's transaction of its own
+// quantity plus the pending market's, and that transaction's admission. The
+// zero-cost batch above is its subset; TradingView books a commissioned pair
+// the same way, the admission leaving the commission out (lab tv w6-f10i,
+// w6-f10j, w6b-p1b/p1c/p1d, tests/fixtures/same_point_entries).
+bool PineExecutionAdapter::same_point_pair_scope() const {
     const bool all_in_percent = config_.default_qty_type
         == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
         && config_.default_qty_value >= 100.0;
@@ -2650,7 +2660,7 @@ bool PineExecutionAdapter::same_bar_market_tx_scope() const {
         || coof_recalc_active_ || config_.close_entries_rule_any
         || config_.pyramiding > 1 || all_in_percent
         || (!fixed_default && !variable_short_seed)
-        || config_.slippage != 0 || config_.commission_value != 0.0
+        || config_.slippage != 0
         || risk_.direction != 0 || risk_.max_cons_loss_days != 0
         || risk_.max_drawdown > 0.0 || risk_.max_intraday_loss > 0.0
         || risk_.max_position_size > 0.0 || risk_.halted || cap.active()) {
@@ -6156,11 +6166,12 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             // transaction of its own quantity plus the earlier pending market
             // call's, and TradingView costs that transaction at the signal:
             // past the equity it drops the later call (lab tv
-            // w6-f10g-pair-gross; the KI-65 NQ probe on CME_MINI:NQ1! 15).
+            // w6-f10g-pair-gross; the KI-65 NQ probe on CME_MINI:NQ1! 15),
+            // the commission left out (w6b-p1b/p1c-pair-gross-*).
             if (current == 0.0 && explicit_fixed && source_point
-                && same_bar_market_tx_scope()) {
+                && same_point_pair_scope()) {
                 const double pending = pending_opposite_market_units(
-                    is_long, source_point->decision.script_bar_open_ms);
+                    is_long, source_point->decision.script_bar_open_ms, id);
                 if (std::isfinite(pending)) units += pending;
             }
             const double required = units * mark
@@ -6498,6 +6509,19 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         const double transaction = normalized_qty + flat_pending_opposite_market_units;
         request.intent = native_order::Transact{is_long ? transaction : -transaction};
     }
+    // Outside the zero-cost batch the later of two opposite flat market
+    // calls is still one transaction of its own quantity plus the earlier
+    // pending market call's (lab tv w6-f10j-pair-commission-per-order MM-LF).
+    if (!priced && !same_bar_market_candidate && current == 0.0 && explicit_fixed
+        && finite_positive(qty) && oca_name.empty() && source_point
+        && same_point_pair_scope()) {
+        const double pending = pending_opposite_market_units(
+            is_long, source_point->decision.script_bar_open_ms, id);
+        if (finite_positive(pending)) {
+            const double transaction = normalized_qty + pending;
+            request.intent = native_order::Transact{is_long ? transaction : -transaction};
+        }
+    }
     request.label = id; request.comment = comment;
     const auto coof_native_state = detail::run_state(require_host());
     const bool coof_lower_path = coof_native_state.spec
@@ -6744,12 +6768,12 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         // first, as one buy of its own quantity plus the market's, and the
         // market then sells only its own (lab tv w6-f10a-open-pair MS-SF).
         const bool fills_ahead = snapshot.projection_opposite_market_predecessor
-            && same_bar_market_tx_scope() && explicit_fixed && is_long
+            && same_point_pair_scope() && explicit_fixed && is_long
             && pure_stop_entry && finite_positive(current_point->price)
             && stop_price <= current_point->price;
         const double predecessor_units = fills_ahead
             ? pending_opposite_market_units(
-                is_long, current_point->decision.script_bar_open_ms)
+                is_long, current_point->decision.script_bar_open_ms, id)
             : kNaN;
         if (fills_ahead && finite_positive(predecessor_units)) {
             request.intent = native_order::Transact{normalized_qty + predecessor_units};
@@ -18734,7 +18758,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 && !short_preempted_by_priced_exit
                 && !flat_dual_stop_member && !prearmed_entry_bar_margin
                 && !(long_full_margin
-                     && std::abs(staged_.syminfo.pointvalue - 1.0) > 1e-12)) {
+                     && std::abs(staged_.syminfo.pointvalue - 1.0) > 1e-12)
+                && !same_point_pair_fill_follows(*placement_snapshot, event.handle(),
+                                                 event.resolved_price)) {
                 const double opening_exact_required = std::abs(opened_position.signed_units)
                     * event.resolved_price * staged_.syminfo.pointvalue
                     * active_staged_fx(context.sub_bar_open_ms);
@@ -20165,14 +20191,17 @@ double PendingIntentView::trail_best_price() const noexcept {
 // R5 lane W6-ENG-FILL-ORDER, family F10: the own units of the opposite MARKET
 // entries this source bar placed that are still pending (batched or live), or
 // NaN when one of them carries no explicit quantity. TradingView adds them to
-// the later call's transaction.
+// the later call's transaction. A call of the caller's own id is the one the
+// caller replaces, not a pending one, and a typed, OCA-named or
+// fill-recalculation market is a book the tapes do not measure (NaN, lane
+// W6B-ENG-PAIRS).
 double PineExecutionAdapter::pending_opposite_market_units(
-        bool is_long, std::int64_t script_open_ms) const {
+        bool is_long, std::int64_t script_open_ms, const SourceId& id) const {
     double units = 0.0;
     bool unsized = false;
     const auto add = [&](const PlacementSnapshot& row, double own) {
         if (!row.opening || row.family != PineOrderFamily::Entry || row.is_long == is_long
-            || row.placement_script_open_ms != script_open_ms
+            || row.placement_script_open_ms != script_open_ms || row.source_id == id
             || finite_positive(row.exit_levels.limit)
             || finite_positive(row.exit_levels.stop)
             || finite_positive(row.exit_levels.trail_points)
@@ -20180,7 +20209,9 @@ double PineExecutionAdapter::pending_opposite_market_units(
             || finite_positive(row.exit_levels.trail_offset)) {
             return;
         }
-        if (finite_positive(own)) units += own;
+        const bool measured = row.oca_name.empty() && !row.birth.from_fill()
+            && (row.qty_type < 0 || row.qty_type == static_cast<int>(QtyType::FIXED));
+        if (measured && finite_positive(own)) units += own;
         else unsized = true;
     };
     for (const auto& prior : pending_same_bar_commands_) {
@@ -20193,6 +20224,48 @@ double PineExecutionAdapter::pending_opposite_market_units(
         if (prior != placement_.end()) add(prior->second, prior->second.requested_qty);
     }
     return unsized ? kNaN : units;
+}
+
+// R5 lane W6B-ENG-PAIRS: whether the opening fill of a flat entry is the
+// first of a same-point pair whose opposite member, placed on the same bar,
+// fills at this same price next. TradingView checks the margin of such a pair
+// once both have filled: a commissioned pair whose one transaction the
+// commission leaves just short of the equity is booked with no margin call
+// (lab tv w6b-p1c-pair-gross-percent MM-SF-U and MS-SF-U).
+bool PineExecutionAdapter::same_point_pair_fill_follows(
+        const PlacementSnapshot& filled, const native_order::RequestHandle& filled_handle,
+        double price) const {
+    if (!filled.opening || filled.family != PineOrderFamily::Entry
+        || filled.projection_position_side != static_cast<std::int32_t>(PositionSide::FLAT)
+        || !finite_positive(filled.requested_qty) || !finite_positive(price)
+        || !same_point_pair_scope()) {
+        return false;
+    }
+    return std::any_of(live_handles_.begin(), live_handles_.end(),
+        [&](const native_order::RequestHandle& handle) {
+            if (handle == filled_handle) return false;
+            const auto found = placement_.find(handle.incarnation);
+            if (found == placement_.end()) return false;
+            const auto& row = found->second;
+            if (!row.opening || row.family != PineOrderFamily::Entry
+                || row.is_long == filled.is_long
+                || row.projection_created_bar != filled.projection_created_bar
+                || row.projection_position_side
+                    != static_cast<std::int32_t>(PositionSide::FLAT)
+                || !finite_positive(row.requested_qty) || !row.oca_name.empty()
+                || row.birth.from_fill()
+                || !(row.qty_type < 0 || row.qty_type == static_cast<int>(QtyType::FIXED))) {
+                return false;
+            }
+            const bool stop = finite_positive(row.exit_levels.stop);
+            const bool limit = finite_positive(row.exit_levels.limit);
+            if (stop && limit) return false;
+            if (stop) return row.is_long ? row.exit_levels.stop <= price
+                                         : row.exit_levels.stop >= price;
+            if (limit) return row.is_long ? row.exit_levels.limit >= price
+                                          : row.exit_levels.limit <= price;
+            return true;
+        });
 }
 
 // R5 lane W6-ENG-FILL-ORDER, family F10. TradingView fills the entries that
@@ -20208,9 +20281,10 @@ double PineExecutionAdapter::pending_opposite_market_units(
 // price can share the next fill point, and a pure-stop book is
 // defer_open_marketable_sells' at that open. The scope is the flat
 // explicit-quantity family same_bar_market_tx_scope() settles as one broker
-// batch of frozen transactions, which is what the tapes measure.
+// batch of frozen transactions, which is what the tapes measure, widened by
+// same_point_pair_scope() to the configurations lane W6B-ENG-PAIRS measured.
 void PineExecutionAdapter::order_same_point_entries() {
-    if (!host_ || live_handles_.size() < 2 || !same_bar_market_tx_scope()) return;
+    if (!host_ || live_handles_.size() < 2 || !same_point_pair_scope()) return;
     auto& host = require_host();
     if (detail::run_position(host).signed_units != 0.0) return;
     const auto point = detail::callback_point(host);

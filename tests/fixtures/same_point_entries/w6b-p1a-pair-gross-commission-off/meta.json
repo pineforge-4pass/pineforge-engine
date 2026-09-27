@@ -1,0 +1,16 @@
+{
+  "title": "W6B P1 pair gross admission, no commission",
+  "slug": "w6b-p1a-pair-gross-commission-off",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:31:45.996Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "e80e720b13a25e8a38998c91620d019b90cfd6f5ce0ee351fd78013d2645c860",
+  "tv_trades_sha256": "892f587ac099126720c78375e75d0c63da05c8f25300e6a07f87293ab3ef5648",
+  "tv_trades_rows": 60
+}

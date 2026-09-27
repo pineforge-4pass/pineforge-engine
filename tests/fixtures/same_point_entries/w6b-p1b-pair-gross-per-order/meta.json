@@ -1,0 +1,16 @@
+{
+  "title": "W6B P1 pair gross admission, a per-order commission",
+  "slug": "w6b-p1b-pair-gross-per-order",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:31:48.988Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "ffcee1e19defac46faa0251438d57ba0cd9034939e647178e13a1ce9bc372c6e",
+  "tv_trades_sha256": "794c67900f8f22a69d48f3895eb68bcb039c98e2f0a68aaa63b489f693cdd9af",
+  "tv_trades_rows": 60
+}

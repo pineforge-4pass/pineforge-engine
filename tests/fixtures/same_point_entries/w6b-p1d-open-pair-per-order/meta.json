@@ -1,0 +1,16 @@
+{
+  "title": "W6B P1d opposite pair at one open, per-order commission",
+  "slug": "w6b-p1d-open-pair-per-order",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:31:56.311Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "61e1f95560914f14c590cf5ea1457076f0a14ca910db0581d2b37968e378742e",
+  "tv_trades_sha256": "27007967844d293305a5452e4c6aca8c36c67c5acd376628b9e7c446fe1f0936",
+  "tv_trades_rows": 80
+}

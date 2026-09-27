@@ -18,6 +18,10 @@
  *        equity it drops the later call.
  *        Under process_orders_on_close a market pair fills at the close in
  *        the same order.
+ *        With a commission (lane W6B-ENG-PAIRS) the order and the one
+ *        transaction are the same: its fee is split across the rows it books
+ *        by quantity, and its admission against the equity leaves the fee
+ *        out, however little of the equity the fee would leave.
  *   F12  A held position's protective strategy.exit stop and a reversing
  *        strategy.entry stop on the same side of the price: the level the
  *        bar's path reaches first fills first, the magnifier changes nothing,
@@ -84,6 +88,7 @@ constexpr double kLot = 0.0001;
 constexpr double kTick = 0.01;
 constexpr std::int64_t kBarMs = 15 * 60'000;
 constexpr std::int64_t kStepMs = 2 * 60 * 60'000;
+constexpr std::int64_t kHourMs = 60 * 60'000;
 constexpr std::int64_t kCleanupMs = 30 * 60'000;
 
 // One trade as both sides report it, prices in ticks and quantity in lots:
@@ -135,12 +140,14 @@ struct Tape {
     std::vector<Row> trades;           // closed inside the replayed bars, in tape order
     std::vector<std::string> entries;  // each trade's entry signal
     std::vector<std::string> exits;    // each trade's exit signal
+    std::vector<double> fees;          // each trade's commission
 };
 
 Tape tape_trades(const std::string& tape, std::int64_t end_ms) {
     std::ifstream in(std::string(PINEFORGE_SAME_POINT_FIXTURE_DIR) + "/" + tape + "/tv_trades.csv");
     std::map<int, Row> by_number;
     std::map<int, std::string> entry_signal, exit_signal;
+    std::map<int, double> fee;
     std::string line;
     bool header = true;
     while (std::getline(in, line)) {
@@ -149,8 +156,9 @@ Tape tape_trades(const std::string& tape, std::int64_t end_ms) {
         std::stringstream fields(line);
         std::string field;
         while (std::getline(fields, field, ',')) cell.push_back(field);
-        // Trade number, Type, Date and time, Signal, Price USDT, Size (qty), ...
-        if (cell.size() < 6) continue;
+        // Trade number, Type, Date and time, Signal, Price USDT, Size (qty),
+        // Size (value), Net PnL, Return %, Commission, ...
+        if (cell.size() < 10) continue;
         const int number = std::stoi(cell[0]);
         Row& row = by_number[number];
         const double price = std::stod(cell[4]);
@@ -163,6 +171,7 @@ Tape tape_trades(const std::string& tape, std::int64_t end_ms) {
             std::get<2>(row) = ticks(price);
             std::get<3>(row) = lots(qty);
             entry_signal[number] = cell[3];
+            fee[number] = std::stod(cell[9]);
         } else {
             std::get<4>(row) = tape_ms(cell[2]);
             std::get<5>(row) = ticks(price);
@@ -176,6 +185,7 @@ Tape tape_trades(const std::string& tape, std::int64_t end_ms) {
             out.trades.push_back(row);
             out.entries.push_back(entry_signal[number]);
             out.exits.push_back(exit->second);
+            out.fees.push_back(fee[number]);
         }
     }
     return out;
@@ -248,14 +258,35 @@ const std::vector<Cell> kClosePair = {
     {{false, 'M', 1, "ML-SF-1"}, {true, 'L', 1, "ML-SF-2"}},
 };
 
-enum class Probe { Pair, GuardedPair, Stops };
+// w6-f10i / w6-f10j: the pairs with a commission.
+const std::vector<Cell> kCommissionPair = {
+    {{true, 'M', 1, "MM-LF-1"}, {false, 'M', 1, "MM-LF-2"}},
+    {{false, 'M', 1, "MM-SF-1"}, {true, 'M', 1, "MM-SF-2"}},
+    {{false, 'M', 1, "MS-SF-1"}, {true, 'S', 1, "MS-SF-2"}},
+    {{false, 'M', 2, "MS-SF-Q2-1"}, {true, 'S', 3, "MS-SF-Q3-2"}},
+};
+// w6b-p1a/b/c: the gross-admission bands (the quantities are sized off the
+// equity at the signal, so the table's are unused).
+const std::vector<Cell> kGrossBands = {
+    {{true, 'M', 0, "MM-LF-W-1"}, {false, 'M', 0, "MM-LF-W-2"}},
+    {{true, 'M', 0, "MM-LF-U-1"}, {false, 'M', 0, "MM-LF-U-2"}},
+    {{true, 'M', 0, "MM-LF-O-1"}, {false, 'M', 0, "MM-LF-O-2"}},
+    {{false, 'M', 0, "MM-SF-W-1"}, {true, 'M', 0, "MM-SF-W-2"}},
+    {{false, 'M', 0, "MM-SF-U-1"}, {true, 'M', 0, "MM-SF-U-2"}},
+    {{false, 'M', 0, "MM-SF-O-1"}, {true, 'M', 0, "MM-SF-O-2"}},
+    {{false, 'M', 0, "MS-SF-W-1"}, {true, 'S', 0, "MS-SF-W-2"}},
+    {{false, 'M', 0, "MS-SF-U-1"}, {true, 'S', 0, "MS-SF-U-2"}},
+    {{false, 'M', 0, "MS-SF-O-1"}, {true, 'S', 0, "MS-SF-O-2"}},
+};
+
+enum class Probe { Pair, GuardedPair, Stops, Gross };
 
 // The probes, as their generated TUs lower them (fixtures/.../strategy.pine).
 class ProbeHost final : public source::PineStrategyHost {
 public:
     ProbeHost(Probe probe, const std::vector<Cell>* cells, int passes,
-              const source::PineStrategyConfig& config)
-        : probe_(probe), cells_(cells), passes_(passes) {
+              const source::PineStrategyConfig& config, std::int64_t step_ms, double fee)
+        : probe_(probe), cells_(cells), passes_(passes), step_ms_(step_ms), fee_(fee) {
         attach_pine_execution_adapter();
         configure_pine_strategy(config);
         set_syminfo_metadata("qty_step", kLot);
@@ -263,6 +294,7 @@ public:
 
     void on_source_bar(const Bar&) override {
         if (probe_ == Probe::Stops) stops(current_bar_.timestamp);
+        else if (probe_ == Probe::Gross) gross(current_bar_.timestamp);
         else pair(current_bar_.timestamp);
     }
 
@@ -283,20 +315,49 @@ private:
     void pair(std::int64_t t) {
         const std::int64_t n = static_cast<std::int64_t>(cells_->size());
         const std::int64_t rel = t - at(8, 0, 0);
-        const bool in_range = rel >= 0 && rel < passes_ * n * kStepMs;
-        const bool event = in_range && rel % kStepMs == 0;
-        const bool cleanup = in_range && rel % kStepMs == kCleanupMs;
+        const bool in_range = rel >= 0 && rel < passes_ * n * step_ms_;
+        const bool event = in_range && rel % step_ms_ == 0;
+        const bool cleanup = in_range && rel % step_ms_ == kCleanupMs;
         const bool guarded = probe_ == Probe::GuardedPair;
         const bool first_pass = pine_bar_index() != acted_bar_;
         if (guarded && !(is_last_tick_ && first_pass)) return;
         if (event && signed_position_size() == 0.0) {
             acted_bar_ = pine_bar_index();
-            const Cell& cell = (*cells_)[static_cast<std::size_t>((rel / kStepMs) % n)];
+            const Cell& cell = (*cells_)[static_cast<std::size_t>((rel / step_ms_) % n)];
             place("E1", cell.first);
             place("E2", cell.second);
         }
         if (cleanup && (!guarded || signed_position_size() != 0.0)) {
             acted_bar_ = pine_bar_index();
+            strategy_cancel_all();
+            strategy_close("", "FLT", kNaN, kNaN, false);
+        }
+    }
+
+    // w6b-p1a/b/c: the pair's transaction sized off strategy.equity at the
+    // signal close -- well under it (W), under it by less than the fee (U),
+    // or just over it (O) -- every hour from 2025-04-08 00:00 UTC.
+    void gross(std::int64_t t) {
+        const std::int64_t n = static_cast<std::int64_t>(cells_->size());
+        const std::int64_t rel = t - at(8, 0, 0);
+        const bool in_range = rel >= 0 && rel < passes_ * n * step_ms_;
+        const int cell = in_range ? static_cast<int>((rel / step_ms_) % n) : -1;
+        const double close = current_bar_.close;
+        const double equity = current_equity() + open_profit(close);
+        const double fee = fee_ > 0.0 ? fee_ : -fee_ * equity;
+        const int band = cell % 3;
+        const double gap = band == 0 ? 2 * fee : (band == 1 ? 0.5 * fee : -0.5 * fee);
+        const double total = std::floor((equity - gap) / close * 10000) / 10000;
+        const double qa = std::floor(total / 2 * 10000) / 10000;
+        const double qb = std::round((total - qa) * 10000) / 10000;
+        if (in_range && rel % step_ms_ == 0 && signed_position_size() == 0.0) {
+            const Cell& c = (*cells_)[static_cast<std::size_t>(cell)];
+            strategy_entry("E1", c.first.is_long, kNaN, kNaN, qa, c.first.comment, "", 0, -1);
+            strategy_entry("E2", c.second.is_long, kNaN,
+                           c.second.kind == 'S' ? close * 0.5 : kNaN, qb, c.second.comment,
+                           "", 0, -1);
+        }
+        if (in_range && rel % step_ms_ == kCleanupMs) {
             strategy_cancel_all();
             strategy_close("", "FLT", kNaN, kNaN, false);
         }
@@ -351,11 +412,14 @@ private:
     Probe probe_;
     const std::vector<Cell>* cells_;
     std::int64_t passes_;
+    std::int64_t step_ms_;
+    double fee_;  // the gross probe's fee: money, or (negative) a share of the equity
     int acted_bar_ = -1;
 };
 
 struct Run {
     std::vector<Row> trades;
+    std::vector<double> fees;
     std::string error;
 };
 
@@ -363,8 +427,8 @@ struct Run {
 // last bar is closed there by the range end and is not a tape trade).
 Run run(Probe probe, const std::vector<Cell>* cells, int passes,
         const source::PineStrategyConfig& config, std::int64_t trade_start_ms,
-        std::int64_t end_ms) {
-    ProbeHost host(probe, cells, passes, config);
+        std::int64_t end_ms, std::int64_t step_ms, double fee) {
+    ProbeHost host(probe, cells, passes, config, step_ms, fee);
     host.set_trade_start_time(trade_start_ms);
     const std::vector<Bar> bars = feed();
     host.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false);
@@ -378,6 +442,7 @@ Run run(Probe probe, const std::vector<Cell>* cells, int passes,
         CHECK(on_grid(t.qty, kLot));
         out.trades.emplace_back(t.entry_time, t.is_long, ticks(t.entry_price), lots(t.qty),
                                 t.exit_time, ticks(t.exit_price));
+        out.fees.push_back(t.commission);
     }
     return out;
 }
@@ -402,6 +467,13 @@ source::PineStrategyConfig fixed_config(int pyramiding, bool pooc, bool coof,
     return c;
 }
 
+source::PineStrategyConfig commissioned(source::PineStrategyConfig c, CommissionType type,
+                                        double value) {
+    c.commission_type = static_cast<int>(type);
+    c.commission_value = value;
+    return c;
+}
+
 source::PineStrategyConfig v6_default_config() {
     source::PineStrategyConfig c{};
     c.initial_capital = 100000.0;  // omitted: v6's defaults
@@ -411,11 +483,12 @@ source::PineStrategyConfig v6_default_config() {
     return c;
 }
 
-// The pair cell an entry time belongs to (its two-hour slot), -1 outside.
-int pair_cell(std::int64_t entry_ms, std::size_t cells, int passes) {
+// The pair cell an entry time belongs to (its slot), -1 outside.
+int pair_cell(std::int64_t entry_ms, std::size_t cells, int passes,
+              std::int64_t step_ms = kStepMs) {
     const std::int64_t rel = entry_ms - at(8, 0, 0);
-    if (rel < 0 || rel >= passes * static_cast<std::int64_t>(cells) * kStepMs) return -1;
-    return static_cast<int>((rel / kStepMs) % static_cast<std::int64_t>(cells));
+    if (rel < 0 || rel >= passes * static_cast<std::int64_t>(cells) * step_ms) return -1;
+    return static_cast<int>((rel / step_ms) % static_cast<std::int64_t>(cells));
 }
 
 struct Case {
@@ -429,18 +502,26 @@ struct Case {
     std::size_t closed;                // tape trades closed inside the bars
     // Entry-time windows [from, to) of cells this row leaves out (README).
     std::vector<std::pair<std::int64_t, std::int64_t>> left_out = {};
+    std::int64_t step_ms = kStepMs;    // one cell's slot
+    double fee = 0.0;                  // Probe::Gross: the probe's feeEst
+    bool fees = false;                 // also require each trade's commission
 };
 
-std::vector<Row> covered_rows(const std::vector<Row>& rows, const Case& c) {
+std::vector<Row> covered_rows(const std::vector<Row>& rows, const Case& c,
+                              const std::vector<double>* fees = nullptr,
+                              std::vector<double>* covered_fees = nullptr) {
     std::vector<Row> out;
-    for (const Row& row : rows) {
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        const Row& row = rows[i];
         const std::int64_t entry = std::get<0>(row);
         bool keep = c.covered.empty();
         for (const int wanted : c.covered)
-            if (pair_cell(entry, c.cells->size(), c.passes) == wanted) keep = true;
+            if (pair_cell(entry, c.cells->size(), c.passes, c.step_ms) == wanted) keep = true;
         for (const auto& [from, to] : c.left_out)
             if (entry >= from && entry < to) keep = false;
-        if (keep) out.push_back(row);
+        if (!keep) continue;
+        out.push_back(row);
+        if (fees && covered_fees) covered_fees->push_back((*fees)[i]);
     }
     return out;
 }
@@ -451,6 +532,10 @@ int main() {
     const std::int64_t end_ms = kEth15[sizeof(kEth15) / sizeof(kEth15[0]) - 1].ts;
     const std::vector<int> all14 = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};
     const std::vector<int> all8 = {0, 1, 2, 3, 4, 5, 6, 7};
+    const std::vector<int> all9 = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+    const std::vector<int> all4 = {0, 1, 2, 3};
+    const auto per_order = CommissionType::CASH_PER_ORDER;
+    const auto percent = CommissionType::PERCENT;
 
     const Case cases[] = {
         {"w6-f10a-open-pair", Probe::Pair, &kOpenPair, 2, "fixed 1, pyramiding 0",
@@ -476,6 +561,30 @@ int main() {
         {"w6-f12b-stop-priority-default", Probe::Stops, nullptr, 0,
          "nothing (v6: percent_of_equity, 100)", v6_default_config(), {}, 11,
          {{at(9, 0, 0), at(9, 1, 0)}}},
+        // Lane W6B-ENG-PAIRS, item 1: a commissioned pair.
+        {"w6-f10i-pair-commission-percent", Probe::Pair, &kCommissionPair, 2,
+         "fixed 1, pyramiding 0, commission 0.1 percent",
+         commissioned(fixed_config(0, false, false), percent, 0.1), all4, 16, {}, kStepMs, 0.0,
+         true},
+        {"w6-f10j-pair-commission-per-order", Probe::Pair, &kCommissionPair, 2,
+         "fixed 1, pyramiding 0, commission 5 per order",
+         commissioned(fixed_config(0, false, false), per_order, 5.0), all4, 16, {}, kStepMs,
+         0.0, true},
+        {"w6b-p1d-open-pair-per-order", Probe::Pair, &kOpenPair, 2,
+         "fixed 1, pyramiding 0, commission 5 per order",
+         commissioned(fixed_config(0, false, false), per_order, 5.0), all14, 40, {}, kStepMs,
+         0.0, true},
+        {"w6b-p1a-pair-gross-commission-off", Probe::Gross, &kGrossBands, 2,
+         "fixed 1, capital 10000, no commission", fixed_config(0, false, false, 10000.0), all9,
+         30, {}, kHourMs, 50.0, true},
+        {"w6b-p1b-pair-gross-per-order", Probe::Gross, &kGrossBands, 2,
+         "fixed 1, capital 10000, commission 50 per order",
+         commissioned(fixed_config(0, false, false, 10000.0), per_order, 50.0), all9, 30, {},
+         kHourMs, 50.0, true},
+        {"w6b-p1c-pair-gross-percent", Probe::Gross, &kGrossBands, 2,
+         "fixed 1, capital 10000, commission 1 percent",
+         commissioned(fixed_config(0, false, false, 10000.0), percent, 1.0), all9, 30, {},
+         kHourMs, -0.01, true},
     };
 
     for (const Case& c : cases) {
@@ -484,15 +593,27 @@ int main() {
         CHECK(tape.trades.size() == c.closed);
         const std::int64_t trade_start = tape.trades.empty()
             ? at(7, 0, 0) : std::get<0>(tape.trades.front()) - kBarMs;
-        const Run lane = run(c.probe, c.cells, c.passes, c.lane, trade_start, end_ms);
+        const Run lane = run(c.probe, c.cells, c.passes, c.lane, trade_start, end_ms, c.step_ms,
+                             c.fee);
         CHECK(lane.error.empty());
-        const std::vector<Row> want = covered_rows(tape.trades, c);
-        const std::vector<Row> got = covered_rows(lane.trades, c);
+        std::vector<double> want_fees, got_fees;
+        const std::vector<Row> want = covered_rows(tape.trades, c, &tape.fees, &want_fees);
+        const std::vector<Row> got = covered_rows(lane.trades, c, &lane.fees, &got_fees);
         CHECK(!want.empty());
         CHECK(got == want);
         if (got != want) {
             show("tape", want);
             show("engine", got);
+        }
+        if (c.fees && got == want) {
+            // The commission of each row: one combined order's fee is split
+            // across the rows it books by quantity.
+            for (std::size_t i = 0; i < want.size(); ++i) {
+                CHECK(std::abs(got_fees[i] - want_fees[i]) < 1e-6);
+                if (std::abs(got_fees[i] - want_fees[i]) >= 1e-6)
+                    std::printf("    fee row %zu: tape %.8f engine %.8f\n", i, want_fees[i],
+                                got_fees[i]);
+            }
         }
     }
 
@@ -520,6 +641,9 @@ int main() {
         {"w6-f10f-coof-pair", &kClosePair, 16},
         {"w6-f10g-pair-gross", &kGross, 10},
         {"w6-f10h-pair-gross-pyramiding1", &kGross, 10},
+        {"w6-f10i-pair-commission-percent", &kCommissionPair, 8},
+        {"w6-f10j-pair-commission-per-order", &kCommissionPair, 8},
+        {"w6b-p1d-open-pair-per-order", &kOpenPair, 28},
     };
     for (const PairTape& pt : pair_tapes) {
         const Tape tape = tape_trades(pt.tape, end_ms);
@@ -552,6 +676,35 @@ int main() {
         }
         std::printf("   %s: %zu cells with both legs traded\n", pt.tape, both);
         CHECK(both == pt.both_traded);
+    }
+
+    // The gross-admission bands, on TradingView's own rows: the later call
+    // trades whenever its transaction at the signal close is within the
+    // equity, however little of it the commission would leave (U), and not
+    // past it (O), with or without a commission.
+    std::printf("-- the admission, on the tapes\n");
+    for (const char* name : {"w6b-p1a-pair-gross-commission-off", "w6b-p1b-pair-gross-per-order",
+                             "w6b-p1c-pair-gross-percent"}) {
+        const Tape tape = tape_trades(name, end_ms);
+        std::map<int, std::pair<bool, bool>> traded;  // slot -> (first, second) traded
+        for (std::size_t i = 0; i < tape.trades.size(); ++i) {
+            const int slot = pair_cell(std::get<0>(tape.trades[i]), 18, 1, kHourMs);
+            if (slot < 0) continue;
+            const Cell& cell = kGrossBands[static_cast<std::size_t>(slot) % kGrossBands.size()];
+            for (const std::string* signal : {&tape.entries[i], &tape.exits[i]}) {
+                traded[slot].first = traded[slot].first || *signal == cell.first.comment;
+                traded[slot].second = traded[slot].second || *signal == cell.second.comment;
+            }
+        }
+        std::size_t kept = 0, dropped = 0;
+        for (int slot = 0; slot < 18; ++slot) {
+            const bool over = slot % 3 == 2;
+            CHECK(traded[slot].first);
+            CHECK(traded[slot].second == !over);
+            (over ? dropped : kept) += traded[slot].second == !over ? 1 : 0;
+        }
+        std::printf("   %s: %zu later calls kept (W, U), %zu dropped (O)\n", name, kept, dropped);
+        CHECK(kept == 12 && dropped == 6);
     }
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
