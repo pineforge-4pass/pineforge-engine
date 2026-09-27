@@ -887,6 +887,11 @@ list(APPEND TEST_SOURCES test_same_point_entries_tapes)
 # (tests/fixtures/ltf_lookahead_calling_open), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_ltf_lookahead_calling_open_tapes)
 
+# Lane W8D-NOTRADES: an entry a mid-leg calc_on_order_fills recalculation places
+# is live from the leg's end (tests/fixtures/coof_refill_waypoint), on
+# TradingView's tapes.
+list(APPEND TEST_SOURCES test_coof_refill_waypoint_tapes)
+
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bare_host_contracts)
@@ -2345,6 +2350,12 @@ endif()
 if(TARGET test_ltf_lookahead_calling_open_tapes)
     target_compile_definitions(test_ltf_lookahead_calling_open_tapes PRIVATE
         PINEFORGE_LTF_CALLING_OPEN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ltf_lookahead_calling_open")
+endif()
+
+# Lane W8D-NOTRADES reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_coof_refill_waypoint_tapes)
+    target_compile_definitions(test_coof_refill_waypoint_tapes PRIVATE
+        PINEFORGE_COOF_REFILL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_refill_waypoint")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape

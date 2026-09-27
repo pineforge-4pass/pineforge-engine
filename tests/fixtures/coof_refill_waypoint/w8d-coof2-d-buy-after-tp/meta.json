@@ -1,0 +1,16 @@
+{
+  "title": "w8d-coof2-d-buy-after-tp",
+  "slug": "w8d-coof2-d-buy-after-tp",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:45:52.024Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "d0c4110e47bf35dc77f0bbf05a1c74878deef33319613ef603fd81a63f18edf4",
+  "tv_trades_sha256": "caa20f6248832b58906ec7d3d71dbe2c953179f45180b2c4df6feff544992e9f",
+  "tv_trades_rows": 594
+}

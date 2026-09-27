@@ -1,0 +1,16 @@
+{
+  "title": "w8d-coof2-e-buystop-through",
+  "slug": "w8d-coof2-e-buystop-through",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:48:37.023Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "76799c6d93a4880346af7415443f26271a00f05bd4e313699a021250af17f2de",
+  "tv_trades_sha256": "24cadd391c374bdd953e0e5df94a65d2887b7ecd6e2035611bb64fc09f58f158",
+  "tv_trades_rows": 616
+}

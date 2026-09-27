@@ -1,0 +1,16 @@
+{
+  "title": "w8d-coof2-c-buy-resting",
+  "slug": "w8d-coof2-c-buy-resting",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:45:48.475Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "651783f1547eb53f7b4120a21604c1f5340b22ed635f6128e8da558ce331879d",
+  "tv_trades_sha256": "0dfd7387ff93f189361503f6a6794cbc8e8d1585b4b9211a0d72e5c890760be2",
+  "tv_trades_rows": 556
+}

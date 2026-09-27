@@ -6728,7 +6728,8 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     if (coof_recalc_active_ && !coof_first_open_ && !coof_lower_path && priced) {
         const auto point = detail::callback_point(require_host());
         const double birth = point ? point->price : kNaN;
-        const double waypoint = coof_next_waypoint();
+        int waypoint_index = -1;
+        const double waypoint = coof_next_waypoint(&waypoint_index);
         bool reached = false;
         bool limit_route = false;
         if (finite_positive(stop_price)) {
@@ -6745,6 +6746,40 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                     * staged_.syminfo.mintick);
             snapshot.forced_execution_price = nearest_tick(
                 slipped, staged_.syminfo.mintick);
+        }
+        // A pure limit or stop entry that the recalculation of a MID-LEG fill
+        // places already executable at that fill's price is live only from
+        // the leg's end, the next extreme: when still executable there it
+        // fills at the extreme's print (a stop keeps its slippage).
+        // TradingView, lab tv tapes tests/fixtures/coof_refill_waypoint
+        // (w8d-coof2-a/b/d/e/f; resting-limit control -c): the level fill
+        // this path booked at the placement point was never executable
+        // after it (R5 lane W8D-NOTRADES). An entry not executable at the
+        // extreme keeps its level fill: TradingView rests it there (-d), but
+        // a magnified script's next point is an intrabar one, and resting
+        // it to the chart bar's extreme delayed the unmagnified
+        // bystry1991-ema200 refills by a bar or more. Not pinned under
+        // process_orders_on_close, on the close leg or on a leg-end fill.
+        const bool pure_limit = finite_positive(limit_price) && !finite_positive(stop_price);
+        const bool pure_stop = finite_positive(stop_price) && !finite_positive(limit_price);
+        const double level = pure_limit ? limit_price : stop_price;
+        const auto executable_at = [&](double price) {
+            return pure_limit ? (is_long ? price <= level : price >= level)
+                              : (is_long ? price >= level : price <= level);
+        };
+        if (!reached && (pure_limit || pure_stop) && !config_.process_orders_on_close
+            && (waypoint_index == 1 || waypoint_index == 2) && finite_positive(waypoint)
+            && finite_positive(birth) && !coof_fill_on_path_point()
+            && executable_at(birth) && executable_at(waypoint)) {
+            const double tick = staged_.syminfo.mintick;
+            const double booked = source_bar_fill_tick(waypoint, tick);
+            const bool falling = waypoint < birth;
+            request.trigger = is_long == falling
+                ? native_order::Trigger{native_order::Limit{waypoint, booked != waypoint}}
+                : native_order::Trigger{native_order::Stop{waypoint}};
+            snapshot.forced_execution_price = nearest_tick(waypoint
+                + (pure_limit ? 0.0 : (is_long ? 1.0 : -1.0) * config_.slippage * tick),
+                tick);
         }
     }
     if (current == 0.0 && priced && current_point) {

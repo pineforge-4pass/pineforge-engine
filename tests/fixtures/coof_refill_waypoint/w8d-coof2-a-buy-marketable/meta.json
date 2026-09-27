@@ -1,0 +1,16 @@
+{
+  "title": "w8d-coof2-a-buy-marketable",
+  "slug": "w8d-coof2-a-buy-marketable",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:45:33.849Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "fa5906bc9c6b38c1c4a8cea8d2ff169063f2f16b73e8d49100a863f38600fc03",
+  "tv_trades_sha256": "189c5c41805ed64d085166bc4efc3044ef09c65f01b9e3d77e0a38b4b51ea395",
+  "tv_trades_rows": 622
+}

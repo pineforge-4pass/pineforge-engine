@@ -1,0 +1,27 @@
+//@version=6
+// W8D-NOTRADES synthetic: a calc_on_order_fills refill right after an exit fills mid-bar.
+// short stopped out (X stop 150 over the average); refill SELL limit 600 below X's fill (marketable at the recalc)
+// Stateless (every decision reads strategy.* only), so the recalculation's rollback cannot lose it.
+strategy("w8d-coof2-b-sell-marketable", overlay = true, calc_on_order_fills = true, process_orders_on_close = false, default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 10000000)
+nClosed = strategy.closedtrades
+lastExitHere = nClosed > 0 and strategy.closedtrades.exit_bar_index(nClosed - 1) == bar_index
+lastExitWasX = nClosed > 0 and strategy.closedtrades.exit_id(nClosed - 1) == "X"
+flat = strategy.position_size == 0
+openId = strategy.opentrades > 0 ? strategy.opentrades.entry_id(0) : ""
+heldBars = strategy.opentrades > 0 ? bar_index - strategy.opentrades.entry_bar_index(0) : 0
+// P: one position every 4 hours (UTC slots), protected by X, closed after 8 bars
+if flat and not lastExitHere and minute(time) == 0 and hour(time, "UTC") % 4 == 0
+    strategy.entry("P", strategy.short)
+if openId == "P"
+    lvl = strategy.position_avg_price + 150
+    strategy.exit("X", "P", stop = lvl)
+    if heldBars >= 8
+        strategy.close("P")
+// R: the refill, placed by the recalculation that X's fill triggers (and re-placed by the bar's close)
+if flat and lastExitHere and lastExitWasX
+    xPrice = strategy.closedtrades.exit_price(nClosed - 1)
+    strategy.entry("R", strategy.short, limit = xPrice - 600)
+if flat and not lastExitHere
+    strategy.cancel("R")
+if openId == "R" and heldBars >= 4
+    strategy.close("R")
