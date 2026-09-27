@@ -2984,19 +2984,22 @@ kernel merges; the adapter runs the site's payload on every bar handed over, in
 the requested context: history offsets and TA state over the context's own
 bars, `bar_index` the context's, `time_close` the bar's own close, `syminfo.*`
 the symbol's facts (`syminfo.tickerid` is the string the script passed).
-`barmerge.gaps_on` reads na on a chart bar that received no new bar. A symbol
-whose facts say it is invalid reads na under `ignore_invalid_symbol` and fails
-the run closed without it; a registered symbol with no installed feed fails the
-run closed, naming the symbol and the timeframe; a chart aggregated from finer
-input is refused, since the merge is judged per chart bar. Recorded request
-series -- TradingView's own per-chart-bar values of `request.earnings`,
-`dividends`, `splits` and `financial`, installed by
+`barmerge.gaps_on` reads na on a chart bar that received no new bar (through
+the generated `clear_security()`, which also clears the payload's own history
+series, as for a same-symbol site). A symbol whose facts say it is invalid
+reads na under `ignore_invalid_symbol` and fails the run closed without it; a
+registered symbol with no installed feed fails the run closed, naming the
+symbol and the timeframe, while a feed installed with no bars reads na; a chart
+aggregated from finer input is refused, since the merge is judged per chart
+bar. Recorded request series -- TradingView's own per-chart-bar values of
+`request.earnings`, `dividends`, `splits` and `financial`, installed by
 `strategy_set_recorded_series` -- are the adapter's alone:
 `recorded_series_value(key)` reads the value recorded for the chart bar's open
-time, na where the tape has no row, and a key nobody installed fails the read
-closed. `stream_begin` refuses a source host holding a symbol feed or a
-recorded series ("request.security symbol feeds and recorded request series
-support historical runs only"). `scripts/run_strategy.py` installs all of it
+time, na where the tape has no row (on every bar for a tape installed without
+rows), and a key nobody installed fails the read closed. `stream_begin` refuses
+a source host holding a symbol feed or a recorded series ("request.security
+symbol feeds and recorded request series support historical runs only"), and
+each of the four setters answers -1 while a run is in progress. `scripts/run_strategy.py` installs all of it
 from the probe's pinned requests manifest when `PINEFORGE_REQUESTS_ROOT` is set
 (workflow `docs/xsym-requests.md`, "The environment contract"), and records
 each feed's key, sha256 and bar count in the run provenance.

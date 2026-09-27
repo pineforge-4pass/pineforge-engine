@@ -970,6 +970,15 @@ bool parse_fact_number(const std::string& text, double& value) {
     return used == text.size();
 }
 
+// The doors install before a run: a run in progress (a stream's warmup or
+// realtime leg included) has already staged and hashed what it reads.
+constexpr const char* kRunInProgress =
+    "a run is in progress; request data is installed before a run begins";
+
+bool run_in_progress(const NativeStrategyHost& host) {
+    return host.native_state().kind == NativeLifecycleKind::Running;
+}
+
 }  // namespace
 
 void source::PineStrategyHost::register_security_eval(
@@ -1170,6 +1179,7 @@ bool source::PineStrategyHost::set_symbol_feed(const std::string& key,
         last_error_ = "strategy_set_symbol_feed: " + why;
         return false;
     };
+    if (run_in_progress(*this)) return refuse(kRunInProgress);
     if (key.empty()) return refuse("empty symbol key");
     const std::string tf = canonical_symbol_timeframe(timeframe);
     if (tf.empty() || !native_calendar::parse_timeframe(tf)) {
@@ -1178,18 +1188,15 @@ bool source::PineStrategyHost::set_symbol_feed(const std::string& key,
     if (n < 0 || (n > 0 && (bars == nullptr || close_ms == nullptr)))
         return refuse("invalid bar array");
     const std::int64_t existing = find_symbol_feed(key, tf);
-    if (n == 0) {
-        if (existing >= 0)
-            symbol_feeds_.erase(symbol_feeds_.begin() + static_cast<std::ptrdiff_t>(existing));
-        refresh_symbol_data_digest();
-        last_error_.clear();
-        return true;
-    }
+    // n == 0 is a symbol with no bars over the run (a feed file with a header
+    // only): installed, so its sites read na rather than fail as unfed.
     NativeInstrumentFeed feed;
     feed.instrument = key;
     feed.tf = tf;
-    feed.bars.assign(bars, bars + n);
-    feed.close_ms.assign(close_ms, close_ms + n);
+    if (n > 0) {
+        feed.bars.assign(bars, bars + n);
+        feed.close_ms.assign(close_ms, close_ms + n);
+    }
     // The kernel's own judgement of the feed, so a refusal names its field
     // here rather than at the next begin.
     const auto judged = validate_native_instrument_feeds({feed});
@@ -1217,6 +1224,7 @@ bool source::PineStrategyHost::set_symbol_feed_column(const std::string& key,
         last_error_ = "strategy_set_symbol_feed_column: " + why;
         return false;
     };
+    if (run_in_progress(*this)) return refuse(kRunInProgress);
     const std::int64_t found = find_symbol_feed(key, canonical_symbol_timeframe(timeframe));
     if (found < 0) {
         return refuse("no feed is installed for symbol '" + key + "' at timeframe '"
@@ -1227,7 +1235,20 @@ bool source::PineStrategyHost::set_symbol_feed_column(const std::string& key,
     if (n < 0 || static_cast<std::size_t>(n) != feed.bars.size() || (n > 0 && values == nullptr))
         return refuse("column '" + name + "' has " + std::to_string(n) + " values for "
                       + std::to_string(feed.bars.size()) + " bars");
-    NativeInstrumentColumn column{name, std::vector<double>(values, values + n)};
+    // The kernel's judgement of the name, here rather than at the next begin:
+    // a feed of the same key without bars carries it (the count is checked
+    // above, and no column value is refused).
+    NativeInstrumentFeed named;
+    named.instrument = feed.instrument;
+    named.tf = feed.tf;
+    named.columns.push_back(NativeInstrumentColumn{name, {}});
+    if (const auto judged = validate_native_instrument_feeds({named}); !judged) {
+        return refuse("column '" + name + "' refused (NativeRunSpecError "
+                      + std::to_string(static_cast<int>(judged.error)) + ", field "
+                      + std::to_string(static_cast<int>(judged.field)) + ")");
+    }
+    NativeInstrumentColumn column{name, n > 0 ? std::vector<double>(values, values + n)
+                                              : std::vector<double>{}};
     bool replaced = false;
     for (auto& existing : feed.columns) {
         if (existing.name != name) continue;
@@ -1249,6 +1270,7 @@ bool source::PineStrategyHost::set_symbol_facts(const std::string& key,
         last_error_ = "strategy_set_symbol_facts: " + why;
         return false;
     };
+    if (run_in_progress(*this)) return refuse(kRunInProgress);
     if (key.empty()) return refuse("empty symbol key");
     SymbolFacts candidate = symbol_facts_.count(key) ? symbol_facts_[key] : SymbolFacts{};
     if (field == "canonical") {
@@ -1287,23 +1309,22 @@ bool source::PineStrategyHost::set_recorded_series(const std::string& key,
         last_error_ = "strategy_set_recorded_series: " + why;
         return false;
     };
+    if (run_in_progress(*this)) return refuse(kRunInProgress);
     if (key.empty()) return refuse("empty key");
     if (n < 0 || (n > 0 && (chart_open_ms == nullptr || values == nullptr)))
         return refuse("invalid arrays");
-    if (n == 0) {
-        recorded_series_.erase(key);
-        refresh_symbol_data_digest();
-        last_error_.clear();
-        return true;
-    }
     for (int i = 1; i < n; ++i) {
         if (chart_open_ms[i] <= chart_open_ms[i - 1])
             return refuse("chart open times must be strictly increasing (row "
                           + std::to_string(i) + ")");
     }
+    // n == 0 is a request that returned na on every chart bar (a tape with a
+    // header only): installed, so every read is na rather than a failure.
     RecordedSeries series;
-    series.open_ms.assign(chart_open_ms, chart_open_ms + n);
-    series.values.assign(values, values + n);
+    if (n > 0) {
+        series.open_ms.assign(chart_open_ms, chart_open_ms + n);
+        series.values.assign(values, values + n);
+    }
     recorded_series_[key] = std::move(series);
     refresh_symbol_data_digest();
     last_error_.clear();

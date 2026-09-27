@@ -1401,10 +1401,10 @@ PF_API int strategy_set_native_security_feed(pf_strategy_t s,
  * setters, each behind its own feature probe. They are the Pine source
  * host's doors: a strategy that registers a request site for another
  * symbol reads its bars, its facts and its recorded request values from
- * what these installed before the run. A host with no source layer answers
- * each -1. Every array is copied; a later call replaces what an earlier one
- * installed under the same key. Historical runs only: stream_begin() fails
- * closed while a symbol feed or a recorded series is installed. */
+ * what these installed before the run; during a run each answers -1, as a
+ * host with no source layer does. Every array is copied; a later call
+ * replaces what an earlier one installed under the same key. Historical runs
+ * only: stream_begin() fails closed while a feed or a series is installed. */
 
 /** Feature probe for #strategy_set_symbol_feed. */
 #define PINEFORGE_HAS_SYMBOL_FEED_V1 1
@@ -1428,8 +1428,8 @@ PF_API int strategy_set_native_security_feed(pf_strategy_t s,
  *  with lookahead off reads the last bar that has closed by the chart bar's
  *  close, one with lookahead on the last bar that opened by its open, and the
  *  site's expression runs over every bar of the feed, in order. Installing a
- *  feed drops the columns of the feed it replaces. Pass @p n == 0 to clear
- *  the feed of (@p key, @p timeframe). Historical runs only: stream_begin()
+ *  feed drops the columns of the feed it replaces; @p n == 0 installs a feed
+ *  without bars, whose sites read na. Historical runs only: stream_begin()
  *  fails closed while a symbol feed is installed.
  *
  *  @return 0 on success, -1 for a null strategy, invalid input (the reason in
@@ -1446,8 +1446,8 @@ PF_API int strategy_set_symbol_feed(pf_strategy_t s, const char* key, const char
  *  a symbol feed is installed.
  *
  *  @return 0 on success, -1 for a null strategy, a feed that is not
- *          installed, a length that is not the feed's, an empty name, or a
- *          host with no source layer. */
+ *          installed, a length that is not the feed's, a name the kernel
+ *          refuses, or a host with no source layer. */
 PF_API int strategy_set_symbol_feed_column(pf_strategy_t s, const char* key,
                                            const char* timeframe, const char* name,
                                            const double* values, int n);
@@ -1474,7 +1474,7 @@ PF_API int strategy_set_symbol_facts(pf_strategy_t s, const char* key, const cha
 /** Copy a recorded request series: the values a request returned on the
  *  chart bars that opened at @p chart_open_ms (strictly increasing), keyed
  *  by the request key a generated strategy reads it under. On a chart bar
- *  with no row the series reads na. Pass @p n == 0 to clear @p key.
+ *  with no row the series reads na, and on every bar when @p n == 0.
  *  Historical runs only: stream_begin() fails closed while a recorded series
  *  is installed.
  *

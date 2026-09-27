@@ -43,16 +43,21 @@ chart day late, as TradingView sees it. The site's expression runs on **every**
 bar of the other symbol, in order, so its history offsets and indicators run
 over that symbol's own bars; inside it `bar_index`, `time_close` and
 `syminfo.*` are the other symbol's. `gaps_on` reads na on a chart bar that
-received no new bar. A symbol with no installed feed fails the run closed,
-naming the symbol and the timeframe; an invalid one reads na under
-`ignore_invalid_symbol`. Historical runs only: a stream refuses an installed
-symbol feed. The merge itself is the kernel's (`NativeRunSpec::instrument_feeds`,
+received no new bar; the generated `clear_security()` that blanks the site
+there also clears the expression's own history series, as it does for a
+same-symbol site, so under `gaps_on` an offset or an indicator inside the
+expression starts over after each such bar (a codegen limit, not the merge's).
+A symbol with no installed feed fails the run closed, naming the symbol and
+the timeframe; a feed installed with no bars reads na on every chart bar, and
+an invalid symbol reads na under `ignore_invalid_symbol`. Historical runs
+only: a stream refuses an installed symbol feed, and every setter answers -1
+while a run is in progress. The merge itself is the kernel's (`NativeRunSpec::instrument_feeds`,
 @ref native_engine) and holds for a native host too.
 
 `scripts/run_strategy.py` installs a probe's pinned feeds, facts and recorded
 request values (`strategy_set_recorded_series`, TradingView's per-chart-bar
-fundamentals) from `PINEFORGE_REQUESTS_ROOT/<probe>/requests.json` when that
-variable is set. Codegen's lowering of a foreign `request.security` onto this
+fundamentals; a tape with a header only is a request na on every chart bar)
+from `PINEFORGE_REQUESTS_ROOT/<probe>/requests.json` when that variable is set. Codegen's lowering of a foreign `request.security` onto this
 surface is a separate lane; until it lands, codegen still refuses a symbol that
 is not the chart's.
 

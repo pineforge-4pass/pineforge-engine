@@ -1515,7 +1515,7 @@ def validate_probe_requests(document, label: str = "requests manifest") -> list[
                 _requests_text(facts[field], f"{where}.facts.{field}", label, limit=128)
             mintick = facts["mintick"]
             if (isinstance(mintick, bool) or not isinstance(mintick, (int, float))
-                    or not math.isfinite(mintick) or mintick <= 0):
+                    or not _requests_finite(mintick) or mintick <= 0):
                 _requests_refuse(label, f"{where}.facts.mintick must be a positive finite number")
         elif entry["canonical"] is not None or entry["facts"] is not None:
             _requests_refuse(label, f"{where} is invalid, so its canonical and facts must be null")
@@ -1607,6 +1607,22 @@ def validate_probe_requests(document, label: str = "requests manifest") -> list[
     return files
 
 
+def _requests_finite(value) -> bool:
+    try:
+        return math.isfinite(value)
+    except OverflowError:  # an integer past a double
+        return False
+
+
+def _requests_stamp(text: str) -> int:
+    """An epoch-millisecond field: an integer an int64 holds (ctypes would
+    wrap a larger one silently)."""
+    value = int(text)
+    if not -(1 << 63) <= value < (1 << 63):
+        raise ValueError("stamp out of range")
+    return value
+
+
 def _requests_float(text: str, *, empty_is_nan: bool) -> float:
     if text == "" or text == "NaN":
         if empty_is_nan:
@@ -1639,8 +1655,8 @@ def _parse_requests_feed(data: bytes, columns: list, label: str, ref: str):
             _requests_refuse(label, f"feed {ref} row {row_index + 1} has {len(fields)} fields, "
                                     f"not {len(columns)}")
         try:
-            timestamp = int(fields[0])
-            closes_at = int(fields[1])
+            timestamp = _requests_stamp(fields[0])
+            closes_at = _requests_stamp(fields[1])
             open_, high, low, close = (_requests_float(v, empty_is_nan=False)
                                        for v in fields[2:6])
             volume = _requests_float(fields[6], empty_is_nan=True)
@@ -1681,7 +1697,7 @@ def _parse_requests_tape(data: bytes, label: str, ref: str):
             _requests_refuse(label, f"recorded series {ref} row {row_index + 1} has "
                                     f"{len(fields)} fields, not 2")
         try:
-            open_ms[row_index] = int(fields[0])
+            open_ms[row_index] = _requests_stamp(fields[0])
             values[row_index] = _requests_float(fields[1], empty_is_nan=True)
         except ValueError:
             _requests_refuse(label, f"recorded series {ref} row {row_index + 1} does not parse")
@@ -1709,6 +1725,20 @@ def load_probe_requests(strategy_dir: Path, environ=None) -> dict | None:
     if not manifest_path.is_file():
         return None
     label = str(manifest_path)
+    try:
+        return _read_probe_requests(probe_dir, manifest_path, slug, label)
+    except RequestsManifestError:
+        raise
+    except (OSError, ValueError, TypeError, OverflowError, RecursionError) as error:
+        # A manifest the schema cannot even walk -- JSON nested past the
+        # recursion limit, a number past a double, an unreadable file -- is
+        # refused by name like any other.
+        _requests_refuse(label, f"requests manifest cannot be read "
+                                f"({type(error).__name__}: {error})")
+
+
+def _read_probe_requests(probe_dir: Path, manifest_path: Path, slug: str,
+                         label: str) -> dict:
     manifest_bytes = manifest_path.read_bytes()
     try:
         document = json.loads(manifest_bytes.decode("utf-8"))

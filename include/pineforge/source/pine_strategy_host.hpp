@@ -702,6 +702,12 @@ protected:
                                 const std::string& requested_tf, const std::string& input_tf,
                                 bool lookahead_on, bool gaps_on = false,
                                 bool ignore_invalid_symbol = false);
+    // A string literal where input_tf stands, in five or six arguments, would
+    // bind the same-symbol overload above (a pointer converts to bool ahead of
+    // std::string) and read the symbol as its timeframe; it does not compile.
+    void register_security_eval(int sec_id, const std::string& symbol,
+                                const std::string& requested_tf, const char* input_tf,
+                                bool lookahead_on, bool gaps_on = false) = delete;
     // The named column (strategy_set_symbol_feed_column) of the context bar a
     // foreign site is evaluating, or last evaluated; NaN when the site, the
     // column or the bar is unknown. Generated payload code reads it.

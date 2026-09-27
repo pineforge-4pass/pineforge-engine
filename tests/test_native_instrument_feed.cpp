@@ -11,7 +11,9 @@
 //      chart reads a DXY-like 23-hour feed; every feed bar is handed over, the
 //      overnight ones on the next session's first bar, and the first chart bar
 //      sees the 55th bar of the context (index 54), the report's own pin --
-//      the same under a raw label partition, whose inputs carry no duration;
+//      the same under a raw label partition, whose inputs carry no duration,
+//      where a label outside the session reads the calendar's slot for it
+//      (which traded nothing: its last traded close is its open);
 //   2. a daily foreign bar that closes after the chart's close is seen one day
 //      late (a NYSE-like daily chart and a US10Y-like daily feed);
 //   3. a weekend carry under gaps = false, and na on the weekend under
@@ -159,6 +161,37 @@ void test_raw_label_partition_reads_the_calendar() {
         for (std::size_t j = 0; j < tolerant.reads.size() && j < strict.reads.size(); ++j) {
             CHECK(tolerant.reads[j].index[0] == strict.reads[j].index[0]);
         }
+    }
+}
+
+// A raw label outside the session -- a pre-market print under 09:30-16:00 --
+// sits in the calendar's slot for it, which traded nothing: its last traded
+// close is its open. The rule reads that slot like any other, so a series
+// merged by close sees the bars closed by 12:00Z and one merged by open the
+// bars opened by it, with no calendar guessed for the print itself.
+void test_raw_label_off_the_session() {
+    scenario = "raw label off the session";
+    std::vector<Bar> chart = nyse_quarter_chart({monday()});
+    Bar early = chart.front();
+    early.timestamp = monday() + 12 * kHour;  // 08:00 New York
+    chart.insert(chart.begin(), early);
+    const NativeInstrumentFeed feed = dxy_like_quarter_feed(monday(), monday() + kDay);
+    for (const bool lookahead : {false, true}) {
+        NativeRunSpec raw = nyse_spec("xsym-labels-off", "15");
+        raw.slot_label_policy = NativeSlotLabelPolicy::FeedTolerant;
+        raw.legacy_tolerance = NativeFeedTolerance::BatchStructuralBars;
+        raw.instrument_feeds.push_back(feed);
+        raw.subscriptions.push_back(instrument_series(feed, lookahead));
+        InstrumentHost host;
+        if (!run_batch(host, raw, chart)) return;
+        std::vector<std::int64_t> open, close;
+        chart_intervals(raw, chart, open, close);
+        CHECK(!open.empty() && open.front() == early.timestamp);
+        CHECK(!close.empty() && close.front() == early.timestamp);  // traded nothing
+        check_against_rule(host, 0, feed, chart, expected_exposure(feed, open, close, lookahead),
+                           false);
+        // 00:00Z..11:45Z closed by 12:00Z; 00:00Z..12:00Z opened by it.
+        CHECK(host.reads.front().index[0] == (lookahead ? 48 : 47));
     }
 }
 
@@ -695,6 +728,7 @@ void test_column_rides_with_its_bar() {
 int main() {
     test_foreign_session_differs();
     test_raw_label_partition_reads_the_calendar();
+    test_raw_label_off_the_session();
     test_daily_foreign_close_seen_a_day_late();
     test_weekend_carry_and_gaps();
     test_finer_feed_under_daily_lookahead();

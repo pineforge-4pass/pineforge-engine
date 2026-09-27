@@ -185,6 +185,18 @@ moves -- a declaring host's run is its empty-hook run, value for value -- and
 no C symbol is added: a C host declares both from its `pf_native_callbacks_v1`,
 a table without `on_bar_open` or `on_precommit`.
 
+R5 lane XSYM-D adds four `BacktestEngine` virtuals inside v19, beside
+`set_aux_security_feed`: `set_symbol_feed`, `set_symbol_feed_column`,
+`set_symbol_facts` and `set_recorded_series`, the source host's doors for
+`strategy_set_symbol_feed` and its three siblings. Like N5's
+`hash_host_extension` inside v18, they land without an epoch; they change the
+vtable, so a generated or native C++ object compiled against an earlier v19
+header is rebuilt with the library (the subclass contract is internal, as
+`engine.hpp` states). No value moves: the kernel's defaults answer false, and
+a run with no symbol data folds nothing new. The C side is append-only -- four
+functions, each behind its own `PINEFORGE_HAS_…_V1` probe -- so
+`PF_ABI_VERSION` stays 4.
+
 R5 gap lane P2c gave two TradingView-named public surfaces a generic primary
 spelling without an epoch, because an alias needs none, and lane REL10 removed
 the old spellings for 1.0 without one, because removing an alias moves

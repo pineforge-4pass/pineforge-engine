@@ -6,14 +6,20 @@
 //
 //   1. the recorded series: a chart bar whose open has a row reads that row's
 //      value exactly; every other chart bar reads na; a key nobody installed
-//      fails the read closed, naming the key; n == 0 clears a key;
+//      fails the read closed, naming the key; n == 0 installs a series that
+//      reads na on every bar (a request na throughout records no row);
 //   2. the four setters install through the C ABI on a Pine handle: a foreign
-//      site then reads the feed's bars, its column and its facts;
+//      site then reads the feed's bars, its column and its facts; a feed of
+//      n == 0 bars is installed, and its site reads na on every chart bar;
 //   3. every argument refusal answers -1 without installing anything, and the
 //      validation refusals name their cause in strategy_get_last_error;
 //   4. a host with no source layer answers each setter -1;
 //   5. strategy_stream_begin fails closed while a symbol feed or a recorded
-//      series is installed (the C ABI pin in scripts/check_c_abi_runtime.py).
+//      series is installed (the C ABI pin in scripts/check_c_abi_runtime.py),
+//      and while a run is in progress every setter answers -1, naming it;
+//   6. the symbol overload of register_security_eval cannot be spelled with a
+//      literal input_tf in five or six arguments, where it would bind the
+//      same-symbol overload instead.
 //
 // Synthetic values only: no TradingView bar enters the repository.
 
@@ -29,6 +35,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #if !defined(PINEFORGE_HAS_SYMBOL_FEED_V1) || !defined(PINEFORGE_HAS_SYMBOL_FEED_COLUMN_V1) \
@@ -160,15 +168,18 @@ void recorded_series_exact_on_event_bars() {
           == "request data: no recorded series is installed for key "
              "'earnings|TEST:F|estimate|-|gaps_on|lookahead_off'");
 
-    // n == 0 clears the key: the same read now fails closed.
-    Reader cleared;
-    prime(cleared);
-    CHECK(strategy_set_recorded_series(handle(cleared), kEarnings, open.data(), values.data(),
+    // n == 0 installs the key with no row -- a request that was na on every
+    // chart bar -- replacing the rows before it: every read is na, no failure.
+    Reader empty;
+    prime(empty);
+    CHECK(strategy_set_recorded_series(handle(empty), kEarnings, open.data(), values.data(),
                                        static_cast<int>(open.size())) == 0);
-    CHECK(strategy_set_recorded_series(handle(cleared), kEarnings, nullptr, nullptr, 0) == 0);
-    cleared.run(chart.data(), static_cast<int>(chart.size()), "D", "D", false, 4,
-                MagnifierDistribution::ENDPOINTS);
-    CHECK(cleared.last_error().find("no recorded series is installed") != std::string::npos);
+    CHECK(strategy_set_recorded_series(handle(empty), kEarnings, nullptr, nullptr, 0) == 0);
+    empty.run(chart.data(), static_cast<int>(chart.size()), "D", "D", false, 4,
+              MagnifierDistribution::ENDPOINTS);
+    CHECK(empty.last_error().empty());
+    CHECK(empty.series.size() == chart.size());
+    for (const double value : empty.series) CHECK(std::isnan(value));
 
     // Unordered open times are refused by name and install nothing.
     Reader refused;
@@ -227,6 +238,28 @@ void setters_install_a_foreign_site() {
         CHECK(reader.column[j] == carry[j - 1]);
         CHECK(reader.type[j] == "bond");
     }
+
+    // A symbol with no bars over the run: a feed of n == 0 is installed (a
+    // feed file with a header only), so its site reads na on every chart bar
+    // and the run does not fail as unfed; its column is the empty one.
+    Reader barren;
+    prime(barren);
+    barren.foreign = true;
+    barren.read_series = false;
+    const pf_strategy_t b = handle(barren);
+    CHECK(strategy_set_symbol_feed(b, "SYN:US10Y", "1D", bars.data(), closes.data(),
+                                   static_cast<int>(bars.size())) == 0);
+    CHECK(strategy_set_symbol_feed(b, "SYN:US10Y", "D", nullptr, nullptr, 0) == 0);
+    CHECK(strategy_set_symbol_feed_column(b, "SYN:US10Y", "D", "carry", nullptr, 0) == 0);
+    CHECK(strategy_set_symbol_facts(b, "SYN:US10Y", "valid", "true") == 0);
+    barren.run(chart.data(), static_cast<int>(chart.size()), "D", "D", false, 4,
+               MagnifierDistribution::ENDPOINTS);
+    CHECK(barren.last_error().empty());
+    CHECK(barren.close.size() == chart.size());
+    for (std::size_t j = 0; j < barren.close.size(); ++j) {
+        CHECK(std::isnan(barren.close[j]));
+        CHECK(std::isnan(barren.column[j]));
+    }
 }
 
 // ---- 3. argument refusals ------------------------------------------------
@@ -250,6 +283,18 @@ void argument_refusals() {
     CHECK(strategy_set_symbol_feed_column(s, "K", "15", nullptr, &value, 1) == -1);
     CHECK(strategy_set_symbol_feed_column(s, "K", "15", "c", &value, 1) == -1);
     CHECK(std::string(strategy_get_last_error(s)).find("no feed is installed") != std::string::npos);
+    // A column name the kernel would refuse at the next begin is refused here,
+    // by name, and installs nothing.
+    {
+        Reader named;
+        const pf_strategy_t h = handle(named);
+        CHECK(strategy_set_symbol_feed(h, "K", "15", &bar, &close, 1) == 0);
+        CHECK(strategy_set_symbol_feed_column(h, "K", "15", "\xff", &value, 1) == -1);
+        CHECK(std::string(strategy_get_last_error(h))
+                  .find("strategy_set_symbol_feed_column: column '\xff' refused (NativeRunSpecError")
+              == 0);
+        CHECK(strategy_set_symbol_feed_column(h, "K", "15", "c", &value, 1) == 0);
+    }
     CHECK(strategy_set_symbol_facts(nullptr, "K", "type", "index") == -1);
     CHECK(strategy_set_symbol_facts(s, "K", nullptr, "index") == -1);
     CHECK(strategy_set_symbol_facts(s, "K", "type", nullptr) == -1);
@@ -321,14 +366,56 @@ void streams_refuse_request_data() {
         CHECK(std::string(strategy_get_last_error(handle(reader))) == refusal);
     }
     {
-        // With nothing installed the same stream begins.
+        // With nothing installed the same stream begins; while it runs, every
+        // setter answers -1, naming the run, and installs nothing.
         Reader reader;
         prime(reader);
         reader.read_series = false;
-        CHECK(strategy_stream_begin(handle(reader), warmup.data(), static_cast<int>(warmup.size()),
+        const pf_strategy_t s = handle(reader);
+        CHECK(strategy_stream_begin(s, warmup.data(), static_cast<int>(warmup.size()),
                                     "D", "D") == 0);
+        CHECK(reader.native_state().kind == NativeLifecycleKind::Running);
+        const std::string running =
+            "a run is in progress; request data is installed before a run begins";
+        pf_bar_t bar{4.2, 4.3, 4.1, 4.25, 0.0, chart[0].timestamp - 15 * kHour};
+        const std::int64_t close = chart[0].timestamp - kHour;
+        const std::int64_t open = chart[1].timestamp;
+        const double value = 2.0;
+        CHECK(strategy_set_symbol_feed(s, "SYN:US10Y", "D", &bar, &close, 1) == -1);
+        CHECK(std::string(strategy_get_last_error(s)) == "strategy_set_symbol_feed: " + running);
+        CHECK(strategy_set_symbol_feed_column(s, "SYN:US10Y", "D", "c", &value, 1) == -1);
+        CHECK(std::string(strategy_get_last_error(s))
+              == "strategy_set_symbol_feed_column: " + running);
+        CHECK(strategy_set_symbol_facts(s, "SYN:US10Y", "type", "bond") == -1);
+        CHECK(std::string(strategy_get_last_error(s)) == "strategy_set_symbol_facts: " + running);
+        CHECK(strategy_set_recorded_series(s, kEarnings, &open, &value, 1) == -1);
+        CHECK(std::string(strategy_get_last_error(s))
+              == "strategy_set_recorded_series: " + running);
     }
 }
+
+// ---- 6. the symbol overload's literal trap --------------------------------
+
+// Binds<Host, T> answers whether the symbol overload, called on a Host with
+// its input_tf spelled as a T in five arguments, compiles (a member, so the
+// protected overload is in reach). A literal would otherwise bind the
+// same-symbol overload (const char* converts to bool, a standard conversion,
+// ahead of std::string's user-defined one) and read "SYN:US10Y" as the
+// requested timeframe; the host deletes that spelling.
+struct OverloadProbe : source::PineStrategyHost {
+    template <typename Host, typename T, typename = void>
+    struct Binds : std::false_type {};
+    template <typename Host, typename T>
+    struct Binds<Host, T, std::void_t<decltype(std::declval<Host&>().register_security_eval(
+                              0, "SYN:US10Y", "D", std::declval<T>(), false))>>
+        : std::true_type {};
+};
+static_assert(!OverloadProbe::Binds<OverloadProbe, const char (&)[2]>::value,
+              "a literal input_tf must not bind the same-symbol overload");
+static_assert(!OverloadProbe::Binds<OverloadProbe, const char*>::value,
+              "a C string input_tf must not bind the same-symbol overload");
+static_assert(OverloadProbe::Binds<OverloadProbe, const std::string&>::value,
+              "a std::string input_tf binds the symbol overload");
 
 }  // namespace
 

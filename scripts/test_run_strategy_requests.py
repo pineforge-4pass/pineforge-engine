@@ -280,6 +280,47 @@ class LoadRequests(unittest.TestCase):
             (root / SLUG / "requests.json").write_bytes(b"{not json")
             self._refused(root, "not valid UTF-8 JSON")
 
+    def test_unwalkable_manifests_are_refused_by_name(self) -> None:
+        # A mintick past a double, and JSON nested past the recursion limit,
+        # raise from the walk itself (OverflowError, RecursionError).
+        huge = _manifest()
+        huge["symbols"]["SYN:DXY"]["facts"]["mintick"] = 10 ** 400
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _materialize(root, huge)
+            self._refused(root, r"facts\.mintick must be a positive finite number")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / SLUG).mkdir()
+            (root / SLUG / "requests.json").write_bytes(b"[" * 100000 + b"]" * 100000)
+            self._refused(root, r"requests manifest cannot be read \(RecursionError")
+        # A stamp an int64 cannot hold, which ctypes would wrap silently.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bad = FEED_CSV.replace(b"1743984000000,1743984900000",
+                                   b"99999999999999999999,1743984900000")
+            doc = _manifest(feeds=[dict(_manifest()["feeds"][0], sha256=_sha(bad),
+                                        bytes=len(bad))])
+            _materialize(root, doc, files=(bad, TAPE_CSV, LIBRARY))
+            self._refused(root, "row 1 does not parse")
+
+    def test_a_header_only_tape_installs_as_a_series_without_rows(self) -> None:
+        # The workflow keeps a request that was na on every chart bar as a tape
+        # with a header only; it is installed (n == 0), never skipped, so the
+        # engine reads na on every bar instead of failing the key as unknown.
+        empty = b"chart_open_ms,value\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = _manifest(recorded=[dict(_manifest()["recorded"][0], sha256=_sha(empty))])
+            _materialize(root, doc, files=(FEED_CSV, empty, LIBRARY))
+            requests = load_probe_requests(Path("/build") / SLUG,
+                                           environ={REQUESTS_ROOT_ENV: str(root)})
+            self.assertEqual(requests["recorded"][0]["rows"], 0)
+            fake = _FakeLibrary()
+            _strategy(fake)._install_probe_requests(7, requests)
+            self.assertIn(("recorded", "earnings|NYSE:F|actual|-|gaps_on|lookahead_off", [], []),
+                          fake.events)
+
     def test_only_the_probes_own_directory_is_read(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
