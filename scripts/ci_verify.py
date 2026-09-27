@@ -290,7 +290,15 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #         tapes)
 # Both register in release too. 294 registered, 293 run: the WebSocket row
 # still skips on a system libcurl.
-KERNEL_MIN_TESTS = 293
+# 295 run = those 293 plus lane RUN-HARNESS's two source-free harness suites,
+# counted with ctest -N on the integrated tree (kernel profile, 296 registered):
+#   +1 test_run_strategy_magnifier (a script declaring use_bar_magnifier = true
+#      runs magnified over the runner-named finer feed)
+#   +1 test_run_strategy_mincontract (syminfo.mincontract is the lane
+#      template's quantity step)
+# Both register in release too. 296 registered, 295 run: the WebSocket row
+# still skips on a system libcurl.
+KERNEL_MIN_TESTS = 295
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -460,7 +468,36 @@ KERNEL_MIN_TESTS = 293
 #   +1 F7 test_session_break_open_bar_tape (aggregated bars that open inside a
 #         session break)
 # No release row skips, so 724 registered is 724 run.
-RELEASE_MIN_TESTS = 724
+# 748 = those 724 plus INT28's twenty-two source-bound rows and RUN-HARNESS's
+# two kernel-profile rows above, counted with ctest -N on the integrated tree
+# (the kernel profile builds none of the twenty-two):
+#   +1 TVDEF-DROPS        test_tvdef_drops_tapes
+#   +1 W3-ENG-EXIT-ALLOC  test_exit_queue_tapes (W3B-ENG-GRID adds its rows
+#                         to this one)
+#   +1 W3B-ENG-GRID       test_grid_close_tapes
+#   +1 W5-ENG-MARGIN-V6   test_margin_v6_tapes
+#   +1 W6-ENG-FILL-ORDER  test_same_point_entries_tapes (W6B-ENG-PAIRS adds
+#                         its rows to this one)
+#   +1 W8C-SECURITY       test_ltf_lookahead_calling_open_tapes
+#   +1 W8D-NOTRADES       test_coof_refill_waypoint_tapes
+#   +1 W8E-EXITS          test_ki62_same_id_cover
+#   +6 W4-ENG-POOC-SAMEPASS test_pooc_samepass_tapes,
+#                         test_global_exit_fill_size_tapes,
+#                         test_coof_reissued_exit_tapes,
+#                         test_coof_fill_bar_exit_tapes,
+#                         test_pooc_margin_call_sizing_tapes,
+#                         test_pooc_short_slip_admission_tapes
+#   +4 W8A-SIGSTATE-1     test_intraday_loss_open_fill_tape,
+#                         test_pyramiding_open_order_tape,
+#                         test_pooc_same_pass_close_tape,
+#                         test_limit_entry_affordability_tape
+#   +2 R1-CONSOLIDATE     test_same_bar_reissue_tapes,
+#                         test_open_fill_order_tapes
+#   +1 RUN-HARNESS        test_run_harness_window_tapes
+#   +1 INT28              test_int28_rule_compositions (two lanes' rules in
+#                         one run, on TradingView's tapes)
+# No release row skips, so 748 registered is 748 run.
+RELEASE_MIN_TESTS = 748
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
@@ -490,9 +527,11 @@ ADR_RULED_TEXTS_MIN = 40
 # TV-DEFAULTS +1, MAG-INTRABAR +3, PAR-ORDERS-3 +1, K-DRAWSNAP +3,
 # K-TA-DYNLEN +3), counted the same way; 701/701/710 with lane XSYM-D's four
 # rows of RELEASE_MIN_TESTS in each, counted the same way; 705/705/714 with
-# lane K-SESSION-WINDOWS' four, counted the same way on the rebased tree.
+# lane K-SESSION-WINDOWS' four, counted the same way on the rebased tree;
+# 729/729/738 at INT28, each with its twenty-four rows of RELEASE_MIN_TESTS,
+# counted the same way.
 # An excluded run must still discover at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 705, 'sanitizers': 705, 'native': 714}
+EXCLUDED_REGISTERED_MIN = {'debug': 729, 'sanitizers': 729, 'native': 738}
 # The ctest stage's bound. A full sanitizers run (push to main, a manual
 # dispatch, the maintainers' verification) ran out of its 30 minutes twice on
 # main's four-core runner before every row had finished, so it gets an hour; a
