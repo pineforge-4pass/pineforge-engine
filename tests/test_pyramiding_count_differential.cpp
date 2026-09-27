@@ -25,7 +25,7 @@
  *   P3  close one id of two, third id                 adapter = kernel = TV
  *   P4  resting limit entry, then a market add        adapter = kernel = TV
  *   P4b the resting limit fills after the market add  adapter = TV != kernel
- *   P6  three market entries on one flat bar          adapter != TV = kernel
+ *   P6  three market entries on one flat bar          adapter = kernel = TV
  *   P8  exit(qty) from B drains lot A (FIFO), third   adapter != TV = kernel
  *   P9  exit(qty) from A drains lot A, third id       adapter = kernel = TV
  *   P10 exit from B, default quantity, two lots open  adapter = kernel = TV
@@ -39,6 +39,9 @@
  * pending LIMIT entry no longer counts against the cap at a later call, and a
  * LIMIT entry the cap admitted fills over it (tests/fixtures/
  * pyramiding_open_order); before it the adapter refused L3 and M.
+ * P6 moved to TradingView with lane W5B-ENG-MARGIN-RESIDUAL's rule SB: the
+ * later market entries of a flat bar are refused at the fill once the book
+ * they meet holds the cap (tests/fixtures/margin_residual).
  */
 
 #include <pineforge/bar.hpp>

@@ -1,0 +1,16 @@
+{
+  "title": "W5B SB three same-bar default entries",
+  "slug": "w5b-sb-default-x3",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T21:22:24.246Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "888323d51fe9e0deed45898acf3b3671556a11ca97221014868d4a6970bf0ba3",
+  "tv_trades_sha256": "e3b0412226c3233aefdf58b099f3c3861faf85fcfddc84a6215b1ce5dd653ab5",
+  "tv_trades_rows": 96
+}

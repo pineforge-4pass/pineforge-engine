@@ -1,0 +1,22 @@
+//@version=6
+strategy("W5B SB three same-bar default entries", overlay=true, pyramiding=3)
+
+// Lane W5B-ENG-MARGIN-RESIDUAL, same-bar openings (the krunerr env_facts
+// shape). v6 defaults: 100000, 100 % of equity, margin 100 both ways. Every
+// 6 hours from flat the script places three same-side default MARKET entries
+// on one bar, each 100 % of the equity at that close. Even cells are long,
+// odd cells short. The book is flattened an hour later.
+int t0 = timestamp("UTC", 2025, 4, 2, 1, 0)
+int step = 6 * 60 * 60 * 1000
+int n = 20
+int rel = time - t0
+bool inRange = rel >= 0 and rel < n * step
+int phase = inRange ? rel % step : -1
+int cell = inRange ? int(math.floor(rel / step)) : -1
+bool isLong = cell % 2 == 0
+if phase == 0 and strategy.position_size == 0
+    strategy.entry("A", isLong ? strategy.long : strategy.short, comment="A")
+    strategy.entry("B", isLong ? strategy.long : strategy.short, comment="B")
+    strategy.entry("C", isLong ? strategy.long : strategy.short, comment="C")
+if phase == 60 * 60 * 1000
+    strategy.close_all(comment="cleanup")

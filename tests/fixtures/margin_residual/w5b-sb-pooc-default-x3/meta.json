@@ -1,0 +1,16 @@
+{
+  "title": "W5B SB three same-bar default entries, POOC",
+  "slug": "w5b-sb-pooc-default-x3",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T21:22:27.534Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "382c7caacc927f1f3bc1cc8ab39fbd2cd4845fdb0b996814d98db2531f559f76",
+  "tv_trades_sha256": "0a8635a1bb88f917c614994772c7d40575c6ea1f5631e60e398828aa17870394",
+  "tv_trades_rows": 120
+}

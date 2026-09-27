@@ -1761,6 +1761,11 @@ private:
     bool market_orders_pending_at_close(const NativeDecisionContext& context,
                                         std::uint64_t except_incarnation = 0) const;
     bool defer_rounded_pooc_short_margin_until_close(const Bar&) const;
+    std::optional<std::int64_t> flat_sibling_placement(std::size_t min_lots) const;
+    bool flat_sibling_book(const PlacementSnapshot&, std::int32_t interval_index,
+                           NativePathPhase phase) const;
+    bool flat_sibling_fill_follows(const PlacementSnapshot&,
+                                   const native_order::RequestHandle&) const;
     bool declined_reversal_at_open(const Bar&) const;
     bool schedule_margin_call_path(const Bar&, const NativeDecisionContext&);
     void defer_declined_reversal_exits_at_adverse(const Bar&,

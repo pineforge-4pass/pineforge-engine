@@ -962,6 +962,9 @@ list(APPEND TEST_SOURCES test_int28_rule_compositions)
 # all-in reversal entry belongs to that reversal
 # (tests/fixtures/reversal_close_all), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_reversal_close_all_tapes)
+# Lane W5B-ENG-MARGIN-RESIDUAL: the margin-family residuals at Pine v6's
+# defaults (tests/fixtures/margin_residual), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_margin_residual_tapes)
 
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
@@ -2534,6 +2537,13 @@ endif()
 if(TARGET test_reversal_close_all_tapes)
     target_compile_definitions(test_reversal_close_all_tapes PRIVATE
         PINEFORGE_REVERSAL_CLOSE_ALL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/reversal_close_all")
+endif()
+
+# Lane W5B-ENG-MARGIN-RESIDUAL reads its TradingView tapes from the fixture
+# tree; source-bound.
+if(TARGET test_margin_residual_tapes)
+    target_compile_definitions(test_margin_residual_tapes PRIVATE
+        PINEFORGE_MARGIN_RESIDUAL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_residual")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape

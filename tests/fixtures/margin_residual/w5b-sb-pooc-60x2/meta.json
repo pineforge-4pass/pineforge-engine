@@ -1,0 +1,16 @@
+{
+  "title": "W5B SB two same-bar 60% entries, POOC",
+  "slug": "w5b-sb-pooc-60x2",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T21:22:21.317Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "58953b2ce23b6c7381c3e45ff3d874b46dd2208b5966ee90fab2a06653fc9d06",
+  "tv_trades_sha256": "7493ebfddfb2e12d79f768ca2ab1362b30fc71a6f805000841238a10c6084b85",
+  "tv_trades_rows": 240
+}

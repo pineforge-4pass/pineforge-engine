@@ -1,0 +1,16 @@
+{
+  "title": "W5B SB two same-bar 60% entries, market",
+  "slug": "w5b-sb-market-60x2",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T21:22:18.299Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "657f709f7ec26f782126a08ecf8bbef83aca74f5fa273444544eec4cee865c9e",
+  "tv_trades_sha256": "b9ba86de453f664d08b724a9fffaad31b3e540dd17f3b6ecdf24c1e0727cf9a9",
+  "tv_trades_rows": 240
+}

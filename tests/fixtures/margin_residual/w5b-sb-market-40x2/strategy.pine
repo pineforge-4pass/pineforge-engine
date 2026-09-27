@@ -1,0 +1,24 @@
+//@version=6
+strategy("W5B SB two same-bar 40% entries, market", overlay=true, pyramiding=2)
+
+// Lane W5B-ENG-MARGIN-RESIDUAL, same-bar openings. v6 defaults: 100000,
+// margin 100 both ways. Every 3 hours from flat the script places two
+// same-side MARKET entries on one bar, each of explicit quantity 60 % of
+// strategy.equity at that close: each fits the equity alone, together they
+// need 120 %. Both are placed while flat. Does TradingView fill both at the
+// next open and margin-call the book there, or refuse the second? Even cells
+// are long, odd cells short. The book is flattened an hour later.
+int t0 = timestamp("UTC", 2025, 4, 2, 0, 0)
+int step = 3 * 60 * 60 * 1000
+int n = 40
+int rel = time - t0
+bool inRange = rel >= 0 and rel < n * step
+int phase = inRange ? rel % step : -1
+int cell = inRange ? int(math.floor(rel / step)) : -1
+bool isLong = cell % 2 == 0
+float q = math.floor(strategy.equity * 0.4 / close * 10000) / 10000
+if phase == 0 and strategy.position_size == 0
+    strategy.entry("A", isLong ? strategy.long : strategy.short, qty=q, comment="A")
+    strategy.entry("B", isLong ? strategy.long : strategy.short, qty=q, comment="B")
+if phase == 60 * 60 * 1000
+    strategy.close_all(comment="cleanup")

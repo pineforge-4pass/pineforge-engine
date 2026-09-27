@@ -25,7 +25,7 @@ NYSE:F 15), byte-identical: `strategy.pine`, `tv_trades.csv` (UTC+8),
 | P3 | close one id of two, third id | fills | = | = |
 | P4 | resting far limit L2, then a market add L3 | L3 fills | refused L3 (= since W8A-SIGSTATE-1 R-B) | = |
 | P4b | the resting limit fills after the add | L, L3 AND L2 (3 lots) | L, L2 (= since W8A-SIGSTATE-1 R-B) | L, L3 |
-| P6 | three market entries on one flat bar | 2 fill | 3 fill | = |
+| P6 | three market entries on one flat bar | 2 fill | = (3 fill until R5 lane W5B-ENG-MARGIN-RESIDUAL) | = |
 | P8 | `exit(qty)` from B stops out lot A (FIFO), third id | fills | refuses | = |
 | P9 | `exit(qty)` from A stops out lot A, third id | fills | = | = |
 | P10 | `exit` from B, default quantity, lots A+B | closes 100 (A) | closes 200 (100 since R5 lane H-THIN) | = (Reduce 100) |
@@ -44,11 +44,13 @@ kernel's `max_open_lots` (surviving + new lots at every match) agrees on 14 of
 15, all but P4b; the adapter's command-time count on 8 of 15. P10 is not a
 pyramiding question (the quantity a default `strategy.exit(from_entry)` closes
 under FIFO); it was pinned as a separate recorded divergence and R5 lane
-H-THIN fixed it (the exit reserves its entry's own quantity; 9 of 15). Lane
+H-THIN fixed it (the exit reserves its entry's own quantity; 9 of 15 then). Lane
 W8A-SIGSTATE-1's rule R-B moved P4, P4b and D1 to TradingView: a pending
 LIMIT entry no longer counts against the cap at a later call, and a LIMIT
 entry the cap admitted fills over it (`tests/fixtures/pyramiding_open_order`;
-12 of 15 now).
+12 of 15 then). R5 lane W5B-ENG-MARGIN-RESIDUAL made P6 the adapter's too: the
+later entries of a flat bar are refused at the fill once the book they meet
+holds the cap (13 of 15 now).
 
 R5 lane H-THIN measured the lowering the fifteen suggest -- `project()`
 declaring `max_open_lots = max(1, pyramiding)` -- on the corpus: with the
