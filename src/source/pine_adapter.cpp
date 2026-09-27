@@ -7138,6 +7138,31 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                                      staged_.quantity_grid ? *staged_.quantity_grid : 0.0)) {
         return;
     }
+    // TradingView checks a default-quantity LIMIT entry that opens from flat
+    // at every call, against the calling bar's close: a call whose quantity
+    // costs more than the equity there is rejected, and it takes the resting
+    // order of that id with it, however affordable the order's own level is
+    // (lane W8A-SIGSTATE-1 R3, tests/fixtures/limit_entry_affordability).
+    // The fill-time check still applies to an order the call admitted.
+    if (default_sized && config_.default_qty_type == static_cast<int>(QtyType::FIXED)
+        && current == 0.0 && finite_positive(limit_price) && std::isnan(stop_price)
+        && finite_positive(snapshot.sizing.mark)) {
+        const double margin = is_long ? config_.margin_long : config_.margin_short;
+        const double signal = nearest_tick(snapshot.sizing.mark, staged_.syminfo.mintick);
+        const double required = std::abs(config_.default_qty_value) * signal
+            * staged_.syminfo.pointvalue * snapshot.sizing.fx * margin / 100.0;
+        const double epsilon = std::max(1e-9, std::abs(snapshot.sizing.equity) * 1e-12);
+        if (margin > 0.0 && (!std::isfinite(required) || !std::isfinite(snapshot.sizing.equity)
+                             || required > snapshot.sizing.equity + epsilon)) {
+            if (const auto prior = live_by_source_key_.find(key_for(id));
+                prior != live_by_source_key_.end()) {
+                const auto handle = prior->second;
+                const auto result = require_host().cancel(handle);
+                if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
+            }
+            return;
+        }
+    }
     if (default_stop_scope && finite_positive(snapshot.sizing.frozen_units)
         && finite_positive(snapshot.sizing.mark)) {
         const double margin = is_long ? config_.margin_long : config_.margin_short;

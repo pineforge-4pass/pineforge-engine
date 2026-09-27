@@ -1,0 +1,16 @@
+{
+  "title": "w8a btc15 limafford",
+  "slug": "w8a-btc15-limafford",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T16:27:20.682Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "0c897377d0db1c8a7b3a631f597a47fba775138fb774b5b9193937ebef65ac6d",
+  "tv_trades_sha256": "15057f1d604c7fb9c18699742d1f16186efb5f3d2179f9a392a74511eeb52c30",
+  "tv_trades_rows": 4
+}

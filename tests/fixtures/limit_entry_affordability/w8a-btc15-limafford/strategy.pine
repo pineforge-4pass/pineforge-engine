@@ -1,0 +1,49 @@
+//@version=6
+// W8A-SIGSTATE-1 btc15 synthetic: affordability of a flat default-FIXED LIMIT entry.
+// Equity 95000, qty 1 BTC, no commission, margin 100 %. Every cell is flat when it starts.
+//  E  sell limit ABOVE the market, placed once on a bar whose close is affordable,
+//     limit notional (95250) above equity; touched later.
+//  A  buy limit below the market re-issued on every bar 18:00..19:45; first issue affordable
+//     at its close, LAST issue unaffordable at its close (95291 > equity); touched at 21:45.
+//  C  buy limit placed ONCE on an affordable close; later closes exceed equity (no re-issue);
+//     touched at 17:00.
+//  B  control: buy limit issued on two affordable closes, every close affordable until the touch.
+strategy("w8a btc15 limafford", overlay=true, initial_capital=95000,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     margin_long=100, margin_short=100)
+
+E0 = timestamp("UTC", 2025, 4, 25, 12, 15)
+ET = timestamp("UTC", 2025, 4, 25, 14, 0)
+A0 = timestamp("UTC", 2025, 4, 25, 18, 0)
+A1 = timestamp("UTC", 2025, 4, 25, 19, 45)
+AT = timestamp("UTC", 2025, 4, 25, 21, 45)
+C0 = timestamp("UTC", 2025, 4, 29, 14, 15)
+CT = timestamp("UTC", 2025, 4, 29, 17, 0)
+B0 = timestamp("UTC", 2025, 4, 29, 22, 0)
+B1 = timestamp("UTC", 2025, 4, 29, 22, 15)
+BT = timestamp("UTC", 2025, 4, 29, 23, 0)
+
+unaff = close > strategy.equity
+
+if time == E0
+    strategy.entry("E", strategy.short, limit=95250.0, comment=unaff ? "E-u" : "E-a")
+if time >= A0 and time <= A1
+    strategy.entry("A", strategy.long, limit=94640.0, comment=unaff ? "A-u" : "A-a")
+if time == C0
+    strategy.entry("C", strategy.long, limit=94680.0, comment=unaff ? "C-u" : "C-a")
+if time == B0 or time == B1
+    strategy.entry("B", strategy.long, limit=93980.01, comment=unaff ? "B-u" : "B-a")
+
+// every cell's order is withdrawn at the close of its touch bar (a fill there already happened)
+if time == ET
+    strategy.cancel("E")
+if time == AT
+    strategy.cancel("A")
+if time == CT
+    strategy.cancel("C")
+if time == BT
+    strategy.cancel("B")
+
+// flatten on the bar after any fill
+if strategy.position_size != 0
+    strategy.close_all(comment="x")

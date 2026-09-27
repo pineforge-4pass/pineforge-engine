@@ -934,6 +934,11 @@ list(APPEND TEST_SOURCES test_pyramiding_open_order_tape)
 # TradingView's tape.
 list(APPEND TEST_SOURCES test_pooc_same_pass_close_tape)
 
+# Lane W8A-SIGSTATE-1 R3: a default-quantity LIMIT entry opening from flat is
+# checked against the calling close at every call
+# (tests/fixtures/limit_entry_affordability), on TradingView's tape.
+list(APPEND TEST_SOURCES test_limit_entry_affordability_tape)
+
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bare_host_contracts)
@@ -2452,6 +2457,13 @@ endif()
 if(TARGET test_pooc_same_pass_close_tape)
     target_compile_definitions(test_pooc_same_pass_close_tape PRIVATE
         PINEFORGE_POOC_SAME_PASS_CLOSE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_same_pass_close")
+endif()
+
+# Lane W8A-SIGSTATE-1 R3 reads its TradingView tape and 15m bars from the
+# fixture tree; source-bound.
+if(TARGET test_limit_entry_affordability_tape)
+    target_compile_definitions(test_limit_entry_affordability_tape PRIVATE
+        PINEFORGE_LIMIT_ENTRY_AFFORDABILITY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/limit_entry_affordability")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape
