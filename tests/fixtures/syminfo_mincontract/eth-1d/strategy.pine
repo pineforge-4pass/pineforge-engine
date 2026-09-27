@@ -1,0 +1,20 @@
+//@version=6
+strategy("pf-w2-mincontract-readout", overlay = true, initial_capital = 10000000000,
+     default_qty_type = strategy.fixed, default_qty_value = 1,
+     commission_value = 0, slippage = 0, pyramiding = 1)
+
+// Read-out of TradingView's syminfo facts on the chart it runs on: the entry's
+// quantity is 1000 * syminfo.mincontract, and the entry comment spells the
+// numeric facts; the exit comment spells the identity.
+numerics = "mincontract=" + str.tostring(syminfo.mincontract) +
+     "|mintick=" + str.tostring(syminfo.mintick) +
+     "|pointvalue=" + str.tostring(syminfo.pointvalue) +
+     "|pricescale=" + str.tostring(syminfo.pricescale) +
+     "|minmove=" + str.tostring(syminfo.minmove)
+identity = "tickerid=" + syminfo.tickerid + "|type=" + syminfo.type +
+     "|currency=" + syminfo.currency + "|basecurrency=" + syminfo.basecurrency
+
+if bar_index == 1
+    strategy.entry("mc", strategy.long, qty = syminfo.mincontract * 1000, comment = numerics)
+if bar_index == 2
+    strategy.close("mc", comment = identity)

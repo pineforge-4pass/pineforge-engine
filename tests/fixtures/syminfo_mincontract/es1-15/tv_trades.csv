@@ -1,0 +1,3 @@
+﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)
+1,Exit long,2025-04-01 08:45,"tickerid=={""settlement-as-close"":true,""symbol"":""CME_MINI:ES1!""}|type=futures|currency=USD|basecurrency=",5627.25,1000,281612500,-250000,-0.09,0,0,0.00,-350000,-0.12,-250000,0.00,1
+1,Entry long,2025-04-01 08:30,mincontract=1|mintick=0.25|pointvalue=50|pricescale=100|minmove=25,5632.25,1000,281612500,-250000,-0.09,0,0,0.00,-350000,-0.12,-250000,0.00,1

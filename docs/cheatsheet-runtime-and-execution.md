@@ -472,6 +472,8 @@ Audited gaps a forward/real-time executor must know (beyond per-order fills).
   `use_bar_magnifier = true`) runs on the 1m feed named by
   `PINEFORGE_RUN_MAGNIFIER_FEED` with the magnifier on, on an intraday chart
   coarser than 1m; on a daily or coarser chart it prints `declared-not-run`.
+- `PINEFORGE_VERIFY_QTY_STEP` in the environment (the lane template's quantity
+  step) declares `syminfo.mincontract` unless `inputs.json` declares its own.
 
 ## ⚠️ Possible bug (flagged, not confirmed)
 

@@ -1,0 +1,16 @@
+{
+  "title": "pf-w2-mincontract-readout",
+  "slug": "pf-w2-mincontract-xauusd-15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T18:54:24.056Z",
+  "chart": {
+    "symbol": "OANDA:XAUUSD",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-10"
+  },
+  "pine_sha256": "c391930153b139e78b55e29ee0acae81997201186be1b0d4986e63d153694e63",
+  "tv_trades_sha256": "9cde55c211cf0baf1e9e8c30326f4df7203a842a01c100fe4109aebf0c017ab0",
+  "tv_trades_rows": 2
+}

@@ -1,0 +1,3 @@
+﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)
+1,Exit long,2025-04-07 05:00,tickerid=OANDA:XAUUSD|type=cfd|currency=USD|basecurrency=,3030.77,10,31145.2,-837.5,-2.69,0,222.55,0.71,-988.7,-3.17,-837.5,0.00,1
+1,Entry long,2025-04-04 05:00,mincontract=0.01|mintick=0.001|pointvalue=1|pricescale=1000|minmove=1,3114.52,10,31145.2,-837.5,-2.69,0,222.55,0.71,-988.7,-3.17,-837.5,0.00,1

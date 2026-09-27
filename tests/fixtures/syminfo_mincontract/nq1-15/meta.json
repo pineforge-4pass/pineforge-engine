@@ -1,0 +1,16 @@
+{
+  "title": "pf-w2-mincontract-readout",
+  "slug": "pf-w2-mincontract-nq1-15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T18:54:04.528Z",
+  "chart": {
+    "symbol": "CME_MINI:NQ1!",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-10"
+  },
+  "pine_sha256": "c391930153b139e78b55e29ee0acae81997201186be1b0d4986e63d153694e63",
+  "tv_trades_sha256": "a12dfc0dd10a645c40031181d9e0a27ef2ea7baa553a3fb00f8652c84bad8384",
+  "tv_trades_rows": 2
+}

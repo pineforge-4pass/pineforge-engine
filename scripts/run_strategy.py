@@ -1119,8 +1119,13 @@ def _load_account_currency_fx_daily_closes(path: Path):
     )
 
 
+# The lane template's quantity step, as the case runner hands it to every
+# case of a lane that declares one (inputs_run_kwargs: syminfo.mincontract).
+LANE_QTY_STEP_ENV = "PINEFORGE_VERIFY_QTY_STEP"
+
+
 def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
-                      default_chart_tz: str = "") -> tuple[Path, dict]:
+                      default_chart_tz: str = "", env=None) -> tuple[Path, dict]:
     """Resolve per-probe ``inputs.json`` metadata into the OHLCV path and the
     keyword arguments for :meth:`Strategy.run`.
 
@@ -1131,7 +1136,10 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
     ``scripts/crossvalidate_metrics.py`` both consume it, so a probe that
     runs under one harness runs identically under the other. ``params``
     itself must still be passed to ``Strategy.run(params=...)`` so Pine
-    ``input()`` values reach ``strategy_set_input``.
+    ``input()`` values reach ``strategy_set_input``. ``env`` (default
+    ``os.environ``) supplies the one lane fact the case runner hands every
+    run, the lane template's quantity step (``LANE_QTY_STEP_ENV``), which
+    becomes ``syminfo.mincontract``.
     """
     if not isinstance(params, dict):
         params = {}
@@ -1250,6 +1258,25 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
             syminfo_metadata = {}
         syminfo_metadata = dict(syminfo_metadata)
         syminfo_metadata["qty_step"] = qty_step
+    # syminfo.mincontract: on every campaign symbol TradingView's smallest
+    # contract IS its quantity step (tests/fixtures/syminfo_mincontract: 18
+    # lab tv read-outs, one per lane -- BINANCE:ETHUSDT.P 0.0001,
+    # BINANCE:BTCUSDT 0.00001, OANDA:EURUSD / OANDA:XAUUSD 0.01, NASDAQ:AAPL,
+    # NYSE:F, NSE:NIFTY, CME_MINI:ES1! and NQ1! 1). The fact is the lane
+    # template's: its environment's PINEFORGE_VERIFY_QTY_STEP
+    # (lane_input_templates), which the case runner sets for every case of
+    # a lane that declares it and every verifier child inherits. Only a
+    # declared step counts: the Lab substitutes ETHUSDT.P's 0.0001 as
+    # runtime_overrides.qty_step where a lane declares none (the two ETH 15m
+    # templates), and records that value as its default, not as lane
+    # evidence. Generated code reads the fact through
+    # get_syminfo_metadata("mincontract") once codegen lowers it so (W2's
+    # F06, cg/w2-trio 90ab04d; codegen d7e095f still lowers na); a probe that
+    # declares its own keeps it.
+    lane_step = _num((os.environ if env is None else env).get(LANE_QTY_STEP_ENV))
+    if lane_step is not None and math.isfinite(lane_step) and lane_step > 0.0:
+        syminfo_metadata = dict(syminfo_metadata or {})
+        syminfo_metadata.setdefault("mincontract", lane_step)
 
     fx_series = None
     fx_source_sha256 = None
@@ -3729,10 +3756,10 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
         if not str(k).startswith("tv_") and k not in _VALIDATION_META_KEYS
     }
     # syminfo from runtime_overrides. apply_syminfo covers mintick/pointvalue/
-    # timezone/session; syminfo_metadata (fundamentals) is NOT covered — 0 corpus
-    # probes use it (documented gap) -- nor is a declared bar magnifier (the
-    # image runs generated.cpp, so the library's export is never read), which
-    # main() says when the environment names a magnifier feed.
+    # timezone/session; syminfo_metadata (fundamentals, and the lane's
+    # syminfo.mincontract) is NOT covered, nor is a declared bar magnifier (the
+    # image runs generated.cpp, so the library's export is never read) --
+    # documented gaps, which main() prints when the environment names either.
     syminfo: dict = {}
     if run_kwargs.get("syminfo_timezone"):
         syminfo["timezone"] = run_kwargs["syminfo_timezone"]
@@ -4027,9 +4054,10 @@ def main() -> int:
                 "error: --runner docker does not support --dump-book; "
                 "use --runner ctypes with a freshly built strategy library.")
         strat = None
-        if os.environ.get(MAGNIFIER_FEED_ENV):
-            print("note: --runner docker does not honour a declared bar magnifier; "
-                  "use --runner ctypes", file=sys.stderr)
+        if os.environ.get(MAGNIFIER_FEED_ENV) or os.environ.get(LANE_QTY_STEP_ENV):
+            print("note: --runner docker honours neither a declared bar magnifier nor "
+                  "syminfo_metadata (syminfo.mincontract); use --runner ctypes",
+                  file=sys.stderr)
 
         def run_engine(start_ms):
             return _run_via_docker(strategy_dir, ohlcv_path, params, run_kwargs,

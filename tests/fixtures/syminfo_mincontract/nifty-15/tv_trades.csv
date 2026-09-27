@@ -1,0 +1,3 @@
+﻿Trade number,Type,Date and time,Signal,Price NONE,Size (qty),Size (value),Net PnL NONE,Return %,Commission NONE,Favorable excursion NONE,Favorable excursion %,Adverse excursion NONE,Adverse excursion %,Cumulative PnL NONE,Cumulative PnL %,Duration (bars)
+1,Exit long,2025-04-01 12:30,tickerid=NSE_DLY:NIFTY|type=index|currency=NONE|basecurrency=,23513.9,1000,23544450,-30550,-0.13,0,8850,0.04,-51700,-0.22,-30550,0.00,1
+1,Entry long,2025-04-01 12:15,mincontract=1|mintick=0.05|pointvalue=1|pricescale=100|minmove=5,23544.45,1000,23544450,-30550,-0.13,0,8850,0.04,-51700,-0.22,-30550,0.00,1

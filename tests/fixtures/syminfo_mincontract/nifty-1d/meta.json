@@ -1,0 +1,16 @@
+{
+  "title": "pf-w2-mincontract-readout",
+  "slug": "pf-w2-mincontract-nifty-1d",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T18:54:15.560Z",
+  "chart": {
+    "symbol": "NSE:NIFTY",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2025-04-10"
+  },
+  "pine_sha256": "c391930153b139e78b55e29ee0acae81997201186be1b0d4986e63d153694e63",
+  "tv_trades_sha256": "666b9b308c54263e3f08fd9b66ec0470a23c20e235b8e08722a142a75b3df692",
+  "tv_trades_rows": 2
+}

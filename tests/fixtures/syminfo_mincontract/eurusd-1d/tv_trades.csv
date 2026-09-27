@@ -1,0 +1,3 @@
+﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)
+1,Exit long,2025-04-07 05:00,tickerid=OANDA:EURUSD|type=forex|currency=USD|basecurrency=EUR,1.08926,10,11.0526,-0.16,-1.45,0,0.0552,0.50,-0.16,-1.45,-0.16,0.00,1
+1,Entry long,2025-04-04 05:00,mincontract=0.01|mintick=0.00001|pointvalue=1|pricescale=100000|minmove=1,1.10526,10,11.0526,-0.16,-1.45,0,0.0552,0.50,-0.16,-1.45,-0.16,0.00,1

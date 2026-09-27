@@ -1,0 +1,3 @@
+﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)
+1,Exit long,2025-04-01 08:45,tickerid=BINANCE:BTCUSDT|type=crypto|currency=USDT|basecurrency=BTC,82727.18,0.01,826.4,0.8718,0.11,0,0.9509,0.12,-0.9673,-0.12,0.8718,0.00,1
+1,Entry long,2025-04-01 08:30,mincontract=0.00001|mintick=0.01|pointvalue=1|pricescale=100|minmove=1,82640,0.01,826.4,0.8718,0.11,0,0.9509,0.12,-0.9673,-0.12,0.8718,0.00,1
