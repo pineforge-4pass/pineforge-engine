@@ -56,6 +56,9 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.d(value.qty_percent); f.b(value.is_long); f.b(value.immediately);
     f.b(value.opening); f.b(value.deferred_cohort);
     f.b(value.reservation_deferred_to_pending_entry);
+    // Folded only when set, so a run that never issues a void exit keeps
+    // its digest (lane W3B-ENG-GRID).
+    if (value.void_issue) f.b(true);
     f.b(value.fixed_exit_reservation);
     f.b(value.frozen_market_instruction);
     f.d(value.frozen_market_own_units); f.d(value.frozen_market_transaction_units);

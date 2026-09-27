@@ -1,0 +1,16 @@
+{
+  "title": "W3 F05 s12 POOC stop cancelled after an hour",
+  "slug": "w3f05-s12-pooc-qty-cancel-first",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:44:19.526Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "6a010215c65c9f10cf61896ef00429ae9a382a0253cf7c30fb0f2dca3d813d15",
+  "tv_trades_sha256": "8b17c0bef581d0bce9a9777481017f1b021027eef733af856dde9c1c04a90bde",
+  "tv_trades_rows": 10
+}

@@ -73,6 +73,36 @@ marketable against the new side for the next open instead, off the book; the
 engine released them there and closed the short (population:
 `job-2436-williamcleves-double-tap` on OANDA:XAUUSD 15, 2026-01-16).
 
+## An exit whose entry neither exists nor rests is void (lane W3B-ENG-GRID)
+
+TradingView voids a `strategy.exit(from_entry = "L")` when the call runs while
+entry L has neither an open trade nor an entry order waiting to fill: the
+exit does not wait for a later entry of that id (s18 and s21 above void it on
+the entry's own bar, before the entry call). The engine kept such an exit in
+its book and filled it against the next position L opened.
+
+| tape | TradingView | tv_trades.csv sha256 |
+|---|---|---|
+| `w3f05-s17-pooc-qty-exit-before-entry` | `process_orders_on_close`; B (that bar's `close + 6`) issued once, on the bar before each entry (23:45), and never again: void (the engine filled B at 00:15) | `8396c7e265cd69e1549265167cc84df57fe1391c37ed4c20631d18aa5ace0646` |
+| `w3f05-s19-exit-before-entry-nextopen` | s17 without `process_orders_on_close`: void (the engine filled B at the entry's open) | `56b1bb4e8d41a48253d2c798ab878fcce5d2441cb7a16f2f9afede101675b508` |
+| `w3f05-s12-pooc-qty-cancel-first` | `process_orders_on_close`; stop A (`ref - 40`) then target B (`ref + 12`) on every bar from the first entry, flat or not; A cancelled and no longer issued an hour after each entry. B re-issued while flat is void, so on the next entry bar A, issued first, holds the queue front: A stops out inside the hour on 04-09, B fills after A's cancel on the other days (the engine kept B from the flat bars, ahead of A: no stop on 04-09, B at 00:15 on 04-14) | `8b17c0bef581d0bce9a9777481017f1b021027eef733af856dde9c1c04a90bde` |
+| `w3bf05-v1-void-call-over-standing-exit` | four cells, one a day, each filled at the next open and ended by a `close_all`. 04-08: X (limit 1570) issued while limit entry L rests, L cancelled, X re-issued (limit 1600) while void, L entered at market: X fills at 1570, the void call changed nothing. 04-09: the same (X stop 1440) without the void call: X fills at 1440. 04-10: X (stop 1635) issued behind a market L, the position closed, X re-issued (stop 1620) while void, L entered again: X never fills (the engine filled 1620 before the fix). 04-11: the same (X limit 1545) without the void call: X never fills | `735e7f66cdf78ec0474e83511d67c288ef0acc68337a4a65c202a999d5fb3aa2` |
+
+A void call places nothing TradingView acts on (v1, 04-10), and it leaves an
+exit of the same id, issued while the entry rested or was open, as it is (v1,
+04-08). The engine still places the void call's request -- so every later
+request keeps its incarnation -- but it reserves nothing, holds no place in
+the exit queue, and the entry's opening withdraws it.
+
+Open finding (not this lane's rule): the engine withdraws an exit with its
+resting entry when `strategy.cancel` cancels that entry, where TradingView
+keeps it for the next entry of that id (v1, 04-08 and 04-09: no X fill in the
+engine). While it does, a void call over an exit the engine still holds for
+its pair keeps its former effect, a re-issue of that exit, rather than
+TradingView's 04-08 rule. `tests/test_exit_queue_tapes.cpp` compares v1's
+engine trades from 04-10 on and reads the first two cells off TradingView's
+rows only.
+
 ## Bars
 
 `bars.inc` holds the replayed bars, 2025-04-07 00:00 .. 2025-04-14 12:00 UTC,

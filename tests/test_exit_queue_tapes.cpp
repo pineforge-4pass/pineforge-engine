@@ -189,6 +189,10 @@ enum class Probe {
     ExitBeforeEntryCall,    // s18 / s21: B once on the entry bar, before the entry
     PendingLimitParent,     // s20: B once while its limit entry rests
     TwoParentReversal,      // r1: two short entries reverse a long that re-issues XL
+    ExitBeforeEntryBar,     // s17 / s19: B once, on the bar before each entry
+    CancelFirst,            // s12: A then B every bar held; A cancelled after an hour
+    StandingExit,           // v1: a void call over an exit issued while its entry was
+                            //     resting or open
 };
 
 bool entry_cell(std::int64_t t) {
@@ -198,6 +202,11 @@ bool entry_cell(std::int64_t t) {
 bool next_cell(std::int64_t t) {
     return t == at(8, 0, 15) || t == at(9, 0, 15) || t == at(10, 0, 15) || t == at(11, 0, 15)
         || t == at(14, 0, 15);
+}
+// s17 / s19 issue their exit on the bar before each entry cell.
+bool pre_cell(std::int64_t t) {
+    return t == at(7, 23, 45) || t == at(8, 23, 45) || t == at(9, 23, 45)
+        || t == at(10, 23, 45) || t == at(13, 23, 45);
 }
 bool cleanup_cell(std::int64_t t) {
     return t == at(8, 6, 0) || t == at(9, 6, 0) || t == at(10, 6, 0) || t == at(11, 6, 0)
@@ -229,11 +238,17 @@ public:
         switch (probe_) {
         case Probe::PendingLimitParent: pending_limit_parent(t, close, cell); return;
         case Probe::TwoParentReversal: two_parent_reversal(t, close); return;
+        case Probe::StandingExit: standing_exit(t); return;
         case Probe::ExitBeforeEntryCall:
             if (cell) {
                 exit("B", "L", close + 6.0, kNaN, 100.0, "B target");
                 strategy_entry("L", true, kNaN, kNaN, 1, "L", "", 0, -1);
             }
+            if (cleanup_cell(t)) strategy_close("", "cleanup", kNaN, kNaN, false);
+            return;
+        case Probe::ExitBeforeEntryBar:
+            if (pre_cell(t)) exit("B", "L", close + 6.0, kNaN, 100.0, "B target");
+            if (cell) strategy_entry("L", true, kNaN, kNaN, 1, "L", "", 0, -1);
             if (cleanup_cell(t)) strategy_close("", "cleanup", kNaN, kNaN, false);
             return;
         default: break;
@@ -306,6 +321,15 @@ public:
             if (held) exit("B", "L", ref_ + 100.0, kNaN, 100.0, "B target");
             break;
         }
+        case Probe::CancelFirst:
+            if (cell) cancelled_ = false;
+            if (have_ref && !cancelled_ && pine_bar_index() - entry_bar_ >= 4) {
+                strategy_cancel("A");
+                cancelled_ = true;
+            }
+            if (have_ref && !cancelled_) exit("A", "L", kNaN, ref_ - 40.0, 100.0, "A stop");
+            if (have_ref) exit("B", "L", ref_ + 12.0, kNaN, 100.0, "B target");
+            break;
         case Probe::FirstEverStop:
             if (held && trades_ == 1) exit("A", "L", kNaN, ref_ - 8.0, 100.0, "A stop");
             if (held && trades_ > 1 && pine_bar_index() > entry_bar_)
@@ -342,6 +366,42 @@ private:
         }
     }
 
+    // v1, one cell a day: X issued while limit entry L rests, L cancelled, X
+    // re-issued while void, L entered at market (04-08); the same without the
+    // void call (04-09); X issued behind a market L, the position closed, X
+    // re-issued while void, L entered again (04-10); the same without the
+    // void call (04-11).
+    void standing_exit(std::int64_t t) {
+        if (t == at(8, 0, 0)) {
+            strategy_entry("L", true, 1500.0, kNaN, kNaN, "L");
+            exit("X", "L", 1570.0, kNaN, 100.0, "X first");
+        }
+        if (t == at(8, 0, 15)) strategy_cancel("L");
+        if (t == at(8, 0, 30)) exit("X", "L", 1600.0, kNaN, 100.0, "X void");
+        if (t == at(8, 0, 45)) strategy_entry("L", true, kNaN, kNaN, kNaN, "L");
+        if (t == at(9, 0, 0)) {
+            strategy_entry("L", true, 1450.0, kNaN, kNaN, "L");
+            exit("X", "L", kNaN, 1440.0, 100.0, "X first");
+        }
+        if (t == at(9, 0, 15)) strategy_cancel("L");
+        if (t == at(9, 0, 45)) strategy_entry("L", true, kNaN, kNaN, kNaN, "L");
+        if (t == at(10, 0, 0)) {
+            strategy_entry("L", true, kNaN, kNaN, kNaN, "L");
+            exit("X", "L", kNaN, 1635.0, 100.0, "X first");
+        }
+        if (t == at(10, 0, 15)) strategy_close("", "flat", kNaN, kNaN, false);
+        if (t == at(10, 0, 45)) exit("X", "L", kNaN, 1620.0, 100.0, "X void");
+        if (t == at(10, 1, 0)) strategy_entry("L", true, kNaN, kNaN, kNaN, "L");
+        if (t == at(11, 0, 0)) {
+            strategy_entry("L", true, kNaN, kNaN, kNaN, "L");
+            exit("X", "L", 1545.0, kNaN, 100.0, "X first");
+        }
+        if (t == at(11, 0, 15)) strategy_close("", "flat", kNaN, kNaN, false);
+        if (t == at(11, 1, 0)) strategy_entry("L", true, kNaN, kNaN, kNaN, "L");
+        if (t == at(8, 3, 0) || t == at(9, 3, 0) || t == at(10, 4, 0) || t == at(11, 4, 0))
+            strategy_close("", "cleanup", kNaN, kNaN, false);
+    }
+
     void pending_limit_parent(std::int64_t t, double close, bool cell) {
         if (cell) {
             level_ = close - 15.0;
@@ -360,6 +420,7 @@ private:
     double level_ = kNaN;
     int entry_bar_ = 0;
     int trades_ = 0;
+    bool cancelled_ = false;
 };
 
 struct Run {
@@ -414,7 +475,18 @@ struct Case {
     std::size_t closed;  // tape trades closed inside the bars
     QtyType type = QtyType::FIXED;
     double value = 1.0;
+    // Trades entered before this are TradingView's evidence only, not
+    // compared with the engine's (v1: its first two cells are an open
+    // finding, see the fixture README).
+    std::int64_t compare_from = 0;
 };
+
+std::vector<Row> entered_from(const std::vector<Row>& rows, std::int64_t from) {
+    std::vector<Row> out;
+    for (const Row& r : rows)
+        if (std::get<0>(r) >= from) out.push_back(r);
+    return out;
+}
 
 // Every trade of the tape that exits by `signal`.
 std::size_t count_signal(const Tape& tape, const std::string& signal) {
@@ -447,6 +519,14 @@ int main() {
         {"w3f05-s21-exit-before-entry-call-nextopen", Probe::ExitBeforeEntryCall, false, 5},
         {"w3f05-r1-two-parent-reversal-global-exit", Probe::TwoParentReversal, false, 10,
          QtyType::PERCENT_OF_EQUITY, 40.0},
+        // Lane W3B-ENG-GRID: an exit whose entry neither exists nor rests is void.
+        {"w3f05-s17-pooc-qty-exit-before-entry", Probe::ExitBeforeEntryBar, true, 5},
+        {"w3f05-s19-exit-before-entry-nextopen", Probe::ExitBeforeEntryBar, false, 5},
+        {"w3f05-s12-pooc-qty-cancel-first", Probe::CancelFirst, true, 5},
+        // Lane W3B-ENG-GRID: a void call places nothing and leaves a standing
+        // exit as it is; an exit does not outlive its trade.
+        {"w3bf05-v1-void-call-over-standing-exit", Probe::StandingExit, false, 6,
+         QtyType::FIXED, 1.0, at(10, 0, 0)},
     };
 
     std::map<std::string, Tape> tapes;
@@ -458,10 +538,13 @@ int main() {
 
         const Run lane = run(c.probe, config(c.pooc, c.type, c.value), end_ms);
         CHECK(lane.error.empty());
-        CHECK(lane.trades == tape.trades);
-        if (lane.trades != tape.trades) {
-            show("tape", tape.trades);
-            show("engine", lane.trades);
+        const std::vector<Row> want = entered_from(tape.trades, c.compare_from);
+        const std::vector<Row> got = entered_from(lane.trades, c.compare_from);
+        CHECK(!want.empty());
+        CHECK(got == want);
+        if (got != want) {
+            show("tape", want);
+            show("engine", got);
         }
     }
 
@@ -499,6 +582,34 @@ int main() {
         CHECK(count_signal(tapes["w3f05-s18-pooc-qty-exit-before-entry-call"], "B target") == 0);
         CHECK(count_signal(tapes["w3f05-s21-exit-before-entry-call-nextopen"], "B target") == 0);
         CHECK(count_signal(tapes["w3f05-s20-exit-for-pending-limit-entry"], "B target") == 2);
+        // Issued a bar before its entry exists, an exit is void as well: it
+        // never waits for the entry (s17, s19). A script that keeps issuing
+        // an exit while flat therefore gives the next trade's first-issued
+        // exit the queue front (s12: A, issued first on the entry bar, fills
+        // its stop inside the hour; B fills once A is cancelled).
+        CHECK(count_signal(tapes["w3f05-s17-pooc-qty-exit-before-entry"], "B target") == 0);
+        CHECK(count_signal(tapes["w3f05-s19-exit-before-entry-nextopen"], "B target") == 0);
+        CHECK(count_signal(tapes["w3f05-s12-pooc-qty-cancel-first"], "A stop") == 1);
+        CHECK(count_signal(tapes["w3f05-s12-pooc-qty-cancel-first"], "B target") == 3);
+        // A void call places nothing and leaves an exit of the same id,
+        // issued while its entry rested, as it is: X's first level (1570)
+        // fills after L is cancelled and entered again, not the void call's
+        // (1600); without the void call, X outlives L's cancel too (1440).
+        // An exit does not outlive its trade: issued behind a market entry,
+        // X never fills in the next trade of that entry, re-issued while
+        // void (04-10) or not (04-11).
+        const Tape& v1 = tapes["w3bf05-v1-void-call-over-standing-exit"];
+        CHECK(v1.trades.size() == 6);
+        if (v1.trades.size() == 6) {
+            CHECK(v1.signals[0] == "X first");
+            CHECK(std::get<5>(v1.trades[0]) == ticks(1570.0));
+            CHECK(v1.signals[1] == "X first");
+            CHECK(std::get<5>(v1.trades[1]) == ticks(1440.0));
+            CHECK(v1.signals[2] == "flat");
+            CHECK(v1.signals[3] == "cleanup");
+            CHECK(v1.signals[4] == "flat");
+            CHECK(v1.signals[5] == "cleanup");
+        }
         // A from_entry="" exit of the side a reversal ends never closes the
         // new side, even beside a second entry of the reversal bar.
         const Tape& reversal = tapes["w3f05-r1-two-parent-reversal-global-exit"];

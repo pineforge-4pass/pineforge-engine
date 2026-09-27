@@ -44,11 +44,13 @@
  *     RECORDED; every run completes.
  *   - An exit placed while its id has no order at all is never active on
  *     TradingView: the id's trade runs to the close_all even with a 3c bracket
- *     (xf-tight-qty), and without calc_on_order_fills this engine agrees
- *     (xf-tight-qty-nocoof: exact). Inside a recalculation it does not: an
- *     exit with a quantity is re-targeted to the next waypoint and closes the
- *     trade a bar after its entry (xf-qty rows 3 and 6 / 6, xs-qty rows 3 and
- *     9), and a reached bracket fills (xf-tight-qty rows 3, 6, 9). RECORDED.
+ *     (xf-tight-qty), and without calc_on_order_fills this engine agreed
+ *     (xf-tight-qty-nocoof: exact). Inside a recalculation it did not -- an
+ *     exit with a quantity was re-targeted to the next waypoint and closed
+ *     the trade a bar after its entry (xf-qty rows 3 and 6 / 6, xs-qty rows 3
+ *     and 9), and a reached bracket filled (xf-tight-qty rows 3, 6, 9) --
+ *     until lane W3B-ENG-GRID voided an exit whose entry neither exists nor
+ *     rests (tests/fixtures/exit_queue, w3f05-s17 / -s19): exact since.
  * Every other row is exact: side, instants, prices, quantity, signals, bars.
  */
 
@@ -358,14 +360,17 @@ int main() {
     const Variant variants[] = {
         {"pa2-i1-pend-xf-pooc", Shape::PendingBracket, false, true, 1, rows({6})},
         {"pa2-i1-pend-xs-crossed-pooc", Shape::PendingCrossed, false, true, 1, rows({2, 4, 6})},
-        {"pa2-i1-xf-qty-pooc", Shape::NoOrderLong, true, true, 1, rows({3, 6})},
-        {"pa2-i1-xf-qty-pyr2", Shape::NoOrderLong, true, false, 2, rows({6})},
+        // Lane W3B-ENG-GRID: an exit whose entry neither exists nor rests
+        // is void, inside a recalculation too -- the rows these five
+        // recorded now match.
+        {"pa2-i1-xf-qty-pooc", Shape::NoOrderLong, true, true, 1, 0u},
+        {"pa2-i1-xf-qty-pyr2", Shape::NoOrderLong, true, false, 2, 0u},
         {"pa2-i1-xf-dyn-pooc", Shape::NoOrderLong, false, true, 1, 0u},
         {"pa2-i1-xs-dyn-pooc", Shape::NoOrderShort, false, true, 1, 0u},
         {"pa2-i1-xs-dyn", Shape::NoOrderShort, false, false, 1, 0u},
-        {"pa2-i1-xs-qty-pooc", Shape::NoOrderShort, true, true, 1, rows({3, 9})},
-        {"pa2-i1-xs-qty", Shape::NoOrderShort, true, false, 1, rows({3, 9})},
-        {"pa2-i1-xf-tight-qty-pooc", Shape::NoOrderTight, true, true, 1, rows({3, 6, 9})},
+        {"pa2-i1-xs-qty-pooc", Shape::NoOrderShort, true, true, 1, 0u},
+        {"pa2-i1-xs-qty", Shape::NoOrderShort, true, false, 1, 0u},
+        {"pa2-i1-xf-tight-qty-pooc", Shape::NoOrderTight, true, true, 1, 0u},
         {"pa2-i1-xf-tight-qty-nocoof-pooc", Shape::NoOrderTightBar, true, true, 1, 0u},
     };
     for (const Variant& v : variants) replay(v);

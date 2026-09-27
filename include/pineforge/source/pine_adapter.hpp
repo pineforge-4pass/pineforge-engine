@@ -186,6 +186,12 @@ struct PlacementSnapshot {
     bool opening = false;
     bool deferred_cohort = false;
     bool reservation_deferred_to_pending_entry = false;
+    // A strategy.exit issued while its from_entry had neither an open trade
+    // nor an entry order waiting to fill, which TradingView voids. Its request
+    // waits in the book as before; the entry's opening withdraws it
+    // (withdraw_void_exits), and a re-issue made once the entry exists takes
+    // a new place in the exit queue rather than this one's.
+    bool void_issue = false;
     bool fixed_exit_reservation = false;
     bool frozen_market_instruction = false;
     double frozen_market_own_units = std::numeric_limits<double>::quiet_NaN();
@@ -1992,6 +1998,12 @@ private:
                                  std::uint64_t, std::uint64_t);
     void observe_close_ledger(const native_order::ExecutionAppliedEvent&,
                               const PlacementSnapshot*);
+    bool entry_order_pending(const SourceId&) const;
+    bool open_lot_of(const SourceId& id) const;
+    bool standing_exit(const SourceId& exit_id, const SourceId& from_entry) const;
+    void unvoid_exit(PlacementSnapshot& row);
+    void execute_or_withdraw_close(native_order::RequestHandle close, bool void_issue);
+    void withdraw_void_exits(const SourceId& entry_id);
     void credit_close_ledger(const SourceId&, double units);
     void book_close_ledger(const SourceId&, double units);
 

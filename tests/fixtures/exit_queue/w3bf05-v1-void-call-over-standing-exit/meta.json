@@ -1,0 +1,16 @@
+{
+  "title": "W3B F05 v1 void exit call over a standing exit",
+  "slug": "w3bf05-v1-void-call-over-standing-exit",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T19:24:44.615Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "30ebe032ac5f3f03797ee885e366b3b867dea0ef5aca9a8475221c4d1ca385d0",
+  "tv_trades_sha256": "735e7f66cdf78ec0474e83511d67c288ef0acc68337a4a65c202a999d5fb3aa2",
+  "tv_trades_rows": 12
+}

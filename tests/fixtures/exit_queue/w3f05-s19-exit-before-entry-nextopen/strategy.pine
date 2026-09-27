@@ -1,0 +1,21 @@
+//@version=6
+strategy("W3 F05 s19 exit issued the bar before its entry", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W3-ENG-EXIT-ALLOC, family F05: an exit issued while its entry does
+// not exist yet. One long per cell (qty=1, filled at the next open); a
+// cleanup close_all ends every cell six hours after its entry. Target B
+// (that bar's close + 6) is issued once, on the bar before each entry, and
+// never again.
+
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+entryCell = cell(8, 0, 0) or cell(9, 0, 0) or cell(10, 0, 0) or cell(11, 0, 0) or cell(14, 0, 0)
+preCell = cell(7, 23, 45) or cell(8, 23, 45) or cell(9, 23, 45) or cell(10, 23, 45) or cell(13, 23, 45)
+cleanup = cell(8, 6, 0) or cell(9, 6, 0) or cell(10, 6, 0) or cell(11, 6, 0) or cell(14, 6, 0)
+
+if preCell
+    strategy.exit("B", from_entry="L", limit=close + 6.0, comment="B target")
+if entryCell
+    strategy.entry("L", strategy.long, qty=1, comment="L")
+
+if cleanup
+    strategy.close_all(comment="cleanup")

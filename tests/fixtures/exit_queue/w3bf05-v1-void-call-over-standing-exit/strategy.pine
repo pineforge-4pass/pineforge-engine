@@ -1,0 +1,64 @@
+//@version=6
+strategy("W3B F05 v1 void exit call over a standing exit", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W3B-ENG-GRID: what a void strategy.exit call -- its entry neither
+// open nor resting -- does to an exit of the same id issued earlier, while
+// the entry rested or was open. Four cells, one per day; qty 1, fills at
+// the next open.
+// A 04-08: X (limit 1570) issued while limit entry L rests; L cancelled; X
+//          re-issued (limit 1600) while void; L entered at market.
+// B 04-09: A's shape (X stop 1440), without the void re-issue.
+// C 04-10: L entered at market, X (stop 1635) issued behind it; close_all;
+//          X re-issued (stop 1620) while void; L entered again.
+// D 04-11: C's shape (X limit 1545), without the void re-issue.
+// Every cell ends with a close_all.
+
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+
+// A
+if cell(8, 0, 0)
+    strategy.entry("L", strategy.long, limit=1500.0, comment="L")
+    strategy.exit("X", from_entry="L", limit=1570.0, comment="X first")
+if cell(8, 0, 15)
+    strategy.cancel("L")
+if cell(8, 0, 30)
+    strategy.exit("X", from_entry="L", limit=1600.0, comment="X void")
+if cell(8, 0, 45)
+    strategy.entry("L", strategy.long, comment="L")
+if cell(8, 3, 0)
+    strategy.close_all(comment="cleanup")
+
+// B
+if cell(9, 0, 0)
+    strategy.entry("L", strategy.long, limit=1450.0, comment="L")
+    strategy.exit("X", from_entry="L", stop=1440.0, comment="X first")
+if cell(9, 0, 15)
+    strategy.cancel("L")
+if cell(9, 0, 45)
+    strategy.entry("L", strategy.long, comment="L")
+if cell(9, 3, 0)
+    strategy.close_all(comment="cleanup")
+
+// C
+if cell(10, 0, 0)
+    strategy.entry("L", strategy.long, comment="L")
+    strategy.exit("X", from_entry="L", stop=1635.0, comment="X first")
+if cell(10, 0, 15)
+    strategy.close_all(comment="flat")
+if cell(10, 0, 45)
+    strategy.exit("X", from_entry="L", stop=1620.0, comment="X void")
+if cell(10, 1, 0)
+    strategy.entry("L", strategy.long, comment="L")
+if cell(10, 4, 0)
+    strategy.close_all(comment="cleanup")
+
+// D
+if cell(11, 0, 0)
+    strategy.entry("L", strategy.long, comment="L")
+    strategy.exit("X", from_entry="L", limit=1545.0, comment="X first")
+if cell(11, 0, 15)
+    strategy.close_all(comment="flat")
+if cell(11, 1, 0)
+    strategy.entry("L", strategy.long, comment="L")
+if cell(11, 4, 0)
+    strategy.close_all(comment="cleanup")
