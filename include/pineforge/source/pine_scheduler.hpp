@@ -70,6 +70,23 @@ public:
         }
         return retained_.bars[static_cast<std::size_t>(interval_index + 1)];
     }
+    // The first input the run retains -- a batch's, or a stream's warmup --
+    // after input `input_index` that opens at or after `at_or_after`, or
+    // nullopt when the retained input ends first.
+    std::optional<Bar> retained_input_from(int input_index, std::int64_t at_or_after) const {
+        if (input_index < 0) return std::nullopt;
+        for (std::size_t i = static_cast<std::size_t>(input_index) + 1; i < retained_.bars.size(); ++i) {
+            if (retained_.bars[i].timestamp >= at_or_after) return retained_.bars[i];
+        }
+        return std::nullopt;
+    }
+    bool retains_stream() const noexcept { return retained_.is_stream; }
+    // The open of the script bar published last, before the run's first none.
+    std::optional<std::int64_t> last_published_script_open() const noexcept {
+        if (last_published_script_open_ms_ == std::numeric_limits<std::int64_t>::min())
+            return std::nullopt;
+        return last_published_script_open_ms_;
+    }
     bool terminal_source_bar() const noexcept {
         return expected_source_bars_ > 0 && source_bar_count_ >= expected_source_bars_;
     }

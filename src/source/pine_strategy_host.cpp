@@ -271,6 +271,8 @@ void source::PineStrategyHost::on_native_run_begin() {
     session_ismarket_ = false;
     session_isfirstbar_ = false;
     session_islastbar_ = false;
+    session_isfirstbar_regular_ = false;
+    session_islastbar_regular_ = false;
     source_prepare_failed_ = false;
     // Generated configure_security_evaluators() registers this run's foreign
     // sites again inside run_begin; a run that configures none has none.
@@ -1457,32 +1459,122 @@ static std::optional<std::size_t> sort_same_bar_exit_trades(std::vector<Trade>& 
 }
 
 void source::PineStrategyHost::scheduler_update_session_state() {
-    // The three session flags are the kernel's session-day facts of this
-    // script bar, selected before the source callback reads them (R5 lane F5).
-    // The rule lane E26 established here -- TradingView ends a session at the
-    // session DAY, the flag belonging to the last chart bar whose successor
-    // is out of session or on another session day, isfirstbar its dual; the
-    // `lab tv` tapes in tests/fixtures/session_islastbar give it bar for bar
-    // -- is the kernel's generic reading of the run's calendar and input now
-    // (NativeDecisionContext, market_driver.hpp), so this host computes none
-    // of it and every driving path reads the same facts by construction.
+    // session_ismarket_ and the _regular pair are the kernel's session-day
+    // facts of this script bar, selected before the source callback reads
+    // them (R5 lane F5). The rule lane E26 established here -- TradingView
+    // ends a session at the session DAY, the flag belonging to the last chart
+    // bar whose successor is out of session or on another session day,
+    // isfirstbar its dual; the `lab tv` tapes in tests/fixtures/session_islastbar
+    // give it bar for bar -- is the kernel's generic reading of the run's
+    // calendar and input (NativeDecisionContext, market_driver.hpp), so every
+    // driving path reads the same regular day by construction. The plain pair
+    // starts from it; the chart's day an extended-hours chart widens it to is
+    // Pine's own, below (update_extended_session_day).
     //
-    // What stays is Pine's own live-probe protocol (set_realtime_tail): its
-    // batch's final bar is the still-forming realtime bar, so that bar closes
-    // its session day where the calendar does, not by the batch's run-end
+    // Pine's live-probe protocol (set_realtime_tail) stays too: its batch's
+    // final bar is the still-forming realtime bar, so that bar closes its
+    // session day where the calendar does, not by the batch's run-end
     // convention -- the kernel's open-ended reading, which equals the ordinary
     // one on every other bar.
     //
-    // The scheduler's retained-input lookahead that fed the old rule is gone:
-    // under calc_on_order_fills it read two bars ahead on a bar a fill
-    // recalculation had already published (tests/test_session_day_facts_adapter.cpp).
+    // The scheduler's old lookahead indexed its retained input by the count
+    // of source bars published, which under calc_on_order_fills read two bars
+    // ahead on a bar a fill recalculation had already published
+    // (tests/test_session_day_facts_adapter.cpp); the chart day's lookahead
+    // starts from the point's own input and its script bar's end instead.
     const NativeCurrentPointView* point = detail::callback_point(*this);
     if (!point) return;
     const NativeDecisionContext& facts = point->decision;
     session_ismarket_ = facts.in_session;
-    session_isfirstbar_ = facts.opens_session_day;
-    session_islastbar_ = realtime_tail_ ? facts.closes_session_day_open_ended
-                                        : facts.closes_session_day;
+    session_isfirstbar_regular_ = facts.opens_session_day;
+    session_islastbar_regular_ = realtime_tail_ ? facts.closes_session_day_open_ended
+                                                : facts.closes_session_day;
+    session_isfirstbar_ = session_isfirstbar_regular_;
+    session_islastbar_ = session_islastbar_regular_;
+    update_extended_session_day(facts);
+}
+
+// session.isfirstbar / session.islastbar mark the CHART's session day (R5
+// lane K-SESSION-WINDOWS F2). With extended hours TradingView's chart holds
+// the regular day's pre- and post-market bars too, and the plain pair spans
+// them while the _regular pair keeps the regular day: on NASDAQ:AAPL 60 with
+// extended hours isfirstbar is the 04:00 bar and islastbar the 19:00 one,
+// isfirstbar_regular 10:00 and islastbar_regular 15:00
+// (tests/fixtures/session_windows). A chart without extended hours holds no
+// pre- or post-market bar, so there the pairs are one. The regular day is the
+// kernel's session-day facts; pre- and post-market are session.ispremarket /
+// ispostmarket's windows (session_time.hpp), which exist only on a session
+// day that opens and closes on one date, the date the chart's day is keyed
+// to. A bar neither in session nor pre- or post-market is in no chart day.
+//
+// The bar before is the script bar published last. The bar after is the
+// first input the run holds -- a batch's, or a stream's warmup
+// (PineScheduler::retained_input_from) -- past this script bar's interval,
+// so the chart, magnified and aggregated paths read one answer for the same
+// bars; a batch's final bar closes its day as the kernel's does unless the
+// live probe tail is still forming it. Without such a bar a pre- or
+// post-market bar reads the chart timeframe's next slot, while a regular bar
+// keeps the kernel's close: nothing says whether the post-market bars that
+// slot names will come.
+void source::PineStrategyHost::update_extended_session_day(const NativeDecisionContext& facts) {
+    const std::string& session = syminfo_.session;
+    const std::string& tz = syminfo_.timezone;
+    const std::int64_t at = facts.script_bar_open_ms;
+    const bool regular = facts.in_session;
+    // A regular bar that neither opens nor closes the regular day is inside
+    // it, and so inside the chart's: the kernel's answer stands.
+    if (regular && !facts.opens_session_day && !session_islastbar_regular_) return;
+    const auto pre = [&](std::int64_t ms) {
+        return pineforge::session_in_premarket(session, tz, ms, script_tf_);
+    };
+    const auto post = [&](std::int64_t ms) {
+        return pineforge::session_in_postmarket(session, tz, ms, script_tf_);
+    };
+    const bool premarket = !regular && pre(at);
+    const bool postmarket = !regular && !premarket && post(at);
+    if (!regular && !premarket && !postmarket) return;
+
+    const std::int64_t day = pineforge::calendar_day_open_local_ms(at, tz);
+    const auto same_day = [&](std::int64_t ms) {
+        return pineforge::calendar_day_open_local_ms(ms, tz) == day;
+    };
+    const auto in_chart_day = [&](std::int64_t ms) {
+        return (pineforge::session_in_market(session, tz, ms) || pre(ms) || post(ms))
+            && same_day(ms);
+    };
+    const std::optional<std::int64_t> before = scheduler_.last_published_script_open();
+    // The next script bar opens at or after this one's interval end: an
+    // aggregated bucket's, or -- a FeedTolerant chart bar's interval being its
+    // label alone -- the instant after the label.
+    const std::int64_t next_open = std::max(at + 1, facts.script_interval.next_period_open_ms);
+    std::optional<std::int64_t> after;
+    bool known_after = false;
+    if (const auto bar = scheduler_.retained_input_from(facts.coordinate.input_interval_index,
+                                                        next_open)) {
+        after = bar->timestamp;
+        known_after = true;
+    }
+    const bool run_end = !known_after && !scheduler_.retains_stream() && !realtime_tail_;
+    if (!known_after && !run_end && !regular && script_tf_seconds_ > 0)
+        after = at + static_cast<std::int64_t>(script_tf_seconds_) * 1000;
+
+    if (regular) {
+        // The regular day's first bar opens the chart's unless pre-market
+        // bars of its date precede it; its last closes the chart's unless
+        // post-market bars of its date follow.
+        if (facts.opens_session_day)
+            session_isfirstbar_ = !(before && pre(*before) && same_day(*before));
+        if (session_islastbar_regular_)
+            session_islastbar_ = !(known_after && post(*after) && same_day(*after));
+        return;
+    }
+    if (premarket) {
+        session_isfirstbar_ = !(before && pre(*before) && same_day(*before));
+        session_islastbar_ = after ? !in_chart_day(*after) : run_end;
+        return;
+    }
+    session_isfirstbar_ = !(before && in_chart_day(*before));
+    session_islastbar_ = after ? !(post(*after) && same_day(*after)) : run_end;
 }
 
 void source::PineStrategyHost::scheduler_publish_source_bar(

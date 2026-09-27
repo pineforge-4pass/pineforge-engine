@@ -120,6 +120,8 @@ struct Seen {
     bool ismarket = false;
     bool isfirstbar = false;
     bool islastbar = false;
+    bool isfirstbar_regular = false;
+    bool islastbar_regular = false;
 };
 
 class SessionHost final : public source::PineStrategyHost {
@@ -131,7 +133,8 @@ public:
 
     void on_source_bar(const Bar&) override {
         seen.push_back({current_bar_.timestamp, session_ismarket_,
-                        session_isfirstbar_, session_islastbar_});
+                        session_isfirstbar_, session_islastbar_,
+                        session_isfirstbar_regular_, session_islastbar_regular_});
     }
 
     std::vector<Seen> seen;
@@ -195,7 +198,9 @@ bool same_bars(const std::vector<Seen>& a, const std::vector<Seen>& b) {
     if (a.size() != b.size()) return false;
     for (std::size_t i = 0; i < a.size(); ++i) {
         if (a[i].ts != b[i].ts || a[i].ismarket != b[i].ismarket
-            || a[i].isfirstbar != b[i].isfirstbar || a[i].islastbar != b[i].islastbar)
+            || a[i].isfirstbar != b[i].isfirstbar || a[i].islastbar != b[i].islastbar
+            || a[i].isfirstbar_regular != b[i].isfirstbar_regular
+            || a[i].islastbar_regular != b[i].islastbar_regular)
             return false;
     }
     return true;
@@ -259,6 +264,11 @@ std::set<std::int64_t> minus(const std::set<std::int64_t>& a, const std::set<std
 // 1m bars 15:30 .. 16:14 ET: nine 5m script bars, six in session. The flag
 // belongs to 15:55 alone, the bar whose next bar (16:00) is out of session.
 // Before this lane the aggregated run flagged all six in-session bars.
+// R5 lane K-SESSION-WINDOWS F2: that is session.islastbar_regular. The bars
+// after 16:00 are post-market, which only an extended-hours chart holds, and
+// there TradingView's session.islastbar ends the chart's day on its last
+// post-market bar (tests/fixtures/session_windows, NASDAQ:AAPL with extended
+// hours): here the run's final bar, 16:10.
 void test_one_session_close() {
     std::printf("test_one_session_close\n");
     const auto one_minute = ladder(kTue0930Et + 360 * kMinute, kTue0930Et + 404 * kMinute, kMinute);
@@ -272,12 +282,14 @@ void test_one_session_close() {
     // The control: the chart-timeframe path, as it has always read it.
     CHECK(chart.error.empty());
     CHECK(bits(chart.seen, &Seen::ismarket) == "111111000");
-    CHECK(bits(chart.seen, &Seen::islastbar) == "000001000");
+    CHECK(bits(chart.seen, &Seen::islastbar_regular) == "000001000");
+    CHECK(bits(chart.seen, &Seen::islastbar) == "000000001");
     CHECK(same_bars(chart_mag.seen, chart.seen));
 
     CHECK(agg.error.empty());
     CHECK(agg_mag.error.empty());
-    CHECK(bits(agg.seen, &Seen::islastbar) == "000001000");
+    CHECK(bits(agg.seen, &Seen::islastbar_regular) == "000001000");
+    CHECK(bits(agg.seen, &Seen::islastbar) == "000000001");
     CHECK(same_bars(agg.seen, chart.seen));
     CHECK(same_bars(agg_mag.seen, chart.seen));
     if (!same_bars(agg.seen, chart.seen) || !same_bars(agg_mag.seen, chart.seen)) {
@@ -293,6 +305,10 @@ void test_one_session_close() {
 // from 09:15). Each session's last bar is flagged: Tuesday 15:55, and
 // Wednesday 09:40, the run's final bar. The legacy aggregated rule
 // (in_session && barstate.islast) saw only 09:40 — "000000000000001".
+// R5 lane K-SESSION-WINDOWS F2: those are the _regular flags. With Tuesday's
+// post-market and Wednesday's pre-market bars in the chart, session.islastbar
+// is Tuesday 16:10 and session.isfirstbar Wednesday 09:15, as on
+// TradingView's extended-hours tapes.
 void test_two_sessions() {
     std::printf("test_two_sessions\n");
     auto one_minute = ladder(kTue0930Et + 360 * kMinute, kTue0930Et + 404 * kMinute, kMinute);
@@ -311,11 +327,14 @@ void test_two_sessions() {
 
     CHECK(chart.error.empty());
     CHECK(bits(chart.seen, &Seen::ismarket) == "111111000000111");
-    CHECK(bits(chart.seen, &Seen::isfirstbar) == "100000000000100");
-    CHECK(bits(chart.seen, &Seen::islastbar) == "000001000000001");
+    CHECK(bits(chart.seen, &Seen::isfirstbar_regular) == "100000000000100");
+    CHECK(bits(chart.seen, &Seen::islastbar_regular) == "000001000000001");
+    CHECK(bits(chart.seen, &Seen::isfirstbar) == "100000000100000");
+    CHECK(bits(chart.seen, &Seen::islastbar) == "000000001000001");
 
     CHECK(agg.error.empty());
-    CHECK(bits(agg.seen, &Seen::islastbar) == "000001000000001");
+    CHECK(bits(agg.seen, &Seen::islastbar_regular) == "000001000000001");
+    CHECK(bits(agg.seen, &Seen::islastbar) == "000000001000001");
     CHECK(same_bars(agg.seen, chart.seen));
     CHECK(same_bars(agg_mag.seen, chart.seen));
     if (!same_bars(agg.seen, chart.seen) || !same_bars(agg_mag.seen, chart.seen)) {
@@ -554,7 +573,8 @@ public:
 
     void on_source_bar(const Bar&) override {
         seen.push_back({current_bar_.timestamp, session_ismarket_,
-                        session_isfirstbar_, session_islastbar_});
+                        session_isfirstbar_, session_islastbar_,
+                        session_isfirstbar_regular_, session_islastbar_regular_});
         bars.push_back(bar_index_);
         const int et = static_cast<int>(
             ((current_bar_.timestamp / kMinute - 240) % 1440 + 1440) % 1440);

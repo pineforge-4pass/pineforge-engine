@@ -885,9 +885,11 @@ private:
     void scheduler_mark_report_point(std::int64_t script_bar_ts);
     void scheduler_record_broker_hash();
     void capture_script_continuation_hash();
-    // The one writer of the three session flags below: it selects the
-    // kernel's session-day facts of the script bar being published.
+    // The one writer of the session flags below: it selects the kernel's
+    // session-day facts of the script bar being published, and widens the
+    // chart's day by the pre- and post-market bars an extended chart holds.
     void scheduler_update_session_state();
+    void update_extended_session_day(const NativeDecisionContext& facts);
     void adapter_label_bracket_trades(
         const native_order::ExecutionAppliedEvent&, bool from_bracket);
     bool adapter_has_open_entry_id(const std::string&) const;
@@ -1004,17 +1006,21 @@ protected:
     bool probe_suppress_tail_logic_ = false;
 
     // The script bar's session flags as generated code reads them:
-    // session.isfirstbar and session.islastbar lower to the last two, and
+    // session.isfirstbar and session.islastbar lower to the next two, and
     // session_ismarket_ is the in-session fact itself (a generated
     // session.ismarket calls pine_session_ismarket above instead). They were
     // BacktestEngine members the kernel only cleared (R5 lane F5 moved them
-    // here). scheduler_update_session_state writes all three from the kernel's
+    // here). scheduler_update_session_state writes them from the kernel's
     // session-day facts before each source callback, and on_native_run_begin
     // clears them; derived from those facts, they fold into no hash, as the
-    // facts do not.
+    // facts do not. The _regular pair is the regular session's day, the
+    // kernel's facts as they are; the plain pair the chart's, widened by the
+    // pre- and post-market bars an extended-hours chart holds.
     bool session_ismarket_ = false;
     bool session_isfirstbar_ = false;
     bool session_islastbar_ = false;
+    bool session_isfirstbar_regular_ = false;
+    bool session_islastbar_regular_ = false;
 
     // Live-runtime tail (spec §3.1): once script_tf_seconds_ is known for
     // this run, freeze pine_last_bar_index()/last_bar_time_ at the horizon

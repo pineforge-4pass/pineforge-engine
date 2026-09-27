@@ -674,11 +674,13 @@ struct Seen {
     bool isfirstbar = false;
     bool islastbar = false;
     int open_entries = 0;
+    bool islastbar_regular = false;
 };
 
 bool operator==(const Seen& a, const Seen& b) {
     return a.ts == b.ts && a.bar == b.bar && a.ismarket == b.ismarket
-        && a.isfirstbar == b.isfirstbar && a.islastbar == b.islastbar;
+        && a.isfirstbar == b.isfirstbar && a.islastbar == b.islastbar
+        && a.islastbar_regular == b.islastbar_regular;
 }
 
 class SessionFlagsHost final : public source::PineStrategyHost {
@@ -697,7 +699,8 @@ public:
     }
     void on_source_bar(const Bar&) override {
         seen.push_back({current_bar_.timestamp, bar_index_, session_ismarket_,
-                        session_isfirstbar_, session_islastbar_, position_entry_count_});
+                        session_isfirstbar_, session_islastbar_, position_entry_count_,
+                        session_islastbar_regular_});
         const int et = static_cast<int>(
             ((current_bar_.timestamp / kMinute - 240) % 1440 + 1440) % 1440);
         if (et == entry_minute_et_ && !entered_) {
@@ -820,6 +823,10 @@ void test_coof_session_flags() {
 // 15:45 fills at 16:00 ET, out of session, where no session flag holds.
 // Before this lane the recalculation read 15:45's islastbar:
 //   COOF on  ... 15:45[bi25 f0 l1 pos0] 16:00[bi26 f0 l1 pos1] 16:00[bi26 f0 l0 pos1]
+// R5 lane K-SESSION-WINDOWS F2: 16:00-16:45 are post-market bars, which only
+// an extended-hours chart holds, so session.islastbar ends the chart's day on
+// 16:45 and 15:45 carries session.islastbar_regular alone (TradingView's
+// extended-hours tapes, tests/fixtures/session_windows).
 void test_coof_session_flags_post_market() {
     std::printf("test_coof_session_flags_post_market\n");
     std::string off_error, on_error;
@@ -830,7 +837,9 @@ void test_coof_session_flags_post_market() {
     const std::int64_t tue1545 = kTue0930Et + 375 * kMinute;
     const std::int64_t tue1600 = kTue0930Et + 390 * kMinute;
     CHECK(flags_text(off, tue1545, tue1600)
-          == " 15:45[bi25 m1 f0 l1 pos0] 16:00[bi26 m0 f0 l0 pos1]");
+          == " 15:45[bi25 m1 f0 l0 pos0] 16:00[bi26 m0 f0 l0 pos1]");
+    const Seen* close_1545 = callback(off, tue1545, 0);
+    CHECK(close_1545 != nullptr && close_1545->islastbar_regular);
     const Seen* recalc = callback(on, tue1600, 0);
     CHECK(recalc != nullptr);
     if (recalc) {
