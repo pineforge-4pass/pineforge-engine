@@ -17917,6 +17917,64 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             if (exposure > 0.0 && !intermediate_paired_gross)
                 reconcile_deferred_exit_reservations(id, exposure);
         }
+        // Exits for every entry (from_entry="") armed before this opening
+        // queue for the position the same way: behind a full one created
+        // earlier, a later one is left nothing (lane W3-ENG-EXIT-ALLOC, tape
+        // w3f05-s11-pooc-qty-any-entry). The full one keeps its dynamic
+        // reservation; only the ones behind it are cancelled.
+        if (physical_exposure > 0.0) {
+            struct GlobalExit {
+                std::uint64_t key = 0;
+                std::uint64_t rank = 0;
+                bool full = true;
+                std::vector<native_order::RequestHandle> handles;
+            };
+            std::vector<GlobalExit> armed;
+            for (const auto& handle : live_handles_) {
+                const auto found = placement_.find(handle.incarnation);
+                if (found == placement_.end()) continue;
+                const auto& row = found->second;
+                const bool exit = row.family == PineOrderFamily::ExitLimit
+                    || row.family == PineOrderFamily::ExitStop
+                    || row.family == PineOrderFamily::ExitTrail;
+                if (!exit || !row.from_entry.empty()
+                    || std::isfinite(row.projection_remaining_qty)) {
+                    continue;
+                }
+                const bool full = !std::isfinite(row.requested_qty)
+                    && (!std::isfinite(row.qty_percent)
+                        || row.qty_percent >= 100.0 - internal::kFullPercentEps);
+                const auto key = key_for(row.source_id, row.from_entry);
+                const auto rank = exit_queue_rank(placement_, row);
+                auto family = std::find_if(armed.begin(), armed.end(),
+                    [&](const GlobalExit& value) { return value.key == key; });
+                if (family == armed.end()) {
+                    armed.push_back({key, rank, full, {handle}});
+                } else {
+                    family->rank = std::min(family->rank, rank);
+                    family->full = family->full && full;
+                    family->handles.push_back(handle);
+                }
+            }
+            if (armed.size() > 1) {
+                std::stable_sort(armed.begin(), armed.end(),
+                    [](const GlobalExit& left, const GlobalExit& right) {
+                        return left.rank < right.rank;
+                    });
+                std::vector<native_order::RequestHandle> behind;
+                bool behind_full = false;
+                for (const auto& family : armed) {
+                    if (behind_full)
+                        behind.insert(behind.end(), family.handles.begin(), family.handles.end());
+                    else if (family.full)
+                        behind_full = true;
+                }
+                for (const auto& handle : behind) {
+                    const auto result = require_host().cancel(handle);
+                    if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
+                }
+            }
+        }
     }
     if (placement_snapshot && placement_snapshot->family == PineOrderFamily::CloseAll
         && event.closed_units > 0.0) {

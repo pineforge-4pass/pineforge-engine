@@ -1,0 +1,16 @@
+{
+  "title": "W3 F05 s11 POOC from_entry empty stop before target",
+  "slug": "w3f05-s11-pooc-qty-any-entry",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:44:14.069Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "1ec0398d3efaeabaeda03d85de398c431dd32becccda9e15c217b95432050793",
+  "tv_trades_sha256": "744eb973818d1ae82e8b1ad7b5ed02bb18fcd21abf5af5a72d34020d12adaf57",
+  "tv_trades_rows": 10
+}

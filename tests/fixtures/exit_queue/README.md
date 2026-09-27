@@ -43,6 +43,7 @@ TradingView's own rows.
 | `w3f05-s8-pooc-qty-half-then-full` | A for 50%, then B without qty: B gets the other half | `98dbc59b3ffbeaa33f8d3604a095a83909c3a178cab4cf9281858a1c4fbe3859` |
 | `w3f05-s8b-pooc-qty-full-then-half` | A without qty, then B for 50%: B gets nothing (the rows are s5's) | `744eb973818d1ae82e8b1ad7b5ed02bb18fcd21abf5af5a72d34020d12adaf57` |
 | `w3f05-s13-pooc-qty-shared-oca` | s5 with both exits in `oca_name = "X"`: the OCA name changes nothing (s5's rows) | `744eb973818d1ae82e8b1ad7b5ed02bb18fcd21abf5af5a72d34020d12adaf57` |
+| `w3f05-s11-pooc-qty-any-entry` | s5 with both exits for every entry (`from_entry=""`): the same queue (s5's rows); the engine had left both exits reserving the whole position | `744eb973818d1ae82e8b1ad7b5ed02bb18fcd21abf5af5a72d34020d12adaf57` |
 
 ## The controls (the engine already booked them)
 

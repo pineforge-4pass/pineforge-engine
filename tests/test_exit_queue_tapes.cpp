@@ -15,6 +15,10 @@
  * first exit re-issued there lost the whole position to the stale later one,
  * which then filled instead (a stop never fired; its target did).
  *
+ * Exits for every entry (from_entry="") armed before an opening queue for the
+ * new position the same way; the adapter had left each reserving all of it
+ * (s11).
+ *
  * Each row replays TradingView's own tape of a synthetic probe
  * (tests/fixtures/exit_queue, lab tv exports on BINANCE:ETHUSDT.P 15) through
  * the Pine adapter under the configuration the generated constructor declares
@@ -173,6 +177,7 @@ enum class Probe {
     HalfThenFull,           // s8: A 50%, then B without qty
     FullThenHalf,           // s8b: A without qty, then B 50%
     TargetCreatedFirst,     // s10: B alone on the entry bar, then A then B while held
+    AnyEntry,               // s11: A then B with from_entry=""
     SharedOca,              // s13: A then B, both oca_name="X"
     StopOnce,               // s14: A once on the entry bar, B every bar held
     CancelThenReissue,      // s15: A cancelled after an hour, issued again after two
@@ -261,6 +266,12 @@ public:
             if (held && pine_bar_index() > entry_bar_)
                 exit("A", "L", kNaN, ref_ - 8.0, 100.0, "A stop");
             if (held) exit("B", "L", ref_ + 40.0, kNaN, 100.0, "B target");
+            break;
+        case Probe::AnyEntry:
+            if (have_ref) {
+                exit("A", "", kNaN, ref_ - 40.0, 100.0, "A stop");
+                exit("B", "", ref_ + 4.0, kNaN, 100.0, "B target");
+            }
             break;
         case Probe::SharedOca:
             if (have_ref) {
@@ -390,6 +401,7 @@ int main() {
         {"w3f05-s8-pooc-qty-half-then-full", Probe::HalfThenFull, true, 10},
         {"w3f05-s8b-pooc-qty-full-then-half", Probe::FullThenHalf, true, 5},
         {"w3f05-s10-pooc-qty-target-created-first", Probe::TargetCreatedFirst, true, 5},
+        {"w3f05-s11-pooc-qty-any-entry", Probe::AnyEntry, true, 5},
         {"w3f05-s13-pooc-qty-shared-oca", Probe::SharedOca, true, 5},
         {"w3f05-s14-pooc-qty-stop-once", Probe::StopOnce, true, 5},
         {"w3f05-s15-pooc-qty-cancel-then-redeclare", Probe::CancelThenReissue, true, 5},
@@ -422,7 +434,7 @@ int main() {
         // the market reaches first -- in both declaration orders, with and
         // without process_orders_on_close, and when both share an OCA name.
         for (const char* name : {"w3f05-s1-stop-then-target", "w3f05-s5-pooc-qty-stop-then-target",
-                                 "w3f05-s13-pooc-qty-shared-oca"}) {
+                                 "w3f05-s11-pooc-qty-any-entry", "w3f05-s13-pooc-qty-shared-oca"}) {
             CHECK(count_signal(tapes[name], "B target") == 0);
             CHECK(count_signal(tapes[name], "A stop") == 2);
         }
