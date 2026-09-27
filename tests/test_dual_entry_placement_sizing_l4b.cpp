@@ -1057,6 +1057,11 @@ static void test_MM_pair_fill_gap_gate_uses_gross_transaction_qty() {
 // Deferred percent-layered exits armed between pair calls resolve against the
 // final own exposure, not the transient gross open. At 2.5, 40%/60% must freeze
 // to 1.0/1.5 only after transaction netting completes.
+// Expectation corrected (lane W3B-ENG-GRID): the two exits are issued before
+// LAY-L's entry call, while LAY-L neither exists nor rests, and TradingView
+// voids such an exit (lab tv w3f05-s18, -s21: an exit issued on its entry's
+// bar before the entry call never fills; w3bf05-v1): nothing rests for them
+// after the pair, where the adapter had frozen 1.0 and 1.5.
 static void test_MM_pair_defers_percent_exit_reconciliation_until_net() {
     std::printf("test_MM_pair_defers_percent_exit_reconciliation_until_net\n");
     struct P : PendingMarketProbeBase {
@@ -1088,8 +1093,8 @@ static void test_MM_pair_defers_percent_exit_reconciliation_until_net() {
     p.run(bars, 3);
     CHECK(near(p.position_after_pair, 2.5));
     CHECK(near(p.ledger_after_pair, 2.5));
-    CHECK(near(p.exit_one_qty, 1.0));
-    CHECK(near(p.exit_two_qty, 1.5));
+    CHECK(near(p.exit_one_qty, 0.0));
+    CHECK(near(p.exit_two_qty, 0.0));
     CHECK(p.trade_count() == 2);
 }
 

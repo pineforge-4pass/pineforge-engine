@@ -707,7 +707,11 @@ static void check_missing_provenance_is_inert(BookVariant variant,
     CHECK(probe.parent_then_child_incarnations
           == (variant == BookVariant::PostCancelDoubleReissue));
     CHECK(near(probe.position_seen_on_trigger_bar, is_long ? 1.0 : -1.0));
-    CHECK(probe.trade_count() == 1);
+    // Expectation corrected (lane W3B-ENG-GRID): FreshChild issues X after
+    // the cancel and before the fresh parent's call, while E neither exists
+    // nor rests, and TradingView voids such an exit (lab tv w3f05-s18, -s21;
+    // w3bf05-v1): the fresh parent's trade has no X to close it.
+    CHECK(probe.trade_count() == (variant == BookVariant::FreshChild ? 0 : 1));
 }
 
 static void check_sort_scope_guards() {

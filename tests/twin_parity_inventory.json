@@ -200,6 +200,13 @@
       "twinAssertionSha256": "54c3efd189cd70416be175b5608954f0299bdc4aa3d80ab97550665e949401cd",
       "twinAssertions": 54
     },
+    "test_dual_entry_placement_sizing": {
+      "baseAssertions": 172,
+      "reason": "lane W3B-ENG-GRID: the pair's percent exits for LAY-L are issued before LAY-L's entry call, while LAY-L neither exists nor rests, and TradingView voids such an exit (lab tv w3f05-s18, w3f05-s21, w3bf05-v1 in tests/fixtures/exit_queue): nothing rests for them after the pair, where the adapter froze 1.0 and 1.5",
+      "twin": "test_dual_entry_placement_sizing_l4b.cpp",
+      "twinAssertionSha256": "1584d05750571a66283c1234fac0b5dc6cbe7bde0bf2ab46637051ddd327db3b",
+      "twinAssertions": 172
+    },
     "test_engine_risk": {
       "baseAssertions": 56,
       "reason": "protected risk-latch reads are rewritten to public trade and position outcomes",
@@ -304,6 +311,13 @@
       "twin": "test_percent_equity_open_entry_fee_l4b.cpp",
       "twinAssertionSha256": "cb694da6f8211cab98bb19411d0a06a5ccd90c8ab87be9e7f5d7332d976f1ce0",
       "twinAssertions": 23
+    },
+    "test_prearmed_exit_path_cursor": {
+      "baseAssertions": 96,
+      "reason": "lane W3B-ENG-GRID: the FreshChild book issues its exit after the parent's cancel and before the fresh parent's call, while the entry neither exists nor rests, and TradingView voids such an exit (lab tv w3f05-s18, w3f05-s21, w3bf05-v1 in tests/fixtures/exit_queue): the fresh parent's trade has no exit to close it",
+      "twin": "test_prearmed_exit_path_cursor_l4c.cpp",
+      "twinAssertionSha256": "0128c3d7d3cb461dea0032ad74b36b88c22f6f717c72366decf06eb0e1eb8057",
+      "twinAssertions": 96
     },
     "test_reservation_expansion": {
       "baseAssertions": 139,
