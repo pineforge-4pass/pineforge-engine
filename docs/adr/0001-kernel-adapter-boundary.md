@@ -338,17 +338,20 @@ kernel and own these quirks, each at its site:
 - **Pine language state and harness flags.** Series, the tick-level barstate flags and
   position-view freezing (`PineLanguageState` `pine_language_state.hpp:12`); the session flags,
   `PineStrategyHost` members since R5 lane F5 (`session_ismarket_`
-  `pine_strategy_host.hpp:1019`), which `scheduler_update_session_state`
+  `pine_strategy_host.hpp:1024`), which `scheduler_update_session_state`
   (`pine_strategy_host.cpp:1461`) selects from the kernel's session-day facts before each source
   callback — `session_ismarket_` and the `_regular` pair are those facts as they are, and the plain
   `session.isfirstbar` / `islastbar` pair widens the regular day by the pre- and post-market bars an
   extended-hours chart holds (`update_extended_session_day`, Pine policy on TradingView's
   extended-hours tapes, `tests/test_session_extended_day_tape.cpp`). Generated code reads two of them;
-  a generated `session.ismarket` still calls the time-of-day predicate
-  (`pine_session_ismarket` `pine_strategy_host.hpp:665`), which on six `lab tv` tapes misses every
-  Sunday open of a weekday-masked overnight session and every bar of `0000-2400`, where the
-  kernel's fact matches TradingView on every bar (R5 lane H-MEASURE,
-  `tests/test_session_ismarket_tape.cpp`; routing it is a codegen change); `barstate_islast_`, still a
+  a generated chart `session.ismarket` asks the session calendar at the bar's open through the
+  transpiler's own helper, and only one inside a `request.security` payload still calls the
+  time-of-day predicate (`pine_session_ismarket` `pine_strategy_host.hpp:665`), which on six
+  `lab tv` tapes misses every Sunday open of a weekday-masked overnight session and every bar of
+  `0000-2400`, where the kernel's fact matches TradingView on every bar (R5 lane H-MEASURE,
+  `tests/test_session_ismarket_tape.cpp`). A reading at the bar's open also puts a bar that opens
+  inside a break out of market, which TradingView and the kernel's fact hold in market
+  (`tests/test_session_break_open_bar_tape.cpp`); `barstate_islast_`, still a
   `BacktestEngine` member (`engine.hpp:378`) only this host writes; the live-tail /
   probe-suppress overrides (`set_realtime_tail` `pine_strategy_host.hpp:502`,
   `set_probe_suppress_tail_logic` `pine_strategy_host.hpp:528`), whose live-probe protocol is

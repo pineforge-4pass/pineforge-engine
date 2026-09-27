@@ -1,10 +1,12 @@
 /*
  * test_session_ismarket_tape.cpp — R5 wave H, lane H-MEASURE, row G2-36.
  *
- * Generated Pine code reads `session.ismarket` through the legacy
+ * Generated Pine code read `session.ismarket` through the legacy
  * time-of-day predicate `pine_session_ismarket` (include/pineforge/
- * session_time.hpp, via PineStrategyHost's class-scope wrapper), while the
- * kernel answers the same question as a session-day fact
+ * session_time.hpp, via PineStrategyHost's class-scope wrapper) when this
+ * row was written; the transpiler has since asked the session calendar at a
+ * chart bar's open instead, and keeps the predicate inside request.security
+ * payloads. The kernel answers the same question as a session-day fact
  * (NativeDecisionContext::in_session, which the Pine host also stores as
  * session_ismarket_ before every source callback). The two read a session's
  * day mask differently: the predicate tests each instant's own weekday, the

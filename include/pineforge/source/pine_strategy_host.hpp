@@ -1005,17 +1005,22 @@ protected:
     int realtime_tail_horizon_bars_ = 0;
     bool probe_suppress_tail_logic_ = false;
 
-    // The script bar's session flags as generated code reads them:
-    // session.isfirstbar and session.islastbar lower to the next two, and
-    // session_ismarket_ is the in-session fact itself (a generated
-    // session.ismarket calls pine_session_ismarket above instead). They were
-    // BacktestEngine members the kernel only cleared (R5 lane F5 moved them
-    // here). scheduler_update_session_state writes them from the kernel's
-    // session-day facts before each source callback, and on_native_run_begin
-    // clears them; derived from those facts, they fold into no hash, as the
-    // facts do not. The _regular pair is the regular session's day, the
-    // kernel's facts as they are; the plain pair the chart's, widened by the
-    // pre- and post-market bars an extended-hours chart holds.
+    // The script bar's session flags. Generated code reads session.isfirstbar
+    // and session.islastbar from the next two -- and, as the transpiler lowers
+    // them today, their _regular spellings as well, which the last two answer:
+    // the plain pair is the chart's session day, widened by the pre- and
+    // post-market bars an extended-hours chart holds, the _regular pair the
+    // regular session's day, the kernel's facts as they are.
+    // session_ismarket_ is the kernel's in-session fact. A generated chart
+    // session.ismarket does not read it: it asks the session calendar at the
+    // bar's open (the transpiler's _pf_session_market_ helper, e.g.
+    // corpus/validation/symbol-specified/AAPL/session-ismarket-nyse-rth-01),
+    // and one inside a request.security payload calls pine_session_ismarket
+    // above. The flags were BacktestEngine members the kernel only cleared (R5
+    // lane F5 moved them here). scheduler_update_session_state writes them
+    // before each source callback and on_native_run_begin clears them;
+    // derived from the kernel's session-day facts, they fold into no hash, as
+    // the facts do not.
     bool session_ismarket_ = false;
     bool session_isfirstbar_ = false;
     bool session_islastbar_ = false;
