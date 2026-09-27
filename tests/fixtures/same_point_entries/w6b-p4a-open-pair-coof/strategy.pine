@@ -1,0 +1,83 @@
+//@version=6
+strategy("W6B P4a opposite pair at one open, calc_on_order_fills", overlay=true,
+     initial_capital=1000000, pyramiding=0,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     commission_type=strategy.commission.percent, commission_value=0,
+     slippage=0, margin_long=100, margin_short=100,
+     process_orders_on_close=false, calc_on_order_fills=true)
+
+// Lane W6-ENG-FILL-ORDER, family F10. From flat, two opposite
+// strategy.entry calls on one bar; both are marketable at the next open, so
+// both fill at that one price. The signal names show which leg TradingView
+// fills first. Leg kinds: M market, S stop, L limit; a priced leg is
+// already marketable (buy stop / sell limit at half the close, sell stop /
+// buy limit at twice the close). LF = long leg declared first, SF = short
+// leg declared first. Each cell is flattened 30 minutes later.
+//
+// Lane W6B-ENG-PAIRS, item 4: the same cells under calc_on_order_fills, the
+// pair placed once per confirmed bar (a fill recalculation places nothing).
+
+int t0 = timestamp("UTC", 2025, 4, 8, 0, 0)
+int stepMs = 2 * 60 * 60 * 1000
+int nCells = 14
+int rel = time - t0
+bool inRange = rel >= 0 and rel < 2 * nCells * stepMs
+bool eventBar = inRange and rel % stepMs == 0
+bool cleanupBar = inRange and rel % stepMs == 30 * 60 * 1000
+int cell = inRange ? (rel - rel % stepMs) / stepMs % nCells : -1
+
+float lo = close * 0.5
+float hi = close * 2.0
+
+var int actedBar = -1
+bool firstPass = bar_index != actedBar
+
+if barstate.isconfirmed and firstPass and eventBar and strategy.position_size == 0
+    actedBar := bar_index
+    if cell == 0
+        strategy.entry("E1", strategy.long, qty=1, comment="MM-LF-1")
+        strategy.entry("E2", strategy.short, qty=1, comment="MM-LF-2")
+    else if cell == 1
+        strategy.entry("E1", strategy.short, qty=1, comment="MM-SF-1")
+        strategy.entry("E2", strategy.long, qty=1, comment="MM-SF-2")
+    else if cell == 2
+        strategy.entry("E1", strategy.long, qty=1, comment="MS-LF-1")
+        strategy.entry("E2", strategy.short, qty=1, stop=hi, comment="MS-LF-2")
+    else if cell == 3
+        strategy.entry("E1", strategy.short, qty=1, comment="MS-SF-1")
+        strategy.entry("E2", strategy.long, qty=1, stop=lo, comment="MS-SF-2")
+    else if cell == 4
+        strategy.entry("E1", strategy.long, qty=1, stop=lo, comment="SM-LF-1")
+        strategy.entry("E2", strategy.short, qty=1, comment="SM-LF-2")
+    else if cell == 5
+        strategy.entry("E1", strategy.short, qty=1, stop=hi, comment="SM-SF-1")
+        strategy.entry("E2", strategy.long, qty=1, comment="SM-SF-2")
+    else if cell == 6
+        strategy.entry("E1", strategy.long, qty=1, stop=lo, comment="SS-LF-1")
+        strategy.entry("E2", strategy.short, qty=1, stop=hi, comment="SS-LF-2")
+    else if cell == 7
+        strategy.entry("E1", strategy.short, qty=1, stop=hi, comment="SS-SF-1")
+        strategy.entry("E2", strategy.long, qty=1, stop=lo, comment="SS-SF-2")
+    else if cell == 8
+        strategy.entry("E1", strategy.short, qty=1, comment="ML-SF-1")
+        strategy.entry("E2", strategy.long, qty=1, limit=hi, comment="ML-SF-2")
+    else if cell == 9
+        strategy.entry("E1", strategy.short, qty=1, limit=lo, comment="LM-SF-1")
+        strategy.entry("E2", strategy.long, qty=1, comment="LM-SF-2")
+    else if cell == 10
+        strategy.entry("E1", strategy.short, qty=1, limit=lo, comment="LL-SF-1")
+        strategy.entry("E2", strategy.long, qty=1, limit=hi, comment="LL-SF-2")
+    else if cell == 11
+        strategy.entry("E1", strategy.short, qty=1, limit=lo, comment="LS-SF-1")
+        strategy.entry("E2", strategy.long, qty=1, stop=lo, comment="LS-SF-2")
+    else if cell == 12
+        strategy.entry("E1", strategy.short, qty=1, stop=hi, comment="SL-SF-1")
+        strategy.entry("E2", strategy.long, qty=1, limit=hi, comment="SL-SF-2")
+    else if cell == 13
+        strategy.entry("E1", strategy.short, qty=2, comment="MS-SF-Q2-1")
+        strategy.entry("E2", strategy.long, qty=3, stop=lo, comment="MS-SF-Q3-2")
+
+if barstate.isconfirmed and firstPass and cleanupBar and strategy.position_size != 0
+    actedBar := bar_index
+    strategy.cancel_all()
+    strategy.close_all(comment="FLT")

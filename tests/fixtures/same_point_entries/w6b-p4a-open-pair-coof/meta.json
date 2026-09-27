@@ -1,0 +1,16 @@
+{
+  "title": "W6B P4a opposite pair at one open, calc_on_order_fills",
+  "slug": "w6b-p4a-open-pair-coof",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:32:06.480Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "1b4130ded9220aa500ffc6b570cd51a7d12d454f36ca270853266b15e5ae2c75",
+  "tv_trades_sha256": "b93840d8a6a8f35a379d975017b1a5ff90366ab672764da4339bde0dfc981295",
+  "tv_trades_rows": 80
+}

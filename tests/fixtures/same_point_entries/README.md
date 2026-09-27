@@ -174,6 +174,22 @@ earlier bar, a replaced or cancelled call -- keep the legacy source order the
 pyramiding-2 MM cases of `test_dual_entry_placement_sizing_l4b` pin, and a
 pyramiding-2 market pair keeps its admission at the batch's finalization.
 
+## F10 under calc_on_order_fills (lane W6B-ENG-PAIRS, item 4)
+
+| tape | trades | `strategy()` declares | tv_trades.csv sha256 |
+|---|---:|---|---|
+| `w6b-p4a-open-pair-coof` | 40 | `w6-f10a-open-pair`'s cells, calc_on_order_fills | `b93840d8a6a8f35a379d975017b1a5ff90366ab672764da4339bde0dfc981295` |
+| `w6b-p4b-limit-class-coof` | 24 | `w6-f10b-limit-class`'s cells, calc_on_order_fills | `2a3f906b05037f148f4b3be8d53a2267a5c2031c29acc86400f249b0a54228a6` |
+
+Both place the pair once per confirmed bar, as `w6-f10f-coof-pair` does, and
+TradingView books them byte for byte as the two W6 tapes without
+calc_on_order_fills: the order and the one transaction do not change when a
+fill recalculates the script (`w6-f10f` shows the same on the close-pair
+cells). The engine had kept these pairs outside the pair rules, so a later
+market call traded its own quantity and a buy placed after a sell filled
+last; the pair scope now covers calc_on_order_fills for calls placed outside
+a fill recalculation.
+
 ## F12: a reversing stop and a protective stop on one bar
 
 | tape | trades | `strategy()` declares | tv_trades.csv sha256 |
@@ -207,9 +223,6 @@ open is already through now fills at that open.
 
 The test leaves these out; the tapes stay as evidence.
 
-- `w6-f10f-coof-pair`, calc_on_order_fills without process_orders_on_close:
-  every cell. The engine neither orders the pair nor adds the pending market's
-  quantity outside `same_bar_market_tx_scope()`.
 - `w6-f12b-stop-priority-default` A4: after the exit, TradingView opens the
   reversal's frozen 2x short at the open and liquidates it at once by a margin
   call at the same price; the engine refuses the fill. A margin-model rule,

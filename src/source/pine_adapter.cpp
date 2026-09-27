@@ -2639,7 +2639,7 @@ bool PineExecutionAdapter::core_sizing_price_matches(
 
 bool PineExecutionAdapter::same_bar_market_tx_scope() const {
     return config_.commission_value == 0.0 && config_.pyramiding <= 1
-        && same_point_pair_scope();
+        && !config_.calc_on_order_fills && same_point_pair_scope();
 }
 
 // R5 lane W6B-ENG-PAIRS: where the flat-pair rules of W6-ENG-FILL-ORDER hold
@@ -2647,8 +2647,10 @@ bool PineExecutionAdapter::same_bar_market_tx_scope() const {
 // quantity plus the pending market's, and that transaction's admission. The
 // zero-cost batch above is its subset; TradingView books a commissioned pair
 // the same way, the admission leaving the commission out (lab tv w6-f10i,
-// w6-f10j, w6b-p1b/p1c/p1d), and a pair under any pyramiding, same-side lots
-// by rank too (w6-f10c, w6b-p2a/p2b/p2c; tests/fixtures/same_point_entries).
+// w6-f10j, w6b-p1b/p1c/p1d), a pair under any pyramiding, same-side lots by
+// rank too (w6-f10c, w6b-p2a/p2b/p2c), and a pair under calc_on_order_fills
+// placed outside a fill recalculation (w6-f10f, w6b-p4a/p4b;
+// tests/fixtures/same_point_entries).
 bool PineExecutionAdapter::same_point_pair_scope() const {
     const bool all_in_percent = config_.default_qty_type
         == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
@@ -2658,7 +2660,7 @@ bool PineExecutionAdapter::same_point_pair_scope() const {
         || (config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
             && config_.default_qty_value < 100.0);
     const bool variable_short_seed = variable_default && short_seed_context_is_live();
-    if (!host_ || config_.process_orders_on_close || config_.calc_on_order_fills
+    if (!host_ || config_.process_orders_on_close
         || coof_recalc_active_ || config_.close_entries_rule_any || all_in_percent
         || (!fixed_default && !variable_short_seed)
         || config_.slippage != 0

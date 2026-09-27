@@ -23,7 +23,8 @@
  *        by quantity, and its admission against the equity leaves the fee
  *        out, however little of the equity the fee would leave. Under
  *        pyramiding 2 a pair books as under 0, and same-side lots fill by
- *        rank too, three of them under pyramiding 3.
+ *        rank too, three of them under pyramiding 3; under
+ *        calc_on_order_fills a pair placed once per bar books as without it.
  *   F12  A held position's protective strategy.exit stop and a reversing
  *        strategy.entry stop on the same side of the price: the level the
  *        bar's path reaches first fills first, the magnifier changes nothing,
@@ -632,6 +633,15 @@ int main() {
          all8, 24},
         {"w6b-p2c-same-side-pyramiding3", Probe::Pair, &kSameSideTriple, 2,
          "fixed 1, pyramiding 3", fixed_config(3, false, false), all12, 72},
+        // Item 4: calc_on_order_fills without process_orders_on_close.
+        {"w6-f10f-coof-pair", Probe::GuardedPair, &kClosePair, 2,
+         "fixed 1, pyramiding 0, calc_on_order_fills", fixed_config(0, false, true), all8, 26},
+        {"w6b-p4a-open-pair-coof", Probe::GuardedPair, &kOpenPair, 2,
+         "fixed 1, pyramiding 0, calc_on_order_fills (the tape equals w6-f10a's)",
+         fixed_config(0, false, true), all14, 40},
+        {"w6b-p4b-limit-class-coof", Probe::GuardedPair, &kLimitClass, 2,
+         "fixed 1, pyramiding 0, calc_on_order_fills (the tape equals w6-f10b's)",
+         fixed_config(0, false, true), all8, 24},
     };
 
     for (const Case& c : cases) {
@@ -693,6 +703,8 @@ int main() {
         {"w6b-p1d-open-pair-per-order", &kOpenPair, 28},
         {"w6b-p2a-open-pair-pyramiding2", &kOpenPair, 28},
         {"w6b-p2b-limit-class-pyramiding2", &kLimitClass, 16},
+        {"w6b-p4a-open-pair-coof", &kOpenPair, 28},
+        {"w6b-p4b-limit-class-coof", &kLimitClass, 16},
     };
     for (const PairTape& pt : pair_tapes) {
         const Tape tape = tape_trades(pt.tape, end_ms);
