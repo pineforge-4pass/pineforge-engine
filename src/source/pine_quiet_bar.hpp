@@ -51,7 +51,6 @@ enum class QuietHook : std::uint8_t {
     TvMoneyTrailMargin,      // schedule_tv_money_long_margin_before_trail: out of scope
     OpenMarginCheckpoints,   // on_bar_open's open/path margin block: flat book
     DeclinedReversalAtOpen,  // declined_reversal_at_open: no reversal entry
-    RoundedPoocShortMargin,  // defer_rounded_pooc_short_margin_until_close: out of scope
     IntradayLossClose,       // submit_intraday_loss_close at the open: no loss rule
     IntradayLossPath,        // schedule_intraday_loss_path at the open: no loss rule
     PreopenMarginSlice,      // schedule_preopen_margin_slice: no default-percent opening

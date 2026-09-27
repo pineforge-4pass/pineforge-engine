@@ -3,12 +3,16 @@
 
 #define pending_orders_ source_pending_view()
 
-// Fable delta-2 P0-A witness (A42 corrected): a carried POOC short with a
-// competing pending entry-like order takes no open/path margin slice on that
-// bar; the close checkpoint runs after the bar's market fills
-// (ab9714be pine_fills.cpp:1172-1230, :2462-2523; pine_scheduler.cpp:260-278).
-// Every literal below is the ab9714be output of the same probe
-// (EV tasks/r4-d/fable-delta3-probes/mc, probe_base).
+// A carried POOC short beside a competing pending entry-like order: once the
+// Fable delta-2 P0-A witness (A42 corrected), whose literals were the
+// ab9714be output of the probe (EV tasks/r4-d/fable-delta3-probes/mc,
+// probe_base) -- no open/path margin slice on that bar, the close checkpoint
+// after the bar's market fills (ab9714be pine_fills.cpp:1172-1230,
+// :2462-2523; pine_scheduler.cpp:260-278). TradingView takes the short's
+// calls on the bar's path before the script whether an entry is parked beside
+// it or not (lab tv tape tests/fixtures/margin_residual
+// w5b-pc-seen-size-parked, lane W5B-ENG-MARGIN-RESIDUAL): every parked
+// variant below books the rows of its unparked control.
 // A carried short's completed adverse-path liquidation is visible to the
 // process_orders_on_close script, before a close or reversal sizes its order.
 // Compact command fixtures use synthetic timestamps, with quantities/prices
@@ -111,10 +115,10 @@ static void expect(const char* tag, CarriedShort& e, double first, double second
 
 int main() {
     { CarriedShort e(Action::REVERSE); e.run(bars.data(), static_cast<int>(bars.size())); expect("reverse, no parked", e, -12.44432, -12.33168, 2.00000, {{"__margin_call__", 2000, 0.15740, 110675.31}, {"__margin_call__", 3000, 0.11264, 111326.20}, {"L", 3000, 12.33168, 110981.97}, {"__close__", 4000, 2.00000, 110820.93}}); }
-    { CarriedShort e(Action::REVERSE); e.parked_entry = true; e.run(bars.data(), static_cast<int>(bars.size())); expect("reverse, parked@0 (fixture)", e, -12.60172, -12.44432, 2.00000, {{"__margin_call__", 2000, 0.15740, 110675.31}, {"L", 3000, 12.44432, 110981.97}, {"__close__", 4000, 2.00000, 110820.93}}); }
-    { Variant e(0, false); e.run(bars.data(), static_cast<int>(bars.size())); expect("hold, parked@0", e, -12.60172, -12.44432, -12.33168, {{"__margin_call__", 2000, 0.15740, 110675.31}, {"__margin_call__", 3000, 0.11264, 111326.20}, {"__close__", 4000, 12.33168, 110820.93}}); }
-    { Variant e(1, false); e.run(bars.data(), static_cast<int>(bars.size())); expect("hold, parked@1 (after bar1 slice)", e, -12.44432, -12.44432, -12.33168, {{"__margin_call__", 2000, 0.15740, 110675.31}, {"__margin_call__", 3000, 0.11264, 111326.20}, {"__close__", 4000, 12.33168, 110820.93}}); }
-    { Variant e(0, true); e.run(bars.data(), static_cast<int>(bars.size())); expect("hold, parked@0, cancel@2", e, -12.60172, -12.44432, -12.33168, {{"__margin_call__", 2000, 0.15740, 110675.31}, {"__margin_call__", 3000, 0.11264, 111326.20}, {"__close__", 4000, 12.33168, 110820.93}}); }
+    { CarriedShort e(Action::REVERSE); e.parked_entry = true; e.run(bars.data(), static_cast<int>(bars.size())); expect("reverse, parked@0 (fixture)", e, -12.44432, -12.33168, 2.00000, {{"__margin_call__", 2000, 0.15740, 110675.31}, {"__margin_call__", 3000, 0.11264, 111326.20}, {"L", 3000, 12.33168, 110981.97}, {"__close__", 4000, 2.00000, 110820.93}}); }
+    { Variant e(0, false); e.run(bars.data(), static_cast<int>(bars.size())); expect("hold, parked@0", e, -12.44432, -12.33168, -12.33168, {{"__margin_call__", 2000, 0.15740, 110675.31}, {"__margin_call__", 3000, 0.11264, 111326.20}, {"__close__", 4000, 12.33168, 110820.93}}); }
+    { Variant e(1, false); e.run(bars.data(), static_cast<int>(bars.size())); expect("hold, parked@1 (after bar1 slice)", e, -12.44432, -12.33168, -12.33168, {{"__margin_call__", 2000, 0.15740, 110675.31}, {"__margin_call__", 3000, 0.11264, 111326.20}, {"__close__", 4000, 12.33168, 110820.93}}); }
+    { Variant e(0, true); e.run(bars.data(), static_cast<int>(bars.size())); expect("hold, parked@0, cancel@2", e, -12.44432, -12.33168, -12.33168, {{"__margin_call__", 2000, 0.15740, 110675.31}, {"__margin_call__", 3000, 0.11264, 111326.20}, {"__close__", 4000, 12.33168, 110820.93}}); }
     { Variant e(2, false); e.run(bars.data(), static_cast<int>(bars.size())); expect("hold, parked@2", e, -12.44432, -12.33168, -12.33168, {{"__margin_call__", 2000, 0.15740, 110675.31}, {"__margin_call__", 3000, 0.11264, 111326.20}, {"__close__", 4000, 12.33168, 110820.93}}); }
     { Variant e(9, false); e.run(bars.data(), static_cast<int>(bars.size())); expect("hold, never parked", e, -12.44432, -12.33168, -12.33168, {{"__margin_call__", 2000, 0.15740, 110675.31}, {"__margin_call__", 3000, 0.11264, 111326.20}, {"__close__", 4000, 12.33168, 110820.93}}); }
     std::printf("test_l9a_carried_pooc_competing_checkpoint: %d passed, %d failed\n", passed, failed);

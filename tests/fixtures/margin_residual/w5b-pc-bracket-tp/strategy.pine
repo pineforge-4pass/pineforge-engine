@@ -1,0 +1,24 @@
+//@version=6
+strategy("W5B PC POOC short with a take-profit on its called bar", overlay=true, process_orders_on_close=true)
+
+// Lane W5B-ENG-MARGIN-RESIDUAL, a carried process_orders_on_close short whose
+// next bar rises above its fill (a margin call at the high) and falls to its
+// take-profit, fee- and slippage-free. v6 defaults: 100000, 100 % of equity,
+// margin 100. At each of fifteen signal closes a default short fills at the
+// close with strategy.exit(limit = 0.2 % under that close, stop 3 % over).
+// Flat 45 minutes after the cell.
+cellAt(int offsetMin) =>
+    int t = time - offsetMin * 60 * 1000
+    t == timestamp("UTC", 2025, 4, 2, 0, 0) or t == timestamp("UTC", 2025, 4, 2, 3, 0) or
+     t == timestamp("UTC", 2025, 4, 2, 6, 0) or t == timestamp("UTC", 2025, 4, 2, 9, 0) or
+     t == timestamp("UTC", 2025, 4, 2, 18, 0) or t == timestamp("UTC", 2025, 4, 3, 21, 0) or
+     t == timestamp("UTC", 2025, 4, 4, 12, 0) or t == timestamp("UTC", 2025, 4, 5, 3, 0) or
+     t == timestamp("UTC", 2025, 4, 5, 9, 0) or t == timestamp("UTC", 2025, 4, 5, 12, 0) or
+     t == timestamp("UTC", 2025, 4, 5, 15, 0) or t == timestamp("UTC", 2025, 4, 5, 21, 0) or
+     t == timestamp("UTC", 2025, 4, 6, 9, 0) or t == timestamp("UTC", 2025, 4, 6, 12, 0) or
+     t == timestamp("UTC", 2025, 4, 6, 15, 0)
+if cellAt(0)
+    strategy.entry("S", strategy.short, comment="short")
+    strategy.exit("X", "S", limit=close * 0.998, stop=close * 1.03, comment_profit="tp", comment_loss="sl")
+if cellAt(45)
+    strategy.close_all(comment="cleanup")

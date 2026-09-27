@@ -15097,105 +15097,6 @@ bool PineExecutionAdapter::schedule_tv_money_long_margin_before_trail(
         "__tv_money_margin_path__"));
 }
 
-bool PineExecutionAdapter::market_orders_pending_at_close(
-        const NativeDecisionContext& context, std::uint64_t except_incarnation) const {
-    for (const auto& handle : live_handles_) {
-        if (handle.incarnation == except_incarnation) continue;
-        const auto found = placement_.find(handle.incarnation);
-        if (found == placement_.end()) continue;
-        const auto& row = found->second;
-        const bool market_family = row.family == PineOrderFamily::Entry
-            || row.family == PineOrderFamily::Order
-            || row.family == PineOrderFamily::Close
-            || row.family == PineOrderFamily::CloseAll;
-        if (!market_family) continue;
-        if (std::isfinite(row.exit_levels.limit) || std::isfinite(row.exit_levels.stop)) continue;
-        if (row.projection_created_bar != projection_bar_index(context)) continue;
-        return true;
-    }
-    return false;
-}
-
-bool PineExecutionAdapter::defer_rounded_pooc_short_margin_until_close(
-        const Bar& bar) const {
-    const auto grid = staged_.quantity_grid;
-    // Quiet: out of scope by the run's configuration alone, which the test
-    // below would refuse before it reads the book.
-    if (detail::skip_quiet(detail::QuietHook::RoundedPoocShortMargin,
-            host_ != nullptr
-            && (!config_.process_orders_on_close || config_.calc_on_order_fills
-                || stream_mode_ || config_.pyramiding < 0 || config_.pyramiding > 1
-                || config_.commission_value != 0.0 || config_.slippage != 0
-                || std::abs(config_.margin_short - 100.0) > 1e-12
-                || !grid || !(*grid > 0.0) || !(*grid < 1.0)
-                || std::abs(staged_.syminfo.pointvalue - 1.0) > 1e-12
-                || cap.active() || risk_.max_intraday_loss > 0.0
-                || risk_.max_drawdown > 0.0 || risk_.max_cons_loss_days > 0))) {
-        return false;
-    }
-    const auto position = detail::run_position(require_host());
-    if (!config_.process_orders_on_close || config_.calc_on_order_fills
-        || stream_mode_ || position.signed_units >= 0.0 || position.lot_count != 1
-        || position_open_script_bar_ >= bar.timestamp
-        || config_.pyramiding < 0 || config_.pyramiding > 1
-        || config_.commission_value != 0.0 || config_.slippage != 0
-        || std::abs(config_.margin_short - 100.0) > 1e-12
-        || !grid || !(*grid > 0.0) || !(*grid < 1.0)
-        || std::abs(staged_.syminfo.pointvalue - 1.0) > 1e-12
-        || active_staged_fx(bar.timestamp) != 1.0
-        || cap.active() || risk_.max_intraday_loss > 0.0
-        || risk_.max_drawdown > 0.0 || risk_.max_cons_loss_days > 0
-        || !finite_positive(bar.high)) {
-        return false;
-    }
-    const double adverse = nearest_tick(bar.high, staged_.syminfo.mintick);
-    if (!finite_positive(adverse)
-        || !(*grid * adverse * staged_.syminfo.pointvalue < 1.0)) {
-        return false;
-    }
-
-    // ab9714be:pine_fills.cpp:1173-1264.  Rounded-money POOC shorts defer the
-    // adverse checkpoint until after the source body unless the completed
-    // old-order pass contains exactly one live, full owned trailing exit.
-    // The no-trail case is the observable R26 timing discriminator.
-    // ab9714be:pine_fills.cpp:7672-7675: that pass Removes an EXIT whose
-    // from_entry never filled in the current position cycle (the opposite
-    // side's per-bar strategy.exit), so it never counts as a second order.
-    const PlacementSnapshot* only = nullptr;
-    for (const auto& handle : live_handles_) {
-        const auto found = placement_.find(handle.incarnation);
-        if (found == placement_.end()) continue;
-        const auto& row = found->second;
-        const bool exit_family = row.family == PineOrderFamily::ExitLimit
-            || row.family == PineOrderFamily::ExitStop
-            || row.family == PineOrderFamily::ExitTrail;
-        if (exit_family && !row.from_entry.empty()) {
-            const auto cohort = cohorts_by_id_.find(row.from_entry);
-            if (cohort == cohorts_by_id_.end() || cohort->second.opened.empty())
-                continue;
-        }
-        if (only) return true;
-        only = &row;
-    }
-    if (!only || only->family != PineOrderFamily::ExitTrail
-        || only->from_entry.empty() || only->legs.dormant()
-        || only->legs.pending_replacement()
-        || std::isfinite(only->exit_levels.stop)
-        || std::isfinite(only->exit_levels.limit)
-        || !finite_positive(only->exit_levels.trail_offset)
-        || (!std::isfinite(only->exit_levels.trail_points)
-            && !std::isfinite(only->exit_levels.trail_price))) {
-        return true;
-    }
-    const double held = std::abs(position.signed_units);
-    const bool full = std::isfinite(only->projection_remaining_qty)
-        ? only->projection_remaining_qty >= held - 1e-10
-        : (std::isfinite(only->requested_qty)
-            ? std::abs(only->requested_qty) >= held - 1e-10
-            : std::isfinite(only->qty_percent) && only->qty_percent >= 100.0);
-    return !full;
-}
-
 namespace {
 
 // A MARKET entry: no limit, stop or trail level. A flat bar's priced entries
@@ -15293,30 +15194,20 @@ bool PineExecutionAdapter::schedule_margin_call_path(
     const auto position = detail::run_position(require_host());
     if (position.signed_units == 0.0) return false;
     if (config_.process_orders_on_close) {
-        const bool competing_entry = std::any_of(
-            live_handles_.begin(), live_handles_.end(), [&](const auto& handle) {
-                const auto found = placement_.find(handle.incarnation);
-                return found != placement_.end() && found->second.opening
-                    && (found->second.family == PineOrderFamily::Entry
-                        || found->second.family == PineOrderFamily::Order);
-            });
-        // ab9714be pine_fills.cpp:1172-1230 / :2462-2523 (executed on both
-        // libraries, Fable delta-2 P0-A): while a competing pending entry-like
-        // order exists, a carried POOC short takes no open/path margin slice
-        // on that bar at all — the slice lands at the close checkpoint after
-        // the script instead (base bar-1 view -12.60172 with a parked entry,
-        // -12.44432 without). Neither a prior margin event (A42's latch) nor
-        // an exit-comment scan (L4a) is part of the legacy predicate.
-        // The legacy sites are the carried POOC *short* checkpoints; a long
-        // position keeps the ordinary path slice (L8a margin_call_latch).
-        if (competing_entry && position.signed_units < 0.0) return false;
-        // ab9714be pine_scheduler.cpp:246-281: a carried POOC short outside
-        // the fee-free pre-script checkpoint (pine_fills.cpp:1172-1196) with
-        // nothing resting (no before-priced-exit hook, pine_fills.cpp:2150)
-        // is sliced only by the end-of-bar process_margin_call, after the
-        // close-time script sized its brackets against the untrimmed short.
-        // The post-script carried POOC short checkpoint (on_bar_close) owns
-        // that slice; an intrabar path slice would trim the position first.
+        // A carried process_orders_on_close short is checked over its bar's
+        // path before the script runs at the close, as a long is, whatever
+        // else the book holds: a pending entry beside it, a bracket that
+        // fills later on the path, a close, add or reversal at the close, and
+        // at any money class (lab tv tapes tests/fixtures/margin_residual
+        // w5b-pc-seen-size and -seen-size-parked: the script reads the called
+        // size, a parked entry beside the short or not; w5b-pc-carried-close,
+        // -reverse and -bracket-tp; lane W5B-ENG-MARGIN-RESIDUAL). ab9714be
+        // took no path slice beside a competing entry, and none on a
+        // rounded-money short, slicing after the script instead. The one
+        // exception left is a commissioned or slipped short with nothing
+        // resting: its slice is on_bar_close_before_script's, at the high
+        // before the script (lane W5-ENG-MARGIN-V6, C1), and a path slice
+        // here would take it twice.
         // A void call's request rests for no one (void_issue).
         const bool resting_order = std::any_of(
             live_handles_.begin(), live_handles_.end(), [&](const auto& handle) {
@@ -17215,7 +17106,6 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
             && declined_reversal_at_open(bar);
         bool margin_scheduled = false;
         if (!opening_margin_applied
-            && !defer_rounded_pooc_short_margin_until_close(bar)
             && (!whole_market_close_waits || declined_reversal)) {
             margin_scheduled = schedule_margin_call_path(bar, context);
         }
@@ -17762,21 +17652,16 @@ void PineExecutionAdapter::on_bar_close(
     // applied a margin slice on this script bar.
     if (last_margin_call_script_bar_ == context.script_bar_open_ms) return;
     if (submit_tv_money_long_margin_call(bar, context)) return;
-    if (defer_rounded_pooc_short_margin_until_close(bar)) {
-        const double adverse = nearest_tick(bar.high, staged_.syminfo.mintick);
-        (void)submit_margin_call_slice(adverse, context);
-        return;
-    }
-    // Quiet: both checkpoints below belong to a short under one run
-    // configuration each -- a commissioned full-margin short outside
-    // process_orders_on_close, a carried short inside it without fill
-    // recalculation -- and neither applies to this run.
+    // Quiet: the checkpoint below belongs to a commissioned full-margin short
+    // outside process_orders_on_close, and does not apply to this run. A
+    // carried short under process_orders_on_close was checked over the bar's
+    // path before the script (schedule_margin_call_path), or at its high
+    // there when commissioned or slipped (on_bar_close_before_script).
     if (skip_quiet(QuietHook::CloseMarginCheckpoints,
             bound
             && !(!config_.process_orders_on_close && config_.margin_short == 100.0
               && config_.commission_type == static_cast<int>(CommissionType::PERCENT)
-              && config_.commission_value > 0.0)
-            && !(config_.process_orders_on_close && !config_.calc_on_order_fills))) {
+              && config_.commission_value > 0.0))) {
         return;
     }
     const auto position = detail::run_position(require_host());
@@ -17826,26 +17711,6 @@ void PineExecutionAdapter::on_bar_close(
         }
         const double adverse = nearest_tick(bar.high, staged_.syminfo.mintick);
         (void)submit_margin_call_slice(adverse, context);
-    }
-    // A commissioned or slipped carried short was checked at its high before
-    // the script (on_bar_close_before_script).
-    const bool carried_pooc_short = config_.process_orders_on_close
-        && !config_.calc_on_order_fills && position.signed_units < 0.0
-        && position_open_script_bar_ != std::numeric_limits<std::int64_t>::min()
-        && position_open_script_bar_ != context.script_bar_open_ms
-        && config_.commission_value == 0.0 && config_.slippage == 0;
-    if (carried_pooc_short && finite_positive(bar.high)) {
-        // ab9714be pine_scheduler.cpp:260-278: the script's new market orders
-        // fill at the close (step 4) before process_margin_call runs. While
-        // such an order is live the checkpoint is deferred to the last of
-        // those fills (on_applied) so it evaluates the post-fill book
-        // (executed on both libraries: a reversal entry consumes the carried
-        // short with no close slice, Fable delta-2 P0-A).
-        if (market_orders_pending_at_close(context)) {
-            pooc_close_checkpoint_deferred_ms_ = context.script_bar_open_ms;
-            return;
-        }
-        (void)submit_margin_call_slice(bar.high, context);
     }
     // Ordinary price-path slices are born at the native open/applied points
     // and matched by the generic driver at their actual waypoint.  This
@@ -19143,24 +19008,6 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 // already-reduced physical book.
                 if (!recheck_at_fill || !submit_margin_call_slice(event.resolved_price, context))
                     (void)schedule_margin_call_path(policy_script_bar_, context);
-            }
-        }
-        if (pooc_close_checkpoint_deferred_ms_ == context.script_bar_open_ms
-            && context.coordinate.path_phase == NativePathPhase::Close
-            && placement_snapshot->family != PineOrderFamily::Margin
-            && !market_orders_pending_at_close(context, event.handle().incarnation)) {
-            // Last of this bar's close market fills: run the deferred
-            // carried-POOC-short checkpoint on the post-fill book.
-            pooc_close_checkpoint_deferred_ms_ = std::numeric_limits<std::int64_t>::min();
-            const auto after_fill = detail::run_position(require_host());
-            if (after_fill.signed_units < 0.0
-                && position_open_script_bar_ != std::numeric_limits<std::int64_t>::min()
-                && position_open_script_bar_ != context.script_bar_open_ms
-                && last_margin_call_script_bar_ != context.script_bar_open_ms
-                && policy_script_bar_valid_
-                && policy_script_bar_.timestamp == context.script_bar_open_ms
-                && finite_positive(policy_script_bar_.high)) {
-                (void)submit_margin_call_slice(policy_script_bar_.high, context);
             }
         }
         if (placement_snapshot->family == PineOrderFamily::Risk

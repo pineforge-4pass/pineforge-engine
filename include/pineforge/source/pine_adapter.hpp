@@ -1758,9 +1758,6 @@ private:
         const Bar&, const NativeDecisionContext&);
     bool schedule_tv_money_long_margin_before_trail(
         const Bar&, const NativeDecisionContext&);
-    bool market_orders_pending_at_close(const NativeDecisionContext& context,
-                                        std::uint64_t except_incarnation = 0) const;
-    bool defer_rounded_pooc_short_margin_until_close(const Bar&) const;
     std::optional<std::int64_t> flat_sibling_placement(std::size_t min_lots) const;
     bool flat_sibling_book(const PlacementSnapshot&, std::int32_t interval_index,
                            NativePathPhase phase) const;
@@ -2147,8 +2144,11 @@ private:
     // did. Same hash argument as kernel_margin_path_point_ above: a strictly
     // monotone ordinal compared only for equality with the current point's.
     std::uint64_t kernel_margin_resize_point_ = std::numeric_limits<std::uint64_t>::max();
-    // Close-time carried-POOC-short checkpoint deferred behind this bar's
-    // market fills (ab9714be pine_scheduler.cpp:260 before :278).
+    // Retired by lane W5B-ENG-MARGIN-RESIDUAL: ab9714be deferred a carried
+    // process_orders_on_close short's checkpoint behind its bar's close market
+    // fills (pine_scheduler.cpp:260 before :278); TradingView checks it over
+    // the bar's path before the script instead. Never set now, and kept as
+    // the constant it folds into the broker-state hash.
     std::int64_t pooc_close_checkpoint_deferred_ms_ = std::numeric_limits<std::int64_t>::min();
     std::int32_t signal_close_mc_event_bar_ = -1;
     std::int64_t signal_close_mc_position_cycle_ = 0;

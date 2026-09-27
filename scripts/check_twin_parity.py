@@ -29,7 +29,7 @@ LEDGER = ROOT / "tests/twin_parity_ledger.md"
 # executable code means a ledger/inventory rewrite cannot silently redefine
 # what the guard proves.
 BASE_MANIFEST_SHA256 = "594d23c87a6581dd8ea4a6ca57c8b3d2402034232d873355f839027564b6914f"
-INVENTORY_SHA256 = "8e00f38cc37b4cff875fb978aa77aad8f3dbea85e1151b826c531c77fc9b76df"
+INVENTORY_SHA256 = "b4874f155b6f36d4c78c9bfcb24716f02c852716f7654a6ea3de876bb2b4cb5a"
 LEDGER_SHA256 = "c568999da8777ff967cdb3fcf007f382f88902bf78f9e02c2c5d7d15de22e9ba"
 
 APPENDIX_HEADING = "## Appendix 5 — CHECK-parity unobservable literal ledger"

@@ -11,6 +11,13 @@
  *       opened; the combined book is margin-called once they have all filled
  *       -- at that fill, or under process_orders_on_close at the next open,
  *       sized at the close.
+ *   PC  A short carried under process_orders_on_close is checked over its
+ *       bar's path before the script runs at the close, fees or none, at any
+ *       money class, a pending entry beside it or not: the script reads the
+ *       called size, a take-profit later on the path meets what the call
+ *       left, and the script's close, reversal or add fills after it. An add
+ *       filled at the close is checked at the next open, not at that bar's
+ *       high.
  *
  * Each row replays one lab tv tape (tests/fixtures/margin_residual) through
  * the Pine adapter under the configuration the generated constructor declares
@@ -148,6 +155,20 @@ enum class Probe {
     SameBarExplicit60,   // w5b-sb-market-60x2 / w5b-sb-pooc-60x2
     SameBarExplicit40,   // w5b-sb-market-40x2
     SameBarDefault3,     // w5b-sb-default-x3 / w5b-sb-pooc-default-x3
+    CarriedNone,         // w5b-pc-carried-none
+    CarriedReverse,      // w5b-pc-carried-reverse
+    CarriedClose,        // w5b-pc-carried-close
+    SeenSize,            // w5b-pc-seen-size
+    SeenSizeParked,      // w5b-pc-seen-size-parked
+    BracketTakeProfit,   // w5b-pc-bracket-tp
+    AddCells,            // w5b-pa-pooc-p50
+};
+
+// The fifteen signal closes of the w5b-pc-* probes (W5-ENG-MARGIN-V6's cells).
+const std::int64_t kCells[] = {
+    at(2, 0, 0), at(2, 3, 0), at(2, 6, 0), at(2, 9, 0), at(2, 18, 0),
+    at(3, 21, 0), at(4, 12, 0), at(5, 3, 0), at(5, 9, 0), at(5, 12, 0),
+    at(5, 15, 0), at(5, 21, 0), at(6, 9, 0), at(6, 12, 0), at(6, 15, 0),
 };
 
 class ProbeHost final : public source::PineStrategyHost {
@@ -165,11 +186,19 @@ public:
         case Probe::SameBarExplicit60: same_bar_explicit(t, 0.6); break;
         case Probe::SameBarExplicit40: same_bar_explicit(t, 0.4); break;
         case Probe::SameBarDefault3: same_bar_default(t); break;
+        case Probe::CarriedNone:
+        case Probe::CarriedReverse:
+        case Probe::CarriedClose:
+        case Probe::SeenSize:
+        case Probe::SeenSizeParked:
+        case Probe::BracketTakeProfit: carried(t); break;
+        case Probe::AddCells: add_cells(t); break;
         }
     }
 
 private:
     void close_all(const char* comment) { strategy_close("", comment, kNaN, kNaN, false); }
+    int open_trades() const { return static_cast<int>(pyramid_entries_.size()); }
 
     // strategy.equity at this bar's close.
     double equity() { return current_equity() + open_profit(current_bar_.close); }
@@ -209,6 +238,59 @@ private:
             strategy_entry("C", is_long, kNaN, kNaN, kNaN, "C");
         }
         if (phase == 60 * kMinute) close_all("cleanup");
+    }
+
+    // w5b-pc-*: at each cell a default short fills at the close; on the next
+    // bar the script does its probe's action at the close; flattened 45
+    // minutes after the cell.
+    void carried(std::int64_t t) {
+        for (const std::int64_t cell : kCells) {
+            if (t == cell) {
+                strategy_entry("S", false, kNaN, kNaN, kNaN, "short");
+                if (probe_ == Probe::SeenSizeParked) {
+                    strategy_entry("P", true, std::round(current_bar_.close * 0.5 * 100.0) / 100.0,
+                                   kNaN, 0.001, "parked");
+                }
+                if (probe_ == Probe::BracketTakeProfit) {
+                    strategy_exit("X", "S", current_bar_.close * 0.998, current_bar_.close * 1.03);
+                }
+            }
+            if (t == cell + 15 * kMinute) {
+                switch (probe_) {
+                case Probe::CarriedNone: strategy_cancel_all(); break;
+                case Probe::CarriedReverse:
+                    strategy_entry("L", true, kNaN, kNaN, kNaN, "reverse");
+                    break;
+                case Probe::CarriedClose: close_all("close"); break;
+                case Probe::SeenSize:
+                case Probe::SeenSizeParked:
+                    strategy_order("B", true, std::abs(signed_position_size()));
+                    break;
+                default: break;
+                }
+            }
+            if (t == cell + 45 * kMinute) {
+                if (probe_ == Probe::SeenSizeParked) strategy_cancel("P");
+                close_all("cleanup");
+            }
+        }
+    }
+
+    // w5b-pa-pooc-p50: every 2 hours from 2025-04-02 00:00 UTC, sixty cells;
+    // E1 from flat, E2 45 minutes later while E1 is the only trade; flattened
+    // 90 minutes in. Even cells long, odd short.
+    void add_cells(std::int64_t t) {
+        const std::int64_t t0 = at(2, 0, 0);
+        const std::int64_t step = 120 * kMinute;
+        const std::int64_t rel = t - t0;
+        if (rel < 0 || rel >= 60 * step) return;
+        const std::int64_t phase = rel % step;
+        const bool is_long = (rel / step) % 2 == 0;
+        if (phase == 0 && signed_position_size() == 0.0)
+            strategy_entry("E1", is_long, kNaN, kNaN, kNaN);
+        if (phase == 45 * kMinute && open_trades() == 1)
+            strategy_entry("E2", is_long, kNaN, kNaN, kNaN);
+        if (phase == 90 * kMinute) close_all("cleanup");
     }
 
     Probe probe_;
@@ -263,12 +345,12 @@ void show(const char* tag, const std::vector<Row>& rows) {
 
 // What a probe's strategy() declares, over v6's defaults (initial capital
 // 100000, 100 % of equity, pyramiding 1, margin 100 both ways).
-source::PineStrategyConfig config(bool pooc, int pyramiding) {
+source::PineStrategyConfig config(bool pooc, int pyramiding, double percent = 100.0) {
     source::PineStrategyConfig c{};
     c.process_orders_on_close = pooc;
     c.initial_capital = 100000.0;
     c.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
-    c.default_qty_value = 100.0;
+    c.default_qty_value = percent;
     c.pyramiding = pyramiding;
     return c;
 }
@@ -293,6 +375,13 @@ int main() {
         {"SB", "w5b-sb-default-x3", Probe::SameBarDefault3, config(false, 3), 48},
         {"SB", "w5b-sb-pooc-default-x3", Probe::SameBarDefault3, config(true, 3), 60},
         {"SB control", "w5b-sb-market-40x2", Probe::SameBarExplicit40, config(false, 2), 80},
+        {"PC", "w5b-pc-seen-size", Probe::SeenSize, config(true, 1), 36},
+        {"PC", "w5b-pc-seen-size-parked", Probe::SeenSizeParked, config(true, 1), 36},
+        {"PC", "w5b-pc-carried-close", Probe::CarriedClose, config(true, 1), 36},
+        {"PC", "w5b-pc-carried-reverse", Probe::CarriedReverse, config(true, 1), 51},
+        {"PC", "w5b-pc-bracket-tp", Probe::BracketTakeProfit, config(true, 1), 35},
+        {"PC", "w5b-pa-pooc-p50", Probe::AddCells, config(true, 2, 50.0), 109},
+        {"PC control", "w5b-pc-carried-none", Probe::CarriedNone, config(true, 1), 37},
     };
 
     for (const Case& c : cases) {

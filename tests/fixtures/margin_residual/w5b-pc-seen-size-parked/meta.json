@@ -1,0 +1,16 @@
+{
+  "title": "W5B PC carried POOC short with a parked entry, size seen at the next close",
+  "slug": "w5b-pc-seen-size-parked",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T21:47:24.957Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "2cb8c2f330dc5546458cfee6ee3b78622ce7f589557a5d71bc9d984f11327bc6",
+  "tv_trades_sha256": "ee4b13e93ece389691a84d657851cfd796f8c9319a842eb8ce67346e390b80fb",
+  "tv_trades_rows": 72
+}

@@ -1,0 +1,16 @@
+{
+  "title": "W5B PC carried POOC short, nothing at the next close",
+  "slug": "w5b-pc-carried-none",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T21:29:58.934Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "6d8f034a4f6618017c35c8d81c7f735e8f2f6add96d38c55f5c41fa58ea479a9",
+  "tv_trades_sha256": "415df80fea9981cd4370397cd527173bdff984a22b811435c7fa0b265c49855d",
+  "tv_trades_rows": 74
+}

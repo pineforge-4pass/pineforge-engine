@@ -1,0 +1,16 @@
+{
+  "title": "W5B PC POOC short with a take-profit on its called bar",
+  "slug": "w5b-pc-bracket-tp",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T21:46:22.235Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "733cf3dcbb2bc082ac7f8d21d9cd20406d245907d79b95405f1844ac4132922e",
+  "tv_trades_sha256": "5c5afc0bc65fd4df5158429899fe045bff9d262cbe0fc682778d8fa72a2e860d",
+  "tv_trades_rows": 70
+}

@@ -107,16 +107,21 @@ void test_funded_and_competing_order_controls() {
     CHECK(funded.second_closed == 0);
     CHECK(funded.rows().size() == 2);
     CHECK(near(funded.final_view, 2.0));
-    // A competing pending ENTRY keeps its established transaction scheduling.
+    // A competing pending ENTRY beside the short changes nothing: the bar-2
+    // call is taken on the path before the script reads the book, as without
+    // it (lab tv tape tests/fixtures/margin_residual w5b-pc-seen-size-parked,
+    // lane W5B-ENG-MARGIN-RESIDUAL; ab9714be took no path slice beside a
+    // competing entry and read -12.44432 here).
     CarriedShort competing(Action::REVERSE);
     competing.parked_entry = true;
     competing.run(bars.data(), static_cast<int>(bars.size()));
-    // A competing pending ENTRY keeps its established transaction scheduling
-    // (base literal; ab9714be tests/test_carried_pooc_short_margin_state.cpp:109).
-    CHECK(near(competing.second_view, -12.44432));
+    CHECK(near(competing.second_view, -12.33168));
     // The same command topology with prices and capital rescaled together
-    // enters the broker's separate rounded-margin financial class. Keep its
-    // established script timing until that class has its own complete proof.
+    // enters the broker's rounded-margin financial class: its calls are taken
+    // before the script too (lab tv tape tests/fixtures/margin_residual
+    // w5b-pc-seen-size, a rounded-money short whose script reads the called
+    // size; ab9714be deferred them until after the script: -12.60172 and one
+    // row closed).
     std::vector<Bar> smaller = bars;
     for (auto& bar : smaller) {
         bar.open *= 0.00001; bar.high *= 0.00001;
@@ -124,8 +129,8 @@ void test_funded_and_competing_order_controls() {
     }
     CarriedShort rounded_margin(Action::REVERSE, 1392521.546177, 0.00001);
     rounded_margin.run(smaller.data(), static_cast<int>(smaller.size()));
-    CHECK(near(rounded_margin.first_view, -12.60172));
-    CHECK(rounded_margin.second_closed == 1);
+    CHECK(near(rounded_margin.first_view, -12.44432));
+    CHECK(rounded_margin.second_closed == 2);
 }
 
 class FreshShort : public pineforge::source::PineStrategyHost {

@@ -193,6 +193,13 @@
       "twinAssertionSha256": "51cc42a4424fe7a6b0fa998544551fbd818d3e6c72dd9c567f2ac98d30215cef",
       "twinAssertions": 242
     },
+    "test_carried_pooc_short_margin_state": {
+      "baseAssertions": 43,
+      "reason": "the competing-entry and rounded-money controls follow the R5 lane W5B-ENG-MARGIN-RESIDUAL TradingView tapes (tests/fixtures/margin_residual w5b-pc-seen-size and -seen-size-parked): a carried process_orders_on_close short is called on its bar's path before the script, a pending entry beside it or not and at any money class, so the script reads the called size where ab9714be read the uncalled one",
+      "twin": "test_carried_pooc_short_margin_state_l4a.cpp",
+      "twinAssertionSha256": "02c5f820b47d00e8967c4272de6c3302663357fbb280b605f55d85aa18f7206c",
+      "twinAssertions": 43
+    },
     "test_declined_reversal_close_leg": {
       "baseAssertions": 39,
       "reason": "R6's all-in same-side add co-queued with a close of the held id follows the R5 lane W5-ENG-MARGIN-V6 TradingView tapes (tests/fixtures/margin_v6 w5-m1-addclose): TradingView drops the add at placement, its margin on top of the held side's exceeding the equity, so the close leaves the book flat instead of the add re-opening LONG 100; and lane INT28-FIX rule CA: R5's close_all placed after the all-in reversal entry belongs to that reversal (tests/fixtures/reversal_close_all int28fix-ca2-rev and -frosty), so the declined reversal holds the long where the row froze the close_all firing",
@@ -360,6 +367,13 @@
       "twin": "test_reservation_expansion_l4c.cpp",
       "twinAssertionSha256": "359f41c82bf7dfab29dd59bf67720e52741df0b995443311cd479676ad1d811b",
       "twinAssertions": 38
+    },
+    "test_rounded_carried_short_trail": {
+      "baseAssertions": 43,
+      "reason": "the other order shapes and the competing entry follow the R5 lane W5B-ENG-MARGIN-RESIDUAL TradingView tapes (tests/fixtures/margin_residual w5b-pc-seen-size and -seen-size-parked): a rounded-money carried process_orders_on_close short is called on its bar's path before the script whatever else the book holds, so every shape sees the margin before the script as the trailing exits do",
+      "twin": "test_rounded_carried_short_trail_l4c.cpp",
+      "twinAssertionSha256": "b16b9023353e7533c80e570d84017ec77a020a405f09377c0c86dbf17750dc22",
+      "twinAssertions": 43
     },
     "test_settlement_observation_boundary": {
       "baseAssertions": 65,

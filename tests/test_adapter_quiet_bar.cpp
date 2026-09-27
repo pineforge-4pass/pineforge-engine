@@ -1016,7 +1016,7 @@ const char* const kHookNames[] = {
     "OpenMarketableSells", "GappedBracketReaccept", "DualEntryPath", "CoofTail",
     "CoofDeclinedReversal", "DueCapClose", "SlippedPoocMoney", "TvMoneyLongMargin",
     "TvMoneyTrailMargin", "OpenMarginCheckpoints", "DeclinedReversalAtOpen",
-    "RoundedPoocShortMargin", "IntradayLossClose", "IntradayLossPath", "PreopenMarginSlice",
+    "IntradayLossClose", "IntradayLossPath", "PreopenMarginSlice",
     "BracketLegs", "PendingCloses", "PendingEntries", "RelativeExits", "PoocLimitEntryFills",
     "PoocExitFills", "DeferredSellAdmission", "ThrottledReopens", "TerminalExplicitMarket",
     "CloseMarginCheckpoints",

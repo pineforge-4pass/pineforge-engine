@@ -1,0 +1,16 @@
+{
+  "title": "W5B PA POOC 50% add",
+  "slug": "w5b-pa-pooc-p50",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T21:22:30.760Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "5b3006786d8b2e279aaabebfafe946d16b3d1b4d3e47957f5a7c00ac81bf6643",
+  "tv_trades_sha256": "79a5c58b0ef2b2109d16bf5cea9b041d224d62fd5ddd7f62b4ed2178daec9305",
+  "tv_trades_rows": 218
+}

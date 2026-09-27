@@ -126,20 +126,26 @@ void test_funded_control_does_not_create_margin() {
     CHECK(near(engine.after_action_view, 897130.84));
 }
 
-void test_other_order_shapes_retain_the_existing_checkpoint() {
+// Every other order shape, and a competing pending entry, sees the margin
+// before the script as the trailing exits do: TradingView takes a carried
+// short's calls on the bar's path before the script runs, whatever the book
+// holds (lab tv tapes tests/fixtures/margin_residual w5b-pc-seen-size and
+// -seen-size-parked, lane W5B-ENG-MARGIN-RESIDUAL; ab9714be deferred them
+// until after the script here, reading -891902.61 and -888216.89).
+void test_other_order_shapes_see_the_margin_before_the_script() {
     for (ExitShape shape : {ExitShape::NONE, ExitShape::PARTIAL_TRAIL, ExitShape::PRICED}) {
         RoundedShort engine(Action::HOLD, shape);
         engine.run(bars.data(), static_cast<int>(bars.size()));
-        CHECK(near(engine.first_view, -891902.61));
-        CHECK(near(engine.boundary_view, -888216.89));
-        CHECK(engine.boundary_closed == 1);
+        CHECK(near(engine.first_view, -888216.89));
+        CHECK(near(engine.boundary_view, -884473.25));
+        CHECK(engine.boundary_closed == 2);
         CHECK(engine.rows().size() == 3);
     }
     RoundedShort competing(Action::HOLD);
     competing.competing = true;
     competing.run(bars.data(), static_cast<int>(bars.size()));
-    CHECK(near(competing.boundary_view, -888216.89));
-    CHECK(competing.boundary_closed == 1);
+    CHECK(near(competing.boundary_view, -884473.25));
+    CHECK(competing.boundary_closed == 2);
 }
 
 class ExcursionShort : public pineforge::source::PineStrategyHost {
@@ -208,7 +214,7 @@ void test_margin_excursion_samples_only_the_traversed_prefix() {
 int main() {
     test_margin_is_visible_before_script_actions();
     test_funded_control_does_not_create_margin();
-    test_other_order_shapes_retain_the_existing_checkpoint();
+    test_other_order_shapes_see_the_margin_before_the_script();
     test_margin_excursion_samples_only_the_traversed_prefix();
     std::printf("%d passed, %d failed\n", passed, failed);
     return failed ? 1 : 0;

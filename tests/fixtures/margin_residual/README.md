@@ -38,3 +38,23 @@ had opened, refused it, and never called the book: it filled the first entry
 of each cell and nothing else. TradingView judges each entry on its own cost,
 as it judged the first, and checks the combined book once the last has filled
 (the CG-LINUX-RED `env_facts` export of 2026-09-26 is the same shape).
+
+## PC: a carried process_orders_on_close short is checked before the script
+
+| tape | trades | `strategy()` declares | TradingView | tv_trades.csv sha256 |
+|---|---:|---|---|---|
+| `w5b-pc-seen-size` | 36 | `process_orders_on_close` | fifteen default shorts filled at a signal close; on the next bar, whose high puts the short under its margin, the script buys back `math.abs(strategy.position_size)` with `strategy.order`: the call is taken at the high first and the script reads the called size, so the buy closes exactly the rest | `ee4b13e93ece389691a84d657851cfd796f8c9319a842eb8ce67346e390b80fb` |
+| `w5b-pc-seen-size-parked` | 36 | the same | the same with a far long limit entry parked beside each short: the same file | `ee4b13e93ece389691a84d657851cfd796f8c9319a842eb8ce67346e390b80fb` |
+| `w5b-pc-carried-close` | 36 | the same | `strategy.close_all` at the next close: the call at the high, then the close of the rest | `7f3f83734958534c3457d5b7db39af145a8f0f60511352dc5befafdb7477fd2a` |
+| `w5b-pc-carried-reverse` | 51 | the same | a default long at the next close: the call at the high, then the reversal sized from the called book's equity | `e7335b02f293337f26ca60468a3c8255361f2974a72f08ee53857342b52afd2d` |
+| `w5b-pc-bracket-tp` | 35 | the same | each short carries `strategy.exit(limit = close * 0.998, stop = close * 1.03)`: on a bar that first rises over the fill and then falls to the take-profit, the call at the high comes first and the take-profit fills the rest | `5c5afc0bc65fd4df5158429899fe045bff9d262cbe0fc682778d8fa72a2e860d` |
+| `w5b-pa-pooc-p50` | 109 | `process_orders_on_close`, `pyramiding=2`, 50 % | E1 then an add E2 45 minutes later: a short add filled at a close is not checked at that bar's high on the grown book; the grown book is called at the next open | `79a5c58b0ef2b2109d16bf5cea9b041d224d62fd5ddd7f62b4ed2178daec9305` |
+| `w5b-pc-carried-none` | 37 | `process_orders_on_close` | the control: nothing at the next close but a `strategy.cancel_all()` | `415df80fea9981cd4370397cd527173bdff984a22b811435c7fa0b265c49855d` |
+
+ab9714be took no path check on such a short beside a competing pending entry
+or on a rounded-money one, and checked it at the high after the script
+instead, deferred behind the close's market fills to the book they left: the
+script read the uncalled size, a close or bracket that emptied the book on
+the path left no call, and an add at the close was called at the high on the
+grown book. Lane W5-ENG-MARGIN-V6 moved the commissioned and slipped shorts
+before the script (C1); these tapes show the rest.

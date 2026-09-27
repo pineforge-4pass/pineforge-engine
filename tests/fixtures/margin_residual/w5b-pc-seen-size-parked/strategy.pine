@@ -1,0 +1,30 @@
+//@version=6
+strategy("W5B PC carried POOC short with a parked entry, size seen at the next close", overlay=true, process_orders_on_close=true)
+
+// Lane W5B-ENG-MARGIN-RESIDUAL, what a process_orders_on_close script reads
+// on a bar whose high calls its carried short, fee- and slippage-free. v6
+// defaults: 100000, 100 % of equity, margin 100. At each of fifteen signal
+// closes a default short fills at the close; at the next close the script
+// buys back math.abs(strategy.position_size) with strategy.order: a size read
+// before that bar's call over-buys the called short into a small long. Flat
+// 45 minutes after the cell. Beside each short rests a parked long limit
+// entry far under the market (the competing pending entry of the legacy
+// carried-short checkpoint), cancelled at the cleanup.
+cellAt(int offsetMin) =>
+    int t = time - offsetMin * 60 * 1000
+    t == timestamp("UTC", 2025, 4, 2, 0, 0) or t == timestamp("UTC", 2025, 4, 2, 3, 0) or
+     t == timestamp("UTC", 2025, 4, 2, 6, 0) or t == timestamp("UTC", 2025, 4, 2, 9, 0) or
+     t == timestamp("UTC", 2025, 4, 2, 18, 0) or t == timestamp("UTC", 2025, 4, 3, 21, 0) or
+     t == timestamp("UTC", 2025, 4, 4, 12, 0) or t == timestamp("UTC", 2025, 4, 5, 3, 0) or
+     t == timestamp("UTC", 2025, 4, 5, 9, 0) or t == timestamp("UTC", 2025, 4, 5, 12, 0) or
+     t == timestamp("UTC", 2025, 4, 5, 15, 0) or t == timestamp("UTC", 2025, 4, 5, 21, 0) or
+     t == timestamp("UTC", 2025, 4, 6, 9, 0) or t == timestamp("UTC", 2025, 4, 6, 12, 0) or
+     t == timestamp("UTC", 2025, 4, 6, 15, 0)
+if cellAt(0)
+    strategy.entry("S", strategy.short, comment="short")
+    strategy.entry("P", strategy.long, qty=0.001, limit=math.round(close * 0.5, 2), comment="parked")
+if cellAt(15)
+    strategy.order("B", strategy.long, qty=math.abs(strategy.position_size), comment="buy seen")
+if cellAt(45)
+    strategy.cancel("P")
+    strategy.close_all(comment="cleanup")

@@ -1,0 +1,16 @@
+{
+  "title": "W5B PC carried POOC short, size seen at the next close",
+  "slug": "w5b-pc-seen-size",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T21:46:02.950Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "ac14942b80526190a64698b1638a8a787bb685d0ab7a1627a03da77138d1e649",
+  "tv_trades_sha256": "ee4b13e93ece389691a84d657851cfd796f8c9319a842eb8ce67346e390b80fb",
+  "tv_trades_rows": 72
+}

@@ -1,0 +1,16 @@
+{
+  "title": "W5B PC carried POOC short, reversed at the next close",
+  "slug": "w5b-pc-carried-reverse",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T21:30:04.525Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "7c1ae47d3e7fcbb43cd007c574384b0f26256f8a7dbe48df0cc89ffaf0231dad",
+  "tv_trades_sha256": "e7335b02f293337f26ca60468a3c8255361f2974a72f08ee53857342b52afd2d",
+  "tv_trades_rows": 102
+}
