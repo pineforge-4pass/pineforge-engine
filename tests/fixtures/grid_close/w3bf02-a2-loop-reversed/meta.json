@@ -1,0 +1,16 @@
+{
+  "title": "W3B F02 a2 the loop closes D then C",
+  "slug": "w3bf02-a2-loop-reversed",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:33:31.533Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "6030c8d536cb25269e3f263739897e8071a00a92714d84dcc249d0aca99e4c63",
+  "tv_trades_sha256": "fea32f41ef6596ae6e7e817d23aa26ab23ac9a607b665a68326090a114524fd4",
+  "tv_trades_rows": 12
+}

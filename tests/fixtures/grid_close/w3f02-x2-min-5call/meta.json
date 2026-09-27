@@ -1,0 +1,16 @@
+{
+  "title": "W3 F02 x2 five-call survivor consumes the id",
+  "slug": "w3f02-x2-min-5call",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:40:44.055Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "fd1800da7d9b5df2a08e34fbf6c3fa9185ad64a7b6a9a7fef0ce1c3d38389616",
+  "tv_trades_sha256": "ae92feca54a06eee2189a5de6de74d78600b38517c52088ccebb5c8994c2112c",
+  "tv_trades_rows": 28
+}

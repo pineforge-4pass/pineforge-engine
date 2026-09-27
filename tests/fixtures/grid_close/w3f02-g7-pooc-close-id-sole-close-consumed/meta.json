@@ -1,0 +1,16 @@
+{
+  "title": "W3 F02 g7 POOC close an id a sole close consumed",
+  "slug": "w3f02-g7-pooc-close-id-sole-close-consumed",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:07:26.453Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "36e5b2a6c3c5986cce835d904b01f3ee5aae3033bf3b91b333813ffbb631ac2f",
+  "tv_trades_sha256": "3510913b73961b773819281ba15c203e92a9a3f09d10b2864a0c4bec4ff62bf6",
+  "tv_trades_rows": 24
+}

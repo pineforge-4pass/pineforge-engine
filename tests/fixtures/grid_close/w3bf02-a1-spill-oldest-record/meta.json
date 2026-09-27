@@ -1,0 +1,16 @@
+{
+  "title": "W3B F02 a1 the spill takes the oldest entry first",
+  "slug": "w3bf02-a1-spill-oldest-record",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:33:28.077Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "29b043e31937196c94b5782b944b4aa29a23d22ce4ef128d67362093f7f94329",
+  "tv_trades_sha256": "56f37ead54a5f725bed3a5342f2f4f1ccdb1878cc7b7a90d6968ef2aa447cefa",
+  "tv_trades_rows": 10
+}

@@ -1,0 +1,16 @@
+{
+  "title": "W3 F02 g9 POOC loop entries, close the second id",
+  "slug": "w3f02-g9-pooc-loop-entries-close-second",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:12:32.285Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "c4b5e5b7ed51980a0dcad54537a07cfcb9bf8e1bc763676f63051dec014199e7",
+  "tv_trades_sha256": "b33529bb25576f54a9cafa3e0901130b2e6ad885ca987765d396cff5075fe77e",
+  "tv_trades_rows": 18
+}

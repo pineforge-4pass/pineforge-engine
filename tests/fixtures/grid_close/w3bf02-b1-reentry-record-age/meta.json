@@ -1,0 +1,16 @@
+{
+  "title": "W3B F02 b1 a re-entered id spills after older ids",
+  "slug": "w3bf02-b1-reentry-record-age",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:33:34.910Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "e213cb2c7bbbe26049b38d6d80e8a0cbedae6ec91f749dfe2745abe176c41b0e",
+  "tv_trades_sha256": "5b022c2687c40b0ab133e15cd4bbbf54f890ee528456c8bb84e7f57c3d39903c",
+  "tv_trades_rows": 10
+}

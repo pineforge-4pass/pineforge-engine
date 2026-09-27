@@ -1,0 +1,16 @@
+{
+  "title": "W3B F02 e1 an entry pyramiding refuses has nothing to close",
+  "slug": "w3bf02-e1-pyramiding-refused",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:33:55.778Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "92dc8c43001923b91c8a0132b189ffd2c4beb1adc629b0b589717bc6ba66c8c5",
+  "tv_trades_sha256": "51f3fff6341881c773a7f1f4e0216a4a7db3695cec9809d8e69515f155fcf58e",
+  "tv_trades_rows": 8
+}

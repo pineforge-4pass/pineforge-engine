@@ -1,0 +1,16 @@
+{
+  "title": "W3 F02 g8 POOC loop entries, close the first id",
+  "slug": "w3f02-g8-pooc-loop-entries-close-first",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:12:26.464Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "f52a503a9c697ab90e54c315dbac223f12e7d48d3d23ce2d954fd034d42235ef",
+  "tv_trades_sha256": "4f4ef8d908b1e5eb11beded7f2e53f3530082a1ccc5c1358bac5a8673aad7dfc",
+  "tv_trades_rows": 18
+}

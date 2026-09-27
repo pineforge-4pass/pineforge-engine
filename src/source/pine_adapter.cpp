@@ -2006,10 +2006,7 @@ void PineExecutionAdapter::reset_for_run() {
     bracket_shadowed_openings_.clear();
     named_entry_cancel_tokens_.clear();
     close_logical_units_.clear();
-    close_reserved_units_.clear();
-    close_first_units_.clear();
-    close_callsite_reserved_units_.clear();
-    close_callsite_first_units_.clear();
+    close_ledger_records_.clear();
     close_batch_callsites_.clear();
     close_batch_bar_ = -1;
     close_batch_queue_sequence_ = 0;
@@ -7284,22 +7281,6 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     }
 }
 
-double PineExecutionAdapter::close_reserved_other_units(
-        const SourceId& id, std::uint64_t) const noexcept {
-    std::map<SourceId, double> backing_by_id = close_reserved_units_;
-    for (const auto& owner : close_callsite_reserved_units_) {
-        for (const auto& claim : owner.second) {
-            auto& backing = backing_by_id[claim.first];
-            backing = std::max(backing, claim.second);
-        }
-    }
-    double total = 0.0;
-    for (const auto& backing : backing_by_id) {
-        if (backing.first != id) total += backing.second;
-    }
-    return total;
-}
-
 bool PineExecutionAdapter::enqueue_pooc_fifo_close(
         const SourceId& id, const std::string& comment,
         std::uint64_t token, std::uint64_t) {
@@ -7320,6 +7301,9 @@ bool PineExecutionAdapter::enqueue_pooc_fifo_close(
     const double unclosed = logical == close_logical_units_.end()
         ? 0.0 : logical->second;
 
+    // A call is sized against the position less what the bar's other close
+    // orders already hold; a site re-sizing its own order counts its own
+    // claim back unless another site closes that id as well.
     double pending_reserved = 0.0;
     for (const auto& row : close_batch_callsites_) {
         if (row.second.active) pending_reserved += row.second.target;
@@ -7339,52 +7323,17 @@ bool PineExecutionAdapter::enqueue_pooc_fifo_close(
         pending_reserved -= prior->target;
 
     const double held = std::abs(detail::run_position(require_host()).signed_units);
-    double persistent_other = close_reserved_other_units(id, token);
-    if (prior && prior->first_ledger_consumed && prior->first_id != id) {
-        double current_claim = 0.0;
-        const auto owner = close_callsite_reserved_units_.find(token);
-        if (owner != close_callsite_reserved_units_.end()) {
-            const auto claim = owner->second.find(prior->first_id);
-            if (claim != owner->second.end()) current_claim = claim->second;
-        }
-        double competing_claim = 0.0;
-        const auto legacy = close_reserved_units_.find(prior->first_id);
-        if (legacy != close_reserved_units_.end()) competing_claim = legacy->second;
-        for (const auto& candidate : close_callsite_reserved_units_) {
-            if (candidate.first == token) continue;
-            const auto claim = candidate.second.find(prior->first_id);
-            if (claim != candidate.second.end())
-                competing_claim = std::max(competing_claim, claim->second);
-        }
-        persistent_other -= std::max(0.0, current_claim - competing_claim);
-        persistent_other = std::max(0.0, persistent_other);
-    }
-    const double persistent_available = std::max(0.0, held - persistent_other);
-    const double available = std::max(0.0, persistent_available - pending_reserved);
+    const double available = std::max(0.0, held - pending_reserved);
     const double target = std::min(unclosed, available);
-    if (!(target > internal::kQtyEpsilon)) {
-        if (unclosed > internal::kQtyEpsilon && !(persistent_available > internal::kQtyEpsilon)) {
-            if (token == 0) {
-                close_logical_units_.erase(id);
-                close_reserved_units_.erase(id);
-                close_first_units_.erase(id);
-            } else {
-                auto& site = close_batch_callsites_[token];
-                if (std::find(site.deferred_cleanup_ids.begin(),
-                              site.deferred_cleanup_ids.end(), id)
-                    == site.deferred_cleanup_ids.end()) {
-                    site.deferred_cleanup_ids.push_back(id);
-                }
-            }
-        }
-        return false;
-    }
+    // A call with nothing to close -- its id has no unbooked units, or the
+    // bar's other closes hold the whole position -- places nothing and
+    // leaves its site's order as it was (tapes w3bf02-c1, -c2, -c3).
+    if (!(target > internal::kQtyEpsilon)) return false;
 
     const double replaced_target = prior && prior->active ? prior->target : 0.0;
     close_batch_pending_debt_ += target;
     pending_same_bar_close_qty_ += target;
     if (token != 0) close_batch_admitted_total_ += target - replaced_target;
-    const bool retire_whole = unclosed > persistent_available + internal::kQtyEpsilon;
 
     auto& site = close_batch_callsites_[token];
     if (!site.active) {
@@ -7392,62 +7341,23 @@ bool PineExecutionAdapter::enqueue_pooc_fifo_close(
         site.token = token;
         site.calls = 1;
         site.first_id = id;
-        site.first_target = target;
         site.id = id;
         site.comment = comment;
         site.target = target;
-        site.retire_ledger_whole = retire_whole;
         site.queue_sequence = ++close_batch_queue_sequence_;
         return true;
     }
-    if (site.id == id) {
-        site.comment = comment;
-        site.target = target;
-        site.retire_ledger_whole = retire_whole;
-        return true;
-    }
-
-    ++site.calls;
-    if (site.calls == 2) {
-        const auto& reservations = token == 0
-            ? close_reserved_units_
-            : close_callsite_reserved_units_[token];
-        const auto& provenance = token == 0
-            ? close_first_units_
-            : close_callsite_first_units_[token];
-        const auto reserved = reservations.find(site.first_id);
-        const auto first = provenance.find(site.first_id);
-        if (reserved != reservations.end() && first != provenance.end()) {
-            site.first_carry_valid = true;
-            site.first_carry_qty = first->second;
-        }
-        site.first_ledger_consumed = true;
-    } else if (site.calls == 3) {
-        site.first_carry_valid = false;
-        site.first_carry_qty = 0.0;
-    }
+    // A later call of the site re-sizes the site's one order for its own id
+    // and comment; the fill still books against the site's first id.
+    if (site.id != id) ++site.calls;
     site.id = id;
     site.comment = comment;
     site.target = target;
-    site.retire_ledger_whole = retire_whole;
     return true;
 }
 
 void PineExecutionAdapter::flush_pending_closes() {
     if (close_batch_callsites_.empty()) return;
-    for (const auto& row : close_batch_callsites_) {
-        const auto& site = row.second;
-        for (const auto& id : site.deferred_cleanup_ids) {
-            close_logical_units_.erase(id);
-            if (site.token == 0) {
-                close_reserved_units_.erase(id);
-                close_first_units_.erase(id);
-            } else {
-                close_callsite_reserved_units_[site.token].erase(id);
-                close_callsite_first_units_[site.token].erase(id);
-            }
-        }
-    }
     std::vector<CloseCallsiteState> sites;
     sites.reserve(close_batch_callsites_.size());
     for (const auto& row : close_batch_callsites_)
@@ -7457,8 +7367,6 @@ void PineExecutionAdapter::flush_pending_closes() {
             return left.queue_sequence < right.queue_sequence;
         });
 
-    double remaining = 0.0;
-    for (const auto& site : sites) remaining += site.target;
     std::vector<std::pair<std::uint64_t, double>> fifo_lots;
     if (const auto* pine = pine_view_of(&require_host())) {
         fifo_lots.reserve(pine->pyramid_entries_.size());
@@ -7549,28 +7457,6 @@ void PineExecutionAdapter::flush_pending_closes() {
         }), lots.end());
     };
     for (const auto& site : sites) {
-        remaining = std::max(0.0, remaining - site.target);
-        if (site.first_ledger_consumed) {
-            close_logical_units_.erase(site.first_id);
-            if (site.token == 0) {
-                close_reserved_units_.erase(site.first_id);
-                close_first_units_.erase(site.first_id);
-            } else {
-                close_callsite_reserved_units_[site.token].erase(site.first_id);
-                close_callsite_first_units_[site.token].erase(site.first_id);
-            }
-        }
-        for (const auto& id : site.deferred_cleanup_ids) {
-            close_logical_units_.erase(id);
-            if (site.token == 0) {
-                close_reserved_units_.erase(id);
-                close_first_units_.erase(id);
-            } else {
-                close_callsite_reserved_units_[site.token].erase(id);
-                close_callsite_first_units_[site.token].erase(id);
-            }
-        }
-
         const auto physical = detail::run_position(require_host());
         // ab9714be pine_strategy_commands.cpp:694-696: strategy_close returns immediately when position is flat (<= kQtyEpsilon)
         if (std::abs(physical.signed_units) <= internal::kQtyEpsilon) continue;
@@ -7635,12 +7521,6 @@ void PineExecutionAdapter::flush_pending_closes() {
         snapshot.close_callsite_token = site.token;
         snapshot.close_batch_calls = static_cast<std::uint32_t>(site.calls);
         snapshot.close_first_id = site.first_id;
-        snapshot.close_first_target = site.first_target;
-        snapshot.close_first_ledger_consumed = site.first_ledger_consumed;
-        snapshot.close_first_carry_valid = site.first_carry_valid;
-        snapshot.close_first_carry_qty = site.first_carry_qty;
-        snapshot.close_retire_ledger_whole = site.retire_ledger_whole;
-        snapshot.close_pending_later_qty = remaining;
         const SourceId key = "__pine_close_flush__" + std::to_string(site.token);
         (void)submit_or_replace(
             std::move(request), std::move(snapshot), false, key);
@@ -7652,94 +7532,53 @@ void PineExecutionAdapter::flush_pending_closes() {
     close_batch_admitted_total_ = 0.0;
 }
 
-void PineExecutionAdapter::observe_close_policy(
+void PineExecutionAdapter::observe_close_ledger(
         const native_order::ExecutionAppliedEvent& event,
-        const PlacementSnapshot& snapshot) {
-    if (snapshot.close_batch_calls == 0 || !(event.closed_units > 0.0)) return;
-    const double remaining_position = std::abs(
-        detail::run_position(require_host()).signed_units);
-    // ab9714be pine_strategy_commands.cpp:1575: the reservation is bounded by
-    // the binary64 position difference qty_before - position_qty_, not by the
-    // settled close units; the two can differ by a few ULPs.
-    double actual_fill = event.closed_units;
-    if (const auto* pine = pine_view_of(&require_host());
-        pine && std::isfinite(pine->precommit_held_units_)) {
-        actual_fill = std::max(0.0, pine->precommit_held_units_ - remaining_position);
-    }
-    const auto erase_owner = [&](auto& owners, std::uint64_t token,
-                                 const SourceId& id) {
-        auto owner = owners.find(token);
-        if (owner == owners.end()) return;
-        owner->second.erase(id);
-        if (owner->second.empty()) owners.erase(owner);
+        const PlacementSnapshot* snapshot) {
+    if (!snapshot || snapshot->close_batch_calls == 0) return;
+    // A close site's fill books against its first call's id, whichever id
+    // its last call sized the order for; what that id's ledger cannot cover
+    // spills over the oldest entries' (tapes w3f02-x1, -x2, w3bf02-a1, -a2,
+    // -b1).
+    book_close_ledger(snapshot->close_first_id, event.closed_units);
+}
+
+void PineExecutionAdapter::credit_close_ledger(const SourceId& id, double units) {
+    close_logical_units_[id] += units;
+    if (config_.close_entries_rule_any) return;
+    if (!close_ledger_records_.empty() && close_ledger_records_.back().id == id)
+        close_ledger_records_.back().units += units;
+    else
+        close_ledger_records_.push_back({id, units});
+}
+
+void PineExecutionAdapter::book_close_ledger(const SourceId& id, double units) {
+    if (!(units > 0.0) || close_ledger_records_.empty()) return;
+    double left = units;
+    const auto take = [&left](CloseLedgerRecord& record) {
+        if (!(left > internal::kQtyEpsilon) || !(record.units > 0.0)) return;
+        const double amount = std::min(record.units, left);
+        record.units -= amount;
+        left -= amount;
     };
-
-    if (snapshot.close_batch_calls == 1) {
-        close_logical_units_.erase(snapshot.source_id);
-        if (snapshot.close_callsite_token == 0) {
-            close_reserved_units_.erase(snapshot.source_id);
-            close_first_units_.erase(snapshot.source_id);
-        } else {
-            erase_owner(close_callsite_reserved_units_,
-                        snapshot.close_callsite_token, snapshot.source_id);
-            erase_owner(close_callsite_first_units_,
-                        snapshot.close_callsite_token, snapshot.source_id);
-        }
-    } else if (remaining_position > 0.0) {
-        if (snapshot.close_batch_calls == 2
-            && snapshot.close_first_carry_valid
-            && snapshot.close_first_carry_qty > 0.0) {
-            close_logical_units_[snapshot.close_first_id] =
-                snapshot.close_first_carry_qty;
-        }
-        const double reserved_other = close_reserved_other_units(
-            snapshot.source_id, snapshot.close_callsite_token);
-        const double capacity = std::max(0.0,
-            remaining_position - reserved_other - snapshot.close_pending_later_qty);
-        const double reserve = std::min(actual_fill, capacity);
-        if (reserve > 0.0) {
-            // The owner keeps the id's established ledger here (ab9714be
-            // pine_strategy_commands.cpp:1557-1575); its floor stays the
-            // settled close units, never the ULP-wider position difference.
-            auto& logical = close_logical_units_[snapshot.source_id];
-            logical = std::max(logical, std::min(event.closed_units, capacity));
-        }
-        if (snapshot.close_callsite_token == 0) {
-            if (reserve > 0.0) close_reserved_units_[snapshot.source_id] = reserve;
-            else {
-                close_logical_units_.erase(snapshot.source_id);
-                close_reserved_units_.erase(snapshot.source_id);
-            }
-            if (snapshot.close_batch_calls == 2 && reserve >= actual_fill)
-                close_first_units_[snapshot.source_id] = snapshot.close_first_target;
-            else
-                close_first_units_.erase(snapshot.source_id);
-        } else {
-            if (reserve > 0.0) {
-                close_callsite_reserved_units_[snapshot.close_callsite_token]
-                    [snapshot.source_id] = reserve;
-            } else {
-                close_logical_units_.erase(snapshot.source_id);
-                erase_owner(close_callsite_reserved_units_,
-                            snapshot.close_callsite_token, snapshot.source_id);
-            }
-            if (snapshot.close_batch_calls == 2 && reserve >= actual_fill) {
-                close_callsite_first_units_[snapshot.close_callsite_token]
-                    [snapshot.source_id] = snapshot.close_first_target;
-            } else {
-                erase_owner(close_callsite_first_units_,
-                            snapshot.close_callsite_token, snapshot.source_id);
-            }
-        }
+    // The id's own entries first, oldest first; then, for what they cannot
+    // cover, every id's entries in the order they filled.
+    for (auto& record : close_ledger_records_)
+        if (record.id == id) take(record);
+    for (auto& record : close_ledger_records_) take(record);
+    std::vector<CloseLedgerRecord> kept;
+    kept.reserve(close_ledger_records_.size());
+    for (auto& record : close_ledger_records_) {
+        if (!(record.units > internal::kQtyEpsilon)) continue;
+        if (!kept.empty() && kept.back().id == record.id)
+            kept.back().units += record.units;
+        else
+            kept.push_back(std::move(record));
     }
-
-    if (remaining_position == 0.0) {
-        close_logical_units_.clear();
-        close_reserved_units_.clear();
-        close_first_units_.clear();
-        close_callsite_reserved_units_.clear();
-        close_callsite_first_units_.clear();
-    }
+    close_ledger_records_ = std::move(kept);
+    close_logical_units_.clear();
+    for (const auto& record : close_ledger_records_)
+        close_logical_units_[record.id] += record.units;
 }
 
 void PineExecutionAdapter::close(const SourceId& id, const std::string& comment, double qty,
@@ -17281,10 +17120,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // the prior position side cannot survive to admit a later close of that
         // side against the new position.
         close_logical_units_.clear();
-        close_reserved_units_.clear();
-        close_first_units_.clear();
-        close_callsite_reserved_units_.clear();
-        close_callsite_first_units_.clear();
+        close_ledger_records_.clear();
     }
     if (next_sign != 0 && (current_position_sign_ == 0 || current_position_sign_ != next_sign)) {
         ++current_position_cycle_;
@@ -17395,8 +17231,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             facts.live_units_by_origin[event.handle().incarnation]
                 += std::abs(event.opened_units);
         }
-        close_logical_units_[placement_snapshot->source_id]
-            += std::abs(event.opened_units);
+        credit_close_ledger(placement_snapshot->source_id, std::abs(event.opened_units));
         record_opening_fee(*placement_snapshot, event);
         materialize_pending_bracket_legs(event);
         const auto created_side = static_cast<PositionSide>(
@@ -18115,10 +17950,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         position_open_priced_ = false;
         open_entry_fees_.clear();
         close_logical_units_.clear();
-        close_reserved_units_.clear();
-        close_first_units_.clear();
-        close_callsite_reserved_units_.clear();
-        close_callsite_first_units_.clear();
+        close_ledger_records_.clear();
         std::vector<SourceId> ended_sources;
         pending_margin_revivals_.clear();
         for (auto& cohort : cohorts_by_id_) {
@@ -18183,10 +18015,14 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             }
         }
     }
+    // A fill that reduces the side it leaves open books its units against
+    // the close ledger (a reversal or a flat has just cleared it).
+    if (event.closed_units > 0.0 && !flipped_position
+        && detail::run_position(require_host()).signed_units != 0.0) {
+        observe_close_ledger(event, placement_snapshot ? &*placement_snapshot : nullptr);
+    }
     if (placement_snapshot) {
         observe_intraday_cap(event, *placement_snapshot, context);
-        if (placement_snapshot->close_batch_calls != 0)
-            observe_close_policy(event, *placement_snapshot);
         if (placement_snapshot->family == PineOrderFamily::Margin
             && event.closed_units > 0.0) {
             last_margin_call_script_bar_ = context.script_bar_open_ms;
@@ -18676,59 +18512,46 @@ double PineExecutionAdapter::fixture_close_logical_units(
     return found == close_logical_units_.end() ? 0.0 : found->second;
 }
 
-double PineExecutionAdapter::fixture_close_reserved_units(
-        const SourceId& id) const noexcept {
-    const auto found = close_reserved_units_.find(id);
-    return found == close_reserved_units_.end() ? 0.0 : found->second;
+// The close ledger books every fill against an id's own entries and spills
+// the rest oldest first (book_close_ledger), so no close holds a standing
+// reservation or a carried first target any more: these fixture reads of the
+// retired reservation model answer none.
+double PineExecutionAdapter::fixture_close_reserved_units(const SourceId&) const noexcept {
+    return 0.0;
 }
 
-double PineExecutionAdapter::fixture_close_first_units(
-        const SourceId& id) const noexcept {
-    const auto found = close_first_units_.find(id);
-    return found == close_first_units_.end() ? 0.0 : found->second;
+double PineExecutionAdapter::fixture_close_first_units(const SourceId&) const noexcept {
+    return 0.0;
 }
 
 double PineExecutionAdapter::fixture_callsite_close_reserved_units(
-        std::uint64_t token, const SourceId& id) const noexcept {
-    const auto owner = close_callsite_reserved_units_.find(token);
-    if (owner == close_callsite_reserved_units_.end()) return 0.0;
-    const auto found = owner->second.find(id);
-    return found == owner->second.end() ? 0.0 : found->second;
+        std::uint64_t, const SourceId&) const noexcept {
+    return 0.0;
 }
 
 double PineExecutionAdapter::fixture_callsite_close_first_units(
-        std::uint64_t token, const SourceId& id) const noexcept {
-    const auto owner = close_callsite_first_units_.find(token);
-    if (owner == close_callsite_first_units_.end()) return 0.0;
-    const auto found = owner->second.find(id);
-    return found == owner->second.end() ? 0.0 : found->second;
+        std::uint64_t, const SourceId&) const noexcept {
+    return 0.0;
 }
 
 std::size_t PineExecutionAdapter::fixture_close_reservation_count() const noexcept {
-    return close_reserved_units_.size();
+    return 0;
 }
 
 std::size_t PineExecutionAdapter::fixture_close_first_count() const noexcept {
-    return close_first_units_.size();
+    return 0;
 }
 
 std::size_t PineExecutionAdapter::fixture_callsite_close_reservation_count() const noexcept {
-    std::size_t count = 0;
-    for (const auto& owner : close_callsite_reserved_units_) count += owner.second.size();
-    return count;
+    return 0;
 }
 
 std::size_t PineExecutionAdapter::fixture_callsite_close_first_count() const noexcept {
-    std::size_t count = 0;
-    for (const auto& owner : close_callsite_first_units_) count += owner.second.size();
-    return count;
+    return 0;
 }
 
 double PineExecutionAdapter::fixture_callsite_close_reserved_total() const noexcept {
-    double total = 0.0;
-    for (const auto& owner : close_callsite_reserved_units_)
-        for (const auto& claim : owner.second) total += claim.second;
-    return total;
+    return 0.0;
 }
 
 std::vector<PineExecutionAdapter::FixtureCloseCallsite>

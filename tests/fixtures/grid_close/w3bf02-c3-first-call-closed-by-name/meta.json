@@ -1,0 +1,16 @@
+{
+  "title": "W3B F02 c3 the loop first closes an id already closed",
+  "slug": "w3bf02-c3-first-call-closed-by-name",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:33:45.026Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "0ad7dfa37ab7f848fdfc9c2236ad134dea0fb710b8422caf52b213e59ae977e4",
+  "tv_trades_sha256": "1e558bbfc5ff80c5aaaff6a2c959a6d743759db0d7eecbd5875bd044ba63e861",
+  "tv_trades_rows": 10
+}

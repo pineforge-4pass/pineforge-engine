@@ -1,0 +1,29 @@
+//@version=6
+strategy("W3 F02 g6 POOC close an id a loop survivor consumed", overlay=true, pyramiding=5, process_orders_on_close=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W3-ENG-EXIT-ALLOC, family F02: strategy.close(id) under the default
+// FIFO close_entries_rule once other closes have consumed the id's lots.
+// Every cell runs on 2025-04-08, 04-09 and 04-10 (UTC); a cleanup close_all
+// ends each day's cell at 05:00.
+// Four one-unit entries L1..L4 (00:00..00:45). At 02:00 one strategy.close
+// call site, in a loop, closes "L3" then "L4": the surviving close takes,
+// FIFO, the L1 lot. At 03:00 another call site closes "L1".
+
+cell(h, m) => (dayofmonth(time, "UTC") == 8 or dayofmonth(time, "UTC") == 9 or dayofmonth(time, "UTC") == 10) and month(time, "UTC") == 4 and year(time, "UTC") == 2025 and hour(time, "UTC") == h and minute(time, "UTC") == m
+
+if cell(0, 0)
+    strategy.entry("L1", strategy.long, qty=1, comment="L1")
+if cell(0, 15)
+    strategy.entry("L2", strategy.long, qty=1, comment="L2")
+if cell(0, 30)
+    strategy.entry("L3", strategy.long, qty=1, comment="L3")
+if cell(0, 45)
+    strategy.entry("L4", strategy.long, qty=1, comment="L4")
+if cell(2, 0)
+    for i = 3 to 4
+        strategy.close("L" + str.tostring(i), comment="loop close L" + str.tostring(i))
+if cell(3, 0)
+    strategy.close("L1", comment="close L1")
+
+if cell(5, 0)
+    strategy.close_all(comment="cleanup")

@@ -1,0 +1,16 @@
+{
+  "title": "W3 F02 g2 POOC close after FIFO consumed",
+  "slug": "w3f02-g2-pooc-close-after-fifo-consumed",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:04:11.066Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "4a8691fd93c0193863ff80f9e34a1b7cf3a88e473f709e8d15af79101e8d1844",
+  "tv_trades_sha256": "dd4ae9fc6fe3e7099eb6db7dd44e2dbe46d982bb48662c8f82f2a0289f495d37",
+  "tv_trades_rows": 18
+}

@@ -1,0 +1,16 @@
+{
+  "title": "W3 F02 x1 xlm grid sequence",
+  "slug": "w3f02-x1-xlm-sequence",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:18:35.538Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "4830d37d4f37ad5c2846daae5ab0725d5bca34e9c9eeaddb860ae2440b56412d",
+  "tv_trades_sha256": "393bd244059616417cfed9474ec7b9eebc7decbaee205ff5e97f0359f820a392",
+  "tv_trades_rows": 52
+}

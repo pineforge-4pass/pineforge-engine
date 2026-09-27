@@ -223,10 +223,15 @@ struct PlacementSnapshot {
     std::uint64_t command_sequence = 0;
     // Source close-callsite lowering facts. They describe one admitted
     // script-evaluation command; the native request remains the sole
-    // executable order.
+    // executable order. `close_first_id` is the id the fill books against in
+    // the close ledger (book_close_ledger): the first call of the call site
+    // on the bar, whatever id a later call of the site sized the order for.
     std::uint64_t close_callsite_token = 0;
     std::uint32_t close_batch_calls = 0;
     SourceId close_first_id{};
+    // Retired with the reservation model (lane W3B-ENG-GRID): nothing sets
+    // these five any more, and each keeps its default so the v4 placement
+    // fold keeps its layout.
     double close_first_target = 0.0;
     bool close_first_ledger_consumed = false;
     bool close_first_carry_valid = false;
@@ -1660,21 +1665,26 @@ private:
         std::uint64_t surviving_exit_incarnation = 0;
     };
 
+    // One strategy.close call site on one bar: TradingView keeps one order
+    // per site. Its quantity and comment are the last effective call's, the
+    // id its fill books against the first effective call's.
     struct CloseCallsiteState {
         bool active = false;
         std::uint64_t token = 0;
         int calls = 0;
         SourceId first_id{};
-        double first_target = 0.0;
-        bool first_ledger_consumed = false;
-        bool first_carry_valid = false;
-        double first_carry_qty = 0.0;
         SourceId id{};
         std::string comment{};
         double target = 0.0;
-        bool retire_ledger_whole = false;
         std::uint64_t queue_sequence = 0;
-        std::vector<SourceId> deferred_cleanup_ids;
+    };
+
+    // One opening fill's share of the close ledger: the units entered under
+    // `id` that no close has booked yet. Records keep fill order; adjacent
+    // records of one id merge.
+    struct CloseLedgerRecord {
+        SourceId id{};
+        double units = 0.0;
     };
 
     NativeStrategyHost& require_host() const;
@@ -1980,10 +1990,10 @@ private:
     void apply_terminal_explicit_market_policy(const NativeDecisionContext&);
     bool enqueue_pooc_fifo_close(const SourceId&, const std::string&,
                                  std::uint64_t, std::uint64_t);
-    double close_reserved_other_units(const SourceId&,
-                                      std::uint64_t) const noexcept;
-    void observe_close_policy(const native_order::ExecutionAppliedEvent&,
-                              const PlacementSnapshot&);
+    void observe_close_ledger(const native_order::ExecutionAppliedEvent&,
+                              const PlacementSnapshot*);
+    void credit_close_ledger(const SourceId&, double units);
+    void book_close_ledger(const SourceId&, double units);
 
     // @source-state begin
     NativeStrategyHost* host_ = nullptr;
@@ -2039,13 +2049,12 @@ private:
     std::unordered_map<SourceId, std::int64_t> consumed_partial_exit_cycles_;
     std::unordered_set<std::uint64_t> bracket_shadowed_openings_;
     std::unordered_map<SourceId, NamedEntryCancelToken> named_entry_cancel_tokens_;
+    // The close ledger: per id, the units entered under it that no close has
+    // booked yet (close_logical_units_), and the same units by opening fill
+    // in fill order (close_ledger_records_), which a booking beyond its id's
+    // own units spills over oldest first.
     std::map<SourceId, double> close_logical_units_;
-    std::map<SourceId, double> close_reserved_units_;
-    std::map<SourceId, double> close_first_units_;
-    std::map<std::uint64_t, std::map<SourceId, double>>
-        close_callsite_reserved_units_;
-    std::map<std::uint64_t, std::map<SourceId, double>>
-        close_callsite_first_units_;
+    std::vector<CloseLedgerRecord> close_ledger_records_;
     std::map<std::uint64_t, CloseCallsiteState> close_batch_callsites_;
     std::int32_t close_batch_bar_ = -1;
     std::uint64_t close_batch_queue_sequence_ = 0;

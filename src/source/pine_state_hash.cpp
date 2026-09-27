@@ -443,31 +443,24 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         const auto& token = named_entry_cancel_tokens_.at(key);
         f.s(key); f.u(token.entry_incarnation); f.u(token.surviving_exit_incarnation);
     }
-    const auto hash_close_units = [&](const auto& values) {
-        f.u(values.size());
-        for (const auto& row : values) { f.s(row.first); f.d(row.second); }
-    };
-    hash_close_units(close_logical_units_);
-    hash_close_units(close_reserved_units_);
-    hash_close_units(close_first_units_);
-    const auto hash_close_owners = [&](const auto& owners) {
-        f.u(owners.size());
-        for (const auto& owner : owners) {
-            f.u(owner.first); hash_close_units(owner.second);
-        }
-    };
-    hash_close_owners(close_callsite_reserved_units_);
-    hash_close_owners(close_callsite_first_units_);
+    f.u(close_logical_units_.size());
+    for (const auto& row : close_logical_units_) { f.s(row.first); f.d(row.second); }
+    // The ledger's records fold only when there are two or more: a single
+    // record is the one id close_logical_units_ holds, and none is none, so a
+    // position of one id folds what it folded before the records existed.
+    if (close_ledger_records_.size() > 1) {
+        f.u(close_ledger_records_.size());
+        for (const auto& record : close_ledger_records_) { f.s(record.id); f.d(record.units); }
+    }
+    // The retired reservation model's two maps and two per-site maps fold as
+    // the empty maps they always were outside a multi-call close site.
+    f.u(0); f.u(0); f.u(0); f.u(0);
     f.u(close_batch_callsites_.size());
     for (const auto& row : close_batch_callsites_) {
         const auto& site = row.second;
         f.u(row.first); f.b(site.active); f.u(site.token); f.i(site.calls);
-        f.s(site.first_id); f.d(site.first_target);
-        f.b(site.first_ledger_consumed); f.b(site.first_carry_valid);
-        f.d(site.first_carry_qty); f.s(site.id); f.s(site.comment);
-        f.d(site.target); f.b(site.retire_ledger_whole);
-        f.u(site.queue_sequence); f.u(site.deferred_cleanup_ids.size());
-        for (const auto& id : site.deferred_cleanup_ids) f.s(id);
+        f.s(site.first_id); f.s(site.id); f.s(site.comment);
+        f.d(site.target); f.u(site.queue_sequence);
     }
     f.i(close_batch_bar_); f.u(close_batch_queue_sequence_);
     f.d(close_batch_pending_debt_); f.d(close_batch_admitted_total_);

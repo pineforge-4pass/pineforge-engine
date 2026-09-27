@@ -1,0 +1,16 @@
+{
+  "title": "W3 F02 g4 POOC loop closes consumed ids",
+  "slug": "w3f02-g4-pooc-loop-close-consumed-ids",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:04:12.705Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "53e9c0988cc568cfd25714e636c7bd655e4d0e0e673db0ed41b49eb0260d1ca8",
+  "tv_trades_sha256": "eb528911cf4a87e6e9cfe7263b4f9e5eee718180099639555908b52967b6d5e8",
+  "tv_trades_rows": 24
+}

@@ -1,0 +1,16 @@
+{
+  "title": "W3 F02 g3 POOC close the remaining fragment",
+  "slug": "w3f02-g3-pooc-close-remaining-fragment",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:04:09.539Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "065e5e27b32f4e61e8a80f7cf81e05e84f410a0e59b15a3e9583efa122c302a4",
+  "tv_trades_sha256": "15406e57ea898ca421a42a556ab782a96960265f200a7913c7636e6d97fef537",
+  "tv_trades_rows": 18
+}

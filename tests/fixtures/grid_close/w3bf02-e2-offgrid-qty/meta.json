@@ -1,0 +1,16 @@
+{
+  "title": "W3B F02 e2 entry quantities off the lot grid",
+  "slug": "w3bf02-e2-offgrid-qty",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:33:59.035Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "63fc82d4f20839afd743ede9489ad5a59b376a2239e5f24c8a1675f2176dfb10",
+  "tv_trades_sha256": "033362abdf956fb1354cc347017866feb41c41ac06a845716ccd8f480a6a7fe7",
+  "tv_trades_rows": 10
+}

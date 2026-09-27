@@ -1,0 +1,26 @@
+//@version=6
+strategy("W3 F02 g2 POOC close after FIFO consumed", overlay=true, pyramiding=5, process_orders_on_close=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W3-ENG-EXIT-ALLOC, family F02: strategy.close(id) under the default
+// FIFO close_entries_rule once other closes have consumed the id's lots.
+// Every cell runs on 2025-04-08, 04-09 and 04-10 (UTC); a cleanup close_all
+// ends each day (orders fill at the signal close)'s cell at 05:00.
+// Entry A (1) at 00:00 and B (2) at 01:00. close("B") at 02:00 takes, FIFO,
+// A's lot and one unit of B's; then close("A") at 03:00 and close("B") again
+// at 04:00.
+
+cell(h, m) => (dayofmonth(time, "UTC") == 8 or dayofmonth(time, "UTC") == 9 or dayofmonth(time, "UTC") == 10) and month(time, "UTC") == 4 and year(time, "UTC") == 2025 and hour(time, "UTC") == h and minute(time, "UTC") == m
+
+if cell(0, 0)
+    strategy.entry("A", strategy.long, qty=1, comment="A")
+if cell(1, 0)
+    strategy.entry("B", strategy.long, qty=2, comment="B")
+if cell(2, 0)
+    strategy.close("B", comment="close B first")
+if cell(3, 0)
+    strategy.close("A", comment="close A")
+if cell(4, 0)
+    strategy.close("B", comment="close B again")
+
+if cell(5, 0)
+    strategy.close_all(comment="cleanup")

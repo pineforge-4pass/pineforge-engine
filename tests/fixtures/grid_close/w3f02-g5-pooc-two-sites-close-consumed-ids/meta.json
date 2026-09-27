@@ -1,0 +1,16 @@
+{
+  "title": "W3 F02 g5 POOC two call sites close consumed ids",
+  "slug": "w3f02-g5-pooc-two-sites-close-consumed-ids",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:04:14.566Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "837dcd8b39022150a69d0d74f9f38658f5b2fb786399d908bbf832f4a280eeca",
+  "tv_trades_sha256": "bc2f445c67bb21eb74aeb293d738454750f9841b00164033ee4524e979948131",
+  "tv_trades_rows": 24
+}
