@@ -281,7 +281,16 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #      manifest, the sha256 pins, the refusals by name)
 # Both register in release too. 292 registered, 291 run: the WebSocket row
 # still skips on a system libcurl.
-KERNEL_MIN_TESTS = 291
+# 293 run = those 291 plus lane K-SESSION-WINDOWS' two source-free rows,
+# counted with ctest -N on the rebased tree (kernel profile, 294 registered):
+#   +1 F6 test_session_prepost_windows_tape (pre- and post-market over every
+#         session window, on TradingView's session-flag tapes)
+#   +1 F1 test_native_session_day_bar_open (a script bar's session-day facts
+#         at its own label, on TradingView's extended-hours and break-open
+#         tapes)
+# Both register in release too. 294 registered, 293 run: the WebSocket row
+# still skips on a system libcurl.
+KERNEL_MIN_TESTS = 293
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -443,8 +452,15 @@ KERNEL_MIN_TESTS = 291
 #      another symbol against the kernel's delivery rule)
 #   +1 test_symbol_request_data (the symbol-data C ABI, the recorded series
 #      store, the stream refusal)
-# No release row skips, so 720 registered is 720 run.
-RELEASE_MIN_TESTS = 720
+# 724 = those 720 plus lane K-SESSION-WINDOWS' four, counted with ctest -N on
+# the rebased tree: its two KERNEL_MIN_TESTS rows above, which register here
+# too, and two source-bound rows:
+#   +1 F2 test_session_extended_day_tape (session.isfirstbar / islastbar and
+#         their _regular twins through the Pine host)
+#   +1 F7 test_session_break_open_bar_tape (aggregated bars that open inside a
+#         session break)
+# No release row skips, so 724 registered is 724 run.
+RELEASE_MIN_TESTS = 724
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
@@ -473,9 +489,10 @@ ADR_RULED_TEXTS_MIN = 40
 # INT27's thirteen rows of RELEASE_MIN_TESTS (K-RUNERR +1, PERF-ZONED +1,
 # TV-DEFAULTS +1, MAG-INTRABAR +3, PAR-ORDERS-3 +1, K-DRAWSNAP +3,
 # K-TA-DYNLEN +3), counted the same way; 701/701/710 with lane XSYM-D's four
-# rows of RELEASE_MIN_TESTS in each, counted the same way.
+# rows of RELEASE_MIN_TESTS in each, counted the same way; 705/705/714 with
+# lane K-SESSION-WINDOWS' four, counted the same way on the rebased tree.
 # An excluded run must still discover at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 701, 'sanitizers': 701, 'native': 710}
+EXCLUDED_REGISTERED_MIN = {'debug': 705, 'sanitizers': 705, 'native': 714}
 # The ctest stage's bound. A full sanitizers run (push to main, a manual
 # dispatch, the maintainers' verification) ran out of its 30 minutes twice on
 # main's four-core runner before every row had finished, so it gets an hour; a
