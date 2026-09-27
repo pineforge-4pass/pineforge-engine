@@ -1,0 +1,16 @@
+{
+  "title": "w10 cap abc",
+  "slug": "w10-cap-abc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T22:26:09.039Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "8e63c5085006e17c178a2e4800ec079c4afa5928d6b5c18a8bf576427b975446",
+  "tv_trades_sha256": "7782a76c8950668396273e0bfd1191f7a8efcfc0f4dae71ec13d1a0ebc92463d",
+  "tv_trades_rows": 12
+}

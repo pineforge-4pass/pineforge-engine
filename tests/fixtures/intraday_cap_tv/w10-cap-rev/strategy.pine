@@ -1,0 +1,41 @@
+//@version=6
+// W10-DIAG-UNKNOWN synthetic probe: strategy.risk.max_intraday_filled_orders
+// under process_orders_on_close, a reversal bar in two script orders.
+//   D (04-11): a long; then an opposite entry FOLLOWED by a close of the long
+//              on one bar; then a new long.
+//   E (04-12): a long; then an opposite entry alone; then a new long.
+//   F (04-13): a long; then a close FOLLOWED by an opposite entry on one bar;
+//              then a new long.
+strategy("w10 cap reversal order", overlay=true, process_orders_on_close=true,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=0,
+     commission_value=0, slippage=0)
+strategy.risk.max_intraday_filled_orders(3)
+
+at(int d, int h, int m) => time == timestamp("UTC", 2025, 4, d, h, m)
+
+// D
+if at(11, 0, 0)
+    strategy.entry("DL", strategy.long, comment="D long")
+if at(11, 1, 0)
+    strategy.entry("DS", strategy.short, comment="D short")
+    strategy.close("DL", comment="D close")
+if at(11, 2, 0)
+    strategy.entry("DL2", strategy.long, comment="D long again")
+// E
+if at(12, 0, 0)
+    strategy.entry("EL", strategy.long, comment="E long")
+if at(12, 1, 0)
+    strategy.entry("ES", strategy.short, comment="E short")
+if at(12, 2, 0)
+    strategy.entry("EL2", strategy.long, comment="E long again")
+// F
+if at(13, 0, 0)
+    strategy.entry("FL", strategy.long, comment="F long")
+if at(13, 1, 0)
+    strategy.close("FL", comment="F close")
+    strategy.entry("FS", strategy.short, comment="F short")
+if at(13, 2, 0)
+    strategy.entry("FL2", strategy.long, comment="F long again")
+
+if at(11, 6, 0) or at(12, 6, 0) or at(13, 6, 0)
+    strategy.close_all(comment="cleanup")

@@ -15813,8 +15813,22 @@ void PineExecutionAdapter::observe_intraday_cap(
                         + static_cast<std::ptrdiff_t>(continuation_index));
                 }
             }
-            if (observe_close)
-                cap.committed_close(clock, calculation, before, event.ordinal, candidates);
+            if (observe_close) {
+                // Only an opposite entry the script placed BEFORE this close
+                // inherits its slot: that entry's reversal is what closed the
+                // position, so TradingView books the bar as one fill. One
+                // placed after the close opens from flat and is a fill of its
+                // own (lane W10-DIAG-UNKNOWN rule CAP-ORDER,
+                // tests/fixtures/intraday_cap_tv).
+                std::vector<compat::pine::ContinuationCandidate> inheritors;
+                for (const auto& candidate : candidates) {
+                    if (static_cast<std::uint64_t>(candidate.created_seq)
+                        < snapshot.command_sequence) {
+                        inheritors.push_back(candidate);
+                    }
+                }
+                cap.committed_close(clock, calculation, before, event.ordinal, inheritors);
+            }
             cap_latest_fill_ = event.ordinal;
             if (continuation) {
                 (void)require_host().execute_current(

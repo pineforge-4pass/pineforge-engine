@@ -977,6 +977,11 @@ list(APPEND TEST_SOURCES test_coof_recalc_security_tapes)
 # (tests/fixtures/coqueued_open_margin), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_coqueued_open_margin_tapes)
 
+# Lane W10-DIAG-UNKNOWN rules CAP-ORDER and CAP-ON: TradingView's
+# strategy.risk.max_intraday_filled_orders count (tests/fixtures/
+# intraday_cap_tv), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_intraday_cap_tv_tapes)
+
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bare_host_contracts)
@@ -2576,6 +2581,13 @@ endif()
 if(TARGET test_coqueued_open_margin_tapes)
     target_compile_definitions(test_coqueued_open_margin_tapes PRIVATE
         PINEFORGE_COQ_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coqueued_open_margin")
+endif()
+
+# Lane W10-DIAG-UNKNOWN (CAP) reads its TradingView tapes from the fixture tree;
+# source-bound.
+if(TARGET test_intraday_cap_tv_tapes)
+    target_compile_definitions(test_intraday_cap_tv_tapes PRIVATE
+        PINEFORGE_CAP_TV_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/intraday_cap_tv")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape

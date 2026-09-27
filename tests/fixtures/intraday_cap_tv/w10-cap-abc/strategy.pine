@@ -1,0 +1,42 @@
+//@version=6
+// W10-DIAG-UNKNOWN synthetic probe: strategy.risk.max_intraday_filled_orders
+// under process_orders_on_close. Three UTC days, one shape each:
+//   A (04-08): a long, three same-direction entry calls while it is held,
+//              a close, then a new long.
+//   B (04-09): a long, a close, then a short that is the day's third fill.
+//   C (04-10): a long, then a close and an opposite entry on one bar,
+//              then a new entry.
+strategy("w10 cap abc", overlay=true, process_orders_on_close=true,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=0,
+     commission_value=0, slippage=0)
+strategy.risk.max_intraday_filled_orders(3)
+
+at(int d, int h, int m) => time == timestamp("UTC", 2025, 4, d, h, m)
+
+// A
+if at(8, 0, 0)
+    strategy.entry("AL", strategy.long, comment="A long")
+if at(8, 0, 15) or at(8, 0, 30) or at(8, 0, 45)
+    strategy.entry("AL", strategy.long, comment="A long again")
+if at(8, 1, 0)
+    strategy.close("AL", comment="A close")
+if at(8, 1, 15)
+    strategy.entry("AL2", strategy.long, comment="A second long")
+// B
+if at(9, 0, 0)
+    strategy.entry("BL", strategy.long, comment="B long")
+if at(9, 0, 30)
+    strategy.close("BL", comment="B close")
+if at(9, 1, 0)
+    strategy.entry("BS", strategy.short, comment="B short")
+// C
+if at(10, 0, 0)
+    strategy.entry("CL", strategy.long, comment="C long")
+if at(10, 1, 0)
+    strategy.close("CL", comment="C close")
+    strategy.entry("CS", strategy.short, comment="C short")
+if at(10, 2, 0)
+    strategy.entry("CL2", strategy.long, comment="C long again")
+
+if at(8, 6, 0) or at(9, 6, 0) or at(10, 6, 0)
+    strategy.close_all(comment="cleanup")

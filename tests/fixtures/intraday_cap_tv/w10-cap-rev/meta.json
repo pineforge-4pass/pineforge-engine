@@ -1,0 +1,16 @@
+{
+  "title": "w10 cap reversal order",
+  "slug": "w10-cap-rev",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T22:28:21.906Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "ecaa75bcc6106689539618bb0780658750fcd10f7f277c63ee5056847a5b6fc7",
+  "tv_trades_sha256": "b6fd2e0f43a2183515cb44f7345a9e25462c2947ada81b90e3ca9fee9ab37eeb",
+  "tv_trades_rows": 16
+}
