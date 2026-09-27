@@ -1,0 +1,16 @@
+{
+  "title": "W8B flip: same-id entry twice around its bracket",
+  "slug": "w8b-flip-double-bracket",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:15:09.497Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "d6fc5dbbee686b08a5dbedb7396421057156d26072f9600efff4789c5842c865",
+  "tv_trades_sha256": "a0f436a5730a9b4e9dcaa04102b57daf0cf62d4b5f85523ac415f966fdf0b3f9",
+  "tv_trades_rows": 8
+}

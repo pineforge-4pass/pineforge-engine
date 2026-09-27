@@ -1,0 +1,22 @@
+//@version=6
+strategy("W8B flip: same-id entry called twice, orders on close", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, process_orders_on_close=true)
+
+// Lane W8B-SIGSTATE-2. A short is open; on the flip bar the script calls
+// strategy.entry for the long twice with the same id, the shape of a helper
+// whose body repeats its entry call. Orders fill on their bar's close. Cell 1 flips after the price rose (the
+// flip's own default size is below the short's), cell 2 after it fell (above).
+if time == timestamp("UTC", 2025, 4, 8, 0, 15)
+    strategy.entry("S1", strategy.short, comment="S1 seed short")
+if time == timestamp("UTC", 2025, 4, 8, 0, 30)
+    strategy.entry("L1", strategy.long, comment="L1 flip long")
+    strategy.entry("L1", strategy.long, comment="L1 flip long")
+if time == timestamp("UTC", 2025, 4, 9, 0, 0)
+    strategy.entry("S2", strategy.short, comment="S2 seed short")
+if time == timestamp("UTC", 2025, 4, 9, 0, 15)
+    strategy.entry("L2", strategy.long, comment="L2 flip long")
+    strategy.entry("L2", strategy.long, comment="L2 flip long")
+
+cleanup = time == timestamp("UTC", 2025, 4, 8, 2, 0) or time == timestamp("UTC", 2025, 4, 9, 2, 0)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

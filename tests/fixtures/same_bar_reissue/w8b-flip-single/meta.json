@@ -1,0 +1,16 @@
+{
+  "title": "W8B flip: same-id entry called once (control)",
+  "slug": "w8b-flip-single",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:15:05.261Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "c086529f7cf8b301aa07ea57eadb16fa88ede51082d23e6ddcfbaeb7e64110a7",
+  "tv_trades_sha256": "185a57c05bd2169eda6013b981d0c326cadaac14a0468f941038c7bf4bb50570",
+  "tv_trades_rows": 8
+}

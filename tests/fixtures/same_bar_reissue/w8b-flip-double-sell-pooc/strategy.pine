@@ -1,0 +1,25 @@
+//@version=6
+strategy("W8B flip: same-id short entry twice over a bracketed long, orders on close", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, process_orders_on_close=true)
+
+// Lane W8B-SIGSTATE-2. The sell side of w8b-flip-double-seedbracket, orders on close. Cell 1
+// (04-08): the price rose into the flip, so its size is below the long's and a
+// long remainder stays open; the long's bracket limit (1580) is reached at
+// 01:30 before the 02:00 cleanup. Cell 2 (04-09): the price fell into the
+// flip, so its size is above the long's.
+if time == timestamp("UTC", 2025, 4, 8, 0, 15)
+    strategy.entry("L1", strategy.long, comment="L1 seed long")
+    strategy.exit("XL1", "L1", stop=1500.0, limit=1580.0, comment="L1 bracket")
+if time == timestamp("UTC", 2025, 4, 8, 0, 30)
+    strategy.entry("S1", strategy.short, comment="S1 flip short")
+    strategy.entry("S1", strategy.short, comment="S1 flip short")
+if time == timestamp("UTC", 2025, 4, 9, 0, 0)
+    strategy.entry("L2", strategy.long, comment="L2 seed long")
+    strategy.exit("XL2", "L2", stop=1400.0, limit=1500.0, comment="L2 bracket")
+if time == timestamp("UTC", 2025, 4, 9, 0, 15)
+    strategy.entry("S2", strategy.short, comment="S2 flip short")
+    strategy.entry("S2", strategy.short, comment="S2 flip short")
+
+cleanup = time == timestamp("UTC", 2025, 4, 8, 2, 0) or time == timestamp("UTC", 2025, 4, 9, 2, 0)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

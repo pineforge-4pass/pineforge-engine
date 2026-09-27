@@ -939,6 +939,11 @@ list(APPEND TEST_SOURCES test_pooc_same_pass_close_tape)
 # (tests/fixtures/limit_entry_affordability), on TradingView's tape.
 list(APPEND TEST_SOURCES test_limit_entry_affordability_tape)
 
+# Lane R1-CONSOLIDATE (lanes W8A-SIGSTATE-1 and W8B-SIGSTATE-2): a same-bar
+# reissue of a reversing MARKET entry moves only its own quantity
+# (tests/fixtures/same_bar_reissue), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_same_bar_reissue_tapes)
+
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bare_host_contracts)
@@ -2464,6 +2469,13 @@ endif()
 if(TARGET test_limit_entry_affordability_tape)
     target_compile_definitions(test_limit_entry_affordability_tape PRIVATE
         PINEFORGE_LIMIT_ENTRY_AFFORDABILITY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/limit_entry_affordability")
+endif()
+
+# Lane R1-CONSOLIDATE reads its TradingView tapes from the fixture tree (and the
+# bars of tests/fixtures/tvdef_drops); source-bound.
+if(TARGET test_same_bar_reissue_tapes)
+    target_compile_definitions(test_same_bar_reissue_tapes PRIVATE
+        PINEFORGE_SAME_BAR_REISSUE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/same_bar_reissue")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape

@@ -1,0 +1,16 @@
+{
+  "title": "W8B flip: same-id short entry twice over a bracketed long, orders on close",
+  "slug": "w8b-flip-double-sell-pooc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:38:56.649Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "3fbd95c3d0bad80d68527e39e17599820eba28084e2a3c081c85c800a56a38e1",
+  "tv_trades_sha256": "4f1f815215de59d3583eeb86ec732b45d85c65adae9f3e2385030e73a05341ed",
+  "tv_trades_rows": 8
+}

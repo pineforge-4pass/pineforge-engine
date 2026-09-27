@@ -4,6 +4,10 @@
 // seed 3 => 1.53 SHORT under First; equal quantities => FLAT. A later
 // same-direction MARKET does not fill. The old long bracket stays dormant
 // until reissued. The buy-side mirror is deliberately outside this fix.
+// Lane R1-CONSOLIDATE widened the rule on TradingView's tapes
+// (tests/fixtures/same_bar_reissue): the same-bar reissue of a reversing
+// MARKET entry is a plain transaction on either side and for every
+// quantity kind, so the explicit-qty row below now expects it.
 // Small synthetic unit bars below scale that arithmetic to 3 - 2 = 1.
 #include <cmath>
 #include <cstdio>
@@ -181,10 +185,14 @@ void test_excluded_lanes() {
     CHECK(mirror.seen[3].side==PositionSide::LONG);
     CHECK(near(mirror.seen[3].qty,2));
     CHECK(mirror.seen[3].id=="Last");
+    // An explicit qty re-issued the same way is TradingView's plain
+    // transaction too: 3 - 2 = 1 LONG (lab tv tapes w8a-dbl-p10 cell C and
+    // w8a-dbl-scope3 cells G and H, tests/fixtures/same_bar_reissue); this
+    // row pinned a full reversal to SHORT 2 that no tape backed.
     Probe explicit_order; explicit_order.explicit_qty=true;
     explicit_order.sibling=false; run(explicit_order);
-    CHECK(explicit_order.seen[3].side==PositionSide::SHORT);
-    CHECK(near(explicit_order.seen[3].qty,2));
+    CHECK(explicit_order.seen[3].side==PositionSide::LONG);
+    CHECK(near(explicit_order.seen[3].qty,1));
     for (bool priced : {false,true}) {
         Probe replaced; replaced.sibling=false;
         replaced.priced_first=priced; replaced.cancel_first=!priced;

@@ -1,0 +1,16 @@
+{
+  "title": "W8A dbl-entry p10 single",
+  "slug": "w8a-dbl-p10-single",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:09:09.558Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "4b3882df042b236807fc8e1c0adafea270197873a47b40fbb06eb61500f08741",
+  "tv_trades_sha256": "5c4e30f4ea50856b6947c81e2c9a627e264335e5570c3b47727a78ed78ec2d7c",
+  "tv_trades_rows": 18
+}

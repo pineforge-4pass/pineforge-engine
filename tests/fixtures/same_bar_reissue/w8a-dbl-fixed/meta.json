@@ -1,0 +1,16 @@
+{
+  "title": "W8A dbl-entry fixed",
+  "slug": "w8a-dbl-fixed",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:14:50.866Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "f5aebaadd4fc32a625d662997db66a4ef04e2d0169e8dee66b994d046a48f145",
+  "tv_trades_sha256": "25535241dee653fee663459670345a2725653dd8a25921f192be666cb8747746",
+  "tv_trades_rows": 16
+}

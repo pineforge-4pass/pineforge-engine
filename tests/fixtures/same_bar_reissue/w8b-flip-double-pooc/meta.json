@@ -1,0 +1,16 @@
+{
+  "title": "W8B flip: same-id entry called twice, orders on close",
+  "slug": "w8b-flip-double-pooc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:38:50.114Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "07732a98fce7581266ce265cdfc64c134fca256e9a35bd9f773825244ffbd06a",
+  "tv_trades_sha256": "7ccbe9aedb41dfa6a8329b4d7ed3dc55da1d17cf09a74e84254ec685244e3c2d",
+  "tv_trades_rows": 8
+}

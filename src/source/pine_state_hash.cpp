@@ -349,6 +349,10 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     for (const auto& command : pending_same_bar_commands_) {
         hash_native_request(f, command.request); hash_placement(f, command.snapshot);
         f.s(command.replacement_key); f.b(command.opening);
+        // Folded only when set, so a batch without an R1 reissue keeps its digest.
+        if (command.staged_reversal) {
+            f.b(command.staged_reversal); f.d(command.staged_reversal_held_units);
+        }
     }
     f.u(source_shadow_pending_.size());
     for (const auto& shadow : source_shadow_pending_) {

@@ -1,0 +1,16 @@
+{
+  "title": "W8B flip: same-id entry twice over a bracketed short",
+  "slug": "w8b-flip-double-seedbracket",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:19:07.923Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "1d8663e048ac3948cdaa9c6f27f475afe8ab87f8a3c69c53de57cfad48d9f45d",
+  "tv_trades_sha256": "d8c3c63e018eb9c1d788ebed9b03a6b6242b762c56af68706d5afe26e5dfe467",
+  "tv_trades_rows": 8
+}

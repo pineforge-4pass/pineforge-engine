@@ -1,0 +1,23 @@
+//@version=6
+strategy("W8B flip: same-id short entry twice, fixed size", overlay=true, initial_capital=10000, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W8B-SIGSTATE-2. w8b-flip-double-sell under a fixed default of 1: the
+// seed longs name 2 (above the flip's size, a long remainder stays open and
+// its bracket limit 1580 is reached at 01:30) and 0.5 (below it).
+if time == timestamp("UTC", 2025, 4, 8, 0, 15)
+    strategy.entry("L1", strategy.long, qty=2, comment="L1 seed long")
+    strategy.exit("XL1", "L1", stop=1500.0, limit=1580.0, comment="L1 bracket")
+if time == timestamp("UTC", 2025, 4, 8, 0, 30)
+    strategy.entry("S1", strategy.short, comment="S1 flip short")
+    strategy.entry("S1", strategy.short, comment="S1 flip short")
+if time == timestamp("UTC", 2025, 4, 9, 0, 0)
+    strategy.entry("L2", strategy.long, qty=0.5, comment="L2 seed long")
+    strategy.exit("XL2", "L2", stop=1400.0, limit=1500.0, comment="L2 bracket")
+if time == timestamp("UTC", 2025, 4, 9, 0, 15)
+    strategy.entry("S2", strategy.short, comment="S2 flip short")
+    strategy.entry("S2", strategy.short, comment="S2 flip short")
+
+cleanup = time == timestamp("UTC", 2025, 4, 8, 2, 0) or time == timestamp("UTC", 2025, 4, 9, 2, 0)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

@@ -1,0 +1,16 @@
+{
+  "title": "W8A dbl-entry scope3 single",
+  "slug": "w8a-dbl-scope3-single",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:44:45.982Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "449b87db2a589ecc097d9fe99eacafb3e5367739864bf803793f34960ee6f282",
+  "tv_trades_sha256": "2dce20e2555a8c8959409a5c61a2d6ca170c78a48439eb03087bfbbe60436401",
+  "tv_trades_rows": 20
+}

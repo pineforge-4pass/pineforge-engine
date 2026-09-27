@@ -6878,6 +6878,24 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             && !finite_positive(prior->second.exit_levels.limit)
             && !finite_positive(prior->second.exit_levels.stop);
     }
+    // R1: a same-id MARKET reissue of a reversal whose predecessor is still
+    // staged in this callback's same-bar batch is the same replacement; the
+    // staged predecessor never reached live_by_source_key_. TradingView books
+    // the reissue as a transaction of its own quantity against the opposite
+    // position, not as a reversal, on either side and for every quantity kind
+    // (lab tv tapes tests/fixtures/same_bar_reissue, lane R1-CONSOLIDATE).
+    bool staged_reversal_replacement = false;
+    if (same_bar_market_candidate && !snapshot.replaced_opening && reverses) {
+        staged_reversal_replacement = std::any_of(pending_same_bar_commands_.begin(),
+            pending_same_bar_commands_.end(), [&](const PendingSameBarCommand& row) {
+                return row.opening && !row.snapshot.frozen_market_targeted_close
+                    && row.replacement_key == id
+                    && row.snapshot.family == PineOrderFamily::Entry
+                    && row.snapshot.is_long == is_long;
+            });
+        snapshot.replaced_opening = staged_reversal_replacement;
+        snapshot.replacement_predecessor_market = staged_reversal_replacement;
+    }
     const bool special_sell_replacement = default_sized && reverses && !is_long
         && snapshot.replaced_opening && snapshot.replacement_predecessor_market;
     if (special_sell_replacement && current_point) {
@@ -7333,8 +7351,11 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         if (over_cap && !opposite_market_pending && !opposite_entry_pending) return;
         if (!(over_cap && !opposite_market_pending)
             && finite_positive(own_units)) {
-            const double held_opposite = current != 0.0 && ((current > 0.0) != is_long)
+            // R1: a staged reversal's same-id reissue transacts its own units
+            // only; it does not carry the held opposite side.
+            const double held_opposite_units = current != 0.0 && ((current > 0.0) != is_long)
                 ? std::max(0.0, std::abs(current) - preceding_close_qty) : 0.0;
+            const double held_opposite = staged_reversal_replacement ? 0.0 : held_opposite_units;
             const double transaction = own_units + held_opposite + opposite_pending_own;
             if (finite_positive(transaction)) {
                 if (over_cap && opposite_market_pending
@@ -7365,6 +7386,10 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                             && row.replacement_key == id;
                     });
                 PendingSameBarCommand pending{std::move(request), std::move(snapshot), id, true};
+                if (staged_reversal_replacement) {
+                    pending.staged_reversal = true;
+                    pending.staged_reversal_held_units = held_opposite_units;
+                }
                 if (existing == pending_same_bar_commands_.end()) {
                     pending_same_bar_commands_.push_back(std::move(pending));
                 } else {
@@ -11128,6 +11153,18 @@ void PineExecutionAdapter::flush_pending_same_bar_commands(bool flat_pair_follow
                 && placeholder.command_ordinal > queued[1].snapshot.command_ordinal;
         });
     const bool potential_short_seed = full_short_seed || partial_short_seed;
+    // R1 stays outside the round-8 short-seed book: its model yields
+    // TradingView's close-lot artifact only from the full reversal
+    // (tests/oracle/test_oracle_short_seed.cpp, GateControl::SameIdReplacement),
+    // so a Long reissued over the seed gets back the held units R1 left out.
+    if (potential_short_seed && batch_start < 0.0) {
+        for (auto& command : queued) {
+            if (!command.staged_reversal) continue;
+            command.snapshot.frozen_market_transaction_units += command.staged_reversal_held_units;
+            command.snapshot.replaced_opening = false;
+            command.snapshot.replacement_predecessor_market = false;
+        }
+    }
     // ab9714be src/compat/pine/market_admission.cpp:33-37 (explicit_pair_scope)
     // carries no commission term.
     const bool p2_candidate_scope = config_.pyramiding == 2
@@ -13398,10 +13435,15 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             return result;
         }
     }
-    // A same-id default-percent replacement over an opposite open book is a
-    // source transaction (reduce the carried side by its frozen own size),
-    // not the ordinary auto-reversal shape. The replacement fact is captured
-    // before submit_or_replace retires its predecessor.
+    // A same-id replacement of a live MARKET entry over an opposite open book
+    // is a source transaction (reduce the carried side by its own size, open
+    // any remainder), not the ordinary auto-reversal shape. The replacement
+    // fact is captured before submit_or_replace retires its predecessor.
+    // TradingView sizes a MARKET reissue against the position its predecessor
+    // would leave, so it carries no reversal addend on either side and for
+    // every quantity kind: default percent, fixed and cash, and an explicit
+    // qty (R1, tests/fixtures/same_bar_reissue). The sell default-percent
+    // scope before it is kept for a priced reissue.
     const bool opposite_at_fill = facts.position.signed_units != 0.0
         && ((facts.position.signed_units > 0.0) != source.is_long);
     const auto live_side = facts.position.signed_units > 0.0
@@ -13432,10 +13474,11 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         const bool source_close_precedes = source.projection_after_close;
         const bool replacement_transaction = source.reverse_to
             && source.replaced_opening
-            && source.replacement_predecessor_market && !source.is_long
-            && !std::isfinite(source.requested_qty)
-            && config_.default_qty_type
-                == static_cast<int>(QtyType::PERCENT_OF_EQUITY);
+            && source.replacement_predecessor_market
+            && (std::holds_alternative<native_order::Market>(trigger)
+                || (!source.is_long && !std::isfinite(source.requested_qty)
+                    && config_.default_qty_type
+                        == static_cast<int>(QtyType::PERCENT_OF_EQUITY)));
         // A flat stop entry is kept while a live or queued entry shares its
         // placement bar (erase_retired_rows, K8).
         const auto dual_stop_peer = [&](std::uint64_t incarnation, const PlacementSnapshot& peer) {

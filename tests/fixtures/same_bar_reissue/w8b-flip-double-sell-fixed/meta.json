@@ -1,0 +1,16 @@
+{
+  "title": "W8B flip: same-id short entry twice, fixed size",
+  "slug": "w8b-flip-double-sell-fixed",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:19:17.248Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "c9818eb07e41c4258bd990c3b55ddf5db08d312efa6d197af236c212bfca88b4",
+  "tv_trades_sha256": "a532a1ac820e999732687564bf19bc77025afcc4108f45ab136983eb3c13946c",
+  "tv_trades_rows": 8
+}

@@ -1595,6 +1595,11 @@ private:
         PlacementSnapshot snapshot;
         SourceId replacement_key;
         bool opening = false;
+        // A same-id MARKET reissue booked as a transaction of its own units
+        // (R1) and the held opposite units it left out, which the round-8
+        // short-seed book puts back.
+        bool staged_reversal = false;
+        double staged_reversal_held_units = 0.0;
     };
 
     // A source command can remain observable through the enclosing source

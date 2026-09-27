@@ -1,0 +1,16 @@
+{
+  "title": "W8A dbl-entry cash",
+  "slug": "w8a-dbl-cash",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:14:55.214Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "3bfffab78eea32785c4883a92449171e112e69ea5e7eb634763996ff76967844",
+  "tv_trades_sha256": "d36a76e00ec2a5fd2caca1f2ebf53f4ad1d61c2fe05c07ba745356050b4914c2",
+  "tv_trades_rows": 16
+}

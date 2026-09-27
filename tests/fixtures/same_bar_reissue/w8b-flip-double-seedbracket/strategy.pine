@@ -1,0 +1,24 @@
+//@version=6
+strategy("W8B flip: same-id entry twice over a bracketed short", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=10)
+
+// Lane W8B-SIGSTATE-2. As w8b-flip-double, but the seed short carries its own
+// bracket. Cell 1 (04-08): the flip's size is below the short's, so a short
+// remainder stays open; its bracket stop (1580) is reached at 01:30 before the
+// 02:00 cleanup. Cell 2 (04-09): the flip's size is above the short's.
+if time == timestamp("UTC", 2025, 4, 8, 0, 15)
+    strategy.entry("S1", strategy.short, comment="S1 seed short")
+    strategy.exit("XS1", "S1", stop=1580.0, limit=1500.0, comment="S1 bracket")
+if time == timestamp("UTC", 2025, 4, 8, 0, 30)
+    strategy.entry("L1", strategy.long, comment="L1 flip long")
+    strategy.entry("L1", strategy.long, comment="L1 flip long")
+if time == timestamp("UTC", 2025, 4, 9, 0, 0)
+    strategy.entry("S2", strategy.short, comment="S2 seed short")
+    strategy.exit("XS2", "S2", stop=1500.0, limit=1400.0, comment="S2 bracket")
+if time == timestamp("UTC", 2025, 4, 9, 0, 15)
+    strategy.entry("L2", strategy.long, comment="L2 flip long")
+    strategy.entry("L2", strategy.long, comment="L2 flip long")
+
+cleanup = time == timestamp("UTC", 2025, 4, 8, 2, 0) or time == timestamp("UTC", 2025, 4, 9, 2, 0)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

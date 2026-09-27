@@ -1,0 +1,45 @@
+// Lane W8A-SIGSTATE-1: a repeated same-id strategy.entry that reverses the
+// position under a default_qty_value 5000 USDT (cash) default, with single-call controls.
+//   A 2025-04-08: long A1 qty=3 (01:00); short A2 twice (03:00)
+//   B 2025-04-08: short B1 qty=3 (07:00); long B2 twice (09:00)
+//   C 2025-04-08: long C1 qty=3 (13:00); short C2 once (15:00), the control of A
+//   D 2025-04-08: short D1 qty=3 (19:00); long D2 once (21:00), the control of B
+// Each cell ends with strategy.cancel_all() and strategy.close_all() two hours later.
+//@version=6
+strategy("W8A dbl-entry cash", overlay=true, default_qty_type=strategy.cash, default_qty_value=5000)
+
+at(int y, int mo, int d, int h, int mi) => time == timestamp("UTC", y, mo, d, h, mi)
+
+if at(2025, 4, 8, 1, 0)
+    strategy.entry("A1", strategy.long, qty=3)
+if at(2025, 4, 8, 3, 0)
+    strategy.entry("A2", strategy.short)
+    strategy.entry("A2", strategy.short)
+if at(2025, 4, 8, 5, 0)
+    strategy.cancel_all()
+    strategy.close_all()
+
+if at(2025, 4, 8, 7, 0)
+    strategy.entry("B1", strategy.short, qty=3)
+if at(2025, 4, 8, 9, 0)
+    strategy.entry("B2", strategy.long)
+    strategy.entry("B2", strategy.long)
+if at(2025, 4, 8, 11, 0)
+    strategy.cancel_all()
+    strategy.close_all()
+
+if at(2025, 4, 8, 13, 0)
+    strategy.entry("C1", strategy.long, qty=3)
+if at(2025, 4, 8, 15, 0)
+    strategy.entry("C2", strategy.short)
+if at(2025, 4, 8, 17, 0)
+    strategy.cancel_all()
+    strategy.close_all()
+
+if at(2025, 4, 8, 19, 0)
+    strategy.entry("D1", strategy.short, qty=3)
+if at(2025, 4, 8, 21, 0)
+    strategy.entry("D2", strategy.long)
+if at(2025, 4, 8, 23, 0)
+    strategy.cancel_all()
+    strategy.close_all()

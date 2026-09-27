@@ -1,0 +1,16 @@
+{
+  "title": "W8B flip: same-id entry called twice",
+  "slug": "w8b-flip-double",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:15:01.094Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "80599824ca8459c142a0dd04e95efb205ba8552cac16b18d7b38b8906b42b743",
+  "tv_trades_sha256": "a0f436a5730a9b4e9dcaa04102b57daf0cf62d4b5f85523ac415f966fdf0b3f9",
+  "tv_trades_rows": 8
+}

@@ -1,0 +1,9 @@
+﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)
+1,Exit long,2025-04-08 08:45,S1 flip short,1555.87,1,1553.57,2.3,0.15,0,4.98,0.32,-6.52,-0.42,2.3,0.02,1
+1,Entry long,2025-04-08 08:30,L1 seed long,1553.57,1,1553.57,2.3,0.15,0,4.98,0.32,-6.52,-0.42,2.3,0.02,1
+2,Exit long,2025-04-08 10:15,cleanup,1610.76,1,1553.57,57.19,3.68,0,64.43,4.15,-13.38,-0.86,59.49,0.59,7
+2,Entry long,2025-04-08 08:30,L1 seed long,1553.57,1,1553.57,57.19,3.68,0,64.43,4.15,-13.38,-0.86,59.49,0.59,7
+3,Exit long,2025-04-09 08:30,S2 flip short,1473.01,0.5,739.42,-2.915,-0.39,0,0.245,0.03,-4.385,-0.59,56.575,0.57,1
+3,Entry long,2025-04-09 08:15,L2 seed long,1478.84,0.5,739.42,-2.915,-0.39,0,0.245,0.03,-4.385,-0.59,56.575,0.57,1
+4,Exit short,2025-04-09 10:15,cleanup,1447.38,0.5,736.505,12.815,1.74,0,44.505,6.04,-3.275,-0.44,69.39,0.69,7
+4,Entry short,2025-04-09 08:30,S2 flip short,1473.01,0.5,736.505,12.815,1.74,0,44.505,6.04,-3.275,-0.44,69.39,0.69,7

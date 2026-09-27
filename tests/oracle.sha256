@@ -15,12 +15,12 @@
     "test_oracle_relative_exit.cpp": "67c28772bfd2b422bef440689b26b08df08a39d1d9a54bfd45f5331f8cbef3a6",
     "test_oracle_reversal_close_only.cpp": "1c36918ed0caa6e678ec373f8117c1f832570f0bc7aa48d0a732e8c0db83cce9",
     "test_oracle_reversal_later_tick.cpp": "ca45d16f8823a2d88cfc398408f71897dcbc26e140459b5f81860896474bd774",
-    "test_oracle_reversal_replaced_percent.cpp": "5f083ab82f7a2f427b756763d3e71a8b6e2c5de8419ea71a442c8c413e23739d",
+    "test_oracle_reversal_replaced_percent.cpp": "8045db56eab804901b002585e67eb29331c1491b3f1dcd35deb2820e01aea501",
     "test_oracle_reversal_same_bar_tx.cpp": "775150f02e5a3ad7fd3c46cc7786a4d03857a2a66aaf3a627743a08831d3161b",
     "test_oracle_short_seed.cpp": "d28e163cb7d33af85478f084d8020476b1063f27f2b67c632c193e80a2a9112b",
     "test_oracle_short_seed_percent.cpp": "ba24c10847dc5b2364243274b09f488f75f0737951c754a6a809f8ab280ec591",
     "test_oracle_stop_snapshot.cpp": "d3a14a771538873144c8f03a9d8cf391256e9967ad31a03e29e1ed46359daf1d"
   },
   "schema": "pineforge-r4-d-oracle-tree/v1",
-  "treeSha256": "f25b1dd2cbe0044e84a74458605e8c88248a90aca55c9f707f7de62f2d6bef52"
+  "treeSha256": "f482e3216339e6542ee86a5b6ec7f147b35876963da90ecd16cd91a00b89b355"
 }
