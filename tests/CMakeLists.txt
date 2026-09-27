@@ -900,6 +900,10 @@ list(APPEND TEST_SOURCES test_ki62_same_id_cover)
 # decides the calculation's exits after its market orders
 # (tests/fixtures/pooc_samepass), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_pooc_samepass_tapes)
+# ... and a from_entry "" exit without a quantity closes its share of the
+# position it fills against, a market add's lot included
+# (tests/fixtures/global_exit_fill_size), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_global_exit_fill_size_tapes)
 
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
@@ -2378,6 +2382,10 @@ endif()
 if(TARGET test_pooc_samepass_tapes)
     target_compile_definitions(test_pooc_samepass_tapes PRIVATE
         PINEFORGE_W4_POOC_SAMEPASS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_samepass")
+endif()
+if(TARGET test_global_exit_fill_size_tapes)
+    target_compile_definitions(test_global_exit_fill_size_tapes PRIVATE
+        PINEFORGE_W4_GLOBAL_EXIT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/global_exit_fill_size")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape

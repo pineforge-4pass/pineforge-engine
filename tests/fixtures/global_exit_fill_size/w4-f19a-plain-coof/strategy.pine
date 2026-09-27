@@ -1,0 +1,57 @@
+//@version=6
+strategy("w4-f19a-plain-coof", overlay=true, pyramiding=5, process_orders_on_close=false, calc_on_order_fills=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W4-ENG-POOC-SAMEPASS, family F19. Each cell holds one lot, then places
+// the orders named below; flattened a little over an hour later. pyramiding=5.
+cell(h, m) => time == timestamp("UTC", 2025, 4, 11, h, m)
+
+// A: an add and a from_entry "" limit exit through the close
+if cell(0, 0)
+    strategy.entry("A1", strategy.long, comment="A1")
+if cell(0, 30)
+    strategy.entry("A2", strategy.long, comment="A2")
+    strategy.exit("A-TP", limit=close - 3, comment="A tp")
+// B: the exit first, then the add
+if cell(2, 0)
+    strategy.entry("B1", strategy.long, comment="B1")
+if cell(2, 30)
+    strategy.exit("B-TP", limit=close - 3, comment="B tp")
+    strategy.entry("B2", strategy.long, comment="B2")
+// C: an add and a from_entry "" limit the next bar reaches after its open
+if cell(5, 0)
+    strategy.entry("C1", strategy.long, comment="C1")
+if cell(5, 30)
+    strategy.entry("C2", strategy.long, comment="C2")
+    strategy.exit("C-TP", limit=close + 2, comment="C tp")
+// D: an add and a limit exit from_entry the held lot
+if cell(7, 0)
+    strategy.entry("D1", strategy.long, comment="D1")
+if cell(7, 30)
+    strategy.entry("D2", strategy.long, comment="D2")
+    strategy.exit("D-TP", from_entry="D1", limit=close - 3, comment="D tp")
+// E: two lots of 2, an add and a from_entry "" exit of 50 percent
+if cell(9, 0)
+    strategy.entry("E1", strategy.long, qty=2, comment="E1")
+if cell(9, 30)
+    strategy.entry("E2", strategy.long, qty=2, comment="E2")
+    strategy.exit("E-TP", qty_percent=50, limit=close - 3, comment="E tp")
+// F: a from_entry "" limit placed while one lot is held, an add on a later
+// bar, and the limit reached after both lots are held
+if cell(11, 0)
+    strategy.entry("F1", strategy.long, comment="F1")
+if cell(11, 15)
+    strategy.exit("F-TP", limit=close + 12, comment="F tp")
+if cell(11, 45)
+    strategy.entry("F2", strategy.long, comment="F2")
+// G: an add and a from_entry "" stop exit through the close
+if cell(14, 0)
+    strategy.entry("G1", strategy.long, comment="G1")
+if cell(14, 30)
+    strategy.entry("G2", strategy.long, comment="G2")
+    strategy.exit("G-SL", stop=close + 3, comment="G sl")
+
+cleanup = cell(1, 45) or cell(3, 45) or cell(6, 45) or cell(8, 45) or cell(10, 45) or
+     cell(13, 45) or cell(15, 45)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

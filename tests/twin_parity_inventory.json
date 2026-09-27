@@ -333,6 +333,13 @@
       "twinAssertionSha256": "1084c2698a763bbf141b0dbaceb661b4d251214c5d1c114b2d4bf267978beca7",
       "twinAssertions": 28
     },
+    "test_pooc_global_full_exit": {
+      "baseAssertions": 66,
+      "reason": "the three rows that left an add open follow the R5 W4-ENG-POOC-SAMEPASS TradingView tapes (w4-f19a-pooc cells A, B and F): a from_entry \"\" exit without a quantity, the book's only exit, is sized on the position it fills against, so an add filled before that fill -- a same-id replacement, a later bar's entry, a same-bar add placed after the exit -- is closed with it",
+      "twin": "test_pooc_global_full_exit_l4c.cpp",
+      "twinAssertionSha256": "6c90c8b2cddcc1c9b9f35af2e5d78f3fc46f3e8bf13e3a40685159aba3681e73",
+      "twinAssertions": 66
+    },
     "test_pooc_open_money_event": {
       "baseAssertions": 57,
       "reason": "the fee compatibility scope's opening event follows the R5 lane W5-ENG-MARGIN-V6 TradingView tapes (tests/fixtures/margin_v6 w5-c2-pooc-flat-explicit-long): under a commission a process_orders_on_close opening is called at the next open, so outside calc_on_order_fills its event is at 2000, not at the entry close",

@@ -12841,6 +12841,22 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             }
             return units;
         };
+        if (fill_time_global_exit(source)) {
+            const double percent = std::isfinite(source.qty_percent) ? source.qty_percent : 100.0;
+            if (percent >= 100.0 - internal::kFullPercentEps) {
+                result.units = cover_full_scope(facts.scope_exposure_units);
+                return result;
+            }
+            // A partial exit sized when it fills still keeps the reservation
+            // its placement split off: the fill takes in the lots an add
+            // opened since (w4-f19a cell E), never less than a sibling exit
+            // that filled first left it (lab tv w3bf05-g8, lane W3B-ENG-GRID).
+            double units = quantize_close_units(facts.scope_exposure_units, percent);
+            if (finite_positive(source.projection_remaining_qty))
+                units = std::max(units, source.projection_remaining_qty);
+            result.units = cover_full_scope(units);
+            return result;
+        }
         const bool has_projected_remaining =
             (source.from_entry.empty() || source.fixed_exit_reservation)
             && std::isfinite(source.projection_remaining_qty);
@@ -16176,19 +16192,25 @@ void PineExecutionAdapter::reaccept_gapped_bracket_behind_same_id_add(
     // by incarnation, so the older leg would flatten the book and the add
     // would open from flat.  Re-accept the unchanged leg at this opening: its
     // fresh incarnation orders it behind the add at the same open point.
-    if (config_.calc_on_order_fills || config_.process_orders_on_close
-        || stream_mode_ || coof_recalc_active_ || context.sub_index != 0) {
+    if (config_.process_orders_on_close || stream_mode_ || coof_recalc_active_
+        || context.sub_index != 0) {
         return;
     }
     const auto physical = detail::run_position(require_host());
     if (physical.signed_units == 0.0) return;
     const bool long_position = physical.signed_units > 0.0;
+    // A from_entry "" exit that sizes on the position it fills against
+    // (fill_time_global_exit) covers an add of ANY id the same way: TradingView
+    // judges the market add first at the shared open and then closes both lots
+    // with the exit, whether the script placed the exit before or after the add
+    // (lab tv w4-f19a-plain cells A, B and G; lane W4-ENG-POOC-SAMEPASS).
     const auto pure_market_add = [&](const PlacementSnapshot& add,
                                      const SourceId& from_entry) {
         return add.opening
             && (add.family == PineOrderFamily::Entry
                 || add.family == PineOrderFamily::Order)
-            && add.source_id == from_entry && add.is_long == long_position
+            && (from_entry.empty() || add.source_id == from_entry)
+            && add.is_long == long_position
             && !finite_positive(add.exit_levels.limit)
             && !finite_positive(add.exit_levels.stop)
             && !finite_positive(add.exit_levels.trail_points)
@@ -16201,15 +16223,21 @@ void PineExecutionAdapter::reaccept_gapped_bracket_behind_same_id_add(
         const auto found = placement_.find(handle.incarnation);
         if (found == placement_.end()) continue;
         const auto& leg = found->second;
+        const bool global_leg = leg.from_entry.empty() && fill_time_global_exit(leg);
+        // The same-id KI-62 order is the owner's without calc_on_order_fills
+        // only; TradingView's from_entry "" order holds with it too
+        // (w4-f19a-plain-coof cell B).
+        if (config_.calc_on_order_fills && !global_leg) continue;
         if ((leg.family != PineOrderFamily::ExitStop
                 && leg.family != PineOrderFamily::ExitLimit)
-            || leg.from_entry.empty() || !leg.deferred_cohort
+            || (leg.from_entry.empty() && !global_leg) || !leg.deferred_cohort
             || std::isfinite(leg.requested_qty)
-            || (std::isfinite(leg.qty_percent) && leg.qty_percent < 100.0 - 1e-9)
+            || (!global_leg && std::isfinite(leg.qty_percent)
+                && leg.qty_percent < 100.0 - 1e-9)
             || finite_positive(leg.exit_levels.trail_points)
             || finite_positive(leg.exit_levels.trail_price)
             || finite_positive(leg.exit_levels.trail_offset)
-            || !(cohort_exposure_for(leg.from_entry) > 0.0)) {
+            || (!global_leg && !(cohort_exposure_for(leg.from_entry) > 0.0))) {
             continue;
         }
         int exit_priority = 0;
@@ -16513,7 +16541,8 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         defer_open_marketable_sells(bar);
     }
     // Quiet: a gapped leg is re-accepted only behind a live pure market add
-    // of its own id, which is an opening entry or order.
+    // of its own id (of any id for a from_entry "" exit), which is an
+    // opening entry or order.
     if (!skip_quiet(QuietHook::GappedBracketReaccept,
             !any_live_row(live_handles_, placement_, [](const PlacementSnapshot& row) {
                 return row.opening && (row.family == PineOrderFamily::Entry
@@ -16985,6 +17014,34 @@ bool PineExecutionAdapter::pooc_close_market_pending(
     });
 }
 
+bool PineExecutionAdapter::fill_time_global_exit(const PlacementSnapshot& source) const {
+    // TradingView sizes a from_entry "" exit that names no quantity when it
+    // fills: its percentage of the whole position then, the lots a market add
+    // opened after it was placed included -- at the same open it fills at, on
+    // a later bar, or at a process_orders_on_close close -- and whether it was
+    // placed before or after that add (lab tv w4-f19a-*, lane
+    // W4-ENG-POOC-SAMEPASS; job-2388's DCA take-profit). An exit that names its
+    // entry closes that entry's lots only, which the kernel scope already
+    // selects. Scoped to the book's only exit: beside another exit order the
+    // placement-time reservation still splits the book.
+    if (!source.from_entry.empty() || std::isfinite(source.requested_qty)) return false;
+    if (source.family != PineOrderFamily::ExitLimit && source.family != PineOrderFamily::ExitStop
+        && source.family != PineOrderFamily::ExitTrail) {
+        return false;
+    }
+    if (!(std::isfinite(source.projection_remaining_qty) && source.projection_remaining_qty > 0.0))
+        return false;
+    const auto other_exit = [&](const PlacementSnapshot& row) {
+        return (row.family == PineOrderFamily::ExitLimit || row.family == PineOrderFamily::ExitStop
+                || row.family == PineOrderFamily::ExitTrail)
+            && (row.source_id != source.source_id || !row.from_entry.empty());
+    };
+    if (any_live_row(live_handles_, placement_, other_exit)) return false;
+    for (const auto& leg : pending_bracket_legs_)
+        if (other_exit(leg.snapshot)) return false;
+    return true;
+}
+
 void PineExecutionAdapter::fill_pooc_close_exits(
         double raw_close, const NativeDecisionContext& context) {
     // TradingView's process_orders_on_close pass (lab tv w4-f08*, lane
@@ -17093,13 +17150,21 @@ void PineExecutionAdapter::fill_pooc_close_exits(
         double units = std::isfinite(row.projection_remaining_qty)
             ? std::max(0.0, row.projection_remaining_qty)
             : (std::isfinite(row.requested_qty) ? std::abs(row.requested_qty) : 0.0);
-        if (!std::isfinite(row.projection_remaining_qty) && !std::isfinite(row.requested_qty)) {
-            // A host-sized leg placed while flat carries no reservation yet:
-            // it closes its share of what it exits now (a from_entry "" exit
-            // placed with a flat entry, w4-f08-* cell J).
+        if ((!std::isfinite(row.projection_remaining_qty) && !std::isfinite(row.requested_qty))
+            || fill_time_global_exit(row)) {
+            // A host-sized leg placed while flat carries no reservation yet,
+            // and a from_entry "" exit that is the book's only exit sizes on
+            // the position it fills against: it closes its share of what it
+            // exits now (w4-f08-* cell J, w4-f19a-pooc cells A and B).
             units = quantize_close_units(
                 row.from_entry.empty() ? live_held_units : cohort_exposure_for(row.from_entry),
                 std::isfinite(row.qty_percent) ? row.qty_percent : 100.0);
+            // A partial one keeps its placement reservation (resolve_terms).
+            if (std::isfinite(row.qty_percent)
+                && row.qty_percent < 100.0 - internal::kFullPercentEps
+                && finite_positive(row.projection_remaining_qty)) {
+                units = std::max(units, row.projection_remaining_qty);
+            }
         }
         if (!(units > 0.0)) continue;
         // ab9714be pine_fills.cpp:1618 and pine_fills.cpp:1708-1723 spell
