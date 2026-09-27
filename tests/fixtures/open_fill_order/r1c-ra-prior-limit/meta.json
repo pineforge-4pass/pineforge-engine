@@ -1,0 +1,16 @@
+{
+  "title": "r1c-ra-prior-limit",
+  "slug": "r1c-ra-prior-limit",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T20:03:44.205Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "1D",
+    "from": "2024-12-01",
+    "to": "2025-08-01"
+  },
+  "pine_sha256": "b481274222087408d2e7da30b1cd21e3138f920380e4f2d921dcf93297ba8579",
+  "tv_trades_sha256": "af9a3a84e72f0dcb4662cfa53175c9a78c09a0ffa5561aa3cf263eaa28c73ae8",
+  "tv_trades_rows": 26
+}

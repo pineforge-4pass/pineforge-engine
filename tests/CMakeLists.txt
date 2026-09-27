@@ -944,6 +944,11 @@ list(APPEND TEST_SOURCES test_limit_entry_affordability_tape)
 # (tests/fixtures/same_bar_reissue), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_same_bar_reissue_tapes)
 
+# Lane R1-CONSOLIDATE, rule R-A: at one opening price the MARKET orders fill
+# before the buy LIMIT entries the open reached, lowest limit first
+# (tests/fixtures/open_fill_order), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_open_fill_order_tapes)
+
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bare_host_contracts)
@@ -2476,6 +2481,12 @@ endif()
 if(TARGET test_same_bar_reissue_tapes)
     target_compile_definitions(test_same_bar_reissue_tapes PRIVATE
         PINEFORGE_SAME_BAR_REISSUE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/same_bar_reissue")
+endif()
+
+# Lane R1-CONSOLIDATE's R-A tapes and their lane feeds; source-bound.
+if(TARGET test_open_fill_order_tapes)
+    target_compile_definitions(test_open_fill_order_tapes PRIVATE
+        PINEFORGE_OPEN_FILL_ORDER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/open_fill_order")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape

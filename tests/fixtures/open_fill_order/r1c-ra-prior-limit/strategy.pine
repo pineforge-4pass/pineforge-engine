@@ -1,0 +1,71 @@
+//@version=6
+// R1-CONSOLIDATE R-A probe: at one opening price, does a buy LIMIT entry that
+// has rested since an earlier bar fill before or after the MARKET orders the
+// previous bar's close placed? Each cell rests a buy limit from d0 inside the
+// gap between d1's low and d2's open (NYSE:F daily), places market orders at
+// d1's close, and is flattened at d2's close.
+strategy("r1c-ra-prior-limit", overlay=true, initial_capital=10000, pyramiding=2,
+     default_qty_type=strategy.fixed, default_qty_value=1, margin_long=100, margin_short=100,
+     commission_value=0, slippage=0)
+
+on(y, m, dd) => year == y and month == m and dayofmonth == dd
+
+cleanup(tag) =>
+    strategy.cancel_all()
+    strategy.close_all(comment=tag + " cleanup")
+
+// P (control): a flat opposite market pair alone.
+if on(2024, 12, 13)
+    strategy.entry("P-PAIR-S", strategy.short, qty=150)
+    strategy.entry("P-PAIR-L", strategy.long, qty=150)
+if on(2024, 12, 16)
+    cleanup("P")
+
+// M: the resting limit, then a flat opposite market pair of 55 % each
+// (2025-01-31 low 9.99, 2025-02-03 open 9.72).
+if on(2025, 1, 30)
+    strategy.entry("M-REST-L", strategy.long, qty=100, limit=9.85)
+if on(2025, 1, 31)
+    strategy.entry("M-PAIR-S", strategy.short, qty=550)
+    strategy.entry("M-PAIR-L", strategy.long, qty=550)
+if on(2025, 2, 3)
+    cleanup("M")
+
+// E: the resting limit, then a same-side market entry
+// (2025-02-05 low 9.96, 2025-02-06 open 9.49).
+if on(2025, 2, 4)
+    strategy.entry("E-REST-L", strategy.long, qty=100, limit=9.70)
+if on(2025, 2, 5)
+    strategy.entry("E-MKT-L", strategy.long, qty=200)
+if on(2025, 2, 6)
+    cleanup("E")
+
+// X: in position, the resting limit add, then strategy.close_all
+// (2025-04-03 low 9.53, 2025-04-04 open 9.315).
+if on(2025, 3, 31)
+    strategy.entry("X-HOLD", strategy.long, qty=100)
+if on(2025, 4, 2)
+    strategy.entry("X-REST-L", strategy.long, qty=200, limit=9.42)
+if on(2025, 4, 3)
+    strategy.close_all(comment="X close_all")
+if on(2025, 4, 4)
+    cleanup("X")
+
+// N: the M shape with an affordable pair
+// (2025-07-03 low 11.75, 2025-07-07 open 11.6).
+if on(2025, 7, 2)
+    strategy.entry("N-REST-L", strategy.long, qty=100, limit=11.68)
+if on(2025, 7, 3)
+    strategy.entry("N-PAIR-S", strategy.short, qty=150)
+    strategy.entry("N-PAIR-L", strategy.long, qty=150)
+if on(2025, 7, 7)
+    cleanup("N")
+
+// O: the resting limit, then an opposite market entry
+// (2025-07-15 low 11.5247, 2025-07-16 open 11.35).
+if on(2025, 7, 14)
+    strategy.entry("O-REST-L", strategy.long, qty=100, limit=11.44)
+if on(2025, 7, 15)
+    strategy.entry("O-MKT-S", strategy.short, qty=200)
+if on(2025, 7, 16)
+    cleanup("O")

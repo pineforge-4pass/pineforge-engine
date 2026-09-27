@@ -2000,6 +2000,7 @@ private:
         const Bar&, const NativeDecisionContext&, bool defer_trails = false);
     void reaccept_gapped_bracket_behind_same_id_add(
         const Bar&, const NativeDecisionContext&);
+    void order_open_marketable_limit_entries(const Bar&, const NativeDecisionContext&);
     void apply_terminal_explicit_market_policy(const NativeDecisionContext&);
     bool enqueue_pooc_fifo_close(const SourceId&, const std::string&,
                                  std::uint64_t, std::uint64_t);

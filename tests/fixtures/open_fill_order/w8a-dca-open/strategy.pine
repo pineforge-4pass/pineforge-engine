@@ -1,0 +1,73 @@
+// Lane W8A-SIGSTATE-1 (group dca): opening-tick booking order and the pyramiding count of
+// same-side entries. pyramiding=3, explicit qty on every call (default cash sizing unused).
+// A buy limit placed above the close is marketable and fills at the next bar's open.
+//   E1  04-15 01:00 flat: limits B(q1,+1.0%), A(q2,+3.0%), C(q3,+2.0%) in that call order
+//   E2a 04-15 05:00 market X1(q1); 06:00 limit L1(q2,+2%) THEN close_all
+//   E2b 04-15 10:00 market X2(q1); 11:00 close_all THEN limit L2(q2,+2%)
+//   E3  04-15 15:00 market F1(q1); 16:00 limits P1(q1,+1%), P2(q2,+2%), P3(q3,+3%)
+//   E4a 04-15 20:00 G1, 21:00 G2 (market q1); 22:00 market GM(q1) THEN limit GL(q2,+2%)
+//   E4b 04-16 02:00 H1, 03:00 H2 (market q1); 04:00 limit HL(q2,+2%) THEN market HM(q1)
+// Each cell ends with strategy.cancel_all() and strategy.close_all() about two hours later.
+//@version=6
+strategy("W8A dca open-tick order", overlay=true, pyramiding=3, initial_capital=100000,
+     default_qty_type=strategy.cash, default_qty_value=100)
+
+at(int y, int mo, int d, int h, int mi) => time == timestamp("UTC", y, mo, d, h, mi)
+
+if at(2025, 4, 15, 1, 0)
+    strategy.entry("B", strategy.long, qty=1, limit=close * 1.010)
+    strategy.entry("A", strategy.long, qty=2, limit=close * 1.030)
+    strategy.entry("C", strategy.long, qty=3, limit=close * 1.020)
+if at(2025, 4, 15, 3, 0)
+    strategy.cancel_all()
+    strategy.close_all()
+
+if at(2025, 4, 15, 5, 0)
+    strategy.entry("X1", strategy.long, qty=1)
+if at(2025, 4, 15, 6, 0)
+    strategy.entry("L1", strategy.long, qty=2, limit=close * 1.02)
+    strategy.close_all()
+if at(2025, 4, 15, 8, 0)
+    strategy.cancel_all()
+    strategy.close_all()
+
+if at(2025, 4, 15, 10, 0)
+    strategy.entry("X2", strategy.long, qty=1)
+if at(2025, 4, 15, 11, 0)
+    strategy.close_all()
+    strategy.entry("L2", strategy.long, qty=2, limit=close * 1.02)
+if at(2025, 4, 15, 13, 0)
+    strategy.cancel_all()
+    strategy.close_all()
+
+if at(2025, 4, 15, 15, 0)
+    strategy.entry("F1", strategy.long, qty=1)
+if at(2025, 4, 15, 16, 0)
+    strategy.entry("P1", strategy.long, qty=1, limit=close * 1.01)
+    strategy.entry("P2", strategy.long, qty=2, limit=close * 1.02)
+    strategy.entry("P3", strategy.long, qty=3, limit=close * 1.03)
+if at(2025, 4, 15, 18, 0)
+    strategy.cancel_all()
+    strategy.close_all()
+
+if at(2025, 4, 15, 20, 0)
+    strategy.entry("G1", strategy.long, qty=1)
+if at(2025, 4, 15, 21, 0)
+    strategy.entry("G2", strategy.long, qty=1)
+if at(2025, 4, 15, 22, 0)
+    strategy.entry("GM", strategy.long, qty=1)
+    strategy.entry("GL", strategy.long, qty=2, limit=close * 1.02)
+if at(2025, 4, 16, 0, 0)
+    strategy.cancel_all()
+    strategy.close_all()
+
+if at(2025, 4, 16, 2, 0)
+    strategy.entry("H1", strategy.long, qty=1)
+if at(2025, 4, 16, 3, 0)
+    strategy.entry("H2", strategy.long, qty=1)
+if at(2025, 4, 16, 4, 0)
+    strategy.entry("HL", strategy.long, qty=2, limit=close * 1.02)
+    strategy.entry("HM", strategy.long, qty=1)
+if at(2025, 4, 16, 6, 0)
+    strategy.cancel_all()
+    strategy.close_all()

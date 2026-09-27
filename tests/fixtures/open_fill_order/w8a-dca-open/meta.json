@@ -1,0 +1,16 @@
+{
+  "title": "W8A dca open-tick order",
+  "slug": "w8a-dca-open",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T16:21:25.363Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "ef7d1ef1d20fb0b9903fb4a9ec959cbed5f74f6b1738d33894c36747e43fbbae",
+  "tv_trades_sha256": "17289e79b7821acb80c19adb056cfd27d15e62fd32f46435bdeef1060e17117c",
+  "tv_trades_rows": 36
+}

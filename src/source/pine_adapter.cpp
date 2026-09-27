@@ -16487,6 +16487,100 @@ void PineExecutionAdapter::reaccept_gapped_bracket_behind_same_id_add(
     }
 }
 
+void PineExecutionAdapter::order_open_marketable_limit_entries(
+        const Bar& bar, const NativeDecisionContext& context) {
+    // TradingView fills the orders executable at a bar's opening price in
+    // this order: every MARKET order first, entries and exits alike, then the
+    // buy LIMIT entries the open has already reached, lowest limit first,
+    // whether a limit was placed at the previous close or has rested since an
+    // earlier bar; neither the order they were placed in nor their ids decide
+    // (R-A, tests/fixtures/open_fill_order). The native matcher breaks a
+    // same-point tie by queue order, so re-pricing each such entry in place
+    // (ReplaceOptions::keep_handle), lowest limit first, takes them behind
+    // every other request in that order. Each still books the opening print,
+    // as it would have at its own place in the queue.
+    if (config_.process_orders_on_close || config_.calc_on_order_fills
+        || stream_mode_ || coof_recalc_active_ || context.sub_index != 0) {
+        return;
+    }
+    const double open_fill = source_bar_fill_tick(bar.open, staged_.syminfo.mintick);
+    const auto marketable = [&](const PlacementSnapshot& row) {
+        return row.family == PineOrderFamily::Entry && row.opening && row.is_long
+            && finite_positive(row.exit_levels.limit) && !finite_positive(row.exit_levels.stop)
+            && !finite_positive(row.exit_levels.trail_points)
+            && !finite_positive(row.exit_levels.trail_price)
+            && !finite_positive(row.exit_levels.trail_offset)
+            && open_fill <= row.exit_levels.limit;
+    };
+    if (!any_live_row(live_handles_, placement_, marketable)) return;
+    // A flat book holding MARKET entries of both sides is the opposite-pair
+    // family, whose own route decides its open: TradingView fills that pair
+    // before the limit too, and also books the pair's later call as one
+    // transaction admitted at its gross (tape r1c-ra-prior-limit cells M and
+    // N), which this route does not model.
+    const auto market_entry = [](const PlacementSnapshot& row, bool is_long) {
+        return row.family == PineOrderFamily::Entry && row.opening && row.is_long == is_long
+            && !finite_positive(row.exit_levels.limit) && !finite_positive(row.exit_levels.stop);
+    };
+    if (detail::run_position(require_host()).signed_units == 0.0
+        && any_live_row(live_handles_, placement_,
+                        [&](const PlacementSnapshot& row) { return market_entry(row, true); })
+        && any_live_row(live_handles_, placement_,
+                        [&](const PlacementSnapshot& row) { return market_entry(row, false); })) {
+        return;
+    }
+    auto& host = require_host();
+    struct Marketable {
+        native_order::RequestHandle handle;
+        native_order::Request request;
+        double level = 0.0;
+        std::uint64_t priority = 0;
+    };
+    std::vector<Marketable> limits;
+    std::uint64_t last_market = 0;
+    for (const auto& working : host.native_working_requests()) {
+        const auto& definition = *working.definition;
+        const std::uint64_t priority = definition.priority != 0
+            ? definition.priority : definition.handle.incarnation;
+        if (std::holds_alternative<native_order::Market>(definition.request.trigger)) {
+            last_market = std::max(last_market, priority);
+            continue;
+        }
+        const auto* limit = std::get_if<native_order::Limit>(&definition.request.trigger);
+        if (!limit || open_fill > limit->price) continue;
+        const auto found = placement_.find(definition.handle.incarnation);
+        if (found == placement_.end() || !marketable(found->second)) continue;
+        limits.push_back({definition.handle, definition.request, limit->price, priority});
+    }
+    std::sort(limits.begin(), limits.end(), [](const auto& left, const auto& right) {
+        return left.priority < right.priority;
+    });
+    bool in_order = true;
+    for (std::size_t i = 0; i < limits.size(); ++i) {
+        if (limits[i].priority < last_market
+            || (i > 0 && limits[i].level < limits[i - 1].level)) {
+            in_order = false;
+        }
+    }
+    if (in_order) return;
+    std::stable_sort(limits.begin(), limits.end(), [](const auto& left, const auto& right) {
+        return left.level < right.level;
+    });
+    // A priced entry keeps a host-resolved quantity (entry(): only an
+    // unpriced default quantity is lowered onto the core's Sized intent), so
+    // the same request re-prices with nothing frozen to re-measure.
+    native_order::ReplaceOptions reprice;
+    reprice.keep_handle = true;
+    for (const auto& row : limits) {
+        const auto result = host.replace(row.handle, row.request, reprice);
+        if (result.status != native_order::ReplaceStatus::Replaced) continue;
+        if (const auto found = placement_.find(row.handle.incarnation);
+            found != placement_.end()) {
+            found->second.forced_execution_price = open_fill;
+        }
+    }
+}
+
 void PineExecutionAdapter::apply_terminal_explicit_market_policy(
         const NativeDecisionContext& context) {
     if (!config_.process_orders_on_close
@@ -16729,6 +16823,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
             }))) {
         reaccept_gapped_bracket_behind_same_id_add(bar, context);
     }
+    order_open_marketable_limit_entries(bar, context);
     source_shadow_pending_.clear();
     coof_script_bar_ = bar;
     coof_script_bar_valid_ = true;
