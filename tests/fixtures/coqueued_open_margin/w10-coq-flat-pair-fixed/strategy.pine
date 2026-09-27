@@ -1,0 +1,36 @@
+//@version=6
+// W10-DIAG-UNKNOWN synthetic probe: MARKET entries placed on one bar are each
+// judged at the next open. Cells at fixed UTC bars; explicit quantities.
+strategy("w10 coqueued flat pair fixed default", overlay=true, pyramiding=4, default_qty_type=strategy.fixed, default_qty_value=34,
+     margin_long=100, margin_short=100, process_orders_on_close=false,
+     calc_on_order_fills=false, commission_value=0, slippage=0)
+
+at(int d, int h, int m) => time == timestamp("UTC", 2025, 4, d, h, m)
+
+// A: flat, two longs of 34 (together over the equity).
+if at(8, 0, 0)
+    strategy.entry("A1", strategy.long, comment="A1 long 34")
+    strategy.entry("A2", strategy.long, comment="A2 long 34")
+// B: flat, two shorts of 33 (together over the equity).
+if at(8, 4, 0)
+    strategy.entry("B1", strategy.short, qty=33, comment="B1 short 33")
+    strategy.entry("B2", strategy.short, qty=33, comment="B2 short 33")
+// C: flat, two longs of 30 (together inside the equity): control.
+if at(8, 8, 0)
+    strategy.entry("C1", strategy.long, qty=30, comment="C1 long 30")
+    strategy.entry("C2", strategy.long, qty=30, comment="C2 long 30")
+// D: a held long of 20, then two adds of 28 on one bar (each fits alone).
+if at(9, 0, 0)
+    strategy.entry("D0", strategy.long, qty=20, comment="D0 seed 20")
+if at(9, 0, 15)
+    strategy.entry("D1", strategy.long, qty=28, comment="D1 add 28")
+    strategy.entry("D2", strategy.long, qty=28, comment="D2 add 28")
+// E: a held long of 20, then one add of 56 (over the equity): control.
+if at(9, 4, 0)
+    strategy.entry("E0", strategy.long, qty=20, comment="E0 seed 20")
+if at(9, 4, 15)
+    strategy.entry("E1", strategy.long, qty=56, comment="E1 add 56")
+
+if at(8, 1, 0) or at(8, 5, 0) or at(8, 9, 0) or at(9, 1, 0) or at(9, 5, 0)
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

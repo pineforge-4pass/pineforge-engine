@@ -972,6 +972,10 @@ list(APPEND TEST_SOURCES test_slipped_short_tapes)
 # bar's finer request.security values (tests/fixtures/coof_recalc_security),
 # on TradingView's tape.
 list(APPEND TEST_SOURCES test_coof_recalc_security_tapes)
+# Lane W10-DIAG-UNKNOWN rule COQ: each MARKET entry filled at an open is judged
+# against the position held when it was placed, not a same-open sibling's fill
+# (tests/fixtures/coqueued_open_margin), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_coqueued_open_margin_tapes)
 
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
@@ -2565,6 +2569,13 @@ endif()
 if(TARGET test_coof_recalc_security_tapes)
     target_compile_definitions(test_coof_recalc_security_tapes PRIVATE
         PINEFORGE_COOF_RECALC_SECURITY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_recalc_security")
+endif()
+
+# Lane W10-DIAG-UNKNOWN (COQ) reads its TradingView tapes from the fixture tree;
+# source-bound.
+if(TARGET test_coqueued_open_margin_tapes)
+    target_compile_definitions(test_coqueued_open_margin_tapes PRIVATE
+        PINEFORGE_COQ_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coqueued_open_margin")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape

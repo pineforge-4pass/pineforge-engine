@@ -13907,10 +13907,34 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             && ((physical.signed_units > 0.0) == source.is_long);
         const bool reversal = physical.signed_units != 0.0
             && ((physical.signed_units > 0.0) != source.is_long);
-        const double units = same_side
+        double units = same_side
             ? std::abs(view.account.resulting_abs_notional)
                 / (view.resolved_price * staged_.syminfo.pointvalue * fx)
             : std::abs(view.inspected_opened_units);
+        // TradingView judges a MARKET entry filled at the open after the bar
+        // that placed it against the position held at its placement, not
+        // against a sibling entry that filled at the same open a moment
+        // earlier: two entries that each fit the equity alone both fill, and
+        // the excess is margin-called at the fill, first in first out (lane
+        // W10-DIAG-UNKNOWN rule COQ, tests/fixtures/coqueued_open_margin).
+        // Units held beyond the placement's own held quantity can only be
+        // such same-open fills, so only they leave the requirement. An entry
+        // the open trades already hold at the pyramiding cap is TradingView's
+        // to refuse at this check (H-MEASURE's first-eligible-point count),
+        // so it keeps the whole-book requirement.
+        const auto placed_side = static_cast<PositionSide>(source.projection_position_side);
+        const double placed_held = source.projection_affordability_held_qty;
+        if (same_side
+            && std::holds_alternative<native_order::Market>(view.definition->request.trigger)
+            && (placed_side == PositionSide::FLAT
+                || (placed_side == PositionSide::LONG) == source.is_long)
+            && std::isfinite(placed_held) && placed_held >= 0.0
+            && projection_bar_index(view.cursor.point) == source.projection_created_bar + 1
+            && std::abs(physical.signed_units) > placed_held + 1e-10
+            && config_.pyramiding > 0
+            && physical.lot_count < static_cast<std::size_t>(config_.pyramiding)) {
+            units = placed_held + std::abs(view.inspected_opened_units);
+        }
         const double required = units * view.resolved_price * staged_.syminfo.pointvalue * fx
             * margin_pct / 100.0;
         // The placement tuple deliberately excludes the prospective opening

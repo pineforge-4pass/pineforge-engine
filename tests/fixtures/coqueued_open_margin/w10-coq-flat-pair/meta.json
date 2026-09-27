@@ -1,0 +1,16 @@
+{
+  "title": "w10 coqueued flat pair",
+  "slug": "w10-coq-flat-pair",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T21:40:25.470Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "5cf792de42afe666849a009d7adf2808943b637e66b33e500b83b5b0fc4243d4",
+  "tv_trades_sha256": "300f534b2792b963c5223641d9d78bb9547f82f039ddece360f6f937605b7117",
+  "tv_trades_rows": 26
+}
