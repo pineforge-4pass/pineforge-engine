@@ -1,0 +1,16 @@
+{
+  "title": "INT28 c1 two-parent reversal with global exits at v6 defaults",
+  "slug": "int28-c1-two-parent-reversal-v6",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T19:51:54.315Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-17"
+  },
+  "pine_sha256": "495e75e6037f7d83ccd626ba6c935015bb76bd5109c9584116a0d1a2df6b7da0",
+  "tv_trades_sha256": "f0ac5087c18f51a9227c512f04f9c62837f6c203f68316cffdcfd4cb7856d57e",
+  "tv_trades_rows": 80
+}

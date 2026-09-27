@@ -1,0 +1,31 @@
+//@version=6
+strategy("INT28 c1 two-parent reversal with global exits at v6 defaults", overlay=true)
+
+// INT28 composition witness: W3-ENG-EXIT-ALLOC rule C (a reversal voids the
+// reversed side's global exit, its legs parked off the book included) and
+// W5-ENG-MARGIN-V6 MR (a from_entry="" exit is the held position's under a
+// declined reversal), in one run at Pine v6's defaults (100% of equity,
+// margin 100). The cells of tape exit_queue/w3f05-r1-two-parent-reversal-
+// global-exit, every day: a long at 00:00 UTC; while long the script
+// re-issues exit XL (from_entry="", limit close + 20, stop close - 20); at
+// 00:30 it places two short entries S1 and S2; while short it re-issues exit
+// XS (from_entry="", limit avg - 15, stop avg + 15). Where the next open
+// cannot fund the 100% reversal it is declined and the long keeps XL; where
+// it can, the reversal voids XL. A cleanup cancels and closes everything at
+// 02:00.
+dayStart = hour(time, "UTC") == 0 and minute(time, "UTC") == 0
+rev = hour(time, "UTC") == 0 and minute(time, "UTC") == 30
+cleanup = hour(time, "UTC") == 2 and minute(time, "UTC") == 0
+if dayStart
+    strategy.entry("L", strategy.long, comment="L")
+if rev
+    strategy.entry("S1", strategy.short, comment="S1")
+    strategy.entry("S2", strategy.short, comment="S2")
+if strategy.position_size > 0
+    strategy.exit("XL", from_entry="", limit=close + 20.0, stop=close - 20.0, comment="long exit")
+if strategy.position_size < 0
+    strategy.exit("XS", from_entry="", limit=strategy.position_avg_price - 15.0,
+         stop=strategy.position_avg_price + 15.0, comment="short exit")
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

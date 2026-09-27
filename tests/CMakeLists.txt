@@ -954,6 +954,10 @@ list(APPEND TEST_SOURCES test_open_fill_order_tapes)
 # replayed with run_strategy.py's window for a run that starts on that bar.
 list(APPEND TEST_SOURCES test_run_harness_window_tapes)
 
+# INT28: two wave-J lanes' rules acting in one run, and at one fill
+# (tests/fixtures/int28_compositions), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_int28_rule_compositions)
+
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bare_host_contracts)
@@ -2510,6 +2514,14 @@ endif()
 if(TARGET test_run_harness_window_tapes)
     target_compile_definitions(test_run_harness_window_tapes PRIVATE
         PINEFORGE_RUN_HARNESS_WINDOW_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/run_harness_window")
+endif()
+
+# INT28 reads its TradingView tapes from the fixture tree (and lane
+# R1-CONSOLIDATE's w8a-dca-open); source-bound.
+if(TARGET test_int28_rule_compositions)
+    target_compile_definitions(test_int28_rule_compositions PRIVATE
+        PINEFORGE_INT28_COMPOSITIONS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/int28_compositions"
+        PINEFORGE_OPEN_FILL_ORDER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/open_fill_order")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape

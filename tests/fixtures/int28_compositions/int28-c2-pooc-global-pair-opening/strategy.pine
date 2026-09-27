@@ -1,0 +1,26 @@
+//@version=6
+strategy("INT28 c2 POOC global exit pair at a commissioned opening", overlay=true, process_orders_on_close=true, commission_type=strategy.commission.percent, commission_value=0.1)
+
+// INT28 composition witness: W3-ENG-EXIT-ALLOC rule B (exits for every entry
+// armed before an opening queue for it: behind a full one, a later one is
+// left nothing) and W5-ENG-MARGIN-V6 C2 (a commissioned
+// process_orders_on_close opening is margin-called at the next open, not at
+// its fill), both acting at one opening fill. Each cell enters long at the
+// default size (100% of equity, margin 100) on its first bar, filled at that
+// bar's close, where the entry's commission leaves the long short of margin.
+// From that bar on the script re-issues two exits for every entry: a full
+// stop-and-target A created first and a nearer full target B after it. A
+// cleanup closes everything two hours after the entry.
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+entryCell = cell(2, 0, 0) or cell(2, 9, 0) or cell(3, 21, 0) or cell(4, 12, 0) or cell(8, 0, 0) or cell(9, 0, 0) or cell(10, 0, 0) or cell(14, 0, 0)
+cleanup = cell(2, 2, 0) or cell(2, 11, 0) or cell(3, 23, 0) or cell(4, 14, 0) or cell(8, 2, 0) or cell(9, 2, 0) or cell(10, 2, 0) or cell(14, 2, 0)
+var float ref = na
+if entryCell
+    strategy.entry("L", strategy.long, comment="L")
+    ref := close
+if not na(ref) and not cleanup
+    strategy.exit("A", from_entry="", stop=ref - 30.0, limit=ref + 40.0, comment="A")
+    strategy.exit("B", from_entry="", limit=ref + 6.0, comment="B")
+if cleanup
+    strategy.close_all(comment="cleanup")
+    ref := na

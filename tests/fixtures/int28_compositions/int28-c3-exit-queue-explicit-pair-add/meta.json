@@ -1,0 +1,16 @@
+{
+  "title": "INT28 c3 explicit exit pair and a same-bar same-id add",
+  "slug": "int28-c3-exit-queue-explicit-pair-add",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T19:49:08.426Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-17"
+  },
+  "pine_sha256": "d333149bd6cf4a4630a569689605ef6d67a1599bfcad2aecc0c1823fd1e94fb6",
+  "tv_trades_sha256": "636e27a5231356761b4f3c551f79143edb88e2b6cd0452884f097cae3c01b2fd",
+  "tv_trades_rows": 4
+}

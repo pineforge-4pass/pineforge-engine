@@ -1,0 +1,16 @@
+{
+  "title": "INT28 c2 POOC global exit pair at a commissioned opening",
+  "slug": "int28-c2-pooc-global-pair-opening",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T19:38:38.868Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-17"
+  },
+  "pine_sha256": "f089e5f3cb2610c2a5ca4cce7ea3e4dd2b54e5dbde239ade6d37af3524c64d6d",
+  "tv_trades_sha256": "8cfe08daff162a2df6037ab20b02a0c5ef4c57ac40725e402a355f6ee58b8fcb",
+  "tv_trades_rows": 16
+}
