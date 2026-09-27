@@ -14,6 +14,10 @@
  *       judged at placement against the held units plus its own: TradingView
  *       drops an add whose combined margin exceeds the equity, even where an
  *       exit empties the position at the open the add would fill at.
+ *   C1  A commissioned or slipped short carried under process_orders_on_close
+ *       is called at the bar's high before the script runs at the close: the
+ *       script reads the called book, and its close fills meet what the call
+ *       left.
  *
  * Each row replays one lab tv tape (tests/fixtures/margin_v6) through the
  * Pine adapter under the configuration the generated constructor declares for
@@ -160,6 +164,7 @@ enum class Probe {
     RvGlobalHeld, RvNamed,         // w5-rv-global-held / -named-control (NYSE:F)
     AddExit,                       // w5-m1-addexit-p100 / -p60
     AddClose,                      // w5-m1-addclose
+    PoocShortComm,                 // w5-m2-pooc-short-comm
 };
 
 class ProbeHost final : public source::PineStrategyHost {
@@ -188,6 +193,7 @@ public:
         case Probe::RvNamed: revival(t, true); break;
         case Probe::AddExit: add_and_exit(t, avg); break;
         case Probe::AddClose: add_and_close(t); break;
+        case Probe::PoocShortComm: pooc_shorts(t, false); break;
         }
     }
 
@@ -283,6 +289,16 @@ private:
             strategy_close("C", "C close", kNaN, kNaN, false);
         }
         if (t == at(8, 2, 0) || t == at(9, 2, 0) || t == at(10, 2, 0)) close_all("cleanup");
+    }
+
+    // w5-m2-pooc-short-comm, and -plain with its fourth short D (C lies
+    // beyond the replayed bars).
+    void pooc_shorts(std::int64_t t, bool with_d) {
+        if (t == at(10, 17, 0)) strategy_entry("A", false, kNaN, kNaN, kNaN, "A short");
+        if (t == at(2, 13, 30)) strategy_entry("B", false, kNaN, kNaN, kNaN, "B short");
+        if (with_d && t == at(7, 0, 0)) strategy_entry("D", false, kNaN, kNaN, kNaN, "D short");
+        if (t == at(10, 18, 30) || t == at(2, 15, 0) || (with_d && t == at(7, 1, 30)))
+            cleanup();
     }
 
     Probe probe_;
@@ -393,6 +409,7 @@ int main() {
         {"M1 control", "w5-m1-addexit-p60", Probe::AddExit, config(false, 0.0, 0, 60.0, 10),
          false, 3},
         {"M1", "w5-m1-addclose", Probe::AddClose, config(false, 0.0, 0, 100.0, 2), false, 4},
+        {"C1", "w5-m2-pooc-short-comm", Probe::PoocShortComm, config(true, 0.05, 1), false, 6},
     };
 
     for (const Case& c : cases) {

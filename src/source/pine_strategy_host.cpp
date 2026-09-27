@@ -354,6 +354,7 @@ void source::PineStrategyHost::on_native_bar(
     diag_magnifier_sample_ticks_processed_ = bar_magnifier_enabled_
         ? static_cast<std::int64_t>(context.driver_statistics.sample_ticks_processed) : 0;
     adapter_.observe_terminal_receipts();
+    adapter_.on_bar_close_before_script(bar, context);
     scheduler_.bar(bar, context, *this);
     adapter_.on_bar_close(bar, context);
     if (context.is_terminal_sub_bar

@@ -1,0 +1,14 @@
+//@version=6
+strategy("W5 C1 POOC carried short size seen at the called close", overlay=true, process_orders_on_close=true, commission_type=strategy.commission.percent, commission_value=0.05, slippage=1)
+
+// Lane W5-ENG-MARGIN-V6, mechanism C1. A 100%-of-equity SHORT filled at the
+// 12:00 close is called at the next open and high, and again at the 12:30
+// bar's high (1802). On that bar's close the script reverses with an explicit
+// quantity equal to the position size it reads there. Does the script see the
+// short before (55.1762) or after (53.645) the call at the high?
+if time == timestamp("UTC", 2025, 4, 4, 12, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 4, 12, 30)
+    strategy.entry("L", strategy.long, qty=math.abs(strategy.position_size), comment="reverse by the size seen")
+if time == timestamp("UTC", 2025, 4, 4, 13, 30)
+    strategy.close_all(comment="cleanup")

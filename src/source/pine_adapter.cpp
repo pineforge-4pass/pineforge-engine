@@ -16973,6 +16973,33 @@ void PineExecutionAdapter::flush_pooc_marketable_exit_fills(
     }
 }
 
+void PineExecutionAdapter::on_bar_close_before_script(
+        const Bar& bar, const NativeDecisionContext& context) {
+    // TradingView calls a short carried under process_orders_on_close at the
+    // bar's high before the script runs at its close: the script reads the
+    // called book, and its own close fills meet what the call left (lab tv
+    // tapes tests/fixtures/margin_v6 w5-c1-seen-size: a reversal by the size
+    // the script reads is 53.645, not the 55.1762 held before the call;
+    // w5-m2-pooc-carried-close / -reverse / -none: 1.5312 @1802.01, then the
+    // close's own fill; lane W5-ENG-MARGIN-V6). A slice at this bar's open
+    // leaves the high still to be checked, on the book that slice left
+    // (w5-m2-pooc-short-comm: a call at the open and one at the high of the
+    // same bar, three times). This is the commissioned or slipped short that
+    // schedule_margin_call_path takes no path check for; a fee-free one keeps
+    // the kernel's path check and the checkpoint after the script.
+    if (host_ == nullptr || stream_mode_ || !config_.process_orders_on_close
+        || config_.calc_on_order_fills
+        || (config_.commission_value == 0.0 && config_.slippage == 0)
+        || !finite_positive(bar.high)) {
+        return;
+    }
+    if (detail::run_position(require_host()).signed_units < 0.0
+        && position_open_script_bar_ != std::numeric_limits<std::int64_t>::min()
+        && position_open_script_bar_ != context.script_bar_open_ms) {
+        (void)submit_margin_call_slice(bar.high, context);
+    }
+}
+
 void PineExecutionAdapter::on_bar_close(
         const Bar& bar, const NativeDecisionContext& context) {
     // Quiet-bar gates (pine_quiet_bar.hpp), as at the opening. None fires on
@@ -17113,10 +17140,13 @@ void PineExecutionAdapter::on_bar_close(
         const double adverse = nearest_tick(bar.high, staged_.syminfo.mintick);
         (void)submit_margin_call_slice(adverse, context);
     }
+    // A commissioned or slipped carried short was checked at its high before
+    // the script (on_bar_close_before_script).
     const bool carried_pooc_short = config_.process_orders_on_close
         && !config_.calc_on_order_fills && position.signed_units < 0.0
         && position_open_script_bar_ != std::numeric_limits<std::int64_t>::min()
-        && position_open_script_bar_ != context.script_bar_open_ms;
+        && position_open_script_bar_ != context.script_bar_open_ms
+        && config_.commission_value == 0.0 && config_.slippage == 0;
     if (carried_pooc_short && finite_positive(bar.high)) {
         // ab9714be pine_scheduler.cpp:260-278: the script's new market orders
         // fill at the close (step 4) before process_margin_call runs. While

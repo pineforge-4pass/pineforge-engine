@@ -51,6 +51,24 @@ took the open first, the add then opened a new position from flat. An add
 whose shortfall stays within one lot is still admitted, as the fill-time add
 arm admits it (`tests/test_reversal_admission_float_guard_l4c.cpp` pin E).
 
+## C1: a carried process_orders_on_close short is called before the script
+
+| tape | trades | `strategy()` declares | TradingView | tv_trades.csv sha256 |
+|---|---:|---|---|---|
+| `w5-m2-pooc-short-comm` | 9 | `process_orders_on_close`, commission 0.05 %, slippage 1 | three shorts filled at a signal close; where the next bar opens above the fill and rises further, a call at that open and another at the same bar's high | `cf1395a929bf34f4f047c91f4673c7462950608a862193a9f4fddd9c25f10d53` |
+| `w5-c1-seen-size` | 5 | the same | the 12:00 short, called at the 12:15 open and high and again at the 12:30 high (1.5312 @1802.01); a reversal on that bar by `math.abs(strategy.position_size)` opens 53.645, the size after the call | `fa7efd0c7eaa7505b7f0902ff69c34f2ba9bf652df91805879cbcb4b92be09b9` |
+| `w5-m2-pooc-carried-close` | 4 | the same | the same calls, then `strategy.close_all` at the close takes the 53.645 left | `890535b85a21b448d0ccdfd8cb9651f935e713b9b8e699b82c2414c06daa007e` |
+| `w5-m2-pooc-carried-none` | 4 | the same | the same calls with nothing at the close but a `strategy.cancel_all()` | `018d0f5213132630c7c2af15b522673f91c524ee41143d53516b0948308ac187` |
+| `w5-m2-pooc-carried-reverse` | 6 | the same | the same calls, then a default reversal sized from the equity after them; the new long's call follows at the next open (C2) | `a89b97c89518f4ff40a5ba72154085994302e4a7ae8599f86ee29131a96cf423` |
+
+ab9714be checked a commissioned or slipped carried short only after the
+script, not at all once a slice at the bar's open had been taken, and deferred
+the check behind a close-time market order to the post-fill book: a close_all
+or a reversal consumed the short with no call, and a reversal was sized from
+the equity before it. Each carried tape also needs the 12:15 opening call
+(M2), and `w5-m2-pooc-carried-reverse` its new long's call (C2): the test
+replays them from those rules on.
+
 ## Bars
 
 `bars.inc` is the corpus 15m chart feed `scripts/derive_corpus_feeds.py`

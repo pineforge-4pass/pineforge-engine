@@ -1,0 +1,16 @@
+{
+  "title": "W5 M2 POOC short open+extreme calls (comm 0.05 slip 1)",
+  "slug": "w5-m2-pooc-short-comm",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:44:33.225Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "48581817f65c7bbe87a9024042cd50a13bdfbe1712f531aa64d65e8061422d51",
+  "tv_trades_sha256": "cf1395a929bf34f4f047c91f4673c7462950608a862193a9f4fddd9c25f10d53",
+  "tv_trades_rows": 18
+}

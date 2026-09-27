@@ -1394,6 +1394,9 @@ public:
     std::optional<double> resolve_margin_call_units(const NativeMarginCallView&) const;
     void on_bar_open(const Bar&, const NativeDecisionContext&);
     void on_tick(const Bar&, const NativeTickContext&);
+    // Called from the generic calculation callback before the source script
+    // runs, at the executable decision point on_bar_close then sees.
+    void on_bar_close_before_script(const Bar&, const NativeDecisionContext&);
     // Called from the generic calculation callback after the source script
     // has returned while the current decision point remains executable.
     void on_bar_close(const Bar&, const NativeDecisionContext&);

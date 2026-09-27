@@ -1,0 +1,16 @@
+{
+  "title": "W5 M2 POOC carried short call + reverse",
+  "slug": "w5-m2-pooc-carried-reverse",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:38:57.842Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "0c1513edc6610930d525eebee206755efb7ac6cc3bb32cbff2389ba0d6b9dbe6",
+  "tv_trades_sha256": "a89b97c89518f4ff40a5ba72154085994302e4a7ae8599f86ee29131a96cf423",
+  "tv_trades_rows": 12
+}

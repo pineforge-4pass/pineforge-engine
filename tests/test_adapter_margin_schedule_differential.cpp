@@ -24,7 +24,9 @@
  *       R5 lane PAR-MARGIN (TradingView's tapes below), and after an add to
  *       a carried book since R5 lane PAR-MARGIN-2, so the adapter books what
  *       the kernel books there. Its BarOpen point on a carried POOC short
- *       with fees is a point the adapter still refuses; the kernel books there.
+ *       with fees is a point the adapter still refuses; the kernel books
+ *       there, and the adapter books the same call at the calculation point,
+ *       before the script (lane W5-ENG-MARGIN-V6, C1).
  *   M8  (G2-10) checkpoints as market executions. A gap-open breach: the
  *       adapter executes at the open, sized at the open; the kernel has no
  *       check kind that does -- its mark check rests at the adverse extreme,
@@ -41,7 +43,7 @@
  *   M11 (G2-13) opening admission. AdmitWithHostMargin admits an opening the
  *       kernel's initial-margin gate declines (a percent entry fee), and
  *       refuses an add the kernel admits (signal-time equity vs marked).
- *   E20 f1: under set_probe_suppress_tail_logic the post-script close
+ *   E20 f1: under set_probe_suppress_tail_logic the close-time margin
  *       checkpoint still runs on the forming bar (ruling of 2026-09-22,
  *       docs/pages/live-surface.md §3.2).
  *   Intrabar margin on TradingView's tapes (tests/fixtures/intrabar_margin):
@@ -499,9 +501,15 @@ void m7_mid_bar_add() {
 //           1.7504761904761923 @105 on the path, then the script's close
 //           takes the remaining 7.7495238095238079 @104;
 //   adapter: a carried POOC short with fees and nothing resting takes no
-//           open/path slice (schedule_margin_call_path) -- the post-script
-//           checkpoint owns it, and the script's close empties the book
-//           first: one row, 9.5 @104, no margin call.
+//           open/path slice (schedule_margin_call_path); the close-time
+//           checkpoint takes it at the high BEFORE the script, as
+//           TradingView does (lane W5-ENG-MARGIN-V6, C1: tests/fixtures/
+//           margin_v6 w5-m2-pooc-carried-close, the call at the high and
+//           then the close_all's fill of what it left) -- the same
+//           1.7504761904761923 @105, executed at the calculation point, then
+//           the close of 7.7495238095238079 @104. Before the lane the check
+//           ran after the script, whose close had emptied the book: one row,
+//           9.5 @104, no margin call.
 void m7_carried_pooc_short_fee() {
     std::printf("-- M7-C carried POOC short with a fee: the BarOpen point\n");
     Config c;
@@ -526,10 +534,11 @@ void m7_carried_pooc_short_fee() {
     const auto native = margin_fills(kernel);
     print_side("kernel", native, kernel.position(), kernel.balance());
 
-    CHECK(adapter.empty());
-    REQUIRE(pine.trade_count() == 1);
-    CHECK(pine.get_trade(0).qty == 9.5);
-    CHECK(pine.get_trade(0).exit_price == 104.0);
+    REQUIRE(adapter.size() == 1);
+    check_fill(adapter[0], 1, NativePathPhase::None, 1.7504761904761923, 105.0, false);
+    REQUIRE(pine.trade_count() == 2);
+    CHECK(same_value(pine.get_trade(1).qty, 7.7495238095238079));
+    CHECK(pine.get_trade(1).exit_price == 104.0);
     CHECK(pine.position() == 0.0);
     REQUIRE(native.size() == 1);
     check_fill(native[0], 1, NativePathPhase::High, 1.7504761904761923, 105.0, true);
@@ -796,14 +805,18 @@ void m11_add(double open, bool adapter_admits) {
 //   path  (E20's own two-bar tape): the kernel's resting liquidation, admitted
 //         at the bar's open by on_bar_open's scheduling, matched on the tail's
 //         path -- booked with or without the post-script checkpoint;
-//   close (a carried POOC short with a fee): the post-script checkpoint
-//         adapter_.on_bar_close takes after the (suppressed) script -- the
-//         route the ruling is about. Under the pre-ruling promise ("surfaces
-//         only at settlement", what ab9714be did) the tail books nothing on
-//         either route: the book the forming bar found, the one-bar run.
-// The third run shows why it matters: with a script that would close the
-// short on that bar, the settled bar books the close and no margin call, the
-// forming bar (script suppressed) books the broker's margin call.
+//   close (a carried POOC short with a fee): the close-time checkpoint the
+//         adapter takes at the (suppressed) script's calculation point -- the
+//         route the ruling is about; since lane W5-ENG-MARGIN-V6 (C1) it
+//         runs before the script, as TradingView's does. Under the pre-ruling
+//         promise ("surfaces only at settlement", what ab9714be did) the tail
+//         books nothing on either route: the book the forming bar found, the
+//         one-bar run.
+// The third run: with a script that closes the short on that bar, the
+// settled bar books the margin call and then the close of what it left, the
+// forming bar (script suppressed) books the same margin call and keeps the
+// rest. Before C1 the settled bar's check ran after the close and booked no
+// call.
 struct TailRun {
     std::vector<MarginFill> fills;
     double position = 0.0;
@@ -860,7 +873,7 @@ void e20_probe_tail_margin_call() {
     CHECK(close_probe.calls == 1);
     for (const auto* run : {&close_plain, &close_probe}) {
         REQUIRE(run->fills.size() == 1);
-        // phase None: the post-script checkpoint, after the calculation point.
+        // phase None: the close-time checkpoint, at the calculation point.
         check_fill(run->fills[0], 1, NativePathPhase::None, 1.7504761904761923, 105.0, false);
         CHECK(run->fills[0].time == two[1].timestamp);
         CHECK(same_value(run->position, -7.7495238095238079));
@@ -878,7 +891,8 @@ void e20_probe_tail_margin_call() {
     const auto closing_probe = tail_run(close, two, 9.5, true, true);
     print_tail("closing plain", closing_plain);
     print_tail("closing probe", closing_probe);
-    CHECK(closing_plain.fills.empty());
+    REQUIRE(closing_plain.fills.size() == 1);
+    check_fill(closing_plain.fills[0], 1, NativePathPhase::None, 1.7504761904761923, 105.0, false);
     CHECK(closing_plain.position == 0.0);
     REQUIRE(closing_probe.fills.size() == 1);
     check_fill(closing_probe.fills[0], 1, NativePathPhase::None, 1.7504761904761923, 105.0, false);

@@ -1,0 +1,16 @@
+{
+  "title": "W5 C1 POOC carried short size seen at the called close",
+  "slug": "w5-c1-seen-size",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:57:03.515Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "8775bf04e7211f1e2d35c706aac2363afb08f4939e04d3bd37cb49d736bf6b2a",
+  "tv_trades_sha256": "fa7efd0c7eaa7505b7f0902ff69c34f2ba9bf652df91805879cbcb4b92be09b9",
+  "tv_trades_rows": 10
+}
