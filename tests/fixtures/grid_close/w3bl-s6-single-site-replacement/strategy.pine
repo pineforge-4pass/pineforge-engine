@@ -1,0 +1,30 @@
+//@version=6
+strategy("W3B legacy S6 single-site replacement after two exact-two batches", overlay=true, pyramiding=10, process_orders_on_close=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W3B-ENG-GRID: a replay of strategy.entry / strategy.close / strategy.order
+// commands on BINANCE:ETHUSDT.P 15 bars from 2025-04-08 00:00 UTC, one step per
+// 15 minutes. Entries go through one strategy.entry call site in a loop; each
+// strategy.close call site is a loop of its own, so the calls one site makes on a
+// step are that site's calls. A cleanup close_all runs at step 20.
+
+start = timestamp("UTC", 2025, 4, 8, 0, 0)
+step = (time - start) / (15 * 60 * 1000)
+
+if step == 0
+    strategy.entry("F7", strategy.long, qty=0.2133, comment="BUY_F7")
+    strategy.entry("L7", strategy.long, qty=0.4310, comment="BUY_L7")
+    strategy.entry("F15", strategy.long, qty=0.2312, comment="BUY_F15")
+    strategy.entry("L15", strategy.long, qty=0.4672, comment="BUY_L15")
+    strategy.entry("L3", strategy.long, qty=0.2069, comment="BUY_L3")
+    strategy.entry("L4", strategy.long, qty=0.4159, comment="BUY_L4")
+    strategy.entry("seed", strategy.long, qty=0.1869, comment="BUY_seed")
+var s1Step = array.from(1, 1, 2, 2, 3, 3)
+var s1Id = array.from("F7", "L7", "F15", "L15", "L3", "L4")
+var s1Comment = array.from("SETUP_F7", "SETUP_L7", "SETUP_F15", "SETUP_L15", "FIRST_L3", "SURVIVOR_L4")
+if time >= start
+    for k = 0 to array.size(s1Step) - 1
+        if array.get(s1Step, k) == step
+            strategy.close(array.get(s1Id, k), comment=array.get(s1Comment, k))
+
+if step == 20
+    strategy.close_all(comment="cleanup")

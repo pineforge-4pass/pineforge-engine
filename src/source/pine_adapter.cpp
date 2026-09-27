@@ -18772,48 +18772,6 @@ double PineExecutionAdapter::fixture_close_logical_units(
     return found == close_logical_units_.end() ? 0.0 : found->second;
 }
 
-// The close ledger books every fill against an id's own entries and spills
-// the rest oldest first (book_close_ledger), so no close holds a standing
-// reservation or a carried first target any more: these fixture reads of the
-// retired reservation model answer none.
-double PineExecutionAdapter::fixture_close_reserved_units(const SourceId&) const noexcept {
-    return 0.0;
-}
-
-double PineExecutionAdapter::fixture_close_first_units(const SourceId&) const noexcept {
-    return 0.0;
-}
-
-double PineExecutionAdapter::fixture_callsite_close_reserved_units(
-        std::uint64_t, const SourceId&) const noexcept {
-    return 0.0;
-}
-
-double PineExecutionAdapter::fixture_callsite_close_first_units(
-        std::uint64_t, const SourceId&) const noexcept {
-    return 0.0;
-}
-
-std::size_t PineExecutionAdapter::fixture_close_reservation_count() const noexcept {
-    return 0;
-}
-
-std::size_t PineExecutionAdapter::fixture_close_first_count() const noexcept {
-    return 0;
-}
-
-std::size_t PineExecutionAdapter::fixture_callsite_close_reservation_count() const noexcept {
-    return 0;
-}
-
-std::size_t PineExecutionAdapter::fixture_callsite_close_first_count() const noexcept {
-    return 0;
-}
-
-double PineExecutionAdapter::fixture_callsite_close_reserved_total() const noexcept {
-    return 0.0;
-}
-
 std::vector<PineExecutionAdapter::FixtureCloseCallsite>
 PineExecutionAdapter::fixture_close_callsites() const {
     std::vector<FixtureCloseCallsite> result;

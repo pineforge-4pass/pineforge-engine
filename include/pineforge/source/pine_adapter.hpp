@@ -236,7 +236,7 @@ struct PlacementSnapshot {
     std::uint32_t close_batch_calls = 0;
     SourceId close_first_id{};
     // Retired with the reservation model (lane W3B-ENG-GRID): nothing sets
-    // these five any more, and each keeps its default so the v4 placement
+    // these six any more, and each keeps its default so the v4 placement
     // fold keeps its layout.
     double close_first_target = 0.0;
     bool close_first_ledger_consumed = false;
@@ -1419,20 +1419,9 @@ public:
     }
     int source_entry_slot_count() const noexcept;
     double fixture_close_logical_units(const SourceId&) const noexcept;
-    double fixture_close_reserved_units(const SourceId&) const noexcept;
-    double fixture_close_first_units(const SourceId&) const noexcept;
-    double fixture_callsite_close_reserved_units(
-        std::uint64_t, const SourceId&) const noexcept;
-    double fixture_callsite_close_first_units(
-        std::uint64_t, const SourceId&) const noexcept;
-    std::size_t fixture_close_reservation_count() const noexcept;
-    std::size_t fixture_close_first_count() const noexcept;
     std::size_t fixture_close_logical_count() const noexcept {
         return close_logical_units_.size();
     }
-    std::size_t fixture_callsite_close_reservation_count() const noexcept;
-    std::size_t fixture_callsite_close_first_count() const noexcept;
-    double fixture_callsite_close_reserved_total() const noexcept;
     double fixture_close_pending_debt() const noexcept {
         return close_batch_pending_debt_;
     }

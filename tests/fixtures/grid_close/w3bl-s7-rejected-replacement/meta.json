@@ -1,0 +1,16 @@
+{
+  "title": "W3B legacy S7 closes of an id a sell used up",
+  "slug": "w3bl-s7-rejected-replacement",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T18:53:32.993Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "4e88fd870c010b78286434aa1e3a6fc67f38d277001533c9310c9a16a4708139",
+  "tv_trades_sha256": "7b7ffcbd77aad0689fcfd7550a6d2812c6e465f3b8da04b3b3d9bd88b6df73ab",
+  "tv_trades_rows": 4
+}

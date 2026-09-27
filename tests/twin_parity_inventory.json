@@ -258,10 +258,10 @@
     },
     "test_integration": {
       "baseAssertions": 572,
-      "reason": "legacy owner reads in the integration TU are rewritten to source-host projections",
+      "reason": "legacy owner reads in the integration TU are rewritten to source-host projections; the close-reservation rows follow lane W3B-ENG-GRID's TradingView tapes (tests/fixtures/grid_close: w3f02-x1/-x2, w3bf02-a1/-a2/-f1 and the legacy scenarios w3bl-s6..-s10b): a call site's fill books its first id's close ledger and spills oldest first, every reducing fill books it, and no close holds a standing reservation, so the rows pin the ledger and the trades instead of the retired reservation and provenance maps",
       "twin": "test_integration_l4d.cpp",
-      "twinAssertionSha256": "3678564aacd7444c676ef72b937979ec453ec4f5ce9761a9cd3a8bb9d665b3d8",
-      "twinAssertions": 572
+      "twinAssertionSha256": "643213ed0ff426974b6126cb61ca73bd32dc6d028d53c87d988063349a6d1f0a",
+      "twinAssertions": 569
     },
     "test_live_pending_order_mirror": {
       "baseAssertions": 73,

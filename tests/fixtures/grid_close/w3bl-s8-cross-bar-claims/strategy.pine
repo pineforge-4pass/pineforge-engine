@@ -1,0 +1,41 @@
+//@version=6
+strategy("W3B legacy S8 a fresh close after two two-call sites", overlay=true, pyramiding=10, process_orders_on_close=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W3B-ENG-GRID: a replay of strategy.entry / strategy.close / strategy.order
+// commands on BINANCE:ETHUSDT.P 15 bars from 2025-04-08 00:00 UTC, one step per
+// 15 minutes. Entries go through one strategy.entry call site in a loop; each
+// strategy.close call site is a loop of its own, so the calls one site makes on a
+// step are that site's calls. A cleanup close_all runs at step 20.
+
+start = timestamp("UTC", 2025, 4, 8, 0, 0)
+step = (time - start) / (15 * 60 * 1000)
+
+if step == 0
+    strategy.entry("A", strategy.long, qty=1, comment="BUY_A")
+    strategy.entry("B", strategy.long, qty=1, comment="BUY_B")
+    strategy.entry("D", strategy.long, qty=3, comment="BUY_D")
+    strategy.entry("C", strategy.long, qty=1, comment="BUY_C")
+var s1Step = array.from(1, 1)
+var s1Id = array.from("A", "B")
+var s1Comment = array.from("T1_FIRST_A", "T1_SURVIVOR_B")
+if time >= start
+    for k = 0 to array.size(s1Step) - 1
+        if array.get(s1Step, k) == step
+            strategy.close(array.get(s1Id, k), comment=array.get(s1Comment, k))
+var s2Step = array.from(1, 1)
+var s2Id = array.from("A", "C")
+var s2Comment = array.from("T2_FIRST_A", "T2_SURVIVOR_C")
+if time >= start
+    for k = 0 to array.size(s2Step) - 1
+        if array.get(s2Step, k) == step
+            strategy.close(array.get(s2Id, k), comment=array.get(s2Comment, k))
+var s3Step = array.from(2)
+var s3Id = array.from("D")
+var s3Comment = array.from("SECOND_BAR_D")
+if time >= start
+    for k = 0 to array.size(s3Step) - 1
+        if array.get(s3Step, k) == step
+            strategy.close(array.get(s3Id, k), comment=array.get(s3Comment, k))
+
+if step == 20
+    strategy.close_all(comment="cleanup")

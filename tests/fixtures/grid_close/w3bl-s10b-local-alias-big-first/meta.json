@@ -1,0 +1,16 @@
+{
+  "title": "W3B legacy S10b three-call site after alias sites, big first",
+  "slug": "w3bl-s10b-local-alias-big-first",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T18:53:53.266Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "4c56475223fffa5eb66675bccf8a625bbfd56326e03130e6dc276fbd88a6ee8b",
+  "tv_trades_sha256": "31b0e516086782547383b1535fe16cc9dc615b600bc9b501fbe19f171411868a",
+  "tv_trades_rows": 14
+}

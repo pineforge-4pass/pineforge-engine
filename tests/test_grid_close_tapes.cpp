@@ -435,6 +435,53 @@ std::vector<Probe> probes() {
          close_at(0, hm(2, 0), "B", 1, "close B first"), close_at(0, hm(3, 0), "A", 2, "close A"),
          close_at(0, hm(4, 0), "B", 3, "close B again")}));
 
+    // The scenarios of the retired reservation model's rows
+    // (test_integration_l4d), each strategy.close site a loop of its own
+    // (tools/siteseq.py): no close holds a standing claim.
+    const auto site = [](int step, const char* id, std::uint64_t token, const char* comment) {
+        return close_at(8, step, id, token, comment);
+    };
+    const auto buy = [](int step, const char* id, double qty) {
+        return entry(8, step, id, qty, std::string("BUY_") + id);
+    };
+    const auto sell = [](int step, double qty) {
+        return Event{8, step, 'O', "trim", qty, 0, "TRIM"};
+    };
+    out.push_back(Probe{"w3bl-s6-single-site-replacement", true, 10,
+        {buy(0, "F7", 0.2133), buy(0, "L7", 0.4310), buy(0, "F15", 0.2312),
+         buy(0, "L15", 0.4672), buy(0, "L3", 0.2069), buy(0, "L4", 0.4159),
+         buy(0, "seed", 0.1869), site(1, "F7", 1, "SETUP_F7"), site(1, "L7", 1, "SETUP_L7"),
+         site(2, "F15", 1, "SETUP_F15"), site(2, "L15", 1, "SETUP_L15"),
+         site(3, "L3", 1, "FIRST_L3"), site(3, "L4", 1, "SURVIVOR_L4"), cleanup(8, 20)}});
+    out.push_back(Probe{"w3bl-s7-rejected-replacement", true, 10,
+        {buy(0, "A", 1), buy(1, "B", 2), sell(1, 1), site(2, "A", 1, "SITE1_A"),
+         site(2, "A", 2, "SITE2_A"), site(2, "B", 2, "REJECTED_FULL_B"), cleanup(8, 20)},
+        "TRIM"});
+    out.push_back(Probe{"w3bl-s8-cross-bar-claims", true, 10,
+        {buy(0, "A", 1), buy(0, "B", 1), buy(0, "D", 3), buy(0, "C", 1),
+         site(1, "A", 1, "T1_FIRST_A"), site(1, "B", 1, "T1_SURVIVOR_B"),
+         site(1, "A", 2, "T2_FIRST_A"), site(1, "C", 2, "T2_SURVIVOR_C"),
+         site(2, "D", 3, "SECOND_BAR_D"), cleanup(8, 20)}});
+    out.push_back(Probe{"w3bl-s9-same-id-owner-claims", true, 10,
+        {buy(0, "F1", 0.6), buy(0, "A", 0.6), buy(0, "F2", 1), site(1, "F1", 1, "SETUP_F1"),
+         site(1, "A", 1, "SETUP_A_06"), buy(2, "A", 0.4), site(3, "F2", 2, "SETUP_F2"),
+         site(3, "A", 2, "SETUP_A_10"), buy(4, "D", 3), sell(5, 1), buy(5, "D", 1),
+         site(6, "D", 3, "GROUPED_BACKING_D"), cleanup(8, 20)},
+        "TRIM"});
+    for (const bool small_first : {true, false}) {
+        const std::uint64_t small = small_first ? 1 : 2;
+        const std::uint64_t big = small_first ? 2 : 1;
+        out.push_back(Probe{small_first ? "w3bl-s10a-local-alias-small-first"
+                                        : "w3bl-s10b-local-alias-big-first", true, 10,
+            {buy(0, "F_SMALL", 0.6), buy(0, "B", 0.6), buy(0, "F_BIG", 1), buy(0, "C", 1),
+             site(1, "F_SMALL", small, "SETUP_SMALL_FIRST"), site(1, "B", small, "SETUP_SMALL_B"),
+             buy(2, "B", 0.4), site(3, "F_BIG", big, "SETUP_BIG_FIRST"),
+             site(3, "B", big, "SETUP_BIG_B"), buy(4, "D", 4), sell(5, 2.0000000000000004),
+             site(6, "B", 1, "FIRST_B"), site(6, "C", 1, "MIDDLE_C"), site(6, "D", 1, "SURVIVOR_D"),
+             cleanup(8, 20)},
+            "TRIM"});
+    }
+
     // w3f02-g2 .. g9 (lane W3-ENG-EXIT-ALLOC): the single-unit controls.
     out.push_back(cells("w3f02-g2-pooc-close-after-fifo-consumed", true, 5,
         {entry(0, hm(0, 0), "A", 1, "A"), entry(0, hm(1, 0), "B", 2, "B"),
@@ -569,6 +616,17 @@ int main() {
         CHECK(closed_at(f2, 4) == 2000);
         CHECK(closed_at(f2, 7) == 1000);
         CHECK(closed_at(f2, 9) == 0);
+        // The retired reservation model's scenarios: no close holds a
+        // standing claim, so each site fills its survivor's whole ledger
+        // (s6: 0.4159, not 0.3560; s8: D's 3, not 2), and a sell that used up
+        // an id voids its closes (s7: B's close takes the book; s9, s10: D's 4).
+        CHECK(closed_at(tapes["w3bl-s6-single-site-replacement"], 3) == 4159);
+        CHECK(closed_at(tapes["w3bl-s7-rejected-replacement"], 2) == 20000);
+        CHECK(closed_at(tapes["w3bl-s8-cross-bar-claims"], 2) == 30000);
+        CHECK(closed_at(tapes["w3bl-s9-same-id-owner-claims"], 6) == 40000);
+        CHECK(closed_at(tapes["w3bl-s10a-local-alias-small-first"], 6) == 40000);
+        CHECK(tapes["w3bl-s10a-local-alias-small-first"]
+              == tapes["w3bl-s10b-local-alias-big-first"]);
         long long g1_close_a = 0;
         for (const Row& r : tapes["w3f02-g1-close-after-fifo-consumed"])
             if (std::get<6>(r) == "close A") g1_close_a += std::get<3>(r);

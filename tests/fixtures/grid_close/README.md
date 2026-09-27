@@ -79,6 +79,27 @@ dropped the call when the FIFO rule had closed them all.
 | `w3bf02-d2-nopooc-spill-oldest-record` | a1 without `process_orders_on_close`: `close("A")` closes the 0.1 the spill left (the engine dropped it) | `b3a9866683f73a51ea063045356948b6e9271f5fccafe18476722d5a0597a5a7` |
 | `w3bf02-f2-nopooc-exit-reduce` | A 0.1, B 0.2, C 0.3; at step 3 `strategy.exit("X", from_entry="B")` with a limit 5% under the close fills 0.2 at the next open, A's lot and half of B's, but books B's units: `close("A")` closes 0.1 (the engine dropped it), `close("B")` nothing | `4ae4027fb07609c71b123fe6acc08ace00197432a889cb5761bc8eeec4ba75c5` |
 
+## The retired reservation model's scenarios (the engine held standing claims)
+
+The adapter used to hold a close site's fill as a standing reservation against
+the other ids and carried the first call's target between two-call sites; the
+rows of `test_integration_l4d` pinned that model's claims and trades. These
+probes replay those rows' command sequences (`tools/siteseq.py`: each
+`strategy.close` call site a loop of its own, `process_orders_on_close`,
+pyramiding 10) and show no standing claim: each site fills its survivor's whole
+ledger, and a `strategy.order` sell that used up an id voids that id's closes.
+The twin's rows now pin TradingView's outcome (`tests/twin_parity_inventory.json`
+records the rewrite).
+
+| tape | TradingView | tv_trades.csv sha256 |
+|---|---|---|
+| `w3bl-s6-single-site-replacement` | seven entries; one site closes F7 then L7, F15 then L15, then L3 then L4: the last order closes L4's whole 0.4159 (the model capped it at 0.3560) | `6d2410d125e87791d6082a0e6437110fb4c5cad2434ac9e20eb11e2e58e17fde` |
+| `w3bl-s7-rejected-replacement` | A 1, B 2, a sell of 1; two sites close A (void: the sell used A up), the second then closes B: B's order takes the book (the model rejected it) | `7b7ffcbd77aad0689fcfd7550a6d2812c6e465f3b8da04b3b3d9bd88b6df73ab` |
+| `w3bl-s8-cross-bar-claims` | A, B, D 3, C; two sites first naming A close B and C; a later close of D closes D's 3 (the model capped it at 2) | `a66d0a34e6f52a1924b70e62d47b995695c66989c37672f56ede0d9f86ea3570` |
+| `w3bl-s9-same-id-owner-claims` | two sites on A's re-entries, a sell of 1, then a close of D closes D's 4 and flattens the book (the model closed 3) | `9cd0d293caa52bea4f252bf8a4b40874c7b269f69844602b43f1ee8749885b93` |
+| `w3bl-s10a-local-alias-small-first` | two sites on B's re-entries, a sell of 2; one site closes B, C then D: B's and C's calls are void, D's order closes D's 4 (the model closed 3) | `31b0e516086782547383b1535fe16cc9dc615b600bc9b501fbe19f171411868a` |
+| `w3bl-s10b-local-alias-big-first` | s10a with the two earlier sites swapped: the same rows (the model closed 3.4) | `31b0e516086782547383b1535fe16cc9dc615b600bc9b501fbe19f171411868a` |
+
 ## The controls (the engine already booked them)
 
 | tape | TradingView | tv_trades.csv sha256 |

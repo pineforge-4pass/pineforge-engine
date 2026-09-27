@@ -2765,25 +2765,20 @@ public:
     double ledger(const std::string& id) const {
         return l4d_close_logical_units(id);
     }
-    double reservation(const std::string& id) const {
-        return l4d_close_reserved_units(id);
-    }
-    double two_call_first_qty(const std::string& id) const {
-        return l4d_close_first_units(id);
-    }
 };
 
-// ENA discriminator: only an exact-two-call batch may create provenance, and
-// only a later exact-two-call batch may consume it. The carried quantity is
-// the PRIOR batch's FIRST target (2), not B's ledger (6), reservation (3), or
-// ledger-minus-reservation (3).
+// A call site's one order books its fill against the site's first call's id;
+// what that id's close ledger cannot cover spills over the oldest entries'
+// units (lane W3B-ENG-GRID, TradingView tapes tests/fixtures/grid_close
+// w3f02-x2, w3bf02-a1 and -a2). A's 2 and one of B's 3 pay for the first
+// site's 3; the second site, first naming B, books B's oldest units first.
 class TwoCallReplacementChainStrategy : public CloseReplacementProbeBase {
 public:
-    double prior_res_b = -1.0;
-    double prior_first_b = -1.0;
+    double prior_ledger_b = -1.0;
+    double prior_ledger_a = -1.0;
     double carried_ledger_b = -1.0;
-    double released_res_b = -1.0;
-    double released_first_b = -1.0;
+    double carried_ledger_c = -1.0;
+    double ledger_b_before_close = -1.0;
     double final_pos = -1.0;
     void on_source_bar(const Bar&) override {
         double na = std::numeric_limits<double>::quiet_NaN();
@@ -2795,9 +2790,9 @@ public:
             strategy_close("B", "priorB");
         }
         if (bar_index_ == 4) {
-            prior_res_b = reservation("B");
-            prior_first_b = two_call_first_qty("B");
-            strategy_entry("B", true, na, na, 3.0);  // ledger B: 3 -> 6
+            prior_ledger_b = ledger("B");
+            prior_ledger_a = ledger("A");
+            strategy_entry("B", true, na, na, 3.0);  // ledger B: 2 -> 5
         }
         if (bar_index_ == 5) {
             strategy_close("B", "currentB");
@@ -2805,17 +2800,19 @@ public:
         }
         if (bar_index_ == 6) {
             carried_ledger_b = ledger("B");
-            released_res_b = reservation("B");
-            released_first_b = two_call_first_qty("B");
+            carried_ledger_c = ledger("C");
             strategy_entry("B", true, na, na, 3.0);  // ledger B: 2 -> 5
         }
-        if (bar_index_ == 7) strategy_close("B", "finalB");
+        if (bar_index_ == 7) {
+            ledger_b_before_close = ledger("B");
+            strategy_close("B", "finalB");
+        }
         if (bar_index_ == 8) final_pos = signed_position_size();
     }
 };
 
-static void test_exact_two_call_replacement_carries_prior_first_target() {
-    std::printf("test_exact_two_call_replacement_carries_prior_first_target\n");
+static void test_two_call_site_books_its_first_id_and_spills_oldest() {
+    std::printf("test_two_call_site_books_its_first_id_and_spills_oldest\n");
     TwoCallReplacementChainStrategy strat;
     Bar bars[] = {
         {100, 101, 99, 100, 50,  60000},
@@ -2830,11 +2827,11 @@ static void test_exact_two_call_replacement_carries_prior_first_target() {
     };
     strat.run(bars, 9);
 
-    CHECK(near(strat.prior_res_b, 3.0));
-    CHECK(near(strat.prior_first_b, 2.0));
+    CHECK(near(strat.prior_ledger_b, 2.0));
+    CHECK(near(strat.prior_ledger_a, 0.0));
     CHECK(near(strat.carried_ledger_b, 2.0));
-    CHECK(near(strat.released_res_b, 0.0));
-    CHECK(near(strat.released_first_b, 0.0));
+    CHECK(near(strat.carried_ledger_c, 3.0));
+    CHECK(near(strat.ledger_b_before_close, 5.0));
     CHECK(near(strat.final_pos, 3.0));
     CHECK(strat.trade_count() == 6);
     if (strat.trade_count() == 6) {
@@ -2845,22 +2842,20 @@ static void test_exact_two_call_replacement_carries_prior_first_target() {
     }
 }
 
-// XAU L37 control: a 3+ call batch creates a reservation but no two-call
-// provenance, so a later two-call replacement keeps the legacy full erase.
-// The subsequent sole close also clears the survivor's reservation/provenance,
-// and close_all exercises the flat-position reset.
+// A three-call site is one order too: it books against its first id, A, and
+// X keeps its unit (lane W3B-ENG-GRID, TradingView tape w3f02-x1's five-call
+// loops). A later sole close books its own id; close_all empties the ledger.
 class ThreeToTwoReplacementStrategy : public CloseReplacementProbeBase {
 public:
-    double prior_res_b = -1.0;
-    double prior_first_b = -1.0;
+    double prior_ledger_b = -1.0;
+    double prior_ledger_x = -1.0;
     double ledger_b = -1.0;
-    double res_b = -1.0;
-    double first_b = -1.0;
-    double res_c_after_sole = -1.0;
-    double first_c_after_sole = -1.0;
+    double ledger_c = -1.0;
+    double ledger_x = -1.0;
+    double ledger_c_after_sole = -1.0;
+    double ledger_x_after_sole = -1.0;
     double final_pos = -1.0;
-    size_t final_reservations = 99;
-    size_t final_provenance = 99;
+    size_t final_ledgers = 99;
     void on_source_bar(const Bar&) override {
         double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
@@ -2873,32 +2868,31 @@ public:
             strategy_close("B", "priorB");
         }
         if (bar_index_ == 5) {
-            prior_res_b = reservation("B");
-            prior_first_b = two_call_first_qty("B");
+            prior_ledger_b = ledger("B");
+            prior_ledger_x = ledger("X");
             strategy_close("B", "currentB");
             strategy_close("C", "currentC");
         }
         if (bar_index_ == 6) {
             ledger_b = ledger("B");
-            res_b = reservation("B");
-            first_b = two_call_first_qty("B");
+            ledger_c = ledger("C");
+            ledger_x = ledger("X");
             strategy_close("C", "soleC");
         }
         if (bar_index_ == 7) {
-            res_c_after_sole = reservation("C");
-            first_c_after_sole = two_call_first_qty("C");
+            ledger_c_after_sole = ledger("C");
+            ledger_x_after_sole = ledger("X");
             strategy_close_all();
         }
         if (bar_index_ == 8) {
             final_pos = signed_position_size();
-            final_reservations = l4d_close_reservation_count();
-            final_provenance = l4d_close_first_count();
+            final_ledgers = l4d_close_logical_count();
         }
     }
 };
 
-static void test_three_call_batch_does_not_create_two_call_provenance() {
-    std::printf("test_three_call_batch_does_not_create_two_call_provenance\n");
+static void test_three_call_site_books_its_first_id() {
+    std::printf("test_three_call_site_books_its_first_id\n");
     ThreeToTwoReplacementStrategy strat;
     Bar bars[] = {
         {100, 101, 99, 100, 50,  60000},
@@ -2913,31 +2907,28 @@ static void test_three_call_batch_does_not_create_two_call_provenance() {
     };
     strat.run(bars, 9);
 
-    CHECK(near(strat.prior_res_b, 1.0));
-    CHECK(near(strat.prior_first_b, 0.0));
+    CHECK(near(strat.prior_ledger_b, 1.0));
+    CHECK(near(strat.prior_ledger_x, 1.0));
     CHECK(near(strat.ledger_b, 0.0));
-    CHECK(near(strat.res_b, 0.0));
-    CHECK(near(strat.first_b, 0.0));
-    CHECK(near(strat.res_c_after_sole, 0.0));
-    CHECK(near(strat.first_c_after_sole, 0.0));
+    CHECK(near(strat.ledger_c, 1.0));
+    CHECK(near(strat.ledger_x, 1.0));
+    CHECK(near(strat.ledger_c_after_sole, 0.0));
+    CHECK(near(strat.ledger_x_after_sole, 1.0));
     CHECK(near(strat.final_pos, 0.0));
-    CHECK(strat.final_reservations == 0);
-    CHECK(strat.final_provenance == 0);
+    CHECK(strat.final_ledgers == 0);
 }
 
-// A prior exact-two batch does create provenance, but a third call in the
-// current batch invalidates its provisional carry. Intermediate ledgers remain
-// intact and a 3+ survivor must not create new two-call provenance.
+// A two-call site, then a three-call one: each books its fill against its own
+// first id (A, then B); the ids its later calls named keep their units (lane
+// W3B-ENG-GRID, TradingView tapes w3f02-x1, w3bf02-a2).
 class TwoToThreeReplacementStrategy : public CloseReplacementProbeBase {
 public:
-    double prior_res_b = -1.0;
-    double prior_first_b = -1.0;
+    double prior_ledger_b = -1.0;
+    double prior_ledger_a = -1.0;
     double ledger_b = -1.0;
     double ledger_c = -1.0;
     double ledger_d = -1.0;
-    double res_b = -1.0;
-    double res_d = -1.0;
-    double first_d = -1.0;
+    double position_after = -1.0;
     void on_source_bar(const Bar&) override {
         double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
@@ -2949,8 +2940,8 @@ public:
             strategy_close("B", "priorB");
         }
         if (bar_index_ == 5) {
-            prior_res_b = reservation("B");
-            prior_first_b = two_call_first_qty("B");
+            prior_ledger_b = ledger("B");
+            prior_ledger_a = ledger("A");
             strategy_close("B", "currentB");
             strategy_close("C", "currentC");
             strategy_close("D", "currentD");
@@ -2959,15 +2950,13 @@ public:
             ledger_b = ledger("B");
             ledger_c = ledger("C");
             ledger_d = ledger("D");
-            res_b = reservation("B");
-            res_d = reservation("D");
-            first_d = two_call_first_qty("D");
+            position_after = signed_position_size();
         }
     }
 };
 
-static void test_three_call_current_batch_invalidates_two_call_carry() {
-    std::printf("test_three_call_current_batch_invalidates_two_call_carry\n");
+static void test_each_site_books_its_own_first_id() {
+    std::printf("test_each_site_books_its_own_first_id\n");
     TwoToThreeReplacementStrategy strat;
     Bar bars[] = {
         {100, 101, 99, 100, 50,  60000},
@@ -2980,36 +2969,33 @@ static void test_three_call_current_batch_invalidates_two_call_carry() {
     };
     strat.run(bars, 7);
 
-    CHECK(near(strat.prior_res_b, 1.0));
-    CHECK(near(strat.prior_first_b, 1.0));
+    CHECK(near(strat.prior_ledger_b, 1.0));
+    CHECK(near(strat.prior_ledger_a, 0.0));
     CHECK(near(strat.ledger_b, 0.0));
     CHECK(near(strat.ledger_c, 1.0));
     CHECK(near(strat.ledger_d, 1.0));
-    CHECK(near(strat.res_b, 0.0));
-    CHECK(near(strat.res_d, 1.0));
-    CHECK(near(strat.first_d, 0.0));
+    CHECK(near(strat.position_after, 2.0));
 }
 
-// A surviving multi-close may fill the entire position slice not already
-// claimed by older reservations. In that case no physical backing remains for
-// the survivor: its ledger/reservation/provenance must all clear. A later
-// zero-available close also consumes its stale logical cycle, so a same-id
-// re-entry starts fresh instead of accumulating an unfillable prior slice.
+// Every fill that reduces the position books the close ledger, so the ledger
+// sums to the position: a strategy.order sell names no entry and books the
+// oldest entries' units -- here C's, whose later close is void, and whose
+// re-entry is closed fresh (lane W3B-ENG-GRID, TradingView tape
+// tests/fixtures/grid_close/w3bf02-f1).
 class ZeroBackedCloseReservationStrategy : public CloseReplacementProbeBase {
 public:
     double post_pos = -1.0;
     double post_ledger_b = -1.0;
-    double post_res_b = -1.0;
-    double post_first_b = -1.0;
-    double post_total_res = -1.0;
+    double post_ledger_r = -1.0;
+    double post_ledger_c = -1.0;
+    double post_ledger_total = -1.0;
     double blocked_ledger_c = -1.0;
     double reentry_ledger_c = -1.0;
     double final_ledger_c = -1.0;
     double final_pos = -1.0;
 
-    double total_reservations() const {
-        return reservation("A") + reservation("B")
-            + reservation("C") + reservation("R");
+    double ledger_total() const {
+        return ledger("X") + ledger("A") + ledger("B") + ledger("C") + ledger("R");
     }
 
     void on_source_bar(const Bar&) override {
@@ -3034,11 +3020,11 @@ public:
         if (bar_index_ == 3) {
             post_pos = signed_position_size();
             post_ledger_b = ledger("B");
-            post_res_b = reservation("B");
-            post_first_b = two_call_first_qty("B");
-            post_total_res = total_reservations();
+            post_ledger_r = ledger("R");
+            post_ledger_c = ledger("C");
+            post_ledger_total = ledger_total();
 
-            strategy_close("C", "blocked");  // no unreserved physical qty
+            strategy_close("C", "blocked");  // C's units went to the sell
             blocked_ledger_c = ledger("C");
             strategy_entry("C", true, na, na, 1.0);
         }
@@ -3053,8 +3039,8 @@ public:
     }
 };
 
-static void test_zero_backed_close_reservation_clears_stale_cycle() {
-    std::printf("test_zero_backed_close_reservation_clears_stale_cycle\n");
+static void test_a_sell_books_the_oldest_entries_units() {
+    std::printf("test_a_sell_books_the_oldest_entries_units\n");
     ZeroBackedCloseReservationStrategy strat;
     Bar bars[] = {
         {100, 101, 99, 100, 50,  60000},
@@ -3068,9 +3054,9 @@ static void test_zero_backed_close_reservation_clears_stale_cycle() {
 
     CHECK(near(strat.post_pos, 2.0));
     CHECK(near(strat.post_ledger_b, 0.0));
-    CHECK(near(strat.post_res_b, 0.0));
-    CHECK(near(strat.post_first_b, 0.0));
-    CHECK(near(strat.post_total_res, 2.0));
+    CHECK(near(strat.post_ledger_r, 2.0));
+    CHECK(near(strat.post_ledger_c, 0.0));
+    CHECK(near(strat.post_ledger_total, 2.0));
     CHECK(near(strat.blocked_ledger_c, 0.0));
     CHECK(near(strat.reentry_ledger_c, 1.0));
     CHECK(near(strat.final_ledger_c, 0.0));
@@ -3078,17 +3064,16 @@ static void test_zero_backed_close_reservation_clears_stale_cycle() {
     CHECK(strat.trade_count() == 2);
 }
 
-// ENA control: a positive truncated reservation is still a live replacement
-// chain. Keep the survivor's established logical ledger, but clamp the new
-// physical reservation and drop exact-two provenance because the fill is not
-// fully backed. This is intentionally distinct from the zero-backed ETH case.
+// The second site's order is B's 4, booked against its first id A: A's unit
+// pays for one, the oldest entry left, B, for the other three (lane
+// W3B-ENG-GRID, TradingView tapes w3f02-x2, w3bf02-a1).
 class PositiveTruncatedCloseReservationStrategy : public CloseReplacementProbeBase {
 public:
     double final_pos = -1.0;
     double ledger_b = -1.0;
-    double res_b = -1.0;
-    double first_b = -1.0;
-    double total_res = -1.0;
+    double ledger_r = -1.0;
+    double ledger_a = -1.0;
+    double ledger_total = -1.0;
 
     void on_source_bar(const Bar&) override {
         double na = std::numeric_limits<double>::quiet_NaN();
@@ -3110,16 +3095,15 @@ public:
         if (bar_index_ == 3) {
             final_pos = signed_position_size();
             ledger_b = ledger("B");
-            res_b = reservation("B");
-            first_b = two_call_first_qty("B");
-            total_res = reservation("A") + reservation("B")
-                + reservation("R");
+            ledger_r = ledger("R");
+            ledger_a = ledger("A");
+            ledger_total = ledger("X") + ledger("A") + ledger("B") + ledger("R");
         }
     }
 };
 
-static void test_positive_truncated_close_reservation_keeps_ledger_only() {
-    std::printf("test_positive_truncated_close_reservation_keeps_ledger_only\n");
+static void test_a_fill_beyond_the_first_ids_units_spills() {
+    std::printf("test_a_fill_beyond_the_first_ids_units_spills\n");
     PositiveTruncatedCloseReservationStrategy strat;
     Bar bars[] = {
         {100, 101, 99, 100, 50,  60000},
@@ -3130,10 +3114,10 @@ static void test_positive_truncated_close_reservation_keeps_ledger_only() {
     strat.run(bars, 4);
 
     CHECK(near(strat.final_pos, 2.0));
-    CHECK(near(strat.ledger_b, 4.0));
-    CHECK(near(strat.res_b, 1.0));
-    CHECK(near(strat.first_b, 0.0));
-    CHECK(near(strat.total_res, 2.0));
+    CHECK(near(strat.ledger_b, 1.0));
+    CHECK(near(strat.ledger_r, 1.0));
+    CHECK(near(strat.ledger_a, 0.0));
+    CHECK(near(strat.ledger_total, 2.0));
 }
 // ---- 38a2. Pine-v6 POOC default-FIFO close queue --------------------------
 
@@ -3532,9 +3516,10 @@ public:
             close_site("F15", "SETUP_F15");
             close_site("L15", "SETUP_L15");
         } else if (bar_index_ == 3) {
-            // The two public exact-two batches above leave .8982 of persistent
-            // backing against a 1.2542 live book. Replacing L3(.2069) with
-            // L4(.4159) can therefore reuse exactly .3560 of capacity.
+            // No close holds a standing claim: the survivor's order is L4's
+            // whole .4159, booked against L3, and L3's .2069 with .2090 of the
+            // oldest entry's units pay for it (lane W3B-ENG-GRID, TradingView
+            // tape tests/fixtures/grid_close/w3bl-s6-single-site-replacement).
             trades_.clear();
             close_site("L3", "FIRST_L3");
             close_site("L4", "SURVIVOR_L4");
@@ -3549,8 +3534,8 @@ private:
     bool tokenized_;
 };
 
-static void test_single_site_replacement_reuses_own_live_claim() {
-    std::printf("test_single_site_replacement_reuses_own_live_claim\n");
+static void test_single_site_replacement_fills_the_survivors_ledger() {
+    std::printf("test_single_site_replacement_fills_the_survivors_ledger\n");
     SingleCallsiteReplacementCapacityStrategy legacy(/*tokenized=*/false);
     SingleCallsiteReplacementCapacityStrategy tokenized(/*tokenized=*/true);
     Bar bars[] = {
@@ -3567,16 +3552,16 @@ static void test_single_site_replacement_reuses_own_live_claim() {
              &legacy, &tokenized}) {
         CHECK(base->trade_count() == 1);
         if (base->trade_count() == 1) {
-            CHECK(near(base->get_trade(0).qty, 0.3560));
+            CHECK(near(base->get_trade(0).qty, 0.4159));
             CHECK(base->get_trade(0).exit_comment == "SURVIVOR_L4");
         }
     }
-    CHECK(near(legacy.debt_after_calls, 0.5629));
-    CHECK(near(tokenized.debt_after_calls, 0.5629));
+    CHECK(near(legacy.debt_after_calls, 0.6228));
+    CHECK(near(tokenized.debt_after_calls, 0.6228));
     CHECK(near(legacy.admitted_after_calls, 0.0));
-    CHECK(near(tokenized.admitted_after_calls, 0.3560));
-    CHECK(near(legacy.final_position, 0.8982));
-    CHECK(near(tokenized.final_position, 0.8982));
+    CHECK(near(tokenized.admitted_after_calls, 0.4159));
+    CHECK(near(legacy.final_position, 0.8383));
+    CHECK(near(tokenized.final_position, 0.8383));
 }
 
 class RejectedCallsiteReplacementStrategy : public pineforge::source::PineStrategyHost {
@@ -3620,8 +3605,11 @@ public:
         if (bar_index_ != 2) return;
 
         strategy_exit("protect-B", "B", 200.0, na);
-        // B's public two-unit opening and the one-unit RAW reduction above
-        // leave a two-unit logical claim over the two-unit physical book.
+        // The one-unit sell above named no entry and booked A's unit, the
+        // oldest: both closes of A are void, and B's, the only call placing
+        // anything, closes the whole book and cancels B's exit (lane
+        // W3B-ENG-GRID, TradingView tapes tests/fixtures/grid_close
+        // w3bf02-f1, w3bl-s7-rejected-replacement).
         strategy_close("A", "SITE1_A", na, na, false, 721);
         strategy_close("A", "SITE2_A", na, na, false, 722);
         exits_before_rejected = pending_exit_count();
@@ -3642,9 +3630,9 @@ public:
     }
 };
 
-static void test_rejected_replacement_has_no_debt_or_order_side_effects() {
+static void test_closes_of_an_id_a_sell_used_up_are_void() {
     std::printf(
-        "test_rejected_replacement_has_no_debt_or_order_side_effects\n");
+        "test_closes_of_an_id_a_sell_used_up_are_void\n");
     RejectedCallsiteReplacementStrategy strat;
     Bar bars[] = {
         {100, 101, 99, 100, 50,  60000},
@@ -3654,15 +3642,20 @@ static void test_rejected_replacement_has_no_debt_or_order_side_effects() {
     strat.run(bars, 3);
 
     CHECK(strat.exits_before_rejected == 1);
-    CHECK(strat.exits_after_rejected == 1);
-    CHECK(near(strat.debt_before_rejected, 2.0));
+    CHECK(strat.exits_after_rejected == 0);
+    CHECK(near(strat.debt_before_rejected, 0.0));
     CHECK(near(strat.debt_after_rejected, 2.0));
-    CHECK(near(strat.admitted_before_rejected, 2.0));
+    CHECK(near(strat.admitted_before_rejected, 0.0));
     CHECK(near(strat.admitted_after_rejected, 2.0));
     CHECK(strat.site_calls_after_rejected == 1);
-    CHECK(strat.site_id_after_rejected == "A");
-    CHECK(strat.site_comment_after_rejected == "SITE2_A");
-    CHECK(strat.site_queue_after_rejected == 2);
+    CHECK(strat.site_id_after_rejected == "B");
+    CHECK(strat.site_comment_after_rejected == "REJECTED_FULL_B");
+    CHECK(strat.site_queue_after_rejected == 1);
+    CHECK(strat.trade_count() == 2);
+    if (strat.trade_count() == 2) {
+        CHECK(strat.get_trade(1).exit_comment == "REJECTED_FULL_B");
+        CHECK(near(strat.get_trade(1).qty, 2.0));
+    }
 }
 
 class OwnerAwareCloseReservationStrategy : public pineforge::source::PineStrategyHost {
@@ -3678,24 +3671,12 @@ public:
         process_orders_on_close_ = true;
     }
 
-    double t2_claim = -1.0;
-    double t2_provenance = -1.0;
     double shared_k_ledger = -1.0;
-    double total_claims = -1.0;
+    double ledger_a = -1.0;
+    double ledger_j = -1.0;
+    double ledger_total = -1.0;
     double live_position = -1.0;
-    bool t1_owns_k = true;
-    bool owner_maps_empty_after_flat = false;
     bool ledger_empty_after_flat = false;
-
-    double owner_value(
-        const std::unordered_map<
-            uint64_t, std::unordered_map<std::string, double>>& owners,
-        uint64_t token, const std::string& id) const {
-        const auto owner = owners.find(token);
-        if (owner == owners.end()) return 0.0;
-        const auto value = owner->second.find(id);
-        return value == owner->second.end() ? 0.0 : value->second;
-    }
 
     void cleanup_site() {
         const double na = std::numeric_limits<double>::quiet_NaN();
@@ -3725,17 +3706,14 @@ public:
                 cleanup_site();
             }
         } else if (bar_index_ == 2) {
-            t2_claim = l4d_callsite_reserved_units(732, "K");
-            t2_provenance = l4d_callsite_first_units(732, "K");
             shared_k_ledger = l4d_close_logical_units("K");
-            total_claims = l4d_callsite_reserved_total();
+            ledger_a = l4d_close_logical_units("A");
+            ledger_j = l4d_close_logical_units("J");
+            ledger_total = l4d_close_logical_units("seed") + ledger_a + ledger_j
+                + shared_k_ledger;
             live_position = position_qty_;
-            t1_owns_k = l4d_callsite_reserved_units(731, "K") > 0.0;
             strategy_close("", "FLAT_RESET");
         } else if (bar_index_ == 3) {
-            owner_maps_empty_after_flat =
-                l4d_callsite_reservation_count() == 0
-                && l4d_callsite_first_count() == 0;
             ledger_empty_after_flat = l4d_close_logical_count() == 0;
         }
     }
@@ -3744,9 +3722,13 @@ private:
     bool cleanup_site_first_;
 };
 
-static void test_owner_reservation_survives_other_token_cleanup_permutations() {
+// Two sites on one bar, in either order: each books its fill against its own
+// first id (K for one, A for the other); the ids their later calls named keep
+// their units, and the ledger still sums to the position (lane W3B-ENG-GRID,
+// TradingView tapes w3f02-g5, w3bl-s8-cross-bar-claims).
+static void test_two_sites_book_their_own_first_ids_in_either_order() {
     std::printf(
-        "test_owner_reservation_survives_other_token_cleanup_permutations\n");
+        "test_two_sites_book_their_own_first_ids_in_either_order\n");
     Bar bars[] = {
         {100, 101, 99, 100, 50,  60000},
         {100, 106, 99, 105, 50, 120000},
@@ -3756,23 +3738,19 @@ static void test_owner_reservation_survives_other_token_cleanup_permutations() {
     for (bool cleanup_first : {false, true}) {
         OwnerAwareCloseReservationStrategy strat(cleanup_first);
         strat.run(bars, 4);
-        CHECK(near(strat.t2_claim, 1.0));
-        CHECK(near(strat.t2_provenance, 1.0));
-        CHECK(strat.shared_k_ledger + 1e-9 >= strat.t2_claim);
-        CHECK(!strat.t1_owns_k);
-        CHECK(strat.total_claims <= strat.live_position + 1e-9);
-        CHECK(strat.owner_maps_empty_after_flat);
+        CHECK(near(strat.shared_k_ledger, 0.0));
+        CHECK(near(strat.ledger_a, 0.0));
+        CHECK(near(strat.ledger_j, 1.0));
+        CHECK(near(strat.live_position, 4.0));
+        CHECK(near(strat.ledger_total, strat.live_position));
         CHECK(strat.ledger_empty_after_flat);
     }
 }
 
 class CrossOwnerReserveBackingStrategy : public pineforge::source::PineStrategyHost {
 public:
-    double t1_b_claim = -1.0;
-    double t1_b_provenance = -1.0;
-    double t2_c_claim = -1.0;
-    double t2_c_provenance = -1.0;
-    double total_claims = -1.0;
+    double ledger_a = -1.0;
+    double ledger_b = -1.0;
     double live_position = -1.0;
     double ledger_c = -1.0;
 
@@ -3784,16 +3762,6 @@ public:
         slippage_ = 0;
         pyramiding_ = 10;
         process_orders_on_close_ = true;
-    }
-
-    double owner_value(
-        const std::unordered_map<
-            uint64_t, std::unordered_map<std::string, double>>& owners,
-        uint64_t token, const std::string& id) const {
-        const auto owner = owners.find(token);
-        if (owner == owners.end()) return 0.0;
-        const auto value = owner->second.find(id);
-        return value == owner->second.end() ? 0.0 : value->second;
     }
 
     void on_source_bar(const Bar&) override {
@@ -3808,20 +3776,20 @@ public:
             strategy_close("A", "T2_FIRST_A", na, na, false, 742);
             strategy_close("C", "T2_SURVIVOR_C", na, na, false, 742);
         } else if (bar_index_ == 2) {
-            t1_b_claim = l4d_callsite_reserved_units(741, "B");
-            t1_b_provenance = l4d_callsite_first_units(741, "B");
-            t2_c_claim = l4d_callsite_reserved_units(742, "C");
-            t2_c_provenance = l4d_callsite_first_units(742, "C");
-            total_claims = l4d_callsite_reserved_total();
+            ledger_a = l4d_close_logical_units("A");
+            ledger_b = l4d_close_logical_units("B");
             live_position = position_qty_;
             ledger_c = l4d_close_logical_units("C");
         }
     }
 };
 
-static void test_cross_owner_post_fill_backing_is_physically_bounded() {
+// Both sites first name A: the first books A's unit, the second, finding
+// none left, spills onto the oldest entry left, B; C keeps its unit (lane
+// W3B-ENG-GRID, TradingView tape w3bl-s8-cross-bar-claims).
+static void test_second_site_on_a_spent_first_id_spills_oldest() {
     std::printf(
-        "test_cross_owner_post_fill_backing_is_physically_bounded\n");
+        "test_second_site_on_a_spent_first_id_spills_oldest\n");
     CrossOwnerReserveBackingStrategy strat;
     Bar bars[] = {
         {100, 101, 99, 100, 50,  60000},
@@ -3838,22 +3806,18 @@ static void test_cross_owner_post_fill_backing_is_physically_bounded() {
         CHECK(near(strat.get_trade(1).qty, 1.0));
     }
     CHECK(near(strat.live_position, 1.0));
-    CHECK(near(strat.t1_b_claim, 1.0));
-    CHECK(near(strat.t1_b_provenance, 1.0));
-    CHECK(near(strat.t2_c_claim, 0.0));
-    CHECK(near(strat.t2_c_provenance, 0.0));
-    CHECK(near(strat.ledger_c, 0.0));
-    CHECK(strat.total_claims <= strat.live_position + 1e-9);
+    CHECK(near(strat.ledger_a, 0.0));
+    CHECK(near(strat.ledger_b, 0.0));
+    CHECK(near(strat.ledger_c, 1.0));
 }
 
-// Persistent claims owned by different source sites follow the same
-// different-id capacity rule as token 0. After B and C each retain one unit,
-// a fresh D close for three units can use only the two unclaimed units of the
-// four-unit live position.
+// No close keeps a standing claim across bars: after the two sites of bar 1
+// book A's unit and B's, a fresh close of D closes D's three units (lane
+// W3B-ENG-GRID, TradingView tape w3bl-s8-cross-bar-claims).
 class CrossBarDifferentIdClaimCapacityStrategy : public pineforge::source::PineStrategyHost {
 public:
     double position_before_d = -1.0;
-    double claims_before_d = -1.0;
+    double ledger_d_before = -1.0;
     double admitted_d = -1.0;
     double position_after_d = -1.0;
 
@@ -3881,7 +3845,7 @@ public:
             strategy_close("C", "T2_SURVIVOR_C", na, na, false, 752);
         } else if (bar_index_ == 2) {
             position_before_d = position_qty_;
-            claims_before_d = l4d_callsite_reserved_total();
+            ledger_d_before = l4d_close_logical_units("D");
             strategy_close("D", "SECOND_BAR_D", na, na, false, 753);
             admitted_d = l4d_close_admitted_total();
         } else if (bar_index_ == 3) {
@@ -3890,8 +3854,8 @@ public:
     }
 };
 
-static void test_cross_bar_different_id_claims_cap_fresh_site() {
-    std::printf("test_cross_bar_different_id_claims_cap_fresh_site\n");
+static void test_a_fresh_site_is_not_capped_by_earlier_sites() {
+    std::printf("test_a_fresh_site_is_not_capped_by_earlier_sites\n");
     CrossBarDifferentIdClaimCapacityStrategy strat;
     Bar bars[] = {
         {100, 101, 99, 100, 50,  60000},
@@ -3902,15 +3866,15 @@ static void test_cross_bar_different_id_claims_cap_fresh_site() {
     strat.run(bars, 4);
 
     CHECK(near(strat.position_before_d, 4.0));
-    CHECK(near(strat.claims_before_d, 2.0));
-    CHECK(near(strat.admitted_d, 2.0));
-    CHECK(near(strat.position_after_d, 2.0));
+    CHECK(near(strat.ledger_d_before, 3.0));
+    CHECK(near(strat.admitted_d, 3.0));
+    CHECK(near(strat.position_after_d, 1.0));
     CHECK(strat.trade_count() == 3);
     if (strat.trade_count() == 3) {
         CHECK(strat.get_trade(0).exit_comment == "T1_SURVIVOR_B");
         CHECK(strat.get_trade(1).exit_comment == "T2_SURVIVOR_C");
         CHECK(strat.get_trade(2).exit_comment == "SECOND_BAR_D");
-        CHECK(near(strat.get_trade(2).qty, 2.0));
+        CHECK(near(strat.get_trade(2).qty, 3.0));
     }
 }
 
@@ -3958,8 +3922,11 @@ public:
     }
 };
 
-static void test_same_id_owner_claims_share_physical_backing() {
-    std::printf("test_same_id_owner_claims_share_physical_backing\n");
+// The one-unit sell books the oldest units (A's, which both earlier sites
+// left), so D's close takes D's four and flattens the book (lane
+// W3B-ENG-GRID, TradingView tape w3bl-s9-same-id-owner-claims).
+static void test_a_close_after_a_sell_takes_its_whole_ledger() {
+    std::printf("test_a_close_after_a_sell_takes_its_whole_ledger\n");
     SameIdOwnerClaimsShareBackingStrategy strat;
     Bar bars[] = {
         {100, 101, 99, 100, 50,  60000},
@@ -3973,19 +3940,21 @@ static void test_same_id_owner_claims_share_physical_backing() {
     };
     strat.run(bars, 8);
 
-    CHECK(near(strat.admitted_d, 3.0));
-    CHECK(near(strat.final_position, 1.0));
-    CHECK(strat.trade_count() == 1);
-    if (strat.trade_count() == 1) {
+    CHECK(near(strat.admitted_d, 4.0));
+    CHECK(near(strat.final_position, 0.0));
+    CHECK(strat.trade_count() == 2);
+    if (strat.trade_count() == 2) {
         CHECK(strat.get_trade(0).exit_comment == "GROUPED_BACKING_D");
         CHECK(near(strat.get_trade(0).qty, 3.0));
+        CHECK(strat.get_trade(1).exit_comment == "GROUPED_BACKING_D");
+        CHECK(near(strat.get_trade(1).qty, 1.0));
     }
 }
 
 class SameIdAliasesExcludedFromPostFillBackingStrategy
     : public pineforge::source::PineStrategyHost {
 public:
-    double new_a_claim = -1.0;
+    double ledger_a_after = -1.0;
     double final_position = -1.0;
 
     SameIdAliasesExcludedFromPostFillBackingStrategy() {
@@ -4019,14 +3988,17 @@ public:
             strategy_close("A", "SURVIVOR_A", na, na, false, 773);
         } else if (bar_index_ == 5) {
             final_position = position_qty_;
-            new_a_claim = l4d_callsite_reserved_units(773, "A");
+            ledger_a_after = l4d_close_logical_units("A");
         }
     }
 };
 
-static void test_post_fill_backing_excludes_all_same_id_aliases() {
+// Each site books its first id (F1, F2, then X); A, named last each time,
+// keeps its re-entered unit for later (lane W3B-ENG-GRID, TradingView tapes
+// w3f02-x1, w3bl-s9-same-id-owner-claims).
+static void test_the_last_named_id_keeps_its_units() {
     std::printf(
-        "test_post_fill_backing_excludes_all_same_id_aliases\n");
+        "test_the_last_named_id_keeps_its_units\n");
     SameIdAliasesExcludedFromPostFillBackingStrategy strat;
     Bar bars[] = {
         {100, 101, 99, 100, 50,  60000},
@@ -4039,7 +4011,7 @@ static void test_post_fill_backing_excludes_all_same_id_aliases() {
     strat.run(bars, 6);
 
     CHECK(near(strat.final_position, 1.0));
-    CHECK(near(strat.new_a_claim, 1.0));
+    CHECK(near(strat.ledger_a_after, 1.0));
     CHECK(strat.trade_count() == 1);
     if (strat.trade_count() == 1) {
         CHECK(strat.get_trade(0).exit_comment == "SURVIVOR_A");
@@ -4064,8 +4036,8 @@ public:
 
     double admitted_d = -1.0;
     double final_position = -1.0;
-    double competing_claim_after = -1.0;
-    bool current_claim_erased = false;
+    double ledger_b_before = -1.0;
+    double ledger_c_before = -1.0;
 
     void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
@@ -4098,16 +4070,14 @@ public:
                                std::numeric_limits<double>::infinity()));
         } else if (bar_index_ == 6) {
             trades_.clear();
+            ledger_b_before = l4d_close_logical_units("B");
+            ledger_c_before = l4d_close_logical_units("C");
             strategy_close("B", "FIRST_B", na, na, false, 781);
             strategy_close("C", "MIDDLE_C", na, na, false, 781);
             strategy_close("D", "SURVIVOR_D", na, na, false, 781);
             admitted_d = l4d_close_admitted_total();
         } else if (bar_index_ == 7) {
             final_position = position_qty_;
-            current_claim_erased =
-                l4d_callsite_reserved_units(781, "B") == 0.0;
-            competing_claim_after =
-                l4d_callsite_reserved_units(782, "B");
         }
     }
 
@@ -4116,9 +4086,14 @@ private:
     double competing_claim_;
 };
 
-static void test_local_alias_release_frees_only_marginal_backing() {
+// The two-unit sell books the oldest units: B's and C's, all that the earlier
+// sites left of them. The three-call site's B and C calls are then void, D's
+// order closes D's four, whichever site the earlier sites were (lane
+// W3B-ENG-GRID, TradingView tapes w3bl-s10a-local-alias-small-first and
+// w3bl-s10b-local-alias-big-first).
+static void test_a_sell_voids_the_ids_it_used_up_in_a_site() {
     std::printf(
-        "test_local_alias_release_frees_only_marginal_backing\n");
+        "test_a_sell_voids_the_ids_it_used_up_in_a_site\n");
     Bar bars[] = {
         {100, 101, 99, 100, 50,  60000},
         {100, 106, 99, 105, 50, 120000},
@@ -4135,19 +4110,17 @@ static void test_local_alias_release_frees_only_marginal_backing() {
         double expected_d;
     };
     const Case cases[] = {
-        {0.6, 1.0, 3.0},
-        {1.0, 0.6, 3.4},
+        {0.6, 1.0, 4.0},
+        {1.0, 0.6, 4.0},
     };
     for (const Case& test : cases) {
         UnequalAliasLocalReleaseStrategy strat(
             test.current, test.competing);
         strat.run(bars, 8);
         CHECK(near(strat.admitted_d, test.expected_d));
-        CHECK(near(strat.final_position, test.competing));
-        CHECK(strat.current_claim_erased);
-        CHECK(near(strat.competing_claim_after, test.competing));
-        CHECK(strat.final_position + 1e-9
-              >= strat.competing_claim_after);
+        CHECK(near(strat.final_position, 0.0));
+        CHECK(near(strat.ledger_b_before, 0.0));
+        CHECK(near(strat.ledger_c_before, 0.0));
         CHECK(strat.trade_count() == 1);
         if (strat.trade_count() == 1) {
             CHECK(strat.get_trade(0).exit_comment == "SURVIVOR_D");
@@ -6274,24 +6247,24 @@ int main() {
     test_win_loss_tracking();
     test_position_reversal_state();
     test_same_bar_multi_close_single_fill();
-    test_exact_two_call_replacement_carries_prior_first_target();
-    test_three_call_batch_does_not_create_two_call_provenance();
-    test_three_call_current_batch_invalidates_two_call_carry();
-    test_zero_backed_close_reservation_clears_stale_cycle();
-    test_positive_truncated_close_reservation_keeps_ledger_only();
+    test_two_call_site_books_its_first_id_and_spills_oldest();
+    test_three_call_site_books_its_first_id();
+    test_each_site_books_its_own_first_id();
+    test_a_sell_books_the_oldest_entries_units();
+    test_a_fill_beyond_the_first_ids_units_spills();
     test_same_bar_multi_close_queues_all_in_source_order();
     test_overlapping_id_callsites_reserve_before_replacement();
     test_distinct_sites_same_id_share_physical_capacity();
     test_same_callsite_loop_close_replaces_in_place();
     test_callsite_replacement_separates_live_claim_from_entry_debt();
-    test_single_site_replacement_reuses_own_live_claim();
-    test_rejected_replacement_has_no_debt_or_order_side_effects();
-    test_owner_reservation_survives_other_token_cleanup_permutations();
-    test_cross_owner_post_fill_backing_is_physically_bounded();
-    test_cross_bar_different_id_claims_cap_fresh_site();
-    test_same_id_owner_claims_share_physical_backing();
-    test_post_fill_backing_excludes_all_same_id_aliases();
-    test_local_alias_release_frees_only_marginal_backing();
+    test_single_site_replacement_fills_the_survivors_ledger();
+    test_closes_of_an_id_a_sell_used_up_are_void();
+    test_two_sites_book_their_own_first_ids_in_either_order();
+    test_second_site_on_a_spent_first_id_spills_oldest();
+    test_a_fresh_site_is_not_capped_by_earlier_sites();
+    test_a_close_after_a_sell_takes_its_whole_ledger();
+    test_the_last_named_id_keeps_its_units();
+    test_a_sell_voids_the_ids_it_used_up_in_a_site();
     test_interleaved_callsite_replacement_preserves_queue_position();
     test_exported_callsite_interleaving_tv_oracle();
     test_exported_shared_inner_udf_tv_oracle();

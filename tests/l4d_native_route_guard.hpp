@@ -234,37 +234,8 @@ protected:
     double l4d_close_logical_units(const std::string& id) const noexcept {
         return adapter_.fixture_close_logical_units(id);
     }
-    double l4d_close_reserved_units(const std::string& id) const noexcept {
-        return adapter_.fixture_close_reserved_units(id);
-    }
-    double l4d_close_first_units(const std::string& id) const noexcept {
-        return adapter_.fixture_close_first_units(id);
-    }
-    double l4d_callsite_reserved_units(
-            std::uint64_t token, const std::string& id) const noexcept {
-        return adapter_.fixture_callsite_close_reserved_units(token, id);
-    }
-    double l4d_callsite_first_units(
-            std::uint64_t token, const std::string& id) const noexcept {
-        return adapter_.fixture_callsite_close_first_units(token, id);
-    }
-    std::size_t l4d_close_reservation_count() const noexcept {
-        return adapter_.fixture_close_reservation_count();
-    }
-    std::size_t l4d_close_first_count() const noexcept {
-        return adapter_.fixture_close_first_count();
-    }
     std::size_t l4d_close_logical_count() const noexcept {
         return adapter_.fixture_close_logical_count();
-    }
-    std::size_t l4d_callsite_reservation_count() const noexcept {
-        return adapter_.fixture_callsite_close_reservation_count();
-    }
-    std::size_t l4d_callsite_first_count() const noexcept {
-        return adapter_.fixture_callsite_close_first_count();
-    }
-    double l4d_callsite_reserved_total() const noexcept {
-        return adapter_.fixture_callsite_close_reserved_total();
     }
     double l4d_close_pending_debt() const noexcept {
         return adapter_.fixture_close_pending_debt();

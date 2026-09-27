@@ -1,0 +1,16 @@
+{
+  "title": "W3B legacy S6 single-site replacement after two exact-two batches",
+  "slug": "w3bl-s6-single-site-replacement",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T18:53:28.118Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "909f86a9f97b4d8d89b7db9ed6fbd5b8846c393707b19595ff4c5c60d162e1c0",
+  "tv_trades_sha256": "6d2410d125e87791d6082a0e6437110fb4c5cad2434ac9e20eb11e2e58e17fde",
+  "tv_trades_rows": 20
+}

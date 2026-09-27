@@ -1,0 +1,16 @@
+{
+  "title": "W3B legacy S9 a close after same-id two-call sites and a sell",
+  "slug": "w3bl-s9-same-id-owner-claims",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T18:53:42.963Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "0097a299956a305ade88aafb734a0b51a830b9071ac26170f351566233b0c45a",
+  "tv_trades_sha256": "9cd0d293caa52bea4f252bf8a4b40874c7b269f69844602b43f1ee8749885b93",
+  "tv_trades_rows": 14
+}
