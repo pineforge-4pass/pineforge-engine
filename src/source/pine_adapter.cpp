@@ -10198,68 +10198,6 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         }
     }
 
-    // ab9714be pine_fills.cpp:7810-7842: under process_orders_on_close, a freshly
-    // submitted priced exit leg that is already marketable against this same bar's close
-    // fills immediately at the close.
-    if (config_.process_orders_on_close && config_.calc_on_order_fills
-        && !coof_recalc_active_ && source_point
-        && source_point->decision.coordinate.provenance == NativePriceProvenance::Calculation
-        && source_point->decision.coordinate.path_phase == NativePathPhase::None
-        && physical.signed_units != 0.0) {
-        const double quote = source_point->price;
-        const bool closing_long = physical.signed_units > 0.0;
-        struct Candidate {
-            native_order::RequestHandle handle;
-            PlacementSnapshot snapshot;
-        };
-        std::vector<Candidate> candidates;
-        for (const auto& handle : live_handles_) {
-            const auto found = placement_.find(handle.incarnation);
-            if (found == placement_.end() || found->second.source_id != exit_id
-                || found->second.from_entry != from_entry
-                || (found->second.family != PineOrderFamily::ExitLimit
-                    && found->second.family != PineOrderFamily::ExitStop)) {
-                continue;
-            }
-            const auto& row = found->second;
-            const bool limit_hit = row.family == PineOrderFamily::ExitLimit
-                && finite_positive(row.exit_levels.limit)
-                && (closing_long ? quote >= row.exit_levels.limit
-                                 : quote <= row.exit_levels.limit);
-            const bool stop_hit = row.family == PineOrderFamily::ExitStop
-                && finite_positive(row.exit_levels.stop)
-                && (closing_long ? quote <= row.exit_levels.stop
-                                 : quote >= row.exit_levels.stop);
-            if (limit_hit || stop_hit) candidates.push_back({handle, row});
-        }
-        if (!candidates.empty()) {
-            std::stable_sort(candidates.begin(), candidates.end(),
-                [&](const auto& left, const auto& right) {
-                    return left.snapshot.command_sequence
-                        < right.snapshot.command_sequence;
-                });
-            const auto selected = candidates.front();
-            cancel_bracket_siblings(selected.handle);
-            native_order::Request request;
-            request.intent = native_order::Flatten{};
-            request.label = exit_id;
-            request.comment = comment;
-            request.trigger = native_order::Market{};
-            PlacementSnapshot immediate = selected.snapshot;
-            const bool stop_close = selected.snapshot.family == PineOrderFamily::ExitStop;
-            immediate.forced_execution_price = nearest_tick(
-                quote + (stop_close ? (closing_long ? -1.0 : 1.0) : 0.0)
-                    * config_.slippage * staged_.syminfo.mintick,
-                staged_.syminfo.mintick);
-            immediate.projection_predecessor = selected.handle.incarnation;
-            immediate.projection_predecessor_exit = true;
-            const auto accepted = submit_or_replace(
-                std::move(request), std::move(immediate), false,
-                exit_id + "\x1f" + from_entry
-                    + std::to_string(static_cast<int>(selected.snapshot.family)));
-            if (accepted) execute_or_withdraw_close(*accepted, void_issue);
-        }
-    }
     if (!placed_absolute_leg
         && !(has_trail_request && finite_positive(trail_price))) {
         // ab9714be pine_strategy_commands.cpp:533-537: only a NaN operand is
@@ -17023,67 +16961,55 @@ void PineExecutionAdapter::fill_pooc_close_entries(
 
 void PineExecutionAdapter::flush_pooc_marketable_exit_fills(
         const Bar& bar, const NativeDecisionContext& context) {
-    // ab9714be pine_fills.cpp:7604-7648 + 7810-7843: under process_orders_on_close,
-    // a priced exit leg placed by this bar's source calc that is already marketable
-    // against this same bar's close fills in the post-calculation fill pass at the
-    // close (stop leg first, at most one leg per exit order) instead of resting
-    // for the next bar. Only the ordinary (non-COOF, non-stream) route is scoped.
-    if (config_.calc_on_order_fills || !config_.process_orders_on_close
-        || stream_mode_ || coof_recalc_active_) {
-        return;
-    }
+    // Under process_orders_on_close the close pass decides the exits this
+    // calculation placed, after the calculation's orders that fill at the
+    // close whatever its price (fill_pooc_close_exits), with or without
+    // calc_on_order_fills. With one of those still to fill, the exits wait for
+    // it: on_applied runs the pass after that fill.
+    if (!config_.process_orders_on_close || stream_mode_ || coof_recalc_active_) return;
+    if (pooc_close_market_pending(context)) return;
+    fill_pooc_close_exits(bar.close, context);
+}
+
+bool PineExecutionAdapter::pooc_close_market_pending(
+        const NativeDecisionContext& context) const {
+    // A strategy.close / close_all, or a market entry or order, that this
+    // calculation placed and the close point has not filled yet.
+    const int bar_index = projection_bar_index(context);
+    return any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
+        if (row.projection_created_bar != bar_index || row.birth.from_fill()) return false;
+        if (row.family == PineOrderFamily::Close || row.family == PineOrderFamily::CloseAll)
+            return true;
+        return (row.family == PineOrderFamily::Entry || row.family == PineOrderFamily::Order)
+            && !std::isfinite(row.exit_levels.limit) && !std::isfinite(row.exit_levels.stop);
+    });
+}
+
+void PineExecutionAdapter::fill_pooc_close_exits(
+        double raw_close, const NativeDecisionContext& context) {
+    // TradingView's process_orders_on_close pass (lab tv w4-f08*, lane
+    // W4-ENG-POOC-SAMEPASS): the calculation's market orders fill at the
+    // close first -- a strategy.close, or an entry that reverses the held
+    // side, voids that side's exits -- and then every exit leg the
+    // calculation placed is decided against the same close: it fills there
+    // when the close's tick reaches its level on the closing side (a sell
+    // stop at or above it, a sell limit at or below it, and the mirror for a
+    // buy), the stop leg first and at most one leg per exit order; otherwise
+    // it rests for the next bar. That holds for a position held from an
+    // earlier bar, one this close pass opened or reversed into (the exit
+    // placed with its entry), and a from_entry "" exit, with or without
+    // calc_on_order_fills. The close's tick, not the raw close, decides
+    // (NYSE:F half-cent closes, w4-f08t-pooc: a sell limit 11.467 over a raw
+    // 11.465 close fills there, a sell stop 11.447 over a raw 11.445 close
+    // rests, on either side and in either scope). The fill books the close,
+    // a stop slipped like any stop fill (w4-f08s-pooc-slip).
     const auto physical = detail::run_position(require_host());
-    if (physical.signed_units == 0.0) return;
+    if (physical.signed_units == 0.0 || !finite_positive(raw_close)) return;
     const bool closing_long = physical.signed_units > 0.0;
-    const double raw_close = bar.close;
+    const auto held_side = static_cast<std::int32_t>(
+        closing_long ? PositionSide::LONG : PositionSide::SHORT);
     const double tick = staged_.syminfo.mintick;
-    // ab9714be pine_fills.cpp:7318-7365 (pooc_short_exit_trigger_close): the
-    // admission gate and the fill evaluation of one POOC same-bar exit reissue
-    // test a SINGLE trigger close. The pinned short reissue tests the broker's
-    // TICK close (C11.575 -> 11.58 skips L11.576782, C11.695 -> 11.70 reaches
-    // S11.698693, C12.495 -> 12.50 reaches S12.496973); every other
-    // configuration tests the RAW close. The booked price is
-    // bar_fill_price(bar.close) either way, so only the tests move. The scope
-    // below is the close-time image of the placement-time pooc_short_tick_scope
-    // of the strategy.exit lowering, which owns the same pinned reissue.
-    bool competing_entry = false;
-    for (const auto& handle : live_handles_) {
-        const auto found = placement_.find(handle.incarnation);
-        if (found != placement_.end() && found->second.opening) {
-            competing_entry = true;
-            break;
-        }
-    }
-    const double held_units = std::abs(physical.signed_units);
-    const bool pinned_short_scope = !closing_long && !competing_entry
-        && physical.lot_count == 1
-        && position_open_script_bar_
-            != std::numeric_limits<std::int64_t>::min()
-        && position_open_script_bar_ < context.script_bar_open_ms
-        && config_.pyramiding == 0 && config_.slippage == 0
-        && config_.commission_type == static_cast<int>(CommissionType::PERCENT)
-        && std::abs(staged_.syminfo.pointvalue - 1.0) < 1e-12
-        && active_staged_fx(context.sub_bar_open_ms) == 1.0
-        && staged_.account_fx_effective_from_ms.empty()
-        && finite_positive(tick);
-    const auto pinned_tick_close = [&](const PlacementSnapshot& row) {
-        if (!pinned_short_scope || row.projection_predecessor == 0) return false;
-        if (row.projection_position_side
-            == static_cast<std::int32_t>(PositionSide::FLAT)) return false;
-        if (!row.oca_name.empty()) return false;
-        if (!std::isnan(row.exit_levels.trail_points)
-            || !std::isnan(row.exit_levels.trail_price)
-            || !std::isnan(row.exit_levels.trail_offset)) return false;
-        if (std::isfinite(row.qty_percent)
-            && row.qty_percent < 100.0 - 1e-9) return false;
-        const double leg_units = std::isfinite(row.projection_remaining_qty)
-            ? std::max(0.0, row.projection_remaining_qty)
-            : (std::isfinite(row.requested_qty)
-                ? std::abs(row.requested_qty) : held_units);
-        if (std::abs(leg_units - held_units) > 1e-9) return false;
-        return !row.from_entry.empty()
-            && cohort_exposure_for(row.from_entry) > 0.0;
-    };
+    const double close_tick = source_bar_fill_tick(raw_close, tick);
     struct Leg {
         native_order::RequestHandle handle;
         PlacementSnapshot snapshot;
@@ -17104,6 +17030,30 @@ void PineExecutionAdapter::flush_pooc_marketable_exit_fills(
             && row.family != PineOrderFamily::ExitStop) continue;
         if (row.birth.from_fill()) continue;
         if (row.projection_created_bar != projection_bar_index(context)) continue;
+        // The leg is the held position's: a named entry's own lots, or a
+        // from_entry "" exit placed under this position or while flat
+        // (TVDEF-DROPS R3: an exit belongs to the position it was placed
+        // under).
+        if (!row.from_entry.empty()
+                ? !(cohort_exposure_for(row.from_entry) > 0.0)
+                : (row.projection_position_side != held_side
+                   && row.projection_position_side
+                       != static_cast<std::int32_t>(PositionSide::FLAT))) {
+            continue;
+        }
+        // A leg the calculation placed before the entry it names is never
+        // applied by TradingView (w4-f08-* cell I); the pass leaves it be.
+        if (!row.from_entry.empty()) {
+            const auto cohort = cohorts_by_id_.find(row.from_entry);
+            if (cohort != cohorts_by_id_.end() && !cohort->second.opened.empty()) {
+                const auto parent = placement_.find(cohort->second.opened.back().incarnation);
+                if (parent != placement_.end()
+                    && parent->second.projection_created_bar == row.projection_created_bar
+                    && parent->second.command_sequence > row.command_sequence) {
+                    continue;
+                }
+            }
+        }
         const bool stop_leg = row.family == PineOrderFamily::ExitStop;
         const double level = stop_leg ? row.exit_levels.stop : row.exit_levels.limit;
         if (!finite_positive(level)) continue;
@@ -17126,37 +17076,31 @@ void PineExecutionAdapter::flush_pooc_marketable_exit_fills(
     }
     for (auto& entry : groups) {
         Group& group = entry.second;
-        // Two-stage gate, both stages mirroring ab9714be. Stage one is the
-        // classify_order_eligibility POOC gate evaluated over the whole
-        // order: the EXIT order carries is_long=false always, so it tests
-        // the short-side (buy-close) direction for each leg and admits the
-        // order when either leg passes (pine_fills.cpp:7621-7648). Stage
-        // two is evaluate_fill_price's exit_same_bar_reissue marketability
-        // test, which uses the position side (pine_fills.cpp:7810-7843);
-        // the same-bar close fill fires on a stage-two leg only when the
-        // order also passed stage one. Both stages read the same trigger
-        // close (pooc_short_exit_trigger_close, pine_fills.cpp:7318-7365).
+        // An earlier exit of this pass may have closed the position.
+        const double live_signed = detail::run_position(require_host()).signed_units;
+        if (live_signed == 0.0 || (live_signed > 0.0) != closing_long) break;
         const double stop_level = group.has_stop ? group.stop.snapshot.exit_levels.stop : kNaN;
         const double limit_level = group.has_limit ? group.limit.snapshot.exit_levels.limit : kNaN;
-        const bool pinned_reissue = (group.has_stop
-                && pinned_tick_close(group.stop.snapshot))
-            || (group.has_limit && pinned_tick_close(group.limit.snapshot));
-        const double quote_close = pinned_reissue
-            ? source_bar_fill_tick(raw_close, tick) : raw_close;
-        const bool gate = (group.has_stop && quote_close >= stop_level)
-            || (group.has_limit && quote_close <= limit_level);
-        if (!gate) continue;
         const bool fill_stop = group.has_stop
-            && (closing_long ? quote_close <= stop_level : quote_close >= stop_level);
+            && (closing_long ? close_tick <= stop_level : close_tick >= stop_level);
         const bool fill_limit = group.has_limit
-            && (closing_long ? quote_close >= limit_level : quote_close <= limit_level);
+            && (closing_long ? close_tick >= limit_level : close_tick <= limit_level);
         if (!fill_stop && !fill_limit) continue;
         const Leg& selected = fill_stop ? group.stop : group.limit;
         if (!selected.handle.incarnation) continue;
         const auto& row = selected.snapshot;
-        const double units = std::isfinite(row.projection_remaining_qty)
+        const double live_held_units = std::abs(live_signed);
+        double units = std::isfinite(row.projection_remaining_qty)
             ? std::max(0.0, row.projection_remaining_qty)
             : (std::isfinite(row.requested_qty) ? std::abs(row.requested_qty) : 0.0);
+        if (!std::isfinite(row.projection_remaining_qty) && !std::isfinite(row.requested_qty)) {
+            // A host-sized leg placed while flat carries no reservation yet:
+            // it closes its share of what it exits now (a from_entry "" exit
+            // placed with a flat entry, w4-f08-* cell J).
+            units = quantize_close_units(
+                row.from_entry.empty() ? live_held_units : cohort_exposure_for(row.from_entry),
+                std::isfinite(row.qty_percent) ? row.qty_percent : 100.0);
+        }
         if (!(units > 0.0)) continue;
         // ab9714be pine_fills.cpp:1618 and pine_fills.cpp:1708-1723 spell
         // full-position coverage as `qty - kQtyEpsilon`, cap the quantity at
@@ -17166,8 +17110,6 @@ void PineExecutionAdapter::flush_pooc_marketable_exit_fills(
         // Submitting the reservation's stale binary64 residual as a sized
         // reduction instead is refused off-grid, and the sub-lot remainder it
         // strands is what the 1x-margin path later fragments.
-        const double live_held_units =
-            std::abs(detail::run_position(require_host()).signed_units);
         const bool covers_live_book = live_held_units > 0.0
             && units >= live_held_units - internal::kQtyEpsilon;
         cancel_bracket_siblings(selected.handle);
@@ -17241,7 +17183,7 @@ void PineExecutionAdapter::on_bar_close(
     // and a gate reading that one skipped both passes there (R5 lane
     // PAR-ORDERS).
     const bool close_fill_pass = config_.process_orders_on_close
-        && !config_.calc_on_order_fills && !stream_mode_ && !coof_recalc_active_;
+        && !stream_mode_ && !coof_recalc_active_;
     const bool entry_close_fill_pass = config_.process_orders_on_close
         && !stream_mode_ && !coof_recalc_active_;
     const int bar_index = projection_bar_index(context);
@@ -17996,6 +17938,17 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                     || row.projection_created_bar
                         != placement_snapshot->projection_created_bar
                     || carried_origin_leg(row)) {
+                    continue;
+                }
+                // A from_entry "" exit placed while the position this fill
+                // reversed was open belongs to that position (TVDEF-DROPS R3):
+                // it never joins the new side's entry-bar path (lab tv
+                // w4-f08b-pooc-coof cell S).
+                if (row.from_entry.empty() && event.closed_units > 0.0
+                    && row.projection_position_side
+                        == static_cast<std::int32_t>(event.opened_units > 0.0
+                                                         ? PositionSide::SHORT
+                                                         : PositionSide::LONG)) {
                     continue;
                 }
                 const bool long_position = event.opened_units > 0.0;
@@ -19089,6 +19042,21 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         && !stream_mode_ && !coof_recalc_active_
         && event.cursor.point.path_phase == NativePathPhase::Close) {
         fill_pooc_close_entries(event.raw_price, context, /*after_close=*/true);
+    }
+    // Once the calculation's last order that fills at a process_orders_on_close
+    // close has filled there, the pass decides the calculation's exits,
+    // including those placed with the entry that just opened or reversed the
+    // position (fill_pooc_close_exits; lane W4-ENG-POOC-SAMEPASS).
+    if (placement_snapshot && config_.process_orders_on_close
+        && !stream_mode_ && !coof_recalc_active_
+        && context.coordinate.provenance == NativePriceProvenance::AfterCalculationClose
+        && placement_snapshot->projection_created_bar == projection_bar_index(context)
+        && (placement_snapshot->opening
+            || placement_snapshot->family == PineOrderFamily::Close
+            || placement_snapshot->family == PineOrderFamily::CloseAll
+            || placement_snapshot->family == PineOrderFamily::Order)
+        && !pooc_close_market_pending(context)) {
+        fill_pooc_close_exits(event.raw_price, context);
     }
 }
 

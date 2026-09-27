@@ -1,0 +1,16 @@
+{
+  "title": "w4-f08t-pooc",
+  "slug": "w4-f08t-pooc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:45:17.913Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-07-08"
+  },
+  "pine_sha256": "544560090adc7a55f42d7784beadfd3c3be9ac6dcec935316b658629ac1239ae",
+  "tv_trades_sha256": "5e640888d5007b74d2d9be33f7facfcb1b91abd51fa4bb89fcfd126fa53ffa49",
+  "tv_trades_rows": 16
+}

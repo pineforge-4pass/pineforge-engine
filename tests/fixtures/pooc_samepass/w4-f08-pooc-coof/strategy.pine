@@ -1,0 +1,76 @@
+//@version=6
+strategy("w4-f08-pooc-coof", overlay=true, process_orders_on_close=true, calc_on_order_fills=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W4-ENG-POOC-SAMEPASS, family F08. Every cell is placed at a fixed
+// 15m bar (UTC) and flattened two hours later. "through" means the exit's
+// level is already past the placing bar's close on the side that fills it
+// (a buy stop below the close, a sell stop above it, a buy limit above it,
+// a sell limit below it).
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+
+// A: flat short + from_entry stop through the close
+if cell(8, 0, 0)
+    strategy.entry("A-S", strategy.short, comment="A short")
+    strategy.exit("A-X", from_entry="A-S", stop=close - 3, comment="A stop through")
+// B: flat long + from_entry stop through the close
+if cell(8, 4, 0)
+    strategy.entry("B-L", strategy.long, comment="B long")
+    strategy.exit("B-X", from_entry="B-L", stop=close + 3, comment="B stop through")
+// C: flat long + from_entry limit through the close
+if cell(8, 8, 0)
+    strategy.entry("C-L", strategy.long, comment="C long")
+    strategy.exit("C-X", from_entry="C-L", limit=close - 3, comment="C limit through")
+// D: flat short + from_entry limit through the close
+if cell(8, 12, 0)
+    strategy.entry("D-S", strategy.short, comment="D short")
+    strategy.exit("D-X", from_entry="D-S", limit=close + 3, comment="D limit through")
+// E: control, flat long + bracket not through
+if cell(8, 16, 0)
+    strategy.entry("E-L", strategy.long, comment="E long")
+    strategy.exit("E-X", from_entry="E-L", stop=close - 30, limit=close + 30, comment="E bracket")
+// F: long held from an earlier bar, exit placed with its sell stop through
+if cell(9, 0, 0)
+    strategy.entry("F-L", strategy.long, comment="F long")
+if cell(9, 0, 30)
+    strategy.exit("F-X", from_entry="F-L", stop=close + 3, comment="F stop through")
+// G: short held from an earlier bar, exit placed with its buy stop through
+if cell(9, 4, 0)
+    strategy.entry("G-S", strategy.short, comment="G short")
+if cell(9, 4, 30)
+    strategy.exit("G-X", from_entry="G-S", stop=close - 3, comment="G stop through")
+// H: long held, closed and reversed on one bar, the short's stop through
+if cell(9, 8, 0)
+    strategy.entry("H-L", strategy.long, comment="H long")
+if cell(9, 8, 30)
+    strategy.close("H-L", comment="H close")
+    strategy.entry("H-S", strategy.short, comment="H short")
+    strategy.exit("H-X", from_entry="H-S", stop=close - 3, comment="H stop through")
+// I: the exit placed before its entry
+if cell(9, 12, 0)
+    strategy.exit("I-X", from_entry="I-L", stop=close + 3, comment="I stop through")
+    strategy.entry("I-L", strategy.long, comment="I long")
+// J: a from_entry="" exit placed with a flat entry
+if cell(9, 16, 0)
+    strategy.entry("J-L", strategy.long, comment="J long")
+    strategy.exit("J-X", stop=close + 3, comment="J stop through")
+// K: both legs of the bracket through
+if cell(10, 0, 0)
+    strategy.entry("K-L", strategy.long, comment="K long")
+    strategy.exit("K-X", from_entry="K-L", stop=close + 3, limit=close - 3, comment="K both through")
+// M: a long reversed by an entry alone, the new short's stop through
+if cell(10, 4, 0)
+    strategy.entry("M-L", strategy.long, comment="M long")
+if cell(10, 4, 30)
+    strategy.entry("M-S", strategy.short, comment="M short")
+    strategy.exit("M-X", from_entry="M-S", stop=close - 3, comment="M stop through")
+// N: stop exactly at the close
+if cell(10, 8, 0)
+    strategy.entry("N-S", strategy.short, comment="N short")
+    strategy.exit("N-X", from_entry="N-S", stop=close, comment="N stop at close")
+
+cleanup = cell(8, 2, 0) or cell(8, 6, 0) or cell(8, 10, 0) or cell(8, 14, 0) or cell(8, 18, 0) or
+     cell(9, 2, 0) or cell(9, 6, 0) or cell(9, 10, 0) or cell(9, 14, 0) or cell(9, 18, 0) or
+     cell(10, 2, 0) or cell(10, 6, 0) or cell(10, 10, 0)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

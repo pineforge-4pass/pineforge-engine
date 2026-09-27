@@ -1,0 +1,36 @@
+//@version=6
+strategy("w4-f08s-plain-slip", overlay=true, process_orders_on_close=false, default_qty_type=strategy.fixed, default_qty_value=1, slippage=5)
+
+// Lane W4-ENG-POOC-SAMEPASS, family F08, sizing and slippage: the flat entry +
+// exit-through cells of w4-f08 under the declaration above.
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+
+if cell(8, 0, 0)
+    strategy.entry("A-S", strategy.short, comment="A short")
+    strategy.exit("A-X", from_entry="A-S", stop=close - 3, comment="A stop through")
+if cell(8, 4, 0)
+    strategy.entry("B-L", strategy.long, comment="B long")
+    strategy.exit("B-X", from_entry="B-L", stop=close + 3, comment="B stop through")
+if cell(8, 8, 0)
+    strategy.entry("C-L", strategy.long, comment="C long")
+    strategy.exit("C-X", from_entry="C-L", limit=close - 3, comment="C limit through")
+if cell(8, 12, 0)
+    strategy.entry("D-S", strategy.short, comment="D short")
+    strategy.exit("D-X", from_entry="D-S", limit=close + 3, comment="D limit through")
+if cell(8, 16, 0)
+    strategy.entry("E-L", strategy.long, comment="E long")
+    strategy.exit("E-X", from_entry="E-L", stop=close - 30, limit=close + 30, comment="E bracket")
+if cell(9, 0, 0)
+    strategy.entry("F-L", strategy.long, comment="F long")
+if cell(9, 0, 30)
+    strategy.exit("F-X", from_entry="F-L", stop=close + 3, comment="F stop through")
+if cell(9, 4, 0)
+    strategy.entry("G-S", strategy.short, comment="G short")
+if cell(9, 4, 30)
+    strategy.exit("G-X", from_entry="G-S", stop=close - 3, comment="G stop through")
+
+cleanup = cell(8, 2, 0) or cell(8, 6, 0) or cell(8, 10, 0) or cell(8, 14, 0) or cell(8, 18, 0) or
+     cell(9, 2, 0) or cell(9, 6, 0)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

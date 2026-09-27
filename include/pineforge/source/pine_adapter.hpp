@@ -1977,6 +1977,10 @@ private:
     void fill_pooc_close_entries(double raw_close, const NativeDecisionContext&,
                                  bool after_close);
     void flush_pooc_marketable_exit_fills(const Bar&, const NativeDecisionContext&);
+    // The close pass's exit fills at a close tick, and whether the calculation
+    // still has an order the close fills at any price.
+    void fill_pooc_close_exits(double raw_close, const NativeDecisionContext&);
+    bool pooc_close_market_pending(const NativeDecisionContext&) const;
     void record_market_review(admission::Checkpoint, int,
                               const std::vector<native_order::RequestHandle>&);
     void refresh_pending_sizing_after_margin(

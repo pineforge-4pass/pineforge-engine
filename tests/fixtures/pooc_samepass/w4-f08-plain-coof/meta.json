@@ -1,0 +1,16 @@
+{
+  "title": "w4-f08-plain-coof",
+  "slug": "w4-f08-plain-coof",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:33:24.225Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "70ffe593bc3e6d9f8690cd0128e9e2b3053cd8bbf0faeb826e46427fd5a9630d",
+  "tv_trades_sha256": "819ef43656390131fcbc96eb53de6bd2fd28afdfda139b8742fe1aa4a6e76824",
+  "tv_trades_rows": 30
+}

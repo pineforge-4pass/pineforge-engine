@@ -1,0 +1,57 @@
+//@version=6
+strategy("w4-f08b-plain-coof", overlay=true, process_orders_on_close=false, calc_on_order_fills=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W4-ENG-POOC-SAMEPASS, family F08, interactions. Each cell opens a
+// position on one bar and, on a later bar, places the orders named below;
+// every cell is flattened two hours after it starts.
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+
+// P: long held; its exit through the close, then a reversal entry
+if cell(8, 0, 0)
+    strategy.entry("P-L", strategy.long, comment="P long")
+if cell(8, 0, 30)
+    strategy.exit("P-XL", from_entry="P-L", stop=close + 3, comment="P long exit through")
+    strategy.entry("P-S", strategy.short, comment="P short")
+// Q: long held; strategy.close and its exit through the close
+if cell(8, 4, 0)
+    strategy.entry("Q-L", strategy.long, comment="Q long")
+if cell(8, 4, 30)
+    strategy.close("Q-L", comment="Q close")
+    strategy.exit("Q-XL", from_entry="Q-L", stop=close + 3, comment="Q long exit through")
+// R: long held; its exit through, a reversal entry and the short's exit through
+if cell(8, 8, 0)
+    strategy.entry("R-L", strategy.long, comment="R long")
+if cell(8, 8, 30)
+    strategy.exit("R-XL", from_entry="R-L", stop=close + 3, comment="R long exit through")
+    strategy.entry("R-S", strategy.short, comment="R short")
+    strategy.exit("R-XS", from_entry="R-S", stop=close - 3, comment="R short exit through")
+// S: long held; a from_entry="" exit through the close, then a reversal entry
+if cell(8, 12, 0)
+    strategy.entry("S-L", strategy.long, comment="S long")
+if cell(8, 12, 30)
+    strategy.exit("S-X", stop=close + 3, comment="S global exit through")
+    strategy.entry("S-S", strategy.short, comment="S short")
+// U: long held; the reversal entry first, then the long's exit through
+if cell(8, 16, 0)
+    strategy.entry("U-L", strategy.long, comment="U long")
+if cell(8, 16, 30)
+    strategy.entry("U-S", strategy.short, comment="U short")
+    strategy.exit("U-XL", from_entry="U-L", stop=close + 3, comment="U long exit through")
+// V: long held; its exit re-issued every bar, through on the third
+if cell(9, 0, 0)
+    strategy.entry("V-L", strategy.long, comment="V long")
+if cell(9, 0, 15) or cell(9, 0, 30)
+    strategy.exit("V-XL", from_entry="V-L", stop=close - 30, comment="V long exit")
+if cell(9, 0, 45)
+    strategy.exit("V-XL", from_entry="V-L", stop=close + 3, comment="V long exit through")
+// W: flat; an entry and its exit through, then a second exit id for the same entry
+if cell(9, 4, 0)
+    strategy.entry("W-L", strategy.long, comment="W long")
+    strategy.exit("W-X1", from_entry="W-L", limit=close + 30, comment="W target")
+    strategy.exit("W-X2", from_entry="W-L", stop=close + 3, comment="W stop through")
+
+cleanup = cell(8, 2, 0) or cell(8, 6, 0) or cell(8, 10, 0) or cell(8, 14, 0) or cell(8, 18, 0) or
+     cell(9, 2, 0) or cell(9, 6, 0)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

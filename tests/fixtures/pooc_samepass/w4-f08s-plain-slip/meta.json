@@ -1,0 +1,16 @@
+{
+  "title": "w4-f08s-plain-slip",
+  "slug": "w4-f08s-plain-slip",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:39:30.367Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "660046d946b35711b31af4185bb80399ab14e406ca666dcd09298045dc24656b",
+  "tv_trades_sha256": "659c3827964ee03901b3b62f6254ea1bbd392b80def51e61f713b9c144f18b49",
+  "tv_trades_rows": 14
+}

@@ -1,0 +1,60 @@
+//@version=6
+strategy("w4-f08t-pooc", overlay=true, process_orders_on_close=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane W4-ENG-POOC-SAMEPASS, family F08, half-cent closes (NYSE:F 15m,
+// 2025-07-02). Every exit level sits 0.002 from a close printed at half a
+// cent, between the raw close and one of its ticks, so the bar that fills
+// it says which close the process_orders_on_close pass compares. Every
+// cell is flattened on the next bar.
+cell(h, m) => time == timestamp("UTC", 2025, 7, 2, h, m)
+
+// L1 13:45 close 11.445: flat long, sell stop 11.447
+if cell(13, 45)
+    strategy.entry("L1", strategy.long, comment="L1 long")
+    strategy.exit("L1-X", from_entry="L1", stop=close + 0.002, comment="L1 stop")
+// L2 14:15 close 11.465: flat long, sell limit 11.467
+if cell(14, 15)
+    strategy.entry("L2", strategy.long, comment="L2 long")
+    strategy.exit("L2-X", from_entry="L2", limit=close + 0.002, comment="L2 limit")
+// S1 14:45 close 11.505: flat short, buy stop 11.507
+if cell(14, 45)
+    strategy.entry("S1", strategy.short, comment="S1 short")
+    strategy.exit("S1-X", from_entry="S1", stop=close + 0.002, comment="S1 stop")
+// S2 15:15 close 11.655: flat short, buy limit 11.657
+if cell(15, 15)
+    strategy.entry("S2", strategy.short, comment="S2 short")
+    strategy.exit("S2-X", from_entry="S2", limit=close + 0.002, comment="S2 limit")
+// L3 16:15 close 11.655: flat long, sell stop 11.653
+if cell(16, 15)
+    strategy.entry("L3", strategy.long, comment="L3 long")
+    strategy.exit("L3-X", from_entry="L3", stop=close - 0.002, comment="L3 stop")
+// S3 16:45 close 11.655: flat short, buy stop 11.653
+if cell(16, 45)
+    strategy.entry("S3", strategy.short, comment="S3 short")
+    strategy.exit("S3-X", from_entry="S3", stop=close - 0.002, comment="S3 stop")
+// H1 long opened 17:15; 17:30 close 11.655: sell stop 11.657
+if cell(17, 15)
+    strategy.entry("H1", strategy.long, comment="H1 long")
+if cell(17, 30)
+    strategy.exit("H1-X", from_entry="H1", stop=close + 0.002, comment="H1 stop")
+// H2 short opened 18:00; 18:15 close 11.705: buy stop 11.707
+if cell(18, 0)
+    strategy.entry("H2", strategy.short, comment="H2 short")
+if cell(18, 15)
+    strategy.exit("H2-X", from_entry="H2", stop=close + 0.002, comment="H2 stop")
+// H3 short opened 18:30; 18:45 close 11.735: buy limit 11.737
+if cell(18, 30)
+    strategy.entry("H3", strategy.short, comment="H3 short")
+if cell(18, 45)
+    strategy.exit("H3-X", from_entry="H3", limit=close + 0.002, comment="H3 limit")
+// H4 long opened 19:00; 19:15 close 11.745: sell limit 11.747
+if cell(19, 0)
+    strategy.entry("H4", strategy.long, comment="H4 long")
+if cell(19, 15)
+    strategy.exit("H4-X", from_entry="H4", limit=close + 0.002, comment="H4 limit")
+
+cleanup = cell(14, 0) or cell(14, 30) or cell(15, 0) or cell(15, 30) or cell(16, 30) or
+     cell(17, 0) or cell(17, 45) or cell(18, 30) or cell(19, 0) or cell(19, 30)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

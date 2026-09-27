@@ -1,0 +1,16 @@
+{
+  "title": "w4-f08s-pooc-slip",
+  "slug": "w4-f08s-pooc-slip",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:39:28.808Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "0ea137a4230d6a239e5dfffc386397d549a71faf9811d7af0b28973cb4cda472",
+  "tv_trades_sha256": "168c32a9b1bf5a3b2bfc795de14b9962e59fdbfb4d0dae04d71a701eaa09b5b1",
+  "tv_trades_rows": 14
+}
