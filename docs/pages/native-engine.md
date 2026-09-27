@@ -218,9 +218,12 @@ Optional, absent unless set:
   `initial_margin_fraction` (setting both is `MarginModelConflict`). Its
   presence is what enables the model at all. See *Margin and liquidation*
   below.
-- `subscriptions`: declared higher-timeframe series of the run's own symbol.
-  Empty is the whole default surface; see "Higher-timeframe series for native
-  hosts" below.
+- `subscriptions`: declared higher-timeframe series of the run's own symbol,
+  or series reading another instrument's installed feed. Empty is the whole
+  default surface; see "Higher-timeframe series for native hosts" below.
+- `instrument_feeds`: other instruments' own bars, each with its own close,
+  keyed by (instrument, timeframe). Empty is the whole default surface; see
+  "Instrument feeds: another symbol's bars" below.
 
 `validate_native_run_spec` / `normalize_native_run_spec` report the first
 error field. `configure_native` copies a candidate, normalizes it, then stages
@@ -2681,8 +2684,10 @@ ones.
 
 **Limits.** A series finer than the input is refused at configure, not
 emulated, unless it is built from an auxiliary finer feed the host declares
-("The auxiliary finer feed" below). Only the run's own symbol is addressable;
-there is no auxiliary-symbol feed and no chart-slice mapping.
+("The auxiliary finer feed" below). Another symbol is addressable as data: a
+series reads another instrument's own bars from a feed the host installs
+("Instrument feeds: another symbol's bars" below), merged by interval and
+aggregated by nothing. There is no chart-slice mapping.
 
 ### The auxiliary finer feed
 
@@ -2880,6 +2885,121 @@ plain sites it declares as subscriptions ("The Pine adapter on subscriptions"
 above), and the kernel's step is then the only step. A native host therefore
 cannot reach any of those rules, and none of them can change a subscription's
 buckets.
+
+### Instrument feeds: another symbol's bars
+
+A host whose chart is one instrument may read another's bars: a dollar index
+beside a stock, a yield beside a future. It installs the other instrument's own
+bars as data and names, per series, which instrument the series reads:
+
+```cpp
+NativeInstrumentFeed dxy;
+dxy.instrument = "TVC:DXY";   // an opaque key, compared byte for byte
+dxy.tf = "15";                // part of the key; it pairs with nothing
+dxy.bars = dxy_bars;          // strictly increasing opens
+dxy.close_ms = dxy_closes;    // each bar's own close
+spec.instrument_feeds.push_back(dxy);
+
+NativeTimeframeSubscription series;
+series.tf = "15";
+series.source = NativeSeriesSource::InstrumentFeed;
+series.instrument = "TVC:DXY";
+spec.subscriptions.push_back(series);
+```
+
+`instrument_feeds` is empty by default and `instrument` is empty on every other
+series; the run-spec digest folds the feeds only when a host installed one, so
+every spec that uses neither keeps the digest it had. A feed drives nothing by
+itself -- no matching point, no calculation, no script bar -- and **the kernel
+guesses no calendar for the other instrument**: a bar opens at its timestamp and
+closes at `close_ms[i]`, as the feed says (a 240-minute bar its session clips at
+13:26Z closes at 13:26Z). A feed may carry named `columns`, one value per bar (a
+footprint delta); the kernel validates and digests them and reads nothing in
+them.
+
+**Delivery is by interval, and by nothing else.** On each accepted input, every
+bar of the feed not yet handed to the series that is visible at that input is
+handed over, in feed order, at the delivery point every series has (after
+`on_native_input`, before the input is aggregated, matched or calculated):
+
+- `lookahead = false`: bars whose `close_ms` is at or before the input's
+  `NativeInterval::last_traded_close_ms` -- the bars that have closed by the
+  time the input has;
+- `lookahead = true`: bars whose open is at or before the input's
+  `NativeInterval::open_ms` -- the bar in progress at the input's open
+  included, with the final values the feed gives it.
+
+The last bar handed over is the series' value (`native_series_bar()`), each
+delivery reaches `on_native_timeframe_bar`, and every bar is handed over exactly
+once, in order, so a host that counts deliveries knows each bar's feed index,
+and so its column values. Bars earlier than the first input ride on that first
+input (history); bars the feed carries past the last input's horizon are never
+handed over. `gaps` is the subscription contract's: `true` clears the series on
+every accepted input that hands it nothing. The callback's `interval` is the
+bar's own -- open and eligible open its timestamp, last traded close and next
+period open its `close_ms`, next input open the next feed bar's open -- and its
+completion is `Confirmed`. The input's interval is its calendar interval: on the
+tolerant raw-label ingress, whose inputs carry no duration, it is the interval
+the run's session, zone and input timeframe give the input's label.
+
+Two consequences, both pinned on synthetic bars by
+`tests/test_native_instrument_feed.cpp` in the shapes XSYM-DESIGN measured
+against TradingView: a daily bar of another instrument that closes after the
+chart's session close is seen one chart day late, and a weekday-only feed is
+carried over a 24x7 chart's weekend under `gaps = false` and reads empty there
+under `gaps = true`.
+
+**Validation.** At `configure_native`, and by the same functions at begin
+(`validate_native_instrument_feeds`, and `validate_native_timeframe_subscriptions`
+with the feeds as its fifth argument):
+
+| `NativeRunSpecError` | Cause |
+| --- | --- |
+| `EmptyRequiredString` | an empty instrument key, on a feed (`InstrumentFeedInstrument`) or on an InstrumentFeed series (`SubscriptionInstrument`) |
+| `InvalidInstrumentFeedTimeframe` | the feed's literal does not parse |
+| `DuplicateInstrumentFeed` | two feeds with one (instrument, timeframe) key; `"D"` and `"1D"` are one key |
+| `UnorderedInstrumentFeedBars` | opens that are not strictly increasing |
+| `InvalidInstrumentFeedBar` | a non-finite price, or a volume that is neither NaN nor finite and nonnegative; a zero or negative price is admitted, since the kernel trades nothing on the feed |
+| `InvalidInstrumentFeedClose` | `close_ms` of another length than the bars, a close at or before its bar's open, or one after the next bar's open |
+| `InvalidInstrumentFeedColumn` | an empty or repeated column name, or a column of another length than the bars |
+| `SubscriptionWithoutInstrumentFeed` | an InstrumentFeed series naming an (instrument, `tf`) no feed installs |
+| `InstrumentSubscriptionBars` | an InstrumentFeed series that declares `authoritative_bars` |
+| `InstrumentOnNonInstrumentSeries` | an instrument key on an Input or AuxiliaryFeed series |
+
+**Streams refuse them.** A feed is installed whole at begin and has no realtime
+ingress, so `stream_begin` refuses a spec that installs one ("native instrument
+feeds are not supported by streaming") and leaves the host Ready. C has no
+spelling for either field (the 1.0 C boundary table's "instrument feeds" row).
+
+**The Pine adapter on instrument feeds.** A generated `request.security` of
+another symbol registers its site with the symbol-key overload
+`register_security_eval(sec_id, symbol, tf, input_tf, lookahead_on, gaps_on,
+ignore_invalid_symbol)` (`PINEFORGE_HAS_SYMBOL_SECURITY_EVAL_V1`), and reads
+the bars its host was handed through `strategy_set_symbol_feed`,
+`strategy_set_symbol_feed_column` and `strategy_set_symbol_facts`
+(`pineforge.h`). The source host projects those feeds as the run's
+`instrument_feeds` and declares one InstrumentFeed series per site at the
+begin-time hook, after its same-symbol sites, which keep their own route. The
+kernel merges; the adapter runs the site's payload on every bar handed over, in
+the requested context: history offsets and TA state over the context's own
+bars, `bar_index` the context's, `time_close` the bar's own close, `syminfo.*`
+the symbol's facts (`syminfo.tickerid` is the string the script passed).
+`barmerge.gaps_on` reads na on a chart bar that received no new bar. A symbol
+whose facts say it is invalid reads na under `ignore_invalid_symbol` and fails
+the run closed without it; a registered symbol with no installed feed fails the
+run closed, naming the symbol and the timeframe; a chart aggregated from finer
+input is refused, since the merge is judged per chart bar. Recorded request
+series -- TradingView's own per-chart-bar values of `request.earnings`,
+`dividends`, `splits` and `financial`, installed by
+`strategy_set_recorded_series` -- are the adapter's alone:
+`recorded_series_value(key)` reads the value recorded for the chart bar's open
+time, na where the tape has no row, and a key nobody installed fails the read
+closed. `stream_begin` refuses a source host holding a symbol feed or a
+recorded series ("request.security symbol feeds and recorded request series
+support historical runs only"). `scripts/run_strategy.py` installs all of it
+from the probe's pinned requests manifest when `PINEFORGE_REQUESTS_ROOT` is set
+(workflow `docs/xsym-requests.md`, "The environment contract"), and records
+each feed's key, sha256 and bar count in the run provenance.
 
 ### Aggregating a coarser bar without declaring a series
 
@@ -3789,7 +3909,7 @@ hands the runtime a callback table and gets the same kernel back.
 43 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
 `CCallbackHost`, a `final NativeStrategyHost` that forwards each existing
 virtual to the table. No new virtual, no epoch bump, and nothing about the
-established C ABI moves: the 58 compiled-strategy runtime symbols and their
+established C ABI moves: the 62 compiled-strategy runtime symbols and their
 counts are untouched, and `scripts/check_c_abi_runtime.py` pins the new set as
 a second, disjoint inventory.
 
@@ -4183,6 +4303,7 @@ fails when this table cites a row once too few or too many.
 | folding any bytes into the broker-state hash (`hash_host_extension`'s `BrokerStateHashSink`) | A C++ override folds what it likes and may replace the default. `on_hash_extension` answers one 64-bit digest, which the kernel folds after its own bytes under a tag, so a C host's extended hash never equals a C++ host's own fold of the same state. | `C_V1_EXCLUSIONS["hash_sink"]` |
 | `declare_opened_lot_entry_bar_mask` outside `on_applied` | The C++ seam has no phase rule; the C spelling is legal inside `on_applied` alone and `PF_NATIVE_E_STATE` everywhere else. | `C_V1_EXCLUSIONS["entry_bar_mask_phase"]`; the refusals before and after a run are asserted in `tests/test_native_c_api.c` |
 | `NativeRunSpec::timeframe_undetected` | No C spec carries it and the base spec requires both timeframe literals, so a C run always names its timeframes. | `C_V1_EXCLUSIONS["timeframe_undetected"]` |
+| instrument feeds (`NativeRunSpec::instrument_feeds`, `NativeSeriesSource::InstrumentFeed`) | No lane. A C run spec installs no instrument feed and a C subscription row carries no instrument key, so a C host cannot read another instrument's bars through the kernel: `pf_native_series_source_e` leaves `InstrumentFeed` unnamed, and `pf_native_spec_error_e` / `pf_native_spec_field_e` name its refusals only so the translation stays exhaustive. `strategy_set_symbol_feed` and its three siblings in `pineforge.h` are the Pine source host's door (a bare host answers them `-1`), not a C host's. | `C_V1_EXCLUSIONS["instrument_feeds"]` |
 | run statistics through the inherited accessors (`net_profit()`, `open_profit()`, `open_trades_capital_held()`, `max_runup_percent()`, `max_drawdown_percent()`, `active_account_currency_fx()`, `max_contracts_held_all()` and its long / short siblings, `eventrades()`) | Live, C reads `strategy_current_equity`, `strategy_position_size` and `strategy_native_marked_equity_v1`. Everything else comes from a filled report's `pf_metrics_t`, whose drawdown and run-up are walked from the recorded curve; C has no maximum contracts held and no capital held. | `C_V1_EXCLUSIONS["inherited_statistics"]` |
 | the hook views' definitions (`NativeExecutionTermsFacts`, `NativePrecommitView`) and the cursors | The C++ views carry the request's definition, its allowance or scope, and the settlement readiness; the C views carry the intent and trigger tags. A C cursor carries the ordinal, the effective time, `t`, the interval index, the provenance and the phase, never the coordinate's interval instants or source price time, and event rows and the decision drop `t`. | `C_V1_EXCLUSIONS["hook_views"]` |
 | the command events' payloads | `pf_native_event_v1` flattens the event kinds into one tagged record with each kind's documented fields. It drops the definitions and the rejected or attempted requests, the command surface, the authority before and after, the remaining, allowance and pending projections, the cause and receipt ids, the attempted terms and the terms' resolved input, the requested delta, prior adjustment ids and `ReplacedEvent::kept_handle()`. | `C_V1_EXCLUSIONS["event_payloads"]` |
@@ -4292,8 +4413,9 @@ These are contract, not pending work.
   verdict, which runs once, on the physical attempt.
 - **A series finer than the input needs a declared feed.** Without
   `NativeRunSpec::auxiliary_feed` a subscription finer than `input_tf` is
-  refused at configure rather than emulated, and only the run's own symbol is
-  addressable: there is no auxiliary-symbol feed and no chart-slice mapping.
+  refused at configure rather than emulated. Another symbol is addressable
+  only through a feed the host installs (`NativeRunSpec::instrument_feeds`,
+  historical runs only); there is no chart-slice mapping.
 - **TradingView's `request.security` rules are not reachable from a bare
   host.** The lookahead merge latch, the calling-bar publication gates,
   Heikin-Ashi substitution, the range-start cut and `request.security_lower_tf`

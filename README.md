@@ -35,7 +35,7 @@ The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pinefo
 - **Open runtime.** The engine and native live runner are Apache-2.0. The separately distributed [PineForge compiler](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) uses PolyForm Noncommercial terms with additional personal-trading permission; commercial use requires a separate license. Public reference strategies, benchmarks and validation tooling are available in their respective repositories; the community-script test set is not redistributed.
 - **Fast.** In-process, no interpreter: median **15× faster than PyneCore** on 196 timed strategies (a median 603k bars/s per strategy with the bar magnifier on). Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
 - **Deterministic to the bit.** Two runs with the same inputs produce identical trade lists. Same on Linux and macOS.
-- **Yours to embed.** 109 `extern "C"` functions across two headers — 66 compiled-strategy declarations and 43 native-host declarations — append-only ABI. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
+- **Yours to embed.** 113 `extern "C"` functions across two headers — 70 compiled-strategy declarations and 43 native-host declarations — append-only ABI. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
 
 ---
 
@@ -436,9 +436,9 @@ API, the script ABI epoch and the pairing with codegen — is the
 [public contract](docs/pages/public-contract.md); what a 0.x user must act on
 is in [CHANGELOG.md](CHANGELOG.md).
 
-A built strategy `.so` exposes 66 compiled-strategy `PF_API` declarations
-(58 runtime implementations plus eight generated exports) plus 43 native-host
-declarations: 109 `PF_API` exports in total. `nm -gU` also shows libc++'s
+A built strategy `.so` exposes 70 compiled-strategy `PF_API` declarations
+(62 runtime implementations plus eight generated exports) plus 43 native-host
+declarations: 113 `PF_API` exports in total. `nm -gU` also shows libc++'s
 `std::piecewise_construct`; no project-internal C++ symbol is exported. The two
 inventories are pinned by `scripts/check_c_abi_runtime.py`:
 
@@ -457,6 +457,7 @@ inventories are pinned by `scripts/check_c_abi_runtime.py`:
 | `strategy_set_chart_timezone` / `strategy_set_syminfo_timezone` / `strategy_set_syminfo_session` | Chart and exchange time |
 | `strategy_set_syminfo_mintick` / `_pointvalue` / `_metadata` / `_type` / `_string` | Symbol tick size, point value, numeric metadata, instrument class, string members |
 | `strategy_set_native_security_feed` / `strategy_set_aux_security_feed` | Feed `request.security()` from a native higher-timeframe series / an auxiliary bar-aligned feed |
+| `strategy_set_symbol_feed` / `_feed_column` / `strategy_set_symbol_facts` / `strategy_set_recorded_series` | Another symbol's data for `request.security()` of that symbol: its own bars (each with its close) and named columns, its `syminfo.*` facts, and recorded request values per chart bar (each behind its own `PINEFORGE_HAS_…_V1` probe; historical runs only) |
 | `strategy_set_account_currency_fx_series` | Effective-time quote-to-account FX |
 | `strategy_get_last_error` | The latest runtime error |
 | `pf_version_get` / `pf_version_string` / `pf_abi_version` | Runtime version, version string, struct-layout version (`PF_ABI_VERSION == 4`) |

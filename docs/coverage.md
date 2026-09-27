@@ -42,7 +42,7 @@
 | `ta.`*                      | Broad runtime support                                                      | 59 official Pine v6 `ta.`* functions plus 8 official `ta.`* series variables backed by stateful runtime classes, and a free `pivot_point_levels(...)`. Stateful classes expose both `compute(...)` (advance state) and `recompute(...)` (re-run on the same bar without permanently advancing history).                                                             |
 | `math.`*                    | Narrow runtime backing                                                     | Runtime owns only deterministic `pine_random(...)` and rolling `math::Sum`; everything else is left to consumer-emitted code.                                                                                                                                                                                                                                       |
 | `str.`*                     | Narrow runtime backing                                                     | Runtime owns `pine_str_format`, `pine_str_format_time`, `pine_str_match`, `pine_str_split`, `pine_str_tostring`.                                                                                                                                                                                                                                                    |
-| `request.security()`        | Partial                                                                    | Runtime owns the security state machine, ratio / calendar aggregation, lookahead / gaps semantics, lower-TF emulation, and per-security diagnostics.                                                                                                                                                                                                                |
+| `request.security()`        | Partial                                                                    | Runtime owns the security state machine, ratio / calendar aggregation, lookahead / gaps semantics, lower-TF emulation, per-security diagnostics, and (lane XSYM-D) the merge of another symbol's installed bars; codegen still refuses another symbol until its lowering lands.                                                                                                                                                                                                                |
 | Bar magnifier               | Supported                                                                  | OHLC-path sampling with 6 distribution modes plus optional volume-weighted sample density.                                                                                                                                                                                                                                                                          |
 | Time / session / timezone   | Supported                                                                  | `pine_time` / `pine_time_close` with session filtering and a mutex-guarded `tz_util::ScopedTimezone`.                                                                                                                                                                                                                                                               |
 | Timeframe parsing           | Supported                                                                  | `tf_to_seconds`, `tf_ratio`, `tf_change`, `detect_timeframe`, calendar boundary detection, `TimeframeAggregator` (passthrough / ratio / calendar).                                                                                                                                                                                                                  |
@@ -60,7 +60,7 @@
 ## Public C ABI
 
 `<pineforge/pineforge.h>` is the **single canonical consumer header**. It has
-exactly 66 public `PF_API` declarations: 58 runtime implementations and eight
+exactly 70 public `PF_API` declarations: 62 runtime implementations and eight
 per-strategy generated exports. Every compiled PineForge strategy `.so` exports
 that public set. The historical 28-symbol module sentence was not a current
 module inventory; the grouped table below is a guide, not the count:
@@ -124,7 +124,7 @@ single `.hpp`):
 
 | Module             | Header                   | Source                                                                                                                                                                                                                                   | Pine-facing role                                                                                                                                              |
 | ------------------ | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Public C ABI       | `pineforge.h`            | `c_abi.cpp` (+ layout `static_assert`s)                                                                                                                                                                                                                       | 66 public `PF_API` declarations: 58 runtime implementations plus eight per-strategy generated exports. `strategy_configure_native_fx_curve_v1` stages the additive native FX curve. |
+| Public C ABI       | `pineforge.h`            | `c_abi.cpp` (+ layout `static_assert`s)                                                                                                                                                                                                                       | 70 public `PF_API` declarations: 62 runtime implementations plus eight per-strategy generated exports. `strategy_configure_native_fx_curve_v1` stages the additive native FX curve. |
 | Engine             | `engine.hpp`             | `engine_run.cpp`, `engine_stream.cpp`, `engine_execution.cpp`, `engine_orders.cpp`, `engine_path_resolve.cpp`, `engine_trade_accessors.cpp`, `engine_security.cpp`, `engine_lower_tf.cpp`, `engine_report.cpp`, `native_execution_consumer.cpp` | One-shot and continuous lifecycle, native request matching/settlement, orders, reports, inputs / syminfo, magnifier, TF aggregation, and `request.security` plumbing.                  |
 | Engine internals   | `engine_internal.hpp`    | (private cross-TU header)                                                                                                                                                                                                                | `pineforge::internal::`* types and helpers shared between engine `.cpp` partitions; not part of the public ABI.                                               |
 | Technical analysis | `ta.hpp`                 | `ta_moving_averages.cpp`, `ta_oscillators.cpp`, `ta_volatility_trend.cpp`, `ta_extremes_volume.cpp`, `ta_misc.cpp`                                                                                                                       | Official `ta.`* functions and series variables backed by stateful runtime classes with `compute` / `recompute`, plus `pivot_point_levels(...)` free function. |
@@ -551,7 +551,8 @@ backing.
 
 ## `request.security()`
 
-The runtime owns same-symbol security computation. Per-call state lives
+The runtime owns same-symbol security computation, and since lane XSYM-D
+the merge of another symbol's installed bars (below). Per-call state lives
 in `SecurityEvalState`:
 
 ```cpp
@@ -598,6 +599,21 @@ and requested timeframes are fixed intraday minute strings (no `D / W / M / S` s
 `ensure_supported_lower_tf_emulation_flags` rejects lower-TF emulation
 when `lookahead_on` or `gaps_on` is set — emulation is
 `lookahead_off / gaps_off` only.
+
+**Another symbol.** A site of another symbol registers with
+`register_security_eval(sec_id, symbol, requested_tf, input_tf, lookahead_on,
+gaps_on, ignore_invalid_symbol)` (`PINEFORGE_HAS_SYMBOL_SECURITY_EVAL_V1`) and
+reads that symbol's own bars, installed before the run through
+`strategy_set_symbol_feed` / `_feed_column` / `strategy_set_symbol_facts`. The
+kernel hands the site every bar of that feed that has closed by the chart
+bar's close (`lookahead_off`) or opened by its open (`lookahead_on`), in
+order, each with the close the feed gives it
+(`NativeRunSpec::instrument_feeds`); the source host runs the payload on each
+in the requested context -- its own history, `bar_index`, `time_close` and
+`syminfo.*` -- and fails the run closed, naming the symbol and the timeframe,
+when no feed is installed. Codegen still refuses a symbol that is not the
+chart's until its lowering onto this surface lands (lane XSYM-E); see
+@ref native_engine, "Instrument feeds: another symbol's bars".
 
 `request.security_lower_tf(...)` is supported for same-symbol lower
 timeframes that satisfy the same emulation constraints. It returns an
@@ -888,11 +904,12 @@ loudly via a generic `request.`* catch-all, so user code never silently
 falls through to broken codegen.
 
 - **Feasibility:**
-  - `request.financial / dividends / earnings / splits / currency_rate / economic`: *Feasible — needs aux data*. Would need a parallel data-ingestion path so the user can supply a CSV / Parquet of fundamentals, corporate actions, or macroeconomic series; the runtime would then look up the right slice by `bar.timestamp`.
+  - `request.financial / dividends / earnings / splits`: *Feasible — the runtime half exists*. The source host keeps recorded request series (`strategy_set_recorded_series`, lane XSYM-D): a request key maps each chart bar's open time to the value TradingView returned on it, recorded under the call's own `gaps` and `lookahead`, and `recorded_series_value(key)` reads it per chart bar, na where the tape has no row. Recording per chart bar, rather than re-deriving TradingView's report-time and fiscal-period rules from an event list, keeps the value exact by construction. What is missing is codegen's lowering onto the store and the tapes themselves, which the campaign pins per probe (`scripts/run_strategy.py` installs them from `PINEFORGE_REQUESTS_ROOT`).
+  - `request.currency_rate / economic`: *Feasible — needs aux data*. Would need the same kind of pinned series, which no lane records yet.
   - `request.seed`: *Out of scope structurally*. TradingView seeds are user-published time series hosted on TV's infrastructure; PineForge has no equivalent registry.
   - `request.quandl`: *Out of scope by design*. Deprecated upstream; not worth implementing.
-- **Future story:** Fundamentals and economic indicators would land as a generic "auxiliary timeline" feature: pass `aux_data={"earnings": df, "us_gdp": df}` to the runner, exposed to Pine via `request.financial` / `request.economic`-shaped accessors that read from the aux table.
-- **Why not done yet:** Most strategy logic in our test corpus relies on the chart symbol's bars + indicators. Fundamentals- and macro-driven strategies are a meaningful but smaller user segment; we have not built the aux-data ingestion contract.
+- **Future story:** codegen lowers `request.earnings` / `dividends` / `splits` / `financial` onto the recorded series by their request key (`<fn>|<symbol>|<field-or-id>|<period-or->|gaps_<on|off>|lookahead_<on|off>`), and a request with nothing recorded refuses on first read.
+- **Why not done yet:** the engine store landed first (lane XSYM-D); the codegen lowering is lane XSYM-E.
 
 #### `barmerge.lookahead_on` for lower-TF emulation
 

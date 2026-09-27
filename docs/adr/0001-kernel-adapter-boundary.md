@@ -139,8 +139,9 @@ summary of it.
   `native_run_spec.hpp:310`), the report policy (`NativeReportPolicy`
   `native_run_spec.hpp:61`), calculation timing (`NativeCalculationTrigger`
   `native_run_spec.hpp:94`) and the open-bar view, declared higher-timeframe series
-  (`NativeTimeframeSubscription` `native_run_spec.hpp:486`) and the auxiliary finer feed
-  (`NativeAuxiliaryFeed` `native_run_spec.hpp:515`). `initial_margin_fraction`
+  (`NativeTimeframeSubscription` `native_run_spec.hpp:486`), the auxiliary finer feed
+  (`NativeAuxiliaryFeed` `native_run_spec.hpp:515`) and other instruments' feeds
+  (`NativeInstrumentFeed`, lane XSYM-D). `initial_margin_fraction`
   (`native_run_spec.hpp:598`) remains the one-scalar admission-only spelling and is mutually
   exclusive with `margin`. Percent and cash sizing are a *request* value, not a spec one
   (`Sized` `native_order.hpp:164`). What the spec still owns none of is source strategy policy:
@@ -154,7 +155,9 @@ summary of it.
   `examples/native/native_market_strategy.cpp` for a host that drives both a batch and a stream.
 - **Data / HTF.** The magnifier (`magnifier.hpp`) reconstructs intrabar fills.
   `request.security`-style series **are** reachable from a bare host, as declared series of the
-  run's own symbol: `NativeRunSpec::subscriptions`, or `declare_timeframe_subscriptions`
+  run's own symbol, or of another instrument whose own bars the host installs as data
+  (`NativeRunSpec::instrument_feeds` + `NativeSeriesSource::InstrumentFeed`, lane XSYM-D):
+  `NativeRunSpec::subscriptions`, or `declare_timeframe_subscriptions`
   (`native_host.hpp:1136`) from inside `on_native_run_begin`, with
   `on_native_timeframe_bar` (`native_host.hpp:885`) and `native_series_bar`
   (`native_host.hpp:1119`) reading them back, and `NativeAuxiliaryFeed` +
@@ -317,6 +320,14 @@ kernel and own these quirks, each at its site:
   print it fired at, as TradingView's market fills do, where a stop or limit crossed at its own
   off-grid level keeps its directional tick (`source_margin_fill_price`;
   `tests/fixtures/half_tick_rounding`, R5 lane PAR-MARGIN-2).
+- **Another symbol's request.security (lane XSYM-D).** The kernel merges another instrument's
+  installed feed by interval (the rule-2 row "Wave XSYM-D" below); the adapter owns the Pine
+  side: the symbol-key `register_security_eval` overload, the barmerge flags mapped onto the
+  instrument series, the payload run on every bar handed over in the requested context
+  (`bar_index`, `time_close` and `syminfo.*` the context's), `ignore_invalid_symbol`, the
+  fail-closed refusal of a site whose feed is missing, and the recorded request series
+  (TradingView's per-chart-bar fundamentals) no kernel decision reads
+  (`src/source/pine_security_eval.cpp`).
 - **Calculation timing.** The cadence itself is the kernel's: a `calc_on_order_fills` strategy
   projects `NativeCalculationTrigger::BarCloseAndFills` with TradingView's guard literal as
   `max_recalculations_per_point`. What stays are the specifics COOF adds on top —
@@ -405,7 +416,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   (`float_band_eq` `ta_compare_band.hpp:38`), the TV-named fields of the frozen
   `pf_pending_order_v1_t` mirror, and the lot-flag pair above.
 - **The C API trades.** Two disjoint runtime inventories, both pinned.
-  `src/c_abi.cpp` implements the **58** codegen-facing runtime `PF_API` symbols that
+  `src/c_abi.cpp` implements the **62** codegen-facing runtime `PF_API` symbols that
   `scripts/check_c_abi_runtime.py` pins by name, and `src/native_c_host.cpp` implements the
   **43** additive symbols of `<pineforge/native_c_api.h>`. A C host creates a host from a
   callback table (`strategy_native_host_create_v1` `native_c_api.h:2658`), runs a batch
@@ -892,6 +903,12 @@ no new kernel policy.
 |---|---|---|---|
 | One civil-date helper: `native_calendar::native_civil_date` and `native_civil_days` (`include/pineforge/native_calendar.hpp`) | Proleptic-Gregorian day arithmetic (Hinnant's `civil_from_days` / `days_from_civil`) in integers. The calendar, the time-of-day fields, the timeframe helpers, the report's month keys and the Pine adapter's chart-day key read it, where each kept its own copy. | A pure function of its arguments: a calendar has no venue variant and nothing to choose. | `tests/test_chart_day_key_arithmetic.cpp` and `tests/test_utc_month_key_arithmetic.cpp` against `gmtime_r`; `tests/test_native_calendar_hash_witness.cpp` unmoved |
 | The aggregation predicate: `native_calendar::pairing_aggregates` and `NativeStrategyHost::native_aggregates_input_bars()` (`include/pineforge/native_host.hpp`) | Whether the pairing the kernel resolved for a run's input and script timeframes makes its script bars buckets gathered from the input (a same-unit or fixed multiple, a fixed or calendar input under a calendar script bar) rather than the input bars themselves. | A query of the pairing the run already resolved: it reads the spec and decides nothing. The Pine adapter's copy read the two literals and parted from the kernel on one-bucket and monthly pairings. | `tests/test_aggregates_input_bars_literals.cpp` |
+
+### Wave XSYM-D: rule 2 ruling
+
+| Kernel capability | Generic mechanism | Why no platform knob is added | Executed witness |
+|---|---|---|---|
+| Instrument feeds: `NativeInstrumentFeed` in `NativeRunSpec::instrument_feeds`, read by a `NativeSeriesSource::InstrumentFeed` series keyed by (instrument, timeframe) | (a) Another instrument's own bars are data: each carries its own open and close (`close_ms`), and on each accepted input the series is handed, in feed order, every bar not yet handed over that has closed by the input's `NativeInterval::last_traded_close_ms` (lookahead off) or opened by its `open_ms` (lookahead on); `gaps` is the subscription contract's. A second venue or platform is driven by changing the feed's data alone -- its bars and their closes -- and the kernel guesses no calendar for the instrument (the chart side reads the run's own calendar interval of the input, which a raw-label host's zero-length partition does not carry, so it is resolved from the label) | (b) None: `lookahead` and `gaps` are already the subscription's delivery rules, and the merge reads only the bars' own intervals against the input's, so any "which merge" switch would restate what the installed data already decides. Opt-in (rule 3): with no feed installed the spec digest, every delivery and every run are what they were. What stays out of the kernel is TradingView's: the barmerge mapping, the context starting at the range start (the installed feed's own first bar), symbol canonicalization, `syminfo.*` in the requested context, `ignore_invalid_symbol` and the recorded fundamentals -- the adapter's, codegen's or the requests manifest's. Calibration: XSYM-DESIGN (report section 3.3) predicted all 203 witness bars from the dumps alone with exactly this rule (NYSE:F 15 <- TVC:DXY 15, 130/130; BINANCE:BTCUSDT 1D <- TVC:DXY 1D, 31/31; NYSE:F 1D <- TVC:US10Y 1D, one day late, 21/21; NASDAQ:AAPL 1D <- TVC:VIX 240 with lookahead on and `[1]`, 21/21), and lane XSYM-D reproduced the first and last of those witnesses bar for bar through the adapter (130/130, 21/21; synthetic tapes of TradingView, cited by slug, never in the repository) | `tests/test_native_instrument_feed.cpp` (kernel-only, synthetic bars: a foreign session, a foreign daily close after the chart's, the weekend under both `gaps`, a finer feed under a daily chart with lookahead and `[1]`, history before the first input, the context start, the raw-label partition, every refusal, the stream refusal, digests and continuation), `tests/test_native_instrument_feed_twin.cpp` (the same cases through the Pine adapter, field for field) |
 
 ## Boundary rules (for contributors)
 
