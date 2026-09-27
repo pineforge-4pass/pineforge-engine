@@ -23,8 +23,8 @@
  *   P1  close(qty) closes lot 1 whole, re-add         adapter = kernel = TV
  *   P2  close(qty) inside a lot, re-add               adapter = kernel = TV
  *   P3  close one id of two, third id                 adapter = kernel = TV
- *   P4  resting limit entry, then a market add        adapter != TV = kernel
- *   P4b the resting limit fills after the market add  adapter != TV != kernel
+ *   P4  resting limit entry, then a market add        adapter = kernel = TV
+ *   P4b the resting limit fills after the market add  adapter = TV != kernel
  *   P6  three market entries on one flat bar          adapter != TV = kernel
  *   P8  exit(qty) from B drains lot A (FIFO), third   adapter != TV = kernel
  *   P9  exit(qty) from A drains lot A, third id       adapter = kernel = TV
@@ -34,6 +34,11 @@
  * strategy.exit(from_entry) closes under FIFO with two lots open, which the
  * tape's scenario exposed (TradingView closes B's 100, the adapter closed the
  * book until R5 lane H-THIN reserved the entry's own quantity).
+ *
+ * P4, P4b and D1 moved to TradingView with lane W8A-SIGSTATE-1's rule R-B: a
+ * pending LIMIT entry no longer counts against the cap at a later call, and a
+ * LIMIT entry the cap admitted fills over it (tests/fixtures/
+ * pyramiding_open_order); before it the adapter refused L3 and M.
  */
 
 #include <pineforge/bar.hpp>

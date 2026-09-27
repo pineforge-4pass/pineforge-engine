@@ -93,6 +93,15 @@ bool pure_stop_entry_marketable_at(const PlacementSnapshot& snapshot, double ope
                             : open <= snapshot.exit_levels.stop;
 }
 
+// An order resting at a LIMIT level alone (no stop, no trail).
+bool pure_limit_entry(const PlacementSnapshot& snapshot) noexcept {
+    return finite_positive(snapshot.exit_levels.limit)
+        && !finite_positive(snapshot.exit_levels.stop)
+        && !finite_positive(snapshot.exit_levels.trail_points)
+        && !finite_positive(snapshot.exit_levels.trail_price)
+        && !finite_positive(snapshot.exit_levels.trail_offset);
+}
+
 double next_source_path_waypoint(const Bar& bar, NativePathPhase phase,
                                  double current, bool high_first,
                                  double tick = 0.0, int slippage = 0) noexcept {
@@ -6390,9 +6399,13 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         for (const auto& handle : live_handles_) {
             const auto placement = placement_.find(handle.incarnation);
             // ab9714be pine_strategy_commands.cpp:446-464: remove_same_id_pending_orders excludes replaced id before pyramiding check
+            // TradingView counts a pending same-side MARKET entry against the
+            // cap and never a pending LIMIT entry (lane W8A-SIGSTATE-1 R-B,
+            // tests/fixtures/pyramiding_open_order).
             if (placement != placement_.end() && placement->second.opening
                 && placement->second.source_id != id
-                && placement->second.is_long == is_long) ++accepted_in_cycle;
+                && placement->second.is_long == is_long
+                && !pure_limit_entry(placement->second)) ++accepted_in_cycle;
         }
         // Pine's cap is a monotone entry-incarnation count for the current
         // position cycle; a partial close does not free a pyramiding slot.
@@ -13831,8 +13844,12 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         }
     }
     const bool variable_default = config_.default_qty_type != static_cast<int>(QtyType::FIXED);
+    // A LIMIT entry the cap admitted when it was placed fills however many
+    // lots are open by then (lane W8A-SIGSTATE-1 R-B,
+    // tests/fixtures/pyramiding_open_order).
     if (variable_default && !source.frozen_market_instruction && config_.pyramiding > 0
         && view.inspected_closed_units == 0.0
+        && !(source.family == PineOrderFamily::Entry && pure_limit_entry(source))
         && detail::run_position(require_host()).lot_count
             >= static_cast<std::size_t>(config_.pyramiding)) {
         return NativePrecommitVerdict::Refuse;
