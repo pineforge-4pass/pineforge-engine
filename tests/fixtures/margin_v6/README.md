@@ -94,6 +94,14 @@ replays them from those rules on.
 | `w5-c2-pooc-flat-explicit-long` | 30 | `process_orders_on_close`, commission 0.1 % | at each cell a long of explicit quantity `strategy.equity / close`, short of margin by its entry fee: called at the next open, never at the fill | `0e0e1898bcad50f930f756f6e2d0db4ad50cd57d4deb4e441f27d1cb1a10c415` |
 | `w5-c2-pooc-flat-explicit-short` | 42 | the same | the short mirror: called at the next open, at the close's mark (M2) | `4312203f64510b1f0e8a50ea187517ccfa7e28ab237f6122f7b8e6b1ff357920` |
 
+## MK: a slipped market short's opening call is sized at its print
+
+| tape | trades | `strategy()` declares | TradingView | tv_trades.csv sha256 |
+|---|---:|---|---|---|
+| `w5-qp-mkt-once` | 5 | commission 0.05 %, slippage 1 | a 100% market short filled at 1611.06, one tick under the 1611.07 open: called 0.0028 @1611.08 there, then 0.4716 at the high | `26cbefc7811488a797ce9e867d05a3165693f16c27824f739041b91be4c5a58d` |
+| `w5-qp-mkt-reissue` | 5 | the same | the same with the exits re-issued every bar; the same file | `26cbefc7811488a797ce9e867d05a3165693f16c27824f739041b91be4c5a58d` |
+| `w5-mk-short-rev` | 61 | the same | fifteen longs reversed to 100% market shorts at the next open, each called at its open print first | `19207315711c628c035b0c13a3877c496edc0e8f0d699e299e0df3db2ca15dd7` |
+
 ## Bars
 
 `bars.inc` is the corpus 15m chart feed `scripts/derive_corpus_feeds.py`

@@ -1,0 +1,16 @@
+{
+  "title": "W5 QP market qty_percent after calls",
+  "slug": "w5-qp-mkt-once",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:23:54.244Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "6b9bf1ce786a8f972410dd996e034cbefc8a47820358aad63654d3116e28ed29",
+  "tv_trades_sha256": "26cbefc7811488a797ce9e867d05a3165693f16c27824f739041b91be4c5a58d",
+  "tv_trades_rows": 10
+}

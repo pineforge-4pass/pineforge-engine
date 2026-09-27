@@ -26,6 +26,8 @@
  *   C2  The close fill that opens or reverses into a commissioned
  *       process_orders_on_close position is not called there: TradingView
  *       calls it at the next open.
+ *   MK  A slipped MARKET short's opening call is sized at the print its fill
+ *       slipped from, and executed there with the call's own slippage.
  *
  * Each row replays one lab tv tape (tests/fixtures/margin_v6) through the
  * Pine adapter under the configuration the generated constructor declares for
@@ -181,6 +183,8 @@ enum class Probe {
     LongOpen,                      // w5-c2-pooc-long-open
     FlatExplicitLong, FlatExplicitShort, // w5-c2-pooc-flat-explicit-long / -short
     CarriedReverse,                // w5-m2-pooc-carried-reverse
+    QpMarketReissue, QpMarketOnce, // w5-qp-mkt-reissue / -once
+    MarketRevToShort,              // w5-mk-short-rev
 };
 
 // The fifteen signal closes of w5-m2-pooc-short-open, shared by its siblings.
@@ -230,6 +234,9 @@ public:
         case Probe::FlatExplicitLong: flat_explicit(t, true); break;
         case Probe::FlatExplicitShort: flat_explicit(t, false); break;
         case Probe::CarriedReverse: carried(t, 3); break;
+        case Probe::QpMarketReissue: qty_percent_exits(t, at(15, 19, 0), false); break;
+        case Probe::QpMarketOnce: qty_percent_exits(t, at(15, 19, 0), true); break;
+        case Probe::MarketRevToShort: cells(t, -15, "L", true, "S", "short", 45); break;
         }
     }
 
@@ -530,6 +537,9 @@ int main() {
          false, 42},
         {"C1+C2", "w5-m2-pooc-carried-reverse", Probe::CarriedReverse, config(true, 0.05, 1),
          false, 6},
+        {"MK", "w5-qp-mkt-once", Probe::QpMarketOnce, config(false, 0.05, 1), false, 5},
+        {"MK", "w5-qp-mkt-reissue", Probe::QpMarketReissue, config(false, 0.05, 1), false, 5},
+        {"MK", "w5-mk-short-rev", Probe::MarketRevToShort, config(false, 0.05, 1), false, 61},
     };
 
     for (const Case& c : cases) {

@@ -18704,7 +18704,20 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 // pine_fills.cpp:1441-1450 at ab9714be leaves this exact-funded
                 // terminal POOC residual intact until the next opening print.
                 // Genuine opening deficits retain the immediate checkpoint.
-                if (!defer_slipped_pooc_rounding) {
+                // TradingView sizes a slipped market short's opening call at
+                // the print its fill slipped from, and executes it there
+                // with the call's own slippage (lab tv tapes
+                // tests/fixtures/margin_v6 w5-qp-mkt-once and -reissue:
+                // 0.0028 @1611.08 off the 1611.07 open that a 1611.06 fill
+                // slipped from, none at the fill; lane W5-ENG-MARGIN-V6).
+                const bool slipped_market_short = opened_position.signed_units < 0.0
+                    && config_.slippage != 0 && !config_.process_orders_on_close
+                    && std::holds_alternative<native_order::Market>(event.request().trigger);
+                if (!defer_slipped_pooc_rounding && slipped_market_short) {
+                    (void)submit_margin_call_slice(source_bar_fill_tick(
+                        event.resolved_price + config_.slippage * staged_.syminfo.mintick,
+                        staged_.syminfo.mintick), context);
+                } else if (!defer_slipped_pooc_rounding) {
                     (void)submit_margin_call_slice(
                         event.resolved_price, context, true);
                 }

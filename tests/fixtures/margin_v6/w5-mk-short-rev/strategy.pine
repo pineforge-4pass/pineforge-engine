@@ -1,0 +1,97 @@
+//@version=6
+strategy("W5 MK market reversal to short (comm 0.05 slip 1)", overlay=true, commission_type=strategy.commission.percent, commission_value=0.05, slippage=1)
+
+// Lane W5-ENG-MARGIN-V6, mechanism MK. As w5-mk-short-open, but each short
+// reverses a 100%-of-equity LONG opened one bar earlier (at the same next-open
+// fill), so the short's size leaves the long's closing commission unfunded.
+
+if time == timestamp("UTC", 2025, 4, 2, 0, 0) - 15 * 60000
+    strategy.entry("L", strategy.long, comment="long")
+if time == timestamp("UTC", 2025, 4, 2, 0, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 2, 0, 0) + 45 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 2, 3, 0) - 15 * 60000
+    strategy.entry("L", strategy.long, comment="long")
+if time == timestamp("UTC", 2025, 4, 2, 3, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 2, 3, 0) + 45 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 2, 6, 0) - 15 * 60000
+    strategy.entry("L", strategy.long, comment="long")
+if time == timestamp("UTC", 2025, 4, 2, 6, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 2, 6, 0) + 45 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 2, 9, 0) - 15 * 60000
+    strategy.entry("L", strategy.long, comment="long")
+if time == timestamp("UTC", 2025, 4, 2, 9, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 2, 9, 0) + 45 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 2, 18, 0) - 15 * 60000
+    strategy.entry("L", strategy.long, comment="long")
+if time == timestamp("UTC", 2025, 4, 2, 18, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 2, 18, 0) + 45 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 3, 21, 0) - 15 * 60000
+    strategy.entry("L", strategy.long, comment="long")
+if time == timestamp("UTC", 2025, 4, 3, 21, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 3, 21, 0) + 45 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 4, 12, 0) - 15 * 60000
+    strategy.entry("L", strategy.long, comment="long")
+if time == timestamp("UTC", 2025, 4, 4, 12, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 4, 12, 0) + 45 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 3, 0) - 15 * 60000
+    strategy.entry("L", strategy.long, comment="long")
+if time == timestamp("UTC", 2025, 4, 5, 3, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 5, 3, 0) + 45 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 9, 0) - 15 * 60000
+    strategy.entry("L", strategy.long, comment="long")
+if time == timestamp("UTC", 2025, 4, 5, 9, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 5, 9, 0) + 45 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 12, 0) - 15 * 60000
+    strategy.entry("L", strategy.long, comment="long")
+if time == timestamp("UTC", 2025, 4, 5, 12, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 5, 12, 0) + 45 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 15, 0) - 15 * 60000
+    strategy.entry("L", strategy.long, comment="long")
+if time == timestamp("UTC", 2025, 4, 5, 15, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 5, 15, 0) + 45 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 5, 21, 0) - 15 * 60000
+    strategy.entry("L", strategy.long, comment="long")
+if time == timestamp("UTC", 2025, 4, 5, 21, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 5, 21, 0) + 45 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 6, 9, 0) - 15 * 60000
+    strategy.entry("L", strategy.long, comment="long")
+if time == timestamp("UTC", 2025, 4, 6, 9, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 6, 9, 0) + 45 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 6, 12, 0) - 15 * 60000
+    strategy.entry("L", strategy.long, comment="long")
+if time == timestamp("UTC", 2025, 4, 6, 12, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 6, 12, 0) + 45 * 60000
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 6, 15, 0) - 15 * 60000
+    strategy.entry("L", strategy.long, comment="long")
+if time == timestamp("UTC", 2025, 4, 6, 15, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 6, 15, 0) + 45 * 60000
+    strategy.close_all(comment="cleanup")

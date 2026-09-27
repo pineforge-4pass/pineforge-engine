@@ -1,0 +1,16 @@
+{
+  "title": "W5 MK market reversal to short (comm 0.05 slip 1)",
+  "slug": "w5-mk-short-rev",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T16:20:50.728Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "09191c2cfe3013083d5136d3f41005d79765c4abe27d2eb63ffcd35352e47af5",
+  "tv_trades_sha256": "19207315711c628c035b0c13a3877c496edc0e8f0d699e299e0df3db2ca15dd7",
+  "tv_trades_rows": 122
+}

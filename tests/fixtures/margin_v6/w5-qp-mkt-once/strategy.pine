@@ -1,0 +1,21 @@
+//@version=6
+strategy("W5 QP market qty_percent after calls", overlay=true, commission_type=strategy.commission.percent, commission_value=0.05, slippage=1)
+
+// Lane W5-ENG-MARGIN-V6, mechanism QP. A 100%-of-equity SHORT is margin-called
+// after its qty_percent exits are first placed (and, on the -reissue probes,
+// while they are placed again every bar). How many units does each exit close:
+// its percent of the entry, or of the smaller position the calls leave?
+var bool placed = false
+if time == timestamp("UTC", 2025, 4, 15, 19, 0)
+    placed := false
+entryBar = time == timestamp("UTC", 2025, 4, 15, 19, 0)
+if entryBar
+    strategy.entry("S", strategy.short, comment="short")
+if (strategy.position_size < 0 or entryBar) and not placed
+    placed := true
+    strategy.exit("TP1", from_entry="S", qty_percent=35, limit=1577, stop=1700, comment="TP1")
+    strategy.exit("TP2", from_entry="S", qty_percent=35, limit=1552, stop=1700, comment="TP2")
+    strategy.exit("TP3", from_entry="S", limit=1500, stop=1700, comment="TP3")
+if time == timestamp("UTC", 2025, 4, 16, 6, 0)
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")
