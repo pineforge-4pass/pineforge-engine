@@ -1397,16 +1397,16 @@ PF_API int strategy_set_native_security_feed(pf_strategy_t s,
                                              int n);
 #endif
 
-/* Another symbol's data for request.security (lane XSYM-D). Four opt-in
- * setters, each behind its own feature probe. They are the Pine source
- * host's doors: a strategy that registers a request site for another
- * symbol reads its bars, its facts and its recorded request values from
- * what these installed before the run; during a run each answers -1, as a
- * host with no source layer does. Every array is copied; a later call
- * replaces what an earlier one installed under the same key. Historical runs
- * only: stream_begin() fails closed while a feed or a series is installed. */
-
-/** Feature probe for #strategy_set_symbol_feed. */
+/** Feature probe for #strategy_set_symbol_feed: the first of four opt-in
+ *  setters of another symbol's data for request.security (lane XSYM-D),
+ *  each behind its own feature probe. They are the Pine source host's
+ *  doors: a strategy that registers a request site for another symbol reads
+ *  its bars, its facts and its recorded request values from what these
+ *  installed before the run; during a run each answers -1, as a host with
+ *  no source layer does. Every array is copied; a later call replaces what
+ *  an earlier one installed under the same key. Historical runs only:
+ *  stream_begin() fails closed while a symbol feed or a recorded series is
+ *  installed. */
 #define PINEFORGE_HAS_SYMBOL_FEED_V1 1
 /** Feature probe for #strategy_set_symbol_feed_column. */
 #define PINEFORGE_HAS_SYMBOL_FEED_COLUMN_V1 1
