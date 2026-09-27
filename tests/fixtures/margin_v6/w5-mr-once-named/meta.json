@@ -1,0 +1,16 @@
+{
+  "title": "W5 MR once declined reversal + named exit",
+  "slug": "w5-mr-once-named",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:54:33.780Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "fdae38389b90a89fffb8a351dc37809b71bdf3be6b0cc0c6087ca438f0dea1ad",
+  "tv_trades_sha256": "9866b6fcf414cdbeb1b84c8a6d2d1afcbf1c34f47833fa5d145a2e76a18da6d5",
+  "tv_trades_rows": 20
+}

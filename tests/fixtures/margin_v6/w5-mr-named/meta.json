@@ -1,0 +1,16 @@
+{
+  "title": "W5 MR declined reversal + named exit",
+  "slug": "w5-mr-named",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:53:35.659Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "d7135c474a3e6370d397864af1f8a50d0ee7ab771606585255e780b58ed2f49f",
+  "tv_trades_sha256": "97e76f2af327dba9dc262c4202329bec3fe0f2f52389f472d7ac89fe3c9368ef",
+  "tv_trades_rows": 20
+}

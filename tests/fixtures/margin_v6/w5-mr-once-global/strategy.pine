@@ -1,0 +1,40 @@
+//@version=6
+strategy("W5 MR once declined reversal + global exit", overlay=true)
+
+// Lane W5-ENG-MARGIN-V6, mechanism MR (once). As w5-mr-*, but the exit is
+// placed ONCE, on the bar that also places the reversal: after a declined
+// reversal at the next open, is the exit gone, dormant, or live again on the
+// following bars?
+avg = strategy.position_avg_price
+if time == timestamp("UTC", 2025, 4, 2, 13, 15)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 2, 13, 15) + 15 * 60000
+    strategy.entry("L", strategy.long, comment="reverse long")
+    strategy.exit("X", from_entry="", stop=avg + 3, limit=avg - 30, comment="X")
+if time == timestamp("UTC", 2025, 4, 2, 13, 15) + 120 * 60000
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 3, 0, 15)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 3, 0, 15) + 15 * 60000
+    strategy.entry("L", strategy.long, comment="reverse long")
+    strategy.exit("X", from_entry="", stop=avg + 3, limit=avg - 30, comment="X")
+if time == timestamp("UTC", 2025, 4, 3, 0, 15) + 120 * 60000
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 7, 17, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 7, 17, 0) + 15 * 60000
+    strategy.entry("L", strategy.long, comment="reverse long")
+    strategy.exit("X", from_entry="", stop=avg + 3, limit=avg - 30, comment="X")
+if time == timestamp("UTC", 2025, 4, 7, 17, 0) + 120 * 60000
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 28, 10, 15)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 28, 10, 15) + 15 * 60000
+    strategy.entry("L", strategy.long, comment="reverse long")
+    strategy.exit("X", from_entry="", stop=avg + 3, limit=avg - 30, comment="X")
+if time == timestamp("UTC", 2025, 4, 28, 10, 15) + 120 * 60000
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

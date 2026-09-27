@@ -1,0 +1,16 @@
+{
+  "title": "W5 MR revival named (v19dp1 control)",
+  "slug": "w5-rv-named-control",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:55:30.466Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-15",
+    "to": "2025-05-20"
+  },
+  "pine_sha256": "3b557d700b451f257df2322e3048803eeaaead52e506417fd5a86887eed028f2",
+  "tv_trades_sha256": "bdf3d470c8b75f9c53f1ffe0872ef90d2d016657fe74c9b3716172f28a9b68a2",
+  "tv_trades_rows": 4
+}

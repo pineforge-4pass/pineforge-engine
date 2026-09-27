@@ -1120,7 +1120,7 @@ bool PineExecutionAdapter::is_declined_market_reversal(
 
 bool PineExecutionAdapter::follows_same_bar_declined_reversal(
         const PlacementSnapshot& exit, const NativePrecommitView& view) const {
-    if (exit.from_entry.empty() || !exit.legs.target().incarnation) return false;
+    if (!exit.legs.target().incarnation) return false;
     const auto follows = [&](const native_order::CommandEvent& command) {
         const auto* rejected = std::get_if<native_order::MatchRejectedEvent>(&command);
         if (!rejected || rejected->cursor.point.interval_index != view.cursor.point.interval_index
@@ -1128,8 +1128,18 @@ bool PineExecutionAdapter::follows_same_bar_declined_reversal(
             return false;
         }
         const auto reversal = placement_.find(rejected->handle().incarnation);
+        // A from_entry="" exit names every entry, so it is always the held
+        // position's: the declined reversal holds it as it holds a named
+        // bracket of that side (lab tv tapes tests/fixtures/margin_v6 w5-mr-*,
+        // lane W5-ENG-MARGIN-V6) -- unless it was placed under the side the
+        // rejected entry would have opened, which another entry of the bar
+        // already reversed into (lab tv w3bf05-r1c, lane W3B-ENG-GRID).
         return reversal != placement_.end()
-            && bracket_belongs_to_reversal(exit, reversal->second);
+            && (exit.from_entry.empty()
+                    ? exit.projection_position_side
+                        != static_cast<std::int32_t>(reversal->second.is_long
+                            ? PositionSide::LONG : PositionSide::SHORT)
+                    : bracket_belongs_to_reversal(exit, reversal->second));
     };
     auto& host = require_host();
     // In place on a PineStrategyHost, as in observe_terminal_receipts.
@@ -1561,6 +1571,13 @@ void PineExecutionAdapter::suspend_brackets_for_reversal(
     // instead of repeating the walk for every retained exit row.
     std::unordered_map<SourceId, bool> cross_side_by_entry;
     const auto belongs = [&](const PlacementSnapshot& bracket) {
+        // A from_entry="" exit is the held position's, not one placed under
+        // the side the reversal would open (follows_same_bar_declined_reversal).
+        if (bracket.from_entry.empty()) {
+            return bracket.projection_position_side
+                != static_cast<std::int32_t>(reversal.is_long ? PositionSide::LONG
+                                                              : PositionSide::SHORT);
+        }
         if (bracket.projection_position_side == reversal.projection_position_side)
             return true;
         const auto cached = cross_side_by_entry.find(bracket.from_entry);
@@ -1581,7 +1598,7 @@ void PineExecutionAdapter::suspend_brackets_for_reversal(
         const bool exit = candidate.family == PineOrderFamily::ExitLimit
             || candidate.family == PineOrderFamily::ExitStop
             || candidate.family == PineOrderFamily::ExitTrail;
-        if (!exit || candidate.from_entry.empty() || candidate.legs.dormant()
+        if (!exit || candidate.legs.dormant()
             || !candidate.legs.target().incarnation
             || !belongs(candidate)) {
             continue;
@@ -1858,8 +1875,13 @@ void PineExecutionAdapter::revive_brackets_after_margin(
         const bool exit = candidate.family == PineOrderFamily::ExitLimit
             || candidate.family == PineOrderFamily::ExitStop
             || candidate.family == PineOrderFamily::ExitTrail;
-        if (!exit || !candidate.legs.dormant() || candidate.from_entry.empty()
-            || !(cohort_exposure_for(candidate.from_entry) > 0.0)
+        // A from_entry="" exit the declined reversal held is revived like a
+        // named bracket: it names every entry, so the whole held position is
+        // its exposure (lab tv tape tests/fixtures/margin_v6
+        // w5-rv-global-held, lane W5-ENG-MARGIN-V6).
+        const bool global = candidate.from_entry.empty();
+        if (!exit || !candidate.legs.dormant()
+            || (!global && !(cohort_exposure_for(candidate.from_entry) > 0.0))
             || !candidate.legs.target().incarnation) {
             continue;
         }

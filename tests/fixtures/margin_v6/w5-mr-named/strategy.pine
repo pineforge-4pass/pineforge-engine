@@ -1,0 +1,54 @@
+//@version=6
+strategy("W5 MR declined reversal + named exit", overlay=true)
+
+// Lane W5-ENG-MARGIN-V6, mechanism MR. A 100%-of-equity market SHORT is
+// open; on its fill bar's close the script reverses it (strategy.entry long,
+// default size) and sets an exit whose stop the next open is already through
+// (re-issued on every bar while short). On A, C, E and F the next open is above
+// that close, so the long's 100% opening cannot be funded; on B and D it is
+// below. What does TradingView execute at that open?
+avg = strategy.position_avg_price
+if time == timestamp("UTC", 2025, 4, 2, 13, 15)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 2, 13, 15) + 15 * 60000
+    strategy.entry("L", strategy.long, comment="reverse long")
+if time == timestamp("UTC", 2025, 4, 2, 13, 15) + 120 * 60000
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 3, 0, 15)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 3, 0, 15) + 15 * 60000
+    strategy.entry("L", strategy.long, comment="reverse long")
+if time == timestamp("UTC", 2025, 4, 3, 0, 15) + 120 * 60000
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 7, 0, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 7, 0, 0) + 15 * 60000
+    strategy.entry("L", strategy.long, comment="reverse long")
+if time == timestamp("UTC", 2025, 4, 7, 0, 0) + 120 * 60000
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 7, 17, 0)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 7, 17, 0) + 15 * 60000
+    strategy.entry("L", strategy.long, comment="reverse long")
+if time == timestamp("UTC", 2025, 4, 7, 17, 0) + 120 * 60000
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 8, 19, 30)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 8, 19, 30) + 15 * 60000
+    strategy.entry("L", strategy.long, comment="reverse long")
+if time == timestamp("UTC", 2025, 4, 8, 19, 30) + 120 * 60000
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")
+if time == timestamp("UTC", 2025, 4, 28, 10, 15)
+    strategy.entry("S", strategy.short, comment="short")
+if time == timestamp("UTC", 2025, 4, 28, 10, 15) + 15 * 60000
+    strategy.entry("L", strategy.long, comment="reverse long")
+if time == timestamp("UTC", 2025, 4, 28, 10, 15) + 120 * 60000
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")
+if strategy.position_size < 0
+    strategy.exit("X", from_entry="S", stop=avg + 3, limit=avg - 30, comment="X")

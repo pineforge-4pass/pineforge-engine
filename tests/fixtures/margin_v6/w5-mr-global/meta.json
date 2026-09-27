@@ -1,0 +1,16 @@
+{
+  "title": "W5 MR declined reversal + global exit",
+  "slug": "w5-mr-global",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:53:30.923Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "5bcf7d9540aff52a56e43fd7e68408df9ae96a5f3f0853a6a6210e809ec15c5b",
+  "tv_trades_sha256": "97e76f2af327dba9dc262c4202329bec3fe0f2f52389f472d7ac89fe3c9368ef",
+  "tv_trades_rows": 20
+}

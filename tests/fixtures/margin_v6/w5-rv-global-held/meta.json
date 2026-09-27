@@ -1,0 +1,16 @@
+{
+  "title": "W5 MR revival global placed held",
+  "slug": "w5-rv-global-held",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:55:37.521Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-15",
+    "to": "2025-05-20"
+  },
+  "pine_sha256": "6ebb7c7268f5d9f35675285f0c7d8abac942b1f238f837dc72ad3a44a9b0d782",
+  "tv_trades_sha256": "bdf3d470c8b75f9c53f1ffe0872ef90d2d016657fe74c9b3716172f28a9b68a2",
+  "tv_trades_rows": 4
+}
