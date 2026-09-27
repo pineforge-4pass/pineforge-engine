@@ -15,6 +15,10 @@ it by these rules:
   cover spills over every id's unbooked units in the order the entries filled.
 - A call whose id has no unbooked units places nothing and leaves its site's
   order as it was.
+- Every other fill that reduces the position books too: `strategy.close(id,
+  qty)` and a `strategy.exit` against the entry they name, a fill that names
+  none (a `strategy.order` sell, a margin call) against the oldest entries'
+  units.
 
 The adapter kept a per-id ledger, but it erased the first id's units whole and
 reserved the survivor's fill against the other ids instead of booking it, so
@@ -50,6 +54,17 @@ to be the engine's. It also reads the rules off TradingView's own rows.
 | `w3f02-x2-min-5call` | `process_orders_on_close`, pyramiding 200: twelve grid entries (L38 .. L49, 0.19 .. 0.22); at step 3 the loop closes L45 .. L49 and only the last call's order fills, sized for L49 (0.22) but booked against L45 (0.21); the 0.01 L45 cannot cover comes off L38, the oldest entry, and `close("L38")` at step 13 closes 0.18, not 0.19 | `ae92feca54a06eee2189a5de6de74d78600b38517c52088ccebb5c8994c2112c` |
 | `w3f02-x1-xlm-sequence` | an xlm grid bot's sequence on the same entries: later loops spill the rest of L38 away, and its close at step 13 is void | `393bd244059616417cfed9474ec7b9eebc7decbaee205ff5e97f0359f820a392` |
 | `w3bf02-a2-loop-reversed` | B 0.1, A 0.2, C 0.3, D 0.5; the loop closes D then C: the order is C's 0.3, booked against D, which keeps 0.2 for its sole close; C keeps its 0.3 | `fea32f41ef6596ae6e7e817d23aa26ab23ac9a607b665a68326090a114524fd4` |
+
+## The reductions that name another entry or none (the engine left them unbooked)
+
+| tape | TradingView | tv_trades.csv sha256 |
+|---|---|---|
+| `w3bf02-f1-order-reduce` | A 0.1, B 0.2, C 0.3, each close its own call site; at step 3 `strategy.order("trim", strategy.short, qty=0.1)`: the sell books A's units, and `close("A")` at step 5 is void (the engine closed 0.1) | `e8f75f9161d03df4b14852e72053a6248c5e9b6b252603906a73e36dbfc30cc3` |
+| `w3bf02-f3-close-explicit-qty` | the same entries; at step 3 `close("B", qty=0.1)` takes A's lot but books B's units: `close("B")` then closes 0.1 (the engine closed 0.2), `close("A")` 0.1 | `f77ab88fbe8c3852b43eb1969bce5c9e901895467b03398c755ad269cc999124` |
+
+The host's `strategy_order` takes no comment (nor does the generated call), so
+the engine books f1's `TRIM` exit unsigned; the test compares that row without
+its signal.
 
 ## The controls (the engine already booked them)
 

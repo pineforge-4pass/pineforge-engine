@@ -1,0 +1,16 @@
+{
+  "title": "W3B F02 f3 close(id, qty) books its quantity",
+  "slug": "w3bf02-f3-close-explicit-qty",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T18:02:35.358Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "5f8aaa7c010b9daa3362aa27a589080334c3db2ece24c64713d9415676068e0a",
+  "tv_trades_sha256": "f77ab88fbe8c3852b43eb1969bce5c9e901895467b03398c755ad269cc999124",
+  "tv_trades_rows": 8
+}

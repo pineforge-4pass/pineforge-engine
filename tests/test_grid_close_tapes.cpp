@@ -17,6 +17,10 @@
  *     entries filled.
  *   - A call whose id has no unbooked units places nothing and leaves its
  *     site's order as it was.
+ *   - Every other fill that reduces the position books too:
+ *     strategy.close(id, qty) and strategy.exit against the entry they name,
+ *     a fill that names none (a strategy.order sell, a margin call) against
+ *     the oldest entries' units.
  *
  * The adapter kept a per-id ledger, but it erased the first id's units whole
  * and reserved the survivor's fill against the other ids instead of booking
@@ -169,6 +173,8 @@ std::vector<Row> tape_trades(const std::string& tape, std::int64_t end_ms) {
 // One source command of a probe, on 2025-04-<day> at `step`.
 //   E  strategy.entry(id, long, qty) through the entry call site
 //   C  strategy.close(id) through call site `site`, with comment `comment`
+//   Q  strategy.close(id, qty) through call site `site`
+//   O  strategy.order(id, short, qty): a sell that names no entry
 //   A  strategy.close_all (strategy.close with an empty id)
 struct Event {
     unsigned day;
@@ -185,6 +191,10 @@ struct Probe {
     bool pooc;
     int pyramiding;
     std::vector<Event> events;
+    // A strategy.order's comment is its exit signal on the tape, but the
+    // generated call (and so this host's) passes none: the engine books that
+    // exit unsigned, and the row compares without it.
+    std::string unsigned_exit = {};
 };
 
 // The probes, as their generated TUs lower them (fixtures/.../strategy.pine).
@@ -207,6 +217,12 @@ public:
                 break;
             case 'C':
                 strategy_close(e.id, e.comment, kNaN, kNaN, false, e.site);
+                break;
+            case 'Q':
+                strategy_close(e.id, e.comment, e.qty, kNaN, false, e.site);
+                break;
+            case 'O':
+                strategy_order(e.id, false, e.qty, kNaN, kNaN, "", 0);
                 break;
             case 'A':
                 strategy_close("", e.comment, kNaN, kNaN, false);
@@ -378,6 +394,18 @@ std::vector<Probe> probes() {
          {1, 'E', "D", 0.300049}, {2, 'C', "C", 0}, {2, 'C', "D", 0}, {4, 'S', "B", 0},
          {6, 'S', "A", 0}, {8, 'S', "D", 0}}));
 
+    // w3bf02-f1 / -f3: A 0.1, B 0.2, C 0.3, each close its own call site.
+    out.push_back(Probe{"w3bf02-f1-order-reduce", true, 200,
+        {entry(8, 0, "A", 0.1, "BUY_A"), entry(8, 1, "B", 0.2, "BUY_B"),
+         entry(8, 2, "C", 0.3, "BUY_C"), Event{8, 3, 'O', "trim", 0.1, 0, "TRIM"},
+         close_at(8, 5, "A", 11, "SOLE_A"), close_at(8, 7, "B", 12, "SOLE_B"),
+         close_at(8, 9, "C", 13, "SOLE_C"), cleanup(8, 20)}, "TRIM"});
+    out.push_back(Probe{"w3bf02-f3-close-explicit-qty", true, 200,
+        {entry(8, 0, "A", 0.1, "BUY_A"), entry(8, 1, "B", 0.2, "BUY_B"),
+         entry(8, 2, "C", 0.3, "BUY_C"), Event{8, 3, 'Q', "B", 0.1, 21, "PART_B"},
+         close_at(8, 5, "B", 22, "SOLE_B"), close_at(8, 7, "A", 23, "SOLE_A"),
+         close_at(8, 9, "C", 24, "SOLE_C"), cleanup(8, 20)}});
+
     // w3f02-g2 .. g9 (lane W3-ENG-EXIT-ALLOC): the single-unit controls.
     out.push_back(cells("w3f02-g2-pooc-close-after-fifo-consumed", 5,
         {entry(0, hm(0, 0), "A", 1, "A"), entry(0, hm(1, 0), "B", 2, "B"),
@@ -432,8 +460,11 @@ int main() {
     std::map<std::string, std::vector<Row>> tapes;
     for (const Probe& probe : probes()) {
         std::printf("-- %s\n", probe.tape);
-        const std::vector<Row> tape = tape_trades(probe.tape, end_ms);
+        std::vector<Row> tape = tape_trades(probe.tape, end_ms);
         tapes[probe.tape] = tape;
+        for (Row& row : tape)
+            if (!probe.unsigned_exit.empty() && std::get<6>(row) == probe.unsigned_exit)
+                std::get<6>(row).clear();
         CHECK(!tape.empty());
         const Run lane = run(probe, end_ms);
         CHECK(lane.error.empty());
@@ -486,6 +517,17 @@ int main() {
         // e2: the ledger holds the entries' quantities on the lot grid.
         CHECK(closed_at(tapes["w3bf02-e2-offgrid-qty"], 4) == 1234);
         CHECK(closed_at(tapes["w3bf02-e2-offgrid-qty"], 6) == 0);
+        // f1: a strategy.order sell names no entry and books the oldest
+        // entry's units: A's close is void. f3: close("B", qty=0.1) books
+        // B's: close("B") then closes B's 0.1 left and close("A") A's 0.1.
+        const auto& f1 = tapes["w3bf02-f1-order-reduce"];
+        CHECK(closed_at(f1, 3) == 1000);
+        CHECK(closed_at(f1, 5) == 0);
+        CHECK(closed_at(f1, 7) == 2000);
+        const auto& f3 = tapes["w3bf02-f3-close-explicit-qty"];
+        CHECK(closed_at(f3, 3) == 1000);
+        CHECK(closed_at(f3, 5) == 1000);
+        CHECK(closed_at(f3, 7) == 1000);
     }
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);

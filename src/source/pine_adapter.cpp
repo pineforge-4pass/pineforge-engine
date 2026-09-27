@@ -7535,12 +7535,33 @@ void PineExecutionAdapter::flush_pending_closes() {
 void PineExecutionAdapter::observe_close_ledger(
         const native_order::ExecutionAppliedEvent& event,
         const PlacementSnapshot* snapshot) {
-    if (!snapshot || snapshot->close_batch_calls == 0) return;
-    // A close site's fill books against its first call's id, whichever id
-    // its last call sized the order for; what that id's ledger cannot cover
-    // spills over the oldest entries' (tapes w3f02-x1, -x2, w3bf02-a1, -a2,
-    // -b1).
-    book_close_ledger(snapshot->close_first_id, event.closed_units);
+    // The ledger only sizes the default FIFO close; under the ANY rule a
+    // close is bound to its id's own entries.
+    if (config_.close_entries_rule_any) return;
+    // A fill books against the entry it names -- a close site's first call's
+    // id, whichever id its last call sized the order for (tapes w3f02-x1,
+    // -x2, w3bf02-a1, -a2, -b1); strategy.close(id, qty) and strategy.exit's
+    // from_entry name theirs (w3bf02-f3, -f2) -- and what that id's ledger
+    // cannot cover spills over the oldest entries'. A fill that names none (a
+    // strategy.order sell, a margin call) takes the oldest entries' units
+    // (w3bf02-f1).
+    SourceId named{};
+    if (snapshot) {
+        switch (snapshot->family) {
+        case PineOrderFamily::Close:
+            named = snapshot->close_first_id.empty() ? snapshot->source_id
+                                                     : snapshot->close_first_id;
+            break;
+        case PineOrderFamily::ExitLimit:
+        case PineOrderFamily::ExitStop:
+        case PineOrderFamily::ExitTrail:
+            named = snapshot->from_entry;
+            break;
+        default:
+            break;
+        }
+    }
+    book_close_ledger(named, event.closed_units);
 }
 
 void PineExecutionAdapter::credit_close_ledger(const SourceId& id, double units) {

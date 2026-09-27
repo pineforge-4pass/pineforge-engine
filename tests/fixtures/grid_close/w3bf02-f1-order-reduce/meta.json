@@ -1,0 +1,16 @@
+{
+  "title": "W3B F02 f1 a strategy.order sell reduces the position",
+  "slug": "w3bf02-f1-order-reduce",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T18:02:27.385Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "05bed0d5cad8ebc5a537603be45534a8e4669e1ec301868f4d9007813ac48353",
+  "tv_trades_sha256": "e8f75f9161d03df4b14852e72053a6248c5e9b6b252603906a73e36dbfc30cc3",
+  "tv_trades_rows": 6
+}
