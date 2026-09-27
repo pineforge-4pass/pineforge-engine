@@ -258,6 +258,18 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.u(staged_.account_fx_per_quote.size());
     for (const auto rate : staged_.account_fx_per_quote) f.d(rate);
     f.b(staged_.quantity_grid.has_value()); if (staged_.quantity_grid) f.d(*staged_.quantity_grid);
+    // Lane XSYM-D: other symbols' feeds, folded only when installed. Their
+    // bars are the projected spec's instrument feeds, which the continuation
+    // digest folds, so the keys and sizes are what this fold adds.
+    if (!staged_.instrument_feeds.empty()) {
+        f.u(staged_.instrument_feeds.size());
+        for (const auto& feed : staged_.instrument_feeds) {
+            f.s(feed.instrument);
+            f.s(feed.tf);
+            f.u(feed.bars.size());
+            f.u(feed.columns.size());
+        }
+    }
     std::vector<std::string> input_keys;
     for (const auto& pair : staged_.inputs) input_keys.push_back(pair.first);
     std::sort(input_keys.begin(), input_keys.end()); f.u(input_keys.size());
@@ -782,6 +794,39 @@ void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const
                 f.i(held.next_input_ms);
                 f.b(held.calling_bar_complete);
             }
+        }
+    }
+    // Lane XSYM-D: the request sites of other symbols -- registration and
+    // per-run cursors -- and the request data the run was handed (the feeds'
+    // keys and sizes, the facts and the recorded series, through the digest
+    // the setters keep; the feeds' bars are the projected spec's instrument
+    // feeds, which the continuation digest folds). Under their own domain and
+    // only when present, so every run without them keeps the hash it had.
+    if (!foreign_security_sites_.empty() || !symbol_feeds_.empty()
+        || !symbol_facts_.empty() || !recorded_series_.empty()) {
+        f.s(kSourceSymbolDataDomain);
+        f.u(symbol_feeds_.size());
+        f.u(symbol_facts_.size());
+        f.u(recorded_series_.size());
+        f.u(symbol_data_digest_);
+        f.i(foreign_input_index_);
+        f.u(foreign_security_series_.size());
+        for (const int sec_id : foreign_security_series_) f.i(sec_id);
+        f.u(foreign_security_sites_.size());
+        for (const auto& [sec_id, site] : foreign_security_sites_) {
+            f.i(sec_id);
+            f.s(site.symbol);
+            f.s(site.requested_tf);
+            f.b(site.lookahead);
+            f.b(site.gaps);
+            f.b(site.ignore_invalid);
+            f.s(site.tf);
+            f.b(site.invalid);
+            f.i(site.subscription);
+            f.u(site.feed);
+            f.i(site.delivered);
+            f.i(site.close_ms);
+            f.i(site.last_input);
         }
     }
     adapter_.hash_state(f); scheduler_.hash_state(f);

@@ -157,6 +157,7 @@ StagedConfiguration source::PineStrategyHost::staged_configuration() const {
     staged.account_fx_effective_from_ms = account_currency_fx_timestamps_;
     staged.account_fx_per_quote = account_currency_fx_rates_;
     if (std::isfinite(qty_step_) && qty_step_ > 0.0) staged.quantity_grid = qty_step_;
+    staged.instrument_feeds = symbol_feeds_;
     return staged;
 }
 
@@ -177,6 +178,14 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     if (args.is_stream && native_security_feed_enabled()) {
         throw std::runtime_error(
             "native request.security feed supports historical runs only");
+    }
+    // Lane XSYM-D: another symbol's feeds and the recorded request series are
+    // installed whole before a run and have no realtime ingress, exactly as
+    // the native feed above.
+    if (args.is_stream && (!symbol_feeds_.empty() || !recorded_series_.empty())) {
+        throw std::runtime_error(
+            "request.security symbol feeds and recorded request series support historical "
+            "runs only");
     }
 
     if (!(args.n < 2 && !args.is_stream)) {
@@ -263,6 +272,11 @@ void source::PineStrategyHost::on_native_run_begin() {
     session_isfirstbar_ = false;
     session_islastbar_ = false;
     source_prepare_failed_ = false;
+    // Generated configure_security_evaluators() registers this run's foreign
+    // sites again inside run_begin; a run that configures none has none.
+    foreign_security_sites_.clear();
+    foreign_security_series_.clear();
+    foreign_input_index_ = -1;
     try {
         scheduler_.run_begin(*this);
     } catch (const std::exception& error) {
@@ -289,6 +303,7 @@ void source::PineStrategyHost::on_native_input(
     if (source_prepare_failed_) return;
     if (detail::run_phase(*this) == NativeRunPhase::Realtime)
         stream_warmup_mode_ = false;
+    foreign_input_index_ = context.input_index;
     scheduler_.input(bar, context, *this);
     // Aggregation can deliver leftover input after the last script callback.
     // Refresh the last recorded row (and the continuation snapshot) so the
@@ -308,6 +323,11 @@ void source::PineStrategyHost::on_native_tick(
 void source::PineStrategyHost::on_native_bar_open(
         const Bar& bar, const NativeDecisionContext& context) {
     if (source_prepare_failed_) return;
+    // A gaps_on foreign site the kernel handed nothing on this input reads
+    // na: cleared here, after the input's deliveries and before the bar's
+    // calc_on_order_fills checkpoint (PineScheduler::bar_open), so every
+    // calculation of the bar reads the cleared value.
+    if (!foreign_security_sites_.empty()) clear_gapped_foreign_security_sites();
     bar_magnifier_enabled_ = scheduler_.bar_magnifier_enabled();
     diag_magnifier_sub_bars_processed_ = bar_magnifier_enabled_
         ? static_cast<std::int64_t>(context.driver_statistics.sub_bars_processed) : 0;
@@ -613,6 +633,8 @@ void source::PineStrategyHost::set_pine_risk_max_position_size(double value) {
 }
 
 int source::PineStrategyHost::pine_bar_index() const {
+    // Inside a foreign site's payload, bar_index is the requested context's.
+    if (foreign_context_ != nullptr) return static_cast<int>(foreign_context_->delivered - 1);
     return source_bar_index_ + scheduler_.bar_index_offset();
 }
 
@@ -1157,11 +1179,60 @@ void source::PineStrategyHost::scheduler_prepare_security_sequence(
 }
 
 bool source::PineStrategyHost::security_sites_kernel_routed() const noexcept {
+    // A foreign site's InstrumentFeed series is always the kernel's; the
+    // same-symbol sites are routed exactly when the running spec names one of
+    // theirs.
     const NativeRunSpec* spec = detail::run_spec(*this);
-    return spec != nullptr && !spec->subscriptions.empty();
+    if (spec == nullptr) return false;
+    for (const auto& series : spec->subscriptions) {
+        if (series.source != NativeSeriesSource::InstrumentFeed) return true;
+    }
+    return false;
 }
 
 bool source::PineStrategyHost::declare_security_sites_to_kernel() {
+    std::vector<NativeTimeframeSubscription> declared;
+    bool routed = same_symbol_sites_routable(declared);
+    const std::size_t same_symbol = declared.size();
+    // Lane XSYM-D: every foreign site that reads a feed is the kernel's,
+    // declared after the same-symbol ones so theirs keep sec_id = index.
+    prepare_foreign_security_sites(declared);
+    if (declared.empty()) return false;
+    if (declared.size() == same_symbol) {
+        if (!declare_timeframe_subscriptions(std::move(declared))) return false;
+    } else {
+        auto result = declare_timeframe_subscriptions_result(declared);
+        if (result.status != NativeSetupStatus::Applied && routed) {
+            // The same-symbol sites stay on this host's own drive; the
+            // foreign series have no other drive, so only their refusal is
+            // final.
+            declared.erase(declared.begin(),
+                           declared.begin() + static_cast<std::ptrdiff_t>(same_symbol));
+            foreign_security_series_.erase(
+                foreign_security_series_.begin(),
+                foreign_security_series_.begin() + static_cast<std::ptrdiff_t>(same_symbol));
+            for (auto& entry : foreign_security_sites_) {
+                if (entry.second.subscription >= 0)
+                    entry.second.subscription -= static_cast<std::int64_t>(same_symbol);
+            }
+            routed = false;
+            result = declare_timeframe_subscriptions_result(declared);
+        }
+        if (result.status != NativeSetupStatus::Applied) {
+            throw std::runtime_error(
+                "request.security: the kernel refused the symbol feed series (NativeRunSpecError "
+                + std::to_string(static_cast<int>(result.validation.error)) + ", field "
+                + std::to_string(static_cast<int>(result.validation.field)) + ")");
+        }
+    }
+    // The kernel registers the routed sites, sec_id by index, after this
+    // callback returns; the per-site table keeps their Pine semantics.
+    if (routed) security_eval_states_.clear();
+    return routed;
+}
+
+bool source::PineStrategyHost::same_symbol_sites_routable(
+        std::vector<NativeTimeframeSubscription>& out) {
     if (security_eval_states_.empty()) return false;
     // Run shapes with a Pine-only rule around the step: a stream feeds its
     // sites from realtime prints (the kernel takes confirmed bars only); an
@@ -1209,10 +1280,7 @@ bool source::PineStrategyHost::declare_security_sites_to_kernel() {
         subscription.gaps = pine.gaps_on;
         declared.push_back(std::move(subscription));
     }
-    if (!declare_timeframe_subscriptions(std::move(declared))) return false;
-    // The kernel registers these very sites, sec_id by index, after this
-    // callback returns; the per-site table keeps their Pine semantics.
-    security_eval_states_.clear();
+    out = std::move(declared);
     return true;
 }
 

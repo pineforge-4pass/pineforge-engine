@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,9 @@
 #define PINEFORGE_HAS_EXPLICIT_PINE_CAP_V1 1
 #define PINEFORGE_HAS_EXPLICIT_PINE_EXECUTION_ADAPTER_V1 1
 #define PINEFORGE_HAS_NATIVE_LOWERING_V1 1
+// The run-time symbol key overload of register_security_eval (lane XSYM-D):
+// a request site of another symbol reads the feed installed for that symbol.
+#define PINEFORGE_HAS_SYMBOL_SECURITY_EVAL_V1 1
 
 namespace pineforge::source {
 
@@ -24,6 +28,32 @@ namespace pineforge::source {
 // request.security hashes exactly as before; bumped whenever the folded
 // field set changes.
 inline constexpr char kSourceSecurityDomain[] = "pineforge-source-security/v6";
+
+// Hash domain of the request data of other symbols (lane XSYM-D): the sites
+// that read another symbol's feed, and the facts and recorded series the run
+// was handed. Folded only when one is present, so every other run hashes as
+// before.
+inline constexpr char kSourceSymbolDataDomain[] = "pineforge-source-symbol-data/v1";
+
+// One symbol's facts as a request site's expression reads them through
+// syminfo.* (strategy_set_symbol_facts). Empty strings and a NaN mintick are
+// facts nobody supplied.
+struct SymbolFacts {
+    std::string canonical;
+    std::optional<bool> valid;
+    std::string type;
+    std::string timezone;
+    std::string session;
+    std::string currency;
+    double mintick = std::numeric_limits<double>::quiet_NaN();
+};
+
+// A recorded request series (strategy_set_recorded_series): the value a
+// request returned on each chart bar that opened at open_ms[i].
+struct RecordedSeries {
+    std::vector<std::int64_t> open_ms;
+    std::vector<double> values;
+};
 
 // One projected higher-timeframe bucket of the opt-in historical
 // request.security lookahead projection (PineSecurityEvalState below).
@@ -280,6 +310,10 @@ public:
                                const native_order::ExecutionAppliedEvent*) final;
     void on_native_applied(const native_order::ExecutionAppliedEvent&,
                            const NativeDecisionContext&) final;
+    // Lane XSYM-D: a bar of another symbol's feed, handed to a foreign site's
+    // series; the site's payload runs on it in the requested context. A
+    // same-symbol series the kernel steps needs nothing here.
+    void on_native_timeframe_bar(const Bar&, const NativeTimeframeBarContext&) final;
     native_order::ExecutionTerms resolve_execution_terms(
         const NativeExecutionTermsFacts&) const final;
     NativePrecommitVerdict validate_execution_precommit(
@@ -376,6 +410,17 @@ public:
     void set_syminfo_metadata(const std::string&, double) override;
     bool set_aux_security_feed(const Bar* bars, int n,
                                const std::string& input_tf) override;
+    // The request-data doors (pineforge.h strategy_set_symbol_feed and its
+    // siblings); see BacktestEngine for the contract (lane XSYM-D).
+    bool set_symbol_feed(const std::string& key, const std::string& timeframe,
+                         const Bar* bars, const int64_t* close_ms, int n) override;
+    bool set_symbol_feed_column(const std::string& key, const std::string& timeframe,
+                                const std::string& name, const double* values,
+                                int n) override;
+    bool set_symbol_facts(const std::string& key, const std::string& field,
+                          const std::string& value) override;
+    bool set_recorded_series(const std::string& key, const int64_t* chart_open_ms,
+                             const double* values, int n) override;
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     bool source_aux_security_feed_enabled() const override;
     void source_aux_security_input_view(const Bar*&, int&) const override;
@@ -607,6 +652,9 @@ protected:
         scheduler_.fixture_publish_source_series(bar, new_history_slot);
     }
     int64_t time_close() const {
+        // Inside a foreign site's payload the requested context's bar closes
+        // when its feed says it does: no calendar is guessed for the symbol.
+        if (foreign_context_ != nullptr) return foreign_context_->close_ms;
         return pine_time_close(current_bar_.timestamp, script_tf_, syminfo_.session,
                                syminfo_.timezone, script_tf_);
     }
@@ -638,6 +686,31 @@ protected:
     void register_security_eval(int sec_id, const std::string& requested_tf,
                                 const std::string& input_tf, bool lookahead_on,
                                 bool gaps_on = false, bool heikinashi = false);
+    // request.security of ANOTHER symbol (lane XSYM-D): `symbol` is the
+    // run-time string the script passes. The site reads the feed installed
+    // for (symbol, requested_tf) through a kernel InstrumentFeed series: its
+    // expression runs on every bar of that feed, in order -- history offsets
+    // and TA state over the context's own bars, bar_index the context's,
+    // time_close the bar's own close, syminfo.* the symbol's facts -- and the
+    // chart bar reads the last bar the kernel's merge rule makes visible
+    // (lookahead_on: open by the chart bar's open; otherwise closed by its
+    // close). gaps_on reads na on a chart bar that received no new bar. A
+    // symbol whose facts say it is invalid reads na with
+    // ignore_invalid_symbol, and fails the run closed without it; so does a
+    // site whose feed was not installed, naming the symbol and timeframe.
+    void register_security_eval(int sec_id, const std::string& symbol,
+                                const std::string& requested_tf, const std::string& input_tf,
+                                bool lookahead_on, bool gaps_on = false,
+                                bool ignore_invalid_symbol = false);
+    // The named column (strategy_set_symbol_feed_column) of the context bar a
+    // foreign site is evaluating, or last evaluated; NaN when the site, the
+    // column or the bar is unknown. Generated payload code reads it.
+    double security_column_value(int sec_id, const std::string& name) const;
+    // The recorded request series `key` on the current chart bar: the value
+    // recorded for the bar that opened at current_bar_.timestamp, NaN where
+    // the tape has no row. A key nobody installed fails the read closed,
+    // naming it.
+    double recorded_series_value(const std::string& key) const;
     // ``request.security_lower_tf`` registers the same per-sec_id eval
     // state but with the additional contract that the requested TF must
     // resolve to a finer-than-input TF emulation. This wrapper sets the
@@ -672,6 +745,37 @@ private:
     friend class PineScheduler;
     friend class PineExecutionAdapter;
 
+    // One request.security site of ANOTHER symbol (register_security_eval with a
+    // symbol key). Its payload runs in the requested context: on every bar of the
+    // symbol's feed, in order, as the kernel hands the bars over through the
+    // site's NativeSeriesSource::InstrumentFeed series. The registration fields
+    // are the site's; the rest is per run.
+    struct ForeignSecuritySite {
+        std::string symbol;         // the run-time key, exactly as the script passes it
+        std::string requested_tf;   // the literal as registered ("" = the chart's)
+        bool lookahead = false;       // barmerge.lookahead_on
+        bool gaps = false;            // barmerge.gaps_on
+        bool ignore_invalid = false;  // ignore_invalid_symbol
+        // Per run: the feed key's timeframe (canonical spelling), whether the
+        // symbol is invalid (the site then reads na throughout), the kernel
+        // series the site reads (-1 when none), the feed the kernel serves it
+        // from (an index into the installed feeds), the context bars handed over
+        // so far (the next one's bar_index), and the close of the bar most
+        // recently handed over. `eval` carries the requested-context bar index
+        // into the payload's TA members; `syminfo` is the context's SymInfo.
+        std::string tf;
+        bool invalid = false;
+        std::int64_t subscription = -1;
+        std::size_t feed = 0;
+        std::int64_t delivered = 0;
+        std::int64_t close_ms = 0;
+        // The input the last bar was handed over on (-1: none yet): a gaps_on
+        // site that received nothing on the current input reads na.
+        std::int64_t last_input = -1;
+        SecurityEvalState eval{};
+        SymInfo syminfo{};
+    };
+
     StagedConfiguration staged_configuration() const;
     static PineStrategyConfig apply_overrides(PineStrategyConfig,
                                               const StrategyOverrides&);
@@ -699,6 +803,20 @@ private:
     // sec_ids that are not the registration order, or a declaration the
     // kernel refuses.
     bool declare_security_sites_to_kernel();
+    // The same-symbol half of that predicate: true, with `declared` holding
+    // one Input series per site, when every same-symbol site can be stepped
+    // by the kernel; false (and `declared` untouched) otherwise.
+    bool same_symbol_sites_routable(std::vector<NativeTimeframeSubscription>& declared);
+    // Lane XSYM-D: the foreign sites' per-run resolution. Each site's feed and
+    // facts are looked up, an InstrumentFeed series is appended to `declared`
+    // for every site that reads one, and a site that can read nothing fails
+    // the run closed (thrown, naming the symbol and timeframe).
+    void prepare_foreign_security_sites(std::vector<NativeTimeframeSubscription>& declared);
+    // gaps_on foreign sites read na on an input the kernel hands them nothing
+    // on: cleared at every input, before the kernel's deliveries for it.
+    void clear_gapped_foreign_security_sites();
+    std::int64_t find_symbol_feed(const std::string& key, const std::string& tf) const;
+    void refresh_symbol_data_digest() noexcept;
     // True while the running spec names this host's sites: the kernel steps
     // them and the scheduler feeds nothing.
     bool security_sites_kernel_routed() const noexcept;
@@ -840,7 +958,31 @@ protected:
     // configure_security_evaluators() opens with security_eval_states_.clear(),
     // so the first registration into an empty registry starts this table over.
     std::map<int, PineSecurityEvalState> pine_security_states_;
+    // Lane XSYM-D: other symbols' data, installed before a run
+    // (strategy_set_symbol_feed / _column / _facts, strategy_set_recorded_series)
+    // and read by the foreign request sites. The feeds become the projected
+    // spec's instrument feeds (keyed by the run-time symbol string and the
+    // canonical timeframe spelling), so the kernel digests their bars; the
+    // facts and tapes are this host's alone and fold through the digest
+    // below, taken whenever they are set (never during a run).
+    std::vector<NativeInstrumentFeed> symbol_feeds_;
+    std::map<std::string, SymbolFacts> symbol_facts_;
+    std::map<std::string, RecordedSeries> recorded_series_;
+    std::uint64_t symbol_data_digest_ = 1469598103934665603ULL;
+    // The foreign sites in sec_id order, and per kernel series index the
+    // foreign sec_id it serves (-1: a same-symbol series). Generated
+    // configure_security_evaluators() registers the sites; on_native_run_begin
+    // starts the table over.
+    std::map<int, ForeignSecuritySite> foreign_security_sites_;
+    std::vector<int> foreign_security_series_;
+    // The accepted input being processed, as on_native_input last saw it; a
+    // foreign site's deliveries are stamped with it.
+    std::int64_t foreign_input_index_ = -1;
     // @source-state end
+    // The foreign site whose payload is being evaluated: its requested
+    // context answers pine_bar_index(), time_close() and syminfo_ for the
+    // length of the dispatch, and nothing outside one. Never durable.
+    const ForeignSecuritySite* foreign_context_ = nullptr;
 
     // Provider configuration, not book state: it is staged before a run and
     // projected into the adapter at begin, so it is waived from the durable

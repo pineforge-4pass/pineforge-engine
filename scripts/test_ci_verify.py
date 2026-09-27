@@ -907,8 +907,8 @@ class CAbiRuntimeInventory(unittest.TestCase):
         )
         header = _pf_api_names(ROOT / 'include/pineforge/pineforge.h')
         runtime = _pf_api_names(ROOT / 'src/c_abi.cpp')
-        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 66)
-        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 58)
+        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 70)
+        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 62)
         self.assertEqual(len(EXPECTED_RUNTIME), EXPECTED_RUNTIME_IMPLEMENTATIONS)
         self.assertEqual(len(header), EXPECTED_PUBLIC_DECLARATIONS)
         self.assertEqual(len(header), len(set(header)))
@@ -918,6 +918,27 @@ class CAbiRuntimeInventory(unittest.TestCase):
         self.assertIn('strategy_configure_native_fx_curve_v1', runtime)
         self.assertIn('strategy_configure_native_fx_curve_ext_v1', header)
         self.assertIn('strategy_configure_native_fx_curve_ext_v1', runtime)
+        for name in ('strategy_set_symbol_feed', 'strategy_set_symbol_feed_column',
+                     'strategy_set_symbol_facts', 'strategy_set_recorded_series'):
+            self.assertIn(name, header)
+            self.assertIn(name, runtime)
+
+    def test_historical_only_setters_say_a_stream_refuses_them(self):
+        from check_c_abi_runtime import (
+            HISTORICAL_ONLY_PHRASE,
+            HISTORICAL_ONLY_RUNTIME,
+            _historical_only_undocumented,
+        )
+        text = (ROOT / 'include/pineforge/pineforge.h').read_text(encoding='utf-8')
+        self.assertEqual(_historical_only_undocumented(text), [])
+        self.assertIn('strategy_set_symbol_feed', HISTORICAL_ONLY_RUNTIME)
+        # Mutation: the phrase dropped from one setter's own doc comment is named.
+        head, _, tail = text.partition('PF_API int strategy_set_recorded_series(')
+        cut = head.rsplit(HISTORICAL_ONLY_PHRASE, 1)
+        mutated = cut[0] + 'stream_begin() accepts it' + cut[1] \
+            + 'PF_API int strategy_set_recorded_series(' + tail
+        self.assertEqual(_historical_only_undocumented(mutated),
+                         ['strategy_set_recorded_series'])
 
 
 class ReceiptReuse(unittest.TestCase):

@@ -21,7 +21,10 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
+#include <string>
+#include <utility>
 
 namespace pineforge {
 
@@ -926,6 +929,422 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
                                    state.eval_complete_count - 1);
         }
     }
+}
+
+
+// ---- request.security of another symbol (lane XSYM-D) ----------------------
+//
+// A site of ANOTHER symbol reads that symbol's own bars, installed before the
+// run (strategy_set_symbol_feed) and served by the kernel as the site's
+// NativeSeriesSource::InstrumentFeed series: the kernel owns the merge by
+// interval (NativeInstrumentFeed), this host the Pine semantics around it --
+// the barmerge flags mapped onto the series, the payload evaluated on every
+// bar handed over, in the requested context, and ignore_invalid_symbol.
+
+namespace {
+
+// The one timeframe spelling of the symbol-data stores, the requests
+// manifest's: whole minutes as a bare integer ("15", "240"), days, weeks,
+// months and seconds as <n>D|W|M|S, Pine's bare "D"/"W"/"M"/"S" folded to a
+// count of one. Any other text is kept as it is, and no feed will match it.
+std::string canonical_symbol_timeframe(const std::string& tf) {
+    if (tf.size() == 1 && (tf[0] == 'D' || tf[0] == 'W' || tf[0] == 'M' || tf[0] == 'S'))
+        return "1" + tf;
+    return tf;
+}
+
+// syminfo.ticker of a requested symbol: the key without its exchange prefix.
+std::string symbol_ticker(const std::string& key) {
+    const auto colon = key.rfind(':');
+    return colon == std::string::npos ? key : key.substr(colon + 1);
+}
+
+bool parse_fact_number(const std::string& text, double& value) {
+    if (text.empty()) return false;
+    std::size_t used = 0;
+    try {
+        value = std::stod(text, &used);
+    } catch (...) {
+        return false;
+    }
+    return used == text.size();
+}
+
+}  // namespace
+
+void source::PineStrategyHost::register_security_eval(
+        int sec_id, const std::string& symbol, const std::string& requested_tf,
+        const std::string& input_tf, bool lookahead_on, bool gaps_on,
+        bool ignore_invalid_symbol) {
+    // The evaluator input is the symbol's own feed, not the chart's: the
+    // chart's input timeframe plays no part in the site.
+    (void)input_tf;
+    ForeignSecuritySite site;
+    site.symbol = symbol;
+    site.requested_tf = requested_tf;
+    site.lookahead = lookahead_on;
+    site.gaps = gaps_on;
+    site.ignore_invalid = ignore_invalid_symbol;
+    foreign_security_sites_[sec_id] = std::move(site);
+}
+
+std::int64_t source::PineStrategyHost::find_symbol_feed(const std::string& key,
+                                                        const std::string& tf) const {
+    for (std::size_t i = 0; i < symbol_feeds_.size(); ++i) {
+        if (symbol_feeds_[i].instrument == key && symbol_feeds_[i].tf == tf)
+            return static_cast<std::int64_t>(i);
+    }
+    return -1;
+}
+
+void source::PineStrategyHost::prepare_foreign_security_sites(
+        std::vector<NativeTimeframeSubscription>& declared) {
+    foreign_security_series_.assign(declared.size(), -1);
+    if (foreign_security_sites_.empty()) return;
+    // The merge is judged per chart bar, and the kernel hands feed bars over
+    // per accepted input: the two agree only while the input IS the chart
+    // (a chart aggregated from finer input would publish, peek and clear on
+    // the finer cadence).
+    const int ratio = input_tf_.empty() || script_tf_.empty() ? 0
+                                                              : tf_ratio(input_tf_, script_tf_);
+    if (input_tf_.empty() || ratio > 1 || ratio == -1) {
+        throw std::runtime_error(
+            "request.security of another symbol needs the chart's own bars as input; input '"
+            + input_tf_ + "' aggregated to chart '" + script_tf_ + "' is not supported");
+    }
+    for (auto& entry : foreign_security_sites_) {
+        const int sec_id = entry.first;
+        ForeignSecuritySite& site = entry.second;
+        site.tf = canonical_symbol_timeframe(site.requested_tf.empty() ? script_tf_
+                                                                       : site.requested_tf);
+        site.invalid = false;
+        site.subscription = -1;
+        site.feed = 0;
+        site.delivered = 0;
+        site.close_ms = 0;
+        site.last_input = -1;
+        site.eval = SecurityEvalState{};
+        site.eval.sec_id = sec_id;
+        site.eval.tf = site.tf;
+        const auto facts = symbol_facts_.find(site.symbol);
+        const SymbolFacts* known = facts == symbol_facts_.end() ? nullptr : &facts->second;
+        if (known != nullptr && known->valid && !*known->valid) {
+            // TradingView reads na for an invalid symbol under
+            // ignore_invalid_symbol and raises a runtime error without it.
+            if (!site.ignore_invalid) {
+                throw std::runtime_error("request.security: symbol '" + site.symbol
+                                         + "' is invalid");
+            }
+            site.invalid = true;
+            continue;
+        }
+        const std::int64_t feed = find_symbol_feed(site.symbol, site.tf);
+        if (feed < 0) {
+            throw std::runtime_error("request.security: no feed is installed for symbol '"
+                                     + site.symbol + "' at timeframe '" + site.tf + "'");
+        }
+        site.feed = static_cast<std::size_t>(feed);
+        // The requested context's syminfo: the symbol's own facts, and nothing
+        // of the chart's. TradingView's syminfo.tickerid inside the request is
+        // the string the script passed (a bare ticker stays bare). A fact the
+        // host did not supply reads empty (NaN for a number).
+        SymInfo info;
+        info.ticker = symbol_ticker(site.symbol);
+        info.tickerid = site.symbol;
+        info.currency.clear();
+        info.basecurrency.clear();
+        info.type.clear();
+        info.timezone.clear();
+        info.session.clear();
+        info.volumetype.clear();
+        info.description.clear();
+        info.mintick = std::numeric_limits<double>::quiet_NaN();
+        info.pointvalue = std::numeric_limits<double>::quiet_NaN();
+        info.qty_step = 0.0;
+        if (known != nullptr) {
+            info.type = known->type;
+            info.timezone = known->timezone;
+            info.session = known->session;
+            info.currency = known->currency;
+            info.mintick = known->mintick;
+        }
+        site.syminfo = std::move(info);
+        NativeTimeframeSubscription series;
+        series.tf = site.tf;
+        series.source = NativeSeriesSource::InstrumentFeed;
+        series.instrument = site.symbol;
+        series.lookahead = site.lookahead;
+        series.gaps = site.gaps;
+        site.subscription = static_cast<std::int64_t>(declared.size());
+        declared.push_back(std::move(series));
+        foreign_security_series_.push_back(sec_id);
+    }
+}
+
+void source::PineStrategyHost::on_native_timeframe_bar(
+        const Bar& bar, const NativeTimeframeBarContext& context) {
+    if (source_prepare_failed_) return;
+    if (context.subscription >= foreign_security_series_.size()) return;
+    const int sec_id = foreign_security_series_[context.subscription];
+    if (sec_id < 0) return;
+    const auto found = foreign_security_sites_.find(sec_id);
+    if (found == foreign_security_sites_.end()) return;
+    ForeignSecuritySite& site = found->second;
+    // The bar the kernel hands over is the context's next bar: its index is
+    // the count so far (the kernel hands every bar over once, in order), its
+    // close the feed's own.
+    const std::int64_t index = site.delivered;
+    site.delivered = index + 1;
+    site.close_ms = context.interval.last_traded_close_ms;
+    site.last_input = foreign_input_index_;
+    // The requested context answers pine_bar_index(), time_close() and
+    // syminfo_ while its payload runs, and the chart's once it returns.
+    struct ContextScope {
+        PineStrategyHost& host;
+        ForeignSecuritySite& site;
+        const ForeignSecuritySite* previous_context;
+        double previous_mintick;
+        ContextScope(PineStrategyHost& h, ForeignSecuritySite& s)
+            : host(h), site(s), previous_context(h.foreign_context_),
+              previous_mintick(h.syminfo_mintick_) {
+            std::swap(host.syminfo_, site.syminfo);
+            host.syminfo_mintick_ = host.syminfo_.mintick;
+            host.foreign_context_ = &site;
+        }
+        ~ContextScope() {
+            host.foreign_context_ = previous_context;
+            host.syminfo_mintick_ = previous_mintick;
+            std::swap(host.syminfo_, site.syminfo);
+        }
+    } scope(*this, site);
+    dispatch_security_eval(site.eval, bar, true, index);
+}
+
+void source::PineStrategyHost::clear_gapped_foreign_security_sites() {
+    for (const auto& entry : foreign_security_sites_) {
+        const ForeignSecuritySite& site = entry.second;
+        if (!site.gaps || site.subscription < 0) continue;
+        if (site.last_input != foreign_input_index_) clear_security(entry.first);
+    }
+}
+
+double source::PineStrategyHost::security_column_value(int sec_id,
+                                                       const std::string& name) const {
+    const auto found = foreign_security_sites_.find(sec_id);
+    if (found == foreign_security_sites_.end()) return std::numeric_limits<double>::quiet_NaN();
+    const ForeignSecuritySite& site = found->second;
+    if (site.subscription < 0 || site.delivered <= 0 || site.feed >= symbol_feeds_.size())
+        return std::numeric_limits<double>::quiet_NaN();
+    const NativeInstrumentFeed& feed = symbol_feeds_[site.feed];
+    const auto at = static_cast<std::size_t>(site.delivered - 1);
+    for (const auto& column : feed.columns) {
+        if (column.name != name) continue;
+        return at < column.values.size() ? column.values[at]
+                                         : std::numeric_limits<double>::quiet_NaN();
+    }
+    return std::numeric_limits<double>::quiet_NaN();
+}
+
+double source::PineStrategyHost::recorded_series_value(const std::string& key) const {
+    const auto found = recorded_series_.find(key);
+    if (found == recorded_series_.end()) {
+        throw std::runtime_error("request data: no recorded series is installed for key '"
+                                 + key + "'");
+    }
+    const RecordedSeries& series = found->second;
+    const auto at = std::lower_bound(series.open_ms.begin(), series.open_ms.end(),
+                                     current_bar_.timestamp);
+    if (at == series.open_ms.end() || *at != current_bar_.timestamp)
+        return std::numeric_limits<double>::quiet_NaN();
+    return series.values[static_cast<std::size_t>(at - series.open_ms.begin())];
+}
+
+// ---- the request-data doors ------------------------------------------------
+
+bool source::PineStrategyHost::set_symbol_feed(const std::string& key,
+                                               const std::string& timeframe,
+                                               const Bar* bars, const int64_t* close_ms,
+                                               int n) {
+    guard_native_mutation("set_symbol_feed");
+    const auto refuse = [this](const std::string& why) {
+        last_error_ = "strategy_set_symbol_feed: " + why;
+        return false;
+    };
+    if (key.empty()) return refuse("empty symbol key");
+    const std::string tf = canonical_symbol_timeframe(timeframe);
+    if (tf.empty() || !native_calendar::parse_timeframe(tf)) {
+        return refuse("timeframe '" + timeframe + "' does not parse");
+    }
+    if (n < 0 || (n > 0 && (bars == nullptr || close_ms == nullptr)))
+        return refuse("invalid bar array");
+    const std::int64_t existing = find_symbol_feed(key, tf);
+    if (n == 0) {
+        if (existing >= 0)
+            symbol_feeds_.erase(symbol_feeds_.begin() + static_cast<std::ptrdiff_t>(existing));
+        refresh_symbol_data_digest();
+        last_error_.clear();
+        return true;
+    }
+    NativeInstrumentFeed feed;
+    feed.instrument = key;
+    feed.tf = tf;
+    feed.bars.assign(bars, bars + n);
+    feed.close_ms.assign(close_ms, close_ms + n);
+    // The kernel's own judgement of the feed, so a refusal names its field
+    // here rather than at the next begin.
+    const auto judged = validate_native_instrument_feeds({feed});
+    if (!judged) {
+        return refuse("feed refused (NativeRunSpecError "
+                      + std::to_string(static_cast<int>(judged.error)) + ", field "
+                      + std::to_string(static_cast<int>(judged.field)) + ")");
+    }
+    if (existing >= 0) {
+        symbol_feeds_[static_cast<std::size_t>(existing)] = std::move(feed);
+    } else {
+        symbol_feeds_.push_back(std::move(feed));
+    }
+    refresh_symbol_data_digest();
+    last_error_.clear();
+    return true;
+}
+
+bool source::PineStrategyHost::set_symbol_feed_column(const std::string& key,
+                                                      const std::string& timeframe,
+                                                      const std::string& name,
+                                                      const double* values, int n) {
+    guard_native_mutation("set_symbol_feed_column");
+    const auto refuse = [this](const std::string& why) {
+        last_error_ = "strategy_set_symbol_feed_column: " + why;
+        return false;
+    };
+    const std::int64_t found = find_symbol_feed(key, canonical_symbol_timeframe(timeframe));
+    if (found < 0) {
+        return refuse("no feed is installed for symbol '" + key + "' at timeframe '"
+                      + timeframe + "'");
+    }
+    if (name.empty()) return refuse("empty column name");
+    NativeInstrumentFeed& feed = symbol_feeds_[static_cast<std::size_t>(found)];
+    if (n < 0 || static_cast<std::size_t>(n) != feed.bars.size() || (n > 0 && values == nullptr))
+        return refuse("column '" + name + "' has " + std::to_string(n) + " values for "
+                      + std::to_string(feed.bars.size()) + " bars");
+    NativeInstrumentColumn column{name, std::vector<double>(values, values + n)};
+    bool replaced = false;
+    for (auto& existing : feed.columns) {
+        if (existing.name != name) continue;
+        existing = std::move(column);
+        replaced = true;
+        break;
+    }
+    if (!replaced) feed.columns.push_back(std::move(column));
+    refresh_symbol_data_digest();
+    last_error_.clear();
+    return true;
+}
+
+bool source::PineStrategyHost::set_symbol_facts(const std::string& key,
+                                                const std::string& field,
+                                                const std::string& value) {
+    guard_native_mutation("set_symbol_facts");
+    const auto refuse = [this](const std::string& why) {
+        last_error_ = "strategy_set_symbol_facts: " + why;
+        return false;
+    };
+    if (key.empty()) return refuse("empty symbol key");
+    SymbolFacts candidate = symbol_facts_.count(key) ? symbol_facts_[key] : SymbolFacts{};
+    if (field == "canonical") {
+        candidate.canonical = value;
+    } else if (field == "valid") {
+        if (value == "true") candidate.valid = true;
+        else if (value == "false") candidate.valid = false;
+        else return refuse("valid must be \"true\" or \"false\", got '" + value + "'");
+    } else if (field == "type") {
+        candidate.type = value;
+    } else if (field == "timezone") {
+        candidate.timezone = value;
+    } else if (field == "session") {
+        candidate.session = value;
+    } else if (field == "currency") {
+        candidate.currency = value;
+    } else if (field == "mintick") {
+        double parsed = 0.0;
+        if (!parse_fact_number(value, parsed) || !std::isfinite(parsed) || parsed <= 0.0)
+            return refuse("mintick must be a positive decimal, got '" + value + "'");
+        candidate.mintick = parsed;
+    } else {
+        return refuse("unknown field '" + field + "'");
+    }
+    symbol_facts_[key] = std::move(candidate);
+    refresh_symbol_data_digest();
+    last_error_.clear();
+    return true;
+}
+
+bool source::PineStrategyHost::set_recorded_series(const std::string& key,
+                                                   const int64_t* chart_open_ms,
+                                                   const double* values, int n) {
+    guard_native_mutation("set_recorded_series");
+    const auto refuse = [this](const std::string& why) {
+        last_error_ = "strategy_set_recorded_series: " + why;
+        return false;
+    };
+    if (key.empty()) return refuse("empty key");
+    if (n < 0 || (n > 0 && (chart_open_ms == nullptr || values == nullptr)))
+        return refuse("invalid arrays");
+    if (n == 0) {
+        recorded_series_.erase(key);
+        refresh_symbol_data_digest();
+        last_error_.clear();
+        return true;
+    }
+    for (int i = 1; i < n; ++i) {
+        if (chart_open_ms[i] <= chart_open_ms[i - 1])
+            return refuse("chart open times must be strictly increasing (row "
+                          + std::to_string(i) + ")");
+    }
+    RecordedSeries series;
+    series.open_ms.assign(chart_open_ms, chart_open_ms + n);
+    series.values.assign(values, values + n);
+    recorded_series_[key] = std::move(series);
+    refresh_symbol_data_digest();
+    last_error_.clear();
+    return true;
+}
+
+// The facts and tapes as the extension folds them, and the feeds' keys and
+// sizes (their bars are the projected spec's, which the continuation digest
+// folds). Taken whenever the stores change, never during a run.
+void source::PineStrategyHost::refresh_symbol_data_digest() noexcept {
+    BrokerStateHashSink f;
+    f.u(symbol_feeds_.size());
+    for (const auto& feed : symbol_feeds_) {
+        f.s(feed.instrument);
+        f.s(feed.tf);
+        f.u(feed.bars.size());
+        f.u(feed.columns.size());
+        for (const auto& column : feed.columns) f.s(column.name);
+    }
+    f.u(symbol_facts_.size());
+    for (const auto& [key, facts] : symbol_facts_) {
+        f.s(key);
+        f.s(facts.canonical);
+        f.b(facts.valid.has_value());
+        if (facts.valid) f.b(*facts.valid);
+        f.s(facts.type);
+        f.s(facts.timezone);
+        f.s(facts.session);
+        f.s(facts.currency);
+        f.d(facts.mintick);
+    }
+    f.u(recorded_series_.size());
+    for (const auto& [key, series] : recorded_series_) {
+        f.s(key);
+        f.u(series.open_ms.size());
+        for (std::size_t i = 0; i < series.open_ms.size(); ++i) {
+            f.i(series.open_ms[i]);
+            f.d(series.values[i]);
+        }
+    }
+    symbol_data_digest_ = f.h;
 }
 
 }  // namespace pineforge

@@ -63,6 +63,7 @@ public:
         std::uint64_t intrabar = 0;
         std::uint64_t subscriptions = 0;
         std::uint64_t auxiliary = 0;
+        std::uint64_t instruments = 0;
     };
 
     bool is_native() const noexcept override { return true; }
@@ -696,6 +697,15 @@ private:
         // built from the input, which is the whole established surface.
         bool auxiliary = false;
         std::size_t auxiliary_cursor = 0;
+        // NativeSeriesSource::InstrumentFeed: the series reads
+        // NativeRunSpec::instrument_feeds[instrument_feed] bar for bar, and
+        // `instrument_cursor` is the first feed bar not yet handed over. It
+        // has no evaluator state (sec_id -1) and no bucket: the feed's bars
+        // are delivered as they are. False, and both inert, for every other
+        // series, which is the whole established surface.
+        bool instrument = false;
+        std::size_t instrument_feed = 0;
+        std::size_t instrument_cursor = 0;
         // The latest delivered bucket, what native_series_bar() answers.
         std::optional<Bar> latest;
         // lookahead_off: the bucket being accumulated. -1 until an input
@@ -967,7 +977,7 @@ private:
                                         TimeframeSubscription& subscription,
                                         const Bar* input_bars, int n_input);
     bool pump_timeframe_subscriptions(BacktestEngine& engine, const Bar& bar, int index,
-                                      std::int64_t input_period_end_ms);
+                                      const native_calendar::NativeInterval& input_interval);
     // The declared auxiliary feed followed by a stream's appended bars, read
     // as one sequence. Zero / never called for a run that declares no feed.
     std::size_t auxiliary_bar_count() const noexcept;
@@ -989,6 +999,15 @@ private:
     bool deliver_timeframe_bar(BacktestEngine& engine, TimeframeSubscription& subscription,
                                const Bar& bucket, std::int64_t first_contributing_ms,
                                std::int64_t delivered_at_ms, NativeCompletionKind completion);
+    // An InstrumentFeed series: every bar of its feed visible at this input
+    // (NativeInstrumentFeed's delivery rule), handed over in feed order.
+    bool pump_instrument_subscription(BacktestEngine& engine,
+                                      TimeframeSubscription& subscription, const Bar& bar,
+                                      const native_calendar::NativeInterval& input_interval);
+    // The host half of a delivery, shared by both series kinds: the pull
+    // accessor already answers `bucket`, the callback receives it.
+    bool invoke_timeframe_callback(BacktestEngine& engine, const Bar& bucket,
+                                   const NativeTimeframeBarContext& context);
     // The lazy seal: a still-open script bucket keyed to an interval other
     // than `script_key` is sealed LazyComplete and reset. True when nothing
     // was to seal or the sealed calculation succeeded.

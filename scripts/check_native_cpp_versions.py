@@ -523,9 +523,9 @@ def check_texts(files):
     require_namespace_functions(
         spec_src, ("validate_native_run_spec", "normalize_native_run_spec",
                    "validate_native_timeframe_subscriptions",
-                   "validate_native_auxiliary_feed",
+                   "validate_native_auxiliary_feed", "validate_native_instrument_feeds",
                    "native_intrabar_path_digest", "native_timeframe_subscriptions_digest",
-                   "native_auxiliary_feed_digest",
+                   "native_auxiliary_feed_digest", "native_instrument_feeds_digest",
                    "native_margin_model_digest", "native_risk_limits_digest"),
         "native_run_spec_v3")
     run_spec = body(spec, r'struct\s+NativeRunSpec\s*\{', 'native run spec')
@@ -549,19 +549,33 @@ def check_texts(files):
             'NativeOpenBarViewopen_bar_view=NativeOpenBarView::Complete;',
             'std::optional<NativeRiskLimits>risk;',
             'std::optional<NativeAuxiliaryFeed>auxiliary_feed;',
+            'std::vector<NativeInstrumentFeed>instrument_feeds;',
             'NativeEventRetentionevent_retention=NativeEventRetention::Window;'):
         if member not in compact_spec:
             raise ValueError('native_run_spec_v3 omits required policy member: ' + member)
     subscription = body(spec, r'struct\s+NativeTimeframeSubscription\s*\{',
                         'native timeframe subscription')
+    # XSYM-D appends the instrument key last: every member before it keeps its
+    # order, shape and default.
     if (re.sub(r'\s+', '', subscription)
             != 'std::stringtf;std::vector<Bar>authoritative_bars;boollookahead=false;'
-               'boolgaps=false;NativeSeriesSourcesource=NativeSeriesSource::Input;'):
+               'boolgaps=false;NativeSeriesSourcesource=NativeSeriesSource::Input;'
+               'std::stringinstrument;'):
         raise ValueError('native timeframe subscription must preserve its member order and shape')
-    # The series judge has exactly two spellings: the established one, and
-    # the one that also names the run's auxiliary feed. Both are declared.
-    if len(re.findall(r'\bvalidate_native_timeframe_subscriptions\s*\(', spec)) != 2:
-        raise ValueError('native_run_spec_v3 must declare both series validation overloads')
+    # The series judge has exactly three spellings: the established one, the
+    # one that also names the run's auxiliary feed, and the one that also
+    # names its instrument feeds (XSYM-D). All three are declared.
+    if len(re.findall(r'\bvalidate_native_timeframe_subscriptions\s*\(', spec)) != 3:
+        raise ValueError('native_run_spec_v3 must declare the three series validation overloads')
+    instrument_feed = body(spec, r'struct\s+NativeInstrumentFeed\s*\{', 'native instrument feed')
+    if (re.sub(r'\s+', '', instrument_feed)
+            != 'std::stringinstrument;std::stringtf;std::vector<Bar>bars;'
+               'std::vector<std::int64_t>close_ms;std::vector<NativeInstrumentColumn>columns;'):
+        raise ValueError('native instrument feed must preserve its member order and shape')
+    instrument_column = body(spec, r'struct\s+NativeInstrumentColumn\s*\{',
+                             'native instrument column')
+    if re.sub(r'\s+', '', instrument_column) != 'std::stringname;std::vector<double>values;':
+        raise ValueError('native instrument column must preserve its member order and shape')
     auxiliary_feed = body(spec, r'struct\s+NativeAuxiliaryFeed\s*\{', 'native auxiliary feed')
     if re.sub(r'\s+', '', auxiliary_feed) != 'std::stringtf;std::vector<Bar>bars;':
         raise ValueError('native auxiliary feed must preserve its member order and shape')
@@ -573,7 +587,7 @@ def check_texts(files):
         raise ValueError('native event retention must keep Window=0, Full=1, Commands=2')
     series_source = body(spec, r'enum\s+class\s+NativeSeriesSource\s*:\s*std::uint8_t\s*\{',
                          'native series source')
-    if re.sub(r'\s+', '', series_source) != 'Input=0,AuxiliaryFeed=1,':
+    if re.sub(r'\s+', '', series_source) != 'Input=0,AuxiliaryFeed=1,InstrumentFeed=2,':
         raise ValueError('native series source must preserve its enumerators and values')
     margin = body(spec, r'struct\s+NativeMarginModel\s*\{', 'native margin model')
     if (re.sub(r'\s+', '', margin)

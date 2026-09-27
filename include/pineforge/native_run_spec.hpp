@@ -478,9 +478,14 @@ struct IntrabarPath {
 /// bars the input does not have — so `tf` then pairs with the FEED's timeframe
 /// exactly as script_tf pairs with input_tf, and may be finer than the input,
 /// equal to it or coarser. See NativeAuxiliaryFeed for the routing rule.
+/// InstrumentFeed reads ANOTHER instrument's own bars: the
+/// NativeRunSpec::instrument_feeds entry keyed by (`instrument`, `tf`),
+/// delivered bar for bar and aggregated by nothing. See NativeInstrumentFeed
+/// for its delivery rule; `lookahead` and `gaps` keep their meaning there.
 enum class NativeSeriesSource : std::uint8_t {
     Input = 0,
     AuxiliaryFeed = 1,
+    InstrumentFeed = 2,
 };
 
 struct NativeTimeframeSubscription {
@@ -489,6 +494,10 @@ struct NativeTimeframeSubscription {
     bool lookahead = false;
     bool gaps = false;
     NativeSeriesSource source = NativeSeriesSource::Input;
+    /// InstrumentFeed only: the instrument key of the feed the series reads,
+    /// compared byte for byte with NativeInstrumentFeed::instrument. Empty for
+    /// every other source, which is the whole established surface.
+    std::string instrument;
 };
 
 /// An auxiliary feed of the run's OWN symbol at a timeframe strictly finer
@@ -515,6 +524,65 @@ struct NativeTimeframeSubscription {
 struct NativeAuxiliaryFeed {
     std::string tf;
     std::vector<Bar> bars;
+};
+
+/// One named column an instrument feed carries beside its OHLCV: one value
+/// per bar, in bar order. The kernel stores, validates and digests it and
+/// reads nothing in it; a NaN value is an absent one.
+struct NativeInstrumentColumn {
+    std::string name;
+    std::vector<double> values;
+};
+
+/// Another instrument's own bars of one timeframe, installed as data. A run
+/// may hold any number of them, keyed by (`instrument`, `tf`); a declared
+/// series reads one through NativeSeriesSource::InstrumentFeed. The feed
+/// drives nothing by itself -- no matching point, no calculation, no script
+/// bar -- and the kernel guesses no calendar for the instrument: every bar
+/// carries its own close, `close_ms[i]`, beside its open, `bars[i].timestamp`.
+///
+/// `instrument` is an opaque key (no venue or symbol grammar is read). `tf`
+/// must parse; it is part of the key and pairs with nothing, so a feed may be
+/// finer or coarser than the input. `bars` are strictly increasing, their
+/// prices finite, their volume finite and nonnegative or NaN (the instrument
+/// publishes none). `close_ms` has one entry per bar, each after its own open
+/// and at or before the next bar's open. `columns` each hold one value per bar.
+///
+/// Delivery is by interval and by nothing else. On each accepted input, a
+/// series reading the feed is handed, in feed order, every bar it has not yet
+/// been handed that is visible at that input:
+///   lookahead = false: bars whose close_ms <= the input's
+///     NativeInterval::last_traded_close_ms -- the bars that have closed by
+///     the time the input has;
+///   lookahead = true: bars whose open <= the input's NativeInterval::open_ms
+///     -- the bar in progress at the input's open included, with the final
+///     values the feed gives it.
+/// The input's interval is its calendar interval: under a raw label
+/// partition, whose inputs carry no duration, the interval the run's session,
+/// zone and input timeframe give the input's label. The last bar handed over
+/// is the series' visible value
+/// (native_series_bar()), each delivery reaches on_native_timeframe_bar, and
+/// the delivery point is the one every series has: after on_native_input,
+/// before the input is aggregated, matched or calculated. So bars earlier
+/// than the first input are handed over on that first input (history), a
+/// bar the feed carries past the last input's horizon never is, and every
+/// bar is handed over exactly once, in order: a host that counts deliveries
+/// knows the feed index of each. `gaps` is the subscription contract's: true
+/// clears the series on every accepted input that hands it nothing.
+/// NativeTimeframeBarContext::interval is the bar's own: open_ms and
+/// eligible_open_ms its open, last_traded_close_ms and next_period_open_ms
+/// its close_ms, next_input_open_ms the next feed bar's open (its close_ms
+/// for the last bar); completion is Confirmed.
+///
+/// Opt-in: absent (empty) is the whole default surface, and the continuation
+/// digest folds the feeds only when there are any. Historical runs only:
+/// stream_begin refuses a spec that installs one.
+struct NativeInstrumentFeed {
+    std::string instrument;
+    std::string tf;
+    std::vector<Bar> bars;
+    std::vector<std::int64_t> close_ms;
+    std::vector<NativeInstrumentColumn> columns;
 };
 
 /// What the kernel keeps of a run's event record, the rows native_events()
@@ -636,6 +704,11 @@ struct NativeRunSpec {
     /// pre-feed one. Folded into it only when the block is present, exactly as
     /// `margin` and `risk` are.
     std::optional<NativeAuxiliaryFeed> auxiliary_feed;
+    /// Opt-in feeds of other instruments. Empty is the whole default surface:
+    /// nothing is stored, nothing is delivered, and the continuation digest is
+    /// the pre-feed one. Folded into it only when there are any, exactly as
+    /// `auxiliary_feed` is. See NativeInstrumentFeed.
+    std::vector<NativeInstrumentFeed> instrument_feeds;
     /// What native_events() can still return; see NativeEventRetention.
     /// Folded into the spec digest only when it is not Window.
     NativeEventRetention event_retention = NativeEventRetention::Window;
@@ -681,6 +754,8 @@ enum class NativeRunSpecField : std::uint8_t {
     AuxiliaryFeedTimeframe, AuxiliaryFeedBars, SubscriptionSource,
     EventRetention,
     QuantityTolerance,
+    InstrumentFeedInstrument, InstrumentFeedTimeframe, InstrumentFeedBars,
+    InstrumentFeedClose, InstrumentFeedColumns, SubscriptionInstrument,
 };
 
 /// Why a field was refused. Read it beside NativeRunSpecValidation::field: the
@@ -796,6 +871,27 @@ enum class NativeRunSpecError : std::uint8_t {
     SessionKeyChangedOnReuse,
     // A reused host may only consume a run number above its high-water mark.
     RunNumberNotAboveConsumedHighWater,
+    // An instrument feed whose timeframe literal does not parse.
+    InvalidInstrumentFeedTimeframe,
+    // Two instrument feeds with one (instrument, timeframe) key.
+    DuplicateInstrumentFeed,
+    // Instrument bars that are not strictly increasing in time.
+    UnorderedInstrumentFeedBars,
+    // An instrument bar with a non-finite price, or a volume that is neither
+    // NaN nor finite and nonnegative.
+    InvalidInstrumentFeedBar,
+    // close_ms of another length than the bars, or a close at or before its
+    // own bar's open, or after the next bar's open.
+    InvalidInstrumentFeedClose,
+    // A column with an empty or repeated name, or another length than the bars.
+    InvalidInstrumentFeedColumn,
+    // An InstrumentFeed series naming an (instrument, tf) no feed installs.
+    SubscriptionWithoutInstrumentFeed,
+    // An InstrumentFeed series declaring authoritative bars: its bars are the
+    // feed's own, so a second copy states nothing.
+    InstrumentSubscriptionBars,
+    // An instrument key on a series whose source is not InstrumentFeed.
+    InstrumentOnNonInstrumentSeries,
 };
 
 /// Allocation-free facts suitable for the host's durable failure variant.
@@ -852,6 +948,23 @@ NativeRunSpecValidation validate_native_timeframe_subscriptions(
         const std::string& input_tf, bool timeframe_undetected,
         const std::optional<NativeAuxiliaryFeed>& auxiliary_feed) noexcept;
 
+/// The same judgement for a run that also installs instrument feeds: the
+/// feeds are judged first (validate_native_instrument_feeds), then the
+/// auxiliary feed and every series, an InstrumentFeed series naming one of
+/// these feeds. The four-argument form above is this one with no instrument
+/// feed, where such a series is refused as SubscriptionWithoutInstrumentFeed.
+NativeRunSpecValidation validate_native_timeframe_subscriptions(
+        const std::vector<NativeTimeframeSubscription>& subscriptions,
+        const std::string& input_tf, bool timeframe_undetected,
+        const std::optional<NativeAuxiliaryFeed>& auxiliary_feed,
+        const std::vector<NativeInstrumentFeed>& instrument_feeds) noexcept;
+
+/// Exactly the part of validate_native_run_spec that judges the instrument
+/// feeds: each key's strings and timeframe literal, the one-feed-per-key
+/// rule, and each feed's bars, closes and columns. Empty is always valid.
+NativeRunSpecValidation validate_native_instrument_feeds(
+        const std::vector<NativeInstrumentFeed>& instrument_feeds) noexcept;
+
 /// Exactly the part of validate_native_run_spec that judges the auxiliary
 /// feed, against a stated input timeframe: the literal, the strictly-finer
 /// pairing under the input, the order and structure of its bars, and the
@@ -883,6 +996,14 @@ std::uint64_t native_timeframe_subscriptions_digest(
 /// reuse another begin's feed. Callers fold it only when `auxiliary_feed` is
 /// present, keeping the default spec's continuation identity unchanged.
 std::uint64_t native_auxiliary_feed_digest(const NativeAuxiliaryFeed& feed) noexcept;
+
+/// Exact FNV-1a content digest for the installed instrument feeds: each key,
+/// every bar, close and column value in caller order, so a continuation
+/// cannot silently reuse another begin's feeds. Callers fold it only when
+/// `instrument_feeds` is non-empty, keeping the default spec's continuation
+/// identity unchanged.
+std::uint64_t native_instrument_feeds_digest(
+        const std::vector<NativeInstrumentFeed>& instrument_feeds) noexcept;
 
 /// Machine-independent digest of a run spec: exactly the fields the consumer
 /// folds into the continuation identity for the spec, and nothing else — no

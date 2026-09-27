@@ -1746,6 +1746,21 @@ public:
         return !chart_day_partition_.empty();
     }
 
+    // Another symbol's bars, facts and recorded request values, for a source
+    // host whose request sites name them (strategy_set_symbol_feed and its
+    // three siblings in pineforge.h). These are that host's doors: the kernel
+    // base keeps none of it and answers false without a word, as it does for
+    // set_aux_security_feed. A host with no source layer installs another
+    // instrument's bars in its run spec (NativeRunSpec::instrument_feeds).
+    virtual bool set_symbol_feed(const std::string& key, const std::string& timeframe,
+                                 const Bar* bars, const int64_t* close_ms, int n);
+    virtual bool set_symbol_feed_column(const std::string& key, const std::string& timeframe,
+                                        const std::string& name, const double* values, int n);
+    virtual bool set_symbol_facts(const std::string& key, const std::string& field,
+                                  const std::string& value);
+    virtual bool set_recorded_series(const std::string& key, const int64_t* chart_open_ms,
+                                     const double* values, int n);
+
     // Execute confirmed historical bars, then keep this exact instance alive
     // for realtime trade updates. The warmup feed must contain at least one
     // complete input-timeframe bar. Normalized ticks begin at or after the next

@@ -1397,6 +1397,94 @@ PF_API int strategy_set_native_security_feed(pf_strategy_t s,
                                              int n);
 #endif
 
+/* Another symbol's data for request.security (lane XSYM-D). Four opt-in
+ * setters, each behind its own feature probe. They are the Pine source
+ * host's doors: a strategy that registers a request site for another
+ * symbol reads its bars, its facts and its recorded request values from
+ * what these installed before the run. A host with no source layer answers
+ * each -1. Every array is copied; a later call replaces what an earlier one
+ * installed under the same key. Historical runs only: stream_begin() fails
+ * closed while a symbol feed or a recorded series is installed. */
+
+/** Feature probe for #strategy_set_symbol_feed. */
+#define PINEFORGE_HAS_SYMBOL_FEED_V1 1
+/** Feature probe for #strategy_set_symbol_feed_column. */
+#define PINEFORGE_HAS_SYMBOL_FEED_COLUMN_V1 1
+/** Feature probe for #strategy_set_symbol_facts. */
+#define PINEFORGE_HAS_SYMBOL_FACTS_V1 1
+/** Feature probe for #strategy_set_recorded_series. */
+#define PINEFORGE_HAS_RECORDED_SERIES_V1 1
+
+#ifdef PINEFORGE_HAS_SYMBOL_FEED_V1
+/** Copy another symbol's own bars of one timeframe, keyed by the exact
+ *  symbol string a request site passes at run time (@p key) and by
+ *  @p timeframe ("15", "60", "1D", ...; "D" and "1D" are one key).
+ *
+ *  Each bar carries its own close, @p close_ms[i]: after its open
+ *  (@c bars[i].timestamp) and at or before the next bar's open. No calendar
+ *  is guessed for the symbol. Bars must be strictly increasing with finite
+ *  prices; a volume the symbol does not publish is NaN. The feed reaches
+ *  the kernel as a NativeRunSpec instrument feed: on each chart bar, a site
+ *  with lookahead off reads the last bar that has closed by the chart bar's
+ *  close, one with lookahead on the last bar that opened by its open, and the
+ *  site's expression runs over every bar of the feed, in order. Installing a
+ *  feed drops the columns of the feed it replaces. Pass @p n == 0 to clear
+ *  the feed of (@p key, @p timeframe). Historical runs only: stream_begin()
+ *  fails closed while a symbol feed is installed.
+ *
+ *  @return 0 on success, -1 for a null strategy, invalid input (the reason in
+ *          #strategy_get_last_error) or a host with no source layer. */
+PF_API int strategy_set_symbol_feed(pf_strategy_t s, const char* key, const char* timeframe,
+                                    const pf_bar_t* bars, const int64_t* close_ms, int n);
+#endif
+
+#ifdef PINEFORGE_HAS_SYMBOL_FEED_COLUMN_V1
+/** Copy one named column of an installed symbol feed: @p n values, one per
+ *  bar of the feed of (@p key, @p timeframe), in bar order (a footprint
+ *  delta, @c "fp_delta_100_70"). NaN is an absent value. A column of the same
+ *  name is replaced. Historical runs only: stream_begin() fails closed while
+ *  a symbol feed is installed.
+ *
+ *  @return 0 on success, -1 for a null strategy, a feed that is not
+ *          installed, a length that is not the feed's, an empty name, or a
+ *          host with no source layer. */
+PF_API int strategy_set_symbol_feed_column(pf_strategy_t s, const char* key,
+                                           const char* timeframe, const char* name,
+                                           const double* values, int n);
+#endif
+
+#ifdef PINEFORGE_HAS_SYMBOL_FACTS_V1
+/** Set one fact of the symbol a request site names by @p key: @p field is
+ *  one of @c "canonical", @c "valid" (@c "true" / @c "false"), @c "type",
+ *  @c "timezone", @c "session", @c "currency" or @c "mintick" (a positive
+ *  decimal). Inside that site's expression @c syminfo.* reads these facts
+ *  (@c syminfo.tickerid reads @p key itself). A symbol whose @c valid is
+ *  @c "false" makes a site with @c ignore_invalid_symbol read na and fails
+ *  any other site's run closed. Facts only describe an installed feed, so
+ *  historical runs only: stream_begin() fails closed while a symbol feed is
+ *  installed.
+ *
+ *  @return 0 on success, -1 for a null strategy, an unknown field, a value
+ *          the field refuses, or a host with no source layer. */
+PF_API int strategy_set_symbol_facts(pf_strategy_t s, const char* key, const char* field,
+                                     const char* value);
+#endif
+
+#ifdef PINEFORGE_HAS_RECORDED_SERIES_V1
+/** Copy a recorded request series: the values a request returned on the
+ *  chart bars that opened at @p chart_open_ms (strictly increasing), keyed
+ *  by the request key a generated strategy reads it under. On a chart bar
+ *  with no row the series reads na. Pass @p n == 0 to clear @p key.
+ *  Historical runs only: stream_begin() fails closed while a recorded series
+ *  is installed.
+ *
+ *  @return 0 on success, -1 for a null strategy, invalid input or a host
+ *          with no source layer. */
+PF_API int strategy_set_recorded_series(pf_strategy_t s, const char* key,
+                                        const int64_t* chart_open_ms, const double* values,
+                                        int n);
+#endif
+
 /** Returns the error message captured by the most recent #run_backtest /
  *  #run_backtest_full call on this strategy.
  *

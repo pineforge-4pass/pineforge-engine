@@ -254,6 +254,11 @@ void hash_spec(F& f, const NativeRunSpec& spec,
         [cached](const NativeAuxiliaryFeed& feed) noexcept {
             return cached ? cached->auxiliary : pineforge::native_auxiliary_feed_digest(feed);
         };
+    const auto native_instrument_feeds_digest =
+        [cached](const std::vector<NativeInstrumentFeed>& feeds) noexcept {
+            return cached ? cached->instruments
+                          : pineforge::native_instrument_feeds_digest(feeds);
+        };
     f.s(spec.identity.session_key); f.u(spec.identity.run_number - f.run_base);
     f.s(spec.input_tf); f.s(spec.script_tf);
     f.b(spec.timeframe_undetected);
@@ -302,6 +307,13 @@ void hash_spec(F& f, const NativeRunSpec& spec,
     // spec that declares none keeps its pre-feed continuation identity.
     if (spec.auxiliary_feed) {
         f.u(native_auxiliary_feed_digest(*spec.auxiliary_feed));
+    }
+    // XSYM-D: other instruments' feeds fold only where a host installed one,
+    // so every spec that installs none keeps its digest; a tag word first, so
+    // the digest's bits can never read as another optional fold's word.
+    if (!spec.instrument_feeds.empty()) {
+        f.u(0x5853594d46454544ULL);  // "XSYMFEED"
+        f.u(native_instrument_feeds_digest(spec.instrument_feeds));
     }
     // L4: the generic margin model folds only where a host declared one. An
     // absent model folds nothing, so every continuation hash established
@@ -1499,6 +1511,8 @@ const NativeExecutionConsumer::SpecBarDigests& NativeExecutionConsumer::spec_bar
             digests.subscriptions = native_timeframe_subscriptions_digest(spec.subscriptions);
         if (spec.auxiliary_feed)
             digests.auxiliary = native_auxiliary_feed_digest(*spec.auxiliary_feed);
+        if (!spec.instrument_feeds.empty())
+            digests.instruments = native_instrument_feeds_digest(spec.instrument_feeds);
         spec_bar_digests_ = digests;
     }
     return *spec_bar_digests_;
@@ -1619,6 +1633,8 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
             // Only a series built from the auxiliary feed has a feed cursor;
             // a series built from the input folds exactly what it did.
             if (subscription.auxiliary) f.u(subscription.auxiliary_cursor);
+            // Likewise only an instrument series has its feed cursor.
+            if (subscription.instrument) f.u(subscription.instrument_cursor);
         }
     }
     // Bars a realtime stream appended to its declared auxiliary feed are
@@ -8307,15 +8323,24 @@ void NativeExecutionConsumer::clear_timeframe_subscriptions(BacktestEngine& engi
     // touched the vector between runs owns every state in it, and the kernel
     // takes none of them away.
     const std::size_t base = subscription_states_base_;
-    if (engine.security_eval_states_.size() == base + subscriptions_.size()) {
+    // An instrument series registered no evaluator state, so the tail holds
+    // one state per other series, in declaration order.
+    std::size_t registered = 0;
+    for (const auto& subscription : subscriptions_) {
+        if (!subscription.instrument) ++registered;
+    }
+    if (engine.security_eval_states_.size() == base + registered) {
         bool registered_by_this_consumer = true;
-        for (std::size_t i = 0; i < subscriptions_.size(); ++i) {
-            const auto& state = engine.security_eval_states_[base + i];
-            if (state.sec_id != static_cast<int>(base + i)
-                || state.tf != subscriptions_[i].tf_literal) {
+        std::size_t ordinal = 0;
+        for (const auto& subscription : subscriptions_) {
+            if (subscription.instrument) continue;
+            const auto& state = engine.security_eval_states_[base + ordinal];
+            if (state.sec_id != static_cast<int>(base + ordinal)
+                || state.tf != subscription.tf_literal) {
                 registered_by_this_consumer = false;
                 break;
             }
+            ++ordinal;
         }
         if (registered_by_this_consumer) {
             engine.security_eval_states_.erase(
@@ -8389,9 +8414,13 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
         // zero for the whole population that registers none.
         subscription_states_base_ = engine.security_eval_states_.size();
         subscriptions_.reserve(spec.subscriptions.size());
+        // Evaluator states registered so far: an instrument series takes none,
+        // so the others keep sec_id = base + their own ordinal, which is their
+        // index for every spec that declares no instrument series.
+        std::size_t registered = 0;
         for (std::size_t i = 0; i < spec.subscriptions.size(); ++i) {
             const auto& declared = spec.subscriptions[i];
-            const int sec_id = static_cast<int>(subscription_states_base_ + i);
+            const int sec_id = static_cast<int>(subscription_states_base_ + registered);
             auto parsed = native_calendar::parse_timeframe(declared.tf);
             if (!parsed) {
                 fail(engine, NativeFailure{NativeFailureCode::Calendar,
@@ -8406,6 +8435,36 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
             subscription.tf_literal = declared.tf;
             subscription.lookahead = declared.lookahead;
             subscription.gaps = declared.gaps;
+            if (declared.source == NativeSeriesSource::InstrumentFeed) {
+                // Another instrument's own bars: no evaluator, no aggregator,
+                // no authoritative feed -- the kernel hands the feed's bars
+                // over as they are, by the delivery rule of
+                // NativeInstrumentFeed, and guesses no calendar for them.
+                std::optional<std::size_t> feed_index;
+                for (std::size_t k = 0; k < spec.instrument_feeds.size(); ++k) {
+                    const auto& feed = spec.instrument_feeds[k];
+                    if (feed.instrument != declared.instrument) continue;
+                    const auto feed_tf = native_calendar::parse_timeframe(feed.tf);
+                    if (feed_tf && feed_tf->unit() == subscription.tf.unit()
+                        && feed_tf->count() == subscription.tf.count()) {
+                        feed_index = k;
+                        break;
+                    }
+                }
+                if (!feed_index) {
+                    fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                               NativeFailureOperation::Begin});
+                    render(engine,
+                           "native timeframe subscription names an undeclared instrument feed");
+                    return false;
+                }
+                subscription.sec_id = -1;
+                subscription.instrument = true;
+                subscription.instrument_feed = *feed_index;
+                subscriptions_.push_back(std::move(subscription));
+                continue;
+            }
+            ++registered;
             subscription.auxiliary = declared.source == NativeSeriesSource::AuxiliaryFeed;
             if (subscription.auxiliary && !spec.auxiliary_feed) {
                 fail(engine, NativeFailure{NativeFailureCode::Contract,
@@ -8442,7 +8501,7 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
             }
         }
         if (engine.security_eval_states_.size()
-                != subscription_states_base_ + subscriptions_.size()) {
+                != subscription_states_base_ + registered) {
             fail(engine, NativeFailure{NativeFailureCode::Contract,
                                        NativeFailureOperation::Begin});
             render(engine, "native timeframe subscription registration is inconsistent");
@@ -8450,7 +8509,7 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
         }
         engine.prepare_native_security_feeds(input_bars, n_input);
         for (auto& subscription : subscriptions_) {
-            if (!subscription.lookahead) continue;
+            if (!subscription.lookahead || subscription.instrument) continue;
             if (!project_timeframe_subscription(engine, subscription, input_bars, n_input)) {
                 return false;
             }
@@ -8495,7 +8554,7 @@ NativeSetupResult NativeExecutionConsumer::declare_timeframe_subscriptions(
     }
     result.validation = validate_native_timeframe_subscriptions(
         declared, running->spec.input_tf, running->spec.timeframe_undetected,
-        running->spec.auxiliary_feed);
+        running->spec.auxiliary_feed, running->spec.instrument_feeds);
     if (!result.validation) return result;
     running->spec.subscriptions = std::move(declared);
     forget_spec_digests();
@@ -8520,7 +8579,7 @@ NativeSetupResult NativeExecutionConsumer::declare_auxiliary_feed(
     }
     result.validation = validate_native_timeframe_subscriptions(
         running->spec.subscriptions, running->spec.input_tf,
-        running->spec.timeframe_undetected, declared);
+        running->spec.timeframe_undetected, declared, running->spec.instrument_feeds);
     if (!result.validation) return result;
     running->spec.auxiliary_feed = std::move(declared);
     forget_spec_digests();
@@ -8763,7 +8822,8 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
 
 bool NativeExecutionConsumer::pump_timeframe_subscriptions(
         BacktestEngine& engine, const Bar& bar, int index,
-        std::int64_t input_period_end_ms) {
+        const native_calendar::NativeInterval& input_interval) {
+    const std::int64_t input_period_end_ms = input_interval.next_period_open_ms;
     // barmerge.gaps_on for one series: the input delivered nothing of its
     // own, so the series has no value on it -- on the pull side
     // (native_series_bar answers nullopt) and on the push side
@@ -8777,6 +8837,11 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
         if (subscription.gaps) engine.clear_security(subscription.sec_id);
     };
     for (auto& subscription : subscriptions_) {
+        if (subscription.instrument) {
+            if (!pump_instrument_subscription(engine, subscription, bar, input_interval))
+                return false;
+            continue;
+        }
         bool delivered = false;
         if (subscription.lookahead) {
             while (subscription.projected_cursor < subscription.projected_bars.size()
@@ -8905,6 +8970,13 @@ bool NativeExecutionConsumer::deliver_timeframe_bar(
     }
     context.completion = completion;
     context.delivered_at_ms = delivered_at_ms;
+    return invoke_timeframe_callback(engine, bucket, context);
+}
+
+bool NativeExecutionConsumer::invoke_timeframe_callback(
+        BacktestEngine& engine, const Bar& bucket, const NativeTimeframeBarContext& context) {
+    auto* host = native_host(engine);
+    if (host == nullptr) return true;
     in_callback_ = true;
     try {
         host->on_native_timeframe_bar(bucket, context);
@@ -8927,6 +8999,67 @@ bool NativeExecutionConsumer::deliver_timeframe_bar(
     }
     in_callback_ = false;
     return !failed();
+}
+
+// One input's deliveries to an InstrumentFeed series (the rule is
+// NativeInstrumentFeed's, in native_run_spec.hpp): every bar of the feed not
+// yet handed over that is visible at this input -- closed by the input's last
+// traded close, or, under lookahead, open by the input's open -- in feed
+// order. Both the opens and the closes of a feed strictly increase, so the
+// first bar that is not yet visible ends the slice. The bar's interval is the
+// feed's own: its open and its close_ms, never a calendar of the run's.
+bool NativeExecutionConsumer::pump_instrument_subscription(
+        BacktestEngine& engine, TimeframeSubscription& subscription, const Bar& bar,
+        const native_calendar::NativeInterval& input_interval) {
+    const auto* spec = spec_ptr();
+    if (spec == nullptr || subscription.instrument_feed >= spec->instrument_feeds.size()) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Input});
+        render(engine, "native instrument series lost its feed");
+        return false;
+    }
+    const NativeInstrumentFeed& feed = spec->instrument_feeds[subscription.instrument_feed];
+    // The input's own calendar interval. A raw label partition presents every
+    // input as a zero-length interval (timestamp_partition), which states no
+    // close to judge a feed bar against, so the rule reads the interval the
+    // run's session, zone and input timeframe give the input's label. It is
+    // resolved here without touching the interval cache: the run's other
+    // lookups keep answering exactly what they did.
+    native_calendar::NativeInterval horizon = input_interval;
+    if (uses_raw_label_partition()) {
+        if (const auto resolved = native_calendar::interval_containing(
+                calendar_, input_tf_, bar.timestamp, calendar_memo_)) {
+            horizon = *resolved;
+        }
+    }
+    const std::size_t total = feed.bars.size();
+    bool delivered = false;
+    while (subscription.instrument_cursor < total) {
+        const std::size_t at = subscription.instrument_cursor;
+        const bool visible = subscription.lookahead
+            ? feed.bars[at].timestamp <= horizon.open_ms
+            : feed.close_ms[at] <= horizon.last_traded_close_ms;
+        if (!visible) break;
+        ++subscription.instrument_cursor;
+        delivered = true;
+        // The pull accessor answers with this bar for the whole callback.
+        subscription.latest = feed.bars[at];
+        NativeTimeframeBarContext context;
+        context.subscription = subscription.index;
+        context.interval.open_ms = feed.bars[at].timestamp;
+        context.interval.eligible_open_ms = feed.bars[at].timestamp;
+        context.interval.last_traded_close_ms = feed.close_ms[at];
+        context.interval.next_period_open_ms = feed.close_ms[at];
+        context.interval.next_input_open_ms =
+            at + 1 < total ? feed.bars[at + 1].timestamp : feed.close_ms[at];
+        context.completion = NativeCompletionKind::Confirmed;
+        context.delivered_at_ms = bar.timestamp;
+        if (!invoke_timeframe_callback(engine, feed.bars[at], context)) return false;
+    }
+    // gaps: the subscription contract's rule, on the pull side. An instrument
+    // series has no evaluator of the kernel's to clear on the push side; its
+    // host reads each bar in the callback above.
+    if (!delivered && subscription.gaps) subscription.latest.reset();
+    return true;
 }
 
 std::optional<Bar> NativeExecutionConsumer::series_bar(std::size_t subscription) const {
@@ -9096,8 +9229,7 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
             processing_input_ = false;
             return false;
         }
-        if (!pump_timeframe_subscriptions(engine, bar, index,
-                                          interval->next_period_open_ms)) {
+        if (!pump_timeframe_subscriptions(engine, bar, index, *interval)) {
             processing_input_ = false;
             return false;
         }
@@ -9418,6 +9550,13 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
             return false;
         }
         const auto* spec = spec_ptr();
+        // An instrument feed is installed whole at begin and has no realtime
+        // ingress, so a live input would read a feed that stopped at the
+        // warmup: historical runs only.
+        if (spec != nullptr && !spec->instrument_feeds.empty()) {
+            present_refusal(engine, "native instrument feeds are not supported by streaming");
+            return false;
+        }
         auto parsed = native_calendar::parse_timeframe(spec->input_tf);
         auto script = native_calendar::parse_timeframe(spec->script_tf);
         if (!parsed || !script) {

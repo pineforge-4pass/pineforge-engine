@@ -99,6 +99,9 @@ struct StagedConfiguration {
     std::vector<std::int64_t> account_fx_effective_from_ms{};
     std::vector<double> account_fx_per_quote{};
     std::optional<double> quantity_grid{};
+    // Other symbols' feeds the host installed for its request sites (lane
+    // XSYM-D); project() hands them to the kernel as its instrument feeds.
+    std::vector<NativeInstrumentFeed> instrument_feeds{};
 };
 
 enum class PineOrderFamily : std::uint8_t {

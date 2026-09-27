@@ -2138,6 +2138,10 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     spec.fee_kind = fee_kind_for(config.commission_type);
     spec.fee_value = config.commission_value;
     spec.quantity_grid = staged.quantity_grid;
+    // Lane XSYM-D: another symbol's bars a request site reads are the
+    // kernel's instrument feeds, merged by interval there. A run that
+    // installs none leaves the field empty, which folds nothing.
+    spec.instrument_feeds = staged.instrument_feeds;
     // A13: source hosts opt into the generic tolerant batch ingress.
     // Native-only hosts retain the strict Canonical/None defaults.
     spec.slot_label_policy = NativeSlotLabelPolicy::FeedTolerant;

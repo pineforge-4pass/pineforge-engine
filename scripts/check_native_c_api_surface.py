@@ -108,7 +108,12 @@ ENUM_TWINS: dict[str, tuple[str, str, dict[str, str]]] = {
     "pf_native_open_bar_view_e": ("native_run_spec.hpp", "NativeOpenBarView", {}),
     "pf_native_liquidation_sizing_e": ("native_run_spec.hpp", "NativeLiquidationSizing", {}),
     "pf_native_event_retention_e": ("native_run_spec.hpp", "NativeEventRetention", {}),
-    "pf_native_series_source_e": ("native_run_spec.hpp", "NativeSeriesSource", {}),
+    "pf_native_series_source_e": ("native_run_spec.hpp", "NativeSeriesSource", {
+        "InstrumentFeed":
+            "a C run spec installs no instrument feed and a C subscription row carries no "
+            "instrument key, so a C series cannot read one (lane XSYM-D; the 1.0 C boundary "
+            "table)",
+    }),
     "pf_native_size_price_e": ("native_order.hpp", "SizePrice", {}),
     "pf_native_scope_basis_e": ("native_order.hpp", "ScopeBasis", {}),
     "pf_native_liquidation_check_e": ("native_run_spec.hpp", "NativeLiquidationCheck", {}),
@@ -220,6 +225,9 @@ C_V1_EXCLUSIONS: dict[str, tuple[str, str, tuple[tuple[str, str], ...]]] = {
         ("@declarations", r"\bstrategy_native_declare_opened_lot_entry_bar_mask_(?!v1\b)\w+"),)),
     "timeframe_undetected": ("native_run_spec.hpp", "bool timeframe_undetected", (
         ("@declarations", r"\b\w*undetected\w*"),)),
+    "instrument_feeds": ("native_run_spec.hpp", "struct NativeInstrumentFeed", (
+        ("@declarations", r"\bpf_native_instrument\w*|\b\w*instrument_feed\w*"),
+        ("pf_native_subscription_v1", r"\b\w*instrument\w*"))),
     "inherited_statistics": ("engine.hpp", "double max_contracts_held_all() const", (
         ("@declarations", r"\bstrategy_\w*(?:max_contracts_held|capital_held|open_profit"
                           r"|gross_profit|gross_loss|net_profit|runup|drawdown)\w*"),)),

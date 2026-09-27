@@ -702,6 +702,24 @@ PF_PIN_WORD(pineforge::NativeRunSpecError::SessionKeyChangedOnReuse,
             PF_NATIVE_SPEC_ERROR_SESSION_KEY_CHANGED_ON_REUSE);
 PF_PIN_WORD(pineforge::NativeRunSpecError::RunNumberNotAboveConsumedHighWater,
             PF_NATIVE_SPEC_ERROR_RUN_NUMBER_NOT_ABOVE_CONSUMED_HIGH_WATER);
+PF_PIN_WORD(pineforge::NativeRunSpecError::InvalidInstrumentFeedTimeframe,
+            PF_NATIVE_SPEC_ERROR_INVALID_INSTRUMENT_FEED_TIMEFRAME);
+PF_PIN_WORD(pineforge::NativeRunSpecError::DuplicateInstrumentFeed,
+            PF_NATIVE_SPEC_ERROR_DUPLICATE_INSTRUMENT_FEED);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnorderedInstrumentFeedBars,
+            PF_NATIVE_SPEC_ERROR_UNORDERED_INSTRUMENT_FEED_BARS);
+PF_PIN_WORD(pineforge::NativeRunSpecError::InvalidInstrumentFeedBar,
+            PF_NATIVE_SPEC_ERROR_INVALID_INSTRUMENT_FEED_BAR);
+PF_PIN_WORD(pineforge::NativeRunSpecError::InvalidInstrumentFeedClose,
+            PF_NATIVE_SPEC_ERROR_INVALID_INSTRUMENT_FEED_CLOSE);
+PF_PIN_WORD(pineforge::NativeRunSpecError::InvalidInstrumentFeedColumn,
+            PF_NATIVE_SPEC_ERROR_INVALID_INSTRUMENT_FEED_COLUMN);
+PF_PIN_WORD(pineforge::NativeRunSpecError::SubscriptionWithoutInstrumentFeed,
+            PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_WITHOUT_INSTRUMENT_FEED);
+PF_PIN_WORD(pineforge::NativeRunSpecError::InstrumentSubscriptionBars,
+            PF_NATIVE_SPEC_ERROR_INSTRUMENT_SUBSCRIPTION_BARS);
+PF_PIN_WORD(pineforge::NativeRunSpecError::InstrumentOnNonInstrumentSeries,
+            PF_NATIVE_SPEC_ERROR_INSTRUMENT_ON_NON_INSTRUMENT_SERIES);
 PF_PIN_WORD(pineforge::NativeRunSpecField::None, PF_NATIVE_SPEC_FIELD_NONE);
 PF_PIN_WORD(pineforge::NativeRunSpecField::SessionKey, PF_NATIVE_SPEC_FIELD_SESSION_KEY);
 PF_PIN_WORD(pineforge::NativeRunSpecField::RunNumber, PF_NATIVE_SPEC_FIELD_RUN_NUMBER);
@@ -790,6 +808,18 @@ PF_PIN_WORD(pineforge::NativeRunSpecField::SubscriptionSource,
 PF_PIN_WORD(pineforge::NativeRunSpecField::EventRetention, PF_NATIVE_SPEC_FIELD_EVENT_RETENTION);
 PF_PIN_WORD(pineforge::NativeRunSpecField::QuantityTolerance,
             PF_NATIVE_SPEC_FIELD_QUANTITY_TOLERANCE);
+PF_PIN_WORD(pineforge::NativeRunSpecField::InstrumentFeedInstrument,
+            PF_NATIVE_SPEC_FIELD_INSTRUMENT_FEED_INSTRUMENT);
+PF_PIN_WORD(pineforge::NativeRunSpecField::InstrumentFeedTimeframe,
+            PF_NATIVE_SPEC_FIELD_INSTRUMENT_FEED_TIMEFRAME);
+PF_PIN_WORD(pineforge::NativeRunSpecField::InstrumentFeedBars,
+            PF_NATIVE_SPEC_FIELD_INSTRUMENT_FEED_BARS);
+PF_PIN_WORD(pineforge::NativeRunSpecField::InstrumentFeedClose,
+            PF_NATIVE_SPEC_FIELD_INSTRUMENT_FEED_CLOSE);
+PF_PIN_WORD(pineforge::NativeRunSpecField::InstrumentFeedColumns,
+            PF_NATIVE_SPEC_FIELD_INSTRUMENT_FEED_COLUMNS);
+PF_PIN_WORD(pineforge::NativeRunSpecField::SubscriptionInstrument,
+            PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_INSTRUMENT);
 PF_PIN_WORD(pineforge::NativeFxCurveError::None, PF_NATIVE_FX_CURVE_ERROR_NONE);
 PF_PIN_WORD(pineforge::NativeFxCurveError::LengthMismatch,
             PF_NATIVE_FX_CURVE_ERROR_LENGTH_MISMATCH);
@@ -1157,6 +1187,22 @@ constexpr std::uint32_t c_word(pineforge::NativeRunSpecError value) noexcept {
     case V::SessionKeyChangedOnReuse: return PF_NATIVE_SPEC_ERROR_SESSION_KEY_CHANGED_ON_REUSE;
     case V::RunNumberNotAboveConsumedHighWater:
         return PF_NATIVE_SPEC_ERROR_RUN_NUMBER_NOT_ABOVE_CONSUMED_HIGH_WATER;
+    case V::InvalidInstrumentFeedTimeframe:
+        return PF_NATIVE_SPEC_ERROR_INVALID_INSTRUMENT_FEED_TIMEFRAME;
+    case V::DuplicateInstrumentFeed: return PF_NATIVE_SPEC_ERROR_DUPLICATE_INSTRUMENT_FEED;
+    case V::UnorderedInstrumentFeedBars:
+        return PF_NATIVE_SPEC_ERROR_UNORDERED_INSTRUMENT_FEED_BARS;
+    case V::InvalidInstrumentFeedBar: return PF_NATIVE_SPEC_ERROR_INVALID_INSTRUMENT_FEED_BAR;
+    case V::InvalidInstrumentFeedClose:
+        return PF_NATIVE_SPEC_ERROR_INVALID_INSTRUMENT_FEED_CLOSE;
+    case V::InvalidInstrumentFeedColumn:
+        return PF_NATIVE_SPEC_ERROR_INVALID_INSTRUMENT_FEED_COLUMN;
+    case V::SubscriptionWithoutInstrumentFeed:
+        return PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_WITHOUT_INSTRUMENT_FEED;
+    case V::InstrumentSubscriptionBars:
+        return PF_NATIVE_SPEC_ERROR_INSTRUMENT_SUBSCRIPTION_BARS;
+    case V::InstrumentOnNonInstrumentSeries:
+        return PF_NATIVE_SPEC_ERROR_INSTRUMENT_ON_NON_INSTRUMENT_SERIES;
     }
     return static_cast<std::uint32_t>(value);
 }
@@ -1230,6 +1276,12 @@ constexpr std::uint32_t c_word(pineforge::NativeRunSpecField value) noexcept {
     case V::SubscriptionSource: return PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_SOURCE;
     case V::EventRetention: return PF_NATIVE_SPEC_FIELD_EVENT_RETENTION;
     case V::QuantityTolerance: return PF_NATIVE_SPEC_FIELD_QUANTITY_TOLERANCE;
+    case V::InstrumentFeedInstrument: return PF_NATIVE_SPEC_FIELD_INSTRUMENT_FEED_INSTRUMENT;
+    case V::InstrumentFeedTimeframe: return PF_NATIVE_SPEC_FIELD_INSTRUMENT_FEED_TIMEFRAME;
+    case V::InstrumentFeedBars: return PF_NATIVE_SPEC_FIELD_INSTRUMENT_FEED_BARS;
+    case V::InstrumentFeedClose: return PF_NATIVE_SPEC_FIELD_INSTRUMENT_FEED_CLOSE;
+    case V::InstrumentFeedColumns: return PF_NATIVE_SPEC_FIELD_INSTRUMENT_FEED_COLUMNS;
+    case V::SubscriptionInstrument: return PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_INSTRUMENT;
     }
     return static_cast<std::uint32_t>(value);
 }

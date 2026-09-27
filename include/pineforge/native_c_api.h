@@ -1241,9 +1241,21 @@ typedef enum pf_native_spec_error_e {
                                                                        *   this word. */
     PF_NATIVE_SPEC_ERROR_SESSION_KEY_CHANGED_ON_REUSE           = 56, /**< A reused host's
                                                                        *   session key changed. */
-    PF_NATIVE_SPEC_ERROR_RUN_NUMBER_NOT_ABOVE_CONSUMED_HIGH_WATER = 57 /**< A reused host's
-                                                                         *   run number did not
-                                                                         *   exceed its high-water. */
+    PF_NATIVE_SPEC_ERROR_RUN_NUMBER_NOT_ABOVE_CONSUMED_HIGH_WATER = 57, /**< A reused host's
+                                                                          *   run number did not
+                                                                          *   exceed its high-water. */
+    /* 58-66: the instrument-feed refusals of a C++ spec (NativeRunSpec::
+     * instrument_feeds). A C run spec has no instrument feed, so no C call
+     * answers them; they are named so the translation stays exhaustive. */
+    PF_NATIVE_SPEC_ERROR_INVALID_INSTRUMENT_FEED_TIMEFRAME      = 58,
+    PF_NATIVE_SPEC_ERROR_DUPLICATE_INSTRUMENT_FEED              = 59,
+    PF_NATIVE_SPEC_ERROR_UNORDERED_INSTRUMENT_FEED_BARS         = 60,
+    PF_NATIVE_SPEC_ERROR_INVALID_INSTRUMENT_FEED_BAR            = 61,
+    PF_NATIVE_SPEC_ERROR_INVALID_INSTRUMENT_FEED_CLOSE          = 62,
+    PF_NATIVE_SPEC_ERROR_INVALID_INSTRUMENT_FEED_COLUMN         = 63,
+    PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_WITHOUT_INSTRUMENT_FEED   = 64,
+    PF_NATIVE_SPEC_ERROR_INSTRUMENT_SUBSCRIPTION_BARS           = 65,
+    PF_NATIVE_SPEC_ERROR_INSTRUMENT_ON_NON_INSTRUMENT_SERIES    = 66
 } pf_native_spec_error_t;
 
 /** Where a declaration was refused — `NativeRunSpecField`, the first field
@@ -1318,7 +1330,14 @@ typedef enum pf_native_spec_field_e {
     PF_NATIVE_SPEC_FIELD_AUXILIARY_FEED_BARS         = 62,
     PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_SOURCE         = 63,
     PF_NATIVE_SPEC_FIELD_EVENT_RETENTION             = 64,
-    PF_NATIVE_SPEC_FIELD_QUANTITY_TOLERANCE          = 65
+    PF_NATIVE_SPEC_FIELD_QUANTITY_TOLERANCE          = 65,
+    /* 66-71: the instrument-feed fields of a C++ spec; see 58-66 above. */
+    PF_NATIVE_SPEC_FIELD_INSTRUMENT_FEED_INSTRUMENT  = 66,
+    PF_NATIVE_SPEC_FIELD_INSTRUMENT_FEED_TIMEFRAME   = 67,
+    PF_NATIVE_SPEC_FIELD_INSTRUMENT_FEED_BARS        = 68,
+    PF_NATIVE_SPEC_FIELD_INSTRUMENT_FEED_CLOSE       = 69,
+    PF_NATIVE_SPEC_FIELD_INSTRUMENT_FEED_COLUMNS     = 70,
+    PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_INSTRUMENT     = 71
 } pf_native_spec_field_t;
 
 /** Why an append was refused — `NativeAuxiliaryAppendError`: the `error`

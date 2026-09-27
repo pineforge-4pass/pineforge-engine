@@ -211,11 +211,87 @@ bool conflicting_bars(const std::vector<Bar>& left, const std::vector<Bar>& righ
     return false;
 }
 
+// An instrument feed's key: the instrument string byte for byte and the
+// timeframe as parsed, so "D" and "1D" name one feed.
+bool same_instrument_key(const std::string& instrument, const native_calendar::Timeframe& tf,
+                         const std::string& other_instrument,
+                         const native_calendar::Timeframe& other_tf) noexcept {
+    return instrument == other_instrument && tf.unit() == other_tf.unit()
+        && tf.count() == other_tf.count();
+}
+
+// An instrument bar carries finite prices and a volume that is finite and
+// nonnegative, or NaN: an instrument that publishes no volume (an index, a
+// yield) is data, not an invalid bar. Nothing requires a positive price or
+// the high/low to bracket the body: the kernel trades nothing on the feed.
+bool valid_instrument_bar(const Bar& bar) noexcept {
+    return std::isfinite(bar.open) && std::isfinite(bar.high) && std::isfinite(bar.low)
+        && std::isfinite(bar.close) && (std::isnan(bar.volume) || nonnegative(bar.volume));
+}
+
+// The installed instrument feeds, judged without a calendar: each key's
+// strings and literal, one feed per key, and each feed's bars, closes and
+// columns. Parsing a literal may allocate; the callers convert that.
+Result instrument_feed_shapes(const std::vector<NativeInstrumentFeed>& feeds) {
+    std::vector<native_calendar::Timeframe> keys;
+    keys.reserve(feeds.size());
+    for (std::size_t f = 0; f < feeds.size(); ++f) {
+        const auto& feed = feeds[f];
+        if (const auto instrument =
+                validate_string(feed.instrument, Field::InstrumentFeedInstrument, true);
+            !instrument) {
+            return instrument;
+        }
+        if (const auto tf = validate_string(feed.tf, Field::InstrumentFeedTimeframe, true); !tf)
+            return tf;
+        const auto parsed = native_calendar::parse_timeframe(feed.tf);
+        if (!parsed) return {Error::InvalidInstrumentFeedTimeframe, Field::InstrumentFeedTimeframe};
+        for (std::size_t seen = 0; seen < keys.size(); ++seen) {
+            if (same_instrument_key(feeds[seen].instrument, keys[seen], feed.instrument, *parsed))
+                return {Error::DuplicateInstrumentFeed, Field::InstrumentFeedTimeframe};
+        }
+        keys.push_back(*parsed);
+        const auto& bars = feed.bars;
+        for (std::size_t i = 0; i < bars.size(); ++i) {
+            if (!valid_instrument_bar(bars[i]))
+                return {Error::InvalidInstrumentFeedBar, Field::InstrumentFeedBars};
+            if (i > 0 && bars[i].timestamp <= bars[i - 1].timestamp)
+                return {Error::UnorderedInstrumentFeedBars, Field::InstrumentFeedBars};
+        }
+        if (feed.close_ms.size() != bars.size())
+            return {Error::InvalidInstrumentFeedClose, Field::InstrumentFeedClose};
+        for (std::size_t i = 0; i < bars.size(); ++i) {
+            if (feed.close_ms[i] <= bars[i].timestamp
+                || (i + 1 < bars.size() && feed.close_ms[i] > bars[i + 1].timestamp)) {
+                return {Error::InvalidInstrumentFeedClose, Field::InstrumentFeedClose};
+            }
+        }
+        for (std::size_t c = 0; c < feed.columns.size(); ++c) {
+            const auto& column = feed.columns[c];
+            if (const auto name =
+                    validate_string(column.name, Field::InstrumentFeedColumns, true);
+                !name) {
+                return {Error::InvalidInstrumentFeedColumn, Field::InstrumentFeedColumns};
+            }
+            if (column.values.size() != bars.size())
+                return {Error::InvalidInstrumentFeedColumn, Field::InstrumentFeedColumns};
+            for (std::size_t other = 0; other < c; ++other) {
+                if (feed.columns[other].name == column.name)
+                    return {Error::InvalidInstrumentFeedColumn, Field::InstrumentFeedColumns};
+            }
+        }
+    }
+    return {};
+}
+
 // Everything a declared series can be judged on without a calendar: the
 // pairing with a detected input timeframe, the literal itself, the order of
 // the bars it supplies, and that the bars it is built from were declared.
+// `instrument_feeds` is null for a judgement that knows of none, which
+// refuses every InstrumentFeed series as SubscriptionWithoutInstrumentFeed.
 Result subscription_shapes(const std::vector<NativeTimeframeSubscription>& subscriptions,
-                           bool timeframe_undetected, bool has_auxiliary_feed) noexcept {
+                           bool timeframe_undetected, bool has_auxiliary_feed,
+                           const std::vector<NativeInstrumentFeed>* instrument_feeds) {
     if (!subscriptions.empty() && timeframe_undetected) {
         return {Error::SubscriptionWithoutTimeframe, Field::SubscriptionTimeframe};
     }
@@ -237,9 +313,37 @@ Result subscription_shapes(const std::vector<NativeTimeframeSubscription>& subsc
                 return {Error::SubscriptionWithoutAuxiliaryFeed, Field::SubscriptionSource};
             }
             break;
+        case NativeSeriesSource::InstrumentFeed: {
+            if (const auto instrument = validate_string(
+                    subscription.instrument, Field::SubscriptionInstrument, true);
+                !instrument) {
+                return instrument;
+            }
+            if (!bars.empty())
+                return {Error::InstrumentSubscriptionBars, Field::SubscriptionBars};
+            const auto parsed = native_calendar::parse_timeframe(subscription.tf);
+            if (!parsed)
+                return {Error::InvalidSubscriptionTimeframe, Field::SubscriptionTimeframe};
+            bool installed = false;
+            if (instrument_feeds != nullptr) {
+                for (const auto& feed : *instrument_feeds) {
+                    const auto feed_tf = native_calendar::parse_timeframe(feed.tf);
+                    if (feed_tf && same_instrument_key(feed.instrument, *feed_tf,
+                                                       subscription.instrument, *parsed)) {
+                        installed = true;
+                        break;
+                    }
+                }
+            }
+            if (!installed)
+                return {Error::SubscriptionWithoutInstrumentFeed, Field::SubscriptionInstrument};
+            continue;
+        }
         default:
             return {Error::UnknownSeriesSource, Field::SubscriptionSource};
         }
+        if (!subscription.instrument.empty())
+            return {Error::InstrumentOnNonInstrumentSeries, Field::SubscriptionInstrument};
     }
     return {};
 }
@@ -308,12 +412,18 @@ Result subscription_pairings(const std::vector<NativeTimeframeSubscription>& sub
                              const native_calendar::Timeframe* auxiliary) {
     const Field active_field = Field::SubscriptionTimeframe;
     std::vector<std::int64_t> keys;
+    // keys[k] is the period key of subscriptions[keyed[k]]: an InstrumentFeed
+    // series pairs with nothing and shares no feed store, so it holds none.
+    std::vector<std::size_t> keyed;
     keys.reserve(subscriptions.size());
-    for (const auto& subscription : subscriptions) {
+    keyed.reserve(subscriptions.size());
+    for (std::size_t index = 0; index < subscriptions.size(); ++index) {
+        const auto& subscription = subscriptions[index];
         const auto requested = native_calendar::parse_timeframe(subscription.tf);
         if (!requested) {
             return {Error::InvalidSubscriptionTimeframe, active_field};
         }
+        if (subscription.source == NativeSeriesSource::InstrumentFeed) continue;
         const bool from_feed = subscription.source == NativeSeriesSource::AuxiliaryFeed;
         if (from_feed && auxiliary == nullptr) {
             return {Error::SubscriptionWithoutAuxiliaryFeed, Field::SubscriptionSource};
@@ -336,12 +446,13 @@ Result subscription_pairings(const std::vector<NativeTimeframeSubscription>& sub
         const std::int64_t key = subscription_period_key(*requested);
         for (std::size_t seen = 0; seen < keys.size(); ++seen) {
             if (keys[seen] != key) continue;
-            if (conflicting_bars(subscriptions[seen].authoritative_bars,
+            if (conflicting_bars(subscriptions[keyed[seen]].authoritative_bars,
                                  subscription.authoritative_bars)) {
                 return {Error::DuplicateSubscriptionTimeframe, Field::SubscriptionBars};
             }
         }
         keys.push_back(key);
+        keyed.push_back(index);
     }
     return {};
 }
@@ -614,11 +725,21 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
         !feed) {
         return feed;
     }
-    if (const auto series =
-            subscription_shapes(spec.subscriptions, spec.timeframe_undetected,
-                                spec.auxiliary_feed.has_value());
-        !series) {
-        return series;
+    Field shapes_field = Field::InstrumentFeedTimeframe;
+    try {
+        if (const auto feeds = instrument_feed_shapes(spec.instrument_feeds); !feeds)
+            return feeds;
+        shapes_field = Field::SubscriptionTimeframe;
+        if (const auto series =
+                subscription_shapes(spec.subscriptions, spec.timeframe_undetected,
+                                    spec.auxiliary_feed.has_value(), &spec.instrument_feeds);
+            !series) {
+            return series;
+        }
+    } catch (const std::bad_alloc&) {
+        return {Error::AllocationFailure, shapes_field};
+    } catch (...) {
+        return {Error::CalendarFailure, shapes_field};
     }
     if (spec.intrabar.value.index() > 2) {
         return {Error::InvalidIntrabarPath, Field::IntrabarTimeframe};
@@ -866,12 +987,41 @@ NativeRunSpecValidation validate_native_timeframe_subscriptions(
         const std::vector<NativeTimeframeSubscription>& subscriptions,
         const std::string& input_tf, bool timeframe_undetected,
         const std::optional<NativeAuxiliaryFeed>& auxiliary_feed) noexcept {
+    static const std::vector<NativeInstrumentFeed> none;
+    return validate_native_timeframe_subscriptions(subscriptions, input_tf,
+                                                   timeframe_undetected, auxiliary_feed, none);
+}
+
+NativeRunSpecValidation validate_native_instrument_feeds(
+        const std::vector<NativeInstrumentFeed>& instrument_feeds) noexcept {
+    try {
+        return instrument_feed_shapes(instrument_feeds);
+    } catch (const std::bad_alloc&) {
+        return {Error::AllocationFailure, Field::InstrumentFeedTimeframe};
+    } catch (...) {
+        return {Error::CalendarFailure, Field::InstrumentFeedTimeframe};
+    }
+}
+
+NativeRunSpecValidation validate_native_timeframe_subscriptions(
+        const std::vector<NativeTimeframeSubscription>& subscriptions,
+        const std::string& input_tf, bool timeframe_undetected,
+        const std::optional<NativeAuxiliaryFeed>& auxiliary_feed,
+        const std::vector<NativeInstrumentFeed>& instrument_feeds) noexcept {
+    const auto instruments = validate_native_instrument_feeds(instrument_feeds);
+    if (!instruments) return instruments;
     const auto feed = validate_native_auxiliary_feed(auxiliary_feed, input_tf,
                                                      timeframe_undetected);
     if (!feed) return feed;
-    const auto shapes = subscription_shapes(subscriptions, timeframe_undetected,
-                                            auxiliary_feed.has_value());
-    if (!shapes) return shapes;
+    try {
+        const auto shapes = subscription_shapes(subscriptions, timeframe_undetected,
+                                                auxiliary_feed.has_value(), &instrument_feeds);
+        if (!shapes) return shapes;
+    } catch (const std::bad_alloc&) {
+        return {Error::AllocationFailure, Field::SubscriptionTimeframe};
+    } catch (...) {
+        return {Error::CalendarFailure, Field::SubscriptionTimeframe};
+    }
     if (subscriptions.empty() || timeframe_undetected) return {};
     try {
         const auto input = native_calendar::parse_timeframe(input_tf);
@@ -936,6 +1086,9 @@ std::uint64_t native_timeframe_subscriptions_digest(
         if (subscription.source != NativeSeriesSource::Input) {
             u(3u);
             u(static_cast<std::uint64_t>(subscription.source));
+            // The instrument key exists only for a series reading one.
+            if (subscription.source == NativeSeriesSource::InstrumentFeed)
+                s(subscription.instrument);
         }
         u(subscription.authoritative_bars.size());
         for (const auto& bar : subscription.authoritative_bars) {
@@ -964,6 +1117,49 @@ std::uint64_t native_auxiliary_feed_digest(const NativeAuxiliaryFeed& feed) noex
     for (const auto& bar : feed.bars) {
         d(bar.open); d(bar.high); d(bar.low); d(bar.close); d(bar.volume);
         i(bar.timestamp);
+    }
+    return state;
+}
+
+std::uint64_t native_instrument_feeds_digest(
+        const std::vector<NativeInstrumentFeed>& instrument_feeds) noexcept {
+    std::uint64_t state = 1469598103934665603ULL;
+    const auto bytes = [&state](const void* data, std::size_t count) noexcept {
+        const auto* values = static_cast<const unsigned char*>(data);
+        for (std::size_t i = 0; i < count; ++i) {
+            state ^= values[i];
+            state *= 1099511628211ULL;
+        }
+    };
+    const auto u = [&bytes](std::uint64_t value) noexcept { bytes(&value, sizeof value); };
+    const auto i = [&bytes](std::int64_t value) noexcept { bytes(&value, sizeof value); };
+    // A NaN (an absent volume or column value) folds as one quiet NaN, so a
+    // feed digests the same whichever NaN payload its producer wrote.
+    const auto d = [&bytes](double value) noexcept {
+        if (std::isnan(value)) value = std::numeric_limits<double>::quiet_NaN();
+        bytes(&value, sizeof value);
+    };
+    const auto s = [&u, &bytes](const std::string& value) noexcept {
+        u(value.size());
+        bytes(value.data(), value.size());
+    };
+    u(instrument_feeds.size());
+    for (const auto& feed : instrument_feeds) {
+        s(feed.instrument);
+        s(feed.tf);
+        u(feed.bars.size());
+        for (std::size_t k = 0; k < feed.bars.size(); ++k) {
+            const Bar& bar = feed.bars[k];
+            d(bar.open); d(bar.high); d(bar.low); d(bar.close); d(bar.volume);
+            i(bar.timestamp);
+            i(k < feed.close_ms.size() ? feed.close_ms[k] : 0);
+        }
+        u(feed.columns.size());
+        for (const auto& column : feed.columns) {
+            s(column.name);
+            u(column.values.size());
+            for (const double value : column.values) d(value);
+        }
     }
     return state;
 }

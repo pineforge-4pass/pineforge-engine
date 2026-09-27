@@ -9,7 +9,7 @@
  *     BEFORE shipping a .so that consumers depend on.
  *   - The runtime-library-side `extern "C"` symbols (the closed-trade
  *     incarnation accessor, setters, strategy_get_last_error,
- *     the auxiliary-security-feed setter, the strategy_stream_* lifecycle,
+ *     the security-feed and symbol-data setters, the strategy_stream_* lifecycle,
  *     native stream bar input/action polling/fingerprint/API-version exports,
  *     the live-runtime surface (strategy_request_abort,
  *     strategy_last_run_status, strategy_set_realtime_tail,
@@ -963,5 +963,62 @@ PF_API int strategy_configure_native_fx_curve_ext_v1(
         pf_native_fx_curve_error_t* error, uint64_t* index) {
     return configure_native_fx_curve_cabi(s, curve, error, index);
 }
+
+/* Another symbol's data for request.security (lane XSYM-D): the four doors
+ * of a source host, reached through BacktestEngine's virtuals so this kernel
+ * unit names no source-layer type. A host with no source layer answers -1. */
+#ifdef PINEFORGE_HAS_SYMBOL_FEED_V1
+PF_API int strategy_set_symbol_feed(pf_strategy_t s, const char* key, const char* timeframe,
+                                    const pf_bar_t* bars, const int64_t* close_ms, int n) {
+    return pf_cabi_int([&] {
+        if (!s || !key || !timeframe || n < 0 || (n > 0 && (!bars || !close_ms))) return -1;
+        const auto* native = reinterpret_cast<const pineforge::Bar*>(bars);
+        return static_cast<pineforge::BacktestEngine*>(s)
+                       ->set_symbol_feed(std::string(key), std::string(timeframe), native,
+                                         close_ms, n)
+            ? 0 : -1;
+    });
+}
+#endif
+
+#ifdef PINEFORGE_HAS_SYMBOL_FEED_COLUMN_V1
+PF_API int strategy_set_symbol_feed_column(pf_strategy_t s, const char* key,
+                                           const char* timeframe, const char* name,
+                                           const double* values, int n) {
+    return pf_cabi_int([&] {
+        if (!s || !key || !timeframe || !name || n < 0 || (n > 0 && !values)) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)
+                       ->set_symbol_feed_column(std::string(key), std::string(timeframe),
+                                                std::string(name), values, n)
+            ? 0 : -1;
+    });
+}
+#endif
+
+#ifdef PINEFORGE_HAS_SYMBOL_FACTS_V1
+PF_API int strategy_set_symbol_facts(pf_strategy_t s, const char* key, const char* field,
+                                     const char* value) {
+    return pf_cabi_int([&] {
+        if (!s || !key || !field || !value) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)
+                       ->set_symbol_facts(std::string(key), std::string(field),
+                                          std::string(value))
+            ? 0 : -1;
+    });
+}
+#endif
+
+#ifdef PINEFORGE_HAS_RECORDED_SERIES_V1
+PF_API int strategy_set_recorded_series(pf_strategy_t s, const char* key,
+                                        const int64_t* chart_open_ms, const double* values,
+                                        int n) {
+    return pf_cabi_int([&] {
+        if (!s || !key || n < 0 || (n > 0 && (!chart_open_ms || !values))) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)
+                       ->set_recorded_series(std::string(key), chart_open_ms, values, n)
+            ? 0 : -1;
+    });
+}
+#endif
 
 } /* extern "C" */

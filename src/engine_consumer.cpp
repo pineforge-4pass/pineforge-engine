@@ -163,5 +163,31 @@ bool BacktestEngine::source_aux_security_feed_enabled() const { return false; }
 void BacktestEngine::source_aux_security_input_view(const Bar*&, int&) const {}
 #endif
 
+// The same shape for the four request-data doors of a source host
+// (strategy_set_symbol_feed and its siblings): the kernel base answers false
+// without a word. A host with no source layer installs another instrument's
+// bars as NativeRunSpec::instrument_feeds; recorded request values and symbol
+// facts are a source language's, and no kernel decision reads them.
+bool BacktestEngine::set_symbol_feed(const std::string&, const std::string&, const Bar*,
+                                     const int64_t*, int) {
+    guard_native_mutation("set_symbol_feed");
+    return false;
+}
+bool BacktestEngine::set_symbol_feed_column(const std::string&, const std::string&,
+                                            const std::string&, const double*, int) {
+    guard_native_mutation("set_symbol_feed_column");
+    return false;
+}
+bool BacktestEngine::set_symbol_facts(const std::string&, const std::string&,
+                                      const std::string&) {
+    guard_native_mutation("set_symbol_facts");
+    return false;
+}
+bool BacktestEngine::set_recorded_series(const std::string&, const int64_t*, const double*,
+                                         int) {
+    guard_native_mutation("set_recorded_series");
+    return false;
+}
+
 }  // inline namespace engine_script_run_v19
 }  // namespace pineforge

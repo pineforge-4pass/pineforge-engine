@@ -141,6 +141,9 @@ set(TEST_SOURCES
     test_native_auxiliary_feed
     test_native_auxiliary_feed_stream
     test_native_auxiliary_feed_twin
+    test_native_instrument_feed
+    test_native_instrument_feed_twin
+    test_symbol_request_data
     test_native_risk_limits
     test_native_host_repairs
     test_l8c_short_seed_guards

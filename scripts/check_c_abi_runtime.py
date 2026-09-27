@@ -85,12 +85,31 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_configure_native_v1",
     "strategy_configure_native_fx_curve_v1",
     "strategy_configure_native_fx_curve_ext_v1",
+    "strategy_set_symbol_feed",
+    "strategy_set_symbol_feed_column",
+    "strategy_set_symbol_facts",
+    "strategy_set_recorded_series",
 })
 
-EXPECTED_PUBLIC_DECLARATIONS = 66
-EXPECTED_RUNTIME_IMPLEMENTATIONS = 58
+EXPECTED_PUBLIC_DECLARATIONS = 70
+EXPECTED_RUNTIME_IMPLEMENTATIONS = 62
 
-# The C-level native host API. Additive to the 58 above: every symbol here is
+# Runtime setters whose data a stream cannot take: the source host refuses
+# stream_begin() while any of them holds data (the native daily feed since its
+# lane, and lane XSYM-D's four symbol-data setters). Each declaration's own
+# doc comment in pineforge.h must say so, so the contract cannot drop out of
+# the header while the refusal stays in the host (or the other way round
+# unnoticed): the phrase is pinned below.
+HISTORICAL_ONLY_RUNTIME = frozenset({
+    "strategy_set_native_security_feed",
+    "strategy_set_symbol_feed",
+    "strategy_set_symbol_feed_column",
+    "strategy_set_symbol_facts",
+    "strategy_set_recorded_series",
+})
+HISTORICAL_ONLY_PHRASE = "stream_begin() fails closed"
+
+# The C-level native host API. Additive to the 62 above: every symbol here is
 # declared in include/pineforge/native_c_api.h and implemented in
 # src/native_c_host.cpp, and neither file contributes to the two counts above.
 EXPECTED_NATIVE_C_API = frozenset({
@@ -215,7 +234,36 @@ def main() -> int:
         )
         return 1
 
+    missing = _historical_only_undocumented(header.read_text(encoding="utf-8"))
+    if missing:
+        print(
+            "check_c_abi_runtime: pineforge.h no longer says a stream refuses the data of "
+            f"{missing} (each declaration's own doc comment must carry "
+            f"{HISTORICAL_ONLY_PHRASE!r})",
+            file=sys.stderr,
+        )
+        return 1
+
     return _check_native_c_api(hdr_set, abi_set)
+
+
+def _historical_only_undocumented(header_text: str) -> list[str]:
+    """The HISTORICAL_ONLY_RUNTIME setters whose declaration is not preceded,
+    since the previous PF_API declaration, by the stream-refusal phrase."""
+    missing: list[str] = []
+    lines = header_text.splitlines()
+    declarations = [(i, m.group(1)) for i, line in enumerate(lines)
+                    if (m := _PF_API_DECL.match(line))]
+    for k, (line_no, name) in enumerate(declarations):
+        if name not in HISTORICAL_ONLY_RUNTIME:
+            continue
+        start = declarations[k - 1][0] + 1 if k > 0 else 0
+        doc = " ".join(part.strip(" */") for part in lines[start:line_no])
+        if HISTORICAL_ONLY_PHRASE not in " ".join(doc.split()):
+            missing.append(name)
+    found = {name for _, name in declarations}
+    missing.extend(sorted(HISTORICAL_ONLY_RUNTIME - found))
+    return missing
 
 
 def _check_native_c_api(hdr_set: set[str], abi_set: set[str]) -> int:
