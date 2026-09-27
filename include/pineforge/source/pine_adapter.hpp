@@ -2252,6 +2252,8 @@ private:
     bool same_point_pair_fill_follows(const PlacementSnapshot& filled,
                                       const native_order::RequestHandle& filled_handle,
                                       double price) const;
+    // Item 3: a flat market-and-priced pair at a process_orders_on_close close.
+    bool fill_pooc_close_pair(double raw_close, const NativeDecisionContext& context);
 };
 
 } // namespace pineforge::source

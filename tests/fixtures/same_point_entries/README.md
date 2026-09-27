@@ -92,6 +92,19 @@ market pair (`apply_terminal_explicit_market_policy`) had kept source order
 with a reversing second call; a sell-then-buy pair now fills the buy first as
 one transaction of both quantities.
 
+A priced leg the close has already reached fills there against the market
+leg in the same rank order, the later call again one transaction of its own
+quantity plus a pending market's (lane W6B-ENG-PAIRS, item 3): `MS-SF` fills
+the buy stop first as a buy of 2, `ML-SF` the sell market first and then the
+buy limit as a buy of 2, `SM-SF` and `LM-SF` the buy market before the sell
+stop or limit, `LM-LF` the sell market before the buy limit. The close pass
+had filled the priced leg first (`fill_pooc_close_entries`), each leg with
+its own quantity; `PineExecutionAdapter::fill_pooc_close_pair` now fills such
+a pair, and only such a pair, at the close in that order, in the
+configuration the tapes run (pyramiding 0, zero cost, margin 100, no
+magnifier); a combined transaction over the equity at the close, whose
+admission there is unmeasured, keeps the legacy route.
+
 ## F10 with a commission (lane W6B-ENG-PAIRS, item 1)
 
 | tape | trades | `strategy()` declares | tv_trades.csv sha256 |
@@ -194,11 +207,6 @@ open is already through now fills at that open.
 
 The test leaves these out; the tapes stay as evidence.
 
-- `w6-f10d-pooc-pair` / `w6-f10e-pooc-coof-pair`: the cells with a priced leg
-  (`MS-SF`, `SM-SF`, `LM-SF`, `LM-LF`, `ML-SF`). Under
-  process_orders_on_close a priced leg placed at the close fills at that close
-  through the adapter's POOC close pass, which neither orders it against the
-  market leg nor adds the pending market's quantity.
 - `w6-f10f-coof-pair`, calc_on_order_fills without process_orders_on_close:
   every cell. The engine neither orders the pair nor adds the pending market's
   quantity outside `same_bar_market_tx_scope()`.

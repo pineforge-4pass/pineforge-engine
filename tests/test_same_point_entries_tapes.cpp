@@ -16,8 +16,8 @@
  *        partly closes: the tape's two rows of the buy's signal.
  *        TradingView costs that transaction at the signal, and past the
  *        equity it drops the later call.
- *        Under process_orders_on_close a market pair fills at the close in
- *        the same order.
+ *        Under process_orders_on_close a pair fills at the close in the same
+ *        order, a priced leg against the market leg too.
  *        With a commission (lane W6B-ENG-PAIRS) the order and the one
  *        transaction are the same: its fee is split across the rows it books
  *        by quantity, and its admission against the equity leaves the fee
@@ -585,10 +585,10 @@ int main() {
          {0, 1, 2, 3}, 38},
         {"w6-f10d-pooc-pair", Probe::GuardedPair, &kClosePair, 2,
          "fixed 1, pyramiding 0, process_orders_on_close", fixed_config(0, true, false),
-         {0, 1, 6}, 26},
+         all8, 26},
         {"w6-f10e-pooc-coof-pair", Probe::GuardedPair, &kClosePair, 2,
          "fixed 1, pyramiding 0, process_orders_on_close, calc_on_order_fills",
-         fixed_config(0, true, true), {0, 1, 6}, 26},
+         fixed_config(0, true, true), all8, 26},
         {"w6-f12a-stop-priority", Probe::Stops, nullptr, 0, "fixed 1",
          fixed_config(0, false, false), {}, 17},
         {"w6-f12c-stop-priority-magnifier", Probe::Stops, nullptr, 0,

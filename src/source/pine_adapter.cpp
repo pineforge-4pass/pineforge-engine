@@ -16877,6 +16877,7 @@ void PineExecutionAdapter::flush_pooc_marketable_limit_entry_fills(
     // unreached one resting). Only without calc_on_order_fills, the route the
     // tapes cover.
     if (!config_.process_orders_on_close || stream_mode_ || coof_recalc_active_) return;
+    if (fill_pooc_close_pair(bar.close, context)) return;
     fill_pooc_close_entries(bar.close, context, /*after_close=*/false);
 }
 
@@ -20319,6 +20320,118 @@ bool PineExecutionAdapter::same_point_pair_fill_follows(
                                           : row.exit_levels.limit <= price;
             return true;
         });
+}
+
+// R5 lane W6B-ENG-PAIRS, item 3. Under process_orders_on_close a flat pair
+// of one market call and one priced opposite call, both of this bar and the
+// priced one already marketable at the close, fills at that close in the
+// order and with the quantities of W6's rules: the rank of each leg (buy
+// market, buy stop, sell market, sell stop, buy limit, sell limit), the later
+// call as one transaction of its own quantity plus the earlier call's when
+// that one is the market, the earlier call its own (lab tv w6-f10d-pooc-pair
+// and w6-f10e-pooc-coof-pair MS-SF, SM-SF, LM-SF, LM-LF, ML-SF). The close
+// pass had filled the priced leg first, before the market leg of
+// apply_terminal_explicit_market_policy, each with its own quantity. A
+// market pair keeps that policy's own route. True when the pair filled here.
+bool PineExecutionAdapter::fill_pooc_close_pair(
+        double raw_close, const NativeDecisionContext& context) {
+    const double tick = staged_.syminfo.mintick;
+    const double close_tick = source_bar_fill_tick(raw_close, tick);
+    if (config_.pyramiding != 0 || config_.slippage != 0 || config_.close_entries_rule_any
+        || config_.commission_value != 0.0 || config_.margin_long != 100.0
+        || config_.margin_short != 100.0 || bar_magnifier_
+        || config_.default_qty_type != static_cast<int>(QtyType::FIXED)
+        || risk_.direction != 0 || risk_.max_cons_loss_days != 0
+        || risk_.max_drawdown > 0.0 || risk_.max_intraday_loss > 0.0
+        || risk_.max_position_size > 0.0 || risk_.halted || cap.active()
+        || !finite_positive(close_tick)
+        || detail::run_position(require_host()).signed_units != 0.0) {
+        return false;
+    }
+    struct Leg {
+        native_order::RequestHandle handle;
+        PlacementSnapshot row;
+        bool priced = false;
+        int rank = 0;
+    };
+    std::vector<Leg> legs;
+    const int bar_index = projection_bar_index(context);
+    for (const auto& handle : live_handles_) {
+        const auto found = placement_.find(handle.incarnation);
+        if (found == placement_.end()) continue;
+        const auto& row = found->second;
+        if (!row.opening || (row.family != PineOrderFamily::Entry
+                             && row.family != PineOrderFamily::Order)) {
+            continue;
+        }
+        if (row.projection_created_bar != bar_index) return false;  // a resting entry
+        const bool stop = finite_positive(row.exit_levels.stop);
+        const bool limit = finite_positive(row.exit_levels.limit);
+        if (row.family != PineOrderFamily::Entry
+            || row.projection_position_side != static_cast<std::int32_t>(PositionSide::FLAT)
+            || !finite_positive(row.requested_qty)
+            || !(row.qty_type < 0 || row.qty_type == static_cast<int>(QtyType::FIXED))
+            || !row.oca_name.empty() || row.birth.from_fill() || row.birth.at_terminal_fill()
+            || (stop && limit) || row.direction_gate
+            || finite_positive(row.exit_levels.trail_points)
+            || finite_positive(row.exit_levels.trail_price)
+            || finite_positive(row.exit_levels.trail_offset)) {
+            return false;
+        }
+        if (stop && (row.is_long ? close_tick < row.exit_levels.stop
+                                 : close_tick > row.exit_levels.stop)) {
+            return false;
+        }
+        if (limit && (row.is_long ? close_tick > row.exit_levels.limit
+                                  : close_tick < row.exit_levels.limit)) {
+            return false;
+        }
+        legs.push_back({handle, row, stop || limit,
+                        limit ? (row.is_long ? 4 : 5)
+                              : (stop ? (row.is_long ? 1 : 3) : (row.is_long ? 0 : 2))});
+    }
+    if (legs.size() != 2 || legs[0].row.is_long == legs[1].row.is_long
+        || legs[0].priced == legs[1].priced) {
+        return false;
+    }
+    if (legs[1].row.command_sequence < legs[0].row.command_sequence) std::swap(legs[0], legs[1]);
+    // legs[0] is the earlier call; the later one adds its quantity when it
+    // is the market.
+    const double pending = legs[0].priced ? 0.0 : legs[0].row.requested_qty;
+    std::vector<std::pair<Leg*, double>> order = {
+        {&legs[0], legs[0].row.requested_qty},
+        {&legs[1], legs[1].row.requested_qty + pending},
+    };
+    if (legs[1].rank < legs[0].rank) std::swap(order[0], order[1]);
+    // TradingView's admission of that transaction is unmeasured here: one
+    // over the equity at the close keeps the legacy route.
+    const double equity = require_host().native_marked_equity(close_tick);
+    const double required = (legs[1].row.requested_qty + pending) * close_tick
+        * staged_.syminfo.pointvalue * active_staged_fx(context.sub_bar_open_ms);
+    if (!std::isfinite(required) || !std::isfinite(equity) || required > equity) return false;
+    bool filled = false;
+    for (const auto& [leg, units] : order) {
+        native_order::Request request;
+        request.intent = native_order::Transact{leg->row.is_long ? units : -units};
+        request.label = leg->row.source_id;
+        request.comment = leg->row.comment;
+        request.trigger = native_order::Market{};
+        PlacementSnapshot immediate = leg->row;
+        immediate.cancellation = {};
+        immediate.market_admission = {};
+        immediate.reverse_to = false;
+        immediate.terms_priced_reverse = false;
+        immediate.forced_execution_price = close_tick;
+        const auto accepted = submit_or_replace(
+            std::move(request), std::move(immediate), true, leg->row.source_id);
+        if (!accepted) return filled;
+        auto& placed = placement_.at(accepted->incarnation);
+        placed.projection_position_side = leg->row.projection_position_side;
+        (void)require_host().execute_current(
+            {*accepted, NativeCurrentPriceRule::NearestTick});
+        filled = true;
+    }
+    return filled;
 }
 
 // R5 lane W6B-ENG-PAIRS, item 2: under pyramiding above 1 the pending
