@@ -16330,12 +16330,26 @@ void PineExecutionAdapter::apply_terminal_explicit_market_policy(
         if (result.status == native_order::CancelStatus::Cancelled)
             retire(candidate.handle);
     }
+    // TradingView fills the buy of a flat sell-then-buy pair first at the
+    // close (order_same_point_entries' order): the later buy is one
+    // transaction of its own quantity plus the pending sell's, and the sell
+    // then trades only its own (lab tv w6-f10d-pooc-pair, w6-f10e-pooc-coof-
+    // pair MM-SF). A buy-first pair keeps the source order below.
+    const bool buy_first = candidates.size() == 2 && !candidates[0].snapshot.is_long
+        && candidates[1].snapshot.is_long
+        && detail::run_position(require_host()).signed_units == 0.0;
+    if (buy_first) std::swap(candidates[0], candidates[1]);
     int simulated_sign = 0;
     for (auto& candidate : candidates) {
         native_order::Request request;
         const int requested_sign = candidate.snapshot.is_long ? 1 : -1;
         const double signed_units = requested_sign * candidate.snapshot.requested_qty;
-        if (simulated_sign != 0 && simulated_sign != requested_sign) {
+        if (buy_first) {
+            const double pending_sell = candidate.snapshot.is_long
+                ? candidates[1].snapshot.requested_qty : 0.0;
+            request.intent = native_order::Transact{signed_units + pending_sell};
+            candidate.snapshot.reverse_to = false;
+        } else if (simulated_sign != 0 && simulated_sign != requested_sign) {
             request.intent = native_order::ReverseTo{signed_units};
             candidate.snapshot.reverse_to = true;
         } else {

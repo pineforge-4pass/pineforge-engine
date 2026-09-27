@@ -1,0 +1,16 @@
+{
+  "title": "W6 F10f opposite pair at one open (COOF)",
+  "slug": "w6-f10f-coof-pair",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:40:04.815Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "267789df68fcb03cb3ef1138e8a265162fe53f312d43e6973956ba99524620b2",
+  "tv_trades_sha256": "f4a5912c8a6af97c06fa918b95ed4aa3afc4d43543103fa39ae415f845599ad1",
+  "tv_trades_rows": 52
+}

@@ -1,0 +1,16 @@
+{
+  "title": "W6 F10e opposite pair on the close (POOC and COOF)",
+  "slug": "w6-f10e-pooc-coof-pair",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T14:40:00.774Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "299bd9d36d42f489782d4f8bdaccadc764475373de4c8c4deb35ebd5c7afdf91",
+  "tv_trades_sha256": "9f87d773f99b96271e4909104825a221aed8b7edaeed841e5b4cee8322238337",
+  "tv_trades_rows": 52
+}

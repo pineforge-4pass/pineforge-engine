@@ -16,6 +16,8 @@
  *        partly closes: the tape's two rows of the buy's signal.
  *        TradingView costs that transaction at the signal, and past the
  *        equity it drops the later call.
+ *        Under process_orders_on_close a market pair fills at the close in
+ *        the same order.
  *
  * Each row replays one tape through the Pine adapter under the configuration
  * the generated constructor declares for its probe, over the corpus 15m bars
@@ -228,7 +230,18 @@ const std::vector<Cell> kGross = {
     {{true, 'M', 1, "MS-LF-1"}, {false, 'S', 1, "MS-LF-2"}},
     {{false, 'M', 1, "MS-SF-1"}, {true, 'S', 1, "MS-SF-2"}},
 };
-enum class Probe { Pair };
+const std::vector<Cell> kClosePair = {
+    {{true, 'M', 1, "MM-LF-1"}, {false, 'M', 1, "MM-LF-2"}},
+    {{false, 'M', 1, "MM-SF-1"}, {true, 'M', 1, "MM-SF-2"}},
+    {{false, 'M', 1, "MS-SF-1"}, {true, 'S', 1, "MS-SF-2"}},
+    {{false, 'S', 1, "SM-SF-1"}, {true, 'M', 1, "SM-SF-2"}},
+    {{false, 'L', 1, "LM-SF-1"}, {true, 'M', 1, "LM-SF-2"}},
+    {{true, 'L', 1, "LM-LF-1"}, {false, 'M', 1, "LM-LF-2"}},
+    {{false, 'M', 2, "MM-SF-Q2-1"}, {true, 'M', 3, "MM-SF-Q3-2"}},
+    {{false, 'M', 1, "ML-SF-1"}, {true, 'L', 1, "ML-SF-2"}},
+};
+
+enum class Probe { Pair, GuardedPair };
 
 // The probes, as their generated TUs lower them (fixtures/.../strategy.pine).
 class ProbeHost final : public source::PineStrategyHost {
@@ -254,20 +267,26 @@ private:
         strategy_entry(id, leg.is_long, limit, stop, leg.qty, leg.comment, "", 0, -1);
     }
 
-    // The pair every two hours from 2025-04-08 00:00 UTC while flat,
-    // flattened 30 minutes later.
+    // w6-f10a/b/c: the pair every two hours from 2025-04-08 00:00 UTC while
+    // flat, flattened 30 minutes later; w6-f10d/e/f act once per confirmed
+    // bar (a fill recalculation places nothing).
     void pair(std::int64_t t) {
         const std::int64_t n = static_cast<std::int64_t>(cells_->size());
         const std::int64_t rel = t - at(8, 0, 0);
         const bool in_range = rel >= 0 && rel < passes_ * n * kStepMs;
         const bool event = in_range && rel % kStepMs == 0;
         const bool cleanup = in_range && rel % kStepMs == kCleanupMs;
+        const bool guarded = probe_ == Probe::GuardedPair;
+        const bool first_pass = pine_bar_index() != acted_bar_;
+        if (guarded && !(is_last_tick_ && first_pass)) return;
         if (event && signed_position_size() == 0.0) {
+            acted_bar_ = pine_bar_index();
             const Cell& cell = (*cells_)[static_cast<std::size_t>((rel / kStepMs) % n)];
             place("E1", cell.first);
             place("E2", cell.second);
         }
-        if (cleanup) {
+        if (cleanup && (!guarded || signed_position_size() != 0.0)) {
+            acted_bar_ = pine_bar_index();
             strategy_cancel_all();
             strategy_close("", "FLT", kNaN, kNaN, false);
         }
@@ -276,6 +295,7 @@ private:
     Probe probe_;
     const std::vector<Cell>* cells_;
     std::int64_t passes_;
+    int acted_bar_ = -1;
 };
 
 struct Run {
@@ -373,6 +393,12 @@ int main() {
         {"w6-f10h-pair-gross-pyramiding1", Probe::Pair, &kGross, 7,
          "fixed 1, pyramiding 1, capital 3000", fixed_config(1, false, false, 3000.0),
          {0, 1, 2, 3}, 38},
+        {"w6-f10d-pooc-pair", Probe::GuardedPair, &kClosePair, 2,
+         "fixed 1, pyramiding 0, process_orders_on_close", fixed_config(0, true, false),
+         {0, 1, 6}, 26},
+        {"w6-f10e-pooc-coof-pair", Probe::GuardedPair, &kClosePair, 2,
+         "fixed 1, pyramiding 0, process_orders_on_close, calc_on_order_fills",
+         fixed_config(0, true, true), {0, 1, 6}, 26},
     };
 
     for (const Case& c : cases) {
@@ -412,6 +438,9 @@ int main() {
         {"w6-f10a-open-pair", &kOpenPair, 28},
         {"w6-f10b-limit-class", &kLimitClass, 16},
         {"w6-f10c-same-side-class", &kSameSide, 16},
+        {"w6-f10d-pooc-pair", &kClosePair, 16},
+        {"w6-f10e-pooc-coof-pair", &kClosePair, 16},
+        {"w6-f10f-coof-pair", &kClosePair, 16},
         {"w6-f10g-pair-gross", &kGross, 10},
         {"w6-f10h-pair-gross-pyramiding1", &kGross, 10},
     };

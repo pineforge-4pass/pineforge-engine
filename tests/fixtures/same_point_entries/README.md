@@ -76,6 +76,21 @@ call exactly when that transaction, priced at the signal close, is within the
 equity; past it only the earlier call trades. Pyramiding 1 is the same tape.
 The engine had costed the later call's own contract only.
 
+## F10: a flat market pair at one close
+
+| tape | trades | `strategy()` declares | tv_trades.csv sha256 |
+|---|---:|---|---|
+| `w6-f10d-pooc-pair` | 26 | fixed 1, pyramiding 0, process_orders_on_close | `9f87d773f99b96271e4909104825a221aed8b7edaeed841e5b4cee8322238337` |
+| `w6-f10e-pooc-coof-pair` | 26 | the same and calc_on_order_fills | `9f87d773f99b96271e4909104825a221aed8b7edaeed841e5b4cee8322238337` |
+| `w6-f10f-coof-pair` | 26 | fixed 1, pyramiding 0, calc_on_order_fills | `f4a5912c8a6af97c06fa918b95ed4aa3afc4d43543103fa39ae415f845599ad1` |
+
+The same order holds at a process_orders_on_close close, with or without
+calc_on_order_fills (the two tapes are one file), and at the next open under
+calc_on_order_fills alone. The adapter's close pass for a flat explicit
+market pair (`apply_terminal_explicit_market_policy`) had kept source order
+with a reversing second call; a sell-then-buy pair now fills the buy first as
+one transaction of both quantities.
+
 ## Cells TradingView and the engine still book differently
 
 The test leaves these out; the tapes stay as evidence.
@@ -83,6 +98,14 @@ The test leaves these out; the tapes stay as evidence.
 - `w6-f10c-same-side-class`, pyramiding 2: every cell. The engine keeps
   placement order between two same-side lots at one open; TradingView fills
   the market lot, then the stop, then the limit (the tape reading holds it).
+- `w6-f10d-pooc-pair` / `w6-f10e-pooc-coof-pair`: the cells with a priced leg
+  (`MS-SF`, `SM-SF`, `LM-SF`, `LM-LF`, `ML-SF`). Under
+  process_orders_on_close a priced leg placed at the close fills at that close
+  through the adapter's POOC close pass, which neither orders it against the
+  market leg nor adds the pending market's quantity.
+- `w6-f10f-coof-pair`, calc_on_order_fills without process_orders_on_close:
+  every cell. The engine neither orders the pair nor adds the pending market's
+  quantity outside `same_bar_market_tx_scope()`.
 
 ## Bars
 

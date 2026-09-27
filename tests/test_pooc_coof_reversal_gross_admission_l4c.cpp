@@ -10,8 +10,9 @@
  * qty passes the ordinary signal-time margin check.  TV nevertheless declines
  * the later source call when the pair's gross reversal transaction exceeds
  * placement equity.  For fixed/smaller pairs, the duration-one survivor pins
- * the second source call; TV's scratch-row direction is only report
- * attribution and is not asserted here.
+ * the second source call.  The scratch row is the buy's: TradingView fills
+ * the buy first at the close whichever call came first (lab tv
+ * w6-f10d-pooc-pair, w6-f10e-pooc-coof-pair; lane W6-ENG-FILL-ORDER).
  *
  * Clean-room TV anchors:
  *   pf-probe-coof-pooc-opposite-market-ordering
@@ -156,7 +157,7 @@ static void assert_both_fill(bool first_long, double qty) {
     if (p.trade_count() == 2) {
         const Trade& scratch = p.get_trade(0);
         const Trade& survivor = p.get_trade(1);
-        CHECK(scratch.is_long == first_long);
+        CHECK(scratch.is_long);
         CHECK(survivor.is_long != first_long);
         CHECK(scratch.entry_bar_index == 0);
         CHECK(scratch.exit_bar_index == 0);
