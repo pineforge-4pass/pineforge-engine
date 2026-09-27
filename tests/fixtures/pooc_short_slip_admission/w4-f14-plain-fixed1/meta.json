@@ -1,0 +1,16 @@
+{
+  "title": "w4-f14-plain-fixed1",
+  "slug": "w4-f14-plain-fixed1",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:03:04.675Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "fcd459465a672c0326cbf7d49e846f12c2d77f40203dbca1deca0415e5bf994d",
+  "tv_trades_sha256": "d928a7989c6865dbd844fae49d2c548afb5182875f4253bae976d1ad1d6db093",
+  "tv_trades_rows": 26
+}

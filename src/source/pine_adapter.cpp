@@ -6937,6 +6937,34 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         snapshot.sizing.at_fill = (config_.calc_on_order_fills && coof_recalc_active_)
             || (priced && !default_stop_freeze);
     }
+    // Under process_orders_on_close TradingView sizes a default-quantity
+    // percent_of_equity MARKET short at its slipped fill -- the close less the
+    // slippage ticks -- but opens it only while those units' margin at the
+    // close itself fits the equity the calculation marked there: 99.99 % of
+    // 100000 at slippage 15 opens (64.1385 x 1559.12 = 99999.6), 99.995 % and
+    // 100 % never do (lab tv w4-f14m-*). An unfunded one is dropped from a flat
+    // book and keeps only its closing leg when it reverses a long, whether a
+    // strategy.close of that long precedes it or follows it (w4-f14-pooc-v6-slip:
+    // TradingView closes every long and opens no short; lane
+    // W4-ENG-POOC-SAMEPASS -- julzalgo's NYSE:F, ETH and EURUSD tapes hold no
+    // short at all, where the engine opened each one and margin-called it on its
+    // entry bar). A lot step coarse against the slippage absorbs the gap, so
+    // most such shorts still open on BTC.
+    if (config_.process_orders_on_close && !config_.calc_on_order_fills
+        && config_.slippage > 0 && default_sized && !priced && !is_long
+        && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        && !snapshot.sizing.at_fill && !stream_mode_
+        && finite_positive(snapshot.sizing.frozen_units)
+        && finite_positive(snapshot.sizing.mark) && std::isfinite(snapshot.sizing.equity)
+        && snapshot.sizing.fx == 1.0) {
+        const double required = snapshot.sizing.frozen_units * snapshot.sizing.mark
+            * staged_.syminfo.pointvalue * config_.margin_short / 100.0;
+        const double epsilon = std::max(1e-9, std::abs(snapshot.sizing.equity) * 1e-12);
+        if (required > snapshot.sizing.equity + epsilon) {
+            if (!reverses) return;
+            snapshot.affordability_close_only = true;
+        }
+    }
     // R5 R2: a declaration-level default quantity whose sizing price IS the
     // signal rule and whose quantity is frozen at the command is exactly what
     // the core's Sized intent names, so it is lowered onto it here.  The

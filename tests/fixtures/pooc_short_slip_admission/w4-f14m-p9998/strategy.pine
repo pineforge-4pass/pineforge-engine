@@ -1,0 +1,14 @@
+//@version=6
+strategy("w4-f14m-p9998", overlay=true, process_orders_on_close=true, slippage=15, default_qty_type=strategy.percent_of_equity, default_qty_value=99.98)
+
+// Lane W4-ENG-POOC-SAMEPASS, family F14: one flat short at 2025-04-08 00:00
+// (close 1559.12) sized at the percent of equity declared above, with
+// slippage 15 ticks; a flat long at 04:00 as the control; each closed an
+// hour later.
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+if cell(8, 0, 0)
+    strategy.entry("S", strategy.short, comment="S")
+if cell(8, 4, 0)
+    strategy.entry("L", strategy.long, comment="L")
+if cell(8, 1, 0) or cell(8, 5, 0)
+    strategy.close_all(comment="cleanup")

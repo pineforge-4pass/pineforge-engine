@@ -1,0 +1,16 @@
+{
+  "title": "w4-f14m-p9999",
+  "slug": "w4-f14m-p9999",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:50:24.539Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "f54ad87046dc4bef9fa9e16918d68281ef008fb4ca331e8508ed776341dd8516",
+  "tv_trades_sha256": "a6e150ecf9a1674d3bf0c6ad25b5c5fb7e5f2abe1981fd441d33422948e96d7b",
+  "tv_trades_rows": 8
+}

@@ -1,0 +1,16 @@
+{
+  "title": "w4-f14-pooc-v6-slip",
+  "slug": "w4-f14-pooc-v6-slip",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:03:09.148Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "0c4b08731d2c0e7fee208b19508b3cdc6b67b9b3cf901f1d690d28f6199ed36a",
+  "tv_trades_sha256": "7c52f8d69b05480777102693aaf5d0e39b2b91e94e7cb32f3a589049021201e5",
+  "tv_trades_rows": 12
+}

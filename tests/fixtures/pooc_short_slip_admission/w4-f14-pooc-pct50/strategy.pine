@@ -1,0 +1,54 @@
+//@version=6
+strategy("w4-f14-pooc-pct50", overlay=true, process_orders_on_close=true, default_qty_type=strategy.percent_of_equity, default_qty_value=50)
+
+// Lane W4-ENG-POOC-SAMEPASS, family F14. Each cell opens a position on one
+// bar and, on a later bar, closes it and enters the other side on the same
+// calculation (or the control named); flattened two hours after it starts.
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+
+// A: long held; strategy.close, then the short entry
+if cell(8, 0, 0)
+    strategy.entry("A-L", strategy.long, comment="A long")
+if cell(8, 0, 30)
+    strategy.close("A-L", comment="A close")
+    strategy.entry("A-S", strategy.short, comment="A short")
+// B: long held; the short entry, then strategy.close
+if cell(8, 4, 0)
+    strategy.entry("B-L", strategy.long, comment="B long")
+if cell(8, 4, 30)
+    strategy.entry("B-S", strategy.short, comment="B short")
+    strategy.close("B-L", comment="B close")
+// C: long held; the short entry alone (reversal)
+if cell(8, 8, 0)
+    strategy.entry("C-L", strategy.long, comment="C long")
+if cell(8, 8, 30)
+    strategy.entry("C-S", strategy.short, comment="C short")
+// D: short held; strategy.close, then the long entry
+if cell(8, 12, 0)
+    strategy.entry("D-S", strategy.short, comment="D short")
+if cell(8, 12, 30)
+    strategy.close("D-S", comment="D close")
+    strategy.entry("D-L", strategy.long, comment="D long")
+// E: flat; strategy.close of a side not held, then an entry
+if cell(8, 16, 30)
+    strategy.close("E-L", comment="E close")
+    strategy.entry("E-S", strategy.short, comment="E short")
+// F: long held; strategy.close, the short entry and its bracket
+if cell(9, 0, 0)
+    strategy.entry("F-L", strategy.long, comment="F long")
+if cell(9, 0, 30)
+    strategy.close("F-L", comment="F close")
+    strategy.entry("F-S", strategy.short, comment="F short")
+    strategy.exit("F-X", from_entry="F-S", stop=close + 40, limit=close - 40, comment="F bracket")
+// G: long held; strategy.close_all, then the short entry
+if cell(9, 4, 0)
+    strategy.entry("G-L", strategy.long, comment="G long")
+if cell(9, 4, 30)
+    strategy.close_all(comment="G close all")
+    strategy.entry("G-S", strategy.short, comment="G short")
+
+cleanup = cell(8, 2, 0) or cell(8, 6, 0) or cell(8, 10, 0) or cell(8, 14, 0) or cell(8, 18, 0) or
+     cell(9, 2, 0) or cell(9, 6, 0)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")
