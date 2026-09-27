@@ -1,0 +1,16 @@
+{
+  "title": "w4-rex-plain",
+  "slug": "w4-rex-plain",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:09:06.265Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "c2e355a036578956c6b3a8fc63a8e02617a56c41eb4f9a1f9aa3d2b79354cda8",
+  "tv_trades_sha256": "ebe30e7796bae6be26a8e8a1676ae192808ef90210717a9a1c147777fce4cec1",
+  "tv_trades_rows": 12
+}

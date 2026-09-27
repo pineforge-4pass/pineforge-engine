@@ -1,0 +1,16 @@
+{
+  "title": "w4-rex-coof",
+  "slug": "w4-rex-coof",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:09:04.217Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "5f419cbd96ec98f47641ea382264aa1389b1dcd065502473421da75367e96831",
+  "tv_trades_sha256": "b5d6b99e5de029e7d2579c3f083915bf2ca681a3304400693e3bcf72a9b6e3d4",
+  "tv_trades_rows": 12
+}

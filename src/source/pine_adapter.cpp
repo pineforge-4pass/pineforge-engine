@@ -9391,8 +9391,15 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                         ? endpoint >= limit_price : endpoint <= limit_price;
                     const bool endpoint_ahead = closing_long
                         ? endpoint > point->price : endpoint < point->price;
+                    // An exit the recalculation re-issues unchanged was not
+                    // born there: it rests at its own level on the rest of the
+                    // leg, whatever fill recalculated -- a margin call's at the
+                    // high, an add's on the way down (lab tv w4-rex-coof cells
+                    // MC and ADD; lane W4-ENG-POOC-SAMEPASS). One the
+                    // recalculation places first is held (cell NEW).
                     const bool in_flight_remainder = !fill_ends_leg && !marketable
-                        && endpoint_satisfies && endpoint_ahead;
+                        && endpoint_satisfies && endpoint_ahead
+                        && !unchanged_dynamic_leg(PineOrderFamily::ExitLimit, limit_price);
                     const bool later_same_open = phase == NativePathPhase::Open
                         && marketable;
                     if (in_flight_remainder

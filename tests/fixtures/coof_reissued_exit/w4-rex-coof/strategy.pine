@@ -1,0 +1,35 @@
+//@version=6
+strategy("w4-rex-coof", overlay=true, pyramiding=2, calc_on_order_fills=true)
+
+// Lane W4-ENG-POOC-SAMEPASS, re-issued exit. Every cell's short is placed at
+// the close before its bar; flattened two bars after it.
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+on(d, h, m) => time >= timestamp("UTC", 2025, 4, d, h, m) and time < timestamp("UTC", 2025, 4, d, h, m) + 15 * 60000
+
+// MC (2025-04-10 13:30, O 1588.03 H 1591.66 L 1555.00): 100 % of equity, the
+// exit limit 1575 re-issued on every calculation while short; the high
+// margin-calls the short.
+if cell(10, 13, 15)
+    strategy.entry("MC-S", strategy.short, comment="MC short")
+if on(10, 13, 30) and strategy.position_size < 0
+    strategy.exit("MC-X", from_entry="MC-S", limit=1575.0, comment="MC exit")
+// ADD (2025-04-13 19:30, O 1620.00 H 1623.91 L 1559.40): 1 short, its exit
+// limit 1580 re-issued on every calculation while short, a sell-stop add at
+// 1600 on the way down.
+if cell(13, 19, 15)
+    strategy.entry("ADD-S1", strategy.short, qty=1, comment="ADD short")
+    strategy.entry("ADD-S2", strategy.short, qty=1, stop=1600.0, comment="ADD add")
+if on(13, 19, 30) and strategy.position_size < 0
+    strategy.exit("ADD-X", from_entry="ADD-S1", limit=1580.0, comment="ADD exit")
+// NEW (2025-04-16 05:15, O 1589.77 H 1591.51 L 1550.00): 1 short, a sell-stop
+// add at 1575; the exit limit 1560 first placed once the add filled.
+if cell(16, 5, 0)
+    strategy.entry("NEW-S1", strategy.short, qty=1, comment="NEW short")
+    strategy.entry("NEW-S2", strategy.short, qty=1, stop=1575.0, comment="NEW add")
+if on(16, 5, 15) and strategy.position_size <= -2
+    strategy.exit("NEW-X", from_entry="NEW-S1", limit=1560.0, comment="NEW exit")
+
+cleanup = cell(10, 14, 0) or cell(13, 20, 0) or cell(16, 5, 45)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

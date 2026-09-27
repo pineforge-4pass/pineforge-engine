@@ -1,0 +1,16 @@
+{
+  "title": "w4-rex-pooc",
+  "slug": "w4-rex-pooc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T17:09:05.262Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "614dbcfd90bbe0e0a1fb6e59ee99f2ad63671ae438df488da22d794e1f64166d",
+  "tv_trades_sha256": "46f7c977a2a41f5b9db0cc75e85f187a45c682ac2d5e6c28923162cfc1fd495f",
+  "tv_trades_rows": 12
+}
