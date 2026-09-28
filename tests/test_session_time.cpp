@@ -163,9 +163,14 @@ static void test_time_session_syminfo_tz_dst_aware() {
 
 static void test_time_syminfo_tz_does_not_move_calendar_open() {
     std::printf("test_time_syminfo_tz_does_not_move_calendar_open\n");
-    // syminfo_tz is a SESSION default only. The D open of a tz-less call keeps
-    // rolling exactly where it did before (UTC) — the calendar path is owned
-    // by a separate fix. An explicit tz still moves it (pre-existing).
+    // syminfo_tz does not move the D open of a call WITHOUT a session: that
+    // keeps rolling where it did (UTC in these tz-only forms). A session
+    // argument's D bar is the session's own, in the session's timezone -- the
+    // explicit tz, else syminfo.timezone -- so a tz-less "0000-2359" rolls at
+    // New York's midnight exactly as the explicit one does (TradingView:
+    // time("D", "0000-2400") on OANDA:XAUUSD, lab tv w11-sess2400-xau15 field
+    // d and w12-tfd-xau15 field b; lane W12-ENG-TIME moved this pin from the
+    // UTC midnight).
     int64_t bar = 1775572200000LL;  // 2026-04-07 14:30 UTC = 10:30 EDT
     int64_t plain    = pine_time(bar, "D", "", "", "15");
     int64_t with_sym = pine_time(bar, "D", "", "", "15", "America/New_York");
@@ -173,8 +178,8 @@ static void test_time_syminfo_tz_does_not_move_calendar_open() {
     int64_t explicit_ny = pine_time(bar, "D", "0000-2359", "America/New_York", "15");
     CHECK(plain == 1775520000000LL);      // 2026-04-07 00:00 UTC
     CHECK(with_sym == plain);
-    CHECK(sess_sym == plain);
-    CHECK(explicit_ny != plain);
+    CHECK(sess_sym == explicit_ny);
+    CHECK(explicit_ny == 1775534400000LL);  // 2026-04-07 00:00 EDT
     CHECK(pine_time_close(bar, "D", "", "", "15", "America/New_York")
           == pine_time_close(bar, "D", "", "", "15"));
     // tz-looking string in the session slot is still dropped (invalid session),

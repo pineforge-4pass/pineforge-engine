@@ -169,14 +169,17 @@ static void test_forex_pine_time_symbol_clock() {
     // Two-arg time("D", "<tz>") — a timezone in the session slot is not a
     // session: filter dropped, open still the symbol's daily bar.
     CHECK_EQ_MS(pine_time(bar, "D", "Europe/Prague", "", "15", NY, FX), utc_ms(2025, 6, 9, 21, 0));
-    // A VALID session argument defines the day in ITS timezone (TV keys
-    // `time("D", "0000-2359", "America/New_York")` on New York midnight —
-    // measured on lukeborgerding-orb-avwap-retest, 100% vs 18%): the
-    // tz-only calendar floor of the 5-arg forms, na outside the window.
+    // A VALID session argument's D bar is the session's own, in ITS timezone
+    // (TV keys `time("D", "0000-2359", "America/New_York")` on New York
+    // midnight — measured on lukeborgerding-orb-avwap-retest, 100% vs 18% —
+    // and opens `time("D", "0930-1600", "America/New_York")` at 09:30 New
+    // York, lab tv w12-tfd-xau15 field d, tests/fixtures/session_period): the
+    // same bar in the 5-arg forms, na outside the window. Lane W12-ENG-TIME
+    // moved the open from New York's midnight (04:00Z) to 09:30 (13:30Z).
     CHECK_EQ_MS(pine_time(utc_ms(2025, 6, 10, 14, 0), "D", RTH, NY, "15", NY, FX),
                 pine_time(utc_ms(2025, 6, 10, 14, 0), "D", RTH, NY, "15"));
     CHECK_EQ_MS(pine_time(utc_ms(2025, 6, 10, 14, 0), "D", RTH, NY, "15", NY, FX),
-                utc_ms(2025, 6, 10, 4, 0));
+                utc_ms(2025, 6, 10, 13, 30));
     CHECK(is_na(pine_time(bar, "D", RTH, NY, "15", NY, FX)));
     // Same on a UTC/24x7 symbol: the session's tz rolls the day, not UTC.
     CHECK_EQ_MS(pine_time(utc_ms(2025, 6, 10, 1, 0), "D", "0000-2359", NY, "15", UTC, "24x7"),

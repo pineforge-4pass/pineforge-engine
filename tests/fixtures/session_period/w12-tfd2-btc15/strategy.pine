@@ -1,0 +1,36 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane W12-ENG-TIME): more session arguments of time() and
+// time_close() for D / W / M: day lists, 24-hour and past-midnight windows,
+// and the month's close. Each bar's readings are spelled in the comment of
+// the exit that fills on the next bar's open: "n" for na, else minutes from
+// the value to the bar's open (time_close: from the bar's open to the value).
+strategy("w12 tfd2", overlay=true, initial_capital=100000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=2, margin_long=0, margin_short=0)
+
+m(int t) => na(t) ? "n" : str.tostring((time - t) / 60000)
+mc(int t) => na(t) ? "n" : str.tostring((t - time) / 60000)
+
+a = time_close("M", "0930-1600")
+b = time("W", "0930-1600:23456")
+c = time_close("W", "0930-1600:23456")
+d = time("D", "24x7")
+e = time("D", "0930-1600:1")
+f = time("M", "1800-1700")
+g = time("D", "2330-2430")
+h = time_close("D", "2330-2430")
+i = time("D", "0000-0000", "America/New_York")
+j = time_close("D", "0000-0000", "America/New_York")
+k = time("W", "0000-2400")
+l = time("D", "1700-1700", "America/New_York")
+o = time_close("D", "1700-1700", "America/New_York")
+q = time("D", "0930-1130,1300-1500", "America/New_York")
+r = time_close("D", "0930-1130,1300-1500", "America/New_York")
+s = time_close("M", "1800-1700")
+sig = mc(a) + "," + m(b) + "," + mc(c) + "," + m(d) + "," + m(e) + "," + m(f) + "," + m(g) + "," + mc(h) + "," + m(i) + "," + mc(j) + "," + m(k) + "," + m(l) + "," + mc(o) + "," + m(q) + "," + mc(r) + "," + mc(s)
+
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.close("B", comment=sig)
+else
+    strategy.entry("B", strategy.long)
+    strategy.close("A", comment=sig)

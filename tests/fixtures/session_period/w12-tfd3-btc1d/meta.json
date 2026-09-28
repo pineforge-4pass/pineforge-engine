@@ -1,0 +1,16 @@
+{
+  "title": "w12 tfd3",
+  "slug": "w12-tfd3-btc1d",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T13:25:36.902Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "1D",
+    "from": "2025-01-01",
+    "to": "2025-03-01"
+  },
+  "pine_sha256": "88e47476630192eecbac6ffea92666b2543a8ae813ce8515a6fb8dee05497586",
+  "tv_trades_sha256": "a18694320197a3d8786a919db921e6330354ab25cf862ee88439093be3618100",
+  "tv_trades_rows": 118
+}

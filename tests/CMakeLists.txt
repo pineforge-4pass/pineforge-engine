@@ -2666,6 +2666,19 @@ foreach(_pf_w11_row IN ITEMS
     endif()
 endforeach()
 
+# Lane W12-ENG-TIME: the rows that read its TradingView tapes.
+foreach(_pf_w12_row IN ITEMS
+        "test_session_predicates|PINEFORGE_SESSION_PERIOD_FIXTURE_DIR|session_period")
+    string(REPLACE "|" ";" _pf_w12_fields "${_pf_w12_row}")
+    list(GET _pf_w12_fields 0 _pf_w12_target)
+    list(GET _pf_w12_fields 1 _pf_w12_macro)
+    list(GET _pf_w12_fields 2 _pf_w12_dir)
+    if(TARGET ${_pf_w12_target})
+        target_compile_definitions(${_pf_w12_target} PRIVATE
+            ${_pf_w12_macro}="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/${_pf_w12_dir}")
+    endif()
+endforeach()
+
 # std::thread needs an explicit pthread link on some toolchains.
 target_link_libraries(test_timezone_concurrency PRIVATE Threads::Threads)
 target_link_libraries(test_local_time_lock_free_hit PRIVATE Threads::Threads)

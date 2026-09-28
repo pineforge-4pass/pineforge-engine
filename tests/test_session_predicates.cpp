@@ -337,17 +337,14 @@ static void test_session_2400_tapes() {
                     : pine_time(reading.bar_ms, tf, f.session, f.tz, chart.tf,
                                 chart.sym_tz, chart.sym_session);
                 // Where a D period opens under a session argument is not this
-                // clock's rule, and two readings of it differ from
-                // TradingView's (lane W11-ENG-TIME-COLOR's report): time("D",
-                // session) keys its day on UTC where TradingView keys it on
-                // syminfo.timezone (the New York chart), and on a D chart
-                // time(timeframe.period, session, tz) floors the bar to the
-                // tz's day where TradingView answers the bar's own time. There
-                // only whether the bar is in the window is compared.
+                // clock's rule: on a D chart time(timeframe.period, session,
+                // tz) is the session's own day bar (lane W11-ENG-TIME-COLOR's
+                // report read it as the bar's time), and there only whether
+                // the bar is in the window is compared. time("D", session)
+                // keys its day on syminfo.timezone, as TradingView does (lane
+                // W12-ENG-TIME, test_session_period_tapes).
                 const bool daily_chart = std::string(chart.tf) == "1D";
-                const bool session_only =
-                    (f.tf != nullptr && std::string(chart.sym_tz) != "UTC")
-                    || (daily_chart && f.tz[0] != '\0');
+                const bool session_only = daily_chart && f.tz[0] != '\0';
                 const bool same = session_only
                     ? reading_is_na(spelled[k]) == is_na(value)
                     : same_reading(spelled[k], value, reading.bar_ms, f.close);
@@ -486,6 +483,152 @@ static void test_session_day_list_edges() {
     CHECK(!is_na(pine_time(wed_noon, "15", "1100-1300,", "", "15", "UTC", "24x7")));
 }
 
+// ---------------------------------------------------------------------------
+// The D / W / M period of time() and time_close() under a session argument
+// (lane W12-ENG-TIME, tests/fixtures/session_period/README.md). The w12-tfd
+// and w12-tfd2 probes spell, on every chart bar, the minutes from each
+// reading to the bar's open (time_close: from the bar's open to the reading),
+// "n" for na; every reading is replayed through pine_time / pine_time_close
+// as generated code calls them.
+// ---------------------------------------------------------------------------
+
+#ifndef PINEFORGE_SESSION_PERIOD_FIXTURE_DIR
+#error "PINEFORGE_SESSION_PERIOD_FIXTURE_DIR must name tests/fixtures/session_period"
+#endif
+
+struct PeriodField {
+    const char* tf;       // nullptr: timeframe.period
+    const char* session;
+    const char* tz;
+    bool close;           // time_close, spelled from the bar's open
+};
+
+// w12-tfd: a,b,c,d,e,f,g,h,i,j,k,l,o,q|p,r,s,u.
+static const PeriodField kTfdFields[] = {
+    {"D", "", "", false},
+    {"D", "0000-2400", "", false},
+    {"D", "0930-1600", "", false},
+    {"D", "0930-1600", "America/New_York", false},
+    {"D", "1700-2400", "America/New_York", false},
+    {"D", "1800-1700", "", false},
+    {"D", "0930-1130,1300-1500", "", false},
+    {"D", "1300-1500,0930-1130", "", false},
+    {"W", "0930-1600", "", false},
+    {"M", "0930-1600", "", false},
+    {nullptr, "1700-2400", "America/New_York", false},
+    {nullptr, "0000-2400", "America/New_York", false},
+    {"D", "0000-2400", "Asia/Tokyo", false},
+    {"D", "2000-0200", "America/New_York", false},
+    {"D", "0930-1600", "", true},
+    {"D", "1800-1700", "", true},
+    {"D", "0000-2400", "America/New_York", true},
+    {"W", "0930-1600", "", true},
+};
+
+// w12-tfd2: a,b,c,d,e,f,g,h,i,j,k,l,o,q,r,s.
+static const PeriodField kTfd2Fields[] = {
+    {"M", "0930-1600", "", true},
+    {"W", "0930-1600:23456", "", false},
+    {"W", "0930-1600:23456", "", true},
+    {"D", "24x7", "", false},
+    {"D", "0930-1600:1", "", false},
+    {"M", "1800-1700", "", false},
+    {"D", "2330-2430", "", false},
+    {"D", "2330-2430", "", true},
+    {"D", "0000-0000", "America/New_York", false},
+    {"D", "0000-0000", "America/New_York", true},
+    {"W", "0000-2400", "", false},
+    {"D", "1700-1700", "America/New_York", false},
+    {"D", "1700-1700", "America/New_York", true},
+    {"D", "0930-1130,1300-1500", "America/New_York", false},
+    {"D", "0930-1130,1300-1500", "America/New_York", true},
+    {"M", "1800-1700", "", true},
+};
+
+// w12-tfd3: a,b,c,d,e,f,g,h,i,j,k,l,o,q -- windows past midnight.
+static const PeriodField kTfd3Fields[] = {
+    {"D", "2330-2430", "", false},
+    {"D", "2330-0030", "", false},
+    {"D", "2330-2400", "", false},
+    {"D", "0000-0030", "", false},
+    {"D", "2330-2430:1234567", "", false},
+    {"D", "2300-2500", "", false},
+    {"D", "2200-0100", "", false},
+    {"D", "0000-0100,2300-2400", "", false},
+    {"D", "2330-2430", "", true},
+    {"D", "2330-0030:1234567", "", false},
+    {nullptr, "2330-2430", "", false},
+    {nullptr, "2330-0030", "", false},
+    {"D", "2200-0100:1234567", "", false},
+    {"D", "1200-0100", "", false},
+};
+
+// Every reading of one tape against the engine; returns the readings compared.
+static int replay_period_tape(const ChartFacts& chart, const PeriodField* fields,
+                              std::size_t count, int& wrong) {
+    bool ok = true;
+    const auto readings =
+        exit_comment_tape::read(PINEFORGE_SESSION_PERIOD_FIXTURE_DIR, chart.slug, ok);
+    CHECK(ok);
+    int compared = 0;
+    for (const auto& reading : readings) {
+        std::string flat = reading.signal;
+        for (char& c : flat) if (c == '|') c = ',';
+        const auto spelled = exit_comment_tape::split(flat, ',');
+        if (spelled.size() != count) { ++wrong; continue; }
+        for (std::size_t k = 0; k < count; ++k) {
+            const PeriodField& f = fields[k];
+            const std::string tf = f.tf ? f.tf : chart.tf;
+            const int64_t value = f.close
+                ? pine_time_close(reading.bar_ms, tf, f.session, f.tz, chart.tf,
+                                  chart.sym_tz, chart.sym_session)
+                : pine_time(reading.bar_ms, tf, f.session, f.tz, chart.tf,
+                            chart.sym_tz, chart.sym_session);
+            ++compared;
+            if (!same_reading(spelled[k], value, reading.bar_ms, f.close) && ++wrong <= 8) {
+                std::printf("  %s bar %lld field %zu (%s %s %s) tv=%s engine=%lld\n",
+                            chart.slug, static_cast<long long>(reading.bar_ms), k,
+                            f.tf ? f.tf : "period", f.session, f.tz, spelled[k].c_str(),
+                            static_cast<long long>(value));
+            }
+        }
+    }
+    return compared;
+}
+
+// The session's timezone -- the explicit one, else syminfo.timezone -- keys
+// the period: time("D", "0000-2400") on OANDA:XAUUSD opens at New York's
+// midnight, as time("D", "0000-2400", "America/New_York") does.
+static void test_session_period_tapes() {
+    std::printf("test_session_period_tapes\n");
+    struct Tape {
+        ChartFacts chart;
+        const PeriodField* fields;
+        std::size_t count;
+    };
+    const std::size_t tfd = sizeof(kTfdFields) / sizeof(kTfdFields[0]);
+    const std::size_t tfd2 = sizeof(kTfd2Fields) / sizeof(kTfd2Fields[0]);
+    const std::size_t tfd3 = sizeof(kTfd3Fields) / sizeof(kTfd3Fields[0]);
+    const Tape tapes[] = {
+        {{"w12-tfd-btc15", "15", "UTC", "24x7"}, kTfdFields, tfd},
+        {{"w12-tfd-xau15", "15", "America/New_York", "1800-1700"}, kTfdFields, tfd},
+        {{"w12-tfd-btc1d", "1D", "UTC", "24x7"}, kTfdFields, tfd},
+        {{"w12-tfd-xau1d", "1D", "America/New_York", "1800-1700"}, kTfdFields, tfd},
+        {{"w12-tfd2-btc15", "15", "UTC", "24x7"}, kTfd2Fields, tfd2},
+        {{"w12-tfd2-xau15", "15", "America/New_York", "1800-1700"}, kTfd2Fields, tfd2},
+        {{"w12-tfd2-btc1d", "1D", "UTC", "24x7"}, kTfd2Fields, tfd2},
+        {{"w12-tfd2-xau1d", "1D", "America/New_York", "1800-1700"}, kTfd2Fields, tfd2},
+        {{"w12-tfd3-btc1d", "1D", "UTC", "24x7"}, kTfd3Fields, tfd3},
+    };
+    for (const Tape& tape : tapes) {
+        int wrong = 0;
+        const int compared = replay_period_tape(tape.chart, tape.fields, tape.count, wrong);
+        std::printf("  %s: %d readings compared, %d differ\n", tape.chart.slug, compared, wrong);
+        CHECK(compared > 0);
+        CHECK(wrong == 0);
+    }
+}
+
 int main() {
     test_ismarket_inside_rth();
     test_ismarket_outside_rth_close();
@@ -507,6 +650,7 @@ int main() {
     test_session_clock_edge_tapes();
     test_session_day_list_tapes();
     test_session_day_list_edges();
+    test_session_period_tapes();
 
     std::printf("\nsession_predicates: %d passed, %d failed\n",
                 tests_passed, tests_failed);

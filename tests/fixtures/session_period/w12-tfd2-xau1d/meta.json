@@ -1,0 +1,16 @@
+{
+  "title": "w12 tfd2",
+  "slug": "w12-tfd2-xau1d",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T13:04:36.931Z",
+  "chart": {
+    "symbol": "OANDA:XAUUSD",
+    "interval": "1D",
+    "from": "2025-01-01",
+    "to": "2025-07-01"
+  },
+  "pine_sha256": "ca1270d4ad1200341827c4cf93e7f9459d7c09e480b44751738b4a38e7def2f0",
+  "tv_trades_sha256": "093a5094db0779eb33335a328bd34718e3a90f85f8125c835dcd729ab22fa946",
+  "tv_trades_rows": 254
+}
