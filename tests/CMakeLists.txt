@@ -988,9 +988,9 @@ list(APPEND TEST_SOURCES test_intraday_cap_tv_tapes)
 # tapes.
 list(APPEND TEST_SOURCES test_pooc_gap_stop_tapes)
 
-# Lane W10-DIAG-UNKNOWN rule SAMEOPEN-REV: a default-size entry placed while
-# flat that reverses the position a same-bar entry opened at the same open
-# must fit with that position still margined
+# Lane W10-DIAG-UNKNOWN rule SAMEOPEN-REV: a default-size entry placed flat or
+# on its own side that reverses the position a same-bar entry opened at the
+# same open must fit with that position still margined
 # (tests/fixtures/same_open_reversal), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_same_open_reversal_tapes)
 

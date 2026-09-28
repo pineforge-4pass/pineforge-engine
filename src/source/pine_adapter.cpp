@@ -14131,21 +14131,25 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             const auto physical = detail::run_position(require_host());
             const bool reversal = physical.signed_units != 0.0
                 && ((physical.signed_units > 0.0) != source.is_long);
-            // A MARKET entry placed while flat that reverses the position an
-            // earlier entry of its bar opened at this same open is judged by
-            // TradingView against its placement equity with that position
-            // still margined: its own side plus the held side must fit, or it
-            // is refused and the held position stays (lane W10-DIAG-UNKNOWN
-            // rule SAMEOPEN-REV, tests/fixtures/same_open_reversal).
+            // A MARKET entry placed while flat or on its own side that reverses
+            // the position an earlier market entry of its bar opened at this
+            // same open is judged by TradingView against its placement equity
+            // with that position still margined: its own side plus the held
+            // side must fit, or it is refused and the held position stays
+            // (lane W10-DIAG-UNKNOWN rule SAMEOPEN-REV,
+            // tests/fixtures/same_open_reversal).
             const bool same_open_reversal = reversal
                 && source.family == PineOrderFamily::Entry
                 && std::holds_alternative<native_order::Market>(
                     view.definition->request.trigger)
-                && source.projection_position_side
-                    == static_cast<std::int32_t>(PositionSide::FLAT)
+                && (source.projection_position_side
+                        == static_cast<std::int32_t>(PositionSide::FLAT)
+                    || source.projection_position_side == static_cast<std::int32_t>(
+                        source.is_long ? PositionSide::LONG : PositionSide::SHORT))
                 && !source.projection_after_close
                 && projection_bar_index(view.cursor.point) == source.projection_created_bar + 1
                 && position_open_bar_index_ == view.cursor.point.interval_index
+                && !position_open_priced_
                 && !config_.process_orders_on_close && !config_.calc_on_order_fills
                 && !stream_mode_;
             if (same_open_reversal) {

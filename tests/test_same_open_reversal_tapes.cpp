@@ -10,6 +10,9 @@
  * reversal whenever its own side fitted, so at 100 % of equity the reversal
  * went through and a margin call trimmed it (htanrisevdir-trail-stop-al-sat-
  * stratejisi on NASDAQ:AAPL 1D, NSE:NIFTY 1D, NYSE:F 1D and OANDA:XAUUSD 1D).
+ * The same holds for an entry placed on the held side of a position whose
+ * reversing entry its bar placed first (job-2614-andrewwieiw-frosty-alerts on
+ * BINANCE:BTCUSDT, OANDA:EURUSD and BINANCE:ETHUSDT.P 15).
  *
  * Each row replays TradingView's own tape of a synthetic probe
  * (tests/fixtures/same_open_reversal, lab tv exports on NASDAQ:AAPL 1D)
@@ -168,13 +171,17 @@ Book tape_trades(const std::string& tape, std::int64_t end_ms) {
     return out;
 }
 
-// The probes, as their generated TUs lower them (fixtures/.../strategy.pine):
-// cells every two daily bars from 2025-04-14, in a 12-bar cycle (a 16-bar one
-// with the explicit-quantity cell of p1-c50).
+// The probes, as their generated TUs lower them (fixtures/.../strategy.pine).
+// p1-*: cells every two daily bars from 2025-04-14, in a 12-bar cycle (a
+// 16-bar one with the explicit-quantity cell of p1-c50). w10-sameopen-held-*:
+// a held position, then the reversing entry and an entry on the held side on
+// one bar, in a 10-bar cycle.
+enum class Script { P1, Held };
+
 class ProbeHost final : public source::PineStrategyHost {
 public:
-    ProbeHost(const source::PineStrategyConfig& config, int cycle)
-        : cycle_(cycle) {
+    ProbeHost(const source::PineStrategyConfig& config, Script script, int cycle)
+        : script_(script), cycle_(cycle) {
         attach_pine_execution_adapter();
         configure_pine_strategy(config);
         set_syminfo_mintick(kTick);
@@ -191,6 +198,10 @@ public:
         if (armed) ++k_;
         if (!armed) return;
         const int c = k_ % cycle_;
+        if (script_ == Script::Held) {
+            held(c);
+            return;
+        }
         if (c == 0) {
             strategy_entry("LONG", true, kNaN, kNaN, kNaN, "L1");
             strategy_close("LONG", "CL1", kNaN, kNaN, false, 42949672979ULL);
@@ -219,15 +230,36 @@ public:
     }
 
 private:
+    void held(int c) {
+        // H1: hold a short (S0); then L1 and S1 on one bar.
+        if (c == 0) {
+            strategy_entry("SHORT", false, kNaN, kNaN, kNaN, "S0");
+        } else if (c == 2) {
+            strategy_entry("LONG", true, kNaN, kNaN, kNaN, "L1");
+            strategy_entry("SHORT", false, kNaN, kNaN, kNaN, "S1");
+        } else if (c == 4) {
+            strategy_close("", "X1", kNaN, kNaN, false);
+        // H2: hold a long (L0); then S2 and L2 on one bar.
+        } else if (c == 5) {
+            strategy_entry("LONG", true, kNaN, kNaN, kNaN, "L0");
+        } else if (c == 7) {
+            strategy_entry("SHORT", false, kNaN, kNaN, kNaN, "S2");
+            strategy_entry("LONG", true, kNaN, kNaN, kNaN, "L2");
+        } else if (c == 9) {
+            strategy_close("", "X2", kNaN, kNaN, false);
+        }
+    }
+
+    Script script_;
     int cycle_;
     int k_ = -1;
 };
 
 // The engine's trades closed inside the bars (a position still open at the
 // last bar is closed there by the range end and is not a tape trade).
-Book run(const source::PineStrategyConfig& config, int cycle, std::int64_t end_ms,
-         std::string& error) {
-    ProbeHost host(config, cycle);
+Book run(const source::PineStrategyConfig& config, Script script, int cycle,
+         std::int64_t end_ms, std::string& error) {
+    ProbeHost host(config, script, cycle);
     host.set_trade_start_time(kTradeStartMs);
     const std::vector<Bar> bars = feed();
     host.run(bars.data(), static_cast<int>(bars.size()), "1D", "1D", false);
@@ -281,6 +313,7 @@ source::PineStrategyConfig config(double percent) {
 struct Case {
     const char* tape;
     double percent;
+    Script script;
     int cycle;
     std::size_t closed;
     // The cells compared, and the bar their comparison stops at.
@@ -294,20 +327,29 @@ struct Case {
 int main() {
     const std::int64_t end_ms = kAapl1d[sizeof(kAapl1d) / sizeof(kAapl1d[0]) - 1].ts;
     const std::set<std::string> all = {"L1", "S1", "L2", "S2", "L3", "S3", "L4", "S4"};
+    const std::set<std::string> held = {"S0", "L1", "S1", "L0", "S2", "L2"};
     const Case cases[] = {
-        {"p1-a100", 100.0, 12, 38, all, end_ms, "every trade"},
+        {"p1-a100", 100.0, Script::P1, 12, 38, all, end_ms, "every trade"},
         // At 10 % TradingView books each S3-CS3-L3 cell as a long L3 closed by
         // S3 at the open plus the long L3, where the engine books the short S3
         // closed by L3 plus the long L3: the same fills, prices, sizes and
         // money under swapped labels, a report the base engine shares. Only
         // the L-first cells are compared here.
-        {"p1-b10", 10.0, 12, 131, {"L1", "S1", "L2", "S2"}, end_ms,
+        {"p1-b10", 10.0, Script::P1, 12, 131, {"L1", "S1", "L2", "S2"}, end_ms,
          "every trade of the L1-CL1-S1 and L2-S2 cells"},
         // 2025-05-02 is the first explicit-quantity L4-S4 cell: TradingView
         // reverses L4 into S4 there, which the base engine does not either
         // (it closes L4 only); the money diverges from there on.
-        {"p1-c50", 50.0, 16, 91, all, at(2025, 5, 2, 0, 0),
+        {"p1-c50", 50.0, Script::P1, 16, 91, all, at(2025, 5, 2, 0, 0),
          "every trade closed before the first L4-S4 cell (2025-05-02)"},
+        {"w10-sameopen-held-a100", 100.0, Script::Held, 10, 90, held, end_ms, "every trade"},
+        // At 10 % TradingView reverses L0 into S2 and S2 back into L2 at one
+        // open; the engine keeps S2 (its L2 does not fill), a separate
+        // residual the rule cannot cause (it only refuses). The money diverges
+        // from the first such cell (2025-04-25), so only the trades before it
+        // are compared: the H1 cell of 04-17, where S1 must reverse L1 back.
+        {"w10-sameopen-held-b10", 10.0, Script::Held, 10, 156, {"S0", "L1", "S1", "L0"},
+         at(2025, 4, 25, 14, 0), "every trade closed before the first S2-L2 cell (2025-04-25)"},
     };
 
     std::map<std::string, Book> tapes;
@@ -318,7 +360,7 @@ int main() {
         tapes[c.tape] = tape;
         CHECK(tape.trades.size() == c.closed);
         std::string error;
-        const Book lane = run(config(c.percent), c.cycle, end_ms, error);
+        const Book lane = run(config(c.percent), c.script, c.cycle, end_ms, error);
         CHECK(error.empty());
         const std::vector<Row> want = rows_of(tape, c.cells, c.before_ms);
         const std::vector<Row> got = rows_of(lane, c.cells, c.before_ms);
@@ -367,6 +409,17 @@ int main() {
             CHECK(c50.entries[2] == "L2" && c50.exits[2] == "X2");
             CHECK(std::get<3>(c50.trades[2]) == 26175);
         }
+        // A held position, then the reversing entry and an entry on the held
+        // side on one bar. At 100 % the second never reverses the position
+        // the first opened at that open (no S1 or L2 fills; every L1 runs to
+        // X1); at 10 % it does (every L1 is closed by S1, and TradingView books
+        // each S2 it reverses as a long L2 closed by S2).
+        const Book& ha = tapes["w10-sameopen-held-a100"];
+        CHECK(count(ha, "S1") == 0 && count(ha, "L2") == 0);
+        CHECK(count(ha, "L1") > 0 && closed_by(ha, "L1", "X1") == count(ha, "L1"));
+        const Book& hb = tapes["w10-sameopen-held-b10"];
+        CHECK(count(hb, "S1") > 0 && closed_by(hb, "L1", "S1") == count(hb, "L1"));
+        CHECK(closed_by(hb, "L2", "S2") > 0);
     }
 
     std::printf("%d passed, %d failed\n", tests_passed, tests_failed);

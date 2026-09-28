@@ -1,0 +1,16 @@
+{
+  "title": "w10 sameopen held-side b10",
+  "slug": "w10-sameopen-held-b10",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T05:38:13.031Z",
+  "chart": {
+    "symbol": "NASDAQ:AAPL",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "dcccaca4e5ac2ab8c01eeede90d9eb7a818a42162b3cd5d0948f5e1378af8b78",
+  "tv_trades_sha256": "b145ef0c2d66fd714a43b6f5a90f5e1493ef3e88777ff01465c3a1305e15e2cf",
+  "tv_trades_rows": 314
+}

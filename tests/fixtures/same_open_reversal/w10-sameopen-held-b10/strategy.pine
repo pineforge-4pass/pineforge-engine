@@ -1,0 +1,30 @@
+//@version=6
+// W10-DIAG-UNKNOWN synthetic probe: a position is held; on one bar the script
+// places the reversing entry and then an entry in the held position's own
+// direction (at the pyramiding cap when placed). At the next open the first
+// reverses the position; does the second reverse it back? Every entry takes
+// the default size (10 % of equity).
+strategy("w10 sameopen held-side b10", overlay=true, initial_capital=10000000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=10,
+     commission_value=0.01, commission_type=strategy.commission.percent)
+armed = time >= timestamp("UTC", 2025, 4, 14, 0, 0)
+var int k = -1
+if armed
+    k += 1
+c = k % 10
+// H1: hold a short (S0); then L1 and S1 on one bar.
+if armed and c == 0
+    strategy.entry("SHORT", strategy.short, comment="S0")
+if armed and c == 2
+    strategy.entry("LONG", strategy.long, comment="L1")
+    strategy.entry("SHORT", strategy.short, comment="S1")
+if armed and c == 4
+    strategy.close_all(comment="X1")
+// H2: hold a long (L0); then S2 and L2 on one bar.
+if armed and c == 5
+    strategy.entry("LONG", strategy.long, comment="L0")
+if armed and c == 7
+    strategy.entry("SHORT", strategy.short, comment="S2")
+    strategy.entry("LONG", strategy.long, comment="L2")
+if armed and c == 9
+    strategy.close_all(comment="X2")
