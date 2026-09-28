@@ -1703,6 +1703,21 @@
 //   Random44/0/0: boundary 0x3a7009cbf7950f96ull -> 0x732debc0dd6f7cd7ull, trades 0xd7933446c85fc9e2ull -> 0x01cadf1a08d256deull, final_hash 0xac6703f9b030be55ull -> 0xc64966b83e7cef78ull [W5B SB]
 //   Random44/1/1: boundary 0xf26161d992b0b9d7ull -> 0xe4b01bfef621cc40ull, rows 0x056fb98ed64a27afull -> 0x12aff34f2be5d18cull, trades 0xd15149879bf25c79ull -> 0x346e57041dd6b6cdull, final_hash 0x6dfe3e836bc8a2f5ull -> 0xc8470526b19e84d5ull, boundary_count 66 -> 65, trade_count 15 -> 14 [W5B SB]
 //   Random44/1/0: boundary 0xf26161d992b0b9d7ull -> 0xe4b01bfef621cc40ull, trades 0xd15149879bf25c79ull -> 0x346e57041dd6b6cdull, final_hash 0x6dfe3e836bc8a2f5ull -> 0xc8470526b19e84d5ull, boundary_count 66 -> 65, trade_count 15 -> 14 [W5B SB]
+// INT29 re-harvested it once on the integrated tree (main 74491fa1, lane
+// W10-DIAG-UNKNOWN's ten picks, lane W11-ENG-TIME-COLOR's eleven, INT29's own
+// three commits, lane W12-ENG-TIME's thirteen and lane W13-ENG-MARGIN-OPP's
+// four) with PINEFORGE_QUIET_BAR_HARVEST; the same harvest against
+// main reproduces every old row. 4 of 276 runs move, and a harvest at each side
+// of the W10 CAP-ON pick places all four there: the tree just before it
+// reproduces main's rows, the tree at it already has the head's. They are the one
+// scenario that sets a positive max_intraday_filled_orders, whose source
+// statement now turns on the Pine cap switches it does not declare
+// (tests/fixtures/intraday_cap_tv); the lane's own harvest on its tree gave
+// the same values:
+//   IntradayCapDeferred/0/1: boundary 0xde19edf4087b930dull -> 0x56c52ed78e3bf64eull, rows 0x560de539b138ea41ull -> 0xccd84788a40fdeaaull, final_hash 0x7730e7fe703663edull -> 0x30cddb814e876d43ull [W10 CAP-ON]
+//   IntradayCapDeferred/0/0: boundary 0xde19edf4087b930dull -> 0x56c52ed78e3bf64eull, final_hash 0x7730e7fe703663edull -> 0x30cddb814e876d43ull [W10 CAP-ON]
+//   IntradayCapDeferred/1/1: boundary 0x293bdcc491ae22d7ull -> 0x425990cfcb5d5162ull, rows 0xd165d92830916a1cull -> 0x35e7cf4c3a06c2cfull, final_hash 0x7ba4fe8defa15d4aull -> 0x782c119eeff543e4ull [W10 CAP-ON]
+//   IntradayCapDeferred/1/0: boundary 0x293bdcc491ae22d7ull -> 0x425990cfcb5d5162ull, final_hash 0x7ba4fe8defa15d4aull -> 0x782c119eeff543e4ull [W10 CAP-ON]
 constexpr Pinned kPinned[] = {
     {"Quiet", 0, 1, 0xcd8d3ecb4d2c740aull, 0xe6da4342a82c460cull, 0x47fe0d7eaf8e51e3ull, 0x458f1ecf00ef1d5cull, 40, 40, 0},
     {"Quiet", 0, 0, 0xcd8d3ecb4d2c740aull, 0x14650fb0739d0383ull, 0x47fe0d7eaf8e51e3ull, 0x458f1ecf00ef1d5cull, 40, 0, 0},
@@ -1768,10 +1783,10 @@ constexpr Pinned kPinned[] = {
     {"IntradayLoss", 0, 0, 0x392fac4b53eaad92ull, 0x14650fb0739d0383ull, 0x60c9f061d60a69edull, 0x46bb7e611ca6e1c8ull, 40, 0, 1},
     {"IntradayLoss", 1, 1, 0xeed99e6cc52c2efcull, 0xafa99e76c624b49aull, 0x60c9f061d60a69edull, 0x472c0f68bec82bf7ull, 40, 40, 1},
     {"IntradayLoss", 1, 0, 0xeed99e6cc52c2efcull, 0x14650fb0739d0383ull, 0x60c9f061d60a69edull, 0x472c0f68bec82bf7ull, 40, 0, 1},
-    {"IntradayCapDeferred", 0, 1, 0xde19edf4087b930dull, 0x560de539b138ea41ull, 0x2fa61401cccb3845ull, 0x7730e7fe703663edull, 24, 24, 1},
-    {"IntradayCapDeferred", 0, 0, 0xde19edf4087b930dull, 0x14650fb0739d0383ull, 0x2fa61401cccb3845ull, 0x7730e7fe703663edull, 24, 0, 1},
-    {"IntradayCapDeferred", 1, 1, 0x293bdcc491ae22d7ull, 0xd165d92830916a1cull, 0x6517fe8ea7437b74ull, 0x7ba4fe8defa15d4aull, 24, 24, 1},
-    {"IntradayCapDeferred", 1, 0, 0x293bdcc491ae22d7ull, 0x14650fb0739d0383ull, 0x6517fe8ea7437b74ull, 0x7ba4fe8defa15d4aull, 24, 0, 1},
+    {"IntradayCapDeferred", 0, 1, 0x56c52ed78e3bf64eull, 0xccd84788a40fdeaaull, 0x2fa61401cccb3845ull, 0x30cddb814e876d43ull, 24, 24, 1},
+    {"IntradayCapDeferred", 0, 0, 0x56c52ed78e3bf64eull, 0x14650fb0739d0383ull, 0x2fa61401cccb3845ull, 0x30cddb814e876d43ull, 24, 0, 1},
+    {"IntradayCapDeferred", 1, 1, 0x425990cfcb5d5162ull, 0x35e7cf4c3a06c2cfull, 0x6517fe8ea7437b74ull, 0x782c119eeff543e4ull, 24, 24, 1},
+    {"IntradayCapDeferred", 1, 0, 0x425990cfcb5d5162ull, 0x14650fb0739d0383ull, 0x6517fe8ea7437b74ull, 0x782c119eeff543e4ull, 24, 0, 1},
     {"PreopenSlice", 0, 1, 0xcbc8fb1ba9d83481ull, 0xbe57d9275ae9e2bbull, 0x96bb4615ab0ad33bull, 0x62f97adf60eb373full, 36, 36, 1},
     {"PreopenSlice", 0, 0, 0xcbc8fb1ba9d83481ull, 0x14650fb0739d0383ull, 0x96bb4615ab0ad33bull, 0x62f97adf60eb373full, 36, 0, 1},
     {"PreopenSlice", 1, 1, 0xadcfe58d853cedfcull, 0xecc971145edced41ull, 0x96bb4615ab0ad33bull, 0x94fff9b38c7f1bd5ull, 36, 36, 1},

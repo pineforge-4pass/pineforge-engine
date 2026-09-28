@@ -396,6 +396,20 @@
 //   Storm20: digest 0x604f8dc86a777322ull -> 0x411a4fdcd5c11299ull, folds 43 -> 44, trades 10 -> 11 [W5B PC]
 //   Storm21: digest 0xc35dd2c653db38ecull -> 0xf7b8d2e1e5dbff53ull [W5B PC]
 //   Storm21M: digest 0xf770bc84f8b963b1ull -> 0x261cd4c819b89bccull [W5B PC]
+// INT29 re-harvested it once on the integrated tree (main 74491fa1, lane
+// W10-DIAG-UNKNOWN's ten picks, lane W11-ENG-TIME-COLOR's eleven, INT29's own
+// three commits, lane W12-ENG-TIME's thirteen and lane W13-ENG-MARGIN-OPP's
+// four) with PINEFORGE_D2D_PUBLICATION_HARVEST; the same harvest against main
+// reproduces every old row. One run moves, and a harvest at each side of the
+// W13 CP pick places it there: the tree just before it reproduces main's row,
+// the tree at it already has the head's -- the value lane W13 harvested on its
+// own tree. Config03 calls its whole short at a bar's close, where the path
+// after the fill is adverse only at that close; the call is now taken there
+// after the script, which reads the short and places its strategy.close_all(),
+// and the flat purge retires that order once the call empties the book. The
+// closed trades and every count keep their values; the digest takes in the
+// placed and retired order:
+//   Config03: digest 0xc5424169be207aa2ull -> 0xdf3025153dce2e2bull [W13 CP]
 constexpr Pinned kPinned[] = {
     {"Config01", 0x2338d6688ca58837ull, 144, 44, 144},
     {"ConfigFlags101", 0x6b3262a158c0e86dull, 145, 45, 144},
@@ -405,7 +419,7 @@ constexpr Pinned kPinned[] = {
     {"ConfigFlags102", 0x443b33f233df5591ull, 144, 49, 144},
     {"Config02M", 0x8cddc71b29406412ull, 48, 10, 48},
     {"ConfigFlags102M", 0x000ba0de0f306cb9ull, 144, 49, 144},
-    {"Config03", 0xc5424169be207aa2ull, 144, 53, 144},
+    {"Config03", 0xdf3025153dce2e2bull, 144, 53, 144},
     {"ConfigFlags103", 0xc2c52ca326f4f6d0ull, 182, 62, 144},
     {"Config03M", 0xea3de174c93cccc5ull, 144, 49, 144},
     {"ConfigFlags103M", 0x8f0124d4ee2a443cull, 182, 63, 144},

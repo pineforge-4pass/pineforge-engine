@@ -436,16 +436,23 @@ struct PinnedRow {
 };
 
 // The adapter's rows on each margin-100 tape, pinned (a RECORDED divergence).
+// Re-pinned deliberately by lane W13-ENG-MARGIN-OPP's rule CP (a harvest at
+// each of its commits moves these rows at CP's alone): T2's short, reversed
+// into at 1590.36, owes a call at its fill bar's close, now taken there after
+// the script -- 2.1676 at 1594.01 on that bar, where the adapter took 2.1648
+// at the next bar's 1594.00 -- and the rows after it follow (T2's 3.542 call
+// 3.5308, its close 51.8159 -> 51.8243, U1 54.084 -> 54.0841). TradingView
+// takes neither: 1.2424 at 1594.81 on the fill bar and 5.8736 at 1621.14.
 const PinnedRow kOrderMarginRows[] = {
     {"P1", "__close__", true, 1743588900000LL, 1880.02, 1743596100000LL, 1865.26, 52.6587},
     {"Q1", "__close__", true, 1743675300000LL, 1811.58, 1743682500000LL, 1797.78, 53.1156},
     {"R1", "__close__", false, 1743761700000LL, 1812.69, 1743768900000LL, 1780.11, 51.5748},
     {"T1", "T2", true, 1744280100000LL, 1601.17, 1744281900000LL, 1590.36, 58.1887},
     {"T2", "__margin_call__", false, 1744281900000LL, 1590.36, 1744281900000LL, 1594.81, 0.0372},
-    {"T2", "__margin_call__", false, 1744281900000LL, 1590.36, 1744282800000LL, 1594.00, 2.1648},
-    {"T2", "__margin_call__", false, 1744281900000LL, 1590.36, 1744286400000LL, 1621.14, 3.542},
-    {"T2", "__close__", false, 1744281900000LL, 1590.36, 1744287300000LL, 1595.90, 51.8159},
-    {"U1", "__close__", true, 1744452900000LL, 1592.65, 1744460100000LL, 1596.00, 54.084},
+    {"T2", "__margin_call__", false, 1744281900000LL, 1590.36, 1744281900000LL, 1594.01, 2.1676},
+    {"T2", "__margin_call__", false, 1744281900000LL, 1590.36, 1744286400000LL, 1621.14, 3.5308},
+    {"T2", "__close__", false, 1744281900000LL, 1590.36, 1744287300000LL, 1595.90, 51.8243},
+    {"U1", "__close__", true, 1744452900000LL, 1592.65, 1744460100000LL, 1596.00, 54.0841},
 };
 const PinnedRow kContractMarginRows[] = {
     {"P1", "__close__", true, 1743588900000LL, 1880.02, 1743596100000LL, 1865.26, 52.6307},
