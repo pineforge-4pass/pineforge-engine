@@ -552,7 +552,9 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
             host.scheduler_publish_security_boundary();
     }
     const int chart_index = context.coordinate.input_interval_index;
-    if (uses_aux_security_feed_) host.scheduler_feed_aux_security(chart_index);
+    // A calc_on_order_fills recalculation of this bar before this callback
+    // fed its slice already (recalculate).
+    if (uses_aux_security_feed_ && !had_coof_recalc) host.scheduler_feed_aux_security(chart_index);
     if (coof) {
         restore_coof_script_state(host);
         language_.is_first_tick_ = true;
@@ -667,6 +669,18 @@ void PineScheduler::recalculate(const native_order::ExecutionAppliedEvent& event
         != context.script_bar_open_ms;
     const bool callback_advances_source_bar = first_callback
         && !language_.coof_checkpoint_contains_current_bar_;
+    // The bar's first recalculation before its close callback feeds the
+    // bar's auxiliary slice. TradingView runs a recalculation of a historical
+    // bar on the whole bar, its finer request.security reads as well as its
+    // close, high and low: the 5m close read after the open fill, and after a
+    // later fill of the bar, is the chart bar's close, a lookahead_on 5m site
+    // reads the bar's first 5m bar and a 5m lower_tf array all three (lab tv
+    // int28fix-rc, -rc2, -rc3; lane INT28-FIX rule RC). The slice waited for
+    // the close callback, so the recalculation read the previous bar's. A
+    // recalculation after the close callback (a fill the close booked) finds
+    // the slice that callback fed.
+    if (uses_aux_security_feed_ && callback_advances_source_bar)
+        host.scheduler_feed_aux_security(context.coordinate.input_interval_index);
     // COOF re-evaluates the source script against the full script bar while
     // the native current-execution coordinate still supplies the fill price
     // for sizing/placement.  A one-price synthetic callback erases high/low,

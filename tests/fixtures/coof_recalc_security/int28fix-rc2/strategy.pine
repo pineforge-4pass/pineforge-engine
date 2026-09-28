@@ -1,0 +1,24 @@
+//@version=6
+strategy("int28fix-rc2", overlay=true, process_orders_on_close=false, calc_on_order_fills=true, default_qty_type=strategy.fixed, default_qty_value=2)
+
+// Lane INT28-FIX, round 3. What the recalculation of a MID-BAR fill reads:
+// each cell's entry fills at the next open, its recalculation places a
+// take-profit for half the position one point beyond the fill (reached on
+// the bar's path), and the recalculation of that take-profit's fill closes
+// the rest with a comment naming the bar's close, high and low and a 5m close.
+s5 = request.security(syminfo.tickerid, "5", close, lookahead=barmerge.lookahead_off)
+cell(h, m) => time == timestamp("UTC", 2025, 4, 11, h, m)
+f(x) => str.tostring(x, "#.########")
+if cell(0, 15)
+    strategy.entry("RA", strategy.long, comment="RA")
+if cell(2, 15)
+    strategy.entry("RB", strategy.short, comment="RB")
+if strategy.position_size == 2
+    strategy.exit("RA-TP", "RA", qty_percent=50, limit=strategy.position_avg_price + 1, comment="RA tp")
+if strategy.position_size == -2
+    strategy.exit("RB-TP", "RB", qty_percent=50, limit=strategy.position_avg_price - 1, comment="RB tp")
+if math.abs(strategy.position_size) == 1
+    strategy.close_all(comment="c=" + f(close) + " h=" + f(high) + " l=" + f(low) + " s5=" + f(s5))
+if cell(1, 0) or cell(3, 0)
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

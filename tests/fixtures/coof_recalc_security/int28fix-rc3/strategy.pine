@@ -1,0 +1,18 @@
+//@version=6
+strategy("int28fix-rc3", overlay=true, process_orders_on_close=false, calc_on_order_fills=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane INT28-FIX, round 3. What the recalculation of an entry's open fill
+// reads from a lookahead_on 5m request.security and from a 5m
+// request.security_lower_tf array: each cell's entry fills at the next open,
+// and that fill's recalculation closes it with a comment naming both.
+on5 = request.security(syminfo.tickerid, "5", close, lookahead=barmerge.lookahead_on)
+arr = request.security_lower_tf(syminfo.tickerid, "5", close)
+cell(h, m) => time == timestamp("UTC", 2025, 4, 11, h, m)
+f(x) => str.tostring(x, "#.########")
+n = array.size(arr)
+if cell(0, 15)
+    strategy.entry("RA", strategy.long, comment="RA")
+if cell(2, 15)
+    strategy.entry("RB", strategy.short, comment="RB")
+if strategy.position_size != 0
+    strategy.close_all(comment="on5=" + f(on5) + " n=" + str.tostring(n) + " a0=" + (n > 0 ? f(array.get(arr, 0)) : "na") + " aL=" + (n > 0 ? f(array.get(arr, n - 1)) : "na"))

@@ -1,0 +1,16 @@
+{
+  "title": "int28fix-rc",
+  "slug": "int28fix-rc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T11:57:03.011Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "0b8107319a14d966e267af8b07ae2c3446fb8c2b1a27d3239ab6622456cda8df",
+  "tv_trades_sha256": "ce254341b35a225d58f7b92a3d1c91a7f37bacd33268cc3d5d3c1a980e260025",
+  "tv_trades_rows": 4
+}

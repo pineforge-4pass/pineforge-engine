@@ -1,0 +1,18 @@
+//@version=6
+strategy("int28fix-rc", overlay=true, process_orders_on_close=false, calc_on_order_fills=true, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// Lane INT28-FIX, round 3. What the recalculation of an entry's open fill
+// reads: each cell's entry fills at the next bar's open, and that fill's
+// recalculation closes it with a comment naming the chart bar's close, high
+// and low and a 5m and a 60m request.security value.
+s5 = request.security(syminfo.tickerid, "5", close, lookahead=barmerge.lookahead_off)
+r5 = request.security(syminfo.tickerid, "5", ta.rsi(close, 14), lookahead=barmerge.lookahead_off)
+h60 = request.security(syminfo.tickerid, "60", close, lookahead=barmerge.lookahead_off)
+cell(h, m) => time == timestamp("UTC", 2025, 4, 11, h, m)
+f(x) => str.tostring(x, "#.########")
+if cell(0, 15)
+    strategy.entry("RA", strategy.long, comment="RA")
+if cell(2, 15)
+    strategy.entry("RB", strategy.short, comment="RB")
+if strategy.position_size != 0
+    strategy.close_all(comment="c=" + f(close) + " h=" + f(high) + " l=" + f(low) + " s5=" + f(s5) + " r5=" + f(r5) + " h60=" + f(h60))
