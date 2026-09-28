@@ -2100,6 +2100,7 @@ void PineExecutionAdapter::reset_for_run() {
     close_margin_cancelled_bar_ = std::numeric_limits<std::int64_t>::min();
     close_margin_follow_up_bar_ = std::numeric_limits<std::int64_t>::min();
     close_margin_open_bar_ = std::numeric_limits<std::int64_t>::min();
+    waypoint_chain_bar_ = std::numeric_limits<std::int64_t>::min();
     pooc_close_checkpoint_deferred_ms_ = std::numeric_limits<std::int64_t>::min();
     signal_close_mc_event_bar_ = -1;
     signal_close_mc_position_cycle_ = 0;
@@ -15630,6 +15631,27 @@ bool PineExecutionAdapter::schedule_margin_call_path(
                                                   : path[index].price < bar.close;
     }
     if (close_alone) close_margin_point_ = context.coordinate.ordinal;
+    // TradingView checks every point of the path, not only its adverse
+    // extreme: a point the path reaches before that extreme can already be
+    // short of margin -- a short filled the slippage ticks under its print is
+    // still short at a low above its fill. Such a point's call is rested at the
+    // point, and the extreme is checked again on the book it leaves.
+    withdraw_waypoint_margin_calls();
+    if (close_point_margin_scope() && !commissioned_explicit_short_opened(context)) {
+        int adverse_index = -1;
+        for (int index = std::max(current, 0); index < 4; ++index) {
+            if (finite_positive(path[index].price) && path[index].price == adverse) {
+                adverse_index = index;
+                break;
+            }
+        }
+        if (rest_waypoint_margin_call(bar, current <= 0 ? 1 : current, adverse_index, context)) {
+            kernel_margin_path_point_ = context.coordinate.ordinal;
+            close_margin_point_ = context.coordinate.ordinal;
+            waypoint_chain_bar_ = context.script_bar_open_ms;
+            return true;
+        }
+    }
     // R5: the placement is the kernel's. TradingView's scheduling decision has
     // just been taken above -- with this bar's competing orders in front of
     // it, exactly where the legacy broker takes it -- so all that is left is
@@ -15790,6 +15812,73 @@ bool PineExecutionAdapter::book_close_point_call(
     snapshot.follow_up_fill = reference_mark;
     return submit_or_replace(std::move(request), std::move(snapshot), false,
                              kMarginCallLabel).has_value();
+}
+
+// The first of the bar's path points in [from, to) where TradingView's check
+// calls the book as it stands, rested at that point: a touch of its print
+// from the side the path reaches it from, executed at the print's tick with
+// the exit side's slippage. The close is not one of them: its check is taken
+// after the script (close_point_margin_call).
+bool PineExecutionAdapter::rest_waypoint_margin_call(
+        const Bar& bar, int from, int to, const NativeDecisionContext& context) {
+    const auto position = detail::run_position(require_host());
+    if (position.signed_units == 0.0) return false;
+    // Measured on shorts slipped on whole lots (lane INT28-FIX's
+    // int28fix-ou-s1 and -ou-s2, NYSE:F shares at slippage 1 and 2). A
+    // full-margin long's call is the one-contract money call
+    // (submit_tv_money_long_margin_call), and neither a long nor a fractional
+    // lot is checked here: resting their calls at an earlier point takes calls
+    // TradingView does not (lane W13-ENG-MARGIN-OPP's population replay).
+    if (position.signed_units > 0.0 || !(config_.slippage > 0) || !staged_.quantity_grid
+        || *staged_.quantity_grid != 1.0) {
+        return false;
+    }
+    const bool high_first = source_path_uses_high_first(bar);
+    const double path[] = {bar.open, high_first ? bar.high : bar.low,
+                           high_first ? bar.low : bar.high, bar.close};
+    const bool buy = position.signed_units < 0.0;
+    for (int index = std::max(from, 1); index < std::min(to, 3); ++index) {
+        const double price = path[index];
+        if (!finite_positive(price) || !finite_positive(path[index - 1])) continue;
+        const double units = std::min(
+            source_margin_units(source_margin_money(price, context.sub_bar_open_ms), false),
+            std::abs(position.signed_units));
+        if (!(units > 0.0)) continue;
+        const bool falling = price < path[index - 1];
+        native_order::Request request;
+        request.intent = native_order::Reduce{native_order::ExplicitUnits{units}};
+        request.label = kMarginCallLabel;
+        request.comment = "Margin call";
+        request.trigger = falling == buy
+            ? native_order::Trigger{native_order::Limit{price, true}}
+            : native_order::Trigger{native_order::Stop{price}};
+        PlacementSnapshot snapshot;
+        snapshot.family = PineOrderFamily::Margin;
+        snapshot.source_id = request.label;
+        snapshot.requested_qty = units;
+        snapshot.is_long = buy;
+        snapshot.forced_execution_price = source_margin_fill_price(price, buy);
+        snapshot.waypoint_margin_call = true;
+        snapshot.sizing = sizing_snapshot();
+        return submit_or_replace(std::move(request), std::move(snapshot), false,
+                                 "__margin_waypoint__").has_value();
+    }
+    return false;
+}
+
+// A path-point call rested for the book of an earlier schedule: a new
+// schedule, or the bar's end, supersedes it.
+void PineExecutionAdapter::withdraw_waypoint_margin_calls() {
+    std::vector<native_order::RequestHandle> stale;
+    for (const auto& handle : live_handles_) {
+        const auto found = placement_.find(handle.incarnation);
+        if (found != placement_.end() && found->second.waypoint_margin_call)
+            stale.push_back(handle);
+    }
+    for (const auto& handle : stale) {
+        if (require_host().cancel(handle).status == native_order::CancelStatus::Cancelled)
+            retire(handle);
+    }
 }
 
 // The strategy.close_all() orders the script placed on this bar and that
@@ -18352,6 +18441,8 @@ void PineExecutionAdapter::on_bar_close(
         apply_terminal_explicit_market_policy(context);
     update_risk_state(bar.close);
     if (stream_mode_) return;
+    withdraw_waypoint_margin_calls();
+    waypoint_chain_bar_ = std::numeric_limits<std::int64_t>::min();
     {
         const bool cancelled = close_margin_cancelled_bar_ == context.script_bar_open_ms;
         close_margin_cancelled_bar_ = std::numeric_limits<std::int64_t>::min();
@@ -20189,6 +20280,26 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             || placement_snapshot->family == PineOrderFamily::Order)
         && !pooc_close_market_pending(context)) {
         fill_pooc_close_exits(event.raw_price, context);
+    }
+    // A path point's call leaves a book the rest of the path checks again
+    // (schedule_margin_call_path).
+    if (placement_snapshot && placement_snapshot->waypoint_margin_call
+        && event.closed_units > 0.0 && policy_script_bar_valid_
+        && waypoint_chain_bar_ == context.script_bar_open_ms
+        && detail::run_position(require_host()).signed_units != 0.0) {
+        const bool high_first = source_path_uses_high_first(policy_script_bar_);
+        const auto phase = context.coordinate.path_phase;
+        const int filled_at = phase == NativePathPhase::Open ? 0
+            : phase == NativePathPhase::Close ? 3
+            : ((phase == NativePathPhase::High) == high_first ? 1 : 2);
+        const double print = filled_at == 0 ? policy_script_bar_.open
+            : filled_at == 3 ? policy_script_bar_.close
+            : phase == NativePathPhase::High ? policy_script_bar_.high : policy_script_bar_.low;
+        withdraw_waypoint_margin_calls();
+        // A unit so taken is followed as one the kernel's check takes.
+        follow_one_unit_margin_call(event.closed_units, event.resolved_price, print, context);
+        if (detail::run_position(require_host()).signed_units != 0.0)
+            (void)rest_waypoint_margin_call(policy_script_bar_, filled_at + 1, 3, context);
     }
     // The kernel's path check calls one unit as the opening print does, and
     // is followed alike (follow_one_unit_margin_call).

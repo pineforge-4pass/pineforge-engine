@@ -20,7 +20,7 @@ trade the tape closes inside the replayed bars -- entry and exit time, side,
 price in ticks, quantity in lots -- to be the engine's, before the row's
 window end where it names one and outside its open cells (below, "Open"). It
 replays lane INT28-FIX's `tests/fixtures/slipped_short` tapes
-`int28fix-adm-s-cs` and `-ou-s2b` as well. On the commit
+`int28fix-adm-s-cs`, `-ou-s1`, `-ou-s2` and `-ou-s2b` as well. On the commit
 before each rule every rule row fails there and every control row passes.
 
 The `w13-b*` and `w13-a3` probes run on NYSE:F 15m, 2025-04-01 .. 2025-07-01,
@@ -77,6 +77,19 @@ NYSE:F and OANDA:XAUUSD are this shape (their cells call
 | `w13-b4s-cancel-f` | 470 | `-cancel`, slippage 1; open cell 2025-06-06 16:45 UTC | the one-unit calls a close owes, withdrawn by the script's `strategy.cancel_all()` or not, are taken at the next open where they restore the book, and the rest of that bar's path checks the book they leave (32 one-unit calls at the next open; 2025-04-30 17:45 UTC: one unit at 9.95 at the next open, then 4 at 9.97, where the high alone calls 8) | `fa438eba260d3ef04492266ba065bd4f70b6a64b899d67f1778266485c96c5b5` |
 | `slipped_short/int28fix-ou-s2b` | 896 | lane INT28-FIX's tape, 2000 of capital, commission 0.04 %, slippage 2, to 2025-10-01; open cells 2025-04-25 18:15 and 2025-05-30 15:15 UTC | the same at two slippage ticks: a follow-up that falls on a close is booked there after the script, so the cleanup `strategy.close_all()` opens one share long at the next open (2025-04-03 19:00 UTC, closed at 9.34 on 2025-04-04 15:00) | `64eff775fa865595507d4b142ce52e2128f6188763e2027e0a6c9bdab7458e05` |
 
+## CW: a short slipped on whole lots is checked at every path point
+
+| tape | trades | `strategy()` declares | TradingView | tv_trades.csv sha256 |
+|---|---:|---|---|---|
+| `slipped_short/int28fix-ou-s1` | 600 | lane INT28-FIX's tape, 4000 of capital, commission 0.04 %, slippage 1, its whole window | a point the path reaches before its adverse extreme can already be short of margin -- the fill lies the slippage ticks under the print -- and its call is taken there; the extreme is then checked on the book it leaves (2025-05-21 16:30 UTC: one unit at 10.65, then one at 10.67, where the extreme alone calls 4 at 10.67) | `21713e2a157b20dc828b256bf450003c4285792729de20f945167595c97279fd` |
+| `slipped_short/int28fix-ou-s2` | 412 | the same at slippage 2; through 2025-05-20 16:15 UTC | the same (2025-04-01 14:15 UTC: one unit at 9.91, then 12 at 9.97, where the extreme alone calls 16) | `c0fa8591e23fe953b9e7a65cf1b2df25bbf48ef2dab836f0509d1c77289e0276` |
+
+The adapter checks those points on shorts slipped on whole lots only, the
+book these tapes measure. A full-margin long's call is the one-contract money
+call, and on longs and fractional lots (BINANCE, OANDA) a call rested at an
+earlier point is taken where TradingView takes none, so those are left to the
+kernel's check at the adverse extreme.
+
 ## Open
 
 Measured, not modelled; each is a row's open cell or lies past its window end,
@@ -90,8 +103,8 @@ or is a probe of this lane not kept here:
 - `w13-b4s-cancel-f` 2025-06-06 16:45 UTC: TradingView takes one unit at the
   17:00 open (10.29), the engine none.
 - The slipped shorts' one-unit calls at two ticks and more listed under
-  "Open" in tests/fixtures/slipped_short/README.md (`int28fix-ou-s2b`),
-  and this lane's slippage 2 probes `w13-b1t-close-f`,
+  "Open" in tests/fixtures/slipped_short/README.md (`int28fix-ou-s2`,
+  `-ou-s2b`), and this lane's slippage 2 probes `w13-b1t-close-f`,
   `w13-b5t-none-f` and `w13-a4-mkt-slip2-f`: `w13-b5t-none-f` 2025-04-02
   16:15 UTC, where TradingView calls 4 at 10.20 on the bar after the fill
   and the engine two single units there (on 0cfaa782, 4 at 10.22);

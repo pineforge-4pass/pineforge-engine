@@ -62,6 +62,7 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     // Folded only when set, like void_issue (lane W13-ENG-MARGIN-OPP).
     if (value.crosses_zero) f.u(0x7a65726fULL);
     if (!std::isnan(value.follow_up_fill)) f.d(value.follow_up_fill);
+    if (value.waypoint_margin_call) f.u(0x77617970ULL);
     f.b(value.fixed_exit_reservation);
     f.b(value.frozen_market_instruction);
     f.d(value.frozen_market_own_units); f.d(value.frozen_market_transaction_units);

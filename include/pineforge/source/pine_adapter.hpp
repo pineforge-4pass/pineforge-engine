@@ -200,6 +200,9 @@ struct PlacementSnapshot {
     // A follow-up unit queued at a close for the next open: the fill of the
     // call it follows (close_point_follow_up).
     double follow_up_fill = std::numeric_limits<double>::quiet_NaN();
+    // A call rested at a path point before the bar's adverse extreme
+    // (schedule_margin_call_path).
+    bool waypoint_margin_call = false;
     bool fixed_exit_reservation = false;
     bool frozen_market_instruction = false;
     double frozen_market_own_units = std::numeric_limits<double>::quiet_NaN();
@@ -1778,6 +1781,8 @@ private:
     bool declined_reversal_at_open(const Bar&) const;
     bool schedule_margin_call_path(const Bar&, const NativeDecisionContext&);
     bool close_point_margin_scope() const noexcept;
+    void withdraw_waypoint_margin_calls();
+    bool rest_waypoint_margin_call(const Bar&, int from, int to, const NativeDecisionContext&);
     bool commissioned_explicit_short_opened(const NativeDecisionContext&) const;
     bool close_point_margin_call(const Bar&, const NativeDecisionContext&, bool cancelled);
     bool book_close_point_call(double mark, double units, const NativeDecisionContext&,
@@ -2182,6 +2187,11 @@ private:
     // (follow_one_unit_margin_call), booked there after the script. Same
     // hash argument: set on the bar's path, dead once its close is checked.
     std::int64_t close_margin_follow_up_bar_ = std::numeric_limits<std::int64_t>::min();
+    // The script bar whose path checks the adapter rests itself, point by
+    // point, after a call at a point before the bar's adverse extreme
+    // (rest_waypoint_margin_call). Same hash argument: set on the bar's path,
+    // cleared at its close.
+    std::int64_t waypoint_chain_bar_ = std::numeric_limits<std::int64_t>::min();
     // The script bar whose close queued a call for the next open
     // (close_point_margin_call): one the script's cancel_all() withdrew,
     // placed again behind its orders, or a one-unit call the close's fill

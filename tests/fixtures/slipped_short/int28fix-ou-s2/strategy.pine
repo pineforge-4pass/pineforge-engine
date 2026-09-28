@@ -1,0 +1,12 @@
+//@version=6
+strategy("int28fix-ou-s2", overlay = true, initial_capital = 4000, commission_type = strategy.commission.percent, commission_value = 0.04, slippage = 2)
+// Lane INT28-FIX, rules OU and OF: a flat 100%-of-equity MARKET short on
+// the hour from 10:00 to 14:00 New York, closed 45 minutes later.
+h = hour(time, "America/New_York")
+m = minute(time, "America/New_York")
+cell = m == 0 and h >= 10 and h <= 14
+done = m == 45 and h >= 10 and h <= 14
+if cell and strategy.position_size == 0
+    strategy.entry("E", strategy.short)
+if done
+    strategy.close_all(comment = "cleanup")

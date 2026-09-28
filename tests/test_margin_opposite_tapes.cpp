@@ -24,6 +24,10 @@
  *       follow-up unit that falls on the close is booked there after the
  *       script, and a call at the close whose book is still short at the
  *       call's own fill is followed by one more unit at the next open.
+ *   CW  A short slipped on whole lots is checked at every point of the bar's
+ *       path, not only at its adverse extreme: a point the path reaches first
+ *       can already be short of margin, and its call leaves a book the rest
+ *       of the path checks again.
  *
  * Each row replays one lab tv tape through the Pine adapter under the
  * configuration its strategy() declares, over the lane's bars, and requires
@@ -426,6 +430,10 @@ int main() {
          config(10000.0, 0.0, 1), 466, nullptr, {"2025-06-06 16:45"}},
         {"CU", "int28fix-ou-s2b", slipped, Probe::Hourly, Mode::None, Chart::NyseF,
          config(2000.0, 0.04, 2), 511, nullptr, {"2025-04-25 18:15", "2025-05-30 15:15"}},
+        {"CW", "int28fix-ou-s1", slipped, Probe::Hourly, Mode::None, Chart::NyseF,
+         config(4000.0, 0.04, 1), 600},
+        {"CW", "int28fix-ou-s2", slipped, Probe::Hourly, Mode::None, Chart::NyseF,
+         config(4000.0, 0.04, 2), 166, "2025-05-20 16:15"},
         {"control", "w13-b5-none-f", opposite, Probe::EveryFourBars, Mode::None, Chart::NyseF,
          config(10000.0, 0.0, 0), 436},
         {"control", "w13-x5-none-xau2", opposite, Probe::TopOfHour, Mode::None, Chart::XauUsd,

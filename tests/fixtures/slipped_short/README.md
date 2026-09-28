@@ -21,11 +21,12 @@ quantity in shares -- to be the engine's.
 | `int28fix-adm-s-0` | 10000, short (control) | 218 | `fc2743e5ee431da6d0eae7c78c9a37cd4328b61a94855b571b085db0903724f9` |
 | `int28fix-adm-s-c` | 10000, commission 0.04 %, short (control) | 231 | `89b71cf21cf8aa63b14b98035b6c7767a6100c9a0dadbec2df175eb8d5aa5ed1` |
 | `int28fix-adm-l-cs` | 10000, commission 0.04 %, slippage 1, long (control) | 121 | `bb43cab56586784a40e14de6effdf263916375ccc68292185af1bc6664eb42b7` |
+| `int28fix-ou-s2` | 4000, commission 0.04 %, slippage 2, short | 412 | `c0fa8591e23fe953b9e7a65cf1b2df25bbf48ef2dab836f0509d1c77289e0276` |
 | `int28fix-ou-s2b` | 2000, commission 0.04 %, slippage 2, short, to 2025-10-01 | 896 | `64eff775fa865595507d4b142ce52e2128f6188763e2027e0a6c9bdab7458e05` |
 
-`int28fix-ou-s2b` is replayed by lane W13-ENG-MARGIN-OPP's
+`int28fix-ou-s2` and `-ou-s2b` are replayed by lane W13-ENG-MARGIN-OPP's
 `tests/test_margin_opposite_tapes.cpp` (tests/fixtures/margin_opposite), which
-also replays `-adm-s-cs` over its whole window.
+also replays `-adm-s-cs` and `-ou-s1` over their whole window.
 
 The `int28fix-adm-*` probes take a default entry from flat at the 10:00 and
 13:00 New York bars and flatten it with `strategy.close_all()` at the bar 45
@@ -63,7 +64,7 @@ What they show:
 `tests/test_slipped_short_tapes.cpp` replays `-adm-s-cs` through 2025-06-25
 and `-ou-s1` through 2025-04-30: each window ends before the first of the
 shapes below that its tape holds, which lane W13-ENG-MARGIN-OPP models
-(tests/fixtures/margin_opposite, rule CU):
+(tests/fixtures/margin_opposite, rules CU and CW):
 
 - A sub-share deficit at a bar's close takes its share at the next open, and
   the one-unit test reads that fill: `-adm-s-cs` 2025-06-26, a short of 810
@@ -73,18 +74,21 @@ shapes below that its tape holds, which lane W13-ENG-MARGIN-OPP models
   calculation there, so a `strategy.close_all()` the script places on that bar,
   sized at placement, overshoots it into a one-share long at the next open
   (`-ou-s1` from 2025-05-01, `-adm-s-cs` 2025-06-27).
+- A short is checked at every point of its bar's path, not only at the
+  adverse extreme: a point the path reaches first, the low included, can
+  already be short once the fill lies the slippage ticks under the print
+  (`-ou-s1`, `-ou-s2`).
 
 ## Open
 
-Measured on these tapes and on the lane's slippage 2 and 3 probes, not
-modelled here:
-
-- At two slippage ticks and more a short's check also runs at the bar's low,
-  where the book can be short once its fill lies two ticks under the print
-  (the lane's `int28fix-ou-s2`, `-s2b` and `-s3b` probes): `-ou-s2b`
-  2025-04-25 18:15 UTC (a unit at 10.06 on the bar the cleanup is placed on,
-  which the engine does not take) and 2025-05-30 15:15 UTC (a unit on the
-  entry bar that the engine takes a bar later).
+Measured on `int28fix-ou-s2`, `-ou-s2b` and the lane's `int28fix-ou-s3b`
+(1500, slippage 3; not kept here), not modelled: at two slippage ticks and
+more some one-unit calls fall on other path points than the engine's --
+`-ou-s2` from 2025-05-20 16:15 UTC (two units on the entry bar and two on
+the next, where the engine calls 8 at 10.80 on the next), `-ou-s2b`
+2025-04-25 18:15 UTC (a unit at 10.06 on the bar the cleanup is placed on,
+which the engine does not take) and 2025-05-30 15:15 UTC (a unit on the entry
+bar that the engine takes a bar later), and `-ou-s3b` from 2025-04-14.
 
 ## Bars
 
