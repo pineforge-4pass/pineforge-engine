@@ -1,0 +1,24 @@
+//@version=6
+strategy("gjv p1 b10", overlay=true, initial_capital=10000000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, commission_value=0.01, commission_type=strategy.commission.percent)
+armed = time >= timestamp("UTC", 2025, 4, 14, 0, 0)
+var int k = -1
+if armed
+    k += 1
+c = k % 12
+if armed and c == 0
+    strategy.entry("LONG", strategy.long, comment="L1")
+    strategy.close("LONG", comment="CL1")
+    strategy.entry("SHORT", strategy.short, comment="S1")
+if armed and c == 2
+    strategy.close_all(comment="X1")
+if armed and c == 4
+    strategy.entry("LONG", strategy.long, comment="L2")
+    strategy.entry("SHORT", strategy.short, comment="S2")
+if armed and c == 6
+    strategy.close_all(comment="X2")
+if armed and c == 8
+    strategy.entry("SHORT", strategy.short, comment="S3")
+    strategy.close("SHORT", comment="CS3")
+    strategy.entry("LONG", strategy.long, comment="L3")
+if armed and c == 10
+    strategy.close_all(comment="X3")

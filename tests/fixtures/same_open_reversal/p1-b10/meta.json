@@ -1,0 +1,16 @@
+{
+  "title": "gjv p1 b10",
+  "slug": "p1-b10",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T21:37:39.660Z",
+  "chart": {
+    "symbol": "NASDAQ:AAPL",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "8b43b830733997474619014d736264614da41920a523c71915bc3cffa7499877",
+  "tv_trades_sha256": "b4d118a92f4b1dd108c7b624cffa27d0d31dd5ac23725615d7b6630c65aa253f",
+  "tv_trades_rows": 264
+}

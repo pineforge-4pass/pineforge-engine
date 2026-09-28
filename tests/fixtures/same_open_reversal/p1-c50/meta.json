@@ -1,0 +1,16 @@
+{
+  "title": "gjv p1 c50",
+  "slug": "p1-c50",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T21:39:37.321Z",
+  "chart": {
+    "symbol": "NASDAQ:AAPL",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "3c2b8640b413c770cb0acb23033a573784c92937e31f69303fb5420ad4a2956a",
+  "tv_trades_sha256": "7613999f24d20394691fd57b445ae17971f545dbdefeac2d4ff922b65f0eade8",
+  "tv_trades_rows": 184
+}

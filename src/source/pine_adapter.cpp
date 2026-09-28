@@ -14127,10 +14127,33 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         // rechecked at the fill just as the legacy KI-54 admission path does.
         const double active_fx = active_staged_fx(view.cursor.point.effective_time_ms);
         if (active_fx == source.sizing.fx) {
-            const double fill_required = view.account.resulting_abs_notional * fraction;
+            double fill_required = view.account.resulting_abs_notional * fraction;
             const auto physical = detail::run_position(require_host());
             const bool reversal = physical.signed_units != 0.0
                 && ((physical.signed_units > 0.0) != source.is_long);
+            // A MARKET entry placed while flat that reverses the position an
+            // earlier entry of its bar opened at this same open is judged by
+            // TradingView against its placement equity with that position
+            // still margined: its own side plus the held side must fit, or it
+            // is refused and the held position stays (lane W10-DIAG-UNKNOWN
+            // rule SAMEOPEN-REV, tests/fixtures/same_open_reversal).
+            const bool same_open_reversal = reversal
+                && source.family == PineOrderFamily::Entry
+                && std::holds_alternative<native_order::Market>(
+                    view.definition->request.trigger)
+                && source.projection_position_side
+                    == static_cast<std::int32_t>(PositionSide::FLAT)
+                && !source.projection_after_close
+                && projection_bar_index(view.cursor.point) == source.projection_created_bar + 1
+                && position_open_bar_index_ == view.cursor.point.interval_index
+                && !config_.process_orders_on_close && !config_.calc_on_order_fills
+                && !stream_mode_;
+            if (same_open_reversal) {
+                const double held_fraction = (physical.signed_units > 0.0
+                    ? config_.margin_long : config_.margin_short) / 100.0;
+                fill_required += std::abs(physical.signed_units) * view.resolved_price
+                    * staged_.syminfo.pointvalue * active_fx * held_fraction;
+            }
             const bool variable_batch = source.frozen_market_instruction
                 && (config_.default_qty_type == static_cast<int>(QtyType::CASH)
                     || (config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
@@ -14170,7 +14193,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
                 && std::abs(margin_pct - 100.0) < 1e-12
                 && finite_positive(source.sizing.equity);
             const double fill_equity = (variable_batch || all_in_reversal
-                || all_in_true_flat_opening)
+                || all_in_true_flat_opening || same_open_reversal)
                 ? source.sizing.equity : view.account.marked_equity;
             const double float_guard = std::max(
                 1e-9, std::abs(source.sizing.equity) * 1e-12);
@@ -14257,7 +14280,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             }
             if (!std::isfinite(fill_required) || !std::isfinite(fill_equity)
                 || (fill_required > fill_equity + admission_guard
-                    && !price_gap_affordable
+                    && (same_open_reversal || !price_gap_affordable)
                     && !close_then_open_margin_checkpoint)) {
                 return NativePrecommitVerdict::Refuse;
             }

@@ -988,6 +988,12 @@ list(APPEND TEST_SOURCES test_intraday_cap_tv_tapes)
 # tapes.
 list(APPEND TEST_SOURCES test_pooc_gap_stop_tapes)
 
+# Lane W10-DIAG-UNKNOWN rule SAMEOPEN-REV: a default-size entry placed while
+# flat that reverses the position a same-bar entry opened at the same open
+# must fit with that position still margined
+# (tests/fixtures/same_open_reversal), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_same_open_reversal_tapes)
+
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bare_host_contracts)
@@ -2601,6 +2607,13 @@ endif()
 if(TARGET test_pooc_gap_stop_tapes)
     target_compile_definitions(test_pooc_gap_stop_tapes PRIVATE
         PINEFORGE_GAPSTOP_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_gap_stop")
+endif()
+
+# Lane W10-DIAG-UNKNOWN (SAMEOPEN-REV) reads its TradingView tapes from the
+# fixture tree; source-bound.
+if(TARGET test_same_open_reversal_tapes)
+    target_compile_definitions(test_same_open_reversal_tapes PRIVATE
+        PINEFORGE_SAMEOPEN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/same_open_reversal")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape
