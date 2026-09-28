@@ -333,7 +333,7 @@ kernel and own these quirks, each at its site:
   `max_recalculations_per_point`. What stays are the specifics COOF adds on top —
   the language-state snapshot/restore around a recalculation, the waypoint-only refill deferral
   (`next_source_path_waypoint` `pine_adapter.cpp:8669`), the first-open execution chain and its
-  own loop guard (`kFirstOpenLoopGuard` `pine_scheduler_native.cpp:729`), and the two fills Pine refuses to
+  own loop guard (`kFirstOpenLoopGuard` `pine_scheduler_native.cpp:739`), and the two fills Pine refuses to
   recalculate on (`suppress_grouped_stop_recalc` `pine_adapter.cpp:5763`).
 - **Pine language state and harness flags.** Series, the tick-level barstate flags and
   position-view freezing (`PineLanguageState` `pine_language_state.hpp:12`); the session flags,
