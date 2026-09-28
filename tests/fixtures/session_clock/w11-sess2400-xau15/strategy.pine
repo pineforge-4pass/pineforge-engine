@@ -1,0 +1,31 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane W11-ENG-TIME-COLOR): time() and time_close() with
+// session windows that end at 2400, beside controls. Each bar's readings are
+// spelled in the comment of the exit that fills on the next bar's open:
+// "n" for na, else minutes from the value to the bar's open (time_close:
+// from the bar's open to the value).
+strategy("w11 sess2400", overlay=true, initial_capital=100000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=2, margin_long=0, margin_short=0)
+
+m(int t) => na(t) ? "n" : str.tostring((time - t) / 60000)
+mc(int t) => na(t) ? "n" : str.tostring((t - time) / 60000)
+
+a = time(timeframe.period, "0000-2400")
+b = time(timeframe.period, "1700-2400")
+c = time(timeframe.period, "2045-2400", "Asia/Tokyo")
+d = time("D", "0000-2400")
+e = time(timeframe.period, "0000-2400:23456")
+f = time_close(timeframe.period, "1700-2400")
+g = time(timeframe.period, "2300-2400,0000-0100")
+k = time(timeframe.period, "2000-2400", "America/New_York")
+h = time(timeframe.period, "0000-0000")
+i = time(timeframe.period, "0000-2359")
+j = time(timeframe.period, "1700-0000")
+sig = m(a) + "," + m(b) + "," + m(c) + "," + m(d) + "," + m(e) + "," + mc(f) + "," + m(g) + "," + m(k) + "|" + m(h) + "," + m(i) + "," + m(j)
+
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.close("B", comment=sig)
+else
+    strategy.entry("B", strategy.long)
+    strategy.close("A", comment=sig)

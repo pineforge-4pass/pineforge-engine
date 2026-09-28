@@ -1,0 +1,16 @@
+{
+  "title": "w11 sess2400",
+  "slug": "w11-sess2400-xau15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T07:07:36.289Z",
+  "chart": {
+    "symbol": "OANDA:XAUUSD",
+    "interval": "15",
+    "from": "2025-03-05",
+    "to": "2025-03-12"
+  },
+  "pine_sha256": "19ed4a005d4cde44840b6dd7fb0795fb669be748e0eafbdb170246199f969698",
+  "tv_trades_sha256": "fe968cc0781afde80b85de132dcfefa7e045dd4380f18c9c33c896a96a6772d9",
+  "tv_trades_rows": 928
+}

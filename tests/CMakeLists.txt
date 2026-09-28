@@ -2634,6 +2634,20 @@ if(TARGET test_session_day_facts_adapter)
         PINEFORGE_F5_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_islastbar")
 endif()
 
+# Lane W11-ENG-TIME-COLOR: the rows that read TradingView tapes from the
+# fixture tree.
+foreach(_pf_w11_row IN ITEMS
+        "test_session_predicates|PINEFORGE_SESSION_CLOCK_FIXTURE_DIR|session_clock")
+    string(REPLACE "|" ";" _pf_w11_fields "${_pf_w11_row}")
+    list(GET _pf_w11_fields 0 _pf_w11_target)
+    list(GET _pf_w11_fields 1 _pf_w11_macro)
+    list(GET _pf_w11_fields 2 _pf_w11_dir)
+    if(TARGET ${_pf_w11_target})
+        target_compile_definitions(${_pf_w11_target} PRIVATE
+            ${_pf_w11_macro}="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/${_pf_w11_dir}")
+    endif()
+endforeach()
+
 # std::thread needs an explicit pthread link on some toolchains.
 target_link_libraries(test_timezone_concurrency PRIVATE Threads::Threads)
 target_link_libraries(test_local_time_lock_free_hit PRIVATE Threads::Threads)

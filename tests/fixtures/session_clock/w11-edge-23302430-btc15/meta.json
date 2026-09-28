@@ -1,0 +1,16 @@
+{
+  "title": "w11 edge 23302430",
+  "slug": "w11-edge-23302430-btc15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T07:06:42.433Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-03-05",
+    "to": "2025-03-07"
+  },
+  "pine_sha256": "2b4f5437fb1c8f424d4bb91fb23480fea726832fb63feb66e84b627eaf9e9b79",
+  "tv_trades_sha256": "a31842e10520f0062f4a91c3bcc9d905259190efeeeef35af7b6b7859dac8e39",
+  "tv_trades_rows": 384
+}

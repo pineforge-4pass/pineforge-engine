@@ -32,8 +32,10 @@
  *      as out of market, because the instant's weekday is Sunday while the
  *      session day it opens is Monday's;
  *   3. a 24-hour day spelled "0000-2400": the kernel reads every bar in
- *      session, the predicate none ("2400" is not a time of day it parses);
- *      the TradingView spelling "0000-0000" is the control both read as 24h.
+ *      session, and so does the predicate since lane W11-ENG-TIME-COLOR
+ *      read "2400" as the day's end, as TradingView does
+ *      (tests/fixtures/session_clock; it read none before); the TradingView
+ *      spelling "0000-0000" is the control both read as 24h.
  * The predicate's disagreements are pinned bar for bar, so a lane that routes
  * generated session.ismarket to the kernel fact moves exactly these rows.
  *
@@ -262,9 +264,9 @@ int main() {
         {"hm-g236-es1-60-thanksgiving", "1700-1600:23456", "America/Chicago", 14, 14},
         {"hm-g236-eurusd-60-dst-mar", "1700-1700:23456", "America/New_York", 14, 14},
         {"hm-g236-xauusd-60-dst-mar", "1800-1700:23456", "America/New_York", 12, 12},
-        // 3. a 24-hour day: "0000-2400" (predicate: never) and the
-        //    TradingView spelling "0000-0000" (both: always).
-        {"hm-g236-eth-60-24x7", "0000-2400", "UTC", 97, 24},
+        // 3. a 24-hour day: "0000-2400" and the TradingView spelling
+        //    "0000-0000" (both: always).
+        {"hm-g236-eth-60-24x7", "0000-2400", "UTC", 0, 0},
         {"hm-g236-eth-60-24x7", "0000-0000", "UTC", 0, 0},
     };
     for (const Case& c : cases) replay(c);

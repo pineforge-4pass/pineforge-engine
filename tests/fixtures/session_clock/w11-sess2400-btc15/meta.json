@@ -1,0 +1,16 @@
+{
+  "title": "w11 sess2400",
+  "slug": "w11-sess2400-btc15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T07:04:04.568Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-03-05",
+    "to": "2025-03-12"
+  },
+  "pine_sha256": "e957446611c8ece98a249ee2a8284db2611fba42d26d3f1366ea0c7a3a58e4ab",
+  "tv_trades_sha256": "1ff7e4c52cc6d6613d423df49524bbed9e37bc43416f87bdc3fe0573cbfda2de",
+  "tv_trades_rows": 1344
+}

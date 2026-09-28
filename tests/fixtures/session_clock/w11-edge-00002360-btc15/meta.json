@@ -1,0 +1,16 @@
+{
+  "title": "w11 edge 00002360",
+  "slug": "w11-edge-00002360-btc15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T07:05:23.295Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-03-05",
+    "to": "2025-03-07"
+  },
+  "pine_sha256": "9a224e88868ee90b21987ee783a1fc0f95078ac8c19370e3bacc91844ab3c976",
+  "tv_trades_sha256": "36f413506a42f9152951d7db1c4fce9d28d482da8c20640f2ca8323a74a2cb48",
+  "tv_trades_rows": 384
+}

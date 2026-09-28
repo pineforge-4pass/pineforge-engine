@@ -9,10 +9,19 @@
  *  - 24x7 session (crypto) — ismarket always true, pre/post always false
  */
 
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
+#include <pineforge/na.hpp>
 #include <pineforge/session_time.hpp>
+
+#include "exit_comment_tape.hpp"
+
+#ifndef PINEFORGE_SESSION_CLOCK_FIXTURE_DIR
+#error "PINEFORGE_SESSION_CLOCK_FIXTURE_DIR must name tests/fixtures/session_clock"
+#endif
 
 using namespace pineforge;
 
@@ -244,6 +253,167 @@ static void test_start_equals_end_is_full_day() {
     CHECK(pine_session_ismarket("1700-1600", tz, kTs_1730_ET));
 }
 
+// ---------------------------------------------------------------------------
+// A session window's clocks as TradingView reads them (lane
+// W11-ENG-TIME-COLOR, tests/fixtures/session_clock/README.md): HHMM is
+// HH * 60 + MM minutes after a day's midnight, unchecked -- "2400" is the
+// day's end, "2430" 00:30 on the next day, "0060" 01:00 -- an end at or
+// before the start is on the next day, and a time of day is in the window
+// when it, or it on the next day, falls in [start, end). Every reading of
+// every tape is replayed through pine_time / pine_time_close as generated
+// code calls them (the chart's timeframe, syminfo.timezone and
+// syminfo.session trailing).
+// ---------------------------------------------------------------------------
+
+// A spelled reading: "n" for na, else minutes.
+static bool reading_is_na(const std::string& text) { return text == "n"; }
+
+// `minutes` is (reference - value) / 60000 as the probe spells it; the engine
+// answer `value` (na or epoch ms) must be na exactly when TradingView's was,
+// and otherwise the same minutes to a millisecond.
+static bool same_reading(const std::string& text, int64_t value, int64_t bar, bool to_close) {
+    if (reading_is_na(text)) return is_na(value);
+    if (is_na(value)) return false;
+    char* end = nullptr;
+    const double tv = std::strtod(text.c_str(), &end);
+    if (end == text.c_str() || *end != '\0') return false;
+    const double engine = static_cast<double>(to_close ? value - bar : bar - value) / 60000.0;
+    return std::fabs(engine - tv) < 1e-6;
+}
+
+struct ChartFacts {
+    const char* slug;
+    const char* tf;
+    const char* sym_tz;
+    const char* sym_session;
+};
+
+// The w11 sess2400 probe: a,b,c,d,e,f,g,k|h,i,j (strategy.pine in each tape).
+static void test_session_2400_tapes() {
+    std::printf("test_session_2400_tapes\n");
+    struct Field {
+        const char* tf;       // nullptr: timeframe.period
+        const char* session;
+        const char* tz;
+        bool close;           // time_close, spelled from the bar's open
+        bool replayed;        // false: another rule's reading, not compared
+    };
+    static const Field fields[] = {
+        {nullptr, "0000-2400", "", false, true},
+        {nullptr, "1700-2400", "", false, true},
+        {nullptr, "2045-2400", "Asia/Tokyo", false, true},
+        {"D", "0000-2400", "", false, true},
+        {nullptr, "0000-2400:23456", "", false, true},
+        {nullptr, "1700-2400", "", true, true},
+        // Two windows and no day list: which days TradingView admits there is
+        // another rule's than this clock's.
+        {nullptr, "2300-2400,0000-0100", "", false, false},
+        {nullptr, "2000-2400", "America/New_York", false, true},
+        {nullptr, "0000-0000", "", false, true},
+        {nullptr, "0000-2359", "", false, true},
+        {nullptr, "1700-0000", "", false, true},
+    };
+    static const ChartFacts charts[] = {
+        {"w11-sess2400-btc15", "15", "UTC", "24x7"},
+        {"w11-sess2400-btc1d", "1D", "UTC", "24x7"},
+        {"w11-sess2400-xau15", "15", "America/New_York", "1800-1700"},
+    };
+    for (const ChartFacts& chart : charts) {
+        bool ok = true;
+        const auto readings =
+            exit_comment_tape::read(PINEFORGE_SESSION_CLOCK_FIXTURE_DIR, chart.slug, ok);
+        CHECK(ok);
+        int compared = 0;
+        int wrong = 0;
+        for (const auto& reading : readings) {
+            std::string flat = reading.signal;
+            for (char& c : flat) if (c == '|') c = ',';
+            const auto spelled = exit_comment_tape::split(flat, ',');
+            if (spelled.size() != sizeof(fields) / sizeof(fields[0])) { ++wrong; continue; }
+            for (std::size_t k = 0; k < spelled.size(); ++k) {
+                const Field& f = fields[k];
+                if (!f.replayed) continue;
+                const std::string tf = f.tf ? f.tf : chart.tf;
+                const int64_t value = f.close
+                    ? pine_time_close(reading.bar_ms, tf, f.session, f.tz, chart.tf,
+                                      chart.sym_tz, chart.sym_session)
+                    : pine_time(reading.bar_ms, tf, f.session, f.tz, chart.tf,
+                                chart.sym_tz, chart.sym_session);
+                // Where a D period opens under a session argument is not this
+                // clock's rule, and two readings of it differ from
+                // TradingView's (lane W11-ENG-TIME-COLOR's report): time("D",
+                // session) keys its day on UTC where TradingView keys it on
+                // syminfo.timezone (the New York chart), and on a D chart
+                // time(timeframe.period, session, tz) floors the bar to the
+                // tz's day where TradingView answers the bar's own time. There
+                // only whether the bar is in the window is compared.
+                const bool daily_chart = std::string(chart.tf) == "1D";
+                const bool session_only =
+                    (f.tf != nullptr && std::string(chart.sym_tz) != "UTC")
+                    || (daily_chart && f.tz[0] != '\0');
+                const bool same = session_only
+                    ? reading_is_na(spelled[k]) == is_na(value)
+                    : same_reading(spelled[k], value, reading.bar_ms, f.close);
+                ++compared;
+                if (!same) {
+                    if (++wrong <= 5) {
+                        std::printf("  %s bar %lld field %zu (%s) tv=%s engine=%lld\n", chart.slug,
+                                    static_cast<long long>(reading.bar_ms), k, f.session,
+                                    spelled[k].c_str(), static_cast<long long>(value));
+                    }
+                }
+            }
+        }
+        std::printf("  %s: %d readings compared, %d differ\n", chart.slug, compared, wrong);
+        CHECK(compared > 0);
+        CHECK(wrong == 0);
+    }
+}
+
+// The w11 edge probes: one window each, read on BINANCE:BTCUSDT 15 -- where
+// the unchecked clock arithmetic reaches (TradingView accepted every form).
+static void test_session_clock_edge_tapes() {
+    std::printf("test_session_clock_edge_tapes\n");
+    struct Edge { const char* slug; const char* session; };
+    static const Edge edges[] = {
+        {"w11-edge-24000100-btc15", "2400-0100"},
+        {"w11-edge-00002401-btc15", "0000-2401"},
+        {"w11-edge-24002400-btc15", "2400-2400"},
+        {"w11-edge-00002430-btc15", "0000-2430"},
+        {"w11-edge-00002500-btc15", "0000-2500"},
+        {"w11-edge-00002360-btc15", "0000-2360"},
+        {"w11-edge-24300100-btc15", "2430-0100"},
+        {"w11-edge-00000060-btc15", "0000-0060"},
+        {"w11-edge-00009959-btc15", "0000-9959"},
+        {"w11-edge-17002500-btc15", "1700-2500"},
+        {"w11-edge-23302430-btc15", "2330-2430"},
+    };
+    for (const Edge& edge : edges) {
+        bool ok = true;
+        const auto readings =
+            exit_comment_tape::read(PINEFORGE_SESSION_CLOCK_FIXTURE_DIR, edge.slug, ok);
+        CHECK(ok);
+        int wrong = 0;
+        int in_session = 0;
+        for (const auto& reading : readings) {
+            const int64_t value =
+                pine_time(reading.bar_ms, "15", edge.session, "", "15", "UTC", "24x7");
+            if (!reading_is_na(reading.signal)) ++in_session;
+            if (!same_reading(reading.signal, value, reading.bar_ms, false)) {
+                if (++wrong <= 3) {
+                    std::printf("  %s bar %lld tv=%s engine=%lld\n", edge.slug,
+                                static_cast<long long>(reading.bar_ms),
+                                reading.signal.c_str(), static_cast<long long>(value));
+                }
+            }
+        }
+        std::printf("  %s: %zu bars, %d in session, %d differ\n", edge.slug, readings.size(),
+                    in_session, wrong);
+        CHECK(readings.size() == 191);
+        CHECK(wrong == 0);
+    }
+}
+
 int main() {
     test_ismarket_inside_rth();
     test_ismarket_outside_rth_close();
@@ -261,6 +431,8 @@ int main() {
     test_ismarket_weekend_filter();
     test_firstlastbar_transitions();
     test_start_equals_end_is_full_day();
+    test_session_2400_tapes();
+    test_session_clock_edge_tapes();
 
     std::printf("\nsession_predicates: %d passed, %d failed\n",
                 tests_passed, tests_failed);

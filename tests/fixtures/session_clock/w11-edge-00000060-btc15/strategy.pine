@@ -1,0 +1,17 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane W11-ENG-TIME-COLOR): where a session clock of 24xx
+// stops being accepted: time(timeframe.period, "0000-0060"), "n" for na, else
+// minutes from the value to the bar's open.
+strategy("w11 edge 00000060", overlay=true, initial_capital=100000000, default_qty_type=strategy.fixed, default_qty_value=0.001, pyramiding=2, margin_long=0, margin_short=0)
+
+m(int t) => na(t) ? "n" : str.tostring((time - t) / 60000)
+x = time(timeframe.period, "0000-0060")
+sig = m(x)
+
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.close("B", comment=sig)
+else
+    strategy.entry("B", strategy.long)
+    strategy.close("A", comment=sig)

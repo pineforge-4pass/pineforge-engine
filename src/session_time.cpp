@@ -665,6 +665,27 @@ static bool extended_hours_bounds(const std::string& windows, int& first_open,
     return any;
 }
 
+// A window clock of a time() / time_close() / session.* session argument,
+// the four characters of `s` at `at`, as TradingView reads it: HH * 60 + MM
+// minutes after a day's midnight, unchecked -- "2400" is the day's end, "2430"
+// 00:30 on the next day, "0060" 01:00. -1 when they are not four digits. The
+// window test then reads a time of day in the window when it, or it on the
+// next day, falls in [start, end), an end at or before the start being on
+// the next day (lab tv tapes w11-sess2400-{btc15,btc1d,xau15} and
+// w11-edge-*-btc15, tests/fixtures/session_clock).
+int session_clock_minutes(const std::string& s, std::size_t at) {
+    if (at + 4 > s.size())
+        return -1;
+    int digit[4];
+    for (int k = 0; k < 4; ++k) {
+        const char c = s[at + static_cast<std::size_t>(k)];
+        if (c < '0' || c > '9')
+            return -1;
+        digit[k] = c - '0';
+    }
+    return (digit[0] * 10 + digit[1]) * 60 + digit[2] * 10 + digit[3];
+}
+
 }  // anonymous namespace
 
 // ---------------------------------------------------------------------------
@@ -706,24 +727,20 @@ bool local_time_in_session_windows(const std::string& windows_body,
         std::size_t dash = win.find('-');
         if (dash == std::string::npos || dash < 4 || win.size() < dash + 4)
             continue;
-        std::string left = win.substr(0, 4);
-        std::string right = win.substr(dash + 1, 4);
-        int sm = hhmm_to_minutes(left);
-        int em = hhmm_to_minutes(right);
+        int sm = session_clock_minutes(win, 0);
+        int em = session_clock_minutes(win, dash + 1);
         if (sm < 0 || em < 0)
             continue;
-        // A window whose start equals its end ("1700-1700" on OANDA forex,
-        // "0000-0000") is TradingView's 24-hour session: the market is
-        // open the whole day and every bar belongs to it. The half-open
-        // arithmetic below would otherwise make it EMPTY, so time(session)
-        // / time_close / session.ismarket returned na / false on every
-        // bar of a forex symbol (finding 455).
-        if (sm == em)
-            return true;
-        bool in_win = (sm <= em) ? (mod >= sm && mod < em)
-                                 : (mod >= sm || mod < em);
-        if (in_win)
-            return true;
+        // An end at or before the start is on the next day: a wrapping
+        // window ("1800-1700"), and a window whose start equals its end
+        // ("1700-1700" on OANDA forex, "0000-0000"), which is TradingView's
+        // 24-hour session -- every bar belongs to it (finding 455).
+        if (em <= sm)
+            em += 24 * 60;
+        for (int t = mod; t < em; t += 24 * 60) {
+            if (t >= sm)
+                return true;
+        }
     }
     return false;
 }
