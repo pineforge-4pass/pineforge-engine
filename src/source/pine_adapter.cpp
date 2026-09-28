@@ -15281,6 +15281,77 @@ bool PineExecutionAdapter::whole_unit_follow_up_due(double called_units, double 
     return !lots.empty() && std::abs(std::abs(lots.front().signed_units) - 1.0) < 1e-9;
 }
 
+// TradingView follows a one-unit margin call on a whole-unit lot grid with
+// one more unit at the bar's next path point when the unit did not restore
+// the book at its own fill: the book it called, re-marked at the call's fill
+// price, is still short of margin by more than a unit's margin and two of the
+// slippage steps. That point books the unit where its own check calls nothing
+// and its print is inside the call's fill (below it for a short); a print at
+// or beyond the fill is judged by its own check alone. A unit so taken is
+// followed alike, and the close is the last point a bar offers. A long's call
+// is never followed -- its sell lowers the requirement with the equity -- nor
+// is a call at zero slippage, whose fill is its mark. On NYSE:F at slippage 1
+// a short of 352 shares filled at 9.86 and called one share at 9.88 off the
+// 9.87 open print, 0.068 short re-marked there, gives up one more at the 9.855
+// low; one of 359 filled at 9.63 and called at 9.65, 0.001 inside its margin
+// re-marked there, takes none; and one of 396 filled at 9.97 and called at
+// 9.99 meets the 9.995 high at that fill, where its own check calls the next
+// share, followed at the 9.94 low (lab tv tapes tests/fixtures/slipped_short
+// int28fix-ou-s1 and int28fix-adm-s-cs; lane INT28-FIX rule OF). `fill` is
+// the call's own fill, `current` the print its check point fired at.
+void PineExecutionAdapter::follow_one_unit_margin_call(
+        double called_units, double fill, double current,
+        const NativeDecisionContext& context) {
+    if (std::abs(called_units - 1.0) > 1e-9 || !staged_.quantity_grid
+        || *staged_.quantity_grid != 1.0 || stream_mode_ || !(config_.slippage > 0)) {
+        return;
+    }
+    if (config_.commission_value != 0.0
+        && config_.commission_type != static_cast<int>(CommissionType::PERCENT)) {
+        return;
+    }
+    const Bar& bar = policy_script_bar_;
+    const bool high_first = source_path_uses_high_first(bar);
+    const double tick = staged_.syminfo.mintick;
+    const double guard = tick * 1e-6;
+    const double fx = active_staged_fx(context.sub_bar_open_ms);
+    const double step = config_.slippage * tick * staged_.syminfo.pointvalue * fx;
+    auto phase = context.coordinate.path_phase;
+    double at = current;
+    while (finite_positive(fill)) {
+        const auto position = detail::run_position(require_host());
+        if (position.signed_units == 0.0) return;
+        const bool short_book = position.signed_units < 0.0;
+        const auto money = source_margin_money(fill, context.sub_bar_open_ms);
+        if (!money.valid) return;
+        // The book after the call has paid the unit's exit fee; the book it
+        // called, re-marked at the fill, had not.
+        const double exit_fee = config_.commission_value > 0.0
+            ? fill * staged_.syminfo.pointvalue * fx * config_.commission_value / 100.0
+            : 0.0;
+        if (!(money.required - money.equity - exit_fee > 2.0 * step)) return;
+        double next = next_source_path_waypoint(bar, phase, at, high_first);
+        auto next_phase = NativePathPhase::None;
+        if (phase == NativePathPhase::Open) {
+            next_phase = high_first ? NativePathPhase::High : NativePathPhase::Low;
+        } else if (std::isfinite(next)) {
+            next_phase = next == bar.high ? NativePathPhase::High : NativePathPhase::Low;
+        } else if (phase == NativePathPhase::High || phase == NativePathPhase::Low) {
+            next = bar.close;
+            next_phase = NativePathPhase::Close;
+        }
+        if (!finite_positive(next) || next_phase == NativePathPhase::None) return;
+        const double next_mark = nearest_tick(next, tick);
+        if (short_book ? next_mark >= fill - guard : next_mark <= fill + guard) return;
+        if (source_margin_units(source_margin_money(next, context.sub_bar_open_ms), false) > 0.0)
+            return;
+        if (!submit_margin_call_units(next, context, 1.0, true)) return;
+        fill = source_margin_fill_price(next, short_book);
+        at = next;
+        phase = next_phase;
+    }
+}
+
 bool PineExecutionAdapter::schedule_margin_call_path(
         const Bar& bar, const NativeDecisionContext& context) {
     const auto position = detail::run_position(require_host());
@@ -19318,9 +19389,15 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                     && config_.slippage != 0 && !config_.process_orders_on_close
                     && std::holds_alternative<native_order::Market>(event.request().trigger);
                 if (!defer_slipped_pooc_rounding && slipped_market_short) {
-                    (void)submit_margin_call_slice(source_bar_fill_tick(
+                    const double print = source_bar_fill_tick(
                         event.resolved_price + config_.slippage * staged_.syminfo.mintick,
-                        staged_.syminfo.mintick), context);
+                        staged_.syminfo.mintick);
+                    const double held = std::abs(detail::run_position(require_host()).signed_units);
+                    if (submit_margin_call_slice(print, context)) {
+                        follow_one_unit_margin_call(
+                            held - std::abs(detail::run_position(require_host()).signed_units),
+                            source_margin_fill_price(print, true), event.resolved_price, context);
+                    }
                 } else if (!defer_slipped_pooc_rounding) {
                     // A sibling book's call can take a one-unit follow-up at
                     // the bar's next path point (whole_unit_follow_up_due).
@@ -19557,6 +19634,14 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             || placement_snapshot->family == PineOrderFamily::Order)
         && !pooc_close_market_pending(context)) {
         fill_pooc_close_exits(event.raw_price, context);
+    }
+    // The kernel's path check calls one unit as the opening print does, and
+    // is followed alike (follow_one_unit_margin_call).
+    if (event.definition
+        && event.definition->origin == native_order::RequestOrigin::KernelLiquidation
+        && event.closed_units > 0.0) {
+        follow_one_unit_margin_call(event.closed_units, event.resolved_price, event.raw_price,
+                                    context);
     }
 }
 

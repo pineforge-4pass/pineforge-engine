@@ -1764,6 +1764,8 @@ private:
     bool flat_sibling_fill_follows(const PlacementSnapshot&,
                                    const native_order::RequestHandle&) const;
     bool whole_unit_follow_up_due(double called_units, double mark) const;
+    void follow_one_unit_margin_call(double called_units, double fill, double current,
+                                     const NativeDecisionContext&);
     bool declined_reversal_at_open(const Bar&) const;
     bool schedule_margin_call_path(const Bar&, const NativeDecisionContext&);
     void defer_declined_reversal_exits_at_adverse(const Bar&,

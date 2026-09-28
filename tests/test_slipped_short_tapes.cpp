@@ -13,6 +13,11 @@
  *       only where it restores the book at the call's own fill: the whole
  *       position's requirement at the liquidation's slipped print less the
  *       equity at the mark is under a unit's margin.
+ *   OF  A one-unit call that leaves the book short at its own fill -- by more
+ *       than a unit's margin and two slippage steps, re-marked there -- is
+ *       followed by one more unit at the bar's next path point, where that
+ *       point's own check calls nothing and its print is inside the call's
+ *       fill; a unit so taken is followed alike.
  *
  * Each row replays one lab tv tape (tests/fixtures/slipped_short) through the
  * Pine adapter under the configuration the generated constructor declares for
@@ -88,6 +93,11 @@ std::int64_t days_from_civil(int y, unsigned m, unsigned d) {
     const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
     const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     return static_cast<std::int64_t>(era) * 146097 + static_cast<std::int64_t>(doe) - 719468;
+}
+
+// 2025-<month>-<day> 00:00 UTC.
+std::int64_t midnight(unsigned month, unsigned day) {
+    return days_from_civil(2025, month, day) * 1440 * kMinute;
 }
 
 // A tape stamp "YYYY-MM-DD HH:MM" rendered at UTC+8 -> UTC milliseconds.
@@ -256,6 +266,14 @@ int main() {
         {"SS OU", "int28fix-adm-s-s", Probe::TwoCells, false, config(10000.0, 0.0, 1), 14},
         {"SS OU", "int28fix-ou-s3", Probe::Hourly, false, config(4000.0, 0.04, 3), 17},
         {"SS", "int28fix-ou-s4", Probe::Hourly, false, config(4000.0, 0.04, 4), 0},
+        // The windows end before the two shapes these tapes hold beyond these
+        // rules (README, "Open"): a one-unit call a bar's close takes at the
+        // next open, and a follow-up on a close that a close_all placed there
+        // then overshoots.
+        {"SS OU OF", "int28fix-adm-s-cs", Probe::TwoCells, false, config(10000.0, 0.04, 1), 135,
+         midnight(6, 26)},
+        {"SS OU OF", "int28fix-ou-s1", Probe::Hourly, false, config(4000.0, 0.04, 1), 192,
+         midnight(5, 1)},
         {"control", "int28fix-adm-s-0", Probe::TwoCells, false, config(10000.0, 0.0, 0), 218},
         {"control", "int28fix-adm-s-c", Probe::TwoCells, false, config(10000.0, 0.04, 0), 231},
         {"control", "int28fix-adm-l-cs", Probe::TwoCells, true, config(10000.0, 0.04, 1), 121},

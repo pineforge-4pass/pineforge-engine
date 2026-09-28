@@ -16,6 +16,8 @@ quantity in shares -- to be the engine's.
 | `int28fix-adm-s-s` | 10000, slippage 1, short | 14 | `2b64805194a04422ec495aa2560e0af7d8b38f29ce3426ac787cbbd8e6df0319` |
 | `int28fix-ou-s3` | 4000, commission 0.04 %, slippage 3, short | 17 | `29c741bad36cecb308a90bef065ddb2b1e22e5a12de0e751fe97070d918f4ecc` |
 | `int28fix-ou-s4` | 4000, commission 0.04 %, slippage 4, short | 0 | `86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c` |
+| `int28fix-adm-s-cs` | 10000, commission 0.04 %, slippage 1, short | 147 | `be02018d982d590dee2f808ecec99e944825f951c49ac262746c740ee507b85a` |
+| `int28fix-ou-s1` | 4000, commission 0.04 %, slippage 1, short | 600 | `21713e2a157b20dc828b256bf450003c4285792729de20f945167595c97279fd` |
 | `int28fix-adm-s-0` | 10000, short (control) | 218 | `fc2743e5ee431da6d0eae7c78c9a37cd4328b61a94855b571b085db0903724f9` |
 | `int28fix-adm-s-c` | 10000, commission 0.04 %, short (control) | 231 | `89b71cf21cf8aa63b14b98035b6c7767a6100c9a0dadbec2df175eb8d5aa5ed1` |
 | `int28fix-adm-l-cs` | 10000, commission 0.04 %, slippage 1, long (control) | 121 | `bb43cab56586784a40e14de6effdf263916375ccc68292185af1bc6664eb42b7` |
@@ -30,20 +32,49 @@ What they show:
 - SS, the admission: the short is sized at the signal close less the slippage
   ticks, and the commission, and opens only while those units at the signal
   close, on its tick, fit the equity: 6 of 124 cells open at slippage 1
-  without commission (`-adm-s-s`), 8 of 310 at slippage 3 (`-ou-s3`) and none
-  at 4 (`-ou-s4`).
-  Without slippage the short is sized at the close itself and only its
-  fill-time admission applies (`-adm-s-0`, 107 of 124; `-adm-s-c`, 110 of
-  124), as for the long, which is sized above the close (`-adm-l-cs`, 116 of
-  124).
+  without commission (`-adm-s-s`), 58 of 123 with it (`-adm-s-cs`), 8 of 310
+  at slippage 3 (`-ou-s3`) and none at 4 (`-ou-s4`). Without slippage the
+  short is sized at the close itself and only its fill-time admission applies
+  (`-adm-s-0`, 107 of 124; `-adm-s-c`, 110 of 124), as for the long, which is
+  sized above the close (`-adm-l-cs`, 116 of 124).
 - OU, the one-unit call: a restore that floors below one share takes that
   share only where it restores the book at the call's own fill, the whole
   position's requirement at the slipped print less the equity at the mark
   being under one share's margin: a slipped short qualifies only while its
   whole position's slippage stays under that margin, so `-adm-s-s`'s and
-  `-ou-s3`'s sub-share deficits take no call. A long's sell always qualifies
-  (`-adm-l-cs`'s five calls), as does any call without slippage
-  (`-adm-s-c`'s 22).
+  `-ou-s3`'s sub-share deficits take no call, while on the entry bars of
+  `-ou-s1`'s window 55 such calls are taken and 11 deficits take none, and in
+  `-adm-s-cs`'s 3 and 34. A long's sell always qualifies (`-adm-l-cs`'s five
+  calls), as does any call without slippage (`-adm-s-c`'s 22).
+- OF, the follow-up: a one-unit call that leaves the book short at its own
+  fill -- by more than one share's margin and two slippage steps, the book
+  re-marked there -- gives up one more share at the bar's next path point
+  where that point's own check calls nothing and its print is inside the
+  call's fill; a share so taken is followed alike. `-ou-s1`'s window holds 29
+  follow-ups, `-adm-s-cs`'s 3.
+
+## Windows
+
+`-adm-s-cs` is replayed through 2025-06-25 and `-ou-s1` through 2025-04-30;
+each window ends before the first of the two shapes under "Open" that its
+tape holds.
+
+## Open
+
+Measured on these tapes and on the lane's slippage 2 and 3 probes, not
+modelled here:
+
+- A sub-share deficit at a bar's close takes its share at the next open, and
+  the one-unit test reads that fill: `-adm-s-cs` 2025-06-26, a short of 810
+  shares 4.95 short at the 10.62 close mark, gives one up at 10.62 off the
+  10.61 open.
+- A follow-up that falls on a bar's close is booked after the script's
+  calculation there, so a `strategy.close_all()` the script places on that bar,
+  sized at placement, overshoots it into a one-share long at the next open
+  (`-ou-s1` from 2025-05-01, `-adm-s-cs` 2025-06-27).
+- At two slippage ticks and more a short's check also runs at the bar's low,
+  where the book can be short once its fill lies two ticks under the print
+  (the lane's `int28fix-ou-s2`, `-s2b` and `-s3b` probes).
 
 ## Bars
 

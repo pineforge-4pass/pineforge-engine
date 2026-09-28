@@ -1,0 +1,10 @@
+//@version=6
+strategy("int28fix-adm-s-cs", overlay = true, initial_capital = 10000, commission_type = strategy.commission.percent, commission_value = 0.04, slippage = 1)
+h = hour(time, "America/New_York")
+m = minute(time, "America/New_York")
+cell = (h == 10 and m == 0) or (h == 13 and m == 0)
+done = (h == 10 and m == 45) or (h == 13 and m == 45)
+if cell and strategy.position_size == 0
+    strategy.entry("E", strategy.short)
+if done
+    strategy.close_all(comment = "cleanup")

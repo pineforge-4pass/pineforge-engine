@@ -1,0 +1,16 @@
+{
+  "title": "int28fix-ou-s1",
+  "slug": "int28fix-ou-s1",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T08:58:27.830Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-07-01"
+  },
+  "pine_sha256": "62a28a5b0336ca5956c1e3b339ac8aea5fc960e1c3dc4250de7ab67fa32c1c3d",
+  "tv_trades_sha256": "21713e2a157b20dc828b256bf450003c4285792729de20f945167595c97279fd",
+  "tv_trades_rows": 1200
+}
