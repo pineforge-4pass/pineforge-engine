@@ -1750,8 +1750,17 @@ int64_t source::PineStrategyHost::chart_time_close() const {
     if (period != CalendarPeriod::NONE) {
         const int64_t covered = session_covered_instant_ms(
             current_bar_.timestamp, syminfo_.timezone, syminfo_.session);
-        return session_period_last_traded_close_ms(covered, syminfo_.timezone,
-                                                   syminfo_.session, period);
+        int64_t close = session_period_last_traded_close_ms(covered, syminfo_.timezone,
+                                                            syminfo_.session, period);
+        // A week or month dated on a weekend its session does not trade (a
+        // Sunday-dated equity week) sits after its period's last traded close:
+        // the bar is the next period's.
+        if (close <= current_bar_.timestamp) {
+            close = session_period_last_traded_close_ms(
+                session_period_close_ms(covered, syminfo_.timezone, syminfo_.session, period),
+                syminfo_.timezone, syminfo_.session, period);
+        }
+        return close;
     }
     return pine_time_close(current_bar_.timestamp, script_tf_, syminfo_.session,
                            syminfo_.timezone, script_tf_);

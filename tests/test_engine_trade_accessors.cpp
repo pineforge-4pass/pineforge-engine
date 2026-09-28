@@ -438,6 +438,10 @@ static void test_chart_time_close_gap_stamps() {
         {"1D", 1741039200000LL, 1741122000000LL},  // Mon 03-03 22:00Z (17:00 ET, after the close)
         {"1D", 1741098600000LL, 1741122000000LL},  // Tue 09:30 ET, in session: unchanged
         {"1W", 1740978000000LL, 1741381200000LL},  // Mon 03-03 00:00 ET -> Fri 03-07 16:00 ET
+        // A week or month dated on a weekend the session does not trade is the
+        // next period's (Sunday-dated): its close is that period's last one.
+        {"1W", 1740891600000LL, 1741381200000LL},  // Sun 03-02 00:00 ET -> Fri 03-07 16:00 ET
+        {"1M", 1756612800000LL, 1759262400000LL},  // Sun 08-31 00:00 ET -> Tue 09-30 16:00 ET
     };
     ZeroPriceProbe p;
     p.set_syminfo_session("0930-1600");
