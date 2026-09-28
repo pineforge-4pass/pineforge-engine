@@ -469,6 +469,9 @@ public:
     Supertrend(double factor, int atr_period);
     SupertrendResult compute(double high, double low, double close);
     SupertrendResult recompute(double high, double low, double close);
+
+private:
+    SupertrendResult step(double high, double low, double close, bool again);
 };
 
 // --- DMI (Directional Movement Index) ---

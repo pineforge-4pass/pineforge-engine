@@ -219,6 +219,15 @@ SupertrendResult Supertrend::compute(double high, double low, double close) {
     saved_prev_direction_ = prev_direction_;
     saved_prev_close_ = prev_close_;
     saved_initialized_ = initialized_;
+    return step(high, low, close, false);
+}
+
+// One computation of the bar: the first (compute) or a recalculation from the
+// previous bar's saved state (recompute), for the ATR inside as for the bands,
+// so the ATR advances once per bar whatever the number of recalculations.
+SupertrendResult Supertrend::step(double high, double low, double close, bool again) {
+    const double atr_val = again ? atr_.recompute(high, low, close)
+                                 : atr_.compute(high, low, close);
 
     SupertrendResult result;
     result.value = na<double>();
@@ -242,7 +251,6 @@ SupertrendResult Supertrend::compute(double high, double low, double close) {
     // tests/fixtures/supertrend_warmup). initialized_ holds whether atr[1]
     // was valid; a direction of -1 is an uptrend, whose line trails the lower
     // band.
-    const double atr_val = atr_.compute(high, low, close);
     const double hl2 = (high + low) / 2.0;
     double upper = hl2 + factor_ * atr_val;
     double lower = hl2 - factor_ * atr_val;
@@ -771,7 +779,7 @@ SupertrendResult Supertrend::recompute(double high, double low, double close) {
     prev_close_ = saved_prev_close_;
     initialized_ = saved_initialized_;
 
-    return compute(high, low, close);
+    return step(high, low, close, true);
 }
 
 // --- DMI ---

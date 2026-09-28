@@ -286,6 +286,44 @@ static void test_macd_seeded() {
 }
 
 // ============================================================================
+// A recalculation of a bar (calc_on_order_fills, a realtime tick: generated
+// code calls recompute on a bar it has computed) answers what one computation
+// of that bar from the previous bar's state answers, and leaves the state a
+// computation leaves: the ATR inside advances once per bar. It advanced twice
+// (recompute restored the bands but computed the ATR again), so every later
+// bar of such a run read a wrong line.
+// ============================================================================
+
+static void test_supertrend_recompute_is_one_computation() {
+    std::printf("test_supertrend_recompute_is_one_computation\n");
+    const double bars[][3] = {{101.0, 99.0, 100.0},  {103.0, 100.0, 102.0},
+                              {104.0, 101.0, 101.5}, {102.0, 97.0, 98.0},
+                              {99.0, 95.0, 96.0},    {100.0, 96.0, 99.5}};
+    ta::Supertrend once(3.0, 2);
+    ta::Supertrend again(3.0, 2);
+    for (const auto& bar : bars) {
+        const auto want = once.compute(bar[0], bar[1], bar[2]);
+        // A first tick of the bar, then the bar's recalculation at its close.
+        again.compute(bar[0] + 0.5, bar[1] + 0.25, bar[2] + 0.125);
+        const auto got = again.recompute(bar[0], bar[1], bar[2]);
+        CHECK(near(got.value, want.value));
+        CHECK(near(got.direction, want.direction));
+    }
+    // An na recalculation leaves no advance of its own behind either.
+    ta::Supertrend na_tick(3.0, 2);
+    ta::Supertrend plain(3.0, 2);
+    for (const auto& bar : bars) {
+        const auto want = plain.compute(bar[0], bar[1], bar[2]);
+        na_tick.compute(bar[0], bar[1], bar[2]);
+        const auto blank = na_tick.recompute(na<double>(), na<double>(), na<double>());
+        CHECK(is_na(blank.value) && is_na(blank.direction));
+        const auto got = na_tick.recompute(bar[0], bar[1], bar[2]);
+        CHECK(near(got.value, want.value));
+        CHECK(near(got.direction, want.direction));
+    }
+}
+
+// ============================================================================
 // Supertrend from the run's first bar, as TradingView computes it: the Pine
 // reference (hl2 +/- factor * ta.atr(atrPeriod), each band ratcheted against
 // nz(band[1]) and close[1], direction 1 while atr[1] is na). Replayed against
@@ -385,6 +423,7 @@ static void test_supertrend_warmup_tape() {
 int main() {
     test_supertrend_flip();
     test_supertrend_warmup_tape();
+    test_supertrend_recompute_is_one_computation();
     test_sar_long_then_flip();
     test_sar_short_init();
     test_atr_tr_warmup();
