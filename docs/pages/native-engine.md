@@ -1492,7 +1492,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:13989-14022`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:14475-14508`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -2234,13 +2234,13 @@ under the ticket the model or the run named. A host running its own forced
 close states the cause on the row it produced.
 
 `closed_trade_close_cause(i)` (`engine.hpp:1848`) is the C++ read and
-`strategy_closed_trade_close_cause` (`pineforge.h:1239`) the C one, with the
+`strategy_closed_trade_close_cause` (`pineforge.h:1249`) the C one, with the
 same numbering: `-1` for a bad index or a NULL handle, `0` UNKNOWN, `1`
 SCRIPT, `2` BRACKET, `3` MARGIN_CALL, `4` INTRADAY_LOSS_CAP, `5`
 INTRADAY_FILL_CAP, `6` RANGE_END. A row closed at the end of the run
 (`open_at_end`) always answers `6`, ahead of every other cause. The ticket a
 row was booked under is `strategy_closed_trade_entry_id` /
-`_exit_id` / `_exit_comment` (`pineforge.h:1162-1192`), which index exactly the
+`_exit_id` / `_exit_comment` (`pineforge.h:1172-1202`), which index exactly the
 rows of `fill_report`'s trade array and take any handle this engine produces
 — including a `pf_strategy_t` from `strategy_native_host_create_v1`, which is
 how a C host reads back the ticket its own margin model declared.
@@ -3123,7 +3123,7 @@ These are existing refusals, not implied future features:
   confirmed bars carry those series
 
 A C host has the same stream and the same commands. Streaming needs no new
-symbol — `strategy_stream_begin` and its family (`pineforge.h:729`) take
+symbol — `strategy_stream_begin` and its family (`pineforge.h:739`) take
 a `pf_strategy_t` from `strategy_native_host_create_v1` unchanged — and
 `strategy_native_submit_v1` (`native_c_api.h:2718`) obeys the one legality
 rule its C++ spelling does.
