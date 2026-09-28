@@ -7012,6 +7012,39 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             snapshot.affordability_close_only = true;
         }
     }
+    // Without process_orders_on_close the same holds for such a short from a
+    // flat book, which fills at the next open: TradingView sizes it at the
+    // signal close less the slippage ticks (and the commission) and opens it
+    // only while those units' margin at the signal close, on its tick, fits
+    // the equity there, whatever the open. On NYSE:F at slippage 1 a short of
+    // all 10000 at a close of 9.905 sizes 1010 at 9.90 and does not open
+    // (1010 x 9.91 = 10009.1); the commission's smaller quantity opens where
+    // the floor left the tick's room, and at slippage 4 none does (lab tv
+    // tapes tests/fixtures/slipped_short int28fix-adm-s-s and int28fix-ou-s4;
+    // lane INT28-FIX rule SS). A long, and a short without slippage, are
+    // sized at or beyond that close and keep their fill-time admission
+    // (int28fix-adm-l-cs, -adm-s-0, -adm-s-c). A reversal, or a book with an
+    // entry pending, is not measured.
+    if (!config_.process_orders_on_close && !config_.calc_on_order_fills
+        && !coof_recalc_active_ && config_.slippage > 0 && default_sized && !priced
+        && !is_long && current == 0.0
+        && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        && !snapshot.sizing.at_fill && !stream_mode_
+        && finite_positive(snapshot.sizing.frozen_units)
+        && finite_positive(snapshot.sizing.mark) && std::isfinite(snapshot.sizing.equity)
+        && snapshot.sizing.fx == 1.0
+        && std::none_of(live_handles_.begin(), live_handles_.end(),
+            [&](const native_order::RequestHandle& handle) {
+                const auto existing = placement_.find(handle.incarnation);
+                return existing != placement_.end() && existing->second.opening
+                    && existing->second.family == PineOrderFamily::Entry;
+            })) {
+        const double signal = nearest_tick(snapshot.sizing.mark, staged_.syminfo.mintick);
+        const double required = snapshot.sizing.frozen_units * signal
+            * staged_.syminfo.pointvalue * config_.margin_short / 100.0;
+        const double epsilon = std::max(1e-9, std::abs(snapshot.sizing.equity) * 1e-12);
+        if (required > snapshot.sizing.equity + epsilon) return;
+    }
     // R5 R2: a declaration-level default quantity whose sizing price IS the
     // signal rule and whose quantity is frozen at the command is exactly what
     // the core's Sized intent names, so it is lowered onto it here.  The

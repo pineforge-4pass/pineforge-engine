@@ -1,0 +1,16 @@
+{
+  "title": "int28fix-adm-s-0",
+  "slug": "int28fix-adm-s-0",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T08:13:29.699Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-07-01"
+  },
+  "pine_sha256": "02f1bcaffd3d39529c05ea491b9d66f5ddbd3874800fafc7061f69cd14c72e14",
+  "tv_trades_sha256": "fc2743e5ee431da6d0eae7c78c9a37cd4328b61a94855b571b085db0903724f9",
+  "tv_trades_rows": 436
+}
