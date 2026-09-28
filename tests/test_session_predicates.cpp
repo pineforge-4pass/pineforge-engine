@@ -337,18 +337,12 @@ static void test_session_2400_tapes() {
                                       chart.sym_tz, chart.sym_session)
                     : pine_time(reading.bar_ms, tf, f.session, f.tz, chart.tf,
                                 chart.sym_tz, chart.sym_session);
-                // Where a D period opens under a session argument is not this
-                // clock's rule: on a D chart time(timeframe.period, session,
-                // tz) is the session's own day bar (lane W11-ENG-TIME-COLOR's
-                // report read it as the bar's time), and there only whether
-                // the bar is in the window is compared. time("D", session)
+                // On a D chart time(timeframe.period, session, tz) is the
+                // session's own day bar in its zone, and time("D", session)
                 // keys its day on syminfo.timezone, as TradingView does (lane
-                // W12-ENG-TIME, test_session_period_tapes).
-                const bool daily_chart = std::string(chart.tf) == "1D";
-                const bool session_only = daily_chart && f.tz[0] != '\0';
-                const bool same = session_only
-                    ? reading_is_na(spelled[k]) == is_na(value)
-                    : same_reading(spelled[k], value, reading.bar_ms, f.close);
+                // W12-ENG-TIME, test_session_period_tapes): every reading is
+                // compared whole.
+                const bool same = same_reading(spelled[k], value, reading.bar_ms, f.close);
                 ++compared;
                 if (!same) {
                     if (++wrong <= 5) {
