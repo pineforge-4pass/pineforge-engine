@@ -18,9 +18,10 @@ bars in `xau15_bars.inc` or the OANDA:EURUSD 15m bars of
 NYSE:F share, 0.01 XAUUSD or EURUSD) as the `qty_step`, and requires each
 trade the tape closes inside the replayed bars -- entry and exit time, side,
 price in ticks, quantity in lots -- to be the engine's, before the row's
-window end where it names one and outside its open cells (below, "Open").
-On the commit before each rule every rule row fails there and every control
-row passes.
+window end where it names one and outside its open cells (below, "Open"). It
+replays lane INT28-FIX's `tests/fixtures/slipped_short` tapes
+`int28fix-adm-s-cs` and `-ou-s2b` as well. On the commit
+before each rule every rule row fails there and every control row passes.
 
 The `w13-b*` and `w13-a3` probes run on NYSE:F 15m, 2025-04-01 .. 2025-07-01,
 10000 of capital, margin 100 both ways: from flat every 4 bars (`bar_index %
@@ -66,6 +67,16 @@ take none. The population probes `pf-probe-ki62-margin-deferral` on
 NYSE:F and OANDA:XAUUSD are this shape (their cells call
 `strategy.cancel_all()` before `strategy.close_all()`).
 
+## CU: one-unit calls and follow-ups around a close
+
+| tape | trades | `strategy()` declares | TradingView | tv_trades.csv sha256 |
+|---|---:|---|---|---|
+| `w13-b1s-close-f` | 410 | `-close`, slippage 1 | a call at the close whose book, re-marked at the call's own fill, is still short by more than two slippage steps is followed by one more unit at the next open, behind the close order, where the open's print is not beyond that fill (8 one-unit longs; 2025-06-10 19:45 UTC: none, the 10.64 open is over the 10.60 fill); and 636 shares 21.52 short at the 10.76 mark floor to two units, eight called (2025-06-11 14:15 UTC) | `e96036089cee3156f6e5c9a505201ce10db1059b6c99e1a5a1ceebcfd09f1043` |
+| `slipped_short/int28fix-adm-s-cs` | 147 | lane INT28-FIX's tape, its whole window | a one-unit call its close fill would not restore is tried at the next open (2025-06-26: 810 shares 4.95 short at the 10.62 close mark give one up at 10.62 off the 10.61 open); a follow-up that falls on a close is booked there after the script, so the `strategy.close_all()` placed on that bar opens one share long at the next open (2025-06-27) | `be02018d982d590dee2f808ecec99e944825f951c49ac262746c740ee507b85a` |
+| `w13-b5s-none-f` | 448 | `-none`, slippage 1; through 2025-06-30 15:15 UTC | the follow-ups a close's call owes are taken at the next open where they restore the book (19 one-unit calls at the next open), and one so taken is followed at that same open while the book is still short by more than two slippage steps (2025-06-30 14:30 UTC: two units at the 10.73 open) | `4c78402df3b839bdc4e3899adf0c8bce844abbb976f1c077cf509f79353dfc0f` |
+| `w13-b4s-cancel-f` | 470 | `-cancel`, slippage 1; open cell 2025-06-06 16:45 UTC | the one-unit calls a close owes, withdrawn by the script's `strategy.cancel_all()` or not, are taken at the next open where they restore the book, and the rest of that bar's path checks the book they leave (32 one-unit calls at the next open; 2025-04-30 17:45 UTC: one unit at 9.95 at the next open, then 4 at 9.97, where the high alone calls 8) | `fa438eba260d3ef04492266ba065bd4f70b6a64b899d67f1778266485c96c5b5` |
+| `slipped_short/int28fix-ou-s2b` | 896 | lane INT28-FIX's tape, 2000 of capital, commission 0.04 %, slippage 2, to 2025-10-01; open cells 2025-04-25 18:15 and 2025-05-30 15:15 UTC | the same at two slippage ticks: a follow-up that falls on a close is booked there after the script, so the cleanup `strategy.close_all()` opens one share long at the next open (2025-04-03 19:00 UTC, closed at 9.34 on 2025-04-04 15:00) | `64eff775fa865595507d4b142ce52e2128f6188763e2027e0a6c9bdab7458e05` |
+
 ## Open
 
 Measured, not modelled; each is a row's open cell or lies past its window end,
@@ -74,6 +85,18 @@ or is a probe of this lane not kept here:
 - `w13-p2-eur` 2025-04-02 16:45 and 2025-04-03 06:15 UTC: TradingView takes
   no call on the long; the engine takes one unit at the next open, beside the
   close order, as on 0cfaa782.
+- `w13-b5s-none-f` from 2025-06-30 15:15 UTC: TradingView takes one unit at
+  10.73 on the bar after the fill, the engine two, at 10.74 and 10.75.
+- `w13-b4s-cancel-f` 2025-06-06 16:45 UTC: TradingView takes one unit at the
+  17:00 open (10.29), the engine none.
+- The slipped shorts' one-unit calls at two ticks and more listed under
+  "Open" in tests/fixtures/slipped_short/README.md (`int28fix-ou-s2b`),
+  and this lane's slippage 2 probes `w13-b1t-close-f`,
+  `w13-b5t-none-f` and `w13-a4-mkt-slip2-f`: `w13-b5t-none-f` 2025-04-02
+  16:15 UTC, where TradingView calls 4 at 10.20 on the bar after the fill
+  and the engine two single units there (on 0cfaa782, 4 at 10.22);
+  `w13-b1t-close-f` from 2025-04-07 18:45 UTC (on 0cfaa782 from 2025-04-02);
+  `w13-a4-mkt-slip2-f` from 2025-04-01 16:45 UTC, as on 0cfaa782.
 - Stop-entry shorts with commission 0.04 % and slippage 1 (`w13-b1c-close-f`,
   `w13-b2c-cancel-close-f`): the engine takes a call on the fill bar that
   TradingView does not (2025-04-01 14:45 UTC: 16 shares at 9.99), as on

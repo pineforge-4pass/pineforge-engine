@@ -2098,6 +2098,7 @@ void PineExecutionAdapter::reset_for_run() {
     kernel_margin_resize_point_ = std::numeric_limits<std::uint64_t>::max();
     close_margin_point_ = std::numeric_limits<std::uint64_t>::max();
     close_margin_cancelled_bar_ = std::numeric_limits<std::int64_t>::min();
+    close_margin_follow_up_bar_ = std::numeric_limits<std::int64_t>::min();
     close_margin_open_bar_ = std::numeric_limits<std::int64_t>::min();
     pooc_close_checkpoint_deferred_ms_ = std::numeric_limits<std::int64_t>::min();
     signal_close_mc_event_bar_ = -1;
@@ -13791,9 +13792,10 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     }
     // Nor an order sized when it was placed (close_point_margin_call): a
     // margin call or close whose book shrank before it filled opens the rest
-    // on the other side as placed -- no entry gate reads it (lab tv tape
-    // w13-b2-cancel-close-f 2025-04-10 17:15 UTC: the close order closes 1133
-    // shares and the call opens 40 long at the 9.00 open).
+    // on the other side, or beside the lot the other side already holds, as
+    // placed -- no entry gate, pyramiding included, reads it (lab tv tape
+    // w13-b1s-close-f 2025-04-10: the close_all's 4 and the follow-up's 1
+    // both open long at the 9.135 open).
     if (source.crosses_zero) return NativePrecommitVerdict::AdmitWithHostMargin;
     // Entries a bar placed while the book was flat all fill where they reach
     // their fill point, the later ones behind a book of their own side that
@@ -14651,7 +14653,8 @@ PineExecutionAdapter::SourceMarginMoney PineExecutionAdapter::source_margin_mone
 double PineExecutionAdapter::source_margin_units(
         const SourceMarginMoney& money, bool opening_checkpoint) const {
     if (!money.valid || !(money.required > money.equity)) return 0.0;
-    const double raw_minimum = opening_checkpoint && money.required == money.exact_required
+    const bool opening_basis = opening_checkpoint && money.required == money.exact_required;
+    const double raw_minimum = opening_basis
         ? money.held - money.equity / money.unit_margin
         : (money.required - money.equity) / money.unit_margin;
     if (!(raw_minimum > 0.0) || !std::isfinite(raw_minimum)) return 0.0;
@@ -14662,7 +14665,17 @@ double PineExecutionAdapter::source_margin_units(
     if (raw_minimum <= internal::kQtyEpsilon) return 0.0;
     double minimum = raw_minimum;
     if (staged_.quantity_grid) {
-        minimum = std::floor(raw_minimum / *staged_.quantity_grid)
+        // The lots the restore floors to count the shortfall as TradingView's
+        // money, on its ten-significant-digit ladder: a shortfall of exactly
+        // two units' margin floors to two, not one below it for binary64
+        // residue (NYSE:F at slippage 1: 636 shares 21.52 short at the 10.76
+        // mark take 8 at the close, where the unrounded difference
+        // 21.519999999999527 floors to one unit and calls 4; lab tv tape
+        // tests/fixtures/margin_opposite w13-b1s-close-f 2025-06-11).
+        const double floor_basis = opening_basis
+            ? raw_minimum
+            : source_money_round(money.required - money.equity) / money.unit_margin;
+        minimum = std::floor(floor_basis / *staged_.quantity_grid)
             * *staged_.quantity_grid;
     }
     double units = minimum > 0.0 ? 4.0 * minimum : 0.0;
@@ -15519,6 +15532,12 @@ void PineExecutionAdapter::follow_one_unit_margin_call(
         if (short_book ? next_mark >= fill - guard : next_mark <= fill + guard) return;
         if (source_margin_units(source_margin_money(next, context.sub_bar_open_ms), false) > 0.0)
             return;
+        // A follow-up that falls on the close is booked there after the
+        // script (close_point_margin_call).
+        if (next_phase == NativePathPhase::Close && close_point_margin_scope()) {
+            close_margin_follow_up_bar_ = context.script_bar_open_ms;
+            return;
+        }
         if (!submit_margin_call_units(next, context, 1.0, true)) return;
         fill = source_margin_fill_price(next, short_book);
         at = next;
@@ -15634,7 +15653,9 @@ double PineExecutionAdapter::source_margin_one_unit(const SourceMarginMoney& mon
     }
     const double raw = (money.required - money.equity) / money.unit_margin;
     if (!(raw > internal::kQtyEpsilon) || !(raw < 1.0)) return 0.0;
-    if (std::floor(raw / *staged_.quantity_grid) * *staged_.quantity_grid > 0.0)
+    const double floor_basis = source_money_round(money.required - money.equity)
+        / money.unit_margin;
+    if (std::floor(floor_basis / *staged_.quantity_grid) * *staged_.quantity_grid > 0.0)
         return 0.0;
     const double candidate = std::min(1.0, money.held);
     const double rounded = floor_quantity_grid(candidate, staged_.quantity_grid);
@@ -15707,11 +15728,15 @@ bool PineExecutionAdapter::commissioned_explicit_short_opened(
 // plain market order -- on the book the script's close_all flattened it opens
 // the called units on the other side (w13-b2-cancel-close-f; the population
 // probes pf-probe-ki62-margin-deferral on NYSE:F and OANDA:XAUUSD), on a book
-// still held it reduces it (w13-b4-cancel-f). A re-placed one-unit call (a
-// restore that floors below one lot) is taken at that open only where its
-// fill there restores the book (close_point_margin_call_at_open).
+// still held it reduces it (w13-b4-cancel-f). A one-unit call (a restore
+// that floors below one lot) is taken only at a fill where the unit restores
+// the book, so one its fill at this close would not restore is tried again
+// at the next open, and a re-placed one is tried at that open's fill alone
+// (close_point_margin_call_at_open).
 bool PineExecutionAdapter::close_point_margin_call(
         const Bar& bar, const NativeDecisionContext& context, bool cancelled) {
+    const bool follow_up = close_margin_follow_up_bar_ == context.script_bar_open_ms;
+    close_margin_follow_up_bar_ = std::numeric_limits<std::int64_t>::min();
     const auto position = detail::run_position(require_host());
     if (position.signed_units == 0.0 || !source_margin_call_enabled_) return false;
     // A full-margin long's call is the one-contract money call's
@@ -15724,9 +15749,11 @@ bool PineExecutionAdapter::close_point_margin_call(
     double units = std::min(source_margin_units(money, false),
                             std::abs(position.signed_units));
     if (units > 0.0 && !cancelled) return book_close_point_call(money.mark, units, context, false);
-    if (!cancelled) return false;
     if (one_unit > 0.0) return book_close_point_call(money.mark, one_unit, context, true);
     if (units > 0.0) return book_close_point_call(money.mark, units, context, true);
+    // The close's own check calls nothing: a follow-up owed there is booked
+    // after the script (follow_one_unit_margin_call).
+    if (follow_up) return book_close_point_call(money.mark, 1.0, context, cancelled);
     return false;
 }
 
@@ -15735,7 +15762,8 @@ bool PineExecutionAdapter::close_point_margin_call(
 // was placed with; or, `queued`, as a plain market order behind the script's
 // orders for the next open.
 bool PineExecutionAdapter::book_close_point_call(
-        double mark, double units, const NativeDecisionContext& context, bool queued) {
+        double mark, double units, const NativeDecisionContext& context, bool queued,
+        double reference_mark) {
     const auto position = detail::run_position(require_host());
     units = std::min(units, std::abs(position.signed_units));
     if (!(units > 0.0)) return false;
@@ -15743,6 +15771,7 @@ bool PineExecutionAdapter::book_close_point_call(
         auto closes = same_bar_close_alls(context);
         if (!submit_margin_call_units(mark, context, units, true)) return false;
         size_close_alls_at_placement(closes, position.signed_units);
+        close_point_follow_up(mark, context);
         return true;
     }
     const bool buy = position.signed_units < 0.0;
@@ -15758,6 +15787,7 @@ bool PineExecutionAdapter::book_close_point_call(
     snapshot.is_long = buy;
     snapshot.crosses_zero = true;
     snapshot.sizing = sizing_snapshot();
+    snapshot.follow_up_fill = reference_mark;
     return submit_or_replace(std::move(request), std::move(snapshot), false,
                              kMarginCallLabel).has_value();
 }
@@ -15798,11 +15828,50 @@ void PineExecutionAdapter::size_close_alls_at_placement(
     }
 }
 
-// The next open of a close whose call the script's cancel_all() withdrew and
-// placed again (close_point_margin_call): the book is the one that close
-// checked, so its money is re-read at that close's mark, and a one-unit call
-// is withdrawn here when its fill at this open would not restore the book
-// (w13-b2-cancel-close-f 2025-06-10 and 2025-06-30).
+// A call taken at the close whose book, re-marked at the call's own fill, is
+// still short of margin by more than two slippage steps (its exit fee added
+// back) takes one more unit at the next path point, as a one-unit call does
+// inside a bar (follow_one_unit_margin_call): after the close that point is
+// the next open, where the unit waits behind the orders the script placed at
+// the close and is taken only where it restores the book at that open's fill
+// (close_point_margin_call_at_open). A call of any size is followed so: on
+// NYSE:F at slippage 1, 4 called at 9.15 off a 9.14 close mark leave 1115
+// shares 0.52 short at 9.15 and one more is taken at the 9.135 open, behind
+// the script's close_all (lab tv tape w13-b1s-close-f 2025-04-10; 33 of its 34
+// close calls follow this).
+void PineExecutionAdapter::close_point_follow_up(
+        double mark, const NativeDecisionContext& context) {
+    if (!staged_.quantity_grid || *staged_.quantity_grid != 1.0 || !(config_.slippage > 0))
+        return;
+    if (config_.commission_value != 0.0
+        && config_.commission_type != static_cast<int>(CommissionType::PERCENT)) {
+        return;
+    }
+    const auto position = detail::run_position(require_host());
+    if (position.signed_units == 0.0) return;
+    const bool buy = position.signed_units < 0.0;
+    const double fill = source_margin_fill_price(mark, buy);
+    const auto money = source_margin_money(fill, context.sub_bar_open_ms);
+    if (!money.valid) return;
+    const double fx = active_staged_fx(context.sub_bar_open_ms);
+    const double step = config_.slippage * staged_.syminfo.mintick
+        * staged_.syminfo.pointvalue * fx;
+    const double exit_fee = config_.commission_value > 0.0
+        ? fill * staged_.syminfo.pointvalue * fx * config_.commission_value / 100.0
+        : 0.0;
+    if (!(money.required - money.equity - exit_fee > 2.0 * step)) return;
+    (void)book_close_point_call(mark, 1.0, context, true, fill);
+}
+
+// The next open of a close that owed a one-unit call (close_point_margin_call):
+// the book is the one that close checked, so its money is re-read at that
+// close's mark and the unit is tested at this open's fill. One the close left
+// standing executes here, ahead of the orders of that bar (lane INT28-FIX,
+// tests/fixtures/slipped_short int28fix-adm-s-cs 2025-06-26: a short of 810
+// shares 4.95 short at the 10.62 close mark gives one up at 10.62 off the
+// 10.61 open); one the script cancelled and placed again is withdrawn here
+// when its fill would not restore the book (w13-b2-cancel-close-f
+// 2025-06-10 and 2025-06-30).
 bool PineExecutionAdapter::close_point_margin_call_at_open(
         const Bar& bar, const Bar& prior, const NativeDecisionContext& context) {
     if (close_margin_open_bar_ == std::numeric_limits<std::int64_t>::min()) return false;
@@ -15833,17 +15902,25 @@ bool PineExecutionAdapter::close_point_margin_call_at_open(
         return false;
     }
     // A one-unit call is tested at this open's fill against the money of the
-    // book at that close.
+    // book at that close; a follow-up is taken where this open's print is not
+    // beyond the fill of the call it follows (lab tv tape w13-b1s-close-f: six
+    // opens at or inside that fill take their unit, 2025-06-10's at 10.64 over
+    // a 10.60 fill none).
     const bool buy = position.signed_units < 0.0;
     const double fill = source_margin_fill_price(bar.open, buy);
+    const double open_mark = nearest_tick(bar.open, staged_.syminfo.mintick);
+    const double guard = staged_.syminfo.mintick * 1e-6;
     const auto money = source_margin_money(prior.close, context.sub_bar_open_ms);
     std::vector<native_order::RequestHandle> kept;
     double units = 0.0;
     for (const auto& handle : queued) {
         const auto found = placement_.find(handle.incarnation);
         if (found == placement_.end()) continue;
-        const bool taken = !(source_margin_one_unit(money) > 0.0)
-            || source_margin_unit_restores(money, fill);
+        const double followed = found->second.follow_up_fill;
+        const bool taken = finite_positive(followed)
+            ? (buy ? open_mark <= followed + guard : open_mark >= followed - guard)
+            : (!(source_margin_one_unit(money) > 0.0)
+               || source_margin_unit_restores(money, fill));
         if (!taken) {
             withdraw(handle);
             continue;
@@ -15857,7 +15934,25 @@ bool PineExecutionAdapter::close_point_margin_call_at_open(
     // are this open's first execution, ahead of the open's own check.
     if (behind_orders) return true;
     for (const auto& handle : kept) withdraw(handle);
-    (void)submit_margin_call_units(bar.open, context, units, true);
+    if (!submit_margin_call_units(bar.open, context, units, true)) return false;
+    // A follow-up so taken is followed alike, at this same open while the
+    // book re-marked at the unit's fill is still short by more than two
+    // slippage steps (lab tv tape w13-b5s-none-f 2025-06-30 14:30 UTC: two
+    // units at the 10.73 open, each filled at 10.74).
+    const double step = config_.slippage * staged_.syminfo.mintick
+        * staged_.syminfo.pointvalue * active_staged_fx(context.sub_bar_open_ms);
+    for (int more = 0; more < 8 && config_.slippage > 0 && staged_.quantity_grid
+             && *staged_.quantity_grid == 1.0; ++more) {
+        if (detail::run_position(require_host()).signed_units == 0.0) break;
+        const auto after = source_margin_money(fill, context.sub_bar_open_ms);
+        const double exit_fee = config_.commission_value > 0.0
+                && config_.commission_type == static_cast<int>(CommissionType::PERCENT)
+            ? fill * staged_.syminfo.pointvalue * active_staged_fx(context.sub_bar_open_ms)
+                * config_.commission_value / 100.0
+            : 0.0;
+        if (!after.valid || !(after.required - after.equity - exit_fee > 2.0 * step)) break;
+        if (!submit_margin_call_units(bar.open, context, 1.0, true)) break;
+    }
     return false;
 }
 

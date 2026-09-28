@@ -6,7 +6,8 @@
  * placed, executed as a plain market order: one whose book shrank before it
  * filled opens the rest on the other side. Each rule is read off
  * TradingView's own tapes of synthetic probes written for this lane
- * (tests/fixtures/margin_opposite):
+ * (tests/fixtures/margin_opposite) and of lane INT28-FIX
+ * (tests/fixtures/slipped_short):
  *
  *   CP  A call the close owes is taken there after the script: the script
  *       reads the book before it, and a strategy.close_all() the script placed
@@ -17,6 +18,12 @@
  *       placed again behind the script's orders and executes after them at the
  *       next open: on the book the close_all flattened it opens the called
  *       units on the other side, on a book still held it reduces it.
+ *   CU  A one-unit call (a restore that floors below one lot) is taken only at
+ *       a fill that restores the book: one the close's fill would not restore
+ *       is tried again at the next open, behind the script's orders; a
+ *       follow-up unit that falls on the close is booked there after the
+ *       script, and a call at the close whose book is still short at the
+ *       call's own fill is followed by one more unit at the next open.
  *
  * Each row replays one lab tv tape through the Pine adapter under the
  * configuration its strategy() declares, over the lane's bars, and requires
@@ -180,6 +187,11 @@ enum class Probe {
     // equity), strategy.close_all() on the next bar -- under
     // process_orders_on_close (p1) at that bar's close, else at the next open.
     CloseNextBar,
+    // int28fix-adm-*: a default short at 10:00 and 13:00 New York, flattened 45
+    // minutes in with strategy.close_all().
+    TwoCells,
+    // int28fix-ou-*: the same on the hour from 10:00 to 14:00 New York.
+    Hourly,
 };
 
 enum class Mode { Close, CancelClose, Cancel, None, Market };
@@ -215,6 +227,21 @@ public:
             if (signed_position_size() == 0.0 && phase == 0) strategy_entry("L", true);
             if (phase == 1 || (phase == 2 && signed_position_size() != 0.0))
                 strategy_close("", "", kNaN, kNaN, false);
+            break;
+        }
+        case Probe::TwoCells:
+        case Probe::Hourly: {
+            // hour(time, "America/New_York") and minute(time, ...): the window is
+            // EDT (UTC-4) throughout.
+            const std::int64_t minute_of_day =
+                ((current_bar_.timestamp / kMinute) % 1440 + 1440) % 1440;
+            const int hour = static_cast<int>((minute_of_day / 60 + 24 - 4) % 24);
+            const int minute = static_cast<int>(minute_of_day % 60);
+            const bool hour_in = probe_ == Probe::TwoCells ? (hour == 10 || hour == 13)
+                                                            : (hour >= 10 && hour <= 14);
+            if (minute == 0 && hour_in && signed_position_size() == 0.0)
+                strategy_entry("E", false);
+            if (minute == 45 && hour_in) strategy_close("", "cleanup", kNaN, kNaN, false);
             break;
         }
         }
@@ -370,6 +397,7 @@ int main() {
     const std::vector<Bar> xau15 = feed(kXau15);
     const std::vector<Bar> eur15 = feed(kEurUsd15);
     const char* opposite = PINEFORGE_MARGIN_OPPOSITE_FIXTURE_DIR;
+    const char* slipped = PINEFORGE_SLIPPED_SHORT_FIXTURE_DIR;
 
     const Case cases[] = {
         {"CP", "w13-b1-close-f", opposite, Probe::EveryFourBars, Mode::Close, Chart::NyseF,
@@ -388,6 +416,16 @@ int main() {
          config(10000.0, 0.0, 0), 434},
         {"CQ", "w13-x2-cancel-close-xau2", opposite, Probe::TopOfHour, Mode::CancelClose,
          Chart::XauUsd, config(10000.0, 0.0, 0), 1358},
+        {"CU", "w13-b1s-close-f", opposite, Probe::EveryFourBars, Mode::Close, Chart::NyseF,
+         config(10000.0, 0.0, 1), 410},
+        {"CU", "int28fix-adm-s-cs", slipped, Probe::TwoCells, Mode::None, Chart::NyseF,
+         config(10000.0, 0.04, 1), 147},
+        {"CU", "w13-b5s-none-f", opposite, Probe::EveryFourBars, Mode::None, Chart::NyseF,
+         config(10000.0, 0.0, 1), 443, "2025-06-30 15:15"},
+        {"CU", "w13-b4s-cancel-f", opposite, Probe::EveryFourBars, Mode::Cancel, Chart::NyseF,
+         config(10000.0, 0.0, 1), 466, nullptr, {"2025-06-06 16:45"}},
+        {"CU", "int28fix-ou-s2b", slipped, Probe::Hourly, Mode::None, Chart::NyseF,
+         config(2000.0, 0.04, 2), 511, nullptr, {"2025-04-25 18:15", "2025-05-30 15:15"}},
         {"control", "w13-b5-none-f", opposite, Probe::EveryFourBars, Mode::None, Chart::NyseF,
          config(10000.0, 0.0, 0), 436},
         {"control", "w13-x5-none-xau2", opposite, Probe::TopOfHour, Mode::None, Chart::XauUsd,

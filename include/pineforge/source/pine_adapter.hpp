@@ -197,6 +197,9 @@ struct PlacementSnapshot {
     // zero and opens the difference on the other side
     // (close_point_margin_call).
     bool crosses_zero = false;
+    // A follow-up unit queued at a close for the next open: the fill of the
+    // call it follows (close_point_follow_up).
+    double follow_up_fill = std::numeric_limits<double>::quiet_NaN();
     bool fixed_exit_reservation = false;
     bool frozen_market_instruction = false;
     double frozen_market_own_units = std::numeric_limits<double>::quiet_NaN();
@@ -1778,7 +1781,8 @@ private:
     bool commissioned_explicit_short_opened(const NativeDecisionContext&) const;
     bool close_point_margin_call(const Bar&, const NativeDecisionContext&, bool cancelled);
     bool book_close_point_call(double mark, double units, const NativeDecisionContext&,
-                               bool queued);
+                               bool queued, double reference_mark = 0.0);
+    void close_point_follow_up(double mark, const NativeDecisionContext&);
     std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>>
     same_bar_close_alls(const NativeDecisionContext&) const;
     void size_close_alls_at_placement(
@@ -2174,9 +2178,14 @@ private:
     // is dead once that bar's close has been checked.
     std::uint64_t close_margin_point_ = std::numeric_limits<std::uint64_t>::max();
     std::int64_t close_margin_cancelled_bar_ = std::numeric_limits<std::int64_t>::min();
+    // The script bar whose close owes a one-unit follow-up
+    // (follow_one_unit_margin_call), booked there after the script. Same
+    // hash argument: set on the bar's path, dead once its close is checked.
+    std::int64_t close_margin_follow_up_bar_ = std::numeric_limits<std::int64_t>::min();
     // The script bar whose close queued a call for the next open
     // (close_point_margin_call): one the script's cancel_all() withdrew,
-    // placed again behind its orders.
+    // placed again behind its orders, or a one-unit call the close's fill
+    // would not restore, tried again there.
     std::int64_t close_margin_open_bar_ = std::numeric_limits<std::int64_t>::min();
     // Retired by lane W5B-ENG-MARGIN-RESIDUAL: ab9714be deferred a carried
     // process_orders_on_close short's checkpoint behind its bar's close market

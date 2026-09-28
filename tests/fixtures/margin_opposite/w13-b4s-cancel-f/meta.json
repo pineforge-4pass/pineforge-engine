@@ -1,0 +1,16 @@
+{
+  "title": "w13-b4s-cancel",
+  "slug": "w13-b4s-cancel-f",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T13:12:09.095Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-07-01"
+  },
+  "pine_sha256": "99e657231d65ebf2e7788958760a660c11d1fa7433e3783c9d3ba6b2ea6697c0",
+  "tv_trades_sha256": "fa438eba260d3ef04492266ba065bd4f70b6a64b899d67f1778266485c96c5b5",
+  "tv_trades_rows": 940
+}
