@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <ctime>
 #include <string>
 #include <unordered_set>
@@ -845,20 +846,42 @@ int64_t floor_div(int64_t a, int64_t b) {
 }
 
 // The epoch instant of a wall-clock minute in `tz` (days since 1970-01-01 *
-// 1440 + minutes): a repeated local time reads its first occurrence, a skipped
-// one the first instant after it (native_calendar::resolve_civil).
+// 1440 + minutes), read through the offsets decompose_ms_local holds (no
+// zone switch per call): the offsets in force a day before and a day after
+// give the candidates, and a candidate whose own wall clock reads `minute` is
+// the instant -- the first of two in a repeated hour. A minute a switch skips
+// reads the first instant after it (native_calendar::resolve_civil, as the
+// kernel calendar resolves one).
 int64_t wall_minute_ms(int64_t minute, const std::string& tz) {
-    if (!utc_zone(tz)) {
-        const int64_t day = floor_div(minute, 24 * 60);
-        const int of_day = static_cast<int>(minute - day * 24 * 60);
-        const native_calendar::NativeCivilDate date = native_calendar::native_civil_date(day);
-        if (const auto r = native_calendar::resolve_civil(tz, static_cast<int>(date.year),
-                                                          date.month, date.day, of_day / 60,
-                                                          of_day % 60)) {
-            return r->epoch_ms;
+    const int64_t naive = minute * 60000;
+    if (utc_zone(tz))
+        return naive;
+    bool found = false;
+    int64_t best = 0;
+    for (const int64_t probe : {naive - kMsPerDay, naive + kMsPerDay}) {
+        struct tm at {};
+        decompose_ms_local(probe, tz, at);
+        const int64_t candidate = naive - static_cast<int64_t>(at.tm_gmtoff) * 1000;
+        struct tm back {};
+        decompose_ms_local(candidate, tz, back);
+        const int64_t wall =
+            days_from_civil(back.tm_year + 1900, back.tm_mon + 1, back.tm_mday) * 24 * 60
+            + back.tm_hour * 60 + back.tm_min;
+        if (wall == minute && back.tm_sec == 0 && (!found || candidate < best)) {
+            best = candidate;
+            found = true;
         }
     }
-    return minute * 60000;
+    if (found)
+        return best;
+    const int64_t day = floor_div(minute, 24 * 60);
+    const int of_day = static_cast<int>(minute - day * 24 * 60);
+    const native_calendar::NativeCivilDate date = native_calendar::native_civil_date(day);
+    if (const auto r = native_calendar::resolve_civil(tz, static_cast<int>(date.year), date.month,
+                                                      date.day, of_day / 60, of_day % 60)) {
+        return r->epoch_ms;
+    }
+    return naive;
 }
 
 struct ArgDayBar {
@@ -867,27 +890,79 @@ struct ArgDayBar {
     int64_t close_ms = 0;
 };
 
-// Session day `day` (days since 1970-01-01, the date in `tz`) of `s`, memoised
-// per thread: its D bar, not traded on a day the list leaves out. On a
-// daily-or-higher chart a Saturday window that does not wrap ends at the
-// week's end.
-ArgDayBar arg_day_bar(const std::string& session, const ArgSession& s, int64_t day,
-                      const std::string& tz, bool daily_chart) {
-    struct Slot {
+// One session argument in one zone, read once per thread: its windows and day
+// list, and each session day's D bar (per chart kind) and window instances,
+// resolved once. A script's several session sites, in several zones, keep one
+// entry each, so reading one never evicts another's days.
+struct ArgCache {
+    struct Day {
         int64_t day = 0;
         bool used = false;
-        bool daily_chart = false;
-        std::string session;
-        std::string tz;
-        ArgDayBar bar;
+        bool bar_done[2] = {false, false};
+        ArgDayBar bar[2];
+        bool windows_done = false;
+        std::vector<std::pair<int64_t, int64_t>> windows;
     };
-    constexpr int kSlots = 32;
-    thread_local Slot slots[kSlots];
-    Slot& slot = slots[static_cast<std::size_t>(((day % kSlots) + kSlots) % kSlots)];
-    if (slot.used && slot.day == day && slot.daily_chart == daily_chart && slot.tz == tz
-        && slot.session == session) {
-        return slot.bar;
+    static constexpr int kDays = 64;
+    std::string session;
+    std::string tz;
+    bool ok = false;
+    ArgSession parsed;
+    Day days[kDays];
+    uint64_t used_at = 0;
+};
+
+ArgCache& arg_cache(const std::string& session, const std::string& tz) {
+    constexpr std::size_t kEntries = 8;
+    thread_local std::vector<std::unique_ptr<ArgCache>> entries;
+    thread_local uint64_t clock = 0;
+    for (auto& entry : entries) {
+        if (entry->session == session && entry->tz == tz) {
+            entry->used_at = ++clock;
+            return *entry;
+        }
     }
+    if (entries.size() < kEntries) {
+        entries.push_back(std::make_unique<ArgCache>());
+    } else {
+        auto oldest = std::min_element(entries.begin(), entries.end(),
+                                       [](const std::unique_ptr<ArgCache>& a,
+                                          const std::unique_ptr<ArgCache>& b) {
+                                           return a->used_at < b->used_at;
+                                       });
+        std::swap(*oldest, entries.back());
+        entries.back() = std::make_unique<ArgCache>();
+    }
+    ArgCache& entry = *entries.back();
+    entry.session = session;
+    entry.tz = tz;
+    entry.ok = read_arg_session(session, entry.parsed);
+    entry.used_at = ++clock;
+    return entry;
+}
+
+ArgCache::Day& arg_cache_day(ArgCache& cache, int64_t day) {
+    ArgCache::Day& slot =
+        cache.days[static_cast<std::size_t>(((day % ArgCache::kDays) + ArgCache::kDays)
+                                            % ArgCache::kDays)];
+    if (!slot.used || slot.day != day) {
+        slot = ArgCache::Day{};
+        slot.used = true;
+        slot.day = day;
+    }
+    return slot;
+}
+
+// Session day `day` (days since 1970-01-01, the date in the zone) of the
+// cached session: its D bar, not traded on a day the list leaves out. On a
+// daily-or-higher chart a Saturday window that does not wrap ends at the
+// week's end.
+ArgDayBar arg_day_bar(ArgCache& cache, int64_t day, bool daily_chart) {
+    ArgCache::Day& slot = arg_cache_day(cache, day);
+    const int kind = daily_chart ? 1 : 0;
+    if (slot.bar_done[kind])
+        return slot.bar[kind];
+    const ArgSession& s = cache.parsed;
     ArgDayBar bar;
     const int weekday = static_cast<int>(((day + 4) % 7 + 7) % 7) + 1;  // 1970-01-01: Thursday
     if (s.days.empty() || s.days.count(weekday) != 0) {
@@ -902,16 +977,12 @@ ArgDayBar arg_day_bar(const std::string& session, const ArgSession& s, int64_t d
             if (k == 0 || start < first) first = start;
             if (k == 0 || end > last) last = end;
         }
-        bar.open_ms = wall_minute_ms(first, tz);
-        bar.close_ms = wall_minute_ms(last, tz);
+        bar.open_ms = wall_minute_ms(first, cache.tz);
+        bar.close_ms = wall_minute_ms(last, cache.tz);
         bar.traded = bar.close_ms > bar.open_ms;
     }
-    slot.used = true;
-    slot.day = day;
-    slot.daily_chart = daily_chart;
-    slot.session = session;
-    slot.tz = tz;
-    slot.bar = bar;
+    slot.bar_done[kind] = true;
+    slot.bar[kind] = bar;
     return bar;
 }
 
@@ -938,36 +1009,21 @@ int64_t arg_period_first_day(int64_t key, CalendarPeriod period) {
     return key;
 }
 
-// The window instances of session day `day` of `s` in epoch ms, [open,
-// close) each, none on a day the list leaves out; memoised per thread.
-const std::vector<std::pair<int64_t, int64_t>>& arg_day_windows(const std::string& session,
-                                                                const ArgSession& s,
-                                                                int64_t day,
-                                                                const std::string& tz) {
-    struct Slot {
-        int64_t day = 0;
-        bool used = false;
-        std::string session;
-        std::string tz;
-        std::vector<std::pair<int64_t, int64_t>> windows;
-    };
-    constexpr int kSlots = 16;
-    thread_local Slot slots[kSlots];
-    Slot& slot = slots[static_cast<std::size_t>(((day % kSlots) + kSlots) % kSlots)];
-    if (slot.used && slot.day == day && slot.tz == tz && slot.session == session)
+// The window instances of session day `day` of the cached session in epoch
+// ms, [open, close) each, none on a day the list leaves out.
+const std::vector<std::pair<int64_t, int64_t>>& arg_day_windows(ArgCache& cache, int64_t day) {
+    ArgCache::Day& slot = arg_cache_day(cache, day);
+    if (slot.windows_done)
         return slot.windows;
-    slot.used = true;
-    slot.day = day;
-    slot.session = session;
-    slot.tz = tz;
-    slot.windows.clear();
+    slot.windows_done = true;
+    const ArgSession& s = cache.parsed;
     const int weekday = static_cast<int>(((day + 4) % 7 + 7) % 7) + 1;  // 1970-01-01: Thursday
     if (!s.days.empty() && s.days.count(weekday) == 0)
         return slot.windows;
     for (const ArgWindow& w : s.windows) {
         const int64_t start = (day + w.day_offset) * 24 * 60 + w.start;
-        const int64_t open_ms = wall_minute_ms(start, tz);
-        const int64_t close_ms = wall_minute_ms(start + w.length, tz);
+        const int64_t open_ms = wall_minute_ms(start, cache.tz);
+        const int64_t close_ms = wall_minute_ms(start + w.length, cache.tz);
         if (close_ms > open_ms)
             slot.windows.emplace_back(open_ms, close_ms);
     }
@@ -980,8 +1036,8 @@ const std::vector<std::pair<int64_t, int64_t>>& arg_day_windows(const std::strin
 bool session_argument_intraday_bar(int64_t bar_ms, const std::string& session,
                                    const std::string& tz, int64_t tf_ms, int64_t& open_ms,
                                    int64_t& close_ms) {
-    ArgSession s;
-    if (tf_ms <= 0 || !read_arg_session(session, s))
+    ArgCache& cache = arg_cache(session, tz);
+    if (tf_ms <= 0 || !cache.ok)
         return false;
     struct tm local {};
     decompose_ms_local(bar_ms, tz, local);
@@ -992,7 +1048,7 @@ bool session_argument_intraday_bar(int64_t bar_ms, const std::string& session,
         bool found = false;
         int64_t start = 0;
         int64_t end = 0;
-        for (const auto& window : arg_day_windows(session, s, d, tz)) {
+        for (const auto& window : arg_day_windows(cache, d)) {
             if (window.first <= bar_ms && bar_ms < window.second
                 && (!found || window.first > start)) {
                 found = true;
@@ -1015,8 +1071,8 @@ bool session_argument_intraday_bar(int64_t bar_ms, const std::string& session,
 bool session_argument_bar(int64_t bar_ms, const std::string& session, const std::string& tz,
                           CalendarPeriod period, bool daily_chart, int64_t& open_ms,
                           int64_t& close_ms) {
-    ArgSession s;
-    if (!read_arg_session(session, s))
+    ArgCache& cache = arg_cache(session, tz);
+    if (!cache.ok)
         return false;
     struct tm local {};
     decompose_ms_local(bar_ms, tz, local);
@@ -1027,7 +1083,7 @@ bool session_argument_bar(int64_t bar_ms, const std::string& session, const std:
     ArgDayBar held;
     bool found = false;
     for (int64_t d = today + 1; d >= today - 8 && !found; --d) {
-        const ArgDayBar bar = arg_day_bar(session, s, d, tz, daily_chart);
+        const ArgDayBar bar = arg_day_bar(cache, d, daily_chart);
         if (bar.traded && bar.open_ms <= bar_ms) {
             day = d;
             held = bar;
@@ -1047,7 +1103,7 @@ bool session_argument_bar(int64_t bar_ms, const std::string& session, const std:
     const int64_t next_first = arg_period_first_day(key + 1, period);
     open_ms = held.open_ms;
     for (int64_t d = arg_period_first_day(key, period); d < day; ++d) {
-        const ArgDayBar bar = arg_day_bar(session, s, d, tz, daily_chart);
+        const ArgDayBar bar = arg_day_bar(cache, d, daily_chart);
         if (bar.traded) {
             open_ms = bar.open_ms;
             break;
@@ -1056,7 +1112,7 @@ bool session_argument_bar(int64_t bar_ms, const std::string& session, const std:
     close_ms = held.close_ms;
     if (daily_chart) {
         for (int64_t d = next_first - 1; d > day; --d) {
-            const ArgDayBar bar = arg_day_bar(session, s, d, tz, daily_chart);
+            const ArgDayBar bar = arg_day_bar(cache, d, daily_chart);
             if (bar.traded) {
                 close_ms = bar.close_ms;
                 break;
@@ -1065,7 +1121,7 @@ bool session_argument_bar(int64_t bar_ms, const std::string& session, const std:
         return true;
     }
     for (int64_t d = next_first; d < next_first + 62; ++d) {
-        const ArgDayBar bar = arg_day_bar(session, s, d, tz, daily_chart);
+        const ArgDayBar bar = arg_day_bar(cache, d, daily_chart);
         if (bar.traded) {
             close_ms = bar.open_ms;
             break;
@@ -1458,6 +1514,23 @@ static int64_t first_traded_day_stamp_ms(int64_t stamp, const std::string& tz,
                                          const std::string& session) {
     if (session.empty() || session == "24x7")
         return stamp;
+    // Every bar of a month asks for the same few stamps (its open, and the
+    // next month's for time_close): the last answers are kept.
+    struct Memo {
+        bool used = false;
+        int64_t stamp = 0;
+        int64_t answer = 0;
+        std::string tz;
+        std::string session;
+    };
+    constexpr int kMemos = 4;
+    thread_local Memo memos[kMemos];
+    thread_local int next_memo = 0;
+    for (const Memo& memo : memos) {
+        if (memo.used && memo.stamp == stamp && memo.tz == tz && memo.session == session)
+            return memo.answer;
+    }
+    const int64_t asked = stamp;
     for (int guard = 0; guard < 7; ++guard) {
         const int64_t close = session_period_close_ms(stamp, tz, session, CalendarPeriod::DAY);
         struct tm local {};
@@ -1467,6 +1540,13 @@ static int64_t first_traded_day_stamp_ms(int64_t stamp, const std::string& tz,
         stamp = session_period_open_ms(session_covered_instant_ms(close, tz, session), tz, session,
                                        CalendarPeriod::DAY);
     }
+    Memo& memo = memos[next_memo];
+    next_memo = (next_memo + 1) % kMemos;
+    memo.used = true;
+    memo.stamp = asked;
+    memo.answer = stamp;
+    memo.tz = tz;
+    memo.session = session;
     return stamp;
 }
 
@@ -1481,15 +1561,17 @@ static int64_t first_traded_day_stamp_ms(int64_t stamp, const std::string& tz,
 // CET bar at Monday 00:00 CEST). False for any other session, a zone
 // without daylight saving's switches (UTC), or a day the session's list
 // leaves out: the runtime's day stands there.
+static const std::string kAllDaySession = "24x7";
+
 static bool wall_clock_day_bar(int64_t bar_ms, const std::string& tz,
                                const std::string& session, int64_t& open_ms,
                                int64_t& close_ms) {
     if (utc_zone(tz))
         return false;
-    const std::string spelled = session.empty() ? std::string("24x7") : session;
-    ArgSession s;
-    if (!read_arg_session(spelled, s) || s.windows.size() != 1
-        || s.windows[0].length != 24 * 60) {
+    const std::string& spelled = session.empty() ? kAllDaySession : session;
+    const ArgCache& cache = arg_cache(spelled, tz);
+    if (!cache.ok || cache.parsed.windows.size() != 1
+        || cache.parsed.windows[0].length != 24 * 60) {
         return false;
     }
     return session_argument_bar(bar_ms, spelled, tz, CalendarPeriod::DAY, false, open_ms,
