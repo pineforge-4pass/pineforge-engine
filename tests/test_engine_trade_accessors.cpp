@@ -16,12 +16,20 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
+#include <string>
 
 #include <pineforge/engine.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
+
+#include "exit_comment_tape.hpp"
+
+#ifndef PINEFORGE_DAILY_BREAK_CLOSE_FIXTURE_DIR
+#error "PINEFORGE_DAILY_BREAK_CLOSE_FIXTURE_DIR must name tests/fixtures/daily_break_close"
+#endif
 
 using namespace pineforge;
 
@@ -350,11 +358,72 @@ static void test_engine_core_helpers() {
     CHECK(p.pub_position_entry_name() == "Z");
 }
 
+
+// The chart's time_close on a D / W / M chart, as TradingView reads it: the
+// chart bar's period closes at its last traded close, to the millisecond,
+// whatever time of day the bar's stamp reads (lane W11-ENG-TIME-COLOR,
+// tests/fixtures/daily_break_close/README.md). Each w11-tclose3 tape spells
+// "time_close - time" in milliseconds first; every reading is replayed on the
+// lane's symbol facts. Exchange holidays and early closes are not modelled:
+// AAPL's 2025-07-03 (13:00 ET) and the XAUUSD week and month that ended on
+// 2024-11-29 (14:45 ET; the daily bars keep 17:00) are pinned as the
+// readings TradingView closes early.
+static void test_chart_time_close_tapes() {
+    std::printf("test_chart_time_close_tapes\n");
+    struct Chart {
+        const char* slug;
+        const char* tf;
+        const char* session;
+        const char* timezone;
+        int early_closes;  // readings TradingView closes before the session's close
+    };
+    static const Chart charts[] = {
+        {"w11-tclose3-xau1d", "1D", "1800-1700", "America/New_York", 0},
+        {"w11-tclose3-btc1d", "1D", "24x7", "UTC", 0},
+        {"w11-tclose3-eur1d", "1D", "1700-1700", "America/New_York", 0},
+        {"w11-tclose3-aapl1d", "1D", "0930-1600", "America/New_York", 1},
+        {"w11-tclose3-xauw", "1W", "1800-1700", "America/New_York", 1},
+        {"w11-tclose3-xaum", "1M", "1800-1700", "America/New_York", 1},
+    };
+    for (const Chart& chart : charts) {
+        bool ok = true;
+        const auto readings =
+            exit_comment_tape::read(PINEFORGE_DAILY_BREAK_CLOSE_FIXTURE_DIR, chart.slug, ok);
+        CHECK(ok);
+        ZeroPriceProbe p;
+        p.set_script_tf(chart.tf);
+        p.set_syminfo_session(chart.session);
+        p.set_syminfo_timezone(chart.timezone);
+        int wrong = 0;
+        int early = 0;
+        for (const auto& reading : readings) {
+            const auto spelled = exit_comment_tape::split(reading.signal, ',');
+            if (spelled.empty() || spelled[0] == "n") { ++wrong; continue; }
+            const long long tv = std::atoll(spelled[0].c_str());
+            p.set_current_bar_timestamp(reading.bar_ms);
+            const int64_t tc = p.pub_time_close();
+            const long long engine = is_na(tc) ? -1 : static_cast<long long>(tc - reading.bar_ms);
+            if (engine == tv) continue;
+            if (!is_na(tc) && engine > tv) { ++early; continue; }
+            if (++wrong <= 5) {
+                std::printf("  %s bar %lld: tv %lld engine %lld\n", chart.slug,
+                            static_cast<long long>(reading.bar_ms), tv, engine);
+            }
+        }
+        std::printf("  %s: %zu bars, %d early closes, %d differ\n", chart.slug, readings.size(),
+                    early, wrong);
+        CHECK(!readings.empty());
+        CHECK(early == chart.early_closes);
+        CHECK(wrong == 0);
+    }
+}
+
 int main() {
     test_open_trade_accessors_flat_then_pyramid();
     test_open_trade_short_path();
     test_open_trade_zero_price_guard();
     test_engine_core_helpers();
+    test_chart_time_close_tapes();
 
     std::printf("\nengine_trade_accessors: %d passed, %d failed\n",
                 tests_passed, tests_failed);

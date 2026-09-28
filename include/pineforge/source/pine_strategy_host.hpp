@@ -655,9 +655,9 @@ protected:
         // Inside a foreign site's payload the requested context's bar closes
         // when its feed says it does: no calendar is guessed for the symbol.
         if (foreign_context_ != nullptr) return foreign_context_->close_ms;
-        return pine_time_close(current_bar_.timestamp, script_tf_, syminfo_.session,
-                               syminfo_.timezone, script_tf_);
+        return chart_time_close();
     }
+    int64_t chart_time_close() const;  // the chart bar's own (pine_strategy_host.cpp)
     // ab9714be pine_strategy_host.hpp:348-358: generated three-argument
     // session predicates are class-scope calls whose chart timeframe changes
     // the D/W/M meaning.  Keep that Pine policy in the source host; the

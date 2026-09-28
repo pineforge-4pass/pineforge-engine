@@ -1,0 +1,16 @@
+{
+  "title": "w11 tclose3",
+  "slug": "w11-tclose3-eur1d",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T07:45:03.119Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "1D",
+    "from": "2025-03-01",
+    "to": "2025-04-15"
+  },
+  "pine_sha256": "9ec382eff048420abc3d4db26826f06df232cc7ecb5b722ef490892b634cfb8e",
+  "tv_trades_sha256": "dfd065395069a1b1d38639004c33327e7c5ab12eb10340206793de4f42b58652",
+  "tv_trades_rows": 62
+}

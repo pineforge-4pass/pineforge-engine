@@ -1729,4 +1729,26 @@ bool source::PineStrategyHost::adapter_core_sizes_default_opening(bool is_long) 
     return adapter_.core_sizes_default_opening(is_long);
 }
 
+// The chart's time_close. A D/W/M chart bar is the symbol's period whatever
+// time of day its stamp reads, and TradingView closes it at the period's last
+// traded close, to the millisecond: OANDA:XAUUSD stamps its daily bars at
+// 17:00 ET, inside the 1800-1700 session's break, and each closes at the next
+// 17:00 ET, its weekly bars on Friday 17:00 ET; NASDAQ:AAPL's daily bars
+// close at 16:00 ET, OANDA:EURUSD's at the next 17:00 ET, BINANCE:BTCUSDT's
+// at the next 00:00 UTC (lab tv w11-tclose3-*, tests/fixtures/
+// daily_break_close). The time-of-day session filter the intraday path
+// applies read the XAUUSD stamp as out of session, so the D chart answered
+// na. Exchange holidays and early closes are not modelled
+// (session_period_last_traded_close_ms): TradingView closes AAPL's
+// 2025-07-03 at 13:00 ET.
+int64_t source::PineStrategyHost::chart_time_close() const {
+    const CalendarPeriod period = calendar_period_for(script_tf_);
+    if (period != CalendarPeriod::NONE) {
+        return session_period_last_traded_close_ms(current_bar_.timestamp, syminfo_.timezone,
+                                                   syminfo_.session, period);
+    }
+    return pine_time_close(current_bar_.timestamp, script_tf_, syminfo_.session,
+                           syminfo_.timezone, script_tf_);
+}
+
 } // namespace pineforge

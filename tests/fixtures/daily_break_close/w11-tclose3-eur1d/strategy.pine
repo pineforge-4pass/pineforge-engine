@@ -1,0 +1,17 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane W11-ENG-TIME-COLOR): the chart's time_close beside
+// the function time_close("D") / ("W"): milliseconds from each open to its close
+// (integers, so a close 1 ms short of the boundary shows), spelled in the
+// comment of the exit that fills on the next bar's open.
+strategy("w11 tclose3", overlay=true, initial_capital=100000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=2, margin_long=0, margin_short=0)
+
+mn(int a, int b) => na(a) or na(b) ? "n" : str.tostring(a - b)
+sig = mn(time_close, time) + "," + mn(time_close("D"), time("D")) + "," + mn(time_close("D"), time) + "," + mn(time_close("W"), time("W"))
+
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.close("B", comment=sig)
+else
+    strategy.entry("B", strategy.long)
+    strategy.close("A", comment=sig)
