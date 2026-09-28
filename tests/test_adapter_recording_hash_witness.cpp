@@ -33,6 +33,16 @@
 // fd785928 library with -DPINEFORGE_F9_HARVEST (which prints the observed
 // values as the initializers below instead of checking them). Rebuild them
 // the same way; never edit one by hand to make a run pass.
+//
+// INT28 re-harvested them the same way on the integrated tree (main 962960b3
+// and the wave-J picks): the Submit scenario moves (rows and reads) at lane
+// W3B-ENG-GRID's F02 picks -- a close site's fill books its first call's id,
+// and every reducing fill books the close ledger (tests/fixtures/grid_close) --
+// and the Oca scenario (its rows, reads and final scalar; its trades do not)
+// at the pick of lane W8A-SIGSTATE-1's R-B, a pending LIMIT entry no longer
+// counting against pyramiding (tests/fixtures/pyramiding_open_order); an
+// instrumented copy of the adapter prints each rule's marker in its scenario.
+// The same harvest against main reproduces every old value.
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_strategy_host.hpp>
 
@@ -408,6 +418,18 @@ void emit(Scenario scenario, const Observed& got) {
 //   7789401651194802796ull -> 8521102792149394239ull [H-THIN]
 //   16644199069697802031ull -> 15674750399051881772ull [H-THIN]
 //   13033963886965614456ull -> 7695240294002266835ull [H-THIN]
+// INT28 re-harvested it once on the integrated tree (main 962960b3 and the
+// wave-J picks) with PINEFORGE_F9_HARVEST; the same harvest against main
+// reproduces every old value. The Submit and Oca scenarios move (their trades
+// do not). Each moved declaration, with the lines of it that move and the
+// pick(s) at whose boundary they moved (a harvest at every pick; an
+// instrumented copy of the adapter, scratch only, shows each pick's rule
+// firing in the scenario on the final tree):
+//   kOca_final: 1 of 1 lines [W8A R-B]
+//   kOca_reads: 5 of 12 lines [W8A R-B]
+//   kOca_rows: 15 of 32 lines [W8A R-B]
+//   kSubmit_reads: 2 of 6 lines [W3B F02 first id; W3B F02 ledger booking]
+//   kSubmit_rows: 9 of 32 lines [W3B F02 first id; W3B F02 ledger booking]
 constexpr std::uint64_t kSubmit_rows[] = {
     8019365971493599225ull,
     12084928604454138979ull,
@@ -417,15 +439,15 @@ constexpr std::uint64_t kSubmit_rows[] = {
     13664491885780078814ull,
     9587023827432894395ull,
     14524900109868328621ull,
-    9306730010360799799ull,
-    10975560481515534245ull,
-    6175700847996002068ull,
-    17944617882018938484ull,
-    89066156438191170ull,
-    7853223159133263199ull,
-    16829337964629633742ull,
-    14048972284943154657ull,
-    10772403295793355383ull,
+    12861386984956007464ull,
+    9636271775313182766ull,
+    14593285784226472543ull,
+    10087373508410094865ull,
+    5271607094941549455ull,
+    10967581714604759940ull,
+    9296899629760029849ull,
+    14096152748409919554ull,
+    5998880509468655060ull,
     12849842554292919416ull,
     11523841829240280476ull,
     14633701048963800807ull,
@@ -473,8 +495,8 @@ constexpr std::uint64_t kSubmit_rows[] = {
 constexpr std::uint64_t kSubmit_reads[] = {
     18234150623076098218ull,
     7528636846310271579ull,
-    6832312803948695488ull,
-    11582188679677093386ull,
+    5919697962280264299ull,
+    15895840553361286509ull,
     13475769493769981375ull,
     10681991124354674742ull,
 };
@@ -1136,21 +1158,21 @@ constexpr std::uint64_t kOca_rows[] = {
     8782861391928203675ull,
     148042859240194154ull,
     2639689295090791304ull,
-    10798952018967388820ull,
-    13015585966305206737ull,
-    619093614529828615ull,
-    16432223468538835037ull,
-    5709266478406133937ull,
-    11031153128114419525ull,
-    17759043185727148801ull,
-    778153452226410841ull,
-    6929057138192640130ull,
-    1014477579839442850ull,
-    14398065235087572465ull,
-    10116121127485637382ull,
-    9104659107751229673ull,
-    12444616329691358185ull,
-    14761567357674824267ull,
+    3292338544680283540ull,
+    14365721109494484841ull,
+    16315745438525882490ull,
+    10211812198887998072ull,
+    3453235346472806652ull,
+    3881756084375528314ull,
+    11254139579967538522ull,
+    15982954994366452515ull,
+    5877991312918986556ull,
+    18327879919054319324ull,
+    14523893722425410095ull,
+    5768357588422531024ull,
+    1269641092263952791ull,
+    15172589745188766474ull,
+    13866561949272281349ull,
 };
 // expectation corrected (kOca_reads, 12 of 12 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); the trades did not move:
 //   14283998503469032055ull -> 10089579219758468484ull
@@ -1212,17 +1234,17 @@ constexpr std::uint64_t kOca_reads[] = {
     3457726981161275090ull,
     15838028967223682041ull,
     11019583341156392335ull,
-    15037407705806185768ull,
-    17212813844302948315ull,
-    8321492686618048122ull,
-    12537836709650543420ull,
-    5737128231549608782ull,
+    8561321185756650792ull,
+    10082918155625450592ull,
+    13731153404690471591ull,
+    12194364484894581010ull,
+    5595798093249349329ull,
 };
 // expectation corrected: kOca_final 13344165461917220241ull -> 14677771083385306600ull, because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); the trades did not move.
 // expectation corrected (v19-E): kOca_final 14677771083385306600ull -> 15465526605242472570ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
 // expectation corrected (V19-FIX): kOca_final 15465526605242472570ull -> 18394579596403092954ull, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree.
 // expectation corrected (INT26 v19 hash re-pin): kOca_final 18394579596403092954ull -> 14761567357674824267ull [H-THIN], because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the trades did not move.
-constexpr std::uint64_t kOca_final = 14761567357674824267ull;
+constexpr std::uint64_t kOca_final = 13866561949272281349ull;
 constexpr Trade kOca_trades[] = {
     {1736121960000LL, 1736122020000LL, 100.75, 100.75, 2, 0},
     {1736122500000LL, 1736122980000LL, 100.5, 101, 2, 0},

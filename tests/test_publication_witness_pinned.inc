@@ -213,161 +213,310 @@
 //   LegsApartM: digest 0x701aca7df9071fb5ull -> 0xaa0c742ddeacc4d5ull [H-THIN]
 // expectation corrected (INT27 v19 hash re-pin, 1 values over 1 rows), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane PAR-ORDERS-3's recalculation rules (findings 1-2, an exit placed on a fill at a bar's extreme reads that fill; finding 4, after the matcher's own-level fill on a bar's first extreme the recalculation's orders act from that extreme); old values are INT26's pins, which every INT27 pick before PAR-ORDERS-3 kept (0631e045 reproduces each), harvested with this TU's own switch on the integrated tree and at every PAR-ORDERS-3 commit; the source folds, closed trades and recorded rows did not move:
 //   ConfigFlags103: digest 0x9e412b4fb357ae55ull -> 0x275174bdfd481a1bull [PAR-ORDERS-3 f1-2, PAR-ORDERS-3 f4]
+// INT28 re-harvested it once on the integrated tree (main 962960b3 and the
+// wave-J picks) with PINEFORGE_D2D_PUBLICATION_HARVEST; the same harvest
+// against main reproduces every old row. 142 of 156 runs move, each
+// marked with the pick(s) at whose boundary it moved (a harvest at every
+// pick); an instrumented copy of the adapter (scratch only) shows that
+// pick's rule firing in the run on the final tree, or, marked superseded,
+// at the boundary before the named later pick and not after it:
+//   Config01: digest 0xb668af594ea2f5d9 -> 0x2338d6688ca58837 [W3B F02 first id; W3B void exit]
+//   ConfigFlags101: digest 0xe7f27c137f45ac4b -> 0x6b3262a158c0e86d [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W5 C1; W4 F08]
+//   Config01M: digest 0x1efcbeef8aa1dc6d -> 0x8b63a249e4bcbf1f [W3B void exit]
+//   ConfigFlags101M: digest 0xbee912e49e616f4e -> 0xae3b2b9fc4e23750 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W5 C1; W4 F08]
+//   Config02: digest 0x341cf20ba6b96fc3 -> 0x9fc3f24e211e1726, trades 11 -> 10 [W3B F02 first id; W3B F02 ledger booking; W3B g1; W3B void exit; R1-CONSOLIDATE R-A]
+//   ConfigFlags102: digest 0xef9792602fc551c1 -> 0x443b33f233df5591, trades 52 -> 49 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W5 C1; W4 F08]
+//   Config02M: digest 0x4983b8719bbfd192 -> 0x8cddc71b29406412, trades 11 -> 10 [W3B F02 first id; W3B F02 ledger booking; W3B g1; W3B void exit; R1-CONSOLIDATE R-A]
+//   ConfigFlags102M: digest 0xeed018756d1228e9 -> 0x000ba0de0f306cb9, trades 52 -> 49 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W5 C1; W4 F08]
+//   Config03: digest 0x0fc93105580e996e -> 0xc5424169be207aa2, trades 48 -> 53 [W3B F02 first id; W3B void exit; W8A R-B]
+//   ConfigFlags103: digest 0x275174bdfd481a1b -> 0x70b81ca88d79dcc3, folds 184 -> 182, trades 63 -> 61 [W3B F02 first id; W3B F02 ledger booking; W3B g1; W3B void exit; W5 MK; W4 F19c; R1-CONSOLIDATE R1]
+//   Config03M: digest 0x2e2ff1ccdf841c8d -> 0xea3de174c93cccc5, trades 44 -> 49 [W3B F02 first id; W3B void exit; W8A R-B]
+//   ConfigFlags103M: digest 0xa68e0a951db111dd -> 0x8f0124d4ee2a443c, folds 184 -> 182, trades 65 -> 63 [W3B F02 first id; W3B F02 ledger booking; W3B g1; W3B void exit; W5 MK; R1-CONSOLIDATE R1]
+//   Config04: digest 0x63aa9da27d89b846 -> 0x5fc85948d1cc71eb [W3B F02 ledger booking; W3B void exit]
+//   ConfigFlags104: digest 0xefbb1c6bfcb31f17 -> 0x97b7894a32af23f1, trades 13 -> 14 [W3B F02 first id; W3B void exit; W8A R-B]
+//   Config04M: digest 0xba3069b5b515a320 -> 0x87cc9f67ed62f28e [W3B F02 ledger booking; W3B void exit]
+//   ConfigFlags104M: digest 0x0b1d2d1d8096f6b9 -> 0x3850e6440128d893, trades 13 -> 14 [W3B F02 first id; W3B void exit; W8A R-B]
+//   Config05: digest 0x705de70e2d70af67 -> 0x85c421ae2f21507f, trades 14 -> 12 [W3B F02 first id; W3B F02 ledger booking; W3B g1; W3B void exit]
+//   ConfigFlags105: digest 0x69dac2f5ec1d400c -> 0xa103dd79855f049c, trades 13 -> 12 [W3B F02 ledger booking; W3B void exit]
+//   Config05M: digest 0x7f5b8acc384eb6da -> 0x8422d41a3aa8dee1, trades 14 -> 12 [W3B F02 first id; W3B F02 ledger booking; W3B g1; W3B void exit]
+//   ConfigFlags105M: digest 0x3e23588769a2f97b -> 0x43e37c3b91360e9a, trades 13 -> 12 [W3B F02 ledger booking; W3B void exit]
+//   Config06: digest 0x9f061ce6918f93c5 -> 0xd365aa9c3705ae1f [W3B void exit]
+//   ConfigFlags106: digest 0xb5e0aaa404ca93b3 -> 0x4fc0738f0271278c [W3B void exit; W5 C1; W4 F08]
+//   Config06M: digest 0x1ef42058337147b8 -> 0x21e19f868e2ac1a1 [W3B void exit]
+//   ConfigFlags106M: digest 0x3f82500e8ed30156 -> 0x83a9bde980d36054 [W3B void exit; W5 C1; W4 F08]
+//   Config07: digest 0x86c366bc672888fa -> 0xa2e64f9925787e69 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   ConfigFlags107: digest 0xbe9ea2687b1b417a -> 0xabda13a612cf944d, trades 20 -> 22 [W3B F02 first id; W3B F02 ledger booking; W3B g1; W3B void exit]
+//   Config07M: digest 0x0bdf3ca651b69092 -> 0x9a4813d5ba021f90 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   ConfigFlags107M: digest 0x2a5b0d3d56b2cd03 -> 0xca421b83f6380179, trades 21 -> 23 [W3B F02 first id; W3B F02 ledger booking; W3B g1; W3B void exit]
+//   Config08: digest 0xa23953fc578a6b43 -> 0xde6e8977d6fccc6f [W3B void exit]
+//   ConfigFlags108: digest 0x10e8434816e387af -> 0xe78d704b74e4f695 [W3B void exit; W4 F08]
+//   Config08M: digest 0x1f60bb9c965465d8 -> 0xe9dabaa4abe5ce0d [W3B void exit]
+//   ConfigFlags108M: digest 0x2271fc69af564e4c -> 0x75aac168f00f1801 [W3B void exit; W4 F08]
+//   Config09: digest 0x9360d69c97c9db7b -> 0xe6ce749e6d011633 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   ConfigFlags109: digest 0x30a8c80d3bd0ad61 -> 0x18457ecdd3b9059b, trades 42 -> 45 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W8A R-B]
+//   Config09M: digest 0x9e5b912398d35af8 -> 0xcad60c482f2dadb6 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   ConfigFlags109M: digest 0x5a3876b995a66c76 -> 0xb8b2405ade532a1a, trades 42 -> 45 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W8A R-B]
+//   Config10: digest 0x18f9e53074280722 -> 0x89d9ee8fcfdb8d2b [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   ConfigFlags110: digest 0x248ead6c9dbf66b7 -> 0xfd01004606da1f60, trades 11 -> 12 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W4 F08]
+//   Config10M: digest 0x4be74baf8fc46644 -> 0x27b4e0d84ceb64c8 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   ConfigFlags110M: digest 0x54a9f81cdce9d069 -> 0xff6fa6e9e28a9bdf, trades 11 -> 12 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W4 F08]
+//   Config11: digest 0xb150c52332d168ff -> 0xb20c8cbfea616264 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   ConfigFlags111: digest 0x32f4fb6b779cc554 -> 0xcc9cdc745a08b222, trades 19 -> 17 [W3B F02 first id; W3B void exit; W4 F08]
+//   Config11M: digest 0xc8005b52c87cf782 -> 0x3c15e549c4ca8b3b [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   ConfigFlags111M: digest 0xdb5300166665f9c1 -> 0xbb8e81d92e1268bc, trades 19 -> 17 [W3B F02 first id; W3B void exit; W4 F08]
+//   Config12: digest 0xc51092de174909d7 -> 0x8f89d528e22725e5 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   ConfigFlags112: digest 0x68af9f1a740c44e9 -> 0xeffa667f3295fb5d, trades 18 -> 19 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W5 C1]
+//   Config12M: digest 0x3edbdba7792b3233 -> 0x7628205f68612a98 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   ConfigFlags112M: digest 0xfd4565803d79a56b -> 0x16a09b30a0769034, trades 18 -> 19 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W5 C1]
+//   Config13: digest 0x254b2221a515f9e7 -> 0x4404022d43781ea0 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   ConfigFlags113: digest 0x6c6163d6eb022517 -> 0xbd64633fe83e7319 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W5 C1; W4 F08]
+//   Config13M: digest 0x2e78fa9fbc049ded -> 0x2ae2c70980ac0fd2 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   ConfigFlags113M: digest 0x6e9f5a9ece8a9c58 -> 0xeb38b6811f6a8bbf [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W5 C1; W4 F08]
+//   Config14: digest 0x523695406e13e23c -> 0xa3f9a925e91a4f7c [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   ConfigFlags114: digest 0x65aeb7fa3c3ab6bf -> 0xb481578151a6b65b, trades 60 -> 66 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W5 C1; W4 F08; W4 MCSIZE; W8A R3; R1-CONSOLIDATE R1]
+//   Config14M: digest 0x9a3809499b3623c6 -> 0x5289594882c86a97 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   ConfigFlags114M: digest 0x63e140a82186a98d -> 0xe22c1fc0d8f6feea, trades 60 -> 66 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W5 C1; W4 F08; W4 MCSIZE; W8A R3; R1-CONSOLIDATE R1]
+//   Config15: digest 0xad1c7175dc94f6bc -> 0x186642fe4a546b57 [W3B F02 first id; W3B F02 ledger booking; W3B g1; W3B void exit]
+//   ConfigFlags115: digest 0x0141076a069b89e3 -> 0x2498f0b2c19691b0 [W3B void exit]
+//   Config15M: digest 0x1344d28fa92876b9 -> 0xf26e418f92af8c2a [W3B F02 first id; W3B F02 ledger booking; W3B g1; W3B void exit]
+//   ConfigFlags115M: digest 0xd8441700cc46211d -> 0xf689ea3140af17e6 [W3B void exit]
+//   Config16: digest 0x2533d8cb0bd677c4 -> 0x40c001863790e4bb [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   ConfigFlags116: digest 0xf6100c192c1b1a47 -> 0x6ea5c86901105686, trades 19 -> 21 [W3B F02 first id; W3B void exit; W8A R-B]
+//   Config16M: digest 0xfff00bd45398ff09 -> 0x06b36e850ad09548 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   ConfigFlags116M: digest 0x4e9b7658af4a3968 -> 0xf4f9194225b2a7af, trades 19 -> 21 [W3B F02 first id; W3B void exit; W8A R-B]
+//   CloseAllThenEntry: digest 0xc9a6feca41e82e29 -> 0x279fa9da8fb40549 [W3B F02 first id]
+//   CloseAllThenEntryM: digest 0xd0aa4f83cfd909c6 -> 0xc6baa19d8a587d60 [W3B F02 first id]
+//   SameBarBatch: digest 0x67372c2ba662f6c8 -> 0x167ef4263f9ae286 [W3B F02 first id; W3B F02 ledger booking]
+//   SameBarBatchM: digest 0x5517e412f630d8c8 -> 0x488225822bf669d0 [W3B F02 first id; W3B F02 ledger booking]
+//   CloseOrderAdds: digest 0xe5d547fd7ea6eb99 -> 0x1b5718bfccc88d5b [W3B F02 ledger booking]
+//   CloseOrderAddsM: digest 0x2fc90068db6aa341 -> 0xbab50be39f3d0b28 [W3B F02 ledger booking]
+//   DelayedStops: digest 0xf698a0012daa63b3 -> 0x43bed101b5c70825 [W3B F02 first id; W8D]
+//   DelayedStopsM: digest 0x046314c00141b54c -> 0xeebabaa7a380fb84 [W3B F02 first id]
+//   Storm01: digest 0x0d6f6de3707c0f23 -> 0x4fcc1a18f96048be [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   Storm01M: digest 0x17fdf11d7effc7f0 -> 0x00cdd69222a72577 [W3B F02 first id; W3B void exit]
+//   Storm02: digest 0x5ab7e89bf0a32e17 -> 0xc147c03e2f6038fe [W3B void exit; W4 F19c]
+//   Storm02M: digest 0xae05144418043f11 -> 0x745faf07c1b57317 [W3B void exit]
+//   Storm03: digest 0x1734fbc73a88fdaf -> 0x662d5ebe04f3918f [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W4 F08]
+//   Storm03M: digest 0x87784b723c37ec66 -> 0x4b0d6e52556ad140 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W4 F08]
+//   Storm04: digest 0x33ceb62ad976d38a -> 0x07c17443f491fb30, trades 22 -> 24 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   Storm04M: digest 0xb06e7fe199931e4a -> 0x74d239698dac5c24, trades 22 -> 24 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   Storm05: digest 0x00106a73f4035d2b -> 0x8c67fec9d289937d, folds 81 -> 80 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W4 F19c]
+//   Storm05M: digest 0xdef761ffd71cac33 -> 0xfbdf760609e41925, trades 17 -> 18 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   Storm06: digest 0x6bfcdec22c1a1c8f -> 0x64b975d6442847b8, trades 11 -> 13 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   Storm06M: digest 0x44fe7480122bc682 -> 0x7c34e84d996f62b1, trades 11 -> 13 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   Storm07: digest 0xacff98851a92d473 -> 0x8c50963e152ddba8 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   Storm07M: digest 0x196a55d2091dc429 -> 0xa75412c0c52f6ac1 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   Storm08: digest 0x03ba3cc50503307d -> 0x3c2a5b9c43c4fd89 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   Storm08M: digest 0xcdb1ebd3491998e5 -> 0x7bfabcd35099442c [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   Storm09: digest 0xc5746cc50cf41375 -> 0x8087e1c554317200, trades 21 -> 23 [TVDEF-DROPS R1; W3B F02 first id; W3B F02 ledger booking; W3B void exit; W4 F08]
+//   Storm09M: digest 0x8aa89637b4d04cf0 -> 0x31d4f5fc5411c31f, trades 20 -> 22 [TVDEF-DROPS R1; W3B F02 first id; W3B F02 ledger booking; W3B void exit; W4 F08]
+//   Storm10: digest 0x2697bb1c5389db54 -> 0xf7007d9d5ea3296e, folds 65 -> 63, trades 16 -> 13 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W4 F08]
+//   Storm10M: digest 0x741a981667c1a302 -> 0x862537a926bed30e, folds 66 -> 64, trades 16 -> 13 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W4 F08]
+//   Storm11: digest 0x7cfb0ba740c2806b -> 0x0780237b158be286, trades 22 -> 23 [W3B void exit; W4 F08]
+//   Storm11M: digest 0xcfc4532d945da385 -> 0x1932b3271b2aaaba, trades 22 -> 23 [W3B void exit; W4 F08]
+//   Storm12: digest 0x659852f60d3d358c -> 0x2f7a3a3d3b832e58, folds 86 -> 85, trades 20 -> 19 [W3B F02 first id; W3B F02 ledger booking, superseded by R1-CONSOLIDATE R1; W3B g1; W3B void exit; R1-CONSOLIDATE R1]
+//   Storm12M: digest 0xdb3db1a969f1b59a -> 0x6a900d649bc55ad8, folds 86 -> 85, trades 20 -> 19 [W3B F02 first id; W3B F02 ledger booking, superseded by R1-CONSOLIDATE R1; W3B g1; W3B void exit; R1-CONSOLIDATE R1]
+//   Storm13: digest 0xe613ff94ad1aad2a -> 0x97f4432edb19a7e9, trades 23 -> 25 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   Storm13M: digest 0xf7793304d1dbd532 -> 0x1170d6964f4f90ea, trades 23 -> 25 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   Storm14: digest 0x0b1595a2d45290f2 -> 0x5ac38849fb40f365, trades 18 -> 17 [W3B void exit; W4 F08]
+//   Storm14M: digest 0x9e9a3044d9dbcad8 -> 0xc90b1227bf0f3b60, trades 18 -> 17 [W3B void exit; W4 F08]
+//   Storm15: digest 0xc2912804f77858fb -> 0x86667ae71fa7953d [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   Storm15M: digest 0xf32358c4a29e8066 -> 0x1d30c61ffbbb4270 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   Storm16: digest 0x9f128f923d41d2e7 -> 0x73e4d05238964e31 [W3B void exit; W4 F08]
+//   Storm16M: digest 0x72b90fec2e8871d7 -> 0x7e4c9a223abf773e [W3B void exit; W4 F08]
+//   Storm17: digest 0xd62326206a38e5f5 -> 0xfdfa329cd436bbf9, folds 86 -> 83, trades 23 -> 21 [TVDEF-DROPS R1; W3B F02 first id; W3B F02 ledger booking; W3B g1; W3B void exit]
+//   Storm17M: digest 0x9631182cfd1c6023 -> 0x535fe23b5fbfb5ea, folds 80 -> 78, trades 18 -> 17 [TVDEF-DROPS R1; W3B F02 first id; W3B F02 ledger booking; W3B g1; W3B void exit]
+//   Storm18: digest 0x86e8b0cc2cbda4ae -> 0xf12b91d86413533c, folds 80 -> 79, trades 23 -> 22 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; R1-CONSOLIDATE R1]
+//   Storm18M: digest 0xd9fb27e46899ccd7 -> 0x979b7bbd26c38a56, folds 80 -> 79, trades 23 -> 22 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; R1-CONSOLIDATE R1]
+//   Storm19: digest 0xe92413fbdc464242 -> 0x2be2f691db8da9c4, folds 86 -> 81, trades 23 -> 20 [W3B F02 first id; W3B F02 ledger booking; W3B g1; W3B void exit; W8E C1]
+//   Storm19M: digest 0xa9a584e70d470321 -> 0x937badd205890225, folds 86 -> 82, trades 23 -> 21 [W3B F02 first id; W3B F02 ledger booking; W3B g1; W3B void exit; W8E C1]
+//   Storm20: digest 0x93de366f51f2315d -> 0x604f8dc86a777322, folds 45 -> 43, trades 12 -> 10 [TVDEF-DROPS R1; W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   Storm20M: digest 0x201adc8ab4ea9bdb -> 0x08c037a58815f21e, folds 45 -> 43, trades 12 -> 10 [TVDEF-DROPS R1; W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   Storm21: digest 0xd4a8eda3db34c6ee -> 0xc35dd2c653db38ec [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W4 F08]
+//   Storm21M: digest 0xefaa36484eb9c7a1 -> 0xf770bc84f8b963b1 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W4 F08]
+//   Storm22: digest 0x686821a1adb13279 -> 0x6862e0fd009c1790 [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   Storm22M: digest 0x28a2c0fefdac67af -> 0xbf55a11e282da39f [W3B F02 first id; W3B F02 ledger booking; W3B void exit]
+//   Storm23: digest 0xfac7dcb54dc93113 -> 0xb57c9d2a9d2d519f, folds 89 -> 87, trades 26 -> 28 [W3B F02 first id; W3B F02 ledger booking; W3B g1; W3B void exit; W4 F19c]
+//   Storm23M: digest 0xe66e15ba3a360e59 -> 0x6b9e5e8f5194fdfb, folds 89 -> 87, trades 26 -> 28 [W3B F02 first id; W3B F02 ledger booking; W3B g1; W3B void exit]
+//   Storm24: digest 0x9a05f4cc2a37c8b8 -> 0x63f5f7e8631c6674 [W3B void exit]
+//   Storm24M: digest 0xa1f1acfcca37ef51 -> 0x8ec5900090e03ba1 [W3B void exit]
+//   LegsStops01: digest 0xe82893532dd3da24 -> 0xcce81db4d82a5c84 [W3B F02 ledger booking]
+//   LegsStops01M: digest 0x40cde458e42af83d -> 0x26925b94c1b0b053 [W3B F02 ledger booking]
+//   LegsStops02: digest 0x7aa8ab78f1f5ada3 -> 0xf8a76370e77c0288 [W3B F02 ledger booking]
+//   LegsStops02M: digest 0xa1d4657aea1b015d -> 0x249639bbcf988992 [W3B F02 ledger booking]
+//   Legs03: digest 0x4a813820bb3a558d -> 0xcc33c2bf5b9e3eb3 [W3B F02 ledger booking]
+//   Legs03M: digest 0xc10d45c7cb3cbee5 -> 0xbb57583c687ffd41 [W3B F02 ledger booking]
+//   LegsStops03: digest 0xc02aaa3f7c355e7a -> 0x6bfd3259a98f9a50 [W3B F02 ledger booking]
+//   LegsStops03M: digest 0x55a7fe1ea0fc100a -> 0x649fef9865386a15 [W3B F02 ledger booking]
+//   Legs04: digest 0x254b1a89ea0388dd -> 0x8fa244580a1b5d71 [W3B F02 ledger booking]
+//   Legs04M: digest 0x079706336deb5323 -> 0xa9104fae5877598d [W3B F02 ledger booking]
+//   LegsStops04: digest 0xc6a5620646c92b3c -> 0xd0b576fc1ba1e92a [W3B F02 ledger booking]
+//   LegsStops04M: digest 0xbcad7c107485fbe8 -> 0x905b7c095270f8b8 [W3B F02 ledger booking]
+//   LegsStops05: digest 0x94435fe6bea6a39d -> 0x7ee3974eb7d07a1e [W3B F02 ledger booking]
+//   LegsStops05M: digest 0x2722fdb103c71c42 -> 0xf5c4797f33609847 [W3B F02 ledger booking]
+//   LegsStops06: digest 0x198f7d7e224884c0 -> 0x0015322d33dc00be [W3B F02 ledger booking]
+//   LegsStops06M: digest 0x507c89b50b4d4b2b -> 0x3014ef9c76c328ad [W3B F02 ledger booking]
+//   TwoEntries: digest 0x06f2ecb7c1a3a480 -> 0xef5e45463539ecb2 [W3B F02 first id]
+//   TwoEntriesM: digest 0x7c956e01ced10ccb -> 0xa5293744ba522c82 [W3B F02 first id]
+//   LegBesideClose: digest 0xfd494f8d3e8228d4 -> 0x1559b022773e0bae [W3B F02 ledger booking]
+//   LegBesideCloseM: digest 0x4a9e3df3ac353419 -> 0x2b0bb872ebf141d2 [W3B F02 ledger booking]
+//   LegsApart: digest 0x64ff417b6bcf212f -> 0xaef3fc2d3d2e942d [W3B F02 ledger booking]
+//   LegsApartM: digest 0xaa0c742ddeacc4d5 -> 0x650d1b75fc17cdb7 [W3B F02 ledger booking]
 constexpr Pinned kPinned[] = {
-    {"Config01", 0xb668af594ea2f5d9ull, 144, 44, 144},
-    {"ConfigFlags101", 0xe7f27c137f45ac4bull, 145, 45, 144},
-    {"Config01M", 0x1efcbeef8aa1dc6dull, 144, 42, 144},
-    {"ConfigFlags101M", 0xbee912e49e616f4eull, 145, 45, 144},
-    {"Config02", 0x341cf20ba6b96fc3ull, 48, 11, 48},
-    {"ConfigFlags102", 0xef9792602fc551c1ull, 144, 52, 144},
-    {"Config02M", 0x4983b8719bbfd192ull, 48, 11, 48},
-    {"ConfigFlags102M", 0xeed018756d1228e9ull, 144, 52, 144},
-    {"Config03", 0x0fc93105580e996eull, 144, 48, 144},
-    {"ConfigFlags103", 0x275174bdfd481a1bull, 184, 63, 144},
-    {"Config03M", 0x2e2ff1ccdf841c8dull, 144, 44, 144},
-    {"ConfigFlags103M", 0xa68e0a951db111ddull, 184, 65, 144},
-    {"Config04", 0x63aa9da27d89b846ull, 144, 21, 144},
-    {"ConfigFlags104", 0xefbb1c6bfcb31f17ull, 48, 13, 48},
-    {"Config04M", 0xba3069b5b515a320ull, 144, 21, 144},
-    {"ConfigFlags104M", 0x0b1d2d1d8096f6b9ull, 48, 13, 48},
-    {"Config05", 0x705de70e2d70af67ull, 48, 14, 48},
-    {"ConfigFlags105", 0x69dac2f5ec1d400cull, 48, 13, 48},
-    {"Config05M", 0x7f5b8acc384eb6daull, 48, 14, 48},
-    {"ConfigFlags105M", 0x3e23588769a2f97bull, 48, 13, 48},
-    {"Config06", 0x9f061ce6918f93c5ull, 48, 5, 48},
-    {"ConfigFlags106", 0xb5e0aaa404ca93b3ull, 48, 6, 48},
-    {"Config06M", 0x1ef42058337147b8ull, 48, 5, 48},
-    {"ConfigFlags106M", 0x3f82500e8ed30156ull, 48, 6, 48},
-    {"Config07", 0x86c366bc672888faull, 144, 48, 144},
-    {"ConfigFlags107", 0xbe9ea2687b1b417aull, 48, 20, 48},
-    {"Config07M", 0x0bdf3ca651b69092ull, 144, 48, 144},
-    {"ConfigFlags107M", 0x2a5b0d3d56b2cd03ull, 48, 21, 48},
-    {"Config08", 0xa23953fc578a6b43ull, 48, 12, 48},
-    {"ConfigFlags108", 0x10e8434816e387afull, 48, 15, 48},
-    {"Config08M", 0x1f60bb9c965465d8ull, 48, 12, 48},
-    {"ConfigFlags108M", 0x2271fc69af564e4cull, 48, 15, 48},
-    {"Config09", 0x9360d69c97c9db7bull, 144, 66, 144},
-    {"ConfigFlags109", 0x30a8c80d3bd0ad61ull, 144, 42, 144},
-    {"Config09M", 0x9e5b912398d35af8ull, 144, 66, 144},
-    {"ConfigFlags109M", 0x5a3876b995a66c76ull, 144, 42, 144},
-    {"Config10", 0x18f9e53074280722ull, 48, 18, 48},
-    {"ConfigFlags110", 0x248ead6c9dbf66b7ull, 48, 11, 48},
-    {"Config10M", 0x4be74baf8fc46644ull, 48, 18, 48},
-    {"ConfigFlags110M", 0x54a9f81cdce9d069ull, 48, 11, 48},
-    {"Config11", 0xb150c52332d168ffull, 144, 60, 144},
-    {"ConfigFlags111", 0x32f4fb6b779cc554ull, 48, 19, 48},
-    {"Config11M", 0xc8005b52c87cf782ull, 144, 60, 144},
-    {"ConfigFlags111M", 0xdb5300166665f9c1ull, 48, 19, 48},
-    {"Config12", 0xc51092de174909d7ull, 144, 48, 144},
-    {"ConfigFlags112", 0x68af9f1a740c44e9ull, 144, 18, 144},
-    {"Config12M", 0x3edbdba7792b3233ull, 144, 48, 144},
-    {"ConfigFlags112M", 0xfd4565803d79a56bull, 144, 18, 144},
-    {"Config13", 0x254b2221a515f9e7ull, 48, 19, 48},
-    {"ConfigFlags113", 0x6c6163d6eb022517ull, 48, 19, 48},
-    {"Config13M", 0x2e78fa9fbc049dedull, 48, 19, 48},
-    {"ConfigFlags113M", 0x6e9f5a9ece8a9c58ull, 48, 19, 48},
-    {"Config14", 0x523695406e13e23cull, 144, 40, 144},
-    {"ConfigFlags114", 0x65aeb7fa3c3ab6bfull, 144, 60, 144},
-    {"Config14M", 0x9a3809499b3623c6ull, 144, 40, 144},
-    {"ConfigFlags114M", 0x63e140a82186a98dull, 144, 60, 144},
-    {"Config15", 0xad1c7175dc94f6bcull, 144, 48, 144},
-    {"ConfigFlags115", 0x0141076a069b89e3ull, 48, 6, 48},
-    {"Config15M", 0x1344d28fa92876b9ull, 144, 48, 144},
-    {"ConfigFlags115M", 0xd8441700cc46211dull, 48, 6, 48},
-    {"Config16", 0x2533d8cb0bd677c4ull, 144, 54, 144},
-    {"ConfigFlags116", 0xf6100c192c1b1a47ull, 48, 19, 48},
-    {"Config16M", 0xfff00bd45398ff09ull, 144, 54, 144},
-    {"ConfigFlags116M", 0x4e9b7658af4a3968ull, 48, 19, 48},
-    {"CloseAllThenEntry", 0xc9a6feca41e82e29ull, 40, 17, 40},
-    {"CloseAllThenEntryM", 0xd0aa4f83cfd909c6ull, 40, 17, 40},
+    {"Config01", 0x2338d6688ca58837ull, 144, 44, 144},
+    {"ConfigFlags101", 0x6b3262a158c0e86dull, 145, 45, 144},
+    {"Config01M", 0x8b63a249e4bcbf1full, 144, 42, 144},
+    {"ConfigFlags101M", 0xae3b2b9fc4e23750ull, 145, 45, 144},
+    {"Config02", 0x9fc3f24e211e1726ull, 48, 10, 48},
+    {"ConfigFlags102", 0x443b33f233df5591ull, 144, 49, 144},
+    {"Config02M", 0x8cddc71b29406412ull, 48, 10, 48},
+    {"ConfigFlags102M", 0x000ba0de0f306cb9ull, 144, 49, 144},
+    {"Config03", 0xc5424169be207aa2ull, 144, 53, 144},
+    {"ConfigFlags103", 0x70b81ca88d79dcc3ull, 182, 61, 144},
+    {"Config03M", 0xea3de174c93cccc5ull, 144, 49, 144},
+    {"ConfigFlags103M", 0x8f0124d4ee2a443cull, 182, 63, 144},
+    {"Config04", 0x5fc85948d1cc71ebull, 144, 21, 144},
+    {"ConfigFlags104", 0x97b7894a32af23f1ull, 48, 14, 48},
+    {"Config04M", 0x87cc9f67ed62f28eull, 144, 21, 144},
+    {"ConfigFlags104M", 0x3850e6440128d893ull, 48, 14, 48},
+    {"Config05", 0x85c421ae2f21507full, 48, 12, 48},
+    {"ConfigFlags105", 0xa103dd79855f049cull, 48, 12, 48},
+    {"Config05M", 0x8422d41a3aa8dee1ull, 48, 12, 48},
+    {"ConfigFlags105M", 0x43e37c3b91360e9aull, 48, 12, 48},
+    {"Config06", 0xd365aa9c3705ae1full, 48, 5, 48},
+    {"ConfigFlags106", 0x4fc0738f0271278cull, 48, 6, 48},
+    {"Config06M", 0x21e19f868e2ac1a1ull, 48, 5, 48},
+    {"ConfigFlags106M", 0x83a9bde980d36054ull, 48, 6, 48},
+    {"Config07", 0xa2e64f9925787e69ull, 144, 48, 144},
+    {"ConfigFlags107", 0xabda13a612cf944dull, 48, 22, 48},
+    {"Config07M", 0x9a4813d5ba021f90ull, 144, 48, 144},
+    {"ConfigFlags107M", 0xca421b83f6380179ull, 48, 23, 48},
+    {"Config08", 0xde6e8977d6fccc6full, 48, 12, 48},
+    {"ConfigFlags108", 0xe78d704b74e4f695ull, 48, 15, 48},
+    {"Config08M", 0xe9dabaa4abe5ce0dull, 48, 12, 48},
+    {"ConfigFlags108M", 0x75aac168f00f1801ull, 48, 15, 48},
+    {"Config09", 0xe6ce749e6d011633ull, 144, 66, 144},
+    {"ConfigFlags109", 0x18457ecdd3b9059bull, 144, 45, 144},
+    {"Config09M", 0xcad60c482f2dadb6ull, 144, 66, 144},
+    {"ConfigFlags109M", 0xb8b2405ade532a1aull, 144, 45, 144},
+    {"Config10", 0x89d9ee8fcfdb8d2bull, 48, 18, 48},
+    {"ConfigFlags110", 0xfd01004606da1f60ull, 48, 12, 48},
+    {"Config10M", 0x27b4e0d84ceb64c8ull, 48, 18, 48},
+    {"ConfigFlags110M", 0xff6fa6e9e28a9bdfull, 48, 12, 48},
+    {"Config11", 0xb20c8cbfea616264ull, 144, 60, 144},
+    {"ConfigFlags111", 0xcc9cdc745a08b222ull, 48, 17, 48},
+    {"Config11M", 0x3c15e549c4ca8b3bull, 144, 60, 144},
+    {"ConfigFlags111M", 0xbb8e81d92e1268bcull, 48, 17, 48},
+    {"Config12", 0x8f89d528e22725e5ull, 144, 48, 144},
+    {"ConfigFlags112", 0xeffa667f3295fb5dull, 144, 19, 144},
+    {"Config12M", 0x7628205f68612a98ull, 144, 48, 144},
+    {"ConfigFlags112M", 0x16a09b30a0769034ull, 144, 19, 144},
+    {"Config13", 0x4404022d43781ea0ull, 48, 19, 48},
+    {"ConfigFlags113", 0xbd64633fe83e7319ull, 48, 19, 48},
+    {"Config13M", 0x2ae2c70980ac0fd2ull, 48, 19, 48},
+    {"ConfigFlags113M", 0xeb38b6811f6a8bbfull, 48, 19, 48},
+    {"Config14", 0xa3f9a925e91a4f7cull, 144, 40, 144},
+    {"ConfigFlags114", 0xb481578151a6b65bull, 144, 66, 144},
+    {"Config14M", 0x5289594882c86a97ull, 144, 40, 144},
+    {"ConfigFlags114M", 0xe22c1fc0d8f6feeaull, 144, 66, 144},
+    {"Config15", 0x186642fe4a546b57ull, 144, 48, 144},
+    {"ConfigFlags115", 0x2498f0b2c19691b0ull, 48, 6, 48},
+    {"Config15M", 0xf26e418f92af8c2aull, 144, 48, 144},
+    {"ConfigFlags115M", 0xf689ea3140af17e6ull, 48, 6, 48},
+    {"Config16", 0x40c001863790e4bbull, 144, 54, 144},
+    {"ConfigFlags116", 0x6ea5c86901105686ull, 48, 21, 48},
+    {"Config16M", 0x06b36e850ad09548ull, 144, 54, 144},
+    {"ConfigFlags116M", 0xf4f9194225b2a7afull, 48, 21, 48},
+    {"CloseAllThenEntry", 0x279fa9da8fb40549ull, 40, 17, 40},
+    {"CloseAllThenEntryM", 0xc6baa19d8a587d60ull, 40, 17, 40},
     {"Reversals", 0x23a3b43853bb2e1aull, 40, 16, 40},
     {"ReversalsM", 0x29160b951dc12d18ull, 40, 16, 40},
-    {"SameBarBatch", 0x67372c2ba662f6c8ull, 36, 25, 36},
-    {"SameBarBatchM", 0x5517e412f630d8c8ull, 36, 25, 36},
-    {"CloseOrderAdds", 0xe5d547fd7ea6eb99ull, 36, 22, 36},
-    {"CloseOrderAddsM", 0x2fc90068db6aa341ull, 36, 22, 36},
-    {"DelayedStops", 0xf698a0012daa63b3ull, 66, 20, 40},
-    {"DelayedStopsM", 0x046314c00141b54cull, 66, 20, 40},
-    {"Storm01", 0x0d6f6de3707c0f23ull, 43, 13, 43},
-    {"Storm01M", 0x17fdf11d7effc7f0ull, 43, 14, 43},
-    {"Storm02", 0x5ab7e89bf0a32e17ull, 63, 12, 42},
-    {"Storm02M", 0xae05144418043f11ull, 63, 12, 42},
-    {"Storm03", 0x1734fbc73a88fdafull, 41, 17, 41},
-    {"Storm03M", 0x87784b723c37ec66ull, 41, 17, 41},
-    {"Storm04", 0x33ceb62ad976d38aull, 54, 22, 54},
-    {"Storm04M", 0xb06e7fe199931e4aull, 54, 22, 54},
-    {"Storm05", 0x00106a73f4035d2bull, 81, 17, 53},
-    {"Storm05M", 0xdef761ffd71cac33ull, 82, 17, 53},
-    {"Storm06", 0x6bfcdec22c1a1c8full, 40, 11, 40},
-    {"Storm06M", 0x44fe7480122bc682ull, 40, 11, 40},
-    {"Storm07", 0xacff98851a92d473ull, 55, 13, 55},
-    {"Storm07M", 0x196a55d2091dc429ull, 55, 13, 55},
-    {"Storm08", 0x03ba3cc50503307dull, 81, 14, 58},
-    {"Storm08M", 0xcdb1ebd3491998e5ull, 81, 14, 58},
-    {"Storm09", 0xc5746cc50cf41375ull, 48, 21, 48},
-    {"Storm09M", 0x8aa89637b4d04cf0ull, 48, 20, 48},
-    {"Storm10", 0x2697bb1c5389db54ull, 65, 16, 57},
-    {"Storm10M", 0x741a981667c1a302ull, 66, 16, 57},
-    {"Storm11", 0x7cfb0ba740c2806bull, 59, 22, 59},
-    {"Storm11M", 0xcfc4532d945da385ull, 59, 22, 59},
-    {"Storm12", 0x659852f60d3d358cull, 86, 20, 56},
-    {"Storm12M", 0xdb3db1a969f1b59aull, 86, 20, 56},
-    {"Storm13", 0xe613ff94ad1aad2aull, 46, 23, 46},
-    {"Storm13M", 0xf7793304d1dbd532ull, 46, 23, 46},
-    {"Storm14", 0x0b1595a2d45290f2ull, 46, 18, 46},
-    {"Storm14M", 0x9e9a3044d9dbcad8ull, 46, 18, 46},
-    {"Storm15", 0xc2912804f77858fbull, 43, 13, 43},
-    {"Storm15M", 0xf32358c4a29e8066ull, 43, 14, 43},
-    {"Storm16", 0x9f128f923d41d2e7ull, 58, 18, 58},
-    {"Storm16M", 0x72b90fec2e8871d7ull, 58, 18, 58},
-    {"Storm17", 0xd62326206a38e5f5ull, 86, 23, 54},
-    {"Storm17M", 0x9631182cfd1c6023ull, 80, 18, 54},
-    {"Storm18", 0x86e8b0cc2cbda4aeull, 80, 23, 49},
-    {"Storm18M", 0xd9fb27e46899ccd7ull, 80, 23, 49},
-    {"Storm19", 0xe92413fbdc464242ull, 86, 23, 49},
-    {"Storm19M", 0xa9a584e70d470321ull, 86, 23, 49},
-    {"Storm20", 0x93de366f51f2315dull, 45, 12, 42},
-    {"Storm20M", 0x201adc8ab4ea9bdbull, 45, 12, 42},
-    {"Storm21", 0xd4a8eda3db34c6eeull, 47, 14, 47},
-    {"Storm21M", 0xefaa36484eb9c7a1ull, 47, 14, 47},
-    {"Storm22", 0x686821a1adb13279ull, 76, 19, 50},
-    {"Storm22M", 0x28a2c0fefdac67afull, 76, 19, 50},
-    {"Storm23", 0xfac7dcb54dc93113ull, 89, 26, 54},
-    {"Storm23M", 0xe66e15ba3a360e59ull, 89, 26, 54},
-    {"Storm24", 0x9a05f4cc2a37c8b8ull, 54, 25, 54},
-    {"Storm24M", 0xa1f1acfcca37ef51ull, 54, 25, 54},
+    {"SameBarBatch", 0x167ef4263f9ae286ull, 36, 25, 36},
+    {"SameBarBatchM", 0x488225822bf669d0ull, 36, 25, 36},
+    {"CloseOrderAdds", 0x1b5718bfccc88d5bull, 36, 22, 36},
+    {"CloseOrderAddsM", 0xbab50be39f3d0b28ull, 36, 22, 36},
+    {"DelayedStops", 0x43bed101b5c70825ull, 66, 20, 40},
+    {"DelayedStopsM", 0xeebabaa7a380fb84ull, 66, 20, 40},
+    {"Storm01", 0x4fcc1a18f96048beull, 43, 13, 43},
+    {"Storm01M", 0x00cdd69222a72577ull, 43, 14, 43},
+    {"Storm02", 0xc147c03e2f6038feull, 63, 12, 42},
+    {"Storm02M", 0x745faf07c1b57317ull, 63, 12, 42},
+    {"Storm03", 0x662d5ebe04f3918full, 41, 17, 41},
+    {"Storm03M", 0x4b0d6e52556ad140ull, 41, 17, 41},
+    {"Storm04", 0x07c17443f491fb30ull, 54, 24, 54},
+    {"Storm04M", 0x74d239698dac5c24ull, 54, 24, 54},
+    {"Storm05", 0x8c67fec9d289937dull, 80, 17, 53},
+    {"Storm05M", 0xfbdf760609e41925ull, 82, 18, 53},
+    {"Storm06", 0x64b975d6442847b8ull, 40, 13, 40},
+    {"Storm06M", 0x7c34e84d996f62b1ull, 40, 13, 40},
+    {"Storm07", 0x8c50963e152ddba8ull, 55, 13, 55},
+    {"Storm07M", 0xa75412c0c52f6ac1ull, 55, 13, 55},
+    {"Storm08", 0x3c2a5b9c43c4fd89ull, 81, 14, 58},
+    {"Storm08M", 0x7bfabcd35099442cull, 81, 14, 58},
+    {"Storm09", 0x8087e1c554317200ull, 48, 23, 48},
+    {"Storm09M", 0x31d4f5fc5411c31full, 48, 22, 48},
+    {"Storm10", 0xf7007d9d5ea3296eull, 63, 13, 57},
+    {"Storm10M", 0x862537a926bed30eull, 64, 13, 57},
+    {"Storm11", 0x0780237b158be286ull, 59, 23, 59},
+    {"Storm11M", 0x1932b3271b2aaabaull, 59, 23, 59},
+    {"Storm12", 0x2f7a3a3d3b832e58ull, 85, 19, 56},
+    {"Storm12M", 0x6a900d649bc55ad8ull, 85, 19, 56},
+    {"Storm13", 0x97f4432edb19a7e9ull, 46, 25, 46},
+    {"Storm13M", 0x1170d6964f4f90eaull, 46, 25, 46},
+    {"Storm14", 0x5ac38849fb40f365ull, 46, 17, 46},
+    {"Storm14M", 0xc90b1227bf0f3b60ull, 46, 17, 46},
+    {"Storm15", 0x86667ae71fa7953dull, 43, 13, 43},
+    {"Storm15M", 0x1d30c61ffbbb4270ull, 43, 14, 43},
+    {"Storm16", 0x73e4d05238964e31ull, 58, 18, 58},
+    {"Storm16M", 0x7e4c9a223abf773eull, 58, 18, 58},
+    {"Storm17", 0xfdfa329cd436bbf9ull, 83, 21, 54},
+    {"Storm17M", 0x535fe23b5fbfb5eaull, 78, 17, 54},
+    {"Storm18", 0xf12b91d86413533cull, 79, 22, 49},
+    {"Storm18M", 0x979b7bbd26c38a56ull, 79, 22, 49},
+    {"Storm19", 0x2be2f691db8da9c4ull, 81, 20, 49},
+    {"Storm19M", 0x937badd205890225ull, 82, 21, 49},
+    {"Storm20", 0x604f8dc86a777322ull, 43, 10, 42},
+    {"Storm20M", 0x08c037a58815f21eull, 43, 10, 42},
+    {"Storm21", 0xc35dd2c653db38ecull, 47, 14, 47},
+    {"Storm21M", 0xf770bc84f8b963b1ull, 47, 14, 47},
+    {"Storm22", 0x6862e0fd009c1790ull, 76, 19, 50},
+    {"Storm22M", 0xbf55a11e282da39full, 76, 19, 50},
+    {"Storm23", 0xb57c9d2a9d2d519full, 87, 28, 54},
+    {"Storm23M", 0x6b9e5e8f5194fdfbull, 87, 28, 54},
+    {"Storm24", 0x63f5f7e8631c6674ull, 54, 25, 54},
+    {"Storm24M", 0x8ec5900090e03ba1ull, 54, 25, 54},
     {"Legs01", 0x2257c1f1b017aff6ull, 30, 6, 30},
     {"Legs01M", 0xdeeb42cf30042b94ull, 30, 6, 30},
-    {"LegsStops01", 0xe82893532dd3da24ull, 30, 6, 30},
-    {"LegsStops01M", 0x40cde458e42af83dull, 30, 6, 30},
+    {"LegsStops01", 0xcce81db4d82a5c84ull, 30, 6, 30},
+    {"LegsStops01M", 0x26925b94c1b0b053ull, 30, 6, 30},
     {"Legs02", 0x290854a540c0effdull, 30, 6, 30},
     {"Legs02M", 0xa31bffc389143eaaull, 30, 6, 30},
-    {"LegsStops02", 0x7aa8ab78f1f5ada3ull, 30, 6, 30},
-    {"LegsStops02M", 0xa1d4657aea1b015dull, 30, 6, 30},
-    {"Legs03", 0x4a813820bb3a558dull, 30, 6, 30},
-    {"Legs03M", 0xc10d45c7cb3cbee5ull, 30, 6, 30},
-    {"LegsStops03", 0xc02aaa3f7c355e7aull, 30, 6, 30},
-    {"LegsStops03M", 0x55a7fe1ea0fc100aull, 30, 6, 30},
-    {"Legs04", 0x254b1a89ea0388ddull, 30, 6, 30},
-    {"Legs04M", 0x079706336deb5323ull, 30, 6, 30},
-    {"LegsStops04", 0xc6a5620646c92b3cull, 30, 6, 30},
-    {"LegsStops04M", 0xbcad7c107485fbe8ull, 30, 6, 30},
+    {"LegsStops02", 0xf8a76370e77c0288ull, 30, 6, 30},
+    {"LegsStops02M", 0x249639bbcf988992ull, 30, 6, 30},
+    {"Legs03", 0xcc33c2bf5b9e3eb3ull, 30, 6, 30},
+    {"Legs03M", 0xbb57583c687ffd41ull, 30, 6, 30},
+    {"LegsStops03", 0x6bfd3259a98f9a50ull, 30, 6, 30},
+    {"LegsStops03M", 0x649fef9865386a15ull, 30, 6, 30},
+    {"Legs04", 0x8fa244580a1b5d71ull, 30, 6, 30},
+    {"Legs04M", 0xa9104fae5877598dull, 30, 6, 30},
+    {"LegsStops04", 0xd0b576fc1ba1e92aull, 30, 6, 30},
+    {"LegsStops04M", 0x905b7c095270f8b8ull, 30, 6, 30},
     {"Legs05", 0x2b3d7db72415c3ecull, 30, 6, 30},
     {"Legs05M", 0x88fd0678c5020748ull, 30, 6, 30},
-    {"LegsStops05", 0x94435fe6bea6a39dull, 30, 6, 30},
-    {"LegsStops05M", 0x2722fdb103c71c42ull, 30, 6, 30},
+    {"LegsStops05", 0x7ee3974eb7d07a1eull, 30, 6, 30},
+    {"LegsStops05M", 0xf5c4797f33609847ull, 30, 6, 30},
     {"Legs06", 0x6e7d43e693bec002ull, 30, 6, 30},
     {"Legs06M", 0x2fc1828cff3085f2ull, 30, 6, 30},
-    {"LegsStops06", 0x198f7d7e224884c0ull, 30, 6, 30},
-    {"LegsStops06M", 0x507c89b50b4d4b2bull, 30, 6, 30},
-    {"TwoEntries", 0x06f2ecb7c1a3a480ull, 30, 2, 30},
-    {"TwoEntriesM", 0x7c956e01ced10ccbull, 30, 2, 30},
+    {"LegsStops06", 0x0015322d33dc00beull, 30, 6, 30},
+    {"LegsStops06M", 0x3014ef9c76c328adull, 30, 6, 30},
+    {"TwoEntries", 0xef5e45463539ecb2ull, 30, 2, 30},
+    {"TwoEntriesM", 0xa5293744ba522c82ull, 30, 2, 30},
     {"PyramidLots", 0x243689d4eeaf8d3bull, 30, 2, 30},
     {"PyramidLotsM", 0x7c425d1716c9a5a2ull, 30, 2, 30},
-    {"LegBesideClose", 0xfd494f8d3e8228d4ull, 30, 2, 30},
-    {"LegBesideCloseM", 0x4a9e3df3ac353419ull, 30, 2, 30},
+    {"LegBesideClose", 0x1559b022773e0baeull, 30, 2, 30},
+    {"LegBesideCloseM", 0x2b0bb872ebf141d2ull, 30, 2, 30},
     {"TwoLegsOnly", 0x1e97c755ea7f6e5full, 30, 2, 30},
     {"TwoLegsOnlyM", 0x8b4283e07b576d5full, 30, 2, 30},
-    {"LegsApart", 0x64ff417b6bcf212full, 30, 2, 30},
-    {"LegsApartM", 0xaa0c742ddeacc4d5ull, 30, 2, 30},
+    {"LegsApart", 0xaef3fc2d3d2e942dull, 30, 2, 30},
+    {"LegsApartM", 0x650d1b75fc17cdb7ull, 30, 2, 30},
 };

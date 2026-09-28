@@ -381,6 +381,26 @@ std::vector<Scenario> fixtures() {
             }));
     }
 
+    // A market entry and its stop, then a buy stop above, on one bar: the
+    // next bar opens A, stops it out on the way down and reaches B on the
+    // way up, from flat after an opening of the same bar -- one opening from
+    // flat per bar, so B is refused there and re-armed at the close (the
+    // throttled reopen; lane W3B-ENG-GRID: the random runs no longer reach
+    // it).
+    out.push_back(scenario("ThrottledStopEntry", Setup{base_config()},
+        with(wave(40), {mk(11, 101, 104, 98, 103)}),
+        [](QuietHost& h, int i, const Bar&) {
+            if (i == 10) {
+                h.strategy_entry("A", true);
+                h.strategy_exit("XA", "A", kNa, 99.5);
+                h.strategy_entry("B", true, kNa, 103.5);
+            }
+            if (i == 20) {
+                h.strategy_cancel_all();
+                h.strategy_close_all();
+            }
+        }));
+
     // A parent limit pending below the price with its bracket staged
     // behind it, filled many bars later.
     out.push_back(scenario("PendingParent", Setup{base_config()},
@@ -977,8 +997,13 @@ void every_run_matches_the_base_tree() {
     }
     std::printf("  pinned: %zu of %zu runs match the base tree; the battery books %zu "
                 "margin-call rows\n", matched, pinned, margin_calls);
-    // The witness's own margin-call regime (the corpus has none).
-    CHECK(margin_calls >= 24);
+    // The witness's own margin-call regime (the corpus has none). INT28: the
+    // battery books 62 margin-call rows on main 962960b3 and after lane
+    // W3B-ENG-GRID's picks, 54 after W5-ENG-MARGIN-V6's, 46 after
+    // W4-ENG-POOC-SAMEPASS's F08 to BRK and 10 from its F14 on -- the entry-bar
+    // calls on the slipped percent shorts TradingView never opens
+    // (tests/fixtures/pooc_short_slip_admission).
+    CHECK(margin_calls >= 10);
 }
 #endif
 

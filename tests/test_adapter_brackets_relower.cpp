@@ -1066,11 +1066,18 @@ struct Named {
 // so the definition is not anchorable and the fill point submits the seeded
 // leg (TradingView's start, tests/test_pending_entry_trail_tapes.cpp). No
 // closed row, equity figure or book digest here moved; only these counts did.
+// INT28 re-pinned rel-exit-before-entry from {4,4,0} to {0,0,0} (and its book
+// digest, kRelExitBeforeEntry below) for lane W3B-ENG-GRID's void rule: the
+// exit it declares on every bar before the entry call is void while its entry
+// neither exists nor rests (TradingView's tests/fixtures/exit_queue w3f05-s18 /
+// -s21), so no relative leg waits to be anchored at the entry's fill; the next
+// bar's call resolves against the live position. Its closed rows and equity
+// did not move; no other shape's counts did.
 constexpr Named kShapes[] = {
     {"RelBracketTp", "rel-bracket-tp", Shape::RelBracketTp, 1, {2, 2, 0}},
     {"RelBracketSl", "rel-bracket-sl", Shape::RelBracketSl, 1, {2, 2, 0}},
     {"RelBracketEveryBar", "rel-bracket-every-bar", Shape::RelBracketEveryBar, 1, {2, 2, 0}},
-    {"RelExitBeforeEntry", "rel-exit-before-entry", Shape::RelExitBeforeEntry, 1, {4, 4, 0}},
+    {"RelExitBeforeEntry", "rel-exit-before-entry", Shape::RelExitBeforeEntry, 1, {0, 0, 0}},
     {"RelTrailOneShot", "rel-trail-one-shot", Shape::RelTrailOneShot, 1, {1, 1, 0}},
     {"RelTrailOffset", "rel-trail-offset", Shape::RelTrailOffset, 1, {0, 0, 0}},
     {"RelTrailZero", "rel-trail-zero", Shape::RelTrailZero, 1, {1, 1, 0}},
@@ -1180,7 +1187,9 @@ constexpr Row kRelExitBeforeEntry_rows[] = {
     {1700000180000LL, 1700000300000LL, 100.75, 103.75, 2, 6, 1, 0},
     {1700000660000LL, 1700000720000LL, 97.5, 100.5, 2, 6, 1, 0},
 };
-constexpr Pinned kRelExitBeforeEntry = {kRelExitBeforeEntry_rows, 2, 10012, 0, 0, 0, 0x38323ef3655f7398ULL};
+// expectation corrected (INT28, kRelExitBeforeEntry, 1 of 1 values), because lane W3B-ENG-GRID's void rule (an exit whose entry neither exists nor rests is void: the call folds its flag, reserves nothing, holds no queue place and is withdrawn at its entry's opening); harvested with PINEFORGE_R4D_HARVEST on the integrated tree (main 962960b3 and the wave-J picks) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
+//   {kRelExitBeforeEntry_rows, 2, 10012, 0, 0, 0, 0x38323ef3655f7398ULL} -> {kRelExitBeforeEntry_rows, 2, 10012, 0, 0, 0, 0x5a69371f6ad47271ULL} [W3B void exit]
+constexpr Pinned kRelExitBeforeEntry = {kRelExitBeforeEntry_rows, 2, 10012, 0, 0, 0, 0x5a69371f6ad47271ULL};
 
 constexpr Row kRelTrailOneShot_rows[] = {
     {1700000060000LL, 1700000240000LL, 100, 102.5, 2, 5, 1, 0},

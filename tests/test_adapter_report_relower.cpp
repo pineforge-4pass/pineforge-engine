@@ -358,6 +358,11 @@ constexpr Point kOrdinary_curve[] = {
 //   9654818568811123148ull -> 17382764399684682567ull [H-THIN]
 //   7514399512975361670ull -> 5569220102658162789ull [H-THIN]
 //   375912627396258150ull -> 5858716210019128261ull [H-THIN]
+// expectation corrected (INT28, kOrdinary_hashes, 4 of 24 values), because lane W3B-ENG-GRID's F02 rule A (a strategy.close call site's fill books against its first call's id and spills over the oldest ledger records: the close ledger's records fold into the source-adapter state where more than one is kept, and the retired reservation maps fold empty); harvested with PINEFORGE_R1_HARVEST on the integrated tree (main 962960b3 and the wave-J picks) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
+//   8818039625616895170ull -> 5672878236048570851ull [W3B F02 first id]
+//   17382764399684682567ull -> 10786892065294821214ull [W3B F02 first id]
+//   5569220102658162789ull -> 7242027231279883764ull [W3B F02 first id]
+//   5858716210019128261ull -> 14002008052360269184ull [W3B F02 first id]
 constexpr std::uint64_t kOrdinary_hashes[] = {
     243601838968427296ull,
     14082045497352522076ull,
@@ -379,10 +384,10 @@ constexpr std::uint64_t kOrdinary_hashes[] = {
     16710877784426826175ull,
     12222101465241554407ull,
     1466897115669479138ull,
-    8818039625616895170ull,
-    17382764399684682567ull,
-    5569220102658162789ull,
-    5858716210019128261ull,
+    5672878236048570851ull,
+    10786892065294821214ull,
+    7242027231279883764ull,
+    14002008052360269184ull,
 };
 constexpr Row kOrdinary_rows[] = {
     {1736121780000LL, 1736122140000LL, 101.5, 100.5, 2, -6, 4, 0.5, 5, 1, 0},
@@ -520,6 +525,15 @@ constexpr Point kCalcOnOrderFills_curve[] = {
 //   1572183010617309931ull -> 565050300121405896ull [H-THIN]
 //   6980933373957006777ull -> 12671085486866481742ull [H-THIN]
 //   3071340150260882121ull -> 9604569239120914630ull [H-THIN]
+// expectation corrected (INT28, kCalcOnOrderFills_hashes, 8 of 24 values), because lane W3B-ENG-GRID's F02 rule A (a strategy.close call site's fill books against its first call's id and spills over the oldest ledger records: the close ledger's records fold into the source-adapter state where more than one is kept, and the retired reservation maps fold empty); harvested with PINEFORGE_R1_HARVEST on the integrated tree (main 962960b3 and the wave-J picks) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
+//   9827199985728418388ull -> 17170280433164901487ull [W3B F02 first id]
+//   16177976828038662588ull -> 9640930905544679571ull [W3B F02 first id]
+//   12444021166412526756ull -> 2056628341985657031ull [W3B F02 first id]
+//   12728919766761920669ull -> 14151918231987638370ull [W3B F02 first id]
+//   17328862593452428978ull -> 12382040577929627209ull [W3B F02 first id]
+//   565050300121405896ull -> 9481163607627131039ull [W3B F02 first id]
+//   12671085486866481742ull -> 14323795256978485429ull [W3B F02 first id]
+//   9604569239120914630ull -> 14731117152108241157ull [W3B F02 first id]
 constexpr std::uint64_t kCalcOnOrderFills_hashes[] = {
     8076983691197291309ull,
     2440556825337174781ull,
@@ -537,14 +551,14 @@ constexpr std::uint64_t kCalcOnOrderFills_hashes[] = {
     9016627554631535731ull,
     16088314143365594964ull,
     13783309705914047335ull,
-    9827199985728418388ull,
-    16177976828038662588ull,
-    12444021166412526756ull,
-    12728919766761920669ull,
-    17328862593452428978ull,
-    565050300121405896ull,
-    12671085486866481742ull,
-    9604569239120914630ull,
+    17170280433164901487ull,
+    9640930905544679571ull,
+    2056628341985657031ull,
+    14151918231987638370ull,
+    12382040577929627209ull,
+    9481163607627131039ull,
+    14323795256978485429ull,
+    14731117152108241157ull,
 };
 constexpr Row kCalcOnOrderFills_rows[] = {
     {1736121780000LL, 1736122080000LL, 101.5, 100.5, 2, -6, 4, 0.5, 4.5, 1, 0},
@@ -682,6 +696,11 @@ constexpr Point kSuppressedTail_curve[] = {
 //   9654818568811123148ull -> 17382764399684682567ull [H-THIN]
 //   7514399512975361670ull -> 5569220102658162789ull [H-THIN]
 //   7096719386424781198ull -> 8558103254181104877ull [H-THIN]
+// expectation corrected (INT28, kSuppressedTail_hashes, 4 of 24 values), because lane W3B-ENG-GRID's F02 rule A (a strategy.close call site's fill books against its first call's id and spills over the oldest ledger records: the close ledger's records fold into the source-adapter state where more than one is kept, and the retired reservation maps fold empty); harvested with PINEFORGE_R1_HARVEST on the integrated tree (main 962960b3 and the wave-J picks) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
+//   8818039625616895170ull -> 5672878236048570851ull [W3B F02 first id]
+//   17382764399684682567ull -> 10786892065294821214ull [W3B F02 first id]
+//   5569220102658162789ull -> 7242027231279883764ull [W3B F02 first id]
+//   8558103254181104877ull -> 13063501112185034820ull [W3B F02 first id]
 constexpr std::uint64_t kSuppressedTail_hashes[] = {
     243601838968427296ull,
     14082045497352522076ull,
@@ -703,10 +722,10 @@ constexpr std::uint64_t kSuppressedTail_hashes[] = {
     16710877784426826175ull,
     12222101465241554407ull,
     1466897115669479138ull,
-    8818039625616895170ull,
-    17382764399684682567ull,
-    5569220102658162789ull,
-    8558103254181104877ull,
+    5672878236048570851ull,
+    10786892065294821214ull,
+    7242027231279883764ull,
+    13063501112185034820ull,
 };
 constexpr Row kSuppressedTail_rows[] = {
     {1736121780000LL, 1736122140000LL, 101.5, 100.5, 2, -6, 4, 0.5, 5, 1, 0},

@@ -99,6 +99,18 @@
 // same harvest against the base 09f0bbda reproduces every old row. (The
 // counts are the lane's tree's; INT26 pins the integrated tree's trades with
 // this pick and moves the digests in its v19 hash re-pin.)
+// Re-harvested once more for INT28, on the integrated tree (main 962960b3 and
+// the wave-J picks): 142 runs pin a new digest, each marked with the pick(s)
+// at whose boundary it moved (a harvest at every pick) and checked against an
+// instrumented copy of the adapter that shows each pick's rule firing in the
+// run -- lane W3B-ENG-GRID's void rule in 112, its F02 ledger booking in 105
+// and F02 first id in 95, W4 F08 in 30 (the process_orders_on_close close
+// pass), W3B g1 in 18, W5 C1 in 12, W8A R-B and R1-CONSOLIDATE R1 in 8 each,
+// TVDEF-DROPS R1 in 6, W4 F19c in 4, W5 MK, W8E C1, W4 MCSIZE, W8A R3 and
+// R1-CONSOLIDATE R-A in 2 each, W8D in 1; 105 move at two picks or more, and
+// in Storm12 (magnifier off and on) R1-CONSOLIDATE R1 supersedes W3B's ledger
+// booking. tests/test_publication_witness_pinned.inc lists each. The same
+// harvest against main 962960b3 reproduces every old row.
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_strategy_host.hpp>
 

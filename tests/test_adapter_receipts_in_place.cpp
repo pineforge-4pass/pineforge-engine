@@ -39,6 +39,19 @@
 // fc7aad62 library with -DPINEFORGE_P4_HARVEST, which prints the observed
 // values as the initializers below instead of checking them (the allocation
 // half is skipped there). Rebuild them the same way; never edit one by hand.
+//
+// INT28 re-harvested them the same way on the integrated tree (main 962960b3
+// and the wave-J picks): the Revive, Groups and StopLimit scenarios move
+// (Groups and StopLimit with the magnifier off and on) -- at lane
+// W3B-ENG-GRID's F02 picks (every reducing fill books the close ledger, and a
+// close site's fill books its first call's id; tests/fixtures/grid_close), at
+// the pick of lane W8A-SIGSTATE-1's R-B (a pending LIMIT entry no longer counts
+// against pyramiding) and, with three of Groups' trades, at lane
+// R1-CONSOLIDATE's R-A (the buy LIMIT entries an opening price reached fill
+// after the MARKET orders, lowest limit first; tests/fixtures/open_fill_order).
+// The note above the pinned data lists each declaration with its picks; an
+// instrumented copy of the adapter prints each rule's marker in its scenario,
+// and the same harvest against main reproduces every old value.
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_strategy_host.hpp>
 
@@ -421,6 +434,26 @@ void emit(Scenario scenario, bool magnifier, const Observed& got) {
 //   10876124900683281275ull -> 8939974732258322358ull [H-THIN]
 //   10020927749345911019ull -> 2229197510643109192ull [H-THIN]
 //   8691527508212156618ull -> 5373392566564228697ull [H-THIN]
+// INT28 re-harvested it once on the integrated tree (main 962960b3 and the
+// wave-J picks) with PINEFORGE_P4_HARVEST; the same harvest against main
+// reproduces every old value. The Revive, Groups and StopLimit scenarios move
+// (Groups and StopLimit magnifier off and on). Each moved declaration, with
+// the lines of it that move and the pick(s) at whose boundary they moved (a
+// harvest at every pick; an instrumented copy of the adapter, scratch only,
+// shows each pick's rule firing in the scenario on the final tree):
+//   kGroupsMag_at_bar: 15 of 20 lines [R1-CONSOLIDATE R-A; W8A R-B]
+//   kGroupsMag_final: 1 of 1 lines [R1-CONSOLIDATE R-A; W8A R-B]
+//   kGroupsMag_folded: 31 of 41 lines [R1-CONSOLIDATE R-A; W8A R-B]
+//   kGroupsMag_rows: 8 of 10 lines [R1-CONSOLIDATE R-A; W3B F02 first id; W3B F02 ledger booking; W8A R-B]
+//   kGroupsMag_trades: 3 of 9 lines [R1-CONSOLIDATE R-A]
+//   kGroups_at_bar: 15 of 20 lines [R1-CONSOLIDATE R-A; W8A R-B]
+//   kGroups_final: 1 of 1 lines [R1-CONSOLIDATE R-A; W8A R-B]
+//   kGroups_folded: 31 of 41 lines [R1-CONSOLIDATE R-A; W8A R-B]
+//   kGroups_rows: 8 of 10 lines [R1-CONSOLIDATE R-A; W3B F02 first id; W3B F02 ledger booking; W8A R-B]
+//   kGroups_trades: 3 of 9 lines [R1-CONSOLIDATE R-A]
+//   kRevive_rows: 1 of 2 lines [W3B F02 ledger booking]
+//   kStopLimitMag_rows: 5 of 10 lines [W3B F02 ledger booking]
+//   kStopLimit_rows: 5 of 10 lines [W3B F02 ledger booking]
 constexpr std::uint64_t kDeclined_rows[] = {
     10078075251929413260ull, 9021013497480718974ull, 5211498519342463915ull, 8693678377712780894ull,
     3263497715304832018ull, 4887532512140189270ull, 3474228148466484630ull, 8939974732258322358ull,
@@ -573,7 +606,7 @@ constexpr Trade kDeclinedMag_trades[] = {
 //   10980118139031631968ull -> 5462196043591698097ull [H-THIN]
 //   17030525150602589392ull -> 2747991239711285631ull [H-THIN]
 constexpr std::uint64_t kRevive_rows[] = {
-    13853830474015623389ull, 4728749920725358539ull, 4849688479110990770ull, 16929648573929730497ull,
+    13853830474015623389ull, 4728749920725358539ull, 4849688479110990770ull, 13321609604203068862ull,
     1041650372773372953ull, 5462196043591698097ull, 2747991239711285631ull,
 };
 constexpr std::uint64_t kRevive_at_bar[] = {
@@ -1522,14 +1555,14 @@ constexpr Trade kBracketsMag_trades[] = {
 constexpr std::uint64_t kGroups_rows[] = {
     16343339797501156050ull, 4412441122235541001ull, 8796315700613324416ull, 7395320384889894535ull,
     14779897915981054858ull, 12902321761157770999ull, 13233007585699491660ull, 4759091960862828143ull,
-    9823824249826547972ull, 10222432195471458288ull, 12268080935222816256ull, 1820590039511046510ull,
-    13378031530146436277ull, 12953190010614641206ull, 1053166407871468103ull, 9272374160641534696ull,
-    10364329263136600283ull, 4225956051004008949ull, 7108588782921604133ull, 5489213286228074399ull,
-    10616002336161510798ull, 9622546459129830553ull, 944039958041978562ull, 15116276931277952764ull,
-    10604949906509802561ull, 2073356378818895203ull, 2582840377395668879ull, 2562757827364035110ull,
-    12699965404948142476ull, 1195332705294901458ull, 16972648823711764497ull, 4481092489104066192ull,
-    7005130885374206459ull, 6610411880574253007ull, 3204572366595249610ull, 2120665229545761995ull,
-    6282585683572106081ull, 12064630322548111510ull, 1478230385172911488ull, 11603812731166869657ull,
+    9823824249826547972ull, 3367974332034477750ull, 2753028355014566561ull, 10234103761436216838ull,
+    11596526912649217871ull, 11244016696670400502ull, 5498200097845717949ull, 1285712316434115110ull,
+    7752081048512699947ull, 14957227298605160858ull, 2797786839839741211ull, 17524508282913119032ull,
+    258830461705510047ull, 5258299412396125479ull, 11391672083081477777ull, 11337637995714223416ull,
+    4145221672849159830ull, 18129308899206687414ull, 157724745191766488ull, 2858839548381076336ull,
+    3558242964956867075ull, 4785185599700229079ull, 1725255261693593403ull, 5113959160023798689ull,
+    2130444047323073853ull, 1066578971090051403ull, 2037921988155471324ull, 2100850305843993844ull,
+    5021911541248681164ull, 3312743446207326357ull, 3959249222693067018ull, 6790059673110986705ull,
 };
 constexpr std::uint64_t kGroups_at_bar[] = {
     4ull, 0ull, 9ull, 0ull,
@@ -1537,21 +1570,21 @@ constexpr std::uint64_t kGroups_at_bar[] = {
     31ull, 28ull, 36ull, 28ull,
     42ull, 40ull, 53ull, 51ull,
     58ull, 51ull, 63ull, 51ull,
-    69ull, 51ull, 74ull, 51ull,
-    81ull, 51ull, 86ull, 51ull,
-    91ull, 51ull, 102ull, 98ull,
-    107ull, 98ull, 112ull, 98ull,
-    122ull, 119ull, 127ull, 119ull,
-    137ull, 134ull, 142ull, 134ull,
-    147ull, 134ull, 156ull, 152ull,
-    161ull, 152ull, 166ull, 152ull,
-    173ull, 152ull, 178ull, 152ull,
-    189ull, 188ull, 194ull, 188ull,
-    202ull, 199ull, 213ull, 211ull,
-    218ull, 211ull, 223ull, 211ull,
-    230ull, 211ull, 235ull, 211ull,
-    242ull, 211ull, 247ull, 211ull,
-    252ull, 211ull, 260ull, 257ull,
+    70ull, 51ull, 75ull, 51ull,
+    82ull, 51ull, 87ull, 51ull,
+    92ull, 51ull, 107ull, 105ull,
+    112ull, 105ull, 117ull, 105ull,
+    127ull, 124ull, 132ull, 124ull,
+    142ull, 139ull, 147ull, 139ull,
+    152ull, 139ull, 161ull, 157ull,
+    166ull, 157ull, 171ull, 157ull,
+    178ull, 157ull, 183ull, 157ull,
+    194ull, 193ull, 199ull, 193ull,
+    207ull, 204ull, 218ull, 216ull,
+    223ull, 216ull, 228ull, 216ull,
+    235ull, 216ull, 240ull, 216ull,
+    247ull, 216ull, 252ull, 216ull,
+    257ull, 216ull, 265ull, 262ull,
 };
 constexpr std::uint64_t kGroups_folded[] = {
     4ull, 0ull, 4ull, 0ull,
@@ -1564,49 +1597,49 @@ constexpr std::uint64_t kGroups_folded[] = {
     53ull, 51ull, 53ull, 51ull,
     58ull, 51ull, 58ull, 51ull,
     63ull, 51ull, 63ull, 51ull,
-    69ull, 51ull, 69ull, 51ull,
-    74ull, 51ull, 74ull, 51ull,
-    81ull, 51ull, 81ull, 51ull,
-    86ull, 51ull, 86ull, 51ull,
-    91ull, 51ull, 91ull, 51ull,
-    102ull, 98ull, 102ull, 98ull,
-    107ull, 98ull, 107ull, 98ull,
-    112ull, 98ull, 112ull, 98ull,
-    122ull, 119ull, 122ull, 119ull,
-    127ull, 119ull, 127ull, 119ull,
-    137ull, 134ull, 137ull, 134ull,
-    142ull, 134ull, 142ull, 134ull,
-    147ull, 134ull, 147ull, 134ull,
-    156ull, 152ull, 156ull, 152ull,
-    161ull, 152ull, 161ull, 152ull,
-    166ull, 152ull, 166ull, 152ull,
-    173ull, 152ull, 173ull, 152ull,
-    178ull, 152ull, 178ull, 152ull,
-    189ull, 188ull, 189ull, 188ull,
-    194ull, 188ull, 194ull, 188ull,
-    202ull, 199ull, 202ull, 199ull,
-    213ull, 211ull, 213ull, 211ull,
-    218ull, 211ull, 218ull, 211ull,
-    223ull, 211ull, 223ull, 211ull,
-    230ull, 211ull, 230ull, 211ull,
-    235ull, 211ull, 235ull, 211ull,
-    242ull, 211ull, 242ull, 211ull,
-    247ull, 211ull, 247ull, 211ull,
-    252ull, 211ull, 252ull, 211ull,
-    260ull, 257ull, 260ull, 257ull,
-    260ull, 257ull,
+    70ull, 51ull, 70ull, 51ull,
+    75ull, 51ull, 75ull, 51ull,
+    82ull, 51ull, 82ull, 51ull,
+    87ull, 51ull, 87ull, 51ull,
+    92ull, 51ull, 92ull, 51ull,
+    107ull, 105ull, 107ull, 105ull,
+    112ull, 105ull, 112ull, 105ull,
+    117ull, 105ull, 117ull, 105ull,
+    127ull, 124ull, 127ull, 124ull,
+    132ull, 124ull, 132ull, 124ull,
+    142ull, 139ull, 142ull, 139ull,
+    147ull, 139ull, 147ull, 139ull,
+    152ull, 139ull, 152ull, 139ull,
+    161ull, 157ull, 161ull, 157ull,
+    166ull, 157ull, 166ull, 157ull,
+    171ull, 157ull, 171ull, 157ull,
+    178ull, 157ull, 178ull, 157ull,
+    183ull, 157ull, 183ull, 157ull,
+    194ull, 193ull, 194ull, 193ull,
+    199ull, 193ull, 199ull, 193ull,
+    207ull, 204ull, 207ull, 204ull,
+    218ull, 216ull, 218ull, 216ull,
+    223ull, 216ull, 223ull, 216ull,
+    228ull, 216ull, 228ull, 216ull,
+    235ull, 216ull, 235ull, 216ull,
+    240ull, 216ull, 240ull, 216ull,
+    247ull, 216ull, 247ull, 216ull,
+    252ull, 216ull, 252ull, 216ull,
+    257ull, 216ull, 257ull, 216ull,
+    265ull, 262ull, 265ull, 262ull,
+    265ull, 262ull,
 };
 // expectation corrected: kGroups_final 11093578271132015941ull -> 2748401044783380800ull, because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); receipt cursors and trades did not move.
 // expectation corrected (v19-E): kGroups_final 2748401044783380800ull -> 10203291295434148760ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the receipt bars, folded counts and trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
 // expectation corrected (V19-FIX): kGroups_final 10203291295434148760ull -> 14459029476982242904ull, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the receipt bars, folded counts and trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree.
 // expectation corrected (INT26 v19 hash re-pin): kGroups_final 14459029476982242904ull -> 11603812731166869657ull [H-THIN], because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the receipt bars, folded counts and trades did not move.
-constexpr std::uint64_t kGroups_final = 11603812731166869657ull;
+constexpr std::uint64_t kGroups_final = 6790059673110986705ull;
 constexpr Trade kGroups_trades[] = {
     {1736121840000LL, 1736122020000LL, 102.25, 100.75, 1, 0},
     {1736122020000LL, 1736122500000LL, 100.25, 100.5, 2, 0},
-    {1736122500000LL, 1736122500000LL, 100.5, 100.5, 2, 0},
-    {1736122680000LL, 1736122800000LL, 101, 102.5, 1, 0},
-    {1736122680000LL, 1736122980000LL, 101, 101, 1, 0},
+    {1736122500000LL, 1736122800000LL, 100.5, 102.5, 1, 0},
+    {1736122500000LL, 1736122980000LL, 100.5, 101, 1, 0},
+    {1736122680000LL, 1736122980000LL, 101, 101, 2, 0},
     {1736123280000LL, 1736123400000LL, 102.25, 100.75, 1, 0},
     {1736123280000LL, 1736123400000LL, 102.75, 100.75, 1, 0},
     {1736123280000LL, 1736123460000LL, 102.75, 100.75, 1, 0},
@@ -1780,14 +1813,14 @@ constexpr Trade kGroups_trades[] = {
 constexpr std::uint64_t kGroupsMag_rows[] = {
     2680312739779497464ull, 822058034361535600ull, 3962469670734696157ull, 17411473840245726690ull,
     5739216726257722739ull, 4823834691276900811ull, 14557402943266793758ull, 17153420186503897123ull,
-    11456037253658883689ull, 2071497720185716146ull, 10228359593541992710ull, 8164374031973170202ull,
-    14741153401126253421ull, 5321723665543660526ull, 13847739486469904387ull, 5160912244748048563ull,
-    9669498150986227540ull, 8947635553433824973ull, 12178890551572236268ull, 5673400076925890495ull,
-    15315129035357191511ull, 13281596230891049428ull, 4615956555268131813ull, 5864244316711809037ull,
-    1805681795225876151ull, 3885225909948070556ull, 16301392942591338516ull, 16771933549340211026ull,
-    1873451560715463970ull, 8712225159834374858ull, 3729496159990057708ull, 1612160720622215895ull,
-    5717348211442227590ull, 2472676727577223345ull, 8470082562618443630ull, 1840587632070777498ull,
-    15629226293335228938ull, 2022458278016162571ull, 13820365368293950247ull, 7247005295497143736ull,
+    11456037253658883689ull, 14077157578456809561ull, 1876187231412126066ull, 7584349632232999827ull,
+    12772103684118ull, 13157147373266460055ull, 6490629001336978734ull, 1176706407849522005ull,
+    5208174571215505949ull, 17071647794496085499ull, 2965608374461372368ull, 259229827137108988ull,
+    17260710127192181451ull, 6549896198799679268ull, 5279834849193113775ull, 10588095508092492904ull,
+    4656739585812177996ull, 13276070941979300526ull, 4843070621691156340ull, 14074819260325058502ull,
+    12751671947014392855ull, 15852405633363321893ull, 7053518707971088904ull, 9399723714235314627ull,
+    15921359042335171022ull, 13466328171483187858ull, 3230129781500106067ull, 5531959223917165545ull,
+    10579750083708344055ull, 1415069705906409020ull, 213863451962614233ull, 8643042297986607011ull,
 };
 constexpr std::uint64_t kGroupsMag_at_bar[] = {
     4ull, 0ull, 9ull, 0ull,
@@ -1795,21 +1828,21 @@ constexpr std::uint64_t kGroupsMag_at_bar[] = {
     31ull, 0ull, 36ull, 0ull,
     42ull, 0ull, 53ull, 0ull,
     58ull, 0ull, 63ull, 0ull,
-    69ull, 0ull, 74ull, 0ull,
-    81ull, 0ull, 86ull, 0ull,
-    91ull, 0ull, 102ull, 0ull,
-    107ull, 0ull, 112ull, 0ull,
-    122ull, 0ull, 127ull, 0ull,
-    137ull, 0ull, 142ull, 0ull,
-    147ull, 0ull, 156ull, 0ull,
-    161ull, 0ull, 166ull, 0ull,
-    173ull, 0ull, 178ull, 0ull,
-    188ull, 0ull, 193ull, 0ull,
-    201ull, 0ull, 212ull, 0ull,
-    217ull, 0ull, 222ull, 0ull,
-    229ull, 0ull, 234ull, 0ull,
-    241ull, 0ull, 246ull, 0ull,
-    251ull, 0ull, 259ull, 0ull,
+    70ull, 0ull, 75ull, 0ull,
+    82ull, 0ull, 87ull, 0ull,
+    92ull, 0ull, 107ull, 0ull,
+    112ull, 0ull, 117ull, 0ull,
+    127ull, 0ull, 132ull, 0ull,
+    142ull, 0ull, 147ull, 0ull,
+    152ull, 0ull, 161ull, 0ull,
+    166ull, 0ull, 171ull, 0ull,
+    178ull, 0ull, 183ull, 0ull,
+    193ull, 0ull, 198ull, 0ull,
+    206ull, 0ull, 217ull, 0ull,
+    222ull, 0ull, 227ull, 0ull,
+    234ull, 0ull, 239ull, 0ull,
+    246ull, 0ull, 251ull, 0ull,
+    256ull, 0ull, 264ull, 0ull,
 };
 constexpr std::uint64_t kGroupsMag_folded[] = {
     4ull, 0ull, 4ull, 0ull,
@@ -1822,49 +1855,49 @@ constexpr std::uint64_t kGroupsMag_folded[] = {
     53ull, 0ull, 53ull, 0ull,
     58ull, 0ull, 58ull, 0ull,
     63ull, 0ull, 63ull, 0ull,
-    69ull, 0ull, 69ull, 0ull,
-    74ull, 0ull, 74ull, 0ull,
-    81ull, 0ull, 81ull, 0ull,
-    86ull, 0ull, 86ull, 0ull,
-    91ull, 0ull, 91ull, 0ull,
-    102ull, 0ull, 102ull, 0ull,
+    70ull, 0ull, 70ull, 0ull,
+    75ull, 0ull, 75ull, 0ull,
+    82ull, 0ull, 82ull, 0ull,
+    87ull, 0ull, 87ull, 0ull,
+    92ull, 0ull, 92ull, 0ull,
     107ull, 0ull, 107ull, 0ull,
     112ull, 0ull, 112ull, 0ull,
-    122ull, 0ull, 122ull, 0ull,
+    117ull, 0ull, 117ull, 0ull,
     127ull, 0ull, 127ull, 0ull,
-    137ull, 0ull, 137ull, 0ull,
+    132ull, 0ull, 132ull, 0ull,
     142ull, 0ull, 142ull, 0ull,
     147ull, 0ull, 147ull, 0ull,
-    156ull, 0ull, 156ull, 0ull,
+    152ull, 0ull, 152ull, 0ull,
     161ull, 0ull, 161ull, 0ull,
     166ull, 0ull, 166ull, 0ull,
-    173ull, 0ull, 173ull, 0ull,
+    171ull, 0ull, 171ull, 0ull,
     178ull, 0ull, 178ull, 0ull,
-    188ull, 0ull, 188ull, 0ull,
+    183ull, 0ull, 183ull, 0ull,
     193ull, 0ull, 193ull, 0ull,
-    201ull, 0ull, 201ull, 0ull,
-    212ull, 0ull, 212ull, 0ull,
+    198ull, 0ull, 198ull, 0ull,
+    206ull, 0ull, 206ull, 0ull,
     217ull, 0ull, 217ull, 0ull,
     222ull, 0ull, 222ull, 0ull,
-    229ull, 0ull, 229ull, 0ull,
+    227ull, 0ull, 227ull, 0ull,
     234ull, 0ull, 234ull, 0ull,
-    241ull, 0ull, 241ull, 0ull,
+    239ull, 0ull, 239ull, 0ull,
     246ull, 0ull, 246ull, 0ull,
     251ull, 0ull, 251ull, 0ull,
-    259ull, 0ull, 259ull, 0ull,
-    259ull, 0ull,
+    256ull, 0ull, 256ull, 0ull,
+    264ull, 0ull, 264ull, 0ull,
+    264ull, 0ull,
 };
 // expectation corrected: kGroupsMag_final 8471333527175518852ull -> 17786987883651578348ull, because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); receipt cursors and trades did not move.
 // expectation corrected (v19-E): kGroupsMag_final 17786987883651578348ull -> 12557658352255323163ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the receipt bars, folded counts and trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
 // expectation corrected (V19-FIX): kGroupsMag_final 12557658352255323163ull -> 16431710829567235323ull, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the receipt bars, folded counts and trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree.
 // expectation corrected (INT26 v19 hash re-pin): kGroupsMag_final 16431710829567235323ull -> 7247005295497143736ull [H-THIN], because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the receipt bars, folded counts and trades did not move.
-constexpr std::uint64_t kGroupsMag_final = 7247005295497143736ull;
+constexpr std::uint64_t kGroupsMag_final = 8643042297986607011ull;
 constexpr Trade kGroupsMag_trades[] = {
     {1736121840000LL, 1736122020000LL, 102.25, 100.75, 1, 0},
     {1736122020000LL, 1736122500000LL, 100.25, 100.5, 2, 0},
-    {1736122500000LL, 1736122500000LL, 100.5, 100.5, 2, 0},
-    {1736122680000LL, 1736122800000LL, 101, 102.5, 1, 0},
-    {1736122680000LL, 1736122980000LL, 101, 101, 1, 0},
+    {1736122500000LL, 1736122800000LL, 100, 102.5, 1, 0},
+    {1736122500000LL, 1736122980000LL, 100, 101, 1, 0},
+    {1736122680000LL, 1736122980000LL, 101, 101, 2, 0},
     {1736123280000LL, 1736123400000LL, 102.25, 100.5, 1, 0},
     {1736123280000LL, 1736123400000LL, 102.75, 100.5, 1, 0},
     {1736123280000LL, 1736123460000LL, 102.75, 100.75, 1, 0},
@@ -2036,14 +2069,14 @@ constexpr Trade kGroupsMag_trades[] = {
 //   9214756763675162553ull -> 542461356767618432ull [H-THIN]
 //   6336494971372918338ull -> 13852676117274540777ull [H-THIN]
 constexpr std::uint64_t kStopLimit_rows[] = {
-    10950004051556324382ull, 14490347146816688448ull, 17137431077388642227ull, 2067378368474728109ull,
-    11488424314019716432ull, 8954327035592863039ull, 7512665423720105326ull, 4187947268963235259ull,
+    10950004051556324382ull, 14490347146816688448ull, 17137431077388642227ull, 16572291607211202616ull,
+    14716844791625804409ull, 8954327035592863039ull, 7512665423720105326ull, 4187947268963235259ull,
     2913839783495075163ull, 17362053743420220567ull, 18277069102810285906ull, 6966128010082440393ull,
-    343766021385529931ull, 14896797560397420035ull, 17434159485109243471ull, 6133926189978579814ull,
-    13535889090349139748ull, 7154291922301271050ull, 12262784895722576372ull, 12762159079513717323ull,
+    343766021385529931ull, 8737535290161095366ull, 3624930207816781150ull, 6133926189978579814ull,
+    13535889090349139748ull, 7154291922301271050ull, 13948611925394526661ull, 18113377713059116506ull,
     6211630995163031141ull, 15698793793400314809ull, 9224825516139358046ull, 3897555601472887486ull,
     7742563012562507868ull, 6030704080576753327ull, 1172792760249453492ull, 215530794059409427ull,
-    1515537412314014355ull, 8129234433613561553ull, 7238089528421731329ull, 9745351952936386365ull,
+    1515537412314014355ull, 8864479424312686072ull, 7238089528421731329ull, 9745351952936386365ull,
     14384312445426600067ull, 6198847811909310381ull, 11872127846069280170ull, 6744981219021824364ull,
     6655913456858325688ull, 17554715975906318531ull, 542461356767618432ull, 13852676117274540777ull,
 };
@@ -2297,14 +2330,14 @@ constexpr Trade kStopLimit_trades[] = {
 //   8328930773731943340ull -> 14239530769682782007ull [H-THIN]
 //   9254963348917194152ull -> 4769056648897025171ull [H-THIN]
 constexpr std::uint64_t kStopLimitMag_rows[] = {
-    12049254652408164286ull, 7170364698800146161ull, 16063150345282688529ull, 2375247605653847437ull,
-    5989703757491448050ull, 7325059507104947563ull, 4110843077158619028ull, 8512043085829177902ull,
+    12049254652408164286ull, 7170364698800146161ull, 16063150345282688529ull, 3599858653149097876ull,
+    8320568259305114859ull, 7325059507104947563ull, 4110843077158619028ull, 8512043085829177902ull,
     11976516818017786813ull, 8000889795845112059ull, 3812031270016354768ull, 13171068499659342452ull,
-    2834570042813630280ull, 612293012859052373ull, 941008970127083544ull, 12868627571096102339ull,
-    13282802570212513971ull, 3990088271426726433ull, 15805224658207253271ull, 4861907005886599783ull,
+    2834570042813630280ull, 2836736203642368832ull, 13392066916564678809ull, 12868627571096102339ull,
+    13282802570212513971ull, 3990088271426726433ull, 2840451963065699294ull, 7535631320516411386ull,
     5606595334476947895ull, 16715759077213701098ull, 17047719425359875908ull, 8426786106325009307ull,
     15538761259524269350ull, 14720303962652891230ull, 6644795815053845919ull, 13567799877554087198ull,
-    303066552358707847ull, 1144887452290110514ull, 17215798505737563325ull, 13389121371815587728ull,
+    303066552358707847ull, 7117207502541194771ull, 17215798505737563325ull, 13389121371815587728ull,
     10590670751038194751ull, 16401520297421927605ull, 1764458890420715860ull, 15454338180826410585ull,
     10945801551956678372ull, 13245700179032171137ull, 14239530769682782007ull, 4769056648897025171ull,
 };
