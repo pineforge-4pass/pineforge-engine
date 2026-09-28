@@ -1,0 +1,16 @@
+{
+  "title": "w13-x1-close",
+  "slug": "w13-x1-close-xau2",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T13:43:51.105Z",
+  "chart": {
+    "symbol": "OANDA:XAUUSD",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-30"
+  },
+  "pine_sha256": "a611f1e598e898c2e373ae1c584f5b758601f407ed324e8617ecafb4f3fb31b4",
+  "tv_trades_sha256": "f88e80e83cc4e428e22864241b5f2f4990d14597a4534703fa43b54b17e5646d",
+  "tv_trades_rows": 2768
+}

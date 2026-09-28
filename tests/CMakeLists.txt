@@ -972,6 +972,10 @@ list(APPEND TEST_SOURCES test_margin_residual_tapes)
 # Lane INT28-FIX: a slipped all-in short's admission and its one-unit margin
 # calls (tests/fixtures/slipped_short), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_slipped_short_tapes)
+# Lane W13-ENG-MARGIN-OPP: a margin call at a bar's close after the script,
+# and orders sized at placement that cross zero (tests/fixtures/margin_opposite
+# and tests/fixtures/slipped_short), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_margin_opposite_tapes)
 # Lane INT28-FIX (RC): a calc_on_order_fills recalculation reads the whole
 # bar's finer request.security values (tests/fixtures/coof_recalc_security),
 # on TradingView's tape.
@@ -2593,6 +2597,14 @@ endif()
 # source-bound.
 if(TARGET test_slipped_short_tapes)
     target_compile_definitions(test_slipped_short_tapes PRIVATE
+        PINEFORGE_SLIPPED_SHORT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/slipped_short")
+endif()
+
+# Lane W13-ENG-MARGIN-OPP reads its TradingView tapes from the fixture tree;
+# source-bound.
+if(TARGET test_margin_opposite_tapes)
+    target_compile_definitions(test_margin_opposite_tapes PRIVATE
+        PINEFORGE_MARGIN_OPPOSITE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_opposite"
         PINEFORGE_SLIPPED_SHORT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/slipped_short")
 endif()
 

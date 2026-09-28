@@ -2096,6 +2096,7 @@ void PineExecutionAdapter::reset_for_run() {
     last_margin_call_script_bar_ = std::numeric_limits<std::int64_t>::min();
     kernel_margin_path_point_ = std::numeric_limits<std::uint64_t>::max();
     kernel_margin_resize_point_ = std::numeric_limits<std::uint64_t>::max();
+    close_margin_point_ = std::numeric_limits<std::uint64_t>::max();
     pooc_close_checkpoint_deferred_ms_ = std::numeric_limits<std::int64_t>::min();
     signal_close_mc_event_bar_ = -1;
     signal_close_mc_position_cycle_ = 0;
@@ -8022,6 +8023,29 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         request.intent = native_order::Flatten{};
         request.label = "__pine_close_all";
         request.comment = comment;
+        // Under process_orders_on_close TradingView checks the book at the
+        // close after the script, and executes a call there ahead of the
+        // orders the script placed at that close: a close_all keeps the size
+        // it was placed with and opens the called unit on the other side (lab
+        // tv tape w5b-sz-eur-p100-10m 2025-04-10 12:30 and 2025-04-25 06:30 on
+        // OANDA:EURUSD: the one-unit money call at the close, then a short of
+        // one unit by the close order; lane W13-ENG-MARGIN-OPP). A call the
+        // path fired earlier stands before the script, and the close closes
+        // what it left.
+        bool close_sized_before_call = false;
+        if (config_.process_orders_on_close && !immediately && !config_.calc_on_order_fills
+            && !coof_recalc_active_ && policy_script_bar_valid_) {
+            if (const auto point = detail::callback_point(require_host())) {
+                const double held = detail::run_position(require_host()).signed_units;
+                if (held != 0.0 && last_margin_call_at_script_close_
+                    && last_margin_call_script_bar_ == point->decision.script_bar_open_ms
+                    && last_margin_call_position_cycle_ == current_position_cycle_) {
+                    request.intent = native_order::Transact{
+                        -(held + (held > 0.0 ? 1.0 : -1.0) * last_margin_call_closed_units_)};
+                    close_sized_before_call = true;
+                }
+            }
+        }
         double coof_close_all_fill = kNaN;
         if (coof_recalc_active_ && !coof_first_open_ && !immediately
             && coof_script_bar_valid_) {
@@ -8061,6 +8085,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         snapshot.immediately = immediately;
         snapshot.sizing = sizing_snapshot();
         snapshot.forced_execution_price = coof_close_all_fill;
+        snapshot.crosses_zero = close_sized_before_call;
         (void)qty;
         (void)qty_percent;
         (void)callsite_token;
@@ -13758,6 +13783,12 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     if (source.family == PineOrderFamily::Order) {
         return NativePrecommitVerdict::AdmitWithHostMargin;
     }
+    // Nor an order sized when it was placed (close_point_margin_call): a
+    // close whose book shrank before it filled opens the rest on the other
+    // side as placed -- no entry gate reads it (lab tv tape w13-b1-close-f
+    // 2025-04-10 17:15 UTC: 1149 shares closed and 44 opened long at the 9.00
+    // open).
+    if (source.crosses_zero) return NativePrecommitVerdict::AdmitWithHostMargin;
     // Entries a bar placed while the book was flat all fill where they reach
     // their fill point, the later ones behind a book of their own side that
     // only the earlier ones opened: TradingView judges each on its own cost
@@ -14838,6 +14869,9 @@ std::optional<double> PineExecutionAdapter::resolve_margin_call_units(
         && std::abs(config_.margin_long - 100.0) < 1e-12) {
         return 0.0;
     }
+    // A point whose only adverse mark is the close: the call is taken there
+    // after the script (close_point_margin_call), not rested at the close.
+    if (view.cursor.point.ordinal == close_margin_point_) return 0.0;
     const auto money = source_margin_money(view.mark, view.cursor.point.open_ms);
     return source_margin_units(money, false);
 }
@@ -14918,7 +14952,7 @@ bool PineExecutionAdapter::submit_margin_call_units(
 }
 
 bool PineExecutionAdapter::submit_tv_money_long_margin_call(
-        const Bar& bar, const NativeDecisionContext& context) {
+        const Bar& bar, const NativeDecisionContext& context, int* fired_waypoint) {
     // The one-contract 10-significant-digit money residual is an adapter
     // policy over the native position and its ordinary chart path.  It is not
     // a second matching loop: the resulting reduction is still a generic
@@ -15045,6 +15079,7 @@ bool PineExecutionAdapter::submit_tv_money_long_margin_call(
         // ab9714be pine_fills.cpp:1985-2020 books the one contract at
         // bar_fill_price(fire), the path point that fired, not wherever the
         // checkpoint callback happens to stand (the script-bar close).
+        if (fired_waypoint) *fired_waypoint = index;
         return submit_margin_call_units(price, context, units, true);
     }
     return false;
@@ -15236,6 +15271,13 @@ bool PineExecutionAdapter::schedule_tv_money_long_margin_before_trail(
         }
     }
     if (!finite_positive(fire_price)) return false;
+    // A call the close fires is taken there after the script
+    // (close_point_margin_call), not rested for the path to reach its price
+    // first. Under process_orders_on_close it rests as before: it fills ahead
+    // of the orders the script places at that close, which is where
+    // TradingView executes it, and a close_all placed there keeps the size it
+    // had before it (close).
+    if (fire_point == 3 && !config_.process_orders_on_close) return false;
     if (config_.process_orders_on_close && owned_trail) {
         // ab9714be pine_fills.cpp:378-384, 1843-1846 and 1935-1937: under
         // POOC a resting order suppresses the carried rounded-money check
@@ -15551,6 +15593,18 @@ bool PineExecutionAdapter::schedule_margin_call_path(
         }
     }
     if (!finite_positive(adverse)) return false;
+    // A fill between the open and the close whose remaining path is adverse
+    // only at the close: TradingView checks that close after the script has
+    // run there (close_point_margin_call), so the kernel's own check at this
+    // point rests nothing (resolve_margin_call_units).
+    bool close_alone = current == 1 || current == 2;
+    close_alone = close_alone && close_point_margin_scope() && finite_positive(bar.close);
+    for (int index = std::max(current, 0); close_alone && index < 3; ++index) {
+        if (!finite_positive(path[index].price)) continue;
+        close_alone = position.signed_units > 0.0 ? path[index].price > bar.close
+                                                  : path[index].price < bar.close;
+    }
+    if (close_alone) close_margin_point_ = context.coordinate.ordinal;
     // R5: the placement is the kernel's. TradingView's scheduling decision has
     // just been taken above -- with this bar's competing orders in front of
     // it, exactly where the legacy broker takes it -- so all that is left is
@@ -15563,6 +15617,121 @@ bool PineExecutionAdapter::schedule_margin_call_path(
     // same money the kernel is about to ask for.
     return source_margin_units(
         source_margin_money(adverse, context.sub_bar_open_ms), false) > 0.0;
+}
+
+// Where the close's own check is the one after the script: a run whose
+// orders fill at the next open, with no fill recalculation or magnifier.
+bool PineExecutionAdapter::close_point_margin_scope() const noexcept {
+    return !config_.process_orders_on_close && !config_.calc_on_order_fills
+        && !coof_recalc_active_ && !bar_magnifier_ && !stream_mode_;
+}
+
+// A commissioned full-margin short one explicit-quantity MARKET entry opened
+// on this bar: its post-script checkpoint trims it at the fill and then slices
+// the survivor at the bar's adverse extreme (on_bar_close), and TradingView's
+// tapes of that shape follow that checkpoint, not the close's own check.
+bool PineExecutionAdapter::commissioned_explicit_short_opened(
+        const NativeDecisionContext& context) const {
+    const auto position = detail::run_position(require_host());
+    if (config_.process_orders_on_close || position.signed_units >= 0.0
+        || config_.margin_short != 100.0
+        || config_.commission_type != static_cast<int>(CommissionType::PERCENT)
+        || !(config_.commission_value > 0.0)
+        || position_open_script_bar_ != context.script_bar_open_ms
+        || position_open_phase_ == NativePathPhase::Close) {
+        return false;
+    }
+    std::size_t openings = 0;
+    bool explicit_market_opening = false;
+    for (const auto& cohort_id : cohort_order_) {
+        const auto cohort = cohorts_by_id_.find(cohort_id);
+        if (cohort == cohorts_by_id_.end() || cohort->second.cycle != current_position_cycle_)
+            continue;
+        for (const auto& origin : cohort->second.opened) {
+            const auto opening = placement_.find(origin.incarnation);
+            if (opening == placement_.end()) continue;
+            ++openings;
+            const auto& row = opening->second;
+            explicit_market_opening = row.opening && !row.is_long
+                && row.family == PineOrderFamily::Entry
+                && finite_positive(row.requested_qty)
+                && !price_present(row.exit_levels.limit)
+                && !price_present(row.exit_levels.stop);
+        }
+    }
+    return openings == 1 && explicit_market_opening;
+}
+
+// TradingView checks a book whose path after a fill is adverse only at the
+// bar's close at that close, after the script has run there: the script
+// reads the book before the call, and the call is an order sized at the
+// close's mark. Left standing it executes at the close, ahead of the orders
+// the script placed there, and those keep the size they were placed with: a
+// strategy.close_all() placed on that bar closes the called units again and
+// opens them on the other side at the next open (lab tv tape w13-b1-close-f).
+bool PineExecutionAdapter::close_point_margin_call(
+        const Bar& bar, const NativeDecisionContext& context) {
+    const auto position = detail::run_position(require_host());
+    if (position.signed_units == 0.0 || !source_margin_call_enabled_) return false;
+    // A full-margin long's call is the one-contract money call's
+    // (resolve_margin_call_units).
+    if (position.signed_units > 0.0 && std::abs(config_.margin_long - 100.0) < 1e-12)
+        return false;
+    const auto money = source_margin_money(bar.close, context.sub_bar_open_ms);
+    if (!money.valid || source_margin_rounded_tie_veto()) return false;
+    const double units = std::min(source_margin_units(money, false),
+                                  std::abs(position.signed_units));
+    return units > 0.0 && book_close_point_call(money.mark, units, context);
+}
+
+// A call booked at the close after the script, after which every
+// strategy.close_all() the script placed on the bar keeps the size it was
+// placed with.
+bool PineExecutionAdapter::book_close_point_call(
+        double mark, double units, const NativeDecisionContext& context) {
+    const auto position = detail::run_position(require_host());
+    units = std::min(units, std::abs(position.signed_units));
+    if (!(units > 0.0)) return false;
+    auto closes = same_bar_close_alls(context);
+    if (!submit_margin_call_units(mark, context, units, true)) return false;
+    size_close_alls_at_placement(closes, position.signed_units);
+    return true;
+}
+
+// The strategy.close_all() orders the script placed on this bar and that
+// still wait for the next open.
+std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>>
+PineExecutionAdapter::same_bar_close_alls(const NativeDecisionContext& context) const {
+    std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>> closes;
+    for (const auto& handle : live_handles_) {
+        const auto found = placement_.find(handle.incarnation);
+        if (found != placement_.end() && found->second.family == PineOrderFamily::CloseAll
+            && found->second.placement_script_open_ms == context.script_bar_open_ms) {
+            closes.emplace_back(handle, found->second);
+        }
+    }
+    return closes;
+}
+
+// Those orders keep the size they were placed with, the book `placed` before
+// a call at the close shrank it: each becomes the plain market transaction of
+// that size, which crosses zero on the smaller book (close_point_margin_call).
+void PineExecutionAdapter::size_close_alls_at_placement(
+        std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>>& closes,
+        double placed) {
+    for (auto& close : closes) {
+        if (std::find(live_handles_.begin(), live_handles_.end(), close.first)
+            == live_handles_.end()) {
+            continue;
+        }
+        native_order::Request request;
+        request.intent = native_order::Transact{-placed};
+        request.label = close.second.source_id;
+        request.comment = close.second.comment;
+        close.second.crosses_zero = true;
+        (void)submit_or_replace(std::move(request), std::move(close.second), false,
+                                "__pine_close_all");
+    }
 }
 
 bool PineExecutionAdapter::declined_reversal_at_open(const Bar& bar) const {
@@ -17959,12 +18128,25 @@ void PineExecutionAdapter::on_bar_close(
         apply_terminal_explicit_market_policy(context);
     update_risk_state(bar.close);
     if (stream_mode_) return;
+    if (close_point_margin_scope() && !commissioned_explicit_short_opened(context)
+        && close_point_margin_call(bar, context)) {
+        return;
+    }
     // The native callback frame remains current after the source script
     // returns. Reproduce the legacy once-per-script-bar margin checkpoint at
     // the adverse path extreme, unless the earlier open/path policy already
     // applied a margin slice on this script bar.
     if (last_margin_call_script_bar_ == context.script_bar_open_ms) return;
-    if (submit_tv_money_long_margin_call(bar, context)) return;
+    {
+        auto closes = same_bar_close_alls(context);
+        const double placed = detail::run_position(require_host()).signed_units;
+        int fired = -1;
+        if (submit_tv_money_long_margin_call(bar, context, &fired)) {
+            if (fired == 3 && !config_.process_orders_on_close)
+                size_close_alls_at_placement(closes, placed);
+            return;
+        }
+    }
     // Quiet: the checkpoint below belongs to a commissioned full-margin short
     // outside process_orders_on_close, and does not apply to this run. A
     // carried short under process_orders_on_close was checked over the bar's

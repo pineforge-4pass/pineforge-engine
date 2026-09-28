@@ -192,6 +192,11 @@ struct PlacementSnapshot {
     // (withdraw_void_exits), and a re-issue made once the entry exists takes
     // a new place in the exit queue rather than this one's.
     bool void_issue = false;
+    // Sized when it was placed and executed as a plain market transaction:
+    // a margin call or close whose position shrank before it filled crosses
+    // zero and opens the difference on the other side
+    // (close_point_margin_call).
+    bool crosses_zero = false;
     bool fixed_exit_reservation = false;
     bool frozen_market_instruction = false;
     double frozen_market_own_units = std::numeric_limits<double>::quiet_NaN();
@@ -1751,7 +1756,8 @@ private:
     bool submit_margin_call_units(double mark_price, const NativeDecisionContext&,
                                   double units,
                                   bool force_execution_price = true);
-    bool submit_tv_money_long_margin_call(const Bar&, const NativeDecisionContext&);
+    bool submit_tv_money_long_margin_call(const Bar&, const NativeDecisionContext&,
+                                          int* fired_waypoint = nullptr);
     bool slipped_pooc_opening_money_scope(
         const Bar&, const NativeDecisionContext&) const;
     bool submit_slipped_pooc_opening_money_call(
@@ -1768,6 +1774,14 @@ private:
                                      const NativeDecisionContext&);
     bool declined_reversal_at_open(const Bar&) const;
     bool schedule_margin_call_path(const Bar&, const NativeDecisionContext&);
+    bool close_point_margin_scope() const noexcept;
+    bool commissioned_explicit_short_opened(const NativeDecisionContext&) const;
+    bool close_point_margin_call(const Bar&, const NativeDecisionContext&);
+    bool book_close_point_call(double mark, double units, const NativeDecisionContext&);
+    std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>>
+    same_bar_close_alls(const NativeDecisionContext&) const;
+    void size_close_alls_at_placement(
+        std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>>&, double placed);
     void defer_declined_reversal_exits_at_adverse(const Bar&,
                                                   const NativeDecisionContext&,
                                                   bool margin_scheduled);
@@ -2147,6 +2161,12 @@ private:
     // did. Same hash argument as kernel_margin_path_point_ above: a strictly
     // monotone ordinal compared only for equality with the current point's.
     std::uint64_t kernel_margin_resize_point_ = std::numeric_limits<std::uint64_t>::max();
+    // The kernel check point whose adverse mark is the bar's close alone: its
+    // call is the close's, taken after the script (close_point_margin_call).
+    // Same hash argument as kernel_margin_path_point_: it is compared only for
+    // equality with the current point, and is dead once that bar's close has
+    // been checked.
+    std::uint64_t close_margin_point_ = std::numeric_limits<std::uint64_t>::max();
     // Retired by lane W5B-ENG-MARGIN-RESIDUAL: ab9714be deferred a carried
     // process_orders_on_close short's checkpoint behind its bar's close market
     // fills (pine_scheduler.cpp:260 before :278); TradingView checks it over

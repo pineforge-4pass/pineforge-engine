@@ -1,0 +1,12 @@
+//@version=6
+strategy("w13-p2-eur", overlay = true, initial_capital = 10000000, default_qty_type = strategy.percent_of_equity, default_qty_value = 100, pyramiding = 1)
+// Lane W13-ENG-MARGIN-OPP. OANDA:EURUSD (lot 0.01), ten million of capital,
+// margin 100, orders filled at the next open. Every 3 bars from flat a
+// default long (100 % of equity); the bar it fills on calls
+// strategy.close_all(), which fills at the next open. Anything left open (the
+// far side of a margin call) is closed by the next close_all.
+phase = bar_index % 3
+if strategy.position_size == 0 and phase == 0
+    strategy.entry("L", strategy.long)
+if phase == 1 or (phase == 2 and strategy.position_size != 0)
+    strategy.close_all()

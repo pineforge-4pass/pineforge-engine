@@ -59,6 +59,8 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     // Folded only when set, so a run that never issues a void exit keeps
     // its digest (lane W3B-ENG-GRID).
     if (value.void_issue) f.b(true);
+    // Folded only when set, like void_issue (lane W13-ENG-MARGIN-OPP).
+    if (value.crosses_zero) f.u(0x7a65726fULL);
     f.b(value.fixed_exit_reservation);
     f.b(value.frozen_market_instruction);
     f.d(value.frozen_market_own_units); f.d(value.frozen_market_transaction_units);

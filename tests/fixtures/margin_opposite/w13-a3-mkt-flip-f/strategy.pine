@@ -1,0 +1,22 @@
+//@version=6
+strategy("w13-a3-mkt-flip", overlay = true, initial_capital = 10000, margin_long = 100, margin_short = 100)
+// Lane W13-ENG-MARGIN-OPP. From flat every 4 bars an all-in MARKET short
+// (qty = equity / close) that fills at the next open; on that bar the script
+// calls strategy.close_all() at its close; a position left after that is closed
+// at the next bar's close.
+var int st = 0
+if st == 0
+    if strategy.position_size == 0 and bar_index % 4 == 0
+        strategy.entry("S", strategy.short, qty = strategy.equity / close)
+        st := 1
+else if st == 1
+    if strategy.position_size < 0
+        strategy.close_all(comment = "C0")
+        st := 2
+    else
+        st := 0
+else
+    if strategy.position_size != 0
+        strategy.close_all(comment = "C1")
+    else
+        st := 0

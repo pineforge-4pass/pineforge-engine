@@ -1,0 +1,16 @@
+{
+  "title": "w13-p1-eur",
+  "slug": "w13-p1-eur",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T13:43:50.610Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-30"
+  },
+  "pine_sha256": "37500adacfc9e548335d6f52bc52abdd986127f5ce7dfb50a4105a2ce4c881c9",
+  "tv_trades_sha256": "ebafd0cf9bb87e4f49cbbf1d73f023b9f391333525515649c229a27af2fecf50",
+  "tv_trades_rows": 1022
+}

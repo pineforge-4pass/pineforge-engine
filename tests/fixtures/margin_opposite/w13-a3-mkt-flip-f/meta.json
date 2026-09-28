@@ -1,0 +1,16 @@
+{
+  "title": "w13-a3-mkt-flip",
+  "slug": "w13-a3-mkt-flip-f",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T12:55:37.162Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-07-01"
+  },
+  "pine_sha256": "17bf70ea70bb10e8f73187bc787f26c6cd241bcbb4ea62c231fcbd56c1c46c16",
+  "tv_trades_sha256": "c3e39abce75c8c1d50c5953078fdaa1a808eec1c3931a1694a96c2170c0202c8",
+  "tv_trades_rows": 870
+}
