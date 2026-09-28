@@ -469,6 +469,23 @@ static void test_session_day_list_tapes() {
     }
 }
 
+// What the tapes do not reach, read as before the day-list rule: a day list
+// on a 24-hour body ("24x7:23456", ":23456") admits its calendar days, and
+// a trailing comma adds no second window, so no Monday-to-Friday default.
+static void test_session_day_list_edges() {
+    std::printf("test_session_day_list_edges\n");
+    const int64_t wed_noon = 1741780800000LL;  // Wed 2025-03-12 12:00Z
+    const int64_t sat_noon = 1741435200000LL;  // Sat 2025-03-08 12:00Z
+    CHECK(!is_na(pine_time(wed_noon, "15", "24x7:23456", "", "15", "UTC", "24x7")));
+    CHECK(is_na(pine_time(sat_noon, "15", "24x7:23456", "", "15", "UTC", "24x7")));
+    CHECK(!is_na(pine_time(sat_noon, "15", "24x7:1234567", "", "15", "UTC", "24x7")));
+    CHECK(pine_session_ismarket("24x7:23456", "UTC", wed_noon));
+    CHECK(!pine_session_ismarket("24x7:23456", "UTC", sat_noon));
+    // One window and a trailing comma: every day, as one window reads.
+    CHECK(!is_na(pine_time(sat_noon, "15", "1100-1300,", "", "15", "UTC", "24x7")));
+    CHECK(!is_na(pine_time(wed_noon, "15", "1100-1300,", "", "15", "UTC", "24x7")));
+}
+
 int main() {
     test_ismarket_inside_rth();
     test_ismarket_outside_rth_close();
@@ -489,6 +506,7 @@ int main() {
     test_session_2400_tapes();
     test_session_clock_edge_tapes();
     test_session_day_list_tapes();
+    test_session_day_list_edges();
 
     std::printf("\nsession_predicates: %d passed, %d failed\n",
                 tests_passed, tests_failed);

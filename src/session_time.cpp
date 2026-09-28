@@ -686,6 +686,24 @@ int session_clock_minutes(const std::string& s, std::size_t at) {
     return (digit[0] * 10 + digit[1]) * 60 + digit[2] * 10 + digit[3];
 }
 
+// The windows of `windows` whose two clocks read (session_clock_minutes).
+int session_window_count(const std::string& windows) {
+    int count = 0;
+    std::size_t pos = 0;
+    while (pos <= windows.size()) {
+        const std::size_t comma = windows.find(',', pos);
+        std::string win = windows.substr(pos, comma == std::string::npos
+                                                  ? std::string::npos : comma - pos);
+        pos = comma == std::string::npos ? windows.size() + 1 : comma + 1;
+        trim_inplace(win);
+        const std::size_t dash = win.find('-');
+        if (dash != std::string::npos && dash >= 4 && session_clock_minutes(win, 0) >= 0
+            && session_clock_minutes(win, dash + 1) >= 0)
+            ++count;
+    }
+    return count;
+}
+
 // Whether the local time of `local_tm` lies in a window of `windows` whose
 // session day is in `days` (1 = Sunday .. 7 = Saturday). A window's session
 // day is the day it starts, but the day it ends for a window that ends at or
@@ -797,7 +815,7 @@ bool passes_session_filter(const std::string& session,
     parse_day_filter(session, windows, &day_filter);
     // With no day list, one window admits every day and several windows
     // Monday to Friday only (lab tv tapes w11-sessmask{,2}-btc15).
-    if (day_filter.empty() && windows.find(',') != std::string::npos)
+    if (day_filter.empty() && session_window_count(windows) > 1)
         day_filter = {2, 3, 4, 5, 6};
 
     struct tm local_tm {};
@@ -805,7 +823,13 @@ bool passes_session_filter(const std::string& session,
 
     if (day_filter.empty())
         return local_time_in_session_windows(windows, local_tm);
-    return local_time_in_session_days(windows, local_tm, day_filter);
+    // A 24-hour body ("24x7:23456") takes its list on calendar days, as
+    // "0000-0000" does.
+    std::string body = windows;
+    trim_inplace(body);
+    if (body.empty() || body == "24x7")
+        body = "0000-0000";
+    return local_time_in_session_days(body, local_tm, day_filter);
 }
 
 // ---------------------------------------------------------------------------
