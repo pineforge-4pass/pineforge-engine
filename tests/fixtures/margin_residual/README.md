@@ -13,10 +13,11 @@ at UTC+8), `metrics.json`, `meta.json`. `metrics.json` `tvTradesCsvHash` is the
 sha256 of `tv_trades.csv`. Every BINANCE:ETHUSDT.P probe runs on 15-minute
 bars, 2025-04-01 .. 2025-05-06, every NYSE:F probe on 15-minute bars,
 2025-04-15 .. 2025-05-20, and every OANDA:EURUSD probe on 15-minute bars,
-2025-04-01 .. 2025-04-30 (`w5b-sz-eur-p100-10m-0410` .. 2025-04-10), and
+2025-04-01 .. 2025-04-30 (`w5b-sz-eur-p100-10m-0410` and the `w5b-ms-*` probes
+.. 2025-04-10), and
 every CME_MINI:ES1! probe on 15-minute bars, 2025-04-01 .. 2025-04-30. The
 probes of rules SB, PC and PA declare no `initial_capital` and run on v6's
-100000; SZ's and FU's declare theirs.
+100000; SZ's, FU's and MS's declare theirs.
 
 `tests/test_margin_residual_tapes.cpp` replays every tape through the Pine
 adapter under the configuration the generated constructor declares for that
@@ -128,6 +129,21 @@ population, five one-contract process_orders_on_close entries, are called 4 +
 Two of the scripts (`w5b-es-q115`, `w5b-f-q1x12`, n = 400) put `n * step`
 past 2^31, which TradingView evaluates in 64 bits; the replay's probes keep
 their time in 64 bits too.
+
+## MS: the one-unit money call does not read `pyramiding`
+
+| tape | trades | `strategy()` declares | TradingView | tv_trades.csv sha256 |
+|---|---:|---|---|---|
+| `w5b-ms-eur-p100-pyr2` | 130 | `initial_capital=10000000`, 100 %, `pyramiding=2`, `process_orders_on_close`, to 2025-04-10 | the `w5b-sz-eur-p100-10m-0410` cells (one lot held at a time) under `pyramiding=2`: the same file, fourteen one-unit money calls included | `333d87b5e7d84396e7804d267536c583f4d5391cc0a754d51b9985f32e10f9ff` |
+| `w5b-ms-eur-p99-pyr2` | 168 | the same at 99 % | the control: no margin call at all | `bed349e5aa1487233d69cb83e111d145b6b5f2202de516bddbd5d13c082b625c` |
+
+A full-margin long of one lot under process_orders_on_close takes
+TradingView's one-unit money call (the ten-significant-digit residual) at
+pyramiding 1; ab9714be scoped the call to pyramiding 1 and the adapter
+inherited it, so at pyramiding 2 it booked none of the fourteen. The
+population probe `margin-basis-allin` on OANDA:EURUSD (100 %, `pyramiding=2`)
+is the same shape (`tests/test_tv_money_carried_pooc_l4b.cpp`'s pyramiding
+scope moves with it).
 
 ## Bars
 

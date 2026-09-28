@@ -14761,13 +14761,17 @@ bool PineExecutionAdapter::submit_tv_money_long_margin_call(
                 || last_margin_call_script_bar_ == context.script_bar_open_ms))) {
         return false;
     }
+    // A one-lot book under process_orders_on_close takes the call whatever
+    // pyramiding the strategy declares: at pyramiding 2 TradingView books the
+    // same fourteen one-unit calls, trade for trade, as at 1 (lab tv tapes
+    // tests/fixtures/margin_residual w5b-ms-eur-p100-pyr2 and
+    // w5b-sz-eur-p100-10m-0410; none at 99 %, w5b-ms-eur-p99-pyr2; lane
+    // W5B-ENG-MARGIN-RESIDUAL). ab9714be scoped it to pyramiding 1.
     const auto position = detail::run_position(require_host());
     if (!source_margin_call_enabled_ || stream_mode_
         || position.signed_units <= 0.0 || position.lot_count != 1
         || std::abs(config_.margin_long - 100.0) > 1e-12
         || config_.commission_value != 0.0 || config_.slippage != 0
-        || (config_.process_orders_on_close
-            && (config_.pyramiding < 0 || config_.pyramiding > 1))
         || !grid || !(*grid > 0.0) || *grid > 1.0
         || std::abs(staged_.syminfo.pointvalue - 1.0) > 1e-12
         || active_staged_fx(context.sub_bar_open_ms) != 1.0

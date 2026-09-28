@@ -228,13 +228,17 @@ void on_close_observes_margin_first(Close close) {
 
 void preserved_scope() {
     // These are compatibility controls, not new TV margin claims. The
-    // formerly excluded POOC scopes must not be pulled into this extension.
+    // formerly excluded POOC scopes must not be pulled into this extension --
+    // except pyramiding 2 on this one-lot book, which TradingView calls as at
+    // pyramiding 1 (R5 lane W5B-ENG-MARGIN-RESIDUAL, lab tv tapes
+    // tests/fixtures/margin_residual w5b-ms-eur-p100-pyr2 against
+    // w5b-sz-eur-p100-10m-0410): it takes the call carried() pins.
     for (int scope = 0; scope < 6; ++scope) {
         MoneyProbe engine(kCapital, kQty, Entry::EXPLICIT_CLOSE);
         switch (scope) {
         case 0: engine.resting_stop(); break; // no pending-order chronology pin
         case 1: engine.commission(1e-11); break; // still affordable, same residual
-        case 2: engine.pyramiding(2); break; // adds remain on established paths
+        case 2: engine.pyramiding(2); break; // called as at pyramiding 1
         case 3: {
             const int64_t times[] = {1000};
             const double rates[] = {1.0};
@@ -246,8 +250,9 @@ void preserved_scope() {
         }
         run(engine);
         check_entries(engine, kQty);
-        CHECK(margin_rows(engine) == 0);
-        CHECK(engine.rows().size() == 1);
+        CHECK(margin_rows(engine) == (scope == 2 ? 1 : 0));
+        CHECK(engine.rows().size() == (scope == 2 ? 2u : 1u));
+        if (scope == 2 && engine.rows().size() == 2) check_margin(engine.rows()[0], 3000, 1.17905);
     }
 }
 } // namespace

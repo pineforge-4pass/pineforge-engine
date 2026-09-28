@@ -416,6 +416,13 @@
       "twin": "test_trail_open_arm_subtick_offset_l4c.cpp",
       "twinAssertionSha256": "b6f39ef9540567ddc37079fc2831938894239cbcbd4df319e820ba38c106a131",
       "twinAssertions": 101
+    },
+    "test_tv_money_carried_pooc": {
+      "baseAssertions": 43,
+      "reason": "the pyramiding-2 scope follows the R5 lane W5B-ENG-MARGIN-RESIDUAL TradingView tapes (tests/fixtures/margin_residual w5b-ms-eur-p100-pyr2 against w5b-sz-eur-p100-10m-0410): a one-lot full-margin long under process_orders_on_close takes its one-unit money call whatever pyramiding the strategy declares, so that scope takes the call carried() pins instead of none",
+      "twin": "test_tv_money_carried_pooc_l4b.cpp",
+      "twinAssertionSha256": "8b8780d985ad5393e8a75fda604e49247e6d232ea1a480d2265ac6966c9b1448",
+      "twinAssertions": 43
     }
   },
   "removed": [

@@ -1,0 +1,16 @@
+//@version=6
+strategy("W5B MS EURUSD 99% of equity, pyramiding 2", overlay=true,
+     initial_capital=10000000, default_qty_type=strategy.percent_of_equity,
+     default_qty_value=99, pyramiding=2, process_orders_on_close=true)
+
+// Lane W5B-ENG-MARGIN-RESIDUAL, the one-unit money call of a full-margin long
+// under process_orders_on_close when the strategy declares pyramiding 2.
+// OANDA:EURUSD (lot 0.01), 10000000 of capital, margin 100. Every 4 bars from
+// flat the script places one default long entry (99 % of equity), which
+// fills at that bar's close, and closes it two bars later: the book never
+// holds more than that one lot.
+phase = bar_index % 4
+if strategy.position_size == 0 and phase == 0
+    strategy.entry("L", strategy.long)
+if phase == 2
+    strategy.close_all()

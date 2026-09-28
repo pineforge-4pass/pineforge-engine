@@ -30,6 +30,8 @@
  *       by a call of one more unit at the next check point: the bar's next
  *       path point after a market opening's call at the open, the same open
  *       under process_orders_on_close.
+ *   MS  A one-lot full-margin long under process_orders_on_close takes its
+ *       one-unit money call whatever pyramiding the strategy declares.
  *
  * Each row replays one lab tv tape (tests/fixtures/margin_residual) through
  * the Pine adapter under the configuration the generated constructor declares
@@ -189,7 +191,7 @@ enum class Probe {
     AddCells,            // w5b-pa-pooc-p50 / -pooc-p40 / -market-p50
     AddNearFill,         // w5b-pa-pooc-p50-tick
     AddNyseF,            // w5b-pa-f-pooc-p50 / -f-market-p50 (NYSE:F)
-    SizeCells,           // w5b-sz-eur-* (OANDA:EURUSD)
+    SizeCells,           // w5b-sz-eur-*, w5b-ms-eur-* (OANDA:EURUSD)
     SplitCells,          // w5b-sb-es-*fixed-n, w5b-es-*, w5b-f-q1x12, w5b-eth-q111
 };
 
@@ -577,6 +579,11 @@ int main() {
          &es_222},
         {"FU control", "w5b-eth-q111", Probe::SplitCells, fixed(false, 3, 5000.0), Chart::Eth, 480,
          0, &eth_111},
+        // The windows end 2025-04-10 00:00 UTC.
+        {"MS", "w5b-ms-eur-p100-pyr2", Probe::SizeCells, config(true, 2, 100.0, 1e7),
+         Chart::EurUsd, 130, 1744243200000LL},
+        {"MS control", "w5b-ms-eur-p99-pyr2", Probe::SizeCells, config(true, 2, 99.0, 1e7),
+         Chart::EurUsd, 168, 1744243200000LL},
     };
 
     for (const Case& c : cases) {

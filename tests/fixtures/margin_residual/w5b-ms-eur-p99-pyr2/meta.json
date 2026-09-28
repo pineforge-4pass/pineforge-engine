@@ -1,0 +1,16 @@
+{
+  "title": "W5B MS EURUSD 99% of equity, pyramiding 2",
+  "slug": "w5b-ms-eur-p99-pyr2",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T05:48:43.869Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-10"
+  },
+  "pine_sha256": "71dbdacf97b2014b29728e49ae806e565061a27f20bca56767f3b1989b9dbe2b",
+  "tv_trades_sha256": "bed349e5aa1487233d69cb83e111d145b6b5f2202de516bddbd5d13c082b625c",
+  "tv_trades_rows": 338
+}
