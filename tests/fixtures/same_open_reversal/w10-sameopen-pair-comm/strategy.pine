@@ -1,0 +1,17 @@
+//@version=6
+// W10-DIAG-UNKNOWN synthetic probe: from flat, one bar places a Long and then
+// a Short market entry (default 100 % of equity) under a 0.1 % commission.
+// Does the Short reverse the Long at the next open?
+strategy("w10 sameopen pair commission", overlay=true, initial_capital=10000000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+     pyramiding=1, commission_type=strategy.commission.percent, commission_value=0.1)
+armed = time >= timestamp("UTC", 2025, 4, 14, 0, 0)
+var int k = -1
+if armed
+    k += 1
+c = k % 3
+if armed and c == 0
+    strategy.entry("Long", strategy.long, comment="L")
+    strategy.entry("Short", strategy.short, comment="S")
+if armed and c == 2
+    strategy.close_all(comment="X")

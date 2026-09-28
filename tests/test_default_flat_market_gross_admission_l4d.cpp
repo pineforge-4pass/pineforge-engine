@@ -20,6 +20,17 @@
  * keeps Long because the later Short's gross transaction is ~200% of equity.
  *
  * These tests pin the production behavior and its deliberate non-target scope.
+ *
+ * Expectation corrected (lane W10-DIAG-UNKNOWN rule SAMEOPEN-REV,
+ * tests/fixtures/same_open_reversal): TradingView refuses the later Short in
+ * the exact-book controls with a third call (Long-1/Short-2/Long-3, a
+ * replaced Short, a priced or raw third order, a third entry cancelled on the
+ * bar; tape w10-sameopen-shapes-base), under a commission (w10-sameopen-pair-
+ * comm, 0.1 %) and with the bar magnifier (w10-sameopen-shapes-mag): the Long
+ * alone fills. With slippage it runs the Short close-only instead
+ * (w10-sameopen-shapes-slip), which the rule leaves to the reversal below.
+ * TradingView also fills the raw third order at the same open, which the
+ * adapter leaves pending here, as it did before.
  */
 
 #include <cmath>
@@ -293,14 +304,11 @@ static void test_exact_book_controls_remain_ordinary() {
          "[Long-1:M:L:q=na:l=na:s=na:o=-/0:c=1:r=0,"
          "Short-2:M:S:q=na:l=na:s=na:o=-/0:c=1:r=0,"
          "Long-3:M:L:q=na:l=na:s=na:o=-/0:c=1:r=0]",
-         10.0, 2, "[]",
-         "[L:Long-1>Short-2:100.0000>100.0000:q=10.0000:p=0.0000,"
-         "S:Short-2>Long-3:100.0000>100.0000:q=10.0000:p=0.0000]"},
+         10.0, 0, "[]", "[]"},
         {Shape::REPLACEMENT,
          "[Long:M:L:q=na:l=na:s=na:o=-/0:c=1:r=0,"
          "Short:M:S:q=na:l=na:s=na:o=-/0:c=1:r=1]",
-         -10.0, 1, "[]",
-         "[L:Long>Short:100.0000>100.0000:q=10.0000:p=0.0000]"},
+         10.0, 0, "[]", "[]"},
         {Shape::OCA,
          "[Long:M:L:q=na:l=na:s=na:o=G/1:c=0:r=0,"
          "Short:M:S:q=na:l=na:s=na:o=G/1:c=0:r=0]",
@@ -309,21 +317,20 @@ static void test_exact_book_controls_remain_ordinary() {
          "[Long:M:L:q=na:l=na:s=na:o=-/0:c=1:r=0,"
          "Short:M:S:q=na:l=na:s=na:o=-/0:c=1:r=0,"
          "Priced:E:L:q=1.0000:l=na:s=200.0000:o=-/0:c=0:r=0]",
-         -10.0, 1,
+         10.0, 0,
          "[Priced:E:L:q=1.0000:l=na:s=200.0000:o=-/0:c=0:r=0]",
-         "[L:Long>Short:100.0000>100.0000:q=10.0000:p=0.0000]"},
+         "[]"},
         {Shape::RAW_THIRD,
          "[Long:M:L:q=na:l=na:s=na:o=-/0:c=1:r=0,"
          "Short:M:S:q=na:l=na:s=na:o=-/0:c=1:r=0,"
          "Raw:R:L:q=1.0000:l=na:s=na:o=-/0:c=0:r=0]",
-         -10.0, 1,
+         10.0, 0,
          "[Raw:R:L:q=1.0000:l=na:s=na:o=-/0:c=0:r=0]",
-         "[L:Long>Short:100.0000>100.0000:q=10.0000:p=0.0000]"},
+         "[]"},
         {Shape::CANCELED_THIRD,
          "[Long:M:L:q=na:l=na:s=na:o=-/0:c=1:r=0,"
          "Short:M:S:q=na:l=na:s=na:o=-/0:c=1:r=0]",
-         -10.0, 1, "[]",
-         "[L:Long>Short:100.0000>100.0000:q=10.0000:p=0.0000]"},
+         10.0, 0, "[]", "[]"},
     };
     for (const Expected& value : expected) {
         Probe probe(value.shape);
@@ -519,8 +526,7 @@ static void test_configuration_controls_and_explicit_ki65_stay_inert() {
          5.5, 0, "[]"},
         {ConfigControl::MARGIN_50, default_signal, -10.0, 1,
          "[L:Long>Short:100.0000>100.0000:q=10.0000:p=0.0000]"},
-        {ConfigControl::COMMISSION, default_signal, -9.990009990009991, 1,
-         "[L:Long>Short:100.0000>100.0000:q=9.9900:p=-1.9980]"},
+        {ConfigControl::COMMISSION, default_signal, 9.990009990009991, 0, "[]"},
         {ConfigControl::SLIPPAGE, default_signal, -10.001000100010002, 1,
          "[L:Long>Short:100.0100>99.9900:q=9.9990:p=-0.2000]"},
         {ConfigControl::RISK_LONG_ONLY, default_signal, 0.0, 1,
@@ -529,8 +535,7 @@ static void test_configuration_controls_and_explicit_ki65_stay_inert() {
          "[L:Long>Short:100.0000>100.0000:q=10.0000:p=0.0000]"},
         {ConfigControl::COOF, default_signal, -10.0, 1,
          "[L:Long>Short:100.0000>100.0000:q=10.0000:p=0.0000]"},
-        {ConfigControl::MAGNIFIER, default_signal, -10.0, 1,
-         "[L:Long>Short:100.0000>100.0000:q=10.0000:p=0.0000]"},
+        {ConfigControl::MAGNIFIER, default_signal, 10.0, 0, "[]"},
     };
     for (const Expected& value : expected) {
         ConfigProbe probe(value.control);

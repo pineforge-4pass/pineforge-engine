@@ -14137,7 +14137,9 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             // with that position still margined: its own side plus the held
             // side must fit, or it is refused and the held position stays
             // (lane W10-DIAG-UNKNOWN rule SAMEOPEN-REV,
-            // tests/fixtures/same_open_reversal).
+            // tests/fixtures/same_open_reversal). With slippage TradingView
+            // runs such a reversal close-only instead (the -slip tape), which
+            // this rule does not model.
             const bool same_open_reversal = reversal
                 && source.family == PineOrderFamily::Entry
                 && std::holds_alternative<native_order::Market>(
@@ -14149,7 +14151,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
                 && !source.projection_after_close
                 && projection_bar_index(view.cursor.point) == source.projection_created_bar + 1
                 && position_open_bar_index_ == view.cursor.point.interval_index
-                && !position_open_priced_
+                && !position_open_priced_ && config_.slippage == 0
                 && !config_.process_orders_on_close && !config_.calc_on_order_fills
                 && !stream_mode_;
             if (same_open_reversal) {

@@ -176,7 +176,7 @@ Book tape_trades(const std::string& tape, std::int64_t end_ms) {
 // 16-bar one with the explicit-quantity cell of p1-c50). w10-sameopen-held-*:
 // a held position, then the reversing entry and an entry on the held side on
 // one bar, in a 10-bar cycle.
-enum class Script { P1, Held };
+enum class Script { P1, Held, Shapes, Pair };
 
 class ProbeHost final : public source::PineStrategyHost {
 public:
@@ -200,6 +200,19 @@ public:
         const int c = k_ % cycle_;
         if (script_ == Script::Held) {
             held(c);
+            return;
+        }
+        if (script_ == Script::Shapes) {
+            shapes(c);
+            return;
+        }
+        if (script_ == Script::Pair) {
+            if (c == 0) {
+                strategy_entry("Long", true, kNaN, kNaN, kNaN, "L");
+                strategy_entry("Short", false, kNaN, kNaN, kNaN, "S");
+            } else if (c == 2) {
+                strategy_close("", "X", kNaN, kNaN, false);
+            }
             return;
         }
         if (c == 0) {
@@ -247,6 +260,35 @@ private:
             strategy_entry("LONG", true, kNaN, kNaN, kNaN, "L2");
         } else if (c == 9) {
             strategy_close("", "X2", kNaN, kNaN, false);
+        }
+    }
+
+    // w10-sameopen-shapes-*: from flat, a Long and a Short plus a third call.
+    void shapes(int c) {
+        if (c == 0) {
+            strategy_entry("Long-1", true, kNaN, kNaN, kNaN, "T-L1");
+            strategy_entry("Short-2", false, kNaN, kNaN, kNaN, "T-S2");
+            strategy_entry("Long-3", true, kNaN, kNaN, kNaN, "T-L3");
+        } else if (c == 3) {
+            strategy_entry("Long", true, kNaN, kNaN, kNaN, "R-L");
+            strategy_entry("Short", false, kNaN, kNaN, kNaN, "R-S");
+            strategy_entry("Short", false, kNaN, kNaN, kNaN, "R-S2");
+        } else if (c == 6) {
+            strategy_entry("Long", true, kNaN, kNaN, kNaN, "P-L");
+            strategy_entry("Short", false, kNaN, kNaN, kNaN, "P-S");
+            strategy_entry("Priced", true, kNaN, current_bar_.close * 2, 1.0, "P-P", "", 0, -1);
+        } else if (c == 9) {
+            strategy_entry("Long", true, kNaN, kNaN, kNaN, "W-L");
+            strategy_entry("Short", false, kNaN, kNaN, kNaN, "W-S");
+            strategy_order("Raw", true, 1.0, kNaN, kNaN, "", 0);
+        } else if (c == 12) {
+            strategy_entry("Long", true, kNaN, kNaN, kNaN, "C-L");
+            strategy_entry("Short", false, kNaN, kNaN, kNaN, "C-S");
+            strategy_entry("Third", true, kNaN, kNaN, kNaN, "C-T");
+            strategy_cancel("Third");
+        } else if (c == 2 || c == 5 || c == 8 || c == 11 || c == 14) {
+            strategy_cancel_all();
+            strategy_close("", "X", kNaN, kNaN, false);
         }
     }
 
@@ -300,19 +342,20 @@ void show(const char* tag, const std::vector<Row>& rows) {
 }
 
 // What each probe's generated constructor declares.
-source::PineStrategyConfig config(double percent) {
+source::PineStrategyConfig config(double percent, double commission) {
     source::PineStrategyConfig c{};
     c.initial_capital = 10000000.0;
     c.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
     c.default_qty_value = percent;
     c.commission_type = static_cast<int>(CommissionType::PERCENT);
-    c.commission_value = 0.01;
+    c.commission_value = commission;
     return c;
 }
 
 struct Case {
     const char* tape;
     double percent;
+    double commission;
     Script script;
     int cycle;
     std::size_t closed;
@@ -328,28 +371,39 @@ int main() {
     const std::int64_t end_ms = kAapl1d[sizeof(kAapl1d) / sizeof(kAapl1d[0]) - 1].ts;
     const std::set<std::string> all = {"L1", "S1", "L2", "S2", "L3", "S3", "L4", "S4"};
     const std::set<std::string> held = {"S0", "L1", "S1", "L0", "S2", "L2"};
+    const std::set<std::string> shapes = {"T-L1", "T-S2", "T-L3", "R-L", "R-S", "R-S2",
+                                          "P-L", "P-S", "P-P", "W-L", "W-S", "C-L",
+                                          "C-S", "C-T"};
     const Case cases[] = {
-        {"p1-a100", 100.0, Script::P1, 12, 38, all, end_ms, "every trade"},
+        {"p1-a100", 100.0, 0.01, Script::P1, 12, 38, all, end_ms, "every trade"},
         // At 10 % TradingView books each S3-CS3-L3 cell as a long L3 closed by
         // S3 at the open plus the long L3, where the engine books the short S3
         // closed by L3 plus the long L3: the same fills, prices, sizes and
         // money under swapped labels, a report the base engine shares. Only
         // the L-first cells are compared here.
-        {"p1-b10", 10.0, Script::P1, 12, 131, {"L1", "S1", "L2", "S2"}, end_ms,
+        {"p1-b10", 10.0, 0.01, Script::P1, 12, 131, {"L1", "S1", "L2", "S2"}, end_ms,
          "every trade of the L1-CL1-S1 and L2-S2 cells"},
         // 2025-05-02 is the first explicit-quantity L4-S4 cell: TradingView
         // reverses L4 into S4 there, which the base engine does not either
         // (it closes L4 only); the money diverges from there on.
-        {"p1-c50", 50.0, Script::P1, 16, 91, all, at(2025, 5, 2, 0, 0),
+        {"p1-c50", 50.0, 0.01, Script::P1, 16, 91, all, at(2025, 5, 2, 0, 0),
          "every trade closed before the first L4-S4 cell (2025-05-02)"},
-        {"w10-sameopen-held-a100", 100.0, Script::Held, 10, 90, held, end_ms, "every trade"},
+        {"w10-sameopen-held-a100", 100.0, 0.01, Script::Held, 10, 90, held, end_ms,
+         "every trade"},
         // At 10 % TradingView reverses L0 into S2 and S2 back into L2 at one
         // open; the engine keeps S2 (its L2 does not fill), a separate
         // residual the rule cannot cause (it only refuses). The money diverges
         // from the first such cell (2025-04-25), so only the trades before it
         // are compared: the H1 cell of 04-17, where S1 must reverse L1 back.
-        {"w10-sameopen-held-b10", 10.0, Script::Held, 10, 156, {"S0", "L1", "S1", "L0"},
+        {"w10-sameopen-held-b10", 10.0, 0.01, Script::Held, 10, 156, {"S0", "L1", "S1", "L0"},
          at(2025, 4, 25, 14, 0), "every trade closed before the first S2-L2 cell (2025-04-25)"},
+        // TradingView fills the raw strategy.order of the W cells at the same
+        // open; the adapter fills it an open later, as it did before the
+        // rule, one share: its rows are left out.
+        {"w10-sameopen-shapes-base", 100.0, 0.0, Script::Shapes, 15, 50, shapes,
+         end_ms, "every trade but the raw W-R order's"},
+        {"w10-sameopen-pair-comm", 100.0, 0.1, Script::Pair, 3, 43, {"L", "S"}, end_ms,
+         "every trade"},
     };
 
     std::map<std::string, Book> tapes;
@@ -360,7 +414,7 @@ int main() {
         tapes[c.tape] = tape;
         CHECK(tape.trades.size() == c.closed);
         std::string error;
-        const Book lane = run(config(c.percent), c.script, c.cycle, end_ms, error);
+        const Book lane = run(config(c.percent, c.commission), c.script, c.cycle, end_ms, error);
         CHECK(error.empty());
         const std::vector<Row> want = rows_of(tape, c.cells, c.before_ms);
         const std::vector<Row> got = rows_of(lane, c.cells, c.before_ms);
@@ -420,6 +474,25 @@ int main() {
         const Book& hb = tapes["w10-sameopen-held-b10"];
         CHECK(count(hb, "S1") > 0 && closed_by(hb, "L1", "S1") == count(hb, "L1"));
         CHECK(closed_by(hb, "L2", "S2") > 0);
+        // A third call leaves the rule on (no Short fills in any cell), as
+        // do a 0.1 % commission and the bar magnifier (the same trades as
+        // without it). With slippage TradingView runs the Short close-only
+        // instead: the Long closes on it and no short opens, except when the
+        // Short was replaced, which is refused as without slippage.
+        const Book& sb = tapes["w10-sameopen-shapes-base"];
+        for (const char* id : {"T-S2", "T-L3", "R-S", "R-S2", "P-S", "W-S", "C-S"})
+            CHECK(count(sb, id) == 0);
+        CHECK(closed_by(sb, "W-L", "X") == count(sb, "W-L") && count(sb, "W-L") > 0);
+        CHECK(count(tapes["w10-sameopen-pair-comm"], "S") == 0);
+        const Book mag = tape_trades("w10-sameopen-shapes-mag", end_ms);
+        CHECK(mag.trades == sb.trades && mag.entries == sb.entries && mag.exits == sb.exits);
+        const Book slip = tape_trades("w10-sameopen-shapes-slip", end_ms);
+        for (const char* id : {"R-S", "R-S2", "P-S", "W-S", "C-S", "T-S2"})
+            CHECK(count(slip, id) == 0);
+        CHECK(closed_by(slip, "W-L", "W-S") == count(slip, "W-L") && count(slip, "W-L") > 0);
+        CHECK(closed_by(slip, "C-L", "C-S") == count(slip, "C-L") && count(slip, "C-L") > 0);
+        CHECK(closed_by(slip, "P-L", "P-S") == count(slip, "P-L") && count(slip, "P-L") > 0);
+        CHECK(closed_by(slip, "R-L", "X") == count(slip, "R-L") && count(slip, "R-L") > 0);
     }
 
     std::printf("%d passed, %d failed\n", tests_passed, tests_failed);

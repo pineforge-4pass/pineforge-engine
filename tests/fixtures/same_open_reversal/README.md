@@ -12,12 +12,17 @@ fitted, so at 100 % the reversal went through and a margin call trimmed it.
 The same holds when a position is held and the bar places the reversing
 entry and then an entry on the held side (at the pyramiding cap when placed):
 the first reverses the position at the next open, and the second is a
-reversal of a position its own bar's entry opened at that open.
+reversal of a position its own bar's entry opened at that open. A third call
+on the bar does not change it, nor does a commission or the bar magnifier.
+With slippage TradingView runs such a reversal close-only instead (the Long
+closes on the Short and no short opens), which the rule does not model: it
+is scoped to zero slippage.
 
 Each directory is one `lab tv --no-note` export of a synthetic probe written
 for this lane (`p1-*` by agent gjv, 2026-09-27T21:37-21:39Z;
 `w10-sameopen-held-*` 2026-09-28T05:38Z; channel `ws-report-v1`,
-`range proof: covered`), byte for byte: `strategy.pine`, `tv_trades.csv`
+`range proof: covered`; `w10-sameopen-shapes-*` and `w10-sameopen-pair-comm`
+2026-09-28T06:05-06:07Z), byte for byte: `strategy.pine`, `tv_trades.csv`
 (times at UTC+8), `metrics.json`, `meta.json`. All run on NASDAQ:AAPL 1D,
 2025-04-01 .. 2026-05-01, with 10,000,000 initial capital, a 0.01 %
 commission and pyramiding 1. From 2025-04-14 the `p1-*` probes place a cell
@@ -25,7 +30,14 @@ every two daily bars in a 12-bar cycle: L1, `strategy.close("LONG")`, S1; the
 cleanup X1; L2, S2; X2; S3, `strategy.close("SHORT")`, L3; X3. `p1-c50` runs
 a 16-bar cycle that adds L4, S4 with an explicit quantity of half the equity,
 and X4. The `w10-sameopen-held-*` probes run a 10-bar cycle: S0; L1, S1 on
-one bar; X1; then L0; S2, L2 on one bar; X2.
+one bar; X1; then L0; S2, L2 on one bar; X2. The `w10-sameopen-shapes-*`
+probes (pyramiding 1, no commission) run a 15-bar cycle of five cells, each
+a Long and a Short from flat plus a third call: T a Long under another id,
+R the Short again (a replacement), P a priced long stop that never fills,
+W a raw `strategy.order` of one share, C a third entry cancelled on the bar;
+`-slip` adds `slippage=1`, `-mag` `use_bar_magnifier=true`.
+`w10-sameopen-pair-comm` is the bare pair every three bars under a 0.1 %
+commission.
 
 | tape | default size | tv_trades.csv sha256 |
 |---|---|---|
@@ -34,6 +46,10 @@ one bar; X1; then L0; S2, L2 on one bar; X2.
 | `p1-c50` | 50 % | `7613999f24d20394691fd57b445ae17971f545dbdefeac2d4ff922b65f0eade8` |
 | `w10-sameopen-held-a100` | 100 % | `cb27d51bf2bf3806415870523bbda72b4e59aadae53f0b78a531e427cb984fa2` |
 | `w10-sameopen-held-b10` | 10 % | `b145ef0c2d66fd714a43b6f5a90f5e1493ef3e88777ff01465c3a1305e15e2cf` |
+| `w10-sameopen-shapes-base` | 100 % | `f2ade8592803ed0c74a8b2c4e95d53d7e1dd4300d094f32edc86979c45101e21` |
+| `w10-sameopen-shapes-slip` | 100 % | `fec1348e3b19817feedf64f12a022672cf57701a3c78718daf347a968551696b` |
+| `w10-sameopen-shapes-mag` | 100 % | `699397b06bedb6ac953615718670e575bf193548af90a2596928c5aa2a31e69c` |
+| `w10-sameopen-pair-comm` | 100 % | `214d15c9665f42016c01ed68cd78e6fcef9e68f2369e2fcd07a30c3832320baf` |
 
 What TradingView books:
 
@@ -49,6 +65,12 @@ What TradingView books:
 - Held, 10 %: every S1 reverses L1 back at the same open, and every L2
   reverses S2 back (TradingView books each such S2 as a long L2 closed by S2,
   the label swap of `p1-b10`'s S3-CS3-L3).
+- Shapes: no Short ever fills in any cell; every Long runs to X (T's Long-3
+  is at the pyramiding cap); the raw order fills at the same open. With the
+  magnifier the trades are the same. With slippage the Long of the T, P, W
+  and C cells closes on the Short at the open and no short opens (T's Long-3
+  then opens and a margin call closes it); R's Long still runs to X.
+- Pair under 0.1 %: no Short ever fills.
 
 The base engine booked the 100 % reversals (L1 closed at the open, then a
 margin-called short) and the 50 % L2-S2 reversal. It now refuses them. The
@@ -75,16 +97,23 @@ Two cells are not this rule, and the test does not compare them:
 - `w10-sameopen-held-b10` S2-L2 (from 2025-04-25): TradingView reverses S2
   back into L2 at 10 %; the engine keeps S2 (its L2 never fills), as the base
   engine does. The rule only refuses, so it cannot be the cause.
+- `w10-sameopen-shapes-base` W: TradingView fills the raw order at the open
+  of the pair; the engine fills it an open later, as the base engine does
+  (one share; its rows are left out).
+- `w10-sameopen-shapes-slip`: the engine does not run the reversal close-only
+  and is not replayed; the test reads TradingView's rows.
 
-`tests/test_same_open_reversal_tapes.cpp` replays the five tapes through the
+`tests/test_same_open_reversal_tapes.cpp` replays seven of the tapes through the
 Pine adapter under the configuration the generated constructor declares,
 trading from 2025-04-14 13:30 UTC with TradingView's 0.01 tick and whole-share
 lot, and requires the trades the tape closes inside the replayed bars (entry
 and exit time, side, price in ticks, quantity) to be the engine's: every
 trade of `p1-a100`, every trade of the L1 and L2 cells of `p1-b10`, every
 trade of `p1-c50` closed before 2025-05-02, every trade of
-`w10-sameopen-held-a100`, and every trade of `w10-sameopen-held-b10` closed
-before 2025-04-25. It also reads the rule off TradingView's own rows.
+`w10-sameopen-held-a100`, every trade of `w10-sameopen-held-b10` closed
+before 2025-04-25, every trade of `w10-sameopen-shapes-base` but the raw
+order's, and every trade of `w10-sameopen-pair-comm`. It also reads the
+rule off TradingView's own rows, `-mag`'s and `-slip`'s included.
 Fail-before on 4091273d (GAPSTOP): 1754 passed, 2 failed (the `p1-a100` and
 `p1-c50` replays); for the held-side form, on e8170ffa (the rule for entries
 placed flat only): 3024 passed, 1 failed (the `w10-sameopen-held-a100`

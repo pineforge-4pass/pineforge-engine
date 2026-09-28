@@ -1,0 +1,16 @@
+{
+  "title": "w10 sameopen shapes slip",
+  "slug": "w10-sameopen-shapes-slip",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T06:05:23.281Z",
+  "chart": {
+    "symbol": "NASDAQ:AAPL",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "5e67ad667e988d689f27a48e87aa42ab9aca3d4360d4157b7a0be1aa6101a83d",
+  "tv_trades_sha256": "fec1348e3b19817feedf64f12a022672cf57701a3c78718daf347a968551696b",
+  "tv_trades_rows": 108
+}

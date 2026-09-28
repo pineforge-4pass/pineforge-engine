@@ -1,0 +1,16 @@
+{
+  "title": "w10 sameopen shapes base",
+  "slug": "w10-sameopen-shapes-base",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T06:05:18.719Z",
+  "chart": {
+    "symbol": "NASDAQ:AAPL",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "f17d1f91bdad41e4674424df7bf3de1c93faabc164689064907bef392e9a338a",
+  "tv_trades_sha256": "f2ade8592803ed0c74a8b2c4e95d53d7e1dd4300d094f32edc86979c45101e21",
+  "tv_trades_rows": 100
+}

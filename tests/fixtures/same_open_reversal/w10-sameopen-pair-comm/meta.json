@@ -1,0 +1,16 @@
+{
+  "title": "w10 sameopen pair commission",
+  "slug": "w10-sameopen-pair-comm",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T06:07:12.638Z",
+  "chart": {
+    "symbol": "NASDAQ:AAPL",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "3f2ae2cf3fa5472e14e67ce9fe3fc75a9f7d9ec44379b5478d843d760cd09af7",
+  "tv_trades_sha256": "214d15c9665f42016c01ed68cd78e6fcef9e68f2369e2fcd07a30c3832320baf",
+  "tv_trades_rows": 86
+}

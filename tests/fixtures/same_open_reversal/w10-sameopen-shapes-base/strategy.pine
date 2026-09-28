@@ -1,0 +1,38 @@
+//@version=6
+// W10-DIAG-UNKNOWN synthetic probe: from flat, one bar places a Long and a
+// Short market entry (default 100 % of equity) plus a third call: T a Long
+// under another id, R the Short again (a replacement), P a priced long stop
+// that never fills, W a raw strategy.order, C a third entry cancelled on the
+// same bar. Does the Short reverse the Long at the next open? 
+strategy("w10 sameopen shapes base", overlay=true, initial_capital=10000000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+     pyramiding=1)
+armed = time >= timestamp("UTC", 2025, 4, 14, 0, 0)
+var int k = -1
+if armed
+    k += 1
+c = k % 15
+if armed and c == 0
+    strategy.entry("Long-1", strategy.long, comment="T-L1")
+    strategy.entry("Short-2", strategy.short, comment="T-S2")
+    strategy.entry("Long-3", strategy.long, comment="T-L3")
+if armed and c == 3
+    strategy.entry("Long", strategy.long, comment="R-L")
+    strategy.entry("Short", strategy.short, comment="R-S")
+    strategy.entry("Short", strategy.short, comment="R-S2")
+if armed and c == 6
+    strategy.entry("Long", strategy.long, comment="P-L")
+    strategy.entry("Short", strategy.short, comment="P-S")
+    strategy.entry("Priced", strategy.long, stop=close * 2, qty=1, comment="P-P")
+if armed and c == 9
+    strategy.entry("Long", strategy.long, comment="W-L")
+    strategy.entry("Short", strategy.short, comment="W-S")
+    strategy.order("Raw", strategy.long, qty=1, comment="W-R")
+if armed and c == 12
+    strategy.entry("Long", strategy.long, comment="C-L")
+    strategy.entry("Short", strategy.short, comment="C-S")
+    strategy.entry("Third", strategy.long, comment="C-T")
+    strategy.cancel("Third")
+if armed and (c == 2 or c == 5 or c == 8 or c == 11 or c == 14)
+    strategy.cancel_all()
+    strategy.close_all(comment="X")
