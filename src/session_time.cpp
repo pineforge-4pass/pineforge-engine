@@ -1624,8 +1624,10 @@ static int64_t chart_period_close_ms(int64_t bar_ms, const std::string& tz,
             return week_close;
         }
     }
+    // A period whose last traded close is the stamp itself was over when the
+    // stamp opened the next session; a close stamp keeps its own period.
     int64_t close = session_period_last_traded_close_ms(covered, tz, session, period);
-    if (close < bar_ms) {
+    if (at != bar_ms ? close < bar_ms : close <= bar_ms) {
         close = session_period_last_traded_close_ms(
             session_period_close_ms(covered, tz, session, period), tz, session, period);
     }

@@ -548,6 +548,11 @@ static void test_chart_time_close_close_stamps() {
         {"1D", "1700-1700", "America/New_York", 1741039200000LL, 1741125600000LL},
         // 17:00 ET on an equity, past the close: the next session's.
         {"1D", "0930-1600", "America/New_York", 1741039200000LL, 1741122000000LL},
+        // OANDA's week stamped Fri 2025-03-07 17:00 EST, where its week's
+        // last session closes and the next session opens: the next week's,
+        // closing Fri 03-14 17:00 EDT.
+        {"1W", "1800-1700", "America/New_York", 1741384800000LL, 1741986000000LL},
+        {"1W", "1700-1700", "America/New_York", 1741384800000LL, 1741986000000LL},
     };
     ZeroPriceProbe p;
     int wrong = 0;
