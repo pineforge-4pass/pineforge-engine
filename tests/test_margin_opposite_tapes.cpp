@@ -13,6 +13,10 @@
  *       on that bar keeps the size it was placed with, so it closes the called
  *       units again and opens them on the other side -- at the next open, or
  *       at that close under process_orders_on_close.
+ *   CQ  The script's strategy.cancel_all() withdraws that call too; it is then
+ *       placed again behind the script's orders and executes after them at the
+ *       next open: on the book the close_all flattened it opens the called
+ *       units on the other side, on a book still held it reduces it.
  *
  * Each row replays one lab tv tape through the Pine adapter under the
  * configuration its strategy() declares, over the lane's bars, and requires
@@ -376,6 +380,14 @@ int main() {
          config(10000000.0, 0.0, 0, true), 510},
         {"CP", "w13-p2-eur", opposite, Probe::CloseNextBar, Mode::None, Chart::EurUsd,
          config(10000000.0, 0.0, 0), 297, nullptr, {"2025-04-02 16:45", "2025-04-03 06:15"}},
+        {"CQ", "w13-b2-cancel-close-f", opposite, Probe::EveryFourBars, Mode::CancelClose,
+         Chart::NyseF, config(10000.0, 0.0, 0), 331},
+        {"CQ", "w13-b2s-cancel-close-f", opposite, Probe::EveryFourBars, Mode::CancelClose,
+         Chart::NyseF, config(10000.0, 0.0, 1), 355},
+        {"CQ", "w13-b4-cancel-f", opposite, Probe::EveryFourBars, Mode::Cancel, Chart::NyseF,
+         config(10000.0, 0.0, 0), 434},
+        {"CQ", "w13-x2-cancel-close-xau2", opposite, Probe::TopOfHour, Mode::CancelClose,
+         Chart::XauUsd, config(10000.0, 0.0, 0), 1358},
         {"control", "w13-b5-none-f", opposite, Probe::EveryFourBars, Mode::None, Chart::NyseF,
          config(10000.0, 0.0, 0), 436},
         {"control", "w13-x5-none-xau2", opposite, Probe::TopOfHour, Mode::None, Chart::XauUsd,

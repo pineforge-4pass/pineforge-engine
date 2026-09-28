@@ -51,6 +51,21 @@ Before this lane the adapter rested the call at the close's mark, so the path
 filled it at the close before the script ran: the script read the called book
 and the close order closed the rest.
 
+## CQ: the script's cancel_all withdraws the close's call
+
+| tape | trades | `strategy()` declares | TradingView | tv_trades.csv sha256 |
+|---|---:|---|---|---|
+| `w13-b2-cancel-close-f` | 331 | `-cancel-close` | the call is withdrawn with the script's orders and placed again behind them: at the next open the close order closes the whole short and the call, sized at the close, opens its shares long under the id "Margin call" (27 times; 04-10 17:15 UTC: 1133 closed and 40 opened long at 9.00) | `2cc1dc11b45e52a083aedc7ce3a7205eb0976350b01fdb127cad4d1f98485acf` |
+| `w13-b2s-cancel-close-f` | 355 | the same, slippage 1 | the same (35 times) | `c66a54fc6a879decb2d18de60a62758614767fbe352484f7ba4c0bb880176907` |
+| `w13-b4-cancel-f` | 435 | `-cancel` | nothing precedes the call at the next open: it reduces the short there, sized at the close, and the open's own check then reads the smaller book (04-07 17:45 UTC: 16 at the 9.29 open, then one more at the 9.33 high) | `f248fcb44f66cc6ac7bfbb4a6658973cbb3962aa437bed18b1893db5e792f8ec` |
+| `w13-x2-cancel-close-xau2` | 1358 | `-cancel-close` on XAUUSD | the same, ten one-unit longs | `cb8e94b4fb910d659b05c01458be907918fa1ad7c656ed16b72f100cf19255d3` |
+
+A one-unit call placed again so is taken only at an open whose fill restores
+the book: `w13-b2-cancel-close-f` 2025-06-10 19:45 and 2025-06-30 14:15 UTC
+take none. The population probes `pf-probe-ki62-margin-deferral` on
+NYSE:F and OANDA:XAUUSD are this shape (their cells call
+`strategy.cancel_all()` before `strategy.close_all()`).
+
 ## Open
 
 Measured, not modelled; each is a row's open cell or lies past its window end,

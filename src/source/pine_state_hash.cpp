@@ -521,6 +521,10 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.u(static_cast<std::uint64_t>(position_open_phase_));
     f.b(position_open_priced_);
     f.i(last_margin_call_script_bar_); f.i(pooc_close_checkpoint_deferred_ms_);
+    // Live only from a close to the next open; folded only then (lane
+    // W13-ENG-MARGIN-OPP), so every other run keeps its digest.
+    if (close_margin_open_bar_ != std::numeric_limits<std::int64_t>::min())
+        f.i(close_margin_open_bar_);
     f.u(last_margin_call_event_ordinal_);
     f.u(last_margin_call_entry_incarnation_); f.i(last_margin_call_position_cycle_);
     f.b(last_margin_call_at_script_close_);
