@@ -913,7 +913,7 @@ struct ArgCache {
 };
 
 ArgCache& arg_cache(const std::string& session, const std::string& tz) {
-    constexpr std::size_t kEntries = 8;
+    constexpr std::size_t kEntries = 32;
     thread_local std::vector<std::unique_ptr<ArgCache>> entries;
     thread_local uint64_t clock = 0;
     for (auto& entry : entries) {
