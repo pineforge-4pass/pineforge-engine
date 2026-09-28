@@ -1,0 +1,16 @@
+{
+  "title": "w11 sess mask2",
+  "slug": "w11-sessmask2-btc15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T09:00:43.316Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-03-06",
+    "to": "2025-03-12"
+  },
+  "pine_sha256": "2394e393b1d30db3bccc4666917d4e1c3e7564ff071117bf96eadefb7b984139",
+  "tv_trades_sha256": "868a0994a450a57bbd1615a5f992f6b5b2ba285dca3010fafc1bbdfb77037707",
+  "tv_trades_rows": 1152
+}

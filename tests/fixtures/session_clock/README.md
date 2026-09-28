@@ -66,21 +66,35 @@ own findings. There the test compares only whether the bar is in the window:
 TradingView answers the bar's own time and the engine the New York day's
 midnight.
 
-## Which days a session with no day list admits
+## Which days a session admits
 
-`w11-sessmask-btc15` spells seven sessions on BINANCE:BTCUSDT 15, Thursday
-to the next Wednesday, weekend included. With no day list, one window
-(`1200-1300`) admits every day. Several windows (`0000-0100,1200-1300`,
-`0000-1200,1200-2400`, `0000-0100,0000-0100`) admit Monday to Friday only.
-A day list is taken as written: `...:1234567` admits every day and `...:17`
-the weekend alone. Field `g` of `w11-sess2400-*` (`2300-2400,0000-0100`)
-reads the same way: Sunday 23:00 and Saturday 00:00 are out.
-`test_session_day_list_tapes` replays it. In the engine the rule covers a
-session whose windows each end after they start. A window across midnight
-makes the session's days session days (the evening that opens Monday's
-session is a Sunday), and a reading of one instant's weekday cannot give
-that, so such a session (CBOT:ZC1!'s `1900-0745,0830-1320`) keeps its
-every-day reading.
+A day list is taken as written. With no list, one window admits every day and
+several windows admit Monday to Friday only, whether or not one of them opens
+at 00:00. A list, given or implied, filters each window by its session day.
+That is the day the window starts, except for a window that ends at or before
+its start (past midnight), which belongs to the day it ends:
+
+- `1700-1700:23456` runs from Sunday 17:00 to Friday 16:45.
+- `1800-0200:23456` and `2330-0030:23456` admit Sunday evening and not Friday
+  evening.
+- `2330-2430:23456` keeps Friday's 00:00-00:30 tail on Saturday and drops
+  Sunday's on Monday.
+- `0000-0000:23456` is the calendar's weekdays.
+
+`w11-sessmask-btc15`, `w11-sessmask2-btc15` and `w11-sessmask3-btc15` spell
+these sessions on BINANCE:BTCUSDT 15, Thursday to the next Wednesday, weekend
+included:
+
+| tape | sessions |
+|---|---|
+| `w11-sessmask-btc15` | `0000-0100,1200-1300`, `2300-2400,0000-0100:1234567`, `1200-1300`, `0000-0100,1200-1300:17`, `0000-1200,1200-2400`, `0000-0100:1234567`, `0000-0100,0000-0100` |
+| `w11-sessmask2-btc15` | `0930-1130,1300-1500` (in UTC, then in New York), `2330-2430,1200-1300`, `1700-2500,0900-1000`, `0930-1130`, `1800-0200,1200-1300` |
+| `w11-sessmask3-btc15` | `0000-0000:23456`, `1700-1700:23456`, `1800-0200:23456`, `0900-1700:23456`, `2330-0030:23456`, `2330-2430:23456` |
+
+Field `g` of `w11-sess2400-*` (`2300-2400,0000-0100`) reads the same way:
+Sunday 23:00 and Saturday 00:00 are out. `test_session_day_list_tapes`
+replays the three tapes, and `tests/test_session_ismarket_tape.cpp` holds the
+effect on `session.ismarket`'s predicate for the `:23456` session strings.
 
 | tape | chart | range | trades | tv_trades.csv sha256 | strategy.pine sha256 (12) |
 |---|---|---|---:|---|---|
@@ -88,6 +102,8 @@ every-day reading.
 | `w11-sess2400-btc1d` | BINANCE:BTCUSDT 1D | 2025-01-01 .. 2025-07-01 | 181 | `8a66f3a67cdb58eeaa3d6132dc1fb41d5cf6c8b9d7953f5296c8e4e615e04231` | `e957446611c8` |
 | `w11-sess2400-xau15` | OANDA:XAUUSD 15 | 2025-03-05 .. 2025-03-12 | 464 | `fe968cc0781afde80b85de132dcfefa7e045dd4380f18c9c33c896a96a6772d9` | `19ed4a005d4c` |
 | `w11-sessmask-btc15` | BINANCE:BTCUSDT 15 | 2025-03-06 .. 2025-03-12 | 576 | `4a22789e9214f932250b23502780918eae03d7a68d6b6ddc5c4cd5eb5c544e66` | `3b3c4ceb94e3` |
+| `w11-sessmask2-btc15` | BINANCE:BTCUSDT 15 | 2025-03-06 .. 2025-03-12 | 576 | `868a0994a450a57bbd1615a5f992f6b5b2ba285dca3010fafc1bbdfb77037707` | `2394e393b1d3` |
+| `w11-sessmask3-btc15` | BINANCE:BTCUSDT 15 | 2025-03-06 .. 2025-03-12 | 576 | `82ae8d9903f35c112d604597bd0507c71986d70ba1b0eb91e7d9ccf7fb70e2c9` | `eae1064366af` |
 | `w11-edge-24000100-btc15` | BINANCE:BTCUSDT 15 | 2025-03-05 .. 2025-03-07 | 192 | `affb767b42f776c79f2e7a192e0df39b372b9e62d71a842f33231ac27925167d` | `035c48ffcf32` |
 | `w11-edge-24300100-btc15` | BINANCE:BTCUSDT 15 | 2025-03-05 .. 2025-03-07 | 192 | `adef478120bd7fd74b410d86d3fb4f783b6b963e5f7b2952594401899013ac29` | `988aa2c18cd0` |
 | `w11-edge-00000060-btc15` | BINANCE:BTCUSDT 15 | 2025-03-05 .. 2025-03-07 | 192 | `affb767b42f776c79f2e7a192e0df39b372b9e62d71a842f33231ac27925167d` | `fe560a3f2b26` |

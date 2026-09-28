@@ -686,15 +686,17 @@ int session_clock_minutes(const std::string& s, std::size_t at) {
     return (digit[0] * 10 + digit[1]) * 60 + digit[2] * 10 + digit[3];
 }
 
-// True for a session of several windows none of which ends at or before it
-// starts. With no day list TradingView admits such a session on Monday to
-// Friday only, and one window on every day (lab tv tape w11-sessmask-btc15,
-// tests/fixtures/session_clock). A window across midnight makes its days
-// session days -- the evening that opens Monday's session is a Sunday's --
-// which a reading of one instant's weekday cannot give, so such a session
-// keeps its every-day reading.
-bool several_same_day_windows(const std::string& windows) {
-    int count = 0;
+// Whether the local time of `local_tm` lies in a window of `windows` whose
+// session day is in `days` (1 = Sunday .. 7 = Saturday). A window's session
+// day is the day it starts, but the day it ends for a window that ends at or
+// before its start, past midnight: "1700-1700:23456" opens Monday's session
+// on Sunday at 17:00, "1800-0200:23456" admits Sunday 18:00 and not Friday
+// 18:00, "2330-2430:23456" keeps Friday's 00:00-00:30 tail on Saturday and
+// "0000-0000:23456" is the calendar's weekdays (lab tv tapes
+// w11-sessmask{,2,3}-btc15, tests/fixtures/session_clock).
+bool local_time_in_session_days(const std::string& windows, const struct tm& local_tm,
+                                const std::unordered_set<int>& days) {
+    const int mod = local_tm.tm_hour * 60 + local_tm.tm_min;
     std::size_t pos = 0;
     while (pos <= windows.size()) {
         const std::size_t comma = windows.find(',', pos);
@@ -704,14 +706,25 @@ bool several_same_day_windows(const std::string& windows) {
         trim_inplace(win);
         const std::size_t dash = win.find('-');
         if (dash == std::string::npos || dash < 4)
-            return false;
+            continue;
         const int sm = session_clock_minutes(win, 0);
-        const int em = session_clock_minutes(win, dash + 1);
-        if (sm < 0 || em < 0 || em <= sm)
-            return false;
-        ++count;
+        int em = session_clock_minutes(win, dash + 1);
+        if (sm < 0 || em < 0)
+            continue;
+        const int ends_next_day = em <= sm && em > 0 ? 1 : 0;
+        if (em <= sm)
+            em += 24 * 60;
+        // `back` days ago the window opened that holds this time of day.
+        int back = 0;
+        for (int t = mod; t < em; t += 24 * 60, ++back) {
+            if (t < sm)
+                continue;
+            const int day = ((local_tm.tm_wday - back + ends_next_day) % 7 + 7) % 7 + 1;
+            if (days.count(day) != 0)
+                return true;
+        }
     }
-    return count > 1;
+    return false;
 }
 
 }  // anonymous namespace
@@ -782,17 +795,17 @@ bool passes_session_filter(const std::string& session,
     std::string windows;
     std::unordered_set<int> day_filter;
     parse_day_filter(session, windows, &day_filter);
-    if (day_filter.empty() && several_same_day_windows(windows))
+    // With no day list, one window admits every day and several windows
+    // Monday to Friday only (lab tv tapes w11-sessmask{,2}-btc15).
+    if (day_filter.empty() && windows.find(',') != std::string::npos)
         day_filter = {2, 3, 4, 5, 6};
 
     struct tm local_tm {};
     decompose_ms_local(bar_ms, tz, local_tm);  // gmtime_r for UTC (no TZ flip)
 
-    int day_of_week_sun1 = local_tm.tm_wday + 1;  // 1=Sunday
-    if (!day_filter.empty() && day_filter.count(day_of_week_sun1) == 0)
-        return false;
-
-    return local_time_in_session_windows(windows, local_tm);
+    if (day_filter.empty())
+        return local_time_in_session_windows(windows, local_tm);
+    return local_time_in_session_days(windows, local_tm, day_filter);
 }
 
 // ---------------------------------------------------------------------------

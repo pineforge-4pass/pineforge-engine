@@ -27,17 +27,19 @@
  *      "1800-1700" America/New_York, 24x7 UTC for the crypto perp): the
  *      predicate, the kernel fact and TradingView agree on every bar;
  *   2. the same sessions spelled with TradingView's weekday mask ":23456":
- *      the kernel still agrees on every bar; the predicate reads each Sunday
- *      evening open (17:00 CT on ES1!, 17:00 / 18:00 ET on EURUSD / XAUUSD)
- *      as out of market, because the instant's weekday is Sunday while the
- *      session day it opens is Monday's;
+ *      the kernel still agrees on every bar, and so does the predicate since
+ *      lane W11-ENG-TIME-COLOR read a day list against each window's session
+ *      day (tests/fixtures/session_clock): the Sunday evening open (17:00 CT
+ *      on ES1!, 17:00 / 18:00 ET on EURUSD / XAUUSD) is Monday's session. It
+ *      read the instant's weekday before, Sunday, and put each such open out
+ *      of market;
  *   3. a 24-hour day spelled "0000-2400": the kernel reads every bar in
  *      session, and so does the predicate since lane W11-ENG-TIME-COLOR
  *      read "2400" as the day's end, as TradingView does
  *      (tests/fixtures/session_clock; it read none before); the TradingView
  *      spelling "0000-0000" is the control both read as 24h.
- * The predicate's disagreements are pinned bar for bar, so a lane that routes
- * generated session.ismarket to the kernel fact moves exactly these rows.
+ * The predicate's answers are pinned bar for bar; on these tapes it now
+ * disagrees with TradingView nowhere.
  *
  * Bars: session.ismarket is a function of the bar's time and the symbol's
  * session and timezone only, so each tape is replayed on flat bars stamped at
@@ -257,13 +259,13 @@ int main() {
         {"hm-g236-eurusd-60-dst-mar", "1700-1700", "America/New_York", 0, 0},
         {"hm-g236-xauusd-60-dst-mar", "1800-1700", "America/New_York", 0, 0},
         {"hm-g236-eth-60-24x7", "24x7", "UTC", 0, 0},
-        // 2. the same sessions with a weekday mask: the predicate misses
-        //    every Sunday-evening open.
-        {"hm-g236-es1-60-dst-mar", "1700-1600:23456", "America/Chicago", 14, 14},
-        {"hm-g236-es1-60-dst-nov", "1700-1600:23456", "America/Chicago", 14, 14},
-        {"hm-g236-es1-60-thanksgiving", "1700-1600:23456", "America/Chicago", 14, 14},
-        {"hm-g236-eurusd-60-dst-mar", "1700-1700:23456", "America/New_York", 14, 14},
-        {"hm-g236-xauusd-60-dst-mar", "1800-1700:23456", "America/New_York", 12, 12},
+        // 2. the same sessions with a weekday mask: the Sunday-evening open
+        //    is Monday's session, for the predicate too.
+        {"hm-g236-es1-60-dst-mar", "1700-1600:23456", "America/Chicago", 0, 0},
+        {"hm-g236-es1-60-dst-nov", "1700-1600:23456", "America/Chicago", 0, 0},
+        {"hm-g236-es1-60-thanksgiving", "1700-1600:23456", "America/Chicago", 0, 0},
+        {"hm-g236-eurusd-60-dst-mar", "1700-1700:23456", "America/New_York", 0, 0},
+        {"hm-g236-xauusd-60-dst-mar", "1800-1700:23456", "America/New_York", 0, 0},
         // 3. a 24-hour day: "0000-2400" and the TradingView spelling
         //    "0000-0000" (both: always).
         {"hm-g236-eth-60-24x7", "0000-2400", "UTC", 0, 0},

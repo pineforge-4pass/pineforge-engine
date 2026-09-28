@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 #include <pineforge/na.hpp>
 #include <pineforge/session_time.hpp>
@@ -410,42 +411,62 @@ static void test_session_clock_edge_tapes() {
     }
 }
 
-// Which days a session argument with no day list admits (w11-sessmask-btc15,
-// BINANCE:BTCUSDT 15 over a weekend): one window, every day; several windows,
-// Monday to Friday only; a day list, its own days.
+// Which days a session argument admits, TradingView's day list: with no list
+// one window admits every day and several windows Monday to Friday only; a
+// list is taken as written. A list filters each window by its session day --
+// the day the window starts, but the day it ends for a window that wraps past
+// midnight: "1700-1700:23456" opens Monday's session on Sunday at 17:00,
+// "1800-0200" closes Friday's at 02:00 on Friday, and "2330-2430" keeps
+// Friday's 00:00-00:30 tail on Saturday (w11-sessmask{,2,3}-btc15, BINANCE:
+// BTCUSDT 15 over a weekend).
 static void test_session_day_list_tapes() {
     std::printf("test_session_day_list_tapes\n");
-    static const char* const sessions[] = {
-        "0000-0100,1200-1300",          "2300-2400,0000-0100:1234567",
-        "1200-1300",                    "0000-0100,1200-1300:17",
-        "0000-1200,1200-2400",          "0000-0100:1234567",
-        "0000-0100,0000-0100",
+    struct Tape {
+        const char* slug;
+        std::vector<const char*> sessions;
     };
-    bool ok = true;
-    const auto readings =
-        exit_comment_tape::read(PINEFORGE_SESSION_CLOCK_FIXTURE_DIR, "w11-sessmask-btc15", ok);
-    CHECK(ok);
-    int compared = 0;
-    int wrong = 0;
-    for (const auto& reading : readings) {
-        const auto spelled = exit_comment_tape::split(reading.signal, ',');
-        if (spelled.size() != sizeof(sessions) / sizeof(sessions[0])) { ++wrong; continue; }
-        for (std::size_t k = 0; k < spelled.size(); ++k) {
-            const int64_t value =
-                pine_time(reading.bar_ms, "15", sessions[k], "", "15", "UTC", "24x7");
-            ++compared;
-            if (!same_reading(spelled[k], value, reading.bar_ms, false)) {
-                if (++wrong <= 5) {
-                    std::printf("  bar %lld (%s) tv=%s engine=%lld\n",
-                                static_cast<long long>(reading.bar_ms), sessions[k],
-                                spelled[k].c_str(), static_cast<long long>(value));
+    const Tape tapes[] = {
+        {"w11-sessmask-btc15",
+         {"0000-0100,1200-1300", "2300-2400,0000-0100:1234567", "1200-1300",
+          "0000-0100,1200-1300:17", "0000-1200,1200-2400", "0000-0100:1234567",
+          "0000-0100,0000-0100"}},
+        {"w11-sessmask2-btc15",
+         {"0930-1130,1300-1500", "0930-1130,1300-1500", "2330-2430,1200-1300",
+          "1700-2500,0900-1000", "0930-1130", "1800-0200,1200-1300"}},
+        {"w11-sessmask3-btc15",
+         {"0000-0000:23456", "1700-1700:23456", "1800-0200:23456", "0900-1700:23456",
+          "2330-0030:23456", "2330-2430:23456"}},
+    };
+    for (const Tape& tape : tapes) {
+        bool ok = true;
+        const auto readings =
+            exit_comment_tape::read(PINEFORGE_SESSION_CLOCK_FIXTURE_DIR, tape.slug, ok);
+        CHECK(ok);
+        int compared = 0;
+        int wrong = 0;
+        for (const auto& reading : readings) {
+            const auto spelled = exit_comment_tape::split(reading.signal, ',');
+            if (spelled.size() != tape.sessions.size()) { ++wrong; continue; }
+            for (std::size_t k = 0; k < spelled.size(); ++k) {
+                // w11-sessmask2's second field reads its windows in New York.
+                const bool new_york = std::string(tape.slug) == "w11-sessmask2-btc15" && k == 1;
+                const int64_t value = pine_time(reading.bar_ms, "15", tape.sessions[k],
+                                                new_york ? "America/New_York" : "", "15",
+                                                "UTC", "24x7");
+                ++compared;
+                if (!same_reading(spelled[k], value, reading.bar_ms, false)) {
+                    if (++wrong <= 5) {
+                        std::printf("  %s bar %lld (%s) tv=%s engine=%lld\n", tape.slug,
+                                    static_cast<long long>(reading.bar_ms), tape.sessions[k],
+                                    spelled[k].c_str(), static_cast<long long>(value));
+                    }
                 }
             }
         }
+        std::printf("  %s: %d readings compared, %d differ\n", tape.slug, compared, wrong);
+        CHECK(compared == 575 * static_cast<int>(tape.sessions.size()));
+        CHECK(wrong == 0);
     }
-    std::printf("  w11-sessmask-btc15: %d readings compared, %d differ\n", compared, wrong);
-    CHECK(compared == 575 * 7);
-    CHECK(wrong == 0);
 }
 
 int main() {
