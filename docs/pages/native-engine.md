@@ -2576,6 +2576,16 @@ the continuous-session classes `"forex"`, `"cfd"` and `"crypto"`, whose period
 completes on the next session's first bar instead. The vocabulary is the one
 the C ABI's `strategy_set_syminfo_type` fixes.
 
+Every calendar series also closes each bucket **once**, and not while the next
+input bar the run holds still belongs to its period. A session template that
+knows Monday to Friday ends a week at Friday's close; an exchange that trades a
+weekend session inside that week (NSE's Budget-day Sunday of 2026-02-01) keeps
+the week open until that session's last bar, where the series advances one
+bucket. A bar with no known successor -- a stream, the feed's last bar --
+keeps the template's rule, and a later bar of an already closed period merges
+into it without completing it again. Pinned by
+`tests/test_calendar_bucket_closes_once.cpp`.
+
 **Declaring at begin.** A host whose series are known only to its own
 begin-time registration calls
 `declare_timeframe_subscriptions(std::vector<NativeTimeframeSubscription>)`

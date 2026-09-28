@@ -323,6 +323,7 @@ set(TEST_SOURCES
     test_handle_reuse_reset
     test_calendar_aggregation_wm
     test_calendar_wm_open_utc_fastpath
+    test_calendar_bucket_closes_once
     test_htf_session_close_completion
     test_chart_bar_bucket_label
     test_htf_bucket_real_end

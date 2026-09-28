@@ -1396,6 +1396,21 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
     // a same-day session window, complete eagerly on the bar whose close
     // reaches the session end: that is TV's own bucket-final bar.
     feed_merge_into_current(s, input_bar);
+    // A bucket closes once. The rules below ask whether the period is over at
+    // this bar, and a period one of them has already closed stays closed: a
+    // later bar of the same period merges into it without completing it
+    // again, and the next period's first bar starts the next bucket without
+    // re-emitting this one (the boundary branch above) -- the guard the
+    // intraday path keeps (feed_ratio_mode). Without it every bar of a
+    // weekend session that followed the week's nominal close (NSE's Sunday
+    // 2026-02-01, 25 bars on a 15m chart) completed the week once more, and
+    // the series fed from the bucket advanced once per bar.
+    if (s.current_emitted_complete) {
+        result.bar = s.current_bar;
+        result.is_complete = false;
+        result.sub_bar_count = s.sub_bar_count;
+        return result;
+    }
     bool complete = false;
     if (native_periods && next_input_ms > input_bar.timestamp) {
         // TradingView's own period partition is installed and the next input
@@ -1516,6 +1531,23 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
         complete = input_bar.timestamp + input_seconds * 1000
             >= session_period_last_traded_close_ms(input_bar.timestamp, atz,
                                                    asess, CalendarPeriod::DAY);
+    }
+    // Nor is a period over while the next known input bar still belongs to
+    // it. The nominal rules end a period at its session template's last
+    // traded close, and a template knows no trading day it does not declare:
+    // an exchange that trades on a weekend date has more of its week after
+    // Friday's close (NSE's Budget-day session of Sun 2026-02-01 is part of
+    // the week Tue 01-27 .. Sun 02-01, and TradingView's weekly bar completes
+    // on that Sunday's last bar, lab tv w14-htf-w-nifty15). A historical run
+    // holds the next input bar, and when it lies in this period this bar is
+    // not the period's last; its own period key decides, the same key the
+    // boundary branch above splits on.
+    if (complete && next_input_ms > input_bar.timestamp) {
+        const bool next_in_later_period = s.agg != nullptr
+            ? s.agg->period_changes(input_bar.timestamp, next_input_ms)
+            : crosses_boundary(input_bar.timestamp, next_input_ms, cal_period,
+                               atz, asess);
+        if (!next_in_later_period) complete = false;
     }
     if (complete) {
         s.last_completed_bar = s.current_bar;
