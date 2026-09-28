@@ -63,13 +63,16 @@ int64_t timeframe_time_close(int64_t bar_ms,
 // bar; a W / M bar opens at its week's or month's first session day and is
 // never na; time_close of a W / M is the next period's open on an intraday
 // chart and its last session day's close on a daily-or-higher one.
-// An intraday `tf` (with or without a session argument, which only
-// filters) is the symbol's day-stamp-anchored HTF grid bucket
-// (session_intraday_bucket_open_ms in timeframe.hpp — the grid
-// request.security aggregates on): time("60") on NYSE:F is 09:30 / 10:30 /
-// .. / 15:30 ET, time("240") on NSE:NIFTY 09:15 / 13:15 IST and on
-// OANDA:XAUUSD the 17:00-ET-anchored 4h grid (pin-time-hours tapes,
-// 2025-04-01..07-01); the five-argument forms stay on the epoch grid.
+// An intraday `tf` without a session argument is the symbol's
+// day-stamp-anchored HTF grid bucket (session_intraday_bucket_open_ms in
+// timeframe.hpp — the grid request.security aggregates on): time("60") on
+// NYSE:F is 09:30 / 10:30 / .. / 15:30 ET, time("240") on NSE:NIFTY 09:15 /
+// 13:15 IST and on OANDA:XAUUSD the 17:00-ET-anchored 4h grid (pin-time-hours
+// tapes, 2025-04-01..07-01); the five-argument forms stay on the epoch grid.
+// With a session argument it is the session's own grid: tf bars from each
+// window's open, the last cut at its close (time("240", "1800-1700") on
+// OANDA:XAUUSD opens at 18:00 ET, time(timeframe.period, "0930-1600") on
+// BINANCE:BTCUSDT 60 at 09:30), na outside every window.
 // With sym_tz="UTC" and an empty / "24x7" sym_session these are
 // bit-identical to the five-argument forms above.
 //

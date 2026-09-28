@@ -775,6 +775,15 @@ bool local_time_in_session_days(const std::string& windows, const struct tm& loc
 //    end day's and is never cut.
 // The bar is the session's on every chart: on a D chart, time(timeframe.period,
 // session, tz) is the day bar that holds the chart bar's time.
+//
+// An intraday tf is built on the session too: its bars open at each window's
+// open and every tf after it, the last cut at the window's close, so
+// time(timeframe.period, "0930-1600") on BINANCE:BTCUSDT 60 reads 09:30 for
+// the 10:00 bar, time("240", "0930-1600") 09:30 then 13:30, and a second
+// window opens its own grid ("0930-1130,1245-1500": 12:45, 13:45); a bar in
+// no window reads na, as passes_session_filter reads it (w12-tfd4-*,
+// w12-tfd3-btc60). A window that opens on the chart's grid reads each chart
+// bar's own time, as before.
 // ---------------------------------------------------------------------------
 
 struct ArgWindow {
@@ -918,6 +927,77 @@ int64_t arg_period_first_day(int64_t key, CalendarPeriod period) {
         return days_from_civil(year, key - year * 12 + 1, 1);
     }
     return key;
+}
+
+// The window instances of session day `day` of `s` in epoch ms, [open,
+// close) each, none on a day the list leaves out; memoised per thread.
+const std::vector<std::pair<int64_t, int64_t>>& arg_day_windows(const std::string& session,
+                                                                const ArgSession& s,
+                                                                int64_t day,
+                                                                const std::string& tz) {
+    struct Slot {
+        int64_t day = 0;
+        bool used = false;
+        std::string session;
+        std::string tz;
+        std::vector<std::pair<int64_t, int64_t>> windows;
+    };
+    constexpr int kSlots = 16;
+    thread_local Slot slots[kSlots];
+    Slot& slot = slots[static_cast<std::size_t>(((day % kSlots) + kSlots) % kSlots)];
+    if (slot.used && slot.day == day && slot.tz == tz && slot.session == session)
+        return slot.windows;
+    slot.used = true;
+    slot.day = day;
+    slot.session = session;
+    slot.tz = tz;
+    slot.windows.clear();
+    const int weekday = static_cast<int>(((day + 4) % 7 + 7) % 7) + 1;  // 1970-01-01: Thursday
+    if (!s.days.empty() && s.days.count(weekday) == 0)
+        return slot.windows;
+    for (const ArgWindow& w : s.windows) {
+        const int64_t start = (day + w.day_offset) * 24 * 60 + w.start;
+        const int64_t open_ms = wall_minute_ms(start, tz);
+        const int64_t close_ms = wall_minute_ms(start + w.length, tz);
+        if (close_ms > open_ms)
+            slot.windows.emplace_back(open_ms, close_ms);
+    }
+    return slot.windows;
+}
+
+// The session argument's intraday bar of `tf_ms` that holds `bar_ms`: the
+// latest window instance that holds it, cut into tf bars from its open, the
+// last one closing at the window's close. False (na) when no window holds it.
+bool session_argument_intraday_bar(int64_t bar_ms, const std::string& session,
+                                   const std::string& tz, int64_t tf_ms, int64_t& open_ms,
+                                   int64_t& close_ms) {
+    ArgSession s;
+    if (tf_ms <= 0 || !read_arg_session(session, s))
+        return false;
+    struct tm local {};
+    decompose_ms_local(bar_ms, tz, local);
+    const int64_t today = days_from_civil(local.tm_year + 1900, local.tm_mon + 1, local.tm_mday);
+    // A window past midnight opens the day before its day; one spelled longer
+    // than a day ("0000-9959") reaches a few days on.
+    for (int64_t d = today + 1; d >= today - 5; --d) {
+        bool found = false;
+        int64_t start = 0;
+        int64_t end = 0;
+        for (const auto& window : arg_day_windows(session, s, d, tz)) {
+            if (window.first <= bar_ms && bar_ms < window.second
+                && (!found || window.first > start)) {
+                found = true;
+                start = window.first;
+                end = window.second;
+            }
+        }
+        if (!found)
+            continue;
+        open_ms = start + (bar_ms - start) / tf_ms * tf_ms;
+        close_ms = std::min(open_ms + tf_ms, end);
+        return true;
+    }
+    return false;
 }
 
 // The session argument's bar of `period` that holds `bar_ms`: its open and its
@@ -1242,18 +1322,28 @@ static void resolve_session_tz(const std::string& session,
         session_tz_out = "UTC";
 }
 
-// time() / time_close() of a valid session argument under a D / W / M tf: the
-// session's own bar (session_argument_bar), na when no bar holds `bar_ms`.
-static int64_t session_argument_time(int64_t bar_ms, const std::string& session,
-                                     const std::string& session_tz, CalendarPeriod cp,
-                                     const std::string& chart_tf, bool close) {
+// time() / time_close() of a valid session argument: the session's own bar of
+// `tf` (session_argument_bar for D / W / M, session_argument_intraday_bar for
+// an intraday tf), na when no bar holds `bar_ms`. False when `tf` is neither.
+static bool session_argument_time(int64_t bar_ms, const std::string& tf,
+                                  const std::string& session, const std::string& session_tz,
+                                  const std::string& chart_tf, bool close, int64_t& out) {
     int64_t open_ms = 0;
     int64_t close_ms = 0;
-    if (!session_argument_bar(bar_ms, session, session_tz, cp, tf_is_daily_or_higher(chart_tf),
-                              open_ms, close_ms)) {
-        return na<int64_t>();
+    bool held = false;
+    const CalendarPeriod cp = calendar_period_for(tf);
+    if (cp != CalendarPeriod::NONE) {
+        held = session_argument_bar(bar_ms, session, session_tz, cp,
+                                    tf_is_daily_or_higher(chart_tf), open_ms, close_ms);
+    } else {
+        const int sec = tf_to_seconds(tf);
+        if (sec <= 0 || sec >= kSecPerDay)
+            return false;
+        held = session_argument_intraday_bar(bar_ms, session, session_tz,
+                                             static_cast<int64_t>(sec) * 1000, open_ms, close_ms);
     }
-    return close ? close_ms : open_ms;
+    out = !held ? na<int64_t>() : close ? close_ms : open_ms;
+    return true;
 }
 
 int64_t timeframe_time(int64_t bar_ms,
@@ -1269,9 +1359,9 @@ int64_t timeframe_time(int64_t bar_ms,
     std::string sess, session_tz, tf_tz;
     resolve_session_tz(session, tz_in, syminfo_tz, sess, session_tz, tf_tz);
 
-    const CalendarPeriod cp = calendar_period_for(tf);
-    if (!sess.empty() && cp != CalendarPeriod::NONE)
-        return session_argument_time(bar_ms, sess, session_tz, cp, chart_tf, false);
+    int64_t value = 0;
+    if (!sess.empty() && session_argument_time(bar_ms, tf, sess, session_tz, chart_tf, false, value))
+        return value;
     if (!sess.empty() && !passes_session_filter(sess, session_tz, bar_ms))
         return na<int64_t>();
 
@@ -1291,9 +1381,9 @@ int64_t timeframe_time_close(int64_t bar_ms,
     std::string sess, session_tz, tf_tz;
     resolve_session_tz(session, tz_in, syminfo_tz, sess, session_tz, tf_tz);
 
-    const CalendarPeriod cp = calendar_period_for(tf);
-    if (!sess.empty() && cp != CalendarPeriod::NONE)
-        return session_argument_time(bar_ms, sess, session_tz, cp, chart_tf, true);
+    int64_t value = 0;
+    if (!sess.empty() && session_argument_time(bar_ms, tf, sess, session_tz, chart_tf, true, value))
+        return value;
     if (!sess.empty() && !passes_session_filter(sess, session_tz, bar_ms))
         return na<int64_t>();
 
@@ -1312,13 +1402,14 @@ int64_t timeframe_time_close(int64_t bar_ms,
 // roll, 18% with the symbol's UTC roll), and `time("D", "1700-2400")` on
 // OANDA:XAUUSD opens at 17:00 New York (w12-tfd-xau15). A timezone-looking
 // string in the session slot is an invalid session (dropped by
-// resolve_session_tz) and falls back to the symbol clock. An intraday tf is the symbol's
-// day-stamp-anchored HTF grid bucket whatever the session argument (it
-// only filters): TradingView's time("60") on NYSE:F 15 is 09:30 / 10:30 /
-// .. / 15:30 ET, time("240") on NSE:NIFTY 09:15 / 13:15 IST and on
-// OANDA:XAUUSD 17:00 ET + 4h*k, 00:00 UTC + 4h*k only on 24x7 UTC
-// (pin-time-hours, 2025-04-01..07-01) — the very grid request.security
-// aggregates on (session_intraday_bucket_open_ms), one grid in one place.
+// resolve_session_tz) and falls back to the symbol clock. An intraday tf
+// without a session argument is the symbol's day-stamp-anchored HTF grid
+// bucket: TradingView's time("60") on NYSE:F 15 is 09:30 / 10:30 / .. /
+// 15:30 ET, time("240") on NSE:NIFTY 09:15 / 13:15 IST and on OANDA:XAUUSD
+// 17:00 ET + 4h*k, 00:00 UTC + 4h*k only on 24x7 UTC (pin-time-hours,
+// 2025-04-01..07-01) — the very grid request.security aggregates on
+// (session_intraday_bucket_open_ms), one grid in one place; with one, the
+// session's own grid (session_argument_intraday_bar).
 static bool symbol_clock_applies(const std::string& resolved_session,
                                  CalendarPeriod cp) {
     return cp != CalendarPeriod::NONE && resolved_session.empty();
@@ -1396,12 +1487,13 @@ int64_t timeframe_time(int64_t bar_ms,
     std::string sess, session_tz, tf_tz;
     resolve_session_tz(session, tz_in, sym_tz, sess, session_tz, tf_tz);
 
-    const CalendarPeriod cp = calendar_period_for(tf);
-    if (!sess.empty() && cp != CalendarPeriod::NONE)
-        return session_argument_time(bar_ms, sess, session_tz, cp, chart_tf, false);
+    int64_t value = 0;
+    if (!sess.empty() && session_argument_time(bar_ms, tf, sess, session_tz, chart_tf, false, value))
+        return value;
     if (!sess.empty() && !passes_session_filter(sess, session_tz, bar_ms))
         return na<int64_t>();
 
+    const CalendarPeriod cp = calendar_period_for(tf);
     if (symbol_clock_applies(sess, cp)) {
         const int64_t open = session_period_open_ms(bar_ms, sym_tz, sym_session, cp);
         return cp == CalendarPeriod::MONTH ? first_traded_day_stamp_ms(open, sym_tz, sym_session)
@@ -1424,12 +1516,13 @@ int64_t timeframe_time_close(int64_t bar_ms,
     std::string sess, session_tz, tf_tz;
     resolve_session_tz(session, tz_in, sym_tz, sess, session_tz, tf_tz);
 
-    const CalendarPeriod cp = calendar_period_for(tf);
-    if (!sess.empty() && cp != CalendarPeriod::NONE)
-        return session_argument_time(bar_ms, sess, session_tz, cp, chart_tf, true);
+    int64_t value = 0;
+    if (!sess.empty() && session_argument_time(bar_ms, tf, sess, session_tz, chart_tf, true, value))
+        return value;
     if (!sess.empty() && !passes_session_filter(sess, session_tz, bar_ms))
         return na<int64_t>();
 
+    const CalendarPeriod cp = calendar_period_for(tf);
     if (symbol_clock_applies(sess, cp)) {
         // The exact boundary, as TradingView reads it (w12-tclose-*,
         // tests/fixtures/time_close_function): on an intraday chart the

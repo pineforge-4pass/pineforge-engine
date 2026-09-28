@@ -1,0 +1,16 @@
+{
+  "title": "w12 tfd4",
+  "slug": "w12-tfd4-aapl15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T13:28:01.327Z",
+  "chart": {
+    "symbol": "NASDAQ:AAPL",
+    "interval": "15",
+    "from": "2025-03-03",
+    "to": "2025-03-08"
+  },
+  "pine_sha256": "9487e11d54d55b0dbffbb1959333fada5aeeff87c1a949bff6766f1bbf7a890e",
+  "tv_trades_sha256": "5a52d190283c0f1df2e304f0e94f0892f525bc97104522bc5116306ffd4848bf",
+  "tv_trades_rows": 258
+}

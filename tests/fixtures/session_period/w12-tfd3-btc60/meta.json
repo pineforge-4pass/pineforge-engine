@@ -1,0 +1,16 @@
+{
+  "title": "w12 tfd3",
+  "slug": "w12-tfd3-btc60",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T13:25:39.691Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "60",
+    "from": "2025-01-02",
+    "to": "2025-01-08"
+  },
+  "pine_sha256": "88e47476630192eecbac6ffea92666b2543a8ae813ce8515a6fb8dee05497586",
+  "tv_trades_sha256": "ad20eecb3305244ac2f4e6e4c110f517bbec7425a1f2b052bf381b1512476d0d",
+  "tv_trades_rows": 288
+}

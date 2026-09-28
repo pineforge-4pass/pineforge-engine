@@ -1,0 +1,34 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane W12-ENG-TIME): intraday timeframes under a session
+// argument whose windows do not open on the chart's grid. Each bar's readings
+// are spelled in the comment of the exit that fills on the next bar's open:
+// "n" for na, else minutes from the value to the bar's open (time_close: from
+// the bar's open to the value).
+strategy("w12 tfd4", overlay=true, initial_capital=100000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=2, margin_long=0, margin_short=0)
+
+m(int t) => na(t) ? "n" : str.tostring((time - t) / 60000)
+mc(int t) => na(t) ? "n" : str.tostring((t - time) / 60000)
+
+a = time(timeframe.period, "0930-1600")
+b = time(timeframe.period, "0945-1600")
+c = time(timeframe.period, "0930-1130,1300-1500")
+d = time(timeframe.period, "0930-1130,1245-1500")
+e = time("240", "0930-1600")
+f = time("120", "1800-1700")
+g = time(timeframe.period, "1800-1700")
+h = time("30", "0945-1600")
+i = time_close(timeframe.period, "0945-1600")
+j = time_close("240", "0930-1600")
+k = time("240")
+l = time(timeframe.period, "0945-1600:23456")
+o = time(timeframe.period, "0935-1600")
+q = time(timeframe.period, "0907-1600")
+sig = m(a) + "," + m(b) + "," + m(c) + "," + m(d) + "," + m(e) + "," + m(f) + "," + m(g) + "," + m(h) + "," + mc(i) + "," + mc(j) + "," + m(k) + "," + m(l) + "," + m(o) + "," + m(q)
+
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.close("B", comment=sig)
+else
+    strategy.entry("B", strategy.long)
+    strategy.close("A", comment=sig)

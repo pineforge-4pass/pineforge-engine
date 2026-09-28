@@ -227,8 +227,13 @@ void test_xau_time_d_is_the_1700_stamp() {
     CHECK_EQ_MS(T(tue_0700_est, "240", NY, XAU), utc_ms(2025, 1, 14, 10, 0));
     CHECK_EQ_MS(hhmm_ny(T(tue_0700_est, "240", NY, XAU)), 500);
     CHECK_EQ_MS(T(utc_ms(2025, 1, 13, 23, 0), "240", NY, XAU), utc_ms(2025, 1, 13, 22, 0));
-    // A session argument only filters; the grid is the symbol's.
-    CHECK_EQ_MS(pine_time(utc_ms(2025, 4, 1, 0, 45), "240", XAU, "", CHART, NY, XAU), mon_stamp);
+    // A session argument builds its own grid, from its window's open: "240"
+    // on "1800-1700" opens at 18:00 ET, not at the symbol's 17:00 stamp
+    // (lab tv w12-tfd5-xau15, tests/fixtures/session_period; lane
+    // W12-ENG-TIME moved this pin from the 17:00 stamp), and a bar in the
+    // break is in no window.
+    CHECK_EQ_MS(pine_time(utc_ms(2025, 4, 1, 0, 45), "240", XAU, "", CHART, NY, XAU),
+                mon_stamp + k1h);
     CHECK(is_na(pine_time(utc_ms(2025, 4, 1, 21, 30), "240", XAU, "", CHART, NY, XAU)));
 }
 
@@ -262,7 +267,7 @@ void test_nyse_intraday_grid_anchored_at_0930() {
     CHECK_EQ_MS(T(utc_ms(2025, 4, 1, 17, 30), "240", NY, RTH), utc_ms(2025, 4, 1, 17, 30));
     CHECK_EQ_MS(hhmm_ny(T(utc_ms(2025, 4, 1, 19, 45), "240", NY, RTH)), 1330);
     CHECK_EQ_MS(TC(utc_ms(2025, 4, 1, 17, 30), "240", NY, RTH), utc_ms(2025, 4, 1, 21, 30));
-    // With a session argument (only a filter) the grid is the same.
+    // With a session argument opening at 09:30 the grid is the same.
     CHECK_EQ_MS(pine_time(utc_ms(2025, 4, 1, 14, 0), "60", RTH, "", CHART, NY, RTH), tue_open);
     CHECK_EQ_MS(pine_time(utc_ms(2025, 4, 1, 14, 0), "60", RTH, NY, CHART, NY, RTH), tue_open);
     CHECK(is_na(pine_time(utc_ms(2025, 4, 1, 12, 0), "60", RTH, "", CHART, NY, RTH)));

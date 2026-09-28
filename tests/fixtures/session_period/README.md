@@ -36,6 +36,15 @@ is neither a calendar floor of the chart's zone nor the chart bar's own time.
   a daily chart. There `time("D", "2330-2430")` reads na on Sunday's 00:00
   bar, where a 60-minute chart reads Saturday's 23:30 open. A wrapping window
   (`2330-0030`) belongs to its end day and is never cut.
+- **An intraday timeframe** is built on the session too. Its bars open at each
+  window's open and every tf after it, the last one cut at the window's close;
+  a bar in no window reads na. On BINANCE:BTCUSDT 60,
+  `time(timeframe.period, "0930-1600")` reads 09:30 for the 10:00 bar,
+  `time("240", "0930-1600")` reads 09:30 and then 13:30 (closing at 16:00),
+  and a second window opens its own grid (`0930-1130,1245-1500`: 12:45,
+  13:45). On OANDA:XAUUSD 15, `time("240", "1800-1700")` opens at 18:00 ET,
+  where `time("240")` keeps the symbol's 17:00 grid. A window that opens on
+  the chart's grid reads each chart bar's own time.
 
 Each directory is one `lab tv --no-note` export (channel `ws-report-v1`),
 byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8),
@@ -59,3 +68,8 @@ them, on each chart's symbol facts.
 | `w12-tfd2-btc1d` | BINANCE:BTCUSDT 1D | 2025-01-01 .. 2025-07-01 | 181 | covered | `7c8109505d4015d464cf51a5d3a4175c2d683ef405fbcb6471fb74cc6d00d08f` | `ca1270d4ad12` |
 | `w12-tfd2-xau1d` | OANDA:XAUUSD 1D | 2025-01-01 .. 2025-07-01 | 127 | covered | `093a5094db0779eb33335a328bd34718e3a90f85f8125c835dcd729ab22fa946` | `ca1270d4ad12` |
 | `w12-tfd3-btc1d` | BINANCE:BTCUSDT 1D | 2025-01-01 .. 2025-03-01 | 59 | covered | `a18694320197a3d8786a919db921e6330354ab25cf862ee88439093be3618100` | `88e474766301` |
+| `w12-tfd3-btc60` | BINANCE:BTCUSDT 60 | 2025-01-02 .. 2025-01-08 | 144 | covered | `ad20eecb3305244ac2f4e6e4c110f517bbec7425a1f2b052bf381b1512476d0d` | `88e474766301` |
+| `w12-tfd4-btc60` | BINANCE:BTCUSDT 60 | 2025-03-05 .. 2025-03-12 | 168 | covered | `52bf39d49ea7ca8ea6dd40f6876e20b895a9fee0f87c4645e595ff3d887c266f` | `9487e11d54d5` |
+| `w12-tfd4-btc15` | BINANCE:BTCUSDT 15 | 2025-03-06 .. 2025-03-09 | 288 | covered | `929342e4514f41b31af2e75c71536714d80a748abb9b3b6371e1b64109272f53` | `9487e11d54d5` |
+| `w12-tfd4-aapl15` | NASDAQ:AAPL 15 | 2025-03-03 .. 2025-03-08 | 129 | covered | `5a52d190283c0f1df2e304f0e94f0892f525bc97104522bc5116306ffd4848bf` | `9487e11d54d5` |
+| `w12-tfd5-xau15` | OANDA:XAUUSD 15 | 2025-04-01 .. 2025-04-04 | 276 | covered | `278bce8ed01ef9e6db572872a51b70c7e367b26ac1ebbc9699bc8ca829003a6b` | `e6d52af10cb5` |

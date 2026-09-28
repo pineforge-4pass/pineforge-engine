@@ -563,6 +563,38 @@ static const PeriodField kTfd3Fields[] = {
     {"D", "1200-0100", "", false},
 };
 
+// w12-tfd4: a,b,c,d,e,f,g,h,i,j,k,l,o,q -- intraday bars on windows that do
+// not open on the chart's grid.
+static const PeriodField kTfd4Fields[] = {
+    {nullptr, "0930-1600", "", false},
+    {nullptr, "0945-1600", "", false},
+    {nullptr, "0930-1130,1300-1500", "", false},
+    {nullptr, "0930-1130,1245-1500", "", false},
+    {"240", "0930-1600", "", false},
+    {"120", "1800-1700", "", false},
+    {nullptr, "1800-1700", "", false},
+    {"30", "0945-1600", "", false},
+    {nullptr, "0945-1600", "", true},
+    {"240", "0930-1600", "", true},
+    {"240", "", "", false},
+    {nullptr, "0945-1600:23456", "", false},
+    {nullptr, "0935-1600", "", false},
+    {nullptr, "0907-1600", "", false},
+};
+
+// w12-tfd5: a,b,c,d,e,f,g,h -- a session argument's grid beside the symbol's
+// 17:00-anchored one.
+static const PeriodField kTfd5Fields[] = {
+    {"240", "1800-1700", "", false},
+    {"240", "1700-1700", "", false},
+    {"60", "1800-1700", "", false},
+    {"240", "", "", false},
+    {"240", "1800-1700", "", true},
+    {"45", "1800-1700", "", false},
+    {"45", "", "", false},
+    {nullptr, "1800-1700", "", false},
+};
+
 // Every reading of one tape against the engine; returns the readings compared.
 static int replay_period_tape(const ChartFacts& chart, const PeriodField* fields,
                               std::size_t count, int& wrong) {
@@ -609,6 +641,8 @@ static void test_session_period_tapes() {
     const std::size_t tfd = sizeof(kTfdFields) / sizeof(kTfdFields[0]);
     const std::size_t tfd2 = sizeof(kTfd2Fields) / sizeof(kTfd2Fields[0]);
     const std::size_t tfd3 = sizeof(kTfd3Fields) / sizeof(kTfd3Fields[0]);
+    const std::size_t tfd4 = sizeof(kTfd4Fields) / sizeof(kTfd4Fields[0]);
+    const std::size_t tfd5 = sizeof(kTfd5Fields) / sizeof(kTfd5Fields[0]);
     const Tape tapes[] = {
         {{"w12-tfd-btc15", "15", "UTC", "24x7"}, kTfdFields, tfd},
         {{"w12-tfd-xau15", "15", "America/New_York", "1800-1700"}, kTfdFields, tfd},
@@ -619,6 +653,11 @@ static void test_session_period_tapes() {
         {{"w12-tfd2-btc1d", "1D", "UTC", "24x7"}, kTfd2Fields, tfd2},
         {{"w12-tfd2-xau1d", "1D", "America/New_York", "1800-1700"}, kTfd2Fields, tfd2},
         {{"w12-tfd3-btc1d", "1D", "UTC", "24x7"}, kTfd3Fields, tfd3},
+        {{"w12-tfd3-btc60", "60", "UTC", "24x7"}, kTfd3Fields, tfd3},
+        {{"w12-tfd4-btc60", "60", "UTC", "24x7"}, kTfd4Fields, tfd4},
+        {{"w12-tfd4-btc15", "15", "UTC", "24x7"}, kTfd4Fields, tfd4},
+        {{"w12-tfd4-aapl15", "15", "America/New_York", "0930-1600"}, kTfd4Fields, tfd4},
+        {{"w12-tfd5-xau15", "15", "America/New_York", "1800-1700"}, kTfd5Fields, tfd5},
     };
     for (const Tape& tape : tapes) {
         int wrong = 0;

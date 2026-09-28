@@ -1,0 +1,34 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane W12-ENG-TIME): windows that run past midnight, read
+// by time("D", session) and time(timeframe.period, session). Each bar's
+// readings are spelled in the comment of the exit that fills on the next
+// bar's open: "n" for na, else minutes from the value to the bar's open
+// (time_close: from the bar's open to the value).
+strategy("w12 tfd3", overlay=true, initial_capital=100000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=2, margin_long=0, margin_short=0)
+
+m(int t) => na(t) ? "n" : str.tostring((time - t) / 60000)
+mc(int t) => na(t) ? "n" : str.tostring((t - time) / 60000)
+
+a = time("D", "2330-2430")
+b = time("D", "2330-0030")
+c = time("D", "2330-2400")
+d = time("D", "0000-0030")
+e = time("D", "2330-2430:1234567")
+f = time("D", "2300-2500")
+g = time("D", "2200-0100")
+h = time("D", "0000-0100,2300-2400")
+i = time_close("D", "2330-2430")
+j = time("D", "2330-0030:1234567")
+k = time(timeframe.period, "2330-2430")
+l = time(timeframe.period, "2330-0030")
+o = time("D", "2200-0100:1234567")
+q = time("D", "1200-0100")
+sig = m(a) + "," + m(b) + "," + m(c) + "," + m(d) + "," + m(e) + "," + m(f) + "," + m(g) + "," + m(h) + "," + mc(i) + "," + m(j) + "," + m(k) + "," + m(l) + "," + m(o) + "," + m(q)
+
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.close("B", comment=sig)
+else
+    strategy.entry("B", strategy.long)
+    strategy.close("A", comment=sig)

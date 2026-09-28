@@ -1,0 +1,28 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane W12-ENG-TIME): intraday timeframes under a session
+// argument on a symbol whose own grid is anchored off the session's open.
+// Each bar's readings are spelled in the comment of the exit that fills on
+// the next bar's open: "n" for na, else minutes from the value to the bar's
+// open (time_close: from the bar's open to the value).
+strategy("w12 tfd5", overlay=true, initial_capital=100000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=2, margin_long=0, margin_short=0)
+
+m(int t) => na(t) ? "n" : str.tostring((time - t) / 60000)
+mc(int t) => na(t) ? "n" : str.tostring((t - time) / 60000)
+
+a = time("240", "1800-1700")
+b = time("240", "1700-1700")
+c = time("60", "1800-1700")
+d = time("240")
+e = time_close("240", "1800-1700")
+f = time("45", "1800-1700")
+g = time("45")
+h = time(timeframe.period, "1800-1700")
+sig = m(a) + "," + m(b) + "," + m(c) + "," + m(d) + "," + mc(e) + "," + m(f) + "," + m(g) + "," + m(h)
+
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.close("B", comment=sig)
+else
+    strategy.entry("B", strategy.long)
+    strategy.close("A", comment=sig)
