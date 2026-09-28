@@ -296,22 +296,19 @@ static void test_session_2400_tapes() {
         const char* session;
         const char* tz;
         bool close;           // time_close, spelled from the bar's open
-        bool replayed;        // false: another rule's reading, not compared
     };
     static const Field fields[] = {
-        {nullptr, "0000-2400", "", false, true},
-        {nullptr, "1700-2400", "", false, true},
-        {nullptr, "2045-2400", "Asia/Tokyo", false, true},
-        {"D", "0000-2400", "", false, true},
-        {nullptr, "0000-2400:23456", "", false, true},
-        {nullptr, "1700-2400", "", true, true},
-        // Two windows and no day list: which days TradingView admits there is
-        // another rule's than this clock's.
-        {nullptr, "2300-2400,0000-0100", "", false, false},
-        {nullptr, "2000-2400", "America/New_York", false, true},
-        {nullptr, "0000-0000", "", false, true},
-        {nullptr, "0000-2359", "", false, true},
-        {nullptr, "1700-0000", "", false, true},
+        {nullptr, "0000-2400", "", false},
+        {nullptr, "1700-2400", "", false},
+        {nullptr, "2045-2400", "Asia/Tokyo", false},
+        {"D", "0000-2400", "", false},
+        {nullptr, "0000-2400:23456", "", false},
+        {nullptr, "1700-2400", "", true},
+        {nullptr, "2300-2400,0000-0100", "", false},
+        {nullptr, "2000-2400", "America/New_York", false},
+        {nullptr, "0000-0000", "", false},
+        {nullptr, "0000-2359", "", false},
+        {nullptr, "1700-0000", "", false},
     };
     static const ChartFacts charts[] = {
         {"w11-sess2400-btc15", "15", "UTC", "24x7"},
@@ -332,7 +329,6 @@ static void test_session_2400_tapes() {
             if (spelled.size() != sizeof(fields) / sizeof(fields[0])) { ++wrong; continue; }
             for (std::size_t k = 0; k < spelled.size(); ++k) {
                 const Field& f = fields[k];
-                if (!f.replayed) continue;
                 const std::string tf = f.tf ? f.tf : chart.tf;
                 const int64_t value = f.close
                     ? pine_time_close(reading.bar_ms, tf, f.session, f.tz, chart.tf,
@@ -414,6 +410,44 @@ static void test_session_clock_edge_tapes() {
     }
 }
 
+// Which days a session argument with no day list admits (w11-sessmask-btc15,
+// BINANCE:BTCUSDT 15 over a weekend): one window, every day; several windows,
+// Monday to Friday only; a day list, its own days.
+static void test_session_day_list_tapes() {
+    std::printf("test_session_day_list_tapes\n");
+    static const char* const sessions[] = {
+        "0000-0100,1200-1300",          "2300-2400,0000-0100:1234567",
+        "1200-1300",                    "0000-0100,1200-1300:17",
+        "0000-1200,1200-2400",          "0000-0100:1234567",
+        "0000-0100,0000-0100",
+    };
+    bool ok = true;
+    const auto readings =
+        exit_comment_tape::read(PINEFORGE_SESSION_CLOCK_FIXTURE_DIR, "w11-sessmask-btc15", ok);
+    CHECK(ok);
+    int compared = 0;
+    int wrong = 0;
+    for (const auto& reading : readings) {
+        const auto spelled = exit_comment_tape::split(reading.signal, ',');
+        if (spelled.size() != sizeof(sessions) / sizeof(sessions[0])) { ++wrong; continue; }
+        for (std::size_t k = 0; k < spelled.size(); ++k) {
+            const int64_t value =
+                pine_time(reading.bar_ms, "15", sessions[k], "", "15", "UTC", "24x7");
+            ++compared;
+            if (!same_reading(spelled[k], value, reading.bar_ms, false)) {
+                if (++wrong <= 5) {
+                    std::printf("  bar %lld (%s) tv=%s engine=%lld\n",
+                                static_cast<long long>(reading.bar_ms), sessions[k],
+                                spelled[k].c_str(), static_cast<long long>(value));
+                }
+            }
+        }
+    }
+    std::printf("  w11-sessmask-btc15: %d readings compared, %d differ\n", compared, wrong);
+    CHECK(compared == 575 * 7);
+    CHECK(wrong == 0);
+}
+
 int main() {
     test_ismarket_inside_rth();
     test_ismarket_outside_rth_close();
@@ -433,6 +467,7 @@ int main() {
     test_start_equals_end_is_full_day();
     test_session_2400_tapes();
     test_session_clock_edge_tapes();
+    test_session_day_list_tapes();
 
     std::printf("\nsession_predicates: %d passed, %d failed\n",
                 tests_passed, tests_failed);

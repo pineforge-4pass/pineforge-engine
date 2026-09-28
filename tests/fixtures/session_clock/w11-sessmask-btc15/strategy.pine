@@ -1,0 +1,25 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane W11-ENG-TIME-COLOR): which days a session argument
+// with no day list admits, one window or several: time(timeframe.period, s)
+// for single and multi-window sessions with and without a day list, "n" for
+// na, else minutes from the value to the bar's open; spelled in the comment
+// of the exit that fills on the next bar's open.
+strategy("w11 sess mask", overlay=true, initial_capital=100000000, default_qty_type=strategy.fixed, default_qty_value=0.001, pyramiding=2, margin_long=0, margin_short=0)
+
+m(int t) => na(t) ? "n" : str.tostring((time - t) / 60000)
+a = time(timeframe.period, "0000-0100,1200-1300")
+b = time(timeframe.period, "2300-2400,0000-0100:1234567")
+c = time(timeframe.period, "1200-1300")
+d = time(timeframe.period, "0000-0100,1200-1300:17")
+e = time(timeframe.period, "0000-1200,1200-2400")
+f = time(timeframe.period, "0000-0100:1234567")
+g = time(timeframe.period, "0000-0100,0000-0100")
+sig = m(a) + "," + m(b) + "," + m(c) + "," + m(d) + "," + m(e) + "," + m(f) + "," + m(g)
+
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.close("B", comment=sig)
+else
+    strategy.entry("B", strategy.long)
+    strategy.close("A", comment=sig)

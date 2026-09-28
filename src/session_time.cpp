@@ -686,6 +686,34 @@ int session_clock_minutes(const std::string& s, std::size_t at) {
     return (digit[0] * 10 + digit[1]) * 60 + digit[2] * 10 + digit[3];
 }
 
+// True for a session of several windows none of which ends at or before it
+// starts. With no day list TradingView admits such a session on Monday to
+// Friday only, and one window on every day (lab tv tape w11-sessmask-btc15,
+// tests/fixtures/session_clock). A window across midnight makes its days
+// session days -- the evening that opens Monday's session is a Sunday's --
+// which a reading of one instant's weekday cannot give, so such a session
+// keeps its every-day reading.
+bool several_same_day_windows(const std::string& windows) {
+    int count = 0;
+    std::size_t pos = 0;
+    while (pos <= windows.size()) {
+        const std::size_t comma = windows.find(',', pos);
+        std::string win = windows.substr(pos, comma == std::string::npos
+                                                  ? std::string::npos : comma - pos);
+        pos = comma == std::string::npos ? windows.size() + 1 : comma + 1;
+        trim_inplace(win);
+        const std::size_t dash = win.find('-');
+        if (dash == std::string::npos || dash < 4)
+            return false;
+        const int sm = session_clock_minutes(win, 0);
+        const int em = session_clock_minutes(win, dash + 1);
+        if (sm < 0 || em < 0 || em <= sm)
+            return false;
+        ++count;
+    }
+    return count > 1;
+}
+
 }  // anonymous namespace
 
 // ---------------------------------------------------------------------------
@@ -754,6 +782,8 @@ bool passes_session_filter(const std::string& session,
     std::string windows;
     std::unordered_set<int> day_filter;
     parse_day_filter(session, windows, &day_filter);
+    if (day_filter.empty() && several_same_day_windows(windows))
+        day_filter = {2, 3, 4, 5, 6};
 
     struct tm local_tm {};
     decompose_ms_local(bar_ms, tz, local_tm);  // gmtime_r for UTC (no TZ flip)
