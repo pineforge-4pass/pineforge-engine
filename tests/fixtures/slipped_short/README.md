@@ -9,12 +9,12 @@ written for this lane. Each directory is one `lab tv --no-note` export (channel
 tape through the Pine adapter over the bars in `bars.inc`, with TradingView's
 one-share lot as the `qty_step`, and requires each trade the tape closes inside
 the replayed window -- entry and exit time, side, price in ticks of 0.01,
-quantity in shares -- to be the engine's, or on an openings row each opening
-and the shares its slices sum to.
+quantity in shares -- to be the engine's.
 
 | tape | declares | trades | tv_trades.csv sha256 |
 |---|---|---:|---|
 | `int28fix-adm-s-s` | 10000, slippage 1, short | 14 | `2b64805194a04422ec495aa2560e0af7d8b38f29ce3426ac787cbbd8e6df0319` |
+| `int28fix-ou-s3` | 4000, commission 0.04 %, slippage 3, short | 17 | `29c741bad36cecb308a90bef065ddb2b1e22e5a12de0e751fe97070d918f4ecc` |
 | `int28fix-ou-s4` | 4000, commission 0.04 %, slippage 4, short | 0 | `86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c` |
 | `int28fix-adm-s-0` | 10000, short (control) | 218 | `fc2743e5ee431da6d0eae7c78c9a37cd4328b61a94855b571b085db0903724f9` |
 | `int28fix-adm-s-c` | 10000, commission 0.04 %, short (control) | 231 | `89b71cf21cf8aa63b14b98035b6c7767a6100c9a0dadbec2df175eb8d5aa5ed1` |
@@ -30,11 +30,20 @@ What they show:
 - SS, the admission: the short is sized at the signal close less the slippage
   ticks, and the commission, and opens only while those units at the signal
   close, on its tick, fit the equity: 6 of 124 cells open at slippage 1
-  without commission (`-adm-s-s`) and none of 310 at slippage 4 (`-ou-s4`).
+  without commission (`-adm-s-s`), 8 of 310 at slippage 3 (`-ou-s3`) and none
+  at 4 (`-ou-s4`).
   Without slippage the short is sized at the close itself and only its
   fill-time admission applies (`-adm-s-0`, 107 of 124; `-adm-s-c`, 110 of
   124), as for the long, which is sized above the close (`-adm-l-cs`, 116 of
   124).
+- OU, the one-unit call: a restore that floors below one share takes that
+  share only where it restores the book at the call's own fill, the whole
+  position's requirement at the slipped print less the equity at the mark
+  being under one share's margin: a slipped short qualifies only while its
+  whole position's slippage stays under that margin, so `-adm-s-s`'s and
+  `-ou-s3`'s sub-share deficits take no call. A long's sell always qualifies
+  (`-adm-l-cs`'s five calls), as does any call without slippage
+  (`-adm-s-c`'s 22).
 
 ## Bars
 

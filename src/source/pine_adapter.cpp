@@ -14513,7 +14513,26 @@ double PineExecutionAdapter::source_margin_units(
         const double candidate = std::min(1.0, money.held);
         const double rounded = floor_quantity_grid(candidate, staged_.quantity_grid);
         const double guard = std::max(1e-12, std::abs(candidate) * 1e-12);
-        if (candidate >= money.held - guard || std::abs(rounded - candidate) <= guard)
+        // The one unit is taken only where it restores the book at the call's
+        // own fill: TradingView prices the whole position's requirement at the
+        // liquidation's slipped print -- a short's buy is the slippage ticks
+        // above the mark, a long's sell below it -- against the equity at the
+        // mark, and closes nothing when that requirement exceeds the equity by
+        // a unit's margin or more. A long's sell never does, nor does a call at
+        // zero slippage. On NYSE:F at slippage 1 a short of 968 shares filled
+        // at 10.32, 9.12 short of its margin at the 10.33 print, takes no call
+        // (968 x 10.34 exceeds the equity by 18.80), and at slippage 3 one of
+        // 382 filled at 10.43, 8.77 short at 10.46, takes none either (lab tv
+        // tapes tests/fixtures/slipped_short int28fix-adm-s-s and
+        // int28fix-ou-s3; the calls int28fix-adm-s-c and -adm-l-cs take;
+        // lane INT28-FIX rule OU).
+        const double slip = config_.slippage > 0
+            ? config_.slippage * staged_.syminfo.mintick : 0.0;
+        const bool short_book = detail::run_position(require_host()).signed_units < 0.0;
+        const double fill_required = money.exact_required
+            * (money.mark + (short_book ? slip : -slip)) / money.mark;
+        if ((candidate >= money.held - guard || std::abs(rounded - candidate) <= guard)
+            && fill_required - money.equity < money.unit_margin)
             units = candidate;
     }
     units = std::min(money.held, units);

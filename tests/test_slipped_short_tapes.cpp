@@ -9,16 +9,18 @@
  *   SS  The short is sized at the signal close less the slippage ticks (and
  *       the commission) and opens at the next open only while those units'
  *       margin at the signal close, on its tick, fits the equity there.
+ *   OU  A margin call whose restore floors below one unit takes that unit
+ *       only where it restores the book at the call's own fill: the whole
+ *       position's requirement at the liquidation's slipped print less the
+ *       equity at the mark is under a unit's margin.
  *
  * Each row replays one lab tv tape (tests/fixtures/slipped_short) through the
  * Pine adapter under the configuration the generated constructor declares for
  * its probe, over the lab lane f-15 NYSE:F 15m bars in bars.inc, and requires
  * every trade the tape closes inside those bars (or before its own window's
  * end) to be the engine's: entry and exit time, side, price in ticks and
- * quantity in shares -- or, on an openings row, each opening the tape books:
- * its time, side, price in ticks and the shares its slices sum to. On the
- * commit before a rule every rule row fails here, and every control row
- * beside it passes.
+ * quantity in shares. On the commit before a rule every rule row fails here,
+ * and every control row beside it passes.
  */
 
 #include <pineforge/bar.hpp>
@@ -221,19 +223,6 @@ void show(const char* tag, const std::vector<Row>& rows) {
                     std::get<5>(r));
 }
 
-// Each opening a trade list books -- (entry ms, long, entry price, 0, 0, 0)
-// with the shares of its slices summed into the quantity -- for a row that
-// reads the admission alone.
-std::vector<Row> openings(const std::vector<Row>& trades) {
-    std::map<std::tuple<std::int64_t, bool, long long>, long long> shares;
-    for (const Row& r : trades)
-        shares[{std::get<0>(r), std::get<1>(r), std::get<2>(r)}] += std::get<3>(r);
-    std::vector<Row> out;
-    for (const auto& [key, qty] : shares)
-        out.emplace_back(std::get<0>(key), std::get<1>(key), std::get<2>(key), qty, 0, 0);
-    return out;
-}
-
 // What a probe's strategy() declares, over v6's defaults (100 % of equity,
 // pyramiding 1, margin 100 both ways).
 source::PineStrategyConfig config(double capital, double commission_percent, int slippage) {
@@ -255,7 +244,6 @@ struct Case {
     bool is_long;
     source::PineStrategyConfig lane;  // what its generated constructor declares
     std::size_t closed;               // tape trades closed inside the bars
-    bool openings = false;            // compare the openings alone
     std::int64_t end_ms = 0;          // the tape's window end, when before the bars'
 };
 
@@ -265,7 +253,8 @@ int main() {
     const std::vector<Bar> bars = feed(kF15Q2);
 
     const Case cases[] = {
-        {"SS", "int28fix-adm-s-s", Probe::TwoCells, false, config(10000.0, 0.0, 1), 14, true},
+        {"SS OU", "int28fix-adm-s-s", Probe::TwoCells, false, config(10000.0, 0.0, 1), 14},
+        {"SS OU", "int28fix-ou-s3", Probe::Hourly, false, config(4000.0, 0.04, 3), 17},
         {"SS", "int28fix-ou-s4", Probe::Hourly, false, config(4000.0, 0.04, 4), 0},
         {"control", "int28fix-adm-s-0", Probe::TwoCells, false, config(10000.0, 0.0, 0), 218},
         {"control", "int28fix-adm-s-c", Probe::TwoCells, false, config(10000.0, 0.04, 0), 231},
@@ -280,12 +269,10 @@ int main() {
         if (tape.size() != c.closed) std::printf("    tape closes %zu\n", tape.size());
         const Run lane = run(c.probe, c.is_long, c.lane, bars, end);
         CHECK(lane.error.empty());
-        const std::vector<Row> want = c.openings ? openings(tape) : tape;
-        const std::vector<Row> got = c.openings ? openings(lane.trades) : lane.trades;
-        CHECK(got == want);
-        if (got != want) {
-            show("tape", want);
-            show("engine", got);
+        CHECK(lane.trades == tape);
+        if (lane.trades != tape) {
+            show("tape", tape);
+            show("engine", lane.trades);
         }
     }
 
