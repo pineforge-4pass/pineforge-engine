@@ -162,7 +162,10 @@ int64_t session_period_open_ms(int64_t ms, const std::string& tz,
 /// time("60") on NYSE:F is 09:30 / 10:30 / .. / 15:30 ET, time("240") on
 /// NSE:NIFTY 09:15 / 13:15 IST, on OANDA:XAUUSD 17:00 ET + 4h*k). With
 /// tz="UTC" and session ""/"24x7" it is the epoch grid, bit-identical to
-/// the tz-less forms. bucket_sec <= 0 returns `ms`.
+/// the tz-less forms. bucket_sec <= 0 returns `ms`. Under the calling
+/// thread's native daily partition for this clock (below), a session-day
+/// that opened late -- NativeDayPartition::late_opens -- starts its grid at
+/// its own open instead of the day stamp, as tf_change's intraday form does.
 int64_t session_intraday_bucket_open_ms(int64_t ms, int64_t bucket_sec,
                                         const std::string& tz,
                                         const std::string& session);
@@ -228,6 +231,17 @@ int64_t session_period_last_traded_close_ms(int64_t ms, const std::string& tz,
 // session-day close, keeps the nominal rules. Without an installed partition
 // (no native daily feed, a 1D chart, another symbol's clock) every function
 // is bit-identical to the nominal session calendar.
+//
+// The stamps also date where a day OPENED. A stamp later than its
+// session-day's day stamp, with no input bar of that session-day before it,
+// is the open of a day that traded late (native_late_day_opens), and that
+// day's intraday grid starts there: session_intraday_bucket_open_ms and
+// tf_change's intraday form read the partition's late_opens, as a request
+// evaluator's RATIO aggregator reads the same opens from the daily feed
+// (TimeframeAggregator::set_native_day_opens). NSE's Muhurat session of
+// 2025-10-21 opens 13:45 IST, and its one 60-minute bar is stamped 13:45
+// on TradingView, not 13:15 and 14:15 from the 09:15 day stamp (lab tv
+// w14-htf-60-nifty15).
 struct NativeDayPartition {
     std::string tz;
     std::string session;
@@ -236,8 +250,27 @@ struct NativeDayPartition {
     std::vector<int64_t> week_open;    // per stamp: the W group's first stamp
     std::vector<int64_t> month_open;   // per stamp: the M group's first stamp
     int64_t last_bound = 0;            // nominal session-day close of the last stamp
+    std::vector<int64_t> late_opens;   // the stamps that open their session-day late
     bool empty() const { return stamps.empty(); }
 };
+
+/// The native daily stamps that open their session-day LATE: a stamp after
+/// the day stamp of the (nominal) session-day holding it and before that
+/// day's scheduled close, with no input bar between the day stamp and the
+/// stamp -- the day's first trade is the stamp itself, hours after the
+/// session template's open (NSE's Muhurat session of 2025-10-21, 13:45 IST).
+/// Every other stamp is left out: one at its day stamp (every regular day),
+/// one on an earlier session-day (a holiday-merged bar), one at or after
+/// its session-day's scheduled close (a venue dating its daily bars at
+/// midnight or at the close; an evening session the template does not
+/// hold, 18:00 IST on 2024-11-01, whose end it cannot know either), and one
+/// the input shows the day already trading before. Strictly increasing, as
+/// the stamps; empty for non-increasing stamps. `input_bars` may be null
+/// (n_input 0): nothing then contradicts a late stamp.
+std::vector<int64_t> native_late_day_opens(const std::string& tz,
+                                           const std::string& session,
+                                           const std::vector<int64_t>& stamps,
+                                           const Bar* input_bars, int n_input);
 
 /// Build the partition for the symbol clock (tz, session) from the native
 /// daily stamps and the chart's input bars (the trade instants: the last
@@ -419,7 +452,27 @@ public:
     void set_native_periods(std::vector<int64_t> stamps,
                             std::vector<int64_t> trade_instants,
                             CalendarPeriod feed_period);
-    bool has_native_periods() const { return !native_stamps_.empty(); }
+
+    /// A RATIO aggregator's late day opens, from the installed native daily
+    /// feed (native_late_day_opens over the evaluator's input): each opens a
+    /// session-day that traded later than its day stamp, and the intraday
+    /// grid of that session-day starts at it instead of the stamp -- the
+    /// keys feed() splits on, bucket_open_ms and bar_label_ms alike. NSE's
+    /// Muhurat session of 2025-10-21 (13:45 IST, four 15m bars) is one "60"
+    /// bucket stamped 13:45, where the 09:15 day stamp made two (13:15, 14:15)
+    /// and the bucket index ran one ahead for the rest of the feed (lab tv
+    /// w14-htf-60-nifty15, w14-htf-60ema-nifty15). Every other session-day
+    /// keeps the day-stamp grid bit for bit. Empty (the default) changes
+    /// nothing; CALENDAR / PASSTHROUGH and a count-only ratio ignore the
+    /// call; non-increasing opens install nothing.
+    void set_native_day_opens(std::vector<int64_t> late_opens);
+
+    /// Whether an installed native daily feed keys this aggregator's
+    /// buckets: its period partition (CALENDAR, set_native_periods) or late
+    /// day opens (RATIO, set_native_day_opens).
+    bool has_native_periods() const {
+        return !native_stamps_.empty() || !native_late_opens_.empty();
+    }
 
     /// Whether a session ending BEFORE its nominal close completes the
     /// running D/W/M bucket on that session's actual last input bar
@@ -453,7 +506,9 @@ public:
     /// CALENDAR: whether `prev_ms` and `curr_ms` lie in different periods
     /// of this aggregator -- different native periods / W-M groups when
     /// native periods are installed, crosses_boundary on the nominal
-    /// session calendar otherwise. RATIO / PASSTHROUGH: false.
+    /// session calendar otherwise. RATIO with late day opens installed:
+    /// whether they lie in different buckets (bucket_open_ms). Any other
+    /// RATIO, and PASSTHROUGH: false.
     bool period_changes(int64_t prev_ms, int64_t curr_ms) const;
 
     /// Open (Unix ms) of the target-TF bucket an input bar stamped `ms`
@@ -462,7 +517,8 @@ public:
     /// forex week opens Sunday 17:00 ET, its month on the session whose
     /// close date is the 1st); RATIO -> session_intraday_bucket_open_ms,
     /// the day-stamp-anchored grid bucket (the same key feed() splits on
-    /// and time("<intraday tf>") reads); PASSTHROUGH, or a
+    /// and time("<intraday tf>") reads), from its own late day opens
+    /// (set_native_day_opens) rather than a thread's partition; PASSTHROUGH, or a
     /// count-only ratio with no wall-clock width, -> `ms` itself. Pure
     /// function of the configuration: it neither reads nor advances the
     /// aggregation state, so callers may query it before feeding the bar.
@@ -499,6 +555,8 @@ private:
     std::vector<int64_t> native_stamps_;
     std::vector<int64_t> native_group_open_;
     int64_t native_last_bound_ = 0;   // nominal close of the last stamp's period
+    // RATIO: the late day opens the grid starts from (set_native_day_opens).
+    std::vector<int64_t> native_late_opens_;
     // set_early_close_completes: the next-input-bar completion applies.
     bool early_close_completes_ = true;
 

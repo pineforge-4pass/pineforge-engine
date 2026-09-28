@@ -2560,11 +2560,18 @@ TradingView-calibrated, and a host that supplies them inherits its rules:
   and a data hole inside a stamped period is not a close.
 - A period the supplied bars only partly cover yields a partial bucket,
   exactly as a partly covered chart would.
+- The installed **daily** bars also date where each day opened. A daily
+  stamp later than its session-day's day stamp and before its scheduled
+  close, with no input bar of that day before it, is a day that traded late,
+  and an intraday series lays that day's grid from the stamp: NSE's Muhurat
+  session of 2025-10-21 opens 13:45 IST, so its `"60"` bucket is one bar
+  stamped 13:45, not 13:15 and 14:15 from the 09:15 day stamp. Every other
+  day keeps the day-stamp grid.
 
 Declare no `authoritative_bars` and the buckets are a plain aggregation of the
 run's own input, with no calibration to inherit. That is the whole policy
 knob, and it is a ruling of record (ADR-0001, "What the kernel-only archive
-still names"): the three rules above follow from "the supplied
+still names"): the rules above follow from "the supplied
 bars are the venue's own bars of that timeframe", so the kernel gates them on
 the feed's presence rather than on a separate partition field.
 

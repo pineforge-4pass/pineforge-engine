@@ -17,7 +17,7 @@ namespace pineforge {
 // ---- authoritative higher-timeframe feeds ---------------------------------
 //
 // The generic contract (R5 lane N14 ruling, design §2.iv item 6 / ADR-0001):
-// a feed installed here is the venue's own bars of one timeframe. Three
+// a feed installed here is the venue's own bars of one timeframe. Four
 // rules follow from that and from nothing else:
 //   (a) a completed bucket of that timeframe takes its OHLCV from the bar
 //       keyed to the same period -- the aggregator still decides WHEN;
@@ -27,7 +27,11 @@ namespace pineforge {
 //       own belongs to the next stamped period);
 //   (c) a coarser calendar period ("W" / "M") with no feed of its own is
 //       the aggregate of the finest installed calendar feed that divides it
-//       (the daily feed), keyed as its own aggregator labels the period.
+//       (the daily feed), keyed as its own aggregator labels the period;
+//   (d) a daily stamp that opens its session-day late -- after the day
+//       stamp, before any input bar of that day -- is where that day
+//       opened, and an intraday evaluator's grid starts there that day
+//       (native_late_day_opens).
 // The policy knob is the feed itself: a host that installs no authoritative
 // bars gets a plain aggregation of its input with none of this, and a host
 // that wants the venue's periods installs them. The calibration evidence
@@ -216,6 +220,18 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
             np.trade_instants.push_back(last_in_period);
         }
     }
+    // (d) The daily feed also dates where each day OPENED: a stamp later than
+    // its session-day's day stamp, with no input bar of that day before it,
+    // opens a day that traded late (native_late_day_opens), and an intraday
+    // evaluator lays that day's grid from it (set_native_day_opens). Every
+    // other day keeps the day-stamp grid.
+    std::vector<int64_t> late_day_opens;
+    for (std::size_t f = 0; f < native_security_feeds_.size(); ++f) {
+        if (native_security_feeds_[f].seconds != kSecPerDay) continue;
+        late_day_opens = native_late_day_opens(syminfo_.timezone, syminfo_.session,
+                                               periods[f].stamps, input_bars, n_input);
+        break;
+    }
     for (auto& state : security_eval_states_) {
         state.native_feed_index = -1;
         state.native_bars_by_label.clear();
@@ -231,6 +247,10 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
             requested_seconds = 0;
         }
         if (requested_seconds == 0) continue;
+        // Before any label below is keyed: the grid an intraday evaluator
+        // labels its buckets on starts from the late day opens (CALENDAR
+        // and count-only aggregators ignore the call).
+        if (!late_day_opens.empty()) state.aggregator.set_native_day_opens(late_day_opens);
         // Key by the label the aggregate carries: the covered session instant
         // (OANDA's 17:00 stamp covers the 18:00 session, see
         // session_covered_instant_ms) labelled exactly as this state's

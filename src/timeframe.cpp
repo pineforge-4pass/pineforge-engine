@@ -271,17 +271,63 @@ static int64_t intraday_clock_ms(int64_t ts, const std::string& tz,
                - static_cast<int64_t>(session_day_stamp_offset_minutes(session)) * 60000;
 }
 
-int64_t session_intraday_bucket_open_ms(int64_t ms, int64_t bucket_sec,
-                                        const std::string& tz,
-                                        const std::string& session) {
+namespace {
+
+/// The chart symbol's late day opens (NativeDayPartition::late_opens) when
+/// the calling thread's partition keys this clock; nullptr otherwise.
+const std::vector<int64_t>* chart_late_day_opens(const std::string& tz,
+                                                 const std::string& session);
+
+/// The `bucket_ms`-wide intraday grid's clock at `ts`: intraday_clock_ms,
+/// re-anchored on a session-day that opened late. `late_opens` (strictly
+/// increasing; null or empty: none) are instants that open their session-day
+/// after its day stamp (native_late_day_opens). From such an open to the end
+/// of its session-day the clock moves back by the open's offset past the
+/// grid point at or below it, so the open is a bucket boundary and every
+/// bucket of that day runs `bucket_ms` from it, whether or not the width
+/// divides the day ("60" and "75" alike). The move is less than one width,
+/// so the keys stay monotonic across the open. Every other instant, and a
+/// day whose open already sits on the grid, reads intraday_clock_ms exactly.
+int64_t intraday_grid_clock_ms(int64_t ts, const std::string& tz,
+                               const std::string& session,
+                               const std::vector<int64_t>* late_opens,
+                               int64_t bucket_ms) {
+    const int64_t clock = intraday_clock_ms(ts, tz, session);
+    if (late_opens == nullptr || late_opens->empty() || bucket_ms <= 0) return clock;
+    const auto it = std::upper_bound(late_opens->begin(), late_opens->end(), ts);
+    if (it == late_opens->begin()) return clock;
+    const auto day_of = [](int64_t c) {
+        int64_t d = c / kMsPerDay;
+        if (c < 0 && c % kMsPerDay != 0) --d;
+        return d;
+    };
+    const int64_t open_clock = intraday_clock_ms(*(it - 1), tz, session);
+    if (day_of(clock) != day_of(open_clock)) return clock;
+    return clock - ((open_clock % bucket_ms) + bucket_ms) % bucket_ms;
+}
+
+/// Open of the `bucket_sec`-wide bucket holding `ms` on that grid clock.
+int64_t intraday_bucket_open_ms(int64_t ms, int64_t bucket_sec,
+                                const std::string& tz,
+                                const std::string& session,
+                                const std::vector<int64_t>* late_opens) {
     if (bucket_sec <= 0) return ms;
     // Floor (not truncate) so the open never lands after `ms` on a negative
     // clock; for every real feed the two agree.
     const int64_t bucket_ms = bucket_sec * 1000;
-    const int64_t clock = intraday_clock_ms(ms, tz, session);
+    const int64_t clock = intraday_grid_clock_ms(ms, tz, session, late_opens, bucket_ms);
     int64_t open_clock = (clock / bucket_ms) * bucket_ms;
     if (clock < 0 && clock % bucket_ms != 0) open_clock -= bucket_ms;
     return ms - (clock - open_clock);
+}
+
+}  // namespace
+
+int64_t session_intraday_bucket_open_ms(int64_t ms, int64_t bucket_sec,
+                                        const std::string& tz,
+                                        const std::string& session) {
+    return intraday_bucket_open_ms(ms, bucket_sec, tz, session,
+                                   chart_late_day_opens(tz, session));
 }
 
 namespace {
@@ -571,7 +617,51 @@ int64_t session_day_index_nominal(int64_t ms, const std::string& tz,
     return floor_div_day(intraday_clock_ms(ms, tz, session));
 }
 
+const std::vector<int64_t>* chart_late_day_opens(const std::string& tz,
+                                                 const std::string& session) {
+    const NativeDayPartition* p = internal::runtime_ambient().day_partition;
+    if (p == nullptr || p->late_opens.empty() || p->tz != tz || p->session != session) {
+        return nullptr;
+    }
+    return &p->late_opens;
+}
+
 }  // namespace
+
+static int64_t session_day_close_real_ms(int64_t d, const std::string& tz,
+                                         const std::string& session);
+
+std::vector<int64_t> native_late_day_opens(const std::string& tz,
+                                           const std::string& session,
+                                           const std::vector<int64_t>& stamps,
+                                           const Bar* input_bars, int n_input) {
+    std::vector<int64_t> late;
+    if (input_bars == nullptr || n_input < 0) n_input = 0;
+    // Both sequences are sorted, and a stamp's session-day stamp never
+    // decreases along the stamps, so one pass over the input bars serves
+    // every stamp.
+    int j = 0;
+    int64_t prev = 0;
+    for (std::size_t k = 0; k < stamps.size(); ++k) {
+        const int64_t stamp = stamps[k];
+        if (k > 0 && stamp <= prev) return {};
+        prev = stamp;
+        const int64_t day = session_day_index_nominal(stamp, tz, session);
+        const int64_t day_stamp = session_day_stamp_real_ms(day, tz, session);
+        // Inside the session-day's scheduled hours only: a stamp at or after
+        // its close dates no late open the template could hold (a venue that
+        // dates its daily bars at midnight or at the close).
+        if (stamp <= day_stamp || stamp >= session_day_close_real_ms(day, tz, session)) {
+            continue;
+        }
+        while (j < n_input && input_bars[j].timestamp < day_stamp) ++j;
+        // An input bar between the day stamp and the native stamp traded
+        // before the stamp: the day did not open there.
+        if (j < n_input && input_bars[j].timestamp < stamp) continue;
+        late.push_back(stamp);
+    }
+    return late;
+}
 
 int native_day_partition_index(const NativeDayPartition& p, int64_t ms) {
     const auto it = std::upper_bound(p.stamps.begin(), p.stamps.end(), ms);
@@ -748,6 +838,7 @@ bool build_native_day_partition(NativeDayPartition& out,
         prev_week = week;
         prev_month = month;
     }
+    p.late_opens = native_late_day_opens(tz, session, p.stamps, input_bars, n_input);
     out = std::move(p);
     return true;
 }
@@ -971,8 +1062,9 @@ bool tf_change(int64_t prev_ms, int64_t curr_ms, const std::string& tf,
     int secs = tf_to_seconds(tf);
     if (secs <= 0) return false;
     int64_t bucket_ms = static_cast<int64_t>(secs) * 1000;
-    return (intraday_clock_ms(prev_ms, tz, session) / bucket_ms) !=
-           (intraday_clock_ms(curr_ms, tz, session) / bucket_ms);
+    const std::vector<int64_t>* late_opens = chart_late_day_opens(tz, session);
+    return (intraday_grid_clock_ms(prev_ms, tz, session, late_opens, bucket_ms) / bucket_ms) !=
+           (intraday_grid_clock_ms(curr_ms, tz, session, late_opens, bucket_ms) / bucket_ms);
 }
 
 // ─── TimeframeAggregator ───────────────────────────────────────────────────────
@@ -1057,6 +1149,9 @@ struct FeedState {
     // Owner, for bar_label_ms(): the bucket a sub-bar opens is stamped with
     // its grid / session-day open, never with the sub-bar's own timestamp.
     const TimeframeAggregator* agg = nullptr;
+    // RATIO: the late day opens the intraday grid starts from
+    // (TimeframeAggregator::set_native_day_opens); null: none.
+    const std::vector<int64_t>* late_opens = nullptr;
 };
 
 void feed_reset_current(FeedState s, const Bar& bar) {
@@ -1107,8 +1202,10 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
         int64_t bucket_ms = static_cast<int64_t>(target_seconds) * 1000;
         const std::string& atz = s.anchor_tz ? *s.anchor_tz : anchor_utc();
         const std::string& asess = s.anchor_session ? *s.anchor_session : empty_session();
-        int64_t curr_bucket = intraday_clock_ms(s.current_bar.timestamp, atz, asess) / bucket_ms;
-        const int64_t in_clock = intraday_clock_ms(input_bar.timestamp, atz, asess);
+        int64_t curr_bucket = intraday_grid_clock_ms(s.current_bar.timestamp, atz, asess,
+                                                     s.late_opens, bucket_ms) / bucket_ms;
+        const int64_t in_clock =
+            intraday_grid_clock_ms(input_bar.timestamp, atz, asess, s.late_opens, bucket_ms);
         int64_t next_bucket = in_clock / bucket_ms;
         bool boundary = next_bucket != curr_bucket;
 
@@ -1254,7 +1351,7 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
                 && next_input_ms > input_bar.timestamp && s.agg) {
                 const int64_t end_clock = (next_bucket + 1) * bucket_ms;
                 const int64_t close_clock =
-                    intraday_clock_ms(calling_close_ms, atz, asess);
+                    intraday_grid_clock_ms(calling_close_ms, atz, asess, s.late_opens, bucket_ms);
                 if (close_clock >= end_clock
                     && s.agg->bucket_open_ms(next_input_ms)
                            != s.agg->bucket_open_ms(input_bar.timestamp)) {
@@ -1587,7 +1684,7 @@ AggregatedBar TimeframeAggregator::feed(const Bar& input_bar,
                                         int64_t calling_close_ms) {
     FeedState s{current_bar_, sub_bar_count_, current_emitted_complete_,
                 last_completed_bar_, has_completed_,
-                &anchor_tz_, &anchor_session_, this};
+                &anchor_tz_, &anchor_session_, this, &native_late_opens_};
     switch (mode_) {
         case Mode::PASSTHROUGH:
             return feed_passthrough_mode(input_bar, s);
@@ -1686,6 +1783,15 @@ void TimeframeAggregator::set_native_periods(std::vector<int64_t> stamps,
     native_stamps_ = std::move(stamps);
 }
 
+void TimeframeAggregator::set_native_day_opens(std::vector<int64_t> late_opens) {
+    native_late_opens_.clear();
+    if (mode_ != Mode::RATIO || target_seconds_ <= 0) return;
+    for (std::size_t k = 1; k < late_opens.size(); ++k) {
+        if (late_opens[k] <= late_opens[k - 1]) return;
+    }
+    native_late_opens_ = std::move(late_opens);
+}
+
 int TimeframeAggregator::native_index(int64_t ms) const {
     const auto it = std::upper_bound(native_stamps_.begin(),
                                      native_stamps_.end(), ms);
@@ -1695,6 +1801,9 @@ int TimeframeAggregator::native_index(int64_t ms) const {
 }
 
 bool TimeframeAggregator::period_changes(int64_t prev_ms, int64_t curr_ms) const {
+    if (mode_ == Mode::RATIO && !native_late_opens_.empty()) {
+        return bucket_open_ms(prev_ms) != bucket_open_ms(curr_ms);
+    }
     if (mode_ != Mode::CALENDAR) return false;
     if (native_stamps_.empty()) {
         return crosses_boundary(prev_ms, curr_ms, cal_period_, anchor_tz_,
@@ -1717,9 +1826,10 @@ int64_t TimeframeAggregator::bucket_open_ms(int64_t ms) const {
         case Mode::RATIO:
             // Same grid feed_ratio_mode keys on (and time("<intraday tf>")
             // reads): exchange-tz ms since local-midnight + day stamp,
-            // floored to the bucket width. Count-only ratio: no grid.
-            return session_intraday_bucket_open_ms(ms, target_seconds_,
-                                                   anchor_tz_, anchor_session_);
+            // floored to the bucket width, from a late-opening day's own
+            // open (set_native_day_opens). Count-only ratio: no grid.
+            return intraday_bucket_open_ms(ms, target_seconds_, anchor_tz_,
+                                           anchor_session_, &native_late_opens_);
         case Mode::PASSTHROUGH:
             return ms;
     }
