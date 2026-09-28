@@ -706,6 +706,17 @@ int session_window_count(const std::string& windows) {
     return count;
 }
 
+// The windows of `session` and the days it trades, as every predicate reads
+// them: the day list it spells, else Monday to Friday for a session of several
+// windows (lab tv w11-sessmask{,2}-btc15, tests/fixtures/session_clock); an
+// empty list is every day.
+void session_day_list(const std::string& session, std::string& windows,
+                      std::unordered_set<int>& days) {
+    parse_day_filter(session, windows, &days);
+    if (days.empty() && session_window_count(windows) > 1)
+        days = {2, 3, 4, 5, 6};
+}
+
 // Whether the local time of `local_tm` lies in a window of `windows` whose
 // session day is in `days` (1 = Sunday .. 7 = Saturday). A window's session
 // day is the day it starts, but the day it ends for a window that ends at or
@@ -802,12 +813,10 @@ struct ArgSession {
 bool read_arg_session(const std::string& session, ArgSession& out) {
     out = ArgSession{};
     std::string windows;
-    parse_day_filter(session, windows, &out.days);
+    session_day_list(session, windows, out.days);
     trim_inplace(windows);
     if (windows.empty() || windows == "24x7")
         windows = "0000-0000";
-    if (out.days.empty() && session_window_count(windows) > 1)
-        out.days = {2, 3, 4, 5, 6};
     std::size_t pos = 0;
     while (pos <= windows.size()) {
         const std::size_t comma = windows.find(',', pos);
@@ -1132,11 +1141,7 @@ bool passes_session_filter(const std::string& session,
 
     std::string windows;
     std::unordered_set<int> day_filter;
-    parse_day_filter(session, windows, &day_filter);
-    // With no day list, one window admits every day and several windows
-    // Monday to Friday only (lab tv tapes w11-sessmask{,2}-btc15).
-    if (day_filter.empty() && session_window_count(windows) > 1)
-        day_filter = {2, 3, 4, 5, 6};
+    session_day_list(session, windows, day_filter);
 
     struct tm local_tm {};
     decompose_ms_local(bar_ms, tz, local_tm);  // gmtime_r for UTC (no TZ flip)
@@ -1168,9 +1173,13 @@ bool session_in_premarket(const std::string& session,
     if (session.empty() || session == "24x7")
         return false;
 
+    // The days it trades are the in-market predicate's (session_day_list):
+    // a Saturday of a session of several windows and no list is no day of
+    // it. The session day of a bar before its open is the bar's own date:
+    // an overnight session has no pre-market (extended_hours_bounds).
     std::string windows;
     std::unordered_set<int> day_filter;
-    parse_day_filter(session, windows, &day_filter);
+    session_day_list(session, windows, day_filter);
 
     // From 04:00 to the session day's first open, over every window: a
     // break between two windows is not before the open.
@@ -1198,9 +1207,11 @@ bool session_in_postmarket(const std::string& session,
     if (session.empty() || session == "24x7")
         return false;
 
+    // The days it trades are the in-market predicate's (session_day_list),
+    // and a bar after the close is on its session day's own date.
     std::string windows;
     std::unordered_set<int> day_filter;
-    parse_day_filter(session, windows, &day_filter);
+    session_day_list(session, windows, day_filter);
 
     // From the session day's last close, over every window, to 20:00: a
     // break between two windows is not after the close.

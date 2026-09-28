@@ -777,6 +777,35 @@ static void test_wall_clock_day_24x7_new_york() {
     CHECK(pine_time_close(1762084800000LL, "D", "", "", "15", ny, sess) == 1762146000000LL);
 }
 
+// session.ispremarket / session.ispostmarket read the day list the in-market
+// predicate reads (lane W12-ENG-TIME; W11-ENG-TIME-COLOR's reviewer): a
+// session of several windows with no list trades Monday to Friday (lab tv
+// w11-sessmask-btc15 and w11-sessmask2-btc15, tests/fixtures/session_clock),
+// so a Saturday is neither before its open nor after its close, as it is not
+// in market. No TradingView chart of such a session holds a Saturday bar; the
+// weekday readings are TSE:7203's and HKEX:700's
+// (test_session_prepost_windows_tape).
+static void test_prepost_market_day_list() {
+    std::printf("test_prepost_market_day_list\n");
+    const std::string tse = "0900-1130,1230-1530";
+    const std::string tokyo = "Asia/Tokyo";
+    const int64_t sat_0500 = 1741377600000LL;   // Sat 2025-03-08 05:00 JST
+    const int64_t sat_1630 = 1741419000000LL;   // Sat 2025-03-08 16:30 JST
+    const int64_t fri_0500 = 1741291200000LL;   // Fri 2025-03-07 05:00 JST
+    const int64_t fri_1630 = 1741332600000LL;   // Fri 2025-03-07 16:30 JST
+    CHECK(!pine_session_ismarket(tse, tokyo, sat_0500 + 5 * 3600000LL));  // Sat 10:00
+    CHECK(!pine_session_ispremarket(tse, tokyo, sat_0500));
+    CHECK(!pine_session_ispostmarket(tse, tokyo, sat_1630));
+    // Weekdays keep theirs, and a list that names Saturday admits it.
+    CHECK(pine_session_ispremarket(tse, tokyo, fri_0500));
+    CHECK(pine_session_ispostmarket(tse, tokyo, fri_1630));
+    CHECK(pine_session_ispremarket(tse + ":1234567", tokyo, sat_0500));
+    CHECK(pine_session_ispostmarket(tse + ":1234567", tokyo, sat_1630));
+    // One window, no list: every day, as before.
+    CHECK(pine_session_ispremarket("0900-1530", tokyo, sat_0500));
+    CHECK(pine_session_ispostmarket("0900-1530", tokyo, sat_1630));
+}
+
 int main() {
     test_ismarket_inside_rth();
     test_ismarket_outside_rth_close();
@@ -801,6 +830,7 @@ int main() {
     test_session_period_tapes();
     test_time_close_function_tapes();
     test_wall_clock_day_24x7_new_york();
+    test_prepost_market_day_list();
 
     std::printf("\nsession_predicates: %d passed, %d failed\n",
                 tests_passed, tests_failed);
