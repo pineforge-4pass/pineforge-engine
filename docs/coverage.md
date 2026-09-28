@@ -743,9 +743,20 @@ irregular data.
 
 `pine_time(bar_ms, tf, session, tz, chart_tf)` and
 `pine_time_close(...)` return Unix milliseconds, or `na<int64_t>()` when
-the bar is outside the requested session (TradingView semantics for
-filtered sessions). They handle session string parsing and timezone
-conversion internally.
+no bar of `tf` built on the requested session holds the bar (TradingView
+semantics for filtered sessions). They handle session string parsing and
+timezone conversion internally. A session argument builds its own bars, in
+its timezone (the explicit one, else `syminfo.timezone`): a D bar runs
+from a session day's first window open to its last close, a W or M bar
+from the first session day of its week or month to the next one's, and an
+intraday bar opens at each window's open
+(`tests/fixtures/session_period`); the chart's own `time_close` on an
+intraday chart is that grid on `syminfo.session`. A close is the boundary
+itself: on an intraday chart a W or M closes where the next one opens, on
+a daily chart at its last traded close (`tests/fixtures/time_close_function`).
+A 24-hour session's day in a zone with daylight saving runs from one
+wall-clock open to the next, 23 or 25 hours across a switch
+(`tests/fixtures/dst_day_close`).
 
 `tz_util::ScopedTimezone(tz)` is RAII — it grabs a process-wide mutex,
 swaps `TZ` (lazily: a same-zone request skips the `setenv` / `tzset`
