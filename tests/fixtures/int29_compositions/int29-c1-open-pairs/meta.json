@@ -1,0 +1,16 @@
+{
+  "title": "int29 c1 open pairs",
+  "slug": "int29-c1-open-pairs",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T15:30:14.409Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "67ce3bd1cc36619796726317bd011b84f3d5a078acfd66922ecf356eb1501d89",
+  "tv_trades_sha256": "08d7b77d89d5c1985b5f3d6cf34e7ac0ed28b394fa7944cce8dc75ce5f2d768d",
+  "tv_trades_rows": 864
+}

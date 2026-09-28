@@ -957,6 +957,10 @@ list(APPEND TEST_SOURCES test_run_harness_window_tapes)
 # INT28: two wave-J lanes' rules acting in one run, and at one fill
 # (tests/fixtures/int28_compositions), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_int28_rule_compositions)
+# INT29: lane W10-DIAG-UNKNOWN's COQ and SAMEOPEN-REV beside lane
+# W5B-ENG-MARGIN-RESIDUAL's SB and PA at one open
+# (tests/fixtures/int29_compositions), on TradingView's tape.
+list(APPEND TEST_SOURCES test_int29_rule_compositions)
 
 # Lane INT28-FIX (CA): a strategy.close_all() placed after the same bar's
 # all-in reversal entry belongs to that reversal
@@ -2563,6 +2567,12 @@ if(TARGET test_int28_rule_compositions)
     target_compile_definitions(test_int28_rule_compositions PRIVATE
         PINEFORGE_INT28_COMPOSITIONS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/int28_compositions"
         PINEFORGE_OPEN_FILL_ORDER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/open_fill_order")
+endif()
+
+# INT29 reads its TradingView tape from the fixture tree; source-bound.
+if(TARGET test_int29_rule_compositions)
+    target_compile_definitions(test_int29_rule_compositions PRIVATE
+        PINEFORGE_INT29_COMPOSITIONS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/int29_compositions")
 endif()
 
 # Lane INT28-FIX (CA) reads its TradingView tapes from the fixture tree and

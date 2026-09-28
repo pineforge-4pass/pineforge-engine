@@ -1,0 +1,50 @@
+//@version=6
+// INT29 synthetic probe: where lane W10-DIAG-UNKNOWN's rules COQ and
+// SAMEOPEN-REV meet lane W5B-ENG-MARGIN-RESIDUAL's SB and PA at one open.
+// v6 defaults (100000, margin 100 both ways) with a default size of 30 % of
+// equity. A cell every 2 hours from 2025-04-02 00:00 UTC, five kinds in turn;
+// each is flattened by a close_all placed 45 minutes into the cell.
+//   A (SB): from flat, two longs of 60 % on one bar.
+//   B (COQ): a seed long of 30 %, then two adds of 40 % on one bar.
+//   C (SB + SAMEOPEN-REV): from flat, a long of 80 %, a default short and a
+//     long of 30 % on one bar.
+//   D (COQ + PA): a seed long of 50 %, then an add of 30 % and a default add
+//     on one bar.
+//   E (PA pair): a seed long of 50 %, then two default adds on one bar.
+strategy("int29 c1 open pairs", overlay=true, pyramiding=4,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=30)
+int t0 = timestamp("UTC", 2025, 4, 2, 0, 0)
+int step = 2 * 60 * 60 * 1000
+int m15 = 15 * 60 * 1000
+int n = 120
+int rel = time - t0
+bool inRange = rel >= 0 and rel < n * step
+int phase = inRange ? rel % step : -1
+int cell = inRange ? int(math.floor(rel / step)) : -1
+int kind = cell % 5
+q(float pct) => math.floor(strategy.equity * pct / 100 / close * 10000) / 10000
+if phase == 0 and strategy.position_size == 0
+    if kind == 0
+        strategy.entry("A1", strategy.long, qty=q(60), comment="A1")
+        strategy.entry("A2", strategy.long, qty=q(60), comment="A2")
+    else if kind == 1
+        strategy.entry("B0", strategy.long, qty=q(30), comment="B0")
+    else if kind == 2
+        strategy.entry("C1", strategy.long, qty=q(80), comment="C1")
+        strategy.entry("CS", strategy.short, comment="CS")
+        strategy.entry("C2", strategy.long, qty=q(30), comment="C2")
+    else
+        strategy.entry("D0", strategy.long, qty=q(50), comment="D0")
+if phase == m15 and strategy.opentrades == 1
+    if kind == 1
+        strategy.entry("B1", strategy.long, qty=q(40), comment="B1")
+        strategy.entry("B2", strategy.long, qty=q(40), comment="B2")
+    else if kind == 3
+        strategy.entry("DE", strategy.long, qty=q(30), comment="DE")
+        strategy.entry("DD", strategy.long, comment="DD")
+    else if kind == 4
+        strategy.entry("E1", strategy.long, comment="E1")
+        strategy.entry("E2", strategy.long, comment="E2")
+if phase == 3 * m15
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

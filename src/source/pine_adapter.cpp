@@ -14300,6 +14300,28 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             // W5B-ENG-MARGIN-RESIDUAL).
             const bool same_side_add = physical.signed_units != 0.0
                 && (physical.signed_units > 0.0) == source.is_long;
+            // Such an add filled at the open after its bar is judged, as an
+            // explicit one is (rule COQ above), against the position held
+            // when it was placed: a sibling that filled at this open a moment
+            // earlier does not count, so two default adds that each fit on
+            // top of the held position both fill and the book is called at
+            // the fill (lab tv tape tests/fixtures/int29_compositions
+            // int29-c1-open-pairs, cells D and E; lane INT29, composing lane
+            // W10-DIAG-UNKNOWN's COQ with lane W5B-ENG-MARGIN-RESIDUAL's PA).
+            const auto placed_side = static_cast<PositionSide>(source.projection_position_side);
+            const double placed_held = source.projection_tv_carry_qty;
+            if (same_side_add && source.family == PineOrderFamily::Entry
+                && std::holds_alternative<native_order::Market>(view.definition->request.trigger)
+                && (placed_side == PositionSide::FLAT
+                    || (placed_side == PositionSide::LONG) == source.is_long)
+                && std::isfinite(placed_held) && placed_held >= 0.0
+                && projection_bar_index(view.cursor.point) == source.projection_created_bar + 1
+                && std::abs(physical.signed_units) > placed_held + 1e-10
+                && config_.pyramiding > 0
+                && physical.lot_count < static_cast<std::size_t>(config_.pyramiding)) {
+                fill_required = (placed_held + std::abs(view.inspected_opened_units))
+                    * view.resolved_price * staged_.syminfo.pointvalue * active_fx * fraction;
+            }
             double admission_guard = float_guard;
             if (!reversal && !same_side_add && staged_.quantity_grid) {
                 admission_guard = std::max(admission_guard,
