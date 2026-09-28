@@ -693,9 +693,10 @@ static void test_time_close_function_tapes() {
         int holiday_readings;  // W / M readings of a period an exchange holiday shortens
         int periods;           // how many of D, W, M the tape is read for
     };
-    // CAPITALCOM:BTCUSD trades 1700-1700 every day, and a Saturday or Sunday
-    // trading date is none on the symbol clock's weekday rule
-    // (session_period_last_traded_close_ms), so only its D is read here.
+    // CAPITALCOM:BTCUSD trades 1700-1700 every day: spelled with its day list,
+    // as TradingView's symbol describes it, its weekend trading dates count
+    // (a session with hours and no list trades Monday to Friday on the
+    // symbol clock, session_period_last_traded_close_ms's weekday rule).
     static const Tape tapes[] = {
         {PINEFORGE_TIME_CLOSE_FUNCTION_FIXTURE_DIR, {"w12-tclose-btc15", "15", "UTC", "24x7"}, 0, 3},
         {PINEFORGE_TIME_CLOSE_FUNCTION_FIXTURE_DIR,
@@ -710,7 +711,7 @@ static void test_time_close_function_tapes() {
         {PINEFORGE_TIME_CLOSE_FUNCTION_FIXTURE_DIR,
          {"w12-tclose-aapl1d", "1D", "America/New_York", "0930-1600"}, 39, 3},
         {PINEFORGE_DST_DAY_CLOSE_FIXTURE_DIR,
-         {"w12-tclose-cap1d", "1D", "America/New_York", "1700-1700"}, 0, 1},
+         {"w12-tclose-cap1d", "1D", "America/New_York", "1700-1700:1234567"}, 0, 3},
     };
     static const char* const kPeriod[] = {"D", "W", "M"};
     for (const Tape& tape : tapes) {
@@ -730,13 +731,23 @@ static void test_time_close_function_tapes() {
                                                chart.sym_tz, chart.sym_session);
                 const int64_t close = pine_time_close(reading.bar_ms, tf, "", "", chart.tf,
                                                       chart.sym_tz, chart.sym_session);
-                const long long engine[2] = {static_cast<long long>(close - open),
-                                             static_cast<long long>(close - reading.bar_ms)};
+                const bool read = !is_na(open) && !is_na(close);
+                const long long engine[2] = {
+                    read ? static_cast<long long>(close - open) : -1,
+                    read ? static_cast<long long>(close - reading.bar_ms) : -1};
                 for (int k = 0; k < 2; ++k) {
                     const std::string& text = spelled[static_cast<std::size_t>(1 + 2 * p + k)];
                     ++compared;
                     const long long tv = std::atoll(text.c_str());
-                    if (text != "n" && !is_na(open) && !is_na(close) && engine[k] == tv) continue;
+                    if (text != "n" && read && engine[k] == tv) continue;
+                    if (text == "n" || !read) {
+                        if (++wrong <= 6) {
+                            std::printf("  %s bar %lld %s field %d: tv %s engine %s\n", chart.slug,
+                                        static_cast<long long>(reading.bar_ms), kPeriod[p], k,
+                                        text.c_str(), read ? "a value" : "na");
+                        }
+                        continue;
+                    }
                     // A period an exchange holiday shortens: TradingView closes
                     // it earlier, or opens it later, than the session's own
                     // weekdays (calendar data the run does not hold).
@@ -755,6 +766,24 @@ static void test_time_close_function_tapes() {
         CHECK(holiday == tape.holiday_readings);
         CHECK(wrong == 0);
     }
+}
+
+// A session with hours and no day list trades Monday to Friday on the symbol
+// clock, so its month opens at the first weekday session (OANDA:EURUSD's
+// February 2025 at Sunday 02-02 17:00 ET); a bar on a day that rule steps over
+// proves that day trades, and the month it holds opened by then -- never
+// after the bar.
+static void test_month_open_never_after_the_bar() {
+    std::printf("test_month_open_never_after_the_bar\n");
+    const std::string ny = "America/New_York";
+    const int64_t fri_0131 = 1738360800000LL;  // 2025-01-31 17:00 EST, trade date Sat 02-01
+    const int64_t sat_0201 = 1738447200000LL;  // 2025-02-01 17:00 EST, trade date Sun 02-02
+    const int64_t sun_0202 = 1738533600000LL;  // 2025-02-02 17:00 EST, trade date Mon 02-03
+    CHECK(pine_time(sun_0202, "M", "", "", "1D", ny, "1700-1700") == sun_0202);
+    CHECK(pine_time(fri_0131, "M", "", "", "1D", ny, "1700-1700") == fri_0131);
+    CHECK(pine_time(sat_0201, "M", "", "", "1D", ny, "1700-1700") == fri_0131);
+    // Spelled with every day, the month opens on the 1st's session.
+    CHECK(pine_time(sun_0202, "M", "", "", "1D", ny, "1700-1700:1234567") == fri_0131);
 }
 
 // A 24x7 session in New York, where no TradingView symbol reaches but the
@@ -831,6 +860,7 @@ int main() {
     test_time_close_function_tapes();
     test_wall_clock_day_24x7_new_york();
     test_prepost_market_day_list();
+    test_month_open_never_after_the_bar();
 
     std::printf("\nsession_predicates: %d passed, %d failed\n",
                 tests_passed, tests_failed);

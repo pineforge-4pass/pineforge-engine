@@ -1502,14 +1502,15 @@ static bool symbol_clock_applies(const std::string& resolved_session,
 // (session_period_last_traded_close_ms): TradingView closes AAPL's 2025-07-03
 // at 13:00 ET.
 // The stamp of the first session day at or after the symbol-clock D stamp
-// `stamp` whose trading date is a weekday: a session with trading hours does
-// not trade a Saturday or Sunday trading date (the weekday rule of
-// session_period_last_traded_close_ms). TradingView opens a month at its
+// `stamp` that trades: its trading date is a day of the session's list, or,
+// for a session with trading hours and no list, a weekday (the weekday rule
+// of session_period_last_traded_close_ms). TradingView opens a month at its
 // first traded session -- OANDA:XAUUSD's February 2025 at Sunday 02-02
-// 17:00 ET, NASDAQ:AAPL's March at Monday 03-03 09:30 ET -- and on an
-// intraday chart closes it where the next month's opens (w12-tclose-*15,
-// tests/fixtures/time_close_function), where the nominal calendar reads the
-// session of the 1st even on a weekend.
+// 17:00 ET, NASDAQ:AAPL's March at Monday 03-03 09:30 ET, CAPITALCOM:BTCUSD's
+// (1700-1700 every day) at Friday 01-31 17:00 ET -- and on an intraday chart
+// closes it where the next month's opens (w12-tclose-*, tests/fixtures/
+// time_close_function and dst_day_close), where the nominal calendar reads
+// the session of the 1st even on a day that does not trade.
 static int64_t first_traded_day_stamp_ms(int64_t stamp, const std::string& tz,
                                          const std::string& session) {
     if (session.empty() || session == "24x7")
@@ -1531,11 +1532,16 @@ static int64_t first_traded_day_stamp_ms(int64_t stamp, const std::string& tz,
             return memo.answer;
     }
     const int64_t asked = stamp;
+    std::string windows;
+    std::unordered_set<int> days;
+    session_day_list(session, windows, days);
     for (int guard = 0; guard < 7; ++guard) {
         const int64_t close = session_period_close_ms(stamp, tz, session, CalendarPeriod::DAY);
         struct tm local {};
         decompose_ms_local(close - 1, tz, local);
-        if (local.tm_wday != 0 && local.tm_wday != 6)
+        const bool trades = days.empty() ? local.tm_wday != 0 && local.tm_wday != 6
+                                         : days.count(local.tm_wday + 1) != 0;
+        if (trades)
             break;
         stamp = session_period_open_ms(session_covered_instant_ms(close, tz, session), tz, session,
                                        CalendarPeriod::DAY);
@@ -1596,6 +1602,20 @@ static int64_t chart_period_close_ms(int64_t bar_ms, const std::string& tz,
         at = bar_ms - 1;
     }
     const int64_t covered = session_covered_instant_ms(at, tz, session);
+    // A list that trades a Saturday or Sunday is read by the session's own
+    // calendar (session_argument_bar): the period's last session day of the
+    // list closes it, where the runtime's weekday rule stops on Friday.
+    if (period != CalendarPeriod::DAY) {
+        std::string windows;
+        std::unordered_set<int> days;
+        session_day_list(session, windows, days);
+        int64_t week_open = 0;
+        int64_t week_close = 0;
+        if ((days.count(1) != 0 || days.count(7) != 0)
+            && session_argument_bar(covered, session, tz, period, true, week_open, week_close)) {
+            return week_close;
+        }
+    }
     int64_t close = session_period_last_traded_close_ms(covered, tz, session, period);
     if (close < bar_ms) {
         close = session_period_last_traded_close_ms(
@@ -1637,8 +1657,12 @@ int64_t timeframe_time(int64_t bar_ms,
             return day_open;
         }
         const int64_t open = session_period_open_ms(bar_ms, sym_tz, sym_session, cp);
-        return cp == CalendarPeriod::MONTH ? first_traded_day_stamp_ms(open, sym_tz, sym_session)
-                                           : open;
+        if (cp != CalendarPeriod::MONTH)
+            return open;
+        // A bar on a day the list's reading steps over proves the day trades:
+        // the month opened by then.
+        const int64_t traded = first_traded_day_stamp_ms(open, sym_tz, sym_session);
+        return traded <= bar_ms ? traded : open;
     }
     return compute_tf_open_ms(bar_ms, tf, tf_tz, sym_tz, sym_session);
 }
