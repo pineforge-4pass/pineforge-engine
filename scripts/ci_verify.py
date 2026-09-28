@@ -298,7 +298,12 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #      template's quantity step)
 # Both register in release too. 296 registered, 295 run: the WebSocket row
 # still skips on a system libcurl.
-KERNEL_MIN_TESTS = 295
+# 296 run = those 295 plus lane W11-ENG-TIME-COLOR's source-free row, counted
+# with ctest -N on INT29's integrated tree (kernel profile, 297 registered):
+#   +1 test_color_tapes (colours as TradingView reads them back)
+# It registers in release too. 297 registered, 296 run: the WebSocket row
+# still skips on a system libcurl.
+KERNEL_MIN_TESTS = 296
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -508,7 +513,18 @@ KERNEL_MIN_TESTS = 295
 # way (the kernel profile builds none):
 #   +1 INT28-FIX RC       test_coof_recalc_security_tapes
 # No release row skips, so 752 registered is 752 run.
-RELEASE_MIN_TESTS = 752
+# 759 = those 752 plus INT29's seven rows, counted the same way on the
+# integrated tree (the kernel profile builds only the first):
+#   +1 W11-ENG-TIME-COLOR test_color_tapes
+#   +4 W10-DIAG-UNKNOWN   test_coqueued_open_margin_tapes (COQ),
+#                         test_intraday_cap_tv_tapes (CAP-ORDER, CAP-ON),
+#                         test_pooc_gap_stop_tapes (GAPSTOP),
+#                         test_same_open_reversal_tapes (SAMEOPEN-REV)
+#   +1 W13-ENG-MARGIN-OPP test_margin_opposite_tapes (CP, CQ, CU, CW)
+#   +1 INT29              test_int29_rule_compositions (W10's and W5B's
+#                         margin rules at one open, on TradingView's tape)
+# No release row skips, so 759 registered is 759 run.
+RELEASE_MIN_TESTS = 759
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
@@ -542,9 +558,10 @@ ADR_RULED_TEXTS_MIN = 40
 # 729/729/738 at INT28, each with its twenty-four rows of RELEASE_MIN_TESTS,
 # counted the same way; 732/732/741 at INT28-FIX, each with its three rows of
 # RELEASE_MIN_TESTS, counted the same way; 733/733/742 with INT28-FIX round
-# 3's row of RELEASE_MIN_TESTS, counted the same way.
+# 3's row of RELEASE_MIN_TESTS, counted the same way; 740/740/749 at INT29,
+# each with its seven rows of RELEASE_MIN_TESTS, counted the same way.
 # An excluded run must still discover at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 733, 'sanitizers': 733, 'native': 742}
+EXCLUDED_REGISTERED_MIN = {'debug': 740, 'sanitizers': 740, 'native': 749}
 # The ctest stage's bound. A full sanitizers run (push to main, a manual
 # dispatch, the maintainers' verification) ran out of its 30 minutes twice on
 # main's four-core runner before every row had finished, so it gets an hour; a
