@@ -982,6 +982,12 @@ list(APPEND TEST_SOURCES test_coqueued_open_margin_tapes)
 # intraday_cap_tv), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_intraday_cap_tv_tapes)
 
+# Lane W10-DIAG-UNKNOWN rule GAPSTOP: under process_orders_on_close a default
+# percent stop entry the next open gaps through is refused when that open costs
+# more than its sizing equity (tests/fixtures/pooc_gap_stop), on TradingView's
+# tapes.
+list(APPEND TEST_SOURCES test_pooc_gap_stop_tapes)
+
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bare_host_contracts)
@@ -2588,6 +2594,13 @@ endif()
 if(TARGET test_intraday_cap_tv_tapes)
     target_compile_definitions(test_intraday_cap_tv_tapes PRIVATE
         PINEFORGE_CAP_TV_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/intraday_cap_tv")
+endif()
+
+# Lane W10-DIAG-UNKNOWN (GAPSTOP) reads its TradingView tapes from the fixture
+# tree; source-bound.
+if(TARGET test_pooc_gap_stop_tapes)
+    target_compile_definitions(test_pooc_gap_stop_tapes PRIVATE
+        PINEFORGE_GAPSTOP_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_gap_stop")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape

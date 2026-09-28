@@ -1,0 +1,16 @@
+{
+  "title": "w10 gap stop default size, no close processing",
+  "slug": "w10-gap-stop-pct-noclose",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T22:47:19.185Z",
+  "chart": {
+    "symbol": "NASDAQ:AAPL",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-31"
+  },
+  "pine_sha256": "d4f1cdbdf19a26ed3571f1c2d5868f5e35412d9ceb736b594c737b8a81859c46",
+  "tv_trades_sha256": "1bc2e3e6fbf2cdcadbf553dbe72dc93a8cd4364eeb7d6ddc89d2420f8a7ce92c",
+  "tv_trades_rows": 10
+}

@@ -13794,6 +13794,35 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         return NativePrecommitVerdict::AdmitWithHostMargin;
     }
 
+    // Under process_orders_on_close a default percent_of_equity (at most 100)
+    // stop entry placed from flat and not yet marketable is sized at its
+    // level. When a later bar opens through that level, TradingView fills it
+    // at the open only if the equity it was sized from pays for its units
+    // there; otherwise it refuses the order, which is then gone (lane
+    // W10-DIAG-UNKNOWN rule GAPSTOP, tests/fixtures/pooc_gap_stop). A fill at
+    // the level itself costs no more than that equity by the sizing's floor.
+    const double gap_stop_slip = (source.is_long ? 1.0 : -1.0) * config_.slippage
+        * staged_.syminfo.mintick;
+    if (source.family == PineOrderFamily::Entry && config_.process_orders_on_close
+        && std::holds_alternative<native_order::Stop>(view.definition->request.trigger)
+        && !std::isfinite(source.requested_qty)
+        && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        && config_.default_qty_value <= 100.0 && !source.sizing.at_fill
+        && source.projection_position_side == static_cast<std::int32_t>(PositionSide::FLAT)
+        && physical_now.signed_units == 0.0
+        && finite_positive(source.sizing.frozen_units)
+        && finite_positive(source.sizing.equity) && finite_positive(source.exit_levels.stop)
+        && source.sizing.price == source.exit_levels.stop + gap_stop_slip
+        && (source.is_long ? view.resolved_price > source.sizing.price
+                           : view.resolved_price < source.sizing.price)) {
+        const double margin_pct = source.is_long ? config_.margin_long : config_.margin_short;
+        const double cost = source.sizing.frozen_units * view.resolved_price
+            * staged_.syminfo.pointvalue * source.sizing.fx * margin_pct / 100.0;
+        const double epsilon = std::max(1e-9, std::abs(source.sizing.equity) * 1e-12);
+        if (!std::isfinite(cost) || cost > source.sizing.equity + epsilon)
+            return NativePrecommitVerdict::Refuse;
+    }
+
     // ab9714be pine_policy_members.cpp:153-210 and pine_fills.cpp:5627-5644:
     // a same-bar process-on-close long uses ten-significant-digit signal money
     // and the slipped signal threshold.  This is the source host's complete

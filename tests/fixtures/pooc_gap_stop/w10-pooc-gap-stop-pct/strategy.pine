@@ -1,0 +1,39 @@
+//@version=6
+// W10-DIAG-UNKNOWN synthetic probe: under process_orders_on_close, a buy stop
+// entry placed at a bar's close at that bar's high, where the next bar OPENS
+// above the level (a gap through it). G cells rest untouched; K cells cancel
+// the entry on the next bar's calculation if the position is still flat (as
+// a pending-signal script does). X is a control the next bar crosses
+// intrabar, with the same cancel. Every entry takes v6's default size.
+strategy("w10 pooc gap stop default size", overlay=true, process_orders_on_close=true,
+     pyramiding=0,
+     commission_value=0, slippage=0)
+
+T(int mo, int d, int h, int m) => time == timestamp("UTC", 2025, mo, d, h, m)
+
+// G1: 04-11 15:45 high 195.66; 16:00 opens 195.67.
+if T(4, 11, 15, 45)
+    strategy.entry("G1", strategy.long, stop=195.66, comment="G1 gap stop")
+// K1: 04-15 17:00 high 202.41; 17:15 opens 202.42; cancelled at 17:15 if flat.
+if T(4, 15, 17, 0)
+    strategy.entry("K1", strategy.long, stop=202.41, comment="K1 gap stop")
+if T(4, 15, 17, 15) and strategy.position_size == 0
+    strategy.cancel("K1")
+// K2: 04-22 13:45 high 197.855; 14:00 opens 197.87; cancelled at 14:00 if flat.
+if T(4, 22, 13, 45)
+    strategy.entry("K2", strategy.long, stop=197.855, comment="K2 gap stop")
+if T(4, 22, 14, 0) and strategy.position_size == 0
+    strategy.cancel("K2")
+// G2: 04-29 15:30 high 211.17; 15:45 opens 211.18.
+if T(4, 29, 15, 30)
+    strategy.entry("G2", strategy.long, stop=211.17, comment="G2 gap stop")
+// X: 05-01 14:00 high 211.59; 14:15 opens 210.6 and crosses it intrabar;
+// cancelled at 14:15 if flat.
+if T(5, 1, 14, 0)
+    strategy.entry("X", strategy.long, stop=211.59, comment="X crossed stop")
+if T(5, 1, 14, 15) and strategy.position_size == 0
+    strategy.cancel("X")
+
+if T(4, 11, 18, 0) or T(4, 15, 19, 0) or T(4, 22, 16, 0) or T(4, 29, 19, 0) or T(5, 1, 17, 0)
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

@@ -1,0 +1,16 @@
+{
+  "title": "w10 pooc gap stop",
+  "slug": "w10-pooc-gap-stop",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T22:45:47.266Z",
+  "chart": {
+    "symbol": "NASDAQ:AAPL",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-31"
+  },
+  "pine_sha256": "5a3b78d0518e4f2d7e0536d90e00eb208c4f180d9d84e37dcaaefe5c492ad6f4",
+  "tv_trades_sha256": "42bd05b872fdffef2a99042c9bf5900c32b424f044844740e5f791ccd8c9e0bb",
+  "tv_trades_rows": 10
+}

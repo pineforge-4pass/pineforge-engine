@@ -1,0 +1,16 @@
+{
+  "title": "w10 pooc gap stop default size",
+  "slug": "w10-pooc-gap-stop-pct",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T22:46:09.885Z",
+  "chart": {
+    "symbol": "NASDAQ:AAPL",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-31"
+  },
+  "pine_sha256": "54cc27457f5c197f132b6b1c288faffbe9c7bdfefe1ed3b986b36944b2ecfb99",
+  "tv_trades_sha256": "0721521274b0f8f485b276c5e659f35224183c9d448fdfe3940bf9bee6b71d43",
+  "tv_trades_rows": 8
+}
