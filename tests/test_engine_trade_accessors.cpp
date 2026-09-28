@@ -418,12 +418,51 @@ static void test_chart_time_close_tapes() {
     }
 }
 
+// A D / W chart bar stamped outside its session -- before the open or after
+// the close, as some feeds stamp a daily bar at midnight -- is the bar of the
+// session it opens, as a stamp in OANDA's 17:00 ET break is: its time_close
+// is that session's close, never an instant before the bar. TradingView
+// stamps its own equity bars at the 09:30 ET open, so no tape reaches this;
+// session_covered_instant_ms is the engine's rule for such a stamp.
+static void test_chart_time_close_gap_stamps() {
+    std::printf("test_chart_time_close_gap_stamps\n");
+    struct Case {
+        const char* tf;
+        int64_t bar;
+        int64_t close;
+    };
+    // New York on standard time: 09:30 ET is 14:30Z, 16:00 ET 21:00Z.
+    const Case cases[] = {
+        {"1D", 1741064400000LL, 1741122000000LL},  // Tue 03-04 00:00 ET -> Tue 16:00 ET
+        {"1D", 1741046400000LL, 1741122000000LL},  // Tue 03-04 00:00Z (Mon 19:00 ET) -> Tue 16:00 ET
+        {"1D", 1741039200000LL, 1741122000000LL},  // Mon 03-03 22:00Z (17:00 ET, after the close)
+        {"1D", 1741098600000LL, 1741122000000LL},  // Tue 09:30 ET, in session: unchanged
+        {"1W", 1740978000000LL, 1741381200000LL},  // Mon 03-03 00:00 ET -> Fri 03-07 16:00 ET
+    };
+    ZeroPriceProbe p;
+    p.set_syminfo_session("0930-1600");
+    p.set_syminfo_timezone("America/New_York");
+    for (const Case& c : cases) {
+        p.set_script_tf(c.tf);
+        p.set_current_bar_timestamp(c.bar);
+        const int64_t tc = p.pub_time_close();
+        if (tc != c.close) {
+            std::printf("  %s bar %lld: time_close %lld, want %lld\n", c.tf,
+                        static_cast<long long>(c.bar), static_cast<long long>(tc),
+                        static_cast<long long>(c.close));
+        }
+        CHECK(tc == c.close);
+        CHECK(tc > c.bar);
+    }
+}
+
 int main() {
     test_open_trade_accessors_flat_then_pyramid();
     test_open_trade_short_path();
     test_open_trade_zero_price_guard();
     test_engine_core_helpers();
     test_chart_time_close_tapes();
+    test_chart_time_close_gap_stamps();
 
     std::printf("\nengine_trade_accessors: %d passed, %d failed\n",
                 tests_passed, tests_failed);

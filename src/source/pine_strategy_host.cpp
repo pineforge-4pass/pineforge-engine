@@ -1740,11 +1740,17 @@ bool source::PineStrategyHost::adapter_core_sizes_default_opening(bool is_long) 
 // applies read the XAUUSD stamp as out of session, so the D chart answered
 // na. Exchange holidays and early closes are not modelled
 // (session_period_last_traded_close_ms): TradingView closes AAPL's
-// 2025-07-03 at 13:00 ET.
+// 2025-07-03 at 13:00 ET. A stamp outside its session -- a daily bar a feed
+// stamps at midnight, before the open or after the close -- is the bar of
+// the session it opens, as the 17:00 ET break stamp is
+// (session_covered_instant_ms), so it closes with that session, never before
+// its own time.
 int64_t source::PineStrategyHost::chart_time_close() const {
     const CalendarPeriod period = calendar_period_for(script_tf_);
     if (period != CalendarPeriod::NONE) {
-        return session_period_last_traded_close_ms(current_bar_.timestamp, syminfo_.timezone,
+        const int64_t covered = session_covered_instant_ms(
+            current_bar_.timestamp, syminfo_.timezone, syminfo_.session);
+        return session_period_last_traded_close_ms(covered, syminfo_.timezone,
                                                    syminfo_.session, period);
     }
     return pine_time_close(current_bar_.timestamp, script_tf_, syminfo_.session,
