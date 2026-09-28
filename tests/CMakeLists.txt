@@ -2668,7 +2668,8 @@ endforeach()
 
 # Lane W12-ENG-TIME: the rows that read its TradingView tapes.
 foreach(_pf_w12_row IN ITEMS
-        "test_session_predicates|PINEFORGE_SESSION_PERIOD_FIXTURE_DIR|session_period")
+        "test_session_predicates|PINEFORGE_SESSION_PERIOD_FIXTURE_DIR|session_period"
+        "test_session_predicates|PINEFORGE_TIME_CLOSE_FUNCTION_FIXTURE_DIR|time_close_function")
     string(REPLACE "|" ";" _pf_w12_fields "${_pf_w12_row}")
     list(GET _pf_w12_fields 0 _pf_w12_target)
     list(GET _pf_w12_fields 1 _pf_w12_macro)

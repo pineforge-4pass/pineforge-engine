@@ -323,7 +323,9 @@ void fixed_offsets() {
 }
 
 // timeframe_time's month open and timeframe_time_close's D / W / M close in
-// UTC, against their pre-lane bodies.
+// UTC, against their pre-lane bodies. The close is the next period's open
+// itself, not its last millisecond: lane W12-ENG-TIME moved the boundary to
+// TradingView's (lab tv w12-tclose-*, tests/fixtures/time_close_function).
 int64_t libc_month_open(int64_t bar_ms) {
     time_t secs = static_cast<time_t>(bar_ms / 1000);
     int64_t days = static_cast<int64_t>(secs) / 86400;
@@ -348,7 +350,7 @@ int64_t libc_period_close(int64_t open_ms, char period) {
     local_tm.tm_min = 0;
     local_tm.tm_sec = 0;
     time_t nx = mktime(&local_tm);
-    return static_cast<int64_t>(nx) * 1000 - 1;
+    return static_cast<int64_t>(nx) * 1000;
 }
 
 void check_value(const char* what, int64_t bar_ms, int64_t expected, int64_t got) {

@@ -407,10 +407,11 @@ void test_day_anchor_against_tape() {
           "Fri 05-23 09:30 CT still reads Thu 17:00 CT");
     CHECK(!probe.at(cdt(2025, 5, 23, 9, 30)).tfc, "no D change inside the regular session");
     // time_close("D") (the engine's derivation, unpinned): the trade day's
-    // session close -- Tue 05-27 16:00 CT for the merged bar.
-    CHECK(probe.at(kMon0526).time_close_d == cdt(2025, 5, 27, 16, 0) - 1,
+    // session close -- Tue 05-27 16:00 CT for the merged bar -- to the
+    // millisecond (lane W12-ENG-TIME: the exact boundary, lab tv w12-tclose-*, tests/fixtures/time_close_function).
+    CHECK(probe.at(kMon0526).time_close_d == cdt(2025, 5, 27, 16, 0),
           "time_close(\"D\") on the reopen is Tue 05-27 16:00 CT");
-    CHECK(probe.at(kThu0522).time_close_d == cdt(2025, 5, 23, 16, 0) - 1,
+    CHECK(probe.at(kThu0522).time_close_d == cdt(2025, 5, 23, 16, 0),
           "time_close(\"D\") on Thu 17:00 CT is Fri 16:00 CT");
     // time("W"): the week's first native stamp, Sun 05-25 17:00 CT, on
     // every bar of the merged day and on Tuesday's.
@@ -439,7 +440,7 @@ void test_no_native_feed_control() {
     CHECK(without.at(kMon0526).chg, "control: ta.change(time(\"D\")) != 0 on the reopen");
     CHECK(without.at(kMon0526).time_d == kMon0526, "control: time(\"D\") = the reopen");
     CHECK(near(without.at(kMon0526).vwap, without.at(kMon0526).hlc3), "control: ta.vwap re-anchored");
-    CHECK(without.at(kMon0526).time_close_d == cdt(2025, 5, 27, 16, 0) - 1,
+    CHECK(without.at(kMon0526).time_close_d == cdt(2025, 5, 27, 16, 0),
           "control: time_close(\"D\") on the reopen is Tue 16:00 CT (nominal session close)");
     int differing_outside = 0, differing_inside = 0;
     for (const auto& kv : with.rows) {

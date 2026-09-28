@@ -164,7 +164,8 @@ void test_xau_time_d_is_the_1700_stamp() {
     // The session's first bar: D opens an hour before it, at the stamp.
     CHECK_EQ_MS(T(mon_open, "D", NY, XAU), mon_stamp);
     CHECK_EQ_MS(hhmm_ny(T(mon_open, "D", NY, XAU)), 1700);
-    CHECK_EQ_MS(TC(mon_open, "D", NY, XAU), utc_ms(2025, 4, 1, 21, 0) - 1);
+    // time_close is the boundary itself (lane W12-ENG-TIME: the exact boundary, lab tv w12-tclose-*, tests/fixtures/time_close_function).
+    CHECK_EQ_MS(TC(mon_open, "D", NY, XAU), utc_ms(2025, 4, 1, 21, 0));
     CHECK_EQ_MS(T(mon_open, "1D", NY, XAU), mon_stamp);
     // "240": 21:00Z-anchored (17:00 EDT); the 17:00-21:00 ET bucket holds
     // only the 18:00-20:45 bars.
@@ -184,7 +185,7 @@ void test_xau_time_d_is_the_1700_stamp() {
     CHECK_EQ_MS(TC(utc_ms(2025, 4, 1, 20, 45), "60", NY, XAU), utc_ms(2025, 4, 1, 21, 0));
     // Last bar of the session: still Monday's D bar; it closes at the stamp.
     CHECK_EQ_MS(T(utc_ms(2025, 4, 1, 20, 45), "D", NY, XAU), mon_stamp);
-    CHECK_EQ_MS(TC(utc_ms(2025, 4, 1, 20, 45), "D", NY, XAU), utc_ms(2025, 4, 1, 21, 0) - 1);
+    CHECK_EQ_MS(TC(utc_ms(2025, 4, 1, 20, 45), "D", NY, XAU), utc_ms(2025, 4, 1, 21, 0));
     // Next session's first bar: the next stamp.
     CHECK_EQ_MS(T(utc_ms(2025, 4, 1, 22, 0), "D", NY, XAU), utc_ms(2025, 4, 1, 21, 0));
     // Every bar of every session in the tape's range reads the tape's
@@ -200,7 +201,7 @@ void test_xau_time_d_is_the_1700_stamp() {
         for (int64_t t : bars) {
             const int64_t d = T(t, "D", NY, XAU);
             if (d != open_z - k1h || hhmm_ny(d) != 1700) ++bad_d;
-            if (TC(t, "D", NY, XAU) != open_z - k1h + k1d - 1) ++bad_d;
+            if (TC(t, "D", NY, XAU) != open_z - k1h + k1d) ++bad_d;
             const int64_t h4 = T(t, "240", NY, XAU);
             if (!in_set(hhmm_ny(h4), {100, 500, 900, 1300, 1700, 2100})) ++bad_h4;
             if ((h4 - (open_z - k1h)) % k4h != 0 || h4 > t || t >= h4 + k4h) ++bad_h4;
@@ -244,7 +245,7 @@ void test_nyse_intraday_grid_anchored_at_0930() {
     const int64_t tue_open = utc_ms(2025, 4, 1, 13, 30);     // Tue 09:30 EDT
     CHECK_EQ_MS(T(tue_open, "D", NY, RTH), tue_open);
     CHECK_EQ_MS(hhmm_ny(T(tue_open, "D", NY, RTH)), 930);
-    CHECK_EQ_MS(TC(tue_open, "D", NY, RTH), utc_ms(2025, 4, 1, 20, 0) - 1);
+    CHECK_EQ_MS(TC(tue_open, "D", NY, RTH), utc_ms(2025, 4, 1, 20, 0));
     // "60" anchored at 09:30: the 09:45 bar belongs to the 09:30 bar, not to
     // the epoch 09:00 hour the engine used to report.
     CHECK_EQ_MS(T(utc_ms(2025, 4, 1, 13, 45), "60", NY, RTH), tue_open);
@@ -298,7 +299,7 @@ void test_nse_intraday_grid_anchored_at_0915_ist() {
     const int64_t tue_open = utc_ms(2025, 4, 1, 3, 45);      // Tue 09:15 IST
     CHECK_EQ_MS(T(tue_open, "D", IST, NSE), tue_open);
     CHECK_EQ_MS(hhmm_ny(T(tue_open, "D", IST, NSE)), 2345);
-    CHECK_EQ_MS(TC(tue_open, "D", IST, NSE), utc_ms(2025, 4, 1, 10, 0) - 1);
+    CHECK_EQ_MS(TC(tue_open, "D", IST, NSE), utc_ms(2025, 4, 1, 10, 0));
     // "240": 03:45Z (09:15 IST) and 07:45Z (13:15 IST).
     CHECK_EQ_MS(T(utc_ms(2025, 4, 1, 4, 0), "240", IST, NSE), tue_open);
     CHECK_EQ_MS(T(utc_ms(2025, 4, 1, 7, 30), "240", IST, NSE), tue_open);
@@ -369,7 +370,7 @@ void test_cme_grid_unchanged() {
                 utc_ms(2025, 3, 30, 22, 0));
     CHECK_EQ_MS(T(utc_ms(2025, 4, 1, 7, 0), "D", CHI, CME), mon_open);
     CHECK_EQ_MS(hhmm_ny(T(utc_ms(2025, 4, 1, 7, 0), "D", CHI, CME)), 1800);
-    CHECK_EQ_MS(TC(utc_ms(2025, 4, 1, 7, 0), "D", CHI, CME), utc_ms(2025, 4, 1, 21, 0) - 1);
+    CHECK_EQ_MS(TC(utc_ms(2025, 4, 1, 7, 0), "D", CHI, CME), utc_ms(2025, 4, 1, 21, 0));
     // request.security's "240" grid, exactly as test_oanda_day_stamp_grid
     // rule E pins it: 22:00Z / 02:00Z / 06:00Z / .. / 18:00Z.
     TimeframeAggregator agg("240", CHART, CHI, CME);
@@ -402,7 +403,7 @@ void test_cme_grid_unchanged() {
         for (int64_t t : bars) {
             const int64_t d = T(t, "D", CHI, CME);
             if (d != open_z || hhmm_ny(d) != 1800) ++bad_d;
-            if (TC(t, "D", CHI, CME) != open_z + 23 * k1h - 1) ++bad_d;
+            if (TC(t, "D", CHI, CME) != open_z + 23 * k1h) ++bad_d;
             const int64_t h4 = T(t, "240", CHI, CME);
             if (!in_set(hhmm_ny(h4), {200, 600, 1000, 1400, 1800, 2200})) ++bad_h4;
             if ((h4 - open_z) % k4h != 0 || h4 > t || t >= h4 + k4h) ++bad_h4;

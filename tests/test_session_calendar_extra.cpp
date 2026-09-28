@@ -107,8 +107,8 @@ static void test_utc_bucket_negative_quantization() {
 // Calendar WEEK open/close (UTC). Week anchors on Monday 00:00.
 //   bar = 2026-04-08 (Wed) 14:30 UTC.
 //   week open  = Mon 2026-04-06 00:00:00 UTC.
-//   week close = next Mon 2026-04-13 00:00 UTC minus 1 ms
-//              = Sun 2026-04-12 23:59:59.999 UTC.
+//   week close = next Mon 2026-04-13 00:00 UTC, the boundary itself
+//              (lane W12-ENG-TIME: the exact boundary, lab tv w12-tclose-*, tests/fixtures/time_close_function).
 // ---------------------------------------------------------------------------
 static void test_calendar_week_utc() {
     std::printf("test_calendar_week_utc\n");
@@ -119,14 +119,14 @@ static void test_calendar_week_utc() {
 
     CHECK(!is_na(open));
     CHECK(open == utc_ms(2026, 4, 6, 0, 0, 0));            // Monday open
-    CHECK(close == utc_ms(2026, 4, 13, 0, 0, 0) - 1);      // Sunday 23:59:59.999
+    CHECK(close == utc_ms(2026, 4, 13, 0, 0, 0));          // next Monday 00:00
 }
 
 // ---------------------------------------------------------------------------
 // Calendar MONTH open/close (UTC).
 //   bar = 2026-04-08 14:30 UTC.
 //   month open  = 2026-04-01 00:00:00 UTC.
-//   month close = 2026-05-01 00:00 UTC minus 1 ms = 2026-04-30 23:59:59.999.
+//   month close = 2026-05-01 00:00 UTC.
 // ---------------------------------------------------------------------------
 static void test_calendar_month_utc() {
     std::printf("test_calendar_month_utc\n");
@@ -137,14 +137,14 @@ static void test_calendar_month_utc() {
 
     CHECK(!is_na(open));
     CHECK(open == utc_ms(2026, 4, 1, 0, 0, 0));
-    CHECK(close == utc_ms(2026, 5, 1, 0, 0, 0) - 1);
+    CHECK(close == utc_ms(2026, 5, 1, 0, 0, 0));
 }
 
 // ---------------------------------------------------------------------------
 // Calendar DAY open/close (UTC) — compute_tf_close_ms DAY branch.
 //   bar = 2026-04-08 14:30 UTC.
 //   day open  = 2026-04-08 00:00:00 UTC.
-//   day close = 2026-04-09 00:00 UTC minus 1 ms = 2026-04-08 23:59:59.999.
+//   day close = 2026-04-09 00:00 UTC.
 // ---------------------------------------------------------------------------
 static void test_calendar_day_utc() {
     std::printf("test_calendar_day_utc\n");
@@ -154,7 +154,7 @@ static void test_calendar_day_utc() {
     int64_t close = pine_time_close(bar, "D", "", "UTC", "D");
 
     CHECK(open == utc_ms(2026, 4, 8, 0, 0, 0));
-    CHECK(close == utc_ms(2026, 4, 9, 0, 0, 0) - 1);
+    CHECK(close == utc_ms(2026, 4, 9, 0, 0, 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -164,9 +164,9 @@ static void test_calendar_day_utc() {
 //   week open  = Mon 2026-04-06 00:00 ET = 2026-04-06 04:00 UTC.
 //   month open = 2026-04-01 00:00 ET     = 2026-04-01 04:00 UTC.
 //   day  open  = 2026-04-08 00:00 ET     = 2026-04-08 04:00 UTC.
-//   week close = next Mon 00:00 ET - 1ms = 2026-04-13 03:59:59.999 UTC.
-//   month close= 2026-05-01 00:00 ET -1  = 2026-05-01 03:59:59.999 UTC.
-//   day close  = 2026-04-09 00:00 ET -1  = 2026-04-09 03:59:59.999 UTC.
+//   week close = next Mon 00:00 ET        = 2026-04-13 04:00 UTC.
+//   month close= 2026-05-01 00:00 ET      = 2026-05-01 04:00 UTC.
+//   day close  = 2026-04-09 00:00 ET      = 2026-04-09 04:00 UTC.
 // ---------------------------------------------------------------------------
 static void test_calendar_opens_new_york_tz() {
     std::printf("test_calendar_opens_new_york_tz\n");
@@ -177,9 +177,9 @@ static void test_calendar_opens_new_york_tz() {
     CHECK(pine_time(bar, "M", "", tz, "M") == utc_ms(2026, 4, 1, 4, 0, 0));
     CHECK(pine_time(bar, "D", "", tz, "D") == utc_ms(2026, 4, 8, 4, 0, 0));
 
-    CHECK(pine_time_close(bar, "W", "", tz, "W") == utc_ms(2026, 4, 13, 4, 0, 0) - 1);
-    CHECK(pine_time_close(bar, "M", "", tz, "M") == utc_ms(2026, 5, 1, 4, 0, 0) - 1);
-    CHECK(pine_time_close(bar, "D", "", tz, "D") == utc_ms(2026, 4, 9, 4, 0, 0) - 1);
+    CHECK(pine_time_close(bar, "W", "", tz, "W") == utc_ms(2026, 4, 13, 4, 0, 0));
+    CHECK(pine_time_close(bar, "M", "", tz, "M") == utc_ms(2026, 5, 1, 4, 0, 0));
+    CHECK(pine_time_close(bar, "D", "", tz, "D") == utc_ms(2026, 4, 9, 4, 0, 0));
 }
 
 // ---------------------------------------------------------------------------

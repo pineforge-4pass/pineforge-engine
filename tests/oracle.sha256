@@ -2,7 +2,7 @@
   "files": {
     "README.md": "36b94c5f566702ca6de6b0a3a9ccdaf44e2218786d4306e489f17b10b827468b",
     "test_oracle_coof.cpp": "e006f06456b5020f51034a24b3dd99732df53028c8105a32220ad48790f0a903",
-    "test_oracle_day_key.cpp": "14d3a55499d5cd951d34fca121b8ca2574f44ebd12691968612132d91a243ea0",
+    "test_oracle_day_key.cpp": "9571b0753c5e37a71446dcb8861f0a5366b461cd5bef459979ca1a3cb6317081",
     "test_oracle_deferred_any_witnesses.cpp": "c7fc11a952d45971eb42a602bf5a37328b6527aabb1c1948e197383ff7727ab3",
     "test_oracle_deferred_birth.cpp": "1532354df0ffafacb892072d2721f29fb185bce3a53f52ed975f6e0cd5173774",
     "test_oracle_frozen_size.cpp": "305ce4eae79c7529311bdec7eda6d10b830bb7e025d4c63c2aa0c3193df9eb5c",
@@ -22,5 +22,5 @@
     "test_oracle_stop_snapshot.cpp": "d3a14a771538873144c8f03a9d8cf391256e9967ad31a03e29e1ed46359daf1d"
   },
   "schema": "pineforge-r4-d-oracle-tree/v1",
-  "treeSha256": "f482e3216339e6542ee86a5b6ec7f147b35876963da90ecd16cd91a00b89b355"
+  "treeSha256": "e66aee1253b4d9fb89e537554252f82b6f2e33110bbed2de82a584f636614ff8"
 }

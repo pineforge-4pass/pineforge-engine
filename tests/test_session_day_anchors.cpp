@@ -83,11 +83,12 @@ static void test_forex_daily_open_is_17et() {
     // Winter (EST): 17:00 ET == 22:00Z.
     CHECK_EQ_MS(session_period_open_ms(utc_ms(2025, 1, 15, 12, 0), NY, FX, CalendarPeriod::DAY),
                 utc_ms(2025, 1, 14, 22, 0));
-    // Daily close == next session open (exclusive); time_close reports the last ms.
+    // Daily close == next session open (exclusive); time_close reports that
+    // boundary exactly (lane W12-ENG-TIME: the exact boundary, lab tv w12-tclose-*, tests/fixtures/time_close_function).
     CHECK_EQ_MS(session_period_close_ms(bar, NY, FX, CalendarPeriod::DAY),
                 utc_ms(2025, 6, 10, 21, 0));
     CHECK_EQ_MS(pine_time_close(bar, "D", "", "", "15", NY, FX),
-                utc_ms(2025, 6, 10, 21, 0) - 1);
+                utc_ms(2025, 6, 10, 21, 0));
 }
 
 static void test_forex_dst_step() {
@@ -213,7 +214,7 @@ static void test_equity_daily_open_is_0930et() {
     CHECK_EQ_MS(pine_time(bar, "D", "", "", "15", NY, RTH), utc_ms(2025, 6, 10, 13, 30));
     // Close == 16:00 ET, not the next session open.
     CHECK_EQ_MS(session_period_close_ms(bar, NY, RTH, CalendarPeriod::DAY), utc_ms(2025, 6, 10, 20, 0));
-    CHECK_EQ_MS(pine_time_close(bar, "D", "", "", "15", NY, RTH), utc_ms(2025, 6, 10, 20, 0) - 1);
+    CHECK_EQ_MS(pine_time_close(bar, "D", "", "", "15", NY, RTH), utc_ms(2025, 6, 10, 20, 0));
     // Winter: 09:30 EST == 14:30Z.
     CHECK_EQ_MS(session_period_open_ms(utc_ms(2025, 1, 15, 15, 0), NY, RTH, CalendarPeriod::DAY),
                 utc_ms(2025, 1, 15, 14, 30));

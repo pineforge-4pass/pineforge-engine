@@ -531,9 +531,10 @@ static int64_t compute_tf_close_ms(int64_t open_ms,
         // == 30 (verified against vasudevshenoy-manoj-betrayed-me, whose
         // `minute(time_close) >= 30` intraday session-close flatten fires 222
         // times in TV; the prior `- 1` gave 15:29:59.999 -> minute 29 -> the
-        // flatten never fired). The calendar DAY/WEEK/MONTH branches below keep
-        // their `- 1` (period-END = last ms of the period, per their TV-boundary
-        // tests) because those are distinct semantics from an intraday close.
+        // flatten never fired). The calendar DAY/WEEK/MONTH branches below are
+        // exact boundaries too: TradingView's time_close("D") - time("D") on
+        // BINANCE:BTCUSDT is 86400000, not 86399999 (lab tv w12-tclose-*,
+        // tests/fixtures/time_close_function).
         return open_ms + static_cast<int64_t>(sec) * 1000;
     }
 
@@ -552,7 +553,7 @@ static int64_t compute_tf_close_ms(int64_t open_ms,
                 ? days_from_civil(fields.tm_year + 1900 + 1, 1, 1)
                 : days_from_civil(fields.tm_year + 1900, fields.tm_mon + 2, 1);
         }
-        return next * 86400 * 1000 - 1;
+        return next * 86400 * 1000;
     }
 
     tz_util::ScopedTimezone guard(tz);
@@ -565,7 +566,7 @@ static int64_t compute_tf_close_ms(int64_t open_ms,
         local_tm.tm_min = 0;
         local_tm.tm_sec = 0;
         time_t nx = mktime(&local_tm);
-        return static_cast<int64_t>(nx) * 1000 - 1;
+        return static_cast<int64_t>(nx) * 1000;
     }
     if (cp == CalendarPeriod::WEEK) {
         local_tm.tm_mday += 7;
@@ -573,7 +574,7 @@ static int64_t compute_tf_close_ms(int64_t open_ms,
         local_tm.tm_min = 0;
         local_tm.tm_sec = 0;
         time_t nx = mktime(&local_tm);
-        return static_cast<int64_t>(nx) * 1000 - 1;
+        return static_cast<int64_t>(nx) * 1000;
     }
     if (cp == CalendarPeriod::MONTH) {
         local_tm.tm_mon += 1;
@@ -582,7 +583,7 @@ static int64_t compute_tf_close_ms(int64_t open_ms,
         local_tm.tm_min = 0;
         local_tm.tm_sec = 0;
         time_t nx = mktime(&local_tm);
-        return static_cast<int64_t>(nx) * 1000 - 1;
+        return static_cast<int64_t>(nx) * 1000;
     }
     return open_ms;
 }
@@ -1323,6 +1324,60 @@ static bool symbol_clock_applies(const std::string& resolved_session,
     return cp != CalendarPeriod::NONE && resolved_session.empty();
 }
 
+// The close of the symbol's D / W / M period that a daily-or-higher chart bar
+// stamped at `bar_ms` holds: TradingView closes it at the period's last
+// traded close, to the millisecond, whatever time of day the stamp reads --
+// OANDA:XAUUSD's 17:00 ET daily stamps, inside the 1800-1700 session's break,
+// close at the next 17:00 ET and its weeks on Friday 17:00 ET; NASDAQ:AAPL's
+// days at 16:00 ET and its weeks on Friday 16:00 ET; BINANCE:BTCUSDT's at the
+// next 00:00 UTC (lab tv w11-tclose3-*, tests/fixtures/daily_break_close, and
+// w12-tclose-*1d, tests/fixtures/time_close_function). The chart's
+// time_close (PineStrategyHost::chart_time_close) and time_close("D"/"W"/"M")
+// on such a chart read it alike. A stamp outside its session -- a daily bar a
+// feed stamps at midnight, before the open or after the close -- is the bar
+// of the session it opens, as the 17:00 ET break stamp is
+// (session_covered_instant_ms), so it closes with that session, never before
+// its own time; a week or month dated on a weekend its session does not trade
+// (a Sunday-dated equity week) sits after its period's last traded close and
+// is the next period's. Exchange holidays and early closes are not modelled
+// (session_period_last_traded_close_ms): TradingView closes AAPL's 2025-07-03
+// at 13:00 ET.
+// The stamp of the first session day at or after the symbol-clock D stamp
+// `stamp` whose trading date is a weekday: a session with trading hours does
+// not trade a Saturday or Sunday trading date (the weekday rule of
+// session_period_last_traded_close_ms). TradingView opens a month at its
+// first traded session -- OANDA:XAUUSD's February 2025 at Sunday 02-02
+// 17:00 ET, NASDAQ:AAPL's March at Monday 03-03 09:30 ET -- and on an
+// intraday chart closes it where the next month's opens (w12-tclose-*15,
+// tests/fixtures/time_close_function), where the nominal calendar reads the
+// session of the 1st even on a weekend.
+static int64_t first_traded_day_stamp_ms(int64_t stamp, const std::string& tz,
+                                         const std::string& session) {
+    if (session.empty() || session == "24x7")
+        return stamp;
+    for (int guard = 0; guard < 7; ++guard) {
+        const int64_t close = session_period_close_ms(stamp, tz, session, CalendarPeriod::DAY);
+        struct tm local {};
+        decompose_ms_local(close - 1, tz, local);
+        if (local.tm_wday != 0 && local.tm_wday != 6)
+            break;
+        stamp = session_period_open_ms(session_covered_instant_ms(close, tz, session), tz, session,
+                                       CalendarPeriod::DAY);
+    }
+    return stamp;
+}
+
+static int64_t chart_period_close_ms(int64_t bar_ms, const std::string& tz,
+                                     const std::string& session, CalendarPeriod period) {
+    const int64_t covered = session_covered_instant_ms(bar_ms, tz, session);
+    int64_t close = session_period_last_traded_close_ms(covered, tz, session, period);
+    if (close <= bar_ms) {
+        close = session_period_last_traded_close_ms(
+            session_period_close_ms(covered, tz, session, period), tz, session, period);
+    }
+    return close;
+}
+
 int64_t timeframe_time(int64_t bar_ms,
                   const std::string& tf_in,
                   const std::string& session,
@@ -1347,8 +1402,11 @@ int64_t timeframe_time(int64_t bar_ms,
     if (!sess.empty() && !passes_session_filter(sess, session_tz, bar_ms))
         return na<int64_t>();
 
-    if (symbol_clock_applies(sess, cp))
-        return session_period_open_ms(bar_ms, sym_tz, sym_session, cp);
+    if (symbol_clock_applies(sess, cp)) {
+        const int64_t open = session_period_open_ms(bar_ms, sym_tz, sym_session, cp);
+        return cp == CalendarPeriod::MONTH ? first_traded_day_stamp_ms(open, sym_tz, sym_session)
+                                           : open;
+    }
     return compute_tf_open_ms(bar_ms, tf, tf_tz, sym_tz, sym_session);
 }
 
@@ -1373,9 +1431,17 @@ int64_t timeframe_time_close(int64_t bar_ms,
         return na<int64_t>();
 
     if (symbol_clock_applies(sess, cp)) {
-        // Calendar periods report the period END (last ms), matching the
-        // tz-only forms above; intraday closes stay the exact boundary.
-        return session_period_close_ms(bar_ms, sym_tz, sym_session, cp) - 1;
+        // The exact boundary, as TradingView reads it (w12-tclose-*,
+        // tests/fixtures/time_close_function): on an intraday chart the
+        // session day's close, and a week or month closes where the next one
+        // opens (OANDA:XAUUSD's week at the next Sunday 17:00 ET); on a
+        // daily-or-higher chart the period's last traded close, the chart
+        // bar's own reading (XAUUSD's week on Friday 17:00 ET).
+        if (tf_is_daily_or_higher(chart_tf))
+            return chart_period_close_ms(bar_ms, sym_tz, sym_session, cp);
+        const int64_t close = session_period_close_ms(bar_ms, sym_tz, sym_session, cp);
+        return cp == CalendarPeriod::MONTH ? first_traded_day_stamp_ms(close, sym_tz, sym_session)
+                                           : close;
     }
     int64_t t_open = compute_tf_open_ms(bar_ms, tf, tf_tz, sym_tz, sym_session);
     return compute_tf_close_ms(t_open, tf, tf_tz);

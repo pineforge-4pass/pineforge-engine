@@ -629,6 +629,81 @@ static void test_session_period_tapes() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The function forms time_close("D" / "W" / "M") of the symbol's own clock
+// (lane W12-ENG-TIME, tests/fixtures/time_close_function/README.md): the
+// exact boundary, not its last millisecond; on an intraday chart a week or
+// month closes where the next one opens, on a daily chart at its last traded
+// close. The w12-tclose probe spells, in milliseconds, time_close - time,
+// then for D, W and M the function's close minus its own open and minus the
+// bar's time.
+// ---------------------------------------------------------------------------
+
+#ifndef PINEFORGE_TIME_CLOSE_FUNCTION_FIXTURE_DIR
+#error "PINEFORGE_TIME_CLOSE_FUNCTION_FIXTURE_DIR must name tests/fixtures/time_close_function"
+#endif
+
+static void test_time_close_function_tapes() {
+    std::printf("test_time_close_function_tapes\n");
+    struct Tape {
+        ChartFacts chart;
+        int holiday_readings;  // W / M readings of a period an exchange holiday shortens
+    };
+    static const Tape tapes[] = {
+        {{"w12-tclose-btc15", "15", "UTC", "24x7"}, 0},
+        {{"w12-tclose-xau15", "15", "America/New_York", "1800-1700"}, 0},
+        {{"w12-tclose-aapl15", "15", "America/New_York", "0930-1600"}, 0},
+        {{"w12-tclose-eur15", "15", "America/New_York", "1700-1700"}, 0},
+        {{"w12-tclose-btc1d", "1D", "UTC", "24x7"}, 0},
+        {{"w12-tclose-xau1d", "1D", "America/New_York", "1800-1700"}, 0},
+        {{"w12-tclose-aapl1d", "1D", "America/New_York", "0930-1600"}, 39},
+    };
+    static const char* const kPeriod[] = {"D", "W", "M"};
+    for (const Tape& tape : tapes) {
+        const ChartFacts& chart = tape.chart;
+        bool ok = true;
+        const auto readings =
+            exit_comment_tape::read(PINEFORGE_TIME_CLOSE_FUNCTION_FIXTURE_DIR, chart.slug, ok);
+        CHECK(ok);
+        int compared = 0;
+        int wrong = 0;
+        int holiday = 0;
+        for (const auto& reading : readings) {
+            const auto spelled = exit_comment_tape::split(reading.signal, ',');
+            if (spelled.size() != 7) { ++wrong; continue; }
+            for (int p = 0; p < 3; ++p) {
+                const std::string tf = kPeriod[p];
+                const int64_t open = pine_time(reading.bar_ms, tf, "", "", chart.tf,
+                                               chart.sym_tz, chart.sym_session);
+                const int64_t close = pine_time_close(reading.bar_ms, tf, "", "", chart.tf,
+                                                      chart.sym_tz, chart.sym_session);
+                const long long engine[2] = {static_cast<long long>(close - open),
+                                             static_cast<long long>(close - reading.bar_ms)};
+                for (int k = 0; k < 2; ++k) {
+                    const std::string& text = spelled[static_cast<std::size_t>(1 + 2 * p + k)];
+                    ++compared;
+                    const long long tv = std::atoll(text.c_str());
+                    if (text != "n" && !is_na(open) && !is_na(close) && engine[k] == tv) continue;
+                    // A period an exchange holiday shortens: TradingView closes
+                    // it earlier, or opens it later, than the session's own
+                    // weekdays (calendar data the run does not hold).
+                    if (p > 0 && text != "n" && engine[k] > tv) { ++holiday; continue; }
+                    if (++wrong <= 6) {
+                        std::printf("  %s bar %lld %s field %d: tv %s engine %lld\n", chart.slug,
+                                    static_cast<long long>(reading.bar_ms), kPeriod[p], k,
+                                    text.c_str(), engine[k]);
+                    }
+                }
+            }
+        }
+        std::printf("  %s: %d readings compared, %d on holiday periods, %d differ\n",
+                    chart.slug, compared, holiday, wrong);
+        CHECK(compared > 0);
+        CHECK(holiday == tape.holiday_readings);
+        CHECK(wrong == 0);
+    }
+}
+
 int main() {
     test_ismarket_inside_rth();
     test_ismarket_outside_rth_close();
@@ -651,6 +726,7 @@ int main() {
     test_session_day_list_tapes();
     test_session_day_list_edges();
     test_session_period_tapes();
+    test_time_close_function_tapes();
 
     std::printf("\nsession_predicates: %d passed, %d failed\n",
                 tests_passed, tests_failed);
