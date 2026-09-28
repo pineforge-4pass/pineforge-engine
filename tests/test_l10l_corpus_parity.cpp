@@ -116,6 +116,12 @@ void test_coof_pooc_marketable_bracket_exit() {
 // Max intraday fills cap is reached, so cap triggers CloseNow at close 2078.78.
 // The synthetic close pays 1-step slippage: 2078.78 - 0.01 = 2078.77!
 // Owner literals: entry=2078.79, exit=2078.77, qty=2, pnl=-4.197560.
+// The host declares intraday_cap_defer_pooc_close = 0, the owner's close at
+// the fill: with nothing declared, the script's own cap statement takes the
+// close at the next open as TradingView does (lane W10-DIAG-UNKNOWN rule
+// CAP-ON, tests/fixtures/intraday_cap_tv), and this row pins the CloseNow
+// path a host can still select. (TradingView's own #258 exits at 09:00 on
+// the Gatekeeper Guard, not on a cap close.)
 // ---------------------------------------------------------------------------
 class GatekeeperCapHost : public source::PineStrategyHost {
 public:
@@ -133,6 +139,7 @@ public:
         c.process_orders_on_close = true;
         c.calc_on_order_fills = false;
         configure_pine_strategy(c);
+        set_syminfo_metadata("intraday_cap_defer_pooc_close", 0.0);
         set_pine_risk_max_intraday_filled_orders(1);
     }
 

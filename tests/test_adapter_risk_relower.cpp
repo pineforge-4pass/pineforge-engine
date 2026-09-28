@@ -255,10 +255,12 @@ Tape intraday_open_tape() {
 
 // MG13. Two filled orders per day, then the forced close. Two one-unit
 // entries fill at the closes of bars 0 and 1; the second reaches the limit.
-// Bar 1 closes above its open so TradingView books the cap close at that
-// bar's HIGH (its "better than the open" rule) while the kernel books its
-// own flatten at the point it evaluated, the close. A third entry on the
-// same day is refused by both; day 2 is open again for both.
+// TradingView takes the cap's close for that same-bar MARKET fill at the next
+// open, bar 2's (lane W10-DIAG-UNKNOWN rule CAP-ON,
+// tests/fixtures/intraday_cap_tv; the base booked it at bar 1's high), while
+// the kernel books its own flatten at the point it evaluated, the close. A
+// third entry on the same day is refused by both; day 2 is open again for
+// both.
 class FillCap final : public Probe {
 public:
     FillCap() { default_qty_value_ = 1.0; pyramiding_ = 3; }
@@ -586,9 +588,9 @@ int main() {
         const auto adapter = run_adapter<FillCap>(fill_cap_tape());
         verify(kFillCap, adapter, kernel);
         if (!dumping) {
-            // TradingView's cap close is booked at bar 1's high (103) under
-            // the fill-cap ticket; the kernel's flatten at the close (101).
-            CHECK(adapter.find("->1:103 pnl=3 id='' c='Close Position (Max number of filled orders in one day)' cause=5") != std::string::npos);
+            // TradingView's cap close is booked at bar 2's open (101) under
+            // the fill-cap ticket; the kernel's flatten at bar 1's close (101).
+            CHECK(adapter.find("->2:101 pnl=1 id='' c='Close Position (Max number of filled orders in one day)' cause=5") != std::string::npos);
             CHECK(kernel.outcome.find("@1:100->2:101 pnl=1 id='__kernel_risk__' c='Risk limit'") != std::string::npos);
             CHECK(kernel.refused == std::vector<int>{2});
             // Day 2's close is that day's second fill: the kernel breaches
@@ -615,7 +617,7 @@ int main() {
             // is still on the same UTC day at bar 4 (refused) and only bar
             // 24's entry fills.
             CHECK(std::count(adapter.begin(), adapter.end(), '|') == 4);
-            CHECK(adapter.find("L 1 @4:100->24:100 pnl=0 id='' c='Close Position (Max number of filled orders in one day)' cause=5") != std::string::npos);
+            CHECK(adapter.find("L 1 @4:100->25:100 pnl=0 id='' c='Close Position (Max number of filled orders in one day)' cause=5") != std::string::npos);
             CHECK(adapter.find("pos=0") != std::string::npos);
             CHECK(kernel.outcome.find("pos=1") != std::string::npos);
             CHECK(kernel.refused == std::vector<int>{4});

@@ -15,6 +15,14 @@
 // verbatim, to seventeen significant digits. Re-harvest with PF_DUMP=1 on
 // this binary if a scenario is ever added.
 //
+// Re-harvested the same way for lane W10-DIAG-UNKNOWN rule CAP-ON: MG13 and
+// MG14's adapter literals only. Their scripts' own
+// set_pine_risk_max_intraday_filled_orders statement now counts as
+// TradingView does, which under process_orders_on_close takes the cap's
+// close for a same-bar MARKET fill at the next open
+// (tests/fixtures/intraday_cap_tv), where the base booked it at the fill
+// bar's high or close. The kernel literals and every other row are unchanged.
+//
 // Row spelling: side units @entry_hour:entry_price->exit_hour:exit_price
 // pnl exit_id exit_comment close_cause, then the final signed book. Hours
 // count from 2025-03-31 00:00 UTC; the kernel stamps a fill with the next
@@ -54,12 +62,12 @@ const Expected kIntradayOpen{
 
 const Expected kFillCap{
     "MG13",
-    "L 1 @0:100->1:103 pnl=3 id='' c='Close Position (Max number of filled orders in one day)' cause=5 | L 1 @1:101->1:103 pnl=2 id='' c='Close Position (Max number of filled orders in one day)' cause=5 | L 1 @24:101->25:101 pnl=0 id='__close__L' c='' cause=1 | pos=0",
+    "L 1 @0:100->2:101 pnl=1 id='' c='Close Position (Max number of filled orders in one day)' cause=5 | L 1 @1:101->2:101 pnl=0 id='' c='Close Position (Max number of filled orders in one day)' cause=5 | L 1 @24:101->25:101 pnl=0 id='__close__L' c='' cause=1 | pos=0",
     "L 1 @1:100->2:101 pnl=1 id='__kernel_risk__' c='Risk limit' cause=4 | L 1 @2:101->2:101 pnl=0 id='__kernel_risk__' c='Risk limit' cause=4 | L 1 @25:101->26:101 pnl=0 id='X' c='' cause=1 | pos=0"};
 
 const Expected kFillCapChartDay{
     "MG14",
-    "L 1 @0:100->1:100 pnl=0 id='' c='Close Position (Max number of filled orders in one day)' cause=5 | L 1 @1:100->1:100 pnl=0 id='' c='Close Position (Max number of filled orders in one day)' cause=5 | L 1 @4:100->24:100 pnl=0 id='' c='Close Position (Max number of filled orders in one day)' cause=5 | L 1 @24:100->24:100 pnl=0 id='' c='Close Position (Max number of filled orders in one day)' cause=5 | pos=0",
+    "L 1 @0:100->2:100 pnl=0 id='' c='Close Position (Max number of filled orders in one day)' cause=5 | L 1 @1:100->2:100 pnl=0 id='' c='Close Position (Max number of filled orders in one day)' cause=5 | L 1 @4:100->25:100 pnl=0 id='' c='Close Position (Max number of filled orders in one day)' cause=5 | L 1 @24:100->25:100 pnl=0 id='' c='Close Position (Max number of filled orders in one day)' cause=5 | pos=0",
     "L 1 @1:100->2:100 pnl=0 id='__kernel_risk__' c='Risk limit' cause=4 | L 1 @2:100->2:100 pnl=0 id='__kernel_risk__' c='Risk limit' cause=4 | pos=1"};
 
 const Expected kPositionSize{
