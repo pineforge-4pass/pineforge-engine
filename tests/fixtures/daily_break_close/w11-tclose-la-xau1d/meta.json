@@ -1,0 +1,16 @@
+{
+  "title": "w11 tclose la",
+  "slug": "w11-tclose-la-xau1d",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T07:21:34.371Z",
+  "chart": {
+    "symbol": "OANDA:XAUUSD",
+    "interval": "1D",
+    "from": "2025-01-06",
+    "to": "2025-04-15"
+  },
+  "pine_sha256": "a3bc635316158a324d18e20969c6c88365a0bc9efe37b67195dbb6326db436bc",
+  "tv_trades_sha256": "2f3ca398e2baf63eada8aea32f2d00f28950e6da5e255710dc7b7c67195b4430",
+  "tv_trades_rows": 140
+}

@@ -1,0 +1,21 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane W11-ENG-TIME-COLOR): what requests of another symbol
+// read on a daily chart whose bars are stamped in the session break: minutes
+// from each requested bar's time and time_close to the chart bar's time, for
+// a daily lookahead-on request and an hourly request either way; spelled in
+// the comment of the exit that fills on the next bar's open.
+strategy("w11 tclose la", overlay=true, initial_capital=100000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=2, margin_long=0, margin_short=0)
+
+mn(int a, int b) => na(a) or na(b) ? "n" : str.tostring((a - b) / 60000)
+[dt, dtc] = request.security("TVC:DXY", "D", [time, time_close], lookahead=barmerge.lookahead_on)
+[ht, htc] = request.security("TVC:DXY", "60", [time, time_close], lookahead=barmerge.lookahead_off)
+[lt, ltc] = request.security("TVC:DXY", "60", [time, time_close], lookahead=barmerge.lookahead_on)
+sig = mn(time, dt) + "," + mn(time, dtc) + "|" + mn(time, ht) + "," + mn(time, htc) + "|" + mn(time, lt) + "," + mn(time, ltc)
+
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.close("B", comment=sig)
+else
+    strategy.entry("B", strategy.long)
+    strategy.close("A", comment=sig)

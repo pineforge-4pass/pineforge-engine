@@ -1,0 +1,21 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane W11-ENG-TIME-COLOR): the chart bar's time_close on a
+// daily chart, and what a lookahead-off daily request of another symbol
+// reads there. Each bar's readings are spelled in the comment of the exit
+// that fills on the next bar's open: minutes from time to time_close, the
+// exchange-clock HHMM of time and of time_close ("n" for na), and minutes
+// from the requested bar's time / time_close to the chart bar's time.
+strategy("w11 tclose", overlay=true, initial_capital=100000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=2, margin_long=0, margin_short=0)
+
+hm(int t) => na(t) ? "n" : str.tostring(hour(t, syminfo.timezone) * 100 + minute(t, syminfo.timezone))
+mn(int a, int b) => na(a) or na(b) ? "n" : str.tostring((a - b) / 60000)
+[rt, rtc] = request.security("TVC:DXY", "D", [time, time_close], lookahead=barmerge.lookahead_off)
+sig = mn(time_close, time) + "," + hm(time) + "," + hm(time_close) + "," + str.tostring(dayofweek(time, syminfo.timezone)) + "|" + mn(time, rt) + "," + mn(time, rtc)
+
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.close("B", comment=sig)
+else
+    strategy.entry("B", strategy.long)
+    strategy.close("A", comment=sig)

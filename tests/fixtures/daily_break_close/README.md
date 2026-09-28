@@ -44,3 +44,38 @@ facts (session, timezone) through `PineStrategyHost::time_close()`.
 | `w11-tclose3-aapl1d` | NASDAQ:AAPL 1D | 2025-06-01 .. 2025-08-01 | 41 | narrower-than-requested | `db9f99f159ba6675419ef1d55a564a88ea705cb50bcb1e365cbbe24fa986a42d` | `9ec382eff048` |
 | `w11-tclose3-xauw` | OANDA:XAUUSD W | 2024-06-01 .. 2025-06-01 | 51 | narrower-than-requested | `35e30f134d1ac2cc2082ba5f05c2fd5707291ac9df922b3f3eab61afd5fae6d5` | `9ec382eff048` |
 | `w11-tclose3-xaum` | OANDA:XAUUSD 1M | 2022-01-01 .. 2025-06-01 | 40 | narrower-than-requested | `3e6be4783cd39edf0d4946931eb58c1d1416d5d4289d5d693b0eb3feb6f7e8be` | `9ec382eff048` |
+
+## What a request of another symbol reads there
+
+`w11-tclose-xau1d` and `w11-tclose-la-xau1d` hold requests of TVC:DXY on
+the OANDA:XAUUSD 1D chart. They spell the minutes from the requested bar's
+`time` and `time_close` to the chart bar's `time`.
+
+- A lookahead-off daily request reads the DXY bar that closes at 19:00 ET on
+  the label's own day (`-120` for its `time_close`, 18 hours before the chart
+  bar closes). On a Sunday label it reads Friday's bar. The rule is the one
+  every chart has: the last requested bar closed by the chart bar's close,
+  the next 17:00 ET.
+- A lookahead-off hourly request reads the hour that closes at the next
+  17:00 ET (`-1440`).
+- A lookahead-on hourly request reads the hour that opens at the label
+  (`0`), the bar opened by the chart bar's open.
+- A lookahead-on daily request reads the DXY bar that opens inside the chart
+  bar (`-120` for its `time`, 19:00 ET). That is one bar later than the one
+  opened by the label on a Monday to Thursday label, and the same bar on a
+  Sunday one.
+
+`tests/test_native_instrument_feed.cpp` (`test_daily_stamp_in_the_break`)
+rebuilds this shape on synthetic feeds through a bare kernel host with raw
+labels. The kernel reads each label as its calendar interval, the session
+that closes at a Monday to Thursday label, and the case pins that generic
+reading: 38 of its 40 reads differ from TradingView's, all but the Sunday
+labels' lookahead-off daily reads. Lane W11-ENG-TIME-COLOR's kernel rule
+(`c6170f57`, a D/W/M label stamped in the break opens the next period) is
+not on this tree: the Pine adapter never changes the kernel's generic
+mechanics, so TradingView's reading is the adapter's to give.
+
+| tape | chart | range | trades | rangeProof | tv_trades.csv sha256 | strategy.pine sha256 (12) |
+|---|---|---|---:|---|---|---|
+| `w11-tclose-xau1d` | OANDA:XAUUSD 1D | 2025-03-01 .. 2025-07-01 | 85 | narrower-than-requested | `8209c666ff491ff9f744da0c03440f572c7c24377ba538427fccd59123e8fe24` | `fbccbf8d2870` |
+| `w11-tclose-la-xau1d` | OANDA:XAUUSD 1D | 2025-01-06 .. 2025-04-15 | 70 | covered | `2f3ca398e2baf63eada8aea32f2d00f28950e6da5e255710dc7b7c67195b4430` | `a3bc63531615` |

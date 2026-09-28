@@ -32,7 +32,12 @@
 //  10. neutrality and identity: no feed, no digest change; a feed, a digest;
 //      one spec, one continuation; another close, another continuation;
 //  11. a named column rides with its bar: a host that counts deliveries reads
-//      the column of the bar it was handed.
+//      the column of the bar it was handed;
+//  12. a daily chart stamped in its session's break -- OANDA's XAUUSD bars at
+//      17:00 ET under 1800-1700 -- reads each label's calendar interval, the
+//      kernel's generic reading, against a DXY-like daily feed and an hourly
+//      one; TradingView's own readings (lane W11-ENG-TIME-COLOR,
+//      tests/fixtures/daily_break_close) are counted where they differ.
 
 #include "native_instrument_feed_fixture.hpp"
 
@@ -723,6 +728,129 @@ void test_column_rides_with_its_bar() {
     }
 }
 
+// ---- 12. a daily chart stamped in its session's break --------------------
+//
+// OANDA stamps its XAUUSD daily bars at 17:00 ET, inside the 17:00-18:00 break
+// of the 1800-1700 session (tapes w11-tclose3-xau1d, w11-tclose-xau1d and
+// w11-tclose-la-xau1d, tests/fixtures/daily_break_close). Under a raw label
+// partition the kernel hands an instrument series the bars of each input's
+// calendar interval, the interval its session, zone and timeframe give the
+// label: for a Monday-to-Thursday 17:00 ET label the session that closes at
+// the label, opened at 18:00 ET the day before; the Sunday label, in the
+// weekend, reads the slot the calendar gives it (pinned as measured). That
+// reading is the kernel's generic mechanics and stays so: lane
+// W11-ENG-TIME-COLOR's kernel rule c6170f57 (a D/W/M label stamped in the
+// break opens the next period) was not taken, because the Pine adapter never
+// changes the kernel's generic mechanics; TradingView's reading belongs to the
+// adapter. Rebuilt on synthetic feeds of the tapes' shape -- a DXY-like daily
+// bar trades from 19:00 ET on the previous day (17:00 ET on Sunday for
+// Monday's) to 19:00 ET, an hourly feed every hour from Sunday 17:00 ET to
+// Friday 17:00 ET -- the case pins what the kernel reads and counts the reads
+// where TradingView's differ. TradingView's readings, in hours from the chart
+// bar's time (the tapes' own values): a lookahead-off daily request reads the
+// DXY bar that closes at 19:00 ET on the label's day (+2; Friday's bar, -46,
+// on a Sunday label), a lookahead-off hourly one the hour that closes at the
+// next 17:00 ET (+24), a lookahead-on hourly one the hour that opens at the
+// label (0), and a lookahead-on daily one the DXY bar that opens inside the
+// chart bar (+2; the bar opened by the label, 0, on a Sunday one).
+
+void test_daily_stamp_in_the_break() {
+    scenario = "XAUUSD-1D-like chart stamped in the break <- DXY-like daily and hourly feeds";
+    // Sunday 2025-04-06 .. Thursday 04-17, New York on daylight time: 17:00 ET
+    // is 21:00Z and 19:00 ET 23:00Z.
+    const std::int64_t sunday = utc_ms(2025, 4, 6);
+    std::vector<Bar> chart;
+    std::vector<std::int64_t> interval_open;
+    std::vector<std::int64_t> interval_close;
+    int k = 0;
+    for (int week = 0; week < 2; ++week) {
+        for (int d = 0; d < 5; ++d, ++k) {
+            const std::int64_t label = sunday + (7 * week + d) * kDay + 21 * kHour;
+            chart.push_back(make_bar(label, k, 3000.0, 100.0 + k));
+            // The kernel's interval for the label: the session that closes at
+            // it; the Sunday label's slot as measured.
+            interval_open.push_back(label - (d == 0 ? 49 : 23) * kHour);
+            interval_close.push_back(label - (d == 0 ? 46 : 0) * kHour);
+        }
+    }
+    FeedBuilder daily("SYN:DXYD", "D", 103.0);
+    // Trade dates Thursday 04-03 .. Friday 04-18.
+    for (std::int64_t day = utc_ms(2025, 4, 3); day <= utc_ms(2025, 4, 18); day += kDay) {
+        const int wd = weekday(day);
+        if (wd >= 5) continue;
+        const std::int64_t open = wd == 0 ? day - 3 * kHour : day - kHour;
+        daily.add(open, day + 23 * kHour);
+    }
+    FeedBuilder hourly("SYN:DXYH", "60", 104.0);
+    for (std::int64_t t = utc_ms(2025, 4, 3); t < utc_ms(2025, 4, 19); t += kHour) {
+        const std::int64_t day = t - ((t % kDay) + kDay) % kDay;
+        const std::int64_t tod = t - day;
+        const int wd = weekday(day);
+        if (wd == 5 || (wd == 4 && tod >= 21 * kHour) || (wd == 6 && tod < 21 * kHour)) continue;
+        hourly.add(t, t + kHour);
+    }
+    NativeRunSpec spec = nyse_spec("xsym-break-stamp", "1D");
+    spec.ticker = "XAUUSD";
+    spec.tickerid = "TEST:XAUUSD";
+    spec.type = "cfd";
+    spec.session = "1800-1700";
+    spec.slot_label_policy = NativeSlotLabelPolicy::FeedTolerant;
+    spec.legacy_tolerance = NativeFeedTolerance::BatchStructuralBars;
+    spec.instrument_feeds.push_back(daily.feed);
+    spec.instrument_feeds.push_back(hourly.feed);
+    spec.subscriptions.push_back(instrument_series(daily.feed, false));
+    spec.subscriptions.push_back(instrument_series(hourly.feed, false));
+    spec.subscriptions.push_back(instrument_series(hourly.feed, true));
+    spec.subscriptions.push_back(instrument_series(daily.feed, true));
+
+    InstrumentHost host(4);
+    if (!run_batch(host, spec, chart)) return;
+    check_against_rule(host, 0, daily.feed, chart,
+                       expected_exposure(daily.feed, interval_open, interval_close, false), false);
+    check_against_rule(host, 1, hourly.feed, chart,
+                       expected_exposure(hourly.feed, interval_open, interval_close, false), false);
+    check_against_rule(host, 2, hourly.feed, chart,
+                       expected_exposure(hourly.feed, interval_open, interval_close, true), false);
+    check_against_rule(host, 3, daily.feed, chart,
+                       expected_exposure(daily.feed, interval_open, interval_close, true), false);
+
+    // Per label, in hours from the chart bar's time: the kernel's read of each
+    // series (the close of the two lookahead-off reads, the open of the two
+    // lookahead-on ones) and TradingView's.
+    int differs_from_tv = 0;
+    for (std::size_t j = 0; j < chart.size() && j < host.reads.size(); ++j) {
+        const std::int64_t label = chart[j].timestamp;
+        const int wd = weekday(label - label % kDay);  // 0 Monday .. 6 Sunday
+        const auto hours = [&](std::int64_t t) { return (t - label) / kHour; };
+        const auto close_of = [&](const NativeInstrumentFeed& feed, std::size_t s) {
+            const std::int64_t i = host.reads[j].index[s];
+            return i < 0 ? std::int64_t{-1} : feed.close_ms[static_cast<std::size_t>(i)];
+        };
+        const auto open_of = [&](std::size_t s) {
+            const auto& read = host.reads[j].visible[s];
+            return read.has_value() ? read->timestamp : std::int64_t{-1};
+        };
+        CHECK(host.reads[j].visible[0].has_value() && host.reads[j].visible[1].has_value()
+              && host.reads[j].visible[2].has_value() && host.reads[j].visible[3].has_value());
+        const std::int64_t kernel[4] = {
+            hours(close_of(daily.feed, 0)), hours(close_of(hourly.feed, 1)),
+            hours(open_of(2)), hours(open_of(3))};
+        const std::int64_t pinned[4] = {
+            wd == 6 ? -46 : wd == 0 ? -70 : -22,
+            wd == 6 ? -48 : 0,
+            wd == 6 ? -49 : -23,
+            wd == 6 ? -70 : wd == 0 ? -24 : wd == 1 ? -48 : -46};
+        const std::int64_t tradingview[4] = {
+            wd == 6 ? -46 : 2, 24, 0, wd == 6 ? 0 : 2};
+        for (int s = 0; s < 4; ++s) {
+            CHECK(kernel[s] == pinned[s]);
+            differs_from_tv += kernel[s] != tradingview[s] ? 1 : 0;
+        }
+    }
+    // Only the Sunday labels' lookahead-off daily reads are TradingView's.
+    CHECK(differs_from_tv == 38);
+}
+
 }  // namespace
 
 int main() {
@@ -739,6 +867,7 @@ int main() {
     test_stream_refused();
     test_neutrality_and_identity();
     test_column_rides_with_its_bar();
+    test_daily_stamp_in_the_break();
     std::printf("test_native_instrument_feed: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }
