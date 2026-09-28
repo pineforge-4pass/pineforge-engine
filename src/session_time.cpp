@@ -1564,9 +1564,12 @@ static int64_t first_traded_day_stamp_ms(int64_t stamp, const std::string& tz,
 // w12-tzscan-*, tests/fixtures/dst_day_close: CAPITALCOM:BTCUSD, 1700-1700 New
 // York every day, closes its Saturday 2025-03-08 17:00 EST bar at Sunday
 // 17:00 EDT; ACTIVTRADES:BTCUSD, Europe/Amsterdam, its Sunday 2025-03-30 00:00
-// CET bar at Monday 00:00 CEST). False for any other session, a zone
-// without daylight saving's switches (UTC), or a day the session's list
-// leaves out: the runtime's day stands there.
+// CET bar at Monday 00:00 CEST). False, and the runtime's day stands, for any
+// other session, in UTC, on a day the session's list leaves out, and where
+// the chart's native daily partition holds the bar: the feed's stamps and
+// merged days are the symbol's D bars there (session_period_open_ms). A day
+// of 24 hours reads here too: the runtime's midnight floor puts New York's
+// Saturday 23:00 EST before a spring switch in Sunday's day.
 static const std::string kAllDaySession = "24x7";
 
 static bool wall_clock_day_bar(int64_t bar_ms, const std::string& tz,
@@ -1574,6 +1577,11 @@ static bool wall_clock_day_bar(int64_t bar_ms, const std::string& tz,
                                int64_t& close_ms) {
     if (utc_zone(tz))
         return false;
+    if (const NativeDayPartition* p = active_native_day_partition();
+        p != nullptr && p->tz == tz && p->session == session
+        && native_day_partition_index(*p, bar_ms) >= 0) {
+        return false;
+    }
     const std::string& spelled = session.empty() ? kAllDaySession : session;
     const ArgCache& cache = arg_cache(spelled, tz);
     if (!cache.ok || cache.parsed.windows.size() != 1

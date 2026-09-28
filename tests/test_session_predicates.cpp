@@ -17,6 +17,7 @@
 
 #include <pineforge/na.hpp>
 #include <pineforge/session_time.hpp>
+#include <pineforge/timeframe.hpp>
 
 #include "exit_comment_tape.hpp"
 
@@ -806,6 +807,50 @@ static void test_wall_clock_day_24x7_new_york() {
     CHECK(pine_time_close(1762084800000LL, "D", "", "", "15", ny, sess) == 1762146000000LL);
 }
 
+// The chart's native daily partition owns the symbol's D bar where it holds
+// the bar (lane W12-ENG-TIME 5b): a daily feed stamped Fri 2025-03-07 17:00
+// EST and Sun 03-09 17:00 EDT merges Saturday's 1700-1700 New York day into
+// Friday's bar, and time("D") / time_close("D") read the partition's stamp
+// and close, as session_period_open_ms / close_ms do, not the wall-clock day.
+// Where the partition does not hold the bar, or once it is gone, the
+// wall-clock day answers again.
+static void test_wall_clock_day_defers_to_native_partition() {
+    std::printf("test_wall_clock_day_defers_to_native_partition\n");
+    const std::string ny = "America/New_York";
+    const std::string sess = "1700-1700";
+    const int64_t hour = 3600000LL;
+    const int64_t fri_1700 = 1741384800000LL;   // Fri 2025-03-07 17:00 EST
+    const int64_t sat_1700 = 1741471200000LL;   // Sat 2025-03-08 17:00 EST
+    const int64_t sun_1700 = 1741554000000LL;   // Sun 2025-03-09 17:00 EDT
+    const int64_t mon_1700 = 1741640400000LL;   // Mon 2025-03-10 17:00 EDT
+    const int64_t sat_2000 = sat_1700 + 3 * hour;
+    CHECK(pine_time(sat_2000, "D", "", "", "15", ny, sess) == sat_1700);
+    CHECK(pine_time_close(sat_2000, "D", "", "", "15", ny, sess) == sun_1700);
+
+    std::vector<Bar> chart;
+    for (int64_t t = fri_1700; t < mon_1700; t += hour) {
+        Bar bar{};
+        bar.timestamp = t;
+        chart.push_back(bar);
+    }
+    NativeDayPartition partition;
+    CHECK(build_native_day_partition(partition, ny, sess, {fri_1700, sun_1700}, chart.data(),
+                                     static_cast<int>(chart.size())));
+    {
+        NativeDayPartitionScope scope(&partition);
+        CHECK(pine_time(sat_2000, "D", "", "", "15", ny, sess) == fri_1700);
+        CHECK(pine_time_close(sat_2000, "D", "", "", "15", ny, sess)
+              == session_period_close_ms(sat_2000, ny, sess, CalendarPeriod::DAY));
+        // Another session string on the same zone is not the partition's clock.
+        CHECK(pine_time(sat_2000, "D", "", "", "15", ny, "24x7") == sat_1700 - 17 * hour);
+        // Before the partition's first stamp the wall-clock day answers.
+        CHECK(pine_time_close(fri_1700 - hour, "D", "", "", "15", ny, sess) == fri_1700);
+    }
+    CHECK(active_native_day_partition() == nullptr);
+    CHECK(pine_time(sat_2000, "D", "", "", "15", ny, sess) == sat_1700);
+    CHECK(pine_time_close(sat_2000, "D", "", "", "15", ny, sess) == sun_1700);
+}
+
 // session.ispremarket / session.ispostmarket read the day list the in-market
 // predicate reads (lane W12-ENG-TIME; W11-ENG-TIME-COLOR's reviewer): a
 // session of several windows with no list trades Monday to Friday (lab tv
@@ -859,6 +904,7 @@ int main() {
     test_session_period_tapes();
     test_time_close_function_tapes();
     test_wall_clock_day_24x7_new_york();
+    test_wall_clock_day_defers_to_native_partition();
     test_prepost_market_day_list();
     test_month_open_never_after_the_bar();
 
