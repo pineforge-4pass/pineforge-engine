@@ -1,0 +1,24 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane W11-ENG-TIME-COLOR): color.t of color.new /
+// color.rgb over a transparency sweep, and color.r/g/b/t of every named
+// constant; each value spelled in an exit comment.
+strategy("w11 color v6", overlay=true, initial_capital=100000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=4, margin_long=0, margin_short=0)
+
+q(color c) => str.tostring(color.r(c)) + "," + str.tostring(color.g(c)) + "," + str.tostring(color.b(c)) + "," + str.tostring(color.t(c))
+k = math.floor(bar_index / 2) % 101
+sw = "t" + str.tostring(k) + ":" + str.tostring(color.t(color.new(color.red, k))) + "," + str.tostring(color.t(color.new(color.red, k + 0.5))) + "," + str.tostring(color.t(color.rgb(10, 20, 30, k))) + "," + str.tostring(color.t(color.new(#123456, k))) + "," + str.tostring(color.t(color.new(color.new(color.blue, 50), k)))
+n0 = q(color.aqua) + "|" + q(color.black) + "|" + q(color.blue) + "|" + q(color.fuchsia) + "|" + q(color.gray) + "|" + q(color.green)
+n1 = q(color.lime) + "|" + q(color.maroon) + "|" + q(color.navy) + "|" + q(color.olive) + "|" + q(color.orange) + "|" + q(color.purple)
+n2 = q(color.red) + "|" + q(color.silver) + "|" + q(color.teal) + "|" + q(color.white) + "|" + q(color.yellow)
+
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.entry("B", strategy.long)
+    strategy.entry("C", strategy.long)
+    strategy.entry("D", strategy.long)
+else
+    strategy.close("A", comment=sw)
+    strategy.close("B", comment="n0 " + n0)
+    strategy.close("C", comment="n1 " + n1)
+    strategy.close("D", comment="n2 " + n2)

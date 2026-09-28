@@ -1031,6 +1031,11 @@ list(APPEND TEST_SOURCES test_native_session_day_zoned)
 # there, and a bar that traded nothing at one price is one point. Source-free,
 # so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_intrabar_turning_points)
+# Lane W11-ENG-TIME-COLOR: colors as TradingView reads them back -- the named
+# constants, color.new / color.rgb over a transparency sweep, every alpha
+# byte (tests/fixtures/color_tv). Source-free, so it also runs in the
+# kernel-only profile.
+list(APPEND TEST_SOURCES test_color_tapes)
 
 # R5 F5: the Pine adapter selects those facts instead of computing its own:
 # the same tapes flag for flag through the adapter, its live-probe tail
@@ -2637,7 +2642,8 @@ endif()
 # Lane W11-ENG-TIME-COLOR: the rows that read TradingView tapes from the
 # fixture tree.
 foreach(_pf_w11_row IN ITEMS
-        "test_session_predicates|PINEFORGE_SESSION_CLOCK_FIXTURE_DIR|session_clock")
+        "test_session_predicates|PINEFORGE_SESSION_CLOCK_FIXTURE_DIR|session_clock"
+        "test_color_tapes|PINEFORGE_COLOR_TV_FIXTURE_DIR|color_tv")
     string(REPLACE "|" ";" _pf_w11_fields "${_pf_w11_row}")
     list(GET _pf_w11_fields 0 _pf_w11_target)
     list(GET _pf_w11_fields 1 _pf_w11_macro)

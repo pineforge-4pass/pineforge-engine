@@ -1,0 +1,16 @@
+{
+  "title": "w11 color v5",
+  "slug": "w11-color-v5-eth15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T07:08:17.302Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-04"
+  },
+  "pine_sha256": "bf2fda0670eb73d4bfc2998e2367747199939b2f0966b5f724c7722e00dcad66",
+  "tv_trades_sha256": "6173b30fbb1a0f21ed49b98b1678b51ff8badf500cc171ec0ae3eadc13e5688c",
+  "tv_trades_rows": 1152
+}

@@ -1,0 +1,16 @@
+{
+  "title": "w11 color alpha",
+  "slug": "w11-color-alpha-eth15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T07:08:20.801Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "e8f7f7810e99f9d7133415ca85bcdcf18ac40b179af13717a00ab0b09509e137",
+  "tv_trades_sha256": "069af3719ba6d43bebcd7f5fb522ff1e7528e31beeb81a696bf481409b5636cf",
+  "tv_trades_rows": 192
+}
