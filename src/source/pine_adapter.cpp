@@ -14139,15 +14139,37 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             // (lane W10-DIAG-UNKNOWN rule SAMEOPEN-REV,
             // tests/fixtures/same_open_reversal). With slippage TradingView
             // runs such a reversal close-only instead (the -slip tape), which
-            // this rule does not model.
+            // this rule does not model. An entry placed on its own side is
+            // held to the book its tapes pin, the bar's market entries and
+            // unpriced closes: a priced or raw order, or one carried in from
+            // an earlier bar, leaves it to the ordinary reversal, as the
+            // live-position rule of test_live_position_market_gross_admission
+            // does.
+            const auto bare_same_bar_book = [&] {
+                if (!delayed_market_orders_.empty()) return false;
+                for (const auto& handle : live_handles_) {
+                    if (handle == view.target) continue;
+                    const auto found = placement_.find(handle.incarnation);
+                    if (found == placement_.end()) continue;
+                    const auto& row = found->second;
+                    if (row.family == PineOrderFamily::Order) return false;
+                    if (row.family != PineOrderFamily::Entry) continue;
+                    if (finite_positive(row.exit_levels.limit)
+                        || finite_positive(row.exit_levels.stop)
+                        || row.projection_created_bar != source.projection_created_bar)
+                        return false;
+                }
+                return true;
+            };
             const bool same_open_reversal = reversal
                 && source.family == PineOrderFamily::Entry
                 && std::holds_alternative<native_order::Market>(
                     view.definition->request.trigger)
                 && (source.projection_position_side
                         == static_cast<std::int32_t>(PositionSide::FLAT)
-                    || source.projection_position_side == static_cast<std::int32_t>(
-                        source.is_long ? PositionSide::LONG : PositionSide::SHORT))
+                    || (source.projection_position_side == static_cast<std::int32_t>(
+                            source.is_long ? PositionSide::LONG : PositionSide::SHORT)
+                        && bare_same_bar_book()))
                 && !source.projection_after_close
                 && projection_bar_index(view.cursor.point) == source.projection_created_bar + 1
                 && position_open_bar_index_ == view.cursor.point.interval_index

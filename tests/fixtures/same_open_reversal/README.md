@@ -16,7 +16,12 @@ reversal of a position its own bar's entry opened at that open. A third call
 on the bar does not change it, nor does a commission or the bar magnifier.
 With slippage TradingView runs such a reversal close-only instead (the Long
 closes on the Short and no short opens), which the rule does not model: it
-is scoped to zero slippage.
+is scoped to zero slippage. An entry placed on its own side is held to the
+book the held-side tapes pin, the bar's market entries and unpriced closes:
+with a priced or raw order in the book, or one carried in from an earlier
+bar, it is left to the ordinary reversal, as the base engine's live-position
+rule is (test_live_position_market_gross_admission_l4d; no tape covers those
+books).
 
 Each directory is one `lab tv --no-note` export of a synthetic probe written
 for this lane (`p1-*` by agent gjv, 2026-09-27T21:37-21:39Z;
