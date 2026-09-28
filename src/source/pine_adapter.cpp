@@ -14728,6 +14728,56 @@ double PineExecutionAdapter::source_margin_units(
     return units;
 }
 
+// The follow-up TradingView takes after a margin call of `called` units on a
+// long of several lots, sized on `money`, the book before that call, and
+// filled at `fill`. Its broker checks the book again after each lot the call
+// closes, first in first out, on a state that has taken the lot out of the
+// book but not yet booked its P&L -- the lot relieves the shortfall by its
+// cost (its entry fee was booked when it opened) -- while each lot before it,
+// booked, relieves it by what its sale fetched net of its exit fee. The last
+// of those checks that is still short is called again: four times its
+// lot-floored shortfall. So a call whose first lots cost less than the
+// shortfall is followed; one that starts inside a lot costing more is not
+// (lab tv tapes tests/fixtures/add_sibling_margin tailb-lots12-pooc-c0s0,
+// tailb-lots30-pooc-c10s3 and tailb-lots30-mkt-c10s2; the grid bots'
+// calls on BINANCE BTC and ETH daily bars; lane TAIL-B). Only on a
+// fractional lot grid, at a percent commission or none: a whole-unit book's
+// follow-up is whole_unit_follow_up_due's.
+double PineExecutionAdapter::lagged_margin_follow_up_units(
+        const std::vector<NativeOpenLot>& lots, const SourceMarginMoney& money, double called,
+        double fill, std::int64_t sub_bar_open_ms) const {
+    if (!money.valid || !(money.required > money.equity) || !(called > internal::kQtyEpsilon)
+        || !staged_.quantity_grid || !(*staged_.quantity_grid > 0.0)
+        || !(*staged_.quantity_grid < 1.0) || !finite_positive(fill)
+        || (config_.commission_value != 0.0
+            && config_.commission_type != static_cast<int>(CommissionType::PERCENT))) {
+        return 0.0;
+    }
+    const double scale = staged_.syminfo.pointvalue * active_staged_fx(sub_bar_open_ms);
+    const double fee = config_.commission_value / 100.0;
+    const double shortfall = money.required - money.equity;
+    double remaining = called;
+    double booked = 0.0;
+    double last_short = 0.0;
+    for (const auto& lot : lots) {
+        if (!(remaining > internal::kQtyEpsilon)) break;
+        if (!(lot.signed_units > 0.0)) return 0.0;
+        const double taken = std::min(remaining, lot.signed_units);
+        remaining -= taken;
+        const double lagged = shortfall - booked - taken * lot.entry_price * scale;
+        if (lagged > 0.0) last_short = lagged;
+        booked += taken * fill * scale * (1.0 - fee);
+    }
+    if (!(last_short > 0.0) || !std::isfinite(last_short)) return 0.0;
+    const double grid = *staged_.quantity_grid;
+    const double minimum = std::floor(source_money_round(last_short) / money.unit_margin / grid)
+        * grid;
+    double units = std::floor(4.0 * minimum / grid + 1e-6) * grid;
+    units = std::min(units, money.held - called);
+    if (!(units > internal::kQtyEpsilon) || !std::isfinite(units)) return 0.0;
+    return units;
+}
+
 // The forced execution price of a liquidation that fired at `fire`: the fire
 // price on the chart tick ladder, then the EXIT side's own market slippage
 // (ab9714be pine_fills.cpp:1712-1726 and :2649-2658). Reducing a long is a
@@ -17845,10 +17895,23 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
             const bool at_close = at_close_units > 0.0 && at_close_units >= open_shortfall;
             const bool follow_up = whole_unit_follow_up_due(
                 at_close ? at_close_units : source_margin_units(at_open, false), opening_mark);
+            const double held_before = opening_position.signed_units;
+            const auto lots_before = pooc_adds_at_prior_close
+                ? require_host().native_open_lots(opening_mark) : std::vector<NativeOpenLot>{};
             const bool called = at_close
                 ? submit_margin_call_units(opening_mark, context, at_close_units)
                 : submit_margin_call_slice(opening_mark, context);
             if (called && follow_up) (void)submit_margin_call_units(opening_mark, context, 1.0);
+            // The adds' book takes the broker's follow-up at this same open
+            // (lagged_margin_follow_up_units).
+            if (called && pooc_adds_at_prior_close) {
+                const double taken = held_before
+                    - detail::run_position(require_host()).signed_units;
+                const double more = lagged_margin_follow_up_units(
+                    lots_before, at_open, taken, source_margin_fill_price(opening_mark, false),
+                    context.sub_bar_open_ms);
+                if (more > 0.0) (void)submit_margin_call_units(opening_mark, context, more);
+            }
         }
     }
     bool marketable_limit_at_open = false;
@@ -20148,6 +20211,18 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                         && whole_unit_follow_up_due(source_margin_units(source_margin_money(
                                event.resolved_price, context.sub_bar_open_ms), true),
                            event.resolved_price);
+                    // The last of a bar's adds on a long: the broker's
+                    // follow-up (lagged_margin_follow_up_units) is sized on the
+                    // print the adds' fill slipped from and taken at the bar's
+                    // next path point.
+                    const bool adds_book = adds_book_last && opened_position.signed_units > 0.0;
+                    const double print = source_bar_fill_tick(
+                        event.resolved_price - config_.slippage * staged_.syminfo.mintick,
+                        staged_.syminfo.mintick);
+                    const auto print_money = adds_book
+                        ? source_margin_money(print, context.sub_bar_open_ms) : SourceMarginMoney{};
+                    const auto lots_before = adds_book
+                        ? require_host().native_open_lots(print) : std::vector<NativeOpenLot>{};
                     const bool called = submit_margin_call_slice(
                         event.resolved_price, context, true);
                     const double next = next_source_path_waypoint(
@@ -20155,6 +20230,14 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                         event.resolved_price, source_path_uses_high_first(policy_script_bar_));
                     if (called && follow_up && finite_positive(next))
                         (void)submit_margin_call_units(next, context, 1.0, true);
+                    if (called && adds_book && finite_positive(next)) {
+                        const double taken = opened_position.signed_units
+                            - detail::run_position(require_host()).signed_units;
+                        const double more = lagged_margin_follow_up_units(
+                            lots_before, print_money, taken, source_margin_fill_price(print, false),
+                            context.sub_bar_open_ms);
+                        if (more > 0.0) (void)submit_margin_call_units(next, context, more, true);
+                    }
                 }
             }
             const bool terminal_pooc_open = config_.process_orders_on_close

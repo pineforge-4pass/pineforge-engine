@@ -2,7 +2,7 @@
 
 A grid bot buys every level the close crossed, so one bar can place many
 MARKET entries on top of a position it already holds. TradingView's broker
-treats such a bar's adds as a group, and two rules follow from its tapes.
+treats such a bar's adds as a group, and three rules follow from its tapes.
 Each is pinned here by synthetic probes written for this lane; no closed or
 scraped strategy is involved.
 
@@ -17,6 +17,15 @@ scraped strategy is involved.
   too, at the print its fill slipped from. Under `process_orders_on_close` the
   call is taken at the next open, sized at the close the adds filled at, long
   or short, fees or none.
+- **LF (the follow-up).** After a call that closes several lots of a long,
+  TradingView's broker checks the book again after each lot, first in first
+  out, on a state that has taken the lot out of the book but not yet booked its
+  P&L: that lot relieves the shortfall by its cost (its entry fee was booked
+  when it opened), each lot before it, booked, by what its sale fetched net of
+  its exit fee. The last check that is still short is called again, four times
+  its lot-floored shortfall: at the same open under `process_orders_on_close`,
+  at the bar's next path point after a market call. A call that starts inside
+  a lot costing more than the shortfall is not followed.
 
 Every probe runs on BINANCE:ETHUSDT.P 15-minute bars, 2025-04-01 .. 2025-05-01,
 with 10000 of capital, `pyramiding = 200` and margins of 100. Every quantity is
@@ -66,7 +75,26 @@ three adds at 06:30. Each flattened after its adds.
 | `tailb-loss-pooc-c6s3` | long, `process_orders_on_close`, commission 0.06 %, slippage 3 | 20 | `885fada2be11a5b810125c5b6c24d000a127b295c4d1f5b3ce7933d98aa00dbc` |
 | `tailb-loss-mkt-c10s2` | long, commission 0.1 %, slippage 2 | 20 | `d48e337582654c9ffa5696e643f54c8860db9504cebd66a5d01059a881d3f19b` |
 
-The four-seed cell's call takes the first seed whole and part of the second.
+The four-seed cell's call takes the first seed whole and part of the second:
+that seed costs more than the shortfall, so no follow-up.
+
+## The lots probes (rule LF)
+
+A book of N seeds of 9000 / N each, one per bar from 2025-04-06 00:00 UTC,
+then three adds of 700 on the 2025-04-07 06:00 bar; flattened at 08:00.
+
+| tape | `strategy()` declares | trades | tv_trades.csv sha256 |
+|---|---|---:|---|
+| `tailb-lots12-pooc-c0s0` | 12 seeds, long, `process_orders_on_close`, no fees | 17 | `f2a3285447ca9a9618783e170dc9f2fbca5eade3290de015e0caa0672a78c80a` |
+| `tailb-lots30-pooc-c10s3` | 30 seeds, long, `process_orders_on_close`, commission 0.1 %, slippage 3 | 35 | `1af2f5d2d105f782179603b771083489e6021712ef473f64fb276dc3c9bbdef1` |
+| `tailb-lots30-mkt-c10s2` | 30 seeds, long, commission 0.1 %, slippage 2 | 35 | `3db6e37fd08c5c5f10e3072db87411db94416786c4ac397d6ca275a6dc64357a` |
+
+Each call closes the oldest seeds whole and part of the next, and a second
+call follows: at 06:15's open (1539.97, both calls) under
+`process_orders_on_close`, at 06:15's high (1541.74) after the market call at
+its open. The same rule gives both calls of seven further lots probes' tapes
+(12 to 50 seeds, fees or none; scratch exports, not kept) and of the 3Commas
+grid bots' calls on BINANCE:BTCUSDT and BINANCE:ETHUSDT.P daily bars.
 
 ## The replay
 

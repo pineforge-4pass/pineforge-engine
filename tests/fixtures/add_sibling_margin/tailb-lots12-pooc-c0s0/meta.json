@@ -1,0 +1,16 @@
+{
+  "title": "tailb-lots12-pooc-c0s0",
+  "slug": "tailb-lots12-pooc-c0s0",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:27:09.212Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "77eb76158086422d1c0f44f293c4aa9ce6054f2563333a06a006203f107f4100",
+  "tv_trades_sha256": "f2a3285447ca9a9618783e170dc9f2fbca5eade3290de015e0caa0672a78c80a",
+  "tv_trades_rows": 34
+}

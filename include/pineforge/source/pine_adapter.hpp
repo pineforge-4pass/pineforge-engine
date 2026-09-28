@@ -1398,6 +1398,9 @@ public:
     SourceMarginMoney source_margin_money(double mark_price,
                                           std::int64_t sub_bar_open_ms) const;
     double source_margin_units(const SourceMarginMoney&, bool opening_checkpoint) const;
+    double lagged_margin_follow_up_units(const std::vector<NativeOpenLot>& lots,
+                                         const SourceMarginMoney& money, double called,
+                                         double fill, std::int64_t sub_bar_open_ms) const;
     double source_margin_fill_price(double fire, bool close_is_buy) const;
 
     bool source_margin_rounded_tie_veto() const;

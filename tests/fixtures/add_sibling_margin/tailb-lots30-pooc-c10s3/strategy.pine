@@ -1,0 +1,26 @@
+//@version=6
+// Lane TAIL-B synthetic probe: several same-side MARKET adds placed on one bar
+// on top of a held long, each fitting the equity beside the held position
+// alone, together over it. Which adds fill, and how is the grown book
+// margin-called? BINANCE:ETHUSDT.P 15m, fixed UTC cells, 10000 of capital;
+// every quantity is money / close, floored to 0.0001.
+strategy("tailb-lots30-pooc-c10s3", overlay=true, pyramiding=200, initial_capital=10000,
+     margin_long=100, margin_short=100, process_orders_on_close=true,
+     commission_type=strategy.commission.percent, commission_value=0.1, slippage=3)
+
+qOf(float money) => math.floor(money / close * 10000) / 10000
+addN(int n) =>
+    float q = qOf(700)
+    for i = 1 to n
+        strategy.entry("A" + str.tostring(i), strategy.long, qty=q, comment="A" + str.tostring(i))
+
+// A book of 30 seeds of 300 each, one per bar from 2025-04-06 00:00 UTC,
+// then 3 adds of 700 on the 2025-04-07 06:00 bar; flattened at 08:00.
+int t1 = timestamp("UTC", 2025, 4, 6, 0, 0)
+int k = int((time - t1) / (15 * 60 * 1000))
+if time >= t1 and k < 30
+    strategy.entry("S" + str.tostring(k), strategy.long, qty=qOf(300), comment="S" + str.tostring(k))
+if time == timestamp("UTC", 2025, 4, 7, 6, 0)
+    addN(3)
+if time == timestamp("UTC", 2025, 4, 7, 8, 0)
+    strategy.close_all(comment="cleanup")

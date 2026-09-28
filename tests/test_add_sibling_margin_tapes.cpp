@@ -13,6 +13,12 @@
  *       four times its lot-floored shortfall: at that fill for a market add
  *       (a commissioned explicit short at the print its fill slipped from),
  *       under process_orders_on_close at the next open, sized at the close.
+ *   LF  After a call that closes several lots of a long, the broker checks the
+ *       book again after each lot, first in first out, on a state that has
+ *       taken the lot out but not booked its P&L, and calls the last check
+ *       still short again, four times its lot-floored shortfall: at the same
+ *       open under process_orders_on_close, at the bar's next path point after
+ *       a market call.
  *
  * Each row replays one lab tv tape (tests/fixtures/add_sibling_margin,
  * BINANCE:ETHUSDT.P 15) through the Pine adapter under the configuration the
@@ -149,12 +155,13 @@ std::vector<Row> tape_trades(const std::string& tape, std::int64_t end_ms) {
 enum class Probe {
     Cycle,  // tailb-adds-*: every 3 hours a seed, then 1, 2, 3 or 5 adds
     Loss,   // tailb-loss-*: adds on top of a seed the price has moved away from
+    Lots,   // tailb-lots*: a book of many seed lots, then 3 adds
 };
 
 class ProbeHost final : public source::PineStrategyHost {
 public:
-    ProbeHost(Probe probe, const source::PineStrategyConfig& config, bool is_long)
-        : probe_(probe), long_(is_long) {
+    ProbeHost(Probe probe, const source::PineStrategyConfig& config, bool is_long, int seeds)
+        : probe_(probe), long_(is_long), seeds_(seeds) {
         attach_pine_execution_adapter();
         configure_pine_strategy(config);
         set_syminfo_metadata("qty_step", kLot);
@@ -165,6 +172,7 @@ public:
         switch (probe_) {
         case Probe::Cycle: cycle(t); break;
         case Probe::Loss: loss(t); break;
+        case Probe::Lots: lots(t); break;
         }
     }
 
@@ -218,8 +226,21 @@ private:
             close_all("cleanup");
     }
 
+    // tailb-lots*: `seeds_` seeds of 9000 / seeds_ (integer) each, one per bar
+    // from 2025-04-06 00:00 UTC; 3 adds on the 2025-04-07 06:00 bar;
+    // flattened at 08:00.
+    void lots(std::int64_t t) {
+        const std::int64_t t1 = at(6, 0, 0);
+        const std::int64_t k = (t - t1) / (15 * kMinute);
+        if (t >= t1 && k < seeds_)
+            entry("S" + std::to_string(k), q_of(static_cast<double>(9000 / seeds_)));
+        if (t == at(7, 6, 0)) adds(3);
+        if (t == at(7, 8, 0)) close_all("cleanup");
+    }
+
     Probe probe_;
     bool long_;
+    int seeds_;
 };
 
 std::vector<Bar> feed() {
@@ -241,9 +262,9 @@ struct Run {
 
 // The engine's trades closed inside the bars (a position still open at the
 // last bar is closed there by the range end and is not a tape trade).
-Run run(Probe probe, const source::PineStrategyConfig& config, bool is_long,
+Run run(Probe probe, const source::PineStrategyConfig& config, bool is_long, int seeds,
         const std::vector<Bar>& bars, std::int64_t end_ms) {
-    ProbeHost host(probe, config, is_long);
+    ProbeHost host(probe, config, is_long, seeds);
     host.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false);
     Run out;
     out.error = host.last_error();
@@ -290,6 +311,7 @@ struct Case {
     source::PineStrategyConfig lane;  // what its generated constructor declares
     bool is_long;
     std::size_t closed;               // tape trades closed inside the bars
+    int seeds = 0;                    // a lots probe's seed count
 };
 
 }  // namespace
@@ -307,6 +329,9 @@ int main() {
         {"AS AC", "tailb-adds-mkt-c6s3-short", Probe::Cycle, config(false, 0.06, 3), false, 195},
         {"AS AC", "tailb-loss-pooc-c6s3", Probe::Loss, config(true, 0.06, 3), true, 20},
         {"AS AC", "tailb-loss-mkt-c10s2", Probe::Loss, config(false, 0.1, 2), true, 20},
+        {"LF", "tailb-lots12-pooc-c0s0", Probe::Lots, config(true, 0.0, 0), true, 17, 12},
+        {"LF", "tailb-lots30-pooc-c10s3", Probe::Lots, config(true, 0.1, 3), true, 35, 30},
+        {"LF", "tailb-lots30-mkt-c10s2", Probe::Lots, config(false, 0.1, 2), true, 35, 30},
     };
 
     for (const Case& c : cases) {
@@ -314,7 +339,7 @@ int main() {
         const std::int64_t end = bars.back().timestamp;
         const std::vector<Row> tape = tape_trades(c.tape, end);
         CHECK(tape.size() == c.closed);
-        const Run lane = run(c.probe, c.lane, c.is_long, bars, end);
+        const Run lane = run(c.probe, c.lane, c.is_long, c.seeds, bars, end);
         CHECK(lane.error.empty());
         CHECK(lane.trades == tape);
         if (lane.trades != tape) {
