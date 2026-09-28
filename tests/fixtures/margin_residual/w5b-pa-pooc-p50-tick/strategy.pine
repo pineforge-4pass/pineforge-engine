@@ -1,0 +1,25 @@
+//@version=6
+strategy("W5B PA POOC 50% add within two ticks", overlay=true, pyramiding=2,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=50,
+     process_orders_on_close=true)
+
+// Lane W5B-ENG-MARGIN-RESIDUAL, a process_orders_on_close add whose margin
+// on top of the held long's lands within one lot of the equity. Each 2-hour
+// cell opens a long E1 (50 % of equity) at a close, then adds E2 (50 % of the
+// equity then) at the first later close within two ticks of E1's price,
+// while E1 is the only trade; flattened 105 minutes in. A close one or two
+// ticks above E1's leaves held plus add over the equity by less than one
+// lot's notional or just under it; at or below E1's, under.
+int t0 = timestamp("UTC", 2025, 4, 2, 0, 0)
+int step = 2 * 60 * 60 * 1000
+int n = 168
+int rel = time - t0
+bool inRange = rel >= 0 and rel < n * step
+int phase = inRange ? rel % step : -1
+if phase == 0 and strategy.position_size == 0
+    strategy.entry("E1", strategy.long)
+if phase > 0 and phase < 105 * 60 * 1000 and strategy.opentrades == 1
+     and math.abs(close - strategy.position_avg_price) <= 2 * syminfo.mintick
+    strategy.entry("E2", strategy.long)
+if phase == 105 * 60 * 1000
+    strategy.close_all(comment="cleanup")

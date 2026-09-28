@@ -368,6 +368,13 @@
       "twinAssertionSha256": "359f41c82bf7dfab29dd59bf67720e52741df0b995443311cd479676ad1d811b",
       "twinAssertions": 38
     },
+    "test_reversal_admission_float_guard": {
+      "baseAssertions": 25,
+      "reason": "pin E follows the R5 lane W5B-ENG-MARGIN-RESIDUAL TradingView tapes (tests/fixtures/margin_residual w5b-pa-f-market-p50 and -pooc-p50): an add to a held position whose margin exceeds the equity by less than one lot's notional is dropped, so the same-direction add arm keeps no one-lot slack either",
+      "twin": "test_reversal_admission_float_guard_l4c.cpp",
+      "twinAssertionSha256": "720031f9165aa0d73fe14b136fc8098b0a71030121d06b43479cb1ddcd3df4be",
+      "twinAssertions": 25
+    },
     "test_rounded_carried_short_trail": {
       "baseAssertions": 43,
       "reason": "the other order shapes and the competing entry follow the R5 lane W5B-ENG-MARGIN-RESIDUAL TradingView tapes (tests/fixtures/margin_residual w5b-pc-seen-size and -seen-size-parked): a rounded-money carried process_orders_on_close short is called on its bar's path before the script whatever else the book holds, so every shape sees the margin before the script as the trailing exits do",

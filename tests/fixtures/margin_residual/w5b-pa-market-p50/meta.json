@@ -1,0 +1,16 @@
+{
+  "title": "W5B PA market 50% add",
+  "slug": "w5b-pa-market-p50",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T21:22:37.702Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "ed8e2f08cb7a05fc9bcde2c3ddc5687078c985acf963151c6e06f578daf4f1e1",
+  "tv_trades_sha256": "a3e688d70b247d351030a14678f5c457e649623f0c60b7764c8b8a58ef89d99f",
+  "tv_trades_rows": 218
+}

@@ -242,17 +242,17 @@ double directional_tick(double value, double tick, bool upward) noexcept {
 
 // A same-side default MARKET add as TradingView judges it when it is placed:
 // the held units and its own, at the signal close's tick, against the
-// placement equity, with the one-lot slack the same-direction add arm keeps
-// at the fill (validate_precommit's admission_guard;
-// test_reversal_admission_float_guard pin E) (lane W5-ENG-MARGIN-V6; entry()
-// and apply_open_market_admission). `lot` is the quantity grid, 0 without one.
+// placement equity (lane W5-ENG-MARGIN-V6; entry() and
+// apply_open_market_admission), with no lot of slack: an add whose shortfall
+// is under one lot's notional is dropped like any other (lab tv tapes
+// tests/fixtures/margin_residual w5b-pa-f-market-p50 and -pooc-p50 on NYSE:F's
+// whole shares; lane W5B-ENG-MARGIN-RESIDUAL).
 bool add_margin_exceeds_equity(double held_units, const PineSizingSnapshot& sizing,
-                               double margin_pct, double mintick, double pointvalue,
-                               double lot) noexcept {
+                               double margin_pct, double mintick, double pointvalue) noexcept {
     const double signal = nearest_tick(sizing.mark, mintick);
     const double unit_margin = signal * pointvalue * sizing.fx * margin_pct / 100.0;
     const double required = (held_units + sizing.frozen_units) * unit_margin;
-    const double slack = std::max({1e-9, std::abs(sizing.equity) * 1e-12, lot * unit_margin});
+    const double slack = std::max(1e-9, std::abs(sizing.equity) * 1e-12);
     return margin_pct > 0.0 && std::isfinite(required) && std::isfinite(sizing.equity)
         && required > sizing.equity + slack;
 }
@@ -7152,8 +7152,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         && finite_positive(snapshot.sizing.mark)
         && add_margin_exceeds_equity(std::abs(current), snapshot.sizing,
                                      is_long ? config_.margin_long : config_.margin_short,
-                                     staged_.syminfo.mintick, staged_.syminfo.pointvalue,
-                                     staged_.quantity_grid ? *staged_.quantity_grid : 0.0)) {
+                                     staged_.syminfo.mintick, staged_.syminfo.pointvalue)) {
         return;
     }
     // TradingView checks a default-quantity LIMIT entry that opens from flat
@@ -14148,8 +14147,17 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
                 // would otherwise decline it.
                 return NativePrecommitVerdict::AdmitWithHostMargin;
             }
+            // A flat opening keeps one lot of slack for the floor its
+            // quantity was sized on; an add to a held position of its side
+            // keeps none, as it has none when it is placed
+            // (add_margin_exceeds_equity; lab tv tape
+            // tests/fixtures/margin_residual w5b-pa-f-pooc-p50, a
+            // process_orders_on_close add judged at its close fill; lane
+            // W5B-ENG-MARGIN-RESIDUAL).
+            const bool same_side_add = physical.signed_units != 0.0
+                && (physical.signed_units > 0.0) == source.is_long;
             double admission_guard = float_guard;
-            if (!reversal && staged_.quantity_grid) {
+            if (!reversal && !same_side_add && staged_.quantity_grid) {
                 admission_guard = std::max(admission_guard,
                     *staged_.quantity_grid * view.resolved_price
                         * staged_.syminfo.pointvalue * active_fx * fraction);
@@ -16001,8 +16009,7 @@ void PineExecutionAdapter::apply_open_market_admission(
             && finite_positive(row.sizing.frozen_units) && finite_positive(row.sizing.mark)
             && add_margin_exceeds_equity(std::abs(held), row.sizing,
                                          row.is_long ? config_.margin_long : config_.margin_short,
-                                         staged_.syminfo.mintick, staged_.syminfo.pointvalue,
-                                         staged_.quantity_grid ? *staged_.quantity_grid : 0.0)
+                                         staged_.syminfo.mintick, staged_.syminfo.pointvalue)
             && std::none_of(delayed_market_orders_.begin(), delayed_market_orders_.end(),
                             [&](const DelayedMarketOrder& delayed) {
                                 return delayed.snapshot.projection_created_bar == source_bar;

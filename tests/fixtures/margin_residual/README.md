@@ -10,15 +10,17 @@ this lane; no closed or scraped strategy is involved.
 Each directory is one `lab tv --no-note` export (channel `ws-report-v1`,
 `rangeProof` covered), byte for byte: `strategy.pine`, `tv_trades.csv` (times
 at UTC+8), `metrics.json`, `meta.json`. `metrics.json` `tvTradesCsvHash` is the
-sha256 of `tv_trades.csv`. Every probe runs on BINANCE:ETHUSDT.P 15-minute
-bars, 2025-04-01 .. 2025-05-06; none declares `initial_capital`, so each runs
-on v6's 100000.
+sha256 of `tv_trades.csv`. Every BINANCE:ETHUSDT.P probe runs on 15-minute
+bars, 2025-04-01 .. 2025-05-06, and every NYSE:F probe on 15-minute bars,
+2025-04-15 .. 2025-05-20; none declares `initial_capital`, so each runs on
+v6's 100000.
 
 `tests/test_margin_residual_tapes.cpp` replays every tape through the Pine
 adapter under the configuration the generated constructor declares for that
 probe, over the corpus 15m bars of lane W5-ENG-MARGIN-V6
 (`tests/fixtures/margin_v6/bars.inc`, 2025-04-01 00:00 .. 2025-04-17 00:00
-UTC), with TradingView's lot (0.0001 ETH) as the `qty_step`, and requires each trade the tape
+UTC) or the NYSE:F 15m bars in `f15_bars.inc`, with TradingView's lot (0.0001
+ETH, one NYSE:F share) as the `qty_step`, and requires each trade the tape
 closes inside the replayed bars -- entry and exit time, side, price in ticks
 of 0.01, quantity in lots -- to be the engine's. On the lane's base (1ed0a9e4)
 every rule tape below fails there and every control passes.
@@ -58,3 +60,26 @@ script read the uncalled size, a close or bracket that emptied the book on
 the path left no call, and an add at the close was called at the high on the
 grown book. Lane W5-ENG-MARGIN-V6 moved the commissioned and slipped shorts
 before the script (C1); these tapes show the rest.
+
+## PA: an add is judged with no lot of slack
+
+| tape | trades | `strategy()` declares | TradingView | tv_trades.csv sha256 |
+|---|---:|---|---|---|
+| `w5b-pa-f-pooc-p50` | 248 | `process_orders_on_close`, `pyramiding=2`, 50 % | NYSE:F, a long E1 at 09:30 .. 14:30 New York and an add E2 at the next close: every add whose margin on top of the held long's exceeds the equity at the close's tick is dropped, by less than one share's notional ($1.90 .. $9.95) as by more | `e9100da27997e4a07510a854434f63899f52ab0f794bc88d29ca91e06fe60be6` |
+| `w5b-pa-f-market-p50` | 245 | `pyramiding=2`, 50 % | the market twin: E1 fills at the next open, E2 is placed at that bar's close; the same judgement at the signal close | `615ca02b3260e0c588ba9f7dcce0e912678d297565a8ea578bdf5cc773f9b992` |
+| `w5b-pa-pooc-p40` | 120 | `process_orders_on_close`, `pyramiding=2`, 40 % | the control: 40 % + 40 % fits the equity, every add fills | `03b46092a38cac2d88db3427203b6b02b45fd014af0f0dd336a06bd093dfb584` |
+| `w5b-pa-market-p50` | 109 | `pyramiding=2`, 50 % | the control on BINANCE:ETHUSDT.P's 0.0001 lots, market | `a3e688d70b247d351030a14678f5c457e649623f0c60b7764c8b8a58ef89d99f` |
+| `w5b-pa-pooc-p50-tick` | 171 | `process_orders_on_close`, `pyramiding=2`, 50 % | the control: an add only at a close within two ticks of E1's price | `f2586b6b88278880dbb42d275c0922c63533186351a4553f2e837f2e233d675d` |
+
+The adapter admitted an add whose shortfall stayed within one lot's notional
+(the market one at placement, W5-ENG-MARGIN-V6's M1; the process_orders_on_close
+one at its close fill) and then called one whole unit of the book; TradingView
+drops it (`tests/test_reversal_admission_float_guard_l4c.cpp` pin E moves with
+it).
+
+## Bars
+
+`f15_bars.inc` is the NYSE:F 15m chart feed of the lab lane f-15 (evidence
+sha256 `80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32`),
+rows 2025-04-15 13:30 .. 2025-05-19 19:45 UTC copied as text; the lab tv
+window ends before 2025-05-20's session.

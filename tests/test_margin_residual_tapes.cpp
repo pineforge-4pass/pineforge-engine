@@ -18,14 +18,19 @@
  *       left, and the script's close, reversal or add fills after it. An add
  *       filled at the close is checked at the next open, not at that bar's
  *       high.
+ *   PA  An add to a held position of its side is judged, when it is placed,
+ *       on the held units plus its own at the signal close's tick against the
+ *       equity there, with no lot of slack; under process_orders_on_close at
+ *       its close fill.
  *
  * Each row replays one lab tv tape (tests/fixtures/margin_residual) through
  * the Pine adapter under the configuration the generated constructor declares
  * for its probe, over the corpus 15m bars of lane W5-ENG-MARGIN-V6
- * (tests/fixtures/margin_v6/bars.inc, BINANCE:ETHUSDT.P), and requires every
- * trade the tape closes inside those bars to be the engine's: entry and exit
- * time, side, price in ticks and quantity in lots. On the lane's base every
- * rule row fails here, and every control row beside it passes.
+ * (tests/fixtures/margin_v6/bars.inc, BINANCE:ETHUSDT.P) or the lab lane f-15
+ * NYSE:F 15m bars (tests/fixtures/margin_residual/f15_bars.inc), and requires
+ * every trade the tape closes inside those bars to be the engine's: entry and
+ * exit time, side, price in ticks and quantity in lots. On the lane's base
+ * every rule row fails here, and every control row beside it passes.
  */
 
 #include <pineforge/bar.hpp>
@@ -70,10 +75,12 @@ struct FeedBar {
 };
 
 #include "fixtures/margin_v6/bars.inc"
+#include "fixtures/margin_residual/f15_bars.inc"
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-constexpr double kTick = 0.01;       // BINANCE:ETHUSDT.P's price tick
+constexpr double kTick = 0.01;       // both charts' price tick
 constexpr double kEthLot = 0.0001;   // TradingView's BINANCE:ETHUSDT.P quantity step
+constexpr double kShareLot = 1.0;    // NYSE:F
 constexpr std::int64_t kMinute = 60'000;
 
 // One trade as both sides report it, prices in ticks and quantity in lots:
@@ -161,7 +168,9 @@ enum class Probe {
     SeenSize,            // w5b-pc-seen-size
     SeenSizeParked,      // w5b-pc-seen-size-parked
     BracketTakeProfit,   // w5b-pc-bracket-tp
-    AddCells,            // w5b-pa-pooc-p50
+    AddCells,            // w5b-pa-pooc-p50 / -pooc-p40 / -market-p50
+    AddNearFill,         // w5b-pa-pooc-p50-tick
+    AddNyseF,            // w5b-pa-f-pooc-p50 / -f-market-p50 (NYSE:F)
 };
 
 // The fifteen signal closes of the w5b-pc-* probes (W5-ENG-MARGIN-V6's cells).
@@ -178,6 +187,10 @@ public:
         attach_pine_execution_adapter();
         configure_pine_strategy(config);
         set_syminfo_metadata("qty_step", lot);
+        if (probe == Probe::AddNyseF) {
+            set_syminfo_timezone("America/New_York");
+            set_syminfo_session("0930-1600");
+        }
     }
 
     void on_source_bar(const Bar&) override {
@@ -193,11 +206,17 @@ public:
         case Probe::SeenSizeParked:
         case Probe::BracketTakeProfit: carried(t); break;
         case Probe::AddCells: add_cells(t); break;
+        case Probe::AddNearFill: add_near_fill(t); break;
+        case Probe::AddNyseF: add_nyse_f(t); break;
         }
     }
 
 private:
     void close_all(const char* comment) { strategy_close("", comment, kNaN, kNaN, false); }
+    // strategy.position_avg_price: na while flat.
+    double avg_price() const {
+        return signed_position_size() == 0.0 ? kNaN : position_entry_price_;
+    }
     int open_trades() const { return static_cast<int>(pyramid_entries_.size()); }
 
     // strategy.equity at this bar's close.
@@ -276,9 +295,9 @@ private:
         }
     }
 
-    // w5b-pa-pooc-p50: every 2 hours from 2025-04-02 00:00 UTC, sixty cells;
-    // E1 from flat, E2 45 minutes later while E1 is the only trade; flattened
-    // 90 minutes in. Even cells long, odd short.
+    // w5b-pa-pooc-p50 / -p40 / -market-p50: every 2 hours from 2025-04-02
+    // 00:00 UTC, sixty cells; E1 from flat, E2 45 minutes later while E1 is
+    // the only trade; flattened 90 minutes in. Even cells long, odd short.
     void add_cells(std::int64_t t) {
         const std::int64_t t0 = at(2, 0, 0);
         const std::int64_t step = 120 * kMinute;
@@ -291,6 +310,37 @@ private:
         if (phase == 45 * kMinute && open_trades() == 1)
             strategy_entry("E2", is_long, kNaN, kNaN, kNaN);
         if (phase == 90 * kMinute) close_all("cleanup");
+    }
+
+    // w5b-pa-pooc-p50-tick: every 2 hours from 2025-04-02 00:00 UTC, 168
+    // cells; a long E1 from flat, E2 at the first later close within two
+    // ticks of E1's price while E1 is the only trade; flattened 105 minutes in.
+    void add_near_fill(std::int64_t t) {
+        const std::int64_t t0 = at(2, 0, 0);
+        const std::int64_t step = 120 * kMinute;
+        const std::int64_t rel = t - t0;
+        if (rel < 0 || rel >= 168 * step) return;
+        const std::int64_t phase = rel % step;
+        if (phase == 0 && signed_position_size() == 0.0)
+            strategy_entry("E1", true, kNaN, kNaN, kNaN);
+        if (phase > 0 && phase < 105 * kMinute && open_trades() == 1
+            && std::abs(current_bar_.close - avg_price()) <= 2 * kTick + 1e-9)
+            strategy_entry("E2", true, kNaN, kNaN, kNaN);
+        if (phase == 105 * kMinute) close_all("cleanup");
+    }
+
+    // w5b-pa-f-*: New York 09:30 .. 14:30 on the half hour, a long E1 from
+    // flat; the next bar an add E2 while E1 is the only trade; flattened at
+    // the close 45 minutes after E1. The window is EDT (UTC-4) throughout.
+    void add_nyse_f(std::int64_t t) {
+        const std::int64_t minute_of_day = ((t / kMinute) % 1440 + 1440) % 1440;
+        const int hour = static_cast<int>((minute_of_day / 60 + 24 - 4) % 24);
+        const int minute = static_cast<int>(minute_of_day % 60);
+        if (minute == 30 && hour >= 9 && hour <= 14 && signed_position_size() == 0.0)
+            strategy_entry("E1", true, kNaN, kNaN, kNaN);
+        if (minute == 45 && hour >= 9 && hour <= 14 && open_trades() == 1)
+            strategy_entry("E2", true, kNaN, kNaN, kNaN);
+        if (minute == 15 && hour >= 10 && hour <= 15) close_all("cleanup");
     }
 
     Probe probe_;
@@ -360,6 +410,7 @@ struct Case {
     const char* tape;
     Probe probe;
     source::PineStrategyConfig lane;  // what its generated constructor declares
+    bool nyse_f;
     std::size_t closed;               // tape trades closed inside the bars
 };
 
@@ -367,28 +418,40 @@ struct Case {
 
 int main() {
     const std::vector<Bar> eth = feed(kEth15);
+    const std::vector<Bar> f = feed(kF15);
     const std::int64_t eth_end = eth.back().timestamp;
+    const std::int64_t f_end = f.back().timestamp;
 
     const Case cases[] = {
-        {"SB", "w5b-sb-market-60x2", Probe::SameBarExplicit60, config(false, 2), 120},
-        {"SB", "w5b-sb-pooc-60x2", Probe::SameBarExplicit60, config(true, 2), 120},
-        {"SB", "w5b-sb-default-x3", Probe::SameBarDefault3, config(false, 3), 48},
-        {"SB", "w5b-sb-pooc-default-x3", Probe::SameBarDefault3, config(true, 3), 60},
-        {"SB control", "w5b-sb-market-40x2", Probe::SameBarExplicit40, config(false, 2), 80},
-        {"PC", "w5b-pc-seen-size", Probe::SeenSize, config(true, 1), 36},
-        {"PC", "w5b-pc-seen-size-parked", Probe::SeenSizeParked, config(true, 1), 36},
-        {"PC", "w5b-pc-carried-close", Probe::CarriedClose, config(true, 1), 36},
-        {"PC", "w5b-pc-carried-reverse", Probe::CarriedReverse, config(true, 1), 51},
-        {"PC", "w5b-pc-bracket-tp", Probe::BracketTakeProfit, config(true, 1), 35},
-        {"PC", "w5b-pa-pooc-p50", Probe::AddCells, config(true, 2, 50.0), 109},
-        {"PC control", "w5b-pc-carried-none", Probe::CarriedNone, config(true, 1), 37},
+        {"SB", "w5b-sb-market-60x2", Probe::SameBarExplicit60, config(false, 2), false, 120},
+        {"SB", "w5b-sb-pooc-60x2", Probe::SameBarExplicit60, config(true, 2), false, 120},
+        {"SB", "w5b-sb-default-x3", Probe::SameBarDefault3, config(false, 3), false, 48},
+        {"SB", "w5b-sb-pooc-default-x3", Probe::SameBarDefault3, config(true, 3), false, 60},
+        {"SB control", "w5b-sb-market-40x2", Probe::SameBarExplicit40, config(false, 2), false,
+         80},
+        {"PC", "w5b-pc-seen-size", Probe::SeenSize, config(true, 1), false, 36},
+        {"PC", "w5b-pc-seen-size-parked", Probe::SeenSizeParked, config(true, 1), false, 36},
+        {"PC", "w5b-pc-carried-close", Probe::CarriedClose, config(true, 1), false, 36},
+        {"PC", "w5b-pc-carried-reverse", Probe::CarriedReverse, config(true, 1), false, 51},
+        {"PC", "w5b-pc-bracket-tp", Probe::BracketTakeProfit, config(true, 1), false, 35},
+        {"PC", "w5b-pa-pooc-p50", Probe::AddCells, config(true, 2, 50.0), false, 109},
+        {"PC control", "w5b-pc-carried-none", Probe::CarriedNone, config(true, 1), false, 37},
+        {"PA", "w5b-pa-f-pooc-p50", Probe::AddNyseF, config(true, 2, 50.0), true, 248},
+        {"PA", "w5b-pa-f-market-p50", Probe::AddNyseF, config(false, 2, 50.0), true, 245},
+        {"PA control", "w5b-pa-pooc-p40", Probe::AddCells, config(true, 2, 40.0), false, 120},
+        {"PA control", "w5b-pa-market-p50", Probe::AddCells, config(false, 2, 50.0), false,
+         109},
+        {"PA control", "w5b-pa-pooc-p50-tick", Probe::AddNearFill, config(true, 2, 50.0), false,
+         171},
     };
 
     for (const Case& c : cases) {
         std::printf("-- %s: %s\n", c.rule, c.tape);
-        const std::vector<Row> tape = tape_trades(c.tape, eth_end, kEthLot);
+        const double lot = c.nyse_f ? kShareLot : kEthLot;
+        const std::int64_t end = c.nyse_f ? f_end : eth_end;
+        const std::vector<Row> tape = tape_trades(c.tape, end, lot);
         CHECK(tape.size() == c.closed);
-        const Run lane = run(c.probe, c.lane, eth, kEthLot, eth_end);
+        const Run lane = run(c.probe, c.lane, c.nyse_f ? f : eth, lot, end);
         CHECK(lane.error.empty());
         CHECK(lane.trades == tape);
         if (lane.trades != tape) {

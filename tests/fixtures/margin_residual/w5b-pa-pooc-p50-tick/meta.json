@@ -1,0 +1,16 @@
+{
+  "title": "W5B PA POOC 50% add within two ticks",
+  "slug": "w5b-pa-pooc-p50-tick",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T21:55:39.772Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "ce1719bf418260d1ad0611ee75a8cd41d2fb38ab5ee89964558043ffce8182bd",
+  "tv_trades_sha256": "f2586b6b88278880dbb42d275c0922c63533186351a4553f2e837f2e233d675d",
+  "tv_trades_rows": 342
+}

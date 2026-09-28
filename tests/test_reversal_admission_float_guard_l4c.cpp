@@ -36,27 +36,29 @@
  * Board-wide the tightened arm would cancel 18 of 23,785 TradingView-ADMITTED
  * all-in reversals (0.08 %); only 1 of those 18 is above one lot.
  *
- * Scope: the one-lot term is REMOVED ON THE REVERSAL ARM ONLY. The flat-open
- * arm and the same-direction-add arm keep it — each is separately TV-pinned,
- * nothing has falsified their premise, and the "coin flip" argument genuinely
- * does apply to them (they price at the SIZING price the quantity was floored
- * against, so any residual really is floor luck). On a reversal the quantity is
- * floored against the PREVIOUS bar's close while the order fills at THIS bar's
- * open: the overshoot is an observable gap, not floor luck.
+ * Scope: the one-lot term was REMOVED ON THE REVERSAL ARM ONLY here. The
+ * flat-open arm keeps it. The same-direction-add arm kept it until TradingView
+ * falsified it too: on NYSE:F's whole shares, lab tv tapes w5b-pa-f-market-p50
+ * and -pooc-p50 (tests/fixtures/margin_residual, R5 lane
+ * W5B-ENG-MARGIN-RESIDUAL) drop every add whose held-plus-own margin exceeds
+ * the equity by less than one share's notional ($1.90 .. $9.95 against a
+ * $9.9 .. $10.8 share). On a reversal the quantity is floored against the
+ * PREVIOUS bar's close while the order fills at THIS bar's open: the overshoot
+ * is an observable gap, not floor luck.
  *
- * Pins below (A-D are the reversal arm; E and G are the scope controls that
- * must NOT move; F rides the SEPARATE true-flat gap-reject upstream of KI-54,
- * which has since dropped its own one-lot slack — design-cntvxiao-gap-reject):
+ * Pins below (A-D are the reversal arm; E is the add arm, since lane
+ * W5B-ENG-MARGIN-RESIDUAL without slack too; G is the scope control that must
+ * NOT move; F rides the SEPARATE true-flat gap-reject upstream of KI-54, which
+ * has since dropped its own one-lot slack — design-cntvxiao-gap-reject):
  *   A. Reversal, adverse gap costing LESS than one lot -> DECLINED (the RED:
  *      base admits this).
  *   B. Reversal, zero gap (required == free exactly) -> ADMITTED. The guard is
  *      a strict `>`; a `>=` would cancel every ordinary flip.
  *   C. Reversal, favourable gap -> ADMITTED.
  *   D. Reversal, adverse gap far above one lot -> DECLINED (unchanged).
- *   E. SCOPE: same-direction add whose shortfall is under one lot -> still
- *      ADMITTED (the add arm keeps the widening), and its above-one-lot
- *      sibling is still DECLINED. This pair is what proves the term is still
- *      load-bearing where it was left in place.
+ *   E. Same-direction add whose shortfall is under one lot -> DECLINED
+ *      (the add arm has no widening either), and its above-one-lot sibling
+ *      is DECLINED too.
  *   F. Flat open on the SAME sub-lot adverse gap as pin A -> DECLINED by the
  *      true-flat zero-commission gap-reject upstream of KI-54, which no
  *      longer grants one lot of slack: TV cancels on ANY positive shortfall.
@@ -223,7 +225,7 @@ void test_reversal_above_lot_gap_still_declined() {
     CHECK(eng.trade_count() == 0);
 }
 
-// E. SCOPE CONTROL — the same-direction ADD keeps the one-lot widening.
+// E. The same-direction ADD has no one-lot widening either.
 //
 //    pct = 50, pyramiding = 2, qty_step 1.0. The long fills at 100 with
 //    qty = floor_1(10000*0.5/100) = 50, then the bar closes at C, which is
@@ -236,14 +238,14 @@ void test_reversal_above_lot_gap_still_declined() {
 //      required= qty_add * C
 //
 //    E.1  C = 106: equity 10300, qty_add = floor_1(5150/106) = floor_1(48.58)
-//         = 48, required = 5088. Shortfall $88 against a $106 lot — INSIDE the
-//         widening, so the add is ADMITTED. This is the arm's mirror of pin A,
-//         and it must NOT move: if the term were dropped everywhere instead of
-//         on the reversal arm, this add would flip to declined.
+//         = 48, required = 5088. Shortfall $88 against a $106 lot, so the add
+//         is DECLINED: TradingView drops a sub-lot shortfall add like any
+//         other (lab tv tapes tests/fixtures/margin_residual
+//         w5b-pa-f-market-p50 and -pooc-p50; R5 lane W5B-ENG-MARGIN-RESIDUAL,
+//         which moved this pin from ADMITTED).
 //    E.2  C = 108: equity 10400, qty_add = floor_1(5200/108) = 48,
 //         required = 5184. Shortfall $184 against a $108 lot — OUTSIDE the
-//         widening, so the add is still DECLINED. Together E.1/E.2 bracket the
-//         boundary and prove the term is still load-bearing here.
+//         widening, so the add is DECLINED as well.
 static void run_same_dir_add(Probe& eng, double signal_close) {
     eng.script = "LA..";
     std::vector<Bar> bars = {
@@ -256,14 +258,14 @@ static void run_same_dir_add(Probe& eng, double signal_close) {
     eng.run(bars.data(), (int)bars.size());
 }
 
-void test_same_dir_add_keeps_one_lot_slack() {
-    std::printf("-- E: same-direction add keeps the one-lot slack --\n");
+void test_same_dir_add_has_no_one_lot_slack() {
+    std::printf("-- E: same-direction add has no one-lot slack --\n");
     {
-        std::printf("   E.1 sub-lot shortfall add still ADMITTED\n");
+        std::printf("   E.1 sub-lot shortfall add DECLINED\n");
         Probe eng(QtyType::PERCENT_OF_EQUITY, 50.0, 2, /*step=*/1.0);
         run_same_dir_add(eng, 106.0);
         CHECK(eng.position_side_ == PositionSide::LONG);
-        CHECK_NEAR(eng.position_qty_, 98.0, 1e-9);      // 50 + 48
+        CHECK_NEAR(eng.position_qty_, 50.0, 1e-9);      // add dropped
     }
     {
         std::printf("   E.2 above-lot shortfall add still DECLINED\n");
@@ -328,7 +330,7 @@ int main() {
     test_reversal_exact_tie_admitted();
     test_reversal_favourable_gap_admitted();
     test_reversal_above_lot_gap_still_declined();
-    test_same_dir_add_keeps_one_lot_slack();
+    test_same_dir_add_has_no_one_lot_slack();
     test_flat_open_sub_lot_gap_declined();
     test_zero_qty_step_unchanged();
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);

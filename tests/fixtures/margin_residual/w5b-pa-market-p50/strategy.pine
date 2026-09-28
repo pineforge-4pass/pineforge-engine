@@ -1,0 +1,23 @@
+//@version=6
+strategy("W5B PA market 50% add", overlay=true, pyramiding=2,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=50)
+
+// Lane W5B-ENG-MARGIN-RESIDUAL, the market control of the process_orders_on_close add
+// (the margin-basis shape). Each 2-hour cell opens E1 (50 % of equity) at a
+// close, adds E2 (50 % of the equity then) 45 minutes later while E1 is the
+// only trade, and flattens 90 minutes in. Held plus add exceed the equity
+// exactly when E1 is in profit at the add's close. Even cells long, odd short.
+int t0 = timestamp("UTC", 2025, 4, 2, 0, 0)
+int step = 2 * 60 * 60 * 1000
+int n = 60
+int rel = time - t0
+bool inRange = rel >= 0 and rel < n * step
+int phase = inRange ? rel % step : -1
+int cell = inRange ? int(math.floor(rel / step)) : -1
+bool isLong = cell % 2 == 0
+if phase == 0 and strategy.position_size == 0
+    strategy.entry("E1", isLong ? strategy.long : strategy.short)
+if phase == 45 * 60 * 1000 and strategy.opentrades == 1
+    strategy.entry("E2", isLong ? strategy.long : strategy.short)
+if phase == 90 * 60 * 1000
+    strategy.close_all(comment="cleanup")

@@ -1,0 +1,22 @@
+//@version=6
+strategy("W5B PA NYSE:F market 50% add", overlay=true, pyramiding=2,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=50)
+
+// Lane W5B-ENG-MARGIN-RESIDUAL, the market control of the process_orders_on_
+// close add on NYSE:F's whole-share lots. At 09:30, 10:30, ..., 14:30 New York
+// a long E1 (50 % of equity) is placed at the close and fills at the next
+// open; at that next close an add E2 (50 % of the equity then) is placed while
+// E1 is the only trade; flattened by a close_all placed 45 minutes after E1. A close a
+// tick or two above E1's leaves held plus add over the equity by less than
+// one share's notional, or by more; at or below it, under.
+int hNY = hour(time, "America/New_York")
+int mNY = minute(time, "America/New_York")
+bool cellOpen = mNY == 30 and hNY >= 9 and hNY <= 14
+bool cellAdd = mNY == 45 and hNY >= 9 and hNY <= 14
+bool cellEnd = mNY == 15 and hNY >= 10 and hNY <= 15
+if cellOpen and strategy.position_size == 0
+    strategy.entry("E1", strategy.long)
+if cellAdd and strategy.opentrades == 1
+    strategy.entry("E2", strategy.long)
+if cellEnd
+    strategy.close_all(comment="cleanup")

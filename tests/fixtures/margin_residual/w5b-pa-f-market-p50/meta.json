@@ -1,0 +1,16 @@
+{
+  "title": "W5B PA NYSE:F market 50% add",
+  "slug": "w5b-pa-f-market-p50",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T21:56:33.408Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-15",
+    "to": "2025-05-20"
+  },
+  "pine_sha256": "05221f9cfb03943795c8449d17ac7514a8fbab0769733be76e471dd8a169fe43",
+  "tv_trades_sha256": "615ca02b3260e0c588ba9f7dcce0e912678d297565a8ea578bdf5cc773f9b992",
+  "tv_trades_rows": 490
+}

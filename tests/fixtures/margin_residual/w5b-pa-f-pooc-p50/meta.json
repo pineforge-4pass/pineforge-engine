@@ -1,0 +1,16 @@
+{
+  "title": "W5B PA NYSE:F POOC 50% add",
+  "slug": "w5b-pa-f-pooc-p50",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T21:56:29.871Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-15",
+    "to": "2025-05-20"
+  },
+  "pine_sha256": "47b11f54035a18c313b1499f9375f7b68cd7cba550bccbe323593691a131d62a",
+  "tv_trades_sha256": "e9100da27997e4a07510a854434f63899f52ab0f794bc88d29ca91e06fe60be6",
+  "tv_trades_rows": 496
+}
