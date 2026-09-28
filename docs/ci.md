@@ -102,11 +102,11 @@ requires the rows that actually ran to equal the second count, and records
 `registered`, `labelled = registered - selected`, and `ran` in
 `ctest-exclusion.log` and `ci-summary.json`. A skip, missing executable, lost
 registration below the PR registration floor, unreadable enumeration, or
-missing label fails. The PR registration floors after INT28-FIX are 732 for
-Debug and sanitizers and 741 for native (653 and 662 at the INT24 base, plus
+missing label fails. The PR registration floors after INT28-FIX are 733 for
+Debug and sanitizers and 742 for native (653 and 662 at the INT24 base, plus
 wave G's six rows, wave H's twenty-four, INT26's own tape row, INT27's
 thirteen, XSYM-D's four, K-SESSION-WINDOWS' four, INT28's twenty-four and
-INT28-FIX's three). The full-run release and kernel floors are 751 and 295
+INT28-FIX's four). The full-run release and kernel floors are 752 and 295
 rows that ran; full runs do not exclude a label.
 
 Preflight also runs the detached-comment census of the kernel compile closure
