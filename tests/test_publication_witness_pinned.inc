@@ -362,6 +362,40 @@
 //   LegBesideCloseM: digest 0x4a9e3df3ac353419 -> 0x2b0bb872ebf141d2 [W3B F02 ledger booking]
 //   LegsApart: digest 0x64ff417b6bcf212f -> 0xaef3fc2d3d2e942d [W3B F02 ledger booking]
 //   LegsApartM: digest 0xaa0c742ddeacc4d5 -> 0x650d1b75fc17cdb7 [W3B F02 ledger booking]
+// INT28-FIX re-harvested it once on the integrated tree (INT28 4efcb8c5 and
+// INT28-FIX's ten commits) with PINEFORGE_D2D_PUBLICATION_HARVEST; the same harvest against
+// INT28 reproduces every old row. 27 of 156 runs move, each marked with the
+// commit(s) at whose boundary it moved (a harvest at every commit): only the
+// picked W5B-ENG-MARGIN-RESIDUAL rules SB and PC move any; CA, PA, SZ, FU,
+// MS, SS, OU and OF move none. The rules are TradingView's (their lanes'
+// tests/fixtures tapes):
+//   ConfigFlags103: digest 0x70b81ca88d79dcc3ull -> 0xc2c52ca326f4f6d0ull, trades 61 -> 62 [W5B PC]
+//   ConfigFlags105: digest 0xa103dd79855f049cull -> 0xebd79e5a335d3276ull [W5B PC]
+//   ConfigFlags105M: digest 0x43e37c3b91360e9aull -> 0x5f5ee5744f67b56cull [W5B PC]
+//   Config10: digest 0x89d9ee8fcfdb8d2bull -> 0x0a435dc90aec3bf9ull, trades 18 -> 17 [W5B SB]
+//   Config10M: digest 0x27b4e0d84ceb64c8ull -> 0xa7b6beecb9aa3a97ull, trades 18 -> 17 [W5B SB]
+//   ConfigFlags114: digest 0xb481578151a6b65bull -> 0x1cd02a838db42d9bull [W5B PC]
+//   CloseOrderAdds: digest 0x1b5718bfccc88d5bull -> 0x88f567d058671ddfull [W5B PC]
+//   CloseOrderAddsM: digest 0xbab50be39f3d0b28ull -> 0x3d5a1b4dc5db78baull [W5B PC]
+//   Storm01M: digest 0x00cdd69222a72577ull -> 0x3dc7eab655ecce11ull, trades 14 -> 13 [W5B SB]
+//   Storm03: digest 0x662d5ebe04f3918full -> 0x689afea66e651a47ull [W5B PC]
+//   Storm03M: digest 0x4b0d6e52556ad140ull -> 0xc93ba02279910560ull [W5B PC]
+//   Storm06: digest 0x64b975d6442847b8ull -> 0x6c7841c84c9be251ull [W5B PC]
+//   Storm06M: digest 0x7c34e84d996f62b1ull -> 0x2d5832871b33599cull [W5B PC]
+//   Storm09: digest 0x8087e1c554317200ull -> 0xf36667634a185ebdull [W5B PC]
+//   Storm09M: digest 0x31d4f5fc5411c31full -> 0xce00b799a8f5fce2ull [W5B PC]
+//   Storm11: digest 0x0780237b158be286ull -> 0xbaf0b6cf451e3aa8ull [W5B PC]
+//   Storm11M: digest 0x1932b3271b2aaabaull -> 0x67cb9e94d9a557faull [W5B PC]
+//   Storm14: digest 0x5ac38849fb40f365ull -> 0x774e0adda81bef05ull [W5B PC]
+//   Storm14M: digest 0xc90b1227bf0f3b60ull -> 0xdddcaf20cc1357c0ull [W5B PC]
+//   Storm15M: digest 0x1d30c61ffbbb4270ull -> 0xec2886ecd5bbd6fdull, trades 14 -> 13 [W5B SB]
+//   Storm16: digest 0x73e4d05238964e31ull -> 0x22efc7988df63201ull [W5B PC]
+//   Storm16M: digest 0x7e4c9a223abf773eull -> 0x3a4c9fb2446c31c7ull [W5B PC]
+//   Storm17: digest 0xfdfa329cd436bbf9ull -> 0x882383bc431065adull [W5B SB]
+//   Storm17M: digest 0x535fe23b5fbfb5eaull -> 0xee2c56f66947ceacull [W5B SB]
+//   Storm20: digest 0x604f8dc86a777322ull -> 0x411a4fdcd5c11299ull, folds 43 -> 44, trades 10 -> 11 [W5B PC]
+//   Storm21: digest 0xc35dd2c653db38ecull -> 0xf7b8d2e1e5dbff53ull [W5B PC]
+//   Storm21M: digest 0xf770bc84f8b963b1ull -> 0x261cd4c819b89bccull [W5B PC]
 constexpr Pinned kPinned[] = {
     {"Config01", 0x2338d6688ca58837ull, 144, 44, 144},
     {"ConfigFlags101", 0x6b3262a158c0e86dull, 145, 45, 144},
@@ -372,7 +406,7 @@ constexpr Pinned kPinned[] = {
     {"Config02M", 0x8cddc71b29406412ull, 48, 10, 48},
     {"ConfigFlags102M", 0x000ba0de0f306cb9ull, 144, 49, 144},
     {"Config03", 0xc5424169be207aa2ull, 144, 53, 144},
-    {"ConfigFlags103", 0x70b81ca88d79dcc3ull, 182, 61, 144},
+    {"ConfigFlags103", 0xc2c52ca326f4f6d0ull, 182, 62, 144},
     {"Config03M", 0xea3de174c93cccc5ull, 144, 49, 144},
     {"ConfigFlags103M", 0x8f0124d4ee2a443cull, 182, 63, 144},
     {"Config04", 0x5fc85948d1cc71ebull, 144, 21, 144},
@@ -380,9 +414,9 @@ constexpr Pinned kPinned[] = {
     {"Config04M", 0x87cc9f67ed62f28eull, 144, 21, 144},
     {"ConfigFlags104M", 0x3850e6440128d893ull, 48, 14, 48},
     {"Config05", 0x85c421ae2f21507full, 48, 12, 48},
-    {"ConfigFlags105", 0xa103dd79855f049cull, 48, 12, 48},
+    {"ConfigFlags105", 0xebd79e5a335d3276ull, 48, 12, 48},
     {"Config05M", 0x8422d41a3aa8dee1ull, 48, 12, 48},
-    {"ConfigFlags105M", 0x43e37c3b91360e9aull, 48, 12, 48},
+    {"ConfigFlags105M", 0x5f5ee5744f67b56cull, 48, 12, 48},
     {"Config06", 0xd365aa9c3705ae1full, 48, 5, 48},
     {"ConfigFlags106", 0x4fc0738f0271278cull, 48, 6, 48},
     {"Config06M", 0x21e19f868e2ac1a1ull, 48, 5, 48},
@@ -399,9 +433,9 @@ constexpr Pinned kPinned[] = {
     {"ConfigFlags109", 0x18457ecdd3b9059bull, 144, 45, 144},
     {"Config09M", 0xcad60c482f2dadb6ull, 144, 66, 144},
     {"ConfigFlags109M", 0xb8b2405ade532a1aull, 144, 45, 144},
-    {"Config10", 0x89d9ee8fcfdb8d2bull, 48, 18, 48},
+    {"Config10", 0x0a435dc90aec3bf9ull, 48, 17, 48},
     {"ConfigFlags110", 0xfd01004606da1f60ull, 48, 12, 48},
-    {"Config10M", 0x27b4e0d84ceb64c8ull, 48, 18, 48},
+    {"Config10M", 0xa7b6beecb9aa3a97ull, 48, 17, 48},
     {"ConfigFlags110M", 0xff6fa6e9e28a9bdfull, 48, 12, 48},
     {"Config11", 0xb20c8cbfea616264ull, 144, 60, 144},
     {"ConfigFlags111", 0xcc9cdc745a08b222ull, 48, 17, 48},
@@ -416,7 +450,7 @@ constexpr Pinned kPinned[] = {
     {"Config13M", 0x2ae2c70980ac0fd2ull, 48, 19, 48},
     {"ConfigFlags113M", 0xeb38b6811f6a8bbfull, 48, 19, 48},
     {"Config14", 0xa3f9a925e91a4f7cull, 144, 40, 144},
-    {"ConfigFlags114", 0xb481578151a6b65bull, 144, 66, 144},
+    {"ConfigFlags114", 0x1cd02a838db42d9bull, 144, 66, 144},
     {"Config14M", 0x5289594882c86a97ull, 144, 40, 144},
     {"ConfigFlags114M", 0xe22c1fc0d8f6feeaull, 144, 66, 144},
     {"Config15", 0x186642fe4a546b57ull, 144, 48, 144},
@@ -433,52 +467,52 @@ constexpr Pinned kPinned[] = {
     {"ReversalsM", 0x29160b951dc12d18ull, 40, 16, 40},
     {"SameBarBatch", 0x167ef4263f9ae286ull, 36, 25, 36},
     {"SameBarBatchM", 0x488225822bf669d0ull, 36, 25, 36},
-    {"CloseOrderAdds", 0x1b5718bfccc88d5bull, 36, 22, 36},
-    {"CloseOrderAddsM", 0xbab50be39f3d0b28ull, 36, 22, 36},
+    {"CloseOrderAdds", 0x88f567d058671ddfull, 36, 22, 36},
+    {"CloseOrderAddsM", 0x3d5a1b4dc5db78baull, 36, 22, 36},
     {"DelayedStops", 0x43bed101b5c70825ull, 66, 20, 40},
     {"DelayedStopsM", 0xeebabaa7a380fb84ull, 66, 20, 40},
     {"Storm01", 0x4fcc1a18f96048beull, 43, 13, 43},
-    {"Storm01M", 0x00cdd69222a72577ull, 43, 14, 43},
+    {"Storm01M", 0x3dc7eab655ecce11ull, 43, 13, 43},
     {"Storm02", 0xc147c03e2f6038feull, 63, 12, 42},
     {"Storm02M", 0x745faf07c1b57317ull, 63, 12, 42},
-    {"Storm03", 0x662d5ebe04f3918full, 41, 17, 41},
-    {"Storm03M", 0x4b0d6e52556ad140ull, 41, 17, 41},
+    {"Storm03", 0x689afea66e651a47ull, 41, 17, 41},
+    {"Storm03M", 0xc93ba02279910560ull, 41, 17, 41},
     {"Storm04", 0x07c17443f491fb30ull, 54, 24, 54},
     {"Storm04M", 0x74d239698dac5c24ull, 54, 24, 54},
     {"Storm05", 0x8c67fec9d289937dull, 80, 17, 53},
     {"Storm05M", 0xfbdf760609e41925ull, 82, 18, 53},
-    {"Storm06", 0x64b975d6442847b8ull, 40, 13, 40},
-    {"Storm06M", 0x7c34e84d996f62b1ull, 40, 13, 40},
+    {"Storm06", 0x6c7841c84c9be251ull, 40, 13, 40},
+    {"Storm06M", 0x2d5832871b33599cull, 40, 13, 40},
     {"Storm07", 0x8c50963e152ddba8ull, 55, 13, 55},
     {"Storm07M", 0xa75412c0c52f6ac1ull, 55, 13, 55},
     {"Storm08", 0x3c2a5b9c43c4fd89ull, 81, 14, 58},
     {"Storm08M", 0x7bfabcd35099442cull, 81, 14, 58},
-    {"Storm09", 0x8087e1c554317200ull, 48, 23, 48},
-    {"Storm09M", 0x31d4f5fc5411c31full, 48, 22, 48},
+    {"Storm09", 0xf36667634a185ebdull, 48, 23, 48},
+    {"Storm09M", 0xce00b799a8f5fce2ull, 48, 22, 48},
     {"Storm10", 0xf7007d9d5ea3296eull, 63, 13, 57},
     {"Storm10M", 0x862537a926bed30eull, 64, 13, 57},
-    {"Storm11", 0x0780237b158be286ull, 59, 23, 59},
-    {"Storm11M", 0x1932b3271b2aaabaull, 59, 23, 59},
+    {"Storm11", 0xbaf0b6cf451e3aa8ull, 59, 23, 59},
+    {"Storm11M", 0x67cb9e94d9a557faull, 59, 23, 59},
     {"Storm12", 0x2f7a3a3d3b832e58ull, 85, 19, 56},
     {"Storm12M", 0x6a900d649bc55ad8ull, 85, 19, 56},
     {"Storm13", 0x97f4432edb19a7e9ull, 46, 25, 46},
     {"Storm13M", 0x1170d6964f4f90eaull, 46, 25, 46},
-    {"Storm14", 0x5ac38849fb40f365ull, 46, 17, 46},
-    {"Storm14M", 0xc90b1227bf0f3b60ull, 46, 17, 46},
+    {"Storm14", 0x774e0adda81bef05ull, 46, 17, 46},
+    {"Storm14M", 0xdddcaf20cc1357c0ull, 46, 17, 46},
     {"Storm15", 0x86667ae71fa7953dull, 43, 13, 43},
-    {"Storm15M", 0x1d30c61ffbbb4270ull, 43, 14, 43},
-    {"Storm16", 0x73e4d05238964e31ull, 58, 18, 58},
-    {"Storm16M", 0x7e4c9a223abf773eull, 58, 18, 58},
-    {"Storm17", 0xfdfa329cd436bbf9ull, 83, 21, 54},
-    {"Storm17M", 0x535fe23b5fbfb5eaull, 78, 17, 54},
+    {"Storm15M", 0xec2886ecd5bbd6fdull, 43, 13, 43},
+    {"Storm16", 0x22efc7988df63201ull, 58, 18, 58},
+    {"Storm16M", 0x3a4c9fb2446c31c7ull, 58, 18, 58},
+    {"Storm17", 0x882383bc431065adull, 83, 21, 54},
+    {"Storm17M", 0xee2c56f66947ceacull, 78, 17, 54},
     {"Storm18", 0xf12b91d86413533cull, 79, 22, 49},
     {"Storm18M", 0x979b7bbd26c38a56ull, 79, 22, 49},
     {"Storm19", 0x2be2f691db8da9c4ull, 81, 20, 49},
     {"Storm19M", 0x937badd205890225ull, 82, 21, 49},
-    {"Storm20", 0x604f8dc86a777322ull, 43, 10, 42},
+    {"Storm20", 0x411a4fdcd5c11299ull, 44, 11, 42},
     {"Storm20M", 0x08c037a58815f21eull, 43, 10, 42},
-    {"Storm21", 0xc35dd2c653db38ecull, 47, 14, 47},
-    {"Storm21M", 0xf770bc84f8b963b1ull, 47, 14, 47},
+    {"Storm21", 0xf7b8d2e1e5dbff53ull, 47, 14, 47},
+    {"Storm21M", 0x261cd4c819b89bccull, 47, 14, 47},
     {"Storm22", 0x6862e0fd009c1790ull, 76, 19, 50},
     {"Storm22M", 0xbf55a11e282da39full, 76, 19, 50},
     {"Storm23", 0xb57c9d2a9d2d519full, 87, 28, 54},

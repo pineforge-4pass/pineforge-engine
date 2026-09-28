@@ -292,11 +292,22 @@
 //   chains seed 3560788: 2170094277734349720 -> 3614987093622666609 (60 trades, 363 commands, 422 rows placed -> 61 trades, 363 commands, 426 rows placed) [W3B void exit; W8A R-B]
 //   chains seed 3665517: 11220893490402964604 -> 11464826053545175105 (70 trades, 347 commands, 380 rows placed -> 72 trades, 347 commands, 376 rows placed) [W3B void exit; W8A R-B]
 //   chains seed 3770246: 1535576416135278226 -> 6257524543885771248 (62 trades, 346 commands, 372 rows placed -> 63 trades, 346 commands, 364 rows placed) [W3B void exit; W5 C1; W4 F08]
+// INT28-FIX re-harvested it once on the integrated tree (INT28 4efcb8c5 and
+// INT28-FIX's ten commits) with PINEFORGE_V19E_HARVEST; the same harvest against
+// INT28 reproduces every old row. 4 of 108 digests move, each marked with the
+// commit(s) at whose boundary it moved (a harvest at every commit): only the
+// picked W5B-ENG-MARGIN-RESIDUAL rules SB and PC move any; CA, PA, SZ, FU,
+// MS, SS, OU and OF move none. The rules are TradingView's (their lanes'
+// tests/fixtures tapes):
+//   reversals seed 418916: 16010591667054285812 -> 8603512707567609453 (107 trades, 372 commands, 373 rows placed -> 106 trades, 372 commands, 373 rows placed) [W5B SB]
+//   reversals seed 1675664: 10035800005689134556 -> 9885010638859166194 (111 trades, 379 commands, 394 rows placed -> 110 trades, 379 commands, 394 rows placed) [W5B SB]
+//   reversals seed 2199309: 5727820387840827666 -> 3773617840179934238 (122 trades, 400 commands, 378 rows placed -> 122 trades, 400 commands, 380 rows placed) [W5B PC]
+//   reversals seed 3351328: 14703653017612176717 -> 6358143307834022586 (108 trades, 414 commands, 363 rows placed -> 106 trades, 414 commands, 363 rows placed) [W5B SB]
 constexpr std::uint64_t kTranscriptDigests[] = {
     12925325283399332139ull,  // reversals seed 104729, 131 trades, 397 commands, 438 rows placed
     10024640008279748788ull,  // reversals seed 209458, 124 trades, 379 commands, 418 rows placed
     2794849691207223034ull,  // reversals seed 314187, 235 trades, 723 commands, 742 rows placed
-    16010591667054285812ull,  // reversals seed 418916, 107 trades, 372 commands, 373 rows placed
+    8603512707567609453ull,  // reversals seed 418916, 106 trades, 372 commands, 373 rows placed
     16125481158763653444ull,  // reversals seed 523645, 104 trades, 417 commands, 380 rows placed
     4132505341042249934ull,  // reversals seed 628374, 124 trades, 404 commands, 394 rows placed
     10949395400367693376ull,  // reversals seed 733103, 138 trades, 387 commands, 412 rows placed
@@ -308,12 +319,12 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     3043805792067546930ull,  // reversals seed 1361477, 100 trades, 409 commands, 390 rows placed
     11441719398179537978ull,  // reversals seed 1466206, 156 trades, 387 commands, 440 rows placed
     18024148252823409663ull,  // reversals seed 1570935, 69 trades, 344 commands, 269 rows placed
-    10035800005689134556ull,  // reversals seed 1675664, 111 trades, 379 commands, 394 rows placed
+    9885010638859166194ull,  // reversals seed 1675664, 110 trades, 379 commands, 394 rows placed
     3777516334616247576ull,  // reversals seed 1780393, 192 trades, 691 commands, 650 rows placed
     2275854726471319605ull,  // reversals seed 1885122, 127 trades, 396 commands, 402 rows placed
     11265413284249527184ull,  // reversals seed 1989851, 171 trades, 429 commands, 451 rows placed
     8444874965488324792ull,  // reversals seed 2094580, 92 trades, 384 commands, 350 rows placed
-    5727820387840827666ull,  // reversals seed 2199309, 122 trades, 400 commands, 378 rows placed
+    3773617840179934238ull,  // reversals seed 2199309, 122 trades, 400 commands, 380 rows placed
     16340996993447103239ull,  // reversals seed 2304038, 162 trades, 409 commands, 437 rows placed
     2756298568903753126ull,  // reversals seed 2408767, 138 trades, 418 commands, 419 rows placed
     8654109025937810515ull,  // reversals seed 2513496, 102 trades, 393 commands, 399 rows placed
@@ -324,7 +335,7 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     4678338477382770081ull,  // reversals seed 3037141, 114 trades, 405 commands, 409 rows placed
     15598437293592346454ull,  // reversals seed 3141870, 66 trades, 347 commands, 260 rows placed
     10688861328799387616ull,  // reversals seed 3246599, 168 trades, 485 commands, 555 rows placed
-    14703653017612176717ull,  // reversals seed 3351328, 108 trades, 414 commands, 363 rows placed
+    6358143307834022586ull,  // reversals seed 3351328, 106 trades, 414 commands, 363 rows placed
     12370377506510123879ull,  // reversals seed 3456057, 87 trades, 373 commands, 351 rows placed
     4523288504224647910ull,  // reversals seed 3560786, 153 trades, 403 commands, 452 rows placed
     14246593818834397991ull,  // reversals seed 3665515, 136 trades, 393 commands, 424 rows placed
