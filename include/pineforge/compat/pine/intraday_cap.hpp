@@ -130,7 +130,8 @@ public:
             declared_ |= kDeclaredCountPoocFullClose;
         }
     }
-    // A Pine script's own strategy.risk.max_intraday_filled_orders statement
+    // A Pine script's own intraday filled-order cap statement (reaching here
+    // through PineStrategyHost::set_pine_risk_max_intraday_filled_orders)
     // counts as TradingView does: every candidate switch its host did not
     // declare is on (lane W10-DIAG-UNKNOWN rule CAP-ON,
     // tests/fixtures/intraday_cap_tv). A declared switch keeps its value, and
