@@ -460,6 +460,57 @@ static void test_chart_time_close_gap_stamps() {
     }
 }
 
+// A D / W bar a feed stamps at its session's close -- 16:00 ET on an equity,
+// 16:00 CT on CME's 1700-1600 -- is the bar of the session that closes there
+// (lane W12-ENG-TIME; W11-ENG-TIME-COLOR's reviewer): its time_close is its
+// own stamp, as the kernel reads a raw label (the calendar interval that
+// holds it), not the next session's close. A stamp that is also where a
+// session day opens (OANDA's 17:00 ET under 1800-1700 and 1700-1700, CME's
+// 17:00 CT) opens that session, and one past the close, in the break, is the
+// next session's (test_chart_time_close_gap_stamps). TradingView stamps its
+// own bars at the open, so no tape reaches this.
+static void test_chart_time_close_close_stamps() {
+    std::printf("test_chart_time_close_close_stamps\n");
+    struct Case {
+        const char* tf;
+        const char* session;
+        const char* timezone;
+        int64_t bar;
+        int64_t close;
+    };
+    const Case cases[] = {
+        // Mon 2025-03-03 16:00 ET: Monday's session.
+        {"1D", "0930-1600", "America/New_York", 1741035600000LL, 1741035600000LL},
+        // Fri 2025-03-07 16:00 ET: the week that closes there.
+        {"1W", "0930-1600", "America/New_York", 1741381200000LL, 1741381200000LL},
+        // Mon 16:00 CT under 1700-1600: Monday's CME session.
+        {"1D", "1700-1600", "America/Chicago", 1741039200000LL, 1741039200000LL},
+        // Controls: Mon 17:00 CT opens Tuesday's CME session.
+        {"1D", "1700-1600", "America/Chicago", 1741042800000LL, 1741125600000LL},
+        // OANDA's 17:00 ET stamps open the session after the break.
+        {"1D", "1800-1700", "America/New_York", 1741039200000LL, 1741125600000LL},
+        {"1D", "1700-1700", "America/New_York", 1741039200000LL, 1741125600000LL},
+        // 17:00 ET on an equity, past the close: the next session's.
+        {"1D", "0930-1600", "America/New_York", 1741039200000LL, 1741122000000LL},
+    };
+    ZeroPriceProbe p;
+    int wrong = 0;
+    for (const Case& c : cases) {
+        p.set_script_tf(c.tf);
+        p.set_syminfo_session(c.session);
+        p.set_syminfo_timezone(c.timezone);
+        p.set_current_bar_timestamp(c.bar);
+        const int64_t tc = p.pub_time_close();
+        if (tc != c.close && ++wrong <= 8) {
+            std::printf("  %s %s bar %lld: time_close %lld, want %lld\n", c.tf, c.session,
+                        static_cast<long long>(c.bar), static_cast<long long>(tc),
+                        static_cast<long long>(c.close));
+        }
+        CHECK(tc == c.close);
+        CHECK(tc >= c.bar);
+    }
+}
+
 // A 24-hour session that trades through a daylight-saving switch closes its
 // D bar at the next day's same wall-clock time, 23 or 25 hours on, not at
 // its open plus 24 hours (lane W12-ENG-TIME, tests/fixtures/dst_day_close):
@@ -547,6 +598,7 @@ int main() {
     test_chart_time_close_tapes();
     test_chart_time_close_gap_stamps();
     test_chart_time_close_dst_tapes();
+    test_chart_time_close_close_stamps();
 
     std::printf("\nengine_trade_accessors: %d passed, %d failed\n",
                 tests_passed, tests_failed);

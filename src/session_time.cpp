@@ -1439,7 +1439,8 @@ static bool symbol_clock_applies(const std::string& resolved_session,
 // feed stamps at midnight, before the open or after the close -- is the bar
 // of the session it opens, as the 17:00 ET break stamp is
 // (session_covered_instant_ms), so it closes with that session, never before
-// its own time; a week or month dated on a weekend its session does not trade
+// its own time, and a stamp exactly at a close is the bar of the session that
+// closes there; a week or month dated on a weekend its session does not trade
 // (a Sunday-dated equity week) sits after its period's last traded close and
 // is the next period's. Exchange holidays and early closes are not modelled
 // (session_period_last_traded_close_ms): TradingView closes AAPL's 2025-07-03
@@ -1501,9 +1502,20 @@ static int64_t chart_period_close_ms(int64_t bar_ms, const std::string& tz,
     int64_t day_close = 0;
     if (period == CalendarPeriod::DAY && wall_clock_day_bar(bar_ms, tz, session, day_open, day_close))
         return day_close;
-    const int64_t covered = session_covered_instant_ms(bar_ms, tz, session);
+    // A stamp exactly at its session day's close that no session day opens
+    // at -- a feed stamping each bar at its close, 16:00 ET on an equity,
+    // 16:00 CT on CME's 1700-1600 -- is the bar of the session that closes
+    // there, as the kernel reads a raw label (the calendar interval that
+    // holds it); OANDA's 17:00 ET, where the next session day's stamp is,
+    // opens that session.
+    int64_t at = bar_ms;
+    if (session_period_close_ms(bar_ms - 1, tz, session, CalendarPeriod::DAY) == bar_ms
+        && session_period_open_ms(bar_ms, tz, session, CalendarPeriod::DAY) != bar_ms) {
+        at = bar_ms - 1;
+    }
+    const int64_t covered = session_covered_instant_ms(at, tz, session);
     int64_t close = session_period_last_traded_close_ms(covered, tz, session, period);
-    if (close <= bar_ms) {
+    if (close < bar_ms) {
         close = session_period_last_traded_close_ms(
             session_period_close_ms(covered, tz, session, period), tz, session, period);
     }
