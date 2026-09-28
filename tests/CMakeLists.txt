@@ -958,6 +958,11 @@ list(APPEND TEST_SOURCES test_run_harness_window_tapes)
 # (tests/fixtures/int28_compositions), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_int28_rule_compositions)
 
+# Lane INT28-FIX (CA): a strategy.close_all() placed after the same bar's
+# all-in reversal entry belongs to that reversal
+# (tests/fixtures/reversal_close_all), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_reversal_close_all_tapes)
+
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bare_host_contracts)
@@ -2522,6 +2527,13 @@ if(TARGET test_int28_rule_compositions)
     target_compile_definitions(test_int28_rule_compositions PRIVATE
         PINEFORGE_INT28_COMPOSITIONS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/int28_compositions"
         PINEFORGE_OPEN_FILL_ORDER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/open_fill_order")
+endif()
+
+# Lane INT28-FIX (CA) reads its TradingView tapes from the fixture tree and
+# the 15m bars of tests/fixtures/margin_v6; source-bound.
+if(TARGET test_reversal_close_all_tapes)
+    target_compile_definitions(test_reversal_close_all_tapes PRIVATE
+        PINEFORGE_REVERSAL_CLOSE_ALL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/reversal_close_all")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape

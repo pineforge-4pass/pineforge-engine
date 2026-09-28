@@ -1,0 +1,16 @@
+{
+  "title": "int28fix-ca2-frosty",
+  "slug": "int28fix-ca2-frosty",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T07:28:45.015Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-17"
+  },
+  "pine_sha256": "7c7070245052c420e2e10b01f2af59eb498b5abf7e1adbf9ef8ed0a896bc7656",
+  "tv_trades_sha256": "5a5deba25e2f644dd70dc8b70a214a7ccd08f61b39b9852ef1a1e274482eea20",
+  "tv_trades_rows": 50
+}

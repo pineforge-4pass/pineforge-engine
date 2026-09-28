@@ -7936,7 +7936,41 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                 }
             }
         }
-        if (empty_entry && opposite_entry) {
+        // A close_all placed after the same bar's default-size reversal entry
+        // at 100 % of equity belongs to that reversal, as a strategy.close()
+        // of the held id does (opposite_reversal_pair): TradingView flattens
+        // the held position through neither. The next open funds the
+        // reversal, which closes the position and opens the other side, or
+        // declines it (declined_reversal_at_open) and the position is held;
+        // the close_all fills in neither case (lab tv tapes
+        // tests/fixtures/reversal_close_all int28fix-ca2-rev and -frosty;
+        // lane INT28-FIX rule CA, on a fractional lot grid; a whole-unit grid
+        // is not measured). A close_all placed before the entry flattens at
+        // the open (-first).
+        bool all_in_reversal = false;
+        if (!empty_entry && !config_.process_orders_on_close && !config_.calc_on_order_fills
+            && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+            && config_.default_qty_value >= 100.0 - 1e-9
+            && (!staged_.quantity_grid || *staged_.quantity_grid < 1.0)) {
+            const bool held_long = detail::run_position(require_host()).signed_units > 0.0;
+            const auto point = detail::callback_point(require_host());
+            const auto reverses = [&](const PlacementSnapshot& candidate) {
+                return candidate.opening && candidate.family == PineOrderFamily::Entry
+                    && candidate.is_long != held_long && std::isnan(candidate.requested_qty)
+                    && (!point || candidate.placement_script_open_ms
+                        == point->decision.script_bar_open_ms);
+            };
+            for (const auto& pending : pending_same_bar_commands_)
+                all_in_reversal = all_in_reversal || reverses(pending.snapshot);
+            for (const auto& pending : pending_entries_)
+                all_in_reversal = all_in_reversal || reverses(pending.snapshot);
+            for (const auto& handle : live_handles_) {
+                const auto found = placement_.find(handle.incarnation);
+                if (found != placement_.end())
+                    all_in_reversal = all_in_reversal || reverses(found->second);
+            }
+        }
+        if ((empty_entry && opposite_entry) || all_in_reversal) {
             SourceShadowPending shadow;
             shadow.snapshot.family = PineOrderFamily::CloseAll;
             shadow.snapshot.source_id = "__pine_close_all";

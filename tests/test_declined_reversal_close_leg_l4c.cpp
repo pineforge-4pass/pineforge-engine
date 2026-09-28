@@ -229,11 +229,14 @@ static void test_R4_followup_close_and_ledger_recredit() {
     }
 }
 
-// R5: close_all co-queued with a declined reversal is a characterization FREEZE
-// — its bare "__close__" id (empty target) is EXCLUDED from suppression, so it
-// still fires. LONG held then S + close_all(); S declines but close_all flattens.
+// R5: a close_all placed after the all-in reversal entry belongs to that
+// reversal, as a close of the held id does (R1). LONG held then S +
+// close_all(); S declines at the fill and the position is held: TradingView
+// flattens the held long through neither (lane INT28-FIX, rule CA; lab tv
+// tapes tests/fixtures/reversal_close_all int28fix-ca2-rev and -frosty).
+// Expectation corrected: this row froze the close_all firing.
 static void test_R5_close_all_freeze() {
-    std::printf("-- R5: close_all + declined reversal freeze (NOT suppressed) --\n");
+    std::printf("-- R5: close_all + declined reversal: the long is held --\n");
     Probe p;
     p.plan = {
         {{Op::EnterLong}},
@@ -242,8 +245,8 @@ static void test_R5_close_all_freeze() {
     };
     auto bars = reversal_bars(111);
     p.run(bars.data(), (int)bars.size());
-    CHECK(p.position_side_ == PositionSide::FLAT);   // close_all still fired
-    CHECK(p.trade_count() == 1);
+    CHECK(p.position_side_ == PositionSide::LONG);   // the close_all is the reversal's
+    CHECK(p.trade_count() == 0);
 }
 
 // R6: the SAME-direction shape (probe65: same-id add + close, no reversal) is

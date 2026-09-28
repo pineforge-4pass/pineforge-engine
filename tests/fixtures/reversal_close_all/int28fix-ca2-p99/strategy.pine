@@ -1,0 +1,15 @@
+//@version=6
+strategy("int28fix-ca2-p99", overlay = true, default_qty_type = strategy.percent_of_equity, default_qty_value = 99)
+cell(d, h, m) => timestamp("UTC", 2025, 4, d, h, m)
+var cells = array.from(cell(1, 1, 30), cell(2, 12, 30), cell(2, 17, 45), cell(2, 22, 45), cell(3, 6, 15), cell(3, 18, 15), cell(4, 4, 15), cell(4, 11, 30), cell(4, 15, 30), cell(6, 19, 45), cell(7, 3, 45), cell(7, 8, 45))
+for i = 0 to array.size(cells) - 1
+    c = array.get(cells, i)
+    held_long = i % 2 == 0
+    if time == c
+        strategy.entry(held_long ? "L" : "S", held_long ? strategy.long : strategy.short)
+    if time == c + 30 * 60000
+        strategy.entry(held_long ? "S" : "L", held_long ? strategy.short : strategy.long)
+        strategy.close_all(comment = "flatten")
+    if time == c + 90 * 60000
+        strategy.cancel_all()
+        strategy.close_all(comment = "cleanup")

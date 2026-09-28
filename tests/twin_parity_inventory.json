@@ -195,9 +195,9 @@
     },
     "test_declined_reversal_close_leg": {
       "baseAssertions": 39,
-      "reason": "R6's all-in same-side add co-queued with a close of the held id follows the R5 lane W5-ENG-MARGIN-V6 TradingView tapes (tests/fixtures/margin_v6 w5-m1-addclose): TradingView drops the add at placement, its margin on top of the held side's exceeding the equity, so the close leaves the book flat instead of the add re-opening LONG 100",
+      "reason": "R6's all-in same-side add co-queued with a close of the held id follows the R5 lane W5-ENG-MARGIN-V6 TradingView tapes (tests/fixtures/margin_v6 w5-m1-addclose): TradingView drops the add at placement, its margin on top of the held side's exceeding the equity, so the close leaves the book flat instead of the add re-opening LONG 100; and lane INT28-FIX rule CA: R5's close_all placed after the all-in reversal entry belongs to that reversal (tests/fixtures/reversal_close_all int28fix-ca2-rev and -frosty), so the declined reversal holds the long where the row froze the close_all firing",
       "twin": "test_declined_reversal_close_leg_l4c.cpp",
-      "twinAssertionSha256": "9d3de860d030fbdc20240090c20e2b3717b3701444707896f17e42085b0ac087",
+      "twinAssertionSha256": "18c9185d8d13599ca337b1f14eb54f386ebf5097d92b619f7b23531dc2bf7958",
       "twinAssertions": 39
     },
     "test_direct_short_reversal_affordability": {

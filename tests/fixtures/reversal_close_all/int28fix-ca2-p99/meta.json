@@ -1,0 +1,16 @@
+{
+  "title": "int28fix-ca2-p99",
+  "slug": "int28fix-ca2-p99",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T07:28:53.438Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-17"
+  },
+  "pine_sha256": "a230839160ad33e3947d5071954818faca78f642b5ac2fa3f60eee579becfbe4",
+  "tv_trades_sha256": "e46f1e543f67f2a29a0c70ba149bfe051bacb30ae099f73283aea50c0a10ce82",
+  "tv_trades_rows": 60
+}
