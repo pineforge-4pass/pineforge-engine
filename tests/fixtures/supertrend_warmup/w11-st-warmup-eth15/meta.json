@@ -1,0 +1,16 @@
+{
+  "title": "w11 st warmup",
+  "slug": "w11-st-warmup-eth15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T07:10:15.793Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "b9e82561328123a2eb35fb8390949ab0834d9668f2c1f1432e000255d09acb81",
+  "tv_trades_sha256": "8eb153be1c31e953b0d1709554e1a26260c8650866f582101bec592bbfa24b32",
+  "tv_trades_rows": 384
+}

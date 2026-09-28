@@ -1,0 +1,28 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane W11-ENG-TIME-COLOR): ta.supertrend's line and
+// direction from the first bar of the run, for literal and input
+// factor/atrPeriod pairs. Each bar's readings are spelled in the comment of
+// the exit that fills on the next bar's open; bar 0's are kept in a var and
+// spelled on every exit.
+strategy("w11 st warmup", overlay=true, initial_capital=100000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=2, margin_long=0, margin_short=0)
+
+fac = input.float(3.0, "Factor")
+per = input.int(7, "ATR period")
+f(float v) => na(v) ? "n" : str.tostring(v, "#.##")
+[s1, d1] = ta.supertrend(3.0, 10)
+[s2, d2] = ta.supertrend(2.0, 1)
+[s3, d3] = ta.supertrend(1000.0, 5)
+[s4, d4] = ta.supertrend(0.5, 3)
+[s5, d5] = ta.supertrend(fac, per)
+sig = f(s1) + "," + f(d1) + "|" + f(s2) + "," + f(d2) + "|" + f(s3) + "," + f(d3) + "|" + f(s4) + "," + f(d4) + "|" + f(s5) + "," + f(d5)
+var string b0 = ""
+if bar_index == 0
+    b0 := sig
+
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.close("B", comment=sig + " @" + b0)
+else
+    strategy.entry("B", strategy.long)
+    strategy.close("A", comment=sig + " @" + b0)

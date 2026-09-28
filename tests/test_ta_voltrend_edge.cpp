@@ -7,7 +7,8 @@
  *   - Supertrend: direction flip from the bearish init (+1) up to an
  *     uptrend (-1) and then back down to bearish (+1) when the close
  *     pierces the trailing band; the final_upper/final_lower min/max vs
- *     basic-band branches; the ATR-warmup na return.
+ *     basic-band branches; the ATR warmup, replayed against TradingView's
+ *     tape (tests/fixtures/supertrend_warmup).
  *   - SAR: na-input guard, the prev_close-na priming bar, the
  *     first-trend-bar init for BOTH long and short, the ep/af
  *     acceleration steps (long: high>ep, short: low<ep), and the long
@@ -27,11 +28,21 @@
  */
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
+#include <string>
+#include <vector>
 
 #include <pineforge/ta.hpp>
 #include <pineforge/na.hpp>
+
+#include "exit_comment_tape.hpp"
+
+#ifndef PINEFORGE_SUPERTREND_WARMUP_FIXTURE_DIR
+#error "PINEFORGE_SUPERTREND_WARMUP_FIXTURE_DIR must name tests/fixtures/supertrend_warmup"
+#endif
 
 using namespace pineforge;
 
@@ -65,15 +76,18 @@ static void test_supertrend_flip() {
     std::printf("test_supertrend_flip\n");
     ta::Supertrend st(0.5, 2);
 
-    // bar1: ATR not yet warmed up → value+direction na (lines 141-143).
+    // bar1: ATR not yet warmed up. TradingView's reference ratchets each
+    // band against nz(band[1]) = 0 and, with no close[1], keeps the 0, so
+    // the line is 0; the direction is 1 while atr[1] is na (tape
+    // w11-st-warmup-eth15, bar 0 of every pair).
     auto r1 = st.compute(100.0, 99.0, 99.5);
-    CHECK(is_na(r1.value));
-    CHECK(is_na(r1.direction));
+    CHECK(near(r1.value, 0.0));
+    CHECK(near(r1.direction, 1.0));
 
     // bar2: ATR warms up (= (1.0 + 1.5)/2 = 1.25). hl2 = 100.5,
     // final_upper = 100.5 + 0.5*1.25 = 101.125, final_lower = 99.875.
-    // Init branch: close (101) is NOT > final_upper (101.125) → dir = +1
-    // (bearish). st_val = dir==1 ? final_upper : final_lower = 101.125.
+    // atr[1] is still na → dir = +1 (bearish). st_val = dir==1 ?
+    // final_upper : final_lower = 101.125.
     auto r2 = st.compute(101.0, 100.0, 101.0);
     CHECK(near(r2.direction, 1.0));
     CHECK(near(r2.value, 101.125));
@@ -271,8 +285,106 @@ static void test_macd_seeded() {
     CHECK(near(rr.histogram, last.histogram));
 }
 
+// ============================================================================
+// Supertrend from the run's first bar, as TradingView computes it: the Pine
+// reference (hl2 +/- factor * ta.atr(atrPeriod), each band ratcheted against
+// nz(band[1]) and close[1], direction 1 while atr[1] is na). Replayed against
+// w11-st-warmup-eth15 (lab tv --no-note, BINANCE:ETHUSDT.P 15, 2025-04-01 ..
+// 04-03): each exit comment spells "line,direction" of ta.supertrend(3, 10),
+// (2, 1), (1000, 5), (0.5, 3) and (input 3, input 7) on the bar before the
+// fill, the line to two decimals; " @..." carries bar 0's. The bars are the
+// corpus feed's own (fixtures/supertrend_warmup/bars.inc).
+// ============================================================================
+
+struct StBar {
+    int64_t ts;
+    double o, h, l, c;
+};
+#include "fixtures/supertrend_warmup/bars.inc"
+
+// TradingView's "#.##" spelling against the engine's value: "n" for na, else
+// the number the engine's line rounds to.
+static bool same_spelled(const std::string& text, double value) {
+    if (text == "n") return is_na(value);
+    if (is_na(value)) return false;
+    char* end = nullptr;
+    const double tv = std::strtod(text.c_str(), &end);
+    if (end == text.c_str() || *end != '\0') return false;
+    return std::fabs(value - tv) <= 0.005 + 1e-9;
+}
+
+static void test_supertrend_warmup_tape() {
+    std::printf("test_supertrend_warmup_tape\n");
+    constexpr int kSites = 5;
+    const double factor[kSites] = {3.0, 2.0, 1000.0, 0.5, 3.0};
+    const int period[kSites] = {10, 1, 5, 3, 7};
+    constexpr std::size_t kBars = sizeof(kEth15) / sizeof(kEth15[0]);
+    std::vector<std::string> engine(kBars);
+    {
+        std::vector<ta::Supertrend> sites;
+        for (int k = 0; k < kSites; ++k) sites.emplace_back(factor[k], period[k]);
+        for (std::size_t i = 0; i < kBars; ++i) {
+            std::string spelled;
+            for (int k = 0; k < kSites; ++k) {
+                const auto r = sites[static_cast<std::size_t>(k)].compute(kEth15[i].h, kEth15[i].l,
+                                                                          kEth15[i].c);
+                char buf[64];
+                std::snprintf(buf, sizeof buf, "%.17g,%.17g", r.value, r.direction);
+                spelled += (k ? "|" : "") + std::string(buf);
+            }
+            engine[i] = spelled;
+        }
+    }
+    // One reading against the engine's row: every site's line and direction.
+    const auto agrees = [&](const std::string& tv, std::size_t row) {
+        const auto sites_tv = exit_comment_tape::split(tv, '|');
+        const auto sites_engine = exit_comment_tape::split(engine[row], '|');
+        if (sites_tv.size() != kSites || sites_engine.size() != kSites) return false;
+        for (int k = 0; k < kSites; ++k) {
+            const auto a = exit_comment_tape::split(sites_tv[static_cast<std::size_t>(k)], ',');
+            const auto b = exit_comment_tape::split(sites_engine[static_cast<std::size_t>(k)], ',');
+            if (a.size() != 2 || b.size() != 2) return false;
+            const double line = std::strtod(b[0].c_str(), nullptr);
+            const double direction = std::strtod(b[1].c_str(), nullptr);
+            if (!same_spelled(a[0], line) || !same_spelled(a[1], direction)) return false;
+        }
+        return true;
+    };
+    bool ok = true;
+    const auto readings = exit_comment_tape::read(PINEFORGE_SUPERTREND_WARMUP_FIXTURE_DIR,
+                                                  "w11-st-warmup-eth15", ok);
+    CHECK(ok);
+    int compared = 0, wrong = 0, bar0 = 0;
+    for (const auto& reading : readings) {
+        const std::size_t at = reading.signal.find(" @");
+        if (at == std::string::npos) { ++wrong; continue; }
+        const std::int64_t row64 = (reading.bar_ms - kEth15[0].ts) / (15 * 60000);
+        if (row64 < 0 || row64 >= static_cast<std::int64_t>(kBars)
+            || kEth15[static_cast<std::size_t>(row64)].ts != reading.bar_ms) {
+            ++wrong;
+            continue;
+        }
+        ++compared;
+        if (!agrees(reading.signal.substr(0, at), static_cast<std::size_t>(row64))) {
+            if (++wrong <= 5) {
+                std::printf("  bar %lld: tv %s engine %s\n",
+                            static_cast<long long>(reading.bar_ms),
+                            reading.signal.substr(0, at).c_str(),
+                            engine[static_cast<std::size_t>(row64)].c_str());
+            }
+        }
+        bar0 += agrees(reading.signal.substr(at + 2), 0) ? 1 : 0;
+    }
+    std::printf("  w11-st-warmup-eth15: %d bars compared, %d differ; bar 0 agrees on %d\n",
+                compared, wrong, bar0);
+    CHECK(compared == static_cast<int>(kBars) - 1);
+    CHECK(wrong == 0);
+    CHECK(bar0 == compared);
+}
+
 int main() {
     test_supertrend_flip();
+    test_supertrend_warmup_tape();
     test_sar_long_then_flip();
     test_sar_short_init();
     test_atr_tr_warmup();

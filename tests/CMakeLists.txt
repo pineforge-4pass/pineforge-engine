@@ -2643,7 +2643,8 @@ endif()
 # fixture tree.
 foreach(_pf_w11_row IN ITEMS
         "test_session_predicates|PINEFORGE_SESSION_CLOCK_FIXTURE_DIR|session_clock"
-        "test_color_tapes|PINEFORGE_COLOR_TV_FIXTURE_DIR|color_tv")
+        "test_color_tapes|PINEFORGE_COLOR_TV_FIXTURE_DIR|color_tv"
+        "test_ta_voltrend_edge|PINEFORGE_SUPERTREND_WARMUP_FIXTURE_DIR|supertrend_warmup")
     string(REPLACE "|" ";" _pf_w11_fields "${_pf_w11_row}")
     list(GET _pf_w11_fields 0 _pf_w11_target)
     list(GET _pf_w11_fields 1 _pf_w11_macro)

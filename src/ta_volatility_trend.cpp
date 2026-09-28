@@ -228,75 +228,48 @@ SupertrendResult Supertrend::compute(double high, double low, double close) {
         return result;
     }
 
-    double atr_val = atr_.compute(high, low, close);
-    if (is_na(atr_val)) {
-        prev_close_ = close;
-        return result;
-    }
+    // Pine v6's reference implementation of ta.supertrend, from the first
+    // bar on:
+    //   upperBand/lowerBand = hl2 +/- factor * ta.atr(atrPeriod), na while the
+    //     ATR warms up;
+    //   lowerBand := lowerBand > nz(lowerBand[1]) or close[1] < nz(lowerBand[1])
+    //     ? lowerBand : nz(lowerBand[1]), upperBand mirrored -- comparisons with
+    //     na are false, so with no close[1] both bands keep nz's 0;
+    //   direction 1 while atr[1] is na, then against the previous line;
+    //   superTrend := direction == -1 ? lowerBand : upperBand.
+    // So bar 0 answers the line 0 and bars 1 .. atrPeriod - 1 na, with the
+    // direction 1 throughout (lab tv tape w11-st-warmup-eth15,
+    // tests/fixtures/supertrend_warmup). initialized_ holds whether atr[1]
+    // was valid; a direction of -1 is an uptrend, whose line trails the lower
+    // band.
+    const double atr_val = atr_.compute(high, low, close);
+    const double hl2 = (high + low) / 2.0;
+    double upper = hl2 + factor_ * atr_val;
+    double lower = hl2 - factor_ * atr_val;
+    const double prev_lower = is_na(prev_lower_) ? 0.0 : prev_lower_;
+    const double prev_upper = is_na(prev_upper_) ? 0.0 : prev_upper_;
+    lower = (lower > prev_lower || prev_close_ < prev_lower) ? lower : prev_lower;
+    upper = (upper < prev_upper || prev_close_ > prev_upper) ? upper : prev_upper;
 
-    double hl2 = (high + low) / 2.0;
-    double basic_upper = hl2 + factor_ * atr_val;
-    double basic_lower = hl2 - factor_ * atr_val;
-
-    double final_upper, final_lower;
-
-    if (!initialized_) {
-        final_upper = basic_upper;
-        final_lower = basic_lower;
-        // Initial direction: -1 = uptrend (bullish), 1 = downtrend (bearish)
-        // If close > upper band, we're in an uptrend
-        prev_direction_ = (close > final_upper) ? -1.0 : 1.0;
-        initialized_ = true;
-    } else {
-        // Final upper band: take min of basic and previous if prev close <= prev upper
-        if (!is_na(prev_close_) && prev_close_ <= prev_upper_) {
-            final_upper = std::min(basic_upper, prev_upper_);
-        } else {
-            final_upper = basic_upper;
-        }
-
-        // Final lower band: take max of basic and previous if prev close >= prev lower
-        if (!is_na(prev_close_) && prev_close_ >= prev_lower_) {
-            final_lower = std::max(basic_lower, prev_lower_);
-        } else {
-            final_lower = basic_lower;
-        }
-    }
-
-    // Determine direction
-    // In TradingView: direction = -1 means uptrend (bullish), 1 means downtrend (bearish)
-    // Uptrend (-1) uses lower band; reversal when close drops below lower band
-    // Downtrend (1) uses upper band; reversal when close rises above upper band
-    // Note: direction check uses CURRENT bar's final bands
     double direction;
-    if (prev_direction_ == 1.0 && close > final_upper) {
-        direction = -1.0;  // Switch to uptrend (bullish)
-    } else if (prev_direction_ == -1.0 && close < final_lower) {
-        direction = 1.0;   // Switch to downtrend (bearish)
+    if (!initialized_) {
+        direction = 1.0;
+    } else if (prev_st_ == prev_upper) {
+        direction = close > upper ? -1.0 : 1.0;
     } else {
-        direction = prev_direction_;
+        direction = close < lower ? 1.0 : -1.0;
     }
-
-    // Supertrend value: per Pine v6 ta.supertrend reference impl,
-    //   `superTrend := _direction == -1 ? lowerBand : upperBand`
-    // i.e. an UPTREND (direction = -1) trails the LOWER band as
-    // support; a DOWNTREND (direction = +1) trails the UPPER band as
-    // resistance. The previous version picked the OPPOSITE band per
-    // direction, which left `direction` correct (the engine matched TV
-    // bar-for-bar on the dir series) but inflated the line in uptrends
-    // by ~2× ATR (and depressed it in downtrends). Caught by the TA
-    // correctness sweep — direction had 0 mismatches across 4694 bars
-    // while st_line had 4694/4694 mismatches.
-    double st_val = (direction == 1.0) ? final_upper : final_lower;
+    const double st_val = direction == -1.0 ? lower : upper;
 
     result.value = st_val;
     result.direction = direction;
 
-    prev_upper_ = final_upper;
-    prev_lower_ = final_lower;
+    prev_upper_ = upper;
+    prev_lower_ = lower;
     prev_st_ = st_val;
     prev_direction_ = direction;
     prev_close_ = close;
+    initialized_ = !is_na(atr_val);
 
     return result;
 }
