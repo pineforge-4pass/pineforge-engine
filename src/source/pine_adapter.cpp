@@ -2445,9 +2445,16 @@ PineSizingSnapshot PineExecutionAdapter::sizing_snapshot() const {
 }
 
 // The money a default-quantity declaration converts.  CASH is the declared
-// value itself; a percentage is taken of the equity the snapshot marked, on
-// the ten-significant-digit money grid whenever the instrument has a lot grid.
-// Which equity that is (ab9714be pine_fills.cpp:1411-1426, restated in
+// value itself; a percentage is taken of the equity the snapshot marked, and
+// that money -- not the equity it is a percentage of -- goes on the
+// ten-significant-digit money grid whenever the instrument has a lot grid
+// (lab tv tapes tests/fixtures/margin_residual w5b-sz-eur-p50-10m and -p33-10m:
+// on ten million, whose equity carries more decimals than ten digits keep,
+// rounding the equity first floors 44 of the 504 quantities at 50 % and 37 at
+// 33 % one lot off TradingView's, and no rounding at all 8 and 18; at 100 %
+// the two roundings are one number, w5b-sz-eur-p100-10m-0410, where no
+// rounding misses 98 of 130; lane W5B-ENG-MARGIN-RESIDUAL). Which equity that
+// is (ab9714be pine_fills.cpp:1411-1426, restated in
 // percent_commission_live_equity) and this rounding are source policy the
 // generic EquityFraction basis deliberately does not model, so the source
 // hands the core the money and the core converts it.  Any other declaration
@@ -2483,8 +2490,8 @@ double PineExecutionAdapter::default_sizing_cash(
         return money * unit_cost / (unit_cost + config_.commission_value);
     }
     if (!finite_positive(sizing.equity)) return kNaN;
-    const double equity = staged_.quantity_grid ? source_money_round(sizing.equity) : sizing.equity;
-    return config_.default_qty_value / 100.0 * equity;
+    const double money = config_.default_qty_value / 100.0 * sizing.equity;
+    return staged_.quantity_grid ? source_money_round(money) : money;
 }
 
 // A percentage declaration reserves a percentage commission out of its own

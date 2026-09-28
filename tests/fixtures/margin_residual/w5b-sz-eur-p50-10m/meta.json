@@ -1,0 +1,16 @@
+{
+  "title": "W5B SZ EURUSD 50% of equity on 10000000",
+  "slug": "w5b-sz-eur-p50-10m",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T05:16:39.041Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-30"
+  },
+  "pine_sha256": "79e07266184d61b6c0022ccc446f8e4da65517da617c9b6269f9031be9bdd484",
+  "tv_trades_sha256": "6f2cb986c35b2630ee15a74d717e442f9e7248acf462c745f62fedd3442f9cc3",
+  "tv_trades_rows": 1010
+}

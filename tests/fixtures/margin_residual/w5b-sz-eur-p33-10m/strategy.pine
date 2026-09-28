@@ -1,0 +1,17 @@
+//@version=6
+strategy("W5B SZ EURUSD 33% of equity on 10000000", overlay=true,
+     initial_capital=10000000, default_qty_type=strategy.percent_of_equity,
+     default_qty_value=33, pyramiding=1, process_orders_on_close=true)
+
+// Lane W5B-ENG-MARGIN-RESIDUAL, the money a percent-of-equity order converts.
+// OANDA:EURUSD (lot 0.01), 10000000 of capital, margin 100. Every 4 bars from
+// flat the script places a default long entry, which fills at that bar's
+// close (33 % of equity), and closes it two bars later. On this capital the
+// equity carries more decimals than ten significant digits keep, so the
+// quantity floors differently when the equity, rather than the order's money,
+// is rounded to ten significant digits.
+phase = bar_index % 4
+if strategy.position_size == 0 and phase == 0
+    strategy.entry("L", strategy.long)
+if phase == 2
+    strategy.close_all()

@@ -22,15 +22,20 @@
  *       on the held units plus its own at the signal close's tick against the
  *       equity there, with no lot of slack; under process_orders_on_close at
  *       its close fill.
+ *   SZ  A percentage of equity converts the order's money -- the percentage
+ *       of the equity -- rounded to ten significant digits, not the equity
+ *       rounded first.
  *
  * Each row replays one lab tv tape (tests/fixtures/margin_residual) through
  * the Pine adapter under the configuration the generated constructor declares
  * for its probe, over the corpus 15m bars of lane W5-ENG-MARGIN-V6
- * (tests/fixtures/margin_v6/bars.inc, BINANCE:ETHUSDT.P) or the lab lane f-15
- * NYSE:F 15m bars (tests/fixtures/margin_residual/f15_bars.inc), and requires
- * every trade the tape closes inside those bars to be the engine's: entry and
- * exit time, side, price in ticks and quantity in lots. On the lane's base
- * every rule row fails here, and every control row beside it passes.
+ * (tests/fixtures/margin_v6/bars.inc, BINANCE:ETHUSDT.P), the lab lane f-15
+ * NYSE:F 15m bars (tests/fixtures/margin_residual/f15_bars.inc) or the lab
+ * lane eurusd-15 OANDA:EURUSD 15m bars (eur15_bars.inc), and requires every
+ * trade the tape closes inside those bars (or before its own window's end) to
+ * be the engine's: entry and exit time, side, price in ticks and quantity in
+ * lots. On the commit before a rule's every rule row fails here, and every
+ * control row beside it passes.
  */
 
 #include <pineforge/bar.hpp>
@@ -76,18 +81,21 @@ struct FeedBar {
 
 #include "fixtures/margin_v6/bars.inc"
 #include "fixtures/margin_residual/f15_bars.inc"
+#include "fixtures/margin_residual/eur15_bars.inc"
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-constexpr double kTick = 0.01;       // both charts' price tick
+constexpr double kTick = 0.01;       // BINANCE:ETHUSDT.P's and NYSE:F's price tick
+constexpr double kEurTick = 0.00001; // OANDA:EURUSD's
 constexpr double kEthLot = 0.0001;   // TradingView's BINANCE:ETHUSDT.P quantity step
 constexpr double kShareLot = 1.0;    // NYSE:F
+constexpr double kEurLot = 0.01;     // OANDA:EURUSD
 constexpr std::int64_t kMinute = 60'000;
 
 // One trade as both sides report it, prices in ticks and quantity in lots:
 // (entry ms, long, entry price, quantity, exit ms, exit price).
 using Row = std::tuple<std::int64_t, bool, long long, long long, std::int64_t, long long>;
 
-long long ticks(double price) { return std::llround(price / kTick); }
+long long ticks(double price, double tick) { return std::llround(price / tick); }
 long long lots(double qty, double lot) { return std::llround(qty / lot); }
 bool on_grid(double value, double step) {
     return std::abs(value / step - static_cast<double>(std::llround(value / step))) < 1e-6;
@@ -116,7 +124,8 @@ std::int64_t tape_ms(const std::string& stamp) {
     return ((days * 24 + h - 8) * 60 + mi) * kMinute;
 }
 
-std::vector<Row> tape_trades(const std::string& tape, std::int64_t end_ms, double lot) {
+std::vector<Row> tape_trades(const std::string& tape, std::int64_t end_ms, double lot,
+                             double tick) {
     std::ifstream in(std::string(PINEFORGE_MARGIN_RESIDUAL_FIXTURE_DIR) + "/" + tape
                      + "/tv_trades.csv");
     CHECK(in.good());
@@ -135,17 +144,17 @@ std::vector<Row> tape_trades(const std::string& tape, std::int64_t end_ms, doubl
         const int number = std::stoi(cell[0]);
         Row& row = by_number[number];
         const double price = std::stod(cell[4]);
-        CHECK(on_grid(price, kTick));
+        CHECK(on_grid(price, tick));
         if (cell[1].rfind("Entry", 0) == 0) {
             const double qty = std::stod(cell[5]);
             CHECK(on_grid(qty, lot));
             std::get<0>(row) = tape_ms(cell[2]);
             std::get<1>(row) = cell[1] == "Entry long";
-            std::get<2>(row) = ticks(price);
+            std::get<2>(row) = ticks(price, tick);
             std::get<3>(row) = lots(qty, lot);
         } else {
             std::get<4>(row) = tape_ms(cell[2]);
-            std::get<5>(row) = ticks(price);
+            std::get<5>(row) = ticks(price, tick);
             closed[number] = true;
         }
     }
@@ -171,7 +180,11 @@ enum class Probe {
     AddCells,            // w5b-pa-pooc-p50 / -pooc-p40 / -market-p50
     AddNearFill,         // w5b-pa-pooc-p50-tick
     AddNyseF,            // w5b-pa-f-pooc-p50 / -f-market-p50 (NYSE:F)
+    SizeCells,           // w5b-sz-eur-* (OANDA:EURUSD)
 };
+
+// The chart a probe runs on.
+enum class Chart { Eth, NyseF, EurUsd };
 
 // The fifteen signal closes of the w5b-pc-* probes (W5-ENG-MARGIN-V6's cells).
 const std::int64_t kCells[] = {
@@ -182,19 +195,25 @@ const std::int64_t kCells[] = {
 
 class ProbeHost final : public source::PineStrategyHost {
 public:
-    ProbeHost(Probe probe, const source::PineStrategyConfig& config, double lot)
+    ProbeHost(Probe probe, const source::PineStrategyConfig& config, Chart chart, double lot)
         : probe_(probe) {
         attach_pine_execution_adapter();
         configure_pine_strategy(config);
         set_syminfo_metadata("qty_step", lot);
-        if (probe == Probe::AddNyseF) {
+        if (chart == Chart::NyseF) {
             set_syminfo_timezone("America/New_York");
             set_syminfo_session("0930-1600");
+        }
+        if (chart == Chart::EurUsd) {
+            set_syminfo_mintick(kEurTick);
+            set_syminfo_timezone("America/New_York");
+            set_syminfo_session("1700-1700");
         }
     }
 
     void on_source_bar(const Bar&) override {
         const std::int64_t t = current_bar_.timestamp;
+        ++bar_index_;
         switch (probe_) {
         case Probe::SameBarExplicit60: same_bar_explicit(t, 0.6); break;
         case Probe::SameBarExplicit40: same_bar_explicit(t, 0.4); break;
@@ -208,6 +227,7 @@ public:
         case Probe::AddCells: add_cells(t); break;
         case Probe::AddNearFill: add_near_fill(t); break;
         case Probe::AddNyseF: add_nyse_f(t); break;
+        case Probe::SizeCells: size_cells(); break;
         }
     }
 
@@ -343,7 +363,17 @@ private:
         if (minute == 15 && hour >= 10 && hour <= 15) close_all("cleanup");
     }
 
+    // w5b-sz-eur-*: every 4 bars from flat a default long, filled at that
+    // close; flattened two bars later.
+    void size_cells() {
+        const int phase = bar_index_ % 4;
+        if (signed_position_size() == 0.0 && phase == 0)
+            strategy_entry("L", true, kNaN, kNaN, kNaN);
+        if (phase == 2) close_all("");
+    }
+
     Probe probe_;
+    int bar_index_ = -1;  // Pine's bar_index
 };
 
 template <std::size_t N>
@@ -366,20 +396,20 @@ struct Run {
 
 // The engine's trades closed inside the bars (a position still open at the
 // last bar is closed there by the range end and is not a tape trade).
-Run run(Probe probe, const source::PineStrategyConfig& config, const std::vector<Bar>& bars,
-        double lot, std::int64_t end_ms) {
-    ProbeHost host(probe, config, lot);
+Run run(Probe probe, const source::PineStrategyConfig& config, Chart chart,
+        const std::vector<Bar>& bars, double lot, double tick, std::int64_t end_ms) {
+    ProbeHost host(probe, config, chart, lot);
     host.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false);
     Run out;
     out.error = host.last_error();
     for (int i = 0; i < host.trade_count(); ++i) {
         const Trade& t = host.get_trade(i);
         if (t.exit_time >= end_ms) continue;
-        CHECK(on_grid(t.entry_price, kTick));
-        CHECK(on_grid(t.exit_price, kTick));
+        CHECK(on_grid(t.entry_price, tick));
+        CHECK(on_grid(t.exit_price, tick));
         CHECK(on_grid(t.qty, lot));
-        out.trades.emplace_back(t.entry_time, t.is_long, ticks(t.entry_price), lots(t.qty, lot),
-                                t.exit_time, ticks(t.exit_price));
+        out.trades.emplace_back(t.entry_time, t.is_long, ticks(t.entry_price, tick),
+                                lots(t.qty, lot), t.exit_time, ticks(t.exit_price, tick));
     }
     std::sort(out.trades.begin(), out.trades.end());
     return out;
@@ -395,10 +425,11 @@ void show(const char* tag, const std::vector<Row>& rows) {
 
 // What a probe's strategy() declares, over v6's defaults (initial capital
 // 100000, 100 % of equity, pyramiding 1, margin 100 both ways).
-source::PineStrategyConfig config(bool pooc, int pyramiding, double percent = 100.0) {
+source::PineStrategyConfig config(bool pooc, int pyramiding, double percent = 100.0,
+                                  double capital = 100000.0) {
     source::PineStrategyConfig c{};
     c.process_orders_on_close = pooc;
-    c.initial_capital = 100000.0;
+    c.initial_capital = capital;
     c.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
     c.default_qty_value = percent;
     c.pyramiding = pyramiding;
@@ -410,8 +441,9 @@ struct Case {
     const char* tape;
     Probe probe;
     source::PineStrategyConfig lane;  // what its generated constructor declares
-    bool nyse_f;
+    Chart chart;
     std::size_t closed;               // tape trades closed inside the bars
+    std::int64_t end_ms = 0;          // the tape's window end, when before the bars'
 };
 
 }  // namespace
@@ -419,39 +451,50 @@ struct Case {
 int main() {
     const std::vector<Bar> eth = feed(kEth15);
     const std::vector<Bar> f = feed(kF15);
-    const std::int64_t eth_end = eth.back().timestamp;
-    const std::int64_t f_end = f.back().timestamp;
+    const std::vector<Bar> eur = feed(kEurUsd15);
 
     const Case cases[] = {
-        {"SB", "w5b-sb-market-60x2", Probe::SameBarExplicit60, config(false, 2), false, 120},
-        {"SB", "w5b-sb-pooc-60x2", Probe::SameBarExplicit60, config(true, 2), false, 120},
-        {"SB", "w5b-sb-default-x3", Probe::SameBarDefault3, config(false, 3), false, 48},
-        {"SB", "w5b-sb-pooc-default-x3", Probe::SameBarDefault3, config(true, 3), false, 60},
-        {"SB control", "w5b-sb-market-40x2", Probe::SameBarExplicit40, config(false, 2), false,
-         80},
-        {"PC", "w5b-pc-seen-size", Probe::SeenSize, config(true, 1), false, 36},
-        {"PC", "w5b-pc-seen-size-parked", Probe::SeenSizeParked, config(true, 1), false, 36},
-        {"PC", "w5b-pc-carried-close", Probe::CarriedClose, config(true, 1), false, 36},
-        {"PC", "w5b-pc-carried-reverse", Probe::CarriedReverse, config(true, 1), false, 51},
-        {"PC", "w5b-pc-bracket-tp", Probe::BracketTakeProfit, config(true, 1), false, 35},
-        {"PC", "w5b-pa-pooc-p50", Probe::AddCells, config(true, 2, 50.0), false, 109},
-        {"PC control", "w5b-pc-carried-none", Probe::CarriedNone, config(true, 1), false, 37},
-        {"PA", "w5b-pa-f-pooc-p50", Probe::AddNyseF, config(true, 2, 50.0), true, 248},
-        {"PA", "w5b-pa-f-market-p50", Probe::AddNyseF, config(false, 2, 50.0), true, 245},
-        {"PA control", "w5b-pa-pooc-p40", Probe::AddCells, config(true, 2, 40.0), false, 120},
-        {"PA control", "w5b-pa-market-p50", Probe::AddCells, config(false, 2, 50.0), false,
+        {"SB", "w5b-sb-market-60x2", Probe::SameBarExplicit60, config(false, 2), Chart::Eth, 120},
+        {"SB", "w5b-sb-pooc-60x2", Probe::SameBarExplicit60, config(true, 2), Chart::Eth, 120},
+        {"SB", "w5b-sb-default-x3", Probe::SameBarDefault3, config(false, 3), Chart::Eth, 48},
+        {"SB", "w5b-sb-pooc-default-x3", Probe::SameBarDefault3, config(true, 3), Chart::Eth, 60},
+        {"SB control", "w5b-sb-market-40x2", Probe::SameBarExplicit40, config(false, 2),
+         Chart::Eth, 80},
+        {"PC", "w5b-pc-seen-size", Probe::SeenSize, config(true, 1), Chart::Eth, 36},
+        {"PC", "w5b-pc-seen-size-parked", Probe::SeenSizeParked, config(true, 1), Chart::Eth, 36},
+        {"PC", "w5b-pc-carried-close", Probe::CarriedClose, config(true, 1), Chart::Eth, 36},
+        {"PC", "w5b-pc-carried-reverse", Probe::CarriedReverse, config(true, 1), Chart::Eth, 51},
+        {"PC", "w5b-pc-bracket-tp", Probe::BracketTakeProfit, config(true, 1), Chart::Eth, 35},
+        {"PC", "w5b-pa-pooc-p50", Probe::AddCells, config(true, 2, 50.0), Chart::Eth, 109},
+        {"PC control", "w5b-pc-carried-none", Probe::CarriedNone, config(true, 1), Chart::Eth, 37},
+        {"PA", "w5b-pa-f-pooc-p50", Probe::AddNyseF, config(true, 2, 50.0), Chart::NyseF, 248},
+        {"PA", "w5b-pa-f-market-p50", Probe::AddNyseF, config(false, 2, 50.0), Chart::NyseF, 245},
+        {"PA control", "w5b-pa-pooc-p40", Probe::AddCells, config(true, 2, 40.0), Chart::Eth,
+         120},
+        {"PA control", "w5b-pa-market-p50", Probe::AddCells, config(false, 2, 50.0), Chart::Eth,
          109},
-        {"PA control", "w5b-pa-pooc-p50-tick", Probe::AddNearFill, config(true, 2, 50.0), false,
-         171},
+        {"PA control", "w5b-pa-pooc-p50-tick", Probe::AddNearFill, config(true, 2, 50.0),
+         Chart::Eth, 171},
+        {"SZ", "w5b-sz-eur-p50-10m", Probe::SizeCells, config(true, 1, 50.0, 1e7),
+         Chart::EurUsd, 504},
+        {"SZ", "w5b-sz-eur-p33-10m", Probe::SizeCells, config(true, 1, 33.0, 1e7),
+         Chart::EurUsd, 504},
+        // The window ends 2025-04-10 00:00 UTC.
+        {"SZ control", "w5b-sz-eur-p100-10m-0410", Probe::SizeCells, config(true, 1, 100.0, 1e7),
+         Chart::EurUsd, 130, 1744243200000LL},
     };
 
     for (const Case& c : cases) {
         std::printf("-- %s: %s\n", c.rule, c.tape);
-        const double lot = c.nyse_f ? kShareLot : kEthLot;
-        const std::int64_t end = c.nyse_f ? f_end : eth_end;
-        const std::vector<Row> tape = tape_trades(c.tape, end, lot);
+        const std::vector<Bar>& bars =
+            c.chart == Chart::Eth ? eth : (c.chart == Chart::NyseF ? f : eur);
+        const double lot = c.chart == Chart::Eth ? kEthLot
+                         : (c.chart == Chart::NyseF ? kShareLot : kEurLot);
+        const double tick = c.chart == Chart::EurUsd ? kEurTick : kTick;
+        const std::int64_t end = c.end_ms != 0 ? c.end_ms : bars.back().timestamp;
+        const std::vector<Row> tape = tape_trades(c.tape, end, lot, tick);
         CHECK(tape.size() == c.closed);
-        const Run lane = run(c.probe, c.lane, c.nyse_f ? f : eth, lot, end);
+        const Run lane = run(c.probe, c.lane, c.chart, bars, lot, tick, end);
         CHECK(lane.error.empty());
         CHECK(lane.trades == tape);
         if (lane.trades != tape) {

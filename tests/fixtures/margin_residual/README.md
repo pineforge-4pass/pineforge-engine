@@ -11,19 +11,23 @@ Each directory is one `lab tv --no-note` export (channel `ws-report-v1`,
 `rangeProof` covered), byte for byte: `strategy.pine`, `tv_trades.csv` (times
 at UTC+8), `metrics.json`, `meta.json`. `metrics.json` `tvTradesCsvHash` is the
 sha256 of `tv_trades.csv`. Every BINANCE:ETHUSDT.P probe runs on 15-minute
-bars, 2025-04-01 .. 2025-05-06, and every NYSE:F probe on 15-minute bars,
-2025-04-15 .. 2025-05-20; none declares `initial_capital`, so each runs on
+bars, 2025-04-01 .. 2025-05-06, every NYSE:F probe on 15-minute bars,
+2025-04-15 .. 2025-05-20, and every OANDA:EURUSD probe on 15-minute bars,
+2025-04-01 .. 2025-04-30 (`w5b-sz-eur-p100-10m-0410` .. 2025-04-10); only the
+OANDA:EURUSD probes declare `initial_capital` (10000000), the others run on
 v6's 100000.
 
 `tests/test_margin_residual_tapes.cpp` replays every tape through the Pine
 adapter under the configuration the generated constructor declares for that
 probe, over the corpus 15m bars of lane W5-ENG-MARGIN-V6
 (`tests/fixtures/margin_v6/bars.inc`, 2025-04-01 00:00 .. 2025-04-17 00:00
-UTC) or the NYSE:F 15m bars in `f15_bars.inc`, with TradingView's lot (0.0001
-ETH, one NYSE:F share) as the `qty_step`, and requires each trade the tape
-closes inside the replayed bars -- entry and exit time, side, price in ticks
-of 0.01, quantity in lots -- to be the engine's. On the lane's base (1ed0a9e4)
-every rule tape below fails there and every control passes.
+UTC), the NYSE:F 15m bars in `f15_bars.inc` or the OANDA:EURUSD 15m bars in
+`eur15_bars.inc`, with TradingView's lot (0.0001 ETH, one NYSE:F share, 0.01
+EUR) as the `qty_step`, and requires each trade the tape closes inside the
+replayed bars (or before its own window's end) -- entry and exit time, side,
+price in ticks (0.01; 0.00001 on OANDA:EURUSD), quantity in lots -- to be the
+engine's. On the commit before each rule's (the lane's base 1ed0a9e4 for SB,
+PC and PA) every rule tape below fails there and every control passes.
 
 ## SB: a flat bar's entries all fill, and their book is called once
 
@@ -77,9 +81,30 @@ one at its close fill) and then called one whole unit of the book; TradingView
 drops it (`tests/test_reversal_admission_float_guard_l4c.cpp` pin E moves with
 it).
 
+## SZ: a percentage of equity rounds the order's money, not the equity
+
+| tape | trades | `strategy()` declares | TradingView | tv_trades.csv sha256 |
+|---|---:|---|---|---|
+| `w5b-sz-eur-p50-10m` | 504 | `initial_capital=10000000`, 50 %, `process_orders_on_close` | every 4 bars from flat a default long filled at the close, flattened two bars later: each quantity is the lot floor of the order's money, 50 % of the equity, rounded to ten significant digits | `6f2cb986c35b2630ee15a74d717e442f9e7248acf462c745f62fedd3442f9cc3` |
+| `w5b-sz-eur-p33-10m` | 504 | the same at 33 % | the same | `9c51410478c7980553752bf185d59a8a11d57f403c4862cbc3c35a6f53426569` |
+| `w5b-sz-eur-p100-10m-0410` | 130 | the same at 100 %, to 2025-04-10 | the control: at 100 % the money is the equity, so both roundings are one number | `333d87b5e7d84396e7804d267536c583f4d5391cc0a754d51b9985f32e10f9ff` |
+
+On ten million the equity carries more decimals than ten significant digits
+keep. The adapter rounded the equity to ten digits before taking the
+percentage, which floors 44 of the 504 quantities at 50 % and 37 at 33 % one
+lot away from TradingView's (no rounding at all misses 8 and 18, and 98 of
+the 130 at 100 %). The population probe `margin-basis-frac` on OANDA:EURUSD
+(0.01 lots, 50 %) is the same shape: replayed from TradingView's first bar,
+every one of its 3352 closed quantities matches under the order's money
+rounded; under the equity rounded 1327 are a lot off and one add is dropped.
+
 ## Bars
 
 `f15_bars.inc` is the NYSE:F 15m chart feed of the lab lane f-15 (evidence
 sha256 `80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32`),
 rows 2025-04-15 13:30 .. 2025-05-19 19:45 UTC copied as text; the lab tv
-window ends before 2025-05-20's session.
+window ends before 2025-05-20's session. `eur15_bars.inc` is the OANDA:EURUSD
+15m chart feed of the lab lane eurusd-15 (evidence sha256
+`f945f31a140aedc64ca24e2ace42b9885a914ce31a2531f74179b703c025a648`), rows
+2025-04-01 00:00 .. 2025-04-29 23:45 UTC copied as text, the first of them
+TradingView's bar_index 0.
