@@ -46,6 +46,15 @@ is neither a calendar floor of the chart's zone nor the chart bar's own time.
   where `time("240")` keeps the symbol's 17:00 grid. A window that opens on
   the chart's grid reads each chart bar's own time.
 
+- **The chart's own `time_close`** on an intraday chart is the same grid on
+  `syminfo.session`: a bar closes one timeframe after its open, the session's
+  last bar at the session's close. NASDAQ:AAPL 60 opens 09:30 .. 15:30 ET and
+  its 15:30 bar closes at 16:00; AAPL 45 steps 45 minutes from 09:30; NSE:NIFTY
+  60 opens 09:15 .. 15:15 IST and its 15:15 bar closes at 15:30 (the
+  `w12-ctclose-*` tapes, replayed through the host's chart accessor by
+  `tests/test_engine_trade_accessors.cpp`,
+  `test_chart_time_close_intraday_session_grid`).
+
 Each directory is one `lab tv --no-note` export (channel `ws-report-v1`),
 byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8),
 `metrics.json` and `meta.json`. The probes alternate two positions and close
@@ -73,3 +82,6 @@ them, on each chart's symbol facts.
 | `w12-tfd4-btc15` | BINANCE:BTCUSDT 15 | 2025-03-06 .. 2025-03-09 | 288 | covered | `929342e4514f41b31af2e75c71536714d80a748abb9b3b6371e1b64109272f53` | `9487e11d54d5` |
 | `w12-tfd4-aapl15` | NASDAQ:AAPL 15 | 2025-03-03 .. 2025-03-08 | 129 | covered | `5a52d190283c0f1df2e304f0e94f0892f525bc97104522bc5116306ffd4848bf` | `9487e11d54d5` |
 | `w12-tfd5-xau15` | OANDA:XAUUSD 15 | 2025-04-01 .. 2025-04-04 | 276 | covered | `278bce8ed01ef9e6db572872a51b70c7e367b26ac1ebbc9699bc8ca829003a6b` | `e6d52af10cb5` |
+| `w12-ctclose-aapl60` | NASDAQ:AAPL 60 | 2025-03-03 .. 2025-03-08 | 34 | covered | `d9fa1ec1ef02880138cdf78d8a525105c284bbf1059942567773d1c5eb5d033f` | `1fcaf7f96681` |
+| `w12-ctclose-aapl45` | NASDAQ:AAPL 45 | 2025-03-03 .. 2025-03-08 | 44 | covered | `ccaa26b1f9b177b0dde0fbf6557cdb6d2ad2df4c749fc991949bdddd5109c04a` | `1fcaf7f96681` |
+| `w12-ctclose-nifty60` | NSE:NIFTY 60 | 2025-03-03 .. 2025-03-08 | 34 | covered | `d068ca353e647ccf9ac7fc4745b43478fcba554d431fc610112b2ac8bf5a6daa` | `1fcaf7f96681` |

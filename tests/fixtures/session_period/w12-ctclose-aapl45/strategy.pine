@@ -1,0 +1,16 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane W12-ENG-TIME): the chart's time_close on an intraday
+// chart whose session opens off the hour. Each bar's readings are spelled in
+// the comment of the exit that fills on the next bar's open: minutes from time
+// to time_close, then the exchange-clock HHMM of time.
+strategy("w12 ctclose", overlay=true, initial_capital=100000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=2, margin_long=0, margin_short=0)
+
+sig = str.tostring((time_close - time) / 60000) + "," + str.tostring(hour(time, syminfo.timezone) * 100 + minute(time, syminfo.timezone))
+
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.close("B", comment=sig)
+else
+    strategy.entry("B", strategy.long)
+    strategy.close("A", comment=sig)

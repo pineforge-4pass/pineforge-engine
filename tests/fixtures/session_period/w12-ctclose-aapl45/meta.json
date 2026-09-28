@@ -1,0 +1,16 @@
+{
+  "title": "w12 ctclose",
+  "slug": "w12-ctclose-aapl45",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T15:14:38.957Z",
+  "chart": {
+    "symbol": "NASDAQ:AAPL",
+    "interval": "45",
+    "from": "2025-03-03",
+    "to": "2025-03-08"
+  },
+  "pine_sha256": "1fcaf7f96681f70de094cc732974ba188d98a9b627aaf9e48927cd3dda128a52",
+  "tv_trades_sha256": "ccaa26b1f9b177b0dde0fbf6557cdb6d2ad2df4c749fc991949bdddd5109c04a",
+  "tv_trades_rows": 88
+}

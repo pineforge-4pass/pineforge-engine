@@ -460,6 +460,62 @@ static void test_chart_time_close_gap_stamps() {
     }
 }
 
+// The chart's time_close on an intraday chart whose session opens off the
+// hour: TradingView builds the chart's bars on the session's own grid, so a
+// bar closes one timeframe after its open, the last one at the session's
+// close (lab tv w12-ctclose-*, tests/fixtures/session_period): NASDAQ:AAPL 60
+// opens 09:30 .. 15:30 ET and its 15:30 bar closes at 16:00; AAPL 45 the
+// same from 09:30 in 45-minute steps; NSE:NIFTY 60 from 09:15 IST, its 15:15
+// bar closing at 15:30. The accessor reads time_close(timeframe.period,
+// syminfo.session), whose intraday bars are the session's (lane
+// W12-ENG-TIME item 2); the epoch grid it read before closed AAPL's 09:30
+// bar at 10:00.
+#ifndef PINEFORGE_SESSION_PERIOD_FIXTURE_DIR
+#error "PINEFORGE_SESSION_PERIOD_FIXTURE_DIR must name tests/fixtures/session_period"
+#endif
+
+static void test_chart_time_close_intraday_session_grid() {
+    std::printf("test_chart_time_close_intraday_session_grid\n");
+    struct Chart {
+        const char* slug;
+        const char* tf;
+        const char* session;
+        const char* timezone;
+    };
+    static const Chart charts[] = {
+        {"w12-ctclose-aapl60", "60", "0930-1600", "America/New_York"},
+        {"w12-ctclose-aapl45", "45", "0930-1600", "America/New_York"},
+        {"w12-ctclose-nifty60", "60", "0915-1530", "Asia/Kolkata"},
+    };
+    for (const Chart& chart : charts) {
+        bool ok = true;
+        const auto readings =
+            exit_comment_tape::read(PINEFORGE_SESSION_PERIOD_FIXTURE_DIR, chart.slug, ok);
+        CHECK(ok);
+        ZeroPriceProbe p;
+        p.set_script_tf(chart.tf);
+        p.set_syminfo_session(chart.session);
+        p.set_syminfo_timezone(chart.timezone);
+        int wrong = 0;
+        for (const auto& reading : readings) {
+            const auto spelled = exit_comment_tape::split(reading.signal, ',');
+            if (spelled.empty()) { ++wrong; continue; }
+            const long long tv = std::atoll(spelled[0].c_str()) * 60000LL;
+            p.set_current_bar_timestamp(reading.bar_ms);
+            const int64_t tc = p.pub_time_close();
+            const long long engine = is_na(tc) ? -1 : static_cast<long long>(tc - reading.bar_ms);
+            if (engine == tv) continue;
+            if (++wrong <= 5) {
+                std::printf("  %s bar %lld: tv %lld engine %lld\n", chart.slug,
+                            static_cast<long long>(reading.bar_ms), tv, engine);
+            }
+        }
+        std::printf("  %s: %zu bars, %d differ\n", chart.slug, readings.size(), wrong);
+        CHECK(!readings.empty());
+        CHECK(wrong == 0);
+    }
+}
+
 // A D / W bar a feed stamps at its session's close -- 16:00 ET on an equity,
 // 16:00 CT on CME's 1700-1600 -- is the bar of the session that closes there
 // (lane W12-ENG-TIME; W11-ENG-TIME-COLOR's reviewer): its time_close is its
@@ -599,6 +655,7 @@ int main() {
     test_chart_time_close_gap_stamps();
     test_chart_time_close_dst_tapes();
     test_chart_time_close_close_stamps();
+    test_chart_time_close_intraday_session_grid();
 
     std::printf("\nengine_trade_accessors: %d passed, %d failed\n",
                 tests_passed, tests_failed);
