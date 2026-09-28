@@ -32,7 +32,7 @@ namespace pine_color {
     // 100 - a * 100 / 255 rounded to the nearest whole number, so a whole t
     // reads back as itself (w11-color-v6-eth15's sweep; w11-color-alpha-eth15
     // reads all 256 bytes). A t outside 0 .. 100 stores the nearer end, and
-    // an na t is 100, as a missing one is.
+    // a NaN t is 100, what the transpiler passes for an na one.
     inline int64_t new_color(int64_t c, double transp) {
         const double opacity = std::floor(255.0 * (100.0 - transp) / 100.0 + 0.5);
         const int64_t alpha = !(opacity > 0.0) ? 0 : opacity >= 255.0 ? 255
