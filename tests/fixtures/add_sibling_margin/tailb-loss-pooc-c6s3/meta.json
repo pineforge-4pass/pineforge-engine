@@ -1,0 +1,16 @@
+{
+  "title": "tailb-loss-pooc-c6s3",
+  "slug": "tailb-loss-pooc-c6s3",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:27:05.081Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "2445653a23abe66fc67747f57fd76dc2d264bc5efdf6382eee50e7dbbce042a9",
+  "tv_trades_sha256": "885fada2be11a5b810125c5b6c24d000a127b295c4d1f5b3ce7933d98aa00dbc",
+  "tv_trades_rows": 40
+}

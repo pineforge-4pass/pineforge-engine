@@ -13990,15 +13990,24 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         // such same-open fills, so only they leave the requirement. An entry
         // the open trades already hold at the pyramiding cap is TradingView's
         // to refuse at this check (H-MEASURE's first-eligible-point count),
-        // so it keeps the whole-book requirement.
+        // so it keeps the whole-book requirement. Under
+        // process_orders_on_close the adds a bar placed fill at its close and
+        // are judged alike, each beside the position held when it was placed
+        // (lab tv tapes tests/fixtures/add_sibling_margin tailb-adds-pooc-*;
+        // lane TAIL-B).
         const auto placed_side = static_cast<PositionSide>(source.projection_position_side);
         const double placed_held = source.projection_affordability_held_qty;
+        const bool same_point_as_placed =
+            projection_bar_index(view.cursor.point) == source.projection_created_bar + 1
+            || (config_.process_orders_on_close && !config_.calc_on_order_fills
+                && projection_bar_index(view.cursor.point) == source.projection_created_bar
+                && view.cursor.point.path_phase == NativePathPhase::Close);
         if (same_side
             && std::holds_alternative<native_order::Market>(view.definition->request.trigger)
             && (placed_side == PositionSide::FLAT
                 || (placed_side == PositionSide::LONG) == source.is_long)
             && std::isfinite(placed_held) && placed_held >= 0.0
-            && projection_bar_index(view.cursor.point) == source.projection_created_bar + 1
+            && same_point_as_placed
             && std::abs(physical.signed_units) > placed_held + 1e-10
             && config_.pyramiding > 0
             && physical.lot_count < static_cast<std::size_t>(config_.pyramiding)) {
@@ -15368,6 +15377,19 @@ bool market_entry_row(const PlacementSnapshot& row) noexcept {
         && !finite_positive(row.exit_levels.trail_offset);
 }
 
+// An add: an opening MARKET entry placed while the book held its own side.
+bool add_entry_row(const PlacementSnapshot& row) noexcept {
+    return row.family == PineOrderFamily::Entry && row.opening && market_entry_row(row)
+        && row.projection_position_side
+            == static_cast<std::int32_t>(row.is_long ? PositionSide::LONG : PositionSide::SHORT);
+}
+
+// Two adds one script bar placed on the same side.
+bool add_siblings(const PlacementSnapshot& a, const PlacementSnapshot& b) noexcept {
+    return add_entry_row(a) && add_entry_row(b) && a.is_long == b.is_long
+        && a.placement_script_open_ms == b.placement_script_open_ms;
+}
+
 }  // namespace
 
 // The script bar every live lot of the book was placed on, when each is an
@@ -15446,6 +15468,47 @@ bool PineExecutionAdapter::flat_sibling_fill_follows(
                 && row.placement_script_open_ms == filled.placement_script_open_ms
                 && market_entry_row(row);
         });
+}
+
+// Whether another add of `filled`'s bar -- a MARKET entry placed, as `filled`
+// was, while the book held their side -- still waits to fill at the point
+// `filled` just filled at: TradingView margins the grown book once they have
+// all filled (lab tv tapes tests/fixtures/add_sibling_margin; lane TAIL-B).
+bool PineExecutionAdapter::add_sibling_fill_follows(
+        const PlacementSnapshot& filled, const native_order::RequestHandle& filled_handle) const {
+    if (!add_entry_row(filled)) return false;
+    const auto position = detail::run_position(require_host());
+    if (config_.pyramiding > 0
+        && position.lot_count >= static_cast<std::size_t>(config_.pyramiding)) {
+        return false;
+    }
+    return std::any_of(live_handles_.begin(), live_handles_.end(),
+        [&](const native_order::RequestHandle& handle) {
+            if (handle == filled_handle) return false;
+            const auto found = placement_.find(handle.incarnation);
+            return found != placement_.end() && add_siblings(filled, found->second);
+        });
+}
+
+// The book's live lots that the adds the script bar `placed` placed on the
+// book's side opened.
+std::size_t PineExecutionAdapter::add_sibling_lots(std::int64_t placed) const {
+    const auto position = detail::run_position(require_host());
+    if (position.signed_units == 0.0) return 0;
+    std::size_t count = 0;
+    for (const auto& cohort : cohorts_by_id_) {
+        for (const auto& [incarnation, units] : cohort.second.live_units_by_origin) {
+            if (!(units > 0.0)) continue;
+            const auto found = placement_.find(incarnation);
+            if (found == placement_.end()) continue;
+            const auto& lot = found->second;
+            if (add_entry_row(lot) && lot.is_long == (position.signed_units > 0.0)
+                && lot.placement_script_open_ms == placed) {
+                ++count;
+            }
+        }
+    }
+    return count;
 }
 
 // Whether TradingView follows a margin call of `called_units` on the book as it
@@ -17758,11 +17821,22 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         && !context.driver_statistics.intrabar_path_enabled && context.sub_index == 0
         && prior_policy_bar_valid && position_open_phase_ == NativePathPhase::Close
         && position_open_script_bar_ == prior_policy_bar.timestamp;
-    if (long_full_margin && pooc_opened_at_prior_close) {
+    // A book two or more adds of the previous bar grew at its close is called
+    // at this open too, sized at that close, fees or none, long or short (lab
+    // tv tapes tests/fixtures/add_sibling_margin tailb-adds-pooc-*; lane
+    // TAIL-B): on_applied took no call at their fills.
+    const bool pooc_adds_at_prior_close = config_.process_orders_on_close
+        && !config_.calc_on_order_fills
+        && !context.driver_statistics.intrabar_path_enabled && context.sub_index == 0
+        && prior_policy_bar_valid && !pooc_opened_at_prior_close
+        && finite_positive(prior_policy_bar.close)
+        && add_sibling_lots(prior_policy_bar.timestamp) >= 2;
+    if (long_full_margin && (pooc_opened_at_prior_close || pooc_adds_at_prior_close)) {
         const double opening_mark = nearest_tick(bar.open, staged_.syminfo.mintick);
-        if (config_.commission_value != 0.0) {
+        if (config_.commission_value != 0.0 && pooc_opened_at_prior_close) {
             (void)submit_margin_call_slice(opening_mark, context);
-        } else if (flat_sibling_placement(2) && finite_positive(prior_policy_bar.close)) {
+        } else if ((pooc_adds_at_prior_close || flat_sibling_placement(2))
+                   && finite_positive(prior_policy_bar.close)) {
             const double at_close_units = source_margin_units(
                 source_margin_money(prior_policy_bar.close, context.sub_bar_open_ms), false);
             const auto at_open = source_margin_money(opening_mark, context.sub_bar_open_ms);
@@ -17865,8 +17939,9 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         if (config_.process_orders_on_close && !config_.calc_on_order_fills
             && opening_position.signed_units < 0.0 && prior_policy_bar_valid
             && context.sub_index == 0 && !context.driver_statistics.intrabar_path_enabled
-            && position_open_phase_ == NativePathPhase::Close
-            && position_open_script_bar_ == prior_policy_bar.timestamp
+            && ((position_open_phase_ == NativePathPhase::Close
+                 && position_open_script_bar_ == prior_policy_bar.timestamp)
+                || pooc_adds_at_prior_close)
             && finite_positive(prior_policy_bar.close)
             && !source_margin_rounded_tie_veto()) {
             const double at_close_units = source_margin_units(
@@ -19927,6 +20002,27 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         const bool sibling_fill_follows = sibling_book
             || opened_position.lot_count == 1
             ? flat_sibling_fill_follows(*placement_snapshot, event.handle()) : false;
+        // So is a book the adds one bar placed on it grew: once the last of
+        // them has filled, at that fill -- or under process_orders_on_close
+        // at the next open, sized at the close (on_bar_open) -- four times
+        // the lot-floored shortfall of the whole book, not a call after
+        // each add (lab tv tapes tests/fixtures/add_sibling_margin; lane
+        // TAIL-B).
+        const bool placed_add = !sibling_book && add_entry_row(*placement_snapshot);
+        const bool add_fill_follows = placed_add
+            && add_sibling_fill_follows(*placement_snapshot, event.handle());
+        const std::size_t filled_adds = placed_add && !add_fill_follows
+            ? add_sibling_lots(placement_snapshot->placement_script_open_ms) : 0;
+        const bool pooc_add_book = placed_add && config_.process_orders_on_close
+            && !config_.calc_on_order_fills
+            && !context.driver_statistics.intrabar_path_enabled
+            && context.coordinate.path_phase == NativePathPhase::Close
+            && (add_fill_follows || filled_adds >= 2);
+        // The last of a bar's market adds: the grown book's call is taken at
+        // this fill, a commissioned explicit short's too (its print, as a
+        // slipped market short's), not at a later path point.
+        const bool adds_book_last = placed_add && !config_.process_orders_on_close
+            && filled_adds >= 2;
         const bool zero_fee_true_flat_default = !sibling_book
             && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
             && std::abs(config_.default_qty_value - 100.0) < 1e-12
@@ -19938,8 +20034,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             && std::holds_alternative<native_order::Market>(event.request().trigger)
             && placement_snapshot->sizing.price == event.resolved_price;
         if ((full_margin_opening || placement_snapshot->has_full_entry_bracket)
-            && !commissioned_short_opening && !preopen_margin_already_scheduled
-            && stable_opening_fx) {
+            && (!commissioned_short_opening || adds_book_last)
+            && !preopen_margin_already_scheduled && stable_opening_fx) {
             const bool long_full_margin = opened_position.signed_units > 0.0
                 && std::abs(config_.margin_long - 100.0) < 1e-12;
             const bool prearmed_entry_bar_margin = std::any_of(
@@ -20006,6 +20102,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             // floating ledger rounds its fill cost differently.
             if (!zero_fee_true_flat_default && !called_at_next_open
                 && !short_preempted_by_priced_exit && !sibling_fill_follows
+                && !add_fill_follows && !pooc_add_book
                 && !flat_dual_stop_member && !prearmed_entry_bar_margin
                 && !(long_full_margin && !sibling_book
                      && std::abs(staged_.syminfo.pointvalue - 1.0) > 1e-12)

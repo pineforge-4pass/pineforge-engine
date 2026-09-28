@@ -1,0 +1,35 @@
+//@version=6
+// Lane TAIL-B synthetic probe: several same-side MARKET adds placed on one bar
+// on top of a held long, each fitting the equity beside the held position
+// alone, together over it. Which adds fill, and how is the grown book
+// margin-called? BINANCE:ETHUSDT.P 15m, fixed UTC cells, 10000 of capital;
+// every quantity is money / close, floored to 0.0001.
+strategy("tailb-loss-pooc-c6s3", overlay=true, pyramiding=200, initial_capital=10000,
+     margin_long=100, margin_short=100, process_orders_on_close=true,
+     commission_type=strategy.commission.percent, commission_value=0.06, slippage=3)
+
+qOf(float money) => math.floor(money / close * 10000) / 10000
+addN(int n) =>
+    float q = qOf(700)
+    for i = 1 to n
+        strategy.entry("A" + str.tostring(i), strategy.long, qty=q, comment="A" + str.tostring(i))
+
+at(int dd, int h, int m) => time == timestamp("UTC", 2025, 4, dd, h, m)
+// L1: a seed of 9000, a 15 % move, 3 adds. L2: a seed, a 7 % move, 5 adds.
+// L3: four seeds of 2250, a move, 3 adds. L4: a seed, 3 adds two bars later.
+if at(6, 6, 0) or at(8, 12, 0) or at(11, 6, 0)
+    strategy.entry("S", strategy.long, qty=qOf(9000), comment="S")
+if at(10, 0, 0)
+    strategy.entry("S1", strategy.long, qty=qOf(2250), comment="S1")
+if at(10, 0, 15)
+    strategy.entry("S2", strategy.long, qty=qOf(2250), comment="S2")
+if at(10, 0, 30)
+    strategy.entry("S3", strategy.long, qty=qOf(2250), comment="S3")
+if at(10, 0, 45)
+    strategy.entry("S4", strategy.long, qty=qOf(2250), comment="S4")
+if at(7, 6, 0) or at(10, 18, 0) or at(11, 6, 30)
+    addN(3)
+if at(9, 6, 0)
+    addN(5)
+if at(7, 7, 0) or at(9, 7, 0) or at(10, 19, 0) or at(11, 7, 30)
+    strategy.close_all(comment="cleanup")

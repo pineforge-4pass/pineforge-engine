@@ -978,6 +978,10 @@ list(APPEND TEST_SOURCES test_slipped_short_tapes)
 # and orders sized at placement that cross zero (tests/fixtures/margin_opposite
 # and tests/fixtures/slipped_short), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_margin_opposite_tapes)
+# Lane TAIL-B: several MARKET adds one bar places on a held position, their
+# admission and the grown book's margin calls (tests/fixtures/add_sibling_margin),
+# on TradingView's tapes.
+list(APPEND TEST_SOURCES test_add_sibling_margin_tapes)
 # Lane INT28-FIX (RC): a calc_on_order_fills recalculation reads the whole
 # bar's finer request.security values (tests/fixtures/coof_recalc_security),
 # on TradingView's tape.
@@ -2608,6 +2612,12 @@ if(TARGET test_margin_opposite_tapes)
     target_compile_definitions(test_margin_opposite_tapes PRIVATE
         PINEFORGE_MARGIN_OPPOSITE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_opposite"
         PINEFORGE_SLIPPED_SHORT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/slipped_short")
+endif()
+
+# Lane TAIL-B reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_add_sibling_margin_tapes)
+    target_compile_definitions(test_add_sibling_margin_tapes PRIVATE
+        PINEFORGE_ADD_SIBLING_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/add_sibling_margin")
 endif()
 
 # Lane INT28-FIX (RC) reads its TradingView tape from the fixture tree;

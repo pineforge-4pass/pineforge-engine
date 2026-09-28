@@ -1775,6 +1775,9 @@ private:
                            NativePathPhase phase) const;
     bool flat_sibling_fill_follows(const PlacementSnapshot&,
                                    const native_order::RequestHandle&) const;
+    bool add_sibling_fill_follows(const PlacementSnapshot&,
+                                  const native_order::RequestHandle&) const;
+    std::size_t add_sibling_lots(std::int64_t placed) const;
     bool whole_unit_follow_up_due(double called_units, double mark) const;
     void follow_one_unit_margin_call(double called_units, double fill, double current,
                                      const NativeDecisionContext&);

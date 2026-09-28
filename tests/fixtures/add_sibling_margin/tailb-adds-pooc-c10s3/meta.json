@@ -1,0 +1,16 @@
+{
+  "title": "tailb-adds-pooc-c10s3",
+  "slug": "tailb-adds-pooc-c10s3",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:26:50.367Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "5ccf6e7f50a4caff8fe6280d842d5f42e713a38dd86f22e5704345b75acb525f",
+  "tv_trades_sha256": "e59baddab49ba40f94763796411a1a31c3f0a4a57f38990e7e61db66b9faf59a",
+  "tv_trades_rows": 194
+}

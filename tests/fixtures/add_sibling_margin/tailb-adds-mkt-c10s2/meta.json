@@ -1,0 +1,16 @@
+{
+  "title": "tailb-adds-mkt-c10s2",
+  "slug": "tailb-adds-mkt-c10s2",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:26:34.495Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "cf0f6663ad2a56c31ddd1efe4ef8166d9d42e1cdd2c14ef035846fbe0f900036",
+  "tv_trades_sha256": "2f77209860e41adff58d852c9e0d66e468f3ff6e2700966cba2c8a9594a29c67",
+  "tv_trades_rows": 194
+}

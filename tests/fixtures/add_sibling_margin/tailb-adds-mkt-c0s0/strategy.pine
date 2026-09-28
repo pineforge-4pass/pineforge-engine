@@ -1,0 +1,39 @@
+//@version=6
+// Lane TAIL-B synthetic probe: several same-side MARKET adds placed on one bar
+// on top of a held long, each fitting the equity beside the held position
+// alone, together over it. Which adds fill, and how is the grown book
+// margin-called? BINANCE:ETHUSDT.P 15m, fixed UTC cells, 10000 of capital;
+// every quantity is money / close, floored to 0.0001.
+strategy("tailb-adds-mkt-c0s0", overlay=true, pyramiding=200, initial_capital=10000,
+     margin_long=100, margin_short=100, process_orders_on_close=false,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0)
+
+qOf(float money) => math.floor(money / close * 10000) / 10000
+addN(int n) =>
+    float q = qOf(700)
+    for i = 1 to n
+        strategy.entry("A" + str.tostring(i), strategy.long, qty=q, comment="A" + str.tostring(i))
+
+// Every 3 hours from 2025-04-02 00:00 UTC, forty cells. From flat a seed of
+// 9000 (the fifth kind: two seeds of 4500, a bar apart); two bars later 1, 2,
+// 3 or 5 adds of 700 each (the fifth kind: 3), placed on one bar; flattened
+// 75 minutes into the cell.
+int t0 = timestamp("UTC", 2025, 4, 2, 0, 0)
+int step = 3 * 60 * 60 * 1000
+int m15 = 15 * 60 * 1000
+int rel = time - t0
+bool inRange = rel >= 0 and rel < 40 * step
+int phase = inRange ? rel % step : -1
+int kind = inRange ? int(math.floor(rel / step)) % 5 : -1
+int adds = kind == 0 ? 1 : kind == 1 ? 2 : kind == 2 ? 3 : kind == 3 ? 5 : 3
+if phase == 0 and strategy.position_size == 0
+    if kind == 4
+        strategy.entry("S1", strategy.long, qty=qOf(4500), comment="S1")
+    else
+        strategy.entry("S", strategy.long, qty=qOf(9000), comment="S")
+if phase == m15 and kind == 4
+    strategy.entry("S2", strategy.long, qty=qOf(4500), comment="S2")
+if phase == 2 * m15
+    addN(adds)
+if phase == 5 * m15
+    strategy.close_all(comment="cleanup")

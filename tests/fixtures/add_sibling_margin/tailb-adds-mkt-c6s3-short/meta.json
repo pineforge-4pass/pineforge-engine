@@ -1,0 +1,16 @@
+{
+  "title": "tailb-adds-mkt-c6s3-short",
+  "slug": "tailb-adds-mkt-c6s3-short",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:26:38.841Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "2bfa3a403df69f46cece9e996bd3d69b92bae77b4a3f22350465a7bbfac50821",
+  "tv_trades_sha256": "7ecd1ec485190a227c794c86f0830983edc51bb54a521866306eb8b3f97b050d",
+  "tv_trades_rows": 390
+}

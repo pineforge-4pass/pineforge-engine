@@ -1,0 +1,16 @@
+{
+  "title": "tailb-loss-mkt-c10s2",
+  "slug": "tailb-loss-mkt-c10s2",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:27:01.754Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "5dcc01b2f08ce920a8c052cbb8ed78c5480d9d7d2ed3c86c70726e2a29f15431",
+  "tv_trades_sha256": "d48e337582654c9ffa5696e643f54c8860db9504cebd66a5d01059a881d3f19b",
+  "tv_trades_rows": 40
+}
