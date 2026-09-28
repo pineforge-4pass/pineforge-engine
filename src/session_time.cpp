@@ -1458,8 +1458,38 @@ static int64_t first_traded_day_stamp_ms(int64_t stamp, const std::string& tz,
     return stamp;
 }
 
+// The symbol's D bar when its session day lasts 24 hours on the wall clock --
+// 24x7 or empty, or one window whose end is its start (1700-1700,
+// 0000-0000) -- in a zone with daylight saving: the day from one wall-clock
+// open to the next, 23 or 25 hours across a switch, where the runtime's
+// session day is its open plus 24 hours (lab tv w12-tclose-cap1d and
+// w12-tzscan-*, tests/fixtures/dst_day_close: CAPITALCOM:BTCUSD, 1700-1700 New
+// York every day, closes its Saturday 2025-03-08 17:00 EST bar at Sunday
+// 17:00 EDT; ACTIVTRADES:BTCUSD, Europe/Amsterdam, its Sunday 2025-03-30 00:00
+// CET bar at Monday 00:00 CEST). False for any other session, a zone
+// without daylight saving's switches (UTC), or a day the session's list
+// leaves out: the runtime's day stands there.
+static bool wall_clock_day_bar(int64_t bar_ms, const std::string& tz,
+                               const std::string& session, int64_t& open_ms,
+                               int64_t& close_ms) {
+    if (utc_zone(tz))
+        return false;
+    const std::string spelled = session.empty() ? std::string("24x7") : session;
+    ArgSession s;
+    if (!read_arg_session(spelled, s) || s.windows.size() != 1
+        || s.windows[0].length != 24 * 60) {
+        return false;
+    }
+    return session_argument_bar(bar_ms, spelled, tz, CalendarPeriod::DAY, false, open_ms,
+                                close_ms);
+}
+
 static int64_t chart_period_close_ms(int64_t bar_ms, const std::string& tz,
                                      const std::string& session, CalendarPeriod period) {
+    int64_t day_open = 0;
+    int64_t day_close = 0;
+    if (period == CalendarPeriod::DAY && wall_clock_day_bar(bar_ms, tz, session, day_open, day_close))
+        return day_close;
     const int64_t covered = session_covered_instant_ms(bar_ms, tz, session);
     int64_t close = session_period_last_traded_close_ms(covered, tz, session, period);
     if (close <= bar_ms) {
@@ -1495,6 +1525,12 @@ int64_t timeframe_time(int64_t bar_ms,
 
     const CalendarPeriod cp = calendar_period_for(tf);
     if (symbol_clock_applies(sess, cp)) {
+        int64_t day_open = 0;
+        int64_t day_close = 0;
+        if (cp == CalendarPeriod::DAY
+            && wall_clock_day_bar(bar_ms, sym_tz, sym_session, day_open, day_close)) {
+            return day_open;
+        }
         const int64_t open = session_period_open_ms(bar_ms, sym_tz, sym_session, cp);
         return cp == CalendarPeriod::MONTH ? first_traded_day_stamp_ms(open, sym_tz, sym_session)
                                            : open;
@@ -1532,6 +1568,12 @@ int64_t timeframe_time_close(int64_t bar_ms,
         // bar's own reading (XAUUSD's week on Friday 17:00 ET).
         if (tf_is_daily_or_higher(chart_tf))
             return chart_period_close_ms(bar_ms, sym_tz, sym_session, cp);
+        int64_t day_open = 0;
+        int64_t day_close = 0;
+        if (cp == CalendarPeriod::DAY
+            && wall_clock_day_bar(bar_ms, sym_tz, sym_session, day_open, day_close)) {
+            return day_close;
+        }
         const int64_t close = session_period_close_ms(bar_ms, sym_tz, sym_session, cp);
         return cp == CalendarPeriod::MONTH ? first_traded_day_stamp_ms(close, sym_tz, sym_session)
                                            : close;

@@ -460,6 +460,85 @@ static void test_chart_time_close_gap_stamps() {
     }
 }
 
+// A 24-hour session that trades through a daylight-saving switch closes its
+// D bar at the next day's same wall-clock time, 23 or 25 hours on, not at
+// its open plus 24 hours (lane W12-ENG-TIME, tests/fixtures/dst_day_close):
+// CAPITALCOM:BTCUSD (1700-1700 America/New_York, every day) closes its
+// Saturday 2025-03-08 17:00 EST bar at Sunday 17:00 EDT, and
+// ACTIVTRADES:BTCUSD (Europe/Amsterdam) its Sunday 2025-03-30 00:00 CET bar
+// at Monday 00:00 CEST. ACTIVTRADES closes Friday at 23:00 and opens
+// Saturday at 09:00, a venue schedule no session string here spells, so its
+// Friday and Saturday bars are not read.
+#ifndef PINEFORGE_DST_DAY_CLOSE_FIXTURE_DIR
+#error "PINEFORGE_DST_DAY_CLOSE_FIXTURE_DIR must name tests/fixtures/dst_day_close"
+#endif
+
+static void test_chart_time_close_dst_tapes() {
+    std::printf("test_chart_time_close_dst_tapes\n");
+    struct Chart {
+        const char* slug;
+        const char* session;
+        const char* timezone;
+        std::size_t field;     // the comma field holding time_close - time
+        bool skip_fri_sat;     // the venue's own Friday / Saturday schedule
+        int dst_days;          // readings 23 or 25 hours long
+    };
+    static const Chart charts[] = {
+        {"w12-tclose-cap1d", "1700-1700", "America/New_York", 0, false, 1},
+        {"w12-tzscan-capitalcom-btcusd", "1700-1700", "America/New_York", 1, false, 1},
+        {"w12-tzscan-activtrades-btcusd", "24x7", "Europe/Amsterdam", 1, true, 1},
+    };
+    for (const Chart& chart : charts) {
+        bool ok = true;
+        const auto readings =
+            exit_comment_tape::read(PINEFORGE_DST_DAY_CLOSE_FIXTURE_DIR, chart.slug, ok);
+        CHECK(ok);
+        ZeroPriceProbe p;
+        p.set_script_tf("1D");
+        p.set_syminfo_session(chart.session);
+        p.set_syminfo_timezone(chart.timezone);
+        int compared = 0;
+        int wrong = 0;
+        int dst = 0;
+        for (const auto& reading : readings) {
+            const auto spelled = exit_comment_tape::split(reading.signal, ',');
+            if (spelled.size() <= chart.field) { ++wrong; continue; }
+            if (chart.skip_fri_sat && spelled.size() > 2
+                && (spelled[2] == "6" || spelled[2] == "7")) {
+                continue;
+            }
+            const long long tv = std::atoll(spelled[chart.field].c_str());
+            p.set_current_bar_timestamp(reading.bar_ms);
+            const int64_t tc = p.pub_time_close();
+            const long long engine = is_na(tc) ? -1 : static_cast<long long>(tc - reading.bar_ms);
+            ++compared;
+            if (tv != 86400000LL) ++dst;
+            if (engine == tv) continue;
+            if (++wrong <= 5) {
+                std::printf("  %s bar %lld: tv %lld engine %lld\n", chart.slug,
+                            static_cast<long long>(reading.bar_ms), tv, engine);
+            }
+        }
+        std::printf("  %s: %d bars, %d across a switch, %d differ\n", chart.slug, compared, dst,
+                    wrong);
+        CHECK(compared > 0);
+        CHECK(dst == chart.dst_days);
+        CHECK(wrong == 0);
+    }
+    // 24x7 in New York, the rule where no TradingView symbol reaches (lane
+    // W11-ENG-TIME-COLOR's reviewer): the 2025-03-09 day opens at its 00:00
+    // EST (05:00Z) and closes at Monday's 00:00 EDT (04:00Z), 23 hours on;
+    // the day before keeps 24.
+    ZeroPriceProbe ny;
+    ny.set_script_tf("1D");
+    ny.set_syminfo_session("24x7");
+    ny.set_syminfo_timezone("America/New_York");
+    ny.set_current_bar_timestamp(1741496400000LL);   // 2025-03-09 05:00Z
+    CHECK(ny.pub_time_close() == 1741579200000LL);    // 2025-03-10 04:00Z
+    ny.set_current_bar_timestamp(1741410000000LL);   // 2025-03-08 05:00Z
+    CHECK(ny.pub_time_close() == 1741496400000LL);    // 2025-03-09 05:00Z
+}
+
 int main() {
     test_open_trade_accessors_flat_then_pyramid();
     test_open_trade_short_path();
@@ -467,6 +546,7 @@ int main() {
     test_engine_core_helpers();
     test_chart_time_close_tapes();
     test_chart_time_close_gap_stamps();
+    test_chart_time_close_dst_tapes();
 
     std::printf("\nengine_trade_accessors: %d passed, %d failed\n",
                 tests_passed, tests_failed);

@@ -1,0 +1,16 @@
+{
+  "title": "w12 tclose",
+  "slug": "w12-tclose-cap1d",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T13:03:26.707Z",
+  "chart": {
+    "symbol": "CAPITALCOM:BTCUSD",
+    "interval": "1D",
+    "from": "2025-01-01",
+    "to": "2025-07-01"
+  },
+  "pine_sha256": "0143b9b1dfc3b120939c7f5b4e735fed053c13f7c1dbf04321646e68b7ac1c68",
+  "tv_trades_sha256": "f5eaabcfef47c45469128b11019e361691f2ae010b686c4f4821833d8f371b5b",
+  "tv_trades_rows": 360
+}

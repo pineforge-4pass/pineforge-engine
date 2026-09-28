@@ -1,0 +1,16 @@
+{
+  "title": "w12 tzscan",
+  "slug": "w12-tzscan-capitalcom-btcusd",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T12:57:04.615Z",
+  "chart": {
+    "symbol": "CAPITALCOM:BTCUSD",
+    "interval": "1D",
+    "from": "2025-03-01",
+    "to": "2025-04-05"
+  },
+  "pine_sha256": "f49a41362632784962eb5c8fc34a200bdc2d42209dcb978219d2b65c9b34fc75",
+  "tv_trades_sha256": "8b0dcb3fae0b5ff665aaf63b39febb256915d728b089f36303fd04f7cf679285",
+  "tv_trades_rows": 68
+}

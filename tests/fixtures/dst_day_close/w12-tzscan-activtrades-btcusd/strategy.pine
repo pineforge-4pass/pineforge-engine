@@ -1,0 +1,16 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane W12-ENG-TIME): the symbol's exchange timezone and each
+// daily bar's close, spelled in the comment of the exit that fills on the next
+// bar's open: syminfo.timezone, time_close - time in milliseconds, the
+// exchange-clock weekday and HHMM of time.
+strategy("w12 tzscan", overlay=true, initial_capital=100000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=2, margin_long=0, margin_short=0)
+
+sig = syminfo.timezone + "," + str.tostring(time_close - time) + "," + str.tostring(dayofweek(time, syminfo.timezone)) + "," + str.tostring(hour(time, syminfo.timezone) * 100 + minute(time, syminfo.timezone))
+
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.close("B", comment=sig)
+else
+    strategy.entry("B", strategy.long)
+    strategy.close("A", comment=sig)

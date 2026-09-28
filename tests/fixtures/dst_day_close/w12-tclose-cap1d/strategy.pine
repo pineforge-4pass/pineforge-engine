@@ -1,0 +1,18 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane W12-ENG-TIME): the chart's time_close beside the
+// function forms time_close("D"/"W"/"M"), in milliseconds (integers, so a close
+// 1 ms short of a boundary shows): time_close - time, then for each of D, W, M
+// the function's close minus its own open and minus the bar's time; spelled in
+// the comment of the exit that fills on the next bar's open ("n" for na).
+strategy("w12 tclose", overlay=true, initial_capital=100000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=2, margin_long=0, margin_short=0)
+
+mn(int a, int b) => na(a) or na(b) ? "n" : str.tostring(a - b)
+sig = mn(time_close, time) + "," + mn(time_close("D"), time("D")) + "," + mn(time_close("D"), time) + "," + mn(time_close("W"), time("W")) + "," + mn(time_close("W"), time) + "," + mn(time_close("M"), time("M")) + "," + mn(time_close("M"), time)
+
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.close("B", comment=sig)
+else
+    strategy.entry("B", strategy.long)
+    strategy.close("A", comment=sig)

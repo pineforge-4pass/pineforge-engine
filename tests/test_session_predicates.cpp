@@ -681,28 +681,42 @@ static void test_session_period_tapes() {
 #ifndef PINEFORGE_TIME_CLOSE_FUNCTION_FIXTURE_DIR
 #error "PINEFORGE_TIME_CLOSE_FUNCTION_FIXTURE_DIR must name tests/fixtures/time_close_function"
 #endif
+#ifndef PINEFORGE_DST_DAY_CLOSE_FIXTURE_DIR
+#error "PINEFORGE_DST_DAY_CLOSE_FIXTURE_DIR must name tests/fixtures/dst_day_close"
+#endif
 
 static void test_time_close_function_tapes() {
     std::printf("test_time_close_function_tapes\n");
     struct Tape {
+        const char* dir;
         ChartFacts chart;
         int holiday_readings;  // W / M readings of a period an exchange holiday shortens
+        int periods;           // how many of D, W, M the tape is read for
     };
+    // CAPITALCOM:BTCUSD trades 1700-1700 every day, and a Saturday or Sunday
+    // trading date is none on the symbol clock's weekday rule
+    // (session_period_last_traded_close_ms), so only its D is read here.
     static const Tape tapes[] = {
-        {{"w12-tclose-btc15", "15", "UTC", "24x7"}, 0},
-        {{"w12-tclose-xau15", "15", "America/New_York", "1800-1700"}, 0},
-        {{"w12-tclose-aapl15", "15", "America/New_York", "0930-1600"}, 0},
-        {{"w12-tclose-eur15", "15", "America/New_York", "1700-1700"}, 0},
-        {{"w12-tclose-btc1d", "1D", "UTC", "24x7"}, 0},
-        {{"w12-tclose-xau1d", "1D", "America/New_York", "1800-1700"}, 0},
-        {{"w12-tclose-aapl1d", "1D", "America/New_York", "0930-1600"}, 39},
+        {PINEFORGE_TIME_CLOSE_FUNCTION_FIXTURE_DIR, {"w12-tclose-btc15", "15", "UTC", "24x7"}, 0, 3},
+        {PINEFORGE_TIME_CLOSE_FUNCTION_FIXTURE_DIR,
+         {"w12-tclose-xau15", "15", "America/New_York", "1800-1700"}, 0, 3},
+        {PINEFORGE_TIME_CLOSE_FUNCTION_FIXTURE_DIR,
+         {"w12-tclose-aapl15", "15", "America/New_York", "0930-1600"}, 0, 3},
+        {PINEFORGE_TIME_CLOSE_FUNCTION_FIXTURE_DIR,
+         {"w12-tclose-eur15", "15", "America/New_York", "1700-1700"}, 0, 3},
+        {PINEFORGE_TIME_CLOSE_FUNCTION_FIXTURE_DIR, {"w12-tclose-btc1d", "1D", "UTC", "24x7"}, 0, 3},
+        {PINEFORGE_TIME_CLOSE_FUNCTION_FIXTURE_DIR,
+         {"w12-tclose-xau1d", "1D", "America/New_York", "1800-1700"}, 0, 3},
+        {PINEFORGE_TIME_CLOSE_FUNCTION_FIXTURE_DIR,
+         {"w12-tclose-aapl1d", "1D", "America/New_York", "0930-1600"}, 39, 3},
+        {PINEFORGE_DST_DAY_CLOSE_FIXTURE_DIR,
+         {"w12-tclose-cap1d", "1D", "America/New_York", "1700-1700"}, 0, 1},
     };
     static const char* const kPeriod[] = {"D", "W", "M"};
     for (const Tape& tape : tapes) {
         const ChartFacts& chart = tape.chart;
         bool ok = true;
-        const auto readings =
-            exit_comment_tape::read(PINEFORGE_TIME_CLOSE_FUNCTION_FIXTURE_DIR, chart.slug, ok);
+        const auto readings = exit_comment_tape::read(tape.dir, chart.slug, ok);
         CHECK(ok);
         int compared = 0;
         int wrong = 0;
@@ -710,7 +724,7 @@ static void test_time_close_function_tapes() {
         for (const auto& reading : readings) {
             const auto spelled = exit_comment_tape::split(reading.signal, ',');
             if (spelled.size() != 7) { ++wrong; continue; }
-            for (int p = 0; p < 3; ++p) {
+            for (int p = 0; p < tape.periods; ++p) {
                 const std::string tf = kPeriod[p];
                 const int64_t open = pine_time(reading.bar_ms, tf, "", "", chart.tf,
                                                chart.sym_tz, chart.sym_session);
@@ -743,6 +757,26 @@ static void test_time_close_function_tapes() {
     }
 }
 
+// A 24x7 session in New York, where no TradingView symbol reaches but the
+// rule of tests/fixtures/dst_day_close does: each day runs from one local
+// midnight to the next, 23 hours on the 2025-03-09 switch and 25 on
+// 2025-11-02 (the runtime's New York midnight on those Sundays read an hour
+// off, at 04:00Z and 05:00Z).
+static void test_wall_clock_day_24x7_new_york() {
+    std::printf("test_wall_clock_day_24x7_new_york\n");
+    const std::string ny = "America/New_York";
+    const std::string sess = "24x7";
+    // Saturday 2025-03-08, a 24-hour day.
+    CHECK(pine_time(1741435200000LL, "D", "", "", "15", ny, sess) == 1741410000000LL);
+    CHECK(pine_time_close(1741435200000LL, "D", "", "", "15", ny, sess) == 1741496400000LL);
+    // Sunday 2025-03-09: 00:00 EST (05:00Z) to Monday 00:00 EDT (04:00Z).
+    CHECK(pine_time(1741521600000LL, "D", "", "", "15", ny, sess) == 1741496400000LL);
+    CHECK(pine_time_close(1741521600000LL, "D", "", "", "15", ny, sess) == 1741579200000LL);
+    // Sunday 2025-11-02: 00:00 EDT (04:00Z) to Monday 00:00 EST (05:00Z).
+    CHECK(pine_time(1762084800000LL, "D", "", "", "15", ny, sess) == 1762056000000LL);
+    CHECK(pine_time_close(1762084800000LL, "D", "", "", "15", ny, sess) == 1762146000000LL);
+}
+
 int main() {
     test_ismarket_inside_rth();
     test_ismarket_outside_rth_close();
@@ -766,6 +800,7 @@ int main() {
     test_session_day_list_edges();
     test_session_period_tapes();
     test_time_close_function_tapes();
+    test_wall_clock_day_24x7_new_york();
 
     std::printf("\nsession_predicates: %d passed, %d failed\n",
                 tests_passed, tests_failed);
