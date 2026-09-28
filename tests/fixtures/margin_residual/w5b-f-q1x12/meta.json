@@ -1,0 +1,16 @@
+{
+  "title": "W5B f-q1x12: same-bar long entries of 1 1 1 1 1 1 1 1 1 1 1 1 shares",
+  "slug": "w5b-f-q1x12",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T05:30:27.157Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-15",
+    "to": "2025-05-20"
+  },
+  "pine_sha256": "62c9ec6f363e524210677a55e748413891851ae594ca9a105fe208e93570f79c",
+  "tv_trades_sha256": "fe3249d640ad74a93f361d210daa9bfec142cce54512c37be638eea6e32cebb7",
+  "tv_trades_rows": 1680
+}

@@ -1,0 +1,16 @@
+{
+  "title": "W5B eth-q111: same-bar long entries of 1 1 1 ETH",
+  "slug": "w5b-eth-q111",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T05:06:44.419Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "1e34f9ff61f14467c630bb639e1691d51e102a3c6eb8da75c025ce248ffcd7e7",
+  "tv_trades_sha256": "f8acd4bcb9bade3c8048e1e49a074a872bc60d736f3b9207165f1c642cedc5f4",
+  "tv_trades_rows": 960
+}

@@ -1,0 +1,25 @@
+//@version=6
+strategy("W5B es-pooc-short-q111111: same-bar short entries of 1 1 1 1 1 1 contracts", overlay=true,
+     initial_capital=1300000, default_qty_type=strategy.fixed, default_qty_value=1,
+     pyramiding=6, process_orders_on_close=true)
+
+// Lane W5B-ENG-MARGIN-RESIDUAL, the margin call of a book that same-bar
+// entries put over the equity. CME_MINI:ES1! (point value 50), 1300000 of
+// capital, margin 100. Every 2 hours from flat the script places MARKET
+// short entries of 1 1 1 1 1 1 contracts on one bar; they fill at that close and the book is margin-called at the next open. Flattened an
+// hour later.
+int t0 = timestamp("UTC", 2025, 4, 1, 14, 0)
+int step = 2 * 60 * 60 * 1000
+int n = 120
+int rel = time - t0
+bool inRange = rel >= 0 and rel < n * step
+int phase = inRange ? rel % step : -1
+if phase == 0 and strategy.position_size == 0
+    strategy.entry("A", strategy.short, qty=1, comment="A")
+    strategy.entry("B", strategy.short, qty=1, comment="B")
+    strategy.entry("C", strategy.short, qty=1, comment="C")
+    strategy.entry("D", strategy.short, qty=1, comment="D")
+    strategy.entry("E", strategy.short, qty=1, comment="E")
+    strategy.entry("F", strategy.short, qty=1, comment="F")
+if phase == 60 * 60 * 1000
+    strategy.close_all(comment="cleanup")

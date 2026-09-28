@@ -1,0 +1,16 @@
+{
+  "title": "W5B es-pooc-q1122: same-bar long entries of 1 1 2 2 contracts",
+  "slug": "w5b-es-pooc-q1122",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T05:06:41.053Z",
+  "chart": {
+    "symbol": "CME_MINI:ES1!",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-30"
+  },
+  "pine_sha256": "ef0ec40c2a40384ba352d7b77b445129aeb3185fc4b9e72993362b9b15db3451",
+  "tv_trades_sha256": "1c6d66381cfab45386c86e35a64e3b21fa8591fc8dec028cccd34501067e383a",
+  "tv_trades_rows": 872
+}

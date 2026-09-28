@@ -1,0 +1,16 @@
+{
+  "title": "W5B es-short-q111111: same-bar short entries of 1 1 1 1 1 1 contracts",
+  "slug": "w5b-es-short-q111111",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T05:06:36.912Z",
+  "chart": {
+    "symbol": "CME_MINI:ES1!",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-30"
+  },
+  "pine_sha256": "72d2df635422e7c01792276ef95df063dde766a181fe47464b42701555d080eb",
+  "tv_trades_sha256": "9233b1b988d36971f40d51567835d782932b6efb9c37cab477fdd4b923a6c344",
+  "tv_trades_rows": 1056
+}

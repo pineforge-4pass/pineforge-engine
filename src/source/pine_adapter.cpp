@@ -15204,6 +15204,27 @@ bool PineExecutionAdapter::flat_sibling_fill_follows(
         });
 }
 
+// Whether TradingView follows a margin call of `called_units` on the book as it
+// stands before that call with a call of one more unit at its next check
+// point: on a whole-unit lot grid, a call of four times a floored restore of
+// at least one lot (not the one unit a sub-lot restore takes) that leaves part
+// of the book, when the book's oldest lot is one unit. Long or short, the
+// oldest lot called whole or in part, at a market opening's fill (the next
+// path point books it) or under process_orders_on_close at the next open (that
+// open books it): lab tv tapes tests/fixtures/margin_residual
+// w5b-sb-es-fixed-n, -pooc-fixed-n, w5b-es-short-q111111, -q1122,
+// -pooc-q1122, -q115 (CME_MINI:ES1!) and w5b-f-q1x12 (NYSE:F). A book whose
+// oldest lot is larger takes no follow-up (w5b-es-q21111, -pooc-q21111,
+// -q222), nor a one-unit oldest lot on a finer grid (w5b-eth-q111, 1 ETH on
+// 0.0001 lots); lane W5B-ENG-MARGIN-RESIDUAL.
+bool PineExecutionAdapter::whole_unit_follow_up_due(double called_units, double mark) const {
+    if (!staged_.quantity_grid || *staged_.quantity_grid != 1.0) return false;
+    const double held = std::abs(detail::run_position(require_host()).signed_units);
+    if (!(called_units >= 4.0) || !(called_units < held)) return false;
+    const auto lots = require_host().native_open_lots(mark);
+    return !lots.empty() && std::abs(std::abs(lots.front().signed_units) - 1.0) < 1e-9;
+}
+
 bool PineExecutionAdapter::schedule_margin_call_path(
         const Bar& bar, const NativeDecisionContext& context) {
     const auto position = detail::run_position(require_host());
@@ -16998,10 +17019,13 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
             const auto at_open = source_margin_money(opening_mark, context.sub_bar_open_ms);
             const double open_shortfall = at_open.valid && at_open.required > at_open.equity
                 ? (at_open.required - at_open.equity) / at_open.unit_margin : 0.0;
-            if (at_close_units > 0.0 && at_close_units >= open_shortfall)
-                (void)submit_margin_call_units(opening_mark, context, at_close_units);
-            else
-                (void)submit_margin_call_slice(opening_mark, context);
+            const bool at_close = at_close_units > 0.0 && at_close_units >= open_shortfall;
+            const bool follow_up = whole_unit_follow_up_due(
+                at_close ? at_close_units : source_margin_units(at_open, false), opening_mark);
+            const bool called = at_close
+                ? submit_margin_call_units(opening_mark, context, at_close_units)
+                : submit_margin_call_slice(opening_mark, context);
+            if (called && follow_up) (void)submit_margin_call_units(opening_mark, context, 1.0);
         }
     }
     bool marketable_limit_at_open = false;
@@ -17104,11 +17128,19 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
             if (at_close_units > 0.0 && at_close_units >= open_shortfall)
                 close_margined_units = at_close_units;
         }
+        // So is a short two or more of that bar's flat entries opened at the
+        // close: a call there can take a one-unit follow-up at this open
+        // (whole_unit_follow_up_due).
+        const bool opening_follow_up = !whole_market_close_waits && close_margined_units > 0.0
+            && flat_sibling_placement(2)
+            && whole_unit_follow_up_due(close_margined_units, opening_mark);
         const bool opening_margin_applied =
             !whole_market_close_waits
             && (close_margined_units > 0.0
                 ? submit_margin_call_units(opening_mark, context, close_margined_units)
                 : submit_margin_call_slice(opening_mark, context));
+        if (opening_margin_applied && opening_follow_up)
+            (void)submit_margin_call_units(opening_mark, context, 1.0);
         // pine_fills.cpp:2525-2678 gives an opening slice priority over the
         // remaining path.  The surviving book is then evaluated over the
         // suffix: a restored bracket at an earlier level wins naturally, while
@@ -19234,8 +19266,19 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                         event.resolved_price + config_.slippage * staged_.syminfo.mintick,
                         staged_.syminfo.mintick), context);
                 } else if (!defer_slipped_pooc_rounding) {
-                    (void)submit_margin_call_slice(
+                    // A sibling book's call can take a one-unit follow-up at
+                    // the bar's next path point (whole_unit_follow_up_due).
+                    const bool follow_up = sibling_book
+                        && whole_unit_follow_up_due(source_margin_units(source_margin_money(
+                               event.resolved_price, context.sub_bar_open_ms), true),
+                           event.resolved_price);
+                    const bool called = submit_margin_call_slice(
                         event.resolved_price, context, true);
+                    const double next = next_source_path_waypoint(
+                        policy_script_bar_, context.coordinate.path_phase,
+                        event.resolved_price, source_path_uses_high_first(policy_script_bar_));
+                    if (called && follow_up && finite_positive(next))
+                        (void)submit_margin_call_units(next, context, 1.0, true);
                 }
             }
             const bool terminal_pooc_open = config_.process_orders_on_close

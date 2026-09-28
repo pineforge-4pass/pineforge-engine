@@ -1,0 +1,31 @@
+//@version=6
+strategy("W5B f-q1x12: same-bar long entries of 1 1 1 1 1 1 1 1 1 1 1 1 shares", overlay=true,
+     initial_capital=100, default_qty_type=strategy.fixed, default_qty_value=1,
+     pyramiding=12)
+
+// Lane W5B-ENG-MARGIN-RESIDUAL, the margin call of a book that same-bar
+// entries put over the equity. NYSE:F, 100 of capital, margin 100. Every 2
+// hours from flat the script places MARKET long entries of 1 1 1 1 1 1 1 1 1 1 1 1 shares on
+// one bar; they fill at the next open, where the book is margin-called.
+// Flattened an hour later.
+int t0 = timestamp("America/New_York", 2025, 4, 15, 9, 30)
+int step = 2 * 60 * 60 * 1000
+int n = 400
+int rel = time - t0
+bool inRange = rel >= 0 and rel < n * step
+int phase = inRange ? rel % step : -1
+if phase == 0 and strategy.position_size == 0
+    strategy.entry("A", strategy.long, qty=1, comment="A")
+    strategy.entry("B", strategy.long, qty=1, comment="B")
+    strategy.entry("C", strategy.long, qty=1, comment="C")
+    strategy.entry("D", strategy.long, qty=1, comment="D")
+    strategy.entry("E", strategy.long, qty=1, comment="E")
+    strategy.entry("F", strategy.long, qty=1, comment="F")
+    strategy.entry("G", strategy.long, qty=1, comment="G")
+    strategy.entry("H", strategy.long, qty=1, comment="H")
+    strategy.entry("I", strategy.long, qty=1, comment="I")
+    strategy.entry("J", strategy.long, qty=1, comment="J")
+    strategy.entry("K", strategy.long, qty=1, comment="K")
+    strategy.entry("L", strategy.long, qty=1, comment="L")
+if phase == 60 * 60 * 1000
+    strategy.close_all(comment="cleanup")

@@ -1,0 +1,16 @@
+{
+  "title": "W5B es-q115: same-bar long entries of 1 1 5 contracts",
+  "slug": "w5b-es-q115",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T05:30:22.247Z",
+  "chart": {
+    "symbol": "CME_MINI:ES1!",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-30"
+  },
+  "pine_sha256": "59b6c5e60199911f41f24e78fb60347d17bda3889efd0dc93353175717529098",
+  "tv_trades_sha256": "cd5a3019b5312e2a0101c7187ec5fc8926a1af13700ce635498cc337bb4f2b99",
+  "tv_trades_rows": 2102
+}

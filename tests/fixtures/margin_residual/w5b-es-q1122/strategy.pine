@@ -1,0 +1,23 @@
+//@version=6
+strategy("W5B ES1! same-bar entries of 1 1 2 2 contracts", overlay=true,
+     initial_capital=1300000, default_qty_type=strategy.fixed, default_qty_value=1,
+     pyramiding=4)
+
+// Lane W5B-ENG-MARGIN-RESIDUAL, the margin call of a book of whole contracts
+// that same-bar entries put over the equity. CME_MINI:ES1! (point value 50),
+// 1300000 of capital, margin 100. Every 2 hours from flat the script places
+// MARKET entries of 1 1 2 2 contracts on one bar; they fill at the next open,
+// where the 6-contract book is margin-called. Flattened an hour later.
+int t0 = timestamp("UTC", 2025, 4, 1, 14, 0)
+int step = 2 * 60 * 60 * 1000
+int n = 120
+int rel = time - t0
+bool inRange = rel >= 0 and rel < n * step
+int phase = inRange ? rel % step : -1
+if phase == 0 and strategy.position_size == 0
+    strategy.entry("A", strategy.long, qty=1, comment="A")
+    strategy.entry("B", strategy.long, qty=1, comment="B")
+    strategy.entry("C", strategy.long, qty=2, comment="C")
+    strategy.entry("D", strategy.long, qty=2, comment="D")
+if phase == 60 * 60 * 1000
+    strategy.close_all(comment="cleanup")

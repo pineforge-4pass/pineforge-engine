@@ -1,0 +1,16 @@
+{
+  "title": "W5B SB ES1! N same-bar one-contract entries",
+  "slug": "w5b-sb-es-fixed-n",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T22:15:14.214Z",
+  "chart": {
+    "symbol": "CME_MINI:ES1!",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-30"
+  },
+  "pine_sha256": "f7962082e52477f8b3ddb79d67ee1dcf349a434add739e25234d1b8835111c9b",
+  "tv_trades_sha256": "303f1a853ac6dbeef1bb5ec4c9bd6d3614b267c5e6e548b81fa33e04032b5d3d",
+  "tv_trades_rows": 938
+}

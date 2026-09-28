@@ -1,0 +1,16 @@
+{
+  "title": "W5B SB ES1! N same-bar one-contract entries, POOC",
+  "slug": "w5b-sb-es-pooc-fixed-n",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T22:20:03.655Z",
+  "chart": {
+    "symbol": "CME_MINI:ES1!",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-30"
+  },
+  "pine_sha256": "b3326ca103ab929ed009298277bed213cd7861b3f9c2dcdf225c8f63046bc1ec",
+  "tv_trades_sha256": "cff469f01599a3f7b0558040c59772acc63f18e1e449f881234bbdeaa8b7a069",
+  "tv_trades_rows": 938
+}

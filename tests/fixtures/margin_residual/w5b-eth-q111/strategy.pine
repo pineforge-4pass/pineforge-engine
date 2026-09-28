@@ -1,0 +1,21 @@
+//@version=6
+strategy("W5B eth-q111: same-bar long entries of 1 1 1 ETH", overlay=true,
+     initial_capital=5000, default_qty_type=strategy.fixed, default_qty_value=1,
+     pyramiding=3)
+
+// Lane W5B-ENG-MARGIN-RESIDUAL, the margin call of a book that same-bar
+// entries put over the equity. BINANCE:ETHUSDT.P, 5000 of capital, margin 100.
+// Every 2 hours from flat the script places MARKET long entries of 1 1 1
+// ETH on one bar; they fill at the next open, where the book is margin-called. Flattened an hour later.
+int t0 = timestamp("UTC", 2025, 4, 1, 14, 0)
+int step = 2 * 60 * 60 * 1000
+int n = 120
+int rel = time - t0
+bool inRange = rel >= 0 and rel < n * step
+int phase = inRange ? rel % step : -1
+if phase == 0 and strategy.position_size == 0
+    strategy.entry("A", strategy.long, qty=1, comment="A")
+    strategy.entry("B", strategy.long, qty=1, comment="B")
+    strategy.entry("C", strategy.long, qty=1, comment="C")
+if phase == 60 * 60 * 1000
+    strategy.close_all(comment="cleanup")
