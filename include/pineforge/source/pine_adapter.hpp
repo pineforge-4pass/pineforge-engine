@@ -1788,18 +1788,20 @@ private:
                                   const native_order::RequestHandle&) const;
     std::size_t add_sibling_lots(std::int64_t placed) const;
     bool whole_unit_follow_up_due(double called_units, double mark) const;
-    void follow_one_unit_margin_call(double called_units, double fill, double current,
-                                     const NativeDecisionContext&);
+    bool margin_follow_up_scope() const noexcept;
+    double margin_follow_up_units(double called_units, double fill,
+                                  std::int64_t sub_bar_open_ms) const;
+    void follow_margin_call(double called_units, double fill, double current,
+                            const NativeDecisionContext&);
     bool declined_reversal_at_open(const Bar&) const;
     bool schedule_margin_call_path(const Bar&, const NativeDecisionContext&);
     bool close_point_margin_scope() const noexcept;
     void withdraw_waypoint_margin_calls();
     bool rest_waypoint_margin_call(const Bar&, int from, int to, const NativeDecisionContext&);
-    bool commissioned_explicit_short_opened(const NativeDecisionContext&) const;
     bool close_point_margin_call(const Bar&, const NativeDecisionContext&, bool cancelled);
     bool book_close_point_call(double mark, double units, const NativeDecisionContext&,
                                bool queued, double reference_mark = 0.0);
-    void close_point_follow_up(double mark, const NativeDecisionContext&);
+    void close_point_follow_up(double mark, double called_units, const NativeDecisionContext&);
     std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>>
     same_bar_close_alls(const NativeDecisionContext&) const;
     void size_close_alls_at_placement(
@@ -2198,10 +2200,11 @@ private:
     // is dead once that bar's close has been checked.
     std::uint64_t close_margin_point_ = std::numeric_limits<std::uint64_t>::max();
     std::int64_t close_margin_cancelled_bar_ = std::numeric_limits<std::int64_t>::min();
-    // The script bar whose close owes a one-unit follow-up
-    // (follow_one_unit_margin_call), booked there after the script. Same
-    // hash argument: set on the bar's path, dead once its close is checked.
+    // The script bar whose close owes a follow-up (follow_margin_call), booked
+    // there after the script, and the units it owes. Same hash argument: set
+    // on the bar's path, dead once its close is checked.
     std::int64_t close_margin_follow_up_bar_ = std::numeric_limits<std::int64_t>::min();
+    double close_margin_follow_up_units_ = 0.0;
     // The script bar whose path checks the adapter rests itself, point by
     // point, after a call at a point before the bar's adverse extreme
     // (rest_waypoint_margin_call). Same hash argument: set on the bar's path,

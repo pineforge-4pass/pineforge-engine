@@ -1,0 +1,27 @@
+//@version=6
+// TAIL-C diag B synthetic (written from scratch): TradingView's margin calls on the entry bar of
+// a commissioned, slipped, all-in explicit-quantity MARKET short. Export on NYSE:F 15,
+// 2025-04-01 .. 2025-07-01 (whole shares) and on OANDA:EURUSD 15, 2025-04-01 .. 2025-05-01
+// (0.01 lots). Every 8 bars from flat one short of qty = lot-floor(equity / close) is placed; it
+// fills at the next open less 2 ticks and is closed with strategy.close_all() 4 bars later.
+// Model to confirm (fits all 85 margin-call clusters of the two blitz MACD tapes, 34 + 102 rows):
+//  M1 the entry bar's first check is at the OPEN PRINT: equity (fees charged) and requirement
+//     both marked at tick(open), not at the slipped fill; the call, 4 x lot-floor(shortfall /
+//     tick(open)), fills at tick(open) + 2 ticks and is booked before the rest of the bar's path;
+//  M2 every later point of the path (O, nearer extreme, farther extreme, C) is checked the same
+//     way on the book the earlier calls left;
+//  M3 after any call, the book re-marked at that call's own fill, if still short, gives up
+//     4 x lot-floor(shortfall at the fill / fill) more (one unit when that floors to zero) at the
+//     bar's next path point, filled at that point's tick + 2 ticks.
+// Engine today (8988faff): a post-script trim marked at the slipped fill, then one slice at the
+// adverse extreme; follow-ups only after one-unit calls and only one unit.
+strategy("diagB margin open print", overlay = true, initial_capital = 10000,
+     margin_long = 100, margin_short = 100, slippage = 2,
+     commission_type = strategy.commission.percent, commission_value = 0.05, pyramiding = 1)
+float lot = syminfo.mincontract > 0 ? syminfo.mincontract : 1.0
+var int k = 0
+k += 1
+if strategy.position_size == 0 and k % 8 == 0
+    strategy.entry("S", strategy.short, qty = math.floor(strategy.equity / close / lot) * lot)
+if strategy.position_size != 0 and k % 8 == 5
+    strategy.close_all(comment = "X")

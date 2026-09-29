@@ -1063,6 +1063,11 @@ list(APPEND TEST_SOURCES test_exit_reservation_tapes)
 # signal close's tick plus the slippage ticks its fill carries
 # (tests/fixtures/explicit_market_admission), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_explicit_market_admission_tapes)
+# Lane TAIL-I: an all-in commissioned and slipped explicit short is margin-
+# called on its bar's path from the opening print, and under a percent
+# commission a call of any size is followed (tests/fixtures/margin_open_print),
+# on TradingView's tapes.
+list(APPEND TEST_SOURCES test_margin_open_print_tapes)
 # ... and an infinite strategy.entry quantity trades the default quantity, as
 # na does (tests/fixtures/nonfinite_entry_qty), on TradingView's tape.
 list(APPEND TEST_SOURCES test_nonfinite_entry_qty_tape)
@@ -2774,6 +2779,10 @@ endif()
 if(TARGET test_explicit_market_admission_tapes)
     target_compile_definitions(test_explicit_market_admission_tapes PRIVATE
         PINEFORGE_EXPLICIT_ADMISSION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/explicit_market_admission")
+endif()
+if(TARGET test_margin_open_print_tapes)
+    target_compile_definitions(test_margin_open_print_tapes PRIVATE
+        PINEFORGE_MARGIN_OPEN_PRINT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_open_print")
 endif()
 if(TARGET test_nonfinite_entry_qty_tape)
     target_compile_definitions(test_nonfinite_entry_qty_tape PRIVATE

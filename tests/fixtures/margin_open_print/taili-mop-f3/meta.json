@@ -1,0 +1,16 @@
+{
+  "title": "diagB margin open print",
+  "slug": "taili-mop-f3",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T04:59:43.433Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-10-01"
+  },
+  "pine_sha256": "840e104eb5ec7066b9cdae869229846263117c26bc1b9f458e2aaf4acf0b0853",
+  "tv_trades_sha256": "06dbe45f427ebf92d045f684c5398bb5ca37e7ec64d2f64dd36277dd6d90d1d5",
+  "tv_trades_rows": 892
+}
