@@ -1,0 +1,16 @@
+{
+  "title": "td-m1g-samestop-imm",
+  "slug": "td-m1g",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:00:08.244Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-05"
+  },
+  "pine_sha256": "75a70390f14d4aef81a19ad38a21539f63a71faba25b332dfd3a88985680a4d2",
+  "tv_trades_sha256": "ab58d634cded2e1198b2412f4aada41a87180ec5b85c8e0fc0f6d91bef4bbefc",
+  "tv_trades_rows": 86
+}

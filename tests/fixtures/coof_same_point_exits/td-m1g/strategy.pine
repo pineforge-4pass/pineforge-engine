@@ -1,0 +1,22 @@
+//@version=6
+// TAIL-D synthetic M1g: a position of 2 has two exits of 1 with one shared stop level; the
+// calc_on_order_fills recalculation of a stop fill calls (no cancel)
+// strategy.close_all(immediately = true). process_orders_on_close on.
+// Stateless: every decision reads strategy.* and the bar clock only.
+strategy("td-m1g-samestop-imm", overlay = true, process_orders_on_close = true, calc_on_order_fills = true, default_qty_type = strategy.fixed, default_qty_value = 2, initial_capital = 10000000)
+nClosed = strategy.closedtrades
+lastExitHere = nClosed > 0 and strategy.closedtrades.exit_bar_index(nClosed - 1) == bar_index
+flat = strategy.position_size == 0
+slot = minute(time) == 0 and hour(time, "UTC") % 4 == 0
+if flat and not lastExitHere and slot
+    strategy.entry("P", hour(time, "UTC") % 8 == 0 ? strategy.long : strategy.short, qty = 2)
+if strategy.position_size != 0
+    avg = strategy.position_avg_price
+    if math.abs(strategy.position_size) == 2
+        lvl = strategy.position_size > 0 ? avg - 3 : avg + 3
+        strategy.exit("X1", "P", qty = 1, stop = lvl)
+        strategy.exit("X2", "P", qty = 1, stop = lvl)
+    if lastExitHere
+        strategy.close_all(comment = "IMM", immediately = true)
+    if bar_index - strategy.opentrades.entry_bar_index(0) >= 12
+        strategy.close_all(comment = "TIME")

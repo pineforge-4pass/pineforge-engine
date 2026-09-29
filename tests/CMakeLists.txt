@@ -930,6 +930,10 @@ list(APPEND TEST_SOURCES test_pooc_short_slip_admission_tapes)
 # where an off-grid extreme is touched at its raw print
 # (tests/fixtures/coof_immediate_close), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_coof_immediate_close_tapes)
+# ... and every exit of one entry the same path point triggers fills there
+# before that point recalculates (tests/fixtures/coof_same_point_exits), on
+# TradingView's tapes.
+list(APPEND TEST_SOURCES test_coof_same_point_exits_tapes)
 
 # Lane W8A-SIGSTATE-1 R4: a fill at the day's first tick does not trip
 # strategy.risk.max_intraday_loss (tests/fixtures/intraday_loss_open_fill), on
@@ -2530,6 +2534,10 @@ endif()
 if(TARGET test_coof_immediate_close_tapes)
     target_compile_definitions(test_coof_immediate_close_tapes PRIVATE
         PINEFORGE_TAIL_D_IMMEDIATE_CLOSE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_immediate_close")
+endif()
+if(TARGET test_coof_same_point_exits_tapes)
+    target_compile_definitions(test_coof_same_point_exits_tapes PRIVATE
+        PINEFORGE_TAIL_D_SAME_POINT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_same_point_exits")
 endif()
 if(TARGET test_coof_reissued_exit_tapes)
     target_compile_definitions(test_coof_reissued_exit_tapes PRIVATE

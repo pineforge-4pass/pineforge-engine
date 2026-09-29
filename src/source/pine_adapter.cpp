@@ -5768,6 +5768,47 @@ void PineExecutionAdapter::end_coof_recalc() noexcept {
 bool PineExecutionAdapter::suppress_grouped_stop_recalc(
         const native_order::ExecutionAppliedEvent& event,
         const NativeDecisionContext& context) const noexcept {
+    // Every exit of one entry that the fill's point also triggers fills there
+    // before the point recalculates: the recalculation after the first cannot
+    // cancel or outrun the others (lab tv tapes
+    // tests/fixtures/coof_same_point_exits td-m1e, -f and -g: two exits of one
+    // entry share a stop, and the recalculation of a stop fill calls
+    // cancel_all() and close_all(); TradingView books both at the stop; lane
+    // TAIL-D). The recalculation of the point's last such fill runs.
+    if (host_ && config_.calc_on_order_fills && event.closed_units > 0.0) {
+        const double held = detail::run_position(*host_).signed_units;
+        const auto filled = placement_.find(event.handle().incarnation);
+        if (held != 0.0 && filled != placement_.end() && !filled->second.from_entry.empty()
+            && (filled->second.family == PineOrderFamily::ExitStop
+                || filled->second.family == PineOrderFamily::ExitLimit)) {
+            const double price = event.raw_price;
+            const bool closing_long = held > 0.0;
+            for (const auto& handle : live_handles_) {
+                if (handle == event.handle()) continue;
+                const auto sibling = placement_.find(handle.incarnation);
+                if (sibling == placement_.end()) continue;
+                const auto& row = sibling->second;
+                if (row.from_entry != filled->second.from_entry
+                    || row.source_id == filled->second.source_id) {
+                    continue;
+                }
+                const double stop = row.exit_levels.stop;
+                const double limit = row.exit_levels.limit;
+                // The point's print and a level the script computed meet on
+                // the tick grid, not in their last bits.
+                const auto at = [tick = staged_.syminfo.mintick, price](double level) {
+                    return price == level || (finite_positive(tick)
+                        && nearest_tick(price, tick) == nearest_tick(level, tick));
+                };
+                const bool triggered =
+                    (row.family == PineOrderFamily::ExitStop && finite_positive(stop)
+                        && ((closing_long ? price < stop : price > stop) || at(stop)))
+                    || (row.family == PineOrderFamily::ExitLimit && finite_positive(limit)
+                        && ((closing_long ? price > limit : price < limit) || at(limit)));
+                if (triggered) return true;
+            }
+        }
+    }
     if (!host_ || !config_.calc_on_order_fills || config_.process_orders_on_close
         || stream_mode_ || config_.pyramiding != 0 || config_.close_entries_rule_any
         || config_.slippage != 0 || config_.commission_value != 0.0
