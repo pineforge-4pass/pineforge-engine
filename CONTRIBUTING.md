@@ -295,7 +295,8 @@ The merge gate is two commit statuses on the PR head, `pineforge/verify` and
 `ci_verify.py` profiles and their parity verification on it. The GitHub Actions
 jobs (build on Ubuntu + macOS in Release and Debug, sanitizers, ctest, the source
 guards, the install/`find_package` smoke test and the parity subset) are
-advisory.
+advisory. A change that touches documentation only runs the preflight guards
+and the documentation build and skips the rest; `docs/ci.md` names the rule.
 
 ### How a parity campaign gates a merge
 

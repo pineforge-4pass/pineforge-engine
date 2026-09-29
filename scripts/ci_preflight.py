@@ -70,7 +70,8 @@ PARITY_COMMAND = f'JOBS={CORES} ./scripts/{PARITY}'
 # timeout-minutes, exactly, and the command that must carry the core count.
 # docs/ci.md gives each limit's measured basis.
 JOB_RUNNERS = {
-    'ci.yml': {'preflight': (LINUX_RUNNER, 45, None),
+    'ci.yml': {'changes': ('ubuntu-24.04', 5, None),
+               'preflight': (LINUX_RUNNER, 45, None),
                'build': (MATRIX_RUNNER, 75, VERIFY),
                'sanitizers': (LINUX_RUNNER, 120, VERIFY),
                'kernel-only': (LINUX_RUNNER, 60, VERIFY),
@@ -86,6 +87,15 @@ JOB_RUNNERS = {
 STANDARD_RUNNERS = ('ubuntu-24.04', 'ubuntu-latest')
 TRUSTED_ONLY_WORKFLOWS = ('release.yml',)
 TRUSTED_ONLY_EVENTS = {'push', 'schedule', 'workflow_dispatch'}
+# A docs-only change (scripts/ci_docs_only.py) skips the proof jobs. Each waits
+# for the changes job alone and skips only on its docs_only answer, so a failed
+# or unanswered classification runs it; the build aggregate reads both.
+PROOF_JOBS = {'build': 'BUILD_RESULT', 'sanitizers': 'SANITIZER_RESULT',
+              'kernel-only': 'KERNEL_RESULT', 'native-live': 'NATIVE_RESULT',
+              'corpus-parity-subset': 'PARITY_RESULT'}
+DOCS_ONLY_SKIP = "${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}"
+GATE_NEEDS = ('needs: [changes, preflight, build, sanitizers, native-live, kernel-only, '
+              'corpus-parity-subset]')
 # One stage's bound. The verifier self-tests (test_ci_verify.py) drive the real
 # literal-aware parity, receipt and submodule guards in one serial process. On
 # the maintainers' verification hosts they took 475 s at 0d76a099's tree (458 s
@@ -292,7 +302,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
 
 def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
                          parity: str, docs: str, others: dict[str, str] | None = None) -> list[str]:
-    """Pin the PR-light/full-event split, parallel start, merge statuses, row home and runners.
+    """Pin the PR-light/full-event split, the docs-only skip, parallel start, merge statuses,
+    row home and runners.
 
     ``others`` holds every other workflow file by name, for the runner rule.
     """
@@ -306,26 +317,40 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
         if '  ' + trigger not in events:
             findings.append(f'ci.yml must retain {trigger.split(":", 1)[0]}')
     jobs = _jobs(ci)
-    proof_jobs = ('build', 'sanitizers', 'kernel-only', 'native-live',
-                  'corpus-parity-subset')
-    for job in ('preflight', *proof_jobs, 'build-gate'):
+    for job in ('changes', 'preflight', *PROOF_JOBS, 'build-gate'):
         if job not in jobs:
             findings.append(f'ci.yml is missing job {job}')
-    for job in proof_jobs:
-        if re.search(r'^    needs:', jobs.get(job, ''), re.MULTILINE):
-            findings.append(f'{job} must start alongside preflight')
+    # Preflight holds the documentation guards: it runs on every change, and
+    # neither it nor the classification waits for anything.
+    for job in ('changes', 'preflight'):
+        if _job_values(jobs.get(job, ''), 'needs') or _job_values(jobs.get(job, ''), 'if'):
+            findings.append(f'{job} must start at once on every run')
+    for job in PROOF_JOBS:
+        if (_job_values(jobs.get(job, ''), 'needs') not in (['changes'], ['[changes]'])
+                or _job_values(jobs.get(job, ''), 'if') != [DOCS_ONLY_SKIP]):
+            findings.append(f'{job} must start alongside preflight, after changes alone, '
+                            'and skip only a docs-only change')
+    changes = jobs.get('changes', '')
+    if ('      docs_only: ${{ steps.classify.outputs.docs_only }}\n' not in changes
+            or '        id: classify\n' not in changes
+            or 'run: python3 scripts/ci_docs_only.py --github-output "$GITHUB_OUTPUT"'
+            not in changes):
+        findings.append("changes must publish scripts/ci_docs_only.py's answer")
     gate = jobs.get('build-gate', '')
-    if ('needs: [preflight, build, sanitizers, native-live, kernel-only, '
-            'corpus-parity-subset]' not in gate or '    if: always()' not in gate
-            or '    name: build' not in gate):
-        findings.append('build-gate must aggregate every proof job and preflight')
-    for job, variable in (('preflight', 'PREFLIGHT_RESULT'), ('build', 'BUILD_RESULT'),
-                          ('sanitizers', 'SANITIZER_RESULT'), ('native-live', 'NATIVE_RESULT'),
-                          ('kernel-only', 'KERNEL_RESULT'),
-                          ('corpus-parity-subset', 'PARITY_RESULT')):
-        if (f'${{{{ needs.{job}.result }}}}' not in gate
-                or f'"${variable}" == "success"' not in gate):
-            findings.append(f'build-gate must require {job} success')
+    if GATE_NEEDS not in gate or '    if: always()' not in gate or '    name: build' not in gate:
+        findings.append('build-gate must aggregate every proof job, preflight and changes')
+    for job, variable in (('changes', 'CHANGES_RESULT'), ('preflight', 'PREFLIGHT_RESULT'),
+                          *PROOF_JOBS.items()):
+        if f'{variable}: ${{{{ needs.{job}.result }}}}' not in gate:
+            findings.append(f'build-gate must read the result of {job}')
+    if 'DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}' not in gate:
+        findings.append("build-gate must read changes' docs_only answer")
+    # The shell itself is run over every outcome by scripts/test_ci_preflight.py.
+    if '[[ "$PREFLIGHT_RESULT" == "success" ]]' not in gate or 'passed "$PREFLIGHT_RESULT"' in gate:
+        findings.append('build-gate must require preflight success')
+    for job, variable in PROOF_JOBS.items():
+        if f'passed "${variable}"' not in gate:
+            findings.append(f'build-gate must require {job} success or a docs-only skip')
     debug_flag = "${{ github.event_name == 'pull_request' && matrix.build_type == 'Debug' && '--exclude-label slow' || '' }}"
     pr_flag = "${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}"
     if debug_flag not in jobs.get('build', '') or jobs.get('build', '').count('--exclude-label slow') != 1:
@@ -474,6 +499,10 @@ def check_commands(source: Path) -> list[tuple]:
          [sys.executable, str(source / 'scripts/test_report_schema_keys.py')]),
         ('release-version-tests',
          [sys.executable, str(source / 'scripts/test_release_version.py')]),
+        # Lane pf-ci-docs: ci.yml skips its proof jobs on a documentation-only
+        # change, and scripts/ci_docs_only.py's rule decides which that is.
+        ('docs-only-tests',
+         [sys.executable, str(source / 'scripts/test_ci_docs_only.py')]),
         ('design-inventory-tests',
          [sys.executable, str(source / 'scripts/test_check_design_inventory.py')]),
         ('design-inventory',
@@ -596,8 +625,8 @@ def main() -> int:
         for finding in findings:
             print(finding)
         if not findings:
-            print('CI workflow contract: PR exclusions, full events, statuses, slow rows, '
-                  'runners and time limits OK')
+            print('CI workflow contract: PR exclusions, full events, docs-only skip, statuses, '
+                  'slow rows, runners and time limits OK')
         return 1 if findings else 0
     if args.check_docs_workflow or args.self_test_docs_workflow:
         workflow = (ROOT / '.github/workflows/docs.yml').read_text()
