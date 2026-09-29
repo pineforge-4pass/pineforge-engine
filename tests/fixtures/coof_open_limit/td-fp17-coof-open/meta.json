@@ -1,0 +1,16 @@
+{
+  "title": "td-fp17-coof-open",
+  "slug": "td-fp17-coof-open",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:26:41.773Z",
+  "chart": {
+    "symbol": "NSE:NIFTY",
+    "interval": "1D",
+    "from": "2025-05-01",
+    "to": "2025-08-01"
+  },
+  "pine_sha256": "f5f8313a4edad5f628198bfe6f2a7f92b9d5984b525067ec443c7eb5666878b2",
+  "tv_trades_sha256": "48af95073a954d456b8ebae71783412cee0ff76c399c4e6eb4ca69a33619000d",
+  "tv_trades_rows": 14
+}

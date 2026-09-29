@@ -946,6 +946,10 @@ list(APPEND TEST_SOURCES test_coof_timeframe_change_tapes)
 # that entry, so a FIFO close of its lot by another id's exit leaves its own
 # reservation (tests/fixtures/exit_fifo_cross), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_exit_fifo_cross_tapes)
+# ... and under calc_on_order_fills an exit limit the recalculation of an
+# entry's open fill places at or through the open print fills there at once
+# (tests/fixtures/coof_open_limit), on TradingView's tape.
+list(APPEND TEST_SOURCES test_coof_open_limit_tapes)
 
 # Lane W8A-SIGSTATE-1 R4: a fill at the day's first tick does not trip
 # strategy.risk.max_intraday_loss (tests/fixtures/intraday_loss_open_fill), on
@@ -2562,6 +2566,10 @@ endif()
 if(TARGET test_exit_fifo_cross_tapes)
     target_compile_definitions(test_exit_fifo_cross_tapes PRIVATE
         PINEFORGE_TAIL_D_FIFO_CROSS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_fifo_cross")
+endif()
+if(TARGET test_coof_open_limit_tapes)
+    target_compile_definitions(test_coof_open_limit_tapes PRIVATE
+        PINEFORGE_TAIL_D_OPEN_LIMIT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_open_limit")
 endif()
 if(TARGET test_coof_reissued_exit_tapes)
     target_compile_definitions(test_coof_reissued_exit_tapes PRIVATE

@@ -9757,6 +9757,33 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 coof_stop_at_leg_end = true;
             }
         }
+        // A limit that recalculation places at or through the bar's open
+        // print fills there at once, at the print and without slippage; one
+        // short of the print rests at its level on the rest of the entry
+        // bar. The adapter held both for the next bar: it judged them against
+        // the slipped fill (lab tv tape tests/fixtures/coof_open_limit
+        // td-fp17-coof-open cells LA, SB, LE and LG; lane TAIL-D).
+        bool coof_open_limit_rests = false;
+        if (coof_recalc_active_ && coof_first_open_ && family == PineOrderFamily::ExitLimit
+            && finite_positive(limit_price) && physical.signed_units != 0.0
+            && coof_script_bar_valid_) {
+            const auto native = detail::run_state(require_host());
+            const auto point = detail::callback_point(require_host());
+            const bool ordinary_path = !native.spec || native.spec->intrabar.is_none();
+            const double open_print = coof_script_bar_.open;
+            if (ordinary_path && point && finite_positive(point->price)
+                && finite_positive(open_print)) {
+                const bool closing_long = physical.signed_units > 0.0;
+                if (closing_long ? limit_price <= open_print : limit_price >= open_print) {
+                    trigger = native_order::Limit{limit_price};
+                    coof_limit_waypoint_price =
+                        source_bar_fill_tick(open_print, staged_.syminfo.mintick);
+                    coof_stop_at_leg_end = true;
+                } else {
+                    coof_open_limit_rests = true;
+                }
+            }
+        }
         if (pooc_short_tick_scope) {
             const double tick = staged_.syminfo.mintick;
             // The short exit is a buy.  rounded(low) <= limit and
@@ -10013,7 +10040,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                         point->decision.coordinate.interval_index);
                     return !direct_partial;
                 };
-                if ((wrong_stop || wrong_limit) && !coof_stop_at_leg_end
+                if ((wrong_stop || (wrong_limit && !coof_open_limit_rests))
+                    && !coof_stop_at_leg_end
                     && (coof_first_open_ || wrong_stop || !qualified_recross())) {
                     snapshot.defer_until_post_parent_calculation = true;
                     delayed_market_orders_.push_back({

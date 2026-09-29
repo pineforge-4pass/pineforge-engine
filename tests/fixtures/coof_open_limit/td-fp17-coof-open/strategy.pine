@@ -1,0 +1,47 @@
+//@version=6
+// TAIL-D diag finnp17 synthetic: orders that the calc_on_order_fills recalculation of an entry's
+// own opening fill (its first-open recalculation) places, with 2 ticks of slippage.
+// LA / SB: an exit limit already through the open (long / short); LE: the same without a stop;
+// LG: a long exit limit 1 tick above the open (below the slipped entry price);
+// LF: a long exit limit the bar reaches later (control); LC / SD: strategy.close at that recalculation.
+strategy("td-fp17-coof-open", overlay = true, calc_on_order_fills = true, process_orders_on_close = false, slippage = 2, default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 1000000, commission_value = 0)
+day(m, d) => year == 2025 and month == m and dayofmonth == d
+var string active = ""
+if day(6, 2)
+    strategy.entry("LA", strategy.long, comment = "LA")
+    active := "LA"
+if day(6, 9)
+    strategy.entry("SB", strategy.short, comment = "SB")
+    active := "SB"
+if day(6, 16)
+    strategy.entry("LC", strategy.long, comment = "LC")
+    active := "LC"
+if day(6, 23)
+    strategy.entry("SD", strategy.short, comment = "SD")
+    active := "SD"
+if day(6, 30)
+    strategy.entry("LE", strategy.long, comment = "LE")
+    active := "LE"
+if day(7, 7)
+    strategy.entry("LG", strategy.long, comment = "LG")
+    active := "LG"
+if day(7, 14)
+    strategy.entry("LF", strategy.long, comment = "LF")
+    active := "LF"
+t = syminfo.mintick
+if strategy.position_size > 0 and active == "LA"
+    strategy.exit("LA-X", "LA", limit = open - 20 * t, stop = open - 8000 * t, comment_profit = "LA tp", comment_loss = "LA sl")
+if strategy.position_size < 0 and active == "SB"
+    strategy.exit("SB-X", "SB", limit = open + 20 * t, stop = open + 8000 * t, comment_profit = "SB tp", comment_loss = "SB sl")
+if strategy.position_size > 0 and active == "LC"
+    strategy.close("LC", comment = "LC close")
+if strategy.position_size < 0 and active == "SD"
+    strategy.close("SD", comment = "SD close")
+if strategy.position_size > 0 and active == "LE"
+    strategy.exit("LE-X", "LE", limit = open - 20 * t, comment = "LE tp")
+if strategy.position_size > 0 and active == "LG"
+    strategy.exit("LG-X", "LG", limit = open + 1 * t, stop = open - 8000 * t, comment_profit = "LG tp", comment_loss = "LG sl")
+if strategy.position_size > 0 and active == "LF"
+    strategy.exit("LF-X", "LF", limit = open + 10 * t, stop = open - 8000 * t, comment_profit = "LF tp", comment_loss = "LF sl")
+if dayofweek == dayofweek.friday and strategy.position_size != 0
+    strategy.close_all(comment = "cleanup")

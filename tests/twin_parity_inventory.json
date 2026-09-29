@@ -188,9 +188,9 @@
   "observableRewrites": {
     "test_calc_on_order_fills": {
       "baseAssertions": 242,
-      "reason": "the chart-path endpoint row follows the R5 PAR-ORDERS-3 TradingView tapes (pa3-f4-stop-w1-mkt-*): a market add placed by the recalculation on a stop entry's fill exactly at a bar's first extreme fills at that extreme, not at the next waypoint; the entry-bar through-stop rows follow the R5 W4-ENG-POOC-SAMEPASS TradingView tapes (w4-f19c-{long,short}-plain-coof cells LA and SA): a stop already through the open fill that recalculated executes at that fill, not on the next bar",
+      "reason": "the chart-path endpoint row follows the R5 PAR-ORDERS-3 TradingView tapes (pa3-f4-stop-w1-mkt-*): a market add placed by the recalculation on a stop entry's fill exactly at a bar's first extreme fills at that extreme, not at the next waypoint; the entry-bar through-stop rows follow the R5 W4-ENG-POOC-SAMEPASS TradingView tapes (w4-f19c-{long,short}-plain-coof cells LA and SA): a stop already through the open fill that recalculated executes at that fill, not on the next bar; the entry-bar through-limit rows follow the R5 TAIL-D TradingView tape (tests/fixtures/coof_open_limit td-fp17-coof-open cells LA and LE): a limit at or through the open print the recalculation of the open fill places fills at that print on the entry bar, ahead of a valid stop sibling, not on the next bar",
       "twin": "test_calc_on_order_fills_l4c.cpp",
-      "twinAssertionSha256": "51cc42a4424fe7a6b0fa998544551fbd818d3e6c72dd9c567f2ac98d30215cef",
+      "twinAssertionSha256": "4767402d33f2f566c28d9ec4f38d586f79444f1e75b163c8b66bf6ed9463562c",
       "twinAssertions": 242
     },
     "test_carried_pooc_short_margin_state": {

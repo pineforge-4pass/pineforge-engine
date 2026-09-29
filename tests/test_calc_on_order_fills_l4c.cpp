@@ -655,12 +655,14 @@ void test_close_cleanup_does_not_leak_into_new_position_cycle() {
 }
 
 // A COOF-created bracket may contain one leg that is already marketable at the
-// entry-fill cursor. A wrong-side limit carries into the next bar, while a
-// correctly-sided sibling remains eligible on the entry bar's remaining path.
-// A stop already through the open fill that recalculated executes at that
-// fill: TradingView books a zero-length trade at the open (lab tv
-// w4-f19c-{long,short}-plain-coof cells LA and SA; R5 lane
-// W4-ENG-POOC-SAMEPASS), where ab9714be carried it to the next bar.
+// entry-fill cursor. A stop already through the open fill that recalculated
+// executes at that fill: TradingView books a zero-length trade at the open
+// (lab tv w4-f19c-{long,short}-plain-coof cells LA and SA; R5 lane
+// W4-ENG-POOC-SAMEPASS), where ab9714be carried it to the next bar. A limit
+// at or through the open print fills at that print on the entry bar, ahead of
+// a correctly-sided sibling (lab tv tests/fixtures/coof_open_limit
+// td-fp17-coof-open cells LA and LE; R5 lane TAIL-D), where the adapter
+// carried it to the next bar.
 class RecalcEntryBarBracketProbe final : public CoofBase {
 public:
     enum class Shape {
@@ -698,8 +700,8 @@ private:
     Shape shape_;
 };
 
-void test_recalc_wrong_side_entry_bar_limit_carries_stop_fills() {
-    std::printf("test_recalc_wrong_side_entry_bar_limit_carries_stop_fills\n");
+void test_recalc_wrong_side_entry_bar_legs_fill_at_the_open() {
+    std::printf("test_recalc_wrong_side_entry_bar_legs_fill_at_the_open\n");
     Bar bars[] = {
         {100.0, 101.0, 99.0, 100.0, 1000.0,   900'000},
         {100.0, 105.0, 90.0,  95.0, 1000.0, 1'800'000},
@@ -718,12 +720,13 @@ void test_recalc_wrong_side_entry_bar_limit_carries_stop_fills() {
             const Trade& t = p.get_trade(0);
             // expectation corrected (R5 lane W4-ENG-POOC-SAMEPASS): the
             // through stop 104 on bar 2 -> 100 at the fill on bar 1, as
-            // TradingView books w4-f19c cells LA and SA; the limit unchanged.
-            const bool stop = shape == RecalcEntryBarBracketProbe::Shape::WRONG_STOP_ONLY;
+            // TradingView books w4-f19c cells LA and SA; and (R5 lane TAIL-D)
+            // the through limit 104 on bar 2 -> 100 at the open print on bar
+            // 1, as TradingView books td-fp17-coof-open cell LE.
             CHECK(near(t.entry_price, 100.0));
-            CHECK(near(t.exit_price, stop ? 100.0 : 104.0));
+            CHECK(near(t.exit_price, 100.0));
             CHECK(t.entry_bar_index == 1);
-            CHECK(t.exit_bar_index == (stop ? 1 : 2));
+            CHECK(t.exit_bar_index == 1);
         }
     }
 }
@@ -751,8 +754,8 @@ void test_recalc_through_stop_fills_before_valid_limit_leg() {
     }
 }
 
-void test_recalc_wrong_limit_does_not_hide_valid_stop_leg() {
-    std::printf("test_recalc_wrong_limit_does_not_hide_valid_stop_leg\n");
+void test_recalc_through_limit_fills_before_valid_stop_leg() {
+    std::printf("test_recalc_through_limit_fills_before_valid_stop_leg\n");
     RecalcEntryBarBracketProbe p(
         RecalcEntryBarBracketProbe::Shape::VALID_STOP_WRONG_LIMIT);
     Bar bars[] = {
@@ -766,7 +769,10 @@ void test_recalc_wrong_limit_does_not_hide_valid_stop_leg() {
     if (p.trade_count() == 1) {
         const Trade& t = p.get_trade(0);
         CHECK(near(t.entry_price, 100.0));
-        CHECK(near(t.exit_price, 95.0));
+        // expectation corrected (R5 lane TAIL-D): the valid stop 95 -> the
+        // through limit at the open print 100, as TradingView books
+        // td-fp17-coof-open cell LA.
+        CHECK(near(t.exit_price, 100.0));
         CHECK(t.entry_bar_index == 1);
         CHECK(t.exit_bar_index == 1);
     }
@@ -1688,9 +1694,9 @@ int main() {
     test_fill_recalc_priced_entries_bypass_legacy_bar_throttle();
     test_recalc_priced_entry_exemption_expires_after_creation_bar();
     test_close_cleanup_does_not_leak_into_new_position_cycle();
-    test_recalc_wrong_side_entry_bar_limit_carries_stop_fills();
+    test_recalc_wrong_side_entry_bar_legs_fill_at_the_open();
     test_recalc_through_stop_fills_before_valid_limit_leg();
-    test_recalc_wrong_limit_does_not_hide_valid_stop_leg();
+    test_recalc_through_limit_fills_before_valid_stop_leg();
     test_interior_fill_recalc_market_entry_waits_for_next_waypoint();
     test_pooc_same_tick_requires_close_cursor_or_immediately();
     test_tokenized_close_respects_coof_cursor_timing();
