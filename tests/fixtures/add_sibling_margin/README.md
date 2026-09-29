@@ -92,9 +92,13 @@ then three adds of 700 on the 2025-04-07 06:00 bar; flattened at 08:00.
 Each call closes the oldest seeds whole and part of the next, and a second
 call follows: at 06:15's open (1539.97, both calls) under
 `process_orders_on_close`, at 06:15's high (1541.74) after the market call at
-its open. The same rule gives both calls of seven further lots probes' tapes
-(12 to 50 seeds, fees or none; scratch exports, not kept) and of the 3Commas
-grid bots' calls on BINANCE:BTCUSDT and BINANCE:ETHUSDT.P daily bars.
+its open. The same rule gives every call on thirteen further lots probes'
+tapes (scratch exports, not kept): 12, 16, 20, 25, 30, 40 and 50 seeds without
+fees; 10, 30 and 60 seeds at commission 0.1 % and slippage 3 (the 10-seed
+book, whose oldest seed costs more than the shortfall, takes no follow-up); 30
+seeds at each alone; and the 30-seed probe's market twin. It gives the
+3Commas grid bots' call pairs on BINANCE:BTCUSDT and BINANCE:ETHUSDT.P daily
+bars too.
 
 ## The replay
 
