@@ -682,6 +682,11 @@ def build_runtime_provenance(run_kwargs: dict, trade_start_ms: int | None) -> di
             }
             for tf, entry in sorted(native_feeds.items())
         }
+    tail = run_kwargs.get("ohlcv_tail_bar")
+    if tail is not None:
+        # The input bar that completes a daily chart's cut last bar on the
+        # declared-magnifier route (_daily_bars_rebuilt).
+        runtime["ohlcv_tail_bar"] = [int(tail[0])] + [float(x) for x in tail[1:]]
     return runtime
 
 
@@ -2291,6 +2296,7 @@ class Strategy:
             magnifier_volume_weighted: bool = False,
             preloaded_bars: "tuple | None" = None,
             probe_requests: dict | None = None,
+            ohlcv_tail_bar: "tuple | None" = None,
             on_report=None) -> dict:
         """Read OHLCV from CSV, drive the engine, return a report dict.
 
@@ -2319,6 +2325,11 @@ class Strategy:
         Preloaded-bar callers retain their established return shape and do not
         receive an inferred identity for an already-sliced buffer.
 
+        ``ohlcv_tail_bar`` (when given) is one ``(timestamp, open, high,
+        low, close, volume)`` input bar appended after the loaded bars when it
+        is later than the last of them: the completion of a daily chart's cut
+        last bar on the declared-magnifier route (_daily_bars_rebuilt).
+
         ``on_report`` (when given) is invoked with the live ``ReportC``
         after the engine-error check and BEFORE ``report_free``, so
         callers can read report fields the summary dict does not carry
@@ -2345,6 +2356,8 @@ class Strategy:
             bars, n, source_feed_sha256 = _load_bars(
                 bars_csv, ohlcv_start_ms=ohlcv_start_ms,
                 ohlcv_end_ms=ohlcv_end_ms)
+        if ohlcv_tail_bar is not None:
+            bars, n = _with_tail_bar(bars, n, ohlcv_tail_bar)
         aux_requested = (aux_security_ohlcv_csv is not None
                          or aux_security_input_tf is not None)
         aux_bars = None
@@ -2647,6 +2660,21 @@ class Strategy:
         finally:
             self.lib.report_free(ctypes.byref(report))
             self.lib.strategy_free(state)
+
+
+def _with_tail_bar(bars, n: int, tail: tuple):
+    """``bars[:n]`` followed by the input bar ``tail`` -- ``(timestamp, open,
+    high, low, close, volume)`` -- when it is later than the last of them
+    (Strategy.run's ``ohlcv_tail_bar``); the bars unchanged otherwise."""
+    tail_ts, tail_o, tail_h, tail_l, tail_c, tail_v = tail
+    if n > 0 and int(tail_ts) <= int(bars[n - 1].timestamp):
+        return bars, n
+    extended = (BarC * (n + 1))()
+    if n:
+        ctypes.memmove(extended, bars, ctypes.sizeof(BarC) * n)
+    extended[n] = BarC(float(tail_o), float(tail_h), float(tail_l), float(tail_c),
+                       float(tail_v), int(tail_ts))
+    return extended, n + 1
 
 
 def _load_bars(csv_path: Path, *, ohlcv_start_ms: int | None = None,
@@ -3629,6 +3657,112 @@ def _tf_seconds(tf: str) -> int:
     return n * 60
 
 
+class DailyRebuild(NamedTuple):
+    """How a finer feed rebuilds a daily chart's bars
+    (_daily_bars_rebuilt)."""
+    missed: str | None        # the first bar it does not rebuild, or None
+    tail: tuple | None        # the input bar that completes a cut last bar
+
+
+def _daily_bars_rebuilt(chart_ohlcv: Path, feed: Path,
+                        chart_ts: list[int]) -> DailyRebuild:
+    """Whether the finer feed rebuilds every daily chart bar of the run: over
+    each bar's own span, from its stamp to the next bar's, the feed's first
+    open, extremes, last close and summed volume are the bar's. ``missed``
+    names the first bar it does not rebuild; a bar with no feed bar at all
+    is not rebuilt -- a feed that starts after the chart would warm nothing
+    the chart run warms.
+
+    The run's last bar is rebuilt in part when the feed stops inside it: both
+    lane feeds end at TradingView's range end, which falls inside that bar,
+    and TradingView's own last bar is the chart's, whole -- a position still
+    open is closed at that bar's close. The feed's part must open at the
+    bar's open and stay inside its extremes, and ``tail`` then completes it:
+    one input bar at the bar's last minute (the previous bar's last minute,
+    stepped by its stamps) that carries the rest of the chart bar -- its
+    high, low and close, the volume the feed's minutes leave, opening at the
+    feed's last close -- so the run's last daily bar is the chart's own and
+    is calculated, as the chart run's last bar is. ``tail`` is None when the
+    feed covers the bar, which is then rebuilt whole. A feed that stops
+    before the last bar's first minute, or inside a chart of one bar (no
+    earlier bar to step its last minute from), does not rebuild it."""
+    chart: dict[int, tuple[float, ...]] = {}
+    with chart_ohlcv.open(newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            chart[int(float(row["timestamp"]))] = tuple(
+                float(row[k] or 0.0) for k in ("open", "high", "low", "close", "volume"))
+    stamps = list(chart_ts)
+    if not stamps:
+        return DailyRebuild(None, None)
+    day_ms = 86_400_000
+    sums: list[list[float] | None] = [None] * len(stamps)
+    last_minute: list[int | None] = [None] * len(stamps)
+    k = 0
+    stopped_inside = True
+    with feed.open(newline="", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        header = next(reader, None)
+        if header is None:
+            return DailyRebuild("the finer feed is empty", None)
+        cols = [header.index(name) for name in
+                ("timestamp", "open", "high", "low", "close", "volume")]
+        for rec in reader:
+            ts = int(float(rec[cols[0]]))
+            if ts < stamps[0]:
+                continue
+            while k + 1 < len(stamps) and ts >= stamps[k + 1]:
+                k += 1
+            if k == len(stamps) - 1 and ts >= stamps[-1] + day_ms:
+                stopped_inside = False
+                break
+            o, h, l, c, v = (float(rec[i] or 0.0) for i in cols[1:])
+            acc = sums[k]
+            if acc is None:
+                sums[k] = [o, h, l, c, v]
+            else:
+                acc[1] = max(acc[1], h)
+                acc[2] = min(acc[2], l)
+                acc[3] = c
+                acc[4] += v
+            last_minute[k] = ts
+    n = len(stamps)
+    final = None
+    if stopped_inside:
+        if sums[-1] is None:
+            return DailyRebuild(
+                f"no finer bar in the daily bar of {_fmt_utc_ms(stamps[-1])}", None)
+        if n < 2:
+            return DailyRebuild(
+                f"the finer feed stops inside the chart's one daily bar "
+                f"({_fmt_utc_ms(stamps[-1])})", None)
+        final = stamps[-1] + (last_minute[-2] - stamps[-2]) \
+            if last_minute[-2] is not None else None
+    whole = n if final is None or final <= last_minute[-1] else n - 1
+    for index, stamp in enumerate(stamps[:whole]):
+        bar, acc = chart[stamp], sums[index]
+        if acc is None:
+            return DailyRebuild(f"no finer bar in the daily bar of {_fmt_utc_ms(stamp)}", None)
+        for name, want, got in zip(("open", "high", "low", "close"), bar, acc):
+            if want != got:
+                return DailyRebuild(
+                    f"the daily bar of {_fmt_utc_ms(stamp)} has {name} {want:.12g}, "
+                    f"the finer feed {got:.12g}", None)
+        if not math.isclose(bar[4], acc[4], rel_tol=1e-9, abs_tol=1e-9):
+            return DailyRebuild(
+                f"the daily bar of {_fmt_utc_ms(stamp)} has volume {bar[4]:.12g}, "
+                f"the finer feed {acc[4]:.12g}", None)
+    if whole == n:
+        return DailyRebuild(None, None)
+    o, h, l, c, v = chart[stamps[-1]]
+    acc = sums[-1]
+    if acc[0] != o or acc[1] > h or acc[2] < l:
+        return DailyRebuild(
+            f"the daily bar of {_fmt_utc_ms(stamps[-1])} opens at {o:.12g} inside "
+            f"{l:.12g} .. {h:.12g}, the finer feed's part at {acc[0]:.12g} inside "
+            f"{acc[2]:.12g} .. {acc[1]:.12g}", None)
+    return DailyRebuild(None, (final, acc[3], h, l, c, max(v - acc[4], 0.0)))
+
+
 class MagnifierPlan(NamedTuple):
     """How a script declaring use_bar_magnifier = true is run
     (_declared_magnifier_plan)."""
@@ -3659,14 +3793,30 @@ def _declared_magnifier_plan(params: dict, chart_ohlcv: Path, run_kwargs: dict,
     (w9mag-fx-eth-15-off) enter alike and part on 7 of the 23 exits
     tests/fixtures/magnifier_intrabars replays.
 
+    A daily chart runs magnified the same way, on 60-minute intrabars
+    (TradingView's table row for 1D, source::tradingview_intrabar_timeframe),
+    where it keeps its own daily bars. The finer feed must rebuild them: over
+    each bar's span, stamp to stamp, its first open, extremes, last close and
+    summed volume are the bar's (_daily_bars_rebuilt) -- so on
+    OANDA:XAUUSD, OANDA:EURUSD and BINANCE:BTCUSDT, but not on an exchange
+    whose daily bar carries its official open and close or settlement (NSE,
+    NYSE, NASDAQ, CME), whose chart run is left as it was. The chart feed --
+    the venue's daily bars -- is installed as the run's daily feed
+    (``native_security_feeds``), whose stamps date the 1m aggregate's D bars
+    (the kernel's day-label rule, NativeExecutionConsumer::prepare_day_labels):
+    OANDA:XAUUSD's day stays the 21:00 UTC bar its tape is dated by, not the
+    1800-1700 session's 22:00 open. A daily feed the run already installs is
+    kept. TradingView's tapes of synthetic daily-chart probes
+    (tests/fixtures/daily_magnifier) resolve their orders on those intrabars
+    and date every one by the daily stamp.
+
     ``declared-not-run`` otherwise, saying why: the probe turns the
     magnifier off (``runtime_overrides.bar_magnifier`` false), no magnifier
     feed was named, the run already reads an auxiliary request.security
-    feed, the chart is not coarser than 1m, or the chart is daily, weekly or
-    monthly -- TradingView keeps its own daily bars as the chart bars there
-    (OANDA:XAUUSD's daily bar opens at 21:00 UTC, the 1m aggregate's at
-    22:00), and no engine input yet keeps chart bars with a 1m intrabar
-    source. A not-run plan leaves the run exactly as it was."""
+    feed, the chart is not coarser than 1m, the chart is coarser than one
+    day -- a weekly, monthly or multi-day chart, whose bars no installed feed
+    dates -- or the finer feed does not rebuild a daily chart's own bars. A
+    not-run plan leaves the run exactly as it was."""
     env = os.environ if env is None else env
 
     def not_run(why: str) -> MagnifierPlan:
@@ -3684,8 +3834,12 @@ def _declared_magnifier_plan(params: dict, chart_ohlcv: Path, run_kwargs: dict,
     if not chart_tf:
         chart_tf = str(_infer_bar_interval_ms(chart_ohlcv) // 60_000)
     chart_seconds = _tf_seconds(chart_tf)
-    if chart_seconds < 0 or chart_seconds >= 86400:
-        return not_run(f"chart {chart_tf} is daily or coarser")
+    if chart_seconds < 0 or chart_seconds > 86400:
+        return not_run(f"chart {chart_tf} is coarser than one day")
+    if chart_seconds == 86400 and chart_tf.isdigit():
+        # A daily chart spelled in minutes (1440, inferred from its bars) is
+        # the calendar's 1D, whose bars the installed daily feed dates.
+        chart_tf = "1D"
     if chart_seconds <= 60:
         return not_run(f"chart {chart_tf} is not coarser than the 1m feed")
     chart_ts = _feed_timestamps(chart_ohlcv,
@@ -3701,15 +3855,33 @@ def _declared_magnifier_plan(params: dict, chart_ohlcv: Path, run_kwargs: dict,
     if expected and feed_sha != expected:
         raise ValueError(
             f"{MAGNIFIER_FEED_ENV} sha256 {feed_sha} != {MAGNIFIER_FEED_SHA256_ENV} {expected}")
+    rebuilt = DailyRebuild(None, None)
+    if chart_seconds == 86400:
+        rebuilt = _daily_bars_rebuilt(Path(chart_ohlcv), feed, chart_ts)
+        if rebuilt.missed is not None:
+            return not_run(f"the finer feed does not rebuild the chart's own daily bars "
+                           f"({rebuilt.missed})")
     magnified = dict(run_kwargs)
     magnified.update(input_tf="1", script_tf=chart_tf, bar_magnifier=True,
                      ohlcv_start_ms=chart_ts[0],
                      ohlcv_end_ms=chart_ts[-1] + chart_seconds * 1000 - 1)
-    return MagnifierPlan(
-        "declared",
-        f"run on the 1m feed {feed.name} (sha256 {feed_sha}), input_tf=1 "
-        f"script_tf={chart_tf}, magnifier on",
-        feed, magnified)
+    detail = (f"run on the 1m feed {feed.name} (sha256 {feed_sha}), input_tf=1 "
+              f"script_tf={chart_tf}, magnifier on")
+    if rebuilt.tail is not None:
+        magnified["ohlcv_tail_bar"] = rebuilt.tail
+        detail += (f"; the last daily bar, which the feed stops inside, completed "
+                   f"from the chart bar at {_fmt_utc_ms(rebuilt.tail[0])}")
+    if chart_seconds == 86400:
+        installed = dict(run_kwargs.get("native_security_feeds") or {})
+        if not any(_tf_seconds(tf) == 86400 for tf in installed):
+            chart_sha = _sha256_file(chart_ohlcv)
+            if chart_sha is None:
+                raise OSError(f"cannot hash the chart feed: {chart_ohlcv}")
+            installed[chart_tf] = {"path": Path(chart_ohlcv).resolve(),
+                                   "source_file_sha256": chart_sha}
+            detail += f"; the chart's daily bars are its daily feed (sha256 {chart_sha})"
+        magnified["native_security_feeds"] = installed
+    return MagnifierPlan("declared", detail, feed, magnified)
 
 # --- docker runner (pineforge-release image) ---------------------------
 

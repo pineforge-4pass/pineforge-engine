@@ -1,0 +1,24 @@
+//@version=6
+// XAU-CAL synthetic probe (written for this lane; not derived from any scraped script).
+// Chart: OANDA:XAUUSD 1D. Question: when a DAILY chart backtests with the bar magnifier,
+// which date does TradingView give each daily bar and its orders, and which path decides
+// a bracket inside the day?
+//
+// Whenever flat, a 1-unit market long is sent at the bar's close (it fills at the next
+// bar's open) with a bracket of k = 0.4 % of that close on each side. Gold's daily range
+// is several times k, so most days reach both legs, and the magnifier's intrabar path,
+// not the daily bar's own open/high/low/close, decides which leg fills first.
+//
+// Every order comment spells the placing bar's time and time_close, in UTC.
+strategy("xc daily magnifier", overlay = true, use_bar_magnifier = true,
+     default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 1000000,
+     calc_on_order_fills = false, process_orders_on_close = false)
+
+f(int t) => na(t) ? "na" : str.format_time(t, "MMdd-HHmm", "UTC")
+info = "t=" + f(time) + "|tc=" + f(time_close)
+k = math.round_to_mintick(close * 0.004)
+
+if strategy.position_size == 0
+    strategy.entry("L", strategy.long, comment = info)
+    strategy.exit("X", "L", stop = close - k, limit = close + k,
+         comment_loss = "SL|" + info, comment_profit = "TP|" + info)

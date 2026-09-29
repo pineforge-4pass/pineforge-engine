@@ -1,0 +1,24 @@
+//@version=6
+// XAU-CAL synthetic probe (written for this lane; not derived from any scraped script).
+// Chart: OANDA:XAUUSD 1D, bar magnifier declared. Whenever flat, a buy limit rests 0.2 %
+// under the bar's close with a take-profit 0.4 % over that close and a stop 3 % under the
+// entry level, all live from the next bar's open. A day that dips to the limit and then
+// rallies to the take-profit books both inside the day; a day that rallies first and dips
+// later only enters. Which of the two a day is depends on the ORDER of its extremes: the
+// daily bar's open/high/low/close rule (nearer extreme first) and the day's own intrabars
+// disagree on some days, so the tape shows which path TradingView walks on a daily chart.
+// Every order comment spells the placing bar's time and time_close, in UTC.
+strategy("xc daily magnifier dip", overlay = true, use_bar_magnifier = true,
+     default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 1000000,
+     calc_on_order_fills = false, process_orders_on_close = false)
+
+f(int t) => na(t) ? "na" : str.format_time(t, "MMdd-HHmm", "UTC")
+info = "t=" + f(time) + "|tc=" + f(time_close)
+entryLevel = math.round_to_mintick(close * 0.998)
+target = math.round_to_mintick(close * 1.004)
+stopLevel = math.round_to_mintick(entryLevel * 0.97)
+
+if strategy.position_size == 0
+    strategy.entry("L", strategy.long, limit = entryLevel, comment = info)
+    strategy.exit("X", "L", limit = target, stop = stopLevel,
+         comment_profit = "TP|" + info, comment_loss = "SL|" + info)

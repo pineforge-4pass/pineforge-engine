@@ -326,6 +326,7 @@ set(TEST_SOURCES
     test_calendar_bucket_closes_once
     test_intraday_grid_late_day_open
     test_native_day_labels
+    test_daily_magnifier_tapes
     test_htf_session_close_completion
     test_chart_bar_bucket_label
     test_htf_bucket_real_end
@@ -2472,7 +2473,9 @@ foreach(_pf_hm_row IN ITEMS
         # R5 lane MAG-INTRABAR's tape row.
         "test_adapter_magnifier_intrabar_tapes|PINEFORGE_MI_FIXTURE_DIR|magnifier_intrabars"
         # R5 lane PAR-ORDERS-3's tape row.
-        "test_pooc_limit_close_tapes|PINEFORGE_PA3_POOC_LIMIT_FIXTURE_DIR|pooc_limit_close")
+        "test_pooc_limit_close_tapes|PINEFORGE_PA3_POOC_LIMIT_FIXTURE_DIR|pooc_limit_close"
+        # R5 lane XAU-CAL's tape row.
+        "test_daily_magnifier_tapes|PINEFORGE_DAILY_MAGNIFIER_FIXTURE_DIR|daily_magnifier")
     string(REPLACE "|" ";" _pf_hm_fields "${_pf_hm_row}")
     list(GET _pf_hm_fields 0 _pf_hm_target)
     list(GET _pf_hm_fields 1 _pf_hm_macro)

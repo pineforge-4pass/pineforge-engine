@@ -1,0 +1,16 @@
+{
+  "title": "xc daily magnifier dip",
+  "slug": "xc-dmag-dip-xau1d",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T03:55:06.314Z",
+  "chart": {
+    "symbol": "OANDA:XAUUSD",
+    "interval": "1D",
+    "from": "2026-02-16",
+    "to": "2026-04-01"
+  },
+  "pine_sha256": "46ded9a41d4725f634e810d6067042836207ce0ce1989c91276f2839b9bc5621",
+  "tv_trades_sha256": "ce53fcc24eee38c0c365bf9856fa500da0f6b8e7d64f3a8ee7b044299f14cbcb",
+  "tv_trades_rows": 40
+}

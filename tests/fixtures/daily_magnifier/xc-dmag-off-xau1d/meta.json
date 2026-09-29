@@ -1,0 +1,16 @@
+{
+  "title": "xc daily magnifier off",
+  "slug": "xc-dmag-off-xau1d",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T03:51:59.741Z",
+  "chart": {
+    "symbol": "OANDA:XAUUSD",
+    "interval": "1D",
+    "from": "2026-02-16",
+    "to": "2026-04-01"
+  },
+  "pine_sha256": "68de1e12306892e835bca8c06bddea2c33046a18df90ff08173df4134114fa4a",
+  "tv_trades_sha256": "6cca289f03560a6387eb7a249104537be3ee7a0c0e16129f9865d90310c73434",
+  "tv_trades_rows": 62
+}
