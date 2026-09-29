@@ -1707,6 +1707,9 @@ list(APPEND TEST_SOURCES test_adapter_magnifier_intrabar_tapes)
 # R5 lane PAR-ORDERS-3: a process_orders_on_close limit entry at the close that
 # placed it (TradingView's tapes, tests/fixtures/pooc_limit_close). Source-bound.
 list(APPEND TEST_SOURCES test_pooc_limit_close_tapes)
+# R5 lane FIX-E1E2: the report's script_tf_ratio and needs_aggregation on
+# every run route (E1). Source-bound.
+list(APPEND TEST_SOURCES test_report_timeframe_ratio)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

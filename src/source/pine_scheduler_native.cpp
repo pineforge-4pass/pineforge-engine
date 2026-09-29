@@ -126,6 +126,8 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
     const int ratio = undetected || !state.spec ? 1
         : tf_ratio(state.spec->input_tf, state.spec->script_tf);
     const bool needs_aggregation = ratio > 1 || ratio == -1;
+    host.diag_script_tf_ratio_ = ratio;
+    host.diag_needs_aggregation_ = needs_aggregation;
     input_script_completes_.assign(retained_.bars.size(), 1U);
     input_script_boundary_completes_.assign(retained_.bars.size(), 0U);
     // Which input bars complete a script bar, and which complete the previous
