@@ -170,7 +170,10 @@ public:
                 strategy_exit("X", "E", long_ ? level_ + reach : level_ - reach,
                               long_ ? level_ - 3.0 : level_ + 3.0);
             }
-            if (k - open_trade_entry_bar_index(0) >= 4) strategy_close("E");
+            // strategy.opentrades.entry_bar_index(0) is na until the open trade is
+            // booked, which a fill's recalculation can precede; na compares false.
+            const int entry_bar = open_trade_entry_bar_index(0);
+            if (!is_na(entry_bar) && k - entry_bar >= 4) strategy_close("E");
         }
     }
 

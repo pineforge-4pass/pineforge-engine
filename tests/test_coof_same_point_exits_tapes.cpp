@@ -167,7 +167,10 @@ public:
                 if (v_.cancel_all) strategy_cancel_all();
                 strategy_close("", "IMM", kNaN, kNaN, v_.immediately);
             }
-            if (k - open_trade_entry_bar_index(0) >= 12)
+            // strategy.opentrades.entry_bar_index(0) is na until the open trade is
+            // booked, which a fill's recalculation can precede; na compares false.
+            const int entry_bar = open_trade_entry_bar_index(0);
+            if (!is_na(entry_bar) && k - entry_bar >= 12)
                 strategy_close("", "TIME", kNaN, kNaN, false);
         }
     }
