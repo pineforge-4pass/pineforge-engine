@@ -8,12 +8,14 @@ This directory compares **PineForge** with two open-source PineScript runtimes a
 
 ## Headline
 
-Last refresh **2026-09-22**. Versions: engine `main` `063e4460` running the committed `generated.cpp` (codegen `89645d6`), PyneCore 6.10.2, PineTS 0.9.34 and vectorbt 0.28.2, on an Apple M4 Max.
+Last refresh **2026-09-29**. Versions: engine `main` `35db01c8` running the committed `generated.cpp` (codegen `121b3e6a`), PyneCore 6.10.3, PineTS 0.9.34 and vectorbt 0.28.2, on an AWS c7a.8xlarge (AMD EPYC 9R14, 32 cores, SMT off) running Ubuntu 24.04.
+
+**The host changed.** The 2026-09-22 table was timed on an Apple M4 Max, this one on an AWS c7a.8xlarge: times and bars/s are not comparable between the hosts, and only ratios measured on one host, in one window, are compared below.
 
 **Population: 200 strategies in 201 slots**, selected by [`select_population.py`](select_population.py) with seed 20260921. The manifest is [`results/selection.md`](results/selection.md).
 
 - **100 corpus probes** (slots `001`–`100`) are public. They come from `corpus/validation/` at gitlink `442d497`: at least one per each of 19 mechanism families, drawn by TradingView trade-count bins.
-- **100 closed strategies** (slots `101`–`200`) are TradingView-scraped community scripts on `BINANCE:ETHUSDT.P` 15m, the only market and timeframe that both the bench feed and the TradingView tapes cover. Their artifacts are in the maintainers' evidence store (sha256 `6e938f9a9160eeae6bda5c7c2d02078f1b9795d767a48d125fa68245f69ca539`) and are not public.
+- **100 closed strategies** (slots `101`–`200`) are TradingView-scraped community scripts on `BINANCE:ETHUSDT.P` 15m, the only market and timeframe that both the bench feed and the TradingView tapes cover. Their artifacts are in the maintainers' private evidence store (sha256 `c77a9c70891b5e4e97405fe6673389c06652a0cc449b380a4d982f1709e62019`) and are not public; the committed results name each by its slot number only.
 - **Slot `201` stands in for slot `192` in the PyneCore count.** PyneSys rejects `192`'s source with `"Empty document."`, so the next strategy from the same bin became slot `201`. PineForge runs all 201 slots.
 
 Each engine's trade list is graded against TradingView's own export (266,451 trades) by the canonical corpus rubric, [`scripts/verify_corpus.py`](../scripts/verify_corpus.py)'s `analyze_strategy`:
@@ -21,56 +23,59 @@ Each engine's trade list is graded against TradingView's own export (266,451 tra
 | Group | Engine | Slots graded | Trades emitted | TV trades | 🟢 excellent | 🟢 strong | 🟡 moderate | 🟠 weak | 🔴 minimal | ⚪ n/a |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | corpus | PineForge | 100 | 139,668 | 139,665 | **100** | 0 | 0 | 0 | 0 | 0 |
-| corpus | PyneCore | 100 | 199,063 | 139,665 | 84 | 12 | 0 | 3 | 1 | 0 |
+| corpus | PyneCore | 100 | 199,554 | 139,665 | 86 | 12 | 1 | 1 | 0 | 0 |
 | corpus | vectorbt | 13 | 18,040 | 13,637 | 4 | 6 | 2 | 1 | 0 | — |
-| closed | PineForge | 101 | 126,732 | 126,786 | **100** | 1 | 0 | 0 | 0 | 0 |
-| closed | PyneCore | 101 | 172,535 | 126,786 | 49 | 30 | 8 | 9 | 1 | 4 |
-| **all** | PineForge | 201 | 266,400 | 266,451 | **200** | 1 | 0 | 0 | 0 | 0 |
-| **all** | PyneCore | 201 | 371,598 | 266,451 | 133 | 42 | 8 | 12 | 2 | 4 |
+| closed | PineForge | 101 | 126,731 | 126,786 | **101** | 0 | 0 | 0 | 0 | 0 |
+| closed | PyneCore | 101 | 175,031 | 126,786 | 51 | 34 | 11 | 3 | 1 | 1 |
+| **all** | PineForge | 201 | 266,399 | 266,451 | **201** | 0 | 0 | 0 | 0 | 0 |
+| **all** | PyneCore | 201 | 374,585 | 266,451 | 137 | 46 | 12 | 4 | 1 | 1 |
 
-Counting the 200 strategies (slot `201` in place of `192`), PineForge grades 199 excellent and 1 strong. PyneCore grades 133 excellent, 42 strong, 8 moderate, 12 weak and 2 minimal, and 3 slots have no trade list.
+Counting the 200 strategies (slot `201` in place of `192`), PineForge grades all 200 excellent. PyneCore grades 137 excellent, 46 strong, 12 moderate, 4 weak and 1 minimal. The tapes predate a change TradingView made to `strategy()` defaults, and a slot whose script omits one runs with the value its tape ran with (see [Fairness](#fairness)).
 
-Speed was measured on a quiet host, re-checked before every timing batch; the details are in [`results/speed.md`](results/speed.md). PineForge was re-timed at engine `063e4460`. PyneCore, vectorbt and PineTS were not re-measured: their rows come from the same host's earlier 2026-09-22 window, at engine `e9ad37dd`.
+Every engine was timed in the same window on this host, at engine `35db01c8`, with the quiet-host gate re-checked before every timing batch and every timing process pinned to fixed cores; the loads are in [`results/speed.md`](results/speed.md).
 
 | Engine | How it is timed | Strategies | Median per strategy | Bars/s: Q1 · **median** · Q3 |
 |---|---|---:|---:|---|
-| PineForge | in-process Google Benchmark, bar magnifier on | 201 | 89.4 ms | 425k · **603k** · 731k |
-| PyneCore | subprocess wall time (interpreter start, import, backtest), 8 concurrent | 196 | 1,475 ms | 23.3k · **36.6k** · 58.5k |
-| vectorbt | in-process, the 13 ports that load | 13 | 102.3 ms | — |
-| PineTS | subprocess wall time of the canonical 10-indicator script | 1 | 485.8 ms | — |
+| PineForge | in-process Google Benchmark, bar magnifier on | 201 | 66.8 ms | 505k · **807k** · 1133k |
+| PyneCore | subprocess wall time (interpreter start, import, backtest), 8 concurrent | 200 | 2,629 ms | 13.1k · **20.5k** · 32.2k |
+| vectorbt | in-process, the 13 ports that load | 13 | 209.3 ms | — |
+| PineTS | subprocess wall time of the canonical 10-indicator script | 1 | 1416.2 ms | — |
 
-- PineForge's median speedup is **15× over PyneCore**, per strategy across the 196 strategies both engines time (p5 6×, p95 68×), and 1.3× over vectorbt across its 13 ports.
-- The throughput package ([`throughput/`](throughput/)) measures the magnifier-off hot loop at a median of **0.64 M bars/s** per strategy. That figure is over all 201 slots, and is the median of five quiet runs.
-- The PineForge sweep ran at a 1-minute load of 5.41 (slots 001–100) and 5.90 (slots 101–201). Against engine `e9ad37dd`, timed alternately with `063e4460` in one window on 26 public slots, `063e4460` takes 0.94× the time per strategy at the median.
+- PineForge's median speedup is **36× over PyneCore**, per strategy across the 200 strategies both engines time (p5 15×, p95 131×), and 4.2× over vectorbt across its 13 ports.
+- The throughput package ([`throughput/`](throughput/)) measures the magnifier-off hot loop at a median of **0.78 M bars/s** per strategy. That figure is over all 201 slots, and is the median of five quiet runs.
+- The PineForge sweep ran at a 1-minute load of 4.68 (slots 001–100) and 1.32 (slots 101–201). Against engine `063e4460`, timed alternately with `35db01c8` in one window on 201 slots, `35db01c8` takes 0.35× the time per strategy at the median, each engine running its own `generated.cpp`.
+- On the same host and in the same window, PyneCore 6.10.3 takes 1.01× the time of 6.10.2 per strategy at the median, over 26 public slots timed alternately.
+
+**Against the 2026-09-22 table** (engine `063e4460`: PineForge 200 excellent and 1 strong; PyneCore 6.10.2: 133 excellent; 15× over PyneCore at a median 603k bars/s per PineForge strategy):
+
+- **Tiers:** PineForge's strong row, closed slot `181`, grades excellent. PyneCore 6.10.3 grades 12 slots higher than 6.10.2 did and none lower; among them are `140`, `166` and `197`, which raised a `RuntimeError` on 6.10.2 and now run.
+- **Speed:** that table was timed on the other host, so its speedup is not set against this one's. On this host, the same-window comparisons above measure what changed: the engine's time per strategy, and PyneCore's with its release.
 
 **These numbers are not comparable with the 2026-06-11 table** (PineForge 100/100 excellent, PyneCore 85/100, 162×):
 
-- **Tiers:** that table graded a different 100-strategy population with `compare.py`'s own copy of the rubric. The copy had drifted from the canonical rubric and no longer parsed the current tape format. `compare.py` now calls the canonical rubric directly, and PyneCore moved from 6.4.6 to 6.10.2 in between.
-- **Speed:** the ratio fell because the engine is slower per bar, not because the host changed. The 2026-06-11 engine, rebuilt on this host and timed in the same window as the current one, still runs close to its June timings (5–16 % over them in the quieter pass). On the three probes both populations share, the current engine is 10–18× slower with the magnifier on; see [the provenance](results/speed.md#provenance).
+- **Tiers:** that table graded a different 100-strategy population with `compare.py`'s own copy of the rubric. The copy had drifted from the canonical rubric and no longer parsed the current tape format. `compare.py` now calls the canonical rubric directly, and PyneCore moved from 6.4.6 to 6.10.3 in between.
+- **Speed:** it was timed on an Apple M4 Max. The 2026-06-11 engine, rebuilt on this host and timed in the same window, runs the three probes both populations share 4–8× faster than `35db01c8` with the magnifier on; see [the provenance](results/speed.md#provenance).
 
-Every number in this section traces to a committed file or a pinned commit. The raw timing files are in [`results/raw/`](results/raw/), and [`check_provenance.py`](check_provenance.py) derives each number from its source and fails on any number without one. The PineForge sweep's own Google Benchmark files were not kept, so its row derives from the per-strategy column of [`results/speed.md`](results/speed.md).
+Every number in this section traces to a committed file or a pinned commit. The raw timing files are in [`results/raw/`](results/raw/), and [`check_provenance.py`](check_provenance.py) derives each number from its source and fails on any number without one.
 
 ### Where the non-excellent rows come from
 
-**PineForge.** The one strong row is closed slot `181`. Every TradingView trade is matched, but PineForge also emits one extra trade: a long on the window's opening bars (count Δ 1 of 2,411).
+**PineForge.** Every slot grades excellent. Closed slot `181`, strong in the 2026-09-22 table with one extra long on the window's opening bars, lost that trade with the regenerated `generated.cpp`. Codegen `58e5f3e` converts every double-valued expression that enters an integer slot through the na-preserving cast: the script converted an `na` double to `int`, which C++ leaves undefined, and the old build booked one trade more than TradingView.
 
-**PyneCore.** It has 64 graded non-excellent rows. The per-row failing gates are in [`results/summary.md`](results/summary.md).
+**PyneCore.** It has 63 graded non-excellent rows. The per-row failing gates are in [`results/summary.md`](results/summary.md).
 
-- **29 rows** fail only on PnL (15) or only on the trade count (14). In all of them, entries and exits match TradingView to the tick. The difference is the window: PyneCore's broker trades from the feed's first bar, 2024-10-19, five months before TradingView's range opens.
+- **32 rows** fail only on PnL (16) or only on the trade count (16). Their entries match TradingView's exactly and their exits within 0.0002 % (entry and exit p90). The difference is the window: PyneCore's broker trades from the feed's first bar, 2024-10-19, five months before TradingView's range opens.
   - With percent-of-equity sizing, PyneCore compounds P&L that TradingView never had. Slot `002`: quantity 536.418 against TradingView's 547.6178 on identical fills.
-  - A position PyneCore already holds when the range opens adds one trade at the window's leading edge.
+  - A position PyneCore already holds when the range opens adds a trade at the window's leading edge. In 11 of the 16 count-only rows, PyneCore is in a position when TradingView's first trade opens.
   - The PyneCore runner has no counterpart of PineForge's TradingView-window order gate.
-- **9 multi-timeframe scripts** reproduce 0–85.5 % of TradingView's history through `request.security` (the rubric's coverage; `042` has no aligned trades): corpus `037`, `040` and `042`; closed `114`, `163`, `164`, `169`, `181` and `189`.
+- **Multi-timeframe scripts.** PyneCore 6.10.2 reproduced 0–85.5 % of TradingView's history through `request.security` on nine of them. With 6.10.3's `request.security` fixes, corpus `037` and `040` and closed `163` and `164` grade excellent, and closed `181` is one of the count-only rows above. Corpus `042` and closed `114` and `189` grade moderate, and closed `169` still reproduces 41.6 % (weak).
 - **3 grid bots** (`102`, `103`, `107`) drift on FIFO drains and grade moderate.
 - Slot `086` (a `str.match` regex filter) grades weak, and slot `135` has no aligned trades.
-- The remaining rows fail mixed gates.
+- The other 22 rows fail other gates, one or several.
 
-**Four PyneCore slots have no trade list:**
+**One PyneCore slot has no trade list:** slot `192`, whose source PyneSys rejects. The file carries `//@version=6` followed by two `//@version=5` lines. Slots `140`, `166` and `197` raised a `RuntimeError` in 6.10.2's `request.security` engine at the feed's first, partial day; on 6.10.3 they run.
 
-- Slot `192`: PyneSys rejects the source. The file carries `//@version=6` followed by two `//@version=5` lines.
-- Slots `140`, `166` and `197`: PyneCore raises a `RuntimeError` in its `request.security` engine at the feed's first, partial day.
-
-Slot `143` hits the same error intermittently. Its grade comes from the one run that completed, and it could not be timed.
+Slot `143`, whose `request.security` failed intermittently on 6.10.2, completed all 20 timed runs on 6.10.3.
 
 ## Reproduce
 
@@ -94,7 +99,7 @@ cat benchmarks/results/summary.md
 **Maintainers: the full 201 slots.** Fetch the closed root from the maintainers' private evidence store (`lab evidence get`, a maintainer-only tool, with the campaign environment sourced). Its directory is gitignored, and every harness step picks it up when it exists:
 
 ```bash
-lab evidence get 6e938f9a9160eeae6bda5c7c2d02078f1b9795d767a48d125fa68245f69ca539 --out /tmp/bench-closed.tar.gz
+lab evidence get c77a9c70891b5e4e97405fe6673389c06652a0cc449b380a4d982f1709e62019 --out /tmp/bench-closed.tar.gz
 tar -xzf /tmp/bench-closed.tar.gz -C benchmarks        # -> benchmarks/assets-closed/ (101 slots)
 cmake -B build -S . -DPINEFORGE_BUILD_TESTS=ON -DPINEFORGE_BUILD_BENCH_STRATEGIES=ON -DPINEFORGE_BUILD_SPEED_BENCH=ON
 cmake --build build --target pineforge bench_strategies pineforge_bench -j 12
@@ -109,8 +114,9 @@ QUIET_LOAD_MAX=6 SKIP_BUILD=1 SKIP_PINEFORGE=1 SKIP_PYNE=1 SKIP_PINETS=1 SKIP_RE
 #   or in chunks, re-checking the gate before each; the closed PyneCore slots run 1-72 s per backtest:
 ./build/bin/pineforge_bench --benchmark_filter='/throughput/with_magnifier' --benchmark_format=json > benchmarks/_workdir/pf_speed.json
 #   (or per slot range, e.g. --benchmark_filter='^(0[0-9][0-9]|100)-[^/]*/throughput/with_magnifier', then merge the "benchmarks" arrays)
-(cd benchmarks && uv run python speed/time_pynecore.py --n 20 --workers 8 --slots 1-56 --out _workdir/pc_speed_c01.json)
-#   ... one chunk per slot range up to 201, then merge them into _workdir/pc_speed.json
+(cd benchmarks && uv run python speed/time_pynecore.py --n 20 --workers 8 \
+    --first 178,162,164,163,165,132,114,171,181,168,189,105 --out _workdir/pc_speed.json)
+#   (--first starts the longest slots first, so the pool stays 8 wide; one batch took an hour on the AWS host)
 (cd benchmarks && N=20 node speed/time_pinets.mjs > _workdir/pt_speed.json)
 (cd benchmarks && uv run python speed/time_vectorbt.py --out _workdir/vbt_speed.json)
 (cd benchmarks && uv run python speed/aggregate.py --pineforge _workdir/pf_speed.json \
@@ -122,7 +128,7 @@ QUIET_LOAD_MAX=6 SKIP_BUILD=1 SKIP_PINEFORGE=1 SKIP_PYNE=1 SKIP_PINETS=1 SKIP_RE
 bash benchmarks/throughput/reproduce.sh
 ```
 
-PyneSys is not needed to reproduce: the committed `strategy_pyne.py` files are the compiler's output. Refreshing them takes the maintainer's PyneSys key, which the API limits to 120 requests per clock hour and 300 a day; this refresh's 204 requests are in [`results/pynesys-compile-log.md`](results/pynesys-compile-log.md). Adding slots, refreshing the OHLCV and re-emitting `generated.cpp` through codegen are done by the maintainer-only bench-maintenance scripts.
+PyneSys is not needed to reproduce: the committed `strategy_pyne.py` files are the compiler's output. Refreshing them takes the maintainer's PyneSys key, which the API limits to 120 requests per clock hour and 300 a day; the 204 requests that compiled them on 2026-09-21 are in [`results/pynesys-compile-log.md`](results/pynesys-compile-log.md). The 2026-09-30 refresh sent none. Adding slots, refreshing the OHLCV and re-emitting `generated.cpp` through codegen are done by the maintainer-only bench-maintenance scripts.
 
 **`run_all.sh` knobs:**
 
@@ -133,7 +139,7 @@ PyneSys is not needed to reproduce: the committed `strategy_pyne.py` files are t
 
 Every engine run removes the slot's previous trade list first, so a failed run leaves an `_<engine>_error.log` and no trade list, never an earlier run's. A PineForge failure on any slot (a run error, or a `generated.cpp` without its built strategy library) stops `run_all.sh` with exit status 1 before any report is written. PyneCore and vectorbt failures are results: the reports grade those slots n/a with the error.
 
-The harness checks itself without a build or the assets: `python3 benchmarks/check_provenance.py` traces every headline number to its committed source (in a full clone: it reads the 2026-06-11 table from commit `933fe583`), and `python3 -m unittest discover -s benchmarks/tests` runs the harness tests.
+The harness checks itself without a build or the assets: `python3 benchmarks/check_provenance.py` traces every headline number to its committed source (in a full clone: it reads the 2026-06-11 and 2026-09-22 tables from commits `933fe583` and `35db01c8`), and `python3 -m unittest discover -s benchmarks/tests` runs the harness tests.
 
 ## What gets reproduced
 
@@ -217,17 +223,21 @@ A single canonical script ([`assets/strategies/_indicators/canonical.pine`](http
 
 ### Speed measurement
 
-- **PineForge** is timed with Google Benchmark's in-process hot loop, with the bar magnifier on (1→4 ENDPOINTS sub-bar sampling), which is the engine's most expensive configuration. `strategy.dylib` is `dlopen`ed once, outside the timed region. Each timed iteration runs `strategy_create` plus `run_backtest_full` over the whole feed, and the figure is the per-iteration mean over 20 iterations.
+- **PineForge** is timed with Google Benchmark's in-process hot loop, with the bar magnifier on (1→4 ENDPOINTS sub-bar sampling), which is the engine's most expensive configuration. The strategy library is `dlopen`ed once, outside the timed region. Each timed iteration runs `strategy_create`, applies the slot's `inputs.json` `strategy_overrides` (the settings the graded run uses), and runs `run_backtest_full` over the whole feed; the figure is the per-iteration mean over 20 iterations, and each benchmark also reports its run's trade count.
 - **PyneCore** is timed as the subprocess wall time of `uv run python runners/run_pynecore.py <slot> --no-write`, which includes Python startup and framework import. The figures are the median and p95 over 20 invocations, with 8 slots timed concurrently.
 - **vectorbt** is timed in-process: the median over 20 iterations of each port.
 - **PineTS** is timed as the subprocess wall time of `node runners/run_pinets_canonical.mjs`. The harness has no PineTS strategy runner, so the canonical indicator script stands in for its indicator-layer cost.
 - **The quiet-host gate:** before every timing batch, the 1-minute load average must be below 6 with no `cmake --build`, `ctest` or `ci_verify` process running, counted by executable name. `speed.md` lists the load at every batch.
+- **Pinning:** on the timing host every single-threaded timer runs pinned to one core and PyneCore's eight concurrent subprocesses to eight others (`taskset`), and the gate also requires those cores idle. `speed.md` names the cores.
+- **Same-host comparisons:** a change of engine or of a PyneCore release is measured by timing both sides on the same host in one window, alternating new, old, old, new; times from different hosts are never set against each other.
 
 The methodologies are mixed on purpose. In-process timing is the realistic cost for an FFI-callable native engine or a library. Subprocess timing is the realistic cost for engines whose API entry point is the process. Each number is what a real consumer of that engine would see.
 
 ## Fairness
 
 **What is held equal.** Every engine consumes the same 53,929-bar Binance ETH/USDT-USDT perpetual 15m OHLCV feed at [`assets/data/ETHUSDT_15.csv`](https://github.com/pineforge-4pass/pineforge-benchmarks-assets/blob/6aedbcf5c263ec49239dc55b91f39046d470aef1/data/ETHUSDT_15.csv). The PyneCore Python is the official cloud-compiler output for the same `.pine` sources PineForge runs, with no hand-translation. Commission, slippage, default quantity and the bar magnifier come from the `strategy(...)` declaration in the `.pine` source, plus the slot's `inputs.json` runtime overrides.
+
+**The tapes' `strategy()` defaults.** TradingView changed three Pine v6 `strategy()` defaults on 2026-09-24: `initial_capital` 1,000,000 → 100,000, `default_qty_type` fixed → percent of equity, and `default_qty_value` 1 → 100. Every tape here was recorded before that, and the codegen declares the new values when a script omits them. The 64 slots whose script omits one of the three (2 public, 62 closed) pin the value the tape ran with in `inputs.json`'s `strategy_overrides`, as the corpus does. PyneCore's own defaults are the old values, so both engines run each tape's settings. Without the pins, the regenerated closed half grades 45 excellent and 42 weak: capital ten times smaller, and percent-of-equity orders where the script meant one contract.
 
 **What is not.** PineForge applies TradingView's trading window. Its runner, `scripts/run_strategy.py`, warms indicators on the pre-window bars but holds strategy orders until the tape's range opens; four closed slots whose TradingView exports carry earlier positions opt out through `run_strategy.args`. PyneCore's runner has no such gate and trades from the feed's first bar, which accounts for almost half of PyneCore's non-excellent rows (see above). A trimmed feed would buy window parity at the cost of indicator warm-up.
 

@@ -1,0 +1,132 @@
+{
+  "001-analyzer-anvil-percent-costs-01": {
+    "median_ms": 2302.7855175000695,
+    "p95_ms": 2347.4363394997454,
+    "n": 10
+  },
+  "004-barstate-isconfirmed-magnifier-off-01b": {
+    "median_ms": 1182.1986834997915,
+    "p95_ms": 1218.6177044495253,
+    "n": 10
+  },
+  "005-bracket-compass-partial-ladder-01": {
+    "median_ms": 2012.403185999574,
+    "p95_ms": 2031.4792399002272,
+    "n": 10
+  },
+  "009-bracket-trail-points-with-offset-only-01": {
+    "median_ms": 1165.7655429999068,
+    "p95_ms": 1190.94211574984,
+    "n": 10
+  },
+  "013-composite-boscurv-pivot-bos-trigger-01": {
+    "median_ms": 1803.8164174995472,
+    "p95_ms": 1830.0032103503327,
+    "n": 10
+  },
+  "017-composite-kkb-ema-atr-breakout-band-01": {
+    "median_ms": 1327.3996255002203,
+    "p95_ms": 1364.5535179498438,
+    "n": 10
+  },
+  "021-composite-scalping-integration-01": {
+    "median_ms": 1389.4335019999744,
+    "p95_ms": 1432.192594700382,
+    "n": 10
+  },
+  "025-composite-vcp-rsi-smooth-divergence-01": {
+    "median_ms": 1155.397555500258,
+    "p95_ms": 1188.1752575495284,
+    "n": 10
+  },
+  "029-drawing-visual-noise-geometry": {
+    "median_ms": 2144.384562999676,
+    "p95_ms": 2195.161399199469,
+    "n": 10
+  },
+  "033-math-kiln-power-efficiency-01": {
+    "median_ms": 1640.600310499849,
+    "p95_ms": 1667.5826048997806,
+    "n": 10
+  },
+  "037-mtf-daily-array-median-percentrank-01": {
+    "median_ms": 4288.136182000017,
+    "p95_ms": 4316.118437900332,
+    "n": 10
+  },
+  "041-mtf-orbit-trend-01": {
+    "median_ms": 6471.913029499774,
+    "p95_ms": 6778.036945900021,
+    "n": 10
+  },
+  "045-oca-raw-strategy-order-reduce-01": {
+    "median_ms": 978.4286315002646,
+    "p95_ms": 1005.0505077998423,
+    "n": 10
+  },
+  "049-order-dual-four-bar-stop-no-close-01": {
+    "median_ms": 1279.6348420001777,
+    "p95_ms": 1301.0054823503651,
+    "n": 10
+  },
+  "053-order-flip-stop-no-paired-close-01": {
+    "median_ms": 1211.8754499997522,
+    "p95_ms": 1234.0258197499224,
+    "n": 10
+  },
+  "057-order-same-id-market-entry-repeat-01": {
+    "median_ms": 1063.5544699998718,
+    "p95_ms": 1087.9754155495448,
+    "n": 10
+  },
+  "061-pyramid-deferred-flip-close-all-01": {
+    "median_ms": 1789.9217804997534,
+    "p95_ms": 1818.8207410998075,
+    "n": 10
+  },
+  "065-stats-ledger-outcome-throttle-01": {
+    "median_ms": 1946.2536854998689,
+    "p95_ms": 2008.628046550075,
+    "n": 10
+  },
+  "069-ta-closedtrades-risk-introspection-01": {
+    "median_ms": 1598.3371590000388,
+    "p95_ms": 1628.790535099779,
+    "n": 10
+  },
+  "073-ta-inside-bar-engulfing-01": {
+    "median_ms": 1722.0711614995707,
+    "p95_ms": 1779.2503914002282,
+    "n": 10
+  },
+  "077-ta-pivot-array-unshift-pop-01": {
+    "median_ms": 2562.465563999922,
+    "p95_ms": 2600.6296361000295,
+    "n": 10
+  },
+  "081-ta-rsi-bb-self-bands-01": {
+    "median_ms": 2202.412647000074,
+    "p95_ms": 2236.0743558996546,
+    "n": 10
+  },
+  "085-ta-stdev-sma-expansion-break-01": {
+    "median_ms": 1562.8673939995679,
+    "p95_ms": 1590.7241965001958,
+    "n": 10
+  },
+  "089-ta-wpr-14-bands-01": {
+    "median_ms": 1605.9951040001579,
+    "p95_ms": 1656.297248400233,
+    "n": 10
+  },
+  "093-udt-method-in-switch-arms-01": {
+    "median_ms": 1166.4490974994806,
+    "p95_ms": 1188.285643449717,
+    "n": 10
+  },
+  "097-udt-method-udt-return-from-func-01": {
+    "median_ms": 1036.867167500077,
+    "p95_ms": 1082.230944449475,
+    "n": 10
+  }
+}

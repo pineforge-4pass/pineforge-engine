@@ -8,6 +8,7 @@ repository serves, and asserts the error that names the failure.
 """
 from __future__ import annotations
 
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -18,6 +19,17 @@ import check_provenance as cp  # noqa: E402
 
 README = (REPO_ROOT / cp.README).read_text(encoding="utf-8")
 THROUGHPUT_BULLET = "and is the median of five quiet runs."
+# The printed figures the must-fail cases tamper with, read from the README.
+PF_MEDIAN = re.search(r"^\| PineForge \|.*· \*\*([\d.]+[kM])\*\* ·", README, re.M)[1]
+AB_RATIO = re.search(r"takes ([\d.]+)× the time per strategy at the median", README)[1]
+TP = re.search(r"at a median of \*\*([\d.]+) M bars/s\*\*", README)[1]
+
+
+def bumped(printed: str) -> str:
+    """The printed number with its last digit moved by one: outside its precision."""
+    digits = printed.rstrip("kM")
+    last = int(digits[-1])
+    return digits[:-1] + str(last + 1 if last < 9 else last - 1) + printed[len(digits):]
 
 
 class Tampered(cp.Tree):
@@ -52,21 +64,23 @@ class CheckProvenance(unittest.TestCase):
         self.assert_error(self.errors(readme), "'7' has no source")
 
     def test_number_its_source_contradicts_fails(self) -> None:
-        readme = README.replace("**603k**", "**650k**")
+        wrong = str(round(float(PF_MEDIAN[:-1]) + 50)) + PF_MEDIAN[-1]
+        readme = README.replace(f"**{PF_MEDIAN}**", f"**{wrong}**", 1)
         self.assertNotEqual(readme, README)
-        self.assert_error(self.errors(readme), "pineforge_row: the README prints median = 650")
+        self.assert_error(self.errors(readme), f"pineforge_row: the README prints median = {wrong[:-1]}")
 
     def test_rounding_outside_the_printed_precision_fails(self) -> None:
-        readme = README.replace("0.94× the time", "0.95× the time")
+        wrong = bumped(AB_RATIO)
+        readme = README.replace(f"takes {AB_RATIO}× the time per strategy", f"takes {wrong}× the time per strategy")
         self.assertNotEqual(readme, README)
-        self.assert_error(self.errors(readme), "sweep_loads_and_ab: the README prints ratio = 0.95")
+        self.assert_error(self.errors(readme), f"sweep_loads_and_ab: the README prints ratio = {wrong}")
 
     def test_reworded_phrase_fails(self) -> None:
         readme = README.replace(THROUGHPUT_BULLET, "and is the median of 5 runs.")
         self.assertNotEqual(readme, README)
         errors = self.errors(readme)
         self.assert_error(errors, "throughput: its phrase is not in the headline any more")
-        self.assert_error(errors, "'0.64' has no source")
+        self.assert_error(errors, f"'{TP}' has no source")
 
     def test_raw_file_differing_from_its_manifest_sha_fails(self) -> None:
         path = f"{cp.BENCH3}/throughput/r3.json"

@@ -12,6 +12,10 @@ Inputs:
   --loads       TSV from run_all.sh's quiet_gate: label, UTC time, 1-min load, busy procs (optional)
   --provenance  Markdown appended verbatim as the report's closing ``## Provenance``
                 section (who measured, when, and every deviation) (optional)
+  --host        JSON facts of the timing host ({cpu, cores, os, python, compiler,
+                pinning, pynecore, pinets}) when the timings were measured on
+                another machine than the one aggregating them; without it the
+                report describes this machine (optional)
 
 Output: benchmarks/results/speed.md (``--out`` to write elsewhere).
 
@@ -43,8 +47,14 @@ from paths import DATA  # noqa: E402
 # Environment facts
 # ---------------------------------------------------------------------------
 
-def hardware_block() -> str:
-    """Return a markdown bullet list describing the machine."""
+def hardware_block(host: dict | None = None) -> str:
+    """Return a markdown bullet list describing the timing host: ``host``'s
+    facts when given, else this machine."""
+    if host is not None:
+        lines = [f"- **CPU:** {host['cpu']}", f"- **Cores:** {host['cores']}",
+                 f"- **OS:** {host['os']}", f"- **Python:** {host['python']}"]
+        lines += [f"- **{k.capitalize()}:** {host[k]}" for k in ("compiler", "pinning") if k in host]
+        return "\n".join(lines) + "\n"
     cpu = _sysctl_or("machdep.cpu.brand_string", platform.processor())
     ncpu = _sysctl_or("hw.ncpu", str(platform.machine()))
     return (
@@ -169,9 +179,12 @@ def main() -> None:
                     help="PineForge engine label (default: the build's PINEFORGE_VERSION_FULL)")
     ap.add_argument("--provenance", type=Path, default=None,
                     help="Markdown appended as the closing '## Provenance' section")
+    ap.add_argument("--host", type=Path, default=None,
+                    help="JSON facts of the timing host (see the module docstring)")
     ap.add_argument("--out", type=Path, default=RESULTS / "speed.md")
     args = ap.parse_args()
 
+    host = json.loads(args.host.read_text()) if args.host else None
     pf: dict[str, dict] = {}
     if args.pineforge is not None:
         pf = (load_gbench(args.pineforge) if args.pineforge_format == "gbench"
@@ -205,32 +218,39 @@ def main() -> None:
         "# Per-strategy speed table",
         "",
         f"As of: {args.as_of}. {pf_label}; PyneCore "
-        f"{importlib.metadata.version('pynesys-pynecore')}; PineTS {pinets_version()}; "
+        f"{host['pynecore'] if host else importlib.metadata.version('pynesys-pynecore')}; "
+        f"PineTS {host['pinets'] if host else pinets_version()}; "
         f"{len(all_strategies)} strategies on the {bars:,}-bar ETHUSDT 15m feed "
         f"(`{args.feed.relative_to(REPO_ROOT)}`).",
         "",
         "## Hardware",
         "",
-        hardware_block(),
+        hardware_block(host),
     ]
     if loads:
+        # A fifth column, when the gate recorded one, is the busiest pinned
+        # core's utilisation over the gate's 2 s sample (a big.LITTLE host).
+        cores = any(len(row) > 4 for row in loads)
         lines += [
             "## Host load at each timing batch",
             "",
             "Timing is valid only on a quiet host: 1-minute load average below 6.0 and no "
-            "`cmake --build` / `ctest` / `ci_verify` process, re-checked before every batch.",
+            "`cmake --build` / `ctest` / `ci_verify` process, re-checked before every batch"
+            + (", and every core the batch is pinned to below 25 % busy." if cores else "."),
             "",
-            "| Batch | UTC | 1-min load | build/test processes |",
-            "|---|---|---:|---:|",
-        ] + [f"| {row[0]} | {row[1]} | {row[2]} | {row[3]} |" for row in loads] + [""]
+            "| Batch | UTC | 1-min load | build/test processes |" + (" pinned cores, busiest |" if cores else ""),
+            "|---|---|---:|---:|" + ("---:|" if cores else ""),
+        ] + [f"| {row[0]} | {row[1]} | {row[2]} | {row[3]} |" + (f" {float(row[4]):.1f} % |" if cores else "")
+             for row in loads] + [""]
 
     lines += [
         "## Methodology",
         "",
         "- **PineForge:** Google Benchmark (v1.9.0), in-process hot loop with **bar",
         "  magnifier ON** (1→4 ENDPOINTS sub-bar sampling): the `<slug>/throughput/with_magnifier`",
-        "  entries. The strategy `.dylib` is `dlopen`ed once *outside* the timed region; each",
-        f"  timed iteration calls `strategy_create` + `run_backtest_full` over the {bars:,}-bar",
+        "  entries. The strategy library is `dlopen`ed once *outside* the timed region; each",
+        "  timed iteration calls `strategy_create`, applies the slot's `inputs.json`",
+        f"  `strategy_overrides` pins, and runs `run_backtest_full` over the {bars:,}-bar",
         "  feed. `N=20` iterations; GBench's `real_time` is the per-iteration mean (no p95).",
         "- **PyneCore:** subprocess wall time of `uv run python runners/run_pynecore.py",
         "  <strategy> --no-write`, including Python interpreter startup, PyneCore framework",

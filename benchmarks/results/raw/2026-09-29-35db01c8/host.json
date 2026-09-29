@@ -1,0 +1,19 @@
+{
+ "cpu": "AWS c7a.8xlarge (AMD EPYC 9R14, 32 cores, SMT off)",
+ "cores": "32 physical cores, one thread each, four L3 groups of 8 cores (32 MiB each), one NUMA node; KVM guest, a dedicated spot instance with nothing else running",
+ "os": "Ubuntu 24.04.5 LTS (Linux 7.0.0-1013-aws, x86_64)",
+ "python": "3.12.3",
+ "compiler": "g++ 13.3.0 (Ubuntu 13.3.0-6ubuntu2~24.04.1), CMake 3.28.3 with Ninja 1.11.1, CMAKE_BUILD_TYPE=Release, the engine's own flags (no -march: baseline x86-64)",
+ "pinning": "the single-threaded timers (Google Benchmark, PineTS, vectorbt, the throughput package) pinned with taskset to core 2, PyneCore's eight concurrent subprocesses to cores 8-15 (one L3 group); apt, fwupd, man-db and motd timers stopped for the window",
+ "node": "22.23.3",
+ "uv": "0.12.20",
+ "pynecore": "6.10.3",
+ "pinets": "0.9.34",
+ "vectorbt": "0.28.2",
+ "trees": {
+  "35db01c8": "engine 35db01c8 with this refresh's benchmark harness (6d5795a2); benchmarks/assets e564cb9 (generated.cpp from codegen 121b3e6a); closed root c77a9c70",
+  "063e4460": "engine 063e4460 and its own harness; benchmarks/assets 6aedbcf (generated.cpp from codegen 89645d6); closed root 6e938f9a, each slot renamed NNN-closed",
+  "ac011d84": "engine ac011d84 (the 2026-06-11 table's) and its own harness; benchmarks/assets bb97c51d, its three probes the current population shares",
+  "pynecore 6.10.2": "the 2026-09-22 uv.lock (PyneCore 6.10.2) in its own checkout, with its own copies of the 26 A/B slots"
+ }
+}
