@@ -861,3 +861,5 @@ bounds the M2 from above.
 | `corpus-parity-subset` | 30 | 1.8-4.7 min on the standard runner, 2.4-3.8 min on the verification hosts. |
 | `build` (aggregate) | 5 | Seconds. |
 | `changes` | 5 | Seconds: a two-commit checkout and one `git diff`, on the standard runner. |
+
+<!-- CI probe (lane pf-ci-docs): a documentation-only change. Do not merge. -->
