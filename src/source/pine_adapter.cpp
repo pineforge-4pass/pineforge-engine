@@ -9838,6 +9838,35 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                         && !source_same_point(point->price, endpoint, staged_.syminfo.mintick)) {
                         trigger = native_order::Stop{endpoint};
                         coof_stop_waypoint_price = endpoint;
+                    } else if (marketable && phase == NativePathPhase::Open
+                               && finite_positive(endpoint)) {
+                        // The recalculation of a LATER fill at the bar's open
+                        // (a market newborn the first fill's recalculation
+                        // executed there) places it already through: live
+                        // from the first extreme, not the open -- filled at
+                        // the extreme's print when still through there, at
+                        // the open when that extreme is the open, otherwise
+                        // at its own level from the extreme on (lab tv
+                        // tailc-1856-open-newborn cells A/B/C; after the
+                        // first open fill's recalculation it fills at the
+                        // open, cell D and lane W4's LA/SA; R5 lane TAIL-C).
+                        const double tick = staged_.syminfo.mintick;
+                        const bool through_at_extreme = closing_long
+                            ? endpoint <= stop_price : endpoint >= stop_price;
+                        if (source_same_point(point->price, endpoint, tick)) {
+                            trigger = native_order::Stop{point->price};
+                            coof_stop_waypoint_price = point->price;
+                            coof_stop_at_leg_end = true;
+                        } else if (through_at_extreme) {
+                            trigger = native_order::Stop{endpoint};
+                            coof_stop_waypoint_price = endpoint;
+                        } else {
+                            trigger = native_order::Trail{std::abs(stop_price - endpoint), endpoint};
+                            coof_stop_waypoint_price = nearest_tick(stop_price
+                                + (closing_long ? -1.0 : 1.0) * config_.slippage * tick, tick);
+                        }
+                        // Live on this bar: never delayed as a wrong-side stop.
+                        coof_stop_at_leg_end = true;
                     } else {
                         defer_marketable_coof_stop = marketable;
                     }
@@ -18003,6 +18032,20 @@ void PineExecutionAdapter::apply_terminal_explicit_market_policy(
     }
 }
 
+namespace {
+// A priced request the Pine layer only ever places as a plain stop, which a
+// COOF recalculation may rest from its leg's extreme as a trail pinned there
+// (entry(), exit()): an entry stop, or an exit stop that names no trail.
+bool rested_stop_family(const PlacementSnapshot& row) noexcept {
+    if (!finite_positive(row.exit_levels.stop)) return false;
+    if (row.family == PineOrderFamily::Entry) return true;
+    return row.family == PineOrderFamily::ExitStop
+        && std::isnan(row.exit_levels.trail_points)
+        && std::isnan(row.exit_levels.trail_price)
+        && std::isnan(row.exit_levels.trail_offset);
+}
+} // namespace
+
 void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionContext& context) {
     // The script bar this opening follows, before it is replaced below: a
     // short process_orders_on_close filled at its close is margined at that
@@ -18020,7 +18063,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     for (const auto& handle : live_handles_) {
         const auto placement = placement_.find(handle.incarnation);
         if (placement == placement_.end()) continue;
-        if (placement->second.family == PineOrderFamily::Entry) {
+        if (rested_stop_family(placement->second)) {
             rested_entry_stop = rested_entry_stop
                 || (finite_positive(placement->second.forced_execution_price)
                     && require_host().trail_state(handle).has_value());
@@ -18030,9 +18073,10 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         if (const auto state = require_host().trail_state(handle))
             trail_state_at_open_.emplace(handle.incarnation, *state);
     }
-    // A stop entry entry() rested from its leg's extreme rode a trail pinned
-    // at that extreme for the rest of its bar; from this opening on it is
-    // the plain stop at its own level again, gap-filled at an open beyond it.
+    // A stop entry() or exit() rested from its leg's extreme rode a trail
+    // pinned at that extreme for the rest of its bar; from this opening on it
+    // is the plain stop at its own level again, gap-filled at an open beyond
+    // it.
     if (rested_entry_stop) {
         auto& host = require_host();
         native_order::ReplaceOptions keep;
@@ -18042,10 +18086,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
             if (!std::holds_alternative<native_order::Trail>(definition.request.trigger))
                 continue;
             const auto found = placement_.find(definition.handle.incarnation);
-            if (found == placement_.end() || found->second.family != PineOrderFamily::Entry
-                || !finite_positive(found->second.exit_levels.stop)) {
-                continue;
-            }
+            if (found == placement_.end() || !rested_stop_family(found->second)) continue;
             native_order::Request plain = definition.request;
             plain.trigger = native_order::Stop{found->second.exit_levels.stop};
             const auto result = host.replace(definition.handle, plain, keep);

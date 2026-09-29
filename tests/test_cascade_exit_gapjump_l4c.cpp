@@ -421,8 +421,13 @@ void test_r7_second_same_open_limit_exception_is_side_symmetric() {
     CHECK(near(p.average_entry_price(), 90.0));
 }
 
-// ── G3 — LIMIT-only scope guard. A marketable STOP born after the same second
-//         O fill keeps the established whole-entry-bar suppression and rolls. ─
+// ── G3 — A marketable STOP born after the same second O fill is live from
+//         the bar's first extreme, not rolled to the next open: TradingView
+//         fills it there when it is still through, else rests it at its own
+//         level from that extreme (lab tv tapes tests/fixtures/
+//         coof_open_newborn_exit, cells A/B/C; R5 lane TAIL-C). Here W1 is the
+//         low 95, not through for the short's buy stop 97, which the rising
+//         L -> H leg then fills at its level on bar 2. ─
 class SecondSameOpenMarketableStopProbe final : public CoofBase {
 public:
     void on_source_bar(const Bar&) override {
@@ -447,14 +452,15 @@ public:
         if (bar_index_ == 2 && position_side_ == PositionSide::SHORT
             && trades_.size() == 1 && coof_fill_recalc_active_) {
             // Stop 97 is already breached at the second short fill O=98. It
-            // must stay dormant for all of bar 2, then gap at bar 3 O=100.
+            // is live from the first extreme (L 95), where it is not through,
+            // and fills at its level on the L -> H leg of bar 2.
             strategy_exit("Stop", "S", /*limit=*/kNaN, /*stop=*/97.0);
         }
     }
 };
 
-void test_g3_second_same_open_marketable_stop_stays_suppressed() {
-    std::printf("test_g3_second_same_open_marketable_stop_stays_suppressed\n");
+void test_g3_second_same_open_marketable_stop_rests_from_first_extreme() {
+    std::printf("test_g3_second_same_open_marketable_stop_rests_from_first_extreme\n");
     SecondSameOpenMarketableStopProbe p;
     Bar bars[] = {
         {100.0, 100.5,  99.5, 100.0, 1000.0,   900'000},
@@ -469,8 +475,8 @@ void test_g3_second_same_open_marketable_stop_stays_suppressed() {
     CHECK(near(p.signed_size(), 0.0));
     if (p.trade_count() == 2) {
         CHECK(near(p.get_trade(1).entry_price, 98.0));
-        CHECK(near(p.get_trade(1).exit_price, 100.0));
-        CHECK(p.get_trade(1).exit_bar_index == 3);
+        CHECK(near(p.get_trade(1).exit_price, 97.0));
+        CHECK(p.get_trade(1).exit_bar_index == 2);
     }
 }
 
@@ -546,7 +552,7 @@ int main() {
     test_r5_second_same_open_refill_resumes_remaining_path();
     test_r6_second_same_open_short_combined_bracket();
     test_r7_second_same_open_limit_exception_is_side_symmetric();
-    test_g3_second_same_open_marketable_stop_stays_suppressed();
+    test_g3_second_same_open_marketable_stop_rests_from_first_extreme();
     test_g4_second_same_open_trail_keeps_standard_path_reach();
 
     if (tests_failed == 0) {

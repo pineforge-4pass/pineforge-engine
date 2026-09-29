@@ -200,6 +200,13 @@
       "twinAssertionSha256": "02c5f820b47d00e8967c4272de6c3302663357fbb280b605f55d85aa18f7206c",
       "twinAssertions": 43
     },
+    "test_cascade_exit_gapjump": {
+      "baseAssertions": 73,
+      "reason": "the second-same-open marketable stop row follows the R5 TAIL-C TradingView tapes (tailc-1856-open-newborn cells A/B/C, tests/fixtures/coof_open_newborn_exit): an exit stop the recalculation of a later fill at the bar's open places already through is live from the bar's first extreme, filled there when still through, otherwise at its own level from there -- here the short's buy stop 97, not through at the low 95, fills at its level on the entry bar, not at the next open",
+      "twin": "test_cascade_exit_gapjump_l4c.cpp",
+      "twinAssertionSha256": "690c6add3257508433d225bb4db5242df83e4a7e60cc60d86f0851bda1f89534",
+      "twinAssertions": 73
+    },
     "test_declined_reversal_close_leg": {
       "baseAssertions": 39,
       "reason": "R6's all-in same-side add co-queued with a close of the held id follows the R5 lane W5-ENG-MARGIN-V6 TradingView tapes (tests/fixtures/margin_v6 w5-m1-addclose): TradingView drops the add at placement, its margin on top of the held side's exceeding the equity, so the close leaves the book flat instead of the add re-opening LONG 100; and lane INT28-FIX rule CA: R5's close_all placed after the all-in reversal entry belongs to that reversal (tests/fixtures/reversal_close_all int28fix-ca2-rev and -frosty), so the declined reversal holds the long where the row froze the close_all firing",

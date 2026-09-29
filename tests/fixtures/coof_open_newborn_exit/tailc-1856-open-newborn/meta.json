@@ -1,0 +1,16 @@
+{
+  "title": "tailc-1856-open-newborn",
+  "slug": "tailc-1856-open-newborn",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:36:34.971Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-15"
+  },
+  "pine_sha256": "8243423c8334efa08bb37cdc6287aa96f716d05ba8b5d02fcdd0858acb1e5727",
+  "tv_trades_sha256": "fca223ebfddd361aee8d4c5c47f1cf937ae5ef8e0ed426bd71d06ce42198efd8",
+  "tv_trades_rows": 588
+}
