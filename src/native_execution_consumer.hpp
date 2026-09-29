@@ -944,6 +944,18 @@ private:
         std::int64_t timestamp) const;
     std::optional<native_calendar::NativeInterval> script_interval_resolved(
         std::int64_t timestamp) const;
+    // The installed daily feed dates the script's D bars (prepare_day_labels,
+    // native_execution_consumer.cpp): per bar a stamp labels, the bar's
+    // calendar open and that stamp, ascending in both. Empty -- every label
+    // the calendar's -- unless an intraday input aggregates into "D" script
+    // bars with a daily feed installed. Derived from the installed feed at
+    // begin, never folded, as the feed store's own period stamps are not.
+    std::vector<std::pair<std::int64_t, std::int64_t>> day_labels_;
+    void prepare_day_labels(const BacktestEngine& engine, const Bar* input_bars, int n_input);
+    // The instant a lookup by `timestamp` reads the calendar at: a label a
+    // stamp moved before its bar's calendar open names that bar, so it reads
+    // at the bar's open; every other instant is itself.
+    std::int64_t day_label_origin(std::int64_t timestamp) const;
     bool validate_undetected_begin(BacktestEngine& engine, const NativeBeginArgs& args);
     bool apply_spec(BacktestEngine& engine, const NativeRunSpec& spec);
     bool projection_ok(const BacktestEngine& engine) const;

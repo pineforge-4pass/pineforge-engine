@@ -8521,6 +8521,118 @@ static void check_decision_session_facts(void) {
           "the decision's base length is not an aligned prefix of the current one");
 }
 
+/* ── The session day of a dated daily bar (lane XAU-CAL) ────────────
+ *
+ * A daily feed dates the D bars an intraday input aggregates into
+ * (NativeExecutionConsumer::prepare_day_labels): OANDA stamps its XAUUSD days
+ * at 17:00 New York, in the break of the 1800-1700 session, and the bar the
+ * 18:00 session opens is labelled by that stamp. Only the label moves: the
+ * script interval opens at the stamp, its first eligible instant is still the
+ * session's open, and the session day is that session's -- the trading date
+ * of the bar's first in-session instant, not of the stamp before it.
+ *
+ * The tape: two sessions, Mon 2026-03-02 18:00 EST to Tue 17:00 (trading
+ * date 03-03) and Tue 18:00 to Wed 17:00 (03-04), hourly, with their daily
+ * bars stamped 17:00 EST as a declared series' authoritative bars. */
+
+#define DATED_HOUR_MS   3600000LL
+#define DATED_STAMP0_MS 1772488800000LL                         /* Mon 03-02 22:00Z = 17:00 EST */
+#define DATED_OPEN0_MS  (DATED_STAMP0_MS + DATED_HOUR_MS)        /* 18:00 EST */
+#define DATED_DAY_MS    86400000LL
+#define DATED_HOURS     23
+#define DATED_DAYS      2
+
+typedef struct dated_state {
+    int     calculations;
+    int64_t label[DATED_DAYS];
+    int64_t open[DATED_DAYS];
+    int64_t eligible[DATED_DAYS];
+    int64_t day[DATED_DAYS];
+    int     has_day[DATED_DAYS];
+} dated_state;
+
+static int dated_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    dated_state* state = (dated_state*)user;
+    const int i = state->calculations++;
+    (void)bar;
+    if (i >= DATED_DAYS || at->struct_size == PF_NATIVE_DECISION_V1_BASE_SIZE) return 0;
+    state->label[i] = at->script_bar_open_ms;
+    state->open[i] = at->script_interval_open_ms;
+    state->eligible[i] = at->script_interval_eligible_open_ms;
+    state->day[i] = at->session_day_ordinal;
+    state->has_day[i] = at->has_session_day;
+    return 0;
+}
+
+static void check_decision_session_day_of_a_dated_bar(void) {
+    pf_bar_t hours[DATED_DAYS * DATED_HOURS];
+    pf_bar_t days[DATED_DAYS];
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_run_spec_ext_v1 ext;
+    pf_native_subscription_v1 series;
+    pf_native_callbacks_v1 table;
+    dated_state state;
+    pf_strategy_t host;
+    int d, h;
+
+    for (d = 0; d < DATED_DAYS; ++d) {
+        const double base = 5000.0 + 10.0 * (double)d;
+        days[d].timestamp = DATED_STAMP0_MS + (int64_t)d * DATED_DAY_MS;
+        days[d].open = base;
+        days[d].high = base + 3.0;
+        days[d].low = base - 2.0;
+        days[d].close = base + 1.0;
+        days[d].volume = 10.0;
+        for (h = 0; h < DATED_HOURS; ++h) {
+            pf_bar_t* bar = &hours[d * DATED_HOURS + h];
+            bar->timestamp = DATED_OPEN0_MS + (int64_t)d * DATED_DAY_MS + (int64_t)h * DATED_HOUR_MS;
+            bar->open = base;
+            bar->high = base + 1.0;
+            bar->low = base - 1.0;
+            bar->close = base + 0.5;
+            bar->volume = 1.0;
+        }
+    }
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = dated_on_bar;
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "dated-day host create failed");
+    if (!host) return;
+    spec.session_key = "native-c-api-dated-day";
+    spec.input_tf = "60";
+    spec.script_tf = "1D";
+    spec.session = "1800-1700";
+    spec.timezone = "America/New_York";
+    memset(&series, 0, sizeof(series));
+    series.struct_size = (uint32_t)sizeof(series);
+    series.tf = "D";
+    series.authoritative_bars = days;
+    series.authoritative_n = DATED_DAYS;
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_SUBSCRIPTIONS;
+    ext.subscriptions = &series;
+    ext.subscriptions_n = 1u;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_OK,
+                 "the dated-day spec was refused");
+    CHECK_EQ_INT(strategy_native_run_v1(host, hours, DATED_DAYS * DATED_HOURS, NULL),
+                 PF_NATIVE_OK, "the dated-day run did not complete");
+    CHECK_EQ_INT(state.calculations, DATED_DAYS, "the dated-day run calculated another count");
+    for (d = 0; d < DATED_DAYS && d < state.calculations; ++d) {
+        const int64_t stamp = DATED_STAMP0_MS + (int64_t)d * DATED_DAY_MS;
+        CHECK(state.label[d] == stamp, "a dated day's bar is not labelled by its stamp");
+        CHECK(state.open[d] == stamp, "a dated day's interval does not open at its stamp");
+        CHECK(state.eligible[d] == stamp + DATED_HOUR_MS,
+              "a dated day's first eligible instant is not its session's open");
+        CHECK(state.has_day[d] == 1, "a dated day carried no session day");
+        CHECK_EQ_INT((int)state.day[d], 20515 + d,
+                     "a dated day's session day is the stamp's, not its session's");
+    }
+    strategy_native_host_free(host);
+}
+
 /* ── A working row's anchor and owner relation (lane F4, E13 f4) ───
  *
  * pf_native_working_v1 read back a leg's trigger numbers but not how the
@@ -9202,6 +9314,7 @@ int pf_native_c_api_checks(void) {
     check_sized_units_query();
     check_policy_hooks();
     check_decision_session_facts();
+    check_decision_session_day_of_a_dated_bar();
     check_working_relation_tail();
     check_session_day_tail();
     return failures;

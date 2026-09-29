@@ -1890,7 +1890,8 @@ NativeExecutionConsumer::input_interval_resolved(std::int64_t timestamp) const {
     if (cache.input_prior.held && cache.input_prior.ts == timestamp) {
         interval = cache.input_prior.interval;
     } else {
-        interval = native_calendar::interval_containing(calendar_, input_tf_, timestamp, calendar_memo_);
+        interval = native_calendar::interval_containing(
+            calendar_, input_tf_, day_label_origin(timestamp), calendar_memo_);
         if (!interval && legacy_tolerant_slot_labels()) interval = timestamp_partition(timestamp);
     }
     if (cache.input_held) cache.input_prior = {true, cache.input_ts, cache.input_interval};
@@ -1907,14 +1908,113 @@ NativeExecutionConsumer::script_interval_resolved(std::int64_t timestamp) const 
     if (cache.script_prior.held && cache.script_prior.ts == timestamp) {
         interval = cache.script_prior.interval;
     } else {
-        interval = native_calendar::interval_containing(calendar_, script_tf_, timestamp, calendar_memo_);
+        interval = native_calendar::interval_containing(
+            calendar_, script_tf_, day_label_origin(timestamp), calendar_memo_);
         if (!interval && legacy_tolerant_slot_labels()) interval = timestamp_partition(timestamp);
+        // A D bar the installed daily feed dates is labelled by its stamp
+        // (prepare_day_labels), and a lookup by that label is the bar's own
+        // (day_label_origin); its span, closes and successors stay the
+        // calendar's.
+        if (interval && !day_labels_.empty()) {
+            const auto found = std::lower_bound(
+                day_labels_.begin(), day_labels_.end(), interval->open_ms,
+                [](const std::pair<std::int64_t, std::int64_t>& entry, std::int64_t open) {
+                    return entry.first < open;
+                });
+            if (found != day_labels_.end() && found->first == interval->open_ms)
+                interval->open_ms = found->second;
+        }
     }
     if (cache.script_held) cache.script_prior = {true, cache.script_ts, cache.script_interval};
     cache.script_ts = timestamp;
     cache.script_interval = interval;
     cache.script_held = true;
     return interval;
+}
+
+// A venue dates its own daily bars. When an intraday input aggregates into
+// "D" script bars and the run installs the venue's daily feed (the feed store,
+// engine_aux_security.cpp), each of the feed's stamps labels the D bar holding
+// the session instant it covers: the stamp itself inside a session, else the
+// next session's open -- a stamp in a session break covers the session about
+// to open, the instant the store keys the feed's bars by
+// (session_covered_instant_ms). OANDA stamps its XAUUSD daily bars at 17:00 ET,
+// in the break of the 1800-1700 session, so that D bar is labelled 17:00 ET,
+// not the session's 18:00 open; a stamp at the calendar's own open (09:30 ET,
+// 17:00 CT, 00:00 UTC) changes nothing. Only the label moves: the bar's span,
+// its closes and its successor stay the calendar's, a bar no stamp covers keeps
+// the calendar's label, and a bar two stamps cover takes the earlier. A label
+// never passes an input bar the run holds: a stamp with an input between it
+// and its bar's calendar open labels nothing -- a later stamp would follow the
+// bar's own first input (a day that opened late, NSE's 13:45 Muhurat stamp, is
+// labelled by it: no input of that day comes before it), an earlier one would
+// take an input of another bar. A lookup by a moved label is the bar's own
+// (day_label_origin): its intervals, its sub-bars and its session day are the
+// calendar's. No daily feed, a calendar or raw-label input, or a script
+// timeframe other than one day: no label moves, and no calendar lookup is made.
+void NativeExecutionConsumer::prepare_day_labels(const BacktestEngine& engine,
+                                                 const Bar* input_bars, int n_input) {
+    day_labels_.clear();
+    if (!script_tf_.valid() || script_tf_.unit() != native_calendar::TimeframeUnit::Day
+        || script_tf_.count() != 1 || !input_tf_.is_fixed() || uses_raw_label_partition()) {
+        return;
+    }
+    const std::vector<Bar>* daily = nullptr;
+    for (const auto& feed : engine.native_security_feeds_) {
+        if (feed.seconds == kSecPerDay && !feed.bars.empty()) {
+            daily = &feed.bars;
+            break;
+        }
+    }
+    if (daily == nullptr) return;
+    // The first in-session instant at or after `ms`, walking at most a
+    // fortnight of session days.
+    const auto covered_instant = [&](std::int64_t ms) -> std::optional<std::int64_t> {
+        std::int64_t at = ms;
+        for (int guard = 0; guard < 16; ++guard) {
+            const auto day = native_calendar::session_day_at(calendar_, at, calendar_memo_);
+            if (!day) return std::nullopt;
+            for (const auto& span : day->spans) {
+                if (span.second > ms) return std::max(ms, span.first);
+            }
+            if (day->next_origin_ms <= at) return std::nullopt;
+            at = day->next_origin_ms;
+        }
+        return std::nullopt;
+    };
+    std::int64_t last_open = std::numeric_limits<std::int64_t>::min();
+    for (const Bar& bar : *daily) {
+        const auto covered = covered_instant(bar.timestamp);
+        if (!covered) continue;
+        const auto interval = native_calendar::interval_containing(
+            calendar_, script_tf_, *covered, calendar_memo_);
+        if (!interval || interval->open_ms <= last_open) continue;
+        last_open = interval->open_ms;
+        if (interval->open_ms == bar.timestamp) continue;
+        if (input_bars != nullptr && n_input > 0) {
+            const std::int64_t from = std::min(bar.timestamp, interval->open_ms);
+            const std::int64_t to = std::max(bar.timestamp, interval->open_ms);
+            const Bar* first = std::lower_bound(
+                input_bars, input_bars + n_input, from,
+                [](const Bar& input, std::int64_t at) { return input.timestamp < at; });
+            if (first != input_bars + n_input && first->timestamp < to) continue;
+        }
+        day_labels_.emplace_back(interval->open_ms, bar.timestamp);
+    }
+    // A D interval resolved before the labels existed is resolved again.
+    if (!day_labels_.empty()) interval_cache_.clear();
+}
+
+std::int64_t NativeExecutionConsumer::day_label_origin(std::int64_t timestamp) const {
+    if (day_labels_.empty()) return timestamp;
+    const auto found = std::lower_bound(
+        day_labels_.begin(), day_labels_.end(), timestamp,
+        [](const std::pair<std::int64_t, std::int64_t>& entry, std::int64_t label) {
+            return entry.second < label;
+        });
+    if (found != day_labels_.end() && found->second == timestamp && found->first > timestamp)
+        return found->first;
+    return timestamp;
 }
 
 bool NativeExecutionConsumer::validate_undetected_begin(
@@ -2421,6 +2521,9 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
             return false;
         }
     }
+    // Every feed this run reads is installed by now, the host's and the
+    // declared series' alike: the daily feed's stamps label the D bars.
+    prepare_day_labels(engine, begin_bars, begin_n);
     return true;
 }
 
@@ -3652,6 +3755,8 @@ std::optional<std::int64_t> NativeExecutionConsumer::risk_day(
         std::int64_t timestamp_ms) const {
     const auto* risk = risk_limits();
     if (!risk) return std::nullopt;
+    // A D bar's moved label keys the bar's own day (day_label_origin).
+    timestamp_ms = day_label_origin(timestamp_ms);
     try {
         if (risk->day_basis == NativeRiskDay::CalendarDayInTimezone) {
             if (!risk_day_calendar_) return std::nullopt;
@@ -7709,7 +7814,8 @@ void NativeExecutionConsumer::deliver_intrabar_script(
     sub_bars.clear();
     samples.clear();
     if (lower) {
-        const int64_t begin = base.open_ms;
+        // A D bar's moved label walks the bar's own sub-bars (day_label_origin).
+        const int64_t begin = day_label_origin(base.open_ms);
         const int64_t end = script_.interval.next_input_open_ms;
         // preflight_intrabar_path refused this feed unless its stamps strictly
         // increase (NotStrictlyIncreasing, under either label policy), so the

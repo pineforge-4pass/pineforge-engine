@@ -2567,6 +2567,20 @@ TradingView-calibrated, and a host that supplies them inherits its rules:
   session of 2025-10-21 opens 13:45 IST, so its `"60"` bucket is one bar
   stamped 13:45, not 13:15 and 14:15 from the 09:15 day stamp. Every other
   day keeps the day-stamp grid.
+- The installed **daily** bars also date the run's own `"D"` script bars when
+  an intraday input aggregates into them: each stamp labels the bar holding
+  the session instant it covers (the stamp inside a session, else the next
+  session's open), unless an input bar the run holds of that bar comes
+  before it. OANDA stamps its XAUUSD daily bars at 17:00 ET, in the break of
+  the 1800-1700 session, so that bar is labelled 17:00 ET rather than the
+  session's 18:00 open, as TradingView dates it on a daily chart backtested
+  with the bar magnifier. Only the label moves: the bar's span, closes and
+  values stay the calendar's aggregate, a lookup by the label (the bar's
+  open, its sub-bars, its session day) is the bar's own, a bar no stamp
+  covers keeps the calendar's label, a label never passes an input bar the
+  run holds, and a stamp at the calendar's own open changes nothing.
+  Pinned by `tests/test_native_day_labels.cpp` and, on TradingView's tapes,
+  `tests/test_daily_magnifier_tapes.cpp`.
 
 Declare no `authoritative_bars` and the buckets are a plain aggregation of the
 run's own input, with no calibration to inherit. That is the whole policy

@@ -1853,7 +1853,10 @@ pf_native_decision_v1 CCallbackHost::decision(
     out.script_interval_last_traded_close_ms = interval.last_traded_close_ms;
     out.script_interval_next_period_open_ms = interval.next_period_open_ms;
     out.script_interval_next_input_open_ms = interval.next_input_open_ms;
-    if (const auto day = session_day(interval.open_ms)) {
+    /* The day the bar's first in-session instant is on, as the session-day
+     * bytes read it: a D bar a venue's daily stamp dates before its session
+     * opens is still that session's day. */
+    if (const auto day = session_day(std::max(interval.open_ms, interval.eligible_open_ms))) {
         out.has_session_day = 1u;
         out.session_day_ordinal = *day;
     }
