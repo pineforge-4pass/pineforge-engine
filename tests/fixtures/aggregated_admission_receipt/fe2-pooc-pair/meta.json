@@ -1,0 +1,16 @@
+{
+  "title": "fe2-pooc-pair",
+  "slug": "fe2-pooc-pair",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T13:27:12.288Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "60",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "91e320a75cbe669ffb93089de5bf559265bf5ec06590bff510c536c8556352a4",
+  "tv_trades_sha256": "3adbef2a8187e6c2ec8c3f28249521a7a5334886f58f32b8876171e9249b2c0b",
+  "tv_trades_rows": 48
+}

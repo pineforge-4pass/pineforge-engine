@@ -1708,8 +1708,11 @@ list(APPEND TEST_SOURCES test_adapter_magnifier_intrabar_tapes)
 # placed it (TradingView's tapes, tests/fixtures/pooc_limit_close). Source-bound.
 list(APPEND TEST_SOURCES test_pooc_limit_close_tapes)
 # R5 lane FIX-E1E2: the report's script_tf_ratio and needs_aggregation on
-# every run route (E1). Source-bound.
+# every run route (E1), and an aggregated chart's admission receipts in their
+# command's bar space, on TradingView's tapes
+# (tests/fixtures/aggregated_admission_receipt, E2). Source-bound.
 list(APPEND TEST_SOURCES test_report_timeframe_ratio)
+list(APPEND TEST_SOURCES test_aggregated_admission_receipt_tapes)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
@@ -2488,7 +2491,9 @@ foreach(_pf_hm_row IN ITEMS
         # R5 lane PAR-ORDERS-3's tape row.
         "test_pooc_limit_close_tapes|PINEFORGE_PA3_POOC_LIMIT_FIXTURE_DIR|pooc_limit_close"
         # R5 lane XAU-CAL's tape row.
-        "test_daily_magnifier_tapes|PINEFORGE_DAILY_MAGNIFIER_FIXTURE_DIR|daily_magnifier")
+        "test_daily_magnifier_tapes|PINEFORGE_DAILY_MAGNIFIER_FIXTURE_DIR|daily_magnifier"
+        # R5 lane FIX-E1E2's tape row.
+        "test_aggregated_admission_receipt_tapes|PINEFORGE_FIX_E1E2_FIXTURE_DIR|aggregated_admission_receipt")
     string(REPLACE "|" ";" _pf_hm_fields "${_pf_hm_row}")
     list(GET _pf_hm_fields 0 _pf_hm_target)
     list(GET _pf_hm_fields 1 _pf_hm_macro)

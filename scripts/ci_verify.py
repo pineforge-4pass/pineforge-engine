@@ -584,7 +584,14 @@ KERNEL_MIN_TESTS = 300
 #   +1 XAU-CAL  test_symbol_calendar_tapes (the bar after the current one on
 #               TradingView's symbol calendar)
 # No release row skips, so 790 registered is 790 run.
-RELEASE_MIN_TESTS = 790
+# 792 = those 790 plus lane FIX-E1E2's two source-bound rows, counted the
+# same way (the kernel profile builds neither):
+#   +1 FIX-E1E2 test_report_timeframe_ratio (the report's script_tf_ratio
+#               and needs_aggregation on every run route)
+#   +1 FIX-E1E2 test_aggregated_admission_receipt_tapes (an aggregated
+#               chart's admission receipts in their command's bar space)
+# No release row skips, so 792 registered is 792 run.
+RELEASE_MIN_TESTS = 792
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
@@ -625,9 +632,10 @@ ADR_RULED_TEXTS_MIN = 40
 # counted the same way; 767/767/776 with lane TAIL-I's row of
 # RELEASE_MIN_TESTS, counted the same way;
 # 771/771/780 with lane XAU-CAL's four rows of RELEASE_MIN_TESTS in each,
-# counted the same way.
+# counted the same way; 773/773/782 with lane FIX-E1E2's two rows of
+# RELEASE_MIN_TESTS in each, counted the same way.
 # An excluded run must still discover at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 771, 'sanitizers': 771, 'native': 780}
+EXCLUDED_REGISTERED_MIN = {'debug': 773, 'sanitizers': 773, 'native': 782}
 # The ctest stage's bound. A full sanitizers run (push to main, a manual
 # dispatch, the maintainers' verification) ran out of its 30 minutes twice on
 # main's four-core runner before every row had finished, so it gets an hour; a

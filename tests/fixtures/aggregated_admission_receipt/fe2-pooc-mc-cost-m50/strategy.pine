@@ -1,0 +1,33 @@
+//@version=6
+// Lane FIX-E1E2 synthetic probe (written for this lane; no scraped source).
+// Pine v6 default sizing (100 % of equity) with a 0.04 % commission under
+// process_orders_on_close, on a 60-minute chart. Each cell shorts at a fixed
+// UTC hour; on the first later bar whose high is above the short's average
+// price (a bar that margin-calls the short) the script reverses it: cells A
+// with strategy.close and a long strategy.entry, cells B with the long entry
+// alone. Every open position is flattened at a fixed later hour. The long
+// margin is 50 %, so the reversal long (100 % of equity) is never margin-called.
+strategy("fe2-pooc-mc-cost-m50", overlay=true, process_orders_on_close=true, commission_type=strategy.commission.percent, commission_value=0.04, margin_long=50)
+
+at(d, h) => time == timestamp("UTC", 2025, 4, d, h, 0)
+inCell(d, h0, h1) => time >= timestamp("UTC", 2025, 4, d, h0, 0) and time < timestamp("UTC", 2025, 4, d, h1, 0)
+
+// cell A1: 2025-04-03 01:00 .. 06:00, cell B1: 08:00 .. 13:00, cell A2: 15:00 .. 20:00
+// cell B2: 2025-04-04 01:00 .. 06:00, cell A3: 08:00 .. 13:00, cell B3: 15:00 .. 20:00
+if at(3, 1) or at(3, 15) or at(4, 8)
+    strategy.entry("A-S", strategy.short, comment="A short")
+if at(3, 8) or at(4, 1) or at(4, 15)
+    strategy.entry("B-S", strategy.short, comment="B short")
+
+adverse = strategy.position_size < 0 and high > strategy.position_avg_price
+cellA = inCell(3, 2, 6) or inCell(3, 16, 20) or inCell(4, 9, 13)
+cellB = inCell(3, 9, 13) or inCell(4, 2, 6) or inCell(4, 16, 20)
+if adverse and cellA and strategy.opentrades.entry_id(0) == "A-S"
+    strategy.close("A-S", comment="A close")
+    strategy.entry("A-L", strategy.long, comment="A long")
+if adverse and cellB and strategy.opentrades.entry_id(0) == "B-S"
+    strategy.entry("B-L", strategy.long, comment="B long")
+
+if at(3, 6) or at(3, 13) or at(3, 20) or at(4, 6) or at(4, 13) or at(4, 20)
+    strategy.cancel_all()
+    strategy.close_all(comment="flat")

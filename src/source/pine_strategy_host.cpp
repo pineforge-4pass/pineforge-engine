@@ -528,6 +528,16 @@ void source::PineStrategyHost::on_native_applied(
                 if (lot.entry_incarnation == event.handle().incarnation)
                     lot.time = script_open;
             }
+            // A later execution of the same pass can close this fill's lot
+            // before this notification arrives (the reversing second call
+            // of a process_orders_on_close pair): the rows it booked after
+            // this event's own still carry the kernel's instant (lane
+            // FIX-E1E2, tests/fixtures/aggregated_admission_receipt).
+            for (std::size_t index = event.first_trade_index + event.closed_trade_count;
+                 index < trades_.size(); ++index) {
+                if (trades_[index].entry_incarnation == event.handle().incarnation)
+                    trades_[index].entry_time = script_open;
+            }
         }
         for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
             const std::size_t index = event.first_trade_index + i;

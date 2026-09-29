@@ -1,0 +1,16 @@
+{
+  "title": "fe2-pooc-mc-cost-m50",
+  "slug": "fe2-pooc-mc-cost-m50",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T13:29:46.949Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "60",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "82605718fb95a50f18a26c4edd79e72d0cb6fffa4b43e54537471ba7a257977b",
+  "tv_trades_sha256": "1027af8afac96a194eba7b2dd3e3a394ffe8f4935f3e04f405c9802fcacb5615",
+  "tv_trades_rows": 42
+}

@@ -17050,6 +17050,8 @@ void PineExecutionAdapter::source_batch_end() {
     cap.source_batch_end();
 }
 
+// `bar` is the projection bar (projection_bar_index), the bar space of the
+// command observations the review receipts name.
 void PineExecutionAdapter::record_market_review(
         admission::Checkpoint checkpoint, int bar,
         const std::vector<native_order::RequestHandle>& handles) {
@@ -17156,8 +17158,12 @@ void PineExecutionAdapter::refresh_pending_sizing_after_margin(
         const auto& origin = snapshot.market_admission.observation();
         auto allocation = admission_journal.reserve();
         admission::SizingEvent sizing;
+        // A receipt's bar is in its command's bar space: the observation
+        // bound the row's projection bar, the input slot, which an
+        // aggregated run keeps apart from the script-bar interval_index
+        // (lane FIX-E1E2: a receipt at interval_index preceded its command).
         sizing.receipt = {allocation.sequence(), cause_fill,
-                          context.coordinate.interval_index, origin->command};
+                          projection_bar_index(context), origin->command};
         sizing.incarnation = handle.incarnation;
         sizing.before = before;
         sizing.after = {snapshot.sizing.frozen_units, snapshot.sizing.equity,
@@ -17355,9 +17361,9 @@ void PineExecutionAdapter::apply_open_market_admission(
     review_handles.reserve(market.size());
     for (const auto& candidate : market) review_handles.push_back(candidate.handle);
     record_market_review(admission::Checkpoint::DefaultGross,
-                         context.coordinate.interval_index, review_handles);
+                         projection_bar_index(context), review_handles);
     record_market_review(admission::Checkpoint::ExplicitPair,
-                         context.coordinate.interval_index, review_handles);
+                         projection_bar_index(context), review_handles);
     for (const auto& handle : cancellations) {
         const auto result = require_host().cancel(handle);
         if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
@@ -18064,7 +18070,7 @@ void PineExecutionAdapter::apply_terminal_explicit_market_policy(
         }
     }
     record_market_review(admission::Checkpoint::TerminalGross,
-                         context.coordinate.interval_index,
+                         projection_bar_index(context),
                          terminal_review_handles);
 
     // ab9714be pine_fills.cpp:3023-3270 and pine_orders.cpp:193-276:
