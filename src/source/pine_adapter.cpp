@@ -6977,6 +6977,64 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             && !config_.process_orders_on_close && coof_fill_forced_
             && coof_fill_at_second_extreme();
     }
+    // On a magnified path the recalculation's next fill point is the next
+    // point of TradingView's own intrabar path (next_input_waypoint), or the
+    // open itself for the refill of a first open fill. A pure limit or stop
+    // entry the recalculation places is live only from that point: executable
+    // there, it fills at the point's print (a stop keeps its slippage); a
+    // limit that is not rests at its own level from the point on. A stop that
+    // is not keeps its level: a later intrabar can pass the point, so no
+    // trigger here rests it (lab tv tailc-mag-coof-refill-leg; R5 lane
+    // TAIL-C, the magnified twin of w8d-coof2-*).
+    if (coof_recalc_active_ && coof_lower_path && priced && !config_.process_orders_on_close) {
+        const bool lower_limit = finite_positive(limit_price) && !finite_positive(stop_price);
+        const bool lower_stop = finite_positive(stop_price) && !finite_positive(limit_price);
+        const auto lower_point = detail::callback_point(require_host());
+        const double lower_birth = lower_point ? lower_point->price : kNaN;
+        std::optional<PineScheduler::InputWaypoint> lower_next;
+        if (coof_first_open_) {
+            if (finite_positive(lower_birth))
+                lower_next = PineScheduler::InputWaypoint{lower_birth, false};
+        } else if (const auto* lower_host = pine_view_of(&require_host())) {
+            lower_next = lower_host->scheduler_.next_input_waypoint(*lower_host, coof_context_);
+        }
+        // A fill on the chart bar's last intrabar-path point leaves the next
+        // bar's opening as the next fill point: the entry is live from that
+        // open, as off the magnified path (lab tv tailc-mag-coof-refill-leg,
+        // 2025-04-05 02:30 UTC: a buy limit placed at the 1819.51 close print
+        // fills at the next bar's 1819.5 open).
+        if ((lower_limit || lower_stop) && lower_next && lower_next->next_open
+            && coof_context_.is_terminal_sub_bar) {
+            coof_priced_next_open = true;
+        } else if ((lower_limit || lower_stop) && lower_next
+            && finite_positive(lower_next->price) && finite_positive(lower_birth)) {
+            const double level = lower_limit ? limit_price : stop_price;
+            const double waypoint = lower_next->price;
+            const double tick = staged_.syminfo.mintick;
+            const auto executable_at = [&](double price) {
+                return lower_limit ? (is_long ? price <= level : price >= level)
+                                   : (is_long ? price >= level : price <= level);
+            };
+            const bool same_point = coof_first_open_ || lower_next->next_open
+                || source_same_point(lower_birth, waypoint, tick);
+            if (executable_at(waypoint)) {
+                if (same_point) {
+                    request.trigger = native_order::Market{};
+                } else {
+                    const double booked = source_bar_fill_tick(waypoint, tick);
+                    const bool falling = waypoint < lower_birth;
+                    request.trigger = is_long == falling
+                        ? native_order::Trigger{native_order::Limit{waypoint, booked != waypoint}}
+                        : native_order::Trigger{native_order::Stop{waypoint}};
+                }
+                snapshot.forced_execution_price = nearest_tick(waypoint
+                    + (lower_limit ? 0.0 : (is_long ? 1.0 : -1.0) * config_.slippage * tick),
+                    tick);
+            } else if (lower_limit && !same_point && (waypoint > lower_birth) == is_long) {
+                request.trigger = native_order::StopLimit{waypoint, level};
+            }
+        }
+    }
     if (current == 0.0 && priced && current_point) {
         const auto is_opposite_market_predecessor = [&](const PlacementSnapshot& prior) {
             return prior.opening && prior.family == PineOrderFamily::Entry

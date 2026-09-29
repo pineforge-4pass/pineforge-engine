@@ -908,6 +908,11 @@ list(APPEND TEST_SOURCES test_coof_w2_refill_tapes)
 # through is live from the bar's first extreme
 # (tests/fixtures/coof_open_newborn_exit), on TradingView's tape.
 list(APPEND TEST_SOURCES test_coof_open_newborn_exit_tape)
+# ... and, with the bar magnifier on, an entry the recalculation of a fill
+# places is live from the next point of TradingView's intrabar path, the next
+# bar's open after the chart bar's last one
+# (tests/fixtures/magnified_coof_refill), on TradingView's tape.
+list(APPEND TEST_SOURCES test_magnified_coof_refill_tape)
 
 # Lane W8E-EXITS: the KI-62 cover takes only a same-id pyramid add
 # (tests/fixtures/ki62_same_id_cover), on TradingView's tapes.
@@ -2576,6 +2581,10 @@ endif()
 if(TARGET test_coof_open_newborn_exit_tape)
     target_compile_definitions(test_coof_open_newborn_exit_tape PRIVATE
         PINEFORGE_COOF_OPEN_NEWBORN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_open_newborn_exit")
+endif()
+if(TARGET test_magnified_coof_refill_tape)
+    target_compile_definitions(test_magnified_coof_refill_tape PRIVATE
+        PINEFORGE_MAGNIFIED_REFILL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/magnified_coof_refill")
 endif()
 
 # Lane W8E-EXITS reads its TradingView tapes from the fixture tree; source-bound.

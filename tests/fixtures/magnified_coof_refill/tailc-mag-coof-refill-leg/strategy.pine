@@ -1,0 +1,59 @@
+//@version=6
+// TAIL-C diag C, synthetic (not derived from any scraped script).
+// Export on BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-05-01 (lab tv --no-note, ws-report-v1).
+// Replay it on the ETH 1m corpus feed, magnified: input_tf=1, script_tf=15, bar_magnifier on.
+//
+// Question: with use_bar_magnifier = true and calc_on_order_fills = true, a stop exit X fills
+// mid-leg inside one of TradingView's 2-minute intrabars. When does TradingView make live the
+// LIMIT entry R that X's recalculation places, and at what price does R fill?
+// This is the magnified twin of lane W8D-NOTRADES's chart-path tapes
+// (tests/fixtures/coof_refill_waypoint). The adapter lowers those only off the lower path, at
+// src/source/pine_adapter.cpp:6776, gated `!coof_lower_path`.
+//
+// The script is stateless: every decision reads strategy.* only, so the recalculation's
+// rollback cannot lose a decision.
+// P: a 1-unit short every 2 hours on even UTC hours. X: its buy stop at the average + 3 USDT.
+// P is closed after 8 bars.
+// R is placed by the recalculation of X's fill, and re-placed by that bar's close while
+// still flat. Two cells alternate by slot:
+//   A (hour % 4 == 0): R = SELL limit at X's fill - 3 USDT. It is executable at X's fill
+//     and, on the rising leg, at that leg's end (the 2m intrabar's high).
+//     W8D rule on intrabars (DIAG-C LW8D): R fills AT the leg-end print (the 2m high).
+//     Engine at 8988faff: R fills at its own level, X's fill - 3, on X's leg.
+//   B (hour % 4 == 2): R = BUY limit at X's fill + 0.20 USDT. It is executable at X's fill,
+//     but usually not at the rising leg's end.
+//     W8D rule: R rests at its level from the leg end on. It fills later in the bar, or on
+//     the next bar, at its level. Otherwise the next bar cancels it.
+//     Engine at 8988faff: R fills at once at its level, on X's own leg.
+// R is closed after 2 bars.
+// Each R's entry bar and price tell the outcome: the leg-end print, or the level, bar-exact.
+strategy("tailc-mag-coof-refill-leg", overlay = true, use_bar_magnifier = true,
+     calc_on_order_fills = true, process_orders_on_close = false,
+     default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 10000000)
+
+nC = strategy.closedtrades
+lastExitHere = nC > 0 and strategy.closedtrades.exit_bar_index(nC - 1) == bar_index
+lastExitWasX = nC > 0 and strategy.closedtrades.exit_id(nC - 1) == "X"
+flat = strategy.position_size == 0
+openId = strategy.opentrades > 0 ? strategy.opentrades.entry_id(0) : ""
+heldBars = strategy.opentrades > 0 ? bar_index - strategy.opentrades.entry_bar_index(0) : 0
+xBar = nC > 0 ? strategy.closedtrades.exit_time(nC - 1) : na
+cellA = hour(nz(xBar, time), "UTC") % 4 < 2
+
+if flat and not lastExitHere and minute(time) == 0 and hour(time, "UTC") % 2 == 0
+    strategy.entry("P", strategy.short)
+if openId == "P"
+    strategy.exit("X", "P", stop = strategy.position_avg_price + 3)
+    if heldBars >= 8
+        strategy.close("P")
+if flat and lastExitHere and lastExitWasX
+    xPrice = strategy.closedtrades.exit_price(nC - 1)
+    if cellA
+        strategy.entry("RA", strategy.short, limit = xPrice - 3)
+    else
+        strategy.entry("RB", strategy.long, limit = xPrice + 0.2)
+if flat and not lastExitHere
+    strategy.cancel("RA")
+    strategy.cancel("RB")
+if (openId == "RA" or openId == "RB") and heldBars >= 2
+    strategy.close_all(comment = "R done")

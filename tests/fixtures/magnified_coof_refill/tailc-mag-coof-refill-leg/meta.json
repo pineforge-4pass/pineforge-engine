@@ -1,0 +1,16 @@
+{
+  "title": "tailc-mag-coof-refill-leg",
+  "slug": "tailc-mag-coof-refill-leg",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:48:21.072Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "ec3b86ff55e34756253cfd213005380b3e31c55b7162c57947bac2f8108a35c8",
+  "tv_trades_sha256": "ec0b4db942cc4fb6d2d285727716d1c6a00923778881023c187949edc4181253",
+  "tv_trades_rows": 1068
+}
