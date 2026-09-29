@@ -81,6 +81,14 @@ public:
         return std::nullopt;
     }
     bool retains_stream() const noexcept { return retained_.is_stream; }
+    // The input the run retains -- a batch's, or a stream's warmup -- in
+    // time order, and whether each of its bars is a chart bar (no
+    // aggregation to a coarser script timeframe).
+    const std::vector<Bar>& retained_input() const noexcept { return retained_.bars; }
+    bool retained_input_is_chart() const noexcept {
+        return retained_.input_tf.empty() || retained_.script_tf.empty()
+            || retained_.input_tf == retained_.script_tf;
+    }
     // The open of the script bar published last, before the run's first none.
     std::optional<std::int64_t> last_published_script_open() const noexcept {
         if (last_published_script_open_ms_ == std::numeric_limits<std::int64_t>::min())

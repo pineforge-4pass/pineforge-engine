@@ -125,6 +125,13 @@ int local_weekofyear(int64_t bar_ms, const std::string& tz);
 bool local_time_in_session_windows(const std::string& windows_body,
                                    const struct tm& local_tm);
 
+// True when the symbol's session trades at bar_ms: a window of it on one of
+// its session days, where a session that names no days and has trading hours
+// trades Monday to Friday (the weekday rule session_period_last_traded_close_ms
+// reads), and 24x7 or an empty session every day. Exchange holidays are not
+// modelled. The calendar a Pine time() reading a bar past its data steps.
+bool session_trades_at(const std::string& session, const std::string& tz, int64_t bar_ms);
+
 // True when bar_ms (Unix ms) falls inside the session string for the given tz.
 bool passes_session_filter(const std::string& session,
                            const std::string& tz,

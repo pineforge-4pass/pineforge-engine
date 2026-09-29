@@ -1213,6 +1213,22 @@ bool passes_session_filter(const std::string& session,
     return local_time_in_session_days(body, local_tm, day_filter);
 }
 
+bool session_trades_at(const std::string& session, const std::string& tz, int64_t bar_ms) {
+    if (session.empty() || session == "24x7")
+        return true;
+    std::string windows;
+    std::unordered_set<int> days;
+    session_day_list(session, windows, days);
+    trim_inplace(windows);
+    if (windows.empty() || windows == "24x7")
+        windows = "0000-0000";
+    if (days.empty())
+        days = {2, 3, 4, 5, 6};
+    struct tm local_tm {};
+    decompose_ms_local(bar_ms, tz, local_tm);
+    return local_time_in_session_days(windows, local_tm, days);
+}
+
 // ---------------------------------------------------------------------------
 // Session predicate public free functions
 // ---------------------------------------------------------------------------

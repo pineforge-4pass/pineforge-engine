@@ -1,0 +1,16 @@
+{
+  "title": "PF te time bars_back tf",
+  "slug": "pf-te-time-bb-tf-eurusd1d",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:43:41.478Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "1D",
+    "from": "2025-01-01",
+    "to": "2025-06-01"
+  },
+  "pine_sha256": "201116af10cfbf6fcbe8a8088f00ac10dcc52783e3f12889a3a32bfda5c93d1b",
+  "tv_trades_sha256": "e58f8ea917f7fdc34d6549edda503cc56d7b56299e7e246da252c4eb36064302",
+  "tv_trades_rows": 106
+}

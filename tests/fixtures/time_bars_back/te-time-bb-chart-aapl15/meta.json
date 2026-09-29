@@ -1,0 +1,16 @@
+{
+  "title": "PF te time bars_back chart",
+  "slug": "pf-te-time-bb-chart-aapl15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:43:16.849Z",
+  "chart": {
+    "symbol": "NASDAQ:AAPL",
+    "interval": "15",
+    "from": "2025-04-14",
+    "to": "2025-04-23"
+  },
+  "pine_sha256": "f99738effbfc0c7899be5236980ad40e58257efc0578a905046b5d4d346136d5",
+  "tv_trades_sha256": "dc3d755c67c1acb8fa9f271ee635ef22bad7f65055054b469f1fceb01be9a459",
+  "tv_trades_rows": 156
+}

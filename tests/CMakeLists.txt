@@ -1609,6 +1609,9 @@ list(APPEND TEST_SOURCES test_session_prepost_windows_tape)
 list(APPEND TEST_SOURCES test_native_session_day_bar_open)
 #   K-SESSION-WINDOWS F2: the chart's session day and the regular one.
 list(APPEND TEST_SOURCES test_session_extended_day_tape)
+#   TAIL-E: time() / time_close() reading another bar (bars_back,
+#   timeframe_bars_back) against TradingView's tapes.
+list(APPEND TEST_SOURCES test_time_bars_back_tapes)
 #   K-SESSION-WINDOWS F7: an aggregated bar opening inside a session break.
 list(APPEND TEST_SOURCES test_session_break_open_bar_tape)
 #   F1(e) an aggregated process_orders_on_close script reading entry_bar_index.
@@ -2789,6 +2792,12 @@ foreach(_pf_w11_row IN ITEMS
             ${_pf_w11_macro}="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/${_pf_w11_dir}")
     endif()
 endforeach()
+
+# Lane TAIL-E: the time() bars_back tapes.
+if(TARGET test_time_bars_back_tapes)
+    target_compile_definitions(test_time_bars_back_tapes PRIVATE
+        PINEFORGE_TIME_BARS_BACK_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/time_bars_back")
+endif()
 
 # Lane W12-ENG-TIME: the rows that read its TradingView tapes.
 foreach(_pf_w12_row IN ITEMS

@@ -1,0 +1,16 @@
+{
+  "title": "PF te time bars_back chart",
+  "slug": "pf-te-time-bb-chart-xau15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:43:22.309Z",
+  "chart": {
+    "symbol": "OANDA:XAUUSD",
+    "interval": "15",
+    "from": "2025-04-14",
+    "to": "2025-04-23"
+  },
+  "pine_sha256": "f99738effbfc0c7899be5236980ad40e58257efc0578a905046b5d4d346136d5",
+  "tv_trades_sha256": "9d5115217d5613e5ac6dcc230c2c32e18b11592a4c2bee54ecadd03bca2c25c0",
+  "tv_trades_rows": 552
+}

@@ -1,0 +1,16 @@
+//@version=6
+// time() / time_close() with a bar offset on the chart's own timeframe. Every
+// bar spells, in UTC, the current bar's open, the next bar's open with and
+// without the session argument, two and five bars ahead, the previous bar,
+// and the next bar's and the current bar's close. A flat bar sends the entry
+// named by that text; a bar holding the position closes it with the text as
+// the comment, so the tape carries every bar's values.
+strategy("PF te time bars_back chart", overlay = true, default_qty_type = strategy.fixed, default_qty_value = 1)
+f(int t) => na(t) ? "na" : str.format_time(t, "MMdd-HHmm", "UTC")
+v = f(time) + "|" + f(time("", -1)) + "|" + f(time("", "", -1)) + "|" + f(time("", -2))
+     + "|" + f(time("", -5)) + "|" + f(time("", 1)) + "|" + f(time_close("", -1))
+     + "|" + f(time_close("", 0)) + "|" + str.tostring(dayofweek(time("", "", -1)))
+if strategy.position_size == 0
+    strategy.entry(v, strategy.long)
+else
+    strategy.close_all(comment = v)

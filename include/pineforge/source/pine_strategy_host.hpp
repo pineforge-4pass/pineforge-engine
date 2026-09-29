@@ -660,6 +660,16 @@ protected:
     int64_t chart_time_close() const;  // the chart bar's own (pine_strategy_host.cpp)
     // The close of the chart bar stamped `stamp`, as chart_time_close reads it.
     int64_t chart_bar_close_ms(int64_t stamp) const;
+    // Pine v6 time() / time_close() reading another bar: bars_back and
+    // timeframe_bars_back (pine_strategy_host.cpp). From the chart bar opening
+    // at `bar_open_ms` (the current one), `bars_back` chart bars back -- na
+    // before the first -- or, when negative, forward; then the `tf` bar (on
+    // `session` / `tz`, as time() reads them) holding that chart bar, stepped
+    // `timeframe_bars_back` of its own bars: back when positive, forward when
+    // negative. Returns its open, or its close with `close`.
+    int64_t pine_time_offset(int64_t bar_open_ms, int bars_back, const std::string& tf,
+                             const std::string& session, const std::string& tz,
+                             int timeframe_bars_back, bool close) const;
     // ab9714be pine_strategy_host.hpp:348-358: generated three-argument
     // session predicates are class-scope calls whose chart timeframe changes
     // the D/W/M meaning.  Keep that Pine policy in the source host; the
