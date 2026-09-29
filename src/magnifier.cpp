@@ -57,7 +57,7 @@ double path_at(double t, double p0, double p1, double p2, double p3,
     double d = t * total;  // distance along the path
 
     if (d <= len0) {
-        // Segment 0: p0 -> p1
+        // Segment 0: p0 -> p1, the first leg
         double frac = (len0 > 0.0) ? d / len0 : 0.0;
         return p0 + frac * (p1 - p0);
     }
