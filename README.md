@@ -8,7 +8,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/pineforge-4pass/pineforge-engine/ci.yml?branch=main&label=ci&logo=github)](https://github.com/pineforge-4pass/pineforge-engine/actions)
 [![Parity](https://img.shields.io/badge/TradingView%20parity-7%2C989%20%2F%207%2C989%20excellent%20or%20strong-brightgreen)](#validation-scoreboard)
-[![Trades](https://img.shields.io/badge/TradingView%20trades%20graded-2.76M-brightgreen)](#validation-scoreboard)
+[![Trades](https://img.shields.io/badge/TradingView%20trades%20graded-4.78M-brightgreen)](#validation-scoreboard)
 [![Speed](https://img.shields.io/badge/median%2015%C3%97%20vs%20PyneCore-success)](benchmarks/results/speed.md)<br>
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/C%2B%2B-17-00599C.svg?logo=cplusplus&logoColor=white)](#)
@@ -31,7 +31,7 @@ PineForge is a C++17 engine for backtesting and forward execution, with a C ABI 
 
 The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss), translates a PineScript v6 script into a C++ strategy that attaches the engine's Pine execution adapter (its main branch does; the PyPI release 0.10.4 predates the adapter); it owns translation, not execution semantics. TradingView comparisons measure this Pine path under the tested configurations. The [order model](docs/pages/fill-model.md) describes the current submodels and the remaining migration work; [Architecture](#architecture-kernel-vs-parity) states the boundary.
 
-- **Proven, not promised.** All 7,989 graded probes — 309 open reference strategies plus 783 real community scripts on 18 market/timeframe lanes — grade *excellent* or *strong* against TradingView's own trade lists: **7,905 excellent, 84 strong, zero below strong**. The graded probes hold 2,759,431 TradingView trades; 17 probes with TradingView-side defects are excluded.
+- **Proven, not promised.** All 7,989 graded probes — 309 open reference strategies, 680 community-shared scripts and 61 probe scripts the maintainers wrote, on 18 market/timeframe lanes — grade *excellent* or *strong* against TradingView's own trade lists: **7,905 excellent, 84 strong, zero below strong**. The graded probes' TradingView trade lists hold 4,776,328 trades; 17 probes with TradingView-side defects are excluded.
 - **Open runtime.** The engine and native live runner are Apache-2.0. The separately distributed [PineForge compiler](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) uses PolyForm Noncommercial terms with additional personal-trading permission; commercial use requires a separate license. Public reference strategies, benchmarks and validation tooling are available in their respective repositories; the community-script test set is not redistributed.
 - **Fast.** In-process, no interpreter: median **15× faster than PyneCore** on 196 timed strategies, measured at engine `063e4460` on 2026-09-22 with PyneCore timed as a subprocess, its interpreter start-up included (a median 603k bars/s per strategy with the bar magnifier on; [method](benchmarks/results/speed.md)). Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
 - **Deterministic to the bit.** Two runs with the same inputs produce identical trade lists. Same on Linux and macOS.
@@ -222,12 +222,12 @@ live behavior or real broker fills.
 
 ## Validation scoreboard
 
-**Measured 2026-09-29** on engine `35db01c8` with codegen-oss `70c2b4af` (the maintainers' baseline `pineforge-parity-baseline-20260929-engine-35db01c8`): **7,989 graded probes, 7,905 excellent + 84 strong**, none below *strong*, across 18 market/timeframe lanes. Their TradingView trade lists hold 2,759,431 trades.
+**Measured 2026-09-29** on engine `35db01c8` with codegen-oss `70c2b4af` (the maintainers' baseline `pineforge-parity-baseline-20260929-engine-35db01c8`): **7,989 graded probes, 7,905 excellent + 84 strong**, none below *strong*, across 18 market/timeframe lanes. Their TradingView trade lists hold 4,776,328 trades.
 
 | Board | Test set | Result |
 |---|---|---|
 | **Public** — [open corpus](https://github.com/pineforge-4pass/pineforge-corpus) | 312 reference strategies on BINANCE:ETHUSDT.P 15m, Apache-2.0, reproducible by anyone | this repository's sweep: **311 excellent + 1 declared anomaly**; the 309 of them in the measured population: **309 excellent** |
-| **Closed test** | 7,680 probes of 783 community-shared TradingView scripts across the 18 lanes — private under TradingView's Terms of Service | **7,596 excellent + 84 strong** |
+| **Closed test** | 7,680 probes of 741 TradingView scripts across the 18 lanes: 680 community-shared scripts (7,179 probes), private under TradingView's Terms of Service, and 61 probe scripts the maintainers wrote (501 probes) | **7,596 excellent + 84 strong** |
 
 ### Lane by lane
 
@@ -253,7 +253,7 @@ live behavior or real broker fills.
 | OANDA:XAUUSD · 1D | 456 | 454 | 2 | 0 |
 | **Total** | **7,989** | **7,905** | **84** | **0** |
 
-The hard lane holds the 309 public-corpus probes and 700 curated community-script probes. 17 more probes on it reproduce TradingView-side defects and are excluded from grading.
+The hard lane holds the 309 public-corpus probes and 700 closed-test probes (640 community scripts, 60 maintainer-written probe scripts). 17 more probes on it reproduce TradingView-side defects and are excluded from grading.
 
 ### How a probe is graded
 
