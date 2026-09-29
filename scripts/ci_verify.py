@@ -534,7 +534,36 @@ KERNEL_MIN_TESTS = 298
 # 761 = those 759 plus the two W15-KERNEL-CAL rows KERNEL_MIN_TESTS lists
 # above, which register here too. No release row skips, so 761 registered
 # is 761 run.
-RELEASE_MIN_TESTS = 761
+# 785 = those 761 plus INT30's twenty-four source-bound rows, counted with
+# ctest -N on the integrated tree (the kernel profile builds none of them):
+#   +1 TAIL-A  test_security_multi_day_buckets_tapes (N-day request.security)
+#   +1 TAIL-B  test_add_sibling_margin_tapes (AS, AC, LF)
+#   +1 TAIL-G  test_foreign_break_stamp_tapes (other symbols' requests on a
+#              daily chart stamped in its session's break)
+#   +10 TAIL-D test_coof_immediate_close_tapes (M1),
+#              test_coof_same_point_exits_tapes (M1e),
+#              test_coof_resting_bracket_tapes (M2),
+#              test_coof_timeframe_change_tapes (M3),
+#              test_exit_fifo_cross_tapes (M6),
+#              test_coof_open_limit_tapes (FP17),
+#              test_exit_reissue_na_tapes (X1),
+#              test_pooc_pair_gross_tapes (H1),
+#              test_whole_lot_tie_tapes (JD),
+#              test_coof_inflight_cancel_tapes (M7)
+#   +1 TAIL-H  test_exit_reservation_tapes (PS, PK)
+#   +2 TAIL-E  test_time_bars_back_tapes (M4),
+#              test_coof_immediate_close_final_tapes (M5)
+#   +7 TAIL-C  test_open_entry_fee_charged (W8E rule A),
+#              test_coof_w2_refill_tapes (W2),
+#              test_coof_open_newborn_exit_tape (OPEN),
+#              test_magnified_coof_refill_tape (MAG),
+#              test_pooc_add_close_tape (POOC),
+#              test_explicit_market_admission_tapes (ADM),
+#              test_nonfinite_entry_qty_tape (INF)
+#   +1 INT30   test_int30_rule_compositions (TAIL-B's AS, AC and LF beside
+#              TAIL-H's PK, on TradingView's tapes)
+# No release row skips, so 785 registered is 785 run.
+RELEASE_MIN_TESTS = 785
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
@@ -570,9 +599,11 @@ ADR_RULED_TEXTS_MIN = 40
 # RELEASE_MIN_TESTS, counted the same way; 733/733/742 with INT28-FIX round
 # 3's row of RELEASE_MIN_TESTS, counted the same way; 740/740/749 at INT29,
 # each with its seven rows of RELEASE_MIN_TESTS, counted the same way;
-# 742/742/751 with W15-KERNEL-CAL's two rows, counted the same way.
+# 742/742/751 with W15-KERNEL-CAL's two rows, counted the same way;
+# 766/766/775 at INT30, each with its twenty-four rows of RELEASE_MIN_TESTS,
+# counted the same way.
 # An excluded run must still discover at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 742, 'sanitizers': 742, 'native': 751}
+EXCLUDED_REGISTERED_MIN = {'debug': 766, 'sanitizers': 766, 'native': 775}
 # The ctest stage's bound. A full sanitizers run (push to main, a manual
 # dispatch, the maintainers' verification) ran out of its 30 minutes twice on
 # main's four-core runner before every row had finished, so it gets an hour; a
