@@ -563,7 +563,13 @@ KERNEL_MIN_TESTS = 298
 #   +1 INT30   test_int30_rule_compositions (TAIL-B's AS, AC and LF beside
 #              TAIL-H's PK, on TradingView's tapes)
 # No release row skips, so 785 registered is 785 run.
-RELEASE_MIN_TESTS = 785
+# 786 = those 785 plus lane TAIL-I's source-bound row, counted with ctest -N
+# on the lane's tree (the kernel profile builds none):
+#   +1 TAIL-I  test_margin_open_print_tapes (an all-in commissioned and
+#              slipped short's calls from the opening print, every point of
+#              the path, the follow-up of a call of any size)
+# No release row skips, so 786 registered is 786 run.
+RELEASE_MIN_TESTS = 786
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
@@ -601,9 +607,10 @@ ADR_RULED_TEXTS_MIN = 40
 # each with its seven rows of RELEASE_MIN_TESTS, counted the same way;
 # 742/742/751 with W15-KERNEL-CAL's two rows, counted the same way;
 # 766/766/775 at INT30, each with its twenty-four rows of RELEASE_MIN_TESTS,
-# counted the same way.
+# counted the same way; 767/767/776 with lane TAIL-I's row of
+# RELEASE_MIN_TESTS, counted the same way.
 # An excluded run must still discover at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 766, 'sanitizers': 766, 'native': 775}
+EXCLUDED_REGISTERED_MIN = {'debug': 767, 'sanitizers': 767, 'native': 776}
 # The ctest stage's bound. A full sanitizers run (push to main, a manual
 # dispatch, the maintainers' verification) ran out of its 30 minutes twice on
 # main's four-core runner before every row had finished, so it gets an hour; a
