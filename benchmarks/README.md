@@ -66,7 +66,7 @@ Every number in this section traces to a committed file or a pinned commit. The 
 
 - **32 rows** fail only on PnL (16) or only on the trade count (16). Their entries match TradingView's exactly and their exits within 0.0002 % (entry and exit p90). The difference is the window: PyneCore's broker trades from the feed's first bar, 2024-10-19, five months before TradingView's range opens.
   - With percent-of-equity sizing, PyneCore compounds P&L that TradingView never had. Slot `002`: quantity 536.418 against TradingView's 547.6178 on identical fills.
-  - A position PyneCore already holds when the range opens adds a trade at the window's leading edge. In 11 of the 16 count-only rows, PyneCore is in a position when TradingView's first trade opens.
+  - A position PyneCore already holds when the range opens adds a trade at the window's leading edge. In 11 of the 16 count-only rows, a position PyneCore opened before the range is still open when TradingView's first trade opens: 7 hold it past that bar and 4 close it on that bar.
   - The PyneCore runner has no counterpart of PineForge's TradingView-window order gate.
 - **Multi-timeframe scripts.** PyneCore 6.10.2 reproduced 0–85.5 % of TradingView's history through `request.security` on nine of them. With 6.10.3's `request.security` fixes, corpus `037` and `040` and closed `163` and `164` grade excellent, and closed `181` is one of the count-only rows above. Corpus `042` and closed `114` and `189` grade moderate, and closed `169` still reproduces 41.6 % (weak).
 - **3 grid bots** (`102`, `103`, `107`) drift on FIFO drains and grade moderate.
