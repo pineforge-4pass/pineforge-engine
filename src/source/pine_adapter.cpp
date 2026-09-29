@@ -18653,9 +18653,24 @@ void PineExecutionAdapter::fill_pooc_close_entries(
         const bool reversing_stop = placed_against && pure_stop
             && !config_.calc_on_order_fills && (after_close || !close_follows)
             && (book_before == 0.0 || (book_before > 0.0) != row.is_long);
-        if (placed_flat ? (after_close || book_before != 0.0) : !reversing_stop) continue;
+        // So does a limit placed against the held side, reversing it at this
+        // close (lab tv w5r-pooc-add-close cell J), and a limit or stop ADD
+        // placed while its own side is held (cells A, B, C, E, H; the
+        // unreached add D rests; R5 lanes W10 diag-w5r, TAIL-C).
+        const bool reversing_limit = placed_against && pure_limit
+            && !config_.calc_on_order_fills && (after_close || !close_follows)
+            && (book_before == 0.0 || (book_before > 0.0) != row.is_long);
+        const bool placed_with = row.projection_position_side
+            == static_cast<std::int32_t>(row.is_long ? PositionSide::LONG
+                                                     : PositionSide::SHORT);
+        const bool pyramid_add = placed_with && !after_close && book_before != 0.0
+            && (book_before > 0.0) == row.is_long;
+        if (placed_flat ? (after_close || book_before != 0.0)
+                        : !(reversing_stop || reversing_limit || pyramid_add)) {
+            continue;
+        }
         if (row.direction_gate || row.paired_flat_market_candidate) continue;
-        if (row.terms_priced_reverse && !reversing_stop) continue;
+        if (row.terms_priced_reverse && !(reversing_stop || reversing_limit)) continue;
         const bool at_close = finite_positive(close_tick) && (pure_limit
             ? (row.is_long ? close_tick <= row.exit_levels.limit
                            : close_tick >= row.exit_levels.limit)
@@ -18727,7 +18742,33 @@ void PineExecutionAdapter::flush_pooc_marketable_exit_fills(
     // it: on_applied runs the pass after that fill.
     if (!config_.process_orders_on_close || stream_mode_ || coof_recalc_active_) return;
     if (pooc_close_market_pending(context)) return;
+    if (pooc_close_entry_immediate_pending(context, nullptr)) return;
     fill_pooc_close_exits(bar.close, context);
+}
+
+// A priced entry this calculation placed that fill_pooc_close_entries
+// executes at this close (its immediate: an opening Entry row born this bar,
+// not from a fill, with the close forced as its price) and that has not
+// filled yet. The close pass decides the calculation's exits after it, as
+// TradingView does (lab tv w5r-pooc-add-close cells A, B, E, H: the add's
+// exit at that same close; R5 lanes W10 diag-w5r, TAIL-C).
+bool PineExecutionAdapter::pooc_close_entry_immediate_pending(
+        const NativeDecisionContext& context,
+        const native_order::RequestHandle* except) const {
+    const int bar_index = projection_bar_index(context);
+    for (const auto& handle : live_handles_) {
+        if (except && handle == *except) continue;
+        const auto found = placement_.find(handle.incarnation);
+        if (found == placement_.end()) continue;
+        const auto& row = found->second;
+        if (row.family == PineOrderFamily::Entry && row.opening && !row.birth.from_fill()
+            && row.projection_created_bar == bar_index
+            && std::isfinite(row.forced_execution_price)
+            && (std::isfinite(row.exit_levels.limit) || std::isfinite(row.exit_levels.stop))) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool PineExecutionAdapter::pooc_close_market_pending(
@@ -20909,9 +20950,19 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     // close has filled there, the pass decides the calculation's exits,
     // including those placed with the entry that just opened or reversed the
     // position (fill_pooc_close_exits; lane W4-ENG-POOC-SAMEPASS).
+    // The close-pass immediate of a priced entry fills with the calculation's
+    // own provenance; its exits are decided once the last one has filled.
+    const bool close_pass_entry_filled = placement_snapshot
+        && placement_snapshot->family == PineOrderFamily::Entry && placement_snapshot->opening
+        && context.coordinate.provenance == NativePriceProvenance::Calculation
+        && std::isfinite(placement_snapshot->forced_execution_price)
+        && (std::isfinite(placement_snapshot->exit_levels.limit)
+            || std::isfinite(placement_snapshot->exit_levels.stop))
+        && !pooc_close_entry_immediate_pending(context, &event.handle());
     if (placement_snapshot && config_.process_orders_on_close
         && !stream_mode_ && !coof_recalc_active_
-        && context.coordinate.provenance == NativePriceProvenance::AfterCalculationClose
+        && (context.coordinate.provenance == NativePriceProvenance::AfterCalculationClose
+            || close_pass_entry_filled)
         && placement_snapshot->projection_created_bar == projection_bar_index(context)
         && (placement_snapshot->opening
             || placement_snapshot->family == PineOrderFamily::Close

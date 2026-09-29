@@ -922,6 +922,10 @@ list(APPEND TEST_SOURCES test_ki62_same_id_cover)
 # decides the calculation's exits after its market orders
 # (tests/fixtures/pooc_samepass), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_pooc_samepass_tapes)
+# Lanes W10-DIAG-UNKNOWN (diag-w5r) and TAIL-C: the close pass also fills
+# limit/stop adds and reversing limits the close reaches, then decides the
+# exits after them (tests/fixtures/pooc_add_close), on TradingView's tape.
+list(APPEND TEST_SOURCES test_pooc_add_close_tape)
 # ... and a from_entry "" exit without a quantity closes its share of the
 # position it fills against, a market add's lot included
 # (tests/fixtures/global_exit_fill_size), on TradingView's tapes.
@@ -2585,6 +2589,11 @@ endif()
 if(TARGET test_magnified_coof_refill_tape)
     target_compile_definitions(test_magnified_coof_refill_tape PRIVATE
         PINEFORGE_MAGNIFIED_REFILL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/magnified_coof_refill")
+endif()
+
+if(TARGET test_pooc_add_close_tape)
+    target_compile_definitions(test_pooc_add_close_tape PRIVATE
+        PINEFORGE_POOC_ADD_CLOSE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_add_close")
 endif()
 
 # Lane W8E-EXITS reads its TradingView tapes from the fixture tree; source-bound.

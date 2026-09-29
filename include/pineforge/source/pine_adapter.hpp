@@ -2030,6 +2030,8 @@ private:
     // still has an order the close fills at any price.
     void fill_pooc_close_exits(double raw_close, const NativeDecisionContext&);
     bool pooc_close_market_pending(const NativeDecisionContext&) const;
+    bool pooc_close_entry_immediate_pending(const NativeDecisionContext&,
+                                            const native_order::RequestHandle* except) const;
     // A from_entry "" exit without a quantity that is the book's only exit:
     // it closes its percentage of the position it fills against.
     bool fill_time_global_exit(const PlacementSnapshot&) const;

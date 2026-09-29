@@ -1,0 +1,92 @@
+//@version=6
+strategy("w5r-pooc-add-close", overlay=true, process_orders_on_close=true, calc_on_order_fills=false, pyramiding=3, initial_capital=100000, default_qty_type=strategy.fixed, default_qty_value=1, commission_type=strategy.commission.percent, commission_value=0.05, slippage=3, margin_long=100, margin_short=100)
+
+// Lane W10-DIAG-UNKNOWN (diag-w5r), synthetic. Under process_orders_on_close:
+// does a same-side limit ADD placed while holding fill at the placing bar's
+// close when that close reaches it, and are the exits the same calculation
+// places for that add decided against the same close? Each cell opens with a
+// market entry on bar t0 (filled at t0's close) and places its orders on t1 =
+// t0 + 15m; cleanup two hours after t0. "through" = the exit's level is past
+// the close on the side that fills it; "marketable" = the entry's limit is at
+// or past the close on its fill side.
+cell(d, h, m) => time == timestamp("UTC", 2025, 4, d, h, m)
+
+// A: short held; limit add marketable at the close; both exits' stops through
+if cell(14, 0, 0)
+    strategy.entry("A1", strategy.short, comment="A1")
+if cell(14, 0, 15)
+    strategy.entry("A2", strategy.short, limit=close - 5, comment="A2 add")
+    strategy.exit("A1x", from_entry="A1", stop=close - 3, comment="A1x")
+    strategy.exit("A2x", from_entry="A2", stop=close - 3, comment="A2x")
+// B: long mirror of A
+if cell(14, 4, 0)
+    strategy.entry("B1", strategy.long, comment="B1")
+if cell(14, 4, 15)
+    strategy.entry("B2", strategy.long, limit=close + 5, comment="B2 add")
+    strategy.exit("B1x", from_entry="B1", stop=close + 3, comment="B1x")
+    strategy.exit("B2x", from_entry="B2", stop=close + 3, comment="B2x")
+// C: short held; limit add marketable at the close; brackets not through
+if cell(14, 8, 0)
+    strategy.entry("C1", strategy.short, comment="C1")
+if cell(14, 8, 15)
+    strategy.entry("C2", strategy.short, limit=close - 5, comment="C2 add")
+    strategy.exit("C1x", from_entry="C1", stop=close + 30, limit=close - 30, comment="C1x")
+    strategy.exit("C2x", from_entry="C2", stop=close + 30, limit=close - 30, comment="C2x")
+// D: long held; limit add NOT marketable at the close (rests)
+if cell(14, 12, 0)
+    strategy.entry("D1", strategy.long, comment="D1")
+if cell(14, 12, 15)
+    strategy.entry("D2", strategy.long, limit=close - 5, comment="D2 add")
+// E: short held; limit add marketable; both exits' LIMIT legs through
+if cell(14, 16, 0)
+    strategy.entry("E1", strategy.short, comment="E1")
+if cell(14, 16, 15)
+    strategy.entry("E2", strategy.short, limit=close - 5, comment="E2 add")
+    strategy.exit("E1x", from_entry="E1", limit=close + 3, comment="E1x")
+    strategy.exit("E2x", from_entry="E2", limit=close + 3, comment="E2x")
+// F: flat; limit entry marketable at the close; its stop through
+if cell(15, 0, 0)
+    strategy.entry("F1", strategy.long, limit=close + 5, comment="F1")
+    strategy.exit("F1x", from_entry="F1", stop=close + 3, comment="F1x")
+// G: flat; stop entry the close reached; its stop through
+if cell(15, 4, 0)
+    strategy.entry("G1", strategy.short, stop=close + 5, comment="G1")
+    strategy.exit("G1x", from_entry="G1", stop=close - 3, comment="G1x")
+// H: long held; STOP add the close reached; its stop through
+if cell(15, 8, 0)
+    strategy.entry("H1", strategy.long, comment="H1")
+if cell(15, 8, 15)
+    strategy.entry("H2", strategy.long, stop=close - 5, comment="H2 add")
+    strategy.exit("H2x", from_entry="H2", stop=close + 3, comment="H2x")
+// I: short held; the add's exit placed BEFORE the add
+if cell(15, 12, 0)
+    strategy.entry("I1", strategy.short, comment="I1")
+if cell(15, 12, 15)
+    strategy.exit("I2x", from_entry="I2", stop=close - 3, comment="I2x")
+    strategy.entry("I2", strategy.short, limit=close - 5, comment="I2 add")
+// J: long held; opposite-side limit marketable at the close; the new side's stop through
+if cell(15, 16, 0)
+    strategy.entry("J1", strategy.long, comment="J1")
+if cell(15, 16, 15)
+    strategy.entry("J2", strategy.short, limit=close - 5, comment="J2 rev")
+    strategy.exit("J2x", from_entry="J2", stop=close - 3, comment="J2x")
+// L: short held; MARKET add; its stop through (the F08 path, control)
+if cell(16, 0, 0)
+    strategy.entry("L1", strategy.short, comment="L1")
+if cell(16, 0, 15)
+    strategy.entry("L2", strategy.short, comment="L2 add")
+    strategy.exit("L2x", from_entry="L2", stop=close - 3, comment="L2x")
+// N: long held with a 0.05% entry fee; the equity and open profit the script
+// reads at t1's close, encoded in two market adds' quantities
+if cell(16, 4, 0)
+    strategy.entry("N1", strategy.long, comment="N1")
+if cell(16, 4, 15)
+    strategy.entry("N2", strategy.long, qty=math.round(strategy.equity - 99000, 1) / 1000, comment="N2 equity")
+    strategy.entry("N3", strategy.long, qty=math.round(strategy.openprofit + 100, 1) / 1000, comment="N3 openprofit")
+
+cleanup = cell(14, 2, 0) or cell(14, 6, 0) or cell(14, 10, 0) or cell(14, 14, 0) or cell(14, 18, 0) or
+     cell(15, 2, 0) or cell(15, 6, 0) or cell(15, 10, 0) or cell(15, 14, 0) or cell(15, 18, 0) or
+     cell(16, 2, 0) or cell(16, 6, 0)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")
