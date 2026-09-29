@@ -578,6 +578,9 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     if (suppress_probe_tail) host.scheduler_publish_suppressed_tail(script_bar);
     else {
         host.scheduler_publish_source_bar(script_bar, true, !had_coof_recalc);
+        // The bar a recalculation published early becomes the previous bar
+        // of timeframe.change() only now, after its own close (recalculate).
+        if (had_coof_recalc) host.prev_bar_timestamp_ = script_bar.timestamp;
         last_published_script_open_ms_ = context.script_bar_open_ms;
     }
     if (coof) commit_coof_script_state(host);
@@ -708,6 +711,13 @@ void PineScheduler::recalculate(const native_order::ExecutionAppliedEvent& event
     NativeDecisionContext coof_context = context;
     if (at_open) coof_context.coordinate.path_phase = NativePathPhase::Open;
     else if (open_point && bar_known) coof_context.coordinate.path_phase = first_extreme;
+    // timeframe.change() compares the script bar with the bar before it. A
+    // recalculation publishes its bar ahead of the bar's close, and every
+    // later calculation of the bar still compares with that same previous
+    // bar: TradingView resets a day's counter on the close of a day's first
+    // bar that a fill recalculated (lab tv tape
+    // tests/fixtures/coof_timeframe_change td-m3a; lane TAIL-D).
+    const std::int64_t previous_bar_timestamp = host.prev_bar_timestamp_;
     host.adapter_.begin_coof_recalc(
         event, coof_context, first_open, host.broker_fill_event_seq_);
     try {
@@ -721,9 +731,11 @@ void PineScheduler::recalculate(const native_order::ExecutionAppliedEvent& event
         host.adapter_.flush_coof_tail(/*openings_only=*/true);
         host.adapter_.flush_coof_tail();
     } catch (...) {
+        host.prev_bar_timestamp_ = previous_bar_timestamp;
         host.adapter_.end_coof_recalc();
         throw;
     }
+    host.prev_bar_timestamp_ = previous_bar_timestamp;
     host.adapter_.end_coof_recalc();
     restore_coof_script_state(host);
     coof_callback_script_open_ = context.script_bar_open_ms;

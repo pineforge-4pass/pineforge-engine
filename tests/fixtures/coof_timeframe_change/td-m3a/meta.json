@@ -1,0 +1,16 @@
+{
+  "title": "td-m3a-tfchange-coof",
+  "slug": "td-m3a",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:15:11.020Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-15"
+  },
+  "pine_sha256": "82012a6d9c917c812f5fde4b65387d8609b08b3371d476edcec7b805c714100d",
+  "tv_trades_sha256": "d32700ab2e9d4e4dc16d9b56637580519ba810e4c69b366fab30c4d87766ce46",
+  "tv_trades_rows": 56
+}
