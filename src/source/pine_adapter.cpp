@@ -20745,10 +20745,18 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                         && whole_unit_follow_up_due(source_margin_units(source_margin_money(
                                event.resolved_price, context.sub_bar_open_ms), true),
                            event.resolved_price);
-                    // The last of a bar's adds on a long: the broker's
-                    // follow-up (lagged_margin_follow_up_units) is sized on the
-                    // print the adds' fill slipped from and taken at the bar's
-                    // next path point.
+                    // The last of a bar's adds on a long: the call, and the
+                    // broker's follow-up after it (lagged_margin_follow_up_units),
+                    // are sized on the print the adds' fill slipped from, the
+                    // call executed there with its own slippage and the
+                    // follow-up taken at the bar's next path point. At margins
+                    // of 100 the book's shortfall is the same at any mark, so
+                    // the print decides the call only through its divisor: a
+                    // shortfall of 830.4416 is 0.535102 lots of ETH over the
+                    // 1551.93 print and 0.535096 over the 1551.95 fill slipped
+                    // from it, and TradingView calls 2.1404, four times the
+                    // first (lab tv tape tests/fixtures/int30_compositions
+                    // int30-c4-grid-pk-mkt, 2025-04-11 07:00 UTC; lane TAIL-I).
                     const bool adds_book = adds_book_last && opened_position.signed_units > 0.0;
                     const double print = source_bar_fill_tick(
                         event.resolved_price - config_.slippage * staged_.syminfo.mintick,
@@ -20757,8 +20765,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                         ? source_margin_money(print, context.sub_bar_open_ms) : SourceMarginMoney{};
                     const auto lots_before = adds_book
                         ? require_host().native_open_lots(print) : std::vector<NativeOpenLot>{};
-                    const bool called = submit_margin_call_slice(
-                        event.resolved_price, context, true);
+                    const bool called = adds_book && config_.slippage != 0
+                        ? submit_margin_call_slice(print, context)
+                        : submit_margin_call_slice(event.resolved_price, context, true);
                     const double next = next_source_path_waypoint(
                         policy_script_bar_, context.coordinate.path_phase,
                         event.resolved_price, source_path_uses_high_first(policy_script_bar_));

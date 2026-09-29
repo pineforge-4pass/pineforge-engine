@@ -298,30 +298,19 @@ struct Case {
 
 int main() {
     const std::vector<Bar> bars = feed();
-    // One recorded divergence, lane TAIL-B's AC sizing price and not the
-    // composition. At margins of 100 a book's shortfall is its cost plus its
-    // fees less the equity, whatever the mark; TradingView calls four times
-    // its lot floor over the print the adds' fill slipped from (or over the
-    // call's own price, a tick under it), and AC divides by the adds' slipped
-    // fill. Where the two quotients straddle a lot, the call is four lots
-    // short of TradingView's: cell 37, 2025-04-11 07:00 UTC, "L" 4.4515 alone
-    // with SL created first, adds of 0.3473 at 1551.95 slipped from 1551.93:
-    // 830.4416 over 1551.93 is 0.535102 lots (TradingView calls 2.1404 of
-    // "L"), over 1551.95 0.535096 (2.1400 here), and SL, which holds what the
-    // call leaves, exits 2.3111 on the tape and 2.3115 here. The unrounded
-    // probe int30-c3 (lab tv, not kept) met the same boundary in two of its
-    // 23 called market cells, and never under process_orders_on_close, whose
-    // call AC sizes at the close. Every exit PK re-reserves after a call, in
-    // this cell and in the other 45 called cells of the two tapes, is
-    // TradingView's for that call.
-    const std::vector<std::pair<Row, Row>> ac_print = {
-        {{1744352100000LL, true, 155677, 21404, 1744354800000LL, 155191},
-         {1744352100000LL, true, 155677, 21400, 1744354800000LL, 155191}},
-        {{1744352100000LL, true, 155677, 23111, 1744358400000LL, 154218},
-         {1744352100000LL, true, 155677, 23115, 1744358400000LL, 154218}},
-    };
+    // Both tapes are the engine's trade for trade. At margins of 100 a book's
+    // shortfall is its cost plus its fees less the equity, whatever the mark,
+    // and TradingView calls four times its lot floor over the print the adds'
+    // fill slipped from: cell 37, 2025-04-11 07:00 UTC, "L" 4.4515 alone with
+    // SL created first, adds of 0.3473 at 1551.95 slipped from 1551.93, where
+    // 830.4416 over 1551.93 is 0.535102 lots and TradingView calls 2.1404 of
+    // "L" (over the 1551.95 fill it would be 0.535096, a call of 2.1400), and
+    // SL, which holds what the call leaves, exits 2.3111 (lane TAIL-I; INT30
+    // recorded the fill-sized call here). Every exit PK re-reserves after a
+    // call, in this cell and in the other 45 called cells of the two tapes,
+    // is TradingView's for that call.
     const Case cases[] = {
-        {"int30-c4-grid-pk-mkt", config(false, 0.1, 2), 351, 111, ac_print},
+        {"int30-c4-grid-pk-mkt", config(false, 0.1, 2), 351, 111, {}},
         {"int30-c4-grid-pk-pooc", config(true, 0.06, 3), 351, 111, {}},
     };
 
