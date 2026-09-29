@@ -44,20 +44,27 @@ jobs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
     steps:
       # The tested commit and its parents: a pull request's merge and the base
-      # it merged into, a push's commit and its parent (the script fetches an
-      # older before).
+      # it merged into, a push's commit and its parent.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
           persist-credentials: false
 
+      # The base's own copy of the rule judges the change, so a change to the
+      # rule is never judged by itself; a base without one runs every job.
       - name: Classify the change
         id: classify
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
           PUSH_FORCED: ${{ github.event.forced }}
-        run: python3 scripts/ci_docs_only.py --github-output "$GITHUB_OUTPUT"
+        run: |
+          if git show HEAD^1:scripts/ci_docs_only.py > "$RUNNER_TEMP/ci_docs_only.py"; then
+            python3 "$RUNNER_TEMP/ci_docs_only.py" --root . --github-output "$GITHUB_OUTPUT"
+          else
+            echo "not docs-only: the base holds no scripts/ci_docs_only.py"
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
 
   preflight:
     runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
@@ -107,12 +114,15 @@ jobs:
           if-no-files-found: warn
 
   build:
-    # Each leg keeps its name, build (<image>, <type>), whatever the matrix carries.
+    # Each leg keeps its name, build (<image>, <type>), whatever the matrix
+    # carries. A skipped matrix is never expanded: a docs-only run shows one
+    # skipped build check under the unexpanded name.
     name: build (${{ matrix.os }}, ${{ matrix.build_type }})
-    # Every proof job waits for the changes job alone and skips only a
-    # docs-only change; a failed or unanswered classification runs it.
+    # Every proof job waits for the changes job alone and skips only when it
+    # succeeded and answered docs-only, exactly the skip the build aggregate
+    # accepts; a failed or unanswered classification runs it.
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     # A full-set leg waits on the test_ci_verify CTest row, 976-1288 s on the
     # standard runners at 0d76a099, which more cores do not shorten. There the
     # Release legs, which a fork's pull request runs in full, took 30.3 and
@@ -200,7 +210,7 @@ jobs:
   # PINEFORGE_ENABLE_SANITIZERS).
   sanitizers:
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
     # A full run (push to main, manual dispatch) gives its CTest stage an hour
     # after the build; the PR set keeps its 30-minute stage, after about 30
@@ -256,7 +266,7 @@ jobs:
   # runs as an example_* row asserting both its exit code and its summary line.
   kernel-only:
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
     # 22.3 min on the standard runner at 0d76a099, where a fork's pull request
     # still runs the whole kernel set.
@@ -302,7 +312,7 @@ jobs:
   # Reuse native proof once per CI run. Its manual dispatch runs every row.
   native-live:
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     uses: ./.github/workflows/native-live.yml
     with:
       exclude_slow: ${{ github.event_name == 'pull_request' }}
@@ -313,7 +323,7 @@ jobs:
   # build-gate reports its result on every such run.
   corpus-parity-subset:
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     uses: ./.github/workflows/corpus-parity.yml
     with:
       mode: subset

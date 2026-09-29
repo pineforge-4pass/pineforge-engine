@@ -16,22 +16,28 @@ under ``docs/``, unless
 * it lies under ``.github/``, ``benchmarks/``, ``scripts/`` or ``tests/``: a CI
   change runs CI, and the Markdown there is read by the proof jobs' own rows
   (the benchmark provenance README, the twin-parity ledger, fixture READMEs);
-* it is a CMake file; or
+* it is a CMake file or a git control file (``.gitattributes`` decides how a
+  checkout writes the files beside it); or
 * a proof job reads it (PROOF_READS, each with the rows that read it).
 
 A change is docs-only when it changes at least one path and every path it
 changes, both sides of a rename, is documentation. Whatever the script cannot
-establish answers "not docs-only", so the proof jobs run in full: an event
-other than a pull request or a push (a manual dispatch runs everything), a push
-that created the branch or was forced, a pull request whose checked-out merge
-is not the merge of its head, a commit git cannot read, an empty change.
+establish answers "not docs-only", and every proof job runs: an event other
+than a pull request or a push (a manual dispatch runs everything), a push that
+created the branch, was forced or carried more than one commit, a pull request
+whose checked-out merge is not the merge of its head, a commit git cannot read,
+an empty change.
 
-For a pull request the change is the merge GitHub tests (HEAD, checked out with
-its parents) against its first parent, the base it merged into: exactly what
-the tested tree changes. For a push it is ``before`` against the pushed commit;
-a ``before`` the checkout lacks is fetched.
+The change is HEAD, checked out with its parents, against its first parent:
+for a pull request the merge GitHub tests against the base it merged into,
+exactly what the tested tree changes; for a push the pushed commit against
+``before``, which must be that parent.
 
-    python3 scripts/ci_docs_only.py [--github-output FILE]
+The workflow runs the copy of this script that the first parent holds, with
+``--root`` naming the checkout, so a change to the rule is judged by the rule
+it changes and never by itself; a base without the script runs everything.
+
+    python3 ci_docs_only.py [--root DIR] [--github-output FILE]
 
 reads GITHUB_EVENT_NAME, and PR_HEAD_SHA (pull request) or PUSH_BEFORE and
 PUSH_FORCED (push), from the environment. It prints its reasons, appends
@@ -65,6 +71,7 @@ PROOF_READS = {
 SHA = re.compile(r'[0-9a-f]{40}')
 NO_COMMIT = '0' * 40
 SHOWN = 40
+GIT_SECONDS = 60
 
 
 class Doubt(Exception):
@@ -74,46 +81,46 @@ class Doubt(Exception):
 def is_documentation(path: str) -> bool:
     name = path.rsplit('/', 1)[-1]
     if (path.startswith(NOT_DOCUMENTATION_DIRS) or path in PROOF_READS
-            or name == 'CMakeLists.txt' or name.endswith('.cmake')):
+            or name == 'CMakeLists.txt' or name.endswith('.cmake') or name.startswith('.git')):
         return False
     return path.startswith('docs/') or name.endswith('.md')
 
 
 def git(root: Path, *args: str) -> str:
-    result = subprocess.run(['git', '-C', str(root), *args], capture_output=True, text=True)
+    try:
+        result = subprocess.run(['git', '-C', str(root), *args], capture_output=True, text=True,
+                                timeout=GIT_SECONDS)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise Doubt(f'git {" ".join(args)} failed: {error}') from error
     if result.returncode:
         raise Doubt(f'git {" ".join(args)} failed: '
                     f'{result.stderr.strip() or f"exit {result.returncode}"}')
     return result.stdout
 
 
-def has_commit(root: Path, sha: str) -> bool:
-    return subprocess.run(['git', '-C', str(root), 'cat-file', '-e', sha + '^{commit}'],
-                          capture_output=True).returncode == 0
-
-
 def compared(env: dict[str, str], root: Path) -> tuple[str, str, str]:
     """The two commits whose trees the change is, and what they are."""
     event = env.get('GITHUB_EVENT_NAME', '')
+    if event not in ('pull_request', 'push'):
+        raise Doubt(f'{event or "an unnamed event"} runs every job')
+    commits = git(root, 'rev-list', '--parents', '--max-count=1', 'HEAD').split()
     if event == 'pull_request':
         pr_head = env.get('PR_HEAD_SHA', '')
-        commits = git(root, 'rev-list', '--parents', '--max-count=1', 'HEAD').split()
         if len(commits) != 3 or not SHA.fullmatch(pr_head) or commits[2] != pr_head:
             raise Doubt(f'HEAD is not a merge of the pull request head {pr_head or "(none)"}: '
                         f'HEAD and its parents are {" ".join(commits) or "(none)"}')
         return commits[1], commits[0], 'the tested merge against its base'
-    if event == 'push':
-        before, forced = env.get('PUSH_BEFORE', ''), env.get('PUSH_FORCED', '')
-        if forced != 'false':
-            raise Doubt('the push was forced' if forced == 'true' else f'push forced={forced!r}')
-        if before == NO_COMMIT:
-            raise Doubt('the push created the branch')
-        if not SHA.fullmatch(before):
-            raise Doubt(f'push before={before!r} names no commit')
-        if not has_commit(root, before):
-            git(root, 'fetch', '--quiet', '--no-tags', '--depth=1', 'origin', before)
-        return before, git(root, 'rev-parse', 'HEAD').strip(), 'the pushed commit against the previous tip'
-    raise Doubt(f'{event or "an unnamed event"} runs every job')
+    before, forced = env.get('PUSH_BEFORE', ''), env.get('PUSH_FORCED', '')
+    if forced != 'false':
+        raise Doubt('the push was forced' if forced == 'true' else f'push forced={forced!r}')
+    if before == NO_COMMIT:
+        raise Doubt('the push created the branch')
+    if not SHA.fullmatch(before):
+        raise Doubt(f'push before={before!r} names no commit')
+    if len(commits) != 2 or commits[1] != before:
+        raise Doubt(f'the push carried more than its one commit: before {before} is not the parent '
+                    f'of HEAD, whose parents are {" ".join(commits[1:]) or "(none)"}')
+    return before, commits[0], 'the pushed commit against the previous tip'
 
 
 def changed_paths(root: Path, base: str, head: str) -> list[str]:
@@ -146,10 +153,12 @@ def decide(env: dict[str, str], root: Path = ROOT) -> tuple[bool, list[str]]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--root', type=Path, default=ROOT,
+                        help='the checkout to judge (default: the one holding this script)')
     parser.add_argument('--github-output', type=Path,
                         help='append docs_only=true|false to this file')
     args = parser.parse_args(argv)
-    docs_only, lines = decide(dict(os.environ))
+    docs_only, lines = decide(dict(os.environ), args.root)
     for line in lines:
         print(line)
     if args.github_output is not None:
