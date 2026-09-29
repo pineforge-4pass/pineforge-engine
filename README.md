@@ -1,14 +1,14 @@
 <div align="center">
 
-<img src=".github/assets/pineforge-banner.jpg" alt="PineForge — TradingView-exact PineScript backtests, open source, on your own data" width="900">
+<img src=".github/assets/pineforge-banner.jpg" alt="PineForge — PineScript backtests, deterministic, on your data" width="900">
 
 # PineForge
 
 **An open-source C++17 engine for backtesting and forward execution, with PineScript support through code generation.**
 
 [![CI](https://img.shields.io/github/actions/workflow/status/pineforge-4pass/pineforge-engine/ci.yml?branch=main&label=ci&logo=github)](https://github.com/pineforge-4pass/pineforge-engine/actions)
-[![Parity](https://img.shields.io/badge/TradingView%20parity-4%2C190%20%2F%204%2C190%20probes-brightgreen)](#validation-scoreboard)
-[![Trades](https://img.shields.io/badge/trades%20matched-2.8M-brightgreen)](#validation-scoreboard)
+[![Parity](https://img.shields.io/badge/TradingView%20parity-7%2C989%20%2F%207%2C989%20excellent%20or%20strong-brightgreen)](#validation-scoreboard)
+[![Trades](https://img.shields.io/badge/TradingView%20trades%20graded-2.76M-brightgreen)](#validation-scoreboard)
 [![Speed](https://img.shields.io/badge/median%2015%C3%97%20vs%20PyneCore-success)](benchmarks/results/speed.md)<br>
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/C%2B%2B-17-00599C.svg?logo=cplusplus&logoColor=white)](#)
@@ -26,16 +26,16 @@
 
 PineForge is a C++17 engine for backtesting and forward execution, with a C ABI for embedding. The engine has two layers:
 
-1. **A generic kernel** — a Pine-agnostic backtest and forward-execution state machine: order matching and fills, sizing, margin and settlement, the bar magnifier, indicator classes, `request.security()`, time and session math. It knows nothing about Pine or TradingView.
-2. **A source-adapter parity runtime** (`src/source/`, `PineExecutionAdapter` + `PineStrategyHost`) — maps Pine/TradingView execution semantics onto that kernel. This is where TradingView parity lives.
+1. **A generic kernel** — a Pine-agnostic backtest and forward-execution state machine: order matching and fills, sizing, margin and settlement, the bar magnifier, indicator classes, `request.security()`, time and session math. Some TradingView-shaped names survive in its archive, each ruled in [ADR 0001](docs/adr/0001-kernel-adapter-boundary.md) and held there by `scripts/check_kernel_residuals.py`.
+2. **A source-adapter parity runtime** (`src/source/` and `src/compat/pine/`, `PineExecutionAdapter` + `PineStrategyHost`) — maps Pine/TradingView execution semantics onto that kernel. This is where TradingView parity lives.
 
-The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss), translates a PineScript v6 script into a C++ strategy that attaches the engine's Pine execution adapter; it owns translation, not execution semantics. TradingView comparisons measure this Pine path under the tested configurations. The [order model](docs/pages/fill-model.md) describes the current submodels and the remaining migration work; [Architecture](#architecture-kernel-vs-parity) states the boundary.
+The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss), translates a PineScript v6 script into a C++ strategy that attaches the engine's Pine execution adapter (its main branch does; the PyPI release 0.10.4 predates the adapter); it owns translation, not execution semantics. TradingView comparisons measure this Pine path under the tested configurations. The [order model](docs/pages/fill-model.md) describes the current submodels and the remaining migration work; [Architecture](#architecture-kernel-vs-parity) states the boundary.
 
-- **Proven, not promised.** All 4,190 probes — 312 open reference strategies plus 413 real community scripts on 15 markets and timeframes — grade *excellent* or *strong* against TradingView's own trade lists: **4,182 excellent, 8 strong, zero moderate**. The current full sweep evaluates 2,819,967 TradingView trades, with 2,818,237 matched by the verifier.
+- **Proven, not promised.** All 7,989 graded probes — 309 open reference strategies plus 783 real community scripts on 18 market/timeframe lanes — grade *excellent* or *strong* against TradingView's own trade lists: **7,905 excellent, 84 strong, zero below strong**. The graded probes hold 2,759,431 TradingView trades; 17 probes with TradingView-side defects are excluded.
 - **Open runtime.** The engine and native live runner are Apache-2.0. The separately distributed [PineForge compiler](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) uses PolyForm Noncommercial terms with additional personal-trading permission; commercial use requires a separate license. Public reference strategies, benchmarks and validation tooling are available in their respective repositories; the community-script test set is not redistributed.
-- **Fast.** In-process, no interpreter: median **15× faster than PyneCore** on 196 timed strategies (a median 603k bars/s per strategy with the bar magnifier on). Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
+- **Fast.** In-process, no interpreter: median **15× faster than PyneCore** on 196 timed strategies, measured at engine `063e4460` on 2026-09-22 with PyneCore timed as a subprocess, its interpreter start-up included (a median 603k bars/s per strategy with the bar magnifier on; [method](benchmarks/results/speed.md)). Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
 - **Deterministic to the bit.** Two runs with the same inputs produce identical trade lists. Same on Linux and macOS.
-- **Yours to embed.** 114 `extern "C"` functions across two headers — 71 compiled-strategy declarations and 43 native-host declarations — append-only ABI. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
+- **Yours to embed.** 114 `PF_API` declarations across two headers — `pineforge.h`'s 71 (62 runtime exports and up to 9 per-strategy functions a generated module defines) and `native_c_api.h`'s 43 native-host declarations — an ABI that is append-only within a major version from 1.0 on. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
 
 ---
 
@@ -48,7 +48,7 @@ claude mcp add pineforge-backtest \
   -- docker run --rm -i -v "$PWD:/work" ghcr.io/pineforge-4pass/pineforge-backtest-mcp:latest
 ```
 
-For Claude Desktop, Cursor or any MCP client:
+For Cursor, which expands `${workspaceFolder}`, or any MCP client (in Claude Desktop, put an absolute path in its place):
 
 ```jsonc
 {
@@ -62,7 +62,7 @@ For Claude Desktop, Cursor or any MCP client:
 }
 ```
 
-Then ask: *"Fetch BTC/USDT 15m for the last 90 days and backtest this strategy"* — the container transpiles Pine → C++ with the bundled [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss), compiles, runs, and hands the agent the trade list. Nothing leaves your machine. Mount a directory at `/work`; `-i` is required and `-t` must not be added (a TTY corrupts the JSON-RPC stream).
+Then ask: *"Fetch BTC/USDT 15m for the last 90 days and backtest this strategy"* — the container transpiles Pine → C++ with the bundled [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss), compiles, runs, and hands the agent the trade list. The image bundles engine v0.13.1, the last tagged release, with codegen 0.10.4, not this repository's main. Your Pine and data stay on your machine; only the Binance tools (`fetch_binance_ohlcv`, `binance_symbols`) call out, to Binance's public API. Mount a directory at `/work`; `-i` is required and `-t` must not be added (a TTY corrupts the JSON-RPC stream).
 
 | Ask | Tool |
 |---|---|
@@ -71,7 +71,7 @@ Then ask: *"Fetch BTC/USDT 15m for the last 90 days and backtest this strategy"*
 | "Sweep fast 8–21 × slow 21–55, rank by net PnL" | `backtest_pine_grid` |
 | "What broker overrides are available?" | `list_engine_params` |
 
-Prefer zero install? The hosted server at **[mcp.pineforge.dev/mcp](https://mcp.pineforge.dev/mcp)** (Streamable HTTP, no key) backtests against a sealed Binance spot + USDT-perp data lake, metered per IP. The npm package [`@pineforge/backtest-mcp`](https://www.npmjs.com/package/@pineforge/backtest-mcp) mirrors the same server.
+Prefer zero install? The hosted server at **[mcp.pineforge.dev/mcp](https://mcp.pineforge.dev/mcp)** (Streamable HTTP, no key) backtests one configuration at a time on crypto OHLCV it fetches itself (seven venues; the free tier serves the last 365 days), metered per IP by a weekly backtest quota. The npm package [`@pineforge/backtest-mcp`](https://www.npmjs.com/package/@pineforge/backtest-mcp) is the local server run from Node 20+ on the host; it runs each transpile and backtest in the `pineforge-release` image through your Docker daemon.
 
 [![Real backtest on Claude in 60 seconds](https://img.youtube.com/vi/lflD47Bum4w/0.jpg)](https://www.youtube.com/watch?v=lflD47Bum4w)
 
@@ -84,14 +84,15 @@ bash tutorial/run.sh                            # MACD on BTC/USDT, end to end
 python3 tutorial/run_stream.py                  # OHLCV warm-up → realtime trades
 ```
 
-The [shared local/CI verifier](docs/ci.md) includes source guards, tests and installed-package smoke checks. Its ABI check links callers against both the current library and a separately built, pinned historical library. Preparation uses local Git history and the configured compiler; see the [ABI fixture guide](tests/fixtures/settlement_cpp_abi/README.md) for shallow clones and repeated checks. CTest itself stays offline.
+The [shared local/CI verifier](docs/ci.md) includes source guards, tests and installed-package smoke checks. Its ABI check links callers against both the current library and seven separately built, pinned historical libraries. Preparation uses local Git history and the configured compiler, fetching a pinned commit the clone lacks; see the [ABI fixture guide](tests/fixtures/settlement_cpp_abi/README.md) for repeated checks. The first run needs network (the verifier initialises the public `corpus` submodule itself; configure fetches Eigen when no system copy is found) and a full clone: a depth-1 clone fails the benchmark provenance row ([CI guide](docs/ci.md)). CTest itself stays offline.
 
-Prerequisites: CMake ≥ 3.16, a C++17 compiler (GCC ≥ 9, Clang ≥ 10, Apple Clang ≥ 12), Eigen 3.3+ (fetched automatically if absent), Python 3 for the tests (`-DPINEFORGE_BUILD_TESTS=OFF` for a library-only build). `cmake --install build --prefix /usr/local` installs `lib/libpineforge.a`, `include/pineforge/`, and the `find_package(PineForge)` config.
+Prerequisites: CMake ≥ 3.16 to build (the verifier and `ctest --test-dir` need 3.20), a C++17 compiler whose standard library has floating-point `std::to_chars` (libstdc++ from GCC 11 or later, or libc++ 14 or later; on macOS a deployment target of 13.3 or later; CI builds with GCC on Ubuntu 24.04 and Apple Clang on macOS 26), Eigen 3.3+ (fetched automatically if absent), Python 3 for the tests (`-DPINEFORGE_BUILD_TESTS=OFF -DPINEFORGE_BUILD_TUTORIAL=OFF` for a library-only build). `cmake --install build --prefix /usr/local` installs `lib/libpineforge.a` and `lib/libpineforge_kernel.a`, `include/pineforge/`, and the `find_package(PineForge)` config.
 
 ### Embedded in your own harness
 
 ```c
 #include <pineforge/pineforge.h>
+#include <stdio.h>
 
 int main(void) {
     pf_strategy_t s = strategy_create(NULL);
@@ -107,7 +108,7 @@ int main(void) {
 }
 ```
 
-Every PineForge-compiled strategy `.so` exports this same ABI — write the harness once, swap strategies forever. Worked examples for [C](https://cdocs.pineforge.dev/examples_c.html), [Python sweeps](https://cdocs.pineforge.dev/examples_python_sweep.html), [Rust](https://cdocs.pineforge.dev/examples_rust.html), [multi-strategy](https://cdocs.pineforge.dev/examples_multi.html) and [magnifier A/B](https://cdocs.pineforge.dev/examples_magnifier.html) are in the docs.
+Every PineForge-compiled strategy `.so` exports this same ABI, so one harness serves every module built against the same `PF_ABI_VERSION` (compare `pf_abi_version()` before a run). Build the harness against a module, or look the names up with `dlopen`/`dlsym`: `-lpineforge` alone defines no `strategy_create`, `run_backtest` or `report_free`. Worked examples for [C](https://cdocs.pineforge.dev/examples_c.html), [Python sweeps](https://cdocs.pineforge.dev/examples_python_sweep.html), [Rust](https://cdocs.pineforge.dev/examples_rust.html), [multi-strategy](https://cdocs.pineforge.dev/examples_multi.html) and [magnifier A/B](https://cdocs.pineforge.dev/examples_magnifier.html) are in the docs.
 
 Lifecycle-aware compiled modules reset Pine variables, indicator/history buffers and the broker book before each batch run or `strategy_stream_begin` warmup. Inputs and runtime settings persist until changed; ticks within a stream continue its state. Regenerate and rebuild existing modules with current codegen and matching engine headers/archive to obtain this behavior; the [internal C++ rebuild boundary](docs/pages/abi-stability.md) is checked at compile/link time.
 
@@ -118,7 +119,7 @@ Lifecycle-aware compiled modules reset Pine variables, indicator/history buffers
 The engine can be driven three ways. All three run the same kernel, so for the
 same requests they match trigger, price fills, book lots and settle
 identically; what differs is who writes the strategy, who owns TradingView's
-quirks and, for C, the C++ capabilities the 1.0 C surface does not spell (the
+quirks and, for C, the C++ capabilities the C surface planned for 1.0 does not spell (the
 1.0 C boundary table in the [native engine guide](docs/pages/native-engine.md)).
 
 ### 1. PineScript, through codegen
@@ -128,11 +129,14 @@ TradingView's execution semantics on top of the kernel; this is the path the
 validation scoreboard below measures.
 
 ```bash
-pip install pineforge-codegen
-pineforge-codegen strategy.pine -o generated.cpp
-c++ -std=c++17 -ffp-contract=off -shared -fPIC generated.cpp -lpineforge -o strategy.so
-python3 scripts/run_strategy.py .          # or drive it over the C ABI
+pip install "git+https://github.com/pineforge-4pass/pineforge-codegen-oss@main"
+python3 -c "from pathlib import Path; from pineforge_codegen import transpile; Path('generated.cpp').write_text(transpile(Path('strategy.pine').read_text(), filename='strategy.pine'))"
+c++ -std=c++17 -O2 -ffp-contract=off -fbracket-depth=1024 -shared -fPIC generated.cpp \
+    -Wl,-force_load,/usr/local/lib/libpineforge.a -o strategy.so
+python3 scripts/run_strategy.py . --ohlcv tutorial/data/btcusdt_15m_7d.csv --no-trim-output   # or drive it over the C ABI
 ```
+
+Run it from the engine checkout, with `strategy.pine` there, after the `cmake --install` above. This tree pairs with pineforge-codegen's `main` branch; neither is released yet. The PyPI release (`pip install pineforge-codegen`, 0.10.4) emits C++ for engine v0.13.1, the last tagged release, which main's headers no longer compile. Neither has a command-line entry point, so transpile through `transpile()`. The compile line is macOS/Clang's: on Linux link `-Wl,--whole-archive /usr/local/lib/libpineforge.a -Wl,--no-whole-archive`, and drop `-fbracket-depth` for GCC. Linking the whole archive is what puts the runtime's C exports (`pf_abi_version`, the `strategy_stream_*` family) in the module; a script that uses `matrix.*` also needs Eigen's include directory.
 
 ### 2. C++, against the kernel
 
@@ -166,7 +170,7 @@ sizing and its fee reserve, anchored brackets on a price grid, trails in ticks,
 a margin model with a real liquidation and an FX-curve roll, account risk
 limits, calculation timing, higher-timeframe series, an auxiliary finer feed,
 the open book lot by lot, per-bar broker-state hashes, and a kernel-recorded
-report. Each is a CTest row: `ctest --test-dir build -R example_`.
+report. Each is a CTest row in a build with `-DPINEFORGE_BUILD_EXAMPLES=ON` (the `ci_verify.py release` build above has it): `ctest --test-dir build -R '^example_'`.
 
 ### 3. C, against the same kernel
 
@@ -188,15 +192,15 @@ cb.user        = &state;
 cb.on_bar      = on_bar;            /* submit / replace / cancel from here */
 
 pf_strategy_t s = strategy_native_host_create_v1(&cb);
-strategy_configure_native_ext_v1(s, &spec, &ext);
+strategy_configure_native_v1(s, &spec);   /* or strategy_configure_native_ext_v1(s, &spec, &ext) */
 strategy_native_run_v1(s, bars, n, &report);
 ```
 
 **Coming from PineScript?** [PineScript to native C++](docs/pages/pine-to-native.md)
-maps every `strategy.*` builtin, the 19 covered `strategy()` declaration
-parameters and every `request.*` form to its C++ spelling and, where the 1.0 C surface has one,
-its C spelling, names the example that
-exercises each, and walks one six-feature strategy from Pine to a native host
+gives every `strategy.*` builtin, the 19 `strategy()` declaration
+parameters and every `request.*` form a row: its C++ spelling and, where the 1.0 C surface has one,
+its C spelling and the host or test that exercises it, or, for the 18 rows
+ruled *none*, why the kernel has no counterpart. It walks one six-feature strategy from Pine to a native host
 end to end. The [native engine guide](docs/pages/native-engine.md) is the
 reference underneath it.
 
@@ -218,69 +222,63 @@ live behavior or real broker fills.
 
 ## Validation scoreboard
 
-**Native policy refactoring · 2026-09-10:** engine [#234](https://github.com/pineforge-4pass/pineforge-engine/pull/234) and codegen [#127](https://github.com/pineforge-4pass/pineforge-codegen-oss/pull/127) preserve **4,182 excellent / 8 strong**. Both the old-engine/new-codegen and new-engine/new-codegen Cloud runs retain all **4,190 raw trade CSVs, counts and full grades** unchanged. The target bands have zero entrants and zero leavers: **net 0, no individual regression**. These changes remove an unused source flag and give Pine cap behavior explicit ownership; they do not claim complete engine independence. The formal gates remain zero-improvement FAILs and the official baseline remains unchanged.
+**Measured 2026-09-29** on engine `35db01c8` with codegen-oss `70c2b4af` (the maintainers' baseline `pineforge-parity-baseline-20260929-engine-35db01c8`): **7,989 graded probes, 7,905 excellent + 84 strong**, none below *strong*, across 18 market/timeframe lanes. Their TradingView trade lists hold 2,759,431 trades.
 
-**Round 39 · 2026-09-09:** **4,182 excellent / 8 strong / zero moderate** across all **4,190 scored probes**. This round adds one excellent result, with zero regressions on any canonical metric.
+| Board | Test set | Result |
+|---|---|---|
+| **Public** — [open corpus](https://github.com/pineforge-4pass/pineforge-corpus) | 312 reference strategies on BINANCE:ETHUSDT.P 15m, Apache-2.0, reproducible by anyone | this repository's sweep: **311 excellent + 1 declared anomaly**; the 309 of them in the measured population: **309 excellent** |
+| **Closed test** | 7,680 probes of 783 community-shared TradingView scripts across the 18 lanes — private under TradingView's Terms of Service | **7,596 excellent + 84 strong** |
 
-| Board | Test set | Result | TradingView trades evaluated |
-|---|---|---|---|
-| **Public** — [open corpus](https://github.com/pineforge-4pass/pineforge-corpus) | 312 reference strategies, Apache-2.0, reproducible by anyone | **309/309 graded excellent** (ETH/USDT-perp 15m; the corpus' declared engine-only / anomaly probes are not graded) | 429,866 |
-| **Closed test** — the parity campaign | 413 community-shared TradingView scripts across 15 market/timeframe lanes: **3,881 script-lane probes** — private under TradingView's Terms of Service | **3,873 excellent + 8 strong + zero moderate** = 3,881/3,881 (100%) excellent-or-strong | 2,390,101 |
+### Lane by lane
 
-**2,819,967 TradingView trades** evaluated, **2,818,237 matched by the verifier** (99.94%), from the round 39 full Cloud Run sweep. **18 TradingView-side anomalies** remain excluded under the unchanged population; each was documented before exclusion. No scored probe remains below *strong*.
-
-Round 39 extends the existing price-scale admission check to ordinary, fee-free fractional market entries when one minimum lot is worth at least one account unit. It shares the existing financial and order-book scope with the signal-cost check. A separately queued close still fills when the opening is declined, and entries placed after a close retain their established exception.
-
-**PK Willow Pulse UT Williams Live Movement** on **BINANCE:BTCUSDT 15m** moves from strong to excellent: canonical match rises from 96.9% to 100%, with zero trade-count gap and zero entry-price, exit-price, PnL and quantity error at the 90th percentile. Independent comparison of the unfiltered files matches all **12,408 physical trade pairs** on side, entry/exit times, prices and quantity, gaining **10,756 matches with none lost**. Including the displayed PnL in the exact comparison gains **2,193 matches with none lost**; the files use different PnL display precision.
-
-The fix has no strategy, symbol or date lookup. TradingView controls pin both directions, flat entries, reversal/close ordering and funding boundaries. A Cloud diagnostic reproduces the original selected trade CSV across all six observed invocations and confirms that the engine passed signal-cost admission but skipped the price-scale check for a high-value fractional lot. The exact explicit-quantity reversal control exposed a separate gap that remains unchanged by this default-sizing fix. All **704 hard-surface probes** retain their canonical grades, quantity metrics and trade CSVs; **4,189 of 4,190 CSVs are unchanged**. Verifier code, grading rules, profile-selection code, reference tapes, feeds, input files and scored population are unchanged.
-
-### The closed test, lane by lane
-
-| Market · timeframe | Probes | Excellent | Strong | Moderate |
+| Market · timeframe | Probes graded | Excellent | Strong | Below strong |
 |---|---:|---:|---:|---:|
-| BINANCE:ETHUSDT.P · 15m *(hard lane: zero regression allowed)* | 395 | 394 | 1 | — |
-| BINANCE:BTCUSDT · 15m | 354 | 354 | — | — |
-| BINANCE:BTCUSDT · 1D | 259 | 259 | — | — |
-| CME_MINI:ES1! · 15m | 174 | 173 | 1 | — |
-| CME_MINI:ES1! · 1D | 117 | 117 | — | — |
-| CME_MINI:NQ1! · 15m | 174 | 174 | — | — |
-| CME_MINI:NQ1! · 1D | 116 | 116 | — | — |
-| NASDAQ:AAPL · 15m | 356 | 354 | 2 | — |
-| NSE:NIFTY · 15m | 191 | 191 | — | — |
-| NSE:NIFTY · 1D | 145 | 145 | — | — |
-| NYSE:F · 15m | 340 | 338 | 2 | — |
-| NYSE:F · 1D | 263 | 263 | — | — |
-| OANDA:EURUSD · 15m | 373 | 372 | 1 | — |
-| OANDA:XAUUSD · 15m | 376 | 375 | 1 | — |
-| OANDA:XAUUSD · 1D | 248 | 248 | — | — |
-| **Total** | **3,881** | **3,873** | **8** | **0** |
+| BINANCE:ETHUSDT.P · 15m *(hard lane: zero regression allowed)* | 1,009 | 995 | 14 | 0 |
+| BINANCE:ETHUSDT.P · 1D | 540 | 538 | 2 | 0 |
+| BINANCE:BTCUSDT · 15m | 668 | 660 | 8 | 0 |
+| BINANCE:BTCUSDT · 1D | 516 | 515 | 1 | 0 |
+| CME_MINI:ES1! · 15m | 76 | 73 | 3 | 0 |
+| CME_MINI:ES1! · 1D | 35 | 34 | 1 | 0 |
+| CME_MINI:NQ1! · 15m | 74 | 71 | 3 | 0 |
+| CME_MINI:NQ1! · 1D | 37 | 37 | 0 | 0 |
+| NASDAQ:AAPL · 15m | 632 | 625 | 7 | 0 |
+| NASDAQ:AAPL · 1D | 464 | 463 | 1 | 0 |
+| NSE:NIFTY · 15m | 314 | 308 | 6 | 0 |
+| NSE:NIFTY · 1D | 225 | 224 | 1 | 0 |
+| NYSE:F · 15m | 637 | 622 | 15 | 0 |
+| NYSE:F · 1D | 505 | 501 | 4 | 0 |
+| OANDA:EURUSD · 15m | 653 | 645 | 8 | 0 |
+| OANDA:EURUSD · 1D | 453 | 452 | 1 | 0 |
+| OANDA:XAUUSD · 15m | 695 | 688 | 7 | 0 |
+| OANDA:XAUUSD · 1D | 456 | 454 | 2 | 0 |
+| **Total** | **7,989** | **7,905** | **84** | **0** |
+
+The hard lane holds the 309 public-corpus probes and 700 curated community-script probes. 17 more probes on it reproduce TradingView-side defects and are excluded from grading.
 
 ### How a probe is graded
 
 Every script is exported from TradingView as-is (its own inputs, its own defaults) with the chart's trade list at full precision, transpiled with [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss), and run by this engine on the same OHLCV bars. The two trade lists are aligned trade-for-trade and graded by [`scripts/verify_corpus.py`](scripts/verify_corpus.py):
 
-- **excellent** — the same number of trades, ≥ 99% of TradingView's trades matched, entry and exit prices within 0.01% and PnL within 1% at the 90th percentile (trailing-stop scripts are graded on the *production* profile: exits within 0.05%, since a trail fill depends on TradingView's sub-bar path);
+- **excellent** — the same number of trades, ≥ 99% of TradingView's trades matched, entry and exit prices within 0.01% and PnL within 1% at the 90th percentile (trailing-stop scripts are graded on the *production* profile: exits within 0.05% and PnL within 100%, since a trail fill depends on TradingView's sub-bar path);
 - **strong** — ≥ 95% matched, trade count within 6%, entries within 0.1% and exits within 0.5% at p90;
-- **moderate / weak** — ≥ 75% coverage, or less.
+- **moderate** — ≥ 75% coverage with ≥ 90% of the in-window trades matched; **weak** — at least one match; **minimal** — none.
 
-Published parity results use a fixed population and reproducible Cloud Run measurements. The formal gate requires **no hard-surface regression** and strictly positive pooled movement across the target excellent and excellent+strong bands. A documented native-correctness exception permits exactly zero target-band movement with no individual regression, after full comparison and independent review; its actual FAIL remains recorded and baseline promotion is deferred. Negative movement is outside this exception. The merge ruleset requires the maintainers' `pineforge/verify` and `pineforge/parity` commit statuses on the exact PR head; GitHub Actions CI is advisory. Baseline promotion also requires a recorded PASS and an exact-head merge.
+The closed-test grades are the maintainers' own measurement of a fixed population; only the public board can be re-run from this repository. The formal gate requires **no hard-surface regression** and strictly positive pooled movement across the target excellent and excellent+strong bands. A documented native-correctness exception permits exactly zero target-band movement with no individual regression, after full comparison and independent review; its actual FAIL remains recorded and baseline promotion is deferred. Negative movement is outside this exception. The merge ruleset requires the maintainers' `pineforge/verify` and `pineforge/parity` commit statuses on the exact PR head; GitHub Actions CI is advisory. Baseline promotion also requires a recorded PASS and an exact-head merge.
 
 ### What the closed test taught the engine
 
-Every gap was closed by pinning the rule TradingView actually follows — never by loosening the grader. Each rule was isolated with sensor strategies exported from TradingView (capital sweeps, literal replays, per-bar state encoded into order comments) and landed with a replay test on the recorded bars. Among them: the broker carries money at **ten significant digits** (equity rounding, the whole-order drop band, the one-contract margin call, the raw lot floor on every lot-stepped symbol); a trailing stop restarts from the issuing bar's *close* when `trail_points` changes and never folds that bar's extreme; a zero-offset trail rides the raw running best and its arming open fills at the nearest-tick print; a reversal rejected at placement preserves standing exits and a separately queued `strategy.close`, while the distinct fill-time rejection rules govern stop, limit, and trailing legs; sparse `ta.atr`/`ta.tr` read the chart's previous close on every execution; pivot levels snap to the tick grid; early-close sessions complete their higher-timeframe bucket; and account-currency conversion is left out of the comparison entirely, because TradingView's FX series is a moving target no fixed table reproduces.
+Every gap was closed by pinning the rule TradingView actually follows — never by loosening the grader. Each rule was isolated with sensor strategies exported from TradingView (capital sweeps, literal replays, per-bar state encoded into order comments) and landed with a replay test on the recorded bars. Among them: the broker carries money at **ten significant digits** (equity rounding, the whole-order drop band, the one-contract margin call, the raw lot floor on every lot-stepped symbol); a trailing stop restarts from the issuing bar's *close* when `trail_points` changes and never folds that bar's extreme; a zero-offset trail rides the raw running best and its arming open fills at the nearest-tick print; a reversal rejected at placement preserves standing exits and a separately queued `strategy.close`, while the distinct fill-time rejection rules govern stop, limit, and trailing legs; sparse `ta.atr`/`ta.tr` read the chart's previous close on every execution; a resting stop or limit level a hair off the tick grid snaps onto it; early-close sessions complete their higher-timeframe bucket; and account-currency conversion is left out of the comparison entirely, because TradingView's FX series is a moving target no fixed table reproduces.
 
 ### Reproduce the public board yourself
 
 ```bash
 git submodule update --init corpus
-docker pull ghcr.io/pineforge-4pass/pineforge-release:latest   # optional: re-derive every generated.cpp
-VERIFY=1 scripts/regen_corpus_cpp.sh                            # proves the shipped C++ is byte-identical
-JOBS=8 scripts/run_corpus.sh                                    # build 312 .so, run, grade vs TradingView
-python3 scripts/regen_validation_report.py                      # optional: the corpus report
+git -C corpus lfs pull                  # the 1-minute feed is a ~176 MB Git LFS object
+VERIFY=1 scripts/regen_corpus_cpp.sh    # optional, needs Docker: re-transpile every strategy.pine, diff against the shipped generated.cpp
+JOBS=8 scripts/run_corpus.sh            # build the 312 strategies, run them, grade vs TradingView, rewrite corpus/validation_report.md
 ```
 
-The corpus feed is a 1-minute Binance ETH/USDT:USDT tape with the 15-minute bars derived from it (`corpus/data/derived/`). Every probe folder ships `strategy.pine`, `generated.cpp`, `tv_trades.csv` and `engine_trades.csv`. The probe once filed as a TradingView anomaly (`anomaly-equity-mirror-strategy-equity-01`) turned out to be TradingView's ten-significant-digit margin call; the rule is pinned and the probe matches trade-for-trade.
+The corpus feed is a 1-minute Binance ETH/USDT:USDT tape; `scripts/derive_corpus_feeds.py` derives the 15-minute bars from it into `corpus/data/derived/` on the first run. Every probe folder ships `strategy.pine`, `generated.cpp`, TradingView's trade list (`tv_trades.csv`, or the file its `inputs.json` names) and `engine_trades.csv`. One probe, `anomaly-equity-mirror-strategy-equity-01`, declares `expected_tier: anomaly` in its `inputs.json`; the sweep reports it as `anomaly`, not as a failure, and `scripts/check_corpus_parity.sh` pins that headline: 311 excellent, 1 anomaly.
 
 ---
 
@@ -292,7 +290,7 @@ The corpus feed is a 1-minute Binance ETH/USDT:USDT tape with the 15-minute bars
 - **100 closed strategies** (slots 101–200) are TradingView-scraped community scripts on `BINANCE:ETHUSDT.P` 15m. Their artifacts are in the maintainers' evidence store (sha `6e938f9a…`) and are not public.
 - PyneSys rejects slot 192's source, so slot 201, from the same stratum, stands in for it in the PyneCore count. PineForge runs all 201 slots.
 
-PyneCore sources are official PyneSys cloud-compiler output, with no hand-ports. PineTS runs indicators only, because its strategy backtester is still on the upstream roadmap. vectorbt runs the 13 hand-written ports that load. `bash benchmarks/run_all.sh` reproduces the public half with no API keys.
+PyneCore sources are official PyneSys cloud-compiler output, with no hand-ports. PineTS runs only the canonical indicator script: the harness has no PineTS strategy runner, although PineTS has shipped a `strategy.*` namespace since 0.9.17. vectorbt runs the 13 hand-written ports that load. `bash benchmarks/run_all.sh` reproduces the public half with no API keys once the `benchmarks/assets` submodule, uv and Node ≥ 20 are in place ([recipe](benchmarks/README.md#reproduce)).
 
 | Group | Engine | Slots | Trades emitted | TV trades | 🟢 excellent | 🟢 strong | 🟡 moderate | 🟠 weak | 🔴 minimal | ⚪ n/a |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -320,16 +318,16 @@ Four slots have no PyneCore trade list:
 
 - **PineForge:** a median of 89 ms per strategy over the feed, in-process with the bar magnifier on (603k bars/s; quartiles 425k–731k).
 - **PyneCore:** a median of 1,475 ms per subprocess (36.6k bars/s). The median per-strategy speedup is **15×** across the 196 strategies both engines time (p5 6×, p95 68×).
-- **vectorbt:** a median of 102 ms for its 13 ports; PineForge is 1.3× faster on the same 13.
+- **vectorbt:** a median of 102 ms for its 13 ports; PineForge's median per-strategy speedup on the same 13 is 1.3×, and vectorbt is faster on 2 of them.
 - **PineTS:** 486 ms for the canonical 10-indicator script.
 - **Throughput package** ([`benchmarks/throughput/`](benchmarks/throughput/)): the magnifier-off hot loop runs at a median of **0.64 M bars/s** per strategy (N=201, median of five quiet runs).
 
 **Not comparable with the 2026-06-11 table** (PineForge 100/100, PyneCore 85/100, 162×):
 
 - **Tiers:** they now come from the canonical `scripts/verify_corpus.py::analyze_strategy` rubric. The old table graded a different 100-strategy population with `compare.py`'s own copy of the rubric, which had drifted from the canonical one and no longer parsed the current tape format.
-- **Speed:** the ratio fell because the engine is slower per bar, not because the host changed. The 2026-06-11 engine, rebuilt and timed on the same host in the same window, still runs close to its June timings (5–16 % over them in the quieter pass), while the current engine is 10–18× slower on the probes both populations share ([provenance](benchmarks/results/speed.md#provenance)).
+- **Speed:** the ratio fell because the engine is slower per bar, not because the host changed. The 2026-06-11 engine, rebuilt and timed on the same host in the same window, still runs close to its June timings (5–16 % over them in the quieter pass), while engine `063e4460` is 10–18× slower on the probes both populations share ([provenance](benchmarks/results/speed.md#provenance)).
 
-Last refresh **2026-09-22** (engine `063e4460`, PyneCore 6.10.2, PineTS 0.9.34, vectorbt 0.28.2, Apple M4 Max). Per-strategy table: [`benchmarks/results/summary.md`](benchmarks/results/summary.md). Population manifest: [`benchmarks/results/selection.md`](benchmarks/results/selection.md). Method, fairness and the reproduction recipe: [`benchmarks/README.md`](benchmarks/README.md).
+Last refresh **2026-09-22** (engine `063e4460`, PyneCore 6.10.2, PineTS 0.9.34, vectorbt 0.28.2, Apple M4 Max); main has moved on since, and neither the tiers nor the timings were re-measured on it. Per-strategy table: [`benchmarks/results/summary.md`](benchmarks/results/summary.md). Population manifest: [`benchmarks/results/selection.md`](benchmarks/results/selection.md). Method, fairness and the reproduction recipe: [`benchmarks/README.md`](benchmarks/README.md).
 
 ---
 
@@ -344,7 +342,7 @@ GeneratedStrategy  ── indicator math + strategy.entry / exit / close calls
    ▼
 Source-adapter parity runtime   src/source/, src/compat/pine/
    PineStrategyHost, PineExecutionAdapter: Pine order lifecycle, bracket legs,
-   fill-price and slippage rules, POOC / calc_on_order_fills, margin revival,
+   fill-price and slippage rules, process_orders_on_close / calc_on_order_fills, margin revival,
    trail and stop semantics
    │  generic orders, handles, callbacks
    ▼
@@ -369,7 +367,7 @@ A `NativeRunSpec` field the adapter never declares is a recorded decision, not a
 python3 scripts/ci_verify.py release --build-dir build-ci-release --jobs 6
 python3 scripts/ci_verify.py kernel  --build-dir build-ci-kernel  --jobs 6
 
-# The fast wiring and source checks, no build:
+# The fast wiring and source checks, no build (needs actionlint 1.7.12 and shellcheck):
 python3 scripts/ci_preflight.py --output-dir build-ci-preflight
 
 # Or plain CMake, when you only want a library and the tests:
@@ -385,6 +383,7 @@ Options worth knowing (all default off unless noted):
 | `PINEFORGE_BUILD_SOURCE_LAYER` | **ON** by default. `OFF` builds the kernel alone: `libpineforge.a` then holds exactly the objects of `PineForge::kernel`, the Pine headers are not installed, and every Pine-bound target is skipped. |
 | `PINEFORGE_BUILD_EXAMPLES` | The Pine-free native hosts under `examples/native/`, each with its CTest row. |
 | `PINEFORGE_BUILD_CORPUS_STRATEGIES` | A `strategy.so` per probe in `corpus/`, for the parity sweep. |
+| `PINEFORGE_BUILD_TUTORIAL` | **ON** by default. The MACD tutorial's `strategy.so` under `tutorial/`. |
 | `PINEFORGE_BUILD_LIVE_RUNNER` | The `pineforge-live` executable (needs SQLite3, libcurl, OpenSSL). |
 | `PINEFORGE_ENABLE_SANITIZERS` | ASan + UBSan. |
 | `PINEFORGE_ENABLE_COVERAGE` | Source coverage instrumentation; see `scripts/coverage.sh`. |
@@ -409,23 +408,24 @@ ground written for an agent that has been handed a brief in this repository.
 
 ## What ships here
 
-- `libpineforge.a` — the static runtime, in two layers:
-  - **generic kernel** — order matching and fills, sizing, margin and settlement, the bar magnifier, 66 indicator classes, `request.security()`, time and session math;
+- `libpineforge.a` — the static runtime, in two layers (the kernel alone also installs as `libpineforge_kernel.a`, `PineForge::kernel`):
+  - **generic kernel** — order matching and fills, sizing, margin and settlement, the bar magnifier, 70 indicator classes, `request.security()`, time and session math;
   - **source-adapter parity runtime** — `PineStrategyHost` and `PineExecutionAdapter` (`src/source/`) plus the Pine policy helpers in `src/compat/pine/`, which map Pine/TradingView execution semantics onto the kernel.
 - `<pineforge/pineforge.h>` — the public C ABI, the stability-pinned consumer surface.
-- `<pineforge/*.hpp>`, `<pineforge/source/*.hpp>` — internal C++ headers the transpiler emits against (generated code derives from `pineforge::source::PineStrategyHost`); not part of the stability guarantee.
+- `<pineforge/native_c_api.h>` and the native C++ host headers (`native_host.hpp`, `native_run_spec.hpp`, `native_order.hpp`, …) — the kernel's host API, which the [public contract](docs/pages/public-contract.md) covers from 1.0.0.
+- `engine.hpp`, `ta.hpp`, `<pineforge/source/*.hpp>`, `<pineforge/compat/pine/*.hpp>` — the C++ the transpiler emits against (generated code derives from `pineforge::source::PineStrategyHost`); outside the version-number guarantee, held by the codegen pairing rule instead.
 - C++ unit and recorded TradingView replay tests; CI on Linux + macOS × Release + Debug, sanitizers, and a `find_package` smoke consumer.
 - `corpus/` — the 312-strategy public validation corpus (submodule).
-- `benchmarks/` — the three-way comparison harness and the throughput package.
+- `benchmarks/` — the cross-engine comparison harness (PineForge, PyneCore, PineTS, vectorbt) and the throughput package.
 - `scripts/` — `run_corpus.sh`, `verify_corpus.py`, `run_strategy.py` (load any `.so` via ctypes), `regen_corpus_cpp.sh`, `coverage.sh`.
 
-**This is the runtime, not the compiler.** The PineScript → C++ transpiler is [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss) (`pip install pineforge-codegen`), bundled with the runtime in the [`pineforge-release`](https://github.com/pineforge-4pass/pineforge-release) image that the MCP server builds on. **It is a backtest engine, not a chart:** `plot`, `label`, `bgcolor` compile and do nothing. **It is not a TradingView clone:** where TradingView's behaviour is undocumented or platform-specific (the bar magnifier's intrabar path, float ordering) PineForge chooses deterministic rules and documents them; where it converges, it converges exactly.
+**This is the runtime, not the compiler.** The PineScript → C++ transpiler is [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss) (its `main` branch pairs with this tree; `pip install pineforge-codegen` gets the release that pairs with v0.13.1), bundled with the runtime in the [`pineforge-release`](https://github.com/pineforge-4pass/pineforge-release) image that the MCP server builds on. **It is a backtest engine, not a chart:** `plot` and `bgcolor` compile and draw nothing; `line`, `box`, `label` and `linefill` objects are kept as data the script can read back, never rendered. **It is not a TradingView clone:** where TradingView's behaviour is undocumented or platform-specific (the bar magnifier's intrabar path, float ordering) PineForge chooses deterministic rules and documents them; where it converges, it converges exactly.
 
 Full coverage map — every TA class, every order primitive, every `request.security()` semantic, and what is deliberately not implemented: [`docs/coverage.md`](docs/coverage.md).
 
 ### Timezones and day boundaries
 
-TradingView ties some day-boundary logic (intraday order caps, session rollovers) to `syminfo.timezone` and other calculations to the chart timezone. The validator derives the chart timezone from the input CSV; to force one, set `"engine_chart_timezone": "<IANA name>"` (or `""` for UTC) in the probe's `inputs.json`.
+TradingView ties some day-boundary logic (intraday order caps, session rollovers) to `syminfo.timezone` and other calculations to the chart timezone. `scripts/run_strategy.py` runs the engine in UTC unless told otherwise; to set a chart timezone, put `"chart_timezone": "<IANA name>"` in the probe's `inputs.json` (`""` keeps UTC) or pass `--chart-tz`.
 
 ---
 
@@ -440,7 +440,7 @@ A built strategy `.so` exposes 70 compiled-strategy `PF_API` declarations
 (62 runtime implementations plus eight generated exports) plus 43 native-host
 declarations: 113 `PF_API` exports in total; a script that declares
 `use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, the
-71st declaration of `pineforge.h`. `nm -gU` also shows libc++'s
+71st declaration of `pineforge.h`. In an optimized build `nm -gU` also shows libc++'s
 `std::piecewise_construct`; no project-internal C++ symbol is exported. The two
 inventories are pinned by `scripts/check_c_abi_runtime.py`:
 
@@ -467,13 +467,13 @@ inventories are pinned by `scripts/check_c_abi_runtime.py`:
 | `strategy_execution_contract` / `strategy_configure_native_v1` / `strategy_configure_native_fx_curve_v1` / `_fx_curve_ext_v1` | Query Legacy vs NativeMarketV1; apply the versioned native run specification (an invalid or refused base call returns `-1` and leaves the handle Failed; a cooperative `Aborted` handle may be reused with the same key and a higher run number); stage or clear an immutable native FX curve, `_fx_curve_ext_v1` also writing the typed refusal (`pf_native_fx_curve_error_e`) and the offending point's index |
 | `strategy_request_abort` / `strategy_last_run_status` | Cooperative abort of a run in progress; `0`=completed, `1`=aborted |
 | `strategy_set_realtime_tail` | Live-runtime surface (ABI v4): the array's last bar is a still-forming tail — `barstate.islast=false`, `last_bar_index`/`last_bar_time` frozen at the horizon bar, no range-end row |
-| `strategy_set_probe_suppress_tail_logic` | ABI v4: the last bar runs only the broker's pre-`on_bar` steps (pending-order settlement, intraday-cap/loss checks) and returns — no `on_bar`, no margin-call / POOC second pass / bracket-reissue processing (the range-end row is `strategy_set_realtime_tail`'s to skip; the flags are independent) |
+| `strategy_set_probe_suppress_tail_logic` | ABI v4: the last bar runs only the broker's pre-`on_bar` steps (pending-order settlement, intraday-cap/loss checks) and returns — no `on_bar`, no margin-call / `process_orders_on_close` second pass / bracket-reissue processing (the range-end row is `strategy_set_realtime_tail`'s to skip; the flags are independent) |
 | `strategy_set_path_order` / `strategy_last_bar_dual_entry_path` | ABI v4: force the intrabar O→H/L→C leg order (`AUTO`/`HIGH_FIRST`/`LOW_FIRST`) for path-dependent fill probing; read which side won a same-bar dual-entry-stop arbitration |
 | `strategy_set_broker_state_hash_recording` / `strategy_broker_state_hash` | ABI v4: toggle a 64-bit broker-state hash appended at report points to `pf_report_t::broker_state_hash` (a bare host uses `KernelRecorded`); read the final state's hash |
 | `strategy_pending_orders_len` / `strategy_pending_order_get` / `strategy_pending_order_layout` | ABI v4: the resting pending-order book after the most recent run — count, a POD snapshot per order (`pf_pending_order_v1_t`), and the snapshot's self-describing field layout |
 | `strategy_pending_order_fill_qty` / `_level_resolved` / `_effective_levels` / `strategy_trail_best_price` | ABI v4: engine-computed values for a resting order — the quantity it would open if filled at a given price, whether its relative offsets resolve yet, its resolved stop/limit/trail-activation levels, and the live position's trail extreme |
 | `strategy_position_avg_price` / `strategy_position_cycle_seq` / `strategy_position_size` | ABI v4: the live position's volume-weighted average entry price, its cycle id, and its script-facing signed size |
-| `strategy_closed_trade_entry_id` / `_exit_id` / `_exit_comment` / `_close_cause` | ABI v4: per-closed-trade id/comment strings and a `close_cause` enum (`SCRIPT`/`BRACKET`/`MARGIN_CALL`/`INTRADAY_LOSS_CAP`/`INTRADAY_FILL_CAP`/`RANGE_END`), indexed like `strategy_closed_trade_entry_incarnation` |
+| `strategy_closed_trade_entry_id` / `_exit_id` / `_exit_comment` / `_close_cause` | ABI v4: per-closed-trade id/comment strings and a `close_cause` (`pf_close_cause_t`: `SCRIPT`, `BRACKET`, `LIQUIDATION` for a margin call, `RISK_LIMIT` for the intraday loss cap, `FILL_CAP` for the intraday fill cap, `RANGE_END`), indexed like `strategy_closed_trade_entry_incarnation` |
 | `strategy_current_equity` / `strategy_script_bars_processed` | ABI v4: `initial_capital + netprofit` (not Pine's `strategy.equity`, which also adds open profit); total script bars dispatched by the most recent run |
 
 ### Driving the kernel from C
@@ -491,7 +491,7 @@ strategy. They are additive; no symbol, struct or behaviour above changes, and
 | `strategy_native_run_v1` / `strategy_native_report_free_v1` | Run a batch of bars into a `pf_report_t`; release its arrays (the runtime's own `report_free`, which is otherwise a per-strategy export) |
 | `strategy_native_submit_v1` / `_replace_v1` / `_replace_ext_v1` / `_cancel_v1` / `_cancel_all_v1` / `_cancel_where_v1` | The order commands, legal inside a callback or between realtime inputs; `cancel_where` withdraws every live request carrying one comment or one label. `_replace_ext_v1` is `_replace_v1` plus submit's own `reject` out-parameter, so a rejected replace names its `RequestRejectReason` |
 | `strategy_native_execute_current_v1` | Execute one live request at the current execution point |
-| `strategy_native_position_v1` / `_working_len_v1` / `_working_get_v1` | The physical position, and a copy-out snapshot of the live working book (`pf_native_working_v1`: its appended `trail_has_arm_price` tells a trail with no arm price from one armed at 0.0, and a caller sending `PF_NATIVE_WORKING_V1_BASE_SIZE` is filled exactly that far) |
+| `strategy_native_position_v1` / `_working_len_v1` / `_working_get_v1` | The physical position, and a copy-out snapshot of the live working book (`pf_native_working_v1`: its appended `trail_has_arm_price` tells a trail with no arm price from one armed at 0.0, and a caller sending an earlier published length, `PF_NATIVE_WORKING_V1_BASE_SIZE` or `PF_NATIVE_WORKING_V1_ARM_SIZE`, is filled exactly that far) |
 | `strategy_native_open_lot_count_v1` / `_open_lot_get_v1` | The physical book lot by lot (`pf_native_open_lot_v1`: identity, entry facts, signed units, entry fee, fee-net P&L and excursions at a mark) — `strategy.opentrades.*` for a C host |
 | `strategy_native_events_v1` / `_state_v1` | Poll the recorded event history by ordinal; read the lifecycle and its typed failure |
 | `strategy_native_acknowledge_events_v1` / `strategy_native_event_window_v1` | Under the `WINDOW` event retention: say which events the host has read, so the kernel drops those command events at the next script-bar boundary; read the oldest ordinal a poll can still return |
@@ -503,7 +503,7 @@ strategy. They are additive; no symbol, struct or behaviour above changes, and
 | `strategy_native_cohort_open_v1` / `_add_v1` / `_remove_v1` | Cohort rosters: a cohort close is `PF_NATIVE_INTENT_HOST_SIZED` owned by `PF_NATIVE_OWNER_BIND_COHORT`, sized by the `on_close_units` hook |
 | `strategy_native_declare_subscriptions_v1` / `_ext_v1` | Declare the run's higher-timeframe series from inside `on_run_begin`, replacing the staged list; `_ext_v1` adds a series source per row and writes the kernel's typed refusal (`pf_native_spec_error_e` and its field) |
 | `strategy_native_declare_auxiliary_feed_v1` | Declare, replace or withdraw the run's auxiliary finer feed from inside `on_run_begin`, with the same typed refusal |
-| `strategy_configure_native_ext_v1` / `strategy_configure_native_ext_result_v1` | Configure from `pf_native_run_spec_v1` **plus** `pf_native_run_spec_ext_v1` (report policy, price grid, calculation timing, open-bar view, margin model, higher-timeframe subscriptions, generic risk limits, the auxiliary finer feed, the retained intrabar path, and the slot-label / feed-tolerance / path-order / abort-reporting policies). The two specs' nine enum-valued words stay `uint32_t` and each has a C enumeration: `pf_native_fee_kind_e`, `pf_native_close_execution_e`, `pf_native_open_directions_e`, `pf_native_report_policy_e`, `pf_native_price_grid_e`, `pf_native_grid_rounding_e`, `pf_native_calc_trigger_e`, `pf_native_open_bar_view_e`, `pf_native_liquidation_sizing_e`. `_ext_result_v1` writes the kernel's typed refusal (`pf_native_spec_error_e` and its field) and, with either out-parameter set, also configures the next run of a Completed handle or one an abort failed |
+| `strategy_configure_native_ext_v1` / `strategy_configure_native_ext_result_v1` | Configure from `pf_native_run_spec_v1` **plus** `pf_native_run_spec_ext_v1` (report policy, price grid, calculation timing, open-bar view, margin model, higher-timeframe subscriptions, generic risk limits, the auxiliary finer feed, the retained intrabar path, the slot-label / feed-tolerance / path-order / abort-reporting policies, the event retention and the quantity tolerance). The two specs' enum-valued words stay `uint32_t`, and each names its C enumeration: `pf_native_fee_kind_e`, `pf_native_close_execution_e`, `pf_native_open_directions_e`, `pf_native_report_policy_e`, `pf_native_price_grid_e`, `pf_native_grid_rounding_e`, `pf_native_calc_trigger_e`, `pf_native_open_bar_view_e`, `pf_native_liquidation_sizing_e`, `pf_native_event_retention_e` and the others the header's field comments name. `_ext_result_v1` writes the kernel's typed refusal (`pf_native_spec_error_e` and its field) and, with either out-parameter set, also configures the next run of a Completed handle or one an abort failed |
 | `strategy_native_append_auxiliary_bars_v1` / `_ext_v1` | Append a realtime stream's later bars to the run's declared auxiliary finer feed; `_ext_v1` writes the typed append refusal (`pf_native_append_error_e`) and the bar it stopped on |
 | `strategy_native_declare_opened_lot_entry_bar_mask_v1` | From inside `on_applied`, say where the fill that opened a lot sat on its entry bar (`pf_native_opened_lot_fill_point_e`: on the bar's path, or after it); the kernel derives the lot's entry-bar mask that `on_lot_excursion`'s facts carry back |
 | `strategy_native_api_version` | This surface's layout version (`PF_NATIVE_API_VERSION`) |
@@ -518,17 +518,17 @@ row of the 1.0 C boundary table in the native engine guide, and a
 `C_V1_EXCLUSIONS` row of the same checker fails when that gap closes or its C++
 declaration goes.
 
-Every struct is tagged and size-prefixed (`struct_size`, `version`); an unknown
+Every native struct is size-prefixed (`struct_size`), and all but `pf_native_run_spec_v1`, `pf_native_fx_curve_v1` and `pf_native_subscription_v1` also carry a `version`; an unknown
 size, version or enumerator is refused with a documented negative status and
 mutates nothing. `pf_native_run_spec_ext_v1` has six published lengths — the
-layout the lane first shipped (`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`), the same
-struct with L9's appended risk tail (`PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE`), that
-plus N8's intrabar / policy tail (`PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE`), the
+first published layout (`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`), the same
+struct with the appended risk tail (`PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE`), that
+plus the intrabar / policy tail (`PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE`), the
 auxiliary-feed tail (`PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE`), the event-retention
 tail (`PF_NATIVE_RUN_SPEC_EXT_V1_RETENTION_SIZE`), and the current layout with
-K-ULP4's quantity-tolerance tail; `pf_native_callbacks_v1`
-has four — the layout the lane first shipped (`PF_NATIVE_CALLBACKS_V1_BASE_SIZE`),
-that plus its six-hook tail (`PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE`), that plus the
+the quantity-tolerance tail; `pf_native_callbacks_v1`
+has four — the first published layout (`PF_NATIVE_CALLBACKS_V1_BASE_SIZE`),
+that plus its seven-hook tail (`PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE`), that plus the
 policy-hook tail (`PF_NATIVE_CALLBACKS_V1_POLICY_SIZE`), and the current one,
 whose trailing `reserved1` marker says the host reads the lot-excursion facts'
 `entry_commission` tail. The runtime accepts each, so a host
@@ -541,29 +541,29 @@ needs no new symbol: the `strategy_stream_*` family takes these handles
 unchanged. Worked example: [`examples/native/hello_kernel_c.c`](examples/native/hello_kernel_c.c);
 reference: [`docs/pages/native-engine.md`](docs/pages/native-engine.md).
 
-POD types `pf_bar_t`, `pf_trade_tick_t`, `pf_trade_t`, `pf_report_t`, `pf_security_diag_t`, `pf_trace_entry_t`, `pf_version_t`, `pf_trade_stats_t`, `pf_equity_stats_t`, `pf_metrics_t`, `pf_equity_point_t`, `pf_pending_order_v1_t`, `pf_field_desc_t` and the `pf_magnifier_distribution_t` enum complete the surface. ABI v2 added computed trading metrics and a per-bar equity curve; ABI v3 added `pf_trade_t::open_at_end`, TradingView's range-end close of a position still open after the last bar; ABI v4 added the live-runtime accessors above plus `pf_report_t::broker_state_hash` / `broker_state_hash_len` (a per-report-point broker-state hash array, appended after `equity_curve_len`, NULL/0-length unless recording is on and a report point exists) and the `pf_pending_order_v1_t` generated POD mirror of the engine's resting-order record. Check `pf_abi_version()` before running: the report struct is caller-allocated.
+POD types `pf_bar_t`, `pf_trade_tick_t`, `pf_trade_t`, `pf_report_t`, `pf_security_diag_t`, `pf_trace_entry_t`, `pf_version_t`, `pf_trade_stats_t`, `pf_equity_stats_t`, `pf_metrics_t`, `pf_equity_point_t`, `pf_stream_order_action_t`, `pf_native_run_spec_v1`, `pf_native_fx_curve_v1`, `pf_pending_order_v1_t`, `pf_field_desc_t`, the opaque handle `pf_strategy_t` and the enums `pf_magnifier_distribution_t`, `pf_execution_contract_t`, `pf_native_spec_optional_t`, `pf_native_fx_curve_error_t`, `pf_fill_qty_partition_t` and `pf_close_cause_t` complete the surface. ABI v2 added computed trading metrics and a per-bar equity curve; ABI v3 added `pf_trade_t::open_at_end`, TradingView's range-end close of a position still open after the last bar; ABI v4 added the live-runtime accessors above plus `pf_report_t::broker_state_hash` / `broker_state_hash_len` (a per-report-point broker-state hash array, appended after `equity_curve_len`, NULL/0-length unless recording is on and a report point exists) and the `pf_pending_order_v1_t` generated POD mirror of the engine's resting-order record. Check `pf_abi_version()` before running: the report struct is caller-allocated.
 
-Full flag semantics, string lifetimes and the three L0 evidence lanes behind the ABI v4 live surface: [`docs/pages/live-surface.md`](docs/pages/live-surface.md).
+Full flag semantics, string lifetimes and the three evidence scripts behind the ABI v4 live surface: [`docs/pages/live-surface.md`](docs/pages/live-surface.md).
 
-**Stability guarantee.** Within a major version, struct layouts and `extern "C"` signatures are append-only — fields and functions are added, never reordered, removed or retyped; `static_assert`s in `src/c_abi.cpp` pin the layouts. Semantic versioning at the ABI level: PATCH never touches the ABI, MINOR appends, MAJOR breaks. A `.so` built against `0.X.Y` keeps working on any later `0.X.Z`.
+**Stability guarantee.** From 1.0.0, within a major version, struct layouts and `extern "C"` signatures are append-only — fields and functions are added, never reordered, removed or retyped; `static_assert`s in `src/c_abi.cpp` pin the layouts. Semantic versioning at the ABI level: PATCH never touches the ABI, MINOR appends, MAJOR breaks; the [public contract](docs/pages/public-contract.md) states each rule and what holds it. The 0.x releases did not keep this: v0.10.2 grew `pf_report_t` (ABI v2) and v0.12.1 added exports, so a 0.x consumer checks `pf_abi_version()` and rebuilds against the release it runs.
 
 ---
 
 ## Repository layout
 
 ```
-include/pineforge/      public C ABI (pineforge.h) + internal C++ headers
+include/pineforge/      public C ABI (pineforge.h, native_c_api.h), the native C++ host API + internal C++ headers
   ├── source/                         Pine source-adapter headers (pine_adapter.hpp, pine_strategy_host.hpp, …)
   └── compat/pine/                    Pine policy helper headers
-src/                    48 .cpp files in two layers
+src/                    53 .cpp files in two layers
   │ generic kernel (Pine-agnostic)
   ├── c_abi.cpp                       C ABI implementations + layout asserts
   ├── engine_*.cpp                    BacktestEngine: run loop, orders, execution, path resolution,
   │                                   lower-TF emulation, security + aux security, stream, consumer,
   │                                   metrics, report, trade accessors, state hash
-  ├── native_*.cpp                    native orders, run spec, calendar, FX curve, execution consumer
-  ├── market_admission / market_driver / pending_order_mirror / reservation_expansion
-  ├── ta_*.cpp                        66 indicator classes (moving averages, oscillators,
+  ├── native_*.cpp                    native orders, run spec, calendar, FX curve, execution consumer, C host API
+  ├── market_driver / pending_order_mirror / reservation_expansion
+  ├── ta_*.cpp                        70 indicator classes (moving averages, oscillators,
   │                                   volatility/trend, extremes/volume, misc)
   ├── magnifier / matrix / session_time / timeframe / timezone / math / str_utils
   │ source-adapter parity runtime (Pine / TradingView semantics)
@@ -572,21 +572,24 @@ src/                    48 .cpp files in two layers
   │   ├── pine_adapter.cpp            PineExecutionAdapter: Pine order lifecycle, brackets, fills, margin
   │   ├── pine_strategy_commands.cpp  strategy.entry / order / exit / close / cancel lowering
   │   ├── pine_scheduler.cpp, pine_scheduler_native.cpp
-  │   └── pine_aux_security.cpp, pine_state_hash.cpp
+  │   ├── pine_aux_security.cpp, pine_security_eval.cpp, pine_state_hash.cpp
+  │   └── pine_path_resolve.cpp, pine_ta_length.cpp, market_admission.cpp, magnifier_intrabars.cpp
   └── compat/pine/                    exit_activation, exit_lifecycle, market_admission,
                                       order_birth, order_priority, reservation_expansion
 tests/                  C++ unit, TradingView replay and pure-C ABI tests
 examples/native/        Pine-free native hosts, C++ and C, each a CTest row
-corpus/                 public submodule: 312 strategies + the 1-minute feed and derived 15m bars
-benchmarks/             three-way comparison harness, throughput package, results/
+corpus/                 public submodule: 312 strategies + the 1-minute feed (Git LFS); the 15m bars are derived locally
+benchmarks/             cross-engine comparison harness, throughput package, results/
 scripts/                ci_verify.py, ci_preflight.py, check_corpus_parity.sh, run_corpus.sh,
                         verify_corpus.py, run_strategy.py, and the check_*.py source guards
 tutorial/               MACD end-to-end + streaming walkthrough
+runner/                 the optional native live runner, pineforge-live
+docker/                 the release image's JSON entry point (run_json.py)
 docs/                   coverage map, Pine v6 audit, Doxygen site (cdocs.pineforge.dev)
   ├── pages/                          the narrative pages, incl. pine-to-native.md
   ├── design/                         the native feature-parity inventory and rulings
   └── adr/                            0001, the kernel/adapter boundary
-cmake/                  PineForgeConfig.cmake.in + the find_package smoke consumer
+cmake/                  PineForgeConfig.cmake.in, PineForgeVersion.cmake + the find_package smoke consumer
 ```
 
 Documentation: [C ABI reference](https://cdocs.pineforge.dev) · [Getting started](https://cdocs.pineforge.dev/getting_started.html) · [MACD tutorial](https://cdocs.pineforge.dev/tutorial_macd.html) · [Streaming](https://cdocs.pineforge.dev/streaming.html) · [Metrics reference](https://cdocs.pineforge.dev/metrics.html) · [FFI from Python](https://cdocs.pineforge.dev/ffi_python.html) · [Rust](https://cdocs.pineforge.dev/examples_rust.html) · [CMake integration](https://cdocs.pineforge.dev/integration_cmake.html) · [ABI stability](https://cdocs.pineforge.dev/abi_stability.html) · [Public contract](https://cdocs.pineforge.dev/public_contract.html) · [Coverage](https://cdocs.pineforge.dev/coverage.html). The site rebuilds on every push to `main`.
@@ -595,14 +598,14 @@ Documentation: [C ABI reference](https://cdocs.pineforge.dev) · [Getting starte
 
 ## Releases
 
-- **1.0.0** — the release notes are [CHANGELOG.md](CHANGELOG.md), and what 1.x promises is the [public contract](docs/pages/public-contract.md).
-- **Unreleased** (branch `live/abi-v4`) — ABI v4 live surface for `pineforge-live`: 24 new default-off exports (cooperative abort, realtime tail, probe-suppress tail logic, forced path order, a per-bar broker-state hash, the pending-order book as a generated POD mirror, closed-trade id/comment/close-cause, position and equity accessors). No flag changes a historical run: `scripts/live_flags_off_identity.py` (312 corpus probes, 0 differ vs the pre-v4 branch point), `scripts/live_flags_lane.py` (312 probes, 0 positives, 130 open-at-end trades subtracted), and `scripts/bar_identity_lane.py` (row 1: 222,295 bars compared, 2 explained open divergences, 0 else) all pass. 56 symbols.
-- **v0.13.0** (2026-09-05) — the parity campaign, rounds 1–11: TradingView's broker rules pinned with sensor exports and landed with replay tests — ten-significant-digit money, trailing-stop restarts, zero-offset trails, declined-reversal bracket legs, the surviving `strategy.close`, sparse `ta.atr`/`ta.tr`, pivot tick snap, same-bar entry/close transactions, early-close higher-timeframe buckets, 64-bit epoch arrays. Closed test 3,880/3,881; corpus 309/309. ABI v3, 32 symbols, 198 tests.
-- **v0.7 – v0.12** (June–August 2026) — native and auxiliary `request.security()` feeds, ABI v2 metrics + equity curve, streaming mode, range-end accounting. See [GitHub releases](https://github.com/pineforge-4pass/pineforge-engine/releases).
+- **Unreleased** (`main`, `VERSION` 0.14.0, not tagged) — every change since v0.13.1: C ABI version 4, the native kernel and its C host API, the script ABI epoch v19. What a 0.13.1 user must act on is in [CHANGELOG.md](CHANGELOG.md); what 1.x will promise is the [public contract](docs/pages/public-contract.md).
+- **v0.13.1** (2026-09-06, the last tagged release) — the parity campaign's rounds 7–11: TradingView's broker rules pinned with sensor exports and landed with replay tests — ten-significant-digit money, trailing-stop restarts, zero-offset trails, declined-reversal bracket legs, the surviving `strategy.close`, sparse `ta.atr`/`ta.tr`, same-bar market transactions, early-close higher-timeframe buckets; the corpus keeps every USDT-quoted book in USDT. Closed test 3,880/3,881; corpus 309/309. ABI v3, 32 symbols, 198 tests.
+- **v0.13.0** (2026-09-05) — native higher-timeframe and auxiliary `request.security()` feeds, TradingView's range-end close (ABI v3, `pf_trade_t::open_at_end`), the market-entry affordability gate for fixed, cash and explicit-quantity entries, `na` handling in the extremes and `ta.stdev`.
+- **v0.7 – v0.12** (June–August 2026) — ABI v2 metrics + equity curve (v0.10.2), historical-to-realtime streaming and `calc_on_order_fills` (v0.11.0), a timestamped account-currency FX series (v0.12.1). See [GitHub releases](https://github.com/pineforge-4pass/pineforge-engine/releases).
 - **v0.6.0** — performance sprint: cached static inputs, thread-local timestamp caching, lazy timezone caching; up to 6.7M bars/s.
 - **v0.5.0** — Pine v6 compatibility sprint (symbol mappings, constant namespaces, timestamp overloads, collection sorting, bare TA property reads); corpus 234 probes.
 - **v0.4.1** — clean-room 228-probe corpus, submodule made public, five engine fixes.
-- **v0.1 – v0.3** — initial release with the pinned C ABI; same-id stop/replace resolution, RMA seed, `-ffp-contract=off`; magnifier gap fills and directional mintick rounding.
+- **v0.1.1 – v0.4.0** — initial release with the pinned C ABI; same-id stop/replace resolution, RMA seed, `-ffp-contract=off`; magnifier gap fills and directional mintick rounding (these fixes shipped in v0.4.0).
 
 ---
 
@@ -611,7 +614,7 @@ Documentation: [C ABI reference](https://cdocs.pineforge.dev) · [Getting starte
 Read [CONTRIBUTING.md](CONTRIBUTING.md) (includes the Apache-2.0 contribution grant), or
 [Contributing as an LLM](docs/pages/contributing-llm.md) if you are an agent working from a brief.
 The short version: TradingView parity for new work goes in the adapter or in codegen, never in the
-kernel; every change keeps the parity corpus byte-identical; anything exported from
+kernel; a change that moves a parity-corpus trade says so and re-records `scripts/corpus_parity_baseline.txt` with its evidence; anything exported from
 `<pineforge/pineforge.h>` or `<pineforge/native_c_api.h>` is append-only within a major version.
 Bug reports with a Pine script, an OHLCV slice and TradingView's trade list are the most valuable
 thing you can send — that is exactly how every rule above was found.

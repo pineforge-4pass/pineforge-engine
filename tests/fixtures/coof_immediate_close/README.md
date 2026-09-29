@@ -7,7 +7,7 @@ The adapter executed an `immediately` close at the recalculating fill's price. O
 extreme can sit between two cents (H 9.445); the close_all rested its trigger at the booked tick
 (9.45), which the path never reaches, where the close of one id already rested at the raw extreme.
 
-Each directory is one `lab tv --no-note` export of the lane's own synthetic script (pineforge-workflow, channel `ws-report-v1`, BINANCE:ETHUSDT.P and NYSE:F 15, 2025-04-01 .. 2025-04-05 (NYSE:F: 2025-04-15)), byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` (`tvTradesCsvHash` is the sha256 of `tv_trades.csv`), `meta.json`. No closed or scraped strategy is involved.
+Each directory is one `lab tv --no-note` export of the lane's own synthetic script (maintainers' private pineforge-workflow, channel `ws-report-v1`, BINANCE:ETHUSDT.P and NYSE:F 15, 2025-04-01 .. 2025-04-05 (NYSE:F: 2025-04-15)), byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` (`tvTradesCsvHash` is the sha256 of `tv_trades.csv`), `meta.json`. No closed or scraped strategy is involved.
 `tests/test_coof_immediate_close_tapes.cpp` replays every tape through the Pine adapter.
 
 | tape | shape | trades | tv_trades.csv sha256 | rangeProof |

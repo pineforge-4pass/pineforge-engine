@@ -10,7 +10,7 @@ of 4; since R5 lane PAR-MARGIN `on_applied` admits that point for a leveraged
 opening's entry bar, and the section asserts the adapter books each tape's
 rows (lane H-MEASURE had pinned the adapter's late or missing call instead).
 
-Each directory is one `lab tv` export (pineforge-workflow, channel
+Each directory is one `lab tv` export (maintainers' private pineforge-workflow, channel
 `ws-report-v1`, `rangeProof: covered`), byte-identical: `strategy.pine`,
 `tv_trades.csv` (times UTC+8), `meta.json`, `metrics.json`. The sha256 of each
 tape is `metrics.json` `tvTradesCsvHash`; the campaign note is

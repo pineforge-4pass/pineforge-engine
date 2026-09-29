@@ -9,7 +9,7 @@
 PROJECT_NAME           = "PineForge"
 PROJECT_BRIEF          = "Deterministic PineScript v6 backtest runtime — C ABI reference"
 PROJECT_LOGO           =
-PROJECT_NUMBER         =     # filled in by docs/build.sh from VERSION
+PROJECT_NUMBER         =     # filled in by docs/build.sh: git describe, else VERSION
 
 OUTPUT_DIRECTORY       = site
 CREATE_SUBDIRS         = NO

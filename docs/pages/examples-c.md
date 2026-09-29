@@ -13,9 +13,9 @@ No Python, no scripting, no extra deps beyond `libc`. Total: ~120 lines.
 ```
 $ ./macd_runner ./strategy.so btcusdt_15m_7d.csv
 PineForge <version> (<sha>) — 672 bars
-trades: 49  net pnl: -190.85
-  L 0.000000 -> 0.000000  pnl=+12.40  qty=10.0
-  S 0.000000 -> 0.000000  pnl=-22.10  qty=10.0
+trades: 50  net pnl: 569.97
+  L <entry> -> <exit>  pnl=<pnl>  qty=1.0000
+  S <entry> -> <exit>  pnl=<pnl>  qty=1.0000
   ...
 ```
 

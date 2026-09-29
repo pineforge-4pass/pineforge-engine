@@ -22,7 +22,7 @@ rank and pair rules do not order these books: W6's same-rank tie-break is
 placement order, and E1 is price order) and added `r1c-ra-prior-limit` for
 limits that rested since an earlier bar.
 
-Each directory is one `lab tv --no-note` export (pineforge-workflow, channel
+Each directory is one `lab tv --no-note` export (maintainers' private pineforge-workflow, channel
 `ws-report-v1`), byte for byte: `strategy.pine`, `tv_trades.csv` (times at
 UTC+8), `metrics.json`, `meta.json`.
 

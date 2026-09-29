@@ -5,7 +5,7 @@ leaves na is withdrawn on TradingView, a stop and a limit alike. The adapter re-
 levels the call named and kept the old leg resting (fran-pineda-strategy-501 / -502 on
 OANDA:XAUUSD 15).
 
-Each directory is one `lab tv --no-note` export of the lane's own synthetic script (pineforge-workflow, channel `ws-report-v1`, OANDA:XAUUSD 15, 2025-08-14 .. 2025-08-20), byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` (`tvTradesCsvHash` is the sha256 of `tv_trades.csv`), `meta.json`. No closed or scraped strategy is involved. Pyramiding 2, a fixed size of 1; the
+Each directory is one `lab tv --no-note` export of the lane's own synthetic script (maintainers' private pineforge-workflow, channel `ws-report-v1`, OANDA:XAUUSD 15, 2025-08-14 .. 2025-08-20), byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` (`tvTradesCsvHash` is the sha256 of `tv_trades.csv`), `meta.json`. No closed or scraped strategy is involved. Pyramiding 2, a fixed size of 1; the
 na levels are a runtime `var float` na. `tests/test_exit_reissue_na_tapes.cpp` replays the tape.
 
 | tape | shape | trades | tv_trades.csv sha256 | rangeProof |

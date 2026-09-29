@@ -10,10 +10,10 @@ and hosted on Cloudflare Pages.
 ```
 docs/
 ├── Doxyfile              # Doxygen config: INPUT, theme, options. Every page
-│                         # below is listed there, and the order is ours.
+│                         # under pages/ is listed there; the order is ours.
 ├── build.sh              # one-shot: fetch theme, run doxygen -> docs/site/html/,
 │                         # then fail on a warning in the guarded public surface
-├── groups.dox            # the @defgroup tree: kernel, Pine adapter, C ABI groups
+├── groups.dox            # the two layer groups, kernel and Pine adapter
 ├── ci.md                 # the CI profiles, the parity gate, the doc guards
 ├── coverage.md           # the canonical Pine v6 coverage map
 ├── pine_v6_audit_master.md, pine_v6_coverage_detail.md

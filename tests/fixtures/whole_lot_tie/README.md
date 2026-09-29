@@ -9,7 +9,7 @@ realized profit plus the open profit in floating point, whose residue decides an
 does not reproduce; where the engine's sum and that sum on the money grid disagree on the tie, the
 adapter keeps the no-gap rule it had (population probes, cited in the adapter's resolve_terms).
 
-Each directory is one `lab tv --no-note` export of the lane's own synthetic script (pineforge-workflow, channel `ws-report-v1`, NYSE:F 1D, 2025-04-01 .. 2026-05-01), byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` (`tvTradesCsvHash` is the sha256 of `tv_trades.csv`), `meta.json`. No closed or scraped strategy is involved. 100 % of equity, 100 % margin.
+Each directory is one `lab tv --no-note` export of the lane's own synthetic script (maintainers' private pineforge-workflow, channel `ws-report-v1`, NYSE:F 1D, 2025-04-01 .. 2026-05-01), byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` (`tvTradesCsvHash` is the sha256 of `tv_trades.csv`), `meta.json`. No closed or scraped strategy is involved. 100 % of equity, 100 % margin.
 `tests/test_whole_lot_tie_tapes.cpp` replays every tape through the Pine adapter.
 
 | tape | shape | trades | tv_trades.csv sha256 | rangeProof |

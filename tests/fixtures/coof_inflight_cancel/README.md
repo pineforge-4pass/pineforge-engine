@@ -6,7 +6,7 @@ TradingView applies what that recalculation cancels or closes -- `strategy.cance
 whose level the rest of the leg reaches still fills there, at its level; one the leg does not reach
 is gone after it (job-2898-repost64-orb-meeeeeks-quote-ccy on BINANCE:BTCUSDT 15).
 
-Each directory is one `lab tv --no-note` export of the lane's own synthetic script (pineforge-workflow, channel `ws-report-v1`, BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-04-05), byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` (`tvTradesCsvHash` is the sha256 of `tv_trades.csv`), `meta.json`. No closed or scraped strategy is involved.
+Each directory is one `lab tv --no-note` export of the lane's own synthetic script (maintainers' private pineforge-workflow, channel `ws-report-v1`, BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-04-05), byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` (`tvTradesCsvHash` is the sha256 of `tv_trades.csv`), `meta.json`. No closed or scraped strategy is involved.
 `tests/test_coof_inflight_cancel_tapes.cpp` replays every tape through the Pine adapter.
 
 | tape | shape | trades | tv_trades.csv sha256 | rangeProof |

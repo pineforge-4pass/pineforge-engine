@@ -6,7 +6,7 @@
 # reports under benchmarks/results/.
 #
 # Prerequisites:
-#   - cmake >= 3.16 + a C++17 compiler (clang or gcc)
+#   - cmake >= 3.20 (the speed sweep's Google Benchmark target) + a C++17 compiler (clang or gcc)
 #   - uv (Python package manager) + Python 3.11+
 #   - node >= 20
 #   - git submodule update --init benchmarks/assets  (assets data + strategies)
@@ -43,7 +43,7 @@
 #
 # Maintenance scripts (refresh OHLCV, add new bench slots, refresh
 # strategy_pyne.py, re-emit generated.cpp) are NOT part of this script —
-# they live in pineforge-utils/bench-maintenance/ and require closed-source
+# they are maintainer-only and require closed-source
 # dependencies (codegen, PyneSys API key) that public reproducers don't need.
 
 set -euo pipefail
@@ -104,7 +104,7 @@ fi
 # OHLCV is the committed snapshot at benchmarks/assets/data/ETHUSDT_15.csv
 # (submodule). Every committed strategy_pyne.py + pineforge_trades.csv was
 # generated against this file. To extend / re-fetch, see
-# pineforge-utils/bench-maintenance/fetch_extended_ohlcv.py (maintainer-only).
+# the maintainer-only OHLCV fetch script.
 source "${BENCH_DIR}/.venv/bin/activate"
 mkdir -p "${WORKDIR}/data"
 SNAPSHOT_CSV="${BENCH_ASSETS}/data/ETHUSDT_15.csv"

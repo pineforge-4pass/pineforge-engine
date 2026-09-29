@@ -18,10 +18,10 @@ PineForge is a C++17 backtest and forward-execution engine. It has two layers:
 a **kernel** that matches triggers, prices fills, books lots and settles, and a
 **Pine adapter** that reproduces TradingView's execution semantics on top of
 it. A separate project transpiles PineScript into C++ that attaches the
-adapter. The engine's value is that its output is *byte-reproducible* and
-*trade-for-trade identical to TradingView* on a fixed population of 4,190
-probes, so almost every rule below exists to keep a change from quietly moving
-a byte.
+adapter. The engine's value is that its output is *byte-reproducible* and graded
+*trade for trade against TradingView* on a fixed population (8,006 probes at
+the current baseline; 7,905 of the 7,989 graded are excellent, 84 strong), so
+almost every rule below exists to keep a change from quietly moving a byte.
 
 ## Repo map
 
@@ -106,7 +106,7 @@ finding to report, not a step to take.
    with the pin, not with the code. *Enforced:*
    `scripts/check_twin_parity.py`.
 
-9. **Documentation cites the tree by `file:line`, and the citation resolves.**
+9. **Documentation cites the tree by `path:line`, and the citation resolves.**
    *Enforced:* `scripts/check_doc_anchors.py` (the anchor grammar is in that
    file's own docstring), `scripts/check_doc_lint.py` for stale epochs,
    roadmap labels and falsified negative claims, and
@@ -133,8 +133,10 @@ git submodule status          # the corpus gitlink must be the one your brief na
 ```
 
 Work only on the files your brief lists as yours. A need in another file is
-reported to whoever wrote the brief; it is never edited quietly. Never push —
-the pull request is opened after the sweep, by the supervisor.
+reported to whoever wrote the brief; it is never edited quietly. In the
+maintainers' campaign the supervisor opens the pull request after the sweep,
+so a lane never pushes; an outside contributor pushes to a fork and opens the
+pull request as [CONTRIBUTING.md](../../CONTRIBUTING.md) describes.
 
 ### 2. Write the witness first, and record that it failed
 
@@ -202,7 +204,7 @@ left and why. "Done" means executed and pasted, never inferred.
 ## Never
 
 - **Never cite a symbol, path or line from memory.** Open the file. Every
-  `file:line` you write is checked by `scripts/check_doc_anchors.py`, and every
+  `path:line` you write is checked by `scripts/check_doc_anchors.py`, and every
   symbol name you write in prose is read by someone who will try it.
 - **Never loosen a pin to make something green.** A pinned expectation that
   genuinely must change carries, in the diff or the commit message,
@@ -230,15 +232,15 @@ decision, and removing one is a regression:
 
 | Looks duplicated | Why both exist | Ruling of record |
 |---|---|---|
-| the kernel's price grid (`NativeRunSpec::price_grid`) and the adapter's own tick rules | TradingView quantizes per *order kind* — stop and limit legs on the quantized bar, the trail stop and the `calc_on_order_fills` cursors raw — and the kernel grid is one rule for the run. A per-kind mask would spell that inconsistency into the kernel. | ADR 0001 ruling table, row `price_grid`; design `native-feature-parity.md:532` |
-| the kernel's risk limits (`NativeRunSpec::risk`) and the adapter's `strategy.risk.*` | structurally, Pine's risk calls are per-bar statements that arrive after the spec has been digested; substantively, four measured divergences in the latch, the streak, the close price and the day key. | ADR 0001 ruling table, row `risk`; design `native-feature-parity.md:443` |
+| the kernel's price grid (`NativeRunSpec::price_grid`) and the adapter's own tick rules | TradingView quantizes per *order kind* — stop and limit legs on the quantized bar, the trail stop and the `calc_on_order_fills` cursors raw — and the kernel grid is one rule for the run. A per-kind mask would spell that inconsistency into the kernel. | ADR 0001 ruling table, row `price_grid`; design `native-feature-parity.md` §3.6.2 |
+| the kernel's risk limits (`NativeRunSpec::risk`) and the adapter's `strategy.risk.*` | structurally, Pine's risk calls are per-bar statements that arrive after the spec has been digested; substantively, four measured divergences in the latch, the streak, the close price and the day key. | ADR 0001 ruling table, row `risk`; design `native-feature-parity.md` §3.6.1 |
 | the kernel's `max_abs_units` and the adapter's `max_position_size` | the kernel caps the *resulting* book, TradingView gates the *live* book before the fill. | ADR 0001 ruling table, row `max_abs_units` |
-| the kernel's `max_open_lots` and Pine's `pyramiding` | the adapter counts *entries per cycle*, the kernel counts *physical lots*. Measured against TradingView the kernel's count is the closer one (14 of 15 tape scenarios against the adapter's 12, `tests/test_pyramiding_count_differential.cpp`): TradingView checks an entry once, at its first eligible point, against the trades then open. Lowered onto the cap, four corpus probes move away from TradingView, for want of that rule, so the adapter keeps its count. | ADR 0001 ruling table, row `max_open_lots` |
+| the kernel's `max_open_lots` and Pine's `pyramiding` | the adapter counts *entries per cycle*, the kernel counts *physical lots*. Measured against TradingView the kernel's count is the closer one (14 of 15 tape scenarios against the adapter's 13, `tests/test_pyramiding_count_differential.cpp`): TradingView checks an entry once, at its first eligible point, against the trades then open. Lowered onto the cap, four corpus probes move away from TradingView, for want of that rule, so the adapter keeps its count. | ADR 0001 ruling table, row `max_open_lots` |
 | the kernel's margin model and the adapter's money admission | the adapter answers TradingView's ten-significant-digit admission itself and declares a *maintenance-only* model, because a positive initial requirement would decline openings TradingView takes and admit adds it refuses (measured both ways, `tests/test_adapter_margin_schedule_differential.cpp`). | ADR 0001 ruling table, row `initial_margin_fraction` |
-| `NativeRunSpec::report_open_position_at_end` and the adapter's range-end rows | TradingView's range-end report re-marks the curve's last point and re-folds every extreme from it: report *shape*, not a mark-to-market row. | ADR 0001 ruling table, row `report_open_position_at_end`; design `native-feature-parity.md:629` |
+| `NativeRunSpec::report_open_position_at_end` and the adapter's range-end rows | TradingView's range-end report re-marks the curve's last point and re-folds every extreme from it: report *shape*, not a mark-to-market row. | ADR 0001 ruling table, row `report_open_position_at_end`; design `native-feature-parity.md` §3.7 |
 | `subscriptions` in the spec and the adapter's begin-time declaration | the adapter declares the same kernel subscriptions through a hook instead of the field, so a plain `request.security` site really is a kernel subscription. | ADR 0001 ruling table, row `subscriptions` |
 | the kernel's auxiliary feed and the adapter's auxiliary drive | the adapter's chart slice leaves pre-range coverage inert where the kernel folds by time, and evaluates after the bar's matching pass where the kernel delivers before it. | ADR 0001 ruling table, row `auxiliary_feed` |
-| `FeedTolerant` / `LegacyTolerant`, `NativeFeedTolerance` / `NativeLegacyTolerance` | deprecated spellings kept as exact aliases so existing hosts and the adapter compile unchanged; same value, same hash. | native_run_spec.hpp:311 and native_run_spec.hpp:353 |
+| `FeedTolerant` / `LegacyTolerant`, `NativeFeedTolerance` / `NativeLegacyTolerance` | deprecated spellings kept as exact aliases so existing hosts and the adapter compile unchanged; same value, same hash. | `LegacyTolerant` native_run_spec.hpp:329 and `NativeLegacyTolerance` native_run_spec.hpp:357 |
 
 ## Glossary
 

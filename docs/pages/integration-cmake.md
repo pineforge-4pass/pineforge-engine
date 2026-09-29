@@ -9,15 +9,15 @@ projects pull it in with one `find_package` call.
 
 ```cmake
 cmake_minimum_required(VERSION 3.16)
-project(my_strategy_runner LANGUAGES C)
+project(my_strategy_runner LANGUAGES C CXX)   # the archive is C++: link with CXX
 
-find_package(PineForge 1.0 REQUIRED)
+find_package(PineForge 0.13 REQUIRED)            # v0.13.1, or a build of main
 
 add_executable(runner runner.c)
 target_link_libraries(runner PRIVATE PineForge::pineforge)
 ```
 
-That's it. `PineForge::pineforge` is an `IMPORTED INTERFACE` target that
+That's it. `PineForge::pineforge` is an imported static-library target that
 carries:
 
 - the include directory containing `<pineforge/pineforge.h>`
@@ -28,6 +28,10 @@ carries:
   own, as `libpineforge.a` and TradingView's runtime do, instead of fusing
   them into one FMA on ARM64 or FMA-enabled x86 (`PineForge::kernel`
   carries it too)
+- with Clang, the compile option `-fbracket-depth=1024`, so the deeply nested
+  C++ that codegen emits for deep Pine compiles
+- `Eigen3::Eigen`: the package config calls `find_dependency(Eigen3 3.3)`, so
+  Eigen must be findable by the consumer too
 
 ## Locating a non-default install
 
@@ -42,19 +46,23 @@ Or set `CMAKE_PREFIX_PATH=/opt/pineforge`.
 ## Version selection
 
 ```cmake
-find_package(PineForge 1.0 REQUIRED)         # 1.0.0 or any later 1.x.y
-find_package(PineForge 1.0.0 EXACT REQUIRED) # exactly 1.0.0
+find_package(PineForge 0.13 REQUIRED)         # 0.13.x or any later 0.x.y
+find_package(PineForge 0.13.1 EXACT REQUIRED) # v0.13.1, or a git-checkout build of main
 ```
 
 The package config is `SameMajorVersion`: a minimum pins its major version, so
 `find_package(PineForge 0.14 REQUIRED)` does not find a 1.x install, and
-`1.0` does not find a 0.x one. Within a major version PineForge guarantees C
+`1.0` does not find a 0.x one. From 1.0.0, within a major version PineForge guarantees C
 ABI back-compat — see [ABI stability](@ref abi_stability) — so a minimum `1.x`
-(any compatible later 1.x.y) is the recommended pin.
+(any compatible later 1.x.y) is the recommended pin from 1.0.0. No 1.x release
+exists: v0.13.1 is the last tagged release, a git checkout of main configures
+as `0.13.1-<n>-g<sha>` (`git describe`) and a `-DPINEFORGE_VERSION_SOURCE=FILE`
+build as main's `VERSION` file, `0.14.0`; a minimum `0.13` finds all three.
 
-`find_package` compares MAJOR.MINOR.PATCH only. A release candidate installs
-as `PineForge_VERSION` `1.0.0` with `PineForge_VERSION_FULL` `1.0.0-rc.1`, so
-`find_package(PineForge 1.0.0 EXACT)` accepts `1.0.0-rc.1` as well; a project
+`find_package` compares MAJOR.MINOR.PATCH only. A release candidate `X.Y.Z-rc.N`
+installs as `PineForge_VERSION` `X.Y.Z` with `PineForge_VERSION_FULL`
+`X.Y.Z-rc.N`, so `find_package(PineForge X.Y.Z EXACT)` accepts the candidate as
+well; a project
 that must tell a candidate from its release compares `PineForge_VERSION_FULL`,
 the value `pf_version_string()` returns. Generated strategy code pairs with
 exactly that full version of the engine (see
@@ -71,10 +79,12 @@ runner: runner.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 ```
 
-`-lstdc++` is required even from C TUs because the runtime is C++ inside.
+`-lstdc++` (`-lc++` on macOS, whose SDK has no libstdc++) is required even
+from C TUs because the runtime is C++ inside.
 `-lm` covers the `math.h` calls inside the runtime's TA classes.
 `-ffp-contract=off` is the option the CMake package hands every consumer;
-compile a strategy's `generated.cpp` with it too (`CXXFLAGS`).
+compile a strategy's `generated.cpp` with it too (`CXXFLAGS`), and with Clang
+add `-fbracket-depth=1024`, the package's other consumer option.
 
 ## Linking from pkg-config
 

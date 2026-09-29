@@ -21,7 +21,8 @@ It covers, for every category:
 Each row is tagged **Supported**, **Partial**, or **No runtime module
 (Pine surface still supported via consumer compiler)** — and the latter
 is explicit about *why* a given Pine feature has no dedicated runtime
-class but is still covered end-to-end by the closed transpiler.
+class but is still covered end-to-end by the transpiler
+(pineforge-codegen, source-available).
 
 ## Why this lives outside the API reference
 

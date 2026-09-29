@@ -6,7 +6,7 @@ or through the open print, at the print and without slippage, on the entry bar; 
 print rests at its level for the rest of the bar. The adapter judged both against the slipped entry
 fill and held them for the next bar (finnp17-cleantradequantum on NSE:NIFTY 1D).
 
-Each directory is one `lab tv --no-note` export of the lane's own synthetic script (pineforge-workflow, channel `ws-report-v1`, NSE:NIFTY 1D, 2025-05-01 .. 2025-08-01), byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` (`tvTradesCsvHash` is the sha256 of `tv_trades.csv`), `meta.json`. No closed or scraped strategy is involved. The returned range starts on the first
+Each directory is one `lab tv --no-note` export of the lane's own synthetic script (maintainers' private pineforge-workflow, channel `ws-report-v1`, NSE:NIFTY 1D, 2025-05-01 .. 2025-08-01), byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` (`tvTradesCsvHash` is the sha256 of `tv_trades.csv`), `meta.json`. No closed or scraped strategy is involved. The returned range starts on the first
 daily bar after 2025-05-01 (`narrower-than-requested`); every cell lies inside it.
 `tests/test_coof_open_limit_tapes.cpp` replays the tape through the Pine adapter.
 

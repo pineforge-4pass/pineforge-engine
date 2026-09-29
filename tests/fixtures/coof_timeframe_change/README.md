@@ -6,7 +6,7 @@ bar, so the bar's close calculation saw no day change. TradingView resets a day'
 close of a day's first bar that a fill recalculated (niravdpatel5588 on NYSE:F 15: its daily trade
 counter never reset on days whose first bar filled a stop).
 
-Each directory is one `lab tv --no-note` export of the lane's own synthetic script (pineforge-workflow, channel `ws-report-v1`, BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-04-15), byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` (`tvTradesCsvHash` is the sha256 of `tv_trades.csv`), `meta.json`. No closed or scraped strategy is involved.
+Each directory is one `lab tv --no-note` export of the lane's own synthetic script (maintainers' private pineforge-workflow, channel `ws-report-v1`, BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-04-15), byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` (`tvTradesCsvHash` is the sha256 of `tv_trades.csv`), `meta.json`. No closed or scraped strategy is involved.
 `tests/test_coof_timeframe_change_tapes.cpp` replays the tape through the Pine adapter.
 
 | tape | shape | trades | tv_trades.csv sha256 | rangeProof |

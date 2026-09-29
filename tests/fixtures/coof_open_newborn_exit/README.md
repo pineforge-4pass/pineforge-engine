@@ -28,7 +28,7 @@ OANDA:EURUSD and BINANCE:ETHUSDT.P 1D, where the first fill is a zero-length sho
 |---|---:|---|
 | `tailc-1856-open-newborn` | 294 | `fca223ebfddd361aee8d4c5c47f1cf937ae5ef8e0ed426bd71d06ce42198efd8` |
 
-The directory is one `lab tv --no-note` export (pineforge-workflow, channel `ws-report-v1`,
+The directory is one `lab tv --no-note` export (maintainers' private pineforge-workflow, channel `ws-report-v1`,
 `rangeProof: covered`, BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-04-15), byte-identical:
 `strategy.pine`, `tv_trades.csv` (times UTC+8), `meta.json`, `metrics.json`.
 

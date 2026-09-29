@@ -6,7 +6,7 @@ at it, even when the recalculation of the first fill calls `strategy.cancel_all(
 `strategy.close_all()`. The engine recalculated after the first fill, whose cancel_all withdrew the
 second exit before the kernel reached it (niravdpatel5588 on NYSE:F 15).
 
-Each directory is one `lab tv --no-note` export of the lane's own synthetic script (pineforge-workflow, channel `ws-report-v1`, BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-04-05), byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` (`tvTradesCsvHash` is the sha256 of `tv_trades.csv`), `meta.json`. No closed or scraped strategy is involved.
+Each directory is one `lab tv --no-note` export of the lane's own synthetic script (maintainers' private pineforge-workflow, channel `ws-report-v1`, BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-04-05), byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` (`tvTradesCsvHash` is the sha256 of `tv_trades.csv`), `meta.json`. No closed or scraped strategy is involved.
 `tests/test_coof_same_point_exits_tapes.cpp` replays every tape through the Pine adapter.
 
 | tape | shape | trades | tv_trades.csv sha256 | rangeProof |

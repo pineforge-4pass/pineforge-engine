@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // benchmarks/speed/time_pinets.mjs
 //
-// PineTS does not have a strategy backtester yet; we time the canonical
+// The harness has no PineTS strategy runner; we time the canonical
 // indicator script (run_pinets_canonical.mjs) across N subprocess runs as an
 // apples-to-apples indicator-cost measurement.
 //

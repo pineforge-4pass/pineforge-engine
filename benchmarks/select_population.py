@@ -411,7 +411,7 @@ def render_md(m: dict) -> str:
         f"- Population version `{m['inputs']['populationVersionSha256']}` "
         f"(document sha256 `{m['inputs']['populationFileSha256']}`, "
         f"heads {json.dumps(m['inputs']['populationHeads'], sort_keys=True)})",
-        f"- Campaign verify reports: experiment `{m['inputs']['verifyFactsExperimentId']}` "
+        f"- Verify reports (maintainers' private evidence store): experiment `{m['inputs']['verifyFactsExperimentId']}` "
         f"(export sha256 `{m['inputs']['verifyFactsSha256']}`)",
         f"- Bench feed: `{feed['path']}` sha256 `{feed['sha256']}`, {feed['bars']:,} bars, "
         f"{iso(feed['firstMs'])} → {iso(feed['lastMs'])} UTC",

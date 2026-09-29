@@ -3,7 +3,7 @@
 This directory compares **PineForge** with two open-source PineScript runtimes and one vectorized backtester:
 
 - [**PyneCore**](https://github.com/PyneSys/pynecore): a Python framework that runs `@pyne` Python translated from Pine source by the [PyneSys cloud compiler](https://pynesys.io/). Apache 2.0.
-- [**PineTS**](https://github.com/LuxAlgo/PineTS): a TypeScript transpiler and runtime that runs raw `.pine` source in Node.js or browsers. AGPL-3.0. It has no strategy backtester upstream, so it runs indicators only.
+- [**PineTS**](https://github.com/LuxAlgo/PineTS): a TypeScript transpiler and runtime that runs raw `.pine` source in Node.js or browsers. AGPL-3.0. It has shipped a `strategy.*` namespace since 0.9.17, but this harness runs only its indicator layer, through the canonical indicator script.
 - [**vectorbt**](https://github.com/polakowo/vectorbt): a vectorized Pandas/NumPy/Numba backtester. It runs the hand-written `strategy_vbt.py` ports that some slots ship.
 
 ## Headline
@@ -74,7 +74,7 @@ Slot `143` hits the same error intermittently. Its grade comes from the one run 
 
 ## Reproduce
 
-**Public half: no API keys, no downloads.** Every input the public 100 slots need is committed to the [`benchmarks/assets`](https://github.com/pineforge-4pass/pineforge-benchmarks-assets) submodule: OHLCV, `.pine` sources, `generated.cpp`, `tv_trades.csv`, `strategy_pyne.py` and `strategy_vbt.py`. Prerequisites: CMake ≥ 3.20, a C++17 compiler, [uv](https://docs.astral.sh/uv/) with CPython 3.12, and Node ≥ 20.
+**Public half: no API keys, no data downloads.** Every input the public 100 slots need is committed to the [`benchmarks/assets`](https://github.com/pineforge-4pass/pineforge-benchmarks-assets) submodule: OHLCV, `.pine` sources, `generated.cpp`, `tv_trades.csv`, `strategy_pyne.py` and `strategy_vbt.py`. Prerequisites: CMake ≥ 3.20, a C++17 compiler, [uv](https://docs.astral.sh/uv/) with CPython 3.12, Node ≥ 20, and network access: the build fetches Google Benchmark, and `uv sync` and `npm install` fetch the Python and Node packages.
 
 ```bash
 git clone https://github.com/pineforge-4pass/pineforge-engine.git
@@ -91,7 +91,7 @@ SKIP_BUILD=1 SKIP_SPEED=1 JOBS=8 bash benchmarks/run_all.sh
 cat benchmarks/results/summary.md
 ```
 
-**Maintainers: the full 201 slots.** Fetch the closed root from the evidence store (`lab evidence get` with the campaign environment sourced). Its directory is gitignored, and every harness step picks it up when it exists:
+**Maintainers: the full 201 slots.** Fetch the closed root from the maintainers' private evidence store (`lab evidence get`, a maintainer-only tool, with the campaign environment sourced). Its directory is gitignored, and every harness step picks it up when it exists:
 
 ```bash
 lab evidence get 6e938f9a9160eeae6bda5c7c2d02078f1b9795d767a48d125fa68245f69ca539 --out /tmp/bench-closed.tar.gz
@@ -122,7 +122,7 @@ QUIET_LOAD_MAX=6 SKIP_BUILD=1 SKIP_PINEFORGE=1 SKIP_PYNE=1 SKIP_PINETS=1 SKIP_RE
 bash benchmarks/throughput/reproduce.sh
 ```
 
-PyneSys is not needed to reproduce: the committed `strategy_pyne.py` files are the compiler's output. Refreshing them takes the maintainer's PyneSys key, capped at 100 requests an hour; this refresh's 204 requests are in [`results/pynesys-compile-log.md`](results/pynesys-compile-log.md). Adding slots, refreshing the OHLCV and re-emitting `generated.cpp` through codegen are done by the maintainer-only bench-maintenance scripts.
+PyneSys is not needed to reproduce: the committed `strategy_pyne.py` files are the compiler's output. Refreshing them takes the maintainer's PyneSys key, which the API limits to 120 requests per clock hour and 300 a day; this refresh's 204 requests are in [`results/pynesys-compile-log.md`](results/pynesys-compile-log.md). Adding slots, refreshing the OHLCV and re-emitting `generated.cpp` through codegen are done by the maintainer-only bench-maintenance scripts.
 
 **`run_all.sh` knobs:**
 
@@ -133,7 +133,7 @@ PyneSys is not needed to reproduce: the committed `strategy_pyne.py` files are t
 
 Every engine run removes the slot's previous trade list first, so a failed run leaves an `_<engine>_error.log` and no trade list, never an earlier run's. A PineForge failure on any slot (a run error, or a `generated.cpp` without its built strategy library) stops `run_all.sh` with exit status 1 before any report is written. PyneCore and vectorbt failures are results: the reports grade those slots n/a with the error.
 
-The harness checks itself without a build or the assets: `python3 benchmarks/check_provenance.py` traces every headline number to its committed source, and `python3 -m unittest discover -s benchmarks/tests` runs the harness tests.
+The harness checks itself without a build or the assets: `python3 benchmarks/check_provenance.py` traces every headline number to its committed source (in a full clone: it reads the 2026-06-11 table from commit `933fe583`), and `python3 -m unittest discover -s benchmarks/tests` runs the harness tests.
 
 ## What gets reproduced
 
@@ -213,25 +213,25 @@ A slot where an engine produced no trade list, or whose run left an `_<engine>_e
 
 ### Indicator-value comparison (three-way)
 
-A single canonical script ([`assets/strategies/_indicators/canonical.pine`](assets/strategies/_indicators/canonical.pine)) computes 10 common indicators over the full 53,929-bar feed: `ta.ema`, `ta.sma`, `ta.rsi`, `ta.atr`, the three `ta.macd` outputs and the three `ta.bb` outputs. Each engine emits one CSV with per-bar values, and `compare_indicators.py` reports p50, p90, p99 and max relative deltas for every indicator pair.
+A single canonical script ([`assets/strategies/_indicators/canonical.pine`](https://github.com/pineforge-4pass/pineforge-benchmarks-assets/blob/6aedbcf5c263ec49239dc55b91f39046d470aef1/strategies/_indicators/canonical.pine)) computes 10 common indicators over the full 53,929-bar feed: `ta.ema`, `ta.sma`, `ta.rsi`, `ta.atr`, the three `ta.macd` outputs and the three `ta.bb` outputs. Each engine emits one CSV with per-bar values, and `compare_indicators.py` reports p50, p90, p99 and max relative deltas for every indicator pair.
 
 ### Speed measurement
 
 - **PineForge** is timed with Google Benchmark's in-process hot loop, with the bar magnifier on (1→4 ENDPOINTS sub-bar sampling), which is the engine's most expensive configuration. `strategy.dylib` is `dlopen`ed once, outside the timed region. Each timed iteration runs `strategy_create` plus `run_backtest_full` over the whole feed, and the figure is the per-iteration mean over 20 iterations.
 - **PyneCore** is timed as the subprocess wall time of `uv run python runners/run_pynecore.py <slot> --no-write`, which includes Python startup and framework import. The figures are the median and p95 over 20 invocations, with 8 slots timed concurrently.
 - **vectorbt** is timed in-process: the median over 20 iterations of each port.
-- **PineTS** is timed as the subprocess wall time of `node runners/run_pinets_canonical.mjs`. It has no strategy backtester upstream, so the canonical indicator script stands in for its indicator-layer cost.
+- **PineTS** is timed as the subprocess wall time of `node runners/run_pinets_canonical.mjs`. The harness has no PineTS strategy runner, so the canonical indicator script stands in for its indicator-layer cost.
 - **The quiet-host gate:** before every timing batch, the 1-minute load average must be below 6 with no `cmake --build`, `ctest` or `ci_verify` process running, counted by executable name. `speed.md` lists the load at every batch.
 
 The methodologies are mixed on purpose. In-process timing is the realistic cost for an FFI-callable native engine or a library. Subprocess timing is the realistic cost for engines whose API entry point is the process. Each number is what a real consumer of that engine would see.
 
 ## Fairness
 
-**What is held equal.** Every engine consumes the same 53,929-bar Binance ETH/USDT-USDT perpetual 15m OHLCV feed at [`assets/data/ETHUSDT_15.csv`](assets/data/ETHUSDT_15.csv). The PyneCore Python is the official cloud-compiler output for the same `.pine` sources PineForge runs, with no hand-translation. Commission, slippage, default quantity and the bar magnifier come from the `strategy(...)` declaration in the `.pine` source, plus the slot's `inputs.json` runtime overrides.
+**What is held equal.** Every engine consumes the same 53,929-bar Binance ETH/USDT-USDT perpetual 15m OHLCV feed at [`assets/data/ETHUSDT_15.csv`](https://github.com/pineforge-4pass/pineforge-benchmarks-assets/blob/6aedbcf5c263ec49239dc55b91f39046d470aef1/data/ETHUSDT_15.csv). The PyneCore Python is the official cloud-compiler output for the same `.pine` sources PineForge runs, with no hand-translation. Commission, slippage, default quantity and the bar magnifier come from the `strategy(...)` declaration in the `.pine` source, plus the slot's `inputs.json` runtime overrides.
 
 **What is not.** PineForge applies TradingView's trading window. Its runner, `scripts/run_strategy.py`, warms indicators on the pre-window bars but holds strategy orders until the tape's range opens; four closed slots whose TradingView exports carry earlier positions opt out through `run_strategy.args`. PyneCore's runner has no such gate and trades from the feed's first bar, which accounts for almost half of PyneCore's non-excellent rows (see above). A trimmed feed would buy window parity at the cost of indicator warm-up.
 
-PineTS implements no strategy backtesting yet, which is a matter of timing, not architecture. On indicator outputs all three engines must agree within tight tolerances, and a divergence in either direction is flagged as a defect.
+This harness does not run PineTS strategies, although PineTS has shipped a `strategy.*` namespace since 0.9.17. On indicator outputs all three engines must agree within tight tolerances, and a divergence in either direction is flagged as a defect.
 
 ## License
 
@@ -239,11 +239,11 @@ The benchmark code has the same license as the parent repository (Apache 2.0). F
 
 ### `assets/data/ETHUSDT_15.csv`
 
-Binance USDT-M futures ETH/USDT-USDT 15-minute OHLCV: 53,929 bars from 2024-10-19 21:00 to 2026-05-04 15:00 UTC, which covers the TradingView chart range plus about five months of warm-up. It is public market data, not copyrightable in the US or EU. The file is pinned for reproducibility; `pineforge-utils/bench-maintenance/fetch_extended_ohlcv.py` refreshes it (maintainer-only).
+Binance USDT-M futures ETH/USDT-USDT 15-minute OHLCV: 53,929 bars from 2024-10-19 21:00 to 2026-05-04 15:00 UTC, which covers the TradingView chart range plus about five months of warm-up. It is public market data, not copyrightable in the US or EU. The file is pinned for reproducibility; a maintainer-only script refreshes it.
 
 ### `assets/strategies/<NNN-slug>/strategy.pine`
 
-The 100 public slots are probes of the public PineForge corpus: clean-room PineForge originals carrying Apache-2.0 SPDX headers. The 100 closed scripts are third-party TradingView publications. They are used as a factual reference and are not redistributed.
+The 100 public slots are probes of the public PineForge corpus: clean-room PineForge originals under the corpus's Apache-2.0 license. The 100 closed scripts are third-party TradingView publications. They are used as a factual reference and are not redistributed.
 
 ### `assets/strategies/<NNN-slug>/strategy_pyne.py`
 

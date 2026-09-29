@@ -30,8 +30,9 @@ libcurl build with the `ws`/`wss` protocols enabled; some system curl builds
 omit them even when the version is recent. Such a build refuses WebSocket
 input explicitly. Set `CURL_DIR` to a curl CMake package when using a custom
 build; its imported target must include any transitive static dependencies.
-The executable targets POSIX macOS/Linux. Python is used only by one optional
-integration-test receiver/orchestrator, never by the running executable.
+The executable targets POSIX macOS/Linux. Python is used only by optional
+integration tests (`tests/native_live_e2e.py`, `tests/native_live_startup_e2e.py`),
+never by the running executable.
 
 The build includes `build-live/lib/native-live-example.so`, a hand-written
 C++ example, `native-market-example.so`, `native-selected-example.so`, and

@@ -112,7 +112,8 @@ tutorial.
 
 The runtime fills `r` in place — the `pf_report_t` struct itself is
 caller-owned (typically stack-allocated), but the arrays it points to
-(`trades`, `security_diag`, `trace`, `trace_names`) are heap-allocated
+(`trades`, `security_diag`, `trace`, `trace_names`, `equity_curve`,
+`broker_state_hash`) are heap-allocated
 inside the runtime.
 
 ## 4. Consume the report
@@ -132,12 +133,13 @@ for (int i = 0; i < r.trades_len; ++i) {
 
 ## 5. Free everything
 
-Both calls are mandatory and idempotent. Order matters: free the
+Both calls are mandatory. `report_free` is idempotent; `strategy_free`
+accepts `NULL` and frees a handle once. Order matters: free the
 **report first**, then the **handle** — the report's `trace_names`
 strings are owned by the live handle.
 
 ```c
-report_free(&r);   /* releases trades / security_diag / trace arrays */
+report_free(&r);   /* releases every array the report points to */
 strategy_free(s);  /* releases the handle */
 ```
 

@@ -20,7 +20,7 @@ re-issue was at 2026-01-14 23:45, on a close of 96951.78 over an equity of
 96846.71. TradingView rejected it; the engine filled the resting order on
 01-15 03:15, the probe's one engine-only trade.
 
-`w8a-btc15-limafford` is one `lab tv --no-note` export (pineforge-workflow,
+`w8a-btc15-limafford` is one `lab tv --no-note` export (maintainers' private pineforge-workflow,
 channel `ws-report-v1`, `rangeProof` covered), byte for byte:
 `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` and
 `meta.json`. It runs on BINANCE:BTCUSDT 15 with an equity of 95000, a default

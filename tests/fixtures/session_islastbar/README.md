@@ -7,7 +7,7 @@ reported `session.islastbar` on every in-session bar;
 `tests/test_session_islastbar_aggregation.cpp` replays the days below through
 the Pine adapter on both the aggregated and the chart-timeframe path.
 
-Each directory is one `lab tv` export (pineforge-workflow, channel
+Each directory is one `lab tv` export (maintainers' private pineforge-workflow, channel
 `ws-report-v1`, `rangeProof: covered`), byte-identical: `strategy.pine`,
 `tv_trades.csv` (times UTC+8), `meta.json`, `metrics.json`. The sha256 of each
 tape is `metrics.json` `tvTradesCsvHash`. Every probe enters with

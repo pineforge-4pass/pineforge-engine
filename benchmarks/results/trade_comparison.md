@@ -1,7 +1,7 @@
 # Trade comparison
 
 
-Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` port exists) vectorbt on the same 53,929-bar Binance ETH/USDT-USDT 15m feed and is graded against its TradingView tape by the canonical corpus rubric, `scripts/verify_corpus.py::analyze_strategy` (align-then-trim common window, fragment consolidation, range-end mark pairing, exact-count and ≥99% coverage gates for *excellent*, strict/production threshold profiles, `inputs.json` overrides). PineTS has no strategy backtester upstream and is excluded here.
+Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` port exists) vectorbt on the same 53,929-bar Binance ETH/USDT-USDT 15m feed and is graded against its TradingView tape by the canonical corpus rubric, `scripts/verify_corpus.py::analyze_strategy` (align-then-trim common window, fragment consolidation, range-end mark pairing, exact-count and ≥99% coverage gates for *excellent*, strict/production threshold profiles, `inputs.json` overrides). PineTS runs only the canonical indicator script here and is excluded.
 
 ### 001-analyzer-anvil-percent-costs-01  *(corpus, profile: strict)*
 
@@ -384,7 +384,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - entry p90:   `0.0000%`
     - exit  p90:   `0.0000%`
     - PnL   p90:   `0.0000%`
-    - gates: Excellent (224/224 matched, coverage 100.0%). Supersedes the earlier park-at-strong note, which mis-attributed the residual to an unfixable 'TV deep-backtest window-origin artifact'. The residual was a harness-config mismatch of this probe's own making: the previous inputs.json deliberately selected the default full-history 2020-origin 15m feed ('so EMA state warms before the TV comparison window'), while the TV export carries a range-local origin with zero pre-range history (unified range-local seeding, findings 331-333). The engine's three EMAs were therefore converged for five years before the window and its var-based stack-state edge detector had already latched a different regime at the boundary, so the first transitions diverged (TV 4 trades vs engine 2) before resyncing for 220 matched. Origin established by oracle, not assumption: a two-axis sweep of ohlcv_start_ms x chart_ema_na_warmup (2025-03-28..2025-04-02 at 6h steps, then +/-8 bars at 15m granularity), each point scored with scripts/verify_corpus.py, has exactly one setting that reaches 224/224 with zero unmatched TV trades - ohlcv_start_ms=1743379200000 with chart_ema_na_warmup=1, bit-for-bit the config the sibling composite-trendmaster-integration-01 already ships. Coverage rises 98.2% -> 100.0%; no coverage was trimmed and trade_start / trading_is_active semantics are unchanged.
+    - gates: coverage 98.2%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
 ### 024-composite-trendmaster-trend-momentum-structure-gate-01  *(corpus, profile: strict)*
@@ -2624,7 +2624,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - entry p90:   `0.0000%`
     - exit  p90:   `0.0000%`
     - PnL   p90:   `0.0000%`
-    - gates: By-design guard: request.security expression depends on rebound mutable globals / TA constructor args that cannot be safely lifted into the static security evaluator.
+    - gates: count Δ 0.60%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
 ### 169-officialjackofalltrades-regime-execution-strategy-joat  *(closed, profile: strict)*

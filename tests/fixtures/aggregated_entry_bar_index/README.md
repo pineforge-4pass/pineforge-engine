@@ -5,7 +5,7 @@ reads on an aggregated chart. `tests/test_aggregated_entry_bar_index_tape.cpp`
 replays it through the Pine adapter on the 15m chart, on the corpus 1m bars
 aggregated to 15m, and on the same aggregation under the bar magnifier.
 
-Each directory is one `lab tv` export (pineforge-workflow, channel
+Each directory is one `lab tv` export (maintainers' private pineforge-workflow, channel
 `ws-report-v1`, `rangeProof: covered`), byte-identical: `strategy.pine`,
 `tv_trades.csv` (times UTC+8), `meta.json`, `metrics.json`.
 

@@ -12,7 +12,7 @@ every other entry on the next bar, with and without `calc_on_order_fills`.
 `tests/test_pooc_limit_close_tapes.cpp` replays each tape through the Pine adapter on the
 15m chart.
 
-Each directory is one `lab tv` export (pineforge-workflow, channel `ws-report-v1`,
+Each directory is one `lab tv` export (maintainers' private pineforge-workflow, channel `ws-report-v1`,
 `rangeProof: covered`, NYSE:F 15, window 2025-07-01 .. 2025-07-08), byte-identical:
 `strategy.pine`, `tv_trades.csv` (times UTC+8), `meta.json`, `metrics.json`. The
 scripts count chart bars from 2025-07-02 09:30 ET, the first bar of

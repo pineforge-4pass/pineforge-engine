@@ -61,6 +61,6 @@ Open, where the windows end:
 - `-eur` 2025-04-28 14:00 UTC: the 14:15 high leaves the book 0.043 short, a call of 0.12;
   TradingView takes none, a difference of the equity's last cents.
 
-Each directory is one `lab tv --no-note` export (pineforge-workflow, channel
+Each directory is one `lab tv --no-note` export (maintainers' private pineforge-workflow, channel
 `ws-report-v1`, `rangeProof` covered) of the synthetic script, byte for byte:
 `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json`, `meta.json`.

@@ -1,3 +1,11 @@
+# Quantity intent {#quantity_intent}
+
+The `QuantityIntent` / `QuantityRequest` types below live in
+`include/pineforge/quantity_intent.hpp`; since the Pine adapter moved onto
+native requests no engine code constructs them, and the pending-order mirror
+projects its quantity fields from the adapter's placement snapshot
+(`PendingIntentView::copy_v1`).
+
 The adapter placement snapshot separates an exit's original requested amount
 from the native working reservation made for that request. It replaces the
 retired compatibility booleans that mixed those lifetimes.
@@ -30,7 +38,7 @@ basis. Neither case can be represented correctly by one “partial” label.
 
 Deferred market-close instructions are another producer: `strategy.close`
 has already resolved its source amount to a placement target before
-`queue_deferred_close_order` runs. The request records that resolved source
+the deferred close is queued. The request records that resolved source
 target as `Units(qty_to_close)`, without an exposure reservation until a later
 layered binding occurs. This is not a fixed executable-quantity promise: the
 preserved Pine ANY-relative rule can turn target 1 on E2 into reservation 2
@@ -49,13 +57,14 @@ Its `requested_partial` and `full_percent_exit_request` fields are deprecated
 read-only projections derived from the new authoritative values; native
 decisions never read those output fields. New fields append:
 
-- `quantity_intent_kind`: 0 absent, 1 Units, 2 Fraction, 3 All.
+- `quantity_intent_kind`: 1 when the order names neither `qty` nor
+  `qty_percent`, 2 explicit units (`qty`), 3 a percentage (`qty_percent`, as
+  `numerator / 100`); no row reports 0.
 - The relevant units or fraction numerator/denominator; inactive values are 0.
 - Reservation presence, admitted units and basis units.
 
 All new facts and optional-presence discriminators participate in broker
 hashing and mirror output. They are not waived. C ABI version 4 and stream
 API version 1 remain unchanged, and size-limited mirror reads preserve older
-callers. The internal C++ layout changes, so all consumers require a matching
-rebuild and the integrated representation change requires a new internal
-namespace/fingerprint epoch before publication.
+callers. The internal C++ layout changed with them, so all consumers require a
+matching rebuild.

@@ -7,7 +7,7 @@ the activation's tick cell counts as already reached.
 `tests/test_trail_activation_tick_reach.cpp` replays every trade below through
 the Pine adapter and the kernel.
 
-Each directory is one `lab tv` export (pineforge-workflow, channel
+Each directory is one `lab tv` export (maintainers' private pineforge-workflow, channel
 `ws-report-v1`, `rangeProof: covered`), byte-identical: `strategy.pine`,
 `tv_trades.csv` (times UTC+8), `meta.json`, `metrics.json`. The sha256 of each
 tape is `metrics.json` `tvTradesCsvHash`. `e5-eth-long-oneshot-p004` was

@@ -25,7 +25,7 @@ What the tape shows, under process_orders_on_close:
 |---|---:|---|
 | `w5r-pooc-add-close` | 23 | `8414352ea60d8b07b9965ae975c46c77cc24ee4bd55f49268214783ced68dabf` |
 
-The directory is one `lab tv` export (pineforge-workflow, channel `ws-report-v1`,
+The directory is one `lab tv` export (maintainers' private pineforge-workflow, channel `ws-report-v1`,
 `rangeProof: covered`, BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-05-01; exported by lane W10
 into exec/W10-DIAG-UNKNOWN-scratch/tv/diag-w5r), byte-identical: `strategy.pine`,
 `tv_trades.csv` (times UTC+8), `meta.json`, `metrics.json`.

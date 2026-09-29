@@ -10,13 +10,13 @@
 > Pine-to-C++ transpiler against this runtime, integrating PineForge into
 > a strategy harness, or auditing what is *actually* covered before
 > trusting the parity claim. Source-of-truth files: the headers under
-> `[include/pineforge/](../include/pineforge/)` and the implementations
-> under `[src/](../src/)`.
+> [include/pineforge/](../include/pineforge/) and the implementations
+> under [src/](../src/).
 >
 > **Two layers of "supported".** PineForge as a whole = (a) this runtime
->
-> - (b) PineForge's separate, source-available PineScript-to-C++ transpiler. Some Pine
-> surface (arrays, UDTs, most scalar `math.`* calls) has no dedicated
+> plus (b) PineForge's separate, source-available PineScript-to-C++ transpiler
+> (pineforge-codegen). Some Pine
+> surface (arrays, UDTs, most scalar `math.*` calls) has no dedicated
 > runtime class because the transpiler emits the implementation inline using
 > the C++ standard library or generated structs. Maps span both layers:
 > `map.hpp` provides the `PineMap<K,V>` runtime and the transpiler routes its
@@ -25,9 +25,11 @@
 > specialization boundaries. Where this distinction matters, the buckets below
 > call it out explicitly.
 >
-> **Out of scope today.** Visual / charting / alert APIs are not implemented
-> by this runtime regardless of consumer. The runtime now accepts continuous
-> ordered-trade streams, but it does not yet emit alert events or render charts.
+> **Out of scope today.** Plots, chart rendering and alert delivery are not
+> implemented by this runtime regardless of consumer. Drawing objects (`line`,
+> `box`, `label`, `linefill`, `chart.point`) are: `drawing.hpp` keeps their
+> geometry as data a strategy reads back. The runtime accepts continuous
+> ordered-trade streams, but it does not emit alert events.
 
 ## Coverage summary
 
@@ -37,13 +39,13 @@
 | Engine / strategy lifecycle | Supported                                                                  | `BacktestEngine`, one-shot `run(...)` overloads, continuous historical-to-realtime streams, bar loop, raw-trade broker passes, `on_bar(...)` hook, and cumulative reporting.                                                                                                                                                                                       |
 | Strategy orders             | Supported                                                                  | `strategy_entry / order / exit / close / close_all / cancel / cancel_all` with OHLC-path fill resolution, OCA, pyramiding, slippage, commissions, margin gates, partial / FIFO-vs-ANY closes, trailing stops, and TV deferred-flip carry handling.                                                                                                                  |
 | Strategy state / accessors  | Supported                                                                  | Position state, equity / drawdown / runup tracking, win / loss counts, full closed- and open-trade accessor methods, intraday fill counter.                                                                                                                                                                                                                         |
-| Strategy risk               | Supported                                                                  | All six `strategy.risk.*` gates are wired (`engine_risk.cpp` + the fill/order gates): `allow_entry_in` direction allow-list, `max_position_size`, `max_drawdown` (abs / % of peak equity), `max_intraday_loss` (abs / % of equity), `max_cons_loss_days`, and `max_intraday_filled_orders` (latch-till-day-rollover cap-close).                                      |
-| Inputs                      | Value support only                                                         | `unordered_map<string,string>` injection plus typed getters (`get_input_`*). UI metadata is the consumer's problem.                                                                                                                                                                                                                                                 |
-| `ta.`*                      | Broad runtime support                                                      | 59 official Pine v6 `ta.`* functions plus 8 official `ta.`* series variables backed by stateful runtime classes, and a free `pivot_point_levels(...)`. Stateful classes expose both `compute(...)` (advance state) and `recompute(...)` (re-run on the same bar without permanently advancing history).                                                             |
-| `math.`*                    | Narrow runtime backing                                                     | Runtime owns only deterministic `pine_random(...)` and rolling `math::Sum`; everything else is left to consumer-emitted code.                                                                                                                                                                                                                                       |
-| `str.`*                     | Narrow runtime backing                                                     | Runtime owns `pine_str_format`, `pine_str_format_time`, `pine_str_match`, `pine_str_split`, `pine_str_tostring`.                                                                                                                                                                                                                                                    |
-| `request.security()`        | Partial                                                                    | Runtime owns the security state machine, ratio / calendar aggregation, lookahead / gaps semantics, lower-TF emulation, per-security diagnostics, and (lane XSYM-D) the merge of another symbol's installed bars; codegen still refuses another symbol until its lowering lands.                                                                                                                                                                                                                |
-| Bar magnifier               | Supported                                                                  | OHLC-path sampling with 6 distribution modes plus optional volume-weighted sample density.                                                                                                                                                                                                                                                                          |
+| Strategy risk               | Supported                                                                  | All six `strategy.risk.*` gates are wired (the Pine adapter's risk state + the fill/order gates): `allow_entry_in` direction allow-list, `max_position_size`, `max_drawdown` (abs / % of peak equity), `max_intraday_loss` (abs / % of equity), `max_cons_loss_days`, and `max_intraday_filled_orders` (latch-till-day-rollover cap-close).                                      |
+| Inputs                      | Value support only                                                         | `unordered_map<string,string>` injection plus typed getters (`get_input_*`). UI metadata is the consumer's problem.                                                                                                                                                                                                                                                 |
+| `ta.*`                      | Broad runtime support                                                      | 59 official Pine v6 `ta.*` functions plus 8 official `ta.*` series variables backed by stateful runtime classes, and a free `pivot_point_levels(...)`. Stateful classes expose both `compute(...)` (advance state) and `recompute(...)` (re-run on the same bar without permanently advancing history).                                                             |
+| `math.*`                    | Narrow runtime backing                                                     | Runtime owns only deterministic `pine_random(...)` and rolling `math::Sum`; everything else is left to consumer-emitted code.                                                                                                                                                                                                                                       |
+| `str.*`                     | Narrow runtime backing                                                     | Runtime owns `pine_str_format`, `pine_str_format_time`, `pine_str_match`, `pine_str_split`, `pine_str_tostring`.                                                                                                                                                                                                                                                    |
+| `request.security()`        | Partial                                                                    | Runtime owns the security state machine, ratio / calendar aggregation, lookahead / gaps semantics, lower-TF emulation, per-security diagnostics, and (lane XSYM-D) the merge of another symbol's installed bars, which pineforge-codegen main lowers a site of another symbol onto (not in a release yet: v0.10.4 refuses it).                                                                                                                                                                                                                |
+| Bar magnifier               | Supported                                                                  | TradingView's own intrabars, built from a feed finer than the chart (`source/magnifier_intrabars.hpp`); with the chart's own bars only, OHLC-path sampling with 6 distribution modes plus optional volume-weighted sample density.                                                                                                                                                                                                                                                                          |
 | Time / session / timezone   | Supported                                                                  | `pine_time` / `pine_time_close` with session filtering and a mutex-guarded `tz_util::ScopedTimezone`.                                                                                                                                                                                                                                                               |
 | Timeframe parsing           | Supported                                                                  | `tf_to_seconds`, `tf_ratio`, `tf_change`, `detect_timeframe`, calendar boundary detection, `TimeframeAggregator` (passthrough / ratio / calendar).                                                                                                                                                                                                                  |
 | Numeric matrices            | Supported                                                                  | `PineMatrix` over `Eigen::MatrixXd` — construction, access, transforms, linear algebra, predicates.                                                                                                                                                                                                                                                                 |
@@ -54,7 +56,7 @@
 | Logging / runtime errors    | Supported                                                                  | `pine_log_info / warning / error`, `pine_runtime_error` (throws).                                                                                                                                                                                                                                                                                                   |
 | Maps                        | Supported within explicit codegen boundaries                               | `map.hpp` provides ordered `PineMap<K,V>` handles, Pine alias/copy/null semantics, typed missing values, the 50,000-pair limit, and primitive-only rollback snapshots. Generated strategies use this runtime for supported string-key/primitive-value maps; unsupported map history, nested map-bearing matrices, and ambiguous specializations fail closed. |
 | Arrays / UDTs               | **No runtime module** (Pine surface still supported via consumer compiler) | Pine arrays and UDTs work through transpiler-emitted `std::vector<T>` and generated C++ structs. Recursive snapshotting for UDTs or collections containing map/reference handles remains a codegen/type-system responsibility.                                                                                                                                        |
-| Drawing / plotting / alerts | **No runtime module**                                                      | No charting / drawing / alert types exist in the runtime. PineForge's transpiler parses-and-skips these so the strategy still compiles and runs, but no visual side-effects are emitted.                                                                                                                                                                            |
+| Drawing / plotting / alerts | Drawings as data; no plotting or alert module | `drawing.hpp` keeps `line` / `box` / `label` / `linefill` / `chart.point` geometry as data that trading logic reads back; visual setters are accepted no-ops. Plots, tables, polylines and alerts: PineForge's transpiler parses-and-skips these so the strategy still compiles and runs, but no visual side-effects are emitted.                                                                                                                                                                            |
 
 
 ## Public C ABI
@@ -103,22 +105,25 @@ module inventory; the grouped table below is a guide, not the count:
 POD types (`pf_bar_t`, `pf_trade_tick_t`, `pf_trade_t`, `pf_report_t`,
 the metrics/equity structs, `pf_security_diag_t`, `pf_trace_entry_t`,
 `pf_version_t`) and the `pf_magnifier_distribution_t`
-enum complete the surface. **Stability:** within the same
+enum complete the surface. **Stability:** from 1.0.0,
+[the public contract](pages/public-contract.md) states the rules: within the same
 `PINEFORGE_VERSION_MAJOR`, struct layouts and `extern "C"` signatures are
-append-only. New fields may be appended; existing fields are never
+append-only. Before 1.0 they were not (`pf_report_t` grew and two
+`pf_equity_stats_t` fields were renamed after v0.13.1; see CHANGELOG.md). New fields may be appended; existing fields are never
 reordered, removed, or retyped. New functions may be added; existing
 functions are never removed or signature-changed. Compile-time
 `static_assert`s in `src/c_abi.cpp` pin the layouts against drift.
 
-The C++ headers (`<pineforge/engine.hpp>`, `<pineforge/ta.hpp>`, …) are
-*internal* implementation surface — used by PineForge's transpiler, not
-part of the stability guarantee, and not recommended for external
-consumption.
+The C++ headers generated strategies compile against (`<pineforge/engine.hpp>`,
+`<pineforge/ta.hpp>`, the Pine source layer under `include/pineforge/source/`)
+are outside the version guarantee; the codegen pairing rule covers them. The
+native C++ API (`<pineforge/native_host.hpp>` and the headers
+[the public contract](pages/public-contract.md) lists) is a public surface.
 
 ## Runtime modules — file layout
 
-Headers live under `[include/pineforge/](../include/pineforge/)` and
-implementations under `[src/](../src/)`. Several large concerns are
+Headers live under [include/pineforge/](../include/pineforge/) and
+implementations under [src/](../src/). Several large concerns are
 split across multiple `.cpp` files (declarations stay in the matching
 single `.hpp`):
 
@@ -127,8 +132,8 @@ single `.hpp`):
 | ------------------ | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Public C ABI       | `pineforge.h`            | `c_abi.cpp` (+ layout `static_assert`s)                                                                                                                                                                                                                       | 71 public `PF_API` declarations: 62 runtime implementations plus nine per-strategy generated exports. `strategy_configure_native_fx_curve_v1` stages the additive native FX curve. |
 | Engine             | `engine.hpp`             | `engine_run.cpp`, `engine_stream.cpp`, `engine_execution.cpp`, `engine_orders.cpp`, `engine_path_resolve.cpp`, `engine_trade_accessors.cpp`, `engine_security.cpp`, `engine_lower_tf.cpp`, `engine_report.cpp`, `native_execution_consumer.cpp` | One-shot and continuous lifecycle, native request matching/settlement, orders, reports, inputs / syminfo, magnifier, TF aggregation, and `request.security` plumbing.                  |
-| Engine internals   | `engine_internal.hpp`    | (private cross-TU header)                                                                                                                                                                                                                | `pineforge::internal::`* types and helpers shared between engine `.cpp` partitions; not part of the public ABI.                                               |
-| Technical analysis | `ta.hpp`                 | `ta_moving_averages.cpp`, `ta_oscillators.cpp`, `ta_volatility_trend.cpp`, `ta_extremes_volume.cpp`, `ta_misc.cpp`                                                                                                                       | Official `ta.`* functions and series variables backed by stateful runtime classes with `compute` / `recompute`, plus `pivot_point_levels(...)` free function. |
+| Engine internals   | `engine_internal.hpp`    | (private cross-TU header)                                                                                                                                                                                                                | `pineforge::internal::*` types and helpers shared between engine `.cpp` partitions; not part of the public ABI.                                               |
+| Technical analysis | `ta.hpp`                 | `ta_moving_averages.cpp`, `ta_oscillators.cpp`, `ta_volatility_trend.cpp`, `ta_extremes_volume.cpp`, `ta_misc.cpp`                                                                                                                       | Official `ta.*` functions and series variables backed by stateful runtime classes with `compute` / `recompute`, plus `pivot_point_levels(...)` free function. |
 | Math               | `math.hpp`               | `math.cpp`                                                                                                                                                                                                                               | Inline `pine_random(...)` PRNG and rolling `math::Sum` class.                                                                                                 |
 | Strings            | `str_utils.hpp`          | `str_utils.cpp`                                                                                                                                                                                                                          | Format, format-time, regex match, split, and numeric-to-string helpers.                                                                                       |
 | Timeframe          | `timeframe.hpp`          | `timeframe.cpp`                                                                                                                                                                                                                          | TF string parsing, ratio computation, calendar detection, `TimeframeAggregator`.                                                                              |
@@ -138,6 +143,7 @@ single `.hpp`):
 | Matrices           | `matrix.hpp`             | `matrix.cpp`                                                                                                                                                                                                                             | Eigen-backed `PineMatrix`.                                                                                                                                    |
 | Generic matrices   | `generic_matrix.hpp`     | header-only                                                                                                                                                                                                                              | Template `PineGenericMatrix<T>` over `std::vector<std::vector<T>>` (T=bool specialized to `vector<vector<char>>`) for non-double element types.               |
 | Maps               | `map.hpp`                | header-only                                                                                                                                                                                                                              | `PineMap<K,V>` handle runtime with insertion ordering, Pine-aware primitive keys, null IDs, 50,000-pair cap, explicit container copy, and primitive-value snapshot/restore. The transpiler emits this runtime for its supported map boundary. |
+| Drawings           | `drawing.hpp`            | header-only | `line` / `box` / `label` / `linefill` handles in per-type arenas, and `chart.point`: geometry as data, no rendering. |
 | Series history     | `series.hpp`             | header-only                                                                                                                                                                                                                              | Generic `Series<T>` deque with `push` / `update` / `[k]` indexing.                                                                                            |
 | `na`               | `na.hpp`, `map.hpp`      | header-only                                                                                                                                                                                                                              | `na<T>()` generators and `is_na(...)` checks, including the null-ID overload for `PineMap<K,V>`.                                                             |
 | Bar struct         | `bar.hpp`                | header-only                                                                                                                                                                                                                              | `struct Bar { double open, high, low, close, volume; int64_t timestamp; };` (Unix milliseconds).                                                              |
@@ -148,7 +154,9 @@ single `.hpp`):
 ## Engine lifecycle
 
 `BacktestEngine` is an abstract base; the consumer compiler emits a
-strategy class that derives from it and implements `on_bar(const Bar&)`.
+strategy class that derives from `source::PineStrategyHost` (a
+`NativeStrategyHost`, itself a `BacktestEngine`) and implements
+`on_bar(const Bar&)`.
 Three `run(...)` overloads are exposed:
 
 ```cpp
@@ -180,7 +188,7 @@ The full overload additionally injects `SymInfo`, the input map, and a
 `StrategyOverrides` only carries a fixed set of override fields:
 `initial_capital`, `commission_value`, `default_qty_value`, `pyramiding`,
 `slippage`, `commission_type`, `default_qty_type`, `process_orders_on_close`,
-`close_entries_rule`. Anything else (currency, margin, risk thresholds,
+`calc_on_order_fills`, `close_entries_rule` (`source/pine_adapter.hpp`). Anything else (currency, margin, risk thresholds,
 etc.) must be set by the generated subclass — there is no runtime entry
 point for it.
 
@@ -193,13 +201,16 @@ density can be flipped to volume-weighted via
 
 ### Order entry points
 
+These are members of `source::PineStrategyHost`
+(`include/pineforge/source/pine_strategy_host.hpp`).
+
 
 | Method                                                                                                      | Notes                                                                                                                                                                                                                 |
 | ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `strategy_entry(id, is_long, limit, stop, qty, comment, oca_name, oca_type, qty_type)`                      | Replaces an existing pending order with the same `id`. Plain market entry under `process_orders_on_close=true` fills immediately at bar close so `position_avg_price` is correct for follow-up `strategy_exit` calls. |
 | `strategy_order(id, is_long, qty, limit, stop, oca_name, oca_type)`                                         | "Raw" pending order. When direction opposes the open position the order is treated as exit-style for fill resolution.                                                                                                 |
 | `strategy_exit(id, from_entry, limit, stop, trail_points, trail_offset, trail_price, qty_percent, comment)` | Reserves a slice of the open position; partial exits with the same `id` are one-shot per live position.                                                                                                               |
-| `strategy_close(id, comment, qty, qty_percent, immediately)`                                                | FIFO close by entry id (or all when `id` is empty). Honours `close_entries_rule_any_` for ANY-mode partial close. `immediately` bypasses pending-order resolution.                                                    |
+| `strategy_close(id, comment, qty, qty_percent, immediately)`                                                | FIFO close by entry id (or all when `id` is empty). Honours `PineStrategyConfig::close_entries_rule_any` for ANY-mode partial close. `immediately` bypasses pending-order resolution.                                                    |
 | `strategy_close_all()`                                                                                      | Convenience wrapper for `strategy_close("")`.                                                                                                                                                                         |
 | `strategy_cancel(id)` / `strategy_cancel_all()`                                                             | Drops pending orders by id or globally.                                                                                                                                                                               |
 
@@ -225,38 +236,45 @@ least one is set — that policy lives outside the runtime.
 
 ### Position-sizing and commission
 
-Quantity sizing is governed by `default_qty_type_`
+Quantity sizing is governed by `PineStrategyConfig::default_qty_type`
 (enum `QtyType { FIXED, PERCENT_OF_EQUITY, CASH }`) and
-`default_qty_value_`. Commission is `commission_type_`
+`default_qty_value`. A Pine v6 script that omits `initial_capital`,
+`default_qty_type` or `default_qty_value` runs with 100000,
+`strategy.percent_of_equity` and 100, which pineforge-codegen main declares in
+the generated constructor (not in a release yet); code generated by an earlier
+codegen and a hand-built `PineStrategyConfig` keep 1000000, `strategy.fixed` and 1.
+Commission is `commission_type_`
 (enum `CommissionType { PERCENT, CASH_PER_ORDER, CASH_PER_CONTRACT }`)
 and `commission_value_`. Both are per-trade; there is no separate
-runtime entry point for `strategy.default_entry_qty` — the value is
-read directly from `default_qty_value_`.
+runtime entry point for `strategy.default_entry_qty`.
 
-Margin checks use `margin_long_` / `margin_short_` percentages from the
-generated subclass (`100` = no leverage). If the implied required
-capital for a flat entry or pyramid add exceeds current equity, the fill
-is silently rejected, matching TradingView's strategy engine behaviour.
+Margin uses `PineStrategyConfig::margin_long` / `margin_short` percentages
+(`100` = no leverage). The Pine adapter admits an opening by TradingView's
+money rule and books TradingView's margin calls through a maintenance-only
+`NativeMarginModel` (see [PineScript to native C++](pages/pine-to-native.md#pine_to_native_map_margin)).
 
 ### Risk
 
-`BacktestEngine` tracks six risk fields and gates entries through
-`check_risk_allow_entry(is_long)` and `update_risk_state()`:
+The generated strategy declares the six `strategy.risk.*` limits through
+`PineStrategyHost::set_pine_risk_direction`, `set_pine_risk_max_position_size`,
+`set_pine_risk_max_drawdown`, `set_pine_risk_max_intraday_loss`,
+`set_pine_risk_max_cons_loss_days` and `set_pine_risk_max_intraday_filled_orders`;
+the Pine adapter enforces them (`PineExecutionAdapter::update_risk_state`):
 
 
-| Field                                                 | Effect                                                                                                        |
+| Pine limit                                            | Effect                                                                                                        |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `risk_direction_` (`BOTH`, `LONG_ONLY`, `SHORT_ONLY`) | Block entries against the allowed direction.                                                                  |
-| `risk_max_position_size_`                             | Block new entries when current `position_qty_` ≥ cap.                                                         |
-| `risk_max_drawdown_` (+ `_is_pct_`)                   | Halt strategy when peak-to-trough drawdown crosses the cap (absolute $ or % of peak equity).                  |
-| `risk_max_intraday_loss_` (+ `_is_pct_`)              | Halt strategy when running intraday P&L crosses the cap. Day boundary uses month / day-of-month, not session. |
-| `risk_max_cons_loss_days_`                            | Halt strategy after N consecutive losing days.                                                                |
-| `max_intraday_filled_orders_`                         | Latch-till-day-rollover fill cap: the cap-triggering fill emits TV's synthetic cap-close, then all further fills (and order placement) on that chart-day are dropped. The day key is `dayofmonth * 100 + month` computed in the chart timezone (`_decompose_bar_time_chart_tz`), so the counter resets at the chart's wall-clock midnight. |
+| `strategy.risk.allow_entry_in` | Block entries against the allowed direction.                                                                  |
+| `strategy.risk.max_position_size` | Block new entries when current `position_qty_` ≥ cap.                                                         |
+| `strategy.risk.max_drawdown` | Halt strategy when peak-to-trough drawdown crosses the cap (absolute $ or % of peak equity).                  |
+| `strategy.risk.max_intraday_loss` | Halt strategy when running intraday P&L crosses the cap. Day boundary uses month / day-of-month, not session. |
+| `strategy.risk.max_cons_loss_days` | Halt strategy after N consecutive losing days.                                                                |
+| `strategy.risk.max_intraday_filled_orders` | Latch-till-day-rollover fill cap: the cap-triggering fill emits TV's synthetic cap-close, then all further fills (and order placement) on that chart-day are dropped. The chart-day key and the quota rules are `compat::pine::IntradayCap`'s (`include/pineforge/compat/pine/intraday_cap.hpp`). |
 
 
-Risk halt is one-way: once `risk_halted_` is set, no new entries are
-accepted for the remainder of the run. None of these fields are exposed
-via `StrategyOverrides`; they must be set by the generated subclass.
+The drawdown and consecutive-loss-day halts are one-way: once either
+latches, no new entries are accepted for the remainder of the run. None of
+these limits is a `StrategyOverrides` key; the generated strategy sets them.
 
 ### Trade accessors
 
@@ -299,38 +317,39 @@ Aggregate strategy state methods are also defined on the engine:
 `current_bar_.timestamp` (UTC) into
 `{ year, month, dayofmonth, hour, minute, second, dayofweek, weekofyear }`
 and individual scalar accessors (`_bar_year()`, `_bar_hour()`, …) are
-exposed for the consumer to read. The runtime stores a single `int64_t`
-timestamp per bar — there is no separate close timestamp at runtime, so
-any semantic distinction between `time` and `time_close` as bar
-variables must be reconstructed from `tf_to_seconds(...)` (which
-`pine_time_close` does for explicit calls).
+exposed for the consumer to read. A `Bar` stores a single `int64_t`
+timestamp; the Pine host's `time_close()` answers the chart bar's close
+from the session calendar (`pine_time_close` on `syminfo.session` and
+`syminfo.timezone`), and inside another symbol's request payload the feed's
+own close.
 
-`barstate` flags tracked on the engine:
+`barstate` flags the runtime tracks (`barstate_islast_` on the engine, the
+tick flags on the Pine host's language state):
 
-- `is_first_tick_` — first sample within the script bar (true under non-magnifier mode).
-- `is_last_tick_` — last sample within the script bar.
+- `is_first_tick_` / `is_last_tick_` — the Pine host's tick flags (`PineLanguageState`): a script bar's calculation runs at its terminal sub-bar (every bar without the magnifier) with both set.
 - `barstate_islast_` — last script bar in the run.
 
-Pine v6 exposes seven `barstate.*` flags. PineForge runs in batch mode
-with no live data feed, so the runtime cannot honour their realtime
-semantics. The consumer compiler maps them onto the three engine flags
+Pine v6 exposes seven `barstate.*` flags; generated code reads
+`barstate.ishistory` and `barstate.isrealtime` as the constants `true` and
+`false`, in a stream too. The consumer compiler maps them onto the three engine flags
 above with the following batch-mode approximations:
 
 
 | Pine v6 flag                      | PineForge batch-mode value                               |
 | --------------------------------- | -------------------------------------------------------- |
 | `barstate.isfirst`                | `bar_index == 0` (handled by the consumer compiler).     |
-| `barstate.islast`                 | always `false` (no live "current" bar in batch mode).    |
+| `barstate.islast`                 | `barstate_islast_`: true on the run's final bar.          |
 | `barstate.ishistory`              | always `true` (every bar is historical in batch mode).   |
 | `barstate.isrealtime`             | always `false`.                                          |
 | `barstate.isnew`                  | follows `is_first_tick_` (first sample of a script bar). |
 | `barstate.isconfirmed`            | follows `is_last_tick_` (last sample of a script bar).   |
-| `barstate.islastconfirmedhistory` | always `false`.                                          |
+| `barstate.islastconfirmedhistory` | `barstate_islast_` (codegen warns it approximates).       |
 
 
-Live-tick semantics (`calc_on_every_tick`, `calc_on_order_fills`,
-`barstate.isnew` flipping mid-bar on a live feed) have no runtime
-backing — they are intentionally not modelled, see
+`calc_on_order_fills` is modelled: the Pine adapter recalculates the script
+after each fill, with TradingView's script-state rollback. Live-tick semantics
+(`calc_on_every_tick`, which codegen does not read, and `barstate.isnew`
+flipping mid-bar on a live feed) are not modelled; see
 "`varip` and realtime tick semantics" below.
 
 ## Technical Analysis (`namespace ta`)
@@ -340,6 +359,16 @@ and `recompute(...)` (re-run on the same bar — used by the magnifier
 and security intrabar paths so a TA's permanent state is not disturbed).
 State is owned per instance; the consumer compiler allocates one
 instance per call site.
+
+A length that is neither a constant nor an input is the source layer's
+(`include/pineforge/source/pine_ta_length.hpp`): a simple length, fixed for
+the run, builds the class from the call site's first execution
+(`FirstCallBound`); a series length re-windows `ta.highest`, `ta.lowest`,
+`ta.highestbars` and `ta.lowestbars` at every call (`SeriesHighest`,
+`SeriesLowest`, `SeriesHighestBars`, `SeriesLowestBars`); `ta.supertrend`
+keeps its first execution's factor (`PineSupertrend`); a length of 0, a
+negative length or `na` stops the run. pineforge-codegen main lowers such
+calls (not in a release yet: v0.10.4 refuses them).
 
 ### Tuple-returning TA classes
 
@@ -369,7 +398,7 @@ symmetric weights). `ALMA`'s `floor` centres the Gaussian at
 
 Oscillators / momentum (`src/ta_oscillators.cpp`): `RSI`, `Stoch`,
 `CCI`, `MFI`, `Mom`, `ROC`, `CMO`, `TSI(short_length, long_length)`,
-`WPR`, `COG`, `TR`, `ATR`, `RCI`.
+`WPR`, `COG`, `RCI`; (`src/ta_volatility_trend.cpp`): `TR`, `ATR`.
 
 Bands / channels / widths (`src/ta_volatility_trend.cpp`): `BB`, `KC`,
 `BBW`, `KCW`. `KC`'s middle band is the EMA of its source on every bar,
@@ -382,8 +411,8 @@ true)` and `KCW(length, mult, use_true_range = true)` take Pine's
 the first bar (`PF_KC_HAS_USE_TRUE_RANGE`, `tests/test_ta_kc_range.cpp`).
 
 Trend / pivots (`src/ta_volatility_trend.cpp`): `Supertrend(factor, atr_period)`,
-`DMI(di_length, adx_smoothing)`, `SAR(start, increment, maximum)`,
-`PivotHigh(left, right)`, `PivotLow(left, right)`.
+`DMI(di_length, adx_smoothing)`, `SAR(start, increment, maximum)`;
+(`src/ta_extremes_volume.cpp`): `PivotHigh(left, right)`, `PivotLow(left, right)`.
 
 Cross / state machines (`src/ta_oscillators.cpp`): `Crossover`,
 `Crossunder`, `Cross`, `Change(max_length=1)`, `Rising(length)`,
@@ -506,11 +535,11 @@ Every other Pine math function is the consumer compiler's responsibility
 | `pine_str_format_time` | `(timestamp_ms, format, timezone)`       | Maps Pine tokens (`yyyy / MM / dd / HH / mm / ss`) to `strftime` and formats. Empty / `"UTC"` / `"Etc/UTC"` use `gmtime_r`; everything else swaps `TZ` under `tz_util::ScopedTimezone` and uses `localtime_r`.                                |
 | `pine_str_match`       | `(source, regex_pattern)`                | Returns the first capture group if any, else the full match. Empty string on no match or regex error.                                                                                                                                         |
 | `pine_str_split`       | `(source, separator)`                    | Returns `vector<string>`. Empty separator yields `{source}`.                                                                                                                                                                                  |
-| `pine_str_tostring`    | `(value, format_mode = "", mintick = 0)` | The value's shortest round-trip decimal digits, rounded half-up on those digits. `NaN`, `Infinity`, `-Infinity`; no sign on a value that rounds to zero. Modes: default (up to ten fraction digits), `"percent"` (up to two, then `%`; the value is not scaled), `"volume"` (K / M / B / T, up to two fraction digits), `"mintick"` (rounds to mintick, decimal places implied by mintick: the times the tick is multiplied by ten to reach 1, so a 0.25 tick prints one decimal and 0.3 renders `"0.2"`, the rendering generated code delegates to and kept as it was; without a positive tick it is the default mode), or a decimal pattern (`#.##`, `#.00`, `#,###`, `#.##%`). |
+| `pine_str_tostring`    | `(value, format_mode = "", mintick = 0)` | The value's shortest round-trip decimal digits, rounded half-up on those digits. `NaN`, `Infinity`, `-Infinity`; no sign on a value that rounds to zero. Modes: default (up to ten fraction digits), `"percent"` (up to two, then `%`; the value is not scaled), `"volume"` (K / M / B / T with up to two fraction digits; below a thousand, no fraction digits), `"mintick"` (rounds to mintick, decimal places implied by mintick: the times the tick is multiplied by ten to reach 1, so a 0.25 tick prints one decimal and 0.3 renders `"0.2"`, the rendering generated code delegates to and kept as it was; without a positive tick it is the default mode), or a decimal pattern (`#.##`, `#.00`, `#,###`, `#.##%`). |
 
 
 Enum-string lookup for `str.tostring(<enum_member>)` is implemented by
-`pine_enum_str_at(table, n, idx)` (defined in `engine.hpp`), which
+`pine_enum_str_at(table, n, idx)` (defined in `source/pine_policy_support.hpp`), which
 clamps the index to the table size to avoid out-of-bounds reads.
 
 Other string operations (`length`, `contains`, `replace`, etc.) are not
@@ -616,9 +645,9 @@ when no feed is installed. On a D, W or M chart the source host judges the
 merge against the chart bar's own `time` and `time_close`, as TradingView
 does, where the kernel reads a daily label stamped in its session's break
 (OANDA:XAUUSD at 17:00 ET) as the session that closes at it
-(`tests/test_foreign_break_stamp_tapes.cpp`). Codegen still refuses a symbol that is not the
-chart's until its lowering onto this surface lands (lane XSYM-E); see
-@ref native_engine, "Instrument feeds: another symbol's bars".
+(`tests/test_foreign_break_stamp_tapes.cpp`). pineforge-codegen main lowers a site of another symbol onto this surface
+(lane XSYM-E; not in a release yet: v0.10.4 refuses it); see
+[Native engine, "Instrument feeds: another symbol's bars"](pages/native-engine.md#instrument-feeds-another-symbols-bars).
 
 `request.security_lower_tf(...)` is supported for same-symbol lower
 timeframes that satisfy the same emulation constraints. It returns an
@@ -631,13 +660,21 @@ arrays are rejected by the transpiler.
 and throws when:
 
 - a request exists but `input_tf` is empty, or
-- a requested TF is finer than the input but does not satisfy the lower-TF emulation constraints above.
+- a `request.security_lower_tf` TF is finer than the input but does not satisfy the lower-TF emulation constraints above, or a `request.security` TF is finer than a chart fed only its own bars. A run given bars finer than the chart reads `na` on every bar from a `request.security` finer than all of them, as TradingView reads a timeframe it holds no bars of.
 
-Beyond that, the runtime does not police the symbol argument or reject
-other `request.`* variants — those rejections live in the surrounding
-compiler layers.
+Beyond that, the runtime checks the symbol argument only for another
+symbol's site (no installed feed fails the run, naming the symbol and the
+timeframe; `ignore_invalid_symbol` reads `na`) and rejects no other
+`request.*` variant — those rejections live in the surrounding compiler
+layers.
 
 ## Bar magnifier
+
+With a feed finer than the chart, the bar magnifier walks TradingView's own
+intrabars at TradingView's intrabar timeframe (a 15-minute chart walks
+2-minute bars), each owned by the chart bar holding its last minute
+(`tradingview_magnifier_bars`, `source/magnifier_intrabars.hpp`). With the
+chart's own bars only, it samples each bar's OHLC path.
 
 `MagnifierDistribution` has six modes (in `magnifier.hpp`):
 
@@ -658,17 +695,15 @@ emits exactly `O` first and `C` last. The middle leg sequence is `O → H → L 
 
 `sample_price_path_volume_weighted(bar, base, mean_volume, min=2, max=64, dist)`
 scales sample count by `bar.volume / mean_volume`, clamped to
-`[min, max]`. `BacktestEngine::run_magnified_bar(sub_bars)` precomputes
-the per-bar mean volume so each sub-bar's tick density is relative to
-its own script bar's average. The toggle is
+`[min, max]`. The native execution consumer precomputes the per-bar mean
+volume so each sub-bar's tick density is relative to its own script bar's
+average. The toggle is
 `set_magnifier_volume_weighted(bool)`.
 
-Inside `run_magnified_bar` the engine threads through every sub-bar,
-calling `feed_security_eval_state` once per sub-bar (so security
-state-machines see the same fine bars), then iterates the sampled price
-path. On the last sample of the last sub-bar `is_first_tick_` is forced
-to `true` so generated `on_bar(...)` advances series history exactly
-once per script bar.
+The kernel matches orders over every sub-bar of a magnified script bar;
+the Pine host runs the script once, at the terminal sub-bar
+(`is_first_tick_` and `is_last_tick_` are set there), so generated
+`on_bar(...)` advances series history exactly once per script bar.
 
 ## Series, Bar, and `na`
 
@@ -697,20 +732,20 @@ at the storage layer.
 `na`:
 
 ```cpp
-template<typename T> T na();         // double -> NaN, int/int64_t -> INT_MIN, bool -> false
+template<typename T> T na();         // double -> NaN, int -> INT_MIN, int64_t -> INT64_MIN, bool -> false
 inline bool is_na(double v);          // std::isnan
-template<typename T, ...> bool is_na(T v);  // integer overload (== INT_MIN)
+template<typename T, ...> bool is_na(T v);  // integer overload (== the type's minimum)
 ```
 
 ## Color
 
 `pine_color::*` holds 17 named ARGB constants. Helpers:
 
-- `new_color(c, transp)` — clear alpha and pack `(100 - transp) * 2.55` into the high byte.
+- `new_color(c, transp)` — set the alpha byte to the whole number nearest `255 × (100 − transp) / 100`, clamped to 0–255 (an `na` transparency is fully transparent).
 - `r(c)`, `g(c)`, `b(c)` — channel bytes.
 - `t(c)` — recover `transp` (0–100) from the alpha byte.
 
-There are no charting / drawing types in the runtime.
+Drawing objects are data in `drawing.hpp` (see the summary table); the runtime has no charting or rendering types.
 
 ## Timeframes
 
@@ -809,9 +844,10 @@ runtime-supported (see "Not implemented anywhere" below).
 
 
 Each `TradeC` carries
-`entry_time / exit_time / entry_price / exit_price / pnl / pnl_pct / is_long / max_runup / max_drawdown / qty`
-(where `max_runup` / `max_drawdown` are peak favorable / adverse
-excursions in $ / contract).
+`entry_time / exit_time / entry_price / exit_price / pnl / pnl_pct / is_long / max_runup / max_drawdown / qty / commission / entry_bar_index / exit_bar_index / open_at_end`
+(where `max_runup` / `max_drawdown` are the whole trade's peak favorable /
+adverse excursions in account currency, net of entry fees). `ReportC` also
+carries `metrics`, `equity_curve` and `broker_state_hash`.
 
 ## Logging and runtime errors
 
@@ -856,9 +892,9 @@ emits inline C++ against `<cmath>`, `<vector>`, and generated structs.
 
 - Pine `array<T>` — emitted as `std::vector<T>` by PineForge's transpiler.
 - User-defined types (UDTs) — emitted as plain C++ structs; nested fields and `array<UDT>` are also handled there.
-- Currency conversion (`strategy.convert_to_`*) — no runtime feed; PineForge's transpiler treats this as identity (no FX adjustment).
-- Most scalar `math.`* functions (`abs`, `sqrt`, `min`, `max`, trig, `round`, etc.) — PineForge emits these against `<cmath>` / inline expressions.
-- Most `str.`* operations (`length`, `contains`, `replace`, `lower`, `upper`, `tonumber`, etc.) — PineForge emits these against `std::string`.
+- Currency conversion (`strategy.convert_to_*`) — no runtime feed; PineForge's transpiler treats this as identity (no FX adjustment).
+- Most scalar `math.*` functions (`abs`, `sqrt`, `min`, `max`, trig, `round`, etc.) — PineForge emits these against `<cmath>` / inline expressions.
+- Most `str.*` operations (`length`, `contains`, `replace`, `lower`, `upper`, `tonumber`, etc.) — PineForge emits these against `std::string`.
 
 ### Not implemented anywhere — gaps with a future story
 
@@ -878,8 +914,9 @@ carries a forward-looking assessment using these buckets:
 #### Drawing / charting / alerts
 
 `plot`, `plotshape`, `plotchar`, `plotcandle`, `plotbar`, `plotarrow`,
-`fill`, `hline`, `bgcolor`, `barcolor`, `label.`*, `line.`*, `box.*`,
-`table.*`, `polyline.*`, `linefill.*`, `alert(...)`, `alertcondition(...)`.
+`fill`, `hline`, `bgcolor`, `barcolor`, `table.*`, `polyline.*`, the visual
+setters of `label.*` / `line.*` / `box.*` / `linefill.*` (their geometry is
+runtime data, `drawing.hpp`), `alert(...)`, `alertcondition(...)`.
 
 - **Feasibility:** *Feasible* for plotting primitives (capture series + style metadata into the `ReportC` extension or a side-channel CSV / JSON for an external renderer). Realtime `alert(...)` is now also feasible because the engine has an explicit realtime lifecycle, but it still needs alert frequency/dedup state, an event ABI, and delivery plumbing.
 - **Future story:** A "report-as-data" path is the obvious target — `plot(...)` and friends would write tagged time-series rows into a new diagnostics array on `ReportC`, and a Python harness would render them with Plotly / matplotlib. `alertcondition(...)` results could be returned as a list of `(bar_time, message)` triples. Alert delivery should drain deterministic engine events into an external JSON-only webhook adapter so network retries never mutate engine state.
@@ -887,45 +924,44 @@ carries a forward-looking assessment using these buckets:
 
 #### `varip` and realtime tick semantics
 
-`varip` (persists across realtime ticks; resets on bar close in TV);
-`barstate.isrealtime`, `barstate.isnew` in realtime, `calc_on_every_tick`,
-`calc_on_order_fills`.
+`barstate.isrealtime`, `barstate.isnew` in realtime and `calc_on_every_tick`
+on realtime ticks.
 
-- **Feasibility:**
-  - `varip` itself: *Feasible*. With the bar magnifier already simulating intrabar samples, `varip` could map onto sub-bar persistence (do not reset between magnifier ticks; reset only on bar close).
-  - Realtime barstate flags + `calc_on_every_tick` + `calc_on_order_fills`: *Feasible*. Ordered trades now reach the broker, but script recalculation still needs TradingView-style rollback, commit, and post-fill scheduling.
-- **Future story:** `varip` mapping to live per-tick persistence is the right design; currently the support checker rejects `varip` outright but that is conservative rather than fundamental. The new streaming lifecycle supplies the missing data/event boundary, while rollback and codegen support remain future work.
-- **Why not done yet:** `varip` use cases overlap heavily with what `var` already covers in batch mode. The realtime distinction TV makes is meaningful only when the data feed is live.
+- **Feasibility:** *Feasible*. Ordered trades reach the broker and `calc_on_order_fills` already recalculates with TradingView's rollback, but realtime barstate flags and per-tick recalculation still need codegen support.
+- **Status of `varip`:** pineforge-codegen main accepts `varip` (not in a release yet; v0.10.4 rejects it): a historical bar executes once, so a `varip` keeps its value like `var`, and it is left out of the `calc_on_order_fills` rollback.
+- **Why not done yet:** the realtime distinction TV makes is meaningful only when the data feed is live.
 
 #### Import / export / library system
 
 `import <user>/<lib>/<version>`, `export` keyword, `library(...)`
 declaration.
 
-- **Feasibility:** *Feasible*. Pure compiler concern — not a runtime issue at all.
-- **Future story:** Resolve the import (local file or fetched bundle), parse it into an AST, inline its `export`-ed names into the importing strategy's symbol table, and proceed. The runtime needs zero changes; this is an analyzer / compiler-pipeline feature. The hard parts are the package-resolution UX (registry, versioning, caching) and namespacing rules, not code generation.
-- **Why not done yet:** PineForge's primary user surface is single-file strategies. Library-driven workflows are common on TradingView but the cost / value has not justified building the resolver. Pre-expansion (paste the library inline) is the current workaround.
+- **Status:** pineforge-codegen main (not in a release yet; v0.10.4 refuses every `import`) inlines the libraries a strategy imports: `transpile(source, libraries={...})` takes each library's source by its import path, only the exports the script reaches are inlined, and a v5 library keeps v5's rules. An import of a built-in namespace that names only built-ins is a no-op. A `library(...)` script itself, and `export` in a strategy, are still refused. The runtime needs no changes.
 
-#### External `request.`* variants
+#### External `request.*` variants
 
 `request.financial(symbol, field, period)`, `request.dividends`,
 `request.earnings`, `request.splits`, `request.currency_rate`,
 `request.economic(country_code, field, ...)`,
-`request.seed(source, symbol, expression)`, `request.quandl`.
+`request.seed(source, symbol, expression)`, `request.quandl`,
+`request.footprint`.
 
-These are the eight `request.`* calls Pine v6 exposes outside the two
-that PineForge does support (`request.security` and
-`request.security_lower_tf`). The support checker rejects all eight
-loudly via a generic `request.`* catch-all, so user code never silently
-falls through to broken codegen.
+With `request.footprint`, these are the nine `request.*` calls Pine v6 exposes
+outside `request.security` and `request.security_lower_tf`. The released
+pineforge-codegen (v0.10.4) rejects all nine at transpile. On
+pineforge-codegen main `request.economic`, `request.seed`, `request.quandl`
+and `request.currency_rate` are still rejected; `request.financial`,
+`dividends`, `earnings`, `splits` and `footprint` transpile with a warning,
+read `na` when their value reaches only plots and alerts, and otherwise read
+the recorded series below (a footprint: another symbol's feed column) or stop
+the run where the value is read.
 
 - **Feasibility:**
-  - `request.financial / dividends / earnings / splits`: *Feasible — the runtime half exists*. The source host keeps recorded request series (`strategy_set_recorded_series`, lane XSYM-D): a request key maps each chart bar's open time to the value TradingView returned on it, recorded under the call's own `gaps` and `lookahead`, and `recorded_series_value(key)` reads it per chart bar, na where the tape has no row. Recording per chart bar, rather than re-deriving TradingView's report-time and fiscal-period rules from an event list, keeps the value exact by construction. What is missing is codegen's lowering onto the store and the tapes themselves, which the campaign pins per probe (`scripts/run_strategy.py` installs them from `PINEFORGE_REQUESTS_ROOT`).
+  - `request.financial / dividends / earnings / splits`: *Feasible — the runtime half exists*. The source host keeps recorded request series (`strategy_set_recorded_series`, lane XSYM-D): a request key maps each chart bar's open time to the value TradingView returned on it, recorded under the call's own `gaps` and `lookahead`, and `recorded_series_value(key)` reads it per chart bar, na where the tape has no row. Recording per chart bar, rather than re-deriving TradingView's report-time and fiscal-period rules from an event list, keeps the value exact by construction. pineforge-codegen main lowers the four calls onto the store by request key (lane XSYM-E; not in a release yet); a run still needs the tapes, which `scripts/run_strategy.py` installs from `PINEFORGE_REQUESTS_ROOT`.
   - `request.currency_rate / economic`: *Feasible — needs aux data*. Would need the same kind of pinned series, which no lane records yet.
   - `request.seed`: *Out of scope structurally*. TradingView seeds are user-published time series hosted on TV's infrastructure; PineForge has no equivalent registry.
   - `request.quandl`: *Out of scope by design*. Deprecated upstream; not worth implementing.
-- **Future story:** codegen lowers `request.earnings` / `dividends` / `splits` / `financial` onto the recorded series by their request key (`<fn>|<symbol>|<field-or-id>|<period-or->|gaps_<on|off>|lookahead_<on|off>`), and a request with nothing recorded refuses on first read.
-- **Why not done yet:** the engine store landed first (lane XSYM-D); the codegen lowering is lane XSYM-E.
+- **Status:** codegen lowers `request.earnings` / `dividends` / `splits` / `financial` onto the recorded series by their request key (`<fn>|<symbol>|<field-or-id>|<period-or->|gaps_<on|off>|lookahead_<on|off>`), and a request with nothing recorded stops the run where it is read. The engine store (lane XSYM-D) and the codegen lowering (lane XSYM-E) are on main; neither is in a release yet.
 
 #### `barmerge.lookahead_on` for lower-TF emulation
 
@@ -946,31 +982,25 @@ Currently `ensure_supported_lower_tf_emulation_flags(...)` throws when
 
 ## Verifying the surface yourself
 
-The 168-strategy validation corpus under `[corpus/](../corpus/)` (162
-reference strategies + 6 parity probes) is the canonical proof that
+The validation corpus under [corpus/validation/](../corpus/validation/)
+(312 probes at the pinned corpus commit) is the engine's own proof that
 this runtime delivers the surface listed above. Run
 `bash scripts/run_corpus.sh` to compile every `generated.cpp`
-against `libpineforge.a` and diff the per-strategy `engine_trades.csv`
-against the TradingView export shipped alongside it — the current
-canonical report is **excellent=165, strong=2** across the 167 reference
-strategies in `basic/`, `community/`, and `validation/`. The strict
-profile is the only profile and is applied to every strategy: count +
-entry-price + exit-price + P&L within `1.0% / 0.01% / 0.01% / 1.0%`.
+against `libpineforge.a` and diff each probe's `engine_trades.csv`
+against the TradingView export shipped beside it;
+`python3 scripts/verify_corpus.py --all` grades the shipped trade lists by
+the canonical rubric. Its strict profile gates count + entry-price +
+exit-price + P&L within `1.0% / 0.01% / 0.01% / 1.0%`; a strategy whose
+`strategy.exit` uses a `trail_*` parameter gets the production profile,
+which relaxes exit to 0.05% and P&L to 100%.
 
-One additional probe — `corpus/parity-anomalies/equity-mirror/` (the
-former `parity-probe-03-equity-mirror`) — lives in a dedicated
-`parity-anomalies/` directory and is excluded from the headline count
-by default. It exercises the 1× equity margin boundary specifically to
-surface TV-side non-determinism we cannot match deterministically (see
-`parity-anomalies/tv-margin-boundary.md` in the dev-utils repo for the
-full write-up, and `corpus/parity-anomalies/README.md` for the local
-index). Run `python scripts/verify_corpus.py --all --include-anomalies`
-to fold it into the sweep.
+One probe, `corpus/validation/anomaly-equity-mirror-strategy-equity-01`,
+declares `expected_tier: anomaly` in its `inputs.json`: it pins the 1× equity
+margin boundary, where TradingView's own admissions are not deterministic,
+and grades `anomaly` instead of failing the sweep.
 
-The three-way benchmark under `[benchmarks/](../benchmarks/)` extends
-this comparison to include [PyneCore](https://github.com/PyneSys/pynecore)
-and [PineTS](https://github.com/LuxAlgo/PineTS), exercising the same
-surface across three independent engines (PineForge hits canonical
-*excellent* tier on 48 / 50 strategies vs PyneCore's 45 / 50; the 3
-PyneCore-only outliers all involve bracket / trail / partial exits, see
-`[benchmarks/results/summary.md](../benchmarks/results/summary.md)`).
+The benchmark under [benchmarks/](../benchmarks/) grades PineForge, [PyneCore](https://github.com/PyneSys/pynecore)
+and vectorbt with the same rubric; [PineTS](https://github.com/LuxAlgo/PineTS)
+runs indicators only. Over its 201 slots (refreshed 2026-09-22) PineForge
+grades 200 excellent and 1 strong, PyneCore 133 excellent
+([benchmarks/results/summary.md](../benchmarks/results/summary.md)).

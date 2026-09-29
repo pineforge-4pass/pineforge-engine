@@ -27,7 +27,7 @@ re-enters on the 7 bars where (held + qty) x close x 20 fits the equity and
 drops the entry on the other 15; the engine re-entered on all 22.
 
 `w8a-pooc-sameside-closeall` is one `lab tv --no-note` export
-(pineforge-workflow, channel `ws-report-v1`, `rangeProof` covered), byte for
+(maintainers' private pineforge-workflow, channel `ws-report-v1`, `rangeProof` covered), byte for
 byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json`,
 `meta.json`. It runs on BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2026-05-01, with
 `process_orders_on_close`, `pyramiding=0`, margin 100/100, 10000 of capital

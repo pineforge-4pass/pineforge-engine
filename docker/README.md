@@ -18,14 +18,15 @@ stderr.
 
 This repository's workflows publish no image. The prebuilt image of this
 harness is the release hub's, `ghcr.io/pineforge-4pass/pineforge-release`:
-pineforge-release builds it from each engine release's static-lib tarball
-with the `pineforge-codegen` of the same version, for Linux `amd64` and
-`arm64`.
+pineforge-release builds it from an engine release's static-lib tarball
+with a pinned `pineforge-codegen` (the `engine<E>-codegen<C>` tag names the
+pair; same-version pairing starts at 1.0.0), for Linux `amd64` and `arm64`.
 
 ```bash
 docker pull ghcr.io/pineforge-4pass/pineforge-release:latest
-# or pin a release:
+# or pin a hub release (its own X.Y.Z) or an engine/codegen pair:
 docker pull ghcr.io/pineforge-4pass/pineforge-release:X.Y.Z
+docker pull ghcr.io/pineforge-4pass/pineforge-release:engine0.13.1-codegen0.10.4
 ```
 
 A stable release is tagged `X.Y.Z`, `X.Y`, `latest`,
@@ -41,7 +42,7 @@ release builds no image (#38). The image's Dockerfile is pineforge-release's
 `docker/Dockerfile`. It vendors this harness from the pinned engine release,
 fetches that release's static-lib tarball, and adds `g++`, Eigen, `python3`
 and the `pineforge-codegen` transpiler; clone that repository to build the
-image yourself. Per-run transpile+compile is ~1 second.
+image yourself.
 
 The examples below call the image `pineforge`: tag the pulled one that way
 (`docker tag ghcr.io/pineforge-4pass/pineforge-release:latest pineforge`) or
@@ -139,14 +140,15 @@ header) are configured via separate env vars:
 The engine catches every error (TF mismatch, unsupported emulation
 flags, unknown-input-TF, etc.) into `strategy_get_last_error()`; the
 container surfaces these as `{"engine":"pineforge","error":"..."}` on
-stdout with exit code `1` instead of crashing.
+stdout and the container exits `4` (the harness returns 1; the entrypoint
+maps any harness failure to 4) instead of crashing.
 
 Mount a `strategy.pine` and the bundled `pineforge-codegen`
 ([source-available](https://github.com/pineforge-4pass/pineforge-codegen-oss),
 `pip install pineforge-codegen`) transpiles it in-container. Advanced users may
 instead mount a pre-transpiled `strategy.cpp` (the C++ must export the PineForge
 C ABI in `<pineforge/pineforge.h>` — i.e. compile unchanged against
-`libpineforge.a` into the standard 10-symbol strategy `.so`). Inputs are
+`libpineforge.a` into a strategy `.so` exporting the per-strategy C ABI). Inputs are
 read-only mounts; the image performs no network I/O at run time.
 
 ## Output schema
@@ -157,8 +159,8 @@ read-only mounts; the image performs no network I/O at run time.
   "input": {
     "ohlcv":      "/in/ohlcv.csv",
     "bars":       672,
-    "first_ts":   1745182800000,
-    "last_ts":    1745786700000,
+    "first_ts":   1777486500000,
+    "last_ts":    1778090400000,
     "first_time": "2026-04-29 18:15 UTC",
     "last_time":  "2026-05-06 18:00 UTC"
   },
@@ -177,12 +179,12 @@ read-only mounts; the image performs no network I/O at run time.
   },
   "elapsed_seconds":   0.0042,
   "summary": {
-    "total_trades":   49,
-    "wins":           16,
+    "total_trades":   50,
+    "wins":           17,
     "losses":         33,
-    "win_rate_pct":   32.6531,
-    "net_pnl":        -190.85,
-    "avg_trade":      -3.8949,
+    "win_rate_pct":   34.0,
+    "net_pnl":        569.97,
+    "avg_trade":      11.3994,
     "best_trade":     1149.00,
     "worst_trade":    -1111.97,
     "max_drawdown":   -4045.15,
@@ -192,15 +194,15 @@ read-only mounts; the image performs no network I/O at run time.
     {
       "n":            1,
       "side":         "long",
-      "entry_time":   1745188200000,
-      "exit_time":    1745192700000,
-      "entry_price":  75200.50,
-      "exit_price":   75312.00,
+      "entry_time":   1777488300000,
+      "exit_time":    1777505400000,
+      "entry_price":  75242.42,
+      "exit_price":   75771.20,
       "qty":          1,
-      "pnl":          111.50,
-      "pnl_pct":      0.1483,
-      "max_runup":    150.00,
-      "max_drawdown": -22.10
+      "pnl":          528.78,
+      "pnl_pct":      0.7028,
+      "max_runup":    846.48,
+      "max_drawdown": 17.42
     }
   ]
 }
@@ -216,11 +218,11 @@ reversible, no key required:
   "token":  "<base64 of the canonical provenance JSON>",
   "digest": "sha256:<hex>",
   "provenance": {
-    "engine":   { "version_string": "...", "major": 0, "minor": 10, "patch": 2, "commit_sha": "..." },
+    "engine":   { "version_string": "...", "major": 0, "minor": 13, "patch": 1, "commit_sha": "..." },
     "feed":     { "canonicalization": "pf-ohlcv-barc-le-v1", "source_values_sha256": "..." },
-    "codegen":  { "version": "0.6.4", "generated_cpp_sha256": "...", "transpiled_from_pine": true },
+    "codegen":  { "version": "0.10.4", "generated_cpp_sha256": "...", "transpiled_from_pine": true },
     "strategy": { "initial_capital": 1000000.0, "pyramiding": 1, "commission_type": "percent", "...": "all strategy() params, effective" },
-    "inputs":   { "Fast Length": { "type": "int", "default": 9, "value": "8" }, "...": "all input()s, effective" },
+    "inputs":   { "Fast Length": { "type": "int", "default": 12, "value": "8" }, "...": "all input()s, effective" },
     "applied":  { "inputs": { "Fast Length": "8" }, "overrides": {} },
     "runtime":  { "input_tf": "", "bar_magnifier": false, "...": "..." }
   }

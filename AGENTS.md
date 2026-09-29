@@ -7,9 +7,9 @@
 Both C++ unit tests and full corpus verification must pass.
 
 The merge ruleset requires `pineforge/verify` and `pineforge/parity` commit
-statuses on the PR head's exact tree. The maintainers' `lab verify` tooling
-posts them after full verification on their x86-64 build hosts and a parity
-verdict. GitHub Actions is advisory: PR Debug, sanitizers and native jobs
+statuses on the PR head's exact tree. The maintainers post them from their own (private)
+verification tooling after full verification on their x86-64 build hosts and a
+parity verdict; an outside contributor cannot post them. GitHub Actions is advisory: PR Debug, sanitizers and native jobs
 exclude the measured `slow` CTest rows; push-to-main and manual CI dispatch
 run every row. The commands below run the full sets.
 
@@ -54,13 +54,15 @@ If `scripts/run_corpus.sh` reports any parity drift or failures, investigate the
 
 ## Build Commands
 
-- Configure CMake: `cmake -B build -S . -DPINEFORGE_BUILD_TESTS=ON -DPINEFORGE_BUILD_CORPUS_STRATEGIES=ON`
+- Configure CMake: `cmake -B build -S . -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DPINEFORGE_BUILD_TESTS=ON -DPINEFORGE_BUILD_CORPUS_STRATEGIES=ON`
 - Compile: `cmake --build build -j4`
 - Clean: `rm -rf build`
 
 ## Test Commands
 
+- Prepare the ABI providers (once per build dir): `python3 scripts/check_abi_receipt_skips.py --build-dir build --prepare`
 - Run all unit tests: `ctest --test-dir build --output-on-failure`
+- Name receipt-gated rows that skip: `python3 scripts/check_abi_receipt_skips.py --build-dir build`
 - Run single test executable: `./build/bin/test_integration`
 
 ## SOP: adding a runtime `PF_API` export (CI gate — recurring failure)
@@ -77,7 +79,8 @@ Checklist when touching runtime exports — update ALL of these together:
 
 1. `src/c_abi.cpp` — the implementation (and its file-header symbol comment).
 2. `include/pineforge/pineforge.h` — the `PF_API` declaration (+ doxygen).
-3. `scripts/check_c_abi_runtime.py` — add the symbol to `EXPECTED_RUNTIME`.
+3. `scripts/check_c_abi_runtime.py` — add the symbol to `EXPECTED_RUNTIME` and
+   bump `EXPECTED_PUBLIC_DECLARATIONS` / `EXPECTED_RUNTIME_IMPLEMENTATIONS`.
 4. Python ctypes harnesses if consumers must call it
    (`scripts/run_strategy.py`, `tutorial/run*.py`, `docker/run_json.py`,
    `benchmarks/throughput/grid_search_repro.py`).
@@ -97,9 +100,9 @@ they are codegen-emitted; the checker enforces exactly that split.
 ## Refactor workers (native-engine programme, R4 and later)
 
 Applies to any agent — Claude, Codex, OpenCode — implementing a slice of the
-native-engine refactor in this repository. The campaign repo's standing
-orders (`pineforge-workflow/AGENTS.md`, "Roles and dispatch") govern who
-dispatches, reviews and measures; this section is what binds you here.
+native-engine refactor in this repository. The maintainers' campaign
+repository (`pineforge-workflow`, private; its `AGENTS.md`, "Roles and dispatch")
+governs who dispatches, reviews and measures; this section is what binds you here.
 
 - You work in the worktree and branch your brief names, on the files it
   lists as yours, and nowhere else. A need in another file is reported to the
@@ -136,17 +139,17 @@ dispatches, reviews and measures; this section is what binds you here.
 The `PineForge strict CI base` ruleset requires `pineforge/verify` (full
 `ci_verify.py` profiles on the PR head's exact tree) and `pineforge/parity`
 (no parity regression, or no engine behaviour change). The maintainers'
-`lab verify` tooling posts both commit statuses; GitHub Actions does not post them.
+private verification tooling posts both commit statuses; GitHub Actions does not post them.
 Its PR jobs provide faster advisory feedback, while push-to-main and manual
 dispatch run the full CI profiles. A campaign PASS verdict still binds the
 exact engine and codegen HEADs for baseline promotion.
 
 Merged single-axis PRs advance the campaign baseline automatically through
-`.github/workflows/promote-baseline.yml`, pineforge-workflow's
-`campaign/ci/promote-baseline.yml` installed unchanged. `main`'s own copy runs
+`.github/workflows/promote-baseline.yml`, installed from the private
+pineforge-workflow repository's `campaign/ci/promote-baseline.yml`. `main`'s own copy runs
 on the closed PR (`pull_request_target`) and runs no PR code. It promotes only
 when the merge commit on `main` carries the gated PR head's tree (PRs are
 squash-merged, so the head itself never lands on `main`), both required
-statuses are success on that head, and `lab promote` finds the merge gate's
+statuses are success on that head, and the maintainers' private campaign tool finds the merge gate's
 parity verdict for that tree; it then adopts the pair that verdict measured.
 Anything else exits green without promoting.

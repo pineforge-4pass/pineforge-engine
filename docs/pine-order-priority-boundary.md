@@ -4,8 +4,9 @@
 compatibility components: the existing intraday cap and retained-parent order
 priority. It is idempotent, preserves configuration and outstanding cap state,
 and does not imply that all Pine behavior has been extracted from the engine.
-`enable_pine_intraday_cap()`, the cap constructor argument and legacy integer
-cap assignments remain cap-only operations.
+`enable_pine_intraday_cap()` and the cap constructor argument remain cap-only
+operations; the legacy integer cap assignment left with
+`max_intraday_filled_orders_` in R4-C (#253).
 
 Bare construction leaves order priority detached. Syminfo metadata, including
 `flat_retained_child_fresh_parent_order=1`, cannot attach it. The Pine component
@@ -23,7 +24,7 @@ exclusions. Three/four unrelated orders and an intervening accepted-and-canceled
 order remain exclusions. This is one active rule transferred to Pine ownership,
 not a claim that its source-shape policy disappeared globally.
 
-The comparator consumes an immutable `broker::OrderPriorityDecision` bound to
+The comparator consumes an immutable `compat::pine::OrderPriorityDecision` bound to
 exact incarnations. It substitutes two sequence tie-breaks at their former
 location, after fill phase. It does not change eligibility, fill prices, OCA
 mutation, callbacks, admission or financial accounting. Shared incarnation
@@ -66,12 +67,13 @@ an erased handle still belongs to its creating module.
 
 Bare native execution retains the ordinary phase/sequence scan. An older child
 visited while flat can still be skipped until a later pass, exposing a transient
-position to the intervening close-time observer. No identity-bound child
-activation/event queue has been added. That causal scheduler is a separate next
-slice, not an unused reducer in this extraction.
+position to the intervening close-time observer. This extraction added no
+identity-bound child activation. The kernel has one since, the
+`native_order::WaitForApplied` owner (`include/pineforge/native_order.hpp`);
+this note does not re-measure the scan above against it.
 
 Literal C++ controls preserve the old Pine price, quantity, timing and financial
 assertions with explicit fixture attachment; they separately pin native metadata
 inertness, exclusions, OCA, copy/reset/hash and current lifetime safety. Codegen
-checks compile source only. None establishes TV truth, measured campaign
-neutrality, actualZERO, absence of population regressions or readiness to publish.
+checks compile source only. None of them is TradingView parity evidence;
+parity is measured separately ([the corpus gate](ci.md#tradingview-parity-the-corpus-gate)).

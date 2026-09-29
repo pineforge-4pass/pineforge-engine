@@ -31,7 +31,7 @@ on X's leg. Over the whole tape the engine books 534 of 534 trades.
 |---|---:|---|
 | `tailc-mag-coof-refill-leg` | 534 | `ec0b4db942cc4fb6d2d285727716d1c6a00923778881023c187949edc4181253` |
 
-The directory is one `lab tv --no-note` export (pineforge-workflow, channel `ws-report-v1`,
+The directory is one `lab tv --no-note` export (maintainers' private pineforge-workflow, channel `ws-report-v1`,
 `rangeProof` covered, BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-05-01) of a synthetic script
 written for this lane, byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8),
 `metrics.json`, `meta.json`. The script's header comment names an adapter line of the

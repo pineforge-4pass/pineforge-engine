@@ -37,31 +37,33 @@
   },
   "files": {
     "2026-06-11-94596bf/pf_speed.json": {
-      "sha256": "0216b2dfba447805630219f61016082df978d9bd42ad4882e8ab07d72fbded4b",
+      "sha256": "3eba1d0f29b964280ea412fd78707b41afdc47b19fb1961a2a7ee89e78010dd8",
       "what": "Google Benchmark JSON of the 2026-06-11 sweep: 100 slots x {with_magnifier, no_magnifier, cold}; the with_magnifier entries are the PineForge column of the 2026-06-11 speed table (4.80 / 5.58 / 8.72 ms on the three probes the current population shares)",
-      "origin": "~/code/pineforge-engine/benchmarks/_workdir/pf_speed.json",
+      "origin": "benchmarks/_workdir/pf_speed.json",
       "origin_sha256": "d102b7816175e1ef1a98c05e1a7fcdadcf39a5b4b7d370542a77c1a56cfc0b45",
-      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path)"
+      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path); context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name)"
     },
     "2026-06-11-94596bf/pc_speed.json": {
       "sha256": "2141049653f2af9cc5e2e45c6b1407dd4892f596fa2c455d2e9e0a9b45f2d5b4",
       "what": "PyneCore subprocess timings of the 2026-06-11 sweep (99 slots); with pf_speed.json they give the table's median 162x",
-      "origin": "~/code/pineforge-engine/benchmarks/_workdir/pc_speed.json"
+      "origin": "benchmarks/_workdir/pc_speed.json"
     },
     "2026-06-11-94596bf/pt_speed.json": {
       "sha256": "9e22fca70dc86391f2d4cf1773790ec112c3a5c820f068c507c0c50f39acd729",
       "what": "PineTS canonical-indicator timing of the 2026-06-11 sweep",
-      "origin": "~/code/pineforge-engine/benchmarks/_workdir/pt_speed.json"
+      "origin": "benchmarks/_workdir/pt_speed.json"
     },
     "2026-06-11-94596bf/vbt_speed.json": {
       "sha256": "16f60d594b13076973c877127247bb6f17014d2498668c1fd7a99567ec349262",
       "what": "vectorbt timings of the 2026-06-11 sweep",
-      "origin": "~/code/pineforge-engine/benchmarks/_workdir/vbt_speed.json"
+      "origin": "benchmarks/_workdir/vbt_speed.json"
     },
     "2026-09-22-e9ad37dd/pf_speed.json": {
-      "sha256": "d5c8e31f6041167dad60799c3b273e7e80a3f4c79e1a68264db7b7bc8d10c6e5",
+      "sha256": "f101c9e82bdb072dd5a65a517ff5c76541fc3dd0a8663d7a6ead8a0e47018faa",
       "what": "Google Benchmark JSON of lane BENCH2's PineForge sweep at e9ad37dd (201 slots, gate load 3.79); superseded by BENCH3's sweep, kept for the 1.02x cross-window comparison in speed.md",
-      "origin": "/tmp/bench3/bench2-workdir/pf_speed.json (BENCH2's benchmarks/_workdir)"
+      "origin": "/tmp/bench3/bench2-workdir/pf_speed.json (BENCH2's benchmarks/_workdir)",
+      "origin_sha256": "d5c8e31f6041167dad60799c3b273e7e80a3f4c79e1a68264db7b7bc8d10c6e5",
+      "edit": "context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name)"
     },
     "2026-09-22-e9ad37dd/pc_speed.json": {
       "sha256": "800879ec8da94f375e4a2da043f96826f72b6103b774fe1d519590efdc888adc",
@@ -94,11 +96,11 @@
       "origin": "/tmp/bench3/quiet_poll_bench3.tsv"
     },
     "2026-09-22-063e4460/throughput/r1.json": {
-      "sha256": "bab9adcd7e3bcd91b7c6c9df5d12ef96151be0e7dce532d8dab1cb6b9c2f602b",
+      "sha256": "918da0a89f58920a5c4fc1c185b085904efd5e9a95ef9f67b5531b93d7c85ee4",
       "what": "throughput package run 1 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), gate at 2026-09-22T13:29:51Z",
       "origin": "/tmp/bench3/tp-q2/benchmark_results.json",
       "origin_sha256": "2028dfc6025b2c700e530fec4360324e435e9438da925091f9be99fe904bb33b",
-      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path)"
+      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path); context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name)"
     },
     "2026-09-22-063e4460/throughput/r1-load.tsv": {
       "sha256": "fcddfe578b3e93c9098d1f23b924bf47a3868d3ef44a4d9701a5097e9715ce6f",
@@ -106,11 +108,11 @@
       "origin": "/tmp/bench3/tp-q2/loadtrace.tsv"
     },
     "2026-09-22-063e4460/throughput/r2.json": {
-      "sha256": "bfa78da4b0dd21d9ba85164329eb0a91b8344829a3d992597911e0301945d19f",
+      "sha256": "3193941a8a805b8c2b61fb43cc80b76720424784b4dab600ed2452fa1f51c386",
       "what": "throughput package run 2 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), gate at 2026-09-22T13:38:22Z; the median run, published as benchmarks/throughput/benchmark_results.json",
       "origin": "/tmp/bench3/tp-q3/benchmark_results.json",
       "origin_sha256": "905f77ffe6bec684375b7559c40deaeac850fc63c7d331e12ef261e94a9d3d68",
-      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path)"
+      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path); context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name)"
     },
     "2026-09-22-063e4460/throughput/r2-load.tsv": {
       "sha256": "1ac59eb1b491b58ec25a77d3a6523bd792d09c179231aa7e8b3f50110a21073d",
@@ -118,11 +120,11 @@
       "origin": "/tmp/bench3/tp-q3/loadtrace.tsv"
     },
     "2026-09-22-063e4460/throughput/r3.json": {
-      "sha256": "8076701b45b690bc95177327887bc67619d1ff1386efb1d6577c4704071a032c",
+      "sha256": "8458207638b42354d3b0ea9584082e5d5592f7fc59dd580335a6de9489085614",
       "what": "throughput package run 3 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), gate at 2026-09-22T13:46:30Z",
       "origin": "/tmp/bench3/tp-q4/benchmark_results.json",
       "origin_sha256": "81d5204485d09f46ef40889956c94abe3252f583b32f52486b91a8ea5c828f2a",
-      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path)"
+      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path); context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name)"
     },
     "2026-09-22-063e4460/throughput/r3-load.tsv": {
       "sha256": "b736cbd01b3752bb8821586106a27495c1b076566599471fd7cc3de96644332f",
@@ -130,11 +132,11 @@
       "origin": "/tmp/bench3/tp-q4/loadtrace.tsv"
     },
     "2026-09-22-063e4460/throughput/r4.json": {
-      "sha256": "2421d077c22777ce627db1ef7cfc83a82c9488ec0c0f84ef3995db882c2d4752",
+      "sha256": "152ec945d6c74edfee1e79f9ce117756f1ea66112122ce761fbbf24d463388f9",
       "what": "throughput package run 4 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), gate at 2026-09-22T14:00:07Z",
       "origin": "/tmp/bench3/tp-q5/benchmark_results.json",
       "origin_sha256": "f8732abdcc651eb374883f301559fa65ab3a71707ba5b2d70fa5e23025a06579",
-      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path)"
+      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path); context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name)"
     },
     "2026-09-22-063e4460/throughput/r4-load.tsv": {
       "sha256": "3e9238ade8576ddd9fa188f2470628704bb697667ebf112942e44d0d1f91e09c",
@@ -142,11 +144,11 @@
       "origin": "/tmp/bench3/tp-q5/loadtrace.tsv"
     },
     "2026-09-22-063e4460/throughput/r5.json": {
-      "sha256": "9a3030b3a792cb653ced865c3d3ab0d17e541c673c264c5425dc0f16d3fd5e8c",
+      "sha256": "7174e2da66f340d82cdfe35e2d0dc4c74e3b02777cc203ffe61a827c31c1b65b",
       "what": "throughput package run 5 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), gate at 2026-09-22T14:08:13Z",
       "origin": "/tmp/bench3/tp-q6/benchmark_results.json",
       "origin_sha256": "ad538bc3b63154492bbf747918cbb9696e06eac3d2873776439d96dff83d179f",
-      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path)"
+      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path); context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name)"
     },
     "2026-09-22-063e4460/throughput/r5-load.tsv": {
       "sha256": "f0bf6ac7ef4d16472713be54d6d0256e0a54dc881fa963e21f1e2da7b2b4ae95",
@@ -154,40 +156,52 @@
       "origin": "/tmp/bench3/tp-q6/loadtrace.tsv"
     },
     "2026-09-22-063e4460/ab/new1.json": {
-      "sha256": "d457dc1934e242a3a3b2e060382de7a0bb45e20ba8d2f23a54e41bfb0b7dcd8b",
+      "sha256": "79767a6cef0b5acd7a2b7b45ba3c1b631b8982c3ecc1d55a9bdcd23890e5c203",
       "what": "paired A/B, pass 1: engine 063e4460 over 26 public slots (every fourth from 001 to 097, plus 004), <slug>/throughput/with_magnifier",
       "engine": "063e4460",
-      "origin": "/tmp/bench3/ab/new1.json"
+      "origin": "/tmp/bench3/ab/new1.json",
+      "origin_sha256": "d457dc1934e242a3a3b2e060382de7a0bb45e20ba8d2f23a54e41bfb0b7dcd8b",
+      "edit": "context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name)"
     },
     "2026-09-22-063e4460/ab/old1.json": {
-      "sha256": "c735e597ec183a71f6af94478eb915bbbddc5fa9d68be477ae8476132f992c79",
+      "sha256": "43e154bfc828c890e3038856639fdafb8566f232ea05834f2b8acc9a6441ca02",
       "what": "paired A/B, pass 1: engine e9ad37dd over 26 public slots (every fourth from 001 to 097, plus 004), <slug>/throughput/with_magnifier",
       "engine": "e9ad37dd",
-      "origin": "/tmp/bench3/ab/old1.json"
+      "origin": "/tmp/bench3/ab/old1.json",
+      "origin_sha256": "c735e597ec183a71f6af94478eb915bbbddc5fa9d68be477ae8476132f992c79",
+      "edit": "context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name)"
     },
     "2026-09-22-063e4460/ab/june1.json": {
-      "sha256": "99447d694beafa98c138e483871a61e5740980f31b02ad350b91caf28b5bef3b",
+      "sha256": "1b7f97befc2debc7d767241c579602fb6be74e9705ce3ad55c3a77019d3406f5",
       "what": "paired A/B, pass 1: the 2026-06-11 engine ac011d84 rebuilt on the same host, its three probes the current population shares, <slug>/throughput/with_magnifier",
       "engine": "ac011d84",
-      "origin": "/tmp/bench3/ab/june1.json"
+      "origin": "/tmp/bench3/ab/june1.json",
+      "origin_sha256": "99447d694beafa98c138e483871a61e5740980f31b02ad350b91caf28b5bef3b",
+      "edit": "context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name)"
     },
     "2026-09-22-063e4460/ab/old2.json": {
-      "sha256": "d0b401c05f2ed91c70ff8f6d71874dd0e0f76ab43e3ff4aab3b12bda2e3a75a4",
+      "sha256": "4df1b333d10ec573965ab90b3f08db5797ce8ca2e8694c0e5a911a2087c7d224",
       "what": "paired A/B, pass 2: engine e9ad37dd over 26 public slots (every fourth from 001 to 097, plus 004), <slug>/throughput/with_magnifier",
       "engine": "e9ad37dd",
-      "origin": "/tmp/bench3/ab/old2.json"
+      "origin": "/tmp/bench3/ab/old2.json",
+      "origin_sha256": "d0b401c05f2ed91c70ff8f6d71874dd0e0f76ab43e3ff4aab3b12bda2e3a75a4",
+      "edit": "context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name)"
     },
     "2026-09-22-063e4460/ab/new2.json": {
-      "sha256": "b2d801aa4d71d6462865e0b755580ccd751d91967999f15abce975b57657bc74",
+      "sha256": "f61143e7520cbfd962d49d0e00301a4622f7d59f89eef7537670cbf3fbe89a10",
       "what": "paired A/B, pass 2: engine 063e4460 over 26 public slots (every fourth from 001 to 097, plus 004), <slug>/throughput/with_magnifier",
       "engine": "063e4460",
-      "origin": "/tmp/bench3/ab/new2.json"
+      "origin": "/tmp/bench3/ab/new2.json",
+      "origin_sha256": "b2d801aa4d71d6462865e0b755580ccd751d91967999f15abce975b57657bc74",
+      "edit": "context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name)"
     },
     "2026-09-22-063e4460/ab/june2.json": {
-      "sha256": "b4d3800264aac5fa4a0ec4f1ee7e9b77d00bee265a57c3a2ad2b61eb3348aa88",
+      "sha256": "c237149556a7e9602039512924c092d7ffb34e389ca72be72e56e90cbd166686",
       "what": "paired A/B, pass 2: the 2026-06-11 engine ac011d84 rebuilt on the same host, its three probes the current population shares, <slug>/throughput/with_magnifier",
       "engine": "ac011d84",
-      "origin": "/tmp/bench3/ab/june2.json"
+      "origin": "/tmp/bench3/ab/june2.json",
+      "origin_sha256": "b4d3800264aac5fa4a0ec4f1ee7e9b77d00bee265a57c3a2ad2b61eb3348aa88",
+      "edit": "context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name)"
     },
     "2026-09-22-063e4460/ab/load.tsv": {
       "sha256": "f9bb345d5f7c5f5d7532e36c826e936c6cec9bf6bf69bbe9569e383c3a66e9ef",

@@ -6,7 +6,7 @@
 | **Last update** | 2026-06-10 — audit-fix sweep (codegen-oss `7bd20eb` (orig. `974cda7`), engine `6aa1d13`): remaining class-A/H rejections + semantic emission fixes; corpus regenerated (`f143504`), parity unchanged 245 excellent + 1 anomaly |
 | **Audited doc** | `pine_v6_coverage_detail.md` (1039 lines, 941 identifiers) |
 | **Method** | 4 parallel C++/Pine v6 expert agents, line-by-line, Playwright MCP for Pine v6 ref + grep on engine + transpiler. Follow-up: 2 clarification agents with live transpile harness. |
-| **Status** | Standalone — chunk reports and clarification reports consolidated below and removed. |
+| **Status** | Historical record, not re-audited since 2026-06-10: where it disagrees with `pine_v6_coverage_detail.md` or `coverage.md`, those pages hold. Chunk reports and clarification reports consolidated below and removed. |
 
 ## Headline
 
@@ -30,7 +30,7 @@ Items resolved: #7, #8, #9, #10, #33, #36, #37, F5, F22; #29 verified false-posi
 
 - **#28 `input.time`** — RESOLVED. Engine [pineforge-engine#22](https://github.com/pineforge-4pass/pineforge-engine/pull/22) added `get_input_int64`; codegen PR #15 (pre-extraction repo; in `pineforge-codegen-oss` since v0.6.4) routes `input.time` to it (Pine v6 returns `series int` Unix-ms; old `get_input_int` int32 overflowed).
 - **Drawing-var dangling-identifier minor** — RESOLVED. codegen PR #16 (pre-extraction repo; in `pineforge-codegen-oss` since v0.6.4) tracks omitted drawing-typed UDT fields (`_udt_omitted_fields`) and rewrites reads to `/* drawing field omitted */ 0` / strips writes (closes codegen issue #10).
-- **#26 / #27 `input.color` / `input.source`** — RESOLVED (verified against pineforge-codegen source 2026-06-10, commit `64fc886` "input.source series binding, packed-color defval"). Engine ships `get_input_source(title, default_series) → const Series<double>&` and codegen emits `get_input_source("title", _src_<field>_)[0]` for `input.source`; `input.color` routes to `get_input_int64` with a packed-ARGB defval, so the `get_input_color` engine helper contemplated by [pineforge-engine#23](https://github.com/pineforge-4pass/pineforge-engine/issues/23) was deemed unnecessary.
+- **#26 / #27 `input.color` / `input.source`** — RESOLVED (verified against the private pre-extraction codegen source 2026-06-10, commit `64fc886` "input.source series binding, packed-color defval"). Engine ships `get_input_source(title, default_series) → const Series<double>&` and codegen emits `get_input_source("title", _src_<field>_)[0]` for `input.source`; `input.color` routes to `get_input_int64` with a packed-ARGB defval, so the `get_input_color` engine helper contemplated by [pineforge-engine#23](https://github.com/pineforge-4pass/pineforge-engine/issues/23) was deemed unnecessary.
 
 ### Audit-fix sweep (2026-06-10, codegen-oss `7bd20eb` (orig. `974cda7`))
 
@@ -81,7 +81,7 @@ Identifier resolves to a different runtime symbol than spec.
 | # | Identifier | Doc claim | Reality |
 |---|---|---|---|
 | 16 | `last_bar_index` | computed from bar count | **[RESOLVED]** Binds to the actual `last_bar_index_` engine field. |
-| 17 | `timenow` | always na | **[RESOLVED]** Binds to the actual `timenow_` engine property. |
+| 17 | `timenow` | always na | **[RESOLVED]** Lowers to the current bar's `time` (`current_bar_.timestamp`) with a divergence warning; the engine has no `timenow_` member. |
 | 18 | `time_close` (var) | `pine_time_close` | **[RESOLVED]** Correctly binds to C++ engine `time_close()` accessor. |
 | 19 | `barstate.islastconfirmedhistory` | always false | **[RESOLVED]** Properly checks and runs against C++ engine state. |
 | 20 | `timeframe.isminutes` | minutes-only | **[RESOLVED]** Restricts seconds TF correctly via `(tf_is_intraday(...) && !tf_is_seconds(...))`. |
@@ -154,8 +154,8 @@ Identifier resolves to a different runtime symbol than spec.
 - **Annotations** [F11]: lexer drops every `//@*` line; only `//@version=N` is recovered via regex on raw source. `//@variable / //@strategy / //@description` etc. silently discarded. Doc overstates "transpiler reads".
 - **`strategy()`** [F12]: call site lowers to `/* strategy declaration */` comment placeholder. State lives on `StrategyDecl` AST → materialised by `emit_top` into ctor / `set_param` / `extern "C"` bridge. `StrategyOverrides` is host-side override layer, NOT the kwarg sink.
 - **`strategy.default_entry_qty(fill_price)`** [F13]: lowers to `calc_qty(fill_price)` engine method (reads `default_qty_value_` + `default_qty_type_` + equity). Doc's `default_qty_value_` only names underlying setting.
-- **`request.security()`** [F14]: 3 hard restrictions (support_checker.py:683-760): (1) same-chart symbol only (`syminfo.tickerid/.ticker`); (2) `lookahead_on` rejected outright; (3) `currency` / `ignore_invalid_symbol` rejected. Allowed params: `symbol, timeframe, expression, gaps, lookahead`.
-- **`ta.tr` (property) vs `ta.tr(handle_na)` (fn)** [F15]: property hardcodes `handle_na=true` via inline lambda; fn form dispatches `ta::TR` ctor with `handle_na=false` default. Matches Pine v6 spec divergence between forms.
+- **`request.security()`** [F14]: **[SUPERSEDED]** at codegen-oss `70c2b4af` only `currency` is rejected: `lookahead_on` is accepted with a warning, `ignore_invalid_symbol` is registered, and a site of another symbol reads that symbol's installed feed (XSYM-E; not in a release yet).
+- **`ta.tr` (property) vs `ta.tr(handle_na)` (fn)** [F15]: **[SUPERSEDED]** the property now reads `handle_na=false` on the first bar, as Pine v6's `ta.tr` is `ta.tr(false)` (codegen `ad27eb8`).
 - **`strategy.equity`** [F16]: lowers to `(current_equity() + open_profit(current_bar_.close))` — includes mark-to-market open P&L. Doc's bare `current_equity()` understates.
 - **`strategy.openprofit_percent`** denominator: **[RESOLVED 2026-06-10]** Now `open_profit / current_equity() * 100` (realized equity) with zero-guard (`visit_expr.py`).
 - **`syminfo.country`**: **[RESOLVED 2026-06-10]** `PREFIX_TO_COUNTRY` (`helpers_syminfo.py`) is ISO 3166-1 alpha-2 (LSE/AQUIS→GB); EURONEXT and crypto-venue "GLOBAL" pseudo-codes removed — unknown prefix → na.
@@ -180,8 +180,8 @@ Identifier resolves to a different runtime symbol than spec.
 
 Phase 1 — 4 parallel chunk agents:
 1. Loaded official Pine v6 reference via Playwright MCP (`https://www.tradingview.com/pine-script-reference/v6/` — JS SPA, `<h3>` enumeration).
-2. Read transpiler emitters under `/Users/haoliangwen/code/pineforge-codegen-oss/pineforge_codegen/codegen/`.
-3. Read engine headers under `/Users/haoliangwen/code/pineforge-engine/include/pineforge/`.
+2. Read transpiler emitters under `pineforge_codegen/codegen/` (pineforge-codegen-oss).
+3. Read engine headers under `include/pineforge/`.
 4. Verified bucket + backing + notes + emitted-value for EVERY row (no skipping, no spot-check exemption).
 5. Cross-checked grouped sections (`array.*`, `currency.*`, `matrix.*`, etc.) member-by-member against Pine spec.
 
@@ -206,6 +206,6 @@ Phase 2 — 2 clarification agents (F1–F22):
 
 1. **#15 `strategy.closedtrades.first_index`** — hardcoded `0`; becomes wrong only when the engine implements the 9000-trade-list cap. Fix together with that feature.
 2. **`array.size` / `map.size` / `matrix.size` int typing** [F18] — emit `(double)`; Pine types `series int`. Low risk; needs an int-emission pass.
-3. **Engine economics findings O4 / O5** — percent-of-equity sizing base, `pnl_pct` net-of-commission — tracked in `production-readiness-findings.md`; each needs a TV-parity export to pin the convention before changing. (O7 — MFE/MAE convention — fixed 2026-06-10: TV-aligned export sign/names, exit-fill + trail-peak + pre-fill-path excursion folding, partial-slice scaling, net-of-entry-commission basis; MAE p90 now gated at 5% in `verify_corpus.py`.)
+3. **Engine economics findings O4 / O5** — percent-of-equity sizing base, `pnl_pct` net-of-commission — tracked in a maintainers' note outside this repository; each needs a TV-parity export to pin the convention before changing. (O7 — MFE/MAE convention — fixed 2026-06-10: TV-aligned export sign/names, exit-fill + trail-peak + pre-fill-path excursion folding, partial-slice scaling, net-of-entry-commission basis; MAE and MFE have since become report-only in `verify_corpus.py`.)
 4. **Doc** — `pine_v6_coverage_detail.md` totals are delta-reconciled, not re-derived from scratch; a full per-identifier regeneration is still the long-term fix for the ❓ bucket (141 left).
-5. **Corpus probe gaps** — no probe exercises `slippage≠0`, `close_entries_rule`, `risk.max_intraday_loss`/`max_cons_loss_days`, magnifier non-ENDPOINTS modes, `lookahead_on`, `input.color/time/symbol`, `str.format` family, `timestamp()`, `math.random`, `for-in`.
+5. **Corpus probe gaps** — no probe exercises `close_entries_rule`, `risk.max_intraday_loss`/`max_cons_loss_days`, magnifier non-ENDPOINTS modes, `lookahead_on`, `input.color/time/symbol`, `str.format` family, `timestamp()`, `math.random` (at corpus `b40aa8e`; `for…in` has one probe since).

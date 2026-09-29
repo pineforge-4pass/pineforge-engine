@@ -8,10 +8,10 @@ count, fill prices, and net PnL.
 
 ## When the magnifier actually changes anything
 
-The magnifier only fires when **`script_tf > input_tf`** — i.e. the
+The magnifier only adds resolution when **`script_tf > input_tf`** — i.e. the
 runtime is aggregating finer input bars up to a coarser script
-timeframe. With `input_tf == script_tf`, there's no extra resolution
-to recover; turning the magnifier on changes nothing.
+timeframe. With `input_tf == script_tf` it still walks each input bar as one
+sub-bar (the counters count them), but there is no finer path to recover.
 
 The tutorial MACD strategy ships at 15-minute timeframe. Running it
 with `input_tf="15", script_tf="60"` (15-minute feed driving an
@@ -22,24 +22,23 @@ hourly strategy) makes the magnifier sample intra-hour fills from the
 
 ```
 $ python3 magnifier_ab.py
-PineForge <version> — 672 input bars → 168 hourly script bars (ratio 4:1)
+input_bars=672 -> script_bars=168 (ratio 4:1)
 
 without magnifier:
-  trades:  19   net pnl:  -5096.73   sub_bars:     0   ticks:     0
+  trades:  20   net pnl: -5022.62   sub_bars:     0   ticks:     0
 with magnifier (4 samples, ENDPOINTS):
-  trades:  20   net pnl:  -5322.57   sub_bars:   671   ticks:  2684
+  trades:  20   net pnl: -5022.62   sub_bars:   671   ticks:  2684
 delta:
-  trades:   +1
-  net pnl:  -225.84
-  one extra trade exited at an intra-hour OHLC point instead of the next bar close
+  trades:    +0
+  net pnl:     +0.00
 
 per-mode comparison:
-  ENDPOINTS    : trades=20  pnl=-5322.57
-  UNIFORM      : trades=20  pnl=-5322.57
-  COSINE       : trades=20  pnl=-5322.57
-  TRIANGLE     : trades=20  pnl=-5322.57
-  FRONT_LOADED : trades=20  pnl=-5322.57
-  BACK_LOADED  : trades=20  pnl=-5322.57
+  ENDPOINTS    : trades= 20  pnl=-5022.62
+  UNIFORM      : trades= 20  pnl=-5022.62
+  COSINE       : trades= 20  pnl=-5022.62
+  TRIANGLE     : trades= 20  pnl=-5022.62
+  FRONT_LOADED : trades= 20  pnl=-5022.62
+  BACK_LOADED  : trades= 20  pnl=-5022.62
 ```
 
 @note Trade count is identical across all six distribution modes here
@@ -49,6 +48,10 @@ the script has intra-bar `strategy.exit(stop=…)` brackets, trail stops,
 or take-profit limits — see [Bar magnifier](@ref magnifier).
 
 ## Source: magnifier_ab.py
+
+Save it two directories below the repository root (for example
+`demo/python/magnifier_ab.py` in a clone): the `ROOT` and `sys.path` lines
+assume that depth.
 
 ```python
 #!/usr/bin/env python3
@@ -164,7 +167,7 @@ if __name__ == "__main__":
 
 | Observation | What it tells you |
 | --- | --- |
-| `sub_bars_total` is 0 with magnifier on | Either the magnifier was actually off, OR `script_tf == input_tf` and there's nothing to magnify. |
+| `sub_bars_total` is 0 with magnifier on | The magnifier was actually off, or no bar was given an intrabar path. With `script_tf == input_tf` it still walks each input bar (one sub-bar each: 672 sub-bars, 2688 ticks on the tutorial feed), and a bar-close strategy's fills stay the same. |
 | Trade count goes up with magnifier on | Stops/limits resolved intra-bar that would otherwise have rolled over to next-script-bar fills. |
 | Trade count unchanged, PnL changes | Same fills, but at finer-grained prices — typical for `strategy.exit(profit, loss)` brackets. |
 | Distribution modes give different PnL | Strategy has intra-bar exits (stops, limits, trailing). |
@@ -175,8 +178,7 @@ if __name__ == "__main__":
 
 - `strategy.exit(stop=…, limit=…)` brackets — the OCA pair fills on whichever level is hit first inside the bar.
 - `strategy.exit(trail_points=…, trail_offset=…)` — trailing stops update on every magnified sample.
-- `strategy.close(qty_percent=…)` partial closes triggered by an intra-bar level.
-- Any strategy that issues `strategy.entry` from inside an `if barstate.isconfirmed == false` block.
+- Under `calc_on_order_fills`, the orders a fill recalculation places inside the bar: a market entry or `strategy.close` fills at that intrabar point.
 
 For pure bar-close strategies (the tutorial MACD is one), the magnifier
 is a no-op on PnL — only `magnifier_sub_bars_total` changes.

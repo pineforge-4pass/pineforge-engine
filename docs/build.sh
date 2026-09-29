@@ -162,7 +162,7 @@ if [[ -f "$LOG" ]] && grep -E "$GUARDED" "$LOG" | grep -q 'warning:'; then
     exit 1
 fi
 if [[ "$TOTAL" != "0" ]]; then
-    echo "==> unguarded warnings (page lanes L14-B / L14-C own these):"
+    echo "==> unguarded warnings (printed, not fatal):"
     grep 'warning:' "$LOG" || true
 fi
 

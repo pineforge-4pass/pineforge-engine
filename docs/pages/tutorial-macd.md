@@ -9,12 +9,14 @@ minute. Source: [`tutorial/`](https://github.com/pineforge-4pass/pineforge-engin
 
 | Step | What you learn |
 | --- | --- |
-| 1 | Build the runtime + transpile a Pine MACD into `strategy.so`. |
+| 1 | Build the runtime and the committed, pre-transpiled `generated.cpp` into `strategy.so`. |
 | 2 | Load `strategy.so` from Python via `ctypes`. |
 | 3 | Push an OHLCV feed and call #run_backtest_full. |
 | 4 | Read every interesting field of `pf_report_t`. |
-| 5 | Re-run the same compiled strategy with different parameters — no recompile. |
-| 6 | Sweep a 2-D parameter grid in parallel using one `.so` per worker. |
+| 5 | Free the report and the handle, in order. |
+
+Re-running with other parameters, sweeping a grid and running strategies in
+parallel are the example pages at the end.
 
 By the end you'll have the canonical patterns for ad-hoc backtests,
 parameter sweeps, walk-forward windows, and live diagnostic capture.
@@ -26,12 +28,14 @@ tutorial/
 ├── macd/
 │   ├── strategy.pine       # PineScript v6 reference
 │   └── generated.cpp       # transpiled C++ → becomes strategy.so
+├── mtf/                    # two MTF strategies (see Multi-timeframe)
 ├── data/
 │   ├── btcusdt_15m_7d.csv  # 672 frozen bars (Binance)
 │   └── fetch_btcusdt.py    # refresh from Binance public API
 ├── run.py                  # ctypes harness
 ├── run_stream.py           # historical OHLCV → realtime trade stream
 ├── run_advanced.py         # parameter sweep using ABI overrides
+├── run_mtf.py              # MTF demo: script_tf switch + lower_tf
 ├── run.sh                  # one-shot: cmake build + run.py
 └── CMakeLists.txt
 ```
@@ -40,24 +44,32 @@ tutorial/
 
 ```pine
 //@version=6
-strategy("MACD Cross", overlay=false,
-         initial_capital=10000, default_qty_type=strategy.percent_of_equity,
-         default_qty_value=100, commission_type=strategy.commission.percent,
-         commission_value=0.04)
+strategy("MACD Crossover (tutorial)",
+     overlay            = false,
+     initial_capital    = 1000000,
+     currency           = currency.USD,
+     process_orders_on_close = false,
+     pyramiding         = 1,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0,
+     slippage           = 0,
+     default_qty_type   = strategy.fixed,
+     default_qty_value  = 1)
 
-fast   = input.int(12,  "Fast Length")
-slow   = input.int(26,  "Slow Length")
-signal = input.int(9,   "Signal Length")
+fastLen   = input.int(12, "Fast Length",   minval=1)
+slowLen   = input.int(26, "Slow Length",   minval=1)
+signalLen = input.int(9,  "Signal Length", minval=1)
+src       = input.source(close, "Source")
 
-[macd, sig, hist] = ta.macd(close, fast, slow, signal)
+[macdLine, signalLine, histLine] = ta.macd(src, fastLen, slowLen, signalLen)
 
-longCond  = ta.crossover(macd, sig)
-shortCond = ta.crossunder(macd, sig)
+longCond  = ta.crossover(macdLine,  signalLine)
+shortCond = ta.crossunder(macdLine, signalLine)
 
 if longCond
-    strategy.entry("L", strategy.long)
+    strategy.entry("Long",  strategy.long)
 if shortCond
-    strategy.entry("S", strategy.short)
+    strategy.entry("Short", strategy.short)
 ```
 
 ## Path A — local toolchain
@@ -73,8 +85,8 @@ Configures CMake (first time only), builds
 
 ```
 MACD(12,26,9) on BTCUSDT 15m — 672 bars, 2026-04-29 18:15 → 2026-05-06 18:00 UTC
-  trades:    49  (16W / 33L, 32.7% win)
-  net pnl:   -190.85
+  trades:    50  (17W / 33L, 34.0% win)
+  net pnl:   +569.97
   best/worst:+1149.00 / -1111.97
   max dd:    -4045.15
   elapsed:   0.4 ms
@@ -86,9 +98,9 @@ Numbers depend on the OHLCV snapshot — refresh with
 ## Path B — Docker
 
 Mount the strategy + OHLCV into the release hub's image,
-`ghcr.io/pineforge-4pass/pineforge-release` (this runtime plus the
-`pineforge-codegen` of the same version; this repository publishes no image
-of its own); get a JSON report on stdout.
+`ghcr.io/pineforge-4pass/pineforge-release` (a released runtime plus a pinned
+`pineforge-codegen`, named by its `engine<E>-codegen<C>` tag; this repository
+publishes no image of its own); get a JSON report on stdout.
 
 ```bash
 docker run --rm \
@@ -100,19 +112,20 @@ jq '.summary' report.json
 ```
 
 The image transpiles the `.pine` with its own codegen and runs it on its own
-engine, so the image tagged with this tree's release gives Path A's numbers.
+engine, so it gives the numbers of the engine release it carries; main, which
+Path A builds, is not yet released.
 To build the image yourself, use pineforge-release's `docker/Dockerfile`,
 which vendors this tree's `docker/` harness; this repository ships no
 Dockerfile.
 
 ## Inside run.py — annotated walkthrough
 
-The full harness is ~80 lines. Here's the dataflow, end to end.
+The full harness is ~200 lines. Here's the dataflow, end to end.
 
 ### 1. Mirror the C ABI in ctypes
 
-Skipped here — see [FFI from Python](@ref ffi_python) for the complete
-mirror. The harness defines `BarC`, `TradeC`, and `ReportC` exactly
+Skipped here — see [FFI from Python](@ref ffi_python) for the ctypes
+mirror of the report structs. The harness defines `BarC`, `TradeC`, and `ReportC` exactly
 matching `pf_bar_t`, `pf_trade_t`, `pf_report_t`.
 
 ### 2. Load OHLCV into a contiguous array
@@ -145,8 +158,9 @@ lib.strategy_free.argtypes = [ctypes.c_void_p]
 lib.report_free.argtypes   = [ctypes.POINTER(ReportC)]
 ```
 
-@warning Always set `argtypes`. Without them, Python silently passes
-`int` as 32-bit — your timestamps lose half their bits.
+@warning Always set `argtypes`. Without them, Python passes an `int` as a
+32-bit C `int` — an `int64_t` argument such as
+`strategy_stream_advance_time`'s timestamp loses half its bits.
 
 ### 4. Run
 
@@ -190,7 +204,7 @@ Order matters — see [Lifecycle § Free everything](@ref lifecycle).
 
 ## More worked examples
 
-The four pages below pick up where this tutorial leaves off — each one
+The pages below pick up where this tutorial leaves off — each one
 is a self-contained, runnable example targeting a specific use case.
 
 | Example | What it shows |

@@ -6,7 +6,7 @@ Seed **20260921** · `benchmarks/select_population.py` · 200 slots = 100 corpus
 
 - Corpus gitlink: `442d497b52d8b559bbcad0831cb5a8aceebb9d3a` (`corpus/validation/`)
 - Population version `3d72f815de54e4a2f6fdff6bb2294ea99c38849888390ded4ecd68ac3e5a9110` (document sha256 `dd8841c96ff99e1d0e92e944ba7b4827b27fc30cfd05e76a419c1cf3ca992dd4`, heads {"corpus": "b46cd80c247a53b19e23cb0c12c4451d624ce9a6", "engine": "209067aa98fe3d04cc093a630f945fb2e70d2aef", "scrapper": "30a49594f8bcb07cb57b1607e09f1cc2a6035f08"})
-- Campaign verify reports: experiment `exp-r5-p2c-abi-aliases-20260921` (export sha256 `d1e9c28004804ee0ac44e533b282cdf270bf654757658a60daf6f8732e9c2bb7`)
+- Verify reports (maintainers' private evidence store): experiment `exp-r5-p2c-abi-aliases-20260921` (export sha256 `d1e9c28004804ee0ac44e533b282cdf270bf654757658a60daf6f8732e9c2bb7`)
 - Bench feed: `benchmarks/assets/data/ETHUSDT_15.csv` sha256 `c4e3aafade38e399e65a674b1b8ee8e877d769a8714284adfb0afa6a1beb75c6`, 53,929 bars, 2024-10-19 21:00 → 2026-05-04 15:00 UTC
 
 ## Rule

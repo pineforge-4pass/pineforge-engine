@@ -2,14 +2,14 @@
 
 @tableofcontents
 
-A minimal end-to-end build, install, and link in under a minute.
+A minimal end-to-end build, install, and link.
 
 ## Prerequisites
 
 | Requirement | Minimum | Notes |
 | --- | --- | --- |
-| CMake | 3.16 | |
-| C++ compiler | GCC 9, Clang 10, Apple Clang 12 | C++17 required. |
+| CMake | 3.16 | `ctest --test-dir` below needs 3.20. |
+| C++ compiler | libstdc++ from GCC 11, or libc++ 14; on macOS a deployment target of 13.3 | C++17 with floating-point `std::to_chars`. |
 | Eigen | 3.3+ | Optional — fetched automatically via `FetchContent` if no system install is found. |
 
 ## Build + test
@@ -33,9 +33,14 @@ cmake --install build --prefix /usr/local
 
 This installs:
 
-- `lib/libpineforge.a` — the static runtime
-- `include/pineforge/*.hpp` — internal headers
-- `include/pineforge/pineforge.h` — **the public C ABI**
+- `lib/libpineforge.a` — the static runtime (kernel + Pine adapter)
+- `lib/libpineforge_kernel.a` — the kernel alone (`PineForge::kernel`)
+- `include/pineforge/*.hpp` — the C++ headers: the kernel / native API
+  (`native_host.hpp`, `native_run_spec.hpp`, `native_order.hpp`,
+  `native_toolkit.hpp`) and internal ones; `source/` and `compat/pine/` hold
+  the Pine adapter's
+- `include/pineforge/pineforge.h` — **the public C ABI**, with
+  `native_c_api.h` (the C native-host API it includes) and `live_parser.h`
 - `include/pineforge/version.h` — generated version macros
 - `lib/cmake/PineForge/PineForge{Config,Targets,ConfigVersion}.cmake`
 
@@ -61,7 +66,7 @@ int main(void) {
 Compile and run:
 
 ```bash
-cc hello.c -lpineforge -lstdc++ -lm -o hello
+cc hello.c -lpineforge -lstdc++ -lm -o hello   # macOS: -lc++ for -lstdc++
 ./hello
 # PineForge <version> (<sha>)
 ```

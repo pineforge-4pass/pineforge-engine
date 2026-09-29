@@ -242,7 +242,7 @@ def main() -> None:
         "- **vectorbt:** in-process timing of the slots that ship a `strategy_vbt.py` port",
         "  (vectorized Pandas/NumPy + Numba). Median over `N=20` iterations.",
         "- **PineTS:** subprocess wall time of `node runners/run_pinets_canonical.mjs`. PineTS has",
-        "  no strategy backtester upstream; the canonical indicator script (10 indicators) is",
+        "  shipped a `strategy.*` namespace since 0.9.17, but the harness has no PineTS strategy runner; the canonical indicator script (10 indicators) is",
         "  timed as its indicator-layer cost. Single entry, not per-strategy.",
         "",
         "**Mixed-methodology note:** PineForge and vectorbt are timed in-process while",

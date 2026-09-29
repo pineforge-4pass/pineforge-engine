@@ -36,7 +36,7 @@ What keeps TradingView's full reversal (the controls):
 - a LIMIT first call re-issued as a MARKET order on the same bar (cell K);
 - a `strategy.cancel` of the id between the two calls (cell N).
 
-Each directory is one `lab tv --no-note` export (pineforge-workflow, channel
+Each directory is one `lab tv --no-note` export (maintainers' private pineforge-workflow, channel
 `ws-report-v1`, `rangeProof` covered), byte for byte: `strategy.pine`,
 `tv_trades.csv` (times at UTC+8), `metrics.json`, `meta.json`. `metrics.json`
 `tvTradesCsvHash` is the sha256 of `tv_trades.csv`. Every probe runs on

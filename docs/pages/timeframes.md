@@ -24,21 +24,21 @@ run_backtest_full(s, bars, n,
 | --- | --- |
 | `""` (empty) | Auto-detect from bar timestamps. For `script_tf`, defaults to `input_tf`. |
 | `"1"` | 1 minute. |
-| `"60"` or `"1H"` | 1 hour. |
+| `"60"` | 1 hour. |
 | `"1D"` | 1 day (calendar). |
 | `"1W"` | 1 week (calendar). |
 | `"1M"` | 1 month (calendar). |
 | `"15"` | 15 minutes. |
-| `"4H"` | 4 hours. |
+| `"240"` | 4 hours. |
 
 The format follows TradingView's TF strings.
 
 ## Auto-detection
 
 If `input_tf == ""`, the runtime inspects the median delta between
-consecutive `pf_bar_t::timestamp` values and snaps to the nearest
-canonical Pine timeframe. Mixed-cadence feeds (e.g. weekend gaps) are
-robust as long as the modal delta is a clean Pine TF.
+consecutive `pf_bar_t::timestamp` values (the first 100) and snaps to the
+nearest of 1, 3, 5, 15, 30, 60, 120, 240, D and W. Mixed-cadence feeds (e.g.
+weekend gaps) are robust as long as the median delta is a clean Pine TF.
 
 ## Aggregation
 

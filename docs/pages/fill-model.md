@@ -11,14 +11,12 @@ admission and scheduling rules, and the ordinary bar scan and callback-driven
 scan are separate. The responsibilities below guide their consolidation without
 claiming that a single unified scheduler already exists.
 
-The current pending-order representation has five direct boolean members. Two
-duplicate placement fields derive from the original command observation;
-the opposite-market predecessor fact derives from its accepted command's
-original book and removal records. The book records each instruction's raw
-buy/sell direction, including manually constructed peers, without storing the
-derived predecessor result. Cancellation has an explicit terminal receipt. This declaration count is
-an intermediate result: it does not prove that all remaining Pine predicates
-are generic, or that the whole engine has fewer than five compatibility choices.
+The compatibility pending-order object is retired: a resting order is a native
+request plus the source adapter's placement snapshot, which fixes the historical
+placement facts (prior close, entry capacity, opposite-market predecessor) when
+the order is placed ([admission model](@ref market_admission)). Cancellation has
+an explicit terminal receipt. None of this proves that the remaining Pine
+predicates are generic.
 
 ## Responsibilities
 
@@ -168,11 +166,10 @@ stop, limit or trail cannot turn a conditional exit into an unpriced market clos
 Completion identifies the outstanding obligation and its occurrence separately
 from the processing receipt, with causal ordering checked before any mutation.
 
-The ordinary pending-order scan updates risk state, processes due opening work,
-finalizes source cohorts, updates trailing/relative prices and orders the book.
-It then classifies and matches an exact pending handle. A pre-exit margin slice
-can change the book between matching and dispatch, so the handle is resolved
-again before applying the selected order.
+At each bar open the source adapter observes the kernel's terminal receipts,
+erases rows no reader can reach, releases closed cohorts and records trail
+state (`PineExecutionAdapter::on_bar_open`); the native request core then
+matches and settles.
 
 The primary fill updates physical exposure. Reservation growth is settled at the
 existing post-primary checkpoint, before that order's OCA and risk follow-up.
@@ -212,12 +209,7 @@ priority and stable submission identity. Losing candidate scans must not commit
 trigger activation. Dependency cycles must be reported rather than hidden by
 another pairwise preference.
 
-The existing two-sort arrangement does not yet provide that contract. In
-particular, the sibling comparator has reproduced ordering-law failures for
-unrelated interleavings and mixed trailing/non-trailing exits. Grouping by owner
-alone does not repair the mixed-leg case. Replacing these sorts is separate from
-the reservation-ownership change and requires its own native ordering tests and
-Cloud compatibility assessment.
+
 
 A native reduction must never create new exposure. Some existing Pine close
 interpretations can produce a new transaction after their old target disappears;
@@ -230,7 +222,7 @@ claim those migrations or the large-function cleanup are finished.
 
 Literal state tests exercise consume-before-use, exempt presence, replacement,
 stale-owner rejection, no-op preservation and independent copies. Existing
-trade fixtures retain their financial expectations. Cloud comparison of the
+trade fixtures retain their financial expectations. A parity comparison of the
 fixed reference population is required before reporting parity preservation.
 Hashes supplement those comparisons; a matching fingerprint is not a proof
 that all hidden strategy state is equal.

@@ -8,39 +8,44 @@ against tomorrow's runtime — and tells you when it won't.
 
 ## The guarantee
 
-Within the same `PINEFORGE_VERSION_MAJOR`:
+From 1.0.0, within one `PINEFORGE_VERSION_MAJOR` (the
+[public contract](public-contract.md) is the full statement):
 
-- **POD struct layouts** in `<pineforge/pineforge.h>` are
-  **append-only**. Fields are never reordered, removed, or retyped.
-  New fields may only appear at the **end** of an existing struct.
-- **`extern "C"` symbol signatures** are **append-only**. New functions
-  may be added; existing functions are never removed or
-  signature-changed.
+- **`PF_ABI_VERSION` stays 4.** The layouts a caller allocates or strides
+  over (`pf_report_t`, `pf_trade_t`, the metrics structs) do not change; a
+  size-prefixed native struct grows only by an appended tail.
+- **`extern "C"` functions are append-only.** New functions may be added;
+  existing ones are never removed or renamed.
 - **Enum values** are **stable**. New enumerators may be added; existing
   values never change.
 
-Across major versions all bets are off. PineForge bumps `MAJOR` only
-when breaking the ABI — and announces it in release notes.
+Before 1.0 a MINOR release could grow a caller-visible struct: v0.13.0
+appended `pf_trade_t::open_at_end`, and `main` appends the ABI v4 fields to
+`pf_report_t`. Each growth bumped `PF_ABI_VERSION`, so a consumer checks
+`pf_abi_version() == PF_ABI_VERSION` before it runs a strategy.
 
 ## What this means in practice
 
+A strategy `.so` links the runtime statically (`libpineforge.a`), so the two
+parties are the program that loads it and the library it loads:
+
 | Scenario | Outcome |
 | --- | --- |
-| Strategy `.so` built against `0.1.0`, loaded by runtime `0.1.7`. | Works. |
-| Strategy `.so` built against `0.1.0`, loaded by runtime `0.2.0`. | Works (minor bump = additive). |
-| Strategy `.so` built against `0.1.0`, loaded by runtime `1.0.0`. | **No guarantee.** Recompile against the new ABI. |
-| Strategy `.so` built against `0.2.0`, loaded by runtime `0.1.7`. | **Undefined.** Newer ABI on older runtime — strategy may reference symbols that don't exist. |
-
-The forward-compatible direction is **older strategy → newer runtime**.
+| A consumer built against one 1.x `pineforge.h` loads a strategy library built from a later 1.x release. | Works: same `PF_ABI_VERSION`, append-only functions. |
+| The same consumer loads a library built from an earlier 1.x release. | Works for every function that release has; probe a newer one with `dlsym` first. |
+| Consumer and library from different majors, or from different 0.x minors. | **No guarantee.** Check `pf_abi_version()` and rebuild. |
+| A C++ object (a generated strategy, a native host) built against another release's headers. | **Not supported.** Rebuild against the headers and archive it links. |
 
 ## How it's enforced
 
 Three layers:
 
-1. **Compile-time `static_assert`s** in `src/c_abi.cpp` pin every POD
-   struct's `sizeof` and `offsetof` against drift between the C header
-   and the internal C++ types. Any layout change that would affect the
-   ABI fails the build.
+1. **Compile-time `static_assert`s** in `src/c_abi.cpp` pin the size and
+   key field offsets of the structs the header shares with the runtime
+   (`pf_bar_t`, `pf_trade_tick_t`, `pf_trade_t`, `pf_report_t`,
+   `pf_security_diag_t`, `pf_trace_entry_t`) to their internal C++ twins,
+   and `pf_equity_stats_t` / `pf_metrics_t` to literal offsets and sizes;
+   a drift there fails the build.
 
 2. **Visibility hygiene** — `libpineforge.a` is built with
    `-fvisibility=hidden -fvisibility-inlines-hidden`. Only symbols
@@ -48,9 +53,10 @@ Three layers:
    links it. Internal C++ classes (`BacktestEngine`, `ta::*`,
    `pineforge::internal::*`) stay hidden.
 
-3. **CI check** — `scripts/check_c_abi_runtime.py` verifies the ABI
-   surface on every commit. Strategy-side parity is checked locally
-   against the private corpus.
+3. **CI check** — `scripts/check_c_abi_runtime.py` pins the exported name
+   sets and declaration counts (names, not signatures) in `ci_preflight`
+   and every `ci_verify` profile. Strategy-side parity is checked by
+   `scripts/check_corpus_parity.sh` against the public `corpus/` submodule.
 
 ## Symbol inventory
 
@@ -59,8 +65,7 @@ A built strategy `.so` exposes 70 compiled-strategy `PF_API` declarations
 declarations: 113 `PF_API` exports in total; a script that declares
 `use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, the
 71st declaration of `pineforge.h`. `nm -gU` also reports libc++'s
-`std::piecewise_construct`; no project-internal C++ symbol is exported. The historical 28-symbol module
-sentence was not a current module count; the grouped table below is a guide,
+`std::piecewise_construct`; no project-internal C++ symbol is exported. The grouped table below is a guide,
 not the complete inventory:
 
 | Symbol | Group |
@@ -89,7 +94,7 @@ not the complete inventory:
 | `strategy_set_syminfo_pointvalue` | @ref pf_config |
 | `strategy_set_syminfo_metadata` | @ref pf_config |
 | `strategy_set_account_currency_fx_series` | @ref pf_config |
-| `strategy_configure_native_fx_curve_v1` | @ref pf_config |
+| `strategy_configure_native_fx_curve_v1` | @ref pf_lifecycle |
 | `strategy_get_last_error` | Diagnostics |
 | `pf_version_get` | @ref pf_version |
 | `pf_abi_version` | @ref pf_version |
@@ -112,7 +117,9 @@ nm -D --defined-only my_strategy.so | awk '$2=="T"{print $3}' | sort
 The following are **internal** and may change in any release without
 notice:
 
-- C++ headers under `<pineforge/engine.hpp>`, `<pineforge/ta.hpp>`, etc.
+- The C++ headers generated strategies compile against (`<pineforge/engine.hpp>`,
+  `<pineforge/ta.hpp>`, the Pine source layer); the native host headers carry
+  the separate source-compatibility promise of the [public contract](public-contract.md).
 - The contract between codegen-emitted strategy code and the runtime's
   internal C++ types (TA classes, math, series, strategy commands).
 - Internal symbol names (anything not tagged `PF_API`).
@@ -173,8 +180,8 @@ aggregate controls each exercise that pair; no caller executable is run. The
 `host-ab9714b` v16 archive stays the runtime-budget baseline
 (`scripts/check_runtime_budget.py`) and a historical input.
 
-For the 0.14.x line, this is an internal C++ epoch transition rather than a
-public C ABI break: `PF_ABI_VERSION` remains 4 and the append-only C ABI
+On `main` (unreleased; `VERSION` reads 0.14.0), this is an internal C++ epoch
+transition rather than a public C ABI break: `PF_ABI_VERSION` remains 4 and the append-only C ABI
 guarantee remains in force.
 
 R5 lane D2-A adds two non-virtual `NativeStrategyHost` members inside v19,
@@ -258,7 +265,7 @@ within their buffers.
 Namespace versioning protects referenced internal C++ symbols; it does not
 validate an erased `pf_strategy_t` handle. Use a handle only with functions from
 its creating strategy module. A fully self-contained old module can still use
-its own matching runtime; this check does not turn it into a v11 module.
+its own matching runtime; this check does not turn it into a module of the current epoch.
 
 The current integrated representation uses generic broker fingerprint domain
 `pineforge-broker-state/v19` and stream fingerprint version 19; the source
@@ -331,7 +338,7 @@ leaves the roster at the next bar open. The dead
 leg order a run declares folds in the spec digest, `NativeRunSpec::path_order`).
 Trades move only where a margin call used to revive an exit the script had
 cancelled while it was live, or while the adapter had it parked for a
-margin-call slice, as the lab tv tapes v19fix-cancel-before-pair,
+margin-call slice, as the TradingView tapes (`tests/test_adapter_margin_revival_cancel.cpp`) v19fix-cancel-before-pair,
 v19fix-cancel-at-1000, v19fix-gapped-stop-cancel and
 v19fix-gapped-stop-cancel-after-pair show TradingView never does; the values
 the tree pins were re-pinned once more, each marked "expectation corrected
@@ -358,7 +365,7 @@ remain represented. Selected cohorts, their executed live scopes, current
 callback quote/cutoff facts and queued notification order contribute to native
 continuation identity.
 The Pine component schema remains 1; it is
-independent of the aggregate fingerprint version. Prior v2–v14 fingerprints are
+independent of the aggregate fingerprint version. Fingerprints from earlier epochs are
 not comparable. Fingerprints are replay checks, not serialized checkpoints or
 complete hashes of private strategy state. The native runner already binds
 its strategy-library SHA; its ledger format and Python provenance fingerprints
@@ -371,8 +378,8 @@ epoch change itself changes linkage and fingerprint identity. The accompanying
 native execution behavior is described in [Native engine](native-engine.md);
 the ABI boundary alone is not a claim that every execution path is unchanged.
 
-If you find yourself reaching for any of these from outside the closed
-PineForge transpiler, you're holding it wrong — file an issue and we'll
+If you find yourself reaching for any of these from outside the PineForge
+transpiler (`pineforge-codegen`), you're holding it wrong — file an issue and we'll
 lift the missing surface into the public ABI.
 
 ## Version macros

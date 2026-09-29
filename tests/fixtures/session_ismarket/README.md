@@ -21,7 +21,7 @@ Every tape is rangeProof `covered`. The flag is a function of the bar's time
 and the symbol's session and timezone only, so
 `tests/test_session_ismarket_tape.cpp` replays each tape on flat bars stamped
 at the tape's own entry times. The session strings it replays are the
-campaign's lane facts (pineforge-lab `config/symbol-lanes-v1.json`: ES1!
+campaign's lane facts (the maintainers' private pineforge-lab `config/symbol-lanes-v1.json`: ES1!
 `1700-1600` America/Chicago, EURUSD `1700-1700` and XAUUSD `1800-1700`
 America/New_York, crypto `24x7`), the same sessions with TradingView's
 weekday mask `:23456`, and a 24-hour day spelled `0000-2400` and `0000-0000`.

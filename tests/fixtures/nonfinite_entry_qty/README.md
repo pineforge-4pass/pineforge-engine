@@ -32,7 +32,7 @@ closes inside the bars (44) to be the engine's: entry and exit time, side, price
 |---|---:|---|
 | `tailc-a-qty-nonfinite2` | 155 | `9d02d2a0fc994b4049641ee7f1c99c550bb2c32a4030faf9531b0b77d89c3afa` |
 
-The directory is one `lab tv --no-note` export (pineforge-workflow, channel `ws-report-v1`,
+The directory is one `lab tv --no-note` export (maintainers' private pineforge-workflow, channel `ws-report-v1`,
 `rangeProof` covered, BINANCE:BTCUSDT 15, 2025-04-01 .. 2025-04-08) of a synthetic script
 written for this lane, byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8),
 `metrics.json`, `meta.json`.

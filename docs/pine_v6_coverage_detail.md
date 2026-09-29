@@ -1,6 +1,6 @@
 # Pine v6 Coverage — Identifier-by-Identifier Audit
 
-> ✅ **RECONCILED 2026-07-18** against pineforge-codegen-oss `cefeec8` and pineforge-engine `06bb724`. The 2026-07-18 delta records end-to-end `PineMap<K,V>` integration and its fail-closed boundaries on top of the 2026-06-10 audit-fix sweep. This remains a **surgical refresh**, not a full per-identifier re-derivation: untouched rows still carry the 2026-05-17 sprint snapshot, and the ❓ bucket has not been re-audited. Headline totals are delta-reconciled (see the footnote under the totals table).
+> ✅ **RECONCILED 2026-07-18** against pineforge-codegen-oss `cefeec8` and pineforge-engine `06bb724`. The 2026-07-18 delta records end-to-end `PineMap<K,V>` integration and its fail-closed boundaries on top of the 2026-06-10 audit-fix sweep. This remains a **surgical refresh**, not a full per-identifier re-derivation: untouched rows still carry the 2026-05-17 sprint snapshot, and the ❓ bucket has not been re-audited. Headline totals are delta-reconciled (see the footnote under the totals table). Rows corrected since against engine `35db01c8` / codegen-oss `70c2b4af` (drawings, `varip`, `max_bars_back()`, the cosmetic `color()` / `chart.*` reads, `timenow`, `ticker.heikinashi()`, library imports, the recorded `request.*` forms) move identifiers between buckets that the totals below do not recount.
 
 | Field | Value |
 |---|---|
@@ -21,7 +21,7 @@
 | ❌ Unsupported | 175 | 19% |
 | ❓ Unknown / not classified | 141 | 15% |
 
-> **"Fully runs" headline:** PineForge executes **409 of 941** Pine v6 identifiers (✅ Runtime + 🔧 Transpiler = **43%**). The 2026-07-18 map integration reclassifies the `map` type and 11 `map.*` functions from 🔧 to ✅ without changing that combined total. An additional 23% parse-and-skip silently (no error, no effect — drawing/plotting + syminfo na-accepts). 19% are rejected loudly at transpile or produce na-returns — this bucket *grew* in the 2026-06-10 sweep because ~35 identifiers that previously miscompiled silently (constant-namespace free reads, `varip`, `footprint.*`/`volume_row.*`, bare `color()`, `color.from_gradient`, drawing-typed `array.new_*`, `max_bars_back`, `timeframe.from_seconds`, `indicator()`, `chart.bg/fg_color`) now hard-reject with a precise error. 15% remain not-yet-audited at single-identifier precision.
+> **"Fully runs" headline:** PineForge executes **409 of 941** Pine v6 identifiers (✅ Runtime + 🔧 Transpiler = **43%**). The 2026-07-18 map integration reclassifies the `map` type and 11 `map.*` functions from 🔧 to ✅ without changing that combined total. An additional 23% parse-and-skip silently (no error, no effect — drawing/plotting + syminfo na-accepts). 19% are rejected loudly at transpile or produce na-returns — this bucket *grew* in the 2026-06-10 sweep because ~35 identifiers that previously miscompiled silently (constant-namespace free reads, `varip`, `footprint.*`/`volume_row.*`, bare `color()`, `color.from_gradient`, drawing-typed `array.new_*`, `max_bars_back`, `timeframe.from_seconds`, `indicator()`, `chart.bg/fg_color`) hard-rejected with a precise error after that sweep; several are accepted since (see their rows). 15% remain not-yet-audited at single-identifier precision.
 
 > **Sprint delta (2026-05-17):** +17 ✅ Runtime, +21 🔧 Transpiler, +12 ⏭️ Parse-and-skip, +9 ❌ Unsupported (ticker.* split), −59 ❓ Unknown. See [Sprint changes](#sprint-changes-2026-05-17) section below.
 
@@ -54,16 +54,16 @@
 |---|---|---|---|---|
 | `array` | type | 🔧 Transpiler | `std::vector<T>` emitted by transpiler | No runtime array module |
 | `bool` | type | ✅ Runtime | C++ `bool` via `na.hpp` | |
-| `box` | type | ⏭️ Parse-and-skip | Drawing object; no runtime | |
-| `chart.point` | type | ⏭️ Parse-and-skip | Chart geometry; no runtime | |
+| `box` | type | ✅ Runtime | `Box` handle, geometry as data in `drawing.hpp` | Visual setters are accepted no-ops |
+| `chart.point` | type | ✅ Runtime | `ChartPoint` aggregate in `drawing.hpp` | |
 | `color` | type | ✅ Runtime | `color.hpp` — 17 named ARGB constants + helpers | |
 | `const` | type/qualifier | 🔧 Transpiler | C++ `const` | |
 | `float` | type | ✅ Runtime | C++ `double` via `na.hpp` | |
 | `footprint` | type | ❌ Unsupported | Hard-reject via `UNSUPPORTED_NAMESPACES` (`support_checker.py`) | Requires tick-level data the engine does not consume |
 | `int` | type | ✅ Runtime | C++ `int` via `na.hpp` | |
-| `label` | type | ⏭️ Parse-and-skip | Drawing object; no runtime | |
-| `line` | type | ⏭️ Parse-and-skip | Drawing object; no runtime | |
-| `linefill` | type | ⏭️ Parse-and-skip | Drawing object; no runtime | |
+| `label` | type | ✅ Runtime | `Label` handle, geometry and text as data in `drawing.hpp` | Visual setters are accepted no-ops |
+| `line` | type | ✅ Runtime | `Line` handle, geometry as data in `drawing.hpp` | Visual setters are accepted no-ops |
+| `linefill` | type | ✅ Runtime | `Linefill` handle in `drawing.hpp` | |
 | `map` | type | ✅ Runtime | `PineMap<K,V>` in `map.hpp`, emitted by the transpiler | End-to-end for supported string-key/primitive-value maps; unsupported history, nested map-bearing matrices, and ambiguous inferred specializations fail closed |
 | `matrix` | type | ✅ Runtime | `matrix.hpp` / `generic_matrix.hpp` | |
 | `polyline` | type | ⏭️ Parse-and-skip | Drawing object; no runtime | |
@@ -77,33 +77,33 @@
 
 | Identifier | Kind | Status | Backing | Notes |
 |---|---|---|---|---|
-| `ask` | var | ❌ Unsupported | No live feed; always na | Realtime-only |
+| `ask` | var | ❌ Unsupported | Rejected at transpile: a realtime-only builtin with no value in a backtest | Realtime-only |
 | `bar_index` | var | ✅ Runtime | `bar_index_` on `BacktestEngine` | |
-| `bid` | var | ❌ Unsupported | No live feed; always na | Realtime-only |
+| `bid` | var | ❌ Unsupported | Rejected at transpile: a realtime-only builtin with no value in a backtest | Realtime-only |
 | `close` | var | ✅ Runtime | `current_bar_.close` on `BacktestEngine` | |
-| `dayofmonth` | var | 🔧 Transpiler | `tz_time_field_lambda(..., syminfo_.timezone)` inline (`BAR_BUILTINS`) | 2026-06-10: exchange-TZ aware per Pine spec (was UTC `_bar_dayofmonth()`); value-identical on UTC data |
-| `dayofweek` | var | 🔧 Transpiler | `tz_time_field_lambda(..., syminfo_.timezone)` inline (`BAR_BUILTINS`) | 2026-06-10: exchange-TZ aware (was UTC) |
+| `dayofmonth` | var | 🔧 Transpiler | `pine_<field>(current_bar_.timestamp, syminfo_.timezone)` in `session_time.hpp` (`BAR_BUILTINS`) | 2026-06-10: exchange-TZ aware per Pine spec (was UTC `_bar_dayofmonth()`); value-identical on UTC data |
+| `dayofweek` | var | 🔧 Transpiler | `pine_<field>(current_bar_.timestamp, syminfo_.timezone)` in `session_time.hpp` (`BAR_BUILTINS`) | 2026-06-10: exchange-TZ aware (was UTC) |
 | `high` | var | ✅ Runtime | `current_bar_.high` on `BacktestEngine` | |
 | `hl2` | var | 🔧 Transpiler | `(high+low)/2` emitted inline | |
 | `hlc3` | var | 🔧 Transpiler | `(high+low+close)/3` emitted inline | |
 | `hlcc4` | var | 🔧 Transpiler | `(high+low+close+close)/4` emitted inline | |
-| `hour` | var | 🔧 Transpiler | `tz_time_field_lambda(..., syminfo_.timezone)` inline (`BAR_BUILTINS`) | 2026-06-10: exchange-TZ aware (was UTC) |
+| `hour` | var | 🔧 Transpiler | `pine_<field>(current_bar_.timestamp, syminfo_.timezone)` in `session_time.hpp` (`BAR_BUILTINS`) | 2026-06-10: exchange-TZ aware (was UTC) |
 | `last_bar_index` | var | ✅ Runtime | Computed from bar count in run loop | |
 | `last_bar_time` | var | ✅ Runtime | Timestamp of last bar | |
 | `low` | var | ✅ Runtime | `current_bar_.low` on `BacktestEngine` | |
-| `minute` | var | 🔧 Transpiler | `tz_time_field_lambda(..., syminfo_.timezone)` inline (`BAR_BUILTINS`) | 2026-06-10: exchange-TZ aware (was UTC) |
-| `month` | var | 🔧 Transpiler | `tz_time_field_lambda(..., syminfo_.timezone)` inline (`BAR_BUILTINS`) | 2026-06-10: exchange-TZ aware (was UTC) |
+| `minute` | var | 🔧 Transpiler | `pine_<field>(current_bar_.timestamp, syminfo_.timezone)` in `session_time.hpp` (`BAR_BUILTINS`) | 2026-06-10: exchange-TZ aware (was UTC) |
+| `month` | var | 🔧 Transpiler | `pine_<field>(current_bar_.timestamp, syminfo_.timezone)` in `session_time.hpp` (`BAR_BUILTINS`) | 2026-06-10: exchange-TZ aware (was UTC) |
 | `na` | var/fn | ✅ Runtime | `na.hpp` — `na<T>()` generic, `is_na(...)` | |
 | `ohlc4` | var | 🔧 Transpiler | `(open+high+low+close)/4` inline | |
 | `open` | var | ✅ Runtime | `current_bar_.open` on `BacktestEngine` | |
-| `second` | var | 🔧 Transpiler | `tz_time_field_lambda(..., syminfo_.timezone)` inline (`BAR_BUILTINS`) | 2026-06-10: exchange-TZ aware (was UTC) |
+| `second` | var | 🔧 Transpiler | `pine_<field>(current_bar_.timestamp, syminfo_.timezone)` in `session_time.hpp` (`BAR_BUILTINS`) | 2026-06-10: exchange-TZ aware (was UTC) |
 | `time` | var | ✅ Runtime | `current_bar_.timestamp` | |
 | `time_close` | var | ✅ Runtime | `pine_time_close(...)` in `session_time.hpp` | |
 | `time_tradingday` | var | ✅ Runtime | `pine_time_tradingday(bar_ms, session, tz)` in `session_time.hpp` | Sprint G1; derives session-day open in `syminfo_.timezone`; DST-edge fallback for Havana/Lord_Howe |
-| `timenow` | var | ❌ Unsupported | No live clock; always na in batch mode | |
+| `timenow` | var | 🔧 Transpiler | The current bar's `time` (`current_bar_.timestamp`); codegen warns it is not wall-clock time | |
 | `volume` | var | ✅ Runtime | `current_bar_.volume` on `BacktestEngine` | |
-| `weekofyear` | var | 🔧 Transpiler | `tz_time_field_lambda(..., syminfo_.timezone)` inline (`BAR_BUILTINS`) | 2026-06-10: exchange-TZ aware (was UTC) |
-| `year` | var | 🔧 Transpiler | `tz_time_field_lambda(..., syminfo_.timezone)` inline (`BAR_BUILTINS`) | 2026-06-10: exchange-TZ aware (was UTC) |
+| `weekofyear` | var | 🔧 Transpiler | `pine_<field>(current_bar_.timestamp, syminfo_.timezone)` in `session_time.hpp` (`BAR_BUILTINS`) | 2026-06-10: exchange-TZ aware (was UTC) |
+| `year` | var | 🔧 Transpiler | `pine_<field>(current_bar_.timestamp, syminfo_.timezone)` in `session_time.hpp` (`BAR_BUILTINS`) | 2026-06-10: exchange-TZ aware (was UTC) |
 
 ### Variables — barstate
 
@@ -113,7 +113,7 @@
 | `barstate.isfirst` | var | ✅ Runtime | `bar_index == 0` (compiler-handled) | |
 | `barstate.ishistory` | var | ✅ Runtime | always `true` in batch | |
 | `barstate.islast` | var | ✅ Runtime | `barstate_islast_` | |
-| `barstate.islastconfirmedhistory` | var | ✅ Runtime | always `false` in batch | Semantically inaccurate but non-crashing |
+| `barstate.islastconfirmedhistory` | var | ✅ Runtime | `barstate_islast_` (true on the run's final bar) | Approximation; codegen warns |
 | `barstate.isnew` | var | ✅ Runtime | `is_first_tick_` | |
 | `barstate.isrealtime` | var | ✅ Runtime | always `false` in batch | |
 
@@ -121,8 +121,8 @@
 
 | Identifier | Kind | Status | Backing | Notes |
 |---|---|---|---|---|
-| `chart.bg_color` | var | ❌ Unsupported | Hard-reject via `UNSUPPORTED_MEMBERS` (`support_checker.py`) | 2026-06-10: was a silent `false` fallthrough typed COLOR |
-| `chart.fg_color` | var | ❌ Unsupported | Hard-reject via `UNSUPPORTED_MEMBERS` (`support_checker.py`) | 2026-06-10: same |
+| `chart.bg_color` | var | ⏭️ Parse-and-skip | Cosmetic read (`COSMETIC_MEMBERS` in `support_checker.py`): a warning and a default colour | |
+| `chart.fg_color` | var | ⏭️ Parse-and-skip | Cosmetic read (`COSMETIC_MEMBERS` in `support_checker.py`): a warning and a default colour | |
 | `chart.is_heikinashi` | var | 🔧 Transpiler | Constant `false` emitted by `visit_expr` | Sprint E |
 | `chart.is_kagi` | var | 🔧 Transpiler | Constant `false` | Sprint E |
 | `chart.is_linebreak` | var | 🔧 Transpiler | Constant `false` | Sprint E |
@@ -130,8 +130,8 @@
 | `chart.is_range` | var | 🔧 Transpiler | Constant `false` | Sprint E |
 | `chart.is_renko` | var | 🔧 Transpiler | Constant `false` | Sprint E |
 | `chart.is_standard` | var | 🔧 Transpiler | Constant `true` (engine always batches standard OHLCV) | Sprint E |
-| `chart.left_visible_bar_time` | var | ❌ Unsupported | Hard-reject via `UNSUPPORTED_MEMBERS` (`support_checker.py`) | Viewport/UI concept; no batch equivalent |
-| `chart.right_visible_bar_time` | var | ❌ Unsupported | Hard-reject via `UNSUPPORTED_MEMBERS` (`support_checker.py`) | Viewport/UI concept; no batch equivalent |
+| `chart.left_visible_bar_time` | var | ⏭️ Parse-and-skip | Cosmetic read (`COSMETIC_MEMBERS` in `support_checker.py`): a warning and `0` | Viewport/UI concept; no batch equivalent |
+| `chart.right_visible_bar_time` | var | ⏭️ Parse-and-skip | Cosmetic read (`COSMETIC_MEMBERS` in `support_checker.py`): a warning and `0` | Viewport/UI concept; no batch equivalent |
 
 ### Variables — dividends / earnings / splits
 
@@ -161,12 +161,12 @@
 | Identifier | Kind | Status | Backing | Notes |
 |---|---|---|---|---|
 | `session.isfirstbar` | var | ✅ Runtime | `session_isfirstbar_` on the Pine host, selected by `scheduler_update_session_state` (`src/source/pine_strategy_host.cpp`) from the kernel's `NativeDecisionContext::opens_session_day` (R5 lane F5), widened on an extended-hours chart to the first pre-market bar of the day (`update_extended_session_day`, `tests/test_session_extended_day_tape.cpp`); the first bar of a session DAY — its predecessor was out of session or belonged to another session day; on a 1D+ chart every bar (the bar is its whole session) | Sprint A |
-| `session.isfirstbar_regular` | var | ✅ Runtime | The regular session day's first bar, `PineStrategyHost::session_isfirstbar_regular_` (the kernel's `opens_session_day`); on an extended-hours chart `session.isfirstbar` is the pre-market's first bar instead. The transpiler still lowers it to `session.isfirstbar`'s member, so generated code reads the chart's day there until it routes the `_regular` spelling | Sprint A |
+| `session.isfirstbar_regular` | var | ✅ Runtime | The regular session day's first bar, `PineStrategyHost::session_isfirstbar_regular_` (the kernel's `opens_session_day`); on an extended-hours chart `session.isfirstbar` is the pre-market's first bar instead. The transpiler lowers it to that member | Sprint A |
 | `session.islastbar` | var | ✅ Runtime | `session_islastbar_` on the Pine host, same selection, from `NativeDecisionContext::closes_session_day` (`closes_session_day_open_ended` on a live probe's forming bar), widened on an extended-hours chart to the last post-market bar of the day; the last bar of a session DAY — a one-bar lookahead whose successor is out of session or belongs to another session day, as TradingView's tapes flag it (`tests/fixtures/session_islastbar`); on a 1D+ chart every bar (the bar is its whole session). Where the run holds TradingView's calendar for the symbol (`PineStrategyHost::set_symbol_calendar`, the harness's `PINEFORGE_RUN_SESSION_CALENDAR`), a regular intraday bar is last when the calendar's next slot opens another day: OANDA:XAUUSD's calendar goes on past the feed's early closes (`tests/fixtures/symbol_calendar`) | Sprint A |
-| `session.islastbar_regular` | var | ✅ Runtime | The regular session day's last bar, `PineStrategyHost::session_islastbar_regular_`; on an extended-hours chart `session.islastbar` is the post-market's last bar instead. Lowered to `session.islastbar`'s member by the transpiler, as above | Sprint A |
-| `session.ismarket` | var | ✅ Runtime | On the chart, the session calendar asked at the bar's open (the transpiler's own helper over `native_calendar::session_day_at`), which reads a masked overnight session's Sunday open and a `0000-2400` day as TradingView's tapes do; always true on a 1D+ chart, as TradingView documents. Inside a `request.security` payload it is `pine_session_ismarket(session, tz, bar_ms, chart_tf)` in `session_time.hpp` (via `source::PineStrategyHost::pine_session_ismarket`), which misses every Sunday open of a weekday-masked overnight session (`1700-1600:23456`) and every bar of `0000-2400` (`tests/test_session_ismarket_tape.cpp`). A reading at the bar's open puts a bar that opens inside a break out of market, where TradingView and the kernel's `in_session` hold it in market (`tests/test_session_break_open_bar_tape.cpp`) | Sprint A |
-| `session.ispostmarket` | var | ✅ Runtime | `pine_session_ispostmarket(...)` — standard ETH window `RTH_close-2000` local; always false on a 1D+ chart | Sprint A |
-| `session.ispremarket` | var | ✅ Runtime | `pine_session_ispremarket(...)` — standard ETH window `0400-RTH_open` local; always false on a 1D+ chart | Sprint A |
+| `session.islastbar_regular` | var | ✅ Runtime | The regular session day's last bar, `PineStrategyHost::session_islastbar_regular_`; on an extended-hours chart `session.islastbar` is the post-market's last bar instead. The transpiler lowers it to that member | Sprint A |
+| `session.ismarket` | var | ✅ Runtime | On the chart, the session calendar asked at the bar's open (the transpiler's own helper over `native_calendar::session_day_at`), which reads a masked overnight session's Sunday open and a `0000-2400` day as TradingView's tapes do; always true on a 1D+ chart, as TradingView documents. Inside a `request.security` payload it is `pine_session_ismarket(session, tz, bar_ms, chart_tf)` in `session_time.hpp` (via `source::PineStrategyHost::pine_session_ismarket`), which reads a weekday-masked overnight session's Sunday open (`1700-1600:23456`) and every bar of `0000-2400` in market, as TradingView does (`tests/test_session_ismarket_tape.cpp`). A reading at the bar's open puts a bar that opens inside a break out of market, where TradingView and the kernel's `in_session` hold it in market (`tests/test_session_break_open_bar_tape.cpp`) | Sprint A |
+| `session.ispostmarket` | var | ✅ Runtime | `pine_session_ispostmarket(...)` — from the session day's last close over every window to 20:00 local, on a bar not in session; none for a session that spans 24 hours or wraps midnight; always false on a 1D+ chart | Sprint A |
+| `session.ispremarket` | var | ✅ Runtime | `pine_session_ispremarket(...)` — from 04:00 local to the session day's first open over every window, on a bar not in session; none for a session that spans 24 hours or wraps midnight; always false on a 1D+ chart | Sprint A |
 
 ### Variables — strategy
 
@@ -181,7 +181,7 @@
 | `strategy.avg_winning_trade_percent` | var | ✅ Runtime | `avg_winning_trade_percent()` | |
 | `strategy.closedtrades` | var | ✅ Runtime | `trades_.size()` | |
 | `strategy.closedtrades.first_index` | var | 🔧 Transpiler | Hardcoded `0` (`visit_expr.py`, with explanatory comment) | Correct until the engine implements the 9000-trade-list cap (Pine only advances `first_index` when capping drops old trades) |
-| `strategy.equity` | var | ✅ Runtime | `current_equity()` | |
+| `strategy.equity` | var | ✅ Runtime | `current_equity() + open_profit(current_bar_.close)` | |
 | `strategy.eventrades` | var | ✅ Runtime | `eventrades_count_` incremented in `engine_orders.cpp` when trade.profit == 0 | Sprint F |
 | `strategy.grossloss` | var | ✅ Runtime | `gross_loss()` | |
 | `strategy.grossloss_percent` | var | ✅ Runtime | `grossloss_percent()` | |
@@ -194,7 +194,7 @@
 | `strategy.max_contracts_held_long` | var | ✅ Runtime | `max_contracts_held_long_` (gated on `position_side_ == LONG`) | Sprint F |
 | `strategy.max_contracts_held_short` | var | ✅ Runtime | `max_contracts_held_short_` (gated on `position_side_ == SHORT`) | Sprint F |
 | `strategy.max_drawdown` | var | ✅ Runtime | `max_drawdown_` | |
-| `strategy.max_drawdown_percent` | var | ✅ Runtime | `max_runup_percent()` (drawdown variant) | |
+| `strategy.max_drawdown_percent` | var | ✅ Runtime | `max_drawdown_percent()` | |
 | `strategy.max_runup` | var | ✅ Runtime | `max_runup_` | |
 | `strategy.max_runup_percent` | var | ✅ Runtime | `max_runup_percent()` | |
 | `strategy.netprofit` | var | ✅ Runtime | `net_profit()` | |
@@ -222,7 +222,7 @@
 | `syminfo.industry` | var | ⏭️ Parse-and-skip | Returns `na<std::string>()`; conditional-use warning emitted | Sprint G2; pineforge-data scope |
 | `syminfo.isin` | var | ⏭️ Parse-and-skip | Returns `na<std::string>()`; conditional-use warning emitted | Sprint G2; pineforge-data scope |
 | `syminfo.main_tickerid` | var | 🔧 Transpiler | Derived from `syminfo_.tickerid` via `_pf_derive_main_tickerid()` (strips futures `N!` suffix) | Sprint G2 (audit rescue) |
-| `syminfo.mincontract` | var | ⏭️ Parse-and-skip | Returns `na<double>()`; conditional-use warning emitted | Sprint G2 (audit fix) — was previously silently emitting 0; pineforge-data scope |
+| `syminfo.mincontract` | var | ⏭️ Parse-and-skip | `get_syminfo_metadata("mincontract")` — na until a feed injects; conditional-use warning emitted | Sprint G2 (audit fix) — was previously silently emitting 0; pineforge-data scope |
 | `syminfo.minmove` | var | ⏭️ Parse-and-skip | Returns `na<double>()` | Sprint G2 critical fix — was silently emitting 0 (field NOT in `SymInfo` struct, contrary to prior audit) |
 | `syminfo.mintick` | var | ✅ Runtime | `syminfo_.mintick` | |
 | `syminfo.pointvalue` | var | ✅ Runtime | `syminfo_.pointvalue` | |
@@ -265,7 +265,7 @@
 | `ta.obv` | var | ✅ Runtime | `ta::OBV` class (`ta_extremes_volume.cpp`) | |
 | `ta.pvi` | var | ✅ Runtime | `ta::PVI` class (`ta_extremes_volume.cpp`) | |
 | `ta.pvt` | var | ✅ Runtime | `ta::PVT` class (`ta_extremes_volume.cpp`) | |
-| `ta.tr` | var | ✅ Runtime | `ta::TR(handle_na=false)` class (`ta_oscillators.cpp`) | Property form (no args) |
+| `ta.tr` | var | ✅ Runtime | `ta::TR(handle_na=false)` class (`ta_volatility_trend.cpp`) | Property form (no args) |
 | `ta.vwap` | var | ✅ Runtime | `ta::VWAP` class (`ta_extremes_volume.cpp`) | Single-value daily anchor form |
 | `ta.wad` | var | ✅ Runtime | `ta::WAD` class (`ta_extremes_volume.cpp`) | |
 | `ta.wvad` | var | ✅ Runtime | `ta::WVAD` class (`ta_extremes_volume.cpp`) | |
@@ -439,9 +439,9 @@ All 6 `line.style_*` constants are **⏭️ Parse-and-skip** — drawing style c
 | `strategy.commission.cash_per_contract` | const | ✅ Runtime | `CommissionType::CASH_PER_CONTRACT` | |
 | `strategy.commission.cash_per_order` | const | ✅ Runtime | `CommissionType::CASH_PER_ORDER` | |
 | `strategy.commission.percent` | const | ✅ Runtime | `CommissionType::PERCENT` | |
-| `strategy.direction.all` | const | ✅ Runtime | `RiskDirection::BOTH` | |
-| `strategy.direction.long` | const | ✅ Runtime | `RiskDirection::LONG_ONLY` | |
-| `strategy.direction.short` | const | ✅ Runtime | `RiskDirection::SHORT_ONLY` | |
+| `strategy.direction.all` | const | ✅ Runtime | Integer `0` to `set_pine_risk_direction` | |
+| `strategy.direction.long` | const | ✅ Runtime | Integer `1` to `set_pine_risk_direction` | |
+| `strategy.direction.short` | const | ✅ Runtime | Integer `-1` to `set_pine_risk_direction` | |
 | `strategy.fixed` | const | ✅ Runtime | `QtyType::FIXED` | |
 | `strategy.long` | const | ✅ Runtime | `is_long=true` in order calls | |
 | `strategy.oca.cancel` | const | ✅ Runtime | `oca_type=1` | |
@@ -465,12 +465,13 @@ All 6 `line.style_*` constants are **⏭️ Parse-and-skip** — drawing style c
 
 ### Functions — array.* (54 entries)
 
-`array.*` functions are **🔧 Transpiler** — emitted against `std::vector<T>` by PineForge's transpiler. No runtime module. **Exception (2026-06-10):** the 6 drawing/color-typed constructors `array.new_color/_label/_line/_linefill/_box/_table` are **❌ Unsupported** — they reject loudly via the `SUPPORTED_ARRAY` whitelist in `support_checker.py` (previously they silently emitted `0`). Selected notes:
+`array.*` functions are **🔧 Transpiler** — emitted against `std::vector<T>` by PineForge's transpiler. No runtime module. **Exceptions:** `array.new_line/_box/_label/_linefill` hold `drawing.hpp` handles; `array.new_color` and `array.new_table` are **❌ Unsupported** — the `SUPPORTED_ARRAY` whitelist in `support_checker.py` rejects them. Selected notes:
 
 | Identifier | Notes |
 |---|---|
 | `array.new_bool/float/int/string()` | 🔧 Transpiler |
-| `array.new_color/label/line/linefill/box/table()` | ❌ Hard-reject (`SUPPORTED_ARRAY` whitelist, 2026-06-10) |
+| `array.new_line/box/label/linefill()` | 🔧 Transpiler; `std::vector` of `drawing.hpp` handles |
+| `array.new_color/table()` | ❌ Hard-reject (`SUPPORTED_ARRAY` whitelist) |
 | `array.new<type>()` | 🔧 Transpiler generic form |
 | `array.sort()` / `array.sort_indices()` | 🔧 Transpiler; `std::sort`; `sort` honors the `order` arg (2026-06-10) |
 | `array.stdev()` / `array.variance()` | 🔧 Transpiler; honor the optional `biased` arg (population vs n−1 sample) (2026-06-10) |
@@ -497,19 +498,19 @@ All 6 `line.style_*` constants are **⏭️ Parse-and-skip** — drawing style c
 
 ### Functions — box.* (27 entries)
 
-All **⏭️ Parse-and-skip** — drawing object methods; no runtime backing.
+`new`, the geometry getters and setters, `copy` and `delete` are **✅ Runtime** (the per-type arena in `drawing.hpp`); the visual setters (colour, style, width, text styling) are **⏭️ Parse-and-skip** with a warning.
 
 ### Functions — chart.point.* (5 entries)
 
-All **⏭️ Parse-and-skip** — chart geometry; no runtime backing.
+`new`, `now`, `from_index`, `from_time` and `copy` are **✅ Runtime**: `ChartPoint` aggregates (`drawing.hpp`).
 
 ### Functions — color.*
 
 | Identifier | Kind | Status | Backing | Notes |
 |---|---|---|---|---|
-| `color()` | fn | ❌ Unsupported | Hard-reject via `UNSUPPORTED_BARE_FUNCS` (`support_checker.py`) | Use `color.new(c, alpha)` / `color.rgb(r, g, b, transp)` |
+| `color()` | fn | ⏭️ Parse-and-skip | Cosmetic cast (`COSMETIC_BARE_FUNCS` in `support_checker.py`): a warning and a default colour | |
 | `color.b()` | fn | ✅ Runtime | `pine_color::b(c)` | |
-| `color.from_gradient()` | fn | ❌ Unsupported | Hard-reject via `HARD_REJECT_FUNC` (`support_checker.py`) | Charting helper; was a silent hardcoded `0` |
+| `color.from_gradient()` | fn | ⏭️ Parse-and-skip | Cosmetic (`COSMETIC_COLOR_FUNC` in `support_checker.py`): arguments evaluated, a warning and a default colour | Charting helper |
 | `color.g()` | fn | ✅ Runtime | `pine_color::g(c)` | |
 | `color.new()` | fn | ✅ Runtime | `pine_color::new_color(c, transp)` | |
 | `color.r()` | fn | ✅ Runtime | `pine_color::r(c)` | |
@@ -520,7 +521,7 @@ All **⏭️ Parse-and-skip** — chart geometry; no runtime backing.
 
 | Identifier | Kind | Status | Backing | Notes |
 |---|---|---|---|---|
-| `dayofmonth()` | fn | 🔧 Transpiler | `tz_time_field_lambda(field, ts, tz)` — same builder as the bare-variable form, so the two cannot drift | 1-arg form defaults tz to `syminfo_.timezone` per Pine spec; optional 2-arg tz honored |
+| `dayofmonth()` | fn | 🔧 Transpiler | `pine_<field>(ts, tz)` in `session_time.hpp` — the same engine helper as the bare-variable form, so the two cannot drift | 1-arg form defaults tz to `syminfo_.timezone` per Pine spec; optional 2-arg tz honored |
 | `dayofweek()` | fn | 🔧 Transpiler | Same | |
 | `hour()` | fn | 🔧 Transpiler | Same | |
 | `minute()` | fn | 🔧 Transpiler | Same | |
@@ -541,7 +542,7 @@ All **⏭️ Parse-and-skip** — chart geometry; no runtime backing.
 
 ### Functions — footprint.* (9 entries)
 
-All **❌ Unsupported** — hard-reject via `UNSUPPORTED_NAMESPACES` (`support_checker.py`): footprint requires tick-level data the engine does not consume.
+All **❌ Unsupported** — hard-reject via `UNSUPPORTED_NAMESPACES` (`support_checker.py`): footprint requires tick-level data the engine does not consume. On codegen-oss main one member is read: `delta()` (`footprint.delta(fp)`) of a footprint that another symbol's `request.security` returns, from that symbol's pinned feed column; every other member is refused by name.
 
 ### Functions — input.*
 
@@ -566,15 +567,15 @@ All **❌ Unsupported** — hard-reject via `UNSUPPORTED_NAMESPACES` (`support_c
 
 ### Functions — label.* (20 entries)
 
-All **⏭️ Parse-and-skip** — drawing object methods; no runtime backing.
+`new`, the geometry getters and setters, `copy` and `delete` are **✅ Runtime** (the per-type arena in `drawing.hpp`); the visual setters (colour, style, width, text styling) are **⏭️ Parse-and-skip** with a warning.
 
 ### Functions — line.* (20 entries)
 
-All **⏭️ Parse-and-skip** — drawing object methods; no runtime backing.
+`new`, the geometry getters and setters, `copy` and `delete` are **✅ Runtime** (the per-type arena in `drawing.hpp`); the visual setters (colour, style, width, text styling) are **⏭️ Parse-and-skip** with a warning.
 
 ### Functions — linefill.* (5 entries)
 
-All **⏭️ Parse-and-skip** — drawing object methods; no runtime backing.
+`new`, the geometry getters and setters, `copy` and `delete` are **✅ Runtime** (the per-type arena in `drawing.hpp`); the visual setters (colour, style, width, text styling) are **⏭️ Parse-and-skip** with a warning.
 
 ### Functions — log.*
 
@@ -641,7 +642,7 @@ All **✅ Runtime** — backed by `PineMatrix` (`matrix.hpp` / `matrix.cpp`) for
 
 | Identifier | Kind | Status | Backing | Notes |
 |---|---|---|---|---|
-| `max_bars_back()` | fn | ❌ Unsupported | Hard-reject via `NOT_YET_FUNC` (`support_checker.py`) | Was silently dropped by codegen |
+| `max_bars_back()` | fn | 🔧 Transpiler | Sizes the `Series<T>` ring buffers to the requested depth (`Series<T>(int max_len)`) | |
 | `na()` | fn | ✅ Runtime | `na<T>()` in `na.hpp` | |
 | `nz()` | fn | 🔧 Transpiler | `is_na(x) ? 0.0 : x` inline | |
 
@@ -668,16 +669,16 @@ All **✅ Runtime** — backed by `PineMatrix` (`matrix.hpp` / `matrix.cpp`) for
 | Identifier | Kind | Status | Backing | Notes |
 |---|---|---|---|---|
 | `request.currency_rate()` | fn | ❌ Unsupported | Rejected at transpile | No FX data feed |
-| `request.dividends()` | fn | ❌ Unsupported | Rejected at transpile | No fundamentals feed |
-| `request.earnings()` | fn | ❌ Unsupported | Rejected at transpile | No fundamentals feed |
+| `request.dividends()` | fn | ❌ Unsupported (codegen v0.10.4) | v0.10.4 rejects it at transpile; codegen-oss main reads TradingView's recorded answers by request key (`strategy_set_recorded_series`) and `na` when the value reaches only display sinks | No fundamentals feed |
+| `request.earnings()` | fn | ❌ Unsupported (codegen v0.10.4) | v0.10.4 rejects it at transpile; codegen-oss main reads TradingView's recorded answers by request key (`strategy_set_recorded_series`) and `na` when the value reaches only display sinks | No fundamentals feed |
 | `request.economic()` | fn | ❌ Unsupported | Rejected at transpile | No macro data feed |
-| `request.financial()` | fn | ❌ Unsupported | Rejected at transpile | No fundamentals feed |
-| `request.footprint()` | fn | ❌ Unsupported | Footprint data not supported | |
+| `request.financial()` | fn | ❌ Unsupported (codegen v0.10.4) | v0.10.4 rejects it at transpile; codegen-oss main reads TradingView's recorded answers by request key (`strategy_set_recorded_series`) and `na` when the value reaches only display sinks | No fundamentals feed |
+| `request.footprint()` | fn | ❌ Unsupported (codegen v0.10.4) | On codegen-oss main: `na` when the value reaches only display sinks; `delta()` of a footprint that is another symbol's whole `request.security` expression reads that symbol's pinned feed column; otherwise the run stops where it is read | TradingView's delta depends on the chart range |
 | `request.quandl()` | fn | ❌ Unsupported | Deprecated upstream; rejected | |
-| `request.security()` | fn | ✅ Runtime | `SecurityEvalState` + full TF aggregation machinery | Same-symbol MTF + higher-TF aggregation |
+| `request.security()` | fn | ✅ Runtime | `SecurityEvalState` + full TF aggregation machinery | Same-symbol MTF + higher-TF aggregation; another symbol's installed bars (`strategy_set_symbol_feed`, XSYM-D), which codegen-oss main lowers onto (not in a release yet) |
 | `request.security_lower_tf()` | fn | ✅ Runtime | Lower-TF emulation via `synthesize_lower_tf_bars` | Intraday same-symbol only |
 | `request.seed()` | fn | ❌ Unsupported | TV-infrastructure-dependent; rejected | |
-| `request.splits()` | fn | ❌ Unsupported | Rejected at transpile | No corporate actions feed |
+| `request.splits()` | fn | ❌ Unsupported (codegen v0.10.4) | v0.10.4 rejects it at transpile; codegen-oss main reads TradingView's recorded answers by request key (`strategy_set_recorded_series`) and `na` when the value reaches only display sinks | No corporate actions feed |
 
 ### Functions — runtime.error
 
@@ -737,7 +738,7 @@ All **✅ Runtime** — backed by `PineMatrix` (`matrix.hpp` / `matrix.cpp`) for
 | `strategy.closedtrades.size()` | fn | ✅ Runtime | Trade accessor | |
 | `strategy.convert_to_account()` | fn | 🔧 Transpiler | Identity (no FX conversion) | |
 | `strategy.convert_to_symbol()` | fn | 🔧 Transpiler | Identity (no FX conversion) | |
-| `strategy.default_entry_qty()` | fn | ✅ Runtime | `default_qty_value_` | |
+| `strategy.default_entry_qty()` | fn | ❓ Unknown | Codegen emits `calc_qty(fill_price)`, which engine `35db01c8` does not define | |
 | `strategy.entry()` | fn | ✅ Runtime | `strategy_entry()` — full OCA/pyramid/deferred-flip | |
 | `strategy.exit()` | fn | ✅ Runtime | `strategy_exit()` — trail/limit/stop exits | |
 | `strategy.opentrades.commission()` | fn | ✅ Runtime | Open-trade accessor | |
@@ -754,12 +755,12 @@ All **✅ Runtime** — backed by `PineMatrix` (`matrix.hpp` / `matrix.cpp`) for
 | `strategy.opentrades.profit_percent()` | fn | ✅ Runtime | Open-trade accessor | |
 | `strategy.opentrades.size()` | fn | ✅ Runtime | Open-trade accessor | |
 | `strategy.order()` | fn | ✅ Runtime | `strategy_order()` — raw pending order | |
-| `strategy.risk.allow_entry_in()` | fn | ✅ Runtime | `risk_direction_` | |
-| `strategy.risk.max_cons_loss_days()` | fn | ✅ Runtime | `risk_max_cons_loss_days_` | |
-| `strategy.risk.max_drawdown()` | fn | ✅ Runtime | `risk_max_drawdown_` | |
-| `strategy.risk.max_intraday_filled_orders()` | fn | ✅ Runtime | `max_intraday_filled_orders_` | |
-| `strategy.risk.max_intraday_loss()` | fn | ✅ Runtime | `risk_max_intraday_loss_` | |
-| `strategy.risk.max_position_size()` | fn | ✅ Runtime | `risk_max_position_size_` | |
+| `strategy.risk.allow_entry_in()` | fn | ✅ Runtime | `PineStrategyHost::set_pine_risk_direction` | |
+| `strategy.risk.max_cons_loss_days()` | fn | ✅ Runtime | `PineStrategyHost::set_pine_risk_max_cons_loss_days` | |
+| `strategy.risk.max_drawdown()` | fn | ✅ Runtime | `PineStrategyHost::set_pine_risk_max_drawdown` | |
+| `strategy.risk.max_intraday_filled_orders()` | fn | ✅ Runtime | `PineStrategyHost::set_pine_risk_max_intraday_filled_orders` | |
+| `strategy.risk.max_intraday_loss()` | fn | ✅ Runtime | `PineStrategyHost::set_pine_risk_max_intraday_loss` | |
+| `strategy.risk.max_position_size()` | fn | ✅ Runtime | `PineStrategyHost::set_pine_risk_max_position_size` | |
 
 ### Functions — syminfo.prefix / syminfo.ticker (function forms)
 
@@ -840,7 +841,7 @@ All **⏭️ Parse-and-skip** — table drawing methods; no runtime backing.
 
 | Identifier | Kind | Status | Backing | Notes |
 |---|---|---|---|---|
-| `ticker.heikinashi()` | fn | ❌ Unsupported | Hard-reject: "chart-type modifier not supported" | Sprint G2 explicit reject (was blanket namespace reject) |
+| `ticker.heikinashi()` | fn | ✅ Runtime | The chart's own symbol only: the Pine host applies the Heikin-Ashi candle inside the same-symbol `request.security` eval; another symbol's is refused | |
 | `ticker.inherit()` | fn | 🔧 Transpiler | Passthrough — emits `symbol` argument unchanged | Sprint G2 rescue (same-symbol passthrough is valid) |
 | `ticker.kagi()` | fn | ❌ Unsupported | Hard-reject | Sprint G2 |
 | `ticker.linebreak()` | fn | ❌ Unsupported | Hard-reject | Sprint G2 |
@@ -875,14 +876,14 @@ All **❌ Unsupported** — hard-reject via `UNSUPPORTED_NAMESPACES` (`support_c
 | `for` | kw | 🔧 Transpiler | C++ `for` | |
 | `for...in` | kw | 🔧 Transpiler | Range-based for | |
 | `if` | kw | 🔧 Transpiler | C++ `if` | |
-| `import` | kw | ❌ Unsupported | Library system not implemented | |
+| `import` | kw | 🔧 Transpiler | On codegen-oss main (not in a release yet): the library source handed to `transpile(..., libraries=...)` is inlined; a built-in namespace import naming only built-ins is a no-op | |
 | `method` | kw | 🔧 Transpiler | UDT method generation | |
 | `not` | kw | 🔧 Transpiler | C++ `!` | |
 | `or` | kw | 🔧 Transpiler | C++ `||` | |
 | `switch` | kw | 🔧 Transpiler | C++ `switch` | |
 | `type` | kw | 🔧 Transpiler | UDT struct generation | |
 | `var` | kw | 🔧 Transpiler | Persistent variable (static in on_bar) | |
-| `varip` | kw | ❌ Unsupported | Hard-reject in `support_checker` (`is_varip` → error) | 2026-05-29 (codegen#13): warn-then-emit-as-var replaced by a loud reject — no intrabar ticks in batch mode; replace with `var` if logic doesn't depend on intrabar state |
+| `varip` | kw | 🔧 Transpiler | On codegen-oss main (not in a release yet; v0.10.4 rejects it): kept like `var` on historical bars and left out of the `calc_on_order_fills` rollback | 2026-05-29 (codegen#13) made it a loud reject; 2026-09-28 (29bfd21) accepts it |
 | `while` | kw | 🔧 Transpiler | C++ `while` | |
 
 ### Operators
@@ -934,6 +935,8 @@ These identifiers are rejected at transpile time with a loud error or produce a 
 
 ### Fundamentals and external data (hard reject)
 
+The released codegen (v0.10.4) rejects every call below. On pineforge-codegen main (not in a release yet) `request.financial`, `dividends`, `earnings` and `splits` read TradingView's recorded answers by request key instead (`strategy_set_recorded_series`), and read `na` when their value reaches only plots and alerts.
+
 - `request.financial(symbol, field, period)` — fundamental data fetch. No external data feed; transpiler rejects.
 - `request.dividends(ticker, field, gaps, lookahead, ignore_startbar, currency)` — corporate action data. Rejected.
 - `request.earnings(ticker, field, gaps, lookahead, ignore_startbar, currency)` — earnings data. Rejected.
@@ -953,21 +956,21 @@ These identifiers are rejected at transpile time with a loud error or produce a 
 
 ### Realtime-only variables (always na or false)
 
-- `ask` / `bid` — live order book; no feed. Always na.
-- `timenow` — live clock. Batch mode has no "now". Always na.
-- `chart.left_visible_bar_time` / `chart.right_visible_bar_time` — viewport concept; **rejects loudly at transpile** (`UNSUPPORTED_MEMBERS`), as do `chart.bg_color` / `chart.fg_color`.
+- `ask` / `bid` — live order book; no feed. Rejected at transpile.
+- `timenow` — no live clock: it reads the current bar's `time`, with a warning.
+- `chart.left_visible_bar_time` / `chart.right_visible_bar_time` — viewport concept; a warning and `0` (`COSMETIC_MEMBERS`); `chart.bg_color` / `chart.fg_color` read a default colour.
 
-### varip (keyword — hard reject)
+### varip (keyword)
 
-**2026-05-29 update (supersedes the Sprint C warn-then-emit behaviour):** `varip` declarations now **reject loudly** at transpile (`support_checker.py`, PR codegen#13). PineForge batch backtests have no intrabar ticks, so silently demoting `varip` to `var` could mask intent in strategies whose logic depends on intrabar state. The error message suggests replacing `varip` with `var` when the logic does not depend on intrabar updates. Both corpus probes that used `varip` were removed.
+pineforge-codegen main accepts `varip` (not in a release yet; v0.10.4 still rejects it at transpile, the 2026-05-29 codegen#13 behaviour): a historical bar executes once, so a `varip` keeps its value like `var`, and it is left out of the `calc_on_order_fills` rollback.
 
-### Library system (hard reject)
+### Library system
 
-`import`, `export`, `library()` — the library resolver is not implemented. Pre-inline library code as a workaround.
+`library()` scripts and a stray `export` in a strategy are refused. The released codegen (v0.10.4) refuses every `import`; pineforge-codegen main inlines an imported library whose source the caller hands `transpile(..., libraries=...)`.
 
 ### Drawing / plotting (parse-and-skip — silent)
 
-`plot`, `plotshape`, `plotchar`, `plotcandle`, `plotbar`, `plotarrow`, `fill`, `hline`, `bgcolor`, `barcolor`, all `label.*` / `line.*` / `box.*` / `table.*` / `polyline.*` / `linefill.*` methods — these compile silently; no visual output is emitted. **Strategies that only use these for display will run correctly for backtesting purposes.** Strategies that use the _return values_ of `label.new()` / `line.new()` / etc. to store state will compile but those objects will be null/no-op references.
+`plot`, `plotshape`, `plotchar`, `plotcandle`, `plotbar`, `plotarrow`, `fill`, `hline`, `bgcolor`, `barcolor`, all `table.*` / `polyline.*` methods and the visual setters of `label.*` / `line.*` / `box.*` / `linefill.*` — these compile silently; no visual output is emitted. **Strategies that only use these for display will run correctly for backtesting purposes.** The geometry of `label.new()` / `line.new()` / `box.new()` / `linefill.new()` objects is real state (`drawing.hpp`): a strategy that stores and reads it back reads what it wrote; only their visual setters are no-ops.
 
 ### Alert functions (parse-and-skip — silent)
 
@@ -1029,9 +1032,9 @@ buckets. Full final-state release notes: [v0.5.0 release](https://github.com/pin
 
 ### Engine bug filed during sprint
 
-- **GitHub Issue [#16](https://github.com/pineforge-4pass/pineforge-engine/issues/16):** `max_intraday_filled_orders` cap-day boundary uses `chart_timezone` instead of exchange `syminfo.timezone`. Workaround shipped: validator `engine_chart_timezone` override key (per-probe). Long-term fix blocked on pineforge-data integration.
+- **GitHub Issue [#16](https://github.com/pineforge-4pass/pineforge-engine/issues/16):** `max_intraday_filled_orders` cap-day boundary uses `chart_timezone` instead of exchange `syminfo.timezone`. Workaround shipped: validator `engine_chart_timezone` override key (per-probe). The issue was closed on 2026-05-24.
 
-### Validator workflow improvements (pineforge-utils)
+### Validator workflow improvements (the maintainers' private validator)
 
 - Eigen auto-detect at homebrew/macports/apt paths — recovered 6 matrix probes regressing to compile-fail.
 - New `engine_chart_timezone` key in `inputs.json` schema for per-probe override of `_engine_chart_tz_for_csv_tz` auto-derivation.

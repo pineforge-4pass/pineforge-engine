@@ -1,5 +1,11 @@
 # Pine intraday cap: temporary engine-side compatibility
 
+> **Historical record.** This note describes the checkpoint that extracted the
+> cap inside `BacktestEngine`. R4-C (#253) removed `max_intraday_filled_orders_`
+> and moved the cap into the Pine adapter (`PineExecutionAdapter::cap`,
+> `include/pineforge/source/pine_adapter.hpp`); generated risk statements now call
+> `PineStrategyHost::set_pine_risk_max_intraday_filled_orders`.
+
 `compat::pine::IntradayCap` owns the active cap configuration, clock choice,
 quota/latch, close/reversal beneficiary, and close timing/price decisions.
 It lives temporarily under `include/pineforge/compat/pine/`. This checkpoint
@@ -10,8 +16,8 @@ The paired codegen explicitly selects this compatibility component in the
 `GeneratedStrategy` constructor. Current codegen uses the scoped
 `attach_pine_execution_adapter()` hook for cap and retained-parent priority,
 with a guarded cap-only fallback for older engines; see
-[pairing and regeneration](pine-order-priority-boundary.md). Risk statements still
-assign `max_intraday_filled_orders_ = (int)(expression)` at execution time;
+[pairing and regeneration](pine-order-priority-boundary.md). Risk statements
+call `set_pine_risk_max_intraday_filled_orders((int)(expression))` at execution time;
 selecting a component does not evaluate or hoist a risk statement.
 
 ## Source facade and native scope
@@ -125,11 +131,9 @@ this source migration; nested coverage is checked without config waivers.
 ## Validation boundary
 
 Local evidence is restricted to compilation and literal native/metadata tests,
-including the real C ABI transport and source-assignment shape. Corpus/Pine
-replays, local grading, TV exports and Cloud submission are excluded here.
-Independent Grok, unchanged fixed Cloud controls and full regression/gate
-verification remain root-owned requirements before any parity or publication
-claim.
+including the real C ABI transport and source-assignment shape. It is not
+TradingView parity evidence; parity is measured separately
+([the corpus gate](ci.md#tradingview-parity-the-corpus-gate)).
 
 ## Internal pairing and observable-state version 4
 

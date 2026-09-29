@@ -65,9 +65,9 @@ Two consequences that are easy to miss:
 | Add a generic broker/matching capability | the kernel (`src/engine_*`, `src/native_*`) | make it opt-in, add its ADR 0001 ruling row, add a kernel-only test, and add an `examples/native/` host if the ruling is *native-only* |
 | Add or change a TA class | the right `ta_*.cpp` partition + its declaration in `<pineforge/ta.hpp>` | add a unit test against a hand-computed series |
 | Change what codegen may emit | the contract, not this repo's runtime | say so in the PR; the transpiler lives in `pineforge-codegen-oss` |
-| Add a runtime `PF_API` export | `src/c_abi.cpp` + `include/pineforge/pineforge.h` | update `EXPECTED_RUNTIME` check_c_abi_runtime.py:29, the ctypes harnesses, and the README symbol table — all in the same commit |
-| Add a C kernel-driving export | `src/native_c_host.cpp` + `include/pineforge/native_c_api.h` | update that header's COVERAGE block, and retire the 1.0 C boundary row the export closes; `scripts/check_native_c_api_surface.py` proves the block is exactly the host's public surface and fails on a closed gap |
-| Document something | `docs/pages/`, `README.md`, this file | cite the tree by `file:line`; the anchor guard checks that the line still holds the symbol |
+| Add a runtime `PF_API` export | `src/c_abi.cpp` + `include/pineforge/pineforge.h` | update `EXPECTED_RUNTIME` check_c_abi_runtime.py:29 and its two declaration counts, the ctypes harnesses, the README symbol table and every page that states the export counts — all in the same commit |
+| Add a C kernel-driving export | `src/native_c_host.cpp` + `include/pineforge/native_c_api.h` | add it to `EXPECTED_NATIVE_C_API` (and its two counts) in `scripts/check_c_abi_runtime.py`, update that header's COVERAGE block, and retire the 1.0 C boundary row the export closes; `scripts/check_native_c_api_surface.py` proves the block is exactly the host's public surface and fails on a closed gap |
+| Document something | `docs/pages/`, `README.md`, this file | cite the tree by `path:line`; the anchor guard checks that the line still holds the symbol |
 
 ## Development setup
 
@@ -81,8 +81,14 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-You need CMake ≥ 3.16, a C++17 compiler (GCC ≥ 9, Clang ≥ 10, Apple Clang ≥ 12),
-Python 3 and Eigen 3.3+ (fetched automatically if absent). On Debian/Ubuntu also
+You need CMake ≥ 3.16 (3.20 for `ctest --test-dir`), a C++17 compiler whose standard
+library has floating-point `std::to_chars` (libstdc++ from GCC 11 or later, or libc++ 14
+or later; on macOS a deployment target of 13.3 or later),
+Python 3 and Eigen 3.3+ (fetched automatically if absent). The corpus's 1m
+feed is a Git LFS object, so install Git LFS (`git lfs install`) before the
+submodule update; `ci_preflight.py` needs actionlint 1.7.12 and ShellCheck;
+the `kernel` profile of `ci_verify.py` also builds the native live runner,
+which needs SQLite3, libcurl ≥ 7.86 and OpenSSL. On Debian/Ubuntu also
 install `tzdata-legacy` (`sudo apt-get install -y tzdata-legacy`): noble split
 the backward zone links out of `tzdata`, and `test_native_calendar` resolves
 `US/Eastern`, `Japan` and `GB`.
@@ -143,7 +149,7 @@ What each gate refuses:
 | `check_adapter_spec_shadowing.py` | the adapter setting a kernel field it is ruled not to set |
 | `check_twin_parity.py` | a frozen test assertion rewritten instead of a behaviour change being argued |
 | `check_rng_draw_order.py` | two random draws in one call's arguments or one operator's operands, whose order the compiler picks (x86-64 GCC and AppleClang would test different batteries) |
-| `check_doc_anchors.py` | a `file:line` citation that no longer points at the symbol it claims |
+| `check_doc_anchors.py` | a `path:line` citation that no longer points at the symbol it claims |
 | `check_doc_lint.py` | a stale epoch, a roadmap label or a "there is no … yet" claim the tree has falsified | <!-- verified HEAD -->
 | `check_pine_to_native_coverage.py` | a Pine builtin with no row on the migration page |
 | `check_doc_reverts.py` | a published sentence deleted, or older wording restored over newer, by a commit whose message does not name it (by the lane label or hash of the commit that wrote it, or by six of its words) |
@@ -188,8 +194,9 @@ A refresh is deliberate and carries its evidence in the same commit:
 python3 scripts/corpus_trades_identity.py --update
 ```
 
-The subset runs as a required check on a pull request; the full sweep runs
-nightly and on demand. The details, including which 54 probes and why, are in
+On a pull request the subset runs as advisory CI; the full sweep runs nightly
+and on demand, and the maintainers' own parity verification posts the
+`pineforge/parity` status the merge gate requires. The details, including which 54 probes and why, are in
 `docs/ci.md`.
 
 ### "Expectation corrected"
@@ -227,7 +234,7 @@ Two different promises:
 
 ## Coding style
 
-- C++17. No `std::filesystem`, no `<format>`. Yes to structured bindings,
+- C++17. No `std::filesystem`, no `<format>` in the library (`src/`, `include/`; the optional runner uses `std::filesystem`). Yes to structured bindings,
   `if constexpr`, `std::optional`.
 - 4-space indent, no tabs, 100-column soft limit; `.clang-format` is canonical.
 - `lower_snake_case` functions and members, `PascalCase` types.
@@ -283,9 +290,12 @@ A pull request body has two parts and no third:
   line of your new test, the `ci_verify` summary lines for both profiles, the
   parity result, the floor numbers if they moved. Paste it; do not summarise it.
 
-All CI must pass before merge: build on Ubuntu + macOS in Release and Debug,
-sanitizers, ctest, the source guards, the install/`find_package` smoke test, and
-the parity subset.
+The merge gate is two commit statuses on the PR head, `pineforge/verify` and
+`pineforge/parity`, which the maintainers post after running the full
+`ci_verify.py` profiles and their parity verification on it. The GitHub Actions
+jobs (build on Ubuntu + macOS in Release and Debug, sanitizers, ctest, the source
+guards, the install/`find_package` smoke test and the parity subset) are
+advisory.
 
 ### How a parity campaign gates a merge
 
@@ -313,16 +323,17 @@ License 2.0 (the same license as the rest of the project). See
 ## Maintainer: release checklist
 
 1. **Submodule pins** — bump `corpus/` and `benchmarks/assets` to the intended
-   commits and verify both upstream tags resolve under their published
-   Apache-2.0 trees. [LEGAL.md](LEGAL.md) describes the submodule split.
+   commits and verify both commits are published on the public upstream
+   repositories (`pineforge-benchmarks-assets` has no tags; its `LEGAL.md`
+   states Apache-2.0). [LEGAL.md](LEGAL.md) describes the submodule split.
 2. **Secrets** — no API keys, `.env`, or machine-specific paths in tracked
    files; keep `benchmarks/_workdir`, `.venv` and `node_modules` untracked.
 3. **Notices** — keep [NOTICE](NOTICE) aligned with anything linked into
    `libpineforge` (e.g. Eigen). Update [LEGAL.md](LEGAL.md) if you add a new
    mandatory runtime dependency.
 4. **Benchmark AGPL** — optional `benchmarks/` tooling installs AGPL-covered
-   PineTS. Default CI stays on ctest only so a minimal clone is not forced to
-   pull AGPL into the library build.
+   PineTS. Default CI installs none of the benchmark tooling, so a minimal clone
+   never pulls AGPL into the library build.
 5. **Cut the release** — dispatch `.github/workflows/release.yml` (Actions →
    Release → Run workflow); rehearse with `dry_run` first. A dry run computes
    the version with `scripts/release_version.py`, builds, installs, verifies

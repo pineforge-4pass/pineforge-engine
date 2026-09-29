@@ -64,7 +64,8 @@ typedef struct pf_report_s {
 
 @note The `metrics` / `equity_curve` fields were appended in **ABI
 version 2** (`PF_ABI_VERSION`). `pf_report_t` is caller-allocated, so
-consumers must check `pf_abi_version() == 4` before running — a `.so`
+consumers must check `pf_abi_version() == 4` (main; a v0.13.1 `.so`, the
+last tagged release, answers 3) before running — a `.so`
 with no `pf_abi_version` symbol is ABI v1 and predates these fields.
 **ABI version 3** appends `pf_trade_t::open_at_end`, the range-end close
 flag; a v2 reader would misindex the trades array. **ABI version 4**
@@ -92,8 +93,10 @@ typedef struct pf_trade_s {
     double  pnl_pct;        /* net return-on-cost: pnl / (entry_price*qty*pointvalue) * 100
                                (TV "Net P&L %" convention) */
     int     is_long;        /* 1 = long, 0 = short */
-    double  max_runup;      /* peak favorable price travel ($/unit qty) */
-    double  max_drawdown;   /* peak adverse price travel ($/unit qty) */
+    double  max_runup;      /* peak favorable whole-trade excursion,
+                               account ccy, net of entry fees */
+    double  max_drawdown;   /* peak adverse whole-trade excursion,
+                               account ccy, net of entry fees */
     double  qty;            /* filled quantity */
     double  commission;     /* ABI v2: entry+exit commission deducted from pnl */
     int32_t entry_bar_index;/* ABI v2: script-bar index of entry fill (0-based) */
@@ -104,9 +107,9 @@ typedef struct pf_trade_s {
 } pf_trade_t;
 ```
 
-`max_runup` and `max_drawdown` are the **per-unit** Maximum Favorable
-Excursion (MFE) and Maximum Adverse Excursion (MAE) for the trade —
-multiply by `qty` to recover the dollar values.
+`max_runup` and `max_drawdown` are the trade's whole-position Maximum
+Favorable Excursion (MFE) and Maximum Adverse Excursion (MAE) in account
+currency, net of entry fees — already scaled by `qty` and the point value.
 
 ## Bar processing
 
@@ -151,7 +154,9 @@ The runtime tracks each site independently.
 A "sub-bar" is one synthetic intra-bar OHLC slice; a "sample tick" is
 one fill-resolution probe within that slice. With the default
 `PF_MAGNIFIER_ENDPOINTS` distribution and `magnifier_samples = 4`,
-expect `~4 * input_bars_processed` sample ticks.
+expect four sample ticks per sub-bar: `~4 * input_bars_processed` when the
+magnifier walks the input bars, fewer when a Pine strategy walks
+TradingView's coarser intrabars (see [Bar magnifier](@ref magnifier)).
 
 See [Bar magnifier](@ref magnifier) for the full sampling model.
 
@@ -168,10 +173,10 @@ Populated only when:
 | `trace[i].bar_index` | Zero-based bar index within the run. |
 | `trace[i].name_id` | Index into `trace_names`. |
 | `trace[i].value` | Traced expression value on this bar. |
-| `trace_names[k]` | Name string for `name_id == k`. Lifetime: until #strategy_free. |
+| `trace_names[k]` | Name string for `name_id == k`. Lifetime: until the next run on the handle, or #strategy_free. |
 
-Trace records are zero-cost when disabled — no allocation, no
-formatting, no per-bar branch.
+Trace records cost one branch per traced call when disabled — no
+buffer, no formatting.
 
 ## Metrics (ABI v2)
 
@@ -259,10 +264,11 @@ Every heap pointer in `pf_report_t` is freed by a single call to
 pf_report_t r = {0};
 run_backtest(s, bars, n, &r);
 /* ... use r ... */
-report_free(&r);   /* frees trades, security_diag, trace, equity_curve */
+report_free(&r);   /* frees trades, security_diag, trace, trace_names,
+                      equity_curve, broker_state_hash */
 ```
 
 @warning `trace_names` points into a string table owned by the **strategy
-handle**, not the report. The pointer is valid until #strategy_free is
-called on the handle that produced it. If you keep trace data past
+handle**, not the report. The pointer is valid until the next run on, or #strategy_free of, the
+handle that produced it: each run clears the table. If you keep trace data past
 that, copy the strings out first.

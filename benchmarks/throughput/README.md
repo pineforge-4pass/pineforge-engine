@@ -26,15 +26,15 @@ Below is the boxplot chart showing the distribution of backtest throughput acros
 
 *Last measured 2026-09-22 on an Apple M4 Max (16 cores) with engine `main` `063e4460`. This is the median of five quiet runs: the five run medians were 0.621, 0.638, 0.611, 0.646 and 0.640 M/s, and the table and chart come from the run with the median result (run 2). Every run started at a 1-minute load below 6 with no build or test process running; the loads are in [`../results/speed.md`](../results/speed.md). A public checkout only has the 100 public slots, whose median in the same run is 0.727 M/s. At engine `e9ad37dd` the same package measured 0.614 M/s. The five runs' Google Benchmark files and load traces are in [`../results/raw/2026-09-22-063e4460/throughput/`](../results/raw/2026-09-22-063e4460/throughput/); run 2 is byte-identical to `benchmark_results.json`.*
 
-*The median fell from 17.05 M/s, measured 2026-05-29 on 100 strategies and a 41,307-bar feed. A same-host check against the engine of the 2026-06-11 speed table shows the current engine's per-bar cost is 10–18× higher on the probes both populations share (see [`../results/speed.md`](../results/speed.md), Provenance).*
+*The median fell from 17.05 M/s, measured 2026-05-29 on 100 strategies and a 41,307-bar feed. A same-host check against the engine of the 2026-06-11 speed table shows engine `063e4460`'s per-bar cost is 10–18× higher on the probes both populations share (see [`../results/speed.md`](../results/speed.md), Provenance).*
 
 ### 🛠️ FFI Grid Search Optimization Result
 
-`grid_search_repro.py` runs a multi-parameter grid search in memory, through Python ctypes FFI, on the compiled C++ shared library for `021-composite-scalping-integration-01`: an EMA-cross scalper with take-profit and stop-loss exits in ticks, and the public analogue of the retired `19-scalping-wunder-bots`. The sweep covers 27 combinations: Fast EMA 3/5/7 × Slow EMA 11/13/15 × take profit 10/15/20 ticks, with the stop loss held at its default of 7 ticks.
+`grid_search_repro.py` runs a multi-parameter grid search in memory, through Python ctypes FFI, on the compiled C++ shared library for `021-composite-scalping-integration-01`: an EMA-cross scalper with take-profit and stop-loss exits in ticks. The sweep covers 27 combinations: Fast EMA 3/5/7 × Slow EMA 11/13/15 × take profit 10/15/20 ticks, with the stop loss held at its default of 7 ticks.
 
 - **Best configuration:** Fast EMA = 3, Slow EMA = 15, take profit = 20 ticks
 - **Net profit:** **−103.16 USDT**. The probe is a mechanism test, not a profitable strategy: every combination loses. The sweep demonstrates the FFI loop, not an edge.
-- **Trade count:** 5,153 trades over 53,929 bars of 15m ETHUSDT
+- **Trade count:** 5,153 trades over 53,929 bars of 15m ETHUSDT (recorded 2026-09-22 at engine `e9ad37dd`)
 
 ---
 
@@ -50,7 +50,7 @@ Below is the boxplot chart showing the distribution of backtest throughput acros
 
 ### 1. Prerequisites
 
-Ensure you have Python 3, CMake, a C++17 compiler (e.g. clang or gcc), and Python plotting dependencies installed:
+Initialise the assets submodule (`git submodule update --init benchmarks/assets`), and have Python 3, CMake ≥ 3.20 (the build fetches Google Benchmark), a C++17 compiler (e.g. clang or gcc), and the Python plotting dependencies installed:
 
 ```bash
 pip install matplotlib numpy
@@ -68,7 +68,7 @@ chmod +x reproduce.sh
 This script will:
 1. Recompile the backtest engine and every bench strategy in **Release mode**: the 100 public slots, plus the 101 closed slots when the maintainers' `benchmarks/assets-closed/` root is present.
 2. Run Google Benchmark suites across all strategies for dynamic throughput measurement, exporting results to `benchmark_results.json`.
-3. Compute the exact distribution quartiles (Min, Q1, Median, Q3, Max) and save them.
+3. Compute the exact distribution quartiles (Min, Q1, Median, Q3, Max) and print them.
 4. Render the distribution boxplot chart to `throughput_quartiles.png`.
 5. Run the in-memory parameter sweep grid search on `021-composite-scalping-integration-01` and output the optimized parameters.
 
@@ -83,8 +83,8 @@ Instead of running every slot, you can compile and benchmark a single strategy o
 
 ```bash
 # From the project root:
-cmake -B build -DPINEFORGE_BUILD_SPEED_BENCH=ON -DPINEFORGE_BUILD_TESTS=ON
-cmake --build build --target pineforge_bench -j4
+cmake -B build -DPINEFORGE_BUILD_BENCH_STRATEGIES=ON -DPINEFORGE_BUILD_SPEED_BENCH=ON -DPINEFORGE_BUILD_TESTS=ON
+cmake --build build --target bench_strategies pineforge_bench -j4
 
 # Execute only the chosen strategy benchmark:
 ./build/bin/pineforge_bench --benchmark_filter="001-analyzer-anvil-percent-costs-01"
@@ -97,7 +97,7 @@ Every strategy's Pine Script v6 is compiled to native, modern C++17. You can ins
 3. Accessing trades and executing orders in `O(1)` time complexity.
 
 ### C. Verify the FFI Grid Search Performance
-To verify that the FFI parameters are actually being set correctly and the optimization is genuine, run `grid_search_repro.py` in verbose mode to view every single parameter sweep step:
+To verify that the FFI parameters are actually being set correctly and the optimization is genuine, run `grid_search_repro.py`; it prints every parameter combination it runs:
 
 ```bash
 # Run grid search directly

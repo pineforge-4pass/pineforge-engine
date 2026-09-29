@@ -1,7 +1,7 @@
 {
   "context": {
     "date": "2026-09-22T22:08:19+08:00",
-    "host_name": "HaoLiangWendeMac-Studio-2.local",
+    "host_name": "apple-m4-max",
     "executable": "./build/bin/pineforge_bench",
     "num_cpus": 16,
     "mhz_per_cpu": 24,

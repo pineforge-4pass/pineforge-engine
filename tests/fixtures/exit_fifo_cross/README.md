@@ -7,7 +7,7 @@ A's lot, and A's own second exit still fills later, closing B's oldest lot. When
 adapter for that close; its exits reached the book at once, bound to A's cohort, and never filled
 once the FIFO close left that cohort no lot (thulashimohanr on OANDA:XAUUSD 15).
 
-Each directory is one `lab tv --no-note` export of the lane's own synthetic script (pineforge-workflow, channel `ws-report-v1`, BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-04-03), byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` (`tvTradesCsvHash` is the sha256 of `tv_trades.csv`), `meta.json`. No closed or scraped strategy is involved. Pyramiding 2, fixed cells on
+Each directory is one `lab tv --no-note` export of the lane's own synthetic script (maintainers' private pineforge-workflow, channel `ws-report-v1`, BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-04-03), byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` (`tvTradesCsvHash` is the sha256 of `tv_trades.csv`), `meta.json`. No closed or scraped strategy is involved. Pyramiding 2, fixed cells on
 2025-04-01 UTC. `tests/test_exit_fifo_cross_tapes.cpp` replays every tape through the Pine adapter.
 
 | tape | shape | trades | tv_trades.csv sha256 | rangeProof |

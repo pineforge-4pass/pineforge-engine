@@ -5,7 +5,7 @@ TradingView's own trades for the question lane P9 left open: does a
 path or on the tick-quantized one? `tests/test_offset_trail_quantized_arm.cpp`
 replays every trade below through the Pine adapter and the kernel.
 
-Each directory is one `lab tv` export (pineforge-workflow, channel
+Each directory is one `lab tv` export (maintainers' private pineforge-workflow, channel
 `ws-report-v1`, `rangeProof: covered`), byte-identical: `strategy.pine`,
 `tv_trades.csv` (times UTC+8), `meta.json`, `metrics.json`. The sha256 of each
 tape is `metrics.json` `tvTradesCsvHash`.

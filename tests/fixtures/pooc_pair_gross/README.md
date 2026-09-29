@@ -6,7 +6,7 @@ keeps its two-leg shape. The adapter's gross decline held only under `calc_on_or
 slippage or commission; under `process_orders_on_close` alone, or with costs, the later call became a
 full reversal (officialjackofalltrades-helios on OANDA:EURUSD 1D).
 
-Each directory is one `lab tv --no-note` export of the lane's own synthetic script (pineforge-workflow, channel `ws-report-v1`, OANDA:EURUSD 1D, 2025-04-01 .. 2026-05-01), byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` (`tvTradesCsvHash` is the sha256 of `tv_trades.csv`), `meta.json`. No closed or scraped strategy is involved. `process_orders_on_close` on,
+Each directory is one `lab tv --no-note` export of the lane's own synthetic script (maintainers' private pineforge-workflow, channel `ws-report-v1`, OANDA:EURUSD 1D, 2025-04-01 .. 2026-05-01), byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` (`tvTradesCsvHash` is the sha256 of `tv_trades.csv`), `meta.json`. No closed or scraped strategy is involved. `process_orders_on_close` on,
 pyramiding 0, 100000 of capital. `tests/test_pooc_pair_gross_tapes.cpp` replays every tape.
 
 | tape | shape | trades | tv_trades.csv sha256 | rangeProof |

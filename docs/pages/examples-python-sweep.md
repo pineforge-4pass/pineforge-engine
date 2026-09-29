@@ -11,19 +11,19 @@ inputs via the C ABI, and runs a clean backtest.
 ```
 $ python3 sweep.py
 sweeping 12 combos
-  fast=08 slow=21 sig=09  trades= 65  pnl= -3318.18  win=27.7%
-  fast=08 slow=26 sig=09  trades= 63  pnl= -4723.92  win=25.4%
-  fast=08 slow=32 sig=09  trades= 57  pnl= -4356.87  win=26.3%
-  fast=12 slow=26 sig=09  trades= 49  pnl= -3270.77  win=28.6%   <- baseline params
-  fast=12 slow=32 sig=09  trades= 47  pnl= -2884.76  win=29.8%
-  fast=16 slow=21 sig=09  trades= 47  pnl= -3005.30  win=29.8%
+  fast=08 slow=21 sig=09  trades= 66  pnl= -3368.61  win=27.3%
+  fast=08 slow=26 sig=09  trades= 64  pnl= -3901.38  win=26.6%
+  fast=08 slow=32 sig=09  trades= 58  pnl= -3534.33  win=27.6%
+  fast=08 slow=40 sig=09  trades= 54  pnl= -3765.04  win=27.8%
+  fast=12 slow=21 sig=09  trades= 54  pnl= -2962.30  win=29.6%
+  fast=12 slow=26 sig=09  trades= 50  pnl= -2575.42  win=30.0%   <- baseline params
   ...
 12 runs in 6.0 ms (0.5 ms/run)
 
 top 3 by net pnl:
-  (12,32, 9)  pnl=-2884.76
-  (16,21, 9)  pnl=-3005.30
-  (12,26, 9)  pnl=-3270.77
+  (12,32, 9)  pnl=-2189.41
+  (16,21, 9)  pnl=-2309.95
+  (16,26, 9)  pnl=-2541.80
 ```
 
 Numbers depend on the OHLCV snapshot — refresh with
@@ -31,8 +31,10 @@ Numbers depend on the OHLCV snapshot — refresh with
 
 ## Fresh handles keep sweeps isolated
 
-#run_backtest resets broker, trade, equity, series, and report state before
-each one-shot run. Configuration overrides persist on the handle. The example
+#run_backtest resets per-run broker, trade, equity and report state before
+each one-shot run. Configuration persists on the handle, and so do the
+generated script's own members: the committed tutorial strategy reads its
+inputs and builds its TA objects once per handle. The example
 still creates a fresh handle per grid point so every configuration is explicit
 and the same pattern works safely with concurrent workers.
 
@@ -41,6 +43,10 @@ Do not use repeated one-shot calls to model a continuous session: use the
 warmed strategy and broker state across the data-source handoff.
 
 ## Source: sweep.py
+
+Save it two directories below the repository root (for example
+`demo/python/sweep.py` in a clone): the `ROOT` and `sys.path` lines assume
+that depth.
 
 ```python
 #!/usr/bin/env python3
@@ -105,7 +111,7 @@ def main() -> int:
     lib = make_lib()
     bars, n = load_bars()
 
-    overrides = {"initial_capital": 10000, "commission_value": 0.04}
+    overrides = {"initial_capital": 100000, "commission_value": 0.04}
     fasts, slows, signals = [8, 12, 16], [21, 26, 32, 40], [9]
     combos = [(f, sl, sg) for f, sl, sg in product(fasts, slows, signals) if f < sl]
 
@@ -138,7 +144,9 @@ if __name__ == "__main__":
 
 ## Walk-forward variant
 
-Same fresh-handle pattern, sliced bar windows:
+Same fresh-handle pattern, sliced bar windows. It needs a feed longer than one
+window: on the tutorial's 672-bar CSV `range(0, n - window, step)` is empty and
+the loop never runs.
 
 ```python
 window = 30 * 24 * 4   # 30 days at 15m
@@ -151,7 +159,7 @@ for start in range(0, n - window, step):
 
     report = run_one(lib, sub, window,
                      inputs={"Fast Length": 12, "Slow Length": 26, "Signal Length": 9},
-                     overrides={"initial_capital": 10000})
+                     overrides={"initial_capital": 100000})
     print(f"window [{start:5d}..{start+window:5d}]  pnl={report.net_profit:+.2f}")
     lib.report_free(ctypes.byref(report))
 ```

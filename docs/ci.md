@@ -50,7 +50,7 @@ benchmark files are correct.
 | Profile | Build | Additional coverage |
 | --- | --- | --- |
 | `release` | Release, tutorial enabled | Standard CI checks behind a row floor (`RELEASE_MIN_TESTS`; `--min-tests N` overrides it), installed package, and installed native include-independence proof |
-| `debug` | Debug, tutorial enabled | The same checks without Release optimization |
+| `debug` | Debug, tutorial enabled | The standard checks and installed package without Release optimization; no default row floor, examples, include-independence proof or twin-parity guard |
 | `sanitizers` | Debug, ASan and UBSan | Instrumented library, tests and installed consumer; Linux CI also requires leak detection |
 | `native` | Release, live runner enabled | Parser, journal, transport tests, installed runner help, and installed native include-independence proof |
 | `kernel` | Release, live runner enabled, Pine source layer OFF | The source-free CTest set behind a row floor (`KERNEL_MIN_TESTS`; `--min-tests N` overrides it), installed package, and the `nm` half of the include-independence proof over `libpineforge_kernel.a` |
@@ -102,13 +102,13 @@ requires the rows that actually ran to equal the second count, and records
 `registered`, `labelled = registered - selected`, and `ran` in
 `ctest-exclusion.log` and `ci-summary.json`. A skip, missing executable, lost
 registration below the PR registration floor, unreadable enumeration, or
-missing label fails. The PR registration floors after lane TAIL-I are 767
-for Debug and sanitizers and 776 for native (653 and 662 at the INT24 base,
+missing label fails. The PR registration floors after lane FIX-E1E2 are 773
+for Debug and sanitizers and 782 for native (653 and 662 at the INT24 base,
 plus wave G's six rows, wave H's twenty-four, INT26's own tape row, INT27's
 thirteen, XSYM-D's four, K-SESSION-WINDOWS' four, INT28's twenty-four,
-INT28-FIX's four, INT29's seven, W15-KERNEL-CAL's two, INT30's twenty-four
-and TAIL-I's one). The full-run release and kernel floors are 786 and 298
-rows that ran; full runs do not exclude a label.
+INT28-FIX's four, INT29's seven, W15-KERNEL-CAL's two, INT30's twenty-four,
+TAIL-I's one, XAU-CAL's four and FIX-E1E2's two). The full-run release and
+kernel floors are 792 and 300 rows that ran; full runs do not exclude a label.
 
 Preflight also runs the detached-comment census of the kernel compile closure
 (`detached-comments`: `scripts/measure_detached_comments.py --check-ceiling`)
@@ -377,8 +377,8 @@ members the cover had missed, then the keepers: the corpus's only anomaly-tier
 verdict, its two largest trade surfaces, and the mechanisms the campaign
 measured as divergence-prone. Every mechanism of that 40-item scan with
 exactly one witness in the corpus is therefore in the subset by construction —
-`strategy.cancel_all`, `calc_on_order_fills=true`, `commission.cash_per_order`,
-a non-zero `commission_value`, and `map.*`.
+`strategy.cancel_all`, `calc_on_order_fills=true` and
+`commission.cash_per_order`.
 
 **Measured against mutations (R5 lane H-MEASURE, AUDIT3 H12).** A battery of
 44 single-line mutations — kernel matching, fees, sizing, path order, sessions,
@@ -413,9 +413,9 @@ unfiltered by path. The merge ruleset requires `pineforge/verify` and
 full verification on the PR head's exact tree.
 
 What the subset does not prove, and what therefore stays with the nightly
-sweep: the other 282 probes, and the tier headline —
-`scripts/verify_corpus.py` grades the whole population, so 30 re-runs cannot
-print its line, and grading the 282 untouched tapes beside them would judge the
+sweep: the other 258 probes, and the tier headline —
+`scripts/verify_corpus.py` grades the whole population, so 54 re-runs cannot
+print its line, and grading the 258 untouched tapes beside them would judge the
 corpus's own older generation rather than this engine. The subset is an early
 signal alongside the full parity verdict.
 
@@ -436,7 +436,9 @@ main pushes, tags and manual dispatch (`.github/workflows/docs.yml`). A pull
 request builds and uploads the site; the Cloudflare Pages deploy step is
 guarded by `if: github.event_name != 'pull_request'`.
 
-`scripts/check_doc_anchors.py` checks every `file:line` citation: the file and
+`scripts/check_doc_anchors.py` checks every `file:line` citation in the pages it
+guards (`README.md`, `CONTRIBUTING.md`, `docs/README.md`, `docs/pages`,
+`docs/adr`, `docs/design`, `docs/native-refactor-progress.md`): the file and
 line must resolve, qualified symbols must land inside their declared scope, and
 continuations may inherit a full anchor across a physical line break only within
 the same paragraph or table row. Source-labelled fenced examples are scanned;
@@ -502,7 +504,7 @@ to a wording the page held before, must be named by the commit's message: by the
 lane label or the hash of the commit that introduced it, by six consecutive
 words of it, or by the key of its table row (`OL7`). A fresh rewrite and a
 re-anchor need no name. It judges the non-merge commits since the merge base
-with `main`; with no `main` ref (the lab's remote hosts) since the newest
+with `main`; with no `main` ref (a checkout with no branch refs) since the newest
 ancestor whose subject ends in a pull request number (`... (#N)`, the commit a
 merged pull request left on `main`, whose branch was judged commit by commit
 before it merged), else it walks back from `HEAD`; a commit whose tree predates
@@ -540,7 +542,7 @@ prints the inventory with each write site.
 python3 scripts/check_kernel_seam_rows.py --list
 ```
 
-The third source-only guard is `scripts/check_design_inventory.py`
+The fifth source-only guard is `scripts/check_design_inventory.py`
 (`design-inventory`, with its own `design-inventory-tests` suite). It was
 fail-closed from the day it landed: it reads `docs/design/native-feature-parity.md`
 §1, replays `tests/CMakeLists.txt`'s own decision about which units the kernel
@@ -548,13 +550,13 @@ profile compiles, and fails when an inventory row's closure marker does not
 match what the tests actually drive. `--ctest-list` cross-checks its transliteration
 against real `ctest -N` output in both directions.
 
-The fourth is `scripts/check_pine_to_native_coverage.py` (`doc-pine-coverage`),
+The sixth is `scripts/check_pine_to_native_coverage.py` (`doc-pine-coverage`),
 fail-closed from the day it landed as well: it derives the offered Pine set
 from `docs/pine_v6_coverage_detail.md` and the covered set from the migration
 page's first table column and design §1 crosswalk, and fails when a `strategy.*`,
 `request.*`, `barmerge.*` or design inventory ID has no row.
 
-The fifth guard is the CTest row `test_pine_to_native_worked`. At build time
+The seventh guard is the CTest row `test_pine_to_native_worked`. At build time
 `tests/extract_pine_to_native_worked.py` copies the six C++ blocks of the
 migration page's worked example out of the page verbatim (and fails the build
 when the page stops holding them); `tests/test_pine_to_native_worked.cpp`
@@ -563,7 +565,7 @@ the page states — `configure_native` applies, no request is refused, the
 take-profit closes the entry, and the units and the commission are the ones
 the page's own Pine declaration computes. The row registers in every profile.
 
-The sixth guard is the documentation build. `docs/build.sh` runs Doxygen over
+The eighth guard is the documentation build. `docs/build.sh` runs Doxygen over
 the whole public surface — every header under `include/pineforge`, the C API
 and C ABI headers, the eighteen native examples, the adapter units, the pages,
 the front-door documents, the design document and the ADR — and then reads `docs/site/doxygen-warnings.log`.
@@ -636,8 +638,8 @@ Their parity verdict posts `pineforge/parity`, reporting no regression or that
 the PR changed no engine behaviour. The `PineForge strict CI base` ruleset
 requires these two commit statuses. GitHub Actions jobs, including `build`,
 `sanitizers`, docs and the parity subset, are advisory. Baseline promotion
-(`promote-baseline.yml`, pineforge-workflow's `campaign/ci/promote-baseline.yml`
-installed unchanged) runs `main`'s own copy on the closed PR
+(`promote-baseline.yml`, installed from the maintainers' private campaign
+tooling) runs `main`'s own copy on the closed PR
 (`pull_request_target`) and runs no PR code. It requires both statuses to be
 successful on the verified PR head and a merge commit on `main` that carries
 exactly that head's tree (PRs are squash-merged, so the head itself never lands

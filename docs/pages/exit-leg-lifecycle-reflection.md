@@ -5,18 +5,18 @@ exposes named POD fields. Its first 155 descriptors, types, offsets and full
 1272-byte prefix are preserved; 163 canonical lifecycle fields append, followed
 by the admission model's facts. Query the layout or use
 `PF_PENDING_ORDER_FIELD_COUNT` for the complete current field count. No new runtime
-export or public C ABI/schema version is introduced. Old C++ v7 objects remain
+export or public C ABI/schema version is introduced. C++ objects built against an earlier epoch remain
 incompatible and must be rebuilt against matching headers and archive.
 
 The `legs_` fields cover target identity/owner, current lifecycle and definition
 revisions, immutable definition presence/prices, three working generations and
 retirement receipts, suspension and its ordered leg list, exact hold/replacement
 barriers, selected predecessor definition, observation window, and the latest
-replay action including all variant payloads. Lists are bounded to3 and retain
+replay action including all variant payloads. Lists are bounded to 3 and retain
 count and order. Latest-action history is bounded to one receipt.
 
 A reader uses each optional `_present` flag and `legs_last_operation` (the native
-Operation declaration order0–7) before interpreting descendants. Inactive variant
+Operation declaration order 0–7) before interpreting descendants. Inactive variant
 or absent-optional descendants have no semantic value: zero/NaN/sentinel storage
 there is not a substitute for a present value. Unused list slots are UINT32_MAX;
 only indices below the actual count are meaningful. Present doubles preserve
@@ -25,14 +25,11 @@ Definition value presence distinguishes an absent definition from present prices
 whose specific leg is unset/NaN. Use the supplied field descriptors and struct size
 rather than assuming the enlarged object fits an old buffer.
 
-`exit_leg_reflection_schema.py` is the bounded scalar projection catalog and
-produces both generator mappings and per-field mutation fixtures. Generation
-rejects an empty, omitted, renamed, retyped or altered canonical mapping. Native
-storage/visitor checks separately reject hidden nested fields and omitted folds.
-Each appended field has a storage-census mutation that changes that exact POD
-field and the real broker hash. These deliberately exhaustive storage fixtures
-are separate from valid native action and actual engine-settlement tests; they
-do not claim production can create every encoded combination.
+`scripts/pending_intent_view.json` records the projection source of every
+mirror field; `scripts/test_pending_intent_view.py` (CTest
+`test_pending_intent_view_schema`) checks all 406 projections and their
+approved provenance, and `scripts/test_pending_intent_view_mutations.py`
+holds that the check fails on a mutated projection.
 
 A barrier's identity is its issued instruction/owner/revision binding plus its
 requested event/domain/bar/phase. The action's current target/revision and actual

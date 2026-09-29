@@ -10,10 +10,10 @@ the report.
 
 ```
 $ cargo run --release -- path/to/strategy.so path/to/ohlcv.csv
-PineForge <version> (<sha>) — 672 bars
-49 trades, net pnl: -190.85
-  L  pnl=  +12.40  qty=10.0
-  S  pnl=  -22.10  qty=10.0
+loaded 672 bars
+50 trades, net pnl: +569.97
+  L pnl=<pnl>  qty=1.0
+  S pnl=<pnl>  qty=1.0
   ...
 ```
 
@@ -34,7 +34,7 @@ libloading = "0.8"   # safe wrapper around dlopen / dlsym
 ```rust
 use libloading::{Library, Symbol};
 use std::env;
-use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::ffi::{c_char, c_int, c_void};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
@@ -128,7 +128,6 @@ struct PfTraceEntry {
 }
 
 #[repr(C)]
-#[derive(Default)]
 struct PfReport {
     total_trades: c_int,
     trades: *mut PfTrade,
@@ -167,6 +166,11 @@ struct PfReport {
     // ABI v4: per-script-bar broker-state hash (NULL / 0-length unless recording is on)
     broker_state_hash: *mut u64,
     broker_state_hash_len: i64,
+}
+
+impl Default for PfReport {
+    // Raw pointers have no Default: start from the all-zero report C uses.
+    fn default() -> Self { unsafe { std::mem::zeroed() } }
 }
 
 const PF_MAGNIFIER_ENDPOINTS: c_int = 3;
@@ -225,8 +229,11 @@ impl StrategyLib {
                             0, 4, PF_MAGNIFIER_ENDPOINTS,
                             &mut r as *mut _);
 
-            let trades: Vec<PfTrade> = std::slice::from_raw_parts(
-                r.trades, r.trades_len as usize).to_vec();
+            let trades: Vec<PfTrade> = if r.trades.is_null() || r.trades_len <= 0 {
+                Vec::new()   // from_raw_parts needs a non-null pointer even for 0 rows
+            } else {
+                std::slice::from_raw_parts(r.trades, r.trades_len as usize).to_vec()
+            };
 
             (self.free_report)(&mut r as *mut _);
             (self.free_handle)(h);
@@ -244,13 +251,15 @@ fn load_csv(path: &str) -> std::io::Result<Vec<PfBar>> {
         if i == 0 { continue; }                              // header
         let line = line?;
         let mut cols = line.split(',');
+        // timestamp,open,high,low,close,volume -- the tutorial CSV's order
+        let timestamp = cols.next().unwrap().trim().parse().unwrap();
         bars.push(PfBar {
             open:      cols.next().unwrap().parse().unwrap(),
             high:      cols.next().unwrap().parse().unwrap(),
             low:       cols.next().unwrap().parse().unwrap(),
             close:     cols.next().unwrap().parse().unwrap(),
-            volume:    cols.next().unwrap().parse().unwrap(),
-            timestamp: cols.next().unwrap().trim().parse().unwrap(),
+            volume:    cols.next().unwrap().trim().parse().unwrap(),
+            timestamp,
         });
     }
     Ok(bars)
@@ -283,9 +292,12 @@ fn main() {
 - **Lifetime of `trades`** — copied out before `report_free`, so the
   `Vec<PfTrade>` outlives the report.
 - **`trace_names`** — if you enable tracing, copy the strings out
-  before `strategy_free` (their backing memory belongs to the handle).
-- **Threading** — `StrategyLib` is `Send` but **not** `Sync`. One
-  handle per thread; many handles per process is fine.
+  before the next run on the handle or `strategy_free` (their backing memory
+  belongs to the handle, and each run clears it).
+- **Threading** — `StrategyLib` holds only the library and function
+  pointers, so it is `Send` and `Sync`; `run` creates and frees its own
+  handle, and a handle must stay on one thread. Many handles per process is
+  fine.
 - **Empty-string TFs** — Rust string literals are `&str`, not C strings.
   Use `b"\0".as_ptr()` or `CString::new("")?.into_raw()` and remember
   to reclaim it.
@@ -294,4 +306,4 @@ fn main() {
 
 - [FFI from Python](@ref ffi_python) — same ABI, ctypes flavour
 - [Pure C example](@ref examples_c) — same flow with no FFI shim
-- [ABI stability](@ref abi_stability) — what to pin in `Cargo.toml`
+- [ABI stability](@ref abi_stability) — what you can rely on across versions

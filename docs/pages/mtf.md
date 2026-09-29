@@ -9,15 +9,15 @@ paths, and they have different rules:
 | Surface | Pine call | Direction | Bars source |
 | --- | --- | --- | --- |
 | **Upward (HTF)** | `request.security(sym, "60", expr)` | target TF **coarser** than input | aggregated from input bars |
-| **Downward (LTF)** | `request.security_lower_tf(sym, "1", expr)` | target TF **finer** than input | **synthesized** from each input bar's OHLC path |
+| **Downward (LTF)** | `request.security_lower_tf(sym, "1", expr)` | target TF **finer** than the chart | the input's (or an auxiliary feed's) real bars when the target is not finer than them, else **synthesized** from each bar's OHLC path |
 | **Another symbol** | `request.security("TVC:DXY", "15", expr)` | any TF | **the other symbol's own bars**, installed before the run |
 
-The downward path is where PineForge diverges from TradingView. TV
-downloads a separate finer-resolution feed when you switch to a lower
-timeframe; PF does **not**. The input feed's resolution is the upper
-bound on what `request.security_lower_tf` can target — beyond that, no
-data exists. Sub-bars are synthesized on demand by walking the input
-bar's OHLC path. See @ref magnifier for the same idea applied to fill
+The downward path is where PineForge can diverge from TradingView. TV
+reads real bars of the requested lower timeframe; PF reads real ones only
+when the host supplies them — an input finer than the chart
+(`input_tf < script_tf`) or an auxiliary feed
+(`strategy_set_aux_security_feed`). A target finer than every bar the run
+was given is synthesized on demand by walking the input bar's OHLC path. See @ref magnifier for the same idea applied to fill
 resolution.
 
 For the upward path and the chart-aggregation rules, see also
@@ -57,9 +57,9 @@ while a run is in progress. The merge itself is the kernel's (`NativeRunSpec::in
 `scripts/run_strategy.py` installs a probe's pinned feeds, facts and recorded
 request values (`strategy_set_recorded_series`, TradingView's per-chart-bar
 fundamentals; a tape with a header only is a request na on every chart bar)
-from `PINEFORGE_REQUESTS_ROOT/<probe>/requests.json` when that variable is set. Codegen's lowering of a foreign `request.security` onto this
-surface is a separate lane; until it lands, codegen still refuses a symbol that
-is not the chart's.
+from `PINEFORGE_REQUESTS_ROOT/<probe>/requests.json` when that variable is set. pineforge-codegen's main branch lowers a foreign `request.security` onto
+this surface; its v0.10.4 PyPI release still refuses a symbol that is not the
+chart's.
 
 ## The script_tf / input_tf model
 
@@ -106,6 +106,7 @@ run_backtest_full(s, bars, n, "", "", 0, 4, PF_MAGNIFIER_ENDPOINTS, &r);
 //    r.script_tf_seconds == 900   (defaulted)
 //    r.script_tf_ratio   == 1
 //    r.needs_aggregation == 0
+report_free(&r);
 
 // 2. Explicit input + explicit higher script → 4:1 aggregation.
 run_backtest_full(s, bars, n, "15", "60", 0, 4, PF_MAGNIFIER_ENDPOINTS, &r);
@@ -113,20 +114,22 @@ run_backtest_full(s, bars, n, "15", "60", 0, 4, PF_MAGNIFIER_ENDPOINTS, &r);
 //    r.script_tf_seconds == 3600
 //    r.script_tf_ratio   == 4
 //    r.needs_aggregation == 1
+report_free(&r);
 
 // 3. Explicit input, script defaults to input.
 run_backtest_full(s, bars, n, "15", "", 0, 4, PF_MAGNIFIER_ENDPOINTS, &r);
 //    r.input_tf_seconds  == 900
 //    r.script_tf_seconds == 900   (defaulted, NOT inferred separately)
+report_free(&r);
 ```
 
 ## Switching timeframes — Python (ctypes)
 
 ```python
-# Same three calls, byte-string TFs.
-lib.run_backtest_full(s, bars, n, b"",   b"",   0, 4, 3, byref(r))
-lib.run_backtest_full(s, bars, n, b"15", b"60", 0, 4, 3, byref(r))
-lib.run_backtest_full(s, bars, n, b"15", b"",   0, 4, 3, byref(r))
+# Same three calls, byte-string TFs; free each report before the next run.
+for in_tf, script_tf in ((b"", b""), (b"15", b"60"), (b"15", b"")):
+    lib.run_backtest_full(s, bars, n, in_tf, script_tf, 0, 4, 3, byref(r))
+    lib.report_free(byref(r))
 ```
 
 The full runnable harness — three tables walking the script_tf sweep,
@@ -184,17 +187,19 @@ When the run begins, the source host validates each registered lower-TF
 site against the run's evaluator input timeframe
 (`validate_security_timeframes`):
 
-- The target TF must be **strictly finer** than the resolved input TF.
-- The input TF (in seconds) must be an **integer multiple** of the
-  target TF — non-clean ratios are rejected.
+- The target TF must be **strictly finer** than the script TF.
+- Finer than the input TF, it must divide the input TF evenly (sub-bars are
+  synthesized); otherwise it must be an integer multiple of the input TF and
+  divide the script TF (input bars are gathered) — non-clean ratios are
+  rejected.
 - `lookahead` and `gaps` must be off (TV does not expose them on this
   builtin and PF refuses to fake them).
 
 Violations raise at run-time with a precise diagnostic, e.g.:
 
 ```
-request.security_lower_tf requires a timeframe finer than the
-chart's input timeframe: requested 30 from input timeframe 15
+request.security_lower_tf: requested timeframe '30' must be finer than script
+timeframe '15'. Lower-TF API requires a strictly finer timeframe.
 ```
 
 ### Sub-bar synthesis
@@ -234,10 +239,10 @@ Expected (excerpt):
 ```
 Table A — script_tf sweep, fixed input (HTF .so)
  script_tf  in_s  sc_s ratio agg?  in_bars  sc_bars  trades    net_pnl
-        ""   900   900     1    0      672      672       1    -653.46
-      "15"   900   900     1    0      672      672       1    -653.46
-      "60"   900  3600     4    1      672      168       6    -962.57
-     "240"   900 14400    16    1      672       42       0      +0.00
+        ""   900   900     1    0      672      672       2   +4381.53
+      "15"   900   900     1    0      672      672       2   +4381.53
+      "60"   900  3600     4    1      672      168       7    -888.46
+     "240"   900 14400    16    1      672       42       1   +1387.95
 ```
 
 Numbers depend on the OHLCV snapshot.

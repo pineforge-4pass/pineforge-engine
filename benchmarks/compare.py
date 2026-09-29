@@ -285,7 +285,7 @@ def main() -> int:
         "TradingView tape by the canonical corpus rubric, `scripts/verify_corpus.py::analyze_strategy` "
         "(align-then-trim common window, fragment consolidation, range-end mark pairing, exact-count "
         "and ≥99% coverage gates for *excellent*, strict/production threshold profiles, `inputs.json` "
-        "overrides). PineTS has no strategy backtester upstream and is excluded here.\n",
+        "overrides). PineTS runs only the canonical indicator script here and is excluded.\n",
     ]
     for name, group, tv_raw, grades in rows:
         sections.append(detail_block(name, group, tv_raw, grades))

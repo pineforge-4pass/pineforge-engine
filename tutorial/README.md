@@ -36,8 +36,8 @@ Configures CMake (first time only), builds
 
 ```
 MACD(12,26,9) on BTCUSDT 15m — 672 bars, 2026-04-29 18:15 → 2026-05-06 18:00 UTC
-  trades:    49  (16W / 33L, 32.7% win)
-  net pnl:   -190.85
+  trades:    50  (17W / 33L, 34.0% win)
+  net pnl:   +569.97
   best/worst:+1149.00 / -1111.97
   max dd:    -4045.15
   elapsed:   0.4 ms
@@ -67,9 +67,9 @@ lifecycle remain the same.
 ## Path B — Docker (no local toolchain)
 
 Mount the strategy + OHLCV into the release hub's image,
-`ghcr.io/pineforge-4pass/pineforge-release` (this runtime plus the
-`pineforge-codegen` of the same version; this repository publishes no image
-of its own); get a JSON report on stdout.
+`ghcr.io/pineforge-4pass/pineforge-release` (a released runtime plus a pinned
+`pineforge-codegen`, named by its `engine<E>-codegen<C>` tag; this repository
+publishes no image of its own); get a JSON report on stdout.
 
 ```bash
 docker run --rm \
@@ -81,7 +81,8 @@ jq '.summary' report.json
 ```
 
 The image transpiles the `.pine` with its own codegen and runs it on its own
-engine, so the image tagged with this tree's release gives Path A's numbers.
+engine, so it gives the numbers of the engine release it carries; main, which
+Path A builds, is not yet released.
 To build the image yourself, use pineforge-release's `docker/Dockerfile`,
 which vendors this tree's `docker/` harness; this repository ships no
 Dockerfile. Full mount/schema reference in
@@ -93,7 +94,7 @@ The compiled strategy.so exports two C ABI hooks for runtime overrides:
 
 | Hook                        | Overrides                                  |
 | --------------------------- | ------------------------------------------ |
-| `strategy_set_input(k, v)`  | `input.*()` named values from strategy.pine (e.g. `"Fast Length"`, `"Slow Length"`, `"Source"`) |
+| `strategy_set_input(k, v)`  | `input.*()` named values from strategy.pine (e.g. `"Fast Length"`, `"Slow Length"`, `"Signal Length"`) |
 | `strategy_set_override(k, v)` | `strategy(...)` header fields (`initial_capital`, `commission_value`, `default_qty_value`, `pyramiding`, `slippage`, `default_qty_type`, `commission_type`, `process_orders_on_close`) |
 
 ### Path A — sweep grid in Python
@@ -110,8 +111,8 @@ MACD sweep on BTCUSDT 15m — 672 bars, 8 configs (commission 0.04% each side)
 
 fast slow qty  trades  win%     net_pnl      max_dd     ms
 ----------------------------------------------------------------
-  12   26   1      49 28.6%    -3270.77    -6093.70    0.1
-   8   21   1      65 27.7%    -3318.18    -7270.83    0.4
+  12   26   1      50 30.0%    -2575.42    -6093.70    0.4
+   8   21   1      66 27.3%    -3368.61    -7270.83    0.7
   ...
 ```
 
@@ -139,10 +140,10 @@ Two extra `.so` files demonstrate the runtime's two MTF surfaces:
   (input feed → coarser TF inside the strategy).
 - `tutorial/mtf/strategy_ltf.so` — chart at 15m (or any TF), intra-bar
   1m sub-bars synthesized via `request.security_lower_tf` from each
-  chart bar's OHLC path. Demonstrates **downward** synthesis — PF's
-  design is that the input feed's resolution is the upper bound on what
-  the lower-TF target can be, with no separate finer feed (contrast
-  TradingView).
+  chart bar's OHLC path. Demonstrates **downward** synthesis: this chart
+  is fed only its own bars, so the 1m sub-bars are synthesized (a finer input
+  or an auxiliary feed would supply real ones; TradingView always reads real
+  bars).
 
 Build and run:
 
@@ -170,7 +171,8 @@ TradingView's lower-TF model) live in
 
 ## Modify the strategy
 
-`generated.cpp` is plain C++ over `<pineforge/engine.hpp>`. Edit it
+`generated.cpp` is plain C++ over the Pine source host
+(`<pineforge/source/pine_strategy_host.hpp>`, on top of `<pineforge/engine.hpp>`). Edit it
 (swap `ta::MACD` for `ta::RSI`, change params, add an exit rule),
 then rerun whichever path you used. `strategy.pine` is the PineScript
 form the C++ mirrors.

@@ -2,8 +2,9 @@
 
 @tableofcontents
 
-From 1.0.0 the engine's version number is a semantic version over the surfaces
-this page lists, and over nothing else: a PATCH release fixes behaviour, a
+1.0.0 is not released: v0.13.1 is the last tagged release, and `main` carries
+the surfaces below ahead of it. From 1.0.0 the engine's version number is a
+semantic version over the surfaces this page lists, and over nothing else: a PATCH release fixes behaviour, a
 MINOR release adds to a surface, and only a MAJOR release removes or changes
 one. Each rule below names the checker or the CTest row that holds it on this
 tree; where no checker holds part of a rule, the page says so. The codegen
@@ -175,7 +176,7 @@ the fields and calls the C surface declares.
 - **The release hub enforces it.** `release.yml` dispatches `engine-release`
   to pineforge-release with `client_payload` `{version: "vX.Y.Z[-rc.N]",
   prerelease: true|false, run_id}`; codegen dispatches its own version. The
-  hub builds and publishes an image only for an engine and a codegen of the
+  hub, on the 1.0 line, builds and publishes an image only for an engine and a codegen of the
   same version, and publishes a prerelease pair under its exact version, never
   a stable or `latest` tag; that check lives in the pineforge-release
   repository, not on this tree.
@@ -193,5 +194,5 @@ Not covered by the version number:
 The JSON report keys of `docker/run_json.py` are the release image's schema
 (@ref report_schema); `scripts/test_report_schema_keys.py` pins the
 `metrics.equity` keys, which kept `sharpe_tv` / `sortino_tv` when the C
-fields' pre-1.0 spellings were removed. What changed at 1.0 for a 0.x user is
+fields' pre-1.0 spellings were removed. What 1.0 changes for a 0.x user is
 in the repository's `CHANGELOG.md`.

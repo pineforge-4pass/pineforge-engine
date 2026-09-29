@@ -1,37 +1,40 @@
 # Changelog
 
-Notable changes to pineforge-engine. From 1.0.0 the version number follows
-semantic versioning over the surfaces the
-[public contract](docs/pages/public-contract.md) lists. Releases before 1.0.0
-are summarized in the README's *Releases* section and on the GitHub releases
-page.
+Notable changes to pineforge-engine. Earlier releases are summarized in the
+README's *Releases* section and on the GitHub releases page. From the next
+release, planned as 1.0.0, the version number is to follow semantic
+versioning over the surfaces the
+[public contract](docs/pages/public-contract.md) lists.
 
-## 1.0.0
+## Unreleased
 
-Release candidates are tagged `v1.0.0-rc.N`. This entry covers every change
-since v0.13.1, the last release: `VERSION` read 0.14.0 from 439bd520 on, and
-0.14.0 was never tagged. The engine and pineforge-codegen ship 1.0.0
-together, and from 1.0.0 the only supported pair is the same version,
-prerelease included.
+Nothing below is released: `main` is ahead of v0.13.1, the last tagged
+release (2026-09-06), by everything this section lists. `VERSION` reads 0.14.0
+from 439bd520 on, and 0.14.0 was never tagged. The next version is the owner's
+call. It is planned as 1.0.0, which the engine and pineforge-codegen are to
+release together; from it on the only supported pair is the same version,
+prerelease included. Where a section below speaks of 1.0, it describes that
+plan.
 
-### What 1.0 means
+### What the planned 1.0 means
 
 - **The kernel runs without any Pine adapter.** A C++ host
   (`NativeStrategyHost`, `<pineforge/native_host.hpp>` and the native headers)
   or a C host (`<pineforge/native_c_api.h>`) drives the execution kernel that
   generated PineScript strategies run on: batch and stream runs, the native
   request vocabulary, margin and liquidation, risk limits, FX conversion, the
-  per-bar broker-state hash and the report. `-DPINEFORGE_BUILD_SOURCE_LAYER=OFF`
-  builds that kernel alone, `libpineforge_kernel.a` (`PineForge::kernel`,
-  #257), and `examples/native` holds 18 Pine-free hosts (16 C++, 2 C) that run
-  as CTest rows.
+  per-bar broker-state hash and the report. Every build also installs that
+  kernel alone, `libpineforge_kernel.a` (`PineForge::kernel`, #257), and
+  `-DPINEFORGE_BUILD_SOURCE_LAYER=OFF` builds the kernel alone (`libpineforge.a`
+  then holds exactly its objects); `examples/native` holds 18 Pine-free hosts
+  (16 C++, 2 C) that run as CTest rows under `-DPINEFORGE_BUILD_EXAMPLES=ON`.
 - **Pine is an adapter over that kernel.** The Pine source layer was cut out of
   `BacktestEngine` (#253), and generated Pine execution was lowered onto the
   native kernel, retiring the legacy loop (#254). Its host
   (`PineStrategyHost`) and headers live under `include/pineforge/source/`.
-- **The version number now promises something:** the C ABI, the native C++
-  API, the script ABI epoch and its state-hash values, the 1.0 C-surface
-  boundary and the pairing with codegen, as the
+- **From 1.0.0 the version number is to promise something:** the C ABI, the
+  native C++ API, the script ABI epoch and its state-hash values, the 1.0
+  C-surface boundary and the pairing with codegen, as the
   [public contract](docs/pages/public-contract.md) states.
 
 ### Breaking changes: what a 0.x user must act on
@@ -41,7 +44,8 @@ prerelease included.
   caller-allocated, so a mirror built for ABI 3 under-sizes it: update FFI
   mirrors and check `pf_abi_version() == PF_ABI_VERSION` before a run
   (439bd520, d9b80809). No `PF_API` function was removed or renamed; `pineforge.h`
-  declares 34 more and `native_c_api.h` adds the native host API.
+  declares 39 more (71 against 0.13.1's 32) and `native_c_api.h` adds the
+  native host API.
 - **Two C fields renamed.** `pf_equity_stats_t::sharpe_tv` / `sortino_tv` are
   `sharpe_monthly` / `sortino_monthly`, at the same offsets (48 and 56); the
   old spellings, kept as deprecated aliases during development, are removed
@@ -52,16 +56,17 @@ prerelease included.
 - **Regenerate and relink every generated strategy.** The C++ a generated
   strategy compiles against now carries the script ABI epoch
   `engine_script_run_v19` (an inline namespace 0.13.1 did not have), so an
-  object built against 0.x headers does not link. Transpile with the
-  pineforge-codegen release of the same version (engine 1.0.0 with codegen
-  1.0.0; `v1.0.0-rc.N` with codegen `1.0.0-rc.N`) and rebuild. `PF_ABI_VERSION`
-  equality alone does not make a pair.
+  object built against 0.13.1's headers does not link. Transpile with the
+  pineforge-codegen that pairs with this tree -- its main branch; its last
+  release, v0.10.4, predates it -- and rebuild; from 1.0.0 on the pair is the
+  codegen release of the same version. `PF_ABI_VERSION` equality alone does
+  not make a pair.
 - **State hashes are new, and v19's.** The broker-state hash, the per-bar hash
   rows, the stream fingerprint and the native continuation hash did not exist
-  in 0.13.1; their values are the v19 epoch's as the release candidates fix
-  them (#282, #283, #284, #286, #289), and a value recorded by a development
-  build before 1.0.0 is not comparable. From 1.0.0 their recipe is fixed for
-  all of 1.x.
+  in 0.13.1; their values are the v19 epoch's as main computes them (#282,
+  #283, #284, #286, #289; #294, #295 and #297 fold new source-layer state
+  where a run sets it), and a value recorded by an earlier development build
+  is not comparable. From 1.0.0 their recipe is to stay fixed for all of 1.x.
 - **Event retention defaults to a window.** `NativeRunSpec::event_retention`
   defaults to `NativeEventRetention::Window`, which keeps the command journal
   only until every reader has consumed it (#283). A C++ host that reads the
@@ -80,9 +85,13 @@ prerelease included.
   (e71e589c); new code includes `<pineforge/ta_compare_band.hpp>`. A
   kernel-only build installs neither `include/pineforge/source/` nor
   `include/pineforge/compat/`.
-- **CMake pins move to 1.** The package's version file is `SameMajorVersion`,
-  so `find_package(PineForge 0.N ...)` does not find a 1.x install: pin
-  `find_package(PineForge 1.0 REQUIRED)` (docs/pages/integration-cmake.md).
+- **CMake pins move to 1 with the 1.0.0 release.** The package's version file
+  is `SameMajorVersion`, so `find_package(PineForge 0.N ...)` will not find a
+  1.x install: pin `find_package(PineForge 1.0 REQUIRED)` then
+  (docs/pages/integration-cmake.md). Until then a build of main installs a 0.x
+  package -- 0.13.1 from `git describe` in a clone with tags (the default
+  `PINEFORGE_VERSION_SOURCE=AUTO`), 0.14.0 from `VERSION` otherwise -- which a
+  1.0 pin does not find.
 - **Versions may carry a prerelease.** `VERSION` is `X.Y.Z` or `X.Y.Z-rc.N`.
   `PINEFORGE_VERSION_STRING`, `PineForge_VERSION` and `pf_version_get()` stay
   numeric; the full version is `PINEFORGE_VERSION_FULL`, the package's new
@@ -152,6 +161,57 @@ prerelease included.
   current `pf_native_callbacks_v1` leaves its trailing `reserved1` at 0:
   `strategy_native_host_create_v1` returns NULL for any other value. Tables of
   the three earlier published lengths keep working (#289).
+- **A script bar's session facts are read at its own label.**
+  `NativeCoordinate::in_session`, `opens_session_day` and
+  `closes_session_day` read a bar at its label, or at its interval's first
+  eligible instant when that is later, never at an earlier instant of its
+  interval: on an extended-hours NASDAQ:AAPL 60-minute chart the 16:00 bar is
+  out of session and the regular day closes on the 15:00 bar, as TradingView
+  flags them. No hash or layout moves (#293, 962960b3).
+- **A calendar bucket completes once.** A day, week or month bucket closes on
+  its period's last input bar, and a later bar of the period merges into it
+  without completing it again: a week holding a session its template does not
+  declare (NSE's Budget-day Saturday and Sunday sessions) completed again on
+  each of that session's bars. With a daily feed installed, a day whose
+  session opens late -- after the day stamp and before its scheduled close,
+  as NSE's Muhurat session of 2025-10-21 opened at 13:45 IST -- starts the
+  intraday grid of every width at that open (`native_late_day_opens`,
+  `TimeframeAggregator::set_native_day_opens`,
+  `NativeDayPartition::late_opens`) (#296, 7239ab37).
+- **A daily feed dates the day bars it covers.** When an intraday input
+  aggregates into "D" script bars and a daily feed is installed (the feed
+  store's, or a declared series' authoritative bars), each daily stamp labels
+  the D bar holding the session instant it covers: OANDA:XAUUSD's bar is
+  labelled at its 17:00 ET stamp, not at the session's 18:00 ET open. Only the
+  label moves; the bar's span, closes and values stay the calendar's
+  aggregate. On a 1D script a C host's `pf_native_decision_v1`
+  `session_day_ordinal` is the trading date of the bar's first in-session
+  instant when that is later than its label (#298, 35db01c8).
+
+### New C ABI exports
+
+- **Another symbol's data for `request.security`.** `strategy_set_symbol_feed`,
+  `strategy_set_symbol_feed_column`, `strategy_set_symbol_facts` and
+  `strategy_set_recorded_series`, each behind its own `PINEFORGE_HAS_*_V1`
+  probe, install another symbol's bars (each with its own close), their named
+  columns, the symbol's `syminfo` facts and recorded request series before a
+  historical run. A `request.security` of another symbol then runs on that
+  symbol's bars in the requested context -- history, TA, `bar_index`,
+  `time_close` and `syminfo.*` are the requested symbol's -- where only the
+  run's own symbol was addressable; pineforge-codegen's main branch lowers
+  such a site (its b8197fcf). An invalid symbol reads `na` under
+  `ignore_invalid_symbol` and stops the run without it, a symbol with no feed
+  stops the run naming it, an aggregated chart is refused, and a feed or
+  series installed with `n == 0` reads `na`. Each setter answers -1 during a
+  run or on a host with no source layer, and `stream_begin()` fails while a
+  symbol feed or a recorded series is installed. A C++ host installs another
+  instrument's bars with `NativeRunSpec::instrument_feeds` and reads them
+  through a `NativeSeriesSource::InstrumentFeed` series; neither has a C
+  spelling (#292, 7f807b96).
+- **`strategy_declares_bar_magnifier`.** A strategy whose `strategy()` call
+  declares `use_bar_magnifier = true` exports it (it returns 1; every other
+  `.so` lacks the symbol), so a host can run the script on a finer input with
+  the magnifier on, as TradingView backtests it (#294, 74491fa1).
 
 ### Behaviour that moves results against 0.13.1
 
@@ -162,9 +222,9 @@ TradingView behaviour it matches.
   that omits `initial_capital`, `default_qty_type` or `default_qty_value` runs
   with 100000, `strategy.percent_of_equity` and 100 (100 whatever the type:
   100 contracts under `strategy.fixed`, 100 of the account currency under
-  `strategy.cash`), which pineforge-codegen 1.0.0 declares in the generated
-  constructor. Pine v5 scripts and a hand-built `PineStrategyConfig` keep
-  1000000, `strategy.fixed` and 1. To keep a v6 script's old sizing, declare
+  `strategy.cash`), which pineforge-codegen's main branch (78715160, after its
+  v0.10.4) declares in the generated constructor. Code generated by an earlier codegen and a hand-built
+  `PineStrategyConfig` keep 1000000, `strategy.fixed` and 1. To keep a v6 script's old sizing, declare
   the three in its `strategy()` call and transpile it again.
 - `str.tostring` / `str.format` render numbers by the rule TradingView's tapes
   pin (3872c46a, #287).
@@ -178,10 +238,53 @@ TradingView behaviour it matches.
   `ta::PivotPointLevels` computes an anchored period's pivot levels
   (f2ae16c7, de612473, 24c173ed, be41c1bb, 1eef78eb; #281); the six-argument
   `ta::pivot_point_levels` overload computes every type (adb8f2b6, #287).
+- `ta.supertrend` runs Pine's reference from bar 0: its direction is 1 while
+  the ATR warms up and its line is 0 on bar 0, where both read `na` until the
+  ATR was valid, and a recalculated bar advances its ATR once.
+  `ta.percentile_nearest_rank` and `ta.percentile_linear_interpolation` keep
+  TradingView's persistent window, so an `na` in it no longer upsets the
+  order; linear interpolation reads rank p/100 × n − 0.5 (25 % of
+  {20, 30, 40, 50} is 25, not 27.5); `ta.percentrank` reads an `na` value or
+  an all-`na` lookback as 0. `color.t` reads a whole transparency back as set
+  (`color.new(c, 90)` read 91), and `color.red`, `blue`, `black`, `yellow`,
+  `silver` and `teal` are Pine v6's (#F23645, #2962FF, #363A45, #FDD835,
+  #B2B5BE, #089981) (#295, 9e6196ca; #297, 0411892c).
 - Sessions: `session.isfirstbar` / `session.islastbar` are the kernel's
   session-day facts, a session ends at the session day, and an aggregated
   chart and a stream's realtime bar read `session.islastbar` as TradingView
   does (c68fab7e, b531a8d9, 8b843499, be19463d).
+- `session.ispremarket` / `session.ispostmarket` read every window of the
+  session: pre-market runs from 04:00 to the session day's first open and
+  post-market from its last close to 20:00, a break between windows is
+  neither, and an overnight or 24-hour session has neither; they read the
+  in-market predicate's day list. On an extended-hours chart
+  `session.isfirstbar` / `session.islastbar` mark the chart's session day, its
+  pre- and post-market bars included, and `session.isfirstbar_regular` /
+  `session.islastbar_regular` the regular session's, which
+  pineforge-codegen's main branch reads (its fdcdcbb9); the two pairs were one
+  (#293, 962960b3; #295, 9e6196ca).
+- `time()` / `time_close()` and the session predicates read a session
+  argument as TradingView does: each `HHMM` is minutes after midnight,
+  unchecked, so a `"0000-2400"` window, which was skipped, is the whole day; a
+  session of several windows and no day list trades Monday to Friday, and a
+  day list filters each window by its session day; under a D, W or M
+  timeframe the bar is the session's own day, week or month in its timezone
+  (the explicit one, else `syminfo.timezone`), and under an intraday one the
+  bars are cut from each window's open; `time_close("D")`, `("W")` and
+  `("M")` are the exact boundary, not one millisecond before it; a 24-hour
+  session's day runs wall clock to wall clock across a daylight-saving
+  switch. A D, W or M chart bar's `time_close` is its period's last traded
+  close (OANDA:XAUUSD 1D's bars, stamped in the session's break, close at the
+  next 17:00 ET), and an intraday chart bar's closes on its session's grid
+  (NASDAQ:AAPL 60's 15:30 bar at 16:00). Exchange holidays and early closes
+  are not modelled (#295, 9e6196ca).
+- Pine v6's `time()` / `time_close()` with `bars_back` and
+  `timeframe_bars_back` read another bar through
+  `PineStrategyHost::pine_time_offset`, which pineforge-codegen's main branch
+  lowers them onto (its 70c2b4af; they were refused at transpile time): a
+  past bar from the chart's history, a bar ahead from the input the run holds
+  and then the symbol's session calendar, closed days included, and a
+  timeframe's bar stepped on that calendar (#297, 0411892c).
 - A margin call never revives an exit the script cancelled (4b00da92, #287),
   whether the exit was live, dormant, or a gapped stop a declined reversal
   had parked for the next margin call (#289).
@@ -203,6 +306,39 @@ TradingView behaviour it matches.
   A margin call books the nearest tick of the price it fired at, as
   TradingView's market fill does; stop and limit fills keep their directional
   rounding.
+- Margin at placement and fill: an add to a position of its own side is
+  judged on its combined margin with no lot of slack, and a default
+  `percent_of_equity` add is dropped at placement when that exceeds the
+  equity; a bar's same-side market entries from flat all fill, and adds
+  placed on a held position are each judged beside the position held when
+  they were placed, the grown book then called once after the last fill, four
+  times its lot-floored shortfall; a default-size reversal of a position
+  opened at the same open must fit with that position still margined (without
+  slippage); a default `percent_of_equity` short with slippage opens from flat
+  only while its units fit the equity at the signal close's tick; an
+  explicit-quantity market buy from flat is costed at its signal close's tick
+  plus its slippage; under `process_orders_on_close` a gapped default-size
+  stop entry the equity cannot pay for at the open is refused and gone; and a
+  percentage of equity floors the order's money, not the equity rounded first
+  (#294, 74491fa1; #295, 9e6196ca; #297, 0411892c).
+- Margin calls: a `process_orders_on_close` short is margined at its signal
+  close, a carried one is called on its path before the script runs, and a
+  commissioned opening at the next open; a slipped market short's opening
+  call, and the call on a bar's market adds to a long, are sized at the print
+  the fill slipped from; a call the bar's close owes is taken there after the
+  script, a `strategy.close_all` placed on that bar keeping its size, and
+  `strategy.cancel_all` withdraws it, the call then placed again behind the
+  script's orders; on whole-unit lots a call is followed by TradingView's
+  one-unit follow-ups, a sub-unit restore takes its unit only where that unit
+  restores the book at its fill, and a short slipped on whole lots is checked
+  at every point of its bar's path; a call that closes several lots of a long
+  takes the broker's follow-up, and under a percent commission any call is
+  followed and an explicit-quantity short is checked from its entry bar's
+  opening print; under `process_orders_on_close` a one-lot full-margin long's
+  one-unit money call no longer depends on `pyramiding`; a `qty_percent` exit
+  sizes on its entry's filled quantity, the units margin calls took included,
+  and after a call the exits share what remains in the order they were
+  created (#294, 74491fa1; #295, 9e6196ca; #297, 0411892c).
 - A trailing `strategy.exit` placed while its entry is still pending starts
   its running best at the activation, as TradingView's does; on TradingView's
   tapes it exited 1 to 24 bars late.
@@ -218,6 +354,24 @@ TradingView behaviour it matches.
   and a fill booked at an off-grid extreme's tick counts as a fill at that
   extreme. Under the bar magnifier, a market order placed after such a fill
   at an intrabar's second extreme fills there too.
+- `calc_on_order_fills`: what the recalculation of a fill inside a leg of the
+  bar's path places, cancels or closes acts from the end of that leg -- an
+  entry already executable fills at the next extreme's print, a close fills
+  there with or without `immediately = true`, and after a cancel or a full
+  close an exit the rest of the leg reaches still fills at its level; every
+  exit one path point triggers fills there before that point recalculates; an
+  exit re-issued unchanged keeps resting at its level, and a resting entry's
+  bracket stop re-issued at its level stays live there; an exit stop through
+  the first open fill, or an exit limit at or through the open print, that the
+  fill's recalculation places fills there on the entry bar, and one a later
+  open fill's recalculation places is live from the bar's first extreme; after
+  a fill forced onto a leg's end the recalculation's priced entry is live from
+  TradingView's next fill point, with the bar magnifier the next point of its
+  intrabar path; and `timeframe.change()` compares every calculation of a
+  recalculated bar with the bar before it. A `strategy.close` /
+  `strategy.close_all` with `immediately = true` that the bar's calculation
+  executes is final for the bar: no recalculation follows it, and an entry
+  sent behind it fills at the next open (#294, 74491fa1; #297, 0411892c).
 - `process_orders_on_close`: a stop entry whose stop the placing bar's close
   already reached, and the bar's only entry marketable there, fills at that
   close (slippage applied), on the chart, an aggregated chart and under the
@@ -234,6 +388,16 @@ TradingView behaviour it matches.
   resting from an earlier bar. The corpus probe
   `order-deferred-flip-pooc-cross-bar-01` now books all 792 of its
   TradingView tape's trades as TradingView does.
+- `process_orders_on_close`: the close fills the calculation's market orders
+  first, then the priced adds and reversing limits its tick reaches, and then
+  decides every exit the calculation placed against that tick, the exits
+  placed with the entry that just filled included (a stop fills slipped, a
+  limit unslipped, at most one leg per exit order); an entry the script calls
+  after a same-pass `strategy.close_all` or whole-position `strategy.close`
+  is judged against the position the close flattens; a bracket placed after
+  the close's paired entry survives that flat; an exit re-issued while its
+  entry holds no lot is that entry's new exit; and a default entry takes the
+  sizing its bar's margin call revised (#294, 74491fa1; #297, 0411892c).
 - An aggregated chart under the bar magnifier dates every fill at its chart
   bar's open, as TradingView does.
 - The bar magnifier walks TradingView's own intrabars, built from the finer
@@ -261,6 +425,27 @@ TradingView behaviour it matches.
   entry's quantity, oldest lots first, not the whole position, as
   TradingView does; where it closed lots of other entries, the trade rows
   split differently.
+- The `strategy.exit` orders of one entry queue in the order they were
+  created: a re-issue keeps its place and a later exit gets only what the
+  earlier ones leave, so of two exits without `qty` only the first created
+  fills; exits for every entry (`from_entry = ""`) armed before the position
+  opens queue alike. An exit whose entry has neither an open trade nor a
+  waiting order is void and does not wait for a later entry of that id. A
+  `from_entry = ""` exit without a quantity sizes on the whole position when
+  it fills, the lots a later add opened included. A percentage exit keeps one
+  quantity step on a fractional lot grid too. A priced exit that fills on the
+  bar a market add of its own id opened covers that add only when its own
+  fill closed an older lot of that id, and a `qty` exit of an entry a same-bar
+  reversal is still placing waits for that entry to open (#294, 74491fa1;
+  #297, 0411892c).
+- `strategy.close(id)` without `qty` sizes from TradingView's close ledger,
+  the units entered under `id` that no fill has booked yet, with or without
+  `process_orders_on_close`: every fill that reduces the position books the
+  ledger (a close against its call site's first id, an exit against its
+  `from_entry`, anything else oldest first), what an id cannot cover spills
+  over the other ids' units in fill order, a call site's later calls on a bar
+  re-size its one order, and a call whose id has nothing left places nothing
+  (#294, 74491fa1).
 - A `percent_of_equity` default quantity under a cash commission sizes from
   `strategy.equity`, with the open entries' fees charged, and keeps back the
   fee its own order pays, as TradingView does: per order
@@ -269,12 +454,43 @@ TradingView behaviour it matches.
   large. The corpus probe `order-percent-equity-cash-commission-01` now books
   355 of its tape's 366 quantities within TradingView's 0.0001 cell (none
   before).
+- `strategy.netprofit` and `strategy.equity`, and so
+  `strategy.netprofit_percent` and `strategy.openprofit_percent`, charge the
+  entry fees the open lots have paid, as TradingView does; `strategy.openprofit`
+  stays gross. A script that sizes from `strategy.equity` with a commission
+  declared and a position open sizes smaller. `PineStrategyHost::current_equity()`
+  and `net_profit()` read so, `closed_trade_equity()` keeps the old figure,
+  and `BacktestEngine`'s accessors, the report and the C ABI do not change
+  (#297, 0411892c).
+- Reversals and same-bar entries: an entry reversal voids the reversed
+  side's `from_entry = ""` exits, and under a declined reversal such an exit
+  stays the held position's; at Pine v6's all-in defaults a
+  `strategy.close_all` placed after a reversal entry belongs to that
+  reversal, and a protective stop the open is already through fills there
+  when the open declines the reversal (#294). Opposite entries marketable at
+  one fill point from flat fill in TradingView's order -- buy market, buy
+  stop, sell market, sell stop, buy limit, sell limit -- the later one a
+  single transaction of its own quantity plus the pending market's, admitted
+  at the signal close without its commission and dropped past the equity,
+  under `pyramiding`, `process_orders_on_close` and `calc_on_order_fills` too;
+  same-side lots at one point fill market, then stop, then limit (#294); a
+  flat pair of opposite fixed-quantity market entries over the equity keeps
+  only its earlier call (#297). At one opening price, outside
+  `process_orders_on_close` and `calc_on_order_fills`, the market orders fill
+  before the buy limit entries the open reached, lowest limit first, and a
+  same-bar re-issue of a reversing market entry moves only its own quantity
+  (#294). A pending limit entry does not count against `pyramiding`, and a
+  flat limit entry of a fixed default quantity is checked against the equity
+  at every call (#294). A default all-in entry on whole lots whose units cost
+  more than the equity rounded to ten significant digits is dropped from flat
+  and keeps only its closing leg as a reversal, whatever the next open does
+  (#297) (74491fa1, 0411892c).
 - `strategy.margin_liquidation_price` reads `na` when margin calls are
   switched off (`set_margin_call_enabled(false)`, which TradingView has no
   counterpart for); it used to return a price.
 - A `ta.*` call whose length is neither a constant nor an input compiles and
-  computes as TradingView does, with pineforge-codegen 1.0.0 (it refused
-  every such call): a simple length -- fixed for the run, such as one derived
+  computes as TradingView does, with pineforge-codegen's main branch
+  (29bfd210, after its v0.10.4; it refused every such call): a simple length -- fixed for the run, such as one derived
   from `syminfo` or chosen by an input -- gives exactly the constant length's
   answers; a series length re-windows `ta.highest`, `ta.lowest`,
   `ta.highestbars` and `ta.lowestbars` at every call; `ta.supertrend` keeps
@@ -288,11 +504,38 @@ TradingView behaviour it matches.
   run with "requested timeframe '5S' is finer than input '1'"; supply bars of
   that timeframe to read values. A chart fed only its own bars still refuses
   it, so a caller can retry with a finer feed.
+- A `request.security` of a finer timeframe with `lookahead_on` reads the
+  requested bar that opens at or before the calling bar's time, as on
+  OANDA:XAUUSD's daily bars, stamped 17:00 ET inside the session's break
+  (#294, 74491fa1). An N-day timeframe (`"2D"`, `"8D"`) groups the symbol's
+  trading dates N at a time from each year's first, where it read one day;
+  and on a D, W or M chart stamped in its session's break a request of
+  another symbol reads the chart bar's own period (#297, 0411892c).
 - A daily run with an auxiliary feed no longer stops on a session held after
   the regular close, such as NSE's Muhurat sessions (2022-10-24,
   2023-11-12), with "native chart feed trading-period identities must be
   unique and strictly increasing with an auxiliary security feed"; each such
   bar keeps its own slice of the auxiliary bars.
+- `strategy.risk.max_intraday_loss` does not count a fill at the day's first
+  tick -- a carried order closing a position at that open -- as the day's
+  loss (#294). A script's own `strategy.risk.max_intraday_filled_orders`
+  counts as TradingView does: an entry `pyramiding` turns into a no-op is no
+  fill, a `strategy.close` that fills is one, the cap's close for a
+  `process_orders_on_close` fill is taken at the next open, and a close's
+  slot passes to an opposite entry only when the script placed that entry
+  before the close (#295). The corpus probe `cap-gatekeeper-intraday-risk-01`
+  now books all 302 of its TradingView tape's trades exactly (#294,
+  74491fa1; #295, 9e6196ca).
+- A higher-timeframe series completes each calendar bucket once: on NSE:NIFTY
+  a requested weekly series no longer advances again on the bars of a weekend
+  session its template does not declare, and with the daily feed installed a
+  late-opening day (NSE's Muhurat session of 2025-10-21) starts its intraday
+  buckets, `time("60")` and `timeframe.change("60")` at its 13:45 IST open
+  (#296, 7239ab37). A daily chart run magnified on a finer feed dates its bars
+  and orders by the installed daily feed's stamps -- OANDA:XAUUSD's 17:00 ET --
+  not by the session's 18:00 ET open (#298, 35db01c8).
+- A `strategy.entry` quantity of +Infinity or -Infinity trades the strategy's
+  default quantity, as `na` does on TradingView (#297, 0411892c).
 
 ### Performance
 
@@ -312,3 +555,40 @@ TradingView behaviour it matches.
   close-entries rule), then the run's overrides. It recorded the defaults for
   every script, so a fingerprint of a run whose script declares other values
   changes; the trades do not.
+- `run_strategy.py` installs a strategy's pinned request data when
+  `PINEFORGE_REQUESTS_ROOT` is set and `<root>/<strategy directory
+  name>/requests.json` exists: the manifest (`pineforge-probe-requests/v1`)
+  names other symbols' feeds, recorded tapes and symbol facts under that
+  directory's `files/`, each checked against its sha256, and the run's
+  provenance records each feed's and tape's key, sha and length and the
+  manifest's sha. A malformed manifest stops the run before any engine call,
+  and `--runner docker` refuses one; unset, the run is what it was (#292,
+  7f807b96).
+- `run_strategy.py` runs a strategy that declares `use_bar_magnifier = true`
+  magnified, as TradingView backtests it, on the 1-minute feed
+  `PINEFORGE_RUN_MAGNIFIER_FEED` names (held to
+  `PINEFORGE_RUN_MAGNIFIER_FEED_SHA256` when set) unless
+  `runtime_overrides.bar_magnifier` is false: on an intraday chart coarser
+  than 1 minute, and on a daily chart whose daily bars that feed rebuilds
+  exactly (the chart's own bars then date the days). Weekly, monthly and
+  multi-day charts, a run with an auxiliary `request.security` feed and one
+  with no feed log `declared-not-run`; `--runner docker` never reads the
+  declaration (#294, 74491fa1; #298, 35db01c8).
+- On a strategy directory whose `metrics.json` records TradingView's returned
+  range, `run_strategy.py` opens the engine's window on TradingView's first
+  bar when the loaded feed starts there, so an order placed before
+  TradingView's first entry can make it; the rows it reports keep their
+  window. It declares `syminfo.mincontract` from `PINEFORGE_VERIFY_QTY_STEP`
+  when that is a positive finite number and the strategy declares none
+  (`--runner docker` passes no `syminfo` metadata) (#294, 74491fa1).
+- `scripts/symbol_calendar.py` writes a `pineforge-symbol-calendar/v1`
+  document of a symbol's session days from a TradingView tape, and
+  `run_strategy.py` hands the run's symbol the calendar
+  `PINEFORGE_RUN_SESSION_CALENDAR` names (held to
+  `PINEFORGE_RUN_SESSION_CALENDAR_SHA256`; another symbol's is refused) as
+  `syminfo` metadata. The Pine host installs it
+  (`PineStrategyHost::set_symbol_calendar`) and reads the bar after the
+  current one from it -- `time()` / `time_close()` with a bar ahead, a
+  timeframe's bars stepped, `session.islastbar` and
+  `session.islastbar_regular` -- holidays included, and the fingerprint
+  records it (`runtime.session_calendar`) (#298, 35db01c8).

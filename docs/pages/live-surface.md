@@ -4,13 +4,16 @@
 
 **ABI v4** (`PF_ABI_VERSION == 4`) appends 24 exports and two `pf_report_t`
 fields for the separate Python `pineforge-live` recompute-based project built on top
-of this engine (see [`pineforge-workflow-live/docs/superpowers/specs/2026-09-07-pineforge-live-design.md` §3](https://github.com/pineforge-4pass/pineforge-workflow-live)
-for the full contract this surface serves). Every one of the 24 symbols is
+of this engine (see the [Python `pineforge-live` project](https://github.com/pineforge-4pass/pineforge-live)).
+ABI v4 is on `main` and not in a tagged release: v0.13.1, the last tagged
+release, predates it. Every one of the 24 symbols is
 **default off / read-only** and **never changes a historical run**: the
 four configuration setters below default to the pre-v4 behavior, and every
 accessor is a pure read over state the engine already computed for its own
-internal use. Historical-identity is pinned by the L0 evidence in
-[Evidence](#live_surface_evidence).
+internal use. Historical identity is pinned on synthetic tapes by the CTest row
+`test_live_flags_off_identity` (every flag toggled on then off, and an idle
+abort, leave the trades unchanged), and was measured over the corpus when the
+surface landed ([Evidence](#live_surface_evidence)).
 
 **No new evaluator in this surface.** The Python runtime recomputes
 `run_backtest_full`. The optional native C++ runner in this engine repository
@@ -43,13 +46,13 @@ these recomputation controls.
 | `strategy_closed_trade_exit_id` | The engine's own internal exit id (not always the script's `strategy.exit`/`strategy.close` id verbatim — see [String lifetimes and id conventions](#live_surface_strings)). | N/A — read-only. | No |
 | `strategy_closed_trade_exit_comment` | The exit comment string, same row space and lifetime as `strategy_closed_trade_entry_id`. | N/A — read-only. | No |
 | `strategy_closed_trade_close_cause` | Why the *i*-th trade exited: `0` UNKNOWN (reserved for a valid trade with no cause; no live derivation currently returns it), `1` SCRIPT, `2` BRACKET, `3` MARGIN_CALL, `4` INTRADAY_LOSS_CAP, `5` INTRADAY_FILL_CAP, `6` RANGE_END (always wins). `-1` if `s` is `NULL` or `trade_index` is out of range, matching every other indexed accessor's bad-index convention. | N/A — read-only. | No |
-| `strategy_position_size` | The script-facing signed position size (`strategy.position_size`; KI-64 freeze-aware). `NaN` if `s` is `NULL`. | N/A — read-only. | No |
+| `strategy_position_size` | The script-facing signed position size (`strategy.position_size`; while a same-bar `process_orders_on_close` close is frozen it reads the pre-close position). `NaN` if `s` is `NULL`. | N/A — read-only. | No |
 | `strategy_current_equity` | `initial_capital + netprofit` — **not** Pine's `strategy.equity`, which also adds open profit. `NaN` if `s` is `NULL`. | N/A — read-only. | No |
 | `strategy_script_bars_processed` | Total script bars dispatched by the most recent `run()`, mirroring `pf_report_t::script_bars_processed`; includes a stream's warmup leg plus every realtime tick-driven bar. `-1` if `s` is `NULL`. | N/A — read-only. | No |
 
 ## Flag semantics
 
-The four semantics below are stated exactly as the design spec's §3.1–§3.4;
+The four semantics below keep the numbering (§3.1–§3.4) of the `pineforge-live` design they were written for;
 see `include/pineforge/pineforge.h` for the full doxygen (dispatch-path
 scope caveats, interaction with `calc_on_order_fills` and the bar
 magnifier, etc.) — the header is this repository's source of truth.
@@ -256,7 +259,7 @@ by the run in progress and cleared at `run()` entry (a no-op when idle),
 checked at the top of every batch path and stream input loop.
 `strategy_last_run_status(s)` (an append-only status accessor) reports
 whether the most recent run completed
-(`0`) or was aborted (`1`, `NOT_COMPLETED`); `-1` if `s` is `NULL`. L0 pins
+(`0`) or was aborted (`1`, `NOT_COMPLETED`); `-1` if `s` is `NULL`. The CTest row `test_live_flags_off_identity` pins
 **"abort before run → run completes"**: requesting an abort before a run
 starts must not prevent that run from completing, since the flag is
 cleared fresh at `run()` entry.
@@ -314,7 +317,8 @@ same ownership rule as `trades` / `equity_curve` / `trace`.
 `PendingIntentView` from native request definitions/live facts, adapter
 placement snapshots, and receipts; no compatibility order object is rebuilt.
 It starts with `struct_version` and `size` (a self-describing header), followed
-by 98 public projection fields (scalars by value, strings
+by 404 public projection fields (`PF_PENDING_ORDER_FIELD_COUNT`, 406, counts the
+header too) (scalars by value, strings
 as the fixed `char[64]` + truncated-flag + hash64 triple above, enums as
 `int32_t`). `strategy_pending_order_get(s, index, out, size_in)` copies
 `min(size_in, sizeof(pf_pending_order_v1_t))` bytes: an older reader with a
@@ -328,9 +332,11 @@ the mirror can grow (append-only) without breaking it.
 
 ## Evidence {#live_surface_evidence}
 
-Three L0 lanes pin that the ABI v4 surface changes nothing about a
+Three measurement scripts showed, when the surface landed (fork point
+`e3f0d28`, 2026-09-08), that the ABI v4 surface changes nothing about a
 historical run when its flags are left at their defaults, and that the
-engine's own bar aggregation agrees with the corpus's graded feed:
+engine's own bar aggregation agrees with the corpus's graded feed. They are
+not CI gates; re-run them to hold the claim on a later tree:
 
 | Lane | Script | Result |
 | --- | --- | --- |

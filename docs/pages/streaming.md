@@ -90,7 +90,7 @@ report_free(&report);
 strategy_free(strategy);
 ```
 
-Every stream function returns `0` on success and `-1` on failure. Read
+Every `strategy_stream_*` call above returns `0` on success and `-1` on failure. Read
 #strategy_get_last_error immediately after a failure.
 
 An attempt to begin a stream that is already realtime is rejected without

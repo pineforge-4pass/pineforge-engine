@@ -19,10 +19,13 @@ sudo cmake --install build --prefix /usr/local
 | Option | Default | Effect |
 | --- | --- | --- |
 | `CMAKE_BUILD_TYPE` | `Release` | Set to `Debug` for assertions and unstripped symbols. |
-| `PINEFORGE_BUILD_TESTS` | `ON` | Build the 30-binary `ctest` suite. Disable in package builds. |
+| `PINEFORGE_BUILD_TESTS` | `ON` | Build the `ctest` suite (several hundred test binaries). Disable in package builds. |
 | `PINEFORGE_BUILD_TUTORIAL` | `ON` | Build `tutorial/macd/strategy.so`. |
-| `PINEFORGE_BUILD_CORPUS_STRATEGIES` | `OFF` | Compile the private 168-strategy corpus (maintainers only). |
+| `PINEFORGE_BUILD_CORPUS_STRATEGIES` | `OFF` | Build one `strategy.so` per probe of the parity corpus submodule (`git submodule update --init corpus`; 312 probes at its pinned commit). |
 | `PINEFORGE_ENABLE_COVERAGE` | `OFF` | Instrument runtime + tests for source coverage (Clang/GCC). |
+| `PINEFORGE_BUILD_EXAMPLES` | `OFF` | Build the Pine-free hosts of `examples/native/` and their `example_*` CTest rows. |
+| `PINEFORGE_BUILD_SOURCE_LAYER` | `ON` | `OFF` builds the kernel alone; the Pine adapter headers are not installed. |
+| `PINEFORGE_BUILD_LIVE_RUNNER` | `OFF` | Build the native `pineforge-live` runner (SQLite3, libcurl, OpenSSL); see `runner/README.md`. |
 | `CMAKE_INSTALL_PREFIX` | `/usr/local` | Install root. |
 
 ### Install layout
@@ -30,41 +33,39 @@ sudo cmake --install build --prefix /usr/local
 ```
 ${prefix}/
 ├── lib/
-│   ├── libpineforge.a
+│   ├── libpineforge.a          # kernel + Pine adapter (PineForge::pineforge)
+│   ├── libpineforge_kernel.a   # the kernel alone (PineForge::kernel)
 │   └── cmake/PineForge/
 │       ├── PineForgeConfig.cmake
 │       ├── PineForgeConfigVersion.cmake
-│       └── PineForgeTargets.cmake
+│       └── PineForgeTargets*.cmake
 └── include/pineforge/
     ├── pineforge.h        # public C ABI
+    ├── native_c_api.h     # C native-host API (included by pineforge.h)
+    ├── live_parser.h      # parser-plugin ABI of the native live runner
     ├── version.h          # generated version macros
-    ├── bar.hpp            # internal C++ headers (no stability guarantee)
-    ├── color.hpp
-    ├── engine.hpp
-    ├── log.hpp
-    ├── magnifier.hpp
-    ├── math.hpp
-    ├── matrix.hpp
-    ├── na.hpp
-    ├── series.hpp
-    ├── session_time.hpp
-    ├── str_utils.hpp
-    ├── ta.hpp
-    └── timeframe.hpp
+    ├── native_*.hpp       # kernel / native C++ API (see Public contract)
+    ├── *.hpp              # the other C++ headers (no stability guarantee)
+    ├── source/            # Pine adapter headers (internal; not in a kernel-only build)
+    └── compat/pine/       # Pine adapter headers (internal; not in a kernel-only build)
 ```
 
 ## Docker
 
-This repository publishes no container image: a release attaches the
-prebuilt static-lib tarballs above to its GitHub release and notifies the
-release hub, pineforge-release. The hub publishes the image,
-`ghcr.io/pineforge-4pass/pineforge-release`: this runtime, the
-`pineforge-codegen` transpiler of the same version and the one-shot transpile
-+ run harness of `docker/`, built from the release's static-lib tarball. A
-stable release is tagged `X.Y.Z`, `X.Y`, `latest` and
-`engine<E>-codegen<C>`; a release candidate only under its exact version
-(for example `1.0.0-rc.1`) and `engine<E>-codegen<C>`. Pin the tag of the
-release you build against.
+This repository publishes no container image: a release attaches prebuilt
+static-lib tarballs, `pineforge-vX.Y.Z-linux-x86_64.tar.gz`,
+`pineforge-vX.Y.Z-linux-aarch64.tar.gz` and `pineforge-vX.Y.Z-macos-universal.tar.gz`
+(each with a `.sha256`; `lib/`, `include/`, the CMake package, `LICENSE`,
+`NOTICE`, `VERSION`), to its GitHub release and notifies the release hub,
+pineforge-release. v0.13.1 is the last tagged release; main is not yet
+released. The hub publishes the image,
+`ghcr.io/pineforge-4pass/pineforge-release`: this runtime, a pinned
+`pineforge-codegen` transpiler and the one-shot transpile + run harness of
+`docker/`, built from the release's static-lib tarball. The image is tagged
+with the hub's own version (`X.Y.Z`, `X.Y`, and `latest` for the newest stable
+one), with `engine<E>-codegen<C>` naming the pair it carries, and with
+`sha-<short>`; a release candidate gets no `latest`. Pin the
+`engine<E>-codegen<C>` tag of the engine release you build against.
 
 ```bash
 docker pull ghcr.io/pineforge-4pass/pineforge-release:latest

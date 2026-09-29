@@ -32,6 +32,6 @@ What the tapes show, classified by where X filled on the chart bar's path
 | `tailc-w2r-e-sellstop-resting` | long | SELL STOP 5 under X's fill (not executable there) | 159 / 14 / 2 | 51 at W2 / 0 / 0 | 545 | `b20153e058ab89dae5d5fcdd812ed180ecdfb6a9631e13cac854a56fb05cc937` |
 | `tailc-w2r-f-buystop-resting` | short | BUY STOP 5 over X's fill | 154 / 17 / 1 | 47 at W2 / 0 / 0 | 532 | `bfbec52da95af5d0dd2a987eac1565483c285363399275a6ba2bc369787cfdf6` |
 
-Each directory is one `lab tv --no-note` export (pineforge-workflow, channel `ws-report-v1`,
+Each directory is one `lab tv --no-note` export (maintainers' private pineforge-workflow, channel `ws-report-v1`,
 `rangeProof: covered`, BINANCE:BTCUSDT 15, 2025-04-01 .. 2025-05-01), byte-identical:
 `strategy.pine`, `tv_trades.csv` (times UTC+8), `meta.json`, `metrics.json`.

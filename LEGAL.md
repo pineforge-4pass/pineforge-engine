@@ -10,7 +10,7 @@ The PineForge **runtime** (C/C++ sources under `src/`, `include/`, `tests/`, `cm
 
 See [LICENSE](LICENSE) for the full Apache License 2.0 text.
 
-The `corpus/` and `benchmarks/assets/` git submodules are **public** companion repositories, also under **Apache-2.0** for the PineForge-authored material they contain. Each carries its own `LEGAL.md`/`NOTICE`; the per-file scope notes there control (in particular, the TradingView trade-list exports described below are *not* PineForge-licensed works — see "TradingView trade-list exports").
+The `corpus/` and `benchmarks/assets/` git submodules are **public** companion repositories, also under **Apache-2.0** for the PineForge-authored material they contain. Each carries its own `LEGAL.md` (the corpus also a `LICENSE` and `NOTICE`); the per-file scope notes there control (in particular, the TradingView trade-list exports described below are *not* PineForge-licensed works — see "TradingView trade-list exports").
 
 ## The transpiler is a separate, source-available repository
 
@@ -26,6 +26,8 @@ MPL-2.0 applies to Eigen source files as used in your build. See [NOTICE](NOTICE
 
 System packages (e.g. Eigen from `apt` or Homebrew) remain under their upstream licenses.
 
+The optional native live runner (`runner/`, `-DPINEFORGE_BUILD_LIVE_RUNNER=ON`) links SQLite (public domain), libcurl (curl license) and OpenSSL (Apache-2.0 for 3.x) into the `pineforge-live` executable only, never into `libpineforge`; see [NOTICE](NOTICE).
+
 ## Optional benchmark harness (`benchmarks/`)
 
 The **library** build and CI do **not** require Node or PyneCore. The benchmark directory is an **optional** tooling tree.
@@ -35,8 +37,9 @@ If you run `bash benchmarks/run_all.sh`, `npm install`, or install the Python de
 | Dependency area | Typical packages | Upstream license (check exact version) |
 | --- | --- | --- |
 | Node | [PineTS / `pinets`](https://github.com/LuxAlgo/PineTS) | **AGPL-3.0** (and dependencies) |
-| Python | [PyneCore](https://github.com/PyneSys/pynecore) | Apache-2.0 (typical; confirm with PyneSys) |
-| Python | `pandas`, `numpy`, `ccxt`, etc. | BSD/MIT/Apache-style (per package metadata) |
+| Python | [PyneCore](https://github.com/PyneSys/pynecore) | Apache-2.0 |
+| Python | [vectorbt](https://github.com/polakowo/vectorbt) | **Apache-2.0 with Commons Clause** (no selling a product or service whose value derives from it) |
+| Python | `pandas`, `numpy`, `numba` | BSD-style (per package metadata) |
 
 **AGPL-3.0** can impose copyleft obligations when you modify AGPL-covered software and distribute or provide network access to it. PineTS runs as an **optional, separately-installed comparison engine** and is **not** linked into `libpineforge`; we publish numerical results, not PineTS source. The PineForge runtime itself is **not** AGPL.
 

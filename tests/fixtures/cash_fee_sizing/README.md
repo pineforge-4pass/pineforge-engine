@@ -31,7 +31,7 @@ scenario's entry bar and the adapter does not (a recorded divergence; the
 adapter's rows are pinned). `docs/design/native-feature-parity.md` §3.10 has
 the measurement.
 
-Each directory is one `lab tv` export (pineforge-workflow, channel
+Each directory is one `lab tv` export (maintainers' private pineforge-workflow, channel
 `ws-report-v1`, `rangeProof: covered`, `--no-note`), byte-identical:
 `strategy.pine`, `tv_trades.csv` (times UTC+8), `meta.json`, `metrics.json`.
 `hthin-x15b-fifo-fee-basis` is lane H-THIN's tape (its X15 b measurement: a

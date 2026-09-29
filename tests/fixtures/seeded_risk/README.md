@@ -25,7 +25,7 @@ can make in process, and was an uncommitted experiment until this fixture.
 of the tree, builds the runtime and the five probes, checks that the unseeded
 run still hashes to `scripts/corpus_parity_baseline.txt`, runs each probe
 seeded and compares the counts. Exit 0 reproduced, 1 the measurement moved, 2
-the patch no longer applies. On this tree (spark, 29 s): the drawdown probe
+the patch no longer applies. On this tree (aarch64 Linux, 29 s): the drawdown probe
 and `cap-risk-gates-allow-max-intraday-01` identical (1502 / 1464 rows),
 `cap-max-intraday-filled-orders-isolate-01` 3840 of 3916 rows differ from
 2025-04-08, `cap-gatekeeper-intraday-risk-01` 312 of 604 from 2025-10-25,

@@ -1,7 +1,7 @@
 # Exit-leg lifecycle {#exit_leg_lifecycle}
 
 This model changes the internal C++ object layout. Consumers must rebuild against
-the matching engine headers and archive; old v7 objects are incompatible.
+the matching engine headers and archive; objects built against an earlier epoch are incompatible.
 Public C ABI 4 and stream API 1 stay unchanged. The full 155-field pending-mirror
 prefix is preserved; 163 canonical lifecycle fields follow it, with admission
 facts in a separate append segment.
@@ -24,7 +24,7 @@ limit and trail availability are queried independently of their trigger presence
 and existing activation readiness. Suspension of one leg grants no other leg's
 permission.
 
-`compat::pine::exit_lifecycle` selects the existing suspension, pair hold and
+`include/pineforge/compat/pine/exit_lifecycle.hpp` (`select_exit_suspension` and its siblings) selects the existing suspension, pair hold and
 predecessor-stop policy. It preserves legacy bar-only/cycle-ID tests without
 claiming the old cause proves ownership of the new target. Native validation
 uses the actual current target. Repeated decline does not clear a retirement.

@@ -8,7 +8,7 @@ generated-state checkpoint therefore has to hold the drawing arenas exactly,
 which lane K-DRAWSNAP made cheap (`include/pineforge/drawing.hpp`).
 
 `coof-drawing-rollback/` is one `lab tv --no-note` export by lane CG-POPFIX
-(pineforge-workflow, channel `ws-report-v1`, `rangeProof: covered`), copied
+(maintainers' private pineforge-workflow, channel `ws-report-v1`, `rangeProof: covered`), copied
 byte-identical from `exec/CG-POPFIX-scratch/tv/coof-drawing-rollback/out/`:
 `strategy.pine`, `tv_trades.csv` (times UTC+8), `meta.json`, `metrics.json`.
 The tape's sha256 is `metrics.json` `tvTradesCsvHash`

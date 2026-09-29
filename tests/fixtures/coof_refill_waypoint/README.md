@@ -23,7 +23,7 @@ no kernel trigger that arms at a waypoint; resting a limit to the chart bar's ex
 the refills of a magnified script run unmagnified), and the test records those rows (-d:
 eight engine rows, six tape rows; -e: three and one).
 
-Each directory is one `lab tv --no-note` export (pineforge-workflow, channel
+Each directory is one `lab tv --no-note` export (maintainers' private pineforge-workflow, channel
 `ws-report-v1`, BINANCE:BTCUSDT 15, 2025-04-01 .. 2025-05-01), byte-identical:
 `strategy.pine`, `tv_trades.csv` (times UTC+8), `meta.json`, `metrics.json`.
 

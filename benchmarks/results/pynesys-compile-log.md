@@ -1,6 +1,6 @@
 # PyneSys cloud-compile request log
 
-Every request this lane sent to the PyneSys API with the owner's key (limit: 100 requests per rolling hour). Written by `pineforge-utils/bench-maintenance/cloud_compile_ratelimited.py`, a wrapper around `cloud_compile.py`'s `pyne compile … --force` command: one compile is one HTTP request; at most 90 requests in any rolling 3600 s; requests sequential with a 5 s gap; HTTP 429 → wait, then retry once; an auth error stops the batch. No key and no compiled code is logged.
+Every request this refresh sent to the PyneSys API with the maintainer's key (the API's own limits, request 1 below: 120 requests per clock hour, 300 a day). Written by a maintainer-only rate-limited wrapper around `pyne compile … --force`: one compile is one HTTP request; at most 90 requests in any rolling 3600 s; requests sequential with a 5 s gap; HTTP 429 → wait, then retry once; an auth error stops the batch. No key and no compiled code is logged.
 
 ## Counts
 

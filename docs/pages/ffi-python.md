@@ -2,15 +2,19 @@
 
 @tableofcontents
 
-The C ABI is FFI-friendly by design: a compact function set, 11 POD
-structs, one enum, no callbacks, no opaque types except `pf_strategy_t`
-(which is `void*`). This page shows the canonical `ctypes` wiring for Python; any
+The strategy `.so` surface is FFI-friendly by design: a compact function
+set, plain POD structs, integer enums, no callbacks, no opaque types except
+`pf_strategy_t` (which is `void*`). Only the native-host API of
+`<pineforge/native_c_api.h>`, which `pineforge.h` includes, takes a callback
+table. This page shows the canonical `ctypes` wiring for Python; any
 language with a C-FFI (Rust `libc`, Go `cgo`, Node `ffi-napi`,
 Julia `ccall`) follows the same shape.
 
-## Full ctypes mirror
+## ctypes mirror of the report structs
 
-A complete, paste-able mirror of `<pineforge/pineforge.h>`:
+A paste-able mirror of the eleven structs a backtest or stream harness
+exchanges (the native run-spec, FX-curve, stream-action and pending-order
+structs of `<pineforge/pineforge.h>` are not mirrored here):
 
 ```python
 import ctypes
@@ -184,9 +188,10 @@ itself. Open it with `ctypes.CDLL`:
 lib = ctypes.CDLL("./my_strategy.so")
 
 # ABI guard — pf_report_t is CALLER-allocated, so running an old .so
-# against the v2 mirror above (or vice versa) silently corrupts memory.
+# against the v4 mirror above (or vice versa) silently corrupts memory.
 # Verify the .so's layout version before any run:
-EXPECTED_PF_ABI = 4   # PF_ABI_VERSION in <pineforge/pineforge.h>
+EXPECTED_PF_ABI = 4   # PF_ABI_VERSION in <pineforge/pineforge.h> on main (not yet
+                      # released); a v0.13.1 .so answers 3 and needs that release's mirror
 try:
     lib.pf_abi_version.restype = ctypes.c_int
     abi = lib.pf_abi_version()
@@ -294,14 +299,16 @@ clock advancement, and partial-bar rules.
 import csv
 
 # Load OHLCV
-bars = (pf_bar_t * n)()
 with open("ohlcv.csv") as f:
-    for i, row in enumerate(csv.DictReader(f)):
-        bars[i] = pf_bar_t(
-            float(row["open"]), float(row["high"]),
-            float(row["low"]),  float(row["close"]),
-            float(row["volume"]), int(row["timestamp"]),
-        )
+    rows = list(csv.DictReader(f))
+n = len(rows)
+bars = (pf_bar_t * n)()
+for i, row in enumerate(rows):
+    bars[i] = pf_bar_t(
+        float(row["open"]), float(row["high"]),
+        float(row["low"]),  float(row["close"]),
+        float(row["volume"]), int(row["timestamp"]),
+    )
 
 s      = lib.strategy_create(b"{}")
 report = pf_report_t()
@@ -332,7 +339,7 @@ lib.strategy_free(s)
 | `commit_sha` truncated. | Use `c_char_p` and `.decode("utf-8")`, not a fixed-size buffer. |
 | `int` parameters silently truncated. | Set `argtypes` explicitly — never rely on inference. |
 | Tried to `report_free` twice. | Safe — it's idempotent. |
-| Held `report.trace_names[i]` past `strategy_free`. | The strings live on the strategy. Copy before freeing. |
+| Held `report.trace_names[i]` past the next run or `strategy_free`. | The strings live on the strategy and each run clears them. Copy them first. |
 | Tried to share a handle across threads. | Don't — handles are not thread-safe. One handle per worker. |
 
 ## See also

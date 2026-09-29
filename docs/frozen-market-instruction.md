@@ -42,7 +42,7 @@ is introduced by this structural change.
 The selector, full-book admission and execution scopes are unchanged: historical
 close calculation; FIXED sizing; default FIFO; pyramiding at most one; no costs,
 slippage, magnifier, stream or risk extensions. Exact source conditions remain
-in `same_bar_market_tx_scope_is_live` and its command producers.
+in `PineExecutionAdapter::same_bar_market_tx_scope()` and its command producers.
 
 The complete pending book must contain only accepted operations and at most
 two MARKET entries with distinct IDs. An unrelated priced/raw/bracket/close-all
@@ -64,7 +64,7 @@ No Pine selection predicate has been moved into the native contract by renaming.
 
 ## Observation and compatibility
 
-The existing 142-field public pending-order mirror is append-only. Every old
+The public pending-order mirror (`pf_pending_order_v1_t`, 406 POD fields today) is append-only. Every old
 field retains its type, size and offset, including the old full-prefix trailing
 padding. The six old `sbmt_*` outputs are derived projections only; they are not
 writable engine state. Ordinary/revoked operations project false flags and NaN
@@ -79,8 +79,12 @@ The representation is now adapter-owned over native requests. The frozen public
 mirror layout remains append-only and is projected from those facts.
 Public C ABI4 and stream API1 are unchanged.
 
-`test_frozen_market_instruction` uses literal price-100 fixtures and direct
-native command transitions. It pins role construction, amounts in both
+`test_frozen_market_instruction` pinned role construction, amounts in both
 orientations, quantity ownership, whole-book revocation, replacement,
-cancellation, hash sensitivity, string truncation and the full public prefix.
-It does not use external tapes, expected provider trades or a grader.
+cancellation, hash sensitivity, string truncation and the full public prefix
+with literal price-100 fixtures and direct native command transitions. It left
+the build with the legacy owner (`tests/twin_parity_inventory.json`,
+"removed"); the registered row is its native-route twin
+`test_frozen_market_instruction_l4d`, which takes the frozen transaction facts
+from real source commands. Neither uses external tapes, expected provider
+trades or a grader.

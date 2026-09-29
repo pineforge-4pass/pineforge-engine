@@ -33,8 +33,8 @@ the one a host programs against.
 <div class="tabbed">
 
 - <b class="tab-title">I'm new here</b>
-  Read **[Getting Started](@ref getting_started)** for a 60-second build
-  + run, then **[Lifecycle](@ref lifecycle)** to understand handle
+  Read **[Getting Started](@ref getting_started)** for the build, test
+  and install steps, then **[Lifecycle](@ref lifecycle)** to understand handle
   ownership, then **[Tutorial: MACD](@ref tutorial_macd)** for an
   end-to-end working example.
 
@@ -52,8 +52,8 @@ the one a host programs against.
   **[ABI stability](@ref abi_stability)** so you know what you can rely on.
 
 - <b class="tab-title">I'm calling from Python / another language</b>
-  Read **[FFI from Python](@ref ffi_python)** — full ctypes mirror of
-  every POD in `pineforge.h` — or jump to the
+  Read **[FFI from Python](@ref ffi_python)** — a ctypes mirror of
+  the structs a backtest or stream harness exchanges — or jump to the
   **[Pure C](@ref examples_c)** or **[Rust](@ref examples_rust)** worked
   examples.
 
@@ -106,7 +106,8 @@ End-to-end, runnable examples that go beyond the MACD tutorial.
 
 **Driving the kernel yourself.** Every host under `examples/native/` is a
 complete, self-contained program that checks its own results and is run as a
-CTest row (`ctest --test-dir build -R example_`). They link `PineForge::kernel`
+CTest row when configured with `-DPINEFORGE_BUILD_EXAMPLES=ON`
+(`ctest --test-dir build -R example_`). They link `PineForge::kernel`
 directly, so a Pine-layer symbol reaching one is a link error.
 
 | Host | What it demonstrates |
@@ -126,6 +127,9 @@ directly, so a Pine-layer symbol reaching one is a link error.
 | `native_price_grid_strategy.cpp` | One strategy under all four instrument price-grid answers. |
 | `native_price_grid_c.c` | The same four answers from C, read back off the event history. |
 | `native_open_lots_strategy.cpp` | The open book lot by lot, and who folds the equity extremes. |
+| `native_fee_reserve_strategy.cpp` | A cash-sized opening that reserves its own commission, in a JPY account trading a USD-quoted stock. |
+| `native_fx_roll_strategy.cpp` | An account-currency FX curve, and the margin check point a step of it produces. |
+| `native_broker_hash_strategy.cpp` | Per-bar broker-state hashes, with the host's own state folded into them. |
 
 ---
 
@@ -207,7 +211,7 @@ Build the generated strategy module with the repository recipe (or
 
 | Page | What it covers |
 | --- | --- |
-| [Getting Started](@ref getting_started) | Build, test, install and link in under a minute. |
+| [Getting Started](@ref getting_started) | Build, test, install and link. |
 | [Install](@ref install) | What `cmake --install` puts where, and the package layout. |
 | [CMake integration](@ref integration_cmake) | `find_package(PineForge)` in a downstream project. |
 | [Tutorial: MACD on BTCUSDT](@ref tutorial_macd) | One strategy from `.pine` to a graded trade list. |
@@ -217,13 +221,13 @@ Build the generated strategy module with the repository recipe (or
 | Page | What it covers |
 | --- | --- |
 | [Strategy lifecycle](@ref lifecycle) | Handle ownership, run reuse and report freeing. |
-| [Configuration](@ref configuration) | Inputs, `strategy()` overrides, symbol metadata, timezones and sessions. |
+| [Configuration](@ref configuration) | Inputs, `strategy()` overrides, the bar magnifier, trace recording and the trade-start gate. |
 | [Report schema](@ref report_schema) | `pf_report_t` field by field, including the equity curve. |
 | [Trading metrics reference](@ref metrics) | Every `pf_metrics_t` field: units, NaN rules, validation status. |
 | [ABI stability](@ref abi_stability) | The append-only guarantee, and the internal C++ epochs behind it. |
 | [Public contract for 1.0](@ref public_contract) | What the version number promises from 1.0.0: the C ABI, the native C++ API, the script ABI epoch, the C-surface boundary, and the pairing with codegen. |
 | [ABI v4 live surface](@ref live_surface) | The default-off live accessors: abort, realtime tail, broker-state hash, pending-order mirror. |
-| [FFI from Python](@ref ffi_python) | A ctypes mirror of every POD in `pineforge.h`. |
+| [FFI from Python](@ref ffi_python) | A ctypes mirror of the structs a backtest or stream harness exchanges. |
 
 **Writing a native host**
 

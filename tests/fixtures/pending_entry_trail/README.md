@@ -9,7 +9,7 @@ child (`relative_leg_shapes`, armed through `resolve_anchored_level`) and
 adopts it at the fill. `tests/test_pending_entry_trail_tapes.cpp` replays every
 trade below through the adapter and reads the kernel's record.
 
-Each directory is one `lab tv` export (pineforge-workflow, channel
+Each directory is one `lab tv` export (maintainers' private pineforge-workflow, channel
 `ws-report-v1`, `rangeProof: covered`, NYSE:F 15, 2025-04-01 .. 2026-04-10),
 byte-identical: `strategy.pine`, `tv_trades.csv` (times UTC+8), `meta.json`,
 `metrics.json`.

@@ -87,7 +87,8 @@ Checklist when touching runtime exports — update ALL of these together:
 
 1. `src/c_abi.cpp` — the implementation (and its file-header symbol comment).
 2. `include/pineforge/pineforge.h` — the `PF_API` declaration (+ doxygen).
-3. `scripts/check_c_abi_runtime.py` — add the symbol to `EXPECTED_RUNTIME`.
+3. `scripts/check_c_abi_runtime.py` — add the symbol to `EXPECTED_RUNTIME` and
+   bump `EXPECTED_PUBLIC_DECLARATIONS` / `EXPECTED_RUNTIME_IMPLEMENTATIONS`.
 4. Python ctypes harnesses if consumers must call it
    (`scripts/run_strategy.py`, `tutorial/run*.py`, `docker/run_json.py`,
    `benchmarks/throughput/grid_search_repro.py`).
@@ -107,9 +108,9 @@ they are codegen-emitted; the checker enforces exactly that split.
 ## Refactor workers (native-engine programme, R4 and later)
 
 Applies to any agent — Claude, Codex, OpenCode — implementing a slice of the
-native-engine refactor in this repository. The campaign repo's standing
-orders (`pineforge-workflow/AGENTS.md`, "Roles and dispatch") govern who
-dispatches, reviews and measures; this section is what binds you here.
+native-engine refactor in this repository. The maintainers' campaign
+repository (`pineforge-workflow`, private; its `AGENTS.md`, "Roles and dispatch")
+governs who dispatches, reviews and measures; this section is what binds you here.
 
 - You work in the worktree and branch your brief names, on the files it
   lists as yours, and nowhere else. A need in another file is reported to the

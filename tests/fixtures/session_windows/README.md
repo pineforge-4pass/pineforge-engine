@@ -47,7 +47,7 @@ followed by history reads the tests here do not use.
   differs only in its title and header comment, `strategy.pine` sha256
   `1a78deccefb408d955112da398240e8fc5b146d126c40e514ee24078e4af83d4`).
 - **exporter copy**: `lab tv` and the WebSocket exporter
-  `pinescript-scrapper/scripts/tv-ws-backtest.mjs` ask TradingView for the
+  `pinescript-scrapper/scripts/tv-ws-backtest.mjs` (maintainers' private tooling) ask TradingView for the
   regular session. The extended-hours tapes, and the two regular AAPL 60
   tapes exported beside them, ran lane CG-ISMARKET's copy of the exporter
   that differs in one line, `session: process.env.CGIM_TV_SESSION ||

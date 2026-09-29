@@ -10,7 +10,7 @@ close, its quantity grown by the side it was placed against.
 adapter on the 15m chart (`-chart`) or the 1m bars aggregated to 15m under the
 magnifier (`-mag`).
 
-Each directory is one `lab tv` export (pineforge-workflow, channel `ws-report-v1`,
+Each directory is one `lab tv` export (maintainers' private pineforge-workflow, channel `ws-report-v1`,
 `rangeProof: covered`, NYSE:F 15, window 2025-07-01 .. 2025-07-08), byte-identical:
 `strategy.pine`, `tv_trades.csv` (times UTC+8), `meta.json`, `metrics.json`. The
 scripts count chart bars from 2025-07-02 09:30 ET, the first bar of

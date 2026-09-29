@@ -17,7 +17,7 @@ data ends (its exit signal empty) and no bracket leg is left to close it.
 Pine adapter on the 15m chart (`-chart`) or the 1m bars aggregated to 15m under
 the magnifier (`-mag`; its row 4 is a recorded divergence, see the test).
 
-Each directory is one `lab tv` export (pineforge-workflow, channel `ws-report-v1`,
+Each directory is one `lab tv` export (maintainers' private pineforge-workflow, channel `ws-report-v1`,
 `rangeProof: covered`, NYSE:F 15, window 2025-07-01 .. 2025-07-08, `--no-note`),
 byte-identical: `strategy.pine`, `tv_trades.csv` (times UTC+8), `meta.json`,
 `metrics.json`. The scripts count chart bars from 2025-07-02 09:30 ET, the first

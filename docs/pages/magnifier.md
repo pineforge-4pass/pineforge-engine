@@ -79,8 +79,8 @@ its own close. The host marks the chart bar's open and close as one-price bars
 that traded nothing where an intrabar straddles its first minute or leaves its
 last one to the next bar, and the kernel walks such a bar as one point. The
 rows from 1 minute to 1 day were measured against TradingView's own
-`request.security_lower_tf` bars and magnified exports (R5 lane MAG-INTRABAR:
-`tests/test_adapter_magnifier_intrabar_tapes.cpp`,
+`request.security_lower_tf` bars and magnified exports
+(`tests/test_adapter_magnifier_intrabar_tapes.cpp`,
 `tests/fixtures/magnifier_intrabars`).
 
 The host walks the input bars themselves when it cannot build TradingView's:
@@ -97,7 +97,7 @@ which a 1-minute feed does not carry.
 | Mode | Density profile | Use case |
 | --- | --- | --- |
 | `PF_MAGNIFIER_UNIFORM` | Even spacing across the bar. | Symmetric noise; no prior on where fills cluster. |
-| `PF_MAGNIFIER_COSINE` | Tapered ends, dense middle. | Smooth volatility profile. |
+| `PF_MAGNIFIER_COSINE` | Dense at the bar's two ends (cosine spacing), sparse in the middle. | Smooth volatility profile. |
 | `PF_MAGNIFIER_TRIANGLE` | Linear taper from a peak. | Single-peaked intraday activity. |
 | `PF_MAGNIFIER_ENDPOINTS` *(default)* | Exact O,H,L,C points + uniform fill between. | TV-parity default. Best for stop/limit fill realism. |
 | `PF_MAGNIFIER_FRONT_LOADED` | Density biased toward bar open. | Open-driven assets (futures session opens). |

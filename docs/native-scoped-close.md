@@ -81,5 +81,5 @@ cannot report Applied with zero closed units. Exceptions during commitment
 retain the existing abort/discard-and-replay contract; this seam does not
 promise rollback or in-place retry.
 
-See [refactor progress](native-refactor-progress.md) for the remaining
-native order and adapter work.
+See [refactor progress](native-refactor-progress.md) for the record of the
+native refactor's phases.

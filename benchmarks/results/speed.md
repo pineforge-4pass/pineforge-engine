@@ -55,7 +55,7 @@ Timing is valid only on a quiet host: 1-minute load average below 6.0 and no `cm
 - **vectorbt:** in-process timing of the slots that ship a `strategy_vbt.py` port
   (vectorized Pandas/NumPy + Numba). Median over `N=20` iterations.
 - **PineTS:** subprocess wall time of `node runners/run_pinets_canonical.mjs`. PineTS has
-  no strategy backtester upstream; the canonical indicator script (10 indicators) is
+  shipped a `strategy.*` namespace since 0.9.17, but the harness has no PineTS strategy runner; the canonical indicator script (10 indicators) is
   timed as its indicator-layer cost. Single entry, not per-strategy.
 
 **Mixed-methodology note:** PineForge and vectorbt are timed in-process while
@@ -293,13 +293,13 @@ realistic cost for engines whose entry point IS the process.
 
 ## Provenance
 
-- **PineForge re-timed at `063e4460`.** Lane BENCH3 re-ran the PineForge sweep on 2026-09-22 at
+- **PineForge re-timed at `063e4460`.** The BENCH3 window re-ran the PineForge sweep on 2026-09-22 at
   11:57–12:07 UTC, on engine `main` `063e4460` running the committed `generated.cpp` (codegen
   `89645d6`). The sweep ran as two Google Benchmark batches, slots 001–100 and slots 101–201, on an
   Apple M4 Max (12 performance + 4 efficiency cores). The throughput package and a paired A/B
   followed, 13:29–14:22 UTC.
 - **The other engines were not re-measured.** The PyneCore 6.10.2, PineTS 0.9.34 and vectorbt
-  0.28.2 columns are lane BENCH2's, measured 2026-09-22 03:03–05:30 UTC on the same host with the
+  0.28.2 columns are the BENCH2 window's, measured 2026-09-22 03:03–05:30 UTC on the same host with the
   same versions and harness. They are regenerated from the same timing files, which reproduce
   BENCH2's report byte for byte.
 - **Quiet-host gate.** Before every batch, the 1-minute load average had to be below 6.0 with no
@@ -313,7 +313,7 @@ realistic cost for engines whose entry point IS the process.
     the runs that followed each other directly re-checked it before starting.
 - **`063e4460` against `e9ad37dd`: 0.94× the time, paired.** Both engines were built on this host
   and timed in one window (14:17–14:22 UTC, gate 5.40), alternating new, old, old, new over 26
-  public slots (every fourth slot, plus 004, 021 and 061).
+  public slots (every fourth slot from 001 to 097, plus 004; the set includes 004, 021 and 061, the three probes the 2026-06-11 population shares).
   - Per strategy, `063e4460` takes 0.94× the time of `e9ad37dd` at the median (p10 0.91×,
     p90 1.01×), and is faster on 22 of the 26 slots. In the first pair, run at equal load, it is
     faster on all 26 (median 0.93×).
@@ -328,13 +328,13 @@ realistic cost for engines whose entry point IS the process.
   - Two earlier runs were discarded. The first passed the gate at 12:08:00 UTC (load 5.88), but
     another project's container work took the 1-minute load to 16.8 before its benchmark began.
     The second passed at 13:09:51 UTC (5.80), but the script's own build step recompiled the
-    bench tree after a commit had changed the version header, and the run hit the tool's time
+    bench tree after a commit had changed the version header, and the run hit the session's time
     bound.
-- **The 2026-09-21 attempt (lane BENCH1) timed nothing.** The same gate was polled every ~5 minutes
+- **The 2026-09-21 attempt (the BENCH1 window) timed nothing.** The same gate was polled every ~5 minutes
   for four hours (15:49–19:49 UTC, 100 probes), and no probe passed.
   - The 1-minute load was at least 7.74 (17:49:26 UTC, with 8 build/test processes), 97.0 at the
     median and 233.2 at the maximum.
-  - Every probe found 5–16 build/test processes from other lanes' `ci_verify` runs.
+  - Every probe found 5–16 build/test processes from other `ci_verify` runs on the host.
   - That is why BENCH2 timed PyneCore together with PineForge.
 - **PyneCore: 196 of 201 slots timed.** Five slots were not timed:
   - 192: PyneSys rejects its source, so there is no `strategy_pyne.py`.
@@ -342,10 +342,10 @@ realistic cost for engines whose entry point IS the process.
     first partial day.
   - 143: the same `RuntimeError`, but non-deterministic. All five of BENCH2's attempts failed, at
     different bars (2026-03-02, 03-16, 04-06 …), although one BENCH1 parity run completed.
-- **Two slow closed slots were re-timed across tool calls.** Slots 162 (35.8 s per run) and 178
-  (72.5 s per run) did not finish inside one chunk's 10-minute tool window. BENCH2 re-took their 20
+- **Two slow closed slots were re-timed across sessions.** Slots 162 (35.8 s per run) and 178
+  (72.5 s per run) did not finish inside one chunk's 10-minute session limit. BENCH2 re-took their 20
   runs with a copy of `time_pynecore.py`'s `time_one` loop (same subprocess, same clock), split
-  across tool calls:
+  across sessions:
   - 162 ran alone.
   - 178 ran its first 7 runs alone and the other 13 beside the chunks for slots 179–192 and
     193–201 (7 workers plus 1).

@@ -18,8 +18,8 @@ concept deliberately has no native counterpart.
 
 The 19 `strategy()` declaration parameters listed below, every `strategy.*` builtin, every
 `request.*` form and every `barmerge.*` constant has a row below. Other Pine declaration
-arguments are source or display policy; the inventory crosswalk below records their
-absence instead of claiming a native parameter. The offered
+arguments (`title`, `overlay`, `max_lines_count` and the rest) are source or display
+policy and carry no row here. The offered
 set is not this page's opinion: the `strategy.*`, `request.*` and `barmerge.*`
 rows come from the repository's own Pine v6 inventory,
 `docs/pine_v6_coverage_detail.md`, and the
@@ -91,7 +91,7 @@ Each map below has five columns.
 | column | what it holds |
 | --- | --- |
 | Pine | the spelling TradingView offers, exactly as the inventory spells it |
-| C++ | the symbol a `NativeStrategyHost` uses, with its `file:line` |
+| C++ | the symbol a `NativeStrategyHost` uses, with its `path:line` |
 | C | the same thing through `<pineforge/native_c_api.h>` or `<pineforge/pineforge.h>`, or `—` when the C surface has none |
 | Runs in | a host under `examples/native/` that exercises it, or the test that pins it |
 | Notes | the behaviour difference a Pine author would otherwise guess wrong |
@@ -100,7 +100,7 @@ A `none` in the C++ column is a **ruling**, never a gap: it names why the
 kernel does not have the concept and where the behaviour lives. The two
 normative ruling tables are ADR-0001's "Kernel capabilities the Pine adapter
 does not declare" and the design record's §3.6
-(`native-feature-parity.md:417`); both are held against the tree by
+(`docs/design/native-feature-parity.md`); both are held against the tree by
 `scripts/check_native_feature_rulings.py`.
 
 Every example named here is a CTest row: `ctest --test-dir build -R example_`
@@ -128,7 +128,7 @@ rather than defaulted.
 | `commission_value` | `fee_value` native_run_spec.hpp:658 | `fee_value` pineforge.h:502 | `native_open_lots_strategy.cpp` | Quoted per execution by `quote_execution_commissions` engine_execution.cpp:1588. A cash-per-execution ticket is split by units over every slice of that execution. |
 | `slippage` | `slippage_ticks` native_run_spec.hpp:652 | `slippage_ticks` pineforge.h:502 | `native_price_grid_strategy.cpp` | Raw `ticks * price_tick`, applied once native_execution_consumer.cpp:3980-3981. TradingView's round-then-slip order is adapter-only. |
 | `process_orders_on_close` | `NativeCloseExecution` native_run_spec.hpp:33 | `close_execution` pineforge.h:503 | `native_open_lots_strategy.cpp` | `AfterCalculation` emits the post-calculation close point native_execution_consumer.cpp:7786-7787, so a request submitted in bar *k*'s calculation fills at bar *k*'s own close. |
-| `pyramiding` | `max_open_lots` native_run_spec.hpp:664 | `max_open_lots` pineforge.h:505 | `native_open_lots_strategy.cpp` | Caps surviving+new physical lots (`resulting_lot_count` native_execution_consumer.cpp:3096). The Pine adapter keeps its own per-cycle *entry count*, ruled **adapter-policy** in ADR-0001's table row `max_open_lots`; measured against TradingView it is not TradingView's rule, and this cap is the closer one (14 of 15 tape scenarios against 12, `tests/test_pyramiding_count_differential.cpp`). Lowered onto the cap, four corpus probes move away from TradingView, for want of its first-eligible-point rule, so the adapter keeps its count. |
+| `pyramiding` | `max_open_lots` native_run_spec.hpp:664 | `max_open_lots` pineforge.h:505 | `native_open_lots_strategy.cpp` | Caps surviving+new physical lots (`resulting_lot_count` native_execution_consumer.cpp:3096). The Pine adapter keeps its own per-cycle *entry count*, ruled **adapter-policy** in ADR-0001's table row `max_open_lots`; measured against TradingView it is not TradingView's rule, and this cap is the closer one (14 of 15 tape scenarios against 13, `tests/test_pyramiding_count_differential.cpp`). Lowered onto the cap, four corpus probes move away from TradingView, for want of its first-eligible-point rule, so the adapter keeps its count. |
 | `default_qty_type` | `Sized` native_order.hpp:164 with `CashValue` native_order.hpp:91 or `EquityFraction` native_order.hpp:97 | `PF_NATIVE_INTENT_SIZED` native_c_api.h:348 with `size_basis` native_c_api.h:2147 | `native_sized_report_strategy.cpp` | The size is a property of the *request*, not of the run: a native host may size one order by cash and the next by equity fraction. `Transact` native_order.hpp:41 is the fixed-units form. Pine itself has no per-call `qty_type` — TradingView's compiler refuses one — so a script's `strategy.entry(qty = ...)` is always units; the source layer's typed per-call entry, which only generated or C++ callers reach, converts its money exactly as the declared default does. |
 | `default_qty_value` | the basis's own scalar: `CashValue::cash` native_order.hpp:92, `EquityFraction::fraction` native_order.hpp:98 | `intent_value` native_c_api.h:2151 | `native_sized_report_strategy.cpp` | `SizeTime` native_order.hpp:106 chooses *when* the basis resolves and `SizePrice` native_order.hpp:146 *which* price it converts at; both compose. |
 | `calc_on_order_fills` | `NativeCalculationTrigger` native_run_spec.hpp:94 | `calculation` native_c_api.h:2321 | `native_calc_on_fills_strategy.cpp` | `BarCloseAndFills` recalculates once at the cursor of each applied execution, bounded by `max_recalculations_per_point` native_run_spec.hpp:695. The generic cadence only: TradingView's waypoint-only refill, its two-fills-at-open rule and its script-state rollback stay in the adapter. |
@@ -140,7 +140,7 @@ rather than defaulted.
 | `use_bar_magnifier` | `IntrabarPath` native_run_spec.hpp:378 | `intrabar_kind` native_c_api.h:2374 | `tests/test_native_calc_timing.cpp` | The host owns the lower bars, as `lower_tf` native_run_spec.hpp:394 or `synthesized` native_run_spec.hpp:408. The C magnifier arguments of `run_backtest_full` pineforge.h:610 configure a *compiled Pine strategy*, never a native host; its lower bars are TradingView's own intrabars, built from the finer feed at TradingView's table's timeframe (2 minutes on a 15-minute chart) and owned by the chart bar holding their last minute (`tradingview_magnifier_bars` magnifier_intrabars.hpp:44, @ref magnifier_intrabars). |
 | `fill_orders_on_standard_ohlc` | none — the kernel matches the bars you feed it | — | — | TradingView's switch exists because a Heikin-Ashi chart's candles are not the traded prices. A native host feeds the standard OHLC it wants matched, and derives any transformed series itself. |
 | `max_bars_back` | none — a native host owns its own history | — | `hello_kernel.cpp` | Pine infers a buffer length for every series. `pineforge::Series<T>` series.hpp:94 is a fixed-capacity ring you size yourself, so nothing is inferred and nothing silently truncates. |
-| `risk_free_rate` | none — the ratio is a report field with TradingView's fixed rate | `sharpe_monthly` pineforge.h:290 | `native_sized_report_strategy.cpp` | `pf_metrics_t::equity.sharpe_monthly` and `pf_metrics_t::equity.sortino_monthly` (`sortino_monthly` pineforge.h:296) use a fixed 2 %/yr, the TradingView default; nothing in the kernel takes a declared rate. Their pre-1.0 spellings `sharpe_tv` / `sortino_tv` were removed for 1.0; the serialized report keys stay `sharpe_tv` / `sortino_tv`. A host that needs another rate computes it from `pf_report_t::equity_curve`. |
+| `risk_free_rate` | none — the ratio is a report field with TradingView's fixed rate | `sharpe_monthly` pineforge.h:290 | `native_sized_report_strategy.cpp` | `pf_metrics_t::equity.sharpe_monthly` and `pf_metrics_t::equity.sortino_monthly` (`sortino_monthly` pineforge.h:296) use a fixed 2 %/yr, the TradingView default; nothing in the kernel takes a declared rate. In v0.13.1, the last tagged release, they were spelled `sharpe_tv` / `sortino_tv`; main renames them at the same offsets, and the serialized report keys stay `sharpe_tv` / `sortino_tv`. A host that needs another rate computes it from `pf_report_t::equity_curve`. |
 
 ### The feed-shape and presentation policies Pine has no word for
 
@@ -417,7 +417,7 @@ lane N12 measured why — TradingView's drawdown latch samples at the close and
 still admits a reversal, its loss-day streak counts trades, its intraday loss
 closes at the path's adverse extreme and withdraws the book, and its fill cap
 charges slots and transfers quota on a chart-day key. The ruling of record is
-ADR-0001's `risk` row and `native-feature-parity.md:479`; the permanent witness
+ADR-0001's `risk` row and the design record's §3.6.1; the permanent witness
 is `tests/test_adapter_risk_relower.cpp`.
 
 ## Margin and liquidation {#pine_to_native_map_margin}
@@ -467,8 +467,8 @@ part both ways (`tests/test_adapter_margin_schedule_differential.cpp`, M11).
 | raw input before aggregation | `on_native_input` native_host.hpp:875 | `on_input` native_c_api.h:2504 | `native_auxiliary_feed_strategy.cpp` | Every accepted confirmed input bar, before aggregation or matching. |
 | a lower-timeframe sub-bar | `on_native_sub_bar` native_host.hpp:928 | `on_sub_bar` native_c_api.h:2545 | `tests/test_native_calc_timing.cpp` | `NativeCalculationReason::SubBar` is reserved and never delivered to the recalculate hook — a sub-bar has its own callback. |
 | `time`, `bar_index`, the bar's calendar interval, session facts | `NativeDecisionContext` market_driver.hpp:120 with `NativeCoordinate` market_driver.hpp:72 | `pf_native_decision_v1` native_c_api.h:1485 | `hello_kernel.cpp` | `NativeCoordinate::interval_index` is the sequential SCRIPT-bar index on every run, including aggregation; `input_interval_index` names the input slot for a host that needs input cadence. Both are copied onto the callback stack, and mutating them changes nothing. In C++ `script_interval` market_driver.hpp:124 and `input_interval` market_driver.hpp:123 add the calendar facts (eligible open, last traded close, next period and next input opens); the C decision carries the script interval's five instants and the session days of its open and of the next input in its tail, presented to a callback table at `PF_NATIVE_CALLBACKS_V1_POLICY_SIZE` or later, and no input interval. The C `on_input` callback receives the input index separately. The session-day facts are the three rows below. |
-| `session.ismarket` | `in_session` market_driver.hpp:161 | `in_session` native_c_api.h:1503 | `tests/test_native_session_day_facts.cpp` | The script bar is in session on the run's own calendar (`NativeRunSpec::session` / `timezone`), read at its label, or at its interval's first eligible instant when that is later (a bar opening inside a break); a D/W/M bar holds whole session days, so it is always true there. The calendar applies a session's day mask to the session day's trading date: Sunday 17:00 CT of a CME-style `1700-1600:23456` is Monday's session, in session. Pine's own chart `session.ismarket` is generated as the session calendar asked at the bar's open (the transpiler's helper), which holds those Sunday opens and a `0000-2400` day in market, as TradingView does. Inside a `request.security` payload it is still the time-of-day predicate `pine_session_ismarket` session_time.hpp:263, which reads every `HHMM` as minutes and a day mask by each window's session day: on six `lab tv` tapes it now holds every Sunday open under a weekday mask (`1700-1600:23456`) and every bar of `0000-2400` in market, as TradingView does (`tests/test_session_ismarket_tape.cpp`, lane W11-ENG-TIME-COLOR), and unmasked sessions (`1700-1600`, `1700-1700`, `24x7`, `0930-1600`) agree. Any reading at the bar's open puts a bar that opens inside a break out of market, which TradingView and this fact hold in market (`tests/test_session_break_open_bar_tape.cpp`). In C, read the three session bytes only when `session_facts` native_c_api.h:1502 is 1. |
-| `session.isfirstbar` | `opens_session_day` market_driver.hpp:162 | `opens_session_day` native_c_api.h:1504 | `tests/test_native_session_day_facts.cpp` | In session, and the bar before it is not, or is on another session day. The session day rolls at the session's first window start and is keyed to its trading date, so an overnight session is one day across local midnight (Tokyo `2230-0500`: its days open at 22:30). "The bar before" is the one the run holds — the batch input, the stream warmup — else the calendar's previous eligible input slot across declared breaks; a run's first bar opens its day. |
+| `session.ismarket` | `in_session` market_driver.hpp:161 | `in_session` native_c_api.h:1503 | `tests/test_native_session_day_facts.cpp` | The script bar is in session on the run's own calendar (`NativeRunSpec::session` / `timezone`), read at its label, or at its interval's first eligible instant when that is later (a bar opening inside a break); a D/W/M bar holds whole session days, so it is always true there. The calendar applies a session's day mask to the session day's trading date: Sunday 17:00 CT of a CME-style `1700-1600:23456` is Monday's session, in session. Pine's own chart `session.ismarket` is generated as the session calendar asked at the bar's open (the transpiler's helper), which holds those Sunday opens and a `0000-2400` day in market, as TradingView does. Inside a `request.security` payload it is still the time-of-day predicate `pine_session_ismarket` session_time.hpp:263, which reads every `HHMM` as minutes and a day mask by each window's session day: on six TradingView tapes it now holds every Sunday open under a weekday mask (`1700-1600:23456`) and every bar of `0000-2400` in market, as TradingView does (`tests/test_session_ismarket_tape.cpp`, lane W11-ENG-TIME-COLOR), and unmasked sessions (`1700-1600`, `1700-1700`, `24x7`, `0930-1600`) agree. Any reading at the bar's open puts a bar that opens inside a break out of market, which TradingView and this fact hold in market (`tests/test_session_break_open_bar_tape.cpp`). In C, read the three session bytes only when `session_facts` native_c_api.h:1502 is 1. |
+| `session.isfirstbar` | `opens_session_day` market_driver.hpp:162 | `opens_session_day` native_c_api.h:1504 | `tests/test_native_session_day_facts.cpp` | In session, and the bar before it is not, or is on another session day. The session day rolls at the session's first window start and is keyed to its trading date, so an overnight session is one day across local midnight (Tokyo `2230-0500`: its days open at 22:30). "The bar before" is the one the run holds — the batch input, the stream warmup — else the calendar's previous eligible input slot across declared breaks; a run's first bar opens its day. On a chart with extended hours Pine's `session.isfirstbar` / `session.islastbar` span the pre- and post-market bars (the Pine host widens them), and these facts are Pine's `session.isfirstbar_regular` / `session.islastbar_regular`. |
 | `session.islastbar` | `closes_session_day` market_driver.hpp:163, `closes_session_day_open_ended` market_driver.hpp:164 | `closes_session_day` native_c_api.h:1505 | `tests/test_native_session_day_facts.cpp` | In session, and the bar after it is not, or is on another session day, "the bar after" read the same way. A batch's final bar closes its day (a batch is complete input); `closes_session_day_open_ended` reads the calendar there instead, for a host recomputing a batch whose last input is still forming (C++ only: a C host's live edge is a stream). A stream's bars read the calendar, so a stream cannot see an early close its session string does not declare: the NYSE half day's 12:45 closes the day in a batch (the next bar held is the next day's) but not in a stream (ADR-0001, ruling "Session-day facts at a bar with nothing held after it"). |
 | the price at the current point | `current_execution_point` native_host.hpp:1087 | `price` native_c_api.h:1568 | `native_selected_strategy.cpp` | The readiness preview `inspect_current_execution` native_host.hpp:1099 is an observation, never an apply token; `execute_current` native_host.hpp:1104 is the apply. |
 
@@ -662,20 +662,20 @@ classifies its own rows by order family instead. Which leg closed a row is its
 
 | Pine | C++ | C | Runs in | Notes |
 | --- | --- | --- | --- | --- |
-| `request.security()` | `NativeTimeframeSubscription` native_run_spec.hpp:491 in `subscriptions` native_run_spec.hpp:701, or `declare_timeframe_subscriptions` native_host.hpp:1136 inside `on_native_run_begin` native_host.hpp:872 | `strategy_native_declare_subscriptions_v1` native_c_api.h:2941 | `native_htf_strategy.cpp` | A subscription is a series instance: several may share one timeframe. Completed buckets arrive at `on_native_timeframe_bar` native_host.hpp:885 and the latest is pulled with `native_series_bar` native_host.hpp:1119. `authoritative_bars` native_run_spec.hpp:493 replace a completed bucket's OHLCV. The row's two delivery words are typed in C: `pf_native_lookahead_e` native_c_api.h:799 and `pf_native_gaps_e` native_c_api.h:810 (lane E7). The Pine adapter runs its own plain sites through these same subscriptions, ruled **adapter-hook** in ADR-0001's `subscriptions` row. |
+| `request.security()` | `NativeTimeframeSubscription` native_run_spec.hpp:491 in `subscriptions` native_run_spec.hpp:701, or `declare_timeframe_subscriptions` native_host.hpp:1136 inside `on_native_run_begin` native_host.hpp:872 | `strategy_native_declare_subscriptions_v1` native_c_api.h:2941 | `native_htf_strategy.cpp` | A subscription is a series instance: several may share one timeframe. Completed buckets arrive at `on_native_timeframe_bar` native_host.hpp:885 and the latest is pulled with `native_series_bar` native_host.hpp:1119. `authoritative_bars` native_run_spec.hpp:493 replace a completed bucket's OHLCV. The row's two delivery words are typed in C: `pf_native_lookahead_e` native_c_api.h:799 and `pf_native_gaps_e` native_c_api.h:810 (lane E7). The Pine adapter runs its own plain sites through these same subscriptions, ruled **adapter-hook** in ADR-0001's `subscriptions` row. Another symbol's bars are an instrument feed: `NativeInstrumentFeed` native_run_spec.hpp:580 in `instrument_feeds` native_run_spec.hpp:711, read by a series whose source is `InstrumentFeed` native_run_spec.hpp:488 (C++ only in 1.0: @ref native_engine, "Instrument feeds: another symbol's bars"). |
 | `request.security_lower_tf()` | `NativeAuxiliaryFeed` native_run_spec.hpp:524 with `NativeSeriesSource::AuxiliaryFeed` native_run_spec.hpp:487 | `strategy_native_append_auxiliary_bars_v1` native_c_api.h:3218 | `native_auxiliary_feed_strategy.cpp` | Not the same shape: Pine returns an intrabar *array* per bar, the kernel gives you a finer *series* routed by time. A host that wants the raw sub-bars puts them in `IntrabarPath` native_run_spec.hpp:378 and reads `on_native_sub_bar` native_host.hpp:928 instead. |
 | `barmerge.gaps_off` | `NativeTimeframeSubscription::gaps` native_run_spec.hpp:495 set false | `pf_native_subscription_v1::gaps` = `PF_NATIVE_GAPS_HOLD` native_c_api.h:811 | `native_htf_strategy.cpp` | The delivered bucket stands until the next delivery replaces it. |
 | `barmerge.gaps_on` | `NativeTimeframeSubscription::gaps` native_run_spec.hpp:495 set true | `pf_native_subscription_v1::gaps` = `PF_NATIVE_GAPS_CLEAR` native_c_api.h:813 | `native_htf_strategy.cpp` | The series is cleared on every input bar it delivers nothing on, so the pull answers empty — the native spelling of `na`. |
 | `barmerge.lookahead_off` | `NativeTimeframeSubscription::lookahead` native_run_spec.hpp:494 set false | `pf_native_subscription_v1::lookahead` = `PF_NATIVE_LOOKAHEAD_AT_COMPLETION` native_c_api.h:800 | `native_htf_strategy.cpp` | The default and the honest one: a bucket is delivered when it completes. |
 | `barmerge.lookahead_on` | `NativeTimeframeSubscription::lookahead` native_run_spec.hpp:494 set true | `pf_native_subscription_v1::lookahead` = `PF_NATIVE_LOOKAHEAD_AT_FIRST_INPUT` native_c_api.h:802 | `tests/test_native_htf_subscriptions.cpp` | Delivers a bucket's final values on the input that held its first bar. It is lookahead: use it to reproduce a chart, never to trade. |
 | `request.currency_rate()` | none — no FX data feed | `strategy_configure_native_fx_curve_v1` pineforge.h:546 | `native_fx_roll_strategy.cpp` / `tests/test_native_fx_curve.cpp` | The kernel converts with the curve you stage; it fetches nothing. |
-| `request.dividends()` | none — no fundamentals feed | — | — | Rejected at transpile for a Pine script; a native host fetches and models it itself. |
+| `request.dividends()` | none — no fundamentals feed | — | — | For a Pine script, pineforge-codegen main (not in a release yet; v0.10.4 rejects the call at transpile) reads TradingView's recorded answers by request key from the source host (`strategy_set_recorded_series` pineforge.h:1493), reads `na` when the value reaches only plots and alerts, and otherwise stops the run where the value is read if nothing is recorded. A native host fetches and models it itself. |
 | `request.earnings()` | none — no fundamentals feed | — | — | Same. |
 | `request.financial()` | none — no fundamentals feed | — | — | Same. |
 | `request.splits()` | none — no corporate-actions feed | — | — | Same. |
-| `request.economic()` | none — no macro data feed | — | — | Same. |
-| `request.footprint()` | none — no footprint data | — | — | Same. |
-| `request.quandl()` | none — deprecated upstream | — | — | Same. |
+| `request.economic()` | none — no macro data feed | — | — | Rejected at transpile for a Pine script; a native host fetches and models it itself. |
+| `request.footprint()` | none — no footprint data | — | — | Rejected at transpile by v0.10.4. pineforge-codegen main reads `na` when the value reaches only plots and alerts, and reads a footprint's `delta()` from another symbol's installed feed when a `request.security` of that symbol has the footprint as its whole expression; otherwise the run stops where the value is read. A native host models it itself. |
+| `request.quandl()` | none — deprecated upstream | — | — | Rejected at transpile for a Pine script. |
 | `request.seed()` | none — TradingView infrastructure | — | — | Same. |
 
 Indicators and history need no translation at all: `pineforge::ta` ta.hpp:12 is
@@ -767,8 +767,10 @@ Three rules govern the C door:
    only the recalculate hook and still expects the bar hook silently trades
    nothing.
 
-Not every C++ capability has a C spelling in 1.0. Five members of the C++ host
+Not every C++ capability has a C spelling in 1.0. Seven members of the C++ host
 have none: `prepare_native_begin` (a C host supplies each begin argument itself),
+`mark_native_report_point` (the C spec does not name `KernelRecordedAtHostMarks`),
+`native_aggregates_input_bars` (a C host names both timeframes in its own spec),
 `inspect_current_execution` native_host.hpp:1099 (scheduled for 1.1.0:
 `strategy_native_execute_current_v1` applies the command and is no preview), the
 two market-only conveniences `submit_market` / `replace_market`, and
@@ -1057,13 +1059,13 @@ is what makes the engine's protected presentation-error string (returned by
 
 Two example modules are built twice — as executables by
 `PINEFORGE_BUILD_EXAMPLES` CMakeLists.txt:37, and as the runner's MODULE
-target `native_market_example` runner/CMakeLists.txt:45 — from the same source.
+targets `native_market_example` runner/CMakeLists.txt:45 and `native_selected_example` runner/CMakeLists.txt:51 — from the same sources.
 
 ## Verifying parity {#pine_to_native_parity}
 
 A native host is *not* a TradingView-parity claim. When you port a strategy
 that already exists in Pine and want to know exactly where the two differ, run
-the twin harness of `native-feature-parity.md:336`:
+the twin harness of the design record's §3.1 (b) (`docs/design/native-feature-parity.md`):
 
 1. **Same inputs.** One probe, one bar feed, one `NativeRunSpec`. Run it
    through codegen + the adapter, and through your `NativeStrategyHost`.
