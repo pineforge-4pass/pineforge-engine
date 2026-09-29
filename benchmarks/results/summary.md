@@ -41,12 +41,12 @@ Match degree per the canonical corpus rubric (`scripts/verify_corpus.py::analyze
 | 034-matrix-bool-mask-transpose-roundtrip-01 | corpus | strict | 774 | 🟢 excellent (774 / 774) | 🟢 strong (782 / 771) | — |
 | 035-matrix-cadence-transpose-pairs-01 | corpus | strict | 2358 | 🟢 excellent (2358 / 2358) | 🟢 excellent (2358 / 2358) | — |
 | 036-matrix-eigen-covariance-01 | corpus | strict | 542 | 🟢 excellent (542 / 542) | 🟢 excellent (542 / 542) | — |
-| 037-mtf-daily-array-median-percentrank-01 | corpus | strict | 362 | 🟢 excellent (362 / 362) | 🟠 weak (52 / 356) | — |
+| 037-mtf-daily-array-median-percentrank-01 | corpus | strict | 362 | 🟢 excellent (362 / 362) | 🟢 excellent (362 / 362) | — |
 | 038-mtf-dual-tf-60-240-rising-01 | corpus | strict | 736 | 🟢 excellent (736 / 736) | 🟢 excellent (736 / 736) | — |
 | 039-mtf-htf-60-close-change-baseline-01 | corpus | strict | 8779 | 🟢 excellent (8779 / 8779) | 🟢 strong (8781 / 8779) | — |
-| 040-mtf-htf-weekly-sma-cross-01 | corpus | strict | 102 | 🟢 excellent (102 / 102) | 🟠 weak (102 / 92) | — |
+| 040-mtf-htf-weekly-sma-cross-01 | corpus | strict | 102 | 🟢 excellent (102 / 102) | 🟢 excellent (102 / 102) | — |
 | 041-mtf-orbit-trend-01 | corpus | strict | 289 | 🟢 excellent (289 / 289) | 🟢 excellent (289 / 289) | — |
-| 042-mtf-triple-tf-macd-hist-confluence-01 | corpus | strict | 24 | 🟢 excellent (24 / 24) | 🔴 minimal (3 / 24) | — |
+| 042-mtf-triple-tf-macd-hist-confluence-01 | corpus | strict | 24 | 🟢 excellent (24 / 24) | 🟡 moderate (22 / 22) | — |
 | 043-na-deep-history-int-na-01 | corpus | strict | 106 | 🟢 excellent (106 / 106) | 🟢 excellent (106 / 106) | — |
 | 044-oca-multi-bracket-isolation-01 | corpus | strict | 1244 | 🟢 excellent (622 / 622) | 🟢 excellent (622 / 622) | 🟡 moderate (710 / 622) |
 | 045-oca-raw-strategy-order-reduce-01 | corpus | strict | 366 | 🟢 excellent (366 / 366) | 🟢 excellent (366 / 366) | 🟢 excellent (366 / 366) |
@@ -105,128 +105,120 @@ Match degree per the canonical corpus rubric (`scripts/verify_corpus.py::analyze
 | 098-udt-method-var-instance-streak-01 | corpus | strict | 1007 | 🟢 excellent (1007 / 1007) | 🟢 excellent (1007 / 1007) | — |
 | 099-udt-tessellate-tuple-method-01 | corpus | strict | 426 | 🟢 excellent (426 / 426) | 🟢 excellent (426 / 426) | — |
 | 100-vwap-bands-mean-reversion-2sigma-01 | corpus | strict | 241 | 🟢 excellent (241 / 241) | 🟢 excellent (241 / 241) | — |
-| 101-3commas-3commas-bch-overbought-rsi-fade-short-indicator | closed | strict | 288 | 🟢 excellent (288 / 288) | 🟢 excellent (288 / 288) | — |
-| 102-3commas-3commas-pol-grid-bot-long-strategy | closed | strict | 354 | 🟢 excellent (198 / 198) | 🟡 moderate (180 / 194) | — |
-| 103-3commas-eth-grid-bot-long-strategy | closed | strict | 332 | 🟢 excellent (179 / 179) | 🟡 moderate (192 / 178) | — |
-| 104-3commas-gram-rsi-strategy-3commas | closed | strict | 43 | 🟢 excellent (43 / 43) | 🟢 excellent (43 / 43) | — |
-| 105-3commas-heikin-ashi-rsi-fade-short-strategy | closed | strict | 392 | 🟢 excellent (392 / 392) | 🟢 strong (391 / 391) | — |
-| 106-3commas-sol-rsi-dca-long-strategy | closed | strict | 29 | 🟢 excellent (29 / 29) | 🟢 excellent (29 / 29) | — |
-| 107-3commas-xmr-grid-bot-long-strategy | closed | strict | 371 | 🟢 excellent (208 / 208) | 🟡 moderate (188 / 204) | — |
-| 108-a-popal-simple-smart-buy-sell-strategy | closed | strict | 2559 | 🟢 excellent (2559 / 2559) | 🟠 weak (1918 / 2559) | — |
-| 109-acalvillo20-amd1 | closed | strict | 172 | 🟢 excellent (172 / 172) | 🟢 excellent (171 / 171) | — |
-| 110-aiscripts-lvn-rejection-acceptance-strategy | closed | strict | 2949 | 🟢 excellent (2949 / 2949) | 🟢 strong (2949 / 2949) | — |
-| 111-ajayinderbrar-ajay-fibonacci-market-structure-pro-ai-v2-1 | closed | strict | 2373 | 🟢 excellent (1182 / 1182) | 🟡 moderate (1234 / 1182) | — |
-| 112-alexgrover-g-channel-trend-detection-alerts-non-repainting | closed | strict | 462 | 🟢 excellent (462 / 462) | 🟢 excellent (462 / 462) | — |
-| 113-algo-aakash-macd-pullback-validation-with-divergence-filters-algo-aakash | closed | strict | 7 | 🟢 excellent (7 / 7) | 🟡 moderate (6 / 6) | — |
-| 114-amandaborgeson06-bias-status-dashboard | closed | strict | 2183 | 🟢 excellent (1218 / 1218) | 🟠 weak (1209 / 1215) | — |
-| 115-anji-ga-9-21ema-anji | closed | strict | 196 | 🟢 excellent (90 / 90) | 🟢 excellent (90 / 90) | — |
-| 116-anonycryptous-ev-edge-anonycryptous | closed | strict | 866 | 🟢 excellent (866 / 866) | 🟢 excellent (866 / 866) | — |
-| 117-antoniolinux-rsi-mfi-divergence-momentum | closed | strict | 298 | 🟢 excellent (298 / 298) | 🟢 excellent (297 / 297) | — |
-| 118-averagepoe-mnq-anomaly-candle-sma-confluence-v6 | closed | strict | 253 | 🟢 excellent (253 / 253) | 🟢 excellent (253 / 253) | — |
-| 119-backtestbay-strategy-validation-framework-standardised-atr-exits-1-ris | closed | strict | 466 | 🟢 excellent (464 / 464) | 🟢 strong (462 / 461) | — |
-| 120-benblackdiamond-l2gmom-network-momentum | closed | strict | 416 | 🟢 excellent (183 / 183) | 🟡 moderate (181 / 181) | — |
-| 121-bipinbiharipatra-5m-sol-scalper-ha-lorentzian | closed | strict | 1119 | 🟢 excellent (1119 / 1119) | 🟢 strong (1118 / 1118) | — |
-| 122-cb85wj5jmt-moja-strategia-harami-bb | closed | strict | 1976 | 🟢 excellent (1976 / 1976) | 🟢 excellent (1976 / 1976) | — |
-| 123-chadow6875-swing-high-low-ict-clean-pro | closed | strict | 14289 | 🟢 excellent (14289 / 14289) | 🟢 strong (14080 / 14289) | — |
-| 124-cihanozdemir-trade-id-signal-engine-buy-only-option | closed | strict | 200 | 🟢 excellent (200 / 200) | 🟢 excellent (200 / 200) | — |
-| 125-cleightyp-cleightyp-bos-sma-macd-vwap | closed | strict | 1396 | 🟢 excellent (1396 / 1396) | 🟢 excellent (1396 / 1396) | — |
-| 126-cntvxiao-smc-vsa-oi | closed | strict | 978 | 🟢 excellent (557 / 557) | 🟢 strong (560 / 556) | — |
-| 127-codetradesalgo-fix-webhook-latency-dh-905-errors-pinescript-to-python-bridge | closed | strict | 1743 | 🟢 excellent (1743 / 1743) | 🟢 strong (1744 / 1743) | — |
-| 128-colasbreugnon-nq-scalp-fix-signals | closed | strict | 1574 | 🟢 excellent (1574 / 1574) | 🟢 strong (1578 / 1574) | — |
-| 129-daytrader4beginners-box-breakout-strategy-dt4b-trader | closed | strict | 1562 | 🟢 excellent (1562 / 1562) | 🟢 excellent (1562 / 1562) | — |
-| 130-delta-crypto-mu-overnight-gap-capture | closed | strict | 5148 | 🟢 excellent (5148 / 5148) | 🟢 strong (5148 / 5148) | — |
-| 131-devildk-option-point | closed | strict | 210 | 🟢 excellent (210 / 210) | 🟢 excellent (210 / 210) | — |
-| 132-dinkus3-obsidian | closed | strict | 86 | 🟢 excellent (47 / 47) | 🟢 strong (46 / 46) | — |
-| 133-drgunjanpupadhyay-swing-trend-strategy-pro-sideways-filtered-nifty-500 | closed | strict | 313 | 🟢 excellent (313 / 313) | 🟢 strong (313 / 313) | — |
-| 134-elomadablah-atr-trailing-stoploss-multi | closed | strict | 3369 | 🟢 excellent (3368 / 3368) | 🟢 excellent (3368 / 3368) | — |
-| 135-finnp17-atm | closed | strict | 1790 | 🟢 excellent (1790 / 1790) | 🔴 minimal (0 / 1790) | — |
-| 136-fondbird7020-vishall-ema-9-20-50-200-dmi-adx-strategy | closed | strict | 928 | 🟢 excellent (928 / 928) | 🟢 excellent (928 / 928) | — |
-| 137-fran-pineda-strategy-501-de-franpineda | closed | strict | 224 | 🟢 excellent (224 / 224) | 🟢 excellent (224 / 224) | — |
-| 138-fran-pineda-strategy-502-de-franpineda | closed | strict | 151 | 🟢 excellent (151 / 151) | 🟢 excellent (151 / 151) | — |
-| 139-francescodimichele-gold-ai-strategy-v2-0 | closed | production | 643 | 🟢 excellent (643 / 643) | 🟢 strong (644 / 643) | — |
-| 140-gonzowiththewind-sisyphus-happiness | closed | strict | 96 | 🟢 excellent (96 / 96) | ⚪ n/a — PyneCore runtime error: RuntimeError: security context 'sec·93481528·0': the developing batch published | — |
-| 141-hariss369-crypto-sniper-pro-smart-trend-range-filter-strategy-hariss-369 | closed | strict | 774 | 🟢 excellent (774 / 774) | 🟢 excellent (773 / 773) | — |
-| 142-hermescore-momentum-conviction-hermescore | closed | strict | 3194 | 🟢 excellent (3194 / 3194) | 🟢 excellent (3194 / 3194) | — |
-| 143-hungpixi-hungpixi-macd-enhanced-mtf-with-signal-filter-anti-sideway | closed | strict | 4 | 🟢 excellent (4 / 4) | 🟠 weak (4 / 4) | — |
-| 144-igreycrypto-adapted-rsi-w-multi-asset-regime-detection-v1-1 | closed | strict | 513 | 🟢 excellent (189 / 189) | 🟡 moderate (200 / 188) | — |
-| 145-imtiyazali73-imtiyaz-signature-liquidity-compass-smc | closed | strict | 906 | 🟢 excellent (906 / 906) | 🟢 excellent (905 / 905) | — |
-| 146-inr3d-r3d-jackofxc-rtp-strategy | closed | strict | 48 | 🟢 excellent (48 / 48) | 🟢 excellent (47 / 47) | — |
-| 147-jaydeepp095-candle-harry | closed | strict | 746 | 🟢 excellent (746 / 746) | 🟢 excellent (746 / 746) | — |
-| 148-jayendranath4-banknifty-15m-clear-tp-sl-strategy | closed | strict | 430 | 🟢 excellent (430 / 430) | 🟢 excellent (430 / 430) | — |
-| 149-jayentriken-bbwp-macd-ema-trend-strategy | closed | strict | 593 | 🟢 excellent (593 / 593) | 🟢 strong (593 / 593) | — |
-| 150-jdceagle-zigzag-de-fractales-williams | closed | strict | 8491 | 🟢 excellent (8491 / 8491) | 🟢 strong (8492 / 8491) | — |
-| 151-jos-protrader-edward-smart-channel-reversal | closed | strict | 16 | 🟢 excellent (16 / 16) | 🟢 excellent (16 / 16) | — |
-| 152-jos-protrader-edward-smart-liquidity-sweep | closed | strict | 1040 | 🟢 excellent (1040 / 1040) | 🟢 strong (1035 / 1040) | — |
-| 153-jos-protrader-edward-smart-momentum-pro | closed | strict | 232 | 🟢 excellent (232 / 232) | 🟢 excellent (231 / 231) | — |
-| 154-khanhtq26-psol-01-donchian-channels | closed | strict | 346 | 🟢 excellent (346 / 346) | 🟢 excellent (346 / 346) | — |
-| 155-legalrice2697-nse-elite-strategy-v6-full-system | closed | production | 362 | 🟢 excellent (362 / 362) | 🟢 excellent (362 / 362) | — |
-| 156-m-f-atipey-hybrid-3-strategy-smart-system-v6-1 | closed | strict | 132 | 🟢 excellent (123 / 123) | 🟢 strong (123 / 123) | — |
-| 157-madue2014-twe-2-bar-break-strategy | closed | strict | 5999 | 🟢 excellent (5999 / 5999) | 🟢 strong (5998 / 5999) | — |
-| 158-market-logic-india-low-lag-strength-oscillator | closed | strict | 6826 | 🟢 excellent (4073 / 4073) | 🟡 moderate (4633 / 4070) | — |
-| 159-mdfe3757-trade-strategy-v8-4-pine-v6-ready | closed | strict | 642 | 🟢 excellent (301 / 301) | 🟢 strong (302 / 301) | — |
-| 160-mehranazizi219-goldsiggy-murk | closed | strict | 819 | 🟢 excellent (819 / 819) | 🟢 excellent (819 / 819) | — |
-| 161-mylivingedge-gold-asian-range-breakout-signals | closed | strict | 4 | 🟢 excellent (4 / 4) | 🟢 excellent (4 / 4) | — |
-| 162-nicocashfx-prime-strategy-swing | closed | strict | 73 | 🟢 excellent (73 / 73) | 🟢 strong (71 / 71) | — |
-| 163-nightowlxtrader-azt-strategy-v11-first-draft | closed | strict | 13 | 🟢 excellent (13 / 13) | 🟠 weak (1 / 1) | — |
-| 164-officialjackofalltrades-concordance-execution-mandate-joat | closed | strict | 183 | 🟢 excellent (109 / 109) | 🟠 weak (27 / 27) | — |
-| 165-officialjackofalltrades-concordance-regime-synthesis-joat | closed | strict | 7021 | 🟢 excellent (7021 / 7021) | 🟢 strong (7019 / 7019) | — |
-| 166-officialjackofalltrades-concordance-strategy-joat | closed | strict | 602 | 🟢 excellent (246 / 246) | ⚪ n/a — PyneCore runtime error: RuntimeError: security context 'sec·c5dd5335·3': the developing batch published | — |
-| 167-officialjackofalltrades-large-lot-reverse-engineer-joat | closed | strict | 795 | 🟢 excellent (795 / 795) | 🟢 excellent (795 / 795) | — |
-| 168-officialjackofalltrades-parallax-covenant-strategy-joat | closed | strict | 1002 | 🟢 excellent (1002 / 1002) | 🟢 strong (995 / 1001) | — |
-| 169-officialjackofalltrades-regime-execution-strategy-joat | closed | strict | 766 | 🟢 excellent (766 / 766) | 🟠 weak (751 / 765) | — |
-| 170-ollie-b-ollie-asia-sweep-model | closed | strict | 1 | 🟢 excellent (1 / 1) | 🟢 excellent (1 / 1) | — |
-| 171-options7700-2min-bullish-confluence | closed | strict | 1106 | 🟢 excellent (1106 / 1106) | 🟢 excellent (1106 / 1106) | — |
-| 172-projectsyndicate-strong-breakout-signals-projectsyndicate | closed | strict | 1521 | 🟢 excellent (507 / 507) | 🟢 strong (497 / 507) | — |
-| 173-quantitativealpha-strategy-forecast-engine | closed | strict | 1849 | 🟢 excellent (1015 / 1015) | 🟢 strong (1011 / 1011) | — |
-| 174-quantnomad-ut-bot-v2-atr-trailing-stop | closed | strict | 4330 | 🟢 excellent (4330 / 4330) | 🟢 excellent (4330 / 4330) | — |
-| 175-rakesh-09-edge-confirmation-system | closed | strict | 386 | 🟢 excellent (386 / 386) | 🟢 excellent (386 / 386) | — |
-| 176-rakesh-09-edge-confirmation-system-ecs-v2-0 | closed | strict | 484 | 🟢 excellent (289 / 289) | 🟢 strong (298 / 289) | — |
-| 177-rampatel9912-super-rsi-strategy | closed | strict | 2846 | 🟢 excellent (2846 / 2846) | 🟢 excellent (2845 / 2845) | — |
-| 178-remarkablefreddy-ultimate-smc-emas-day-trading-strategy | closed | strict | 519 | 🟢 excellent (519 / 519) | 🟢 excellent (517 / 517) | — |
-| 179-richmondhillcm-richmondhillcm-vwap-volume-spike-suite-v1-3 | closed | strict | 220 | 🟢 excellent (220 / 220) | 🟢 strong (216 / 216) | — |
-| 180-robmagnaye14-eb-ict-v5-pro-trader-daily-5-10-trade-60-target | closed | strict | 291 | 🟢 excellent (291 / 291) | 🟢 excellent (291 / 291) | — |
-| 181-roi10x-shiva-lt-ls-blend | closed | strict | 2411 | 🟢 strong (2412 / 2411) | 🟠 weak (2208 / 2409) | — |
-| 182-sadtrader9-fair-value-gap-strategy | closed | strict | 3031 | 🟢 excellent (3031 / 3031) | 🟢 excellent (3031 / 3031) | — |
-| 183-shiroi-macd-zero-line-candles-alert | closed | strict | 1302 | 🟢 excellent (1302 / 1302) | 🟢 excellent (1302 / 1302) | — |
-| 184-shurben5-tradingview-bot-goat | closed | production | 958 | 🟢 excellent (479 / 479) | 🟢 excellent (479 / 479) | — |
-| 185-simon20cent-efi-macd-advanced-pro | closed | strict | 2153 | 🟢 excellent (2152 / 2152) | 🟢 excellent (2152 / 2152) | — |
-| 186-tharris235106-reversal-signals-with-profit-target-and-continuation | closed | strict | 36 | 🟢 excellent (36 / 36) | 🟢 excellent (36 / 36) | — |
-| 187-thebitcoin37-9-15-ema-strategy-trade-room | closed | strict | 202 | 🟢 excellent (202 / 202) | 🟢 excellent (202 / 202) | — |
-| 188-theforexguy0777-9-ema-20-ema-retest-strategy | closed | strict | 1372 | 🟢 excellent (1372 / 1372) | 🟢 strong (1356 / 1356) | — |
-| 189-therealbouga-apex-mtf-index-model | closed | strict | 144 | 🟢 excellent (73 / 73) | 🟠 weak (70 / 62) | — |
-| 190-tomukasss-engulfing-mitigation-strategy | closed | strict | 53 | 🟢 excellent (38 / 38) | 🟠 weak (26 / 26) | — |
-| 191-tomukasss-trend-pivot-scale-in | closed | strict | 269 | 🟢 excellent (229 / 229) | 🟢 strong (233 / 229) | — |
-| 192-trendchain0719-9-21-ema-volume-spike-bollinger-bands-vwap | closed | strict | 157 | 🟢 excellent (157 / 157) | ⚪ n/a — PyneSys compile error: {"detail":{"status":"error","error":"Empty document.","line":null,"file":"script.pine"}} | — |
-| 193-ttagkoin-adaptive-multi-facto-9-years | closed | strict | 3394 | 🟢 excellent (3393 / 3393) | 🟢 strong (3387 / 3388) | — |
-| 194-usamotorcars-sedat-xi-crypto-ai-bias-engine | closed | strict | 657 | 🟢 excellent (657 / 657) | 🟢 excellent (656 / 656) | — |
-| 195-van007trader-micro-momentum-oscillator-dyna | closed | strict | 712 | 🟢 excellent (712 / 712) | 🟢 excellent (711 / 711) | — |
-| 196-vimalboiling-refined-supertrend-atr-tsl-filters-nifty-banknifty-v2 | closed | strict | 111 | 🟢 excellent (29 / 29) | 🟢 strong (29 / 29) | — |
-| 197-waranyutrkm-asian-box-breakout-eda-tuned | closed | strict | 110 | 🟢 excellent (110 / 110) | ⚪ n/a — PyneCore runtime error: RuntimeError: security context 'sec·6886bfdb·0': the developing batch published | — |
-| 198-wellmanapex-ut-bot-stc-conjunction-strategy-tester-v4-8 | closed | strict | 72 | 🟢 excellent (72 / 72) | 🟢 strong (72 / 72) | — |
-| 199-yahmis13-nyo-day-type-early-read | closed | strict | 26 | 🟢 excellent (26 / 26) | 🟢 excellent (26 / 26) | — |
-| 200-ygd-consulting-llc-yuri-garcia-narrow-state-strategy-ygils | closed | strict | 533 | 🟢 excellent (533 / 533) | 🟢 excellent (533 / 533) | — |
-| 201-robmagnaye14-eb-ict-one-trade-setup-for-life-70-filter-model-v2 | closed | strict | 154 | 🟢 excellent (154 / 154) | 🟢 excellent (153 / 153) | — |
+| 101-closed | closed | strict | 288 | 🟢 excellent (288 / 288) | 🟢 excellent (288 / 288) | — |
+| 102-closed | closed | strict | 354 | 🟢 excellent (198 / 198) | 🟡 moderate (180 / 194) | — |
+| 103-closed | closed | strict | 332 | 🟢 excellent (179 / 179) | 🟡 moderate (192 / 178) | — |
+| 104-closed | closed | strict | 43 | 🟢 excellent (43 / 43) | 🟢 excellent (43 / 43) | — |
+| 105-closed | closed | strict | 392 | 🟢 excellent (392 / 392) | 🟢 strong (391 / 391) | — |
+| 106-closed | closed | strict | 29 | 🟢 excellent (29 / 29) | 🟢 excellent (29 / 29) | — |
+| 107-closed | closed | strict | 371 | 🟢 excellent (208 / 208) | 🟡 moderate (188 / 204) | — |
+| 108-closed | closed | strict | 2559 | 🟢 excellent (2559 / 2559) | 🟢 strong (2560 / 2559) | — |
+| 109-closed | closed | strict | 172 | 🟢 excellent (172 / 172) | 🟢 excellent (171 / 171) | — |
+| 110-closed | closed | strict | 2949 | 🟢 excellent (2949 / 2949) | 🟢 strong (2949 / 2949) | — |
+| 111-closed | closed | strict | 2373 | 🟢 excellent (1182 / 1182) | 🟡 moderate (1234 / 1182) | — |
+| 112-closed | closed | strict | 462 | 🟢 excellent (462 / 462) | 🟢 excellent (462 / 462) | — |
+| 113-closed | closed | strict | 7 | 🟢 excellent (7 / 7) | 🟡 moderate (6 / 6) | — |
+| 114-closed | closed | strict | 2183 | 🟢 excellent (1218 / 1218) | 🟡 moderate (1229 / 1215) | — |
+| 115-closed | closed | strict | 196 | 🟢 excellent (90 / 90) | 🟢 excellent (90 / 90) | — |
+| 116-closed | closed | strict | 866 | 🟢 excellent (866 / 866) | 🟢 excellent (866 / 866) | — |
+| 117-closed | closed | strict | 298 | 🟢 excellent (298 / 298) | 🟢 excellent (297 / 297) | — |
+| 118-closed | closed | strict | 253 | 🟢 excellent (253 / 253) | 🟢 excellent (253 / 253) | — |
+| 119-closed | closed | strict | 466 | 🟢 excellent (464 / 464) | 🟢 strong (462 / 461) | — |
+| 120-closed | closed | strict | 416 | 🟢 excellent (183 / 183) | 🟡 moderate (181 / 181) | — |
+| 121-closed | closed | strict | 1119 | 🟢 excellent (1119 / 1119) | 🟢 strong (1118 / 1118) | — |
+| 122-closed | closed | strict | 1976 | 🟢 excellent (1976 / 1976) | 🟢 excellent (1976 / 1976) | — |
+| 123-closed | closed | strict | 14289 | 🟢 excellent (14289 / 14289) | 🟢 strong (14080 / 14289) | — |
+| 124-closed | closed | strict | 200 | 🟢 excellent (200 / 200) | 🟢 excellent (200 / 200) | — |
+| 125-closed | closed | strict | 1396 | 🟢 excellent (1396 / 1396) | 🟢 excellent (1396 / 1396) | — |
+| 126-closed | closed | strict | 978 | 🟢 excellent (557 / 557) | 🟢 strong (560 / 556) | — |
+| 127-closed | closed | strict | 1743 | 🟢 excellent (1743 / 1743) | 🟢 strong (1744 / 1743) | — |
+| 128-closed | closed | strict | 1574 | 🟢 excellent (1574 / 1574) | 🟢 strong (1578 / 1574) | — |
+| 129-closed | closed | strict | 1562 | 🟢 excellent (1562 / 1562) | 🟢 excellent (1562 / 1562) | — |
+| 130-closed | closed | strict | 5148 | 🟢 excellent (5148 / 5148) | 🟢 strong (5148 / 5148) | — |
+| 131-closed | closed | strict | 210 | 🟢 excellent (210 / 210) | 🟢 excellent (210 / 210) | — |
+| 132-closed | closed | strict | 86 | 🟢 excellent (47 / 47) | 🟢 strong (46 / 46) | — |
+| 133-closed | closed | strict | 313 | 🟢 excellent (313 / 313) | 🟢 strong (313 / 313) | — |
+| 134-closed | closed | strict | 3369 | 🟢 excellent (3368 / 3368) | 🟢 excellent (3368 / 3368) | — |
+| 135-closed | closed | strict | 1790 | 🟢 excellent (1790 / 1790) | 🔴 minimal (0 / 1790) | — |
+| 136-closed | closed | strict | 928 | 🟢 excellent (928 / 928) | 🟢 excellent (928 / 928) | — |
+| 137-closed | closed | strict | 224 | 🟢 excellent (224 / 224) | 🟢 excellent (224 / 224) | — |
+| 138-closed | closed | strict | 151 | 🟢 excellent (151 / 151) | 🟢 excellent (151 / 151) | — |
+| 139-closed | closed | production | 643 | 🟢 excellent (643 / 643) | 🟢 strong (644 / 643) | — |
+| 140-closed | closed | strict | 96 | 🟢 excellent (96 / 96) | 🟢 strong (96 / 96) | — |
+| 141-closed | closed | strict | 774 | 🟢 excellent (774 / 774) | 🟢 excellent (773 / 773) | — |
+| 142-closed | closed | strict | 3194 | 🟢 excellent (3194 / 3194) | 🟢 excellent (3194 / 3194) | — |
+| 143-closed | closed | strict | 4 | 🟢 excellent (4 / 4) | 🟠 weak (4 / 4) | — |
+| 144-closed | closed | strict | 513 | 🟢 excellent (189 / 189) | 🟡 moderate (200 / 188) | — |
+| 145-closed | closed | strict | 906 | 🟢 excellent (906 / 906) | 🟢 excellent (905 / 905) | — |
+| 146-closed | closed | strict | 48 | 🟢 excellent (48 / 48) | 🟢 excellent (47 / 47) | — |
+| 147-closed | closed | strict | 746 | 🟢 excellent (746 / 746) | 🟢 excellent (746 / 746) | — |
+| 148-closed | closed | strict | 430 | 🟢 excellent (430 / 430) | 🟢 excellent (430 / 430) | — |
+| 149-closed | closed | strict | 593 | 🟢 excellent (593 / 593) | 🟢 strong (593 / 593) | — |
+| 150-closed | closed | strict | 8491 | 🟢 excellent (8491 / 8491) | 🟢 strong (8492 / 8491) | — |
+| 151-closed | closed | strict | 16 | 🟢 excellent (16 / 16) | 🟢 excellent (16 / 16) | — |
+| 152-closed | closed | strict | 1040 | 🟢 excellent (1040 / 1040) | 🟢 strong (1035 / 1040) | — |
+| 153-closed | closed | strict | 232 | 🟢 excellent (232 / 232) | 🟢 excellent (231 / 231) | — |
+| 154-closed | closed | strict | 346 | 🟢 excellent (346 / 346) | 🟢 excellent (346 / 346) | — |
+| 155-closed | closed | production | 362 | 🟢 excellent (362 / 362) | 🟢 excellent (362 / 362) | — |
+| 156-closed | closed | strict | 132 | 🟢 excellent (123 / 123) | 🟢 strong (123 / 123) | — |
+| 157-closed | closed | strict | 5999 | 🟢 excellent (5999 / 5999) | 🟢 strong (5998 / 5999) | — |
+| 158-closed | closed | strict | 6826 | 🟢 excellent (4073 / 4073) | 🟡 moderate (4633 / 4070) | — |
+| 159-closed | closed | strict | 642 | 🟢 excellent (301 / 301) | 🟢 strong (302 / 301) | — |
+| 160-closed | closed | strict | 819 | 🟢 excellent (819 / 819) | 🟢 excellent (819 / 819) | — |
+| 161-closed | closed | strict | 4 | 🟢 excellent (4 / 4) | 🟢 excellent (4 / 4) | — |
+| 162-closed | closed | strict | 73 | 🟢 excellent (73 / 73) | 🟢 strong (71 / 71) | — |
+| 163-closed | closed | strict | 13 | 🟢 excellent (13 / 13) | 🟢 excellent (12 / 12) | — |
+| 164-closed | closed | strict | 183 | 🟢 excellent (109 / 109) | 🟢 excellent (109 / 109) | — |
+| 165-closed | closed | strict | 7021 | 🟢 excellent (7021 / 7021) | 🟢 strong (7019 / 7019) | — |
+| 166-closed | closed | strict | 602 | 🟢 excellent (246 / 246) | 🟢 strong (247 / 246) | — |
+| 167-closed | closed | strict | 795 | 🟢 excellent (795 / 795) | 🟢 excellent (795 / 795) | — |
+| 168-closed | closed | strict | 1002 | 🟢 excellent (1002 / 1002) | 🟢 strong (995 / 1001) | — |
+| 169-closed | closed | strict | 766 | 🟢 excellent (766 / 766) | 🟠 weak (751 / 765) | — |
+| 170-closed | closed | strict | 1 | 🟢 excellent (1 / 1) | 🟢 excellent (1 / 1) | — |
+| 171-closed | closed | strict | 1106 | 🟢 excellent (1106 / 1106) | 🟢 excellent (1106 / 1106) | — |
+| 172-closed | closed | strict | 1521 | 🟢 excellent (507 / 507) | 🟢 strong (497 / 507) | — |
+| 173-closed | closed | strict | 1849 | 🟢 excellent (1015 / 1015) | 🟢 strong (1011 / 1011) | — |
+| 174-closed | closed | strict | 4330 | 🟢 excellent (4330 / 4330) | 🟢 excellent (4330 / 4330) | — |
+| 175-closed | closed | strict | 386 | 🟢 excellent (386 / 386) | 🟢 excellent (386 / 386) | — |
+| 176-closed | closed | strict | 484 | 🟢 excellent (289 / 289) | 🟢 strong (298 / 289) | — |
+| 177-closed | closed | strict | 2846 | 🟢 excellent (2846 / 2846) | 🟢 excellent (2845 / 2845) | — |
+| 178-closed | closed | strict | 519 | 🟢 excellent (519 / 519) | 🟢 excellent (517 / 517) | — |
+| 179-closed | closed | strict | 220 | 🟢 excellent (220 / 220) | 🟢 strong (216 / 216) | — |
+| 180-closed | closed | strict | 291 | 🟢 excellent (291 / 291) | 🟢 excellent (291 / 291) | — |
+| 181-closed | closed | strict | 2411 | 🟢 excellent (2411 / 2411) | 🟢 strong (2414 / 2411) | — |
+| 182-closed | closed | strict | 3031 | 🟢 excellent (3031 / 3031) | 🟢 excellent (3031 / 3031) | — |
+| 183-closed | closed | strict | 1302 | 🟢 excellent (1302 / 1302) | 🟢 excellent (1302 / 1302) | — |
+| 184-closed | closed | production | 958 | 🟢 excellent (479 / 479) | 🟢 excellent (479 / 479) | — |
+| 185-closed | closed | strict | 2153 | 🟢 excellent (2152 / 2152) | 🟢 excellent (2152 / 2152) | — |
+| 186-closed | closed | strict | 36 | 🟢 excellent (36 / 36) | 🟢 excellent (36 / 36) | — |
+| 187-closed | closed | strict | 202 | 🟢 excellent (202 / 202) | 🟢 excellent (202 / 202) | — |
+| 188-closed | closed | strict | 1372 | 🟢 excellent (1372 / 1372) | 🟢 strong (1356 / 1356) | — |
+| 189-closed | closed | strict | 144 | 🟢 excellent (73 / 73) | 🟡 moderate (58 / 62) | — |
+| 190-closed | closed | strict | 53 | 🟢 excellent (38 / 38) | 🟠 weak (26 / 26) | — |
+| 191-closed | closed | strict | 269 | 🟢 excellent (229 / 229) | 🟢 strong (233 / 229) | — |
+| 192-closed | closed | strict | 157 | 🟢 excellent (157 / 157) | ⚪ n/a — PyneSys compile error: {"detail":{"status":"error","error":"Empty document.","line":null,"file":"script.pine"}} | — |
+| 193-closed | closed | strict | 3394 | 🟢 excellent (3393 / 3393) | 🟢 strong (3387 / 3388) | — |
+| 194-closed | closed | strict | 657 | 🟢 excellent (657 / 657) | 🟢 excellent (656 / 656) | — |
+| 195-closed | closed | strict | 712 | 🟢 excellent (712 / 712) | 🟢 excellent (711 / 711) | — |
+| 196-closed | closed | strict | 111 | 🟢 excellent (29 / 29) | 🟢 strong (29 / 29) | — |
+| 197-closed | closed | strict | 110 | 🟢 excellent (110 / 110) | 🟡 moderate (112 / 110) | — |
+| 198-closed | closed | strict | 72 | 🟢 excellent (72 / 72) | 🟢 strong (72 / 72) | — |
+| 199-closed | closed | strict | 26 | 🟢 excellent (26 / 26) | 🟢 excellent (26 / 26) | — |
+| 200-closed | closed | strict | 533 | 🟢 excellent (533 / 533) | 🟢 excellent (533 / 533) | — |
+| 201-closed | closed | strict | 154 | 🟢 excellent (154 / 154) | 🟢 excellent (153 / 153) | — |
 
 ## Tallies
 
 | Scope | Engine | Strategies graded | Trades emitted | TV trades | excellent | strong | moderate | weak | minimal | anomaly | engine_only | n/a |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | corpus (100) | PineForge | 100 | 139,668 | 139,665 | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| corpus (100) | PyneCore | 100 | 199,063 | 139,665 | 84 | 12 | 0 | 3 | 1 | 0 | 0 | 0 |
+| corpus (100) | PyneCore | 100 | 199,554 | 139,665 | 86 | 12 | 1 | 1 | 0 | 0 | 0 | 0 |
 | corpus (100) | vectorbt | 13 | 18,040 | 13,637 | 4 | 6 | 2 | 1 | 0 | 0 | 0 | 0 |
-| closed (101) | PineForge | 101 | 126,732 | 126,786 | 100 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
-| closed (101) | PyneCore | 101 | 172,535 | 126,786 | 49 | 30 | 8 | 9 | 1 | 0 | 0 | 4 |
-| all (201) | PineForge | 201 | 266,400 | 266,451 | 200 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
-| all (201) | PyneCore | 201 | 371,598 | 266,451 | 133 | 42 | 8 | 12 | 2 | 0 | 0 | 4 |
+| closed (101) | PineForge | 101 | 126,731 | 126,786 | 101 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| closed (101) | PyneCore | 101 | 175,031 | 126,786 | 51 | 34 | 11 | 3 | 1 | 0 | 0 | 1 |
+| all (201) | PineForge | 201 | 266,399 | 266,451 | 201 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| all (201) | PyneCore | 201 | 374,585 | 266,451 | 137 | 46 | 12 | 4 | 1 | 0 | 0 | 1 |
 | all (201) | vectorbt | 13 | 18,040 | 13,637 | 4 | 6 | 2 | 1 | 0 | 0 | 0 | 0 |
-
-## PineForge: non-excellent rows
-
-| Strategy | Group | Tier | Failing gates / reason | count Δ (abs) | entry p90 | exit p90 | PnL p90 | coverage |
-|---|---|---|---|---:|---:|---:|---:|---:|
-| 181-roi10x-shiva-lt-ls-blend | closed | strong | count Δ 0.04% | 0.0415% (1) | 0.0000% | 0.0000% | 0.0000% | 100.0% |
-
-PineForge non-excellent rows by failing-gate set: count 1.
 
 ## PyneCore: non-excellent rows
 
@@ -240,68 +232,64 @@ PineForge non-excellent rows by failing-gate set: count 1.
 | 023-composite-trendmaster-three-tier-ema-state-01 | corpus | strong | coverage 98.2% | 0.0000% (0) | 0.0000% | 0.0000% | 0.0000% | 98.2% |
 | 030-input-source-subscript-hl2-01 | corpus | strong | count Δ 0.01% | 0.0061% (1) | 0.0000% | 0.0000% | 0.0000% | 100.0% |
 | 034-matrix-bool-mask-transpose-roundtrip-01 | corpus | strong | count Δ 1.41%; coverage 96.3% | 1.4066% (11) | 0.0000% | 0.0000% | 0.0000% | 96.3% |
-| 037-mtf-daily-array-median-percentrank-01 | corpus | weak | count Δ 85.39%; exit p90 17.9900%; pnl p90 1941.0589%; coverage 7.2% | 85.3933% (304) | 0.0000% | 17.9900% | 1941.0589% | 7.2% |
 | 039-mtf-htf-60-close-change-baseline-01 | corpus | strong | count Δ 0.02% | 0.0228% (2) | 0.0000% | 0.0000% | 0.0000% | 100.0% |
-| 040-mtf-htf-weekly-sma-cross-01 | corpus | weak | count Δ 9.80%; exit p90 4.7589%; pnl p90 127.9468%; coverage 15.7% | 9.8039% (10) | 0.0000% | 4.7589% | 127.9468% | 15.7% |
-| 042-mtf-triple-tf-macd-hist-confluence-01 | corpus | minimal | no aligned trades | 87.5000% (21) | 0.0000% | 0.0000% | 0.0000% | 0.0% |
+| 042-mtf-triple-tf-macd-hist-confluence-01 | corpus | moderate | coverage 91.7% | 0.0000% (0) | 0.0000% | 0.0000% | 0.0000% | 91.7% |
 | 054-order-keystone-limit-replace-01 | corpus | strong | pnl p90 2.4713% | 0.0000% (0) | 0.0000% | 0.0000% | 2.4713% | 100.0% |
 | 071-ta-dual-thrust-open-anchored-range-01 | corpus | strong | count Δ 0.03% | 0.0348% (1) | 0.0000% | 0.0000% | 0.0000% | 100.0% |
 | 086-ta-str-match-regex-filter-01 | corpus | weak | count Δ 21.02%; exit p90 0.5374%; pnl p90 273.2000%; coverage 51.2% | 21.0224% (403) | 0.0000% | 0.5374% | 273.2000% | 51.2% |
 | 091-udt-method-drives-strategy-entry-01 | corpus | strong | count Δ 0.06% | 0.0611% (1) | 0.0000% | 0.0000% | 0.0000% | 100.0% |
-| 102-3commas-3commas-pol-grid-bot-long-strategy | closed | moderate | count Δ 7.22%; exit p90 22.1780%; pnl p90 373.1014%; coverage 91.4% | 7.2165% (14) | 0.0000% | 22.1780% | 373.1014% | 91.4% |
-| 103-3commas-eth-grid-bot-long-strategy | closed | moderate | count Δ 7.29%; exit p90 4.0576%; pnl p90 355.8417%; distinct-entry multiplicity Δ 7 | 7.2917% (14) | 0.0000% | 4.0576% | 355.8417% | 100.0% |
-| 105-3commas-heikin-ashi-rsi-fade-short-strategy | closed | strong | pnl p90 2.6549% | 0.0000% (0) | 0.0000% | 0.0000% | 2.6549% | 99.7% |
-| 107-3commas-xmr-grid-bot-long-strategy | closed | moderate | count Δ 7.84%; exit p90 20.1305%; pnl p90 401.1577%; coverage 90.8% | 7.8431% (16) | 0.0000% | 20.1305% | 401.1577% | 90.8% |
-| 108-a-popal-simple-smart-buy-sell-strategy | closed | weak | count Δ 25.05%; coverage 68.4% | 25.0488% (641) | 0.0000% | 0.0000% | 0.0000% | 68.4% |
-| 110-aiscripts-lvn-rejection-acceptance-strategy | closed | strong | pnl p90 2.0408% | 0.0000% (0) | 0.0000% | 0.0000% | 2.0408% | 100.0% |
-| 111-ajayinderbrar-ajay-fibonacci-market-structure-pro-ai-v2-1 | closed | moderate | count Δ 4.21%; exit p90 0.0291%; pnl p90 17.2567%; coverage 93.1% | 4.2139% (52) | 0.0000% | 0.0291% | 17.2567% | 93.1% |
-| 113-algo-aakash-macd-pullback-validation-with-divergence-filters-algo-aakash | closed | moderate | exit p90 2.1912%; pnl p90 50.0000% | 0.0000% (0) | 0.0000% | 2.1912% | 50.0000% | 85.7% |
-| 114-amandaborgeson06-bias-status-dashboard | closed | weak | count Δ 0.49%; exit p90 0.2936%; pnl p90 177.6368%; coverage 85.5% | 0.4938% (6) | 0.0000% | 0.2936% | 177.6368% | 85.5% |
-| 119-backtestbay-strategy-validation-framework-standardised-atr-exits-1-ris | closed | strong | count Δ 0.22% | 0.2165% (1) | 0.0000% | 0.0000% | 0.0000% | 99.4% |
-| 120-benblackdiamond-l2gmom-network-momentum | closed | moderate | pnl p90 33.2648%; coverage 93.4% | 0.0000% (0) | 0.0000% | 0.0003% | 33.2648% | 93.4% |
-| 121-bipinbiharipatra-5m-sol-scalper-ha-lorentzian | closed | strong | pnl p90 10.0317% | 0.0000% (0) | 0.0000% | 0.0000% | 10.0317% | 99.9% |
-| 123-chadow6875-swing-high-low-ict-clean-pro | closed | strong | count Δ 1.46%; coverage 95.6%; distinct-entry multiplicity Δ 472 | 1.4627% (209) | 0.0000% | 0.0000% | 0.0000% | 95.6% |
-| 126-cntvxiao-smc-vsa-oi | closed | strong | count Δ 0.71%; pnl p90 96.2341% | 0.7143% (4) | 0.0000% | 0.0000% | 96.2341% | 100.0% |
-| 127-codetradesalgo-fix-webhook-latency-dh-905-errors-pinescript-to-python-bridge | closed | strong | count Δ 0.06% | 0.0573% (1) | 0.0000% | 0.0000% | 0.0000% | 100.0% |
-| 128-colasbreugnon-nq-scalp-fix-signals | closed | strong | count Δ 0.25% | 0.2535% (4) | 0.0000% | 0.0000% | 0.0000% | 99.9% |
-| 130-delta-crypto-mu-overnight-gap-capture | closed | strong | pnl p90 40.9735% | 0.0000% (0) | 0.0000% | 0.0000% | 40.9735% | 100.0% |
-| 132-dinkus3-obsidian | closed | strong | pnl p90 27.1446% | 0.0000% (0) | 0.0000% | 0.0000% | 27.1446% | 97.9% |
-| 133-drgunjanpupadhyay-swing-trend-strategy-pro-sideways-filtered-nifty-500 | closed | strong | pnl p90 18.3779% | 0.0000% (0) | 0.0000% | 0.0000% | 18.3779% | 100.0% |
-| 135-finnp17-atm | closed | minimal | no aligned trades | 100.0000% (1790) | 0.0000% | 0.0000% | 0.0000% | 0.0% |
-| 139-francescodimichele-gold-ai-strategy-v2-0 | closed | strong | count Δ 0.16% | 0.1553% (1) | 0.0000% | 0.0000% | 3.3148% | 100.0% |
-| 140-gonzowiththewind-sisyphus-happiness | closed | n/a | PyneCore runtime error: RuntimeError: security context 'sec·93481528·0': the developing batch published | | | | | |
-| 143-hungpixi-hungpixi-macd-enhanced-mtf-with-signal-filter-anti-sideway | closed | weak | exit p90 0.1656%; pnl p90 1232.3814% | 0.0000% (0) | 0.0000% | 0.1656% | 1232.3814% | 75.0% |
-| 144-igreycrypto-adapted-rsi-w-multi-asset-regime-detection-v1-1 | closed | moderate | count Δ 6.00%; exit p90 1.1695%; pnl p90 80.3572% | 6.0000% (12) | 0.0000% | 1.1695% | 80.3572% | 100.0% |
-| 149-jayentriken-bbwp-macd-ema-trend-strategy | closed | strong | pnl p90 19.5087% | 0.0000% (0) | 0.0000% | 0.0000% | 19.5087% | 100.0% |
-| 150-jdceagle-zigzag-de-fractales-williams | closed | strong | count Δ 0.01% | 0.0118% (1) | 0.0000% | 0.0000% | 0.0000% | 100.0% |
-| 152-jos-protrader-edward-smart-liquidity-sweep | closed | strong | count Δ 0.48%; coverage 98.2%; distinct-entry multiplicity Δ 15 | 0.4808% (5) | 0.0000% | 0.0000% | 0.0000% | 98.2% |
-| 156-m-f-atipey-hybrid-3-strategy-smart-system-v6-1 | closed | strong | pnl p90 12.0904% | 0.0000% (0) | 0.0000% | 0.0000% | 12.0904% | 100.0% |
-| 157-madue2014-twe-2-bar-break-strategy | closed | strong | count Δ 0.02% | 0.0167% (1) | 0.0000% | 0.0000% | 0.0000% | 100.0% |
-| 158-market-logic-india-low-lag-strength-oscillator | closed | moderate | count Δ 12.15%; exit p90 0.3892%; pnl p90 97.6638% | 12.1520% (563) | 0.0000% | 0.3892% | 97.6638% | 99.6% |
-| 159-mdfe3757-trade-strategy-v8-4-pine-v6-ready | closed | strong | count Δ 0.33%; pnl p90 5.5932% | 0.3311% (1) | 0.0000% | 0.0000% | 5.5932% | 100.0% |
-| 162-nicocashfx-prime-strategy-swing | closed | strong | coverage 97.3% | 0.0000% (0) | 0.0000% | 0.0000% | 0.0000% | 97.3% |
-| 163-nightowlxtrader-azt-strategy-v11-first-draft | closed | weak | exit p90 0.9703%; pnl p90 45.3778%; coverage 8.3% | 0.0000% (0) | 0.0000% | 0.9703% | 45.3778% | 8.3% |
-| 164-officialjackofalltrades-concordance-execution-mandate-joat | closed | weak | coverage 20.2% | 0.0000% (0) | 0.0000% | 0.0001% | 0.0000% | 20.2% |
-| 165-officialjackofalltrades-concordance-regime-synthesis-joat | closed | strong | pnl p90 27.8351% | 0.0000% (0) | 0.0000% | 0.0000% | 27.8351% | 99.5% |
-| 166-officialjackofalltrades-concordance-strategy-joat | closed | n/a | PyneCore runtime error: RuntimeError: security context 'sec·c5dd5335·3': the developing batch published | | | | | |
-| 168-officialjackofalltrades-parallax-covenant-strategy-joat | closed | strong | count Δ 0.60% | 0.5994% (6) | 0.0000% | 0.0000% | 0.0000% | 99.3% |
-| 169-officialjackofalltrades-regime-execution-strategy-joat | closed | weak | count Δ 1.83%; pnl p90 3.6756%; coverage 41.6% | 1.8301% (14) | 0.0000% | 0.0000% | 3.6756% | 41.6% |
-| 172-projectsyndicate-strong-breakout-signals-projectsyndicate | closed | strong | count Δ 1.97%; coverage 97.0% | 1.9724% (10) | 0.0000% | 0.0055% | 0.0000% | 97.0% |
-| 173-quantitativealpha-strategy-forecast-engine | closed | strong | pnl p90 81.3551% | 0.0000% (0) | 0.0000% | 0.0000% | 81.3551% | 99.7% |
-| 176-rakesh-09-edge-confirmation-system-ecs-v2-0 | closed | strong | count Δ 3.02%; pnl p90 10.0718% | 3.0201% (9) | 0.0000% | 0.0000% | 10.0718% | 99.7% |
-| 179-richmondhillcm-richmondhillcm-vwap-volume-spike-suite-v1-3 | closed | strong | pnl p90 3.5901%; coverage 98.2% | 0.0000% (0) | 0.0000% | 0.0000% | 3.5901% | 98.2% |
-| 181-roi10x-shiva-lt-ls-blend | closed | weak | count Δ 8.34%; exit p90 0.2761%; pnl p90 77.1709%; coverage 70.5% | 8.3437% (201) | 0.0000% | 0.2761% | 77.1709% | 70.5% |
-| 188-theforexguy0777-9-ema-20-ema-retest-strategy | closed | strong | coverage 98.8% | 0.0000% (0) | 0.0000% | 0.0000% | 0.0000% | 98.8% |
-| 189-therealbouga-apex-mtf-index-model | closed | weak | count Δ 11.43%; exit p90 0.0745%; pnl p90 129.6360%; coverage 65.3% | 11.4286% (8) | 0.0000% | 0.0745% | 129.6360% | 65.3% |
-| 190-tomukasss-engulfing-mitigation-strategy | closed | weak | exit p90 4.3825%; pnl p90 100.0000%; coverage 68.4% | 0.0000% (0) | 0.0000% | 4.3825% | 100.0000% | 68.4% |
-| 191-tomukasss-trend-pivot-scale-in | closed | strong | count Δ 1.72%; exit p90 0.2162%; pnl p90 21.0526% | 1.7167% (4) | 0.0000% | 0.2162% | 21.0526% | 100.0% |
-| 192-trendchain0719-9-21-ema-volume-spike-bollinger-bands-vwap | closed | n/a | PyneSys compile error: {"detail":{"status":"error","error":"Empty document.","line":null,"file":"script.pine"}} | | | | | |
-| 193-ttagkoin-adaptive-multi-facto-9-years | closed | strong | count Δ 0.03% | 0.0295% (1) | 0.0000% | 0.0000% | 0.0000% | 99.8% |
-| 196-vimalboiling-refined-supertrend-atr-tsl-filters-nifty-banknifty-v2 | closed | strong | pnl p90 2.0909% | 0.0000% (0) | 0.0000% | 0.0002% | 2.0909% | 100.0% |
-| 197-waranyutrkm-asian-box-breakout-eda-tuned | closed | n/a | PyneCore runtime error: RuntimeError: security context 'sec·6886bfdb·0': the developing batch published | | | | | |
-| 198-wellmanapex-ut-bot-stc-conjunction-strategy-tester-v4-8 | closed | strong | pnl p90 3.4471% | 0.0000% (0) | 0.0000% | 0.0000% | 3.4471% | 100.0% |
+| 102-closed | closed | moderate | count Δ 7.22%; exit p90 22.1780%; pnl p90 373.1014%; coverage 91.4% | 7.2165% (14) | 0.0000% | 22.1780% | 373.1014% | 91.4% |
+| 103-closed | closed | moderate | count Δ 7.29%; exit p90 4.0576%; pnl p90 355.8417%; distinct-entry multiplicity Δ 7 | 7.2917% (14) | 0.0000% | 4.0576% | 355.8417% | 100.0% |
+| 105-closed | closed | strong | pnl p90 2.6549% | 0.0000% (0) | 0.0000% | 0.0000% | 2.6549% | 99.7% |
+| 107-closed | closed | moderate | count Δ 7.84%; exit p90 20.1305%; pnl p90 401.1577%; coverage 90.8% | 7.8431% (16) | 0.0000% | 20.1305% | 401.1577% | 90.8% |
+| 108-closed | closed | strong | count Δ 0.04% | 0.0391% (1) | 0.0000% | 0.0000% | 0.0000% | 100.0% |
+| 110-closed | closed | strong | pnl p90 2.0408% | 0.0000% (0) | 0.0000% | 0.0000% | 2.0408% | 100.0% |
+| 111-closed | closed | moderate | count Δ 4.21%; exit p90 0.0291%; pnl p90 17.2567%; coverage 93.1% | 4.2139% (52) | 0.0000% | 0.0291% | 17.2567% | 93.1% |
+| 113-closed | closed | moderate | exit p90 2.1912%; pnl p90 50.0000% | 0.0000% (0) | 0.0000% | 2.1912% | 50.0000% | 85.7% |
+| 114-closed | closed | moderate | count Δ 1.14%; exit p90 0.1089%; pnl p90 212.9500%; coverage 91.4% | 1.1391% (14) | 0.0000% | 0.1089% | 212.9500% | 91.4% |
+| 119-closed | closed | strong | count Δ 0.22% | 0.2165% (1) | 0.0000% | 0.0000% | 0.0000% | 99.4% |
+| 120-closed | closed | moderate | pnl p90 33.2648%; coverage 93.4% | 0.0000% (0) | 0.0000% | 0.0003% | 33.2648% | 93.4% |
+| 121-closed | closed | strong | pnl p90 10.0317% | 0.0000% (0) | 0.0000% | 0.0000% | 10.0317% | 99.9% |
+| 123-closed | closed | strong | count Δ 1.46%; coverage 95.6%; distinct-entry multiplicity Δ 472 | 1.4627% (209) | 0.0000% | 0.0000% | 0.0000% | 95.6% |
+| 126-closed | closed | strong | count Δ 0.71%; pnl p90 96.2341% | 0.7143% (4) | 0.0000% | 0.0000% | 96.2341% | 100.0% |
+| 127-closed | closed | strong | count Δ 0.06% | 0.0573% (1) | 0.0000% | 0.0000% | 0.0000% | 100.0% |
+| 128-closed | closed | strong | count Δ 0.25% | 0.2535% (4) | 0.0000% | 0.0000% | 0.0000% | 99.9% |
+| 130-closed | closed | strong | pnl p90 40.9735% | 0.0000% (0) | 0.0000% | 0.0000% | 40.9735% | 100.0% |
+| 132-closed | closed | strong | pnl p90 27.1446% | 0.0000% (0) | 0.0000% | 0.0000% | 27.1446% | 97.9% |
+| 133-closed | closed | strong | pnl p90 18.3779% | 0.0000% (0) | 0.0000% | 0.0000% | 18.3779% | 100.0% |
+| 135-closed | closed | minimal | no aligned trades | 100.0000% (1790) | 0.0000% | 0.0000% | 0.0000% | 0.0% |
+| 139-closed | closed | strong | count Δ 0.16% | 0.1553% (1) | 0.0000% | 0.0000% | 3.3148% | 100.0% |
+| 140-closed | closed | strong | pnl p90 6.6083% | 0.0000% (0) | 0.0000% | 0.0000% | 6.6083% | 100.0% |
+| 143-closed | closed | weak | exit p90 0.1656%; pnl p90 1232.3814% | 0.0000% (0) | 0.0000% | 0.1656% | 1232.3814% | 75.0% |
+| 144-closed | closed | moderate | count Δ 6.00%; exit p90 1.1695%; pnl p90 80.3572% | 6.0000% (12) | 0.0000% | 1.1695% | 80.3572% | 100.0% |
+| 149-closed | closed | strong | pnl p90 19.5087% | 0.0000% (0) | 0.0000% | 0.0000% | 19.5087% | 100.0% |
+| 150-closed | closed | strong | count Δ 0.01% | 0.0118% (1) | 0.0000% | 0.0000% | 0.0000% | 100.0% |
+| 152-closed | closed | strong | count Δ 0.48%; coverage 98.2%; distinct-entry multiplicity Δ 15 | 0.4808% (5) | 0.0000% | 0.0000% | 0.0000% | 98.2% |
+| 156-closed | closed | strong | pnl p90 12.0904% | 0.0000% (0) | 0.0000% | 0.0000% | 12.0904% | 100.0% |
+| 157-closed | closed | strong | count Δ 0.02% | 0.0167% (1) | 0.0000% | 0.0000% | 0.0000% | 100.0% |
+| 158-closed | closed | moderate | count Δ 12.15%; exit p90 0.3892%; pnl p90 97.6638% | 12.1520% (563) | 0.0000% | 0.3892% | 97.6638% | 99.6% |
+| 159-closed | closed | strong | count Δ 0.33%; pnl p90 5.5932% | 0.3311% (1) | 0.0000% | 0.0000% | 5.5932% | 100.0% |
+| 162-closed | closed | strong | coverage 97.3% | 0.0000% (0) | 0.0000% | 0.0000% | 0.0000% | 97.3% |
+| 165-closed | closed | strong | pnl p90 27.8351% | 0.0000% (0) | 0.0000% | 0.0000% | 27.8351% | 99.5% |
+| 166-closed | closed | strong | count Δ 0.40%; coverage 97.6% | 0.4049% (1) | 0.0000% | 0.0008% | 0.0000% | 97.6% |
+| 168-closed | closed | strong | count Δ 0.60% | 0.5994% (6) | 0.0000% | 0.0000% | 0.0000% | 99.3% |
+| 169-closed | closed | weak | count Δ 1.83%; pnl p90 3.6756%; coverage 41.6% | 1.8301% (14) | 0.0000% | 0.0000% | 3.6756% | 41.6% |
+| 172-closed | closed | strong | count Δ 1.97%; coverage 97.0% | 1.9724% (10) | 0.0000% | 0.0055% | 0.0000% | 97.0% |
+| 173-closed | closed | strong | pnl p90 81.3551% | 0.0000% (0) | 0.0000% | 0.0000% | 81.3551% | 99.7% |
+| 176-closed | closed | strong | count Δ 3.02%; pnl p90 10.0718% | 3.0201% (9) | 0.0000% | 0.0000% | 10.0718% | 99.7% |
+| 179-closed | closed | strong | pnl p90 3.5901%; coverage 98.2% | 0.0000% (0) | 0.0000% | 0.0000% | 3.5901% | 98.2% |
+| 181-closed | closed | strong | count Δ 0.12% | 0.1243% (3) | 0.0000% | 0.0000% | 0.0000% | 100.0% |
+| 188-closed | closed | strong | coverage 98.8% | 0.0000% (0) | 0.0000% | 0.0000% | 0.0000% | 98.8% |
+| 189-closed | closed | moderate | count Δ 6.45%; pnl p90 2.7057%; coverage 80.6% | 6.4516% (4) | 0.0000% | 0.0000% | 2.7057% | 80.6% |
+| 190-closed | closed | weak | exit p90 4.3825%; pnl p90 100.0000%; coverage 68.4% | 0.0000% (0) | 0.0000% | 4.3825% | 100.0000% | 68.4% |
+| 191-closed | closed | strong | count Δ 1.72%; exit p90 0.2162%; pnl p90 21.0526% | 1.7167% (4) | 0.0000% | 0.2162% | 21.0526% | 100.0% |
+| 192-closed | closed | n/a | PyneSys compile error: {"detail":{"status":"error","error":"Empty document.","line":null,"file":"script.pine"}} | | | | | |
+| 193-closed | closed | strong | count Δ 0.03% | 0.0295% (1) | 0.0000% | 0.0000% | 0.0000% | 99.8% |
+| 196-closed | closed | strong | pnl p90 2.0909% | 0.0000% (0) | 0.0000% | 0.0002% | 2.0909% | 100.0% |
+| 197-closed | closed | moderate | count Δ 1.79%; pnl p90 5.5564%; coverage 93.6% | 1.7857% (2) | 0.0000% | 0.0000% | 5.5564% | 93.6% |
+| 198-closed | closed | strong | pnl p90 3.4471% | 0.0000% (0) | 0.0000% | 0.0000% | 3.4471% | 100.0% |
 
-PyneCore non-excellent rows by failing-gate set: pnl 15, count 14, count+exit+pnl+coverage 9, coverage 4, n/a 4, count+coverage 3, count+exit+pnl 3, count+pnl 3, count+coverage+distinct-entry 2, count+entry+exit+pnl+coverage 2, exit+pnl 2, exit+pnl+coverage 2, pnl+coverage 2, count+exit+pnl+distinct-entry 1, count+pnl+coverage 1, distinct-entry 1.
+PyneCore non-excellent rows by failing-gate set: count 16, pnl 16, count+exit+pnl+coverage 5, coverage 4, count+coverage 3, count+exit+pnl 3, count+pnl 3, count+pnl+coverage 3, count+coverage+distinct-entry 2, exit+pnl 2, pnl+coverage 2, count+entry+exit+pnl+coverage 1, count+exit+pnl+distinct-entry 1, distinct-entry 1, exit+pnl+coverage 1, n/a 1.
 
 ## vectorbt: non-excellent rows
 
