@@ -1,0 +1,16 @@
+{
+  "title": "tg xau1d requests",
+  "slug": "tg-xau1d-requests",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T00:34:33.778Z",
+  "chart": {
+    "symbol": "OANDA:XAUUSD",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "b0625d24e26cd553bccc49ef2e8ca8175c5b79fb742cc4cfce7195b5666e2d9e",
+  "tv_trades_sha256": "371218a7589e5d64d243b4a280279ed9bb2f5f3c9e689ed67e0d1f9de9f00392",
+  "tv_trades_rows": 556
+}

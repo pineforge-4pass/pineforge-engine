@@ -841,6 +841,7 @@ void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const
             f.i(site.delivered);
             f.i(site.close_ms);
             f.i(site.last_input);
+            f.i(site.handed);
         }
     }
     adapter_.hash_state(f); scheduler_.hash_state(f);

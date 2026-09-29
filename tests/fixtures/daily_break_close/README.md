@@ -75,6 +75,29 @@ labels' lookahead-off daily reads. Lane W11-ENG-TIME-COLOR's kernel rule
 not on this tree: the Pine adapter never changes the kernel's generic
 mechanics, so TradingView's reading is the adapter's to give.
 
+The adapter gives it (lane TAIL-G, `read_ahead_foreign_security_sites` in
+`src/source/pine_security_eval.cpp`): on a D, W or M chart it judges a
+lookahead-off request against the chart bar's `time_close` and a lookahead-on
+request of an intraday timeframe against its `time`, and runs the bars that
+makes visible before the kernel hands them over. `tg-xau1d-requests` holds the
+request shapes of the population's OANDA:XAUUSD 1D probes over their range:
+lookahead-off daily requests of CBOE:VIX, TVC:US10Y, CRYPTOCAP:USDT.D and
+TVC:DXY, and lookahead-on 60 and 240 requests of TVC:VIX and
+CRYPTOCAP:USDT.D and a 240 one of TVC:DXY, each spelled as the minutes from
+the requested bar's `time` and `time_close` to the chart bar's `time`. Each
+reads the last bar closed by the next 17:00 ET, or opened by the 17:00 ET
+label, on all 277 readings. `tests/test_foreign_break_stamp_tapes.cpp`
+rebuilds, per shape, the requested bars each tape's readings name and reads
+them back through a Pine host's foreign site on the tape's chart bars: every
+read of the twelve shapes of `tg-xau1d-requests`, `w11-tclose-xau1d` and
+`w11-tclose-la-xau1d` (all but its lookahead-on daily column, which
+TradingView aligns by trading date and the adapter leaves to the kernel) is
+TradingView's.
+
+| tape | chart | range | trades | rangeProof | tv_trades.csv sha256 | strategy.pine sha256 (12) |
+|---|---|---|---:|---|---|---|
+| `tg-xau1d-requests` | OANDA:XAUUSD 1D | 2025-04-01 .. 2026-05-01 | 278 | covered | `371218a7589e5d64d243b4a280279ed9bb2f5f3c9e689ed67e0d1f9de9f00392` | `b0625d24e26c` |
+
 | tape | chart | range | trades | rangeProof | tv_trades.csv sha256 | strategy.pine sha256 (12) |
 |---|---|---|---:|---|---|---|
 | `w11-tclose-xau1d` | OANDA:XAUUSD 1D | 2025-03-01 .. 2025-07-01 | 85 | narrower-than-requested | `8209c666ff491ff9f744da0c03440f572c7c24377ba538427fccd59123e8fe24` | `fbccbf8d2870` |

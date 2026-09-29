@@ -612,7 +612,11 @@ order, each with the close the feed gives it
 (`NativeRunSpec::instrument_feeds`); the source host runs the payload on each
 in the requested context -- its own history, `bar_index`, `time_close` and
 `syminfo.*` -- and fails the run closed, naming the symbol and the timeframe,
-when no feed is installed. Codegen still refuses a symbol that is not the
+when no feed is installed. On a D, W or M chart the source host judges the
+merge against the chart bar's own `time` and `time_close`, as TradingView
+does, where the kernel reads a daily label stamped in its session's break
+(OANDA:XAUUSD at 17:00 ET) as the session that closes at it
+(`tests/test_foreign_break_stamp_tapes.cpp`). Codegen still refuses a symbol that is not the
 chart's until its lowering onto this surface lands (lane XSYM-E); see
 @ref native_engine, "Instrument feeds: another symbol's bars".
 

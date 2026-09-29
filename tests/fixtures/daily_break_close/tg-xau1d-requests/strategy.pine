@@ -1,0 +1,29 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane TAIL-G): what requests of other symbols read on a
+// daily chart whose bars are stamped in the session break: minutes from the
+// chart bar's time to its time_close, then from each requested bar's time and
+// time_close to the chart bar's time, for lookahead-off daily requests of four
+// symbols and lookahead-on hourly and four-hour requests of three; spelled in
+// the comment of the exit that fills on the next bar's open.
+strategy("tg xau1d requests", overlay=true, initial_capital=100000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=2, margin_long=0, margin_short=0)
+
+mn(int a, int b) => na(a) or na(b) ? "n" : str.tostring((a - b) / 60000)
+pr(int t, int tc) => mn(time, t) + "," + mn(time, tc)
+[vixT, vixTc] = request.security("CBOE:VIX", "D", [time, time_close], lookahead=barmerge.lookahead_off)
+[tnxT, tnxTc] = request.security("TVC:US10Y", "D", [time, time_close], lookahead=barmerge.lookahead_off)
+[usdtT, usdtTc] = request.security("CRYPTOCAP:USDT.D", "D", [time, time_close], lookahead=barmerge.lookahead_off)
+[dxyT, dxyTc] = request.security("TVC:DXY", "D", [time, time_close], lookahead=barmerge.lookahead_off)
+[vix1T, vix1Tc] = request.security("TVC:VIX", "60", [time, time_close], lookahead=barmerge.lookahead_on)
+[vix4T, vix4Tc] = request.security("TVC:VIX", "240", [time, time_close], lookahead=barmerge.lookahead_on)
+[dxy4T, dxy4Tc] = request.security("TVC:DXY", "240", [time, time_close], lookahead=barmerge.lookahead_on)
+[usdt1T, usdt1Tc] = request.security("CRYPTOCAP:USDT.D", "60", [time, time_close], lookahead=barmerge.lookahead_on)
+[usdt4T, usdt4Tc] = request.security("CRYPTOCAP:USDT.D", "240", [time, time_close], lookahead=barmerge.lookahead_on)
+sig = mn(time_close, time) + "|" + pr(vixT, vixTc) + "|" + pr(tnxT, tnxTc) + "|" + pr(usdtT, usdtTc) + "|" + pr(dxyT, dxyTc) + "|" + pr(vix1T, vix1Tc) + "|" + pr(vix4T, vix4Tc) + "|" + pr(dxy4T, dxy4Tc) + "|" + pr(usdt1T, usdt1Tc) + "|" + pr(usdt4T, usdt4Tc)
+
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.close("B", comment=sig)
+else
+    strategy.entry("B", strategy.long)
+    strategy.close("A", comment=sig)

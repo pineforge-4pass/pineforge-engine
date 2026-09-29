@@ -325,11 +325,16 @@ void source::PineStrategyHost::on_native_tick(
 void source::PineStrategyHost::on_native_bar_open(
         const Bar& bar, const NativeDecisionContext& context) {
     if (source_prepare_failed_) return;
-    // A gaps_on foreign site the kernel handed nothing on this input reads
-    // na: cleared here, after the input's deliveries and before the bar's
+    // Foreign sites, after the input's deliveries and before the bar's
     // calc_on_order_fills checkpoint (PineScheduler::bar_open), so every
-    // calculation of the bar reads the cleared value.
-    if (!foreign_security_sites_.empty()) clear_gapped_foreign_security_sites();
+    // calculation of the bar reads the same values: on a calendar chart the
+    // bars TradingView's merge rule makes visible at this bar that the kernel
+    // has not handed over yet run first; then a gaps_on site that ran on no
+    // new bar reads na.
+    if (!foreign_security_sites_.empty()) {
+        read_ahead_foreign_security_sites(bar);
+        clear_gapped_foreign_security_sites();
+    }
     bar_magnifier_enabled_ = scheduler_.bar_magnifier_enabled();
     diag_magnifier_sub_bars_processed_ = bar_magnifier_enabled_
         ? static_cast<std::int64_t>(context.driver_statistics.sub_bars_processed) : 0;
@@ -1866,12 +1871,15 @@ bool source::PineStrategyHost::adapter_core_sizes_default_opening(bool is_long) 
 // break, and the time-of-day session filter the intraday path applies read
 // that stamp as out of session, so the D chart answered na.
 int64_t source::PineStrategyHost::chart_time_close() const {
+    return chart_bar_close_ms(current_bar_.timestamp);
+}
+
+int64_t source::PineStrategyHost::chart_bar_close_ms(int64_t stamp) const {
     if (calendar_period_for(script_tf_) != CalendarPeriod::NONE) {
-        return pine_time_close(current_bar_.timestamp, script_tf_, "", "", script_tf_,
+        return pine_time_close(stamp, script_tf_, "", "", script_tf_,
                                syminfo_.timezone, syminfo_.session);
     }
-    return pine_time_close(current_bar_.timestamp, script_tf_, syminfo_.session,
-                           syminfo_.timezone, script_tf_);
+    return pine_time_close(stamp, script_tf_, syminfo_.session, syminfo_.timezone, script_tf_);
 }
 
 } // namespace pineforge

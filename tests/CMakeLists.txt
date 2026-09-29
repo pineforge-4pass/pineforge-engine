@@ -987,6 +987,10 @@ list(APPEND TEST_SOURCES test_margin_opposite_tapes)
 # admission and the grown book's margin calls (tests/fixtures/add_sibling_margin),
 # on TradingView's tapes.
 list(APPEND TEST_SOURCES test_add_sibling_margin_tapes)
+# Lane TAIL-G: requests of other symbols on a daily chart stamped in its
+# session's break read the chart bar's own period (tests/fixtures/
+# daily_break_close), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_foreign_break_stamp_tapes)
 # Lane INT28-FIX (RC): a calc_on_order_fills recalculation reads the whole
 # bar's finer request.security values (tests/fixtures/coof_recalc_security),
 # on TradingView's tape.
@@ -2717,6 +2721,12 @@ foreach(_pf_w12_row IN ITEMS
             ${_pf_w12_macro}="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/${_pf_w12_dir}")
     endif()
 endforeach()
+
+# Lane TAIL-G: the row that reads the daily-break request tapes.
+if(TARGET test_foreign_break_stamp_tapes)
+    target_compile_definitions(test_foreign_break_stamp_tapes PRIVATE
+        PINEFORGE_DAILY_BREAK_CLOSE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/daily_break_close")
+endif()
 
 # std::thread needs an explicit pthread link on some toolchains.
 target_link_libraries(test_timezone_concurrency PRIVATE Threads::Threads)

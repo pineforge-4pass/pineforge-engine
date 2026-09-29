@@ -939,7 +939,9 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
 // NativeSeriesSource::InstrumentFeed series: the kernel owns the merge by
 // interval (NativeInstrumentFeed), this host the Pine semantics around it --
 // the barmerge flags mapped onto the series, the payload evaluated on every
-// bar handed over, in the requested context, and ignore_invalid_symbol.
+// bar handed over, in the requested context, ignore_invalid_symbol, and on a
+// calendar chart TradingView's merge against the chart bar's own time and
+// close (read_ahead_foreign_security_sites).
 
 namespace {
 
@@ -1032,6 +1034,7 @@ void source::PineStrategyHost::prepare_foreign_security_sites(
         site.delivered = 0;
         site.close_ms = 0;
         site.last_input = -1;
+        site.handed = 0;
         site.eval = SecurityEvalState{};
         site.eval.sec_id = sec_id;
         site.eval.tf = site.tf;
@@ -1099,12 +1102,21 @@ void source::PineStrategyHost::on_native_timeframe_bar(
     const auto found = foreign_security_sites_.find(sec_id);
     if (found == foreign_security_sites_.end()) return;
     ForeignSecuritySite& site = found->second;
-    // The bar the kernel hands over is the context's next bar: its index is
-    // the count so far (the kernel hands every bar over once, in order), its
-    // close the feed's own.
+    // The kernel hands every bar over once, in order, so the count so far is
+    // the bar's feed index. A bar the payload already ran on, made visible on
+    // an earlier chart bar by the merge rule below, is not run again; any
+    // other is the context's next bar, its close the feed's own.
+    const std::int64_t index = site.handed;
+    site.handed = index + 1;
+    if (index < site.delivered) return;
+    run_foreign_site_bar(site, bar, context.interval.last_traded_close_ms);
+}
+
+void source::PineStrategyHost::run_foreign_site_bar(ForeignSecuritySite& site, const Bar& bar,
+                                                    std::int64_t close_ms) {
     const std::int64_t index = site.delivered;
     site.delivered = index + 1;
-    site.close_ms = context.interval.last_traded_close_ms;
+    site.close_ms = close_ms;
     site.last_input = foreign_input_index_;
     // The requested context answers pine_bar_index(), time_close() and
     // syminfo_ while its payload runs, and the chart's once it returns.
@@ -1127,6 +1139,46 @@ void source::PineStrategyHost::on_native_timeframe_bar(
         }
     } scope(*this, site);
     dispatch_security_eval(site.eval, bar, true, index);
+}
+
+// TradingView merges another symbol's bars into a calendar (D/W/M) chart bar
+// by the chart bar's own period, from its time to its time_close (tapes
+// tg-xau1d-requests, w11-tclose-xau1d and w11-tclose-la-xau1d,
+// tests/fixtures/daily_break_close):
+//   lookahead_off: the last requested bar closed by the chart bar's close;
+//   lookahead_on, an intraday requested timeframe: the last requested bar
+//     opened by the chart bar's time.
+// The kernel hands a series the bars visible at its input's calendar
+// interval, which is that period wherever the chart bar's stamp opens its own
+// session, so nothing is left here to run. OANDA stamps its XAUUSD daily bars
+// at 17:00 ET, inside the break of the 1800-1700 session, and the kernel reads
+// such a label as the session that closes at it (test_daily_stamp_in_the_break
+// in tests/test_native_instrument_feed.cpp): a lookahead-off request would
+// read one bar late, a lookahead-on hourly one a session early. The bars the
+// rule makes visible run here, in feed order, after the input's deliveries;
+// the kernel hands them over again on a later input, below `delivered`.
+// lookahead_on of a D/W/M timeframe, which TradingView aligns by trading date
+// (the requested bar opening inside the chart bar there), keeps the kernel's
+// reading.
+void source::PineStrategyHost::read_ahead_foreign_security_sites(const Bar& chart_bar) {
+    if (calendar_period_for(script_tf_) == CalendarPeriod::NONE) return;
+    const std::int64_t chart_close = chart_bar_close_ms(chart_bar.timestamp);
+    for (auto& entry : foreign_security_sites_) {
+        ForeignSecuritySite& site = entry.second;
+        if (site.invalid || site.subscription < 0 || site.feed >= symbol_feeds_.size()) continue;
+        if (site.lookahead ? calendar_period_for(site.tf) != CalendarPeriod::NONE
+                           : is_na(chart_close)) {
+            continue;
+        }
+        const NativeInstrumentFeed& feed = symbol_feeds_[site.feed];
+        while (static_cast<std::size_t>(site.delivered) < feed.bars.size()) {
+            const auto at = static_cast<std::size_t>(site.delivered);
+            const bool visible = site.lookahead ? feed.bars[at].timestamp <= chart_bar.timestamp
+                                                : feed.close_ms[at] <= chart_close;
+            if (!visible) break;
+            run_foreign_site_bar(site, feed.bars[at], feed.close_ms[at]);
+        }
+    }
 }
 
 void source::PineStrategyHost::clear_gapped_foreign_security_sites() {

@@ -3002,7 +3002,15 @@ begin-time hook, after its same-symbol sites, which keep their own route. The
 kernel merges; the adapter runs the site's payload on every bar handed over, in
 the requested context: history offsets and TA state over the context's own
 bars, `bar_index` the context's, `time_close` the bar's own close, `syminfo.*`
-the symbol's facts (`syminfo.tickerid` is the string the script passed).
+the symbol's facts (`syminfo.tickerid` is the string the script passed). On a
+D, W or M chart the adapter judges TradingView's merge against the chart bar's
+own period: after the input's deliveries it runs the bars closed by the chart
+bar's `time_close` (lookahead off), or opened by its `time` (lookahead on, an
+intraday requested timeframe), that the kernel has not handed over yet, and a
+bar the kernel hands over later is not run again. The two agree wherever the
+chart bar's stamp opens its own session; OANDA stamps its XAUUSD daily bars at
+17:00 ET inside the 1800-1700 session's break, and the kernel reads such a
+label as the session that closes at it (`tests/test_foreign_break_stamp_tapes.cpp`).
 `barmerge.gaps_on` reads na on a chart bar that received no new bar (through
 the generated `clear_security()`, which also clears the payload's own history
 series, as for a same-symbol site). A symbol whose facts say it is invalid
