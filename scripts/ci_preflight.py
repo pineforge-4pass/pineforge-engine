@@ -332,7 +332,7 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     events = ci.split('\non:\n', 1)
     events = events[1].split('\npermissions:', 1)[0] if len(events) == 2 else ''
     for trigger in ('push:\n    branches: [main]',
-                    'pull_request:\n    branches: [main]', 'workflow_dispatch:'):
+                    'pull_request:\n    branches: [main, ci/docs-only-skip-probe-base]', 'workflow_dispatch:'):
         if '  ' + trigger not in events:
             findings.append(f'ci.yml must retain {trigger.split(":", 1)[0]}')
     jobs = _jobs(ci)
