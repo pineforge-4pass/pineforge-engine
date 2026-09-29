@@ -6319,7 +6319,20 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                     is_long, source_point->decision.script_bar_open_ms, id);
                 if (std::isfinite(pending)) units += pending;
             }
-            const double required = units * mark
+            // An explicit-quantity MARKET buy from flat, filled at the next
+            // open, is costed at its signal close's tick plus the slippage
+            // ticks its fill will carry; a sell at the close's tick, never
+            // lowered by them (lab tv tailc-b-admission-a-slip2 against -b-fee
+            // and -c-control; R5 lane TAIL-C). Under process_orders_on_close
+            // it fills at that close, whose own fill-time check decides it
+            // (the TV controls of test_pooc_money_admission_l4b, phase-b/-c).
+            const double admission_mark = !priced && current == 0.0 && is_long
+                    && explicit_fixed && config_.slippage > 0 && finite_positive(mark)
+                    && !config_.process_orders_on_close
+                ? source_bar_fill_tick(mark, staged_.syminfo.mintick)
+                    + config_.slippage * staged_.syminfo.mintick
+                : mark;
+            const double required = units * admission_mark
                 * staged_.syminfo.pointvalue * fx * margin / 100.0;
             // R4-D L10ad: ab9714be pine_strategy_commands.cpp:344-346 gates the
             // whole placement affordability half on margin_pct > 0.0 ("margin_pct

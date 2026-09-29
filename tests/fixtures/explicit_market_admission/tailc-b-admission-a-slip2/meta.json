@@ -1,0 +1,16 @@
+{
+  "title": "tailc-b-admission-a-slip2",
+  "slug": "tailc-b-admission-a-slip2",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:57:58.602Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-10-01"
+  },
+  "pine_sha256": "d1a525df131a64801a90f24fa4c7ceaa0cd75d919ae8e7d1153f44ae43cf2e02",
+  "tv_trades_sha256": "2aea1f1565bc0d02c64cf5fbdb3cbafdac79438347668097dc9475f27188cc89",
+  "tv_trades_rows": 150
+}

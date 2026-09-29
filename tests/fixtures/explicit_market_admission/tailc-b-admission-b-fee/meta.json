@@ -1,0 +1,16 @@
+{
+  "title": "tailc-b-admission-b-fee",
+  "slug": "tailc-b-admission-b-fee",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:58:18.935Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-10-01"
+  },
+  "pine_sha256": "e6ef2ed452b73e32d964fe5f4521eed5dcb22f7200e2ea0b53068a3e20d179a4",
+  "tv_trades_sha256": "d0c0cdb38f8c676bfc3f4b3b58c27c12a78fb7a97cc1b33b94fcca7901fcf0f6",
+  "tv_trades_rows": 144
+}

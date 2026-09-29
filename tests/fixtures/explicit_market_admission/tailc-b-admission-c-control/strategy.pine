@@ -1,0 +1,33 @@
+//@version=6
+// TAIL-C diag B synthetic (written from scratch): placement admission of an explicit-quantity
+// MARKET entry from flat, sized all-in at the signal close, filled at the next session's open.
+// Export on NYSE:F 15, 2025-04-01 .. 2025-10-01, three times, editing ONLY the strategy() line:
+//   A: slippage = 2, commission_value = 0      does a BUY's placement cost add the slippage ticks?
+//   B: slippage = 0, commission_value = 0.05   does it add the entry commission?
+//   C: slippage = 0, commission_value = 0      control (w13-a3 rule: signal close on its tick)
+// One cell per session, placed on its last bar (15:45 New York) from flat: LONG on even
+// sessions, SHORT on odd ones, qty = floor(equity / close), so qty * close <= equity <
+// (qty + 1) * close; the fill is the next session's open, often gapped; strategy.close_all()
+// on that session's 10:30 bar flattens it. Read each cell off the tape:
+//   long cell opens  <=> qty * P <= equity with P = tick(close) [+ slip ticks] [+ fee] at placement,
+//                        and qty * tick(fill) <= equity at the fill;
+//   short cell opens <=> qty * tick(close) <= equity (P never lowered by the slippage) and the fill gate.
+// Engine today (8988faff): P = raw close at placement, then the fill gate at the slipped fill, so a
+// long whose next open gaps 2+ ticks under the close opens there; TradingView (MACD tapes on NYSE:F
+// and OANDA:EURUSD) rejects every such all-in long at slippage 2.
+strategy("tailc-b-admission-c-control", overlay = true, initial_capital = 10000,
+     margin_long = 100, margin_short = 100, slippage = 0,
+     commission_type = strategy.commission.percent, commission_value = 0, pyramiding = 1)
+var int session = 0
+lastBar = hour(time, "America/New_York") == 15 and minute(time, "America/New_York") == 45
+flatBar = hour(time, "America/New_York") == 10 and minute(time, "America/New_York") == 30
+if lastBar
+    session += 1
+    if strategy.position_size == 0
+        q = math.floor(strategy.equity / close)
+        if session % 2 == 0
+            strategy.entry("L", strategy.long, qty = q)
+        else
+            strategy.entry("S", strategy.short, qty = q)
+if flatBar and strategy.position_size != 0
+    strategy.close_all(comment = "X")

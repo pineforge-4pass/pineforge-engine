@@ -1055,6 +1055,10 @@ list(APPEND TEST_SOURCES test_foreign_break_stamp_tapes)
 # what it reserved when margin calls shrink the position
 # (tests/fixtures/exit_reservation), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_exit_reservation_tapes)
+# Lane TAIL-C: an explicit-quantity market buy from flat is admitted at its
+# signal close's tick plus the slippage ticks its fill carries
+# (tests/fixtures/explicit_market_admission), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_explicit_market_admission_tapes)
 # Lane INT28-FIX (RC): a calc_on_order_fills recalculation reads the whole
 # bar's finer request.security values (tests/fixtures/coof_recalc_security),
 # on TradingView's tape.
@@ -2757,6 +2761,10 @@ if(TARGET test_margin_opposite_tapes)
     target_compile_definitions(test_margin_opposite_tapes PRIVATE
         PINEFORGE_MARGIN_OPPOSITE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_opposite"
         PINEFORGE_SLIPPED_SHORT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/slipped_short")
+endif()
+if(TARGET test_explicit_market_admission_tapes)
+    target_compile_definitions(test_explicit_market_admission_tapes PRIVATE
+        PINEFORGE_EXPLICIT_ADMISSION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/explicit_market_admission")
 endif()
 
 # Lane TAIL-B reads its TradingView tapes from the fixture tree; source-bound.

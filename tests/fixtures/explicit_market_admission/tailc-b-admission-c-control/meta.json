@@ -1,0 +1,16 @@
+{
+  "title": "tailc-b-admission-c-control",
+  "slug": "tailc-b-admission-c-control",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:58:22.468Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-10-01"
+  },
+  "pine_sha256": "fe5d3780df9a6f9ef5ba8b26df41f2a56f709df7fc0144a76f2eb2a27cb91e2b",
+  "tv_trades_sha256": "5bef7c74f6b46920da713621054d5312b0e4987a8e1974f5b56715d808cc105c",
+  "tv_trades_rows": 138
+}
