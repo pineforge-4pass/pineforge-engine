@@ -1,0 +1,8 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane TAIL-H): 25 contracts at 1% margin, a 50% limit exit placed before a stop exit; margin calls shrink the book
+strategy("tailh-d2a", overlay=true, initial_capital=100000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1, process_orders_on_close=true, margin_long=1, margin_short=1)
+if time == timestamp("UTC", 2025, 4, 2, 22, 15)
+    strategy.entry("L", strategy.long, qty=25)
+    strategy.exit("TP1_L", from_entry="L", qty_percent=50, limit=5595.75)
+    strategy.exit("MAIN_L", from_entry="L", stop=5477.25, limit=5674.75)

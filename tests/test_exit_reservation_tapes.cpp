@@ -14,6 +14,11 @@
  *       it, the stop exit holds the lot (tailh-d1c). strategy.close with
  *       qty_percent = 50 closes the whole lot the same way, and 0.01 of 0.03
  *       (tailh-d1e-01, tailh-d1e-03).
+ *   PK  A percentage exit keeps the share it reserved when the position
+ *       shrinks under it (margin calls): 50 % of 25 contracts holds 12, and
+ *       with 8 contracts left it holds all 8, so the exit created after it
+ *       holds nothing and its stop never fires (tailh-d2a); created before
+ *       it, the stop exit fires for the 8 (tailh-d2b).
  *
  * Each row replays one lab tv tape through the Pine adapter under the
  * configuration its strategy() declares, over the lane's bars, and requires
@@ -316,6 +321,10 @@ int main() {
          {"2025-10-21 08:45", 0.01, kNaN, kNaN, kNaN, Order::ClosePercent}, 1},
         {"PS", "tailh-d1e-03", Chart::XauUsd,
          {"2025-10-21 08:45", 0.03, kNaN, kNaN, kNaN, Order::ClosePercent}, 2},
+        {"PK", "tailh-d2a", Chart::Es1,
+         {"2025-04-02 22:15", 25.0, 5595.75, 5477.25, 5674.75, Order::PercentFirst}, 7},
+        {"PK-control", "tailh-d2b", Chart::Es1,
+         {"2025-04-02 22:15", 25.0, 5595.75, 5477.25, 5674.75, Order::StopFirst}, 3},
     };
 
     int rows_ok = 0;

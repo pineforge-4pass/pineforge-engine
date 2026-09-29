@@ -4843,6 +4843,37 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
         pending_bracket_legs_.end());
 }
 
+// A margin call shrinks the position under its exits without filling any of
+// them. TradingView keeps each percentage exit's reserved share and hands the
+// position to the exits in their queue order again, each taking what the ones
+// before it leave (lane TAIL-H rule PK, tapes tailh-d2a / tailh-d2b): with 8
+// of 25 contracts left, a 50 % exit created first holds all 8 of its 12 and
+// the stop exit created after it, left nothing, never fires.
+void PineExecutionAdapter::reconcile_exit_reservations_after_margin() {
+    std::vector<SourceId> entries;
+    const auto note = [&](const PlacementSnapshot& snapshot) {
+        const bool exit = snapshot.family == PineOrderFamily::ExitLimit
+            || snapshot.family == PineOrderFamily::ExitStop
+            || snapshot.family == PineOrderFamily::ExitTrail;
+        if (!exit || snapshot.void_issue) return;
+        if (std::find(entries.begin(), entries.end(), snapshot.from_entry) == entries.end())
+            entries.push_back(snapshot.from_entry);
+    };
+    for (const auto& handle : live_handles_) {
+        const auto found = placement_.find(handle.incarnation);
+        if (found != placement_.end()) note(found->second);
+    }
+    for (const auto& pending : pending_bracket_legs_) note(pending.snapshot);
+    for (const auto& delayed : delayed_market_orders_) note(delayed.snapshot);
+    if (entries.empty()) return;
+    const double physical = std::abs(detail::run_position(require_host()).signed_units);
+    for (const auto& entry : entries) {
+        const double exposure = entry.empty() ? physical : cohort_exposure_for(entry);
+        if (exposure > internal::kQtyEpsilon)
+            reconcile_deferred_exit_reservations(entry, exposure);
+    }
+}
+
 // The account FX in force at an instant is the kernel's lookup: the staged
 // scalar and series are the engine's own (staged_configuration copies them at
 // begin), validated positive and finite by their setters.
@@ -19871,6 +19902,12 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     if (!current_debit_observed && event.closed_trade_count > 0)
         consume_closed_trade_rows(event,
             placement_snapshot ? &*placement_snapshot : nullptr);
+    // The margin call's units have left their cohorts: the exits' queue
+    // reserves the position that remains (rule PK).
+    if (placement_snapshot && placement_snapshot->family == PineOrderFamily::Margin
+        && event.closed_units > 0.0) {
+        reconcile_exit_reservations_after_margin();
+    }
     // ab9714be pine_fills.cpp:5883-5899 / pine_strategy_commands.cpp:
     // 2739-2811: once an opening applies, every deferred bracket family for
     // a now-live source cohort receives its reservation.  This also covers

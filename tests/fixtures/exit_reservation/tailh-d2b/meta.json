@@ -1,0 +1,16 @@
+{
+  "title": "tailh-d2b",
+  "slug": "tailh-d2b",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T00:32:21.408Z",
+  "chart": {
+    "symbol": "CME_MINI:ES1!",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-10"
+  },
+  "pine_sha256": "fce98abb1f0511d33ebdd34cfb1b50816bfd47d132b72daa48d2fb3cac87d668",
+  "tv_trades_sha256": "0cd9076fa96ed8ff2aee20ac670857c4a7f6943f4dce7d2bcbf263ce249149b8",
+  "tv_trades_rows": 6
+}

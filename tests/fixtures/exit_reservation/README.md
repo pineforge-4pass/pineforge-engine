@@ -10,6 +10,12 @@ percentage exit's share is sized inside that queue.
   step while the position holds one. 50 % of one 0.01 lot of OANDA:XAUUSD
   reserves the whole lot, as 50 % of one contract does; 50 % of three lots
   reserves one. `strategy.close` with `qty_percent` closes the same share.
+- **PK.** A percentage exit keeps the share it reserved when a margin call
+  shrinks the position under it, and the queue hands the remaining position
+  to the exits again in creation order, each taking what the ones before it
+  leave. 50 % of 25 contracts reserves 12; with 8 left after two margin calls
+  it holds all 8, so the stop exit created after it holds nothing and never
+  fires while the margin calls go on.
 
 Each tape is one `lab tv --no-note` export (channel `ws-report-v1`,
 `rangeProof` covered), byte for byte: `strategy.pine`, `tv_trades.csv` (times
@@ -25,6 +31,8 @@ long of a fixed quantity on the bar opening at one UTC instant:
 | `tailh-d1c` | the same | 0.01, `MAIN_L` before `TP1_L` | the stop holds the lot and exits it at 12:00 |
 | `tailh-d1e-01` | OANDA:XAUUSD 15, 2025-10-15 .. 10-25 | 0.01; `strategy.close("L", qty_percent=50)` on the next bar, `strategy.close("L")` an hour later | the first close exits the whole lot |
 | `tailh-d1e-03` | the same | 0.03, the same closes | the first close exits 0.01, the second 0.02 |
+| `tailh-d2a` | CME_MINI:ES1! 15, 2025-04-01 .. 04-10 | 25 contracts at 2025-04-02 22:15, then `TP1_L` (50 %, limit 5595.75) before `MAIN_L` (stop 5477.25, limit 5674.75) | margin calls of 1 and 16 contracts on 04-03, then of 1, 1, 1, 4 and 1 on 04-04; the stop never fires |
+| `tailh-d2b` | the same | 25 contracts, `MAIN_L` before `TP1_L` | margin calls of 1 and 16, then the stop exits the 8 left at 04-03 14:15 |
 
 `xau15_q4_bars.inc` holds OANDA:XAUUSD 15m bars 2025-10-15 00:00 .. 12-19 21:45
 UTC from the lab lane xauusd-15's chart feed; `es15_bars.inc` CME_MINI:ES1! 15m
@@ -41,3 +49,5 @@ trade the tape closes inside the bars to be the engine's.
 | `tailh-d1c` | 1 | `5da61f747f4cc26f227551d84eb70a6910768d25c229635c495604b422d7d775` | `403819fbb6ac` |
 | `tailh-d1e-01` | 1 | `d8f332bf1c7309dd27e34709bd7faa76c1a906ad200801ff87b97c42c18a5edb` | `38d390f3fd60` |
 | `tailh-d1e-03` | 2 | `ef9148ec4542a27973ddccd004939db17c759363e931be02fc54f745dbb616de` | `ed1dec8b9976` |
+| `tailh-d2a` | 7 | `3e50008ba02e5fe91dd1fe397e39a428f84b4cfb30394a9119e7a364dc6740a7` | `58eb87d048c0` |
+| `tailh-d2b` | 3 | `0cd9076fa96ed8ff2aee20ac670857c4a7f6943f4dce7d2bcbf263ce249149b8` | `fce98abb1f05` |

@@ -1752,6 +1752,7 @@ private:
                                   double& reserved_qty) const;
     void reconcile_deferred_exit_reservations(const SourceId& from_entry,
                                                double live_basis);
+    void reconcile_exit_reservations_after_margin();
     double active_staged_fx(std::int64_t) const noexcept;
     void apply_fx_open_margin_slice(const Bar&, const NativeDecisionContext&);
     void apply_fx_opening_margin_slice(const native_order::ExecutionAppliedEvent&,
