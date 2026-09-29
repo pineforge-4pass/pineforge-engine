@@ -10503,6 +10503,42 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             }
         }
     }
+    // A call that names a level replaces the whole exit order: the price leg
+    // it leaves na (neither the absolute level nor its tick distance) is
+    // withdrawn, not carried from the previous call (lab tv tape
+    // tests/fixtures/exit_reissue_na fran-x1-exit-reissue-na-limit: a re-issue
+    // with stop = na or limit = na drops that leg; lane TAIL-D). Trailing legs
+    // are left as they are.
+    if (placed_absolute_leg && !has_trail_request) {
+        const bool drop_limit = std::isnan(limit_price) && std::isnan(profit_ticks);
+        const bool drop_stop = std::isnan(stop_price) && std::isnan(loss_ticks);
+        const auto dropped = [&](const PlacementSnapshot& row) {
+            return row.source_id == exit_id && row.from_entry == from_entry
+                && !std::isfinite(row.trail_activation_level)
+                && ((drop_limit && row.family == PineOrderFamily::ExitLimit)
+                    || (drop_stop && row.family == PineOrderFamily::ExitStop));
+        };
+        if (drop_limit || drop_stop) {
+            std::vector<native_order::RequestHandle> withdrawn;
+            for (const auto& handle : live_handles_) {
+                const auto found = placement_.find(handle.incarnation);
+                if (found != placement_.end() && dropped(found->second))
+                    withdrawn.push_back(handle);
+            }
+            for (const auto& handle : withdrawn) {
+                const auto result = require_host().cancel(handle);
+                if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
+            }
+            pending_bracket_legs_.erase(std::remove_if(pending_bracket_legs_.begin(),
+                pending_bracket_legs_.end(), [&](const PendingBracketLeg& leg) {
+                    return dropped(leg.snapshot);
+                }), pending_bracket_legs_.end());
+            delayed_market_orders_.erase(std::remove_if(delayed_market_orders_.begin(),
+                delayed_market_orders_.end(), [&](const DelayedMarketOrder& order) {
+                    return dropped(order.snapshot);
+                }), delayed_market_orders_.end());
+        }
+    }
     if (defer_for_same_bar_priority && !from_entry.empty())
         named_entry_cancel_tokens_.erase(from_entry);
     if (pooc_short_tick_scope && source_point) {

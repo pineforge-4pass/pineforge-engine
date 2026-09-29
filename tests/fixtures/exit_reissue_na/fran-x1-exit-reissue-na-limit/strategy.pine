@@ -1,0 +1,28 @@
+//@version=6
+// Synthetic (written from scratch for TAIL-D diag "fran"): does a strategy.exit re-issue whose
+// level is a runtime na remove that resting leg of the same exit id?
+// Longs C/D (Fri 13:15 fill): CX/DX stop 3336 / limit 3345. At the 13:15 close CX is
+// re-issued with the limit and stop = na, DX with both levels again (control).
+// Shorts A/B (Fri 16:15 fill): AX/BX stop 3348.1 / limit 3332.95. At the Sunday reopen bar
+// AX is re-issued with a new stop 3340.525 and limit = na, BX with that stop AND the limit.
+strategy("fran x1 exit reissue na leg", overlay = true, initial_capital = 10000, pyramiding = 2,
+     default_qty_type = strategy.fixed, default_qty_value = 1)
+var float naLevel = na
+if time == timestamp("UTC", 2025, 8, 15, 13, 0)
+    strategy.entry("C", strategy.long)
+    strategy.entry("D", strategy.long)
+    strategy.exit("CX", from_entry = "C", stop = 3336.0, limit = 3345.0)
+    strategy.exit("DX", from_entry = "D", stop = 3336.0, limit = 3345.0)
+if time == timestamp("UTC", 2025, 8, 15, 13, 15)
+    strategy.exit("CX", from_entry = "C", stop = naLevel, limit = 3345.0)
+    strategy.exit("DX", from_entry = "D", stop = 3336.0, limit = 3345.0)
+if time == timestamp("UTC", 2025, 8, 15, 16, 0) and strategy.position_size == 0
+    strategy.entry("A", strategy.short)
+    strategy.entry("B", strategy.short)
+    strategy.exit("AX", from_entry = "A", stop = 3348.1, limit = 3332.95)
+    strategy.exit("BX", from_entry = "B", stop = 3348.1, limit = 3332.95)
+if time == timestamp("UTC", 2025, 8, 17, 22, 0)
+    strategy.exit("AX", from_entry = "A", stop = 3340.525, limit = naLevel)
+    strategy.exit("BX", from_entry = "B", stop = 3340.525, limit = 3332.95)
+if time == timestamp("UTC", 2025, 8, 18, 12, 0)
+    strategy.close_all()

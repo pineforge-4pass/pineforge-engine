@@ -950,6 +950,10 @@ list(APPEND TEST_SOURCES test_exit_fifo_cross_tapes)
 # entry's open fill places at or through the open print fills there at once
 # (tests/fixtures/coof_open_limit), on TradingView's tape.
 list(APPEND TEST_SOURCES test_coof_open_limit_tapes)
+# ... and a strategy.exit call that names a level replaces the whole order:
+# the price leg it leaves na is withdrawn (tests/fixtures/exit_reissue_na),
+# on TradingView's tape.
+list(APPEND TEST_SOURCES test_exit_reissue_na_tapes)
 
 # Lane W8A-SIGSTATE-1 R4: a fill at the day's first tick does not trip
 # strategy.risk.max_intraday_loss (tests/fixtures/intraday_loss_open_fill), on
@@ -2570,6 +2574,10 @@ endif()
 if(TARGET test_coof_open_limit_tapes)
     target_compile_definitions(test_coof_open_limit_tapes PRIVATE
         PINEFORGE_TAIL_D_OPEN_LIMIT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_open_limit")
+endif()
+if(TARGET test_exit_reissue_na_tapes)
+    target_compile_definitions(test_exit_reissue_na_tapes PRIVATE
+        PINEFORGE_TAIL_D_REISSUE_NA_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_reissue_na")
 endif()
 if(TARGET test_coof_reissued_exit_tapes)
     target_compile_definitions(test_coof_reissued_exit_tapes PRIVATE

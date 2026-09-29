@@ -1,0 +1,16 @@
+{
+  "title": "fran x1 exit reissue na leg",
+  "slug": "fran-x1-exit-reissue-na-limit",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:37:36.466Z",
+  "chart": {
+    "symbol": "OANDA:XAUUSD",
+    "interval": "15",
+    "from": "2025-08-14",
+    "to": "2025-08-20"
+  },
+  "pine_sha256": "04b1236fe662c5ecf100f9e6e664e947ddd874c90987e290dbf8041313555c5b",
+  "tv_trades_sha256": "ac2f93a3d5d8501b33dc6bfafc903a8124410d589ac52575224f0a1f004f6769",
+  "tv_trades_rows": 8
+}
