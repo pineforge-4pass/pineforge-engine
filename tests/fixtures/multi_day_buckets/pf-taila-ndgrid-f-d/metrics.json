@@ -1,0 +1,40 @@
+{
+  "validationEligible": false,
+  "strategy": "pf-taila-ndgrid-f-d",
+  "symbol": "NYSE:F",
+  "interval": "1D",
+  "from": "2024-01-01",
+  "to": "2026-05-01",
+  "deepBacktesting": true,
+  "trades": 584,
+  "tvTradesCsv": "tv_trades.csv",
+  "tapeChannel": "ws-report-v1",
+  "sourceCanonicalization": "pine-facade-v1",
+  "sourceArtifactHash": "d9289bd6e3c8736c6fbd8e8b4f1175266e2b8c74c89d9328f7611250ef58a061",
+  "tvTradesCsvHash": "cab66f8b797316541b2af08d4c5c441a85aa47b6ff68789d3edacf04c07e83bd",
+  "wsProvenance": {
+    "schemaVersion": 1,
+    "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+    "authUser": "luisleo52655",
+    "accountType": "pro_premium_expert",
+    "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+    "pineVersion": "0.89848",
+    "symbol": "NYSE:F",
+    "interval": "1D",
+    "requestedRange": {
+      "from": 1704067200000,
+      "to": 1777593600000
+    },
+    "returnedRange": {
+      "from": 1704205800000,
+      "to": 1777555800000
+    },
+    "rangeProof": "narrower-than-requested",
+    "rawFrameSha256": "3281a77b7d8f78df08ff12ed4df168048a88c363f0c8154eddc4397326f2e394",
+    "decodedReportSha256": "b2b7678af5a2c221ca4a75394f82b0546eb3e79e86f7f60cbf73f3b4aff2cb76",
+    "closedTrades": 584,
+    "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+    "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+  },
+  "backtestedAt": "2026-09-28T23:32:16.501Z"
+}

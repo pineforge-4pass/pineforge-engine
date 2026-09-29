@@ -1,0 +1,16 @@
+{
+  "title": "PF taila nday grid",
+  "slug": "pf-taila-ndgrid-nifty-d",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:32:19.809Z",
+  "chart": {
+    "symbol": "NSE:NIFTY",
+    "interval": "1D",
+    "from": "2024-01-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "d9289bd6e3c8736c6fbd8e8b4f1175266e2b8c74c89d9328f7611250ef58a061",
+  "tv_trades_sha256": "66bd4920b85d147488c1193f8d46cde24a6dbc7bf2e1225b6e297b440323730b",
+  "tv_trades_rows": 1156
+}

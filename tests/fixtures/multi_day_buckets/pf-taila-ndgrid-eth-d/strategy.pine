@@ -1,0 +1,21 @@
+//@version=6
+// Synthetic probe (lane TAIL-A): where TradingView opens N-day buckets. Each
+// close's comment spells, for 2, 3, 5, 8 and 13 days, the open time of the
+// requested bar the chart bar reads (lookahead_on) in epoch days, and the
+// requested context's bar_index for 8 days.
+strategy("PF taila nday grid", overlay = true, process_orders_on_close = true, pyramiding = 2, initial_capital = 1000000000, default_qty_type = strategy.fixed, default_qty_value = 1)
+t2 = request.security(syminfo.tickerid, "2D", time, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+t3 = request.security(syminfo.tickerid, "3D", time, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+t5 = request.security(syminfo.tickerid, "5D", time, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+t8 = request.security(syminfo.tickerid, "8D", time, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+t13 = request.security(syminfo.tickerid, "13D", time, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+i8 = request.security(syminfo.tickerid, "8D", bar_index, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+d(x) => na(x) ? "na" : str.tostring(x / 86400000.0, "#.####")
+n(x) => na(x) ? "na" : str.tostring(x)
+msg = d(t2) + "|" + d(t3) + "|" + d(t5) + "|" + d(t8) + "|" + d(t13) + "|" + n(i8) + "|" + n(bar_index)
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.close("B", comment = msg)
+else
+    strategy.entry("B", strategy.long)
+    strategy.close("A", comment = msg)

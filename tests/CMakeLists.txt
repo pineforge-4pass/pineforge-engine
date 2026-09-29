@@ -889,6 +889,11 @@ list(APPEND TEST_SOURCES test_same_point_entries_tapes)
 # (tests/fixtures/ltf_lookahead_calling_open), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_ltf_lookahead_calling_open_tapes)
 
+# Lane TAIL-A: an N-day request.security bar groups the symbol's trading dates
+# N at a time from each year's first (tests/fixtures/multi_day_buckets), on
+# TradingView's tapes.
+list(APPEND TEST_SOURCES test_security_multi_day_buckets_tapes)
+
 # Lane W8D-NOTRADES: an entry a mid-leg calc_on_order_fills recalculation places
 # is live from the leg's end (tests/fixtures/coof_refill_waypoint), on
 # TradingView's tapes.
@@ -2483,6 +2488,12 @@ endif()
 if(TARGET test_ltf_lookahead_calling_open_tapes)
     target_compile_definitions(test_ltf_lookahead_calling_open_tapes PRIVATE
         PINEFORGE_LTF_CALLING_OPEN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ltf_lookahead_calling_open")
+endif()
+
+# Lane TAIL-A reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_security_multi_day_buckets_tapes)
+    target_compile_definitions(test_security_multi_day_buckets_tapes PRIVATE
+        PINEFORGE_MULTI_DAY_BUCKETS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/multi_day_buckets")
 endif()
 
 # Lane W8D-NOTRADES reads its TradingView tapes from the fixture tree; source-bound.

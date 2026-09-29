@@ -1,0 +1,16 @@
+{
+  "title": "PF taila nday grid",
+  "slug": "pf-taila-ndgrid-eth-d",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T22:58:09.259Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "1D",
+    "from": "2024-01-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "d9289bd6e3c8736c6fbd8e8b4f1175266e2b8c74c89d9328f7611250ef58a061",
+  "tv_trades_sha256": "2892d6e977d3fc0bd3efa701dbc6b0dc377eebb488a6782490e8fc6236a57d67",
+  "tv_trades_rows": 1704
+}
