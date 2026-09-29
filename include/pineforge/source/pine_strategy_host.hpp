@@ -408,6 +408,22 @@ public:
     void enable_pine_intraday_cap();
     void attach_pine_execution_adapter();
     void set_syminfo_metadata(const std::string&, double) override;
+    // TradingView's session calendar for the chart's symbol (lane XAU-CAL):
+    // per session day, its open and its close, ascending, each day opening
+    // before it closes and no later than the next opens. Where it holds a
+    // chart bar, the bar after it is the calendar's -- the next slot of an
+    // intraday chart's timeframe in the day, else the next day's open; a 1D
+    // chart's next day -- for session.islastbar / islastbar_regular and for
+    // time() / time_close() reading a later bar, as TradingView reads them;
+    // everywhere else (a W, M or multi-day chart's own bars among them), and
+    // with no calendar (the default), the feed's own bars answer. False, and
+    // nothing installed, for sessions out of order; an empty list removes the
+    // calendar. The C ABI carries it as syminfo metadata ("symbol_calendar_*",
+    // set_syminfo_metadata), installed when the run begins.
+    bool set_symbol_calendar(std::vector<std::pair<std::int64_t, std::int64_t>> sessions);
+    const std::vector<std::pair<std::int64_t, std::int64_t>>& symbol_calendar() const noexcept {
+        return symbol_calendar_;
+    }
     bool set_aux_security_feed(const Bar* bars, int n,
                                const std::string& input_tf) override;
     // The request-data doors (pineforge.h strategy_set_symbol_feed and its
@@ -685,6 +701,16 @@ protected:
     int64_t pine_time_offset(int64_t bar_open_ms, int bars_back, const std::string& tf,
                              const std::string& session, const std::string& tz,
                              int timeframe_bars_back, bool close) const;
+    // The symbol calendar's session day holding `ms` (open <= ms < close), or
+    // null: no calendar, or an instant outside its days.
+    const std::pair<std::int64_t, std::int64_t>* symbol_calendar_day(std::int64_t ms) const;
+    // The first chart bar the symbol calendar opens at or after `at` -- a
+    // slot of the chart's timeframe from its day's open, or the day's open on
+    // a D/W/M chart -- or na outside the calendar's span.
+    std::int64_t symbol_calendar_open_from(std::int64_t at) const;
+    // The last chart bar the symbol calendar opens before `before`, or na
+    // outside the calendar's span.
+    std::int64_t symbol_calendar_open_before(std::int64_t before) const;
     // ab9714be pine_strategy_host.hpp:348-358: generated three-argument
     // session predicates are class-scope calls whose chart timeframe changes
     // the D/W/M meaning.  Keep that Pine policy in the source host; the
@@ -1068,6 +1094,16 @@ protected:
     bool session_islastbar_ = false;
     bool session_isfirstbar_regular_ = false;
     bool session_islastbar_regular_ = false;
+    // TradingView's session calendar for the chart's symbol
+    // (set_symbol_calendar), and the days the C ABI's syminfo metadata has
+    // named since the last run began (index -> open / close,
+    // "symbol_calendar_*"), installed and consumed when a run begins. Run
+    // inputs, as the feed is: they fold into no hash.
+    std::vector<std::pair<std::int64_t, std::int64_t>> symbol_calendar_;
+    std::map<long long, double> symbol_calendar_opens_;
+    std::map<long long, double> symbol_calendar_closes_;
+    long long symbol_calendar_days_ = -1;
+    void install_symbol_calendar_metadata();
 
     // Live-runtime tail (spec §3.1): once script_tf_seconds_ is known for
     // this run, freeze pine_last_bar_index()/last_bar_time_ at the horizon

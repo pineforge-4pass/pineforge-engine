@@ -1,0 +1,16 @@
+{
+  "title": "xc session flags",
+  "slug": "xc-flags-xau15-thanksgiving",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T04:34:10.458Z",
+  "chart": {
+    "symbol": "OANDA:XAUUSD",
+    "interval": "15",
+    "from": "2025-11-25",
+    "to": "2025-12-02"
+  },
+  "pine_sha256": "a1466926b16eb4d1a62544dab3c6687b5459217387d2bda03d030193bad79cda",
+  "tv_trades_sha256": "d71e85836ca22857905eb2c528e4190103a421c619c40a517493459286785eac",
+  "tv_trades_rows": 452
+}

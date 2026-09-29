@@ -1,0 +1,16 @@
+{
+  "title": "xc session flags",
+  "slug": "xc-flags-xau15-yearend",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T04:34:12.883Z",
+  "chart": {
+    "symbol": "OANDA:XAUUSD",
+    "interval": "15",
+    "from": "2025-12-22",
+    "to": "2026-01-06"
+  },
+  "pine_sha256": "a1466926b16eb4d1a62544dab3c6687b5459217387d2bda03d030193bad79cda",
+  "tv_trades_sha256": "a928400f27b16cdcee86d6cd4ff28ad3a6e541f0675414f5ecad7f323e06fa45",
+  "tv_trades_rows": 816
+}

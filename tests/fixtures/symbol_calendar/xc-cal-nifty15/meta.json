@@ -1,0 +1,16 @@
+{
+  "title": "xc symbol calendar",
+  "slug": "xc-cal-nifty15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T04:34:31.686Z",
+  "chart": {
+    "symbol": "NSE:NIFTY",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "1ef2fe99be7dd43cf8b325c84d3224b312a8a0757cec4748be828d52ada1a00e",
+  "tv_trades_sha256": "e7e130901878a945bed94465d3ddd5170750082464e44fa520850227f2917701",
+  "tv_trades_rows": 268
+}

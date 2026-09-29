@@ -1,0 +1,21 @@
+//@version=6
+// XAU-CAL synthetic probe (written for this lane; not derived from any scraped script).
+// What TradingView reads for the bar after the current one, on every chart bar, in UTC:
+// the next bar's open and close (time / time_close with bars_back -1), its weekday, the
+// bar two ahead, the next day's open (timeframe_bars_back -1), and the four session
+// flags isfirstbar, islastbar, isfirstbar_regular, islastbar_regular. A flat bar enters
+// with the text as its name; a bar holding the position closes it with the text as the
+// comment, so every bar's reading is on the tape.
+strategy("xc session flags", overlay = true, default_qty_type = strategy.fixed,
+     default_qty_value = 1)
+
+f(int t) => na(t) ? "na" : str.format_time(t, "MMdd-HHmm", "UTC")
+b(bool x) => x ? "1" : "0"
+v = f(time) + "|" + f(time("", "", -1)) + "|" + f(time_close("", -1)) + "|"
+     + str.tostring(dayofweek(time("", "", -1))) + "|" + f(time("", -2)) + "|"
+     + f(time("D", 0, -1)) + "|" + b(session.isfirstbar) + b(session.islastbar)
+     + b(session.isfirstbar_regular) + b(session.islastbar_regular)
+if strategy.position_size == 0
+    strategy.entry(v, strategy.long)
+else
+    strategy.close_all(comment = v)

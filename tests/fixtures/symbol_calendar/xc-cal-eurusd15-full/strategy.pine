@@ -1,0 +1,18 @@
+//@version=6
+// XAU-CAL synthetic probe (written for this lane; not derived from any scraped script).
+// TradingView's session calendar for the chart's symbol, day by day: the first chart bar
+// of every session day spells, in UTC, that day's open and close as time("D") and
+// time_close("D") read them, and the next three days' (timeframe_bars_back -1 .. -3), so a
+// day the chart holds no bar of is read from the day before it. A flat bar enters with the
+// text as its name; a bar holding the position closes it with the text as the comment.
+strategy("xc symbol calendar", overlay = true, default_qty_type = strategy.fixed,
+     default_qty_value = 1)
+
+f(int t) => na(t) ? "na" : str.format_time(t, "yyMMdd-HHmm", "UTC")
+day(int k) => f(time("D", 0, -k)) + "~" + f(time_close("D", 0, -k))
+v = "d|" + f(time) + "|" + day(0) + "|" + day(1) + "|" + day(2) + "|" + day(3)
+if barstate.isfirst or ta.change(time("D")) != 0
+    if strategy.position_size == 0
+        strategy.entry(v, strategy.long)
+    else
+        strategy.close_all(comment = v)

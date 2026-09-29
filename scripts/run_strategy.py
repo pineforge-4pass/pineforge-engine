@@ -687,7 +687,25 @@ def build_runtime_provenance(run_kwargs: dict, trade_start_ms: int | None) -> di
         # The input bar that completes a daily chart's cut last bar on the
         # declared-magnifier route (_daily_bars_rebuilt).
         runtime["ohlcv_tail_bar"] = [int(tail[0])] + [float(x) for x in tail[1:]]
+    calendar = _session_calendar_provenance(run_kwargs.get("syminfo_metadata"))
+    if calendar is not None:
+        runtime["session_calendar"] = calendar
     return runtime
+
+
+def _session_calendar_provenance(metadata) -> dict | None:
+    """The session calendar a run hands the Pine host (the "symbol_calendar_*"
+    syminfo metadata _session_calendar_metadata writes): its day count and
+    the sha256 of its days, one "open,close" line each; None without one."""
+    if not isinstance(metadata, dict) or "symbol_calendar_days" not in metadata:
+        return None
+    days = int(metadata["symbol_calendar_days"])
+    digest = hashlib.sha256()
+    for index in range(days):
+        open_ms = int(metadata[f"symbol_calendar_open:{index}"])
+        close_ms = int(metadata[f"symbol_calendar_close:{index}"])
+        digest.update(f"{open_ms},{close_ms}\n".encode("ascii"))
+    return {"days": days, "sessions_sha256": digest.hexdigest()}
 
 
 # --- ctypes mirror of <pineforge/pineforge.h> -------------------------
@@ -1127,6 +1145,64 @@ def _load_account_currency_fx_daily_closes(path: Path):
 # The lane template's quantity step, as the case runner hands it to every
 # case of a lane that declares one (inputs_run_kwargs: syminfo.mincontract).
 LANE_QTY_STEP_ENV = "PINEFORGE_VERIFY_QTY_STEP"
+# TradingView's session calendar for the lane's symbol, named by the case
+# runner (with its sha256) for a lane whose TradingView calendar is not its
+# feed's (inputs_run_kwargs, _session_calendar_metadata).
+SESSION_CALENDAR_ENV = "PINEFORGE_RUN_SESSION_CALENDAR"
+SESSION_CALENDAR_SHA256_ENV = "PINEFORGE_RUN_SESSION_CALENDAR_SHA256"
+SESSION_CALENDAR_SCHEMA = "pineforge-symbol-calendar/v1"
+
+
+def load_session_calendar(path: Path) -> tuple[str, list[tuple[int, int]]]:
+    """A ``pineforge-symbol-calendar/v1`` document's symbol and session days
+    (scripts/symbol_calendar.py writes them), checked: the schema, and
+    ascending days, each opening before it closes and no later than the next
+    one opens."""
+    doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(doc, dict) or doc.get("schema") != SESSION_CALENDAR_SCHEMA:
+        raise ValueError(f"{path}: not a {SESSION_CALENDAR_SCHEMA} document")
+    sessions = [(int(o), int(c)) for o, c in doc.get("sessions") or []]
+    if not sessions:
+        raise ValueError(f"{path}: the calendar holds no session day")
+    for index, (o, c) in enumerate(sessions):
+        if not o < c or (index + 1 < len(sessions) and c > sessions[index + 1][0]):
+            raise ValueError(f"{path}: session day {index} is out of order")
+    return str(doc.get("symbol") or ""), sessions
+
+
+def _session_calendar_metadata(env, tickerid: str | None) -> dict:
+    """The syminfo metadata that carries TradingView's session calendar for
+    the chart's symbol to the Pine host (PineStrategyHost::set_symbol_calendar,
+    "symbol_calendar_*" keys), when ``SESSION_CALENDAR_ENV`` names one: the
+    number of days, then each day's open and close in epoch ms. Empty without
+    it. The file is held to ``SESSION_CALENDAR_SHA256_ENV`` when that is set,
+    and a calendar of another symbol than the run's is refused.
+
+    TradingView reads the bar after the current one from that calendar --
+    time("", "", -1), session.islastbar, session.islastbar_regular -- and
+    OANDA:XAUUSD's holds sessions its feed has no bar in (the 17:00-18:00 ET
+    hour, Good Friday, the rest of an early-close day); a lane whose
+    calendar is its feed's (NASDAQ:AAPL, NYSE:F, NSE:NIFTY: every session
+    day the same) is given none and keeps reading the feed."""
+    value = str(env.get(SESSION_CALENDAR_ENV) or "").strip()
+    if not value:
+        return {}
+    path = Path(value).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"{SESSION_CALENDAR_ENV} names no file: {path}")
+    expected = str(env.get(SESSION_CALENDAR_SHA256_ENV) or "").strip().lower()
+    if expected and _sha256_file(path) != expected:
+        raise ValueError(
+            f"{SESSION_CALENDAR_ENV} sha256 {_sha256_file(path)} != "
+            f"{SESSION_CALENDAR_SHA256_ENV} {expected}")
+    symbol, sessions = load_session_calendar(path)
+    if tickerid and symbol and str(tickerid) != symbol:
+        raise ValueError(f"{SESSION_CALENDAR_ENV} is {symbol}'s calendar, the run is {tickerid}")
+    metadata = {"symbol_calendar_days": float(len(sessions))}
+    for index, (open_ms, close_ms) in enumerate(sessions):
+        metadata[f"symbol_calendar_open:{index}"] = float(open_ms)
+        metadata[f"symbol_calendar_close:{index}"] = float(close_ms)
+    return metadata
 
 
 def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
@@ -1282,6 +1358,11 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
     if lane_step is not None and math.isfinite(lane_step) and lane_step > 0.0:
         syminfo_metadata = dict(syminfo_metadata or {})
         syminfo_metadata.setdefault("mincontract", lane_step)
+    calendar = _session_calendar_metadata(os.environ if env is None else env,
+                                          runtime_overrides.get("tickerid"))
+    if calendar:
+        syminfo_metadata = dict(syminfo_metadata or {})
+        syminfo_metadata.update(calendar)
 
     fx_series = None
     fx_source_sha256 = None
@@ -4226,10 +4307,11 @@ def main() -> int:
                 "error: --runner docker does not support --dump-book; "
                 "use --runner ctypes with a freshly built strategy library.")
         strat = None
-        if os.environ.get(MAGNIFIER_FEED_ENV) or os.environ.get(LANE_QTY_STEP_ENV):
+        if (os.environ.get(MAGNIFIER_FEED_ENV) or os.environ.get(LANE_QTY_STEP_ENV)
+                or os.environ.get(SESSION_CALENDAR_ENV)):
             print("note: --runner docker honours neither a declared bar magnifier nor "
-                  "syminfo_metadata (syminfo.mincontract); use --runner ctypes",
-                  file=sys.stderr)
+                  "syminfo_metadata (syminfo.mincontract, the session calendar); "
+                  "use --runner ctypes", file=sys.stderr)
 
         def run_engine(start_ms):
             return _run_via_docker(strategy_dir, ohlcv_path, params, run_kwargs,

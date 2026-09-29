@@ -1,0 +1,16 @@
+{
+  "title": "xc session flags",
+  "slug": "xc-flags-aapl15-thanksgiving",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T04:34:15.645Z",
+  "chart": {
+    "symbol": "NASDAQ:AAPL",
+    "interval": "15",
+    "from": "2025-11-25",
+    "to": "2025-12-02"
+  },
+  "pine_sha256": "a1466926b16eb4d1a62544dab3c6687b5459217387d2bda03d030193bad79cda",
+  "tv_trades_sha256": "746518b4cff489e9a91033c0ee1f6cee07a097c759b04aa18733b31cc7fd8d93",
+  "tv_trades_rows": 92
+}

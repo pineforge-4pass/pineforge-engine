@@ -10,12 +10,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <ctime>
 #include <iterator>
 #include <limits>
 #include <numeric>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <variant>
 
@@ -281,6 +283,7 @@ void source::PineStrategyHost::on_native_run_begin() {
     foreign_security_series_.clear();
     foreign_input_index_ = -1;
     try {
+        install_symbol_calendar_metadata();
         scheduler_.run_begin(*this);
     } catch (const std::exception& error) {
         source_prepare_failed_ = true;
@@ -289,6 +292,94 @@ void source::PineStrategyHost::on_native_run_begin() {
         source_prepare_failed_ = true;
         last_error_ = "unknown error during Pine script preparation";
     }
+}
+
+std::int64_t source::PineStrategyHost::symbol_calendar_open_before(std::int64_t before) const {
+    if (symbol_calendar_.empty() || before <= symbol_calendar_.front().first
+        || before > symbol_calendar_.back().second) {
+        return na<std::int64_t>();
+    }
+    const bool daily = calendar_period_for(script_tf_) != CalendarPeriod::NONE;
+    const std::int64_t step = daily ? 0 : static_cast<std::int64_t>(script_tf_seconds_) * 1000;
+    // The last day opening before `before`, and its last instant before it.
+    const auto it = std::lower_bound(
+        symbol_calendar_.begin(), symbol_calendar_.end(), before,
+        [](const std::pair<std::int64_t, std::int64_t>& day, std::int64_t value) {
+            return day.first < value;
+        });
+    const auto& day = *std::prev(it);
+    const std::int64_t last = std::min(before, day.second) - 1;
+    if (step <= 0) return day.first;
+    return day.first + (last - day.first) / step * step;
+}
+
+// The symbol calendar the C ABI named day by day (set_syminfo_metadata): every
+// day of the count it announced, or the run fails naming what is missing.
+void source::PineStrategyHost::install_symbol_calendar_metadata() {
+    if (symbol_calendar_days_ < 0) return;
+    // The announced days are this run's: taken whole, so a later run's
+    // announcement starts from none (a day it leaves out is missing, never
+    // an earlier run's).
+    const long long count = symbol_calendar_days_;
+    const std::map<long long, double> opens = std::move(symbol_calendar_opens_);
+    const std::map<long long, double> closes = std::move(symbol_calendar_closes_);
+    symbol_calendar_opens_.clear();
+    symbol_calendar_closes_.clear();
+    symbol_calendar_days_ = -1;
+    std::vector<std::pair<std::int64_t, std::int64_t>> sessions;
+    for (long long i = 0; i < count; ++i) {
+        const auto open = opens.find(i);
+        const auto close = closes.find(i);
+        if (open == opens.end() || close == closes.end()
+            || !std::isfinite(open->second) || !std::isfinite(close->second)) {
+            throw std::runtime_error("symbol calendar: session day " + std::to_string(i) + " of "
+                                     + std::to_string(count) + " is missing");
+        }
+        sessions.emplace_back(std::llround(open->second), std::llround(close->second));
+    }
+    if (!set_symbol_calendar(std::move(sessions)))
+        throw std::runtime_error("symbol calendar: session days out of order");
+}
+
+bool source::PineStrategyHost::set_symbol_calendar(
+        std::vector<std::pair<std::int64_t, std::int64_t>> sessions) {
+    for (std::size_t i = 0; i < sessions.size(); ++i) {
+        if (sessions[i].first >= sessions[i].second) return false;
+        if (i + 1 < sessions.size() && sessions[i].second > sessions[i + 1].first) return false;
+    }
+    symbol_calendar_ = std::move(sessions);
+    return true;
+}
+
+const std::pair<std::int64_t, std::int64_t>* source::PineStrategyHost::symbol_calendar_day(
+        std::int64_t ms) const {
+    const auto it = std::upper_bound(
+        symbol_calendar_.begin(), symbol_calendar_.end(), ms,
+        [](std::int64_t value, const std::pair<std::int64_t, std::int64_t>& day) {
+            return value < day.first;
+        });
+    if (it == symbol_calendar_.begin()) return nullptr;
+    const auto& day = *std::prev(it);
+    return ms < day.second ? &day : nullptr;
+}
+
+std::int64_t source::PineStrategyHost::symbol_calendar_open_from(std::int64_t at) const {
+    if (symbol_calendar_.empty() || at < symbol_calendar_.front().first)
+        return na<std::int64_t>();
+    const bool daily = calendar_period_for(script_tf_) != CalendarPeriod::NONE;
+    const std::int64_t step = daily ? 0 : static_cast<std::int64_t>(script_tf_seconds_) * 1000;
+    auto it = std::upper_bound(
+        symbol_calendar_.begin(), symbol_calendar_.end(), at,
+        [](std::int64_t value, const std::pair<std::int64_t, std::int64_t>& day) {
+            return value < day.second;
+        });
+    for (; it != symbol_calendar_.end(); ++it) {
+        if (at <= it->first) return it->first;
+        if (step <= 0) continue;
+        const std::int64_t slot = it->first + (at - it->first + step - 1) / step * step;
+        if (slot < it->second) return slot;
+    }
+    return na<std::int64_t>();
 }
 
 void source::PineStrategyHost::capture_script_continuation_hash() {
@@ -848,6 +939,40 @@ void source::PineStrategyHost::attach_pine_execution_adapter() {
 void source::PineStrategyHost::set_syminfo_metadata(
         const std::string& key, double value) {
     BacktestEngine::set_syminfo_metadata(key, value);
+    // TradingView's symbol calendar (set_symbol_calendar) over the C ABI:
+    // "symbol_calendar_days" = N, then "symbol_calendar_open:<i>" and
+    // "symbol_calendar_close:<i>" for i < N, installed (and the days consumed)
+    // when the run begins. A count that is not a number >= 0 removes the
+    // calendar; a day key whose index is not a decimal number is no day.
+    if (key.compare(0, 16, "symbol_calendar_") == 0) {
+        if (key == "symbol_calendar_days") {
+            if (std::isfinite(value) && value >= 0.0 && value <= 1e9) {
+                symbol_calendar_days_ = std::llround(value);
+            } else {
+                symbol_calendar_days_ = -1;
+                symbol_calendar_opens_.clear();
+                symbol_calendar_closes_.clear();
+                symbol_calendar_.clear();
+            }
+        }
+        for (const auto& [prefix, days] : {std::pair<const char*, std::map<long long, double>*>{
+                                               "symbol_calendar_open:", &symbol_calendar_opens_},
+                                           {"symbol_calendar_close:", &symbol_calendar_closes_}}) {
+            const std::size_t n = std::char_traits<char>::length(prefix);
+            if (key.size() <= n || key.size() - n > 9 || key.compare(0, n, prefix) != 0) continue;
+            long long index = 0;
+            bool digits = true;
+            for (std::size_t i = n; i < key.size(); ++i) {
+                if (key[i] < '0' || key[i] > '9') {
+                    digits = false;
+                    break;
+                }
+                index = index * 10 + (key[i] - '0');
+            }
+            if (digits) (*days)[index] = value;
+        }
+        return;
+    }
     if (key == "bar_index_offset") {
         scheduler_.set_bar_index_offset(std::isfinite(value)
             ? static_cast<int>(std::llround(value)) : 0);
@@ -1637,6 +1762,22 @@ void source::PineStrategyHost::scheduler_update_session_state() {
                                                 : facts.closes_session_day;
     session_isfirstbar_ = session_isfirstbar_regular_;
     session_islastbar_ = session_islastbar_regular_;
+    // TradingView's symbol calendar, where the run holds one: a regular
+    // intraday bar ends its session day when the calendar's next slot does not
+    // lie in it -- OANDA:XAUUSD's 16:45 ET bar (the next slot, 17:00, opens the
+    // next day), not its 12:45 ET bar of 2025-07-04, where the feed stops and
+    // the calendar goes on (te_session_calendar_xau15-jul4). The first bar of a
+    // day stays the one the run holds (isfirstbar is the bar after a bar of
+    // another day, on the calendar and off it).
+    if (facts.in_session && calendar_period_for(script_tf_) == CalendarPeriod::NONE
+        && script_tf_seconds_ > 0) {
+        if (const auto* day = symbol_calendar_day(facts.script_bar_open_ms)) {
+            const bool last = facts.script_bar_open_ms
+                + static_cast<std::int64_t>(script_tf_seconds_) * 1000 >= day->second;
+            session_islastbar_regular_ = last;
+            session_islastbar_ = last;
+        }
+    }
     update_extended_session_day(facts);
 }
 
@@ -1939,7 +2080,23 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
                               : pine_time(input_ms, script_tf_, "", "", script_tf_, sym_tz,
                                           sym_session);
     };
+    // Where the run holds TradingView's symbol calendar (set_symbol_calendar),
+    // the chart bars ahead are its slots: the chart's next bar, the first bar
+    // from an instant, a chart bar's close and a day's open and close are the
+    // calendar's inside its days, whatever bars the history holds there
+    // (OANDA:XAUUSD's 17:00 ET slot, Good Friday's session). Bars behind stay
+    // the history's. The calendar's slots are an intraday chart's bars and a
+    // 1D chart's days; a W, M or multi-day chart's bars are no calendar day,
+    // so it reads its history.
+    const std::int64_t chart_step_ms = static_cast<std::int64_t>(script_tf_seconds_) * 1000;
+    const bool calendar_chart = !symbol_calendar_.empty()
+        && (!daily_chart || (calendar_period_for(script_tf_) == CalendarPeriod::DAY
+                             && script_tf_seconds_ == 86400));
     const auto chart_close_of = [&](std::int64_t open_ms) -> std::int64_t {
+        if (const auto* day = calendar_chart ? symbol_calendar_day(open_ms) : nullptr) {
+            return daily_chart || chart_step_ms <= 0 ? day->second
+                                                     : std::min(open_ms + chart_step_ms, day->second);
+        }
         return daily_chart ? pine_time_close(open_ms, script_tf_, "", "", script_tf_, sym_tz,
                                              sym_session)
                            : pine_time_close(open_ms, script_tf_, sym_session, sym_tz,
@@ -1951,6 +2108,9 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
     // The first chart bar opening at or after `at`: the retained input's, else
     // the calendar's first traded chart slot.
     const auto chart_open_from = [&](std::int64_t at) -> std::int64_t {
+        if (calendar_chart) {
+            if (const std::int64_t slot = symbol_calendar_open_from(at); !is_na(slot)) return slot;
+        }
         auto it = std::lower_bound(input.begin(), input.end(), at,
                                    [](const Bar& bar, std::int64_t value) {
                                        return bar.timestamp < value;
@@ -1971,6 +2131,10 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
     // it holds the instant (a stream's warmup ends where its live bars
     // begin), else the calendar's last traded chart slot.
     const auto chart_open_before = [&](std::int64_t before) -> std::int64_t {
+        if (calendar_chart) {
+            if (const std::int64_t slot = symbol_calendar_open_before(before); !is_na(slot))
+                return slot;
+        }
         auto it = std::lower_bound(input.begin(), input.end(), before,
                                    [](const Bar& bar, std::int64_t value) {
                                        return bar.timestamp < value;
@@ -1989,6 +2153,10 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
     // The chart bar after the one opening at `open_ms`: the retained input's
     // next bar, else the calendar's first traded slot past its close.
     const auto next_chart_open = [&](std::int64_t open_ms) -> std::int64_t {
+        if (calendar_chart && symbol_calendar_day(open_ms) != nullptr) {
+            if (const std::int64_t slot = symbol_calendar_open_from(open_ms + 1); !is_na(slot))
+                return slot;
+        }
         auto it = std::upper_bound(input.begin(), input.end(), open_ms,
                                    [](std::int64_t value, const Bar& bar) {
                                        return value < bar.timestamp;
@@ -2041,8 +2209,20 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
     // history first trades in the period, when it trades later than the
     // calendar's first session day.
     const CalendarPeriod tf_period = calendar_period_for(tf.empty() ? script_tf_ : tf);
+    // A day of the symbol calendar is its "D" bar.
+    const bool calendar_days = session.empty() && tf_period == CalendarPeriod::DAY
+        && tf_to_seconds(tf.empty() ? script_tf_ : tf) == 86400;
     const auto calendar_open_of = [&](std::int64_t ms) -> std::int64_t {
+        if (calendar_days) {
+            if (const auto* day = symbol_calendar_day(ms)) return day->first;
+        }
         return pine_time(ms, tf, session, tz, script_tf_, sym_tz, sym_session);
+    };
+    const auto tf_close_of = [&](std::int64_t open_ms) -> std::int64_t {
+        if (calendar_days) {
+            if (const auto* day = symbol_calendar_day(open_ms)) return day->second;
+        }
+        return pine_time_close(open_ms, tf, session, tz, script_tf_, sym_tz, sym_session);
     };
     const auto tf_open_of = [&](std::int64_t ms) -> std::int64_t {
         const std::int64_t open = calendar_open_of(ms);
@@ -2073,8 +2253,7 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
     }
     for (int k = 0; k < -timeframe_bars_back && !is_na(open); ++k) {
         // The first chart bar past this tf bar's end that a tf bar holds.
-        const std::int64_t end = pine_time_close(open, tf, session, tz, script_tf_, sym_tz,
-                                                 sym_session);
+        const std::int64_t end = tf_close_of(open);
         std::int64_t at = chart_open_from(is_na(end) || end <= open ? open + 1 : end);
         std::int64_t next = na<int64_t>();
         for (int guard = 0; guard < kTimeOffsetBarsPerStep && !is_na(at); ++guard) {
@@ -2098,8 +2277,7 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
         open = prev;
     }
     if (is_na(open)) return na<int64_t>();
-    return close ? pine_time_close(open, tf, session, tz, script_tf_, sym_tz, sym_session)
-                 : open;
+    return close ? tf_close_of(open) : open;
 }
 
 } // namespace pineforge

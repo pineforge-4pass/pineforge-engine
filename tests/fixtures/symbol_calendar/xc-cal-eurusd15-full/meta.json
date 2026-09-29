@@ -1,0 +1,16 @@
+{
+  "title": "xc symbol calendar",
+  "slug": "xc-cal-eurusd15-full",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T04:42:23.123Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2021-05-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "1ef2fe99be7dd43cf8b325c84d3224b312a8a0757cec4748be828d52ada1a00e",
+  "tv_trades_sha256": "b6e620f7f38e80261686afedbe655e6f57264d84ddd5c69e6c7221f6695d10d2",
+  "tv_trades_rows": 1298
+}
