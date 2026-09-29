@@ -1,0 +1,16 @@
+{
+  "title": "td-m6g-fifo-cross-after-reversal",
+  "slug": "td-m6g",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:27:26.019Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "3091159b34682a5bc2327414b620d1121d6c7275167bfbb7d13839157cce2e9f",
+  "tv_trades_sha256": "2acc6c1dc45a9ca43a7f959d02be7e50572cc8ecea8421e0114cbeb329d12c45",
+  "tv_trades_rows": 10
+}

@@ -1,0 +1,16 @@
+{
+  "title": "td-m6a-fifo-cross-exit-reservation",
+  "slug": "td-m6a",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:24:18.364Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "19dcab7f1aad21f1b19bfb17b3451aa647351035e2b53fa1a2c944f1bfb60d6f",
+  "tv_trades_sha256": "b1e69f916897c7c81f13554eb313f298a274304b06000063c51f44151a485887",
+  "tv_trades_rows": 8
+}

@@ -10892,6 +10892,36 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
                     break;
                 }
             }
+            // The parent may not be in the book yet: the reversal entry the
+            // same bar places beside strategy.close() of the position it
+            // reverses is still held (pending_entries_). The leg waits for it
+            // as for a live pending parent, and the parent's opening
+            // materializes it against the whole position (FIFO); submitted
+            // now it binds the id's cohort, and a FIFO close by another id's
+            // exit then leaves it no lot, where TradingView still fills it on
+            // its own reservation (lab tv tape tests/fixtures/exit_fifo_cross
+            // td-m6g; lane TAIL-D).
+            const bool parent_held = cohort != cohorts_by_id_.end()
+                && cohort->second.opened.empty()
+                && leg.snapshot.bracket_origin.incarnation == 0
+                && std::any_of(pending_entries_.begin(), pending_entries_.end(),
+                    [&](const PendingEntry& held) {
+                        return held.snapshot.opening
+                            && held.snapshot.family == PineOrderFamily::Entry
+                            && held.snapshot.source_id == leg.snapshot.from_entry
+                            && held.snapshot.placement_script_open_ms
+                                == leg.snapshot.placement_script_open_ms
+                            && held.snapshot.command_sequence
+                                < leg.snapshot.command_sequence;
+                    });
+            if (parent_held) {
+                // It keeps the bar the script placed it on, as a leg staged
+                // for a flat book's pending parent does, whatever bar the
+                // held parent reaches the book on.
+                leg.snapshot.projection_created_bar_pinned = true;
+                pending_bracket_legs_.push_back(std::move(leg));
+                continue;
+            }
         }
         bool retained_parent_pending = false;
         if ((leg.snapshot.projection_predecessor != 0

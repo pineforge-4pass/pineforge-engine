@@ -942,6 +942,10 @@ list(APPEND TEST_SOURCES test_coof_resting_bracket_tapes)
 # recalculated with the bar before it (tests/fixtures/coof_timeframe_change),
 # on TradingView's tape.
 list(APPEND TEST_SOURCES test_coof_timeframe_change_tapes)
+# ... and a qty= exit of an entry a reversal holds in the adapter waits for
+# that entry, so a FIFO close of its lot by another id's exit leaves its own
+# reservation (tests/fixtures/exit_fifo_cross), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_exit_fifo_cross_tapes)
 
 # Lane W8A-SIGSTATE-1 R4: a fill at the day's first tick does not trip
 # strategy.risk.max_intraday_loss (tests/fixtures/intraday_loss_open_fill), on
@@ -2554,6 +2558,10 @@ endif()
 if(TARGET test_coof_timeframe_change_tapes)
     target_compile_definitions(test_coof_timeframe_change_tapes PRIVATE
         PINEFORGE_TAIL_D_TF_CHANGE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_timeframe_change")
+endif()
+if(TARGET test_exit_fifo_cross_tapes)
+    target_compile_definitions(test_exit_fifo_cross_tapes PRIVATE
+        PINEFORGE_TAIL_D_FIFO_CROSS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_fifo_cross")
 endif()
 if(TARGET test_coof_reissued_exit_tapes)
     target_compile_definitions(test_coof_reissued_exit_tapes PRIVATE

@@ -1,0 +1,16 @@
+//@version=6
+// TAIL-D synthetic M6a: two entry ids, each of 2 units with two qty=1 exits. BT1 (an exit of B)
+// fills while A still holds its last unit, so FIFO closes A's lot; A's second exit AT2 fills
+// later. Fixed cells on BINANCE:ETHUSDT.P 15, 2025-04-01 (UTC).
+strategy("td-m6a-fifo-cross-exit-reservation", overlay = true, pyramiding = 2, default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 1000000)
+T(h, m) => timestamp("UTC", 2025, 4, 1, h, m)
+if time == T(11, 30)
+    strategy.entry("A", strategy.long, qty = 2)
+    strategy.exit("AT1", from_entry = "A", qty = 1, limit = 1862.0)
+    strategy.exit("AT2", from_entry = "A", qty = 1, limit = 1873.0)
+if time == T(12, 0)
+    strategy.entry("B", strategy.long, qty = 2)
+    strategy.exit("BT1", from_entry = "B", qty = 1, limit = 1871.0)
+    strategy.exit("BT2", from_entry = "B", qty = 1, limit = 1880.0)
+if time == T(14, 30)
+    strategy.close_all()

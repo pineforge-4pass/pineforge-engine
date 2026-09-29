@@ -1,0 +1,28 @@
+//@version=6
+// TAIL-D synthetic M6g: a short S of 2 (two qty=1 bracket exits) is reversed by closing it and
+// entering A (2 units, two qty=1 bracket exits placed on the reversal bar). B (2 units, two
+// qty=1 bracket exits) adds beside A; at 12:30 B is called again (pyramiding full) and its exits
+// are re-issued with a moved stop. BT1 fills while A still holds its last unit (FIFO closes A's
+// lot); A's second exit AT2 fills later. Fixed cells on BINANCE:ETHUSDT.P 15, 2025-04-01 (UTC).
+strategy("td-m6g-fifo-cross-after-reversal", overlay = true, pyramiding = 2, default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 1000000)
+T(h, m) => timestamp("UTC", 2025, 4, 1, h, m)
+if time == T(11, 0)
+    strategy.entry("S", strategy.short, qty = 2)
+    strategy.exit("ST1", from_entry = "S", qty = 1, limit = 1840.0, stop = 1900.0)
+    strategy.exit("ST2", from_entry = "S", qty = 1, limit = 1830.0, stop = 1900.0)
+if time == T(11, 30)
+    strategy.close("S")
+    strategy.close("SA")
+    strategy.entry("A", strategy.long, qty = 2)
+    strategy.exit("AT1", from_entry = "A", qty = 1, limit = 1862.0, stop = 1800.0)
+    strategy.exit("AT2", from_entry = "A", qty = 1, limit = 1873.0, stop = 1800.0)
+if time == T(12, 0)
+    strategy.entry("B", strategy.long, qty = 2)
+    strategy.exit("BT1", from_entry = "B", qty = 1, limit = 1871.0, stop = 1800.0)
+    strategy.exit("BT2", from_entry = "B", qty = 1, limit = 1880.0, stop = 1800.0)
+if time == T(12, 30)
+    strategy.entry("B", strategy.long, qty = 2)
+    strategy.exit("BT1", from_entry = "B", qty = 1, limit = 1871.0, stop = 1805.0)
+    strategy.exit("BT2", from_entry = "B", qty = 1, limit = 1880.0, stop = 1805.0)
+if time == T(14, 30)
+    strategy.close_all()
