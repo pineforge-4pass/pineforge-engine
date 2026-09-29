@@ -1,0 +1,16 @@
+{
+  "title": "td-m1c-closeall-pooc-coof",
+  "slug": "td-m1c",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T22:57:10.543Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-05"
+  },
+  "pine_sha256": "e1876273c54a2a55bcb8693a72349df00c959135ab7711c8b85f589215b4475b",
+  "tv_trades_sha256": "6704d1ba9d707ed8da21b02e8649b6e04e3ffa9a5f4b37a4fb9c4448a8a4d140",
+  "tv_trades_rows": 92
+}

@@ -925,6 +925,11 @@ list(APPEND TEST_SOURCES test_pooc_margin_call_sizing_tapes)
 # ... and a slipped default percent short opens only while its margin at the
 # close fits (tests/fixtures/pooc_short_slip_admission), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_pooc_short_slip_admission_tapes)
+# Lane TAIL-D: under calc_on_order_fills a close the recalculation of a
+# mid-leg fill places, `immediately` or not, fills at the end of that leg,
+# where an off-grid extreme is touched at its raw print
+# (tests/fixtures/coof_immediate_close), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_coof_immediate_close_tapes)
 
 # Lane W8A-SIGSTATE-1 R4: a fill at the day's first tick does not trip
 # strategy.risk.max_intraday_loss (tests/fixtures/intraday_loss_open_fill), on
@@ -2521,6 +2526,10 @@ endif()
 if(TARGET test_global_exit_fill_size_tapes)
     target_compile_definitions(test_global_exit_fill_size_tapes PRIVATE
         PINEFORGE_W4_GLOBAL_EXIT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/global_exit_fill_size")
+endif()
+if(TARGET test_coof_immediate_close_tapes)
+    target_compile_definitions(test_coof_immediate_close_tapes PRIVATE
+        PINEFORGE_TAIL_D_IMMEDIATE_CLOSE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_immediate_close")
 endif()
 if(TARGET test_coof_reissued_exit_tapes)
     target_compile_definitions(test_coof_reissued_exit_tapes PRIVATE

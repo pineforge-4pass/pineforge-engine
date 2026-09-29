@@ -1,0 +1,16 @@
+{
+  "title": "td-m1h-imm-closeall-offgrid",
+  "slug": "td-m1h",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:16:36.634Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-15"
+  },
+  "pine_sha256": "948db07411194f5426c75268fe50bfbb2b4fc0e9d39fbd015664ed62aec3541f",
+  "tv_trades_sha256": "0ba881f30dd5e66269e1d319c21c6f862c73dae9b772f4240d78e65082e46f4c",
+  "tv_trades_rows": 238
+}

@@ -7951,6 +7951,16 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         point && cap_placement_denied(point->decision)) {
         return;
     }
+    // The calc_on_order_fills recalculation of a fill inside a leg has no
+    // current price to close at: TradingView fills its `immediately` close
+    // where the same close placed without it fills, at the end of that leg
+    // (lab tv tapes tests/fixtures/coof_immediate_close td-m1a, -c and -d
+    // are one trade list; lane TAIL-D). A fill on a point of the path keeps
+    // the close at that point.
+    if (immediately && coof_recalc_active_ && !coof_first_open_
+        && !coof_fill_on_path_point()) {
+        immediately = false;
+    }
     // The public empty-id spelling is the source route's full-position
     // strategy.close form.  It is not a cohort lookup (there is no empty
     // entry-id cohort), and it retains its caller-supplied report comment.
@@ -8053,7 +8063,8 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         double coof_close_all_fill = kNaN;
         if (coof_recalc_active_ && !coof_first_open_ && !immediately
             && coof_script_bar_valid_) {
-            const double next_extreme = coof_next_waypoint();
+            int next_extreme_index = -1;
+            const double next_extreme = coof_next_waypoint(&next_extreme_index);
             const auto point = detail::callback_point(require_host());
             const double current_quote = point ? point->price : kNaN;
             const bool buy = detail::run_position(require_host()).signed_units < 0.0;
@@ -8065,19 +8076,26 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                 && finite_positive(current_quote)
                 && !source_same_point(current_quote, coof_close_all_fill,
                                       staged_.syminfo.mintick)) {
+                // As the close of one id does: the trigger rests at the raw
+                // extreme the path reaches, and the booked tick rides
+                // forced_execution_price. An OFF-grid extreme (H 9.445 booked
+                // 9.45) is otherwise never touched on this bar (lab tv tape
+                // tests/fixtures/coof_immediate_close td-m1h on NYSE:F; lane
+                // TAIL-D).
+                const bool extreme_target = next_extreme_index == 1
+                    || next_extreme_index == 2;
+                const double level = extreme_target ? next_extreme : coof_close_all_fill;
+                const native_order::Limit limit{level,
+                    extreme_target && coof_close_all_fill != level};
                 const bool falling = coof_close_all_fill < current_quote;
                 if (buy) {
                     request.trigger = falling
-                        ? native_order::Trigger{native_order::Limit{
-                              coof_close_all_fill}}
-                        : native_order::Trigger{native_order::Stop{
-                              coof_close_all_fill}};
+                        ? native_order::Trigger{limit}
+                        : native_order::Trigger{native_order::Stop{level}};
                 } else {
                     request.trigger = falling
-                        ? native_order::Trigger{native_order::Stop{
-                              coof_close_all_fill}}
-                        : native_order::Trigger{native_order::Limit{
-                              coof_close_all_fill}};
+                        ? native_order::Trigger{native_order::Stop{level}}
+                        : native_order::Trigger{limit};
                 }
             }
         }

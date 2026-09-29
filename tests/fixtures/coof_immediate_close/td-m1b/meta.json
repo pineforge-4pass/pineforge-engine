@@ -1,0 +1,16 @@
+{
+  "title": "td-m1b-imm-closeall-coof",
+  "slug": "td-m1b",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T22:57:06.802Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-05"
+  },
+  "pine_sha256": "a91df1002eed46b12d84a3ce496bc8c01299e6ff7d96e0a7fe03a7a8fafb882a",
+  "tv_trades_sha256": "2130e0e1e23ff523caa3fa5cb6cf0a6777e13218e872b29f9c7c07f3d423d964",
+  "tv_trades_rows": 94
+}
