@@ -597,12 +597,11 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - entry p90:   `0.0000%`
     - exit  p90:   `0.0000%`
     - PnL   p90:   `0.0000%`
-- **PyneCore** 🟠 **weak**  (emitted 84; in window engine 52 / TV 356; matched 26; coverage 7.2%)
-    - count delta: `85.3933%` (abs 304)
+- **PyneCore** 🟢 **excellent**  (emitted 557; in window engine 362 / TV 362; matched 362; coverage 100.0%)
+    - count delta: `0.0000%` (abs 0)
     - entry p90:   `0.0000%`
-    - exit  p90:   `17.9900%`
-    - PnL   p90:   `1941.0589%`
-    - gates: count Δ 85.39%; exit p90 17.9900%; pnl p90 1941.0589%; coverage 7.2%
+    - exit  p90:   `0.0000%`
+    - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
 ### 038-mtf-dual-tf-60-240-rising-01  *(corpus, profile: strict)*
@@ -644,12 +643,11 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - entry p90:   `0.0000%`
     - exit  p90:   `0.0000%`
     - PnL   p90:   `0.0000%`
-- **PyneCore** 🟠 **weak**  (emitted 130; in window engine 102 / TV 92; matched 16; coverage 15.7%)
-    - count delta: `9.8039%` (abs 10)
+- **PyneCore** 🟢 **excellent**  (emitted 112; in window engine 102 / TV 102; matched 102; coverage 100.0%)
+    - count delta: `0.0000%` (abs 0)
     - entry p90:   `0.0000%`
-    - exit  p90:   `4.7589%`
-    - PnL   p90:   `127.9468%`
-    - gates: count Δ 9.80%; exit p90 4.7589%; pnl p90 127.9468%; coverage 15.7%
+    - exit  p90:   `0.0000%`
+    - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
 ### 041-mtf-orbit-trend-01  *(corpus, profile: strict)*
@@ -675,12 +673,12 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - entry p90:   `0.0000%`
     - exit  p90:   `0.0000%`
     - PnL   p90:   `0.0000%`
-- **PyneCore** 🔴 **minimal**  (emitted 3; in window engine 0 / TV 0; matched 0; coverage 0.0%)
-    - count delta: `87.5000%` (abs 21)
+- **PyneCore** 🟡 **moderate**  (emitted 39; in window engine 22 / TV 22; matched 22; coverage 91.7%)
+    - count delta: `0.0000%` (abs 0)
     - entry p90:   `0.0000%`
     - exit  p90:   `0.0000%`
     - PnL   p90:   `0.0000%`
-    - gates: no aligned trades
+    - gates: coverage 91.7%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
 ### 043-na-deep-history-int-na-01  *(corpus, profile: strict)*
@@ -1580,7 +1578,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 101-3commas-3commas-bch-overbought-rsi-fade-short-indicator  *(closed, profile: strict)*
+### 101-closed  *(closed, profile: strict)*
 
 - TV closed trades: **288**
 - **PineForge** 🟢 **excellent**  (emitted 288; in window engine 288 / TV 288; matched 288; coverage 100.0%)
@@ -1595,7 +1593,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 102-3commas-3commas-pol-grid-bot-long-strategy  *(closed, profile: strict)*
+### 102-closed  *(closed, profile: strict)*
 
 - TV closed trades: **354**
 - **PineForge** 🟢 **excellent**  (emitted 354; in window engine 198 / TV 198; matched 198; coverage 100.0%)
@@ -1611,14 +1609,14 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 7.22%; exit p90 22.1780%; pnl p90 373.1014%; coverage 91.4%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 103-3commas-eth-grid-bot-long-strategy  *(closed, profile: strict)*
+### 103-closed  *(closed, profile: strict)*
 
 - TV closed trades: **332**
 - **PineForge** 🟢 **excellent**  (emitted 332; in window engine 179 / TV 179; matched 179; coverage 100.0%)
     - count delta: `0.0000%` (abs 0)
     - entry p90:   `0.0000%`
     - exit  p90:   `0.0000%`
-    - PnL   p90:   `0.0850%`
+    - PnL   p90:   `0.0000%`
 - **PyneCore** 🟡 **moderate**  (emitted 339; in window engine 192 / TV 178; matched 178; coverage 100.0%)
     - count delta: `7.2917%` (abs 14)
     - entry p90:   `0.0000%`
@@ -1627,7 +1625,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 7.29%; exit p90 4.0576%; pnl p90 355.8417%; distinct-entry multiplicity Δ 7
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 104-3commas-gram-rsi-strategy-3commas  *(closed, profile: strict)*
+### 104-closed  *(closed, profile: strict)*
 
 - TV closed trades: **43**
 - **PineForge** 🟢 **excellent**  (emitted 43; in window engine 43 / TV 43; matched 43; coverage 100.0%)
@@ -1642,7 +1640,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 105-3commas-heikin-ashi-rsi-fade-short-strategy  *(closed, profile: strict)*
+### 105-closed  *(closed, profile: strict)*
 
 - TV closed trades: **392**
 - **PineForge** 🟢 **excellent**  (emitted 392; in window engine 392 / TV 392; matched 392; coverage 100.0%)
@@ -1658,7 +1656,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: pnl p90 2.6549%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 106-3commas-sol-rsi-dca-long-strategy  *(closed, profile: strict)*
+### 106-closed  *(closed, profile: strict)*
 
 - TV closed trades: **29**
 - **PineForge** 🟢 **excellent**  (emitted 29; in window engine 29 / TV 29; matched 29; coverage 100.0%)
@@ -1673,7 +1671,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 107-3commas-xmr-grid-bot-long-strategy  *(closed, profile: strict)*
+### 107-closed  *(closed, profile: strict)*
 
 - TV closed trades: **371**
 - **PineForge** 🟢 **excellent**  (emitted 371; in window engine 208 / TV 208; matched 208; coverage 100.0%)
@@ -1689,7 +1687,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 7.84%; exit p90 20.1305%; pnl p90 401.1577%; coverage 90.8%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 108-a-popal-simple-smart-buy-sell-strategy  *(closed, profile: strict)*
+### 108-closed  *(closed, profile: strict)*
 
 - TV closed trades: **2559**
 - **PineForge** 🟢 **excellent**  (emitted 2559; in window engine 2559 / TV 2559; matched 2559; coverage 100.0%)
@@ -1697,15 +1695,15 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - entry p90:   `0.0000%`
     - exit  p90:   `0.0000%`
     - PnL   p90:   `0.0000%`
-- **PyneCore** 🟠 **weak**  (emitted 2651; in window engine 1918 / TV 2559; matched 1750; coverage 68.4%)
-    - count delta: `25.0488%` (abs 641)
+- **PyneCore** 🟢 **strong**  (emitted 3551; in window engine 2560 / TV 2559; matched 2559; coverage 100.0%)
+    - count delta: `0.0391%` (abs 1)
     - entry p90:   `0.0000%`
     - exit  p90:   `0.0000%`
     - PnL   p90:   `0.0000%`
-    - gates: count Δ 25.05%; coverage 68.4%
+    - gates: count Δ 0.04%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 109-acalvillo20-amd1  *(closed, profile: strict)*
+### 109-closed  *(closed, profile: strict)*
 
 - TV closed trades: **172**
 - **PineForge** 🟢 **excellent**  (emitted 172; in window engine 172 / TV 172; matched 172; coverage 100.0%)
@@ -1720,7 +1718,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 110-aiscripts-lvn-rejection-acceptance-strategy  *(closed, profile: strict)*
+### 110-closed  *(closed, profile: strict)*
 
 - TV closed trades: **2949**
 - **PineForge** 🟢 **excellent**  (emitted 2949; in window engine 2949 / TV 2949; matched 2949; coverage 100.0%)
@@ -1736,7 +1734,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: pnl p90 2.0408%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 111-ajayinderbrar-ajay-fibonacci-market-structure-pro-ai-v2-1  *(closed, profile: strict)*
+### 111-closed  *(closed, profile: strict)*
 
 - TV closed trades: **2373**
 - **PineForge** 🟢 **excellent**  (emitted 2373; in window engine 1182 / TV 1182; matched 1182; coverage 100.0%)
@@ -1752,7 +1750,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 4.21%; exit p90 0.0291%; pnl p90 17.2567%; coverage 93.1%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 112-alexgrover-g-channel-trend-detection-alerts-non-repainting  *(closed, profile: strict)*
+### 112-closed  *(closed, profile: strict)*
 
 - TV closed trades: **462**
 - **PineForge** 🟢 **excellent**  (emitted 462; in window engine 462 / TV 462; matched 462; coverage 100.0%)
@@ -1767,7 +1765,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 113-algo-aakash-macd-pullback-validation-with-divergence-filters-algo-aakash  *(closed, profile: strict)*
+### 113-closed  *(closed, profile: strict)*
 
 - TV closed trades: **7**
 - **PineForge** 🟢 **excellent**  (emitted 7; in window engine 7 / TV 7; matched 7; coverage 100.0%)
@@ -1783,7 +1781,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: exit p90 2.1912%; pnl p90 50.0000%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 114-amandaborgeson06-bias-status-dashboard  *(closed, profile: strict)*
+### 114-closed  *(closed, profile: strict)*
 
 - TV closed trades: **2183**
 - **PineForge** 🟢 **excellent**  (emitted 2183; in window engine 1218 / TV 1218; matched 1218; coverage 100.0%)
@@ -1791,15 +1789,15 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - entry p90:   `0.0000%`
     - exit  p90:   `0.0000%`
     - PnL   p90:   `0.0000%`
-- **PyneCore** 🟠 **weak**  (emitted 2989; in window engine 1209 / TV 1215; matched 1040; coverage 85.5%)
-    - count delta: `0.4938%` (abs 6)
+- **PyneCore** 🟡 **moderate**  (emitted 3021; in window engine 1229 / TV 1215; matched 1112; coverage 91.4%)
+    - count delta: `1.1391%` (abs 14)
     - entry p90:   `0.0000%`
-    - exit  p90:   `0.2936%`
-    - PnL   p90:   `177.6368%`
-    - gates: count Δ 0.49%; exit p90 0.2936%; pnl p90 177.6368%; coverage 85.5%
+    - exit  p90:   `0.1089%`
+    - PnL   p90:   `212.9500%`
+    - gates: count Δ 1.14%; exit p90 0.1089%; pnl p90 212.9500%; coverage 91.4%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 115-anji-ga-9-21ema-anji  *(closed, profile: strict)*
+### 115-closed  *(closed, profile: strict)*
 
 - TV closed trades: **196**
 - **PineForge** 🟢 **excellent**  (emitted 196; in window engine 90 / TV 90; matched 90; coverage 100.0%)
@@ -1814,7 +1812,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 116-anonycryptous-ev-edge-anonycryptous  *(closed, profile: strict)*
+### 116-closed  *(closed, profile: strict)*
 
 - TV closed trades: **866**
 - **PineForge** 🟢 **excellent**  (emitted 866; in window engine 866 / TV 866; matched 866; coverage 100.0%)
@@ -1829,7 +1827,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 117-antoniolinux-rsi-mfi-divergence-momentum  *(closed, profile: strict)*
+### 117-closed  *(closed, profile: strict)*
 
 - TV closed trades: **298**
 - **PineForge** 🟢 **excellent**  (emitted 298; in window engine 298 / TV 298; matched 298; coverage 100.0%)
@@ -1844,7 +1842,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 118-averagepoe-mnq-anomaly-candle-sma-confluence-v6  *(closed, profile: strict)*
+### 118-closed  *(closed, profile: strict)*
 
 - TV closed trades: **253**
 - **PineForge** 🟢 **excellent**  (emitted 253; in window engine 253 / TV 253; matched 253; coverage 100.0%)
@@ -1859,7 +1857,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 119-backtestbay-strategy-validation-framework-standardised-atr-exits-1-ris  *(closed, profile: strict)*
+### 119-closed  *(closed, profile: strict)*
 
 - TV closed trades: **466**
 - **PineForge** 🟢 **excellent**  (emitted 466; in window engine 464 / TV 464; matched 464; coverage 100.0%)
@@ -1875,7 +1873,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 0.22%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 120-benblackdiamond-l2gmom-network-momentum  *(closed, profile: strict)*
+### 120-closed  *(closed, profile: strict)*
 
 - TV closed trades: **416**
 - **PineForge** 🟢 **excellent**  (emitted 416; in window engine 183 / TV 183; matched 183; coverage 100.0%)
@@ -1891,7 +1889,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: pnl p90 33.2648%; coverage 93.4%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 121-bipinbiharipatra-5m-sol-scalper-ha-lorentzian  *(closed, profile: strict)*
+### 121-closed  *(closed, profile: strict)*
 
 - TV closed trades: **1119**
 - **PineForge** 🟢 **excellent**  (emitted 1119; in window engine 1119 / TV 1119; matched 1119; coverage 100.0%)
@@ -1907,7 +1905,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: pnl p90 10.0317%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 122-cb85wj5jmt-moja-strategia-harami-bb  *(closed, profile: strict)*
+### 122-closed  *(closed, profile: strict)*
 
 - TV closed trades: **1976**
 - **PineForge** 🟢 **excellent**  (emitted 1976; in window engine 1976 / TV 1976; matched 1976; coverage 100.0%)
@@ -1922,7 +1920,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 123-chadow6875-swing-high-low-ict-clean-pro  *(closed, profile: strict)*
+### 123-closed  *(closed, profile: strict)*
 
 - TV closed trades: **14289**
 - **PineForge** 🟢 **excellent**  (emitted 14289; in window engine 14289 / TV 14289; matched 14289; coverage 100.0%)
@@ -1938,7 +1936,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 1.46%; coverage 95.6%; distinct-entry multiplicity Δ 472
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 124-cihanozdemir-trade-id-signal-engine-buy-only-option  *(closed, profile: strict)*
+### 124-closed  *(closed, profile: strict)*
 
 - TV closed trades: **200**
 - **PineForge** 🟢 **excellent**  (emitted 200; in window engine 200 / TV 200; matched 200; coverage 100.0%)
@@ -1953,7 +1951,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 125-cleightyp-cleightyp-bos-sma-macd-vwap  *(closed, profile: strict)*
+### 125-closed  *(closed, profile: strict)*
 
 - TV closed trades: **1396**
 - **PineForge** 🟢 **excellent**  (emitted 1396; in window engine 1396 / TV 1396; matched 1396; coverage 100.0%)
@@ -1968,7 +1966,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 126-cntvxiao-smc-vsa-oi  *(closed, profile: strict)*
+### 126-closed  *(closed, profile: strict)*
 
 - TV closed trades: **978**
 - **PineForge** 🟢 **excellent**  (emitted 978; in window engine 557 / TV 557; matched 557; coverage 100.0%)
@@ -1984,7 +1982,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 0.71%; pnl p90 96.2341%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 127-codetradesalgo-fix-webhook-latency-dh-905-errors-pinescript-to-python-bridge  *(closed, profile: strict)*
+### 127-closed  *(closed, profile: strict)*
 
 - TV closed trades: **1743**
 - **PineForge** 🟢 **excellent**  (emitted 1743; in window engine 1743 / TV 1743; matched 1743; coverage 100.0%)
@@ -2000,7 +1998,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 0.06%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 128-colasbreugnon-nq-scalp-fix-signals  *(closed, profile: strict)*
+### 128-closed  *(closed, profile: strict)*
 
 - TV closed trades: **1574**
 - **PineForge** 🟢 **excellent**  (emitted 1574; in window engine 1574 / TV 1574; matched 1574; coverage 100.0%)
@@ -2016,7 +2014,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 0.25%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 129-daytrader4beginners-box-breakout-strategy-dt4b-trader  *(closed, profile: strict)*
+### 129-closed  *(closed, profile: strict)*
 
 - TV closed trades: **1562**
 - **PineForge** 🟢 **excellent**  (emitted 1562; in window engine 1562 / TV 1562; matched 1562; coverage 100.0%)
@@ -2031,7 +2029,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 130-delta-crypto-mu-overnight-gap-capture  *(closed, profile: strict)*
+### 130-closed  *(closed, profile: strict)*
 
 - TV closed trades: **5148**
 - **PineForge** 🟢 **excellent**  (emitted 5148; in window engine 5148 / TV 5148; matched 5148; coverage 100.0%)
@@ -2047,7 +2045,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: pnl p90 40.9735%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 131-devildk-option-point  *(closed, profile: strict)*
+### 131-closed  *(closed, profile: strict)*
 
 - TV closed trades: **210**
 - **PineForge** 🟢 **excellent**  (emitted 210; in window engine 210 / TV 210; matched 210; coverage 100.0%)
@@ -2062,7 +2060,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 132-dinkus3-obsidian  *(closed, profile: strict)*
+### 132-closed  *(closed, profile: strict)*
 
 - TV closed trades: **86**
 - **PineForge** 🟢 **excellent**  (emitted 86; in window engine 47 / TV 47; matched 47; coverage 100.0%)
@@ -2078,7 +2076,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: pnl p90 27.1446%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 133-drgunjanpupadhyay-swing-trend-strategy-pro-sideways-filtered-nifty-500  *(closed, profile: strict)*
+### 133-closed  *(closed, profile: strict)*
 
 - TV closed trades: **313**
 - **PineForge** 🟢 **excellent**  (emitted 313; in window engine 313 / TV 313; matched 313; coverage 100.0%)
@@ -2094,7 +2092,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: pnl p90 18.3779%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 134-elomadablah-atr-trailing-stoploss-multi  *(closed, profile: strict)*
+### 134-closed  *(closed, profile: strict)*
 
 - TV closed trades: **3369**
 - **PineForge** 🟢 **excellent**  (emitted 3368; in window engine 3368 / TV 3368; matched 3368; coverage 100.0%)
@@ -2109,7 +2107,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 135-finnp17-atm  *(closed, profile: strict)*
+### 135-closed  *(closed, profile: strict)*
 
 - TV closed trades: **1790**
 - **PineForge** 🟢 **excellent**  (emitted 1790; in window engine 1790 / TV 1790; matched 1790; coverage 100.0%)
@@ -2125,7 +2123,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: no aligned trades
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 136-fondbird7020-vishall-ema-9-20-50-200-dmi-adx-strategy  *(closed, profile: strict)*
+### 136-closed  *(closed, profile: strict)*
 
 - TV closed trades: **928**
 - **PineForge** 🟢 **excellent**  (emitted 928; in window engine 928 / TV 928; matched 928; coverage 100.0%)
@@ -2140,7 +2138,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 137-fran-pineda-strategy-501-de-franpineda  *(closed, profile: strict)*
+### 137-closed  *(closed, profile: strict)*
 
 - TV closed trades: **224**
 - **PineForge** 🟢 **excellent**  (emitted 224; in window engine 224 / TV 224; matched 224; coverage 100.0%)
@@ -2155,7 +2153,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 138-fran-pineda-strategy-502-de-franpineda  *(closed, profile: strict)*
+### 138-closed  *(closed, profile: strict)*
 
 - TV closed trades: **151**
 - **PineForge** 🟢 **excellent**  (emitted 151; in window engine 151 / TV 151; matched 151; coverage 100.0%)
@@ -2170,7 +2168,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 139-francescodimichele-gold-ai-strategy-v2-0  *(closed, profile: production)*
+### 139-closed  *(closed, profile: production)*
 
 - TV closed trades: **643**
 - **PineForge** 🟢 **excellent**  (emitted 643; in window engine 643 / TV 643; matched 643; coverage 100.0%)
@@ -2186,7 +2184,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 0.16%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 140-gonzowiththewind-sisyphus-happiness  *(closed, profile: strict)*
+### 140-closed  *(closed, profile: strict)*
 
 - TV closed trades: **96**
 - **PineForge** 🟢 **excellent**  (emitted 96; in window engine 96 / TV 96; matched 96; coverage 100.0%)
@@ -2194,10 +2192,15 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - entry p90:   `0.0000%`
     - exit  p90:   `0.0000%`
     - PnL   p90:   `0.0000%`
-- **PyneCore** ⚪ n/a — PyneCore runtime error: RuntimeError: security context 'sec·93481528·0': the developing batch published
+- **PyneCore** 🟢 **strong**  (emitted 127; in window engine 96 / TV 96; matched 96; coverage 100.0%)
+    - count delta: `0.0000%` (abs 0)
+    - entry p90:   `0.0000%`
+    - exit  p90:   `0.0000%`
+    - PnL   p90:   `6.6083%`
+    - gates: pnl p90 6.6083%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 141-hariss369-crypto-sniper-pro-smart-trend-range-filter-strategy-hariss-369  *(closed, profile: strict)*
+### 141-closed  *(closed, profile: strict)*
 
 - TV closed trades: **774**
 - **PineForge** 🟢 **excellent**  (emitted 774; in window engine 774 / TV 774; matched 774; coverage 100.0%)
@@ -2212,7 +2215,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 142-hermescore-momentum-conviction-hermescore  *(closed, profile: strict)*
+### 142-closed  *(closed, profile: strict)*
 
 - TV closed trades: **3194**
 - **PineForge** 🟢 **excellent**  (emitted 3194; in window engine 3194 / TV 3194; matched 3194; coverage 100.0%)
@@ -2227,7 +2230,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 143-hungpixi-hungpixi-macd-enhanced-mtf-with-signal-filter-anti-sideway  *(closed, profile: strict)*
+### 143-closed  *(closed, profile: strict)*
 
 - TV closed trades: **4**
 - **PineForge** 🟢 **excellent**  (emitted 4; in window engine 4 / TV 4; matched 4; coverage 100.0%)
@@ -2243,7 +2246,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: exit p90 0.1656%; pnl p90 1232.3814%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 144-igreycrypto-adapted-rsi-w-multi-asset-regime-detection-v1-1  *(closed, profile: strict)*
+### 144-closed  *(closed, profile: strict)*
 
 - TV closed trades: **513**
 - **PineForge** 🟢 **excellent**  (emitted 513; in window engine 189 / TV 189; matched 189; coverage 100.0%)
@@ -2259,7 +2262,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 6.00%; exit p90 1.1695%; pnl p90 80.3572%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 145-imtiyazali73-imtiyaz-signature-liquidity-compass-smc  *(closed, profile: strict)*
+### 145-closed  *(closed, profile: strict)*
 
 - TV closed trades: **906**
 - **PineForge** 🟢 **excellent**  (emitted 906; in window engine 906 / TV 906; matched 906; coverage 100.0%)
@@ -2274,7 +2277,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 146-inr3d-r3d-jackofxc-rtp-strategy  *(closed, profile: strict)*
+### 146-closed  *(closed, profile: strict)*
 
 - TV closed trades: **48**
 - **PineForge** 🟢 **excellent**  (emitted 48; in window engine 48 / TV 48; matched 48; coverage 100.0%)
@@ -2289,7 +2292,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 147-jaydeepp095-candle-harry  *(closed, profile: strict)*
+### 147-closed  *(closed, profile: strict)*
 
 - TV closed trades: **746**
 - **PineForge** 🟢 **excellent**  (emitted 746; in window engine 746 / TV 746; matched 746; coverage 100.0%)
@@ -2304,7 +2307,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 148-jayendranath4-banknifty-15m-clear-tp-sl-strategy  *(closed, profile: strict)*
+### 148-closed  *(closed, profile: strict)*
 
 - TV closed trades: **430**
 - **PineForge** 🟢 **excellent**  (emitted 430; in window engine 430 / TV 430; matched 430; coverage 100.0%)
@@ -2319,7 +2322,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 149-jayentriken-bbwp-macd-ema-trend-strategy  *(closed, profile: strict)*
+### 149-closed  *(closed, profile: strict)*
 
 - TV closed trades: **593**
 - **PineForge** 🟢 **excellent**  (emitted 593; in window engine 593 / TV 593; matched 593; coverage 100.0%)
@@ -2335,7 +2338,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: pnl p90 19.5087%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 150-jdceagle-zigzag-de-fractales-williams  *(closed, profile: strict)*
+### 150-closed  *(closed, profile: strict)*
 
 - TV closed trades: **8491**
 - **PineForge** 🟢 **excellent**  (emitted 8491; in window engine 8491 / TV 8491; matched 8491; coverage 100.0%)
@@ -2351,7 +2354,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 0.01%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 151-jos-protrader-edward-smart-channel-reversal  *(closed, profile: strict)*
+### 151-closed  *(closed, profile: strict)*
 
 - TV closed trades: **16**
 - **PineForge** 🟢 **excellent**  (emitted 16; in window engine 16 / TV 16; matched 16; coverage 100.0%)
@@ -2366,7 +2369,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 152-jos-protrader-edward-smart-liquidity-sweep  *(closed, profile: strict)*
+### 152-closed  *(closed, profile: strict)*
 
 - TV closed trades: **1040**
 - **PineForge** 🟢 **excellent**  (emitted 1040; in window engine 1040 / TV 1040; matched 1040; coverage 100.0%)
@@ -2382,7 +2385,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 0.48%; coverage 98.2%; distinct-entry multiplicity Δ 15
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 153-jos-protrader-edward-smart-momentum-pro  *(closed, profile: strict)*
+### 153-closed  *(closed, profile: strict)*
 
 - TV closed trades: **232**
 - **PineForge** 🟢 **excellent**  (emitted 232; in window engine 232 / TV 232; matched 232; coverage 100.0%)
@@ -2397,7 +2400,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 154-khanhtq26-psol-01-donchian-channels  *(closed, profile: strict)*
+### 154-closed  *(closed, profile: strict)*
 
 - TV closed trades: **346**
 - **PineForge** 🟢 **excellent**  (emitted 346; in window engine 346 / TV 346; matched 346; coverage 100.0%)
@@ -2412,7 +2415,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 155-legalrice2697-nse-elite-strategy-v6-full-system  *(closed, profile: production)*
+### 155-closed  *(closed, profile: production)*
 
 - TV closed trades: **362**
 - **PineForge** 🟢 **excellent**  (emitted 362; in window engine 362 / TV 362; matched 362; coverage 100.0%)
@@ -2427,7 +2430,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `2.4454%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 156-m-f-atipey-hybrid-3-strategy-smart-system-v6-1  *(closed, profile: strict)*
+### 156-closed  *(closed, profile: strict)*
 
 - TV closed trades: **132**
 - **PineForge** 🟢 **excellent**  (emitted 132; in window engine 123 / TV 123; matched 123; coverage 100.0%)
@@ -2443,7 +2446,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: pnl p90 12.0904%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 157-madue2014-twe-2-bar-break-strategy  *(closed, profile: strict)*
+### 157-closed  *(closed, profile: strict)*
 
 - TV closed trades: **5999**
 - **PineForge** 🟢 **excellent**  (emitted 5999; in window engine 5999 / TV 5999; matched 5999; coverage 100.0%)
@@ -2459,7 +2462,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 0.02%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 158-market-logic-india-low-lag-strength-oscillator  *(closed, profile: strict)*
+### 158-closed  *(closed, profile: strict)*
 
 - TV closed trades: **6826**
 - **PineForge** 🟢 **excellent**  (emitted 6826; in window engine 4073 / TV 4073; matched 4073; coverage 100.0%)
@@ -2475,7 +2478,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 12.15%; exit p90 0.3892%; pnl p90 97.6638%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 159-mdfe3757-trade-strategy-v8-4-pine-v6-ready  *(closed, profile: strict)*
+### 159-closed  *(closed, profile: strict)*
 
 - TV closed trades: **642**
 - **PineForge** 🟢 **excellent**  (emitted 642; in window engine 301 / TV 301; matched 301; coverage 100.0%)
@@ -2491,7 +2494,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 0.33%; pnl p90 5.5932%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 160-mehranazizi219-goldsiggy-murk  *(closed, profile: strict)*
+### 160-closed  *(closed, profile: strict)*
 
 - TV closed trades: **819**
 - **PineForge** 🟢 **excellent**  (emitted 819; in window engine 819 / TV 819; matched 819; coverage 100.0%)
@@ -2506,7 +2509,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 161-mylivingedge-gold-asian-range-breakout-signals  *(closed, profile: strict)*
+### 161-closed  *(closed, profile: strict)*
 
 - TV closed trades: **4**
 - **PineForge** 🟢 **excellent**  (emitted 4; in window engine 4 / TV 4; matched 4; coverage 100.0%)
@@ -2521,7 +2524,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 162-nicocashfx-prime-strategy-swing  *(closed, profile: strict)*
+### 162-closed  *(closed, profile: strict)*
 
 - TV closed trades: **73**
 - **PineForge** 🟢 **excellent**  (emitted 73; in window engine 73 / TV 73; matched 73; coverage 100.0%)
@@ -2537,7 +2540,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: coverage 97.3%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 163-nightowlxtrader-azt-strategy-v11-first-draft  *(closed, profile: strict)*
+### 163-closed  *(closed, profile: strict)*
 
 - TV closed trades: **13**
 - **PineForge** 🟢 **excellent**  (emitted 13; in window engine 13 / TV 13; matched 13; coverage 100.0%)
@@ -2545,15 +2548,14 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - entry p90:   `0.0000%`
     - exit  p90:   `0.0000%`
     - PnL   p90:   `0.0000%`
-- **PyneCore** 🟠 **weak**  (emitted 17; in window engine 1 / TV 1; matched 1; coverage 8.3%)
+- **PyneCore** 🟢 **excellent**  (emitted 16; in window engine 12 / TV 12; matched 12; coverage 92.3%)
     - count delta: `0.0000%` (abs 0)
     - entry p90:   `0.0000%`
-    - exit  p90:   `0.9703%`
-    - PnL   p90:   `45.3778%`
-    - gates: exit p90 0.9703%; pnl p90 45.3778%; coverage 8.3%
+    - exit  p90:   `0.0000%`
+    - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 164-officialjackofalltrades-concordance-execution-mandate-joat  *(closed, profile: strict)*
+### 164-closed  *(closed, profile: strict)*
 
 - TV closed trades: **183**
 - **PineForge** 🟢 **excellent**  (emitted 183; in window engine 109 / TV 109; matched 109; coverage 100.0%)
@@ -2561,15 +2563,14 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - entry p90:   `0.0000%`
     - exit  p90:   `0.0000%`
     - PnL   p90:   `0.0000%`
-- **PyneCore** 🟠 **weak**  (emitted 91; in window engine 27 / TV 27; matched 22; coverage 20.2%)
+- **PyneCore** 🟢 **excellent**  (emitted 238; in window engine 109 / TV 109; matched 108; coverage 99.1%)
     - count delta: `0.0000%` (abs 0)
     - entry p90:   `0.0000%`
-    - exit  p90:   `0.0001%`
+    - exit  p90:   `0.0002%`
     - PnL   p90:   `0.0000%`
-    - gates: coverage 20.2%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 165-officialjackofalltrades-concordance-regime-synthesis-joat  *(closed, profile: strict)*
+### 165-closed  *(closed, profile: strict)*
 
 - TV closed trades: **7021**
 - **PineForge** 🟢 **excellent**  (emitted 7021; in window engine 7021 / TV 7021; matched 7021; coverage 100.0%)
@@ -2585,7 +2586,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: pnl p90 27.8351%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 166-officialjackofalltrades-concordance-strategy-joat  *(closed, profile: strict)*
+### 166-closed  *(closed, profile: strict)*
 
 - TV closed trades: **602**
 - **PineForge** 🟢 **excellent**  (emitted 602; in window engine 246 / TV 246; matched 246; coverage 100.0%)
@@ -2593,10 +2594,15 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - entry p90:   `0.0000%`
     - exit  p90:   `0.0000%`
     - PnL   p90:   `0.0000%`
-- **PyneCore** ⚪ n/a — PyneCore runtime error: RuntimeError: security context 'sec·c5dd5335·3': the developing batch published
+- **PyneCore** 🟢 **strong**  (emitted 795; in window engine 247 / TV 246; matched 240; coverage 97.6%)
+    - count delta: `0.4049%` (abs 1)
+    - entry p90:   `0.0000%`
+    - exit  p90:   `0.0008%`
+    - PnL   p90:   `0.0000%`
+    - gates: count Δ 0.40%; coverage 97.6%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 167-officialjackofalltrades-large-lot-reverse-engineer-joat  *(closed, profile: strict)*
+### 167-closed  *(closed, profile: strict)*
 
 - TV closed trades: **795**
 - **PineForge** 🟢 **excellent**  (emitted 795; in window engine 795 / TV 795; matched 795; coverage 100.0%)
@@ -2611,7 +2617,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 168-officialjackofalltrades-parallax-covenant-strategy-joat  *(closed, profile: strict)*
+### 168-closed  *(closed, profile: strict)*
 
 - TV closed trades: **1002**
 - **PineForge** 🟢 **excellent**  (emitted 1002; in window engine 1002 / TV 1002; matched 1002; coverage 100.0%)
@@ -2627,7 +2633,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 0.60%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 169-officialjackofalltrades-regime-execution-strategy-joat  *(closed, profile: strict)*
+### 169-closed  *(closed, profile: strict)*
 
 - TV closed trades: **766**
 - **PineForge** 🟢 **excellent**  (emitted 766; in window engine 766 / TV 766; matched 766; coverage 100.0%)
@@ -2643,7 +2649,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 1.83%; pnl p90 3.6756%; coverage 41.6%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 170-ollie-b-ollie-asia-sweep-model  *(closed, profile: strict)*
+### 170-closed  *(closed, profile: strict)*
 
 - TV closed trades: **1**
 - **PineForge** 🟢 **excellent**  (emitted 1; in window engine 1 / TV 1; matched 1; coverage 100.0%)
@@ -2658,7 +2664,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 171-options7700-2min-bullish-confluence  *(closed, profile: strict)*
+### 171-closed  *(closed, profile: strict)*
 
 - TV closed trades: **1106**
 - **PineForge** 🟢 **excellent**  (emitted 1106; in window engine 1106 / TV 1106; matched 1106; coverage 100.0%)
@@ -2673,7 +2679,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 172-projectsyndicate-strong-breakout-signals-projectsyndicate  *(closed, profile: strict)*
+### 172-closed  *(closed, profile: strict)*
 
 - TV closed trades: **1521**
 - **PineForge** 🟢 **excellent**  (emitted 1521; in window engine 507 / TV 507; matched 507; coverage 100.0%)
@@ -2689,7 +2695,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 1.97%; coverage 97.0%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 173-quantitativealpha-strategy-forecast-engine  *(closed, profile: strict)*
+### 173-closed  *(closed, profile: strict)*
 
 - TV closed trades: **1849**
 - **PineForge** 🟢 **excellent**  (emitted 1849; in window engine 1015 / TV 1015; matched 1015; coverage 100.0%)
@@ -2705,7 +2711,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: pnl p90 81.3551%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 174-quantnomad-ut-bot-v2-atr-trailing-stop  *(closed, profile: strict)*
+### 174-closed  *(closed, profile: strict)*
 
 - TV closed trades: **4330**
 - **PineForge** 🟢 **excellent**  (emitted 4330; in window engine 4330 / TV 4330; matched 4330; coverage 100.0%)
@@ -2720,7 +2726,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 175-rakesh-09-edge-confirmation-system  *(closed, profile: strict)*
+### 175-closed  *(closed, profile: strict)*
 
 - TV closed trades: **386**
 - **PineForge** 🟢 **excellent**  (emitted 386; in window engine 386 / TV 386; matched 386; coverage 100.0%)
@@ -2735,7 +2741,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 176-rakesh-09-edge-confirmation-system-ecs-v2-0  *(closed, profile: strict)*
+### 176-closed  *(closed, profile: strict)*
 
 - TV closed trades: **484**
 - **PineForge** 🟢 **excellent**  (emitted 484; in window engine 289 / TV 289; matched 289; coverage 100.0%)
@@ -2751,7 +2757,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 3.02%; pnl p90 10.0718%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 177-rampatel9912-super-rsi-strategy  *(closed, profile: strict)*
+### 177-closed  *(closed, profile: strict)*
 
 - TV closed trades: **2846**
 - **PineForge** 🟢 **excellent**  (emitted 2846; in window engine 2846 / TV 2846; matched 2846; coverage 100.0%)
@@ -2766,7 +2772,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 178-remarkablefreddy-ultimate-smc-emas-day-trading-strategy  *(closed, profile: strict)*
+### 178-closed  *(closed, profile: strict)*
 
 - TV closed trades: **519**
 - **PineForge** 🟢 **excellent**  (emitted 519; in window engine 519 / TV 519; matched 519; coverage 100.0%)
@@ -2781,7 +2787,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 179-richmondhillcm-richmondhillcm-vwap-volume-spike-suite-v1-3  *(closed, profile: strict)*
+### 179-closed  *(closed, profile: strict)*
 
 - TV closed trades: **220**
 - **PineForge** 🟢 **excellent**  (emitted 220; in window engine 220 / TV 220; matched 220; coverage 100.0%)
@@ -2797,7 +2803,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: pnl p90 3.5901%; coverage 98.2%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 180-robmagnaye14-eb-ict-v5-pro-trader-daily-5-10-trade-60-target  *(closed, profile: strict)*
+### 180-closed  *(closed, profile: strict)*
 
 - TV closed trades: **291**
 - **PineForge** 🟢 **excellent**  (emitted 291; in window engine 291 / TV 291; matched 291; coverage 100.0%)
@@ -2812,24 +2818,23 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 181-roi10x-shiva-lt-ls-blend  *(closed, profile: strict)*
+### 181-closed  *(closed, profile: strict)*
 
 - TV closed trades: **2411**
-- **PineForge** 🟢 **strong**  (emitted 2412; in window engine 2412 / TV 2411; matched 2411; coverage 100.0%)
-    - count delta: `0.0415%` (abs 1)
+- **PineForge** 🟢 **excellent**  (emitted 2411; in window engine 2411 / TV 2411; matched 2411; coverage 100.0%)
+    - count delta: `0.0000%` (abs 0)
     - entry p90:   `0.0000%`
     - exit  p90:   `0.0000%`
     - PnL   p90:   `0.0000%`
-    - gates: count Δ 0.04%
-- **PyneCore** 🟠 **weak**  (emitted 3061; in window engine 2208 / TV 2409; matched 1700; coverage 70.5%)
-    - count delta: `8.3437%` (abs 201)
+- **PyneCore** 🟢 **strong**  (emitted 3384; in window engine 2414 / TV 2411; matched 2411; coverage 100.0%)
+    - count delta: `0.1243%` (abs 3)
     - entry p90:   `0.0000%`
-    - exit  p90:   `0.2761%`
-    - PnL   p90:   `77.1709%`
-    - gates: count Δ 8.34%; exit p90 0.2761%; pnl p90 77.1709%; coverage 70.5%
+    - exit  p90:   `0.0000%`
+    - PnL   p90:   `0.0000%`
+    - gates: count Δ 0.12%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 182-sadtrader9-fair-value-gap-strategy  *(closed, profile: strict)*
+### 182-closed  *(closed, profile: strict)*
 
 - TV closed trades: **3031**
 - **PineForge** 🟢 **excellent**  (emitted 3031; in window engine 3031 / TV 3031; matched 3031; coverage 100.0%)
@@ -2844,7 +2849,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 183-shiroi-macd-zero-line-candles-alert  *(closed, profile: strict)*
+### 183-closed  *(closed, profile: strict)*
 
 - TV closed trades: **1302**
 - **PineForge** 🟢 **excellent**  (emitted 1302; in window engine 1302 / TV 1302; matched 1302; coverage 100.0%)
@@ -2859,7 +2864,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 184-shurben5-tradingview-bot-goat  *(closed, profile: production)*
+### 184-closed  *(closed, profile: production)*
 
 - TV closed trades: **958**
 - **PineForge** 🟢 **excellent**  (emitted 958; in window engine 479 / TV 479; matched 479; coverage 100.0%)
@@ -2874,7 +2879,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 185-simon20cent-efi-macd-advanced-pro  *(closed, profile: strict)*
+### 185-closed  *(closed, profile: strict)*
 
 - TV closed trades: **2153**
 - **PineForge** 🟢 **excellent**  (emitted 2153; in window engine 2152 / TV 2152; matched 2152; coverage 100.0%)
@@ -2889,7 +2894,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 186-tharris235106-reversal-signals-with-profit-target-and-continuation  *(closed, profile: strict)*
+### 186-closed  *(closed, profile: strict)*
 
 - TV closed trades: **36**
 - **PineForge** 🟢 **excellent**  (emitted 36; in window engine 36 / TV 36; matched 36; coverage 100.0%)
@@ -2904,7 +2909,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 187-thebitcoin37-9-15-ema-strategy-trade-room  *(closed, profile: strict)*
+### 187-closed  *(closed, profile: strict)*
 
 - TV closed trades: **202**
 - **PineForge** 🟢 **excellent**  (emitted 202; in window engine 202 / TV 202; matched 202; coverage 100.0%)
@@ -2919,7 +2924,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 188-theforexguy0777-9-ema-20-ema-retest-strategy  *(closed, profile: strict)*
+### 188-closed  *(closed, profile: strict)*
 
 - TV closed trades: **1372**
 - **PineForge** 🟢 **excellent**  (emitted 1372; in window engine 1372 / TV 1372; matched 1372; coverage 100.0%)
@@ -2935,7 +2940,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: coverage 98.8%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 189-therealbouga-apex-mtf-index-model  *(closed, profile: strict)*
+### 189-closed  *(closed, profile: strict)*
 
 - TV closed trades: **144**
 - **PineForge** 🟢 **excellent**  (emitted 144; in window engine 73 / TV 73; matched 73; coverage 100.0%)
@@ -2943,15 +2948,15 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - entry p90:   `0.0000%`
     - exit  p90:   `0.0000%`
     - PnL   p90:   `0.0000%`
-- **PyneCore** 🟠 **weak**  (emitted 174; in window engine 70 / TV 62; matched 47; coverage 65.3%)
-    - count delta: `11.4286%` (abs 8)
+- **PyneCore** 🟡 **moderate**  (emitted 198; in window engine 58 / TV 62; matched 58; coverage 80.6%)
+    - count delta: `6.4516%` (abs 4)
     - entry p90:   `0.0000%`
-    - exit  p90:   `0.0745%`
-    - PnL   p90:   `129.6360%`
-    - gates: count Δ 11.43%; exit p90 0.0745%; pnl p90 129.6360%; coverage 65.3%
+    - exit  p90:   `0.0000%`
+    - PnL   p90:   `2.7057%`
+    - gates: count Δ 6.45%; pnl p90 2.7057%; coverage 80.6%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 190-tomukasss-engulfing-mitigation-strategy  *(closed, profile: strict)*
+### 190-closed  *(closed, profile: strict)*
 
 - TV closed trades: **53**
 - **PineForge** 🟢 **excellent**  (emitted 38; in window engine 38 / TV 38; matched 38; coverage 100.0%)
@@ -2967,7 +2972,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: exit p90 4.3825%; pnl p90 100.0000%; coverage 68.4%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 191-tomukasss-trend-pivot-scale-in  *(closed, profile: strict)*
+### 191-closed  *(closed, profile: strict)*
 
 - TV closed trades: **269**
 - **PineForge** 🟢 **excellent**  (emitted 229; in window engine 229 / TV 229; matched 229; coverage 100.0%)
@@ -2983,7 +2988,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 1.72%; exit p90 0.2162%; pnl p90 21.0526%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 192-trendchain0719-9-21-ema-volume-spike-bollinger-bands-vwap  *(closed, profile: strict)*
+### 192-closed  *(closed, profile: strict)*
 
 - TV closed trades: **157**
 - **PineForge** 🟢 **excellent**  (emitted 157; in window engine 157 / TV 157; matched 157; coverage 100.0%)
@@ -2994,7 +2999,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
 - **PyneCore** ⚪ n/a — PyneSys compile error: {"detail":{"status":"error","error":"Empty document.","line":null,"file":"script.pine"}}
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 193-ttagkoin-adaptive-multi-facto-9-years  *(closed, profile: strict)*
+### 193-closed  *(closed, profile: strict)*
 
 - TV closed trades: **3394**
 - **PineForge** 🟢 **excellent**  (emitted 3395; in window engine 3393 / TV 3393; matched 3393; coverage 100.0%)
@@ -3010,7 +3015,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: count Δ 0.03%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 194-usamotorcars-sedat-xi-crypto-ai-bias-engine  *(closed, profile: strict)*
+### 194-closed  *(closed, profile: strict)*
 
 - TV closed trades: **657**
 - **PineForge** 🟢 **excellent**  (emitted 657; in window engine 657 / TV 657; matched 657; coverage 100.0%)
@@ -3025,7 +3030,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 195-van007trader-micro-momentum-oscillator-dyna  *(closed, profile: strict)*
+### 195-closed  *(closed, profile: strict)*
 
 - TV closed trades: **712**
 - **PineForge** 🟢 **excellent**  (emitted 712; in window engine 712 / TV 712; matched 712; coverage 100.0%)
@@ -3040,7 +3045,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 196-vimalboiling-refined-supertrend-atr-tsl-filters-nifty-banknifty-v2  *(closed, profile: strict)*
+### 196-closed  *(closed, profile: strict)*
 
 - TV closed trades: **111**
 - **PineForge** 🟢 **excellent**  (emitted 111; in window engine 29 / TV 29; matched 29; coverage 100.0%)
@@ -3056,7 +3061,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: pnl p90 2.0909%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 197-waranyutrkm-asian-box-breakout-eda-tuned  *(closed, profile: strict)*
+### 197-closed  *(closed, profile: strict)*
 
 - TV closed trades: **110**
 - **PineForge** 🟢 **excellent**  (emitted 110; in window engine 110 / TV 110; matched 110; coverage 100.0%)
@@ -3064,10 +3069,15 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - entry p90:   `0.0000%`
     - exit  p90:   `0.0000%`
     - PnL   p90:   `0.0000%`
-- **PyneCore** ⚪ n/a — PyneCore runtime error: RuntimeError: security context 'sec·6886bfdb·0': the developing batch published
+- **PyneCore** 🟡 **moderate**  (emitted 149; in window engine 112 / TV 110; matched 103; coverage 93.6%)
+    - count delta: `1.7857%` (abs 2)
+    - entry p90:   `0.0000%`
+    - exit  p90:   `0.0000%`
+    - PnL   p90:   `5.5564%`
+    - gates: count Δ 1.79%; pnl p90 5.5564%; coverage 93.6%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 198-wellmanapex-ut-bot-stc-conjunction-strategy-tester-v4-8  *(closed, profile: strict)*
+### 198-closed  *(closed, profile: strict)*
 
 - TV closed trades: **72**
 - **PineForge** 🟢 **excellent**  (emitted 72; in window engine 72 / TV 72; matched 72; coverage 100.0%)
@@ -3083,7 +3093,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - gates: pnl p90 3.4471%
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 199-yahmis13-nyo-day-type-early-read  *(closed, profile: strict)*
+### 199-closed  *(closed, profile: strict)*
 
 - TV closed trades: **26**
 - **PineForge** 🟢 **excellent**  (emitted 26; in window engine 26 / TV 26; matched 26; coverage 100.0%)
@@ -3098,7 +3108,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 200-ygd-consulting-llc-yuri-garcia-narrow-state-strategy-ygils  *(closed, profile: strict)*
+### 200-closed  *(closed, profile: strict)*
 
 - TV closed trades: **533**
 - **PineForge** 🟢 **excellent**  (emitted 533; in window engine 533 / TV 533; matched 533; coverage 100.0%)
@@ -3113,7 +3123,7 @@ Each strategy runs through PineForge, PyneCore and (where a `strategy_vbt.py` po
     - PnL   p90:   `0.0000%`
 - **vectorbt** ⚪ n/a — no strategy_vbt.py port
 
-### 201-robmagnaye14-eb-ict-one-trade-setup-for-life-70-filter-model-v2  *(closed, profile: strict)*
+### 201-closed  *(closed, profile: strict)*
 
 - TV closed trades: **154**
 - **PineForge** 🟢 **excellent**  (emitted 154; in window engine 154 / TV 154; matched 154; coverage 100.0%)
