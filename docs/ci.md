@@ -11,6 +11,8 @@ This checks the CI/native workflow syntax, expressions and shell commands,
 source ABI/hash/schema guards, and the verifier's failure-handling tests. A
 failure fails the advisory aggregate `build` job and retains logs in
 `build-ci-preflight/`. The compilation lanes start alongside preflight.
+A documentation-only change skips them and runs preflight alone
+([Documentation-only changes](#documentation-only-changes)).
 It does not compile the engine or replace any complete verification profile.
 
 Then use the same verification entrypoint as GitHub Actions before publishing:
@@ -41,9 +43,9 @@ runs each image, and each job's time limit, is in
 
 The two source-only benchmark CTest rows run the 25 harness unit tests and
 `benchmarks/check_provenance.py`. The latter reads historical commits (including
-`933fe583`), so every checkout in `.github/workflows/ci.yml` fetches full Git
-history. A depth-1 checkout fails the provenance row even when the current
-benchmark files are correct.
+`933fe583`), so every checkout in `.github/workflows/ci.yml` but the `changes`
+job's fetches full Git history. A depth-1 checkout fails the provenance row
+even when the current benchmark files are correct.
 
 ## Profiles
 
@@ -406,9 +408,10 @@ judge <1 s — **94 s** end to end over an up-to-date build directory, against
 1792 s for the run phase alone in full mode.
 
 `corpus-parity.yml` exposes it as a reusable workflow (`mode: subset`) and
-`ci.yml` calls it on every CI run and lists it in `build-gate`'s `needs`. A
-skipped dependency fails that advisory aggregate job, so the subset remains
-unfiltered by path. The merge ruleset requires `pineforge/verify` and
+`ci.yml` calls it on every CI run that changes more than documentation and
+lists it in `build-gate`'s `needs`. A dependency skipped for anything but a
+documentation-only change fails that advisory aggregate job, so the subset
+remains unfiltered by path. The merge ruleset requires `pineforge/verify` and
 `pineforge/parity`, posted by the maintainers' `lab verify` tooling after
 full verification on the PR head's exact tree.
 
@@ -603,14 +606,17 @@ Compiler objects, binaries and dependency caches are not uploaded
 as diagnostics.
 
 Superseded pull-request runs are canceled. Main/post-merge and manual CI runs
-use distinct concurrency groups and remain uncanceled. A PR runs preflight,
-both Release jobs, kernel-only and the parity subset with their full sets;
+use distinct concurrency groups and remain uncanceled. A PR that changes more
+than documentation runs preflight, both Release jobs, kernel-only and the
+parity subset with their full sets;
 both Debug jobs, sanitizers and native-live run the registered set excluding
 the 29 CTest rows labelled `slow` in `tests/CMakeLists.txt`. The first 27 were
 chosen from INT23/INT24 job logs: over 60 seconds in either sanitizer run or
 over 30 seconds in either Debug run. Preflight and all proof jobs start in
-parallel. The advisory `build` aggregate succeeds only if every job succeeds.
-INT25 re-measured the rows wave G enlarged or added (RATIO-HARDEN's timing
+parallel. The proof jobs wait only for the few-second `changes` job, which
+decides whether the change is documentation only. The advisory `build`
+aggregate succeeds only if every job succeeds, or was skipped for a
+documentation-only change. INT25 re-measured the rows wave G enlarged or added (RATIO-HARDEN's timing
 legs, V19-FIX's scaling rows, and the new KERNEL-EDGE, K-ULP4, C-SURFACE-1 and
 DOC-TRUTH-4 rows) in a full sanitizers and Debug run on the maintainers' x86-64
 verification host (twelve parallel CTest jobs): none crosses either threshold,
@@ -627,8 +633,9 @@ sanitizers (20.3 s Debug) and is the 29th; no other new row comes near a
 threshold (the largest, `test_magnified_aggregated_tape`, 3.4 s under
 sanitizers).
 
-A push to `main` and a manual dispatch of `ci.yml` run every profile without
-the exclusion. Their sanitizers CTest stage gets an hour (`ci_verify.py`
+A push to `main` that changes more than documentation and a manual dispatch of
+`ci.yml` run every profile without the exclusion. Their sanitizers CTest stage
+gets an hour (`ci_verify.py`
 bounds CTest at 30 minutes otherwise, the PR set included), because main's full
 set ran out of 30 minutes twice, and the sanitizers job allows 120 minutes for
 that hour after its build. Standalone manual dispatch of `native-live.yml` is also full.
@@ -650,6 +657,59 @@ for the tree; every other case exits green without promoting.
 The full corpus sweep remains a separate acceptance step. The nightly and
 manual corpus workflow, and the maintainers' full parity verification, keep
 the broader population running.
+
+### Documentation-only changes
+
+A pull request or a push to `main` whose change is documentation only runs
+`preflight` and the documentation build and skips every proof job: the four
+`build` legs, both macOS legs among them, `sanitizers`, `kernel-only`,
+`native-live` and `corpus-parity-subset`. Every other check that reads the
+pages is a `preflight` stage: `doc-anchors`, `doc-lint`, `doc-reverts`,
+`doc-pine-coverage`, `design-inventory`, `kernel-seam-rows`, the native C
+surface table (`source-guard-native-c-surface`) and their self-tests, beside
+the workflow wiring guards. `docs.yml` builds the Doxygen site on every pull
+request and push, as before.
+
+The first job of `ci.yml`, `changes`, decides with
+[`scripts/ci_docs_only.py`](../scripts/ci_docs_only.py). A changed path is
+documentation when it is a Markdown file (`*.md`) or lies under `docs/`,
+unless it lies under `.github/`, `benchmarks/`, `scripts/` or `tests/`, is a
+CMake file, or is one of the four files a proof job reads:
+`docs/pages/pine-to-native.md` and `docs/pages/native-engine.md`, whose code
+blocks `test_pine_to_native_worked` and `test_native_engine_complete_host`
+compile and run; `docs/adr/0001-kernel-adapter-boundary.md`, which
+`test_kernel_residuals`, `test_native_feature_rulings` and the kernel
+profile's `kernel-residuals` stage hold the kernel against; and
+`docs/build.sh`, whose retry self-test is `test_docs_doxygen_retry`. A change
+to one of those four runs every job. A change is documentation only when every
+path it changes, both sides of a rename, is documentation. For a pull request
+the change is the merge GitHub tests against the base it merged into; for a
+push, the pushed commit against the previous tip. Every doubt answers no and
+runs the proof jobs in full: a manual dispatch, a push that creates the branch
+or is forced, a merge that is not the pull request head's, a commit git cannot
+read, an empty change, and a `changes` job that fails or never answers.
+
+Each proof job waits for `changes` alone, seconds on the standard runner;
+`preflight` waits for nothing. The advisory `build` aggregate passes a proof
+job that succeeded, or one that was skipped while `changes` succeeded and
+answered documentation-only. A proof job skipped for any other reason fails
+it, and so does any `preflight` result but success.
+
+A push to `main` follows the same rule, since nothing downstream needs the
+proof jobs to have run on a merged commit: `release.yml` starts only on a
+manual dispatch and builds and verifies its own tarballs,
+`promote-baseline.yml` reads the `pineforge/verify` and `pineforge/parity`
+statuses on the pull request head, no workflow here starts on `workflow_run`,
+and the ruleset requires only those two statuses. A documentation merge
+therefore does not rebuild; the `ci.yml` run on its commit is `preflight` and
+the skip.
+
+`scripts/test_ci_docs_only.py` (`docs-only-tests`, a `ci_preflight` stage)
+holds the rule against real git histories, pull request merges and pushes
+alike, and fails when a CMake file reads a path the rule would call
+documentation. The `ci-workflow-contract` stage pins the wiring, and
+`scripts/test_ci_preflight.py` runs the aggregate's own shell over every
+outcome of every lane.
 
 ### CI-LITE timing estimate
 
@@ -703,7 +763,8 @@ explicitly, so they stay `build (<image>, <type>)`. `native-live.yml` and
 `corpus-parity.yml` apply the test themselves; in a `workflow_call` the
 `github` context is the caller's, so a fork's pull request through CI gets the
 standard runner there too. The advisory `build` aggregate runs a few seconds of
-shell and stays on the standard runner for every event.
+shell and stays on the standard runner for every event. So does the `changes`
+job, a two-commit checkout and one `git diff`.
 
 Each `ci_verify.py` call passes `--jobs "$(getconf _NPROCESSORS_ONLN)"` and
 `check_corpus_parity.sh` gets the same count as `JOBS`, so build and CTest
@@ -712,7 +773,8 @@ and 3 on the standard runners. The larger Linux runner is configured for at
 most eight jobs at once, and one CI run starts seven there (preflight, the two
 Ubuntu `build` legs, sanitizers, kernel-only, native-live and the parity
 subset); a pull request that touches the corpus pin or the parity tooling also
-starts the whole sweep there, an eighth. A second run that overlaps them waits
+starts the whole sweep there, an eighth. A documentation-only change starts
+preflight alone there. A second run that overlaps them waits
 for a runner. Larger runners bill the organization's Actions budget: with no
 payment method or a spending limit of zero, their jobs wait for a runner that
 never comes, since GitHub does not fall back to a standard one. The test keeps
@@ -734,7 +796,11 @@ exactly one core-count `--jobs` (counted over the whole job, however its
 commands are chained, blocked or carried, with the flag and its value on one
 line), or any other `--jobs` or `JOBS` value fails preflight, and so does a jobs
 line or `runs-on` the check cannot read; `scripts/test_ci_preflight.py` holds
-the mutations.
+the mutations. The same stage pins the documentation-only skip: `changes` and
+`preflight` wait for nothing and run on every event, each proof job needs
+`changes` alone and carries the one skip condition
+(`!cancelled() && needs.changes.outputs.docs_only != 'true'`), and the
+`build` aggregate reads every result and the answer.
 
 More cores do not shorten every job. The `test_ci_verify` CTest row
 (`scripts/test_ci_verify.py`) is one Python process, and in the main run at
@@ -776,3 +842,4 @@ bounds the M2 from above.
 | `corpus-parity` | 120 | 16.3-26.2 min on the standard runner, 10.1-10.3 min on the verification hosts. |
 | `corpus-parity-subset` | 30 | 1.8-4.7 min on the standard runner, 2.4-3.8 min on the verification hosts. |
 | `build` (aggregate) | 5 | Seconds. |
+| `changes` | 5 | Seconds: a two-commit checkout and one `git diff`, on the standard runner. |

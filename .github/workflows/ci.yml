@@ -31,6 +31,34 @@ env:
 # scripts/ci_preflight.py pins every runner, time limit and job count, and
 # docs/ci.md gives each limit's measured basis.
 jobs:
+  # Whether the change is documentation only; scripts/ci_docs_only.py holds the
+  # rule, and every doubt answers no. On a docs-only pull request or push the
+  # proof jobs below skip and the build aggregate accepts exactly that skip.
+  # Preflight, where the documentation guards run, does not wait for it, and
+  # docs.yml builds the site as before. A few seconds of git: the standard
+  # runner, for every event.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      # The tested commit and its parents: a pull request's merge and the base
+      # it merged into, a push's commit and its parent (the script fetches an
+      # older before).
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Classify the change
+        id: classify
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_FORCED: ${{ github.event.forced }}
+        run: python3 scripts/ci_docs_only.py --github-output "$GITHUB_OUTPUT"
+
   preflight:
     runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
     # Its verifier-tests stage is one serial process: 475 s at 0d76a099's tree
@@ -81,6 +109,10 @@ jobs:
   build:
     # Each leg keeps its name, build (<image>, <type>), whatever the matrix carries.
     name: build (${{ matrix.os }}, ${{ matrix.build_type }})
+    # Every proof job waits for the changes job alone and skips only a
+    # docs-only change; a failed or unanswered classification runs it.
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     # A full-set leg waits on the test_ci_verify CTest row, 976-1288 s on the
     # standard runners at 0d76a099, which more cores do not shorten. There the
     # Release legs, which a fork's pull request runs in full, took 30.3 and
@@ -167,6 +199,8 @@ jobs:
   # instrumentation propagates into every test binary (CMakeLists.txt option
   # PINEFORGE_ENABLE_SANITIZERS).
   sanitizers:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
     # A full run (push to main, manual dispatch) gives its CTest stage an hour
     # after the build; the PR set keeps its 30-minute stage, after about 30
@@ -221,6 +255,8 @@ jobs:
   # modules are built from the kernel alone, and every examples/native host
   # runs as an example_* row asserting both its exit code and its summary line.
   kernel-only:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
     # 22.3 min on the standard runner at 0d76a099, where a fork's pull request
     # still runs the whole kernel set.
@@ -265,14 +301,19 @@ jobs:
 
   # Reuse native proof once per CI run. Its manual dispatch runs every row.
   native-live:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     uses: ./.github/workflows/native-live.yml
     with:
       exclude_slow: ${{ github.event_name == 'pull_request' }}
 
-  # Advisory TradingView parity subset on every CI run. The maintainers post
-  # the required pineforge/parity status from their separate parity verdict.
-  # Keep this job unfiltered so build-gate reports its result on every run.
+  # Advisory TradingView parity subset on every CI run of a change that is not
+  # docs-only. The maintainers post the required pineforge/parity status from
+  # their separate parity verdict. Keep this job unfiltered by path so
+  # build-gate reports its result on every such run.
   corpus-parity-subset:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     uses: ./.github/workflows/corpus-parity.yml
     with:
       mode: subset
@@ -282,7 +323,7 @@ jobs:
   # maintainers, rather than this build context.
   build-gate:
     name: build
-    needs: [preflight, build, sanitizers, native-live, kernel-only, corpus-parity-subset]
+    needs: [changes, preflight, build, sanitizers, native-live, kernel-only, corpus-parity-subset]
     if: always()
     # A few seconds of shell: the standard runner, for every event.
     runs-on: ubuntu-24.04
@@ -291,6 +332,8 @@ jobs:
       - name: Require every verification lane to have passed
         shell: bash
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           SANITIZER_RESULT: ${{ needs.sanitizers.result }}
@@ -298,9 +341,16 @@ jobs:
           KERNEL_RESULT: ${{ needs.kernel-only.result }}
           PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
         run: |
-          printf '%s\n' "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
+          printf '%s\n' "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
+            "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
             "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT" \
             "kernel: $KERNEL_RESULT" "corpus parity (subset): $PARITY_RESULT"
-          [[ "$PREFLIGHT_RESULT" == "success" && "$BUILD_RESULT" == "success" \
-            && "$SANITIZER_RESULT" == "success" && "$NATIVE_RESULT" == "success" \
-            && "$KERNEL_RESULT" == "success" && "$PARITY_RESULT" == "success" ]]
+          # A proof lane passes by succeeding, or by having been skipped after
+          # the changes job succeeded and answered docs-only. A lane skipped
+          # for any other reason fails, and preflight must always succeed.
+          docs_only=false
+          if [[ "$CHANGES_RESULT" == "success" && "$DOCS_ONLY" == "true" ]]; then docs_only=true; fi
+          passed() { [[ "$1" == "success" || ( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }
+          [[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
+            && passed "$SANITIZER_RESULT" && passed "$NATIVE_RESULT" \
+            && passed "$KERNEL_RESULT" && passed "$PARITY_RESULT"
