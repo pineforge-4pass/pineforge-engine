@@ -1475,8 +1475,8 @@ typedef enum pf_native_anchored_trigger_e {
  *  `closes_session_day` already reads the calendar.
  *
  *  The session tail is the script interval under delivery and the session
- *  day of its open (of its first in-session instant when that is later) and
- *  of the NEXT input's open, on the run's own calendar
+ *  day of its open (on a 1D script, of its first in-session instant when
+ *  that is later) and of the NEXT input's open, on the run's own calendar
  *  (its `session` and `timezone`): the calendar facts under the session-day
  *  bytes above, for a host that applies a rule of its own. On the calendar
  *  alone, a script bar is the last of its session day when
@@ -1515,7 +1515,8 @@ typedef struct pf_native_decision_v1 {
                                                    *   open at or after that close:
                                                    *   closed time skipped. */
     int64_t  session_day_ordinal;                 /**< The session day of
-                                                   *   `script_interval_open_ms`, or of
+                                                   *   `script_interval_open_ms` -- on a
+                                                   *   1D script, of
                                                    *   `script_interval_eligible_open_ms`
                                                    *   when that is later (a D bar a
                                                    *   daily stamp dates before its

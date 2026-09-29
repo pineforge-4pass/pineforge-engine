@@ -423,6 +423,12 @@ void test_metadata_per_run() {
     host.run(bars.data(), static_cast<int>(bars.size()), "15", "15");
     CHECK(host.last_error().find("symbol calendar: session day 1 of 3 is missing")
           != std::string::npos);
+    // The announcement replaced the calendar: none is left for a later run
+    // that announces nothing.
+    CHECK(host.symbol_calendar().empty());
+    host.run(bars.data(), static_cast<int>(bars.size()), "15", "15");
+    CHECK(host.last_error().empty());
+    CHECK(host.symbol_calendar().empty());
     // A day key whose index is no decimal number is no day.
     CalendarHost malformed(Probe::Flags, "1800-1700", "America/New_York");
     send_calendar(malformed, calendar, 2, {0});

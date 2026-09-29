@@ -326,6 +326,9 @@ void source::PineStrategyHost::install_symbol_calendar_metadata() {
     symbol_calendar_opens_.clear();
     symbol_calendar_closes_.clear();
     symbol_calendar_days_ = -1;
+    // The announcement replaces the calendar: one it cannot install leaves
+    // none behind for a later run to read.
+    symbol_calendar_.clear();
     std::vector<std::pair<std::int64_t, std::int64_t>> sessions;
     for (long long i = 0; i < count; ++i) {
         const auto open = opens.find(i);

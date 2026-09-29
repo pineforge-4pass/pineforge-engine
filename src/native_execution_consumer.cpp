@@ -1322,6 +1322,9 @@ bool NativeExecutionConsumer::apply_staged_ingress(BacktestEngine& engine) {
 bool NativeExecutionConsumer::prepare_public_begin(
         BacktestEngine& engine, const NativeBeginArgs& args) {
     interval_cache_.clear();
+    // The run before's day labels read nothing of this run's begin; this
+    // run's are prepared once its feeds are installed (prepare_day_labels).
+    day_labels_.clear();
     // Borrowed for the length of this begin call only: begin_ready needs the
     // caller's own input array to prepare declared higher-timeframe series.
     begin_bars_ = args.bars;
@@ -9943,7 +9946,10 @@ bool NativeExecutionConsumer::finalize_elapsed_slots(BacktestEngine& engine,
 bool NativeExecutionConsumer::deliver_tick(BacktestEngine& engine, const TradeTick& tick) {
     processing_input_ = true;
     select_input_mode(InputMode::ObservedTicks);
-    auto interval = native_calendar::interval_containing(calendar_, input_tf_, tick.timestamp, calendar_memo_);
+    // A print at a D bar's moved label is its bar's, as the script interval
+    // below reads it (day_label_origin).
+    auto interval = native_calendar::interval_containing(
+        calendar_, input_tf_, day_label_origin(tick.timestamp), calendar_memo_);
     if (!interval) {
         processing_input_ = false;
         present_refusal(engine, "native tick is not aligned");

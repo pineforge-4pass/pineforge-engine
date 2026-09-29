@@ -1853,10 +1853,21 @@ pf_native_decision_v1 CCallbackHost::decision(
     out.script_interval_last_traded_close_ms = interval.last_traded_close_ms;
     out.script_interval_next_period_open_ms = interval.next_period_open_ms;
     out.script_interval_next_input_open_ms = interval.next_input_open_ms;
-    /* The day the bar's first in-session instant is on, as the session-day
-     * bytes read it: a D bar a venue's daily stamp dates before its session
-     * opens is still that session's day. */
-    if (const auto day = session_day(std::max(interval.open_ms, interval.eligible_open_ms))) {
+    /* A 1D bar a venue's daily stamp dates before its session opens
+     * (NativeExecutionConsumer::prepare_day_labels) is still that session's
+     * day: the day its first in-session instant is on. Every other bar's day
+     * is its open's, as it always was. */
+    std::int64_t day_at = interval.open_ms;
+    if (interval.eligible_open_ms > interval.open_ms) {
+        const auto state = native_state();
+        const auto tf = state.spec
+            ? pineforge::native_calendar::parse_timeframe(state.spec->script_tf) : std::nullopt;
+        if (tf && tf->valid() && tf->unit() == pineforge::native_calendar::TimeframeUnit::Day
+            && tf->count() == 1) {
+            day_at = interval.eligible_open_ms;
+        }
+    }
+    if (const auto day = session_day(day_at)) {
         out.has_session_day = 1u;
         out.session_day_ordinal = *day;
     }
