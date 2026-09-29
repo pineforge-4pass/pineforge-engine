@@ -1,0 +1,16 @@
+{
+  "title": "tailh pct fullwin",
+  "slug": "tailh-pct-fullwin-btc15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T00:24:22.451Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "7de8569531b7a092e9d33ad31c2ba857ded85616cb2dc369841ec86e17ea0670",
+  "tv_trades_sha256": "50f3e71ad780cb10b2f3b2756079eb07af68fd4de6d171737dbe06d24e5e7363",
+  "tv_trades_rows": 384
+}

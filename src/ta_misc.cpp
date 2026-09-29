@@ -81,14 +81,12 @@ double PercentRank::compute(double src) {
     // non-na count — even in the partial (na-lead) warmup window. TV tapes prove
     // ta.percentrank emits count/length there (Lab finding 315; trendmatrix pair
     // verified byte-exact 100.0/0/0). Dividing by the valid count (the PineTS model)
-    // mismatches TV as soon as count > 0.
+    // mismatches TV as soon as count > 0. Once `length` values precede the bar, an
+    // na current value (nothing is at most it) and an all-na lookback both count
+    // none: 0, not na (tests/fixtures/percentile_window).
     buffer_.push_back(src);
     while ((int)buffer_.size() > length_ + 1) {
         buffer_.pop_front();
-    }
-
-    if (is_na(src)) {
-        return na<double>();
     }
 
     if ((int)buffer_.size() < length_ + 1) {
@@ -97,18 +95,11 @@ double PercentRank::compute(double src) {
 
     double current = buffer_.back();
     int count = 0;
-    int valid = 0;
     int start = (int)buffer_.size() - 1 - length_;
     for (int i = start; i < (int)buffer_.size() - 1; i++) {
-        double v = buffer_[i];
-        if (is_na(v)) continue;
-        valid++;
-        if (percentrank_less_equal(v, current)) {
+        if (percentrank_less_equal(buffer_[i], current)) {
             count++;
         }
-    }
-    if (valid == 0) {
-        return na<double>();
     }
     return ((double)count / (double)length_) * 100.0;
 }
@@ -176,40 +167,90 @@ double Correlation::compute(double src1, double src2) {
 }
 
 // ============================================================================
+// PercentileWindow
+// ============================================================================
+
+PercentileWindow::PercentileWindow(int length) : length_(length) {}
+
+const std::vector<double>* PercentileWindow::push(double src) {
+    if (length_ < 1) return nullptr;
+    left_at_ = -1;
+    if (static_cast<int>(history_.size()) == length_) {
+        const double left = history_.front();
+        history_.pop_front();
+        const auto at = std::find_if(ranked_.begin(), ranked_.end(), [&](double held) {
+            return is_na(left) ? is_na(held) : held == left;
+        });
+        left_at_ = static_cast<int>(at - ranked_.begin());
+        left_value_ = left;
+        ranked_.erase(at);
+    }
+    history_.push_back(src);
+    // na compares false both ways: nothing held is greater than an na value,
+    // and an na held value is greater than nothing.
+    const auto at = std::find_if(ranked_.begin(), ranked_.end(),
+                                 [&](double held) { return held > src; });
+    entered_at_ = static_cast<int>(at - ranked_.begin());
+    ranked_.insert(at, src);
+    return static_cast<int>(history_.size()) == length_ ? &ranked_ : nullptr;
+}
+
+const std::vector<double>* PercentileWindow::repush(double src) {
+    if (entered_at_ < 0) return push(src);
+    ranked_.erase(ranked_.begin() + entered_at_);
+    history_.pop_back();
+    if (left_at_ >= 0) {
+        ranked_.insert(ranked_.begin() + left_at_, left_value_);
+        history_.push_front(left_value_);
+    }
+    return push(src);
+}
+
+namespace {
+
+// Element ceil(pct/100 * n) - 1 of the ranked window, clamped to its ends.
+double nearest_rank_of(const std::vector<double>* ranked, double percentage) {
+    if (ranked == nullptr) return na<double>();
+    const int n = static_cast<int>(ranked->size());
+    const double rank = std::ceil(percentage / 100.0 * n);
+    if (std::isnan(rank)) return na<double>();
+    return (*ranked)[static_cast<int>(std::min(std::max(rank, 1.0), static_cast<double>(n))) - 1];
+}
+
+// The ranked window read at k = pct/100 * n - 0.5, clamped to [0, n - 1]:
+// the two elements around k weighted by its fraction (an na one makes the
+// value na, however small its weight), the last element at k = n - 1.
+double linear_interpolation_of(const std::vector<double>* ranked, double percentage) {
+    if (ranked == nullptr) return na<double>();
+    const int n = static_cast<int>(ranked->size());
+    const double k = std::min(std::max(percentage / 100.0 * n - 0.5, 0.0), n - 1.0);
+    if (std::isnan(k)) return na<double>();
+    const int lo = static_cast<int>(std::floor(k));
+    if (lo >= n - 1) return (*ranked)[n - 1];
+    const double frac = k - lo;
+    return (*ranked)[lo] * (1.0 - frac) + (*ranked)[lo + 1] * frac;
+}
+
+}  // namespace
+
+// ============================================================================
 // PercentileNearestRank
 // ============================================================================
 
-PercentileNearestRank::PercentileNearestRank(int length) : length_(length) {}
+PercentileNearestRank::PercentileNearestRank(int length) : window_(length) {}
 
 double PercentileNearestRank::compute(double src, double percentage) {
-    buffer_.push_back(src);
-    if ((int)buffer_.size() > length_) buffer_.pop_front();
-    if ((int)buffer_.size() < length_) return na<double>();
-    std::vector<double> sorted(buffer_.begin(), buffer_.end());
-    std::sort(sorted.begin(), sorted.end());
-    int idx = std::max(0, std::min((int)sorted.size() - 1,
-        (int)std::ceil(percentage / 100.0 * sorted.size()) - 1));
-    return sorted[idx];
+    return nearest_rank_of(window_.push(src), percentage);
 }
 
 // ============================================================================
 // PercentileLinearInterpolation
 // ============================================================================
 
-PercentileLinearInterpolation::PercentileLinearInterpolation(int length) : length_(length) {}
+PercentileLinearInterpolation::PercentileLinearInterpolation(int length) : window_(length) {}
 
 double PercentileLinearInterpolation::compute(double src, double percentage) {
-    buffer_.push_back(src);
-    if ((int)buffer_.size() > length_) buffer_.pop_front();
-    if ((int)buffer_.size() < length_) return na<double>();
-    std::vector<double> sorted(buffer_.begin(), buffer_.end());
-    std::sort(sorted.begin(), sorted.end());
-    double rank = percentage / 100.0 * ((int)sorted.size() - 1);
-    int lo = (int)std::floor(rank);
-    int hi = (int)std::ceil(rank);
-    if (lo == hi || hi >= (int)sorted.size()) return sorted[lo];
-    double frac = rank - lo;
-    return sorted[lo] + frac * (sorted[hi] - sorted[lo]);
+    return linear_interpolation_of(window_.push(src), percentage);
 }
 
 // --- Linreg ---
@@ -244,22 +285,16 @@ double PercentRank::recompute(double src) {
     if (buffer_.empty()) return compute(src);
     buffer_.back() = src;
 
-    if (is_na(src)) return na<double>();
     if ((int)buffer_.size() < length_ + 1) return na<double>();
 
     double current = buffer_.back();
     int count = 0;
-    int valid = 0;
     int start = (int)buffer_.size() - 1 - length_;
     for (int i = start; i < (int)buffer_.size() - 1; i++) {
-        double v = buffer_[i];
-        if (is_na(v)) continue;
-        valid++;
-        if (percentrank_less_equal(v, current)) count++;
+        if (percentrank_less_equal(buffer_[i], current)) count++;
     }
-    if (valid == 0) return na<double>();
     // Denominator is LENGTH, not the non-na count — same TV rule as compute()
-    // (Lab finding 315).
+    // (Lab finding 315); an na current value or all-na lookback counts none.
     return ((double)count / (double)length_) * 100.0;
 }
 
@@ -299,29 +334,12 @@ double Correlation::recompute(double src1, double src2) {
 
 // --- PercentileNearestRank ---
 double PercentileNearestRank::recompute(double src, double percentage) {
-    if (buffer_.empty()) return compute(src, percentage);
-    buffer_.back() = src;
-    if ((int)buffer_.size() < length_) return na<double>();
-    std::vector<double> sorted(buffer_.begin(), buffer_.end());
-    std::sort(sorted.begin(), sorted.end());
-    int idx = std::max(0, std::min((int)sorted.size() - 1,
-        (int)std::ceil(percentage / 100.0 * sorted.size()) - 1));
-    return sorted[idx];
+    return nearest_rank_of(window_.repush(src), percentage);
 }
 
 // --- PercentileLinearInterpolation ---
 double PercentileLinearInterpolation::recompute(double src, double percentage) {
-    if (buffer_.empty()) return compute(src, percentage);
-    buffer_.back() = src;
-    if ((int)buffer_.size() < length_) return na<double>();
-    std::vector<double> sorted(buffer_.begin(), buffer_.end());
-    std::sort(sorted.begin(), sorted.end());
-    double rank = percentage / 100.0 * ((int)sorted.size() - 1);
-    int lo = (int)std::floor(rank);
-    int hi = (int)std::ceil(rank);
-    if (lo == hi || hi >= (int)sorted.size()) return sorted[lo];
-    double frac = rank - lo;
-    return sorted[lo] + frac * (sorted[hi] - sorted[lo]);
+    return linear_interpolation_of(window_.repush(src), percentage);
 }
 
 // ============================================================================

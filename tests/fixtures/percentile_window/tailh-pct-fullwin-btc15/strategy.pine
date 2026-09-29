@@ -1,0 +1,25 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane TAIL-H): the whole window ta.percentile_nearest_rank
+// ranks, read at percentages 5, 15, ..., 95 of length 10 (ranks 1..10), on two
+// price-free sources with na holes (g: na on every bar_index % 4 == 1; h: na
+// where bar_index * 13 % 7 == 0); ranks 30/70 of a source without na; and
+// ta.percentrank of q (na on bars 0..11) and g. Each bar's readings are
+// spelled in the comment of the exit that fills on the next bar's open.
+strategy("tailh pct fullwin", overlay=true, initial_capital=100000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=2, margin_long=0, margin_short=0)
+
+f(float x) => na(x) ? "n" : str.tostring(x, "#.####")
+win(float x) => f(ta.percentile_nearest_rank(x, 10, 5)) + "," + f(ta.percentile_nearest_rank(x, 10, 15)) + "," + f(ta.percentile_nearest_rank(x, 10, 25)) + "," + f(ta.percentile_nearest_rank(x, 10, 35)) + "," + f(ta.percentile_nearest_rank(x, 10, 45)) + "," + f(ta.percentile_nearest_rank(x, 10, 55)) + "," + f(ta.percentile_nearest_rank(x, 10, 65)) + "," + f(ta.percentile_nearest_rank(x, 10, 75)) + "," + f(ta.percentile_nearest_rank(x, 10, 85)) + "," + f(ta.percentile_nearest_rank(x, 10, 95))
+
+v = float((bar_index * 7919) % 101)
+g = bar_index % 4 == 1 ? na : v
+h = (bar_index * 13) % 7 == 0 ? na : v
+q = bar_index < 12 ? na : v
+sig = win(g) + "|" + win(h) + "|" + f(ta.percentile_nearest_rank(v, 10, 30)) + "," + f(ta.percentile_nearest_rank(v, 10, 70)) + "|" + f(ta.percentrank(q, 10)) + "," + f(ta.percentrank(g, 10))
+
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.close("B", comment=sig)
+else
+    strategy.entry("B", strategy.long)
+    strategy.close("A", comment=sig)

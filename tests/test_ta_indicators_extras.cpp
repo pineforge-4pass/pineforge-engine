@@ -14,11 +14,15 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
+#include <string>
 #include <vector>
 
 #include <pineforge/ta.hpp>
 #include <pineforge/na.hpp>
+
+#include "exit_comment_tape.hpp"
 
 using namespace pineforge;
 
@@ -782,14 +786,208 @@ static void test_percentile() {
     // {20,30,40,45,50}; 50% rank=2 → 40.
     CHECK(near(pl.recompute(45.0, 50.0), 40.0));
 
-    // Fractional rank → linear interpolation between adjacent sorted values.
+    // Fractional rank → linear interpolation between adjacent sorted values,
+    // at TradingView's rank pct/100 * n - 0.5 (tests/fixtures/percentile_window).
     ta::PercentileLinearInterpolation pl2(4);
     for (double v : {10.0, 20.0, 30.0, 40.0}) pl2.compute(v, 50.0);
-    // Window {10,20,30,40}; 25% rank = 0.75 → 0.75 between 10 and 20 → 17.5.
-    CHECK(near(pl2.compute(50.0, 25.0), 0.75 * 30.0 + 0.25 * 20.0, 1e-9));
+    // Window {20,30,40,50}; 25% rank = 0.5 → halfway between 20 and 30 → 25.
+    CHECK(near(pl2.compute(50.0, 25.0), 0.5 * 20.0 + 0.5 * 30.0, 1e-9));
 
     ta::PercentileLinearInterpolation pl_empty(3);
     CHECK(is_na(pl_empty.recompute(1.0, 50.0)));
+}
+
+// ============================================================================
+// ta.percentile_nearest_rank / ta.percentile_linear_interpolation /
+// ta.percentrank from the run's first bar, replayed against TradingView's
+// tapes (tests/fixtures/percentile_window, lab tv --no-note, BINANCE:BTCUSDT
+// 15). TradingView keeps a percentile's window in one array across bars:
+// once `length` values are held, the value `length` bars back leaves at its
+// first occurrence (na matching na) and the new value enters before the first
+// held element greater than it (na is greater than nothing and nothing is
+// greater than na, so na enters last). The array is na until `length` values
+// are held; nearest rank reads element ceil(pct/100 * n) - 1, linear
+// interpolation the two around pct/100 * n - 0.5. ta.percentrank is na until
+// `length` values precede the bar, then counts the preceding `length` values
+// at most the current one: 0 for an na current value or an all-na lookback.
+// ============================================================================
+
+#ifndef PINEFORGE_PERCENTILE_WINDOW_FIXTURE_DIR
+#error "PINEFORGE_PERCENTILE_WINDOW_FIXTURE_DIR must name tests/fixtures/percentile_window"
+#endif
+
+struct PctBar {
+    long long ts;
+    double o, h, l, c;
+};
+#include "fixtures/percentile_window/bars.inc"
+
+// TradingView's "#.####" spelling against an engine value: "n" for na, else
+// the number the value rounds to.
+static bool pct_spelled(const std::string& text, double value) {
+    if (text == "n") return is_na(value);
+    if (is_na(value)) return false;
+    char* end = nullptr;
+    const double tv = std::strtod(text.c_str(), &end);
+    if (end == text.c_str() || *end != '\0') return false;
+    return std::fabs(value - tv) <= 0.00005 + 1e-9;
+}
+
+// The price-free sources of both probes, by bar index.
+static double pct_v(int i) { return static_cast<double>((static_cast<long long>(i) * 7919) % 101); }
+static double pct_g(int i) { return i % 4 == 1 ? na<double>() : pct_v(i); }
+static double pct_w(int i) { return i < 7 ? na<double>() : pct_v(i); }
+static double pct_h(int i) { return (static_cast<long long>(i) * 13) % 7 == 0 ? na<double>() : pct_v(i); }
+static double pct_q(int i) { return i < 12 ? na<double>() : pct_v(i); }
+
+// One tape's readings against the engine's spelling of each bar, the bar
+// index of a reading being its bar's offset from 2025-04-01 00:00 UTC.
+static void pct_compare(const char* slug, const std::vector<std::vector<double>>& engine,
+                        std::size_t fields, int expected, bool with_bar0) {
+    bool ok = true;
+    const auto readings = exit_comment_tape::read(PINEFORGE_PERCENTILE_WINDOW_FIXTURE_DIR, slug, ok);
+    CHECK(ok);
+    int compared = 0, wrong = 0, bar0 = 0, shown = 0;
+    // A reading's cells against one engine row; false when any differs.
+    const auto agrees = [&](const std::string& text, long long row, bool report) {
+        std::vector<std::string> cells;
+        for (const auto& group : exit_comment_tape::split(text, '|'))
+            for (const auto& cell : exit_comment_tape::split(group, ',')) cells.push_back(cell);
+        if (row < 0 || row >= static_cast<long long>(engine.size()) || cells.size() != fields)
+            return false;
+        const auto& mine = engine[static_cast<std::size_t>(row)];
+        bool all = true;
+        for (std::size_t k = 0; k < fields; ++k) {
+            if (pct_spelled(cells[k], mine[k])) continue;
+            all = false;
+            if (report && ++shown <= 5)
+                std::printf("  %s bar %lld field %zu: tv %s engine %.10g\n", slug, row, k,
+                            cells[k].c_str(), mine[k]);
+        }
+        return all;
+    };
+    for (const auto& reading : readings) {
+        const long long row = (reading.bar_ms - kBtc15[0].ts) / (15 * 60000);
+        const std::size_t at = reading.signal.find(" @");
+        ++compared;
+        if (!agrees(reading.signal.substr(0, at), row, true)) ++wrong;
+        // " @..." carries bar 0's reading, kept in a var and spelled on every exit.
+        if (at != std::string::npos && agrees(reading.signal.substr(at + 2), 0, false)) ++bar0;
+    }
+    std::printf("  %s: %d bars compared, %d differ, bar 0 agrees on %d\n", slug, compared,
+                wrong, bar0);
+    CHECK(compared == expected);
+    CHECK(wrong == 0);
+    CHECK(bar0 == (with_bar0 ? compared : 0));
+}
+
+static void test_percentile_window_tapes() {
+    std::printf("test_percentile_window_tapes\n");
+    constexpr int kBars = static_cast<int>(sizeof(kBtc15) / sizeof(kBtc15[0]));
+    CHECK(kBars == 384);
+    {
+        // tailh-pct-warmup-btc15: per source v, g and w, nearest rank 50 and 20
+        // and linear interpolation 50 and 30 of length 10, then ta.percentrank
+        // of 10; then ta.dmi(14, 14)'s ADX, its nearest rank 50 and linear
+        // interpolation 50 of length 300 and its ta.percentrank of 300.
+        struct Site {
+            ta::PercentileNearestRank n50{10}, n20{10};
+            ta::PercentileLinearInterpolation l50{10}, l30{10};
+            ta::PercentRank pr{10};
+        } sv, sg, sw;
+        ta::DMI dmi(14, 14);
+        ta::PercentileNearestRank a_n(300);
+        ta::PercentileLinearInterpolation a_l(300);
+        ta::PercentRank a_pr(300);
+        std::vector<std::vector<double>> engine;
+        const auto feed = [](Site& s, double x, std::vector<double>& row) {
+            row.push_back(s.n50.compute(x, 50));
+            row.push_back(s.n20.compute(x, 20));
+            row.push_back(s.l50.compute(x, 50));
+            row.push_back(s.l30.compute(x, 30));
+            row.push_back(s.pr.compute(x));
+        };
+        for (int i = 0; i < kBars; ++i) {
+            std::vector<double> row;
+            feed(sv, pct_v(i), row);
+            feed(sg, pct_g(i), row);
+            feed(sw, pct_w(i), row);
+            const double adx = dmi.compute(kBtc15[i].h, kBtc15[i].l, kBtc15[i].c).adx;
+            row.push_back(adx);
+            row.push_back(a_n.compute(adx, 50));
+            row.push_back(a_l.compute(adx, 50));
+            row.push_back(a_pr.compute(adx));
+            engine.push_back(row);
+        }
+        pct_compare("tailh-pct-warmup-btc15", engine, 19, kBars - 1, true);
+    }
+    {
+        // tailh-pct-fullwin-btc15: nearest rank 5, 15, .., 95 of length 10 (the
+        // window's elements 0..9) of g and h; nearest rank 30 and 70 of v;
+        // ta.percentrank of q and g.
+        std::vector<ta::PercentileNearestRank> wg(10, ta::PercentileNearestRank(10));
+        std::vector<ta::PercentileNearestRank> wh(10, ta::PercentileNearestRank(10));
+        ta::PercentileNearestRank v30(10), v70(10);
+        ta::PercentRank prq(10), prg(10);
+        std::vector<std::vector<double>> engine;
+        for (int i = 0; i < kBars / 2; ++i) {
+            std::vector<double> row;
+            for (int k = 0; k < 10; ++k) row.push_back(wg[k].compute(pct_g(i), 5 + 10 * k));
+            for (int k = 0; k < 10; ++k) row.push_back(wh[k].compute(pct_h(i), 5 + 10 * k));
+            row.push_back(v30.compute(pct_v(i), 30));
+            row.push_back(v70.compute(pct_v(i), 70));
+            row.push_back(prq.compute(pct_q(i)));
+            row.push_back(prg.compute(pct_g(i)));
+            engine.push_back(row);
+        }
+        pct_compare("tailh-pct-fullwin-btc15", engine, 24, kBars / 2 - 1, false);
+    }
+    {
+        // tailh-pct-edges-btc15: linear interpolation 25, 45, 75, 0 and 100 and
+        // nearest rank 0 and 100 of length 10 of g; nearest rank 50, linear
+        // interpolation 50 and nearest rank 10 of length 100 of g; nearest rank
+        // 50, linear interpolation 33 and nearest rank 90 of length 70 of h.
+        ta::PercentileLinearInterpolation l25(10), l45(10), l75(10), l0(10), l100(10);
+        ta::PercentileNearestRank n0(10), n100(10), g50(100), g10(100), h50(70), h90(70);
+        ta::PercentileLinearInterpolation gl50(100), hl33(70);
+        std::vector<std::vector<double>> engine;
+        for (int i = 0; i < kBars; ++i) {
+            const double g = pct_g(i), h = pct_h(i);
+            engine.push_back({l25.compute(g, 25), l45.compute(g, 45), l75.compute(g, 75),
+                              l0.compute(g, 0), l100.compute(g, 100), n0.compute(g, 0),
+                              n100.compute(g, 100), g50.compute(g, 50), gl50.compute(g, 50),
+                              g10.compute(g, 10), h50.compute(h, 50), hl33.compute(h, 33),
+                              h90.compute(h, 90)});
+        }
+        pct_compare("tailh-pct-edges-btc15", engine, 13, kBars - 1, false);
+    }
+}
+
+// A bar recomputed any number of times reads, and leaves behind, exactly
+// what one compute of its final value does.
+static void test_percentile_recompute_is_one_computation() {
+    std::printf("test_percentile_recompute_is_one_computation\n");
+    ta::PercentileNearestRank once_n(7), again_n(7);
+    ta::PercentileLinearInterpolation once_l(7), again_l(7);
+    ta::PercentRank once_r(7), again_r(7);
+    int same = 0, total = 0;
+    for (int i = 0; i < 200; ++i) {
+        const double x = pct_h(i * 3 + 1);
+        const double decoy = i % 5 == 0 ? na<double>() : pct_v(i + 50);
+        const double a = once_n.compute(x, 40), b = once_l.compute(x, 65), c = once_r.compute(x);
+        again_n.compute(decoy, 40);
+        again_l.compute(decoy, 65);
+        again_r.compute(decoy);
+        again_n.recompute(pct_v(i), 40);
+        again_l.recompute(pct_v(i), 65);
+        again_r.recompute(pct_v(i));
+        const double a2 = again_n.recompute(x, 40), b2 = again_l.recompute(x, 65),
+                     c2 = again_r.recompute(x);
+        ++total;
+        if (near(a, a2, 0.0) && near(b, b2, 0.0) && near(c, c2, 0.0)) ++same;
+    }
+    std::printf("  %d of %d bars agree\n", same, total);
+    CHECK(same == total);
 }
 
 static void test_correlation() {
@@ -1095,6 +1293,8 @@ int main() {
     test_variance_median();
     test_highest_lowest_bars();
     test_percentile();
+    test_percentile_window_tapes();
+    test_percentile_recompute_is_one_computation();
     test_correlation();
     test_bbw_kcw();
     test_mfi();

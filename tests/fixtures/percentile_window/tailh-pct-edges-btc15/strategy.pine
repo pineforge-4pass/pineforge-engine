@@ -1,0 +1,25 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane TAIL-H): ta.percentile_linear_interpolation at ranks
+// that land on an element (percentages 25, 45 and 75 of length 10) and at
+// the window's ends (0 and 100), ta.percentile_nearest_rank at 0 and 100, on
+// a price-free source with na holes (g: na on every bar_index % 4 == 1); and
+// windows of 100 (g) and 70 (h: na where bar_index * 13 % 7 == 0). Each bar's
+// readings are spelled in the comment of the exit that fills on the next
+// bar's open.
+strategy("tailh pct edges", overlay=true, initial_capital=100000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=2, margin_long=0, margin_short=0)
+
+f(float x) => na(x) ? "n" : str.tostring(x, "#.####")
+v = float((bar_index * 7919) % 101)
+g = bar_index % 4 == 1 ? na : v
+h = (bar_index * 13) % 7 == 0 ? na : v
+a = f(ta.percentile_linear_interpolation(g, 10, 25)) + "," + f(ta.percentile_linear_interpolation(g, 10, 45)) + "," + f(ta.percentile_linear_interpolation(g, 10, 75)) + "," + f(ta.percentile_linear_interpolation(g, 10, 0)) + "," + f(ta.percentile_linear_interpolation(g, 10, 100)) + "," + f(ta.percentile_nearest_rank(g, 10, 0)) + "," + f(ta.percentile_nearest_rank(g, 10, 100))
+b = f(ta.percentile_nearest_rank(g, 100, 50)) + "," + f(ta.percentile_linear_interpolation(g, 100, 50)) + "," + f(ta.percentile_nearest_rank(g, 100, 10)) + "," + f(ta.percentile_nearest_rank(h, 70, 50)) + "," + f(ta.percentile_linear_interpolation(h, 70, 33)) + "," + f(ta.percentile_nearest_rank(h, 70, 90))
+sig = a + "|" + b
+
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.close("B", comment=sig)
+else
+    strategy.entry("B", strategy.long)
+    strategy.close("A", comment=sig)

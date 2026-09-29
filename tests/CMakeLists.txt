@@ -2809,6 +2809,12 @@ if(TARGET test_foreign_break_stamp_tapes)
         PINEFORGE_DAILY_BREAK_CLOSE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/daily_break_close")
 endif()
 
+# Lane TAIL-H: the rows that read its TradingView tapes.
+if(TARGET test_ta_indicators_extras)
+    target_compile_definitions(test_ta_indicators_extras PRIVATE
+        PINEFORGE_PERCENTILE_WINDOW_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/percentile_window")
+endif()
+
 # std::thread needs an explicit pthread link on some toolchains.
 target_link_libraries(test_timezone_concurrency PRIVATE Threads::Threads)
 target_link_libraries(test_local_time_lock_free_hit PRIVATE Threads::Threads)

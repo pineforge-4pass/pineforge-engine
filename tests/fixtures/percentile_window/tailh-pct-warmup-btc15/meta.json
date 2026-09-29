@@ -1,0 +1,16 @@
+{
+  "title": "tailh pct warmup",
+  "slug": "tailh-pct-warmup-btc15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T00:08:05.326Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-05"
+  },
+  "pine_sha256": "5cd7d6758895e8fedad69083802095b246d162e1682f8fd2085ae91c9f896112",
+  "tv_trades_sha256": "4f81492241704c6fab8fcb8bd749b2e239a58ad57c53dfb664f90eb049714599",
+  "tv_trades_rows": 768
+}

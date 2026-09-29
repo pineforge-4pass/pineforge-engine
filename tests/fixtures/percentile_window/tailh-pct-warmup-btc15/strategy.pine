@@ -1,0 +1,29 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane TAIL-H): ta.percentile_nearest_rank,
+// ta.percentile_linear_interpolation and ta.percentrank from the first bar of
+// the run, on three price-free sources (v: no na; g: na on every bar_index % 4
+// == 1; w: na on bars 0..6) and on ta.dmi(14, 14)'s ADX. Each bar's readings
+// are spelled in the comment of the exit that fills on the next bar's open;
+// bar 0's are kept in a var and spelled on every exit.
+strategy("tailh pct warmup", overlay=true, initial_capital=100000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=2, margin_long=0, margin_short=0)
+
+f(float x) => na(x) ? "n" : str.tostring(x, "#.####")
+row(float x) => f(ta.percentile_nearest_rank(x, 10, 50)) + "," + f(ta.percentile_nearest_rank(x, 10, 20)) + "," + f(ta.percentile_linear_interpolation(x, 10, 50)) + "," + f(ta.percentile_linear_interpolation(x, 10, 30)) + "," + f(ta.percentrank(x, 10))
+
+v = float((bar_index * 7919) % 101)
+g = bar_index % 4 == 1 ? na : v
+w = bar_index < 7 ? na : v
+[dp, dm, adx] = ta.dmi(14, 14)
+a = f(adx) + "," + f(ta.percentile_nearest_rank(adx, 300, 50)) + "," + f(ta.percentile_linear_interpolation(adx, 300, 50)) + "," + f(ta.percentrank(adx, 300))
+sig = row(v) + "|" + row(g) + "|" + row(w) + "|" + a
+var string b0 = ""
+if bar_index == 0
+    b0 := sig
+
+if bar_index % 2 == 0
+    strategy.entry("A", strategy.long)
+    strategy.close("B", comment=sig + " @" + b0)
+else
+    strategy.entry("B", strategy.long)
+    strategy.close("A", comment=sig + " @" + b0)

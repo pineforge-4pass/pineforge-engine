@@ -988,11 +988,36 @@ public:
     double recompute(double high, double low, double close, double prev_chart_close);
 };
 
+// --- PercentileWindow ---
+// The window TradingView ranks its nearest-rank and linear-interpolation
+// percentiles over: one array kept across bars
+// (tests/fixtures/percentile_window). Once `length` values are held, the value
+// `length` bars back leaves at its first occurrence (na matching na) and the
+// new value enters before the first held element greater than it: the held
+// non-na values stay ascending, and na, greater than nothing and with nothing
+// greater than it, enters last.
+class PercentileWindow {
+    int length_;
+    std::deque<double> history_;
+    std::vector<double> ranked_;
+    // The last push, which a recompute of its bar undoes: where its value
+    // entered, and the value that left and where it stood (-1: none left).
+    int entered_at_ = -1;
+    int left_at_ = -1;
+    double left_value_ = na<double>();
+
+public:
+    explicit PercentileWindow(int length);
+    // The ranked array once `length` values are held, else null.
+    const std::vector<double>* push(double src);
+    // The bar's value replaced by `src` (a push when nothing was pushed yet).
+    const std::vector<double>* repush(double src);
+};
+
 // --- PercentileNearestRank ---
 
 class PercentileNearestRank {
-    int length_;
-    std::deque<double> buffer_;
+    PercentileWindow window_;
 
 public:
     explicit PercentileNearestRank(int length);
@@ -1003,8 +1028,7 @@ public:
 // --- PercentileLinearInterpolation ---
 
 class PercentileLinearInterpolation {
-    int length_;
-    std::deque<double> buffer_;
+    PercentileWindow window_;
 
 public:
     explicit PercentileLinearInterpolation(int length);

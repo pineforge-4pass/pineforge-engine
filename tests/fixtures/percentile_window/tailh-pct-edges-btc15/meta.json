@@ -1,0 +1,16 @@
+{
+  "title": "tailh pct edges",
+  "slug": "tailh-pct-edges-btc15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T00:42:08.128Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-05"
+  },
+  "pine_sha256": "e86022bf3e87d64d635e56bcb13eaa5e1faf4fd99152ebea79bad7b353759146",
+  "tv_trades_sha256": "035f6ab27bf8eacf6ede0a157a0e1ff1b5331656899444749c6c41932b72f22a",
+  "tv_trades_rows": 768
+}
