@@ -1,0 +1,16 @@
+{
+  "title": "jd-rev-tie-bare",
+  "slug": "jd-rev-tie-bare",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:32:39.305Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "303552b79a6e4a6ff78940643aed10d38a6ddf6391a96f5ccc8a12789272a39c",
+  "tv_trades_sha256": "7aa4c448c7f407a546cc9e0c7e2d15511ac49700c03ad3cdff32b97d18d64822",
+  "tv_trades_rows": 2
+}

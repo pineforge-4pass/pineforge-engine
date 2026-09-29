@@ -1,0 +1,5 @@
+﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)
+1,Exit long,2025-04-09 21:30,Close entry(s) order P,8.5,102,945.54,-78.54,-8.31,0,37.74,3.99,-78.54,-8.31,-78.54,-0.08,2
+1,Entry long,2025-04-07 21:30,P,9.27,102,945.54,-78.54,-8.31,0,37.74,3.99,-78.54,-8.31,-78.54,-0.08,2
+2,Exit long,2025-09-11 21:30,Close position order,11.46,8276,96580.92,-1737.96,-1.80,0,1986.24,2.06,-2979.36,-3.08,-1816.5,-1.87,6
+2,Entry long,2025-09-03 21:30,Long,11.67,8276,96580.92,-1737.96,-1.80,0,1986.24,2.06,-2979.36,-3.08,-1816.5,-1.87,6

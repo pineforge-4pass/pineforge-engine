@@ -1,0 +1,16 @@
+{
+  "title": "jd-rev-notie-pair",
+  "slug": "jd-rev-notie-pair",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:32:28.946Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "9dc9dc00da1bb4bfc48330a110a6502185e1f12e46827e065cc7e064f80c8e58",
+  "tv_trades_sha256": "de5002fa62016da7b298009d7b8b646e4d8b5b043138a50b79c48dde02769e1b",
+  "tv_trades_rows": 2
+}

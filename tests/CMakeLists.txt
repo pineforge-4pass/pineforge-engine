@@ -958,6 +958,10 @@ list(APPEND TEST_SOURCES test_exit_reissue_na_tapes)
 # over the equity keeps only its earlier call under process_orders_on_close
 # and with costs (tests/fixtures/pooc_pair_gross), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_pooc_pair_gross_tapes)
+# ... and a default 100 % entry whose whole lots tie the signal's rounded
+# equity is dropped flat and keeps only its closing leg as a reversal
+# (tests/fixtures/whole_lot_tie), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_whole_lot_tie_tapes)
 
 # Lane W8A-SIGSTATE-1 R4: a fill at the day's first tick does not trip
 # strategy.risk.max_intraday_loss (tests/fixtures/intraday_loss_open_fill), on
@@ -2586,6 +2590,10 @@ endif()
 if(TARGET test_pooc_pair_gross_tapes)
     target_compile_definitions(test_pooc_pair_gross_tapes PRIVATE
         PINEFORGE_TAIL_D_PAIR_GROSS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_pair_gross")
+endif()
+if(TARGET test_whole_lot_tie_tapes)
+    target_compile_definitions(test_whole_lot_tie_tapes PRIVATE
+        PINEFORGE_TAIL_D_WHOLE_LOT_TIE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/whole_lot_tie")
 endif()
 if(TARGET test_coof_reissued_exit_tapes)
     target_compile_definitions(test_coof_reissued_exit_tapes PRIVATE

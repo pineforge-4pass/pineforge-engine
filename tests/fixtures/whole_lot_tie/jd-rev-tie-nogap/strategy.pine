@@ -1,0 +1,14 @@
+//@version=6
+// Synthetic probe (lane TAIL-D diagnosis, agent jaydeep), NYSE:F 1D. An all-in long is
+// reversed on one daily bar by strategy.entry short followed by strategy.close of the long;
+// the next open equals that close. The capital leaves the signal-close equity 0.00003 under
+// a whole-share multiple of the close (8771 x 13.08 = 114724.68).
+strategy("jd-rev-tie-nogap", overlay = true, initial_capital = 99994.17997, default_qty_type = strategy.percent_of_equity, default_qty_value = 100, margin_long = 100, margin_short = 100)
+isDay(int y, int m, int d) => year == y and month == m and dayofmonth == d
+if isDay(2025, 10, 13)
+    strategy.entry("Long", strategy.long)
+if isDay(2025, 12, 9)
+    strategy.entry("Short", strategy.short)
+    strategy.close("Long")
+if isDay(2025, 12, 11)
+    strategy.close_all()

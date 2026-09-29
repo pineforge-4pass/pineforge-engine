@@ -1,0 +1,16 @@
+{
+  "title": "jd-drift-under",
+  "slug": "jd-drift-under",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T00:42:25.074Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "82f75f99d38241c25745a10c8d2a9a35c05437af49691fc4d4ea46ccbb5979df",
+  "tv_trades_sha256": "b750e1d7ef67e8951ec81399d7987a3750e9e00cf50611e26e4fb284eef6f781",
+  "tv_trades_rows": 4
+}

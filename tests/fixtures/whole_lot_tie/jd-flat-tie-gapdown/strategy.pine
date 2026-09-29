@@ -1,0 +1,10 @@
+//@version=6
+// Synthetic probe (lane TAIL-D diagnosis, agent jaydeep), NYSE:F 1D. An all-in long from flat
+// on one daily bar whose next open is below its close. The capital is 0.000003 under a
+// whole-share multiple of that close (8665 x 11.54 = 99994.10).
+strategy("jd-flat-tie-gapdown", overlay = true, initial_capital = 99994.099997, default_qty_type = strategy.percent_of_equity, default_qty_value = 100, margin_long = 100, margin_short = 100)
+isDay(int y, int m, int d) => year == y and month == m and dayofmonth == d
+if isDay(2025, 10, 13)
+    strategy.entry("Long", strategy.long)
+if isDay(2025, 10, 15)
+    strategy.close_all()

@@ -1,0 +1,16 @@
+{
+  "title": "jd-drift-over",
+  "slug": "jd-drift-over",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T00:42:24.563Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "c1b63de248bd22ece18934fe659c2e04a7a98bd59d86611d7215e5dfb9495a4a",
+  "tv_trades_sha256": "f7f9c3bff31ee0b392ed7ca2a601d76d6e342afea12e6dd276cab5461199bb76",
+  "tv_trades_rows": 4
+}

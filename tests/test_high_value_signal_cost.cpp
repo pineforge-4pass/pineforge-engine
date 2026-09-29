@@ -158,7 +158,7 @@ void test_flat_signal_cost_across_price_scales() {
     // new fee-free, same-currency, ordinary single-market scope must not turn
     // their admitted position into a signal-cost rejection.
     for (Context mode : {Context::FEE, Context::FX, Context::MULTIPLIER,
-                         Context::INTEGER_LOTS, Context::CLOSE_FILL, Context::RESTING_ENTRY}) {
+                         Context::CLOSE_FILL, Context::RESTING_ENTRY}) {
         double capital = 1033087.4999;
         if (mode == Context::FX || mode == Context::MULTIPLIER) capital = 2066174.9999;
         if (mode == Context::CLOSE_FILL) capital = 1033156.3729;
@@ -167,6 +167,14 @@ void test_flat_signal_cost_across_price_scales() {
         CHECK(engine.observed > 0.0);
         CHECK(!engine.rows().empty());
     }
+    // Whole lots: 300 lots at the 3443.625 signal close cost 1033087.5, a
+    // rounding tie over the 1033087.4999 equity, which TradingView drops
+    // whatever the next open does (lab tv tests/fixtures/whole_lot_tie
+    // jd-flat-tie-gapdown; R5 lane TAIL-D).
+    Flat whole(1033087.4999, 0.01, 0.001, Context::INTEGER_LOTS);
+    whole.run(xau.data(), static_cast<int>(xau.size()));
+    CHECK(near(whole.observed, 0.0));
+    CHECK(whole.rows().empty());
 }
 }
 int main() {

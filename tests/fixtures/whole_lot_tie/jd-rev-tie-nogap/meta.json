@@ -1,0 +1,16 @@
+{
+  "title": "jd-rev-tie-nogap",
+  "slug": "jd-rev-tie-nogap",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:32:59.866Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "d3d491293279994807c37bd6bea5be4d9b1e39cf65c54c82bf4489fd6cc8b4a1",
+  "tv_trades_sha256": "c4efe5ecafea4998e1f56d0087dfa57b7bd72ecea17149c13d6a555bd4001aa0",
+  "tv_trades_rows": 2
+}

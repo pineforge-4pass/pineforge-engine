@@ -1,0 +1,16 @@
+{
+  "title": "jd-rev-tie-pair",
+  "slug": "jd-rev-tie-pair",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:32:15.180Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "4c9ab5e72660e43600a6024ca2d85217d7e8e64a940f8e2d28d08da55a42831e",
+  "tv_trades_sha256": "7aa4c448c7f407a546cc9e0c7e2d15511ac49700c03ad3cdff32b97d18d64822",
+  "tv_trades_rows": 2
+}

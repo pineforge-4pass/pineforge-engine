@@ -1,0 +1,16 @@
+{
+  "title": "jd-flat-tie-gapdown",
+  "slug": "jd-flat-tie-gapdown",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:33:44.415Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "c80fc9ee3ad34da9f11f2e070938d62aa4095dab5240645da9cae4f96915c0a6",
+  "tv_trades_sha256": "86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c",
+  "tv_trades_rows": 0
+}

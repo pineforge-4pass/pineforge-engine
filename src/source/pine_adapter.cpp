@@ -13574,12 +13574,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                 && !stream_mode_ && config_.pyramiding >= 0 && config_.pyramiding <= 1
                 && !cap.active() && risk_.max_intraday_loss <= 0.0
                 && risk_.max_drawdown <= 0.0 && risk_.max_cons_loss_days == 0
-                && ordinary_book
-                // ab9714be pine_fills.cpp:5190-5219: the whole-lot tie is
-                // a no-gap rule. A favorable next-open price retains the
-                // ordinary admitted fill even when rounded signal cost ties.
-                && nearest_tick(result.resolved_price, staged_.syminfo.mintick)
-                    == source.sizing.price;
+                && ordinary_book;
             const auto native_state = detail::run_state(require_host());
             const bool pooc_flat_money = config_.process_orders_on_close
                 && source.projection_position_side
@@ -13601,11 +13596,55 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                 && risk_.max_drawdown <= 0.0 && risk_.max_cons_loss_days == 0
                 && nearest_tick(facts.raw_price, staged_.syminfo.mintick)
                     == nearest_tick(source.sizing.mark, staged_.syminfo.mintick);
+            // Whole lots: the signal's equity against the cost of the whole
+            // lots it sized, the units times the signal close, compared
+            // exactly and whatever the next open does. Short of it by a
+            // rounding tie, TradingView drops a flat entry and keeps only the
+            // closing leg of a reversal (lab tv tapes
+            // tests/fixtures/whole_lot_tie jd-rev-tie-pair, -bare, -gapdown,
+            // -nogap, jd-flat-tie-gapdown and the control jd-rev-notie-pair).
+            // That equity is the capital plus the realized profit plus the
+            // open profit in floating point, whose residue decides an exact
+            // tie (jd-drift-under and jd-drift-over: the capital and a
+            // realized loss sum one ulp under and over their cent value). A
+            // running sum of many closed profits carries a residue of its own
+            // the engine does not reproduce: where the engine's sum and that
+            // sum on the money grid disagree on the tie, TradingView takes it
+            // on some books and not on others (not: antoniolinux-obv-with-sma-
+            // and-max-50gg on NASDAQ:AAPL 15, taro-s-rsi-ma-signals-on-chart on
+            // NYSE:F 15; taken: job-2553-ttagkoin-adaptive-multi-factor-v1-
+            // update-9-years on NYSE:F 15), and the adapter keeps the no-gap
+            // rule it had there (ab9714be pine_fills.cpp:5190-5219). While the
+            // book is still the signal's the settled sum is read (lane TAIL-D).
             if (whole_lot_tie_scope) {
                 const double cost = *result.units * source.sizing.price;
-                if (std::isfinite(cost)
-                    && cost == source_money_round(source.sizing.equity)
-                    && cost > source.sizing.equity) {
+                double settled = source.sizing.equity;
+                const auto* pine = pine_view_of(host_);
+                if (pine && std::isfinite(pine->net_profit_sum_)
+                    && same_double_bits(percent_commission_live_equity(source.sizing.mark),
+                                        source.sizing.equity)) {
+                    settled = pine->initial_capital_
+                        + source_money_round(pine->net_profit_sum_);
+                    const double direction = pine->position_side_ == PositionSide::SHORT
+                        ? -1.0 : 1.0;
+                    for (const auto& lot : pine->pyramid_entries_) {
+                        settled += direction * (source.sizing.mark - lot.price) * lot.qty
+                            * staged_.syminfo.pointvalue * source.sizing.fx
+                            - pine->open_entry_commission(lot);
+                    }
+                }
+                const bool short_raw = source.sizing.equity < cost;
+                const bool short_settled = settled < cost;
+                if (std::isfinite(cost) && short_raw && short_settled) {
+                    result.units = opposite ? facts.opposite_book_units : 0.0;
+                    result.shape = opposite ? native_order::OpeningShape::CloseOpposite
+                                            : native_order::OpeningShape::Transact;
+                    return result;
+                }
+                if (std::isfinite(cost) && short_raw
+                    && nearest_tick(result.resolved_price, staged_.syminfo.mintick)
+                        == source.sizing.price
+                    && cost == source_money_round(source.sizing.equity)) {
                     result.units = 0.0;
                     result.shape = native_order::OpeningShape::Transact;
                     return result;

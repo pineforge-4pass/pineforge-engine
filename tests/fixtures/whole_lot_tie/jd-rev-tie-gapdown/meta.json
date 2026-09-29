@@ -1,0 +1,16 @@
+{
+  "title": "jd-rev-tie-gapdown",
+  "slug": "jd-rev-tie-gapdown",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:32:48.977Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "689e499046059b459a72f25543c8b34d2a66ef9211f15ba2d4441e0441473415",
+  "tv_trades_sha256": "284c8ce3641557347dba7ef145ffae4459f5d1eea38755e6df09fcfd574572fc",
+  "tv_trades_rows": 2
+}
