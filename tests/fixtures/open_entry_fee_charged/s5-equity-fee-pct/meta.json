@@ -1,0 +1,16 @@
+{
+  "title": "w8e-s5-equity-fee-pct",
+  "slug": "s5-equity-fee-pct",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:27:26.927Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "5cbbdfef106b281825496b34b80322005befb6c1ea17f8cac76c9dac2233b2dc",
+  "tv_trades_sha256": "75c3560ef22d7063c0a3178d2d3d23c20ebbd57a445907b1afa8b0445852fafa",
+  "tv_trades_rows": 12
+}

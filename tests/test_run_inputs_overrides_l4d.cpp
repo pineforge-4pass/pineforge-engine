@@ -176,7 +176,7 @@ public:
         strategy_entry("E" + std::to_string(bar_index_), /*is_long=*/true);
     }
     // Observers for the protected runtime state.
-    double equity() const { return current_equity(); }
+    double equity() const { return closed_trade_equity(); }
     double init_cap() const { return initial_capital_; }
     double signed_size() const { return signed_position_size(); }
     int pyramiding() const { return pyramiding_; }
@@ -245,15 +245,16 @@ void test_overrides_applied_to_config_and_equity() {
     // No leg ever closes → final long position holds 2*4 = 8 contracts.
     CHECK(near(s.signed_size(), 8.0));
 
-    // No closed trades → the live net profit is 0 → equity stays at the
-    // overridden initial_capital. (open_profit is not part of
-    // current_equity().) The REPORT, however, carries TradingView's
-    // range-end accounting (record_range_end_close_trades): the two open
-    // legs are reported as closed trades at the last bar's close, one row
-    // per leg, flagged open_at_end, so total_trades is 2 and net_profit is
-    // their mark-to-market net of the 0.5% commission — both legs closed at
-    // the same price, so the report's net profit is exactly the sum of
-    // those two rows.
+    // No closed trades → the closed trades' net profit is 0 → equity stays
+    // at the overridden initial_capital. (Neither open_profit nor the open
+    // legs' paid entry fees are part of closed_trade_equity().) The REPORT,
+    // however, carries TradingView's range-end accounting
+    // (record_range_end_close_trades): the two open legs are reported as
+    // closed trades at the last bar's close, one row per leg, flagged
+    // open_at_end, so total_trades is 2 and net_profit is their
+    // mark-to-market net of the 0.5% commission — both legs closed at the
+    // same price, so the report's net profit is exactly the sum of those
+    // two rows.
     ReportC rep{};
     s.fill_report(&rep);
     CHECK(rep.total_trades == 2);

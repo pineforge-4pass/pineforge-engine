@@ -1061,6 +1061,10 @@ list(APPEND TEST_SOURCES test_pooc_gap_stop_tapes)
 # same open must fit with that position still margined
 # (tests/fixtures/same_open_reversal), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_same_open_reversal_tapes)
+# Lane W8E-EXITS: strategy.netprofit and strategy.equity charge the open lots'
+# paid entry fees (tests/fixtures/open_entry_fee_charged), on TradingView's
+# tapes.
+list(APPEND TEST_SOURCES test_open_entry_fee_charged)
 
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
@@ -2756,6 +2760,12 @@ endif()
 if(TARGET test_same_open_reversal_tapes)
     target_compile_definitions(test_same_open_reversal_tapes PRIVATE
         PINEFORGE_SAMEOPEN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/same_open_reversal")
+endif()
+
+# Lane W8E-EXITS reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_open_entry_fee_charged)
+    target_compile_definitions(test_open_entry_fee_charged PRIVATE
+        PINEFORGE_OPEN_ENTRY_FEE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/open_entry_fee_charged")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape

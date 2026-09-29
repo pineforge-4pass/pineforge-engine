@@ -1,0 +1,16 @@
+{
+  "title": "w8e-s5c-equity-nofee-pct",
+  "slug": "s5c-equity-nofee-pct",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:27:32.483Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "6ea0088d4fde560b5f72125babbf7f6a0588f3a82089229a7a7a2f876bc967e3",
+  "tv_trades_sha256": "34c2176d48940176fe50b0cf0f02c9237c38cacbfd50becb41f83ee9140617cc",
+  "tv_trades_rows": 8
+}

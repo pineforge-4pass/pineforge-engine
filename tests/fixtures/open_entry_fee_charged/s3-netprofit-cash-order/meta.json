@@ -1,0 +1,16 @@
+{
+  "title": "w8e-s3-netprofit-cash-order",
+  "slug": "s3-netprofit-cash-order",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:24:40.181Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "3b03d8078c2e183b455dadefab4ff8505418d6579d629679b3e87bda20d1480e",
+  "tv_trades_sha256": "c1dc06b11981ff860c73af5165b9bc05abba9dd561dcecfd304d6af51c47f2bf",
+  "tv_trades_rows": 8
+}

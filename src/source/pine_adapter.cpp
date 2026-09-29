@@ -4336,7 +4336,7 @@ double PineExecutionAdapter::percent_commission_live_equity(
                 paid_open_commission += fee;
             }
             const double open = fx ? pine->open_profit_at(mark, *fx) : pine->open_profit(mark);
-            return (pine->current_equity() + open) - paid_open_commission;
+            return (pine->closed_trade_equity() + open) - paid_open_commission;
         }
     }
     const double marked = strategy_equity_at(mark, fx);
@@ -15407,7 +15407,7 @@ bool PineExecutionAdapter::submit_tv_money_long_margin_call(
         if (supported_guard_scope) {
             const double entry_value = quantity * pine->position_entry_price_ * point_value;
             const double money_scale = std::max({
-                std::abs(pine->current_equity()), std::abs(pine->open_profit(price)),
+                std::abs(pine->closed_trade_equity()), std::abs(pine->open_profit(price)),
                 std::abs(entry_value), std::abs(exact_value), std::abs(equity),
                 std::abs(rounded_value)});
             const double evaluation_guard = 8.0

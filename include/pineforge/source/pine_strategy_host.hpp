@@ -634,6 +634,21 @@ protected:
     SourceIdLedgerView source_id_ledger_view() const noexcept {
         return SourceIdLedgerView(this);
     }
+    // strategy.netprofit and, through current_equity(), strategy.equity and
+    // the netprofit/openprofit percentages. TradingView charges an entry's
+    // commission when the entry fills, so the entry fees the open lots have
+    // paid (the share still on each lot) are already out of net profit;
+    // strategy.openprofit (open_profit) stays gross of them
+    // (tests/fixtures/open_entry_fee_charged). The engine's own accessors
+    // keep the closed trades' figures.
+    double net_profit() const { return BacktestEngine::net_profit() - open_entry_fees_paid(); }
+    double current_equity() const {
+        return BacktestEngine::current_equity() - open_entry_fees_paid();
+    }
+    // Initial capital plus the closed trades' net profit: current_equity()
+    // before the open lots' paid entry fees are charged.
+    double closed_trade_equity() const { return BacktestEngine::current_equity(); }
+    double open_entry_fees_paid() const;
     double signed_position_size() const;
     void freeze_script_position_view();
     void clear_script_position_view();

@@ -748,6 +748,15 @@ int source::PineStrategyHost::last_bar_dual_entry_path() const {
     return adapter_.pending_intent_view().last_bar_dual_entry_path();
 }
 
+double source::PineStrategyHost::open_entry_fees_paid() const {
+    if (position_side_ == PositionSide::FLAT) return 0.0;
+    double paid = 0.0;
+    for (const auto& lot : pyramid_entries_) {
+        if (lot.qty > internal::kQtyEpsilon) paid += open_entry_commission(lot);
+    }
+    return paid;
+}
+
 double source::PineStrategyHost::signed_position_size() const {
     return scheduler_.script_position_view(bar_index_, position_side_, position_qty_);
 }

@@ -1,0 +1,25 @@
+//@version=6
+strategy("w8e-s3-netprofit-cash-order", overlay=true, initial_capital=100000, default_qty_type=strategy.fixed, default_qty_value=1, commission_type=strategy.commission.cash_per_order, commission_value=25)
+T(h, m) => timestamp("UTC", 2025, 4, 1, h, m)
+var float op = na
+var float eq = na
+var float np = na
+if time == T(12, 0)
+    strategy.entry("A", strategy.long, qty=10)
+if time == T(13, 0)
+    op := strategy.openprofit
+    eq := strategy.equity
+    np := strategy.netprofit
+    strategy.close("A")
+if time == T(15, 0)
+    strategy.entry("OP", op >= 0 ? strategy.long : strategy.short, qty=math.abs(op) / 10 + 0.00003)
+if time == T(15, 15)
+    strategy.close("OP")
+if time == T(16, 0)
+    strategy.entry("EQ", eq - strategy.initial_capital >= 0 ? strategy.long : strategy.short, qty=math.abs(eq - strategy.initial_capital) / 10 + 0.00003)
+if time == T(16, 15)
+    strategy.close("EQ")
+if time == T(17, 0)
+    strategy.entry("NP", np >= 0 ? strategy.long : strategy.short, qty=math.abs(np) / 10 + 0.00003)
+if time == T(17, 15)
+    strategy.close("NP")

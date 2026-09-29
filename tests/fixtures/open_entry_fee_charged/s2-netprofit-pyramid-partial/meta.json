@@ -1,0 +1,16 @@
+{
+  "title": "w8e-s2-netprofit-pyramid-partial",
+  "slug": "s2-netprofit-pyramid-partial",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-27T15:24:36.792Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "884740f7c8b064b2f53f89561b255f768bc4aa3ee471adb0adbb79e2c5f2011c",
+  "tv_trades_sha256": "a61dbf29f79f71c8d272ee3dda44521462ec6f47c3c490b6a83048da7a0b4072",
+  "tv_trades_rows": 12
+}

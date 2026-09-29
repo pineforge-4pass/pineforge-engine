@@ -82,7 +82,7 @@ public:
         }
     }
 
-    double realized_balance() const { return 1'012.0 + net_profit(); }
+    double realized_balance() const { return closed_trade_equity(); }
 };
 
 void exact_reversal_state_is_observed() {

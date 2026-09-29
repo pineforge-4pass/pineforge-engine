@@ -512,10 +512,14 @@ events during the run can keep `Window` and acknowledge its cursor with
 extension's retention word keeps `Full` for ABI compatibility.
 
 Pine's `strategy.openprofit` is the **gross** mark-to-market move of open
-positions; `strategy.equity` adds that gross amount to realized equity. A
-native open lot's `unrealized_pnl` and `native_marked_equity(mark)` deduct its
-remaining entry commission. To recover the Pine figures from those native
-values, add the open lots' `entry_commission` once, at the same mark.
+positions. TradingView charges an entry's commission when the entry fills, so
+`strategy.netprofit` is the closed trades' net profit less the entry fees the
+open lots have paid, and `strategy.equity` (initial capital plus both) is net
+of those fees (tests/fixtures/open_entry_fee_charged). A native open lot's
+`unrealized_pnl` and `native_marked_equity(mark)` deduct its remaining entry
+commission too, so the marked equity is Pine's equity as it stands; to recover
+the gross open profit, add the open lots' `entry_commission` once, at the same
+mark.
 
 The report's trade statistics (`pf_trade_stats_t` in the all, long and short
 blocks) count **report-only range-end rows** when
@@ -530,15 +534,15 @@ range-end reporting is off.
 | --- | --- | --- | --- | --- |
 | `strategy.account_currency` | `currency` native_run_spec.hpp:639 | `currency` pineforge.h:499 | `hello_kernel.cpp` / `native_fx_roll_strategy.cpp` | Declared, never inferred. `account_fx` native_run_spec.hpp:650 is the one positive scalar that converts quote to account; a timestamped curve is `configure_native_fx_curve` native_host.hpp:1202. The FX-roll example runs a JPY account on a USD-quoted stock through such a curve, and a step of it is a margin check point of its own. |
 | `strategy.initial_capital` | `initial_capital` native_run_spec.hpp:648 | `initial_capital` pineforge.h:501 | `hello_kernel.cpp` | The value you declared, unchanged by the run. |
-| `strategy.equity` | `current_equity() + open_profit(mark)` engine.hpp:970-1024; or `native_marked_equity(mark)` native_host.hpp:1301 plus open entry commissions | `strategy_native_marked_equity_v1` native_c_api.h:3055 plus open lots' `entry_commission` | `native_open_lots_strategy.cpp` | Pine marks at the current `close`. The native marked call takes the mark explicitly and returns balance plus open lots' **net** `unrealized_pnl` native_host.hpp:341; add their remaining entry commissions to reproduce Pine's gross-open-profit equity. |
-| `strategy.netprofit` | `net_profit` engine.hpp:967 | `net_profit` pineforge.h:374 | `native_open_lots_strategy.cpp` | Realized only. |
-| `strategy.netprofit_percent` | derive: `net_profit` engine.hpp:967 over `initial_capital` native_run_spec.hpp:648 | `pf_metrics_t` pineforge.h:320 | `native_sized_report_strategy.cpp` | The kernel keeps the facts, not the ratio. |
+| `strategy.equity` | `native_marked_equity(mark)` native_host.hpp:1301; on the Pine host `current_equity() + open_profit(mark)` pine_strategy_host.hpp:600 | `strategy_native_marked_equity_v1` native_c_api.h:3055 | `native_open_lots_strategy.cpp` | Pine marks at the current `close`. The native marked call takes the mark explicitly and returns balance plus open lots' **net** `unrealized_pnl` native_host.hpp:341, which is Pine's equity: TradingView charges the open lots' paid entry fees. |
+| `strategy.netprofit` | on the Pine host `net_profit` pine_strategy_host.hpp:599; `net_profit` engine.hpp:967 is the closed trades' figure | `net_profit` pineforge.h:374, less open lots' `entry_commission` | `native_open_lots_strategy.cpp` | The closed trades' net profit less the entry fees the open lots have paid. The report's figure is the closed trades'. |
+| `strategy.netprofit_percent` | derive: `net_profit` pine_strategy_host.hpp:599 over `initial_capital` native_run_spec.hpp:648 | `pf_metrics_t` pineforge.h:320 | `native_sized_report_strategy.cpp` | The kernel keeps the facts, not the ratio. |
 | `strategy.grossprofit` | `gross_profit` engine.hpp:968 | `pf_trade_stats_t` pineforge.h:269 | `native_open_lots_strategy.cpp` | |
 | `strategy.grossprofit_percent` | `grossprofit_percent` engine.hpp:975 | `pf_metrics_t` pineforge.h:320 | `native_sized_report_strategy.cpp` | Of initial capital. |
 | `strategy.grossloss` | `gross_loss` engine.hpp:969 | `pf_trade_stats_t::gross_loss` pineforge.h:224 | `native_open_lots_strategy.cpp` | For booked closed trades the protected C++ accessor is signed (negative for losses), while the C report stores a positive loss magnitude. With range-end reporting off, `-C.gross_loss == gross_loss()` and `netprofit == grossprofit - C.gross_loss`. With it on, C trade statistics include the report-only range-end rows; filter `open_at_end == 0` before comparing to Pine's closed-trade statistics. |
 | `strategy.grossloss_percent` | `grossloss_percent` engine.hpp:978 | `pf_metrics_t` pineforge.h:320 | `native_sized_report_strategy.cpp` | |
 | `strategy.openprofit` | `open_profit` engine.hpp:1025 | `strategy_native_marked_equity_v1` native_c_api.h:3055 less realized balance, plus open lots' `entry_commission` | `native_open_lots_strategy.cpp` | Pine's open profit is gross of remaining entry fees. The native marked equity and open-lot `unrealized_pnl` are net of them; use the same explicit mark for every term. |
-| `strategy.openprofit_percent` | derive from `open_profit` engine.hpp:1025 | — | `native_open_lots_strategy.cpp` | Pine's denominator is the realized equity. |
+| `strategy.openprofit_percent` | derive from `open_profit` engine.hpp:1025 | — | `native_open_lots_strategy.cpp` | Pine's denominator is the initial capital plus `strategy.netprofit`, the open lots' paid entry fees charged. |
 | `strategy.max_drawdown` | `max_drawdown_` engine.hpp:581 | `max_equity_drawdown` pineforge.h:274 | `native_open_lots_strategy.cpp` | Folded under **every** report policy — see the rule above. The scalar is the run's own; the `pf_equity_stats_t` figure derived from the recorded curve still needs `KernelRecorded` native_run_spec.hpp:63. |
 | `strategy.max_drawdown_percent` | `max_drawdown_percent` engine.hpp:1507 | `max_equity_drawdown_pct` pineforge.h:274 | `native_sized_report_strategy.cpp` | Same rule. |
 | `strategy.max_runup` | `max_runup_` engine.hpp:582 | `max_equity_runup` pineforge.h:278 | `native_open_lots_strategy.cpp` | Same rule. |
