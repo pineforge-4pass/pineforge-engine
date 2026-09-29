@@ -237,8 +237,11 @@ void register_strategy(const std::string& slug, const std::string& dylib_path) {
 
 int main(int argc, char** argv) {
     // The public slots, then the maintainer-local closed slots when present.
-    for (const fs::path root : {fs::path(BENCH_STRATEGIES_DIR),
-                                fs::path(BENCH_CLOSED_STRATEGIES_DIR)}) {
+    // A closed slot registers as "NNN-closed", as every report prints it
+    // (benchmarks/paths.py public_name): its directory name carries the
+    // TradingView author's handle, which no committed timing file repeats.
+    const fs::path closed_root(BENCH_CLOSED_STRATEGIES_DIR);
+    for (const fs::path root : {fs::path(BENCH_STRATEGIES_DIR), closed_root}) {
         if (!fs::is_directory(root)) continue;
         for (auto& entry : fs::directory_iterator(root)) {
             if (!entry.is_directory()) continue;
@@ -251,7 +254,8 @@ int main(int argc, char** argv) {
             if (!fs::exists(dylib)) dylib = entry.path() / "strategy.so";
             if (!fs::exists(dylib)) continue;  // skip silently (e.g. compile failure)
 
-            register_strategy(name, dylib.string());
+            register_strategy(root == closed_root ? name.substr(0, 3) + "-closed" : name,
+                              dylib.string());
         }
     }
 

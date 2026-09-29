@@ -19,14 +19,20 @@ public assets and, when present, the maintainer-local closed root):
     vectorbt_trades.csv    speed/time_vectorbt.py --write-trades (optional)
 
 An engine without output is reported ``n/a`` with its reason: the PyneSys
-compile error for a slot without ``strategy_pyne.py`` (from the compile log
-ledger), else the first line of the runner's ``_<engine>_error.log``. A slot
+compile error for a slot without ``strategy_pyne.py`` (from the request ledger,
+or the committed ``results/pynesys-compile-log.md`` without it), else the first
+line of the runner's ``_<engine>_error.log``. A slot
 whose run left that error log reads ``n/a`` even when a trade list is present:
 the list is not that run's output.
 
 Output lives in ``benchmarks/results/``:
     - trade_comparison.md   per-strategy metrics per engine
     - summary.md            the per-strategy tier table and the tallies
+
+A closed slot is printed as ``NNN-closed`` (``paths.public_name``): its
+directory name carries the TradingView author's handle. A non-excellent row
+prints the rubric's failing gates, never the probe's declared ``notes``, which
+describe PineForge's history on that probe, not the graded engine's run.
 
 Usage:
     python benchmarks/compare.py
@@ -53,7 +59,7 @@ from pathlib import Path
 _SYS_BENCH = Path(__file__).resolve().parent
 if str(_SYS_BENCH) not in sys.path:
     sys.path.insert(0, str(_SYS_BENCH))
-from paths import BENCH, REPO_ROOT, STRATEGIES, STRATEGY_ROOTS  # noqa: E402
+from paths import BENCH, REPO_ROOT, STRATEGIES, STRATEGY_ROOTS, public_name  # noqa: E402
 
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import verify_corpus  # noqa: E402
@@ -68,6 +74,7 @@ _LABEL_EMOJI = {
     "minimal": "🔴", "anomaly": "🔵", "engine_only": "🟣", "n/a": "⚪",
 }
 COMPILE_LEDGER = BENCH_DIR / "_workdir" / "pynesys_requests.jsonl"
+COMPILE_LOG = BENCH_DIR / "results" / "pynesys-compile-log.md"
 
 
 @dataclass
@@ -112,17 +119,31 @@ def vectorbt_as_tv_schema(src: Path, dst: Path) -> int:
     return len(rows) // 2
 
 
-def compile_errors() -> dict[str, str]:
-    """slot -> first line of its PyneSys compile error, from the request ledger."""
-    out: dict[str, str] = {}
+def compile_errors() -> dict[int, str]:
+    """slot number -> first line of its PyneSys compile error.
+
+    The maintainer's request ledger when it exists; else the committed request
+    log, ``results/pynesys-compile-log.md``, whose table prints the same rows
+    (kind, slot, outcome, message) in request order."""
+    records: list[tuple[str, str, str, str]] = []
     if COMPILE_LEDGER.exists():
         for line in COMPILE_LEDGER.read_text().splitlines():
             r = json.loads(line)
-            if r.get("kind") == "compile":
-                if r["outcome"] == "compile-error":
-                    out[r["slot"]] = r.get("message", "")
-                elif r["outcome"] == "ok":
-                    out.pop(r["slot"], None)
+            records.append((r.get("kind", ""), r.get("slot", ""), r.get("outcome", ""),
+                            r.get("message", "")))
+    elif COMPILE_LOG.exists():
+        for line in COMPILE_LOG.read_text(encoding="utf-8").splitlines():
+            cells = [c.strip() for c in line.strip().strip("|").split(" | ")]
+            if len(cells) == 8 and cells[0].isdigit():
+                records.append((cells[3], cells[4], cells[5], cells[6]))
+    out: dict[int, str] = {}
+    for kind, slot, outcome, message in records:
+        if kind != "compile" or not slot[:3].isdigit():
+            continue
+        if outcome == "compile-error":
+            out[int(slot[:3])] = message
+        elif outcome == "ok":
+            out.pop(int(slot[:3]), None)
     return out
 
 
@@ -134,7 +155,7 @@ def first_error_line(path: Path) -> str:
     return (lines[-1] if lines else "no output")[:200]
 
 
-def na_reason(engine: str, slot: Path, csv_name: str, errors: dict[str, str]) -> str:
+def na_reason(engine: str, slot: Path, csv_name: str, errors: dict[int, str]) -> str:
     if engine == "PineForge":
         if not (slot / "generated.cpp").exists():
             return "codegen transpile error (no generated.cpp)"
@@ -143,8 +164,8 @@ def na_reason(engine: str, slot: Path, csv_name: str, errors: dict[str, str]) ->
         return f"no {csv_name}"
     if engine == "PyneCore":
         if not (slot / "strategy_pyne.py").exists():
-            if slot.name in errors:
-                return f"PyneSys compile error: {errors[slot.name]}"
+            if int(slot.name[:3]) in errors:
+                return f"PyneSys compile error: {errors[int(slot.name[:3])]}"
             return "no strategy_pyne.py"
         if (slot / "_pynecore_error.log").exists():
             return "PyneCore runtime error: " + first_error_line(slot / "_pynecore_error.log")
@@ -152,7 +173,7 @@ def na_reason(engine: str, slot: Path, csv_name: str, errors: dict[str, str]) ->
     return "no strategy_vbt.py port" if not (slot / "strategy_vbt.py").exists() else f"no {csv_name}"
 
 
-def grade(slot: Path, engine: str, csv_name: str, scratch: Path, errors: dict[str, str]) -> Grade:
+def grade(slot: Path, engine: str, csv_name: str, scratch: Path, errors: dict[int, str]) -> Grade:
     src = slot / csv_name
     if not src.exists() or (slot / f"_{engine.lower()}_error.log").exists():
         return Grade(engine, "n/a", reason=na_reason(engine, slot, csv_name, errors))
@@ -175,7 +196,7 @@ def slot_dirs(only: str | None) -> list[tuple[str, Path]]:
     for root in STRATEGY_ROOTS:
         group = "corpus" if root == STRATEGIES else "closed"
         for d in root.iterdir():
-            if d.is_dir() and d.name[:1].isdigit() and (only is None or d.name == only):
+            if d.is_dir() and d.name[:1].isdigit() and only in (None, d.name, public_name(d)):
                 out.append((group, d))
     return sorted(out, key=lambda gd: (int(gd[1].name.split("-", 1)[0]), gd[1].name))
 
@@ -193,6 +214,26 @@ def cell(g: Grade) -> str:
     eng_n, tv_n = ((r.eng_count, r.tv_count) if r.no_aligned_trades
                    else (r.eng_gate_count, r.tv_gate_count))
     return f"{_LABEL_EMOJI.get(r.label, '🔴')} {r.label} ({eng_n} / {tv_n})"
+
+
+def failing_gates(r: "verify_corpus.VerificationResult") -> str:
+    """A non-excellent row's failing gates, in the rubric's own words.
+
+    ``analyze_strategy``'s ``notes`` are the probe's declared ``notes`` when
+    its ``inputs.json`` carries some: prose about PineForge's history on the
+    probe, which would stand in the gate column of every engine's row. The
+    gate booleans are the rubric's verdict for the run graded here."""
+    if r.no_aligned_trades:
+        return "no aligned trades"
+    failures = [text for ok, text in (
+        (r.count_ok, f"count Δ {r.count_delta * 100:.2f}%"),
+        (r.entry_ok, f"entry p90 {r.entry_p90 * 100:.4f}%"),
+        (r.exit_ok, f"exit p90 {r.exit_p90 * 100:.4f}%"),
+        (r.pnl_ok, f"pnl p90 {r.pnl_p90 * 100:.4f}%"),
+        (r.coverage_ok, f"coverage {r.coverage * 100:.1f}%"),
+        (r.distinct_entry_identity_ok,
+         f"distinct-entry multiplicity Δ {r.distinct_entry_mismatches}")) if not ok]
+    return "; ".join(failures) or r.label
 
 
 def label_of(g: Grade) -> str:
@@ -221,7 +262,7 @@ def detail_block(name: str, group: str, tv_raw: int, grades: list[Grade]) -> str
             f"    - entry p90:   `{pct(r.entry_p90)}`\n"
             f"    - exit  p90:   `{pct(r.exit_p90)}`\n"
             f"    - PnL   p90:   `{pct(r.pnl_p90)}`"
-            + (f"\n    - gates: {r.notes}" if r.label != "excellent" and r.notes else ""))
+            + (f"\n    - gates: {failing_gates(r)}" if r.label != "excellent" else ""))
     lines.append("")
     return "\n".join(lines)
 
@@ -259,12 +300,12 @@ def main() -> int:
             meta = verify_corpus.load_strategy_metadata(slot)
             tape = slot / str(meta.get("tv_trades_csv", "tv_trades.csv"))
             if not tape.exists():
-                print(f"SKIP {slot.name}: no TV tape", file=sys.stderr)
+                print(f"SKIP {public_name(slot)}: no TV tape", file=sys.stderr)
                 continue
             grades = [grade(slot, e, f, scratch, errors) if e in graded_engines
                       else Grade(e, "pending", reason=pending[e])
                       for e, f in ENGINES]
-            rows.append((slot.name, group, closed_trades(tape), grades))
+            rows.append((public_name(slot), group, closed_trades(tape), grades))
             if not args.quiet:
                 print(f"=== {slot.name} ({group})  TV={rows[-1][2]}")
                 for g in grades:
@@ -358,7 +399,7 @@ def main() -> int:
                                      ("distinct-entry", r.distinct_entry_identity_ok)) if not ok]
             key = "+".join(gates) or "none"
             gate_counts[key] = gate_counts.get(key, 0) + 1
-            tallies.append(f"| {name} | {group} | {r.label} | {r.notes or key} | "
+            tallies.append(f"| {name} | {group} | {r.label} | {failing_gates(r)} | "
                            f"{pct(r.count_delta)} ({r.count_abs_delta}) | {pct(r.entry_p90)} | "
                            f"{pct(r.exit_p90)} | {pct(r.pnl_p90)} | {r.coverage * 100:.1f}% |")
         tallies += ["", f"{engine} non-excellent rows by failing-gate set: "

@@ -1533,10 +1533,10 @@
       "items_per_second": 6.1369464569088514e+05
     },
     {
-      "name": "139-francescodimichele-gold-ai-strategy-v2-0/throughput/no_magnifier/iterations:20",
+      "name": "139-closed/throughput/no_magnifier/iterations:20",
       "family_index": 100,
       "per_family_instance_index": 0,
-      "run_name": "139-francescodimichele-gold-ai-strategy-v2-0/throughput/no_magnifier/iterations:20",
+      "run_name": "139-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1548,10 +1548,10 @@
       "items_per_second": 5.7180057965729001e+05
     },
     {
-      "name": "188-theforexguy0777-9-ema-20-ema-retest-strategy/throughput/no_magnifier/iterations:20",
+      "name": "188-closed/throughput/no_magnifier/iterations:20",
       "family_index": 101,
       "per_family_instance_index": 0,
-      "run_name": "188-theforexguy0777-9-ema-20-ema-retest-strategy/throughput/no_magnifier/iterations:20",
+      "run_name": "188-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1563,10 +1563,10 @@
       "items_per_second": 5.1248060225427320e+05
     },
     {
-      "name": "184-shurben5-tradingview-bot-goat/throughput/no_magnifier/iterations:20",
+      "name": "184-closed/throughput/no_magnifier/iterations:20",
       "family_index": 102,
       "per_family_instance_index": 0,
-      "run_name": "184-shurben5-tradingview-bot-goat/throughput/no_magnifier/iterations:20",
+      "run_name": "184-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1578,10 +1578,10 @@
       "items_per_second": 4.2402946324250242e+05
     },
     {
-      "name": "182-sadtrader9-fair-value-gap-strategy/throughput/no_magnifier/iterations:20",
+      "name": "182-closed/throughput/no_magnifier/iterations:20",
       "family_index": 103,
       "per_family_instance_index": 0,
-      "run_name": "182-sadtrader9-fair-value-gap-strategy/throughput/no_magnifier/iterations:20",
+      "run_name": "182-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1593,10 +1593,10 @@
       "items_per_second": 6.4152503308501013e+05
     },
     {
-      "name": "140-gonzowiththewind-sisyphus-happiness/throughput/no_magnifier/iterations:20",
+      "name": "140-closed/throughput/no_magnifier/iterations:20",
       "family_index": 104,
       "per_family_instance_index": 0,
-      "run_name": "140-gonzowiththewind-sisyphus-happiness/throughput/no_magnifier/iterations:20",
+      "run_name": "140-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1608,10 +1608,10 @@
       "items_per_second": 3.2813477809420653e+05
     },
     {
-      "name": "165-officialjackofalltrades-concordance-regime-synthesis-joat/throughput/no_magnifier/iterations:20",
+      "name": "165-closed/throughput/no_magnifier/iterations:20",
       "family_index": 105,
       "per_family_instance_index": 0,
-      "run_name": "165-officialjackofalltrades-concordance-regime-synthesis-joat/throughput/no_magnifier/iterations:20",
+      "run_name": "165-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1623,10 +1623,10 @@
       "items_per_second": 1.6880147789326275e+05
     },
     {
-      "name": "117-antoniolinux-rsi-mfi-divergence-momentum/throughput/no_magnifier/iterations:20",
+      "name": "117-closed/throughput/no_magnifier/iterations:20",
       "family_index": 106,
       "per_family_instance_index": 0,
-      "run_name": "117-antoniolinux-rsi-mfi-divergence-momentum/throughput/no_magnifier/iterations:20",
+      "run_name": "117-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1638,10 +1638,10 @@
       "items_per_second": 8.3072107556729810e+05
     },
     {
-      "name": "161-mylivingedge-gold-asian-range-breakout-signals/throughput/no_magnifier/iterations:20",
+      "name": "161-closed/throughput/no_magnifier/iterations:20",
       "family_index": 107,
       "per_family_instance_index": 0,
-      "run_name": "161-mylivingedge-gold-asian-range-breakout-signals/throughput/no_magnifier/iterations:20",
+      "run_name": "161-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1653,10 +1653,10 @@
       "items_per_second": 4.4937107298186782e+05
     },
     {
-      "name": "123-chadow6875-swing-high-low-ict-clean-pro/throughput/no_magnifier/iterations:20",
+      "name": "123-closed/throughput/no_magnifier/iterations:20",
       "family_index": 108,
       "per_family_instance_index": 0,
-      "run_name": "123-chadow6875-swing-high-low-ict-clean-pro/throughput/no_magnifier/iterations:20",
+      "run_name": "123-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1668,10 +1668,10 @@
       "items_per_second": 1.8537854206165127e+05
     },
     {
-      "name": "153-jos-protrader-edward-smart-momentum-pro/throughput/no_magnifier/iterations:20",
+      "name": "153-closed/throughput/no_magnifier/iterations:20",
       "family_index": 109,
       "per_family_instance_index": 0,
-      "run_name": "153-jos-protrader-edward-smart-momentum-pro/throughput/no_magnifier/iterations:20",
+      "run_name": "153-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1683,10 +1683,10 @@
       "items_per_second": 8.6140512428149837e+05
     },
     {
-      "name": "125-cleightyp-cleightyp-bos-sma-macd-vwap/throughput/no_magnifier/iterations:20",
+      "name": "125-closed/throughput/no_magnifier/iterations:20",
       "family_index": 110,
       "per_family_instance_index": 0,
-      "run_name": "125-cleightyp-cleightyp-bos-sma-macd-vwap/throughput/no_magnifier/iterations:20",
+      "run_name": "125-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1698,10 +1698,10 @@
       "items_per_second": 2.2551526992081522e+05
     },
     {
-      "name": "164-officialjackofalltrades-concordance-execution-mandate-joat/throughput/no_magnifier/iterations:20",
+      "name": "164-closed/throughput/no_magnifier/iterations:20",
       "family_index": 111,
       "per_family_instance_index": 0,
-      "run_name": "164-officialjackofalltrades-concordance-execution-mandate-joat/throughput/no_magnifier/iterations:20",
+      "run_name": "164-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1713,10 +1713,10 @@
       "items_per_second": 2.0758198302784728e+05
     },
     {
-      "name": "132-dinkus3-obsidian/throughput/no_magnifier/iterations:20",
+      "name": "132-closed/throughput/no_magnifier/iterations:20",
       "family_index": 112,
       "per_family_instance_index": 0,
-      "run_name": "132-dinkus3-obsidian/throughput/no_magnifier/iterations:20",
+      "run_name": "132-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1728,10 +1728,10 @@
       "items_per_second": 1.9595410671902800e+05
     },
     {
-      "name": "154-khanhtq26-psol-01-donchian-channels/throughput/no_magnifier/iterations:20",
+      "name": "154-closed/throughput/no_magnifier/iterations:20",
       "family_index": 113,
       "per_family_instance_index": 0,
-      "run_name": "154-khanhtq26-psol-01-donchian-channels/throughput/no_magnifier/iterations:20",
+      "run_name": "154-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1743,10 +1743,10 @@
       "items_per_second": 8.1462208039879776e+05
     },
     {
-      "name": "120-benblackdiamond-l2gmom-network-momentum/throughput/no_magnifier/iterations:20",
+      "name": "120-closed/throughput/no_magnifier/iterations:20",
       "family_index": 114,
       "per_family_instance_index": 0,
-      "run_name": "120-benblackdiamond-l2gmom-network-momentum/throughput/no_magnifier/iterations:20",
+      "run_name": "120-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1758,10 +1758,10 @@
       "items_per_second": 3.6431633350323152e+05
     },
     {
-      "name": "183-shiroi-macd-zero-line-candles-alert/throughput/no_magnifier/iterations:20",
+      "name": "183-closed/throughput/no_magnifier/iterations:20",
       "family_index": 115,
       "per_family_instance_index": 0,
-      "run_name": "183-shiroi-macd-zero-line-candles-alert/throughput/no_magnifier/iterations:20",
+      "run_name": "183-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1773,10 +1773,10 @@
       "items_per_second": 8.0970766353794222e+05
     },
     {
-      "name": "178-remarkablefreddy-ultimate-smc-emas-day-trading-strategy/throughput/no_magnifier/iterations:20",
+      "name": "178-closed/throughput/no_magnifier/iterations:20",
       "family_index": 116,
       "per_family_instance_index": 0,
-      "run_name": "178-remarkablefreddy-ultimate-smc-emas-day-trading-strategy/throughput/no_magnifier/iterations:20",
+      "run_name": "178-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1788,10 +1788,10 @@
       "items_per_second": 1.9502103123666946e+05
     },
     {
-      "name": "200-ygd-consulting-llc-yuri-garcia-narrow-state-strategy-ygils/throughput/no_magnifier/iterations:20",
+      "name": "200-closed/throughput/no_magnifier/iterations:20",
       "family_index": 117,
       "per_family_instance_index": 0,
-      "run_name": "200-ygd-consulting-llc-yuri-garcia-narrow-state-strategy-ygils/throughput/no_magnifier/iterations:20",
+      "run_name": "200-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1803,10 +1803,10 @@
       "items_per_second": 1.0269216315541379e+05
     },
     {
-      "name": "168-officialjackofalltrades-parallax-covenant-strategy-joat/throughput/no_magnifier/iterations:20",
+      "name": "168-closed/throughput/no_magnifier/iterations:20",
       "family_index": 118,
       "per_family_instance_index": 0,
-      "run_name": "168-officialjackofalltrades-parallax-covenant-strategy-joat/throughput/no_magnifier/iterations:20",
+      "run_name": "168-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1818,10 +1818,10 @@
       "items_per_second": 4.4943342669965682e+05
     },
     {
-      "name": "104-3commas-gram-rsi-strategy-3commas/throughput/no_magnifier/iterations:20",
+      "name": "104-closed/throughput/no_magnifier/iterations:20",
       "family_index": 119,
       "per_family_instance_index": 0,
-      "run_name": "104-3commas-gram-rsi-strategy-3commas/throughput/no_magnifier/iterations:20",
+      "run_name": "104-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1833,10 +1833,10 @@
       "items_per_second": 8.3078762222109630e+05
     },
     {
-      "name": "169-officialjackofalltrades-regime-execution-strategy-joat/throughput/no_magnifier/iterations:20",
+      "name": "169-closed/throughput/no_magnifier/iterations:20",
       "family_index": 120,
       "per_family_instance_index": 0,
-      "run_name": "169-officialjackofalltrades-regime-execution-strategy-joat/throughput/no_magnifier/iterations:20",
+      "run_name": "169-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1848,10 +1848,10 @@
       "items_per_second": 4.7704662591393967e+05
     },
     {
-      "name": "102-3commas-3commas-pol-grid-bot-long-strategy/throughput/no_magnifier/iterations:20",
+      "name": "102-closed/throughput/no_magnifier/iterations:20",
       "family_index": 121,
       "per_family_instance_index": 0,
-      "run_name": "102-3commas-3commas-pol-grid-bot-long-strategy/throughput/no_magnifier/iterations:20",
+      "run_name": "102-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1863,10 +1863,10 @@
       "items_per_second": 6.5086247212844132e+05
     },
     {
-      "name": "173-quantitativealpha-strategy-forecast-engine/throughput/no_magnifier/iterations:20",
+      "name": "173-closed/throughput/no_magnifier/iterations:20",
       "family_index": 122,
       "per_family_instance_index": 0,
-      "run_name": "173-quantitativealpha-strategy-forecast-engine/throughput/no_magnifier/iterations:20",
+      "run_name": "173-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1878,10 +1878,10 @@
       "items_per_second": 1.7108659131166647e+05
     },
     {
-      "name": "124-cihanozdemir-trade-id-signal-engine-buy-only-option/throughput/no_magnifier/iterations:20",
+      "name": "124-closed/throughput/no_magnifier/iterations:20",
       "family_index": 123,
       "per_family_instance_index": 0,
-      "run_name": "124-cihanozdemir-trade-id-signal-engine-buy-only-option/throughput/no_magnifier/iterations:20",
+      "run_name": "124-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1893,10 +1893,10 @@
       "items_per_second": 8.2328632133187703e+05
     },
     {
-      "name": "130-delta-crypto-mu-overnight-gap-capture/throughput/no_magnifier/iterations:20",
+      "name": "130-closed/throughput/no_magnifier/iterations:20",
       "family_index": 124,
       "per_family_instance_index": 0,
-      "run_name": "130-delta-crypto-mu-overnight-gap-capture/throughput/no_magnifier/iterations:20",
+      "run_name": "130-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1908,10 +1908,10 @@
       "items_per_second": 3.8429800358009426e+05
     },
     {
-      "name": "181-roi10x-shiva-lt-ls-blend/throughput/no_magnifier/iterations:20",
+      "name": "181-closed/throughput/no_magnifier/iterations:20",
       "family_index": 125,
       "per_family_instance_index": 0,
-      "run_name": "181-roi10x-shiva-lt-ls-blend/throughput/no_magnifier/iterations:20",
+      "run_name": "181-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1923,10 +1923,10 @@
       "items_per_second": 1.6406883656518048e+05
     },
     {
-      "name": "147-jaydeepp095-candle-harry/throughput/no_magnifier/iterations:20",
+      "name": "147-closed/throughput/no_magnifier/iterations:20",
       "family_index": 126,
       "per_family_instance_index": 0,
-      "run_name": "147-jaydeepp095-candle-harry/throughput/no_magnifier/iterations:20",
+      "run_name": "147-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1938,10 +1938,10 @@
       "items_per_second": 6.9496492249960755e+05
     },
     {
-      "name": "134-elomadablah-atr-trailing-stoploss-multi/throughput/no_magnifier/iterations:20",
+      "name": "134-closed/throughput/no_magnifier/iterations:20",
       "family_index": 127,
       "per_family_instance_index": 0,
-      "run_name": "134-elomadablah-atr-trailing-stoploss-multi/throughput/no_magnifier/iterations:20",
+      "run_name": "134-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1953,10 +1953,10 @@
       "items_per_second": 6.2072188312533323e+05
     },
     {
-      "name": "197-waranyutrkm-asian-box-breakout-eda-tuned/throughput/no_magnifier/iterations:20",
+      "name": "197-closed/throughput/no_magnifier/iterations:20",
       "family_index": 128,
       "per_family_instance_index": 0,
-      "run_name": "197-waranyutrkm-asian-box-breakout-eda-tuned/throughput/no_magnifier/iterations:20",
+      "run_name": "197-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1968,10 +1968,10 @@
       "items_per_second": 2.9057136884120596e+05
     },
     {
-      "name": "122-cb85wj5jmt-moja-strategia-harami-bb/throughput/no_magnifier/iterations:20",
+      "name": "122-closed/throughput/no_magnifier/iterations:20",
       "family_index": 129,
       "per_family_instance_index": 0,
-      "run_name": "122-cb85wj5jmt-moja-strategia-harami-bb/throughput/no_magnifier/iterations:20",
+      "run_name": "122-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1983,10 +1983,10 @@
       "items_per_second": 4.4444389502588479e+05
     },
     {
-      "name": "152-jos-protrader-edward-smart-liquidity-sweep/throughput/no_magnifier/iterations:20",
+      "name": "152-closed/throughput/no_magnifier/iterations:20",
       "family_index": 130,
       "per_family_instance_index": 0,
-      "run_name": "152-jos-protrader-edward-smart-liquidity-sweep/throughput/no_magnifier/iterations:20",
+      "run_name": "152-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -1998,10 +1998,10 @@
       "items_per_second": 8.0312977718805417e+05
     },
     {
-      "name": "176-rakesh-09-edge-confirmation-system-ecs-v2-0/throughput/no_magnifier/iterations:20",
+      "name": "176-closed/throughput/no_magnifier/iterations:20",
       "family_index": 131,
       "per_family_instance_index": 0,
-      "run_name": "176-rakesh-09-edge-confirmation-system-ecs-v2-0/throughput/no_magnifier/iterations:20",
+      "run_name": "176-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2013,10 +2013,10 @@
       "items_per_second": 7.7683538505418971e+05
     },
     {
-      "name": "155-legalrice2697-nse-elite-strategy-v6-full-system/throughput/no_magnifier/iterations:20",
+      "name": "155-closed/throughput/no_magnifier/iterations:20",
       "family_index": 132,
       "per_family_instance_index": 0,
-      "run_name": "155-legalrice2697-nse-elite-strategy-v6-full-system/throughput/no_magnifier/iterations:20",
+      "run_name": "155-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2028,10 +2028,10 @@
       "items_per_second": 3.5112986413893261e+05
     },
     {
-      "name": "111-ajayinderbrar-ajay-fibonacci-market-structure-pro-ai-v2-1/throughput/no_magnifier/iterations:20",
+      "name": "111-closed/throughput/no_magnifier/iterations:20",
       "family_index": 133,
       "per_family_instance_index": 0,
-      "run_name": "111-ajayinderbrar-ajay-fibonacci-market-structure-pro-ai-v2-1/throughput/no_magnifier/iterations:20",
+      "run_name": "111-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2043,10 +2043,10 @@
       "items_per_second": 4.2994799151248834e+05
     },
     {
-      "name": "194-usamotorcars-sedat-xi-crypto-ai-bias-engine/throughput/no_magnifier/iterations:20",
+      "name": "194-closed/throughput/no_magnifier/iterations:20",
       "family_index": 134,
       "per_family_instance_index": 0,
-      "run_name": "194-usamotorcars-sedat-xi-crypto-ai-bias-engine/throughput/no_magnifier/iterations:20",
+      "run_name": "194-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2058,10 +2058,10 @@
       "items_per_second": 5.3441850808952132e+05
     },
     {
-      "name": "145-imtiyazali73-imtiyaz-signature-liquidity-compass-smc/throughput/no_magnifier/iterations:20",
+      "name": "145-closed/throughput/no_magnifier/iterations:20",
       "family_index": 135,
       "per_family_instance_index": 0,
-      "run_name": "145-imtiyazali73-imtiyaz-signature-liquidity-compass-smc/throughput/no_magnifier/iterations:20",
+      "run_name": "145-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2073,10 +2073,10 @@
       "items_per_second": 4.8420882510067400e+05
     },
     {
-      "name": "101-3commas-3commas-bch-overbought-rsi-fade-short-indicator/throughput/no_magnifier/iterations:20",
+      "name": "101-closed/throughput/no_magnifier/iterations:20",
       "family_index": 136,
       "per_family_instance_index": 0,
-      "run_name": "101-3commas-3commas-bch-overbought-rsi-fade-short-indicator/throughput/no_magnifier/iterations:20",
+      "run_name": "101-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2088,10 +2088,10 @@
       "items_per_second": 7.7712195838943415e+05
     },
     {
-      "name": "118-averagepoe-mnq-anomaly-candle-sma-confluence-v6/throughput/no_magnifier/iterations:20",
+      "name": "118-closed/throughput/no_magnifier/iterations:20",
       "family_index": 137,
       "per_family_instance_index": 0,
-      "run_name": "118-averagepoe-mnq-anomaly-candle-sma-confluence-v6/throughput/no_magnifier/iterations:20",
+      "run_name": "118-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2103,10 +2103,10 @@
       "items_per_second": 8.7000570281326328e+05
     },
     {
-      "name": "146-inr3d-r3d-jackofxc-rtp-strategy/throughput/no_magnifier/iterations:20",
+      "name": "146-closed/throughput/no_magnifier/iterations:20",
       "family_index": 138,
       "per_family_instance_index": 0,
-      "run_name": "146-inr3d-r3d-jackofxc-rtp-strategy/throughput/no_magnifier/iterations:20",
+      "run_name": "146-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2118,10 +2118,10 @@
       "items_per_second": 4.0802645979223523e+05
     },
     {
-      "name": "180-robmagnaye14-eb-ict-v5-pro-trader-daily-5-10-trade-60-target/throughput/no_magnifier/iterations:20",
+      "name": "180-closed/throughput/no_magnifier/iterations:20",
       "family_index": 139,
       "per_family_instance_index": 0,
-      "run_name": "180-robmagnaye14-eb-ict-v5-pro-trader-daily-5-10-trade-60-target/throughput/no_magnifier/iterations:20",
+      "run_name": "180-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2133,10 +2133,10 @@
       "items_per_second": 5.1776769148420845e+05
     },
     {
-      "name": "135-finnp17-atm/throughput/no_magnifier/iterations:20",
+      "name": "135-closed/throughput/no_magnifier/iterations:20",
       "family_index": 140,
       "per_family_instance_index": 0,
-      "run_name": "135-finnp17-atm/throughput/no_magnifier/iterations:20",
+      "run_name": "135-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2148,10 +2148,10 @@
       "items_per_second": 3.6816202979621792e+05
     },
     {
-      "name": "199-yahmis13-nyo-day-type-early-read/throughput/no_magnifier/iterations:20",
+      "name": "199-closed/throughput/no_magnifier/iterations:20",
       "family_index": 141,
       "per_family_instance_index": 0,
-      "run_name": "199-yahmis13-nyo-day-type-early-read/throughput/no_magnifier/iterations:20",
+      "run_name": "199-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2163,10 +2163,10 @@
       "items_per_second": 7.5798495667824289e+05
     },
     {
-      "name": "127-codetradesalgo-fix-webhook-latency-dh-905-errors-pinescript-to-python-bridge/throughput/no_magnifier/iterations:20",
+      "name": "127-closed/throughput/no_magnifier/iterations:20",
       "family_index": 142,
       "per_family_instance_index": 0,
-      "run_name": "127-codetradesalgo-fix-webhook-latency-dh-905-errors-pinescript-to-python-bridge/throughput/no_magnifier/iterations:20",
+      "run_name": "127-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2178,10 +2178,10 @@
       "items_per_second": 7.0965466692456743e+05
     },
     {
-      "name": "128-colasbreugnon-nq-scalp-fix-signals/throughput/no_magnifier/iterations:20",
+      "name": "128-closed/throughput/no_magnifier/iterations:20",
       "family_index": 143,
       "per_family_instance_index": 0,
-      "run_name": "128-colasbreugnon-nq-scalp-fix-signals/throughput/no_magnifier/iterations:20",
+      "run_name": "128-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2193,10 +2193,10 @@
       "items_per_second": 3.2401826143825433e+05
     },
     {
-      "name": "167-officialjackofalltrades-large-lot-reverse-engineer-joat/throughput/no_magnifier/iterations:20",
+      "name": "167-closed/throughput/no_magnifier/iterations:20",
       "family_index": 144,
       "per_family_instance_index": 0,
-      "run_name": "167-officialjackofalltrades-large-lot-reverse-engineer-joat/throughput/no_magnifier/iterations:20",
+      "run_name": "167-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2208,10 +2208,10 @@
       "items_per_second": 7.1347443887101370e+05
     },
     {
-      "name": "142-hermescore-momentum-conviction-hermescore/throughput/no_magnifier/iterations:20",
+      "name": "142-closed/throughput/no_magnifier/iterations:20",
       "family_index": 145,
       "per_family_instance_index": 0,
-      "run_name": "142-hermescore-momentum-conviction-hermescore/throughput/no_magnifier/iterations:20",
+      "run_name": "142-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2223,10 +2223,10 @@
       "items_per_second": 4.7023299330257217e+05
     },
     {
-      "name": "119-backtestbay-strategy-validation-framework-standardised-atr-exits-1-ris/throughput/no_magnifier/iterations:20",
+      "name": "119-closed/throughput/no_magnifier/iterations:20",
       "family_index": 146,
       "per_family_instance_index": 0,
-      "run_name": "119-backtestbay-strategy-validation-framework-standardised-atr-exits-1-ris/throughput/no_magnifier/iterations:20",
+      "run_name": "119-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2238,10 +2238,10 @@
       "items_per_second": 1.5678543487760102e+05
     },
     {
-      "name": "175-rakesh-09-edge-confirmation-system/throughput/no_magnifier/iterations:20",
+      "name": "175-closed/throughput/no_magnifier/iterations:20",
       "family_index": 147,
       "per_family_instance_index": 0,
-      "run_name": "175-rakesh-09-edge-confirmation-system/throughput/no_magnifier/iterations:20",
+      "run_name": "175-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2253,10 +2253,10 @@
       "items_per_second": 7.7507525612952199e+05
     },
     {
-      "name": "136-fondbird7020-vishall-ema-9-20-50-200-dmi-adx-strategy/throughput/no_magnifier/iterations:20",
+      "name": "136-closed/throughput/no_magnifier/iterations:20",
       "family_index": 148,
       "per_family_instance_index": 0,
-      "run_name": "136-fondbird7020-vishall-ema-9-20-50-200-dmi-adx-strategy/throughput/no_magnifier/iterations:20",
+      "run_name": "136-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2268,10 +2268,10 @@
       "items_per_second": 7.5461005610355409e+05
     },
     {
-      "name": "115-anji-ga-9-21ema-anji/throughput/no_magnifier/iterations:20",
+      "name": "115-closed/throughput/no_magnifier/iterations:20",
       "family_index": 149,
       "per_family_instance_index": 0,
-      "run_name": "115-anji-ga-9-21ema-anji/throughput/no_magnifier/iterations:20",
+      "run_name": "115-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2283,10 +2283,10 @@
       "items_per_second": 8.1159276340196433e+05
     },
     {
-      "name": "106-3commas-sol-rsi-dca-long-strategy/throughput/no_magnifier/iterations:20",
+      "name": "106-closed/throughput/no_magnifier/iterations:20",
       "family_index": 150,
       "per_family_instance_index": 0,
-      "run_name": "106-3commas-sol-rsi-dca-long-strategy/throughput/no_magnifier/iterations:20",
+      "run_name": "106-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2298,10 +2298,10 @@
       "items_per_second": 7.4597971998614515e+05
     },
     {
-      "name": "108-a-popal-simple-smart-buy-sell-strategy/throughput/no_magnifier/iterations:20",
+      "name": "108-closed/throughput/no_magnifier/iterations:20",
       "family_index": 151,
       "per_family_instance_index": 0,
-      "run_name": "108-a-popal-simple-smart-buy-sell-strategy/throughput/no_magnifier/iterations:20",
+      "run_name": "108-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2313,10 +2313,10 @@
       "items_per_second": 1.0075234043825176e+05
     },
     {
-      "name": "160-mehranazizi219-goldsiggy-murk/throughput/no_magnifier/iterations:20",
+      "name": "160-closed/throughput/no_magnifier/iterations:20",
       "family_index": 152,
       "per_family_instance_index": 0,
-      "run_name": "160-mehranazizi219-goldsiggy-murk/throughput/no_magnifier/iterations:20",
+      "run_name": "160-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2328,10 +2328,10 @@
       "items_per_second": 7.9013897649245686e+05
     },
     {
-      "name": "187-thebitcoin37-9-15-ema-strategy-trade-room/throughput/no_magnifier/iterations:20",
+      "name": "187-closed/throughput/no_magnifier/iterations:20",
       "family_index": 153,
       "per_family_instance_index": 0,
-      "run_name": "187-thebitcoin37-9-15-ema-strategy-trade-room/throughput/no_magnifier/iterations:20",
+      "run_name": "187-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2343,10 +2343,10 @@
       "items_per_second": 7.7466164484704740e+05
     },
     {
-      "name": "137-fran-pineda-strategy-501-de-franpineda/throughput/no_magnifier/iterations:20",
+      "name": "137-closed/throughput/no_magnifier/iterations:20",
       "family_index": 154,
       "per_family_instance_index": 0,
-      "run_name": "137-fran-pineda-strategy-501-de-franpineda/throughput/no_magnifier/iterations:20",
+      "run_name": "137-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2358,10 +2358,10 @@
       "items_per_second": 3.3779390744538879e+05
     },
     {
-      "name": "196-vimalboiling-refined-supertrend-atr-tsl-filters-nifty-banknifty-v2/throughput/no_magnifier/iterations:20",
+      "name": "196-closed/throughput/no_magnifier/iterations:20",
       "family_index": 155,
       "per_family_instance_index": 0,
-      "run_name": "196-vimalboiling-refined-supertrend-atr-tsl-filters-nifty-banknifty-v2/throughput/no_magnifier/iterations:20",
+      "run_name": "196-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2373,10 +2373,10 @@
       "items_per_second": 4.0993376174600463e+05
     },
     {
-      "name": "110-aiscripts-lvn-rejection-acceptance-strategy/throughput/no_magnifier/iterations:20",
+      "name": "110-closed/throughput/no_magnifier/iterations:20",
       "family_index": 156,
       "per_family_instance_index": 0,
-      "run_name": "110-aiscripts-lvn-rejection-acceptance-strategy/throughput/no_magnifier/iterations:20",
+      "run_name": "110-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2388,10 +2388,10 @@
       "items_per_second": 1.0269235870327223e+05
     },
     {
-      "name": "141-hariss369-crypto-sniper-pro-smart-trend-range-filter-strategy-hariss-369/throughput/no_magnifier/iterations:20",
+      "name": "141-closed/throughput/no_magnifier/iterations:20",
       "family_index": 157,
       "per_family_instance_index": 0,
-      "run_name": "141-hariss369-crypto-sniper-pro-smart-trend-range-filter-strategy-hariss-369/throughput/no_magnifier/iterations:20",
+      "run_name": "141-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2403,10 +2403,10 @@
       "items_per_second": 1.6966223752870440e+05
     },
     {
-      "name": "157-madue2014-twe-2-bar-break-strategy/throughput/no_magnifier/iterations:20",
+      "name": "157-closed/throughput/no_magnifier/iterations:20",
       "family_index": 158,
       "per_family_instance_index": 0,
-      "run_name": "157-madue2014-twe-2-bar-break-strategy/throughput/no_magnifier/iterations:20",
+      "run_name": "157-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2418,10 +2418,10 @@
       "items_per_second": 4.1140402905742323e+05
     },
     {
-      "name": "144-igreycrypto-adapted-rsi-w-multi-asset-regime-detection-v1-1/throughput/no_magnifier/iterations:20",
+      "name": "144-closed/throughput/no_magnifier/iterations:20",
       "family_index": 159,
       "per_family_instance_index": 0,
-      "run_name": "144-igreycrypto-adapted-rsi-w-multi-asset-regime-detection-v1-1/throughput/no_magnifier/iterations:20",
+      "run_name": "144-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2433,10 +2433,10 @@
       "items_per_second": 7.3173180643278174e+05
     },
     {
-      "name": "158-market-logic-india-low-lag-strength-oscillator/throughput/no_magnifier/iterations:20",
+      "name": "158-closed/throughput/no_magnifier/iterations:20",
       "family_index": 160,
       "per_family_instance_index": 0,
-      "run_name": "158-market-logic-india-low-lag-strength-oscillator/throughput/no_magnifier/iterations:20",
+      "run_name": "158-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2448,10 +2448,10 @@
       "items_per_second": 2.2866298995653429e+05
     },
     {
-      "name": "143-hungpixi-hungpixi-macd-enhanced-mtf-with-signal-filter-anti-sideway/throughput/no_magnifier/iterations:20",
+      "name": "143-closed/throughput/no_magnifier/iterations:20",
       "family_index": 161,
       "per_family_instance_index": 0,
-      "run_name": "143-hungpixi-hungpixi-macd-enhanced-mtf-with-signal-filter-anti-sideway/throughput/no_magnifier/iterations:20",
+      "run_name": "143-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2463,10 +2463,10 @@
       "items_per_second": 5.4397196671754448e+05
     },
     {
-      "name": "171-options7700-2min-bullish-confluence/throughput/no_magnifier/iterations:20",
+      "name": "171-closed/throughput/no_magnifier/iterations:20",
       "family_index": 162,
       "per_family_instance_index": 0,
-      "run_name": "171-options7700-2min-bullish-confluence/throughput/no_magnifier/iterations:20",
+      "run_name": "171-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2478,10 +2478,10 @@
       "items_per_second": 2.7571528558508185e+05
     },
     {
-      "name": "133-drgunjanpupadhyay-swing-trend-strategy-pro-sideways-filtered-nifty-500/throughput/no_magnifier/iterations:20",
+      "name": "133-closed/throughput/no_magnifier/iterations:20",
       "family_index": 163,
       "per_family_instance_index": 0,
-      "run_name": "133-drgunjanpupadhyay-swing-trend-strategy-pro-sideways-filtered-nifty-500/throughput/no_magnifier/iterations:20",
+      "run_name": "133-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2493,10 +2493,10 @@
       "items_per_second": 7.2710431706810335e+05
     },
     {
-      "name": "198-wellmanapex-ut-bot-stc-conjunction-strategy-tester-v4-8/throughput/no_magnifier/iterations:20",
+      "name": "198-closed/throughput/no_magnifier/iterations:20",
       "family_index": 164,
       "per_family_instance_index": 0,
-      "run_name": "198-wellmanapex-ut-bot-stc-conjunction-strategy-tester-v4-8/throughput/no_magnifier/iterations:20",
+      "run_name": "198-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2508,10 +2508,10 @@
       "items_per_second": 5.4732306055984006e+05
     },
     {
-      "name": "190-tomukasss-engulfing-mitigation-strategy/throughput/no_magnifier/iterations:20",
+      "name": "190-closed/throughput/no_magnifier/iterations:20",
       "family_index": 165,
       "per_family_instance_index": 0,
-      "run_name": "190-tomukasss-engulfing-mitigation-strategy/throughput/no_magnifier/iterations:20",
+      "run_name": "190-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2523,10 +2523,10 @@
       "items_per_second": 6.0325729182458436e+05
     },
     {
-      "name": "177-rampatel9912-super-rsi-strategy/throughput/no_magnifier/iterations:20",
+      "name": "177-closed/throughput/no_magnifier/iterations:20",
       "family_index": 166,
       "per_family_instance_index": 0,
-      "run_name": "177-rampatel9912-super-rsi-strategy/throughput/no_magnifier/iterations:20",
+      "run_name": "177-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2538,10 +2538,10 @@
       "items_per_second": 5.2367581991548487e+05
     },
     {
-      "name": "109-acalvillo20-amd1/throughput/no_magnifier/iterations:20",
+      "name": "109-closed/throughput/no_magnifier/iterations:20",
       "family_index": 167,
       "per_family_instance_index": 0,
-      "run_name": "109-acalvillo20-amd1/throughput/no_magnifier/iterations:20",
+      "run_name": "109-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2553,10 +2553,10 @@
       "items_per_second": 4.9004667933379172e+05
     },
     {
-      "name": "150-jdceagle-zigzag-de-fractales-williams/throughput/no_magnifier/iterations:20",
+      "name": "150-closed/throughput/no_magnifier/iterations:20",
       "family_index": 168,
       "per_family_instance_index": 0,
-      "run_name": "150-jdceagle-zigzag-de-fractales-williams/throughput/no_magnifier/iterations:20",
+      "run_name": "150-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2568,10 +2568,10 @@
       "items_per_second": 3.1446608726784942e+05
     },
     {
-      "name": "170-ollie-b-ollie-asia-sweep-model/throughput/no_magnifier/iterations:20",
+      "name": "170-closed/throughput/no_magnifier/iterations:20",
       "family_index": 169,
       "per_family_instance_index": 0,
-      "run_name": "170-ollie-b-ollie-asia-sweep-model/throughput/no_magnifier/iterations:20",
+      "run_name": "170-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2583,10 +2583,10 @@
       "items_per_second": 2.2379244556810573e+05
     },
     {
-      "name": "156-m-f-atipey-hybrid-3-strategy-smart-system-v6-1/throughput/no_magnifier/iterations:20",
+      "name": "156-closed/throughput/no_magnifier/iterations:20",
       "family_index": 170,
       "per_family_instance_index": 0,
-      "run_name": "156-m-f-atipey-hybrid-3-strategy-smart-system-v6-1/throughput/no_magnifier/iterations:20",
+      "run_name": "156-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2598,10 +2598,10 @@
       "items_per_second": 4.7086342131883150e+05
     },
     {
-      "name": "166-officialjackofalltrades-concordance-strategy-joat/throughput/no_magnifier/iterations:20",
+      "name": "166-closed/throughput/no_magnifier/iterations:20",
       "family_index": 171,
       "per_family_instance_index": 0,
-      "run_name": "166-officialjackofalltrades-concordance-strategy-joat/throughput/no_magnifier/iterations:20",
+      "run_name": "166-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2613,10 +2613,10 @@
       "items_per_second": 1.4795013387225129e+05
     },
     {
-      "name": "116-anonycryptous-ev-edge-anonycryptous/throughput/no_magnifier/iterations:20",
+      "name": "116-closed/throughput/no_magnifier/iterations:20",
       "family_index": 172,
       "per_family_instance_index": 0,
-      "run_name": "116-anonycryptous-ev-edge-anonycryptous/throughput/no_magnifier/iterations:20",
+      "run_name": "116-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2628,10 +2628,10 @@
       "items_per_second": 6.6680885921392229e+05
     },
     {
-      "name": "103-3commas-eth-grid-bot-long-strategy/throughput/no_magnifier/iterations:20",
+      "name": "103-closed/throughput/no_magnifier/iterations:20",
       "family_index": 173,
       "per_family_instance_index": 0,
-      "run_name": "103-3commas-eth-grid-bot-long-strategy/throughput/no_magnifier/iterations:20",
+      "run_name": "103-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2643,10 +2643,10 @@
       "items_per_second": 8.1315609328021470e+05
     },
     {
-      "name": "174-quantnomad-ut-bot-v2-atr-trailing-stop/throughput/no_magnifier/iterations:20",
+      "name": "174-closed/throughput/no_magnifier/iterations:20",
       "family_index": 174,
       "per_family_instance_index": 0,
-      "run_name": "174-quantnomad-ut-bot-v2-atr-trailing-stop/throughput/no_magnifier/iterations:20",
+      "run_name": "174-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2658,10 +2658,10 @@
       "items_per_second": 4.9624222738032462e+05
     },
     {
-      "name": "112-alexgrover-g-channel-trend-detection-alerts-non-repainting/throughput/no_magnifier/iterations:20",
+      "name": "112-closed/throughput/no_magnifier/iterations:20",
       "family_index": 175,
       "per_family_instance_index": 0,
-      "run_name": "112-alexgrover-g-channel-trend-detection-alerts-non-repainting/throughput/no_magnifier/iterations:20",
+      "run_name": "112-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2673,10 +2673,10 @@
       "items_per_second": 8.1707201593874965e+05
     },
     {
-      "name": "159-mdfe3757-trade-strategy-v8-4-pine-v6-ready/throughput/no_magnifier/iterations:20",
+      "name": "159-closed/throughput/no_magnifier/iterations:20",
       "family_index": 176,
       "per_family_instance_index": 0,
-      "run_name": "159-mdfe3757-trade-strategy-v8-4-pine-v6-ready/throughput/no_magnifier/iterations:20",
+      "run_name": "159-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2688,10 +2688,10 @@
       "items_per_second": 5.6774270977155876e+05
     },
     {
-      "name": "195-van007trader-micro-momentum-oscillator-dyna/throughput/no_magnifier/iterations:20",
+      "name": "195-closed/throughput/no_magnifier/iterations:20",
       "family_index": 177,
       "per_family_instance_index": 0,
-      "run_name": "195-van007trader-micro-momentum-oscillator-dyna/throughput/no_magnifier/iterations:20",
+      "run_name": "195-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2703,10 +2703,10 @@
       "items_per_second": 7.5514101921426808e+05
     },
     {
-      "name": "138-fran-pineda-strategy-502-de-franpineda/throughput/no_magnifier/iterations:20",
+      "name": "138-closed/throughput/no_magnifier/iterations:20",
       "family_index": 178,
       "per_family_instance_index": 0,
-      "run_name": "138-fran-pineda-strategy-502-de-franpineda/throughput/no_magnifier/iterations:20",
+      "run_name": "138-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2718,10 +2718,10 @@
       "items_per_second": 3.5095825484675413e+05
     },
     {
-      "name": "189-therealbouga-apex-mtf-index-model/throughput/no_magnifier/iterations:20",
+      "name": "189-closed/throughput/no_magnifier/iterations:20",
       "family_index": 179,
       "per_family_instance_index": 0,
-      "run_name": "189-therealbouga-apex-mtf-index-model/throughput/no_magnifier/iterations:20",
+      "run_name": "189-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2733,10 +2733,10 @@
       "items_per_second": 2.0514913721072252e+05
     },
     {
-      "name": "162-nicocashfx-prime-strategy-swing/throughput/no_magnifier/iterations:20",
+      "name": "162-closed/throughput/no_magnifier/iterations:20",
       "family_index": 180,
       "per_family_instance_index": 0,
-      "run_name": "162-nicocashfx-prime-strategy-swing/throughput/no_magnifier/iterations:20",
+      "run_name": "162-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2748,10 +2748,10 @@
       "items_per_second": 1.3898238166563274e+05
     },
     {
-      "name": "172-projectsyndicate-strong-breakout-signals-projectsyndicate/throughput/no_magnifier/iterations:20",
+      "name": "172-closed/throughput/no_magnifier/iterations:20",
       "family_index": 181,
       "per_family_instance_index": 0,
-      "run_name": "172-projectsyndicate-strong-breakout-signals-projectsyndicate/throughput/no_magnifier/iterations:20",
+      "run_name": "172-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2763,10 +2763,10 @@
       "items_per_second": 2.2560937729109195e+05
     },
     {
-      "name": "193-ttagkoin-adaptive-multi-facto-9-years/throughput/no_magnifier/iterations:20",
+      "name": "193-closed/throughput/no_magnifier/iterations:20",
       "family_index": 182,
       "per_family_instance_index": 0,
-      "run_name": "193-ttagkoin-adaptive-multi-facto-9-years/throughput/no_magnifier/iterations:20",
+      "run_name": "193-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2778,10 +2778,10 @@
       "items_per_second": 4.2774941969595326e+05
     },
     {
-      "name": "149-jayentriken-bbwp-macd-ema-trend-strategy/throughput/no_magnifier/iterations:20",
+      "name": "149-closed/throughput/no_magnifier/iterations:20",
       "family_index": 183,
       "per_family_instance_index": 0,
-      "run_name": "149-jayentriken-bbwp-macd-ema-trend-strategy/throughput/no_magnifier/iterations:20",
+      "run_name": "149-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2793,10 +2793,10 @@
       "items_per_second": 6.0783973382144526e+05
     },
     {
-      "name": "129-daytrader4beginners-box-breakout-strategy-dt4b-trader/throughput/no_magnifier/iterations:20",
+      "name": "129-closed/throughput/no_magnifier/iterations:20",
       "family_index": 184,
       "per_family_instance_index": 0,
-      "run_name": "129-daytrader4beginners-box-breakout-strategy-dt4b-trader/throughput/no_magnifier/iterations:20",
+      "run_name": "129-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2808,10 +2808,10 @@
       "items_per_second": 4.6149646404830791e+05
     },
     {
-      "name": "131-devildk-option-point/throughput/no_magnifier/iterations:20",
+      "name": "131-closed/throughput/no_magnifier/iterations:20",
       "family_index": 185,
       "per_family_instance_index": 0,
-      "run_name": "131-devildk-option-point/throughput/no_magnifier/iterations:20",
+      "run_name": "131-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2823,10 +2823,10 @@
       "items_per_second": 7.9815944836731208e+05
     },
     {
-      "name": "191-tomukasss-trend-pivot-scale-in/throughput/no_magnifier/iterations:20",
+      "name": "191-closed/throughput/no_magnifier/iterations:20",
       "family_index": 186,
       "per_family_instance_index": 0,
-      "run_name": "191-tomukasss-trend-pivot-scale-in/throughput/no_magnifier/iterations:20",
+      "run_name": "191-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2838,10 +2838,10 @@
       "items_per_second": 3.3561572438300727e+05
     },
     {
-      "name": "186-tharris235106-reversal-signals-with-profit-target-and-continuation/throughput/no_magnifier/iterations:20",
+      "name": "186-closed/throughput/no_magnifier/iterations:20",
       "family_index": 187,
       "per_family_instance_index": 0,
-      "run_name": "186-tharris235106-reversal-signals-with-profit-target-and-continuation/throughput/no_magnifier/iterations:20",
+      "run_name": "186-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2853,10 +2853,10 @@
       "items_per_second": 7.7849281688843202e+05
     },
     {
-      "name": "113-algo-aakash-macd-pullback-validation-with-divergence-filters-algo-aakash/throughput/no_magnifier/iterations:20",
+      "name": "113-closed/throughput/no_magnifier/iterations:20",
       "family_index": 188,
       "per_family_instance_index": 0,
-      "run_name": "113-algo-aakash-macd-pullback-validation-with-divergence-filters-algo-aakash/throughput/no_magnifier/iterations:20",
+      "run_name": "113-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2868,10 +2868,10 @@
       "items_per_second": 7.3759852723745815e+05
     },
     {
-      "name": "151-jos-protrader-edward-smart-channel-reversal/throughput/no_magnifier/iterations:20",
+      "name": "151-closed/throughput/no_magnifier/iterations:20",
       "family_index": 189,
       "per_family_instance_index": 0,
-      "run_name": "151-jos-protrader-edward-smart-channel-reversal/throughput/no_magnifier/iterations:20",
+      "run_name": "151-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2883,10 +2883,10 @@
       "items_per_second": 8.6025570470335265e+05
     },
     {
-      "name": "105-3commas-heikin-ashi-rsi-fade-short-strategy/throughput/no_magnifier/iterations:20",
+      "name": "105-closed/throughput/no_magnifier/iterations:20",
       "family_index": 190,
       "per_family_instance_index": 0,
-      "run_name": "105-3commas-heikin-ashi-rsi-fade-short-strategy/throughput/no_magnifier/iterations:20",
+      "run_name": "105-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2898,10 +2898,10 @@
       "items_per_second": 5.4602936746796698e+05
     },
     {
-      "name": "114-amandaborgeson06-bias-status-dashboard/throughput/no_magnifier/iterations:20",
+      "name": "114-closed/throughput/no_magnifier/iterations:20",
       "family_index": 191,
       "per_family_instance_index": 0,
-      "run_name": "114-amandaborgeson06-bias-status-dashboard/throughput/no_magnifier/iterations:20",
+      "run_name": "114-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2913,10 +2913,10 @@
       "items_per_second": 1.6839430415141862e+05
     },
     {
-      "name": "126-cntvxiao-smc-vsa-oi/throughput/no_magnifier/iterations:20",
+      "name": "126-closed/throughput/no_magnifier/iterations:20",
       "family_index": 192,
       "per_family_instance_index": 0,
-      "run_name": "126-cntvxiao-smc-vsa-oi/throughput/no_magnifier/iterations:20",
+      "run_name": "126-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2928,10 +2928,10 @@
       "items_per_second": 5.7688193437138258e+05
     },
     {
-      "name": "201-robmagnaye14-eb-ict-one-trade-setup-for-life-70-filter-model-v2/throughput/no_magnifier/iterations:20",
+      "name": "201-closed/throughput/no_magnifier/iterations:20",
       "family_index": 193,
       "per_family_instance_index": 0,
-      "run_name": "201-robmagnaye14-eb-ict-one-trade-setup-for-life-70-filter-model-v2/throughput/no_magnifier/iterations:20",
+      "run_name": "201-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2943,10 +2943,10 @@
       "items_per_second": 6.0254654096340737e+05
     },
     {
-      "name": "163-nightowlxtrader-azt-strategy-v11-first-draft/throughput/no_magnifier/iterations:20",
+      "name": "163-closed/throughput/no_magnifier/iterations:20",
       "family_index": 194,
       "per_family_instance_index": 0,
-      "run_name": "163-nightowlxtrader-azt-strategy-v11-first-draft/throughput/no_magnifier/iterations:20",
+      "run_name": "163-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2958,10 +2958,10 @@
       "items_per_second": 9.1200494213362777e+04
     },
     {
-      "name": "179-richmondhillcm-richmondhillcm-vwap-volume-spike-suite-v1-3/throughput/no_magnifier/iterations:20",
+      "name": "179-closed/throughput/no_magnifier/iterations:20",
       "family_index": 195,
       "per_family_instance_index": 0,
-      "run_name": "179-richmondhillcm-richmondhillcm-vwap-volume-spike-suite-v1-3/throughput/no_magnifier/iterations:20",
+      "run_name": "179-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2973,10 +2973,10 @@
       "items_per_second": 6.8985807950337895e+05
     },
     {
-      "name": "107-3commas-xmr-grid-bot-long-strategy/throughput/no_magnifier/iterations:20",
+      "name": "107-closed/throughput/no_magnifier/iterations:20",
       "family_index": 196,
       "per_family_instance_index": 0,
-      "run_name": "107-3commas-xmr-grid-bot-long-strategy/throughput/no_magnifier/iterations:20",
+      "run_name": "107-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -2988,10 +2988,10 @@
       "items_per_second": 6.0574644217051403e+05
     },
     {
-      "name": "192-trendchain0719-9-21-ema-volume-spike-bollinger-bands-vwap/throughput/no_magnifier/iterations:20",
+      "name": "192-closed/throughput/no_magnifier/iterations:20",
       "family_index": 197,
       "per_family_instance_index": 0,
-      "run_name": "192-trendchain0719-9-21-ema-volume-spike-bollinger-bands-vwap/throughput/no_magnifier/iterations:20",
+      "run_name": "192-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -3003,10 +3003,10 @@
       "items_per_second": 8.8218021805453557e+05
     },
     {
-      "name": "185-simon20cent-efi-macd-advanced-pro/throughput/no_magnifier/iterations:20",
+      "name": "185-closed/throughput/no_magnifier/iterations:20",
       "family_index": 198,
       "per_family_instance_index": 0,
-      "run_name": "185-simon20cent-efi-macd-advanced-pro/throughput/no_magnifier/iterations:20",
+      "run_name": "185-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -3018,10 +3018,10 @@
       "items_per_second": 6.0011161192435340e+05
     },
     {
-      "name": "148-jayendranath4-banknifty-15m-clear-tp-sl-strategy/throughput/no_magnifier/iterations:20",
+      "name": "148-closed/throughput/no_magnifier/iterations:20",
       "family_index": 199,
       "per_family_instance_index": 0,
-      "run_name": "148-jayendranath4-banknifty-15m-clear-tp-sl-strategy/throughput/no_magnifier/iterations:20",
+      "run_name": "148-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
@@ -3033,10 +3033,10 @@
       "items_per_second": 7.7736223834891967e+05
     },
     {
-      "name": "121-bipinbiharipatra-5m-sol-scalper-ha-lorentzian/throughput/no_magnifier/iterations:20",
+      "name": "121-closed/throughput/no_magnifier/iterations:20",
       "family_index": 200,
       "per_family_instance_index": 0,
-      "run_name": "121-bipinbiharipatra-5m-sol-scalper-ha-lorentzian/throughput/no_magnifier/iterations:20",
+      "run_name": "121-closed/throughput/no_magnifier/iterations:20",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,

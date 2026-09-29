@@ -8,7 +8,7 @@ realistic per-strategy cost for a Python-runtime engine.
 A slot without strategy_pyne.py (a PyneSys compile rejection) is skipped
 gracefully when the subprocess returns non-zero. ``--slots`` (slot-number
 ranges) and ``--out`` let a long sweep run in chunks whose JSON files merge
-by key.
+by key. A closed slot is keyed ``NNN-closed`` (``paths.public_name``).
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BENCH = REPO_ROOT / "benchmarks"
 sys.path.insert(0, str(BENCH))
-from paths import STRATEGY_ROOTS  # noqa: E402
+from paths import STRATEGY_ROOTS, public_name  # noqa: E402
 
 DEFAULT_N = 20
 
@@ -81,7 +81,7 @@ def main() -> None:
         for d in sorted(root.iterdir()):
             if not d.is_dir() or d.name.startswith("_") or d.name.startswith("."):
                 continue
-            if args.only and args.only not in d.name:
+            if args.only and args.only not in d.name and args.only not in public_name(d):
                 continue
             if wanted is not None and int(d.name.split("-", 1)[0]) not in wanted:
                 continue
@@ -91,7 +91,7 @@ def main() -> None:
 
     def process_strat(d: Path) -> tuple[str, dict | None]:
         res = time_one(d, args.n)
-        return d.name, res
+        return public_name(d), res
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {executor.submit(process_strat, d): d for d in strat_dirs}

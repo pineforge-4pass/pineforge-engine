@@ -2243,9 +2243,8 @@
    ]
   },
   {
-   "slot": "101-3commas-3commas-bch-overbought-rsi-fade-short-indicator",
+   "slot": "101-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/3commas-3commas-bch-overbought-rsi-fade-short-indicator",
    "stratum": "hard",
    "bin": 33,
    "tvTrades": 288,
@@ -2256,16 +2255,11 @@
     "2026-04-29 13:45"
    ],
    "tapeSha256": "aa70f2795bb4a83a8c46927391889eb3e494677dece6c3af496548fb90821e39",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "3commas-3commas-dot-rsi-reversal-dca-short-indicator",
-    "presbiterga-range-breakout-session-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "102-3commas-3commas-pol-grid-bot-long-strategy",
+   "slot": "102-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/3commas-3commas-pol-grid-bot-long-strategy",
    "stratum": "hard",
    "bin": 39,
    "tvTrades": 354,
@@ -2276,17 +2270,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "2733143f096e425ce42984c1683dd2fef847fcb2f0cb4f31dd61539ba5f62f35",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "reeduck-neo-matrix",
-    "errajeshmangal-test",
-    "3commas-link-grid-bot-long-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "103-3commas-eth-grid-bot-long-strategy",
+   "slot": "103-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/3commas-eth-grid-bot-long-strategy",
    "stratum": "hard",
    "bin": 37,
    "tvTrades": 332,
@@ -2297,17 +2285,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "68d5ca9986ad23a605ded2cd95b196914d9a590ba91f824260e9ccd0f52d741b",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "alpha-wizard-wave-oscillator",
-    "pridarasx-turtle-soup-strategy-with-1-bar-confirmation",
-    "andrehan-elite-ultimate-smc-pro-probability-engine"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "104-3commas-gram-rsi-strategy-3commas",
+   "slot": "104-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/3commas-gram-rsi-strategy-3commas",
    "stratum": "hard",
    "bin": 9,
    "tvTrades": 43,
@@ -2318,16 +2300,11 @@
     "2026-03-16 04:00"
    ],
    "tapeSha256": "2fd03e97b4b5368dff28bd95d9bc37931daf76bfdfbd574b956d07a2f981bec4",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "3commas-3commas-tao-rsi-oversold-doubling-dca-long-strategy",
-    "doriannnq-tjr-v4-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "105-3commas-heikin-ashi-rsi-fade-short-strategy",
+   "slot": "105-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/3commas-heikin-ashi-rsi-fade-short-strategy",
    "stratum": "hard",
    "bin": 43,
    "tvTrades": 392,
@@ -2338,17 +2315,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "b815af792d78da29d109390937eb39021c2745b68d6130a85f3ac0e847dc7ea5",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "nils123456-mnq-15m-ny-open-orb-strategy",
-    "ltony-oracle-matrix-red-pill",
-    "officialjackofalltrades-quant-synthesis-strategy-joat"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "106-3commas-sol-rsi-dca-long-strategy",
+   "slot": "106-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/3commas-sol-rsi-dca-long-strategy",
    "stratum": "hard",
    "bin": 7,
    "tvTrades": 29,
@@ -2359,17 +2330,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "13196b6f148a6136edb01719cea847cdb43339faa9d392684307ef4853ed8da6",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "bnf6082-market-open-break",
-    "bnf6082-market-open-break-2-0",
-    "ltony-matrix-killzone-trend-filter-session-sniper"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "107-3commas-xmr-grid-bot-long-strategy",
+   "slot": "107-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/3commas-xmr-grid-bot-long-strategy",
    "stratum": "hard",
    "bin": 41,
    "tvTrades": 371,
@@ -2380,17 +2345,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "36e6d2e080f2fe3ef2a9ae5afefe63dd565212fb5688d0b192f5467667854189",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "pacorodriguez-ber-nas100-sp500-turtle-soup-ny-v4-fixed",
-    "bprakaash-new-era-strategy-1-0",
-    "officialjackofalltrades-helios-institutional-synthesis-strategy-joat"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "108-a-popal-simple-smart-buy-sell-strategy",
+   "slot": "108-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/a-popal-simple-smart-buy-sell-strategy",
    "stratum": "hard",
    "bin": 86,
    "tvTrades": 2559,
@@ -2401,17 +2360,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "cc5ef7db940dde934c4362ec99ecdc697a40ffc4bd544afebc1dd3139d89338e",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "beyondthemarkets-black-diamond-fvg",
-    "gb2wgkrtxs-liquidity-sweep-strategy-m2-swing",
-    "mikemucurry-clean-vwap-zl-scalper-single-trigger-by-sandip"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "109-acalvillo20-amd1",
+   "slot": "109-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/acalvillo20-amd1",
    "stratum": "hard",
    "bin": 22,
    "tvTrades": 172,
@@ -2422,17 +2375,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "5f761d47f02520b5ff5d70ab77ef0317f6e3dda9b058cbf086735b35f23cb098",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "robmagnaye14-eb-ict-one-trade-setup-for-life-sniper-70-model-v5",
-    "wardy05-the-club",
-    "jonny-dow-opening-price-level-breakout"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "110-aiscripts-lvn-rejection-acceptance-strategy",
+   "slot": "110-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/aiscripts-lvn-rejection-acceptance-strategy",
    "stratum": "hard",
    "bin": 88,
    "tvTrades": 2949,
@@ -2443,17 +2390,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "0da1fec8106ab45a9e0cdc715fd918228d3f9b0f21e85bd301fe60160f658b9c",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "boztilkiserhan-serhan1-wma-rsi-trailing-scalp-date-filter",
-    "richiedino90-liquidity-zones-vwap-ema-system",
-    "brosbothbk-chande-kroll-stop-exness-look-like-styles"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "111-ajayinderbrar-ajay-fibonacci-market-structure-pro-ai-v2-1",
+   "slot": "111-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/ajayinderbrar-ajay-fibonacci-market-structure-pro-ai-v2-1",
    "stratum": "hard",
    "bin": 84,
    "tvTrades": 2373,
@@ -2464,17 +2405,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "571910000301fdf4da4aa5207c378727d4aa932a969d026df7761ba8dee6fa56",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "colasbreugnon-good-luck",
-    "artificialintelligencealgo-algoai-ema-rsi-entry-exit-system",
-    "elistools-fvg-toolkit-smart-money"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "112-alexgrover-g-channel-trend-detection-alerts-non-repainting",
+   "slot": "112-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/alexgrover-g-channel-trend-detection-alerts-non-repainting",
    "stratum": "hard",
    "bin": 46,
    "tvTrades": 462,
@@ -2485,17 +2420,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "e455961fe6c8cd189eee1f95d061625da642eec0848d1278f72aefb13c3a71ea",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "adxae-z-score-statistical-bands",
-    "strategylab-liquidity-dynamic-trend",
-    "projectsyndicate-strong-reversal-signals-projectsyndicate"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "113-algo-aakash-macd-pullback-validation-with-divergence-filters-algo-aakash",
+   "slot": "113-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/algo-aakash-macd-pullback-validation-with-divergence-filters-algo-aakash",
    "stratum": "hard",
    "bin": 3,
    "tvTrades": 7,
@@ -2506,17 +2435,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "b5bad67a5176778a206dcb4dab7381e77a1de0eb8eb40b391ff5d1c56101b930",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "version-eurgbp-daily-2023-strategy",
-    "ayusattv-z-score-mean-reversion-pro",
-    "version-eurgbp-daily-2024-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "114-amandaborgeson06-bias-status-dashboard",
+   "slot": "114-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/amandaborgeson06-bias-status-dashboard",
    "stratum": "hard",
    "bin": 83,
    "tvTrades": 2183,
@@ -2527,17 +2450,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "871579279c15d27949bfb359479d8b8c8efeb93bfdb4980aaef5b3374dbd562f",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "bladzehairsalon-the-greatest-bot-ever-made-pmt-apex-edition",
-    "jos-protrader-auto-candlestick-patterns-targets-setup",
-    "algoalpha-machine-learning-adaptive-dmi-signals-algoalpha"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "115-anji-ga-9-21ema-anji",
+   "slot": "115-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/anji-ga-9-21ema-anji",
    "stratum": "hard",
    "bin": 24,
    "tvTrades": 196,
@@ -2548,17 +2465,11 @@
     "2026-04-29 15:30"
    ],
    "tapeSha256": "a59a6c6b7a2fdfbb6f7a37a234165ae8b339fe5ebb42bdc7e077ed0a1136b4f8",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "saivivek0192-fabio-whale-vrvp",
-    "santiagomunoz00-mes-orb-v6-santi",
-    "pridarasx-ewo-rsi-advanced-signals-strategy-exhaustion-filter"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "116-anonycryptous-ev-edge-anonycryptous",
+   "slot": "116-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/anonycryptous-ev-edge-anonycryptous",
    "stratum": "hard",
    "bin": 63,
    "tvTrades": 866,
@@ -2569,17 +2480,11 @@
     "2026-04-30 03:30"
    ],
    "tapeSha256": "f540848f4b1f430eecfd260eacd8434805bf3af6139184bebbcc40dd60943da3",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "officialjackofalltrades-caldera-meridian-strategy-joat",
-    "bblacks-tv-options-momentum-bias-strategy-v2",
-    "erdensedat-fvg-bias-finder-erdensedat"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "117-antoniolinux-rsi-mfi-divergence-momentum",
+   "slot": "117-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/antoniolinux-rsi-mfi-divergence-momentum",
    "stratum": "hard",
    "bin": 35,
    "tvTrades": 298,
@@ -2590,17 +2495,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "d98667863b597158c6f0f0a6db50ec5235ec0462ee6c358df085b11b823cdb8d",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "drakkhon-nasdaq-orb-strategy-strict-exec-rrr-2-0-fixed",
-    "equivest-equivest-supply-and-demand-zone",
-    "mayur-das4-mayur-stock-monthly-option-seller"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "118-averagepoe-mnq-anomaly-candle-sma-confluence-v6",
+   "slot": "118-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/averagepoe-mnq-anomaly-candle-sma-confluence-v6",
    "stratum": "hard",
    "bin": 31,
    "tvTrades": 253,
@@ -2611,17 +2510,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "c91f62dd32be6f47008ce3f8fb31d93a5d741f686acd48d1007024a421ba422f",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "3commas-3commas-silicon-vault-long-intc-dca-strategy",
-    "sunitkumar-sugar-baby-scanner-position-size-us-nse",
-    "fran-pineda-strategy-500-turtle-soup-ny-v5-m5-sweep"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "119-backtestbay-strategy-validation-framework-standardised-atr-exits-1-ris",
+   "slot": "119-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/backtestbay-strategy-validation-framework-standardised-atr-exits-1-ris",
    "stratum": "hard",
    "bin": 47,
    "tvTrades": 466,
@@ -2632,16 +2525,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "0357a2a47aa4409d6e6946c36748247ee32acf214bf49e7e8585490f577beb72",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "forexver-xauusd-sok-sondurucu-stratejisi",
-    "jaysharmaofficial-alphamojo-supertrend-strategy-ha-with-buffer"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "120-benblackdiamond-l2gmom-network-momentum",
+   "slot": "120-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/benblackdiamond-l2gmom-network-momentum",
    "stratum": "hard",
    "bin": 44,
    "tvTrades": 416,
@@ -2652,17 +2540,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "6bc27f274d4d9bae63950a8533119c57fb5fbf8d2ddeed10d79e60de76bfa64d",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "mohammedimranpoc14-nifty-supertrend-ce-strategy-alice-blue",
-    "jos-protrader-pivot-breakout-high-low-signals-jpt",
-    "vasanth-mvk-velocity-breakout-strategy-vbs"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "121-bipinbiharipatra-5m-sol-scalper-ha-lorentzian",
+   "slot": "121-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/bipinbiharipatra-5m-sol-scalper-ha-lorentzian",
    "stratum": "hard",
    "bin": 71,
    "tvTrades": 1119,
@@ -2673,16 +2555,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "31562bb5240e646c9a7060b1c0843c44790b906037ea7dfd31c39e6bf8f74883",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "alpha-forge-alpha-forge-liquidity-matrix-v2-2",
-    "geckin-joey-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "122-cb85wj5jmt-moja-strategia-harami-bb",
+   "slot": "122-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/cb85wj5jmt-moja-strategia-harami-bb",
    "stratum": "hard",
    "bin": 81,
    "tvTrades": 1976,
@@ -2693,17 +2570,11 @@
     "2026-04-30 17:30"
    ],
    "tapeSha256": "682a71b9d93a5c179375ddbc9722892f9e2ac601a267b6029092514758324071",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "freddycandle-fc-ema-trend",
-    "musashibruno-ck-index-strategy-open-source-code-free-no-cost",
-    "wayward-bison-vumanchu-wt-zero-cross-strategy-v1-2-2"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "123-chadow6875-swing-high-low-ict-clean-pro",
+   "slot": "123-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/chadow6875-swing-high-low-ict-clean-pro",
    "stratum": "hard",
    "bin": 99,
    "tvTrades": 14289,
@@ -2714,17 +2585,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "4c62e16d42273c8ba65d2894b9076fbff164d880a3d8b2f08df100adfcf3795e",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "steversteves-machine-learning-point-forecast-with-sr-ss",
-    "blackelonmuskonwebull-clean-buyers-vs-sellers-control-black-elon-musk",
-    "masayanfx-spike-ea-trade-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "124-cihanozdemir-trade-id-signal-engine-buy-only-option",
+   "slot": "124-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/cihanozdemir-trade-id-signal-engine-buy-only-option",
    "stratum": "hard",
    "bin": 25,
    "tvTrades": 200,
@@ -2735,17 +2600,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "fdfbf3158a86b5c6340ea36beba6fc379cf644d6b6c767beb6e531dd3c59bdb0",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "r2keymoneymind-xauusd-15m-200-ema-1h-ut-bot-adx-strategy",
-    "lennon-bartling-8am-opening-range-zone",
-    "manjotblue-smart-money-concepts-pa"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "125-cleightyp-cleightyp-bos-sma-macd-vwap",
+   "slot": "125-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/cleightyp-cleightyp-bos-sma-macd-vwap",
    "stratum": "hard",
    "bin": 74,
    "tvTrades": 1396,
@@ -2756,17 +2615,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "165b02696d5c68d0eeb1eeaea3712c27845330c2891e4a222a04b5e2ccf69d25",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "kite4corporation-ema-crossover-labeled-swing-levels-indicator-v6-by-jc",
-    "mylivingedge-mylivingedgefx-panel",
-    "jos-protrader-liquidity-sweep-detector-pro"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "126-cntvxiao-smc-vsa-oi",
+   "slot": "126-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/cntvxiao-smc-vsa-oi",
    "stratum": "hard",
    "bin": 67,
    "tvTrades": 978,
@@ -2777,17 +2630,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "c87559bc98c83e63cd6df69494cb63472409e8c31102da27aa7b06ffecce55c7",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "shahbazgold-ai-triple-confirmation-strategy",
-    "z8830-bb-macd-v6-1-5-qing-smart-distribution",
-    "adxae-trend-pulse-channel-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "127-codetradesalgo-fix-webhook-latency-dh-905-errors-pinescript-to-python-bridge",
+   "slot": "127-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/codetradesalgo-fix-webhook-latency-dh-905-errors-pinescript-to-python-bridge",
    "stratum": "hard",
    "bin": 78,
    "tvTrades": 1743,
@@ -2798,17 +2645,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "2820f1e28ab1f2df96841a32afa010f91e858ae6b7260f2d8fb9f2c484267a60",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "bhavik51-pivot-point-standard",
-    "kevincheung6688-price-action-index-zwyzjnwhj-imitation-v6-pro-tcp",
-    "codetradesalgo-codetrades-sub-50ms-webhook-formatter"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "128-colasbreugnon-nq-scalp-fix-signals",
+   "slot": "128-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/colasbreugnon-nq-scalp-fix-signals",
    "stratum": "hard",
    "bin": 77,
    "tvTrades": 1574,
@@ -2819,17 +2660,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "2b8e8ca037a0ea86eaa12820fea1c8c4204a3068bb9e7cd1f083dde16ec3f00b",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "gurpreetrahal6-gc-overlay-pro-v3-2",
-    "rsouzaeverton-btc-averages-strategy-long-short",
-    "officialjackofalltrades-concordance-allocation-strategy-joat"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "129-daytrader4beginners-box-breakout-strategy-dt4b-trader",
+   "slot": "129-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/daytrader4beginners-box-breakout-strategy-dt4b-trader",
    "stratum": "hard",
    "bin": 76,
    "tvTrades": 1562,
@@ -2840,16 +2675,11 @@
     "2026-04-30 14:15"
    ],
    "tapeSha256": "d292aecf9f292c154105b0ce1316349ee6f5546dbcdd61d56af2480e0a867a05",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "rsantanabooking-simple-breakout-strategy-santana",
-    "klowdcossey99-my-strategy-9"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "130-delta-crypto-mu-overnight-gap-capture",
+   "slot": "130-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/delta-crypto-mu-overnight-gap-capture",
    "stratum": "hard",
    "bin": 94,
    "tvTrades": 5148,
@@ -2860,17 +2690,11 @@
     "2026-04-30 19:45"
    ],
    "tapeSha256": "db23b1355b033879f16b4e61e918074a93e9766d7ef49280d543d2369619d87e",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "taro-s-edvefi-standard-ma-version",
-    "taro-s-volumema",
-    "trendmatrix-labs-trendmatrix-institutional-momentum-regime-engine"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "131-devildk-option-point",
+   "slot": "131-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/devildk-option-point",
    "stratum": "hard",
    "bin": 27,
    "tvTrades": 210,
@@ -2881,17 +2705,11 @@
     "2026-04-29 15:45"
    ],
    "tapeSha256": "bb52e49d3d11d840588421c93507f8c01527814c9dad320e4db094d843984380",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "gpmpastorsc-20-200-sma-strategy",
-    "cipher-instinct-market-structure-supertrend-cipher-instinct",
-    "ruchiragrawal-cluster-breakout-strategy-v6-robust"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "132-dinkus3-obsidian",
+   "slot": "132-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/dinkus3-obsidian",
    "stratum": "hard",
    "bin": 14,
    "tvTrades": 86,
@@ -2902,16 +2720,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "4d45565db41a81fbb6de42ffdd0d9bbe24a30417eb351a66ccbfea42cda41de7",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "yukozb-gold-ny-orb-v19-close-20-00",
-    "van007trader-volume-profile-lite-dyna"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "133-drgunjanpupadhyay-swing-trend-strategy-pro-sideways-filtered-nifty-500",
+   "slot": "133-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/drgunjanpupadhyay-swing-trend-strategy-pro-sideways-filtered-nifty-500",
    "stratum": "hard",
    "bin": 36,
    "tvTrades": 313,
@@ -2922,17 +2735,11 @@
     "2026-04-29 12:15"
    ],
    "tapeSha256": "2c15b7886a2f5053dd11992f49a912a1c2e3801cd48e4068bdba5d0ace32259f",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "dub4art-zero-lag-cvd-rsi-stochastic-divergence-all-in-one-d4a",
-    "b-ram18-hos",
-    "zenoutman-imbalance-repricing-engine-zom"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "134-elomadablah-atr-trailing-stoploss-multi",
+   "slot": "134-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/elomadablah-atr-trailing-stoploss-multi",
    "stratum": "hard",
    "bin": 91,
    "tvTrades": 3369,
@@ -2943,17 +2750,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "692687a48f6cac05ad3d87a8dab70b7712e1a6773ef657ee829fcd2ab8d766a1",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "rhyme17-trendline-and-horizontal-breakout",
-    "dontcare12-obv-trend-candles",
-    "aiscripts-trend-persistence-analysis-framework"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "135-finnp17-atm",
+   "slot": "135-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/finnp17-atm",
    "stratum": "hard",
    "bin": 79,
    "tvTrades": 1790,
@@ -2964,17 +2765,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "cd4beb5c195c7d735a985ee07208c3cc25da611b0a785544d31d4934ca18742f",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "agaam-gfg-orb-asia-london-new-york-by-agaam",
-    "officialjackofalltrades-aureate-market-architecture-strategy-joat",
-    "forexcracked-fvg-order-block-toolkit-forexcracked"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "136-fondbird7020-vishall-ema-9-20-50-200-dmi-adx-strategy",
+   "slot": "136-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/fondbird7020-vishall-ema-9-20-50-200-dmi-adx-strategy",
    "stratum": "hard",
    "bin": 65,
    "tvTrades": 928,
@@ -2985,17 +2780,11 @@
     "2026-04-29 10:45"
    ],
    "tapeSha256": "1c082e93f8c467925b9168f20d519241f281981613368f4a8369e76d3b0a0edd",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "bg7crypto-bg7-nq-8am-orb-v2",
-    "shojiy940207-atr-big-candle-alert-v2",
-    "giua64-aquila-reale-bos-choch-zone"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "137-fran-pineda-strategy-501-de-franpineda",
+   "slot": "137-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/fran-pineda-strategy-501-de-franpineda",
    "stratum": "hard",
    "bin": 29,
    "tvTrades": 224,
@@ -3006,17 +2795,11 @@
     "2026-04-30 20:00"
    ],
    "tapeSha256": "73d202dec54a974633793fd10e51dc515f177a4fbafddf118d059f2746e2d882",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "robmagnaye14-eb-ict-v5-professional-trader-model",
-    "bitfundamental-swing-breakout-strategy-quant-core",
-    "samjnq-initial-balance-breakout-samjnq-v3"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "138-fran-pineda-strategy-502-de-franpineda",
+   "slot": "138-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/fran-pineda-strategy-502-de-franpineda",
    "stratum": "hard",
    "bin": 20,
    "tvTrades": 151,
@@ -3027,17 +2810,11 @@
     "2026-04-30 20:00"
    ],
    "tapeSha256": "dfd1b484dc8d54ae304bd1ada5cb3ed3dcb58e810a3fd71efac71e156c584396",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "chartprime-volumetric-trend-ribbon-pro-chartprime",
-    "van007trader-vwap-deviation-score-dyna",
-    "3commas-3commas-bch-heikin-ashi-rsi-fade-short-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "139-francescodimichele-gold-ai-strategy-v2-0",
+   "slot": "139-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/francescodimichele-gold-ai-strategy-v2-0",
    "stratum": "hard",
    "bin": 55,
    "tvTrades": 643,
@@ -3048,17 +2825,11 @@
     "2026-04-30 13:15"
    ],
    "tapeSha256": "226b31955f73d82c41e0f8da449687647b0dedd6982a7e5c13af7355175364a2",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "crypt0graf-btc-turtle-paper-strategy-v1-bitstamp",
-    "shiroi-volatility-surge-strategy",
-    "algo-aakash-smart-money-stop-hunt-detector-algo-aakash"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "140-gonzowiththewind-sisyphus-happiness",
+   "slot": "140-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/gonzowiththewind-sisyphus-happiness",
    "stratum": "hard",
    "bin": 15,
    "tvTrades": 96,
@@ -3069,17 +2840,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "7a38cd8d275d7916dcb2108bfc24593bf02f2cf259787390701103353e5ec127",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "vinay-poojary-order-block-strategy",
-    "drop-trades-drop-s-opening-range-breakout-orb",
-    "nils123456-orb-strat"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "141-hariss369-crypto-sniper-pro-smart-trend-range-filter-strategy-hariss-369",
+   "slot": "141-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/hariss369-crypto-sniper-pro-smart-trend-range-filter-strategy-hariss-369",
    "stratum": "hard",
    "bin": 60,
    "tvTrades": 774,
@@ -3090,17 +2855,11 @@
     "2026-04-30 15:30"
    ],
    "tapeSha256": "7c8975c4b8cec355d034cd01cea92798dd98a337f5511546da299be52316862d",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "vasudevshenoy-manoj-betrayed-me",
-    "ananthanvelmurugan-orb-lite",
-    "3commas-nvdax-grid-bot-long-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "142-hermescore-momentum-conviction-hermescore",
+   "slot": "142-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/hermescore-momentum-conviction-hermescore",
    "stratum": "hard",
    "bin": 90,
    "tvTrades": 3194,
@@ -3111,16 +2870,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "8bc274b1c1d09934b0387552cd9676afa328a73c735db8f5ea3dd32e190e06df",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "aiscripts-market-breadth-trend-strategy",
-    "proozac98-advvolbars-proozac"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "143-hungpixi-hungpixi-macd-enhanced-mtf-with-signal-filter-anti-sideway",
+   "slot": "143-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/hungpixi-hungpixi-macd-enhanced-mtf-with-signal-filter-anti-sideway",
    "stratum": "hard",
    "bin": 1,
    "tvTrades": 4,
@@ -3131,17 +2885,11 @@
     "2025-11-05 01:00"
    ],
    "tapeSha256": "3018806c7e56b22f13e0da37c452d85be5fcc94792675faedbe200b7cec0713e",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "vikprimus-level-breakout-consolidation",
-    "traderhayz-prison-escape-breakout-strategy",
-    "artificialintelligencealgo-algoai-swing-point-reversal-hunter"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "144-igreycrypto-adapted-rsi-w-multi-asset-regime-detection-v1-1",
+   "slot": "144-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/igreycrypto-adapted-rsi-w-multi-asset-regime-detection-v1-1",
    "stratum": "hard",
    "bin": 49,
    "tvTrades": 513,
@@ -3152,17 +2900,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "0bb68a72fe55ebd1d3e4e06488717a0f165c3ced6963d1d54b4b7eb8258c6dee",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "p181342x-china-a-share-long-trend-resonance-system-clr-system",
-    "phenlabs-liquidity-sweep-absorption-reversal-engine-phenlabs",
-    "abhivish-surgical-sweep-original-restored"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "145-imtiyazali73-imtiyaz-signature-liquidity-compass-smc",
+   "slot": "145-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/imtiyazali73-imtiyaz-signature-liquidity-compass-smc",
    "stratum": "hard",
    "bin": 64,
    "tvTrades": 906,
@@ -3173,17 +2915,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "5b2e1b4c12997d86641e4e48c42f7509d83bb3ada24f07521e17e97c604d7aa9",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "jake-theboss-master-trend-strategy-v1-0",
-    "shiroi-zl-trend-indicator",
-    "boztilkiserhan-serhan-1-wma-adx-trailing-date-filter"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "146-inr3d-r3d-jackofxc-rtp-strategy",
+   "slot": "146-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/inr3d-r3d-jackofxc-rtp-strategy",
    "stratum": "hard",
    "bin": 10,
    "tvTrades": 48,
@@ -3194,17 +2930,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "445dab0b80b43cd8b2d844026d08fb83787a9abfedd961eaef19cb3521262785",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "rumdopfstocks-btc-4h-rsi-bullish-engulfing",
-    "swallowacademy-sca-weekend-gap-indicator",
-    "egoigor1976-1-trendline-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "147-jaydeepp095-candle-harry",
+   "slot": "147-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/jaydeepp095-candle-harry",
    "stratum": "hard",
    "bin": 58,
    "tvTrades": 746,
@@ -3215,17 +2945,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "82765008ced503b0b215e21f0332495abdc83275d72adcca23fae10c9b7698d7",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "shiroi-supertrend-bb-strategy-stb",
-    "roxview-roxema-12-21",
-    "waranyutrkm-asian-box-breakout-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "148-jayendranath4-banknifty-15m-clear-tp-sl-strategy",
+   "slot": "148-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/jayendranath4-banknifty-15m-clear-tp-sl-strategy",
    "stratum": "hard",
    "bin": 45,
    "tvTrades": 430,
@@ -3236,17 +2960,11 @@
     "2026-04-30 14:30"
    ],
    "tapeSha256": "50f5570ff377f956914fbe8e9f4fe0775b901f25cbfd5bae0e4bab783575e27f",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "miemomo3-expma-analysis",
-    "todrock-solana-day-trader-1-02",
-    "shiroi-qqe-trend-strategy-long-short"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "149-jayentriken-bbwp-macd-ema-trend-strategy",
+   "slot": "149-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/jayentriken-bbwp-macd-ema-trend-strategy",
    "stratum": "hard",
    "bin": 52,
    "tvTrades": 593,
@@ -3257,16 +2975,11 @@
     "2026-04-27 01:45"
    ],
    "tapeSha256": "df0fb4421556ded0349c79e1030d792551af239338ed1454c3f66763d655162f",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "ahtisham-ee-decoded-volatility-expansion-ahtisham",
-    "projectsyndicate-strong-impulse-signals-projectsyndicate"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "150-jdceagle-zigzag-de-fractales-williams",
+   "slot": "150-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/jdceagle-zigzag-de-fractales-williams",
    "stratum": "hard",
    "bin": 98,
    "tvTrades": 8491,
@@ -3277,17 +2990,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "ef5cd1538cab6c6148a86260ffa7aba027ccf1d45f237231d1820bb541393827",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "masayanfx-scalping-london-new-york-strategy",
-    "willowsportz-pk-willow-pulse-ut-williams-live-movement",
-    "remarkablefreddy-scale-strat-trade-plan-wedge-trendlines"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "151-jos-protrader-edward-smart-channel-reversal",
+   "slot": "151-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/jos-protrader-edward-smart-channel-reversal",
    "stratum": "hard",
    "bin": 5,
    "tvTrades": 16,
@@ -3298,17 +3005,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "4b4e985c535f5f396740e38f50875f36fdf55380a251fba07d6ecb04e94496fc",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "heneralmomo25-selda-97ma",
-    "colasbreugnon-as-1m-smart-money-strategy",
-    "yubinzhang802-turtle-traders-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "152-jos-protrader-edward-smart-liquidity-sweep",
+   "slot": "152-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/jos-protrader-edward-smart-liquidity-sweep",
    "stratum": "hard",
    "bin": 69,
    "tvTrades": 1040,
@@ -3319,17 +3020,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "b2633e126d99262fa63a269f92008340b68173bef012375fdeb98a62d8ab686b",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "finntech1-event-horizon",
-    "skyricho-jake-bernstein-moving-average-channel-for-widget",
-    "bhajneek12-ema-dmi-macd-rsi-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "153-jos-protrader-edward-smart-momentum-pro",
+   "slot": "153-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/jos-protrader-edward-smart-momentum-pro",
    "stratum": "hard",
    "bin": 30,
    "tvTrades": 232,
@@ -3340,17 +3035,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "0e12961404db3d76dcaa93d3b174104cedeb907f4862ced01e22d8a35bd6c842",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "crypto-imperija-adaptive-atr-trend-bands",
-    "wielkieef-rsi-volume-ladder",
-    "fran-pineda-strategy-250-xauusd-composite-quality-score"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "154-khanhtq26-psol-01-donchian-channels",
+   "slot": "154-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/khanhtq26-psol-01-donchian-channels",
    "stratum": "hard",
    "bin": 38,
    "tvTrades": 346,
@@ -3361,16 +3050,11 @@
     "2026-04-29 14:15"
    ],
    "tapeSha256": "25e37d1a6a2677d06dcc6912d6246ef9aed507fed5a0411fad5c37c286c93f32",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "atreynolds19-bollinger-bands-rsi-live-radar-strategy",
-    "sharpstrat-structure-break-chain-sbc-sharpstrat"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "155-legalrice2697-nse-elite-strategy-v6-full-system",
+   "slot": "155-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/legalrice2697-nse-elite-strategy-v6-full-system",
    "stratum": "hard",
    "bin": 40,
    "tvTrades": 362,
@@ -3381,17 +3065,11 @@
     "2026-04-29 12:00"
    ],
    "tapeSha256": "a41fa3ba8b671b093796ae0394b5d22aafb06a84fb38497749337c72fe5ec3dc",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "binodrawani-twb-5-30-setup-strategy",
-    "dthomas1026-dill-volume-slip-high-low-volume-buy-sell",
-    "trading4me79-nifty-success-analyst-strategy-v6-final"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "156-m-f-atipey-hybrid-3-strategy-smart-system-v6-1",
+   "slot": "156-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/m-f-atipey-hybrid-3-strategy-smart-system-v6-1",
    "stratum": "hard",
    "bin": 18,
    "tvTrades": 132,
@@ -3402,17 +3080,11 @@
     "2026-04-07 22:45"
    ],
    "tapeSha256": "fb35b517cf9baa310687b6b65d106cfd8dbc68415ac7c938d678b41caf9ec4f8",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "quantbyboji-nq-hma-midday-strategy",
-    "mukhlisilahi-universal-backtest-pro-multi-strategy-timeframe-by-mucis",
-    "bnf6082-initial-balance-breakout-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "157-madue2014-twe-2-bar-break-strategy",
+   "slot": "157-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/madue2014-twe-2-bar-break-strategy",
    "stratum": "hard",
    "bin": 95,
    "tvTrades": 5999,
@@ -3423,16 +3095,11 @@
     "2026-04-30 23:45"
    ],
    "tapeSha256": "2d763d2180083269a1b2168f00083fb00da5c755096228b5d333e5e3cb85b175",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "fluxchart-supply-and-demand-zones-flux-charts",
-    "samb817-maket-strat-absorption-bubbles"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "158-market-logic-india-low-lag-strength-oscillator",
+   "slot": "158-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/market-logic-india-low-lag-strength-oscillator",
    "stratum": "hard",
    "bin": 96,
    "tvTrades": 6826,
@@ -3443,17 +3110,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "10b7d0681384b3bbf7aa7f159d8daba1a9ff21c4c5254c1a55aae401aa03e053",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "vinafx-engulfing-zone-finder-box-by-vinafx",
-    "markittick-intra-candle-pressure-dissector-markittick",
-    "taro-s-c-c-ma-simplified-2-color"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "159-mdfe3757-trade-strategy-v8-4-pine-v6-ready",
+   "slot": "159-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/mdfe3757-trade-strategy-v8-4-pine-v6-ready",
    "stratum": "hard",
    "bin": 54,
    "tvTrades": 642,
@@ -3464,17 +3125,11 @@
     "2026-04-30 19:45"
    ],
    "tapeSha256": "899a4319536ad3009d8327695e2fa65f8fc7ce1f05718d97a2ebc15fa78cd583",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "blackelonmuskonwebull-blackelonmusk-auto-chart-patterns-clean-volume-probability",
-    "3commas-btcusdt-p-grid-bot-long-strategy",
-    "3commas-3commas-xlm-grid-bot-long-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "160-mehranazizi219-goldsiggy-murk",
+   "slot": "160-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/mehranazizi219-goldsiggy-murk",
    "stratum": "hard",
    "bin": 62,
    "tvTrades": 819,
@@ -3485,17 +3140,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "8033e451fd04f228c9a9efcde23be32b0c5630107046f5e6c1cd72e890e046b3",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "apkw82-sttrend-tp-lock-added",
-    "shiroi-supertrend-strategy-long-short",
-    "gntfrx-albtrader-nq-beast-supertrend-macd-rsi"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "161-mylivingedge-gold-asian-range-breakout-signals",
+   "slot": "161-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/mylivingedge-gold-asian-range-breakout-signals",
    "stratum": "hard",
    "bin": 2,
    "tvTrades": 4,
@@ -3506,17 +3155,11 @@
     "2026-03-05 12:00"
    ],
    "tapeSha256": "3d47e20f652222d6708d33f6a9f6ffef85602bdbe2625e7a30084ca4590ef3b1",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "meinnameaufxyz-percent-supertrend-strategy-long-only",
-    "market-logic-india-path-signature-regime-engine",
-    "version-eurgbp-daily-2025-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "162-nicocashfx-prime-strategy-swing",
+   "slot": "162-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/nicocashfx-prime-strategy-swing",
    "stratum": "hard",
    "bin": 13,
    "tvTrades": 73,
@@ -3527,17 +3170,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "558bd968bf199f615bc6c0a9b9b0a9df023bfa4c79cdae2026e3d6d541c4a7a5",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "astongill-tjr-london-fakeout-strategy-free",
-    "3commas-bb-rsi-overbought-dca-short-strategy",
-    "elarisgroup-elaris-smart-pullback-hunter"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "163-nightowlxtrader-azt-strategy-v11-first-draft",
+   "slot": "163-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/nightowlxtrader-azt-strategy-v11-first-draft",
    "stratum": "hard",
    "bin": 4,
    "tvTrades": 13,
@@ -3548,16 +3185,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "35de261d540d20c05e825a4b3745b67f82ed325e4666395f9ecf1c4f5c3976f7",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "version-eurusd-daily-2023-strategy",
-    "3commas-arb-rsi-short-strategy-3commas"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "164-officialjackofalltrades-concordance-execution-mandate-joat",
+   "slot": "164-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/officialjackofalltrades-concordance-execution-mandate-joat",
    "stratum": "hard",
    "bin": 23,
    "tvTrades": 183,
@@ -3568,16 +3200,11 @@
     "2026-04-29 11:15"
    ],
    "tapeSha256": "162d062e3f698ae0f1ae7270dc74fe69bb351dee77827471f6c04f6f54470b3f",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "fattyguinness-the-mean-goose-v1",
-    "syed-shah-hassan-ut-bot-alert-shah"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "165-officialjackofalltrades-concordance-regime-synthesis-joat",
+   "slot": "165-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/officialjackofalltrades-concordance-regime-synthesis-joat",
    "stratum": "hard",
    "bin": 97,
    "tvTrades": 7021,
@@ -3588,17 +3215,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "32e9558f7386f52d6f04ee5748ae1bfaf36a74683c7264942375a82cbbe84a92",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "van007trader-vwap-bands-dyna",
-    "trendmatrix-labs-trendmatrix-auto-period-trend-screener",
-    "taro-s-rsi-ma-signals-on-chart"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "166-officialjackofalltrades-concordance-strategy-joat",
+   "slot": "166-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/officialjackofalltrades-concordance-strategy-joat",
    "stratum": "hard",
    "bin": 53,
    "tvTrades": 602,
@@ -3609,17 +3230,11 @@
     "2026-04-29 13:45"
    ],
    "tapeSha256": "dbc7178f16c420792049a0c140684aaf4d21bff28bc9446396b0bce31bb952a3",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "tmtex-bos-fvg-retest-signals",
-    "bluealgocapital-supply-and-demand-zones-with-market-structure-jayadev-rana",
-    "officialjackofalltrades-tension-flow-rr-joat"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "167-officialjackofalltrades-large-lot-reverse-engineer-joat",
+   "slot": "167-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/officialjackofalltrades-large-lot-reverse-engineer-joat",
    "stratum": "hard",
    "bin": 61,
    "tvTrades": 795,
@@ -3630,16 +3245,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "5378ef7b100eac763c4572ebbc06ea4754f428bca57131a9186edbc88932be92",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "version-sk-system-zigzag-fib-system-live-breakout-smc-with-bc-retest",
-    "vikprimus-volume-pressure-support-resistance-proxy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "168-officialjackofalltrades-parallax-covenant-strategy-joat",
+   "slot": "168-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/officialjackofalltrades-parallax-covenant-strategy-joat",
    "stratum": "hard",
    "bin": 68,
    "tvTrades": 1002,
@@ -3650,17 +3260,11 @@
     "2026-04-30 07:45"
    ],
    "tapeSha256": "a53a06f0b34c84343a8eddf86243ed522848dd4ca40c229077dc91513f640d59",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "forexcracked-adaptive-supertrend-forexcracked",
-    "uptrick-uptrick-dynamic-trend-matrix",
-    "3commas-3commas-ena-grid-bot-long-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "169-officialjackofalltrades-regime-execution-strategy-joat",
+   "slot": "169-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/officialjackofalltrades-regime-execution-strategy-joat",
    "stratum": "hard",
    "bin": 59,
    "tvTrades": 766,
@@ -3671,17 +3275,11 @@
     "2026-04-30 07:30"
    ],
    "tapeSha256": "9caf8c59de0d78ea0129f21b6c44c67f43fb5c2947c754e4019a61360049423f",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "stockhunter2025-btcusd-4h-ema-swing-strategy",
-    "b3ar-trades-ehlers-dominant-cycle-stochastic-rsi-v2",
-    "pipstomcapital-pipstorm-va"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "170-ollie-b-ollie-asia-sweep-model",
+   "slot": "170-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/ollie-b-ollie-asia-sweep-model",
    "stratum": "hard",
    "bin": 0,
    "tvTrades": 1,
@@ -3692,16 +3290,11 @@
     "2025-05-19 23:15"
    ],
    "tapeSha256": "a37e7b2d2fdc139d80292e2c74337c6fcb15fe4fc5b7843169b374c893b98d94",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "jespi0611-nq-21-ema-root-pullback-v4-strong-confirmation",
-    "jlall7892-btc-smart-pullback-liquidity-adaptive-rsi"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "171-options7700-2min-bullish-confluence",
+   "slot": "171-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/options7700-2min-bullish-confluence",
    "stratum": "hard",
    "bin": 70,
    "tvTrades": 1106,
@@ -3712,17 +3305,11 @@
     "2026-04-29 12:15"
    ],
    "tapeSha256": "4ba142f754ed950853ef47e08b9dbd6d435c0d5a5b3c4bcd5e0cd8681ed2398e",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "jamarcusallen12-marks-key-times-order-blocks-eqh-eql",
-    "evrinb7716-liquidity-entry-zones-strategy-2-0",
-    "rupasgavane-hemant-gold-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "172-projectsyndicate-strong-breakout-signals-projectsyndicate",
+   "slot": "172-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/projectsyndicate-strong-breakout-signals-projectsyndicate",
    "stratum": "hard",
    "bin": 75,
    "tvTrades": 1521,
@@ -3733,17 +3320,11 @@
     "2026-04-30 07:30"
    ],
    "tapeSha256": "6bce492018d5c005c9e10ea67b732041128a20c9f84de174b17bbbed4de118ba",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "projectsyndicate-strong-candlestick-patterns-projectsyndicate",
-    "wayward-bison-vumanchu-wt-zero-cross-strategy-v1-2-3",
-    "burnerview-amit-eth-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "173-quantitativealpha-strategy-forecast-engine",
+   "slot": "173-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/quantitativealpha-strategy-forecast-engine",
    "stratum": "hard",
    "bin": 80,
    "tvTrades": 1849,
@@ -3754,16 +3335,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "2902d118afaae0df4d0487eb288a6862d63728ba8ddeaa441b945940ad647930",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "ycelestine77-ll-momentum-and-curl-master",
-    "alby1611-bollinger-bands-simple-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "174-quantnomad-ut-bot-v2-atr-trailing-stop",
+   "slot": "174-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/quantnomad-ut-bot-v2-atr-trailing-stop",
    "stratum": "hard",
    "bin": 93,
    "tvTrades": 4330,
@@ -3774,17 +3350,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "123d42cbc023fa64d9f176facbcb9728c1756aa13d9cdf0bbc1c6283895afeff",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "antoniolinux-obv-with-sma-and-max-50gg",
-    "van007trader-quick-reversal-candles-dyna",
-    "systemsoverfeelings-fisher-smoothed-vzo-overlay"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "175-rakesh-09-edge-confirmation-system",
+   "slot": "175-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/rakesh-09-edge-confirmation-system",
    "stratum": "hard",
    "bin": 42,
    "tvTrades": 386,
@@ -3795,16 +3365,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "ab3c5632fdd515797d3165507f9291e8103a1187577c7dc50079317b69dd18c4",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "harshshodhan59-w-m-pattern-3-peaks-rr-tool",
-    "briancurry-egan-s-pure-structure-s-d-strategy-backtest"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "176-rakesh-09-edge-confirmation-system-ecs-v2-0",
+   "slot": "176-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/rakesh-09-edge-confirmation-system-ecs-v2-0",
    "stratum": "hard",
    "bin": 48,
    "tvTrades": 484,
@@ -3815,17 +3380,11 @@
     "2026-04-30 12:15"
    ],
    "tapeSha256": "3bc793f22ca93f4d17aa17fb98fa7758210b4d71f88b44d57caf786e6f32246c",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "aborkan89-abo-rkan-final",
-    "shurben5-tradingview-bot-trailing-15-min",
-    "chawarat-mb-10-in-1-mas-dashboard-buy-sell-v7"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "177-rampatel9912-super-rsi-strategy",
+   "slot": "177-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/rampatel9912-super-rsi-strategy",
    "stratum": "hard",
    "bin": 87,
    "tvTrades": 2846,
@@ -3836,17 +3395,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "8e6feb2fb569ccbabb7e0b7837caddd308bfff771caa4c9aaf49b9c8d0659a5b",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "fullravivla-alligator-cross-signals-false-signals",
-    "almesnedabdulaziz-hunter-oci-all-session",
-    "chillcrypto-flipped-inverted-z-score-subpane"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "178-remarkablefreddy-ultimate-smc-emas-day-trading-strategy",
+   "slot": "178-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/remarkablefreddy-ultimate-smc-emas-day-trading-strategy",
    "stratum": "hard",
    "bin": 50,
    "tvTrades": 519,
@@ -3857,17 +3410,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "66c24dc31710bdbc8fc8dea110979c0a1dfee80069d652949f3fa9e083cb06d2",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "arun-rajan-institutional-ob-entry-exit-sl-strategy",
-    "mrwicktrading-big-daddy-max-orb-strategy",
-    "chadsingh-orb-fib-breakout-signals-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "179-richmondhillcm-richmondhillcm-vwap-volume-spike-suite-v1-3",
+   "slot": "179-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/richmondhillcm-richmondhillcm-vwap-volume-spike-suite-v1-3",
    "stratum": "hard",
    "bin": 28,
    "tvTrades": 220,
@@ -3878,16 +3425,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "4f8f5c54dea1bceae1d2df7b2b8af1eca14c20d89f65696c2a33fb13184a83ce",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "raphaeltay-dual-cof-4h-45m-802",
-    "jevondijefferson-big-breakout-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "180-robmagnaye14-eb-ict-v5-pro-trader-daily-5-10-trade-60-target",
+   "slot": "180-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/robmagnaye14-eb-ict-v5-pro-trader-daily-5-10-trade-60-target",
    "stratum": "hard",
    "bin": 34,
    "tvTrades": 291,
@@ -3898,17 +3440,11 @@
     "2026-04-30 17:15"
    ],
    "tapeSha256": "6dba604af33d82c91ba8e1cccfaecb8f5ea751e71d60a1e59a8f979a41d15f85",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "lukeborgerding-orb-avwap-retest-strategy",
-    "patelanishp-adaptive-dual-engine-strategy-momentum-mean-reversion-bt",
-    "van007trader-momentum-shift-detector-dyna"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "181-roi10x-shiva-lt-ls-blend",
+   "slot": "181-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/roi10x-shiva-lt-ls-blend",
    "stratum": "hard",
    "bin": 85,
    "tvTrades": 2411,
@@ -3919,16 +3455,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "6c763c9981988a8b7ecf83b7f82cde10bce1e72296362052aeb695d6ad581922",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "officialjackofalltrades-concord-execution-mandate-joat",
-    "fran-pineda-strategy-461-ts-m15"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "182-sadtrader9-fair-value-gap-strategy",
+   "slot": "182-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/sadtrader9-fair-value-gap-strategy",
    "stratum": "hard",
    "bin": 89,
    "tvTrades": 3031,
@@ -3939,17 +3470,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "83562f5e9939d5bb3b46c4d6250865746142624c6ac5f581df5b3d11104d1016",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "kev444-gcc-macd-mtf-dashboard-horizontal-clean-dynamic-macd",
-    "shiroi-macd-crossover-strategy-long-short",
-    "taro-s-macd-crossover-signal"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "183-shiroi-macd-zero-line-candles-alert",
+   "slot": "183-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/shiroi-macd-zero-line-candles-alert",
    "stratum": "hard",
    "bin": 72,
    "tvTrades": 1302,
@@ -3960,17 +3485,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "59fc16aab36492137f7d6ef51636f9c95e469cfdeda406ae9297af17509971f6",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "shiroi-macd-zero-line-background-alert",
-    "dj-siggis-jd-0w-1w-siggi-v10-ultimativ",
-    "markittick-alpha-signal-engine-pro-markittick"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "184-shurben5-tradingview-bot-goat",
+   "slot": "184-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/shurben5-tradingview-bot-goat",
    "stratum": "hard",
    "bin": 66,
    "tvTrades": 958,
@@ -3981,16 +3500,11 @@
     "2026-04-30 22:45"
    ],
    "tapeSha256": "1ca3df719c412f5fe7d7d1b64b8e7f3b5135d9e643f8b7eee40839e34ead3514",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "jenmb-sma-standard-deviation-for-entry-and-tp-2-exit-ema-tp3-exit",
-    "officialjackofalltrades-concordance-execution-model-joat"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "185-simon20cent-efi-macd-advanced-pro",
+   "slot": "185-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/simon20cent-efi-macd-advanced-pro",
    "stratum": "hard",
    "bin": 82,
    "tvTrades": 2153,
@@ -4001,17 +3515,11 @@
     "2026-04-30 18:00"
    ],
    "tapeSha256": "0145051b6a6392793a7b9801ae9c37537e2e55d95cac93a7d272d56e011a57a5",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "patelanishp-ema-macd-trend-decision-table",
-    "gopidanielnaidu-bommisetty-signal",
-    "adxae-ema-40-pullback-pyramid-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "186-tharris235106-reversal-signals-with-profit-target-and-continuation",
+   "slot": "186-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/tharris235106-reversal-signals-with-profit-target-and-continuation",
    "stratum": "hard",
    "bin": 8,
    "tvTrades": 36,
@@ -4022,17 +3530,11 @@
     "2026-04-29 04:30"
    ],
    "tapeSha256": "241f592f42c5c80f3d3e84627e1ff191b9e7f80dead2eef13c62eb332ca7a845",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "3commas-3commas-amzn-rsi-oversold-doubling-dca-long-strategy",
-    "secretmorina-post-absorption-vwap-reversal-engine-v1-6",
-    "sonluu1994-8-30-texas-clean-signal-htf-volume-asian-london-time"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "187-thebitcoin37-9-15-ema-strategy-trade-room",
+   "slot": "187-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/thebitcoin37-9-15-ema-strategy-trade-room",
    "stratum": "hard",
    "bin": 26,
    "tvTrades": 202,
@@ -4043,17 +3545,11 @@
     "2026-04-29 20:30"
    ],
    "tapeSha256": "2e3c8b31c5f2ee258f169d73434dcf0eb565c55320fb2dbeffe8b9e6a569612c",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "3commas-3commas-jup-grid-bot-long-strategy",
-    "pickmytrade-official-institutional-liquidity-sweep-pickmytrade",
-    "fran-pineda-strategy-432-btc-donchian-breakout-continuation"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "188-theforexguy0777-9-ema-20-ema-retest-strategy",
+   "slot": "188-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/theforexguy0777-9-ema-20-ema-retest-strategy",
    "stratum": "hard",
    "bin": 73,
    "tvTrades": 1372,
@@ -4064,17 +3560,11 @@
     "2026-04-30 09:30"
    ],
    "tapeSha256": "d407ee2f37382b4b11a9c9c54abc4528c1c60c085456229865b4ddfe5bb70e8e",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "gaganparida-gagan-ut-super-buy",
-    "gate3121-pre-breakout-scanner-volume-compression",
-    "muratkbesiroglu-kaufman-moving-average-adaptive-strategy-by-mkb"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "189-therealbouga-apex-mtf-index-model",
+   "slot": "189-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/therealbouga-apex-mtf-index-model",
    "stratum": "hard",
    "bin": 19,
    "tvTrades": 144,
@@ -4085,16 +3575,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "1067250911c0c0611fbc9d95d1273d9a1018dd4d776a7d9e51515e4bfdebeae4",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "louislapis9-rr-master-lc",
-    "fran-pineda-strategy-470-ny-open-3h-sweep-continuation"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "190-tomukasss-engulfing-mitigation-strategy",
+   "slot": "190-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/tomukasss-engulfing-mitigation-strategy",
    "stratum": "hard",
    "bin": 11,
    "tvTrades": 53,
@@ -4105,17 +3590,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "7adaa39541ec9aa2ef4dd018a6d1820e0e48076917f11a115b5d7f44fc7b9f91",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "tradingcontoto-tradingcontoto-dca",
-    "imtiyazali73-liquidity-reversal-map-pro",
-    "markittick-market-weariness-spectrum-indicator-markittick"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "191-tomukasss-trend-pivot-scale-in",
+   "slot": "191-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/tomukasss-trend-pivot-scale-in",
    "stratum": "hard",
    "bin": 32,
    "tvTrades": 269,
@@ -4126,17 +3605,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "a51689fd85d654683af0026ff8259e60c85adf6aac44a01b73bb3d2e96a75440",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "algotorma-algo-torma-orb-strategy",
-    "egoigor1976-axis-reversal",
-    "nq370-vcgz-bot-clean-v3-3-stable-scored"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "192-trendchain0719-9-21-ema-volume-spike-bollinger-bands-vwap",
+   "slot": "192-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/trendchain0719-9-21-ema-volume-spike-bollinger-bands-vwap",
    "stratum": "hard",
    "bin": 21,
    "tvTrades": 157,
@@ -4148,19 +3621,13 @@
    ],
    "tapeSha256": "eb6c4c90987bd9090bf2d5665fb79f7963a014bc9ee5dc27516bf8dcf275d70f",
    "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "robmagnaye14-eb-ict-one-trade-setup-for-life-70-filter-model-v2",
-    "bigbeluga-volume-trend-order-block-engine-bigbeluga",
-    "3commas-3commas-xrp-grid-bot-long-strategy"
-   ],
    "lost": {
     "reason": "PyneSys compile error: {\"detail\":{\"status\":\"error\",\"error\":\"Empty document.\",\"line\":null,\"file\":\"script.pine\"}}"
    }
   },
   {
-   "slot": "193-ttagkoin-adaptive-multi-facto-9-years",
+   "slot": "193-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/ttagkoin-adaptive-multi-facto-9-years",
    "stratum": "hard",
    "bin": 92,
    "tvTrades": 3394,
@@ -4171,17 +3638,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "ac21f1959f98a2eb2711d522e1dd942a289c95c858bd040423545d78a310bb64",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "latibonit15-execution-signals-confluence-strategy",
-    "stevenygabbyperez-fast-scalper-with-stops",
-    "chartprime-power-order-blocks-chartprime"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "194-usamotorcars-sedat-xi-crypto-ai-bias-engine",
+   "slot": "194-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/usamotorcars-sedat-xi-crypto-ai-bias-engine",
    "stratum": "hard",
    "bin": 56,
    "tvTrades": 657,
@@ -4192,17 +3653,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "6ecd25c1dd87250f6c6511c82ba2beb8b3aed6f30fdcaa161e13638671b4ca50",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "viprasol-apex-trend-signal-engine-viprasol",
-    "jespi0611-nq-ema-vwap-strategy",
-    "hossa-nostra-ho55a-engine-regime"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "195-van007trader-micro-momentum-oscillator-dyna",
+   "slot": "195-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/van007trader-micro-momentum-oscillator-dyna",
    "stratum": "hard",
    "bin": 57,
    "tvTrades": 712,
@@ -4213,16 +3668,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "a03734b09e8e7591e8ddc4df9350cdb70095b08f4e3dcf635b41efa99bb100b9",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "thulashimohanr-prev-day-week-levels-or-vwap-strategy",
-    "nishkumar11-danzanger-breakout-candle-highlighter-by-nish"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "196-vimalboiling-refined-supertrend-atr-tsl-filters-nifty-banknifty-v2",
+   "slot": "196-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/vimalboiling-refined-supertrend-atr-tsl-filters-nifty-banknifty-v2",
    "stratum": "hard",
    "bin": 17,
    "tvTrades": 111,
@@ -4233,17 +3683,11 @@
     "2026-04-26 14:15"
    ],
    "tapeSha256": "ef07e394221d88e362c2229903ba9df7bae70a9cdc6da463148eb7653eb08eee",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "abhivish-rsi-exact-divergence-strategy-extreme-zones",
-    "alpha-wizard-channel-volume-profil",
-    "gainzalgo-smart-ichimoku-gainzalgo"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "197-waranyutrkm-asian-box-breakout-eda-tuned",
+   "slot": "197-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/waranyutrkm-asian-box-breakout-eda-tuned",
    "stratum": "hard",
    "bin": 16,
    "tvTrades": 110,
@@ -4254,17 +3698,11 @@
     "2026-04-29 18:00"
    ],
    "tapeSha256": "ce754b2aac7ab489d3765df80afbbc6c5f15a92c70ab12311313d9c24102f7a6",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "wtomala75-nas100-ema-scalper",
-    "oliver1002-wyckoff-structural-events-trend-filter",
-    "3commas-3commas-pullback-sniper-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "198-wellmanapex-ut-bot-stc-conjunction-strategy-tester-v4-8",
+   "slot": "198-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/wellmanapex-ut-bot-stc-conjunction-strategy-tester-v4-8",
    "stratum": "hard",
    "bin": 12,
    "tvTrades": 72,
@@ -4275,17 +3713,11 @@
     "2026-04-11 16:30"
    ],
    "tapeSha256": "662500339d6e9aab01e326aa28b54089a37532ddde025289f9eb1965c886c1bd",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "neurodoc-cascade-dca-spot-long-strategy",
-    "maziblend35-market-bias-30m",
-    "3commas-rsi-oversold-ao-long-strategy"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "199-yahmis13-nyo-day-type-early-read",
+   "slot": "199-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/yahmis13-nyo-day-type-early-read",
    "stratum": "hard",
    "bin": 6,
    "tvTrades": 26,
@@ -4296,17 +3728,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "b58f470210e9fd5b7f793b1ba37042c36a2b190b905843679624e5c199a895b9",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "dr-ziuber-bb-short-dca-strategy",
-    "thinkswell-smart-circuit-detector",
-    "aetheredge-aetheredge-pattern-edge-learner"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "200-ygd-consulting-llc-yuri-garcia-narrow-state-strategy-ygils",
+   "slot": "200-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/ygd-consulting-llc-yuri-garcia-narrow-state-strategy-ygils",
    "stratum": "hard",
    "bin": 51,
    "tvTrades": 533,
@@ -4317,17 +3743,11 @@
     "2026-05-01 00:00"
    ],
    "tapeSha256": "fc2881f774bbc9398336a1981b2014fd365f30505cebd8e019fade35e7968364",
-   "license": "TradingView scraped, not redistributed",
-   "replacements": [
-    "onderarslantas107-market-projection",
-    "alirichh-ahlenaz",
-    "r87-84-acceleration-wyckoff-balanced-v6"
-   ]
+   "license": "TradingView scraped, not redistributed"
   },
   {
-   "slot": "201-robmagnaye14-eb-ict-one-trade-setup-for-life-70-filter-model-v2",
+   "slot": "201-closed",
    "source": "closed",
-   "probeId": "scrapper:data/standard/robmagnaye14-eb-ict-one-trade-setup-for-life-70-filter-model-v2",
    "stratum": "hard",
    "bin": 21,
    "tvTrades": 154,
@@ -4339,11 +3759,7 @@
    ],
    "tapeSha256": "6563c344e9c435c03b768890225a64c612f87ece8003a352c8e535ce317aebd1",
    "license": "TradingView scraped, not redistributed",
-   "replaces": "192-trendchain0719-9-21-ema-volume-spike-bollinger-bands-vwap",
-   "replacements": [
-    "bigbeluga-volume-trend-order-block-engine-bigbeluga",
-    "3commas-3commas-xrp-grid-bot-long-strategy"
-   ]
+   "replaces": "192-closed"
   }
  ]
 }
