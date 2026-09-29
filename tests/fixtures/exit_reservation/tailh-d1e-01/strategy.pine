@@ -1,0 +1,11 @@
+//@version=6
+// SPDX-License-Identifier: Apache-2.0
+// Synthetic probe (lane TAIL-H): strategy.close with qty_percent = 50 of a
+// 0.01 lot position, then strategy.close of the rest.
+strategy("tailh-d1e-01", overlay=true, initial_capital=100000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1, process_orders_on_close=true, margin_long=1, margin_short=1)
+if time == timestamp("UTC", 2025, 10, 21, 8, 45)
+    strategy.entry("L", strategy.long, qty=0.01)
+if time == timestamp("UTC", 2025, 10, 21, 9, 0)
+    strategy.close("L", comment="half", qty_percent=50)
+if time == timestamp("UTC", 2025, 10, 21, 10, 0)
+    strategy.close("L", comment="rest")

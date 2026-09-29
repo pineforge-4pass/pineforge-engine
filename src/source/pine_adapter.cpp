@@ -4457,10 +4457,11 @@ double PineExecutionAdapter::quantize_percent_exit_units(
     const double step = *staged_.quantity_grid;
     const double floored = std::floor(requested / step + 1e-6) * step;
     double result = floored < requested ? floored : requested;
-    // ab9714be:engine.hpp:1587-1598.  An integer-lot percentage exit keeps
-    // one minimum unit while one full step of reservation capacity remains;
-    // fractional grids retain the ordinary floor-to-zero behaviour.
-    if (step >= 1.0 && requested < step && available >= step) result = step;
+    // ab9714be:engine.hpp:1587-1598.  A percentage exit keeps one minimum
+    // unit while one full step of reservation capacity remains: 50 % of one
+    // contract, and of one 0.01 lot of OANDA:XAUUSD, reserves the whole of it
+    // on TradingView (lane TAIL-H rule PS, tape tailh-d1a).
+    if (requested < step && available + internal::kQtyEpsilon >= step) result = step;
     return result;
 }
 

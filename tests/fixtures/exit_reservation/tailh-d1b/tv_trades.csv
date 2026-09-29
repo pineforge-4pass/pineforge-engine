@@ -1,0 +1,5 @@
+﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)
+1,Exit long,2025-10-21 20:00,MAIN_L,4245.365,0.02,85.483,-0.5757,-0.67,0,0.0789,0.09,-0.5757,-0.67,-0.5757,0.00,13
+1,Entry long,2025-10-21 16:45,L,4274.15,0.02,85.483,-0.5757,-0.67,0,0.0789,0.09,-0.5757,-0.67,-0.5757,0.00,13
+2,Exit long,2025-12-12 19:00,TP1_L,4331.72,0.01,42.7415,0.5757,1.35,0,0.5757,1.35,-3.87685,-9.07,9.103829e-15,0.00,3491
+2,Entry long,2025-10-21 16:45,L,4274.15,0.01,42.7415,0.5757,1.35,0,0.5757,1.35,-3.87685,-9.07,9.103829e-15,0.00,3491

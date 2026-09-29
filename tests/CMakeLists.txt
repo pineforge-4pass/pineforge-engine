@@ -1032,6 +1032,10 @@ list(APPEND TEST_SOURCES test_add_sibling_margin_tapes)
 # session's break read the chart bar's own period (tests/fixtures/
 # daily_break_close), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_foreign_break_stamp_tapes)
+# Lane TAIL-H: a percentage exit's share keeps one quantity step and holds
+# what it reserved when margin calls shrink the position
+# (tests/fixtures/exit_reservation), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_exit_reservation_tapes)
 # Lane INT28-FIX (RC): a calc_on_order_fills recalculation reads the whole
 # bar's finer request.security values (tests/fixtures/coof_recalc_security),
 # on TradingView's tape.
@@ -2813,6 +2817,10 @@ endif()
 if(TARGET test_ta_indicators_extras)
     target_compile_definitions(test_ta_indicators_extras PRIVATE
         PINEFORGE_PERCENTILE_WINDOW_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/percentile_window")
+endif()
+if(TARGET test_exit_reservation_tapes)
+    target_compile_definitions(test_exit_reservation_tapes PRIVATE
+        PINEFORGE_EXIT_RESERVATION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_reservation")
 endif()
 
 # std::thread needs an explicit pthread link on some toolchains.

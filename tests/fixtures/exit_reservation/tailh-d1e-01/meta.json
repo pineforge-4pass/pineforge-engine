@@ -1,0 +1,16 @@
+{
+  "title": "tailh-d1e-01",
+  "slug": "tailh-d1e-01",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T01:04:27.618Z",
+  "chart": {
+    "symbol": "OANDA:XAUUSD",
+    "interval": "15",
+    "from": "2025-10-15",
+    "to": "2025-10-25"
+  },
+  "pine_sha256": "38d390f3fd60ac4fa2ad326681e32e189d82a59ee1b255157ec861c15b9ba3f4",
+  "tv_trades_sha256": "d8f332bf1c7309dd27e34709bd7faa76c1a906ad200801ff87b97c42c18a5edb",
+  "tv_trades_rows": 2
+}
