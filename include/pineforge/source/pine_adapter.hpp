@@ -1524,6 +1524,11 @@ public:
     bool suppress_grouped_stop_recalc(
         const native_order::ExecutionAppliedEvent&,
         const NativeDecisionContext&) const noexcept;
+    // The event fills a strategy.close / close_all sent with immediately =
+    // true, executed by the bar's own calculation.
+    bool immediate_calculation_close(
+        const native_order::ExecutionAppliedEvent&,
+        const NativeDecisionContext&) const noexcept;
 
     std::uint64_t command_sequence_for_exit(const SourceId& exit_id,
                                             const SourceId& from_entry = {}) const noexcept;

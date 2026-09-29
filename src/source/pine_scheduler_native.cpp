@@ -629,6 +629,15 @@ bool PineScheduler::coof_recalculation_due(
         // schedule a calc_on_order_fills source callback.
         return false;
     }
+    // So is a strategy.close / close_all with immediately = true that the
+    // bar's own calculation executed: TradingView recalculates after it
+    // neither -- an entry sent before it while the pyramiding limit held
+    // never fills, one sent after it fills once at the next open (lab tv
+    // tapes te-coof-immediate-reentry-*, tests/fixtures/coof_immediate_close;
+    // lane TAIL-E). A recalculation there re-sent the entry, which the kernel
+    // filled at the same close -- and, when it also closed again, looped
+    // without end.
+    if (host.adapter_.immediate_calculation_close(event, context)) return false;
     if (host.adapter_.suppress_grouped_stop_recalc(event, context)) return false;
     return true;
 }

@@ -715,8 +715,8 @@ All **✅ Runtime** — backed by `PineMatrix` (`matrix.hpp` / `matrix.cpp`) for
 | `strategy()` | fn | ✅ Runtime | `BacktestEngine` constructor + `StrategyOverrides` | |
 | `strategy.cancel()` | fn | ✅ Runtime | `strategy_cancel()` | |
 | `strategy.cancel_all()` | fn | ✅ Runtime | `strategy_cancel_all()` | |
-| `strategy.close()` | fn | ✅ Runtime | `strategy_close()` | |
-| `strategy.close_all()` | fn | ✅ Runtime | `strategy_close_all()` | |
+| `strategy.close()` | fn | ✅ Runtime | `strategy_close()` | `immediately = true` fills at the bar's close, and no `calc_on_order_fills` recalculation follows it (`tests/test_coof_immediate_close_final_tapes.cpp`) |
+| `strategy.close_all()` | fn | ✅ Runtime | `strategy_close_all()` | As `strategy.close()` |
 | `strategy.closedtrades.commission()` | fn | ✅ Runtime | Trade accessor | |
 | `strategy.closedtrades.entry_bar_index()` | fn | ✅ Runtime | Trade accessor | |
 | `strategy.closedtrades.entry_comment()` | fn | ✅ Runtime | Trade accessor | |

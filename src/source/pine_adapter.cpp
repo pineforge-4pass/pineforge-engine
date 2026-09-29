@@ -5879,6 +5879,16 @@ bool PineExecutionAdapter::suppress_grouped_stop_recalc(
         });
 }
 
+bool PineExecutionAdapter::immediate_calculation_close(
+        const native_order::ExecutionAppliedEvent& event,
+        const NativeDecisionContext& context) const noexcept {
+    if (context.coordinate.provenance != NativePriceProvenance::Calculation) return false;
+    const auto filled = placement_.find(event.handle().incarnation);
+    return filled != placement_.end() && filled->second.immediately
+        && (filled->second.family == PineOrderFamily::Close
+            || filled->second.family == PineOrderFamily::CloseAll);
+}
+
 bool PineExecutionAdapter::defer_coof_tail() const noexcept {
     if (!coof_recalc_active_ || coof_first_open_) return false;
     const auto state = detail::run_state(require_host());
@@ -19343,9 +19353,18 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 && !finite_positive(entry.snapshot.exit_levels.trail_points)
                 && !finite_positive(entry.snapshot.exit_levels.trail_price)
                 && !finite_positive(entry.snapshot.exit_levels.trail_offset);
-            const bool marketable_now = !priced_stop
-                || pure_stop_entry_marketable_at(
-                    entry.snapshot, event.resolved_price);
+            // A close the bar's own calculation executed (immediately = true)
+            // fills at the bar's close, where nothing trades after it: the
+            // entry the pass sent behind it waits for the next bar's open, as
+            // it does when the close's fill is known before the entry is
+            // sent (lab tv tapes te-coof-immediate-reentry-*,
+            // tests/fixtures/coof_immediate_close; lane TAIL-E).
+            const bool calculation_close = placement_snapshot->immediately
+                && context.coordinate.provenance == NativePriceProvenance::Calculation;
+            const bool marketable_now = !calculation_close
+                && (!priced_stop
+                    || pure_stop_entry_marketable_at(
+                        entry.snapshot, event.resolved_price));
             if (marketable_now) {
                 entry.snapshot.forced_execution_price = event.resolved_price;
                 // ab9714be pine_fills.cpp:3848-3856 orders the full close

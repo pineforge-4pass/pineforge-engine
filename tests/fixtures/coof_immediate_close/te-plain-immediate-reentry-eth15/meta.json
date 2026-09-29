@@ -1,0 +1,16 @@
+{
+  "title": "PF te plain immediate reentry",
+  "slug": "pf-te-plain-immediate-reentry-eth15",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T01:04:30.013Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "d9ed023f698a8c5c6e11c44d92e102a7c27c561cac9fead67f719de144925633",
+  "tv_trades_sha256": "f6fddd49d09b9089676c1b159d5353a8e0ce38b6d9f3f2ee35ef363db68c868e",
+  "tv_trades_rows": 96
+}

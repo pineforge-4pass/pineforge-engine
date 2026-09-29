@@ -1,0 +1,21 @@
+//@version=6
+// An immediate close without fill recalculation: at the close of every eighth
+// bar the script closes its position immediately and sends a new market
+// entry on the same bar (entry after the close in code order); on every
+// eighth bar offset by four it sends the entry first and the close after.
+// Each order names the bar it was sent on.
+strategy("PF te plain immediate reentry", overlay = true,
+     default_qty_type = strategy.fixed, default_qty_value = 1)
+k = bar_index % 8
+varip int sent = 0
+tag = str.tostring(bar_index)
+if barstate.isconfirmed and k == 5
+    if strategy.position_size > 0
+        strategy.close_all("X" + tag, immediately = true)
+    strategy.entry("A" + tag, strategy.long, comment = "A" + tag)
+if barstate.isconfirmed and k == 1
+    strategy.entry("B" + tag, strategy.long, comment = "B" + tag)
+    if strategy.position_size > 0
+        strategy.close_all("Y" + tag, immediately = true)
+if k == 3 and strategy.position_size == 0
+    strategy.entry("C" + tag, strategy.long, comment = "C" + tag)

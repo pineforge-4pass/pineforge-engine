@@ -25,3 +25,46 @@ Each directory is one `lab tv --no-note` export of the lane's own synthetic scri
 `27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026`); `bars_ford.inc` holds 2025-04-01 13:30 .. 2025-04-14 19:45 UTC of the f-15 lane
 chart feed (sha256 `80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32`), copied as text by
 `exec/TAIL-D-scratch/tools/gen_bars_inc.py`.
+
+## An immediate close in the bar's calculation (R5 lane TAIL-E)
+
+TradingView's trades of one synthetic probe with and without
+`calc_on_order_fills` (R5 lane TAIL-E). Each directory is one
+`lab tv --no-note` export (channel `ws-report-v1`), byte for byte:
+`strategy.pine`, `tv_trades.csv` (times at UTC+8, the exporter's rendering),
+`metrics.json` and `meta.json`. The probes are synthetic and public; no
+scraped or closed strategy is involved.
+
+`te_coof_immediate_reentry` (strategy.pine sha256
+`360b0611590292c16c254f3f538a906489f9a8147c8b4b39c743bb1442f75d8d`) trades one
+contract, pyramiding 1, with `calc_on_order_fills = true`. At the close of
+every eighth bar (`bar_index % 8 == 5`) it closes its position with
+`strategy.close_all(immediately = true)` and sends a market entry `A` after
+it; four bars later (`== 1`) it sends an entry `B` first and the immediate
+close `Y` after it; on `== 3` it enters `C` when flat. Every order names the
+bar it was sent on. `te_plain_immediate_reentry`
+(`d9ed023f698a8c5c6e11c44d92e102a7c27c561cac9fead67f719de144925633`) is the
+same script without `calc_on_order_fills`.
+
+| tape | chart | window | rows | tv_trades.csv sha256 | exported (UTC) | rangeProof |
+|---|---|---|---|---|---|---|
+| `te-coof-immediate-reentry-eth15` | BINANCE:ETHUSDT.P 15 | 2025-04-01..04-03 | 96 | `f6fddd49d09b9089676c1b159d5353a8e0ce38b6d9f3f2ee35ef363db68c868e` | 2026-09-29 00:40:58 | covered |
+| `te-plain-immediate-reentry-eth15` | BINANCE:ETHUSDT.P 15 | 2025-04-01..04-03 | 96 | `f6fddd49d09b9089676c1b159d5353a8e0ce38b6d9f3f2ee35ef363db68c868e` | 2026-09-29 01:04:30 | covered |
+
+`bars.inc` holds the chart's bars for the replay: the corpus 15-minute feed
+`scripts/derive_corpus_feeds.py` derives from `corpus/data/ohlcv_ETH-USDT-USDT_1m.csv`,
+rows 2025-04-01 00:00 .. 04-03 00:15 UTC, copied as text (the two feeds'
+sha256 are in its header).
+
+### What they show
+
+The two tapes are the same bytes: no fill recalculation follows a close the
+bar's own calculation executes. The close `X5` fills at bar 5's close and the
+entry `A5` sent behind it at bar 6's open, once. `B9`, sent while the position
+held the pyramiding limit, never fills, though `Y9` flattens the position on
+the same bar; the next entry is `C11`, at bar 12's open. The trade TradingView
+closes at the range's end has no exit signal; the replay leaves it out.
+
+`tests/test_coof_immediate_close_final_tapes.cpp` replays both tapes through
+the Pine adapter and requires every trade they close -- entry and exit time,
+price in ticks, quantity and the orders' names -- to be the engine's.
