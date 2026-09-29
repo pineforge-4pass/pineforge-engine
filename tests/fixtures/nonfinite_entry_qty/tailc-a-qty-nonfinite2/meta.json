@@ -1,0 +1,16 @@
+{
+  "title": "tailc-a-qty-nonfinite2",
+  "slug": "tailc-a-qty-nonfinite2",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:45:44.783Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-08"
+  },
+  "pine_sha256": "09ddfa2369dfdebd569ff5a92012c8f998e486521b08d6fa2482a4b71d1c54ac",
+  "tv_trades_sha256": "9d02d2a0fc994b4049641ee7f1c99c550bb2c32a4030faf9531b0b77d89c3afa",
+  "tv_trades_rows": 310
+}

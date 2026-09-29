@@ -6163,7 +6163,10 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                                  double stop_price, double qty, const std::string& comment,
                                  const std::string& oca_name, int oca_type, int qty_type) {
     native_order::Request request;
-    const bool default_sized = std::isnan(qty);
+    // An infinite quantity trades the default quantity, as na does (lab tv
+    // tailc-a-qty-nonfinite2: +-Infinity and na legs all enter at the
+    // strategy's default; R5 lane TAIL-C).
+    const bool default_sized = !std::isfinite(qty);
     const bool priced = !std::isnan(limit_price) || !std::isnan(stop_price);
     const bool explicit_fixed = !default_sized
         && (qty_type < 0 || qty_type == static_cast<int>(QtyType::FIXED));
@@ -6287,11 +6290,10 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         }
     }
     // Explicit entry quantities have a source placement-time admission
-    // boundary.  In particular, non-finite units and finite values whose
-    // required margin overflows must never become a live generic request that
-    // waits until a later matching point to be rejected.
+    // boundary.  In particular, finite values whose required margin
+    // overflows must never become a live generic request that waits until a
+    // later matching point to be rejected.
     if (!default_sized) {
-        if (!std::isfinite(qty)) return;
         const bool opposite_live = current != 0.0 && ((current > 0.0) != is_long);
         if (!opposite_live) {
             // Admission is a source command fact at the signal mark; a

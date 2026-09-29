@@ -1,0 +1,34 @@
+//@version=6
+// TAIL-C synthetic A (lane TAIL-C, diag A): what an explicit NON-FINITE or na strategy.entry quantity trades.
+// Export: BINANCE:BTCUSDT 15, 2025-04-01 -> 2025-04-08. Stateless: one leg per UTC hour (hour % 9; leg 8, a 1e12 quantity TradingView refuses with RE10024, is off), entered at the
+// close of the hh:00 bar (process_orders_on_close) and closed by close_all at the close of the hh:15 bar.
+// The default quantity (0.01 BTC fixed) is far from what the capital buys (~12 BTC), so a row's "Size (qty)" tells
+// the default rule apart from an equity/capital rule. z is a SERIES zero, so no division is folded at compile time.
+strategy("tailc-a-qty-nonfinite2", overlay = true, process_orders_on_close = true, default_qty_type = strategy.fixed, default_qty_value = 0.01, initial_capital = 1000000)
+z = close - close
+float fInf = 100 / z
+int iInf = math.floor(100 / z)
+float fNegInf = -100 / z
+int iNa = na
+int iNaF = math.floor(z / z)
+slot = minute(time) == 0 ? hour(time, "UTC") % 9 : -1
+if strategy.position_size != 0
+    strategy.close_all(comment = "x")
+if slot == 0
+    strategy.entry("C", strategy.long, qty = 0.02)
+if slot == 1
+    strategy.entry("FINF", strategy.long, qty = fInf)
+if slot == 2
+    strategy.entry("IINF", strategy.long, qty = iInf)
+if slot == 3 and iInf > 0
+    strategy.entry("GINF", strategy.long, qty = iInf)
+if slot == 4
+    strategy.entry("FNA", strategy.long, qty = na)
+if slot == 5
+    strategy.entry("INA", strategy.long, qty = iNa)
+if slot == 6
+    strategy.entry("INAF", strategy.long, qty = iNaF)
+if slot == 7
+    strategy.entry("NINF", strategy.long, qty = fNegInf)
+if slot == 8 and false
+    strategy.entry("HUGE", strategy.long, qty = 1e12)

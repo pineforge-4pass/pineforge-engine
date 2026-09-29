@@ -1059,6 +1059,9 @@ list(APPEND TEST_SOURCES test_exit_reservation_tapes)
 # signal close's tick plus the slippage ticks its fill carries
 # (tests/fixtures/explicit_market_admission), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_explicit_market_admission_tapes)
+# ... and an infinite strategy.entry quantity trades the default quantity, as
+# na does (tests/fixtures/nonfinite_entry_qty), on TradingView's tape.
+list(APPEND TEST_SOURCES test_nonfinite_entry_qty_tape)
 # Lane INT28-FIX (RC): a calc_on_order_fills recalculation reads the whole
 # bar's finer request.security values (tests/fixtures/coof_recalc_security),
 # on TradingView's tape.
@@ -2767,6 +2770,10 @@ endif()
 if(TARGET test_explicit_market_admission_tapes)
     target_compile_definitions(test_explicit_market_admission_tapes PRIVATE
         PINEFORGE_EXPLICIT_ADMISSION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/explicit_market_admission")
+endif()
+if(TARGET test_nonfinite_entry_qty_tape)
+    target_compile_definitions(test_nonfinite_entry_qty_tape PRIVATE
+        PINEFORGE_NONFINITE_QTY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/nonfinite_entry_qty")
 endif()
 
 # Lane TAIL-B reads its TradingView tapes from the fixture tree; source-bound.

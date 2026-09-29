@@ -57,15 +57,24 @@ private:
 
 int main() {
     for (bool buy : {false, true}) for (bool stop : {false, true}) {
-        // Both explicit infinity and a finite quantity whose notional
-        // overflows exceed finite account resources.
-        for (double units : {std::numeric_limits<double>::infinity(),
-                             -std::numeric_limits<double>::infinity(),
-                             std::numeric_limits<double>::max(), 101.0}) {
+        // A finite quantity whose notional overflows, or whose margin the
+        // capital cannot fund, exceeds finite account resources.
+        for (double units : {std::numeric_limits<double>::max(), 101.0}) {
             Account a;
             a.request(buy, units, stop);
             CHECK(a.pending() == 0);
             CHECK(a.physical_book_empty());
+        }
+        // An infinite quantity trades the strategy's default quantity, as na
+        // does: TradingView enters every +Infinity and -Infinity leg at the
+        // default (lab tv tailc-a-qty-nonfinite2,
+        // tests/fixtures/nonfinite_entry_qty; R5 lane TAIL-C).
+        for (double units : {std::numeric_limits<double>::infinity(),
+                             -std::numeric_limits<double>::infinity()}) {
+            Account infinite;
+            infinite.request(buy, units, stop);
+            CHECK(infinite.pending() == 1);
+            CHECK(infinite.physical_book_empty());
         }
         Account equality;
         equality.request(buy, 100, stop); // 100 units * price100 == capital10000

@@ -198,7 +198,7 @@ public:
         CancelRearm,
         PriorRestingCancelRearm,
         RejectedExtra,
-        RejectedInfiniteExtra,
+        RejectedOverflowExtra,
         CancelAllThenPair,
         NextBarCleanPair,
     };
@@ -290,10 +290,10 @@ public:
             strategy_entry("RX-X", true, kNaN, kNaN, 101.0);
             strategy_entry("RX-A", true, kNaN, kNaN, 55.0);
             strategy_entry("RX-B", false, kNaN, kNaN, 55.0);
-        } else if (shape_ == Shape::RejectedInfiniteExtra) {
+        } else if (shape_ == Shape::RejectedOverflowExtra) {
             strategy_entry(
                 "RI-X", true, kNaN, kNaN,
-                std::numeric_limits<double>::infinity());
+                std::numeric_limits<double>::max());
             strategy_entry("RI-A", true, kNaN, kNaN, 55.0);
             strategy_entry("RI-B", false, kNaN, kNaN, 55.0);
         } else if (shape_ == Shape::CancelAllThenPair) {
@@ -352,8 +352,11 @@ static void test_green_mutated_two_order_books_fail_closed() {
         /*prior_bar=*/true);
     run("signal-rejected extra call stays on ordinary path",
         MutationProbe::Shape::RejectedExtra, -55.0);
-    run("infinite signal-rejected call stays on ordinary path",
-        MutationProbe::Shape::RejectedInfiniteExtra, -55.0);
+    // An infinite quantity is the default quantity (R5 lane TAIL-C,
+    // tests/fixtures/nonfinite_entry_qty), so the call the signal refuses is
+    // a finite quantity whose notional overflows.
+    run("overflowing signal-rejected call stays on ordinary path",
+        MutationProbe::Shape::RejectedOverflowExtra, -55.0);
     run("cancel-all then pair stays on ordinary path",
         MutationProbe::Shape::CancelAllThenPair, -55.0);
     run("prior-bar tombstone does not suppress a clean next-bar pair",
