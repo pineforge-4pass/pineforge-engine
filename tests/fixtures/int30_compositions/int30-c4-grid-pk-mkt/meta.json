@@ -1,0 +1,16 @@
+{
+  "title": "int30-c4-grid-pk-mkt",
+  "slug": "int30-c4-grid-pk-mkt",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T03:20:18.618Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "0355d9d94065351f8d9312984bed7122243c48bc6f5b872882522099e3e2f206",
+  "tv_trades_sha256": "d2d7b731f1a02b4df3500101a0cee37bbf812f52b1105a90ca2f7f7d20ed7b15",
+  "tv_trades_rows": 702
+}

@@ -1,0 +1,16 @@
+{
+  "title": "int30-c4-grid-pk-pooc",
+  "slug": "int30-c4-grid-pk-pooc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T03:20:21.835Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "375a109315b87e6c738e7eb74dc1de0d704202460c8aeaf32b955a970187cf06",
+  "tv_trades_sha256": "0c9a27cb1debe2a7cd35355762c5a2809ccceba86f23678a4f70b83c7b8fe30b",
+  "tv_trades_rows": 702
+}

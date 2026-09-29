@@ -1047,6 +1047,10 @@ list(APPEND TEST_SOURCES test_margin_opposite_tapes)
 # admission and the grown book's margin calls (tests/fixtures/add_sibling_margin),
 # on TradingView's tapes.
 list(APPEND TEST_SOURCES test_add_sibling_margin_tapes)
+# INT30: lane TAIL-B's calls for a bar's adds (AS, AC, LF) beside lane TAIL-H's
+# rule PK, which re-reserves the exits a call shrank
+# (tests/fixtures/int30_compositions), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_int30_rule_compositions)
 # Lane TAIL-G: requests of other symbols on a daily chart stamped in its
 # session's break read the chart bar's own period (tests/fixtures/
 # daily_break_close), on TradingView's tapes.
@@ -2780,6 +2784,13 @@ endif()
 if(TARGET test_add_sibling_margin_tapes)
     target_compile_definitions(test_add_sibling_margin_tapes PRIVATE
         PINEFORGE_ADD_SIBLING_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/add_sibling_margin")
+endif()
+
+# INT30 reads its TradingView tapes from the fixture tree and the 15m bars of
+# tests/fixtures/margin_v6; source-bound.
+if(TARGET test_int30_rule_compositions)
+    target_compile_definitions(test_int30_rule_compositions PRIVATE
+        PINEFORGE_INT30_COMPOSITIONS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/int30_compositions")
 endif()
 
 # Lane INT28-FIX (RC) reads its TradingView tape from the fixture tree;
