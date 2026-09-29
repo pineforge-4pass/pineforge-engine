@@ -310,7 +310,14 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #      starts at the daily feed's stamp: NSE's Muhurat session)
 # Both register in release too. 299 registered, 298 run: the WebSocket row
 # still skips on a system libcurl.
-KERNEL_MIN_TESTS = 298
+# 300 run = those 298 plus lane XAU-CAL's two source-free rows:
+#   +1 test_native_day_labels (a daily bar the installed daily feed dates is
+#      labelled by its stamp: OANDA's 17:00 ET break stamps)
+#   +1 test_symbol_calendar (TradingView's symbol calendar as a run input: the
+#      tape converter, the loader, the harness's syminfo-metadata transport)
+# Both register in release too. 301 registered, 300 run: the WebSocket row
+# still skips on a system libcurl.
+KERNEL_MIN_TESTS = 300
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -569,7 +576,15 @@ KERNEL_MIN_TESTS = 298
 #              slipped short's calls from the opening print, every point of
 #              the path, the follow-up of a call of any size)
 # No release row skips, so 786 registered is 786 run.
-RELEASE_MIN_TESTS = 786
+# 790 = those 786 plus lane XAU-CAL's four rows: the two KERNEL_MIN_TESTS
+# lists above and two source-bound ones, counted the same way (the kernel
+# profile builds neither):
+#   +1 XAU-CAL  test_daily_magnifier_tapes (the bar magnifier on a daily
+#               chart, dated by the daily stamps)
+#   +1 XAU-CAL  test_symbol_calendar_tapes (the bar after the current one on
+#               TradingView's symbol calendar)
+# No release row skips, so 790 registered is 790 run.
+RELEASE_MIN_TESTS = 790
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
@@ -608,9 +623,11 @@ ADR_RULED_TEXTS_MIN = 40
 # 742/742/751 with W15-KERNEL-CAL's two rows, counted the same way;
 # 766/766/775 at INT30, each with its twenty-four rows of RELEASE_MIN_TESTS,
 # counted the same way; 767/767/776 with lane TAIL-I's row of
-# RELEASE_MIN_TESTS, counted the same way.
+# RELEASE_MIN_TESTS, counted the same way;
+# 771/771/780 with lane XAU-CAL's four rows of RELEASE_MIN_TESTS in each,
+# counted the same way.
 # An excluded run must still discover at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 767, 'sanitizers': 767, 'native': 776}
+EXCLUDED_REGISTERED_MIN = {'debug': 771, 'sanitizers': 771, 'native': 780}
 # The ctest stage's bound. A full sanitizers run (push to main, a manual
 # dispatch, the maintainers' verification) ran out of its 30 minutes twice on
 # main's four-core runner before every row had finished, so it gets an hour; a
