@@ -934,6 +934,10 @@ list(APPEND TEST_SOURCES test_coof_immediate_close_tapes)
 # before that point recalculates (tests/fixtures/coof_same_point_exits), on
 # TradingView's tapes.
 list(APPEND TEST_SOURCES test_coof_same_point_exits_tapes)
+# ... and what that recalculation cancels or closes is applied at the leg's
+# end, so an exit the rest of the leg reaches still fills at its level
+# (tests/fixtures/coof_inflight_cancel), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_coof_inflight_cancel_tapes)
 # ... and a pending entry's bracket the recalculation of its mid-leg fill
 # re-issues keeps its stop live at its level on the rest of the leg
 # (tests/fixtures/coof_resting_bracket), on TradingView's tapes.
@@ -2566,6 +2570,10 @@ endif()
 if(TARGET test_coof_same_point_exits_tapes)
     target_compile_definitions(test_coof_same_point_exits_tapes PRIVATE
         PINEFORGE_TAIL_D_SAME_POINT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_same_point_exits")
+endif()
+if(TARGET test_coof_inflight_cancel_tapes)
+    target_compile_definitions(test_coof_inflight_cancel_tapes PRIVATE
+        PINEFORGE_TAIL_D_INFLIGHT_CANCEL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_inflight_cancel")
 endif()
 if(TARGET test_coof_resting_bracket_tapes)
     target_compile_definitions(test_coof_resting_bracket_tapes PRIVATE

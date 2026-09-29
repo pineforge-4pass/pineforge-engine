@@ -5311,7 +5311,10 @@ void PineExecutionAdapter::cancel_exit_orders_for_full_close(
     std::vector<native_order::RequestHandle> handles;
     for (const auto& handle : live_handles_) {
         const auto found = placement_.find(handle.incarnation);
-        if (found != placement_.end() && matches(found->second)) handles.push_back(handle);
+        if (found != placement_.end() && matches(found->second)
+            && !coof_leg_reaches_exit(found->second)) {
+            handles.push_back(handle);
+        }
     }
     for (const auto& handle : handles) {
         const auto result = require_host().cancel(handle);
@@ -6066,6 +6069,33 @@ bool PineExecutionAdapter::coof_remaining_recrosses(
         return false;
     }
     return false;
+}
+
+// Under calc_on_order_fills TradingView applies what the recalculation of a
+// mid-leg fill cancels or closes -- strategy.cancel, strategy.cancel_all, a
+// full strategy.close -- at the end of that leg: an exit resting from before
+// whose level the rest of the leg reaches still fills there, at its level,
+// and one the leg does not reach is gone after it (lab tv tapes
+// tests/fixtures/coof_inflight_cancel td-m7a .. td-m7d; lane TAIL-D).
+bool PineExecutionAdapter::coof_leg_reaches_exit(
+        const PlacementSnapshot& row) const noexcept {
+    if (!coof_recalc_active_ || coof_first_open_ || !coof_script_bar_valid_) return false;
+    if (row.family != PineOrderFamily::ExitLimit && row.family != PineOrderFamily::ExitStop)
+        return false;
+    const auto point = detail::callback_point(require_host());
+    const double units = detail::run_position(require_host()).signed_units;
+    const double leg_end = coof_next_waypoint();
+    if (!point || !finite_positive(point->price) || units == 0.0 || !finite_positive(leg_end))
+        return false;
+    const double price = point->price;
+    const bool closing_long = units > 0.0;
+    // A sell limit and a buy stop wait above the price, a buy limit and a
+    // sell stop below it.
+    const bool above = (row.family == PineOrderFamily::ExitLimit) == closing_long;
+    const double level = row.family == PineOrderFamily::ExitLimit
+        ? row.exit_levels.limit : row.exit_levels.stop;
+    if (!finite_positive(level)) return false;
+    return above ? level > price && level <= leg_end : level < price && level >= leg_end;
 }
 
 void PineExecutionAdapter::flush_coof_tail(
@@ -12260,7 +12290,10 @@ void PineExecutionAdapter::cancel(const SourceId& id) {
     std::vector<native_order::RequestHandle> matches;
     for (const auto& handle : live_handles_) {
         const auto snapshot = placement_.find(handle.incarnation);
-        if (snapshot != placement_.end() && snapshot->second.source_id == id) matches.push_back(handle);
+        if (snapshot != placement_.end() && snapshot->second.source_id == id
+            && !coof_leg_reaches_exit(snapshot->second)) {
+            matches.push_back(handle);
+        }
     }
     std::vector<std::pair<std::uint64_t, std::uint64_t>> cancelled;
     for (const auto& handle : matches) {
@@ -12281,6 +12314,8 @@ void PineExecutionAdapter::cancel_all() {
     const auto handles = live_handles_;
     std::vector<std::pair<std::uint64_t, std::uint64_t>> cancelled;
     for (const auto& handle : handles) {
+        const auto row = placement_.find(handle.incarnation);
+        if (row != placement_.end() && coof_leg_reaches_exit(row->second)) continue;
         const auto result = require_host().cancel(handle);
         if (result.status == native_order::CancelStatus::Cancelled) {
             retire(handle);

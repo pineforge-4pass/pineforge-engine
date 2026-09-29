@@ -1,0 +1,16 @@
+{
+  "title": "td-m7b-cancelall-only",
+  "slug": "td-m7b",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T00:47:06.895Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-05"
+  },
+  "pine_sha256": "8e6a50baf21b39a8e9d830dfa7015964c3c919bb4a1c02bdc969bde9b1f3e7e3",
+  "tv_trades_sha256": "3e0380aa1fd8d2fa9fdbe73dca8418b66aae03dd936e380c8eed055b28ff81c9",
+  "tv_trades_rows": 92
+}

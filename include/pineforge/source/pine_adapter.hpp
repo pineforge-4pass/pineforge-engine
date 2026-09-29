@@ -1906,6 +1906,7 @@ private:
     bool coof_current_fill_was_forced_waypoint() const noexcept;
     double coof_next_waypoint(int* path_index = nullptr) const noexcept;
     bool coof_remaining_recrosses(double level, bool long_position) const noexcept;
+    bool coof_leg_reaches_exit(const PlacementSnapshot&) const noexcept;
     void flush_coof_tail(bool openings_only = false,
                          bool include_next_open = false);
     native_order::Owner owner_for_close(const SourceId&, bool dynamic) const;

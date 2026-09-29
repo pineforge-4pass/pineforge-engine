@@ -1,0 +1,16 @@
+{
+  "title": "td-m7d-close-imm-only",
+  "slug": "td-m7d",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-29T00:47:08.008Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-05"
+  },
+  "pine_sha256": "b293a1c8bcefbeeedae6792a2720fcb119c7a654fa7468d2a3689e6f09498795",
+  "tv_trades_sha256": "400b3e8126e4a4fdbca21d77beca8afefb010ad1321ababbdc1cbf380a5f29de",
+  "tv_trades_rows": 92
+}

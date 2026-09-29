@@ -1,0 +1,22 @@
+//@version=6
+// TAIL-D synthetic M7c: a position of 2 has two take-profits of 1 (TP1 3 points and TP2 6
+// points from the average); the calc_on_order_fills recalculation of TP1's fill calls
+// strategy.cancel("TP2") alone. process_orders_on_close on.
+// Stateless: every decision reads strategy.* and the bar clock only.
+strategy("td-m7c-cancel-tp2", overlay = true, process_orders_on_close = true, calc_on_order_fills = true, default_qty_type = strategy.fixed, default_qty_value = 2, initial_capital = 10000000)
+nClosed = strategy.closedtrades
+lastExitHere = nClosed > 0 and strategy.closedtrades.exit_bar_index(nClosed - 1) == bar_index
+lastExitWasTP1 = nClosed > 0 and strategy.closedtrades.exit_id(nClosed - 1) == "TP1"
+flat = strategy.position_size == 0
+slot = minute(time) == 0 and hour(time, "UTC") % 4 == 0
+if flat and not lastExitHere and slot
+    strategy.entry("P", hour(time, "UTC") % 8 == 0 ? strategy.long : strategy.short, qty = 2)
+if strategy.position_size != 0
+    avg = strategy.position_avg_price
+    if math.abs(strategy.position_size) == 2
+        strategy.exit("TP1", "P", qty = 1, limit = strategy.position_size > 0 ? avg + 3 : avg - 3)
+        strategy.exit("TP2", "P", qty = 1, limit = strategy.position_size > 0 ? avg + 6 : avg - 6)
+    if lastExitHere and lastExitWasTP1
+        strategy.cancel("TP2")
+    if bar_index - strategy.opentrades.entry_bar_index(0) >= 12
+        strategy.close_all(comment = "TIME")
