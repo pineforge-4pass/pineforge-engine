@@ -1,0 +1,16 @@
+{
+  "title": "td-m2b-bracket-reissue-unchanged",
+  "slug": "td-m2b",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:02:34.766Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-05"
+  },
+  "pine_sha256": "cde63d42dfec496e5409c8dbdd279b70c3868244f0123f0486e74a268d7d9480",
+  "tv_trades_sha256": "65ea647efc884815dc9b3f0d12b746f4412610233462c655dcefccef4dcb691e",
+  "tv_trades_rows": 74
+}

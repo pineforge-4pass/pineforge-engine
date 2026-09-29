@@ -934,6 +934,10 @@ list(APPEND TEST_SOURCES test_coof_immediate_close_tapes)
 # before that point recalculates (tests/fixtures/coof_same_point_exits), on
 # TradingView's tapes.
 list(APPEND TEST_SOURCES test_coof_same_point_exits_tapes)
+# ... and a pending entry's bracket the recalculation of its mid-leg fill
+# re-issues keeps its stop live at its level on the rest of the leg
+# (tests/fixtures/coof_resting_bracket), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_coof_resting_bracket_tapes)
 
 # Lane W8A-SIGSTATE-1 R4: a fill at the day's first tick does not trip
 # strategy.risk.max_intraday_loss (tests/fixtures/intraday_loss_open_fill), on
@@ -2538,6 +2542,10 @@ endif()
 if(TARGET test_coof_same_point_exits_tapes)
     target_compile_definitions(test_coof_same_point_exits_tapes PRIVATE
         PINEFORGE_TAIL_D_SAME_POINT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_same_point_exits")
+endif()
+if(TARGET test_coof_resting_bracket_tapes)
+    target_compile_definitions(test_coof_resting_bracket_tapes PRIVATE
+        PINEFORGE_TAIL_D_RESTING_BRACKET_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_resting_bracket")
 endif()
 if(TARGET test_coof_reissued_exit_tapes)
     target_compile_definitions(test_coof_reissued_exit_tapes PRIVATE

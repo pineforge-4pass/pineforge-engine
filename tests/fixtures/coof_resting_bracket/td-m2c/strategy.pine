@@ -1,0 +1,21 @@
+//@version=6
+// TAIL-D synthetic M2c: a pending limit entry E carries a bracket X placed while E rests;
+// E fills mid-leg, and the calc_on_order_fills recalculation of that fill does NOT re-issue X;
+// X's stop is crossed on the rest of the leg.
+strategy("td-m2c-bracket-no-reissue", overlay = true, calc_on_order_fills = true, process_orders_on_close = false, default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 10000000)
+var float L = na
+var bool isLong = true
+nClosed = strategy.closedtrades
+lastExitHere = nClosed > 0 and strategy.closedtrades.exit_bar_index(nClosed - 1) == bar_index
+flat = strategy.position_size == 0
+slot = minute(time) == 0 and hour(time, "UTC") % 2 == 0
+if flat and slot and not lastExitHere
+    isLong := hour(time, "UTC") % 4 == 0
+    L := isLong ? close - 2 : close + 2
+    strategy.entry("E", isLong ? strategy.long : strategy.short, limit = L)
+    strategy.exit("X", "E", stop = isLong ? L - 3 : L + 3, limit = isLong ? L + 20 : L - 20)
+if flat and not slot
+    strategy.cancel("E")
+if strategy.position_size != 0
+    if bar_index - strategy.opentrades.entry_bar_index(0) >= 4
+        strategy.close("E")

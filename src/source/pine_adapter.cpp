@@ -9831,9 +9831,24 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 snapshot.forced_execution_price = coof_limit_waypoint_price;
             else if (finite_positive(coof_stop_waypoint_price))
                 snapshot.forced_execution_price = coof_stop_waypoint_price;
+            // A stop leg the recalculation re-issues at the level its live
+            // order already rests at was not born there: it stays live at
+            // that level on the rest of the leg, whatever else the re-issue
+            // changes -- the bracket a resting entry carried, re-issued by
+            // the recalculation of that entry's mid-leg fill (lab tv tapes
+            // tests/fixtures/coof_resting_bracket td-m2a and td-m2b; lane
+            // TAIL-D). One an earlier recalculation holds stays held.
+            const auto live_stop = live_by_source_key_.find(key_for(replacement_key));
+            const bool stop_leg_rests = live_stop != live_by_source_key_.end() && [&] {
+                const auto prior = placement_.find(live_stop->second.incarnation);
+                return prior != placement_.end()
+                    && prior->second.family == PineOrderFamily::ExitStop
+                    && same_double_bits(prior->second.exit_levels.stop, stop_price)
+                    && !finite_positive(prior->second.forced_execution_price);
+            }();
             if (coof_recalc_active_ && !coof_first_open_ && historical_cascade
                 && family == PineOrderFamily::ExitStop
-                && finite_positive(stop_price)) {
+                && finite_positive(stop_price) && !stop_leg_rests) {
                 const auto point = detail::callback_point(require_host());
                 const double birth = point ? point->price : kNaN;
                 const double waypoint = coof_next_waypoint();
