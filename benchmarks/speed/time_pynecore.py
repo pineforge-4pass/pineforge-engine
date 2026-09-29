@@ -9,6 +9,9 @@ A slot without strategy_pyne.py (a PyneSys compile rejection) is skipped
 gracefully when the subprocess returns non-zero. ``--slots`` (slot-number
 ranges) and ``--out`` let a long sweep run in chunks whose JSON files merge
 by key. A closed slot is keyed ``NNN-closed`` (``paths.public_name``).
+``--first`` submits the longest slots to the pool first, so a slot that runs
+for minutes does not finish alone after the queue has drained: the pool stays
+``--workers`` wide for the whole sweep.
 """
 from __future__ import annotations
 
@@ -68,6 +71,8 @@ def main() -> None:
                     help="slot-number ranges to time, e.g. 1-50,120 (default: all)")
     ap.add_argument("--out", type=Path, default=None,
                     help="also write the JSON to this file")
+    ap.add_argument("--first", default="",
+                    help="slot numbers to submit first, e.g. 178,162 (the longest runs)")
     args = ap.parse_args()
     wanted: set[int] | None = None
     if args.slots:
@@ -86,6 +91,9 @@ def main() -> None:
             if wanted is not None and int(d.name.split("-", 1)[0]) not in wanted:
                 continue
             strat_dirs.append(d)
+    first = [int(n) for n in args.first.split(",") if n.strip()]
+    strat_dirs.sort(key=lambda d: (first.index(int(d.name[:3])) if int(d.name[:3]) in first
+                                   else len(first)))
 
     out: dict[str, dict] = {}
 
