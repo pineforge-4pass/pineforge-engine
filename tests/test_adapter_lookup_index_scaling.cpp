@@ -14,8 +14,8 @@
 //     bracket re-issued every bar adds legs every bar. PERF-D1 measured probe
 //     044 (two quantity brackets per entry) at 55 % in exit().
 // So a run four times longer cost far more than four times as much. This row
-// holds the SHAPE of the cost with process CPU time (std::clock), best of five
-// per leg, and a ratio under 5 -- four for a linear run, plus room for noise
+// holds the SHAPE of the cost with user CPU time, the best of six rounds per
+// leg, and a ratio under 5 -- four for a linear run, plus room for noise
 // and for the per-bar work a shorter run amortizes worse. The small leg is
 // calibrated independently for each workload until its best sample has at
 // least 100 ms of CPU; the large leg is four times that size. The original
@@ -24,6 +24,33 @@
 // legs preserves the old mutant margin (the scan is still well above 5). A
 // timed leg under the minimum doubles the bars and times both legs again (R5
 // lane CI-FLAKE, tests/ratio_timing.hpp).
+// Lane pf-perf-scale times the two tapes in turn, in user CPU. Engine CI runs
+// 36554781580 (35db01c8) and 36621162191 (4dc496de), hosted Ubuntu x86-64
+// under `ctest --parallel 16`, read the applied reversals at 5.50 (6,000 bars
+// 0.1179 s, 24,000 bars 0.6488 s) and 5.31 (0.2432 s, 1.2927 s) while the
+// same trees passed: 35db01c8's re-run at 3.97 (0.1178 s, 0.4672 s),
+// 4dc496de's pull-request head b045b96b at 3.64 (0.2375 s, 0.8642 s). The
+// small blocks matched; the large ones ran 39 and 50 % dearer. The shape is
+// linear: on idle spark cores 0411892c, 35db01c8 and 4dc496de read 3.85-3.97
+// (Cortex-A725, 6,000 / 24,000 bars, 12 runs each) and 4.03-4.07
+// (Cortex-X925, 24,000 / 96,000), and the reversal leg costs 104,315-104,512
+// user instructions a bar from 6,000 to 96,000 bars at all three. Timed in
+// blocks, five small runs and then five large, a load that rises after the
+// first small run and before the first large one ends slows the large block
+// alone. Timed in turn with the large tape first and last, no single rise or
+// fall of the load gives the small tape a quiet sample the large one lacks:
+// moved from a Cortex-X925 to a Cortex-A725 core (2.3 times the CPU a bar)
+// 1.25 to 7 s into the row, the blocks failed for a move 1.75 to 3 s in
+// (5.93-9.26) and the rounds for none of 24 (at most 4.04; a step can still
+// lower a ratio, here to 2.06). User CPU, because the order moves the
+// allocator's page faults between the tapes (R5 lane INT27 made the same
+// choice for the lower-lookup row): in turn, process CPU read the reversals
+// at a median 4.13 against the blocks' 4.00, user CPU at 4.04 against 4.01
+// (A725, 12,000 / 48,000 bars, 8 runs each). This row now reads the
+// reversals at 4.02-4.08 (A725) and 3.94-4.01 (X925) and the brackets at
+// 3.99-4.04, 12 runs each, and a library whose adapter lookups all walk
+// (pine_adapter.cpp's kIndexedFrom unbounded) 6.37-6.43, where the blocks
+// read 6.19-6.27.
 // What the runs produce is pinned elsewhere (test_adapter_lookup_index_
 // witness) and compared bit for bit against the reference scans
 // (test_adapter_lookup_index_differential); here only the finished state is
@@ -37,7 +64,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <ctime>
 #include <limits>
 #include <vector>
 
@@ -133,10 +159,10 @@ struct Leg {
 
 Leg replay(Workload workload, const std::vector<Bar>& bars) {
     ScalingHost host(workload);
-    const std::clock_t started = std::clock();
+    const double started = ratio_timing::user_cpu_seconds();
     host.run(bars.data(), static_cast<int>(bars.size()));
     Leg leg;
-    leg.seconds = static_cast<double>(std::clock() - started) / CLOCKS_PER_SEC;
+    leg.seconds = ratio_timing::user_cpu_seconds() - started;
     leg.trades = host.trade_count();
     CHECK(host.last_error().empty());
     CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
@@ -160,6 +186,28 @@ Leg best_of_five(Workload workload, const std::vector<Bar>& bars) {
     return best;
 }
 
+// Even, so the large tape also closes the rounds.
+constexpr int kRounds = 6;
+static_assert(kRounds % 2 == 0, "the large tape opens and closes the rounds");
+
+// A workload's two tapes, timed in turn round after round -- the large tape
+// first, the order alternating after -- each keeping its best round. The large
+// tape opens and closes the rounds, so a load that rises or falls once while
+// they run never leaves the small tape a sample on the quiet side of the
+// change that the large tape lacks.
+void best_in_turn(Workload workload, const std::vector<Bar>& small_tape,
+                  const std::vector<Bar>& large_tape, Leg& small, Leg& large) {
+    for (int round = 0; round < (gated() ? kRounds : 1); ++round) {
+        const bool large_first = round % 2 == 0;
+        const Leg first = replay(workload, large_first ? large_tape : small_tape);
+        const Leg second = replay(workload, large_first ? small_tape : large_tape);
+        const Leg& s_leg = large_first ? second : first;
+        const Leg& l_leg = large_first ? first : second;
+        if (round == 0 || s_leg.seconds < small.seconds) small = s_leg;
+        if (round == 0 || l_leg.seconds < large.seconds) large = l_leg;
+    }
+}
+
 constexpr int kInitialBars = 6000;
 // The small leg grows to at most this many bars; an Apple M4 Max needs 48,000.
 constexpr int kMaxCalibratedBars = 384000;
@@ -177,8 +225,7 @@ void cost_is_linear_in_the_bars(Workload workload, const char* name) {
     Leg small;
     Leg large;
     const auto time_legs = [&](int count) {
-        small = best_of_five(workload, tape(count));
-        large = best_of_five(workload, tape(count * 4));
+        best_in_turn(workload, tape(count), tape(count * 4), small, large);
         return std::min(small.seconds, large.seconds);
     };
     if (gated())
