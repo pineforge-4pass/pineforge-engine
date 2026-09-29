@@ -121,7 +121,7 @@
     },
     "2026-09-22-063e4460/throughput/r2.json": {
       "sha256": "39efb7c1d80aefa205fdf8d9d887f03a3b61bafde4bcba9670bd7b5bc6d8b875",
-      "what": "throughput package run 2 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), gate at 2026-09-22T13:38:22Z; the median run, published as benchmarks/throughput/benchmark_results.json",
+      "what": "throughput package run 2 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), gate at 2026-09-22T13:38:22Z; the median run, published as benchmarks/throughput/benchmark_results.json until the 2026-09-29 window replaced it",
       "origin": "/tmp/bench3/tp-q3/benchmark_results.json",
       "origin_sha256": "905f77ffe6bec684375b7559c40deaeac850fc63c7d331e12ef261e94a9d3d68",
       "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path); context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name); closed slot names (NNN-<author>-<title>) rewritten to NNN-closed"
