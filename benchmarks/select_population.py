@@ -39,6 +39,15 @@ lost (a PyneSys compile rejection). ``--replace NNN="reason"`` keeps slot NNN
 and appends its replacement -- the first queue entry not already selected --
 as the next free slot number (201, 202, ...), so the manifest stays a pure
 function of its inputs and the recorded rejections.
+
+The committed manifest is the public view (``public_manifest``): a closed
+slot is printed as ``NNN-closed`` and keeps its stratum, bin, trade counts,
+window, tape digest and license, but not the strings that carry the
+TradingView author's handle (its slug, probe id and replacement queue). The
+full manifest is written beside the closed root, to
+``benchmarks/assets-closed/_selection/selection.json``, when that root is
+present; ``--render-public FULL.json`` re-renders the public view from it
+without a new draw.
 """
 from __future__ import annotations
 
@@ -57,7 +66,9 @@ from pathlib import Path
 BENCH = Path(__file__).resolve().parent
 REPO_ROOT = BENCH.parent
 sys.path.insert(0, str(BENCH))
-from paths import DATA  # noqa: E402
+from paths import CLOSED_STRATEGIES, DATA  # noqa: E402
+
+PRIVATE_SELECTION = CLOSED_STRATEGIES.parent / "_selection" / "selection.json"
 
 SEED = 20260921
 N_CORPUS = 100
@@ -262,10 +273,12 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=SEED)
     ap.add_argument("--corpus-dir", type=Path, default=REPO_ROOT / "corpus" / "validation")
     ap.add_argument("--feed", type=Path, default=DATA / "ETHUSDT_15.csv")
-    ap.add_argument("--population", type=Path, required=True,
+    ap.add_argument("--population", type=Path,
                     help="population document (lab evidence get <population fileSha256>)")
-    ap.add_argument("--verify-facts", type=Path, required=True,
+    ap.add_argument("--verify-facts", type=Path,
                     help="campaign verify-report export ({experimentId, rows:[{slug, document}]})")
+    ap.add_argument("--render-public", type=Path, metavar="FULL_JSON",
+                    help="write the public selection.{json,md} from this full manifest; no draw")
     ap.add_argument("--scrapper-data", type=Path,
                     default=Path(os.environ.get("PINESCRIPT_SCRAPPER_DIR",
                                                 Path.home() / "code" / "pinescript-scrapper")) / "data")
@@ -273,6 +286,12 @@ def main() -> int:
     ap.add_argument("--replace", action="append", default=[], metavar='NNN="reason"',
                     help="slot number lost to a PyneSys compile rejection (repeatable)")
     args = ap.parse_args()
+    if args.render_public:
+        write_manifest(json.loads(args.render_public.read_text(encoding="utf-8")), args.out_dir,
+                       private=None)
+        return 0
+    if not (args.population and args.verify_facts):
+        ap.error("a draw needs --population and --verify-facts")
 
     rng = random.Random(args.seed)
     feed = feed_span(args.feed)
@@ -384,11 +403,41 @@ def main() -> int:
         "excludedCorpus": {k: v for k, v in sorted(c_excluded.items())},
         "slots": slots,
     }
-    args.out_dir.mkdir(parents=True, exist_ok=True)
-    (args.out_dir / "selection.json").write_text(json.dumps(manifest, indent=1) + "\n", encoding="utf-8")
-    (args.out_dir / "selection.md").write_text(render_md(manifest), encoding="utf-8")
-    print(render_md(manifest))
+    write_manifest(manifest, args.out_dir,
+                   private=PRIVATE_SELECTION if PRIVATE_SELECTION.parent.is_dir() else None)
     return 0
+
+
+def closed_name(slot: str) -> str:
+    return f"{slot[:3]}-closed"
+
+
+def public_manifest(m: dict) -> dict:
+    """The committed view of manifest ``m``: every closed slot is named
+    ``NNN-closed`` and loses its probe id and replacement queue, the strings
+    that carry the TradingView author's handle."""
+    out = json.loads(json.dumps(m))
+    for x in out["slots"]:
+        if x["source"] != "closed":
+            continue
+        x["slot"] = closed_name(x["slot"])
+        if "replaces" in x:
+            x["replaces"] = closed_name(x["replaces"])
+        x.pop("probeId", None)
+        x.pop("replacements", None)
+    return out
+
+
+def write_manifest(manifest: dict, out_dir: Path, private: Path | None) -> None:
+    """The public selection.{json,md} under ``out_dir``; the full manifest to
+    ``private`` (the closed root's ``_selection/``) when given."""
+    if private is not None:
+        private.write_text(json.dumps(manifest, indent=1) + "\n", encoding="utf-8")
+    public = public_manifest(manifest)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "selection.json").write_text(json.dumps(public, indent=1) + "\n", encoding="utf-8")
+    (out_dir / "selection.md").write_text(render_md(public), encoding="utf-8")
+    print(render_md(public))
 
 
 def render_md(m: dict) -> str:
@@ -461,7 +510,7 @@ def render_md(m: dict) -> str:
         "|---|---|---|---:|---|---:|---|",
     ]
     for x in m["slots"]:
-        where = x.get("corpusPath") or x["probeId"]
+        where = x.get("corpusPath") or x.get("probeId") or "closed root (maintainers only)"
         lines.append(f"| {x['slot']} | {x['source']} | `{where}` | {x['tvTrades']} ({x['tvRows']}) | "
                      f"{x['stratum']} | {x['bin']} | {x['license']} |")
     lines.append("")

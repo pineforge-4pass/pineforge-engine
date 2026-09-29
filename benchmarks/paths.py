@@ -28,3 +28,16 @@ DATA = ASSETS / "data"
 # public checkouts, where STRATEGY_ROOTS is the public root alone.
 CLOSED_STRATEGIES = BENCH / "assets-closed" / "strategies"
 STRATEGY_ROOTS = [STRATEGIES] + ([CLOSED_STRATEGIES] if CLOSED_STRATEGIES.is_dir() else [])
+
+
+def public_name(slot_dir: Path) -> str:
+    """The name a committed report prints for a slot.
+
+    A public slot keeps its directory name. A closed slot's directory name,
+    ``NNN-<author>-<title>``, carries the TradingView author's handle, so every
+    report prints it as ``NNN-closed``: the slot number is the only key the
+    public results need, and the closed root maps it back to its script.
+    """
+    if slot_dir.resolve().parent == CLOSED_STRATEGIES.resolve():
+        return f"{slot_dir.name[:3]}-closed"
+    return slot_dir.name

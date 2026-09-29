@@ -499,482 +499,482 @@
     "p95_ms": 613.8749232748523,
     "n": 20
   },
-  "101-3commas-3commas-bch-overbought-rsi-fade-short-indicator": {
+  "101-closed": {
     "median_ms": 3927.057125605643,
     "p95_ms": 4087.5311313197017,
     "n": 20
   },
-  "102-3commas-3commas-pol-grid-bot-long-strategy": {
+  "102-closed": {
     "median_ms": 1805.3337705787271,
     "p95_ms": 1861.7181686684492,
     "n": 20
   },
-  "103-3commas-eth-grid-bot-long-strategy": {
+  "103-closed": {
     "median_ms": 1062.7596250269562,
     "p95_ms": 1121.975455945358,
     "n": 20
   },
-  "104-3commas-gram-rsi-strategy-3commas": {
+  "104-closed": {
     "median_ms": 3723.5059374943376,
     "p95_ms": 3977.1243039052933,
     "n": 20
   },
-  "105-3commas-heikin-ashi-rsi-fade-short-strategy": {
+  "105-closed": {
     "median_ms": 7545.6846037413925,
     "p95_ms": 8023.446960374713,
     "n": 20
   },
-  "106-3commas-sol-rsi-dca-long-strategy": {
+  "106-closed": {
     "median_ms": 5505.411541555077,
     "p95_ms": 5809.706611162983,
     "n": 20
   },
-  "107-3commas-xmr-grid-bot-long-strategy": {
+  "107-closed": {
     "median_ms": 1812.1644163038582,
     "p95_ms": 1929.1024872800338,
     "n": 20
   },
-  "108-a-popal-simple-smart-buy-sell-strategy": {
+  "108-closed": {
     "median_ms": 1805.1680410280824,
     "p95_ms": 1861.3764798035847,
     "n": 20
   },
-  "109-acalvillo20-amd1": {
+  "109-closed": {
     "median_ms": 6631.871104706079,
     "p95_ms": 7483.867983613163,
     "n": 20
   },
-  "110-aiscripts-lvn-rejection-acceptance-strategy": {
+  "110-closed": {
     "median_ms": 2469.565791776404,
     "p95_ms": 2531.485284655355,
     "n": 20
   },
-  "111-ajayinderbrar-ajay-fibonacci-market-structure-pro-ai-v2-1": {
+  "111-closed": {
     "median_ms": 1797.0836453605443,
     "p95_ms": 1879.0613265242428,
     "n": 20
   },
-  "112-alexgrover-g-channel-trend-detection-alerts-non-repainting": {
+  "112-closed": {
     "median_ms": 1556.1613750178367,
     "p95_ms": 1618.2586057577282,
     "n": 20
   },
-  "113-algo-aakash-macd-pullback-validation-with-divergence-filters-algo-aakash": {
+  "113-closed": {
     "median_ms": 1990.4411665629596,
     "p95_ms": 2017.0747980242595,
     "n": 20
   },
-  "114-amandaborgeson06-bias-status-dashboard": {
+  "114-closed": {
     "median_ms": 12243.723853956908,
     "p95_ms": 15657.014222699217,
     "n": 20
   },
-  "115-anji-ga-9-21ema-anji": {
+  "115-closed": {
     "median_ms": 1320.3095209319144,
     "p95_ms": 1343.3167725102976,
     "n": 20
   },
-  "116-anonycryptous-ev-edge-anonycryptous": {
+  "116-closed": {
     "median_ms": 1856.0426875483245,
     "p95_ms": 1878.1225101323798,
     "n": 20
   },
-  "117-antoniolinux-rsi-mfi-divergence-momentum": {
+  "117-closed": {
     "median_ms": 1920.946895610541,
     "p95_ms": 1980.981589225121,
     "n": 20
   },
-  "118-averagepoe-mnq-anomaly-candle-sma-confluence-v6": {
+  "118-closed": {
     "median_ms": 1369.8299368843436,
     "p95_ms": 1418.7701682560148,
     "n": 20
   },
-  "119-backtestbay-strategy-validation-framework-standardised-atr-exits-1-ris": {
+  "119-closed": {
     "median_ms": 1096.7887707520276,
     "p95_ms": 1135.220581223257,
     "n": 20
   },
-  "120-benblackdiamond-l2gmom-network-momentum": {
+  "120-closed": {
     "median_ms": 3063.2654377259314,
     "p95_ms": 3162.254503602162,
     "n": 20
   },
-  "121-bipinbiharipatra-5m-sol-scalper-ha-lorentzian": {
+  "121-closed": {
     "median_ms": 1657.1282502263784,
     "p95_ms": 1704.7791428398343,
     "n": 20
   },
-  "122-cb85wj5jmt-moja-strategia-harami-bb": {
+  "122-closed": {
     "median_ms": 1650.9983334690332,
     "p95_ms": 1727.4332005530598,
     "n": 20
   },
-  "123-chadow6875-swing-high-low-ict-clean-pro": {
+  "123-closed": {
     "median_ms": 2592.8048125933856,
     "p95_ms": 2660.9588576946408,
     "n": 20
   },
-  "124-cihanozdemir-trade-id-signal-engine-buy-only-option": {
+  "124-closed": {
     "median_ms": 803.3874998800457,
     "p95_ms": 854.975874302909,
     "n": 20
   },
-  "125-cleightyp-cleightyp-bos-sma-macd-vwap": {
+  "125-closed": {
     "median_ms": 3817.745458567515,
     "p95_ms": 3951.2638518819585,
     "n": 20
   },
-  "126-cntvxiao-smc-vsa-oi": {
+  "126-closed": {
     "median_ms": 2681.74787517637,
     "p95_ms": 2783.579685189761,
     "n": 20
   },
-  "127-codetradesalgo-fix-webhook-latency-dh-905-errors-pinescript-to-python-bridge": {
+  "127-closed": {
     "median_ms": 1225.5526459775865,
     "p95_ms": 1270.7454442046583,
     "n": 20
   },
-  "128-colasbreugnon-nq-scalp-fix-signals": {
+  "128-closed": {
     "median_ms": 2466.9678546488285,
     "p95_ms": 2533.251107414253,
     "n": 20
   },
-  "129-daytrader4beginners-box-breakout-strategy-dt4b-trader": {
+  "129-closed": {
     "median_ms": 1673.560687340796,
     "p95_ms": 1723.6401915550232,
     "n": 20
   },
-  "130-delta-crypto-mu-overnight-gap-capture": {
+  "130-closed": {
     "median_ms": 1657.2234795894474,
     "p95_ms": 1713.6450057849288,
     "n": 20
   },
-  "131-devildk-option-point": {
+  "131-closed": {
     "median_ms": 1315.3241039253771,
     "p95_ms": 1355.6046418379995,
     "n": 20
   },
-  "132-dinkus3-obsidian": {
+  "132-closed": {
     "median_ms": 13184.167353669181,
     "p95_ms": 13524.274779018015,
     "n": 20
   },
-  "133-drgunjanpupadhyay-swing-trend-strategy-pro-sideways-filtered-nifty-500": {
+  "133-closed": {
     "median_ms": 1480.8111044112593,
     "p95_ms": 1515.7979557057845,
     "n": 20
   },
-  "134-elomadablah-atr-trailing-stoploss-multi": {
+  "134-closed": {
     "median_ms": 2389.123125001788,
     "p95_ms": 2524.8229270102456,
     "n": 20
   },
-  "135-finnp17-atm": {
+  "135-closed": {
     "median_ms": 2626.8819372635335,
     "p95_ms": 2712.6366166863595,
     "n": 20
   },
-  "136-fondbird7020-vishall-ema-9-20-50-200-dmi-adx-strategy": {
+  "136-closed": {
     "median_ms": 1390.223375055939,
     "p95_ms": 1442.9294495843353,
     "n": 20
   },
-  "137-fran-pineda-strategy-501-de-franpineda": {
+  "137-closed": {
     "median_ms": 1897.4486875813454,
     "p95_ms": 2023.6047252314168,
     "n": 20
   },
-  "138-fran-pineda-strategy-502-de-franpineda": {
+  "138-closed": {
     "median_ms": 1900.9348747786134,
     "p95_ms": 2018.8847917597743,
     "n": 20
   },
-  "139-francescodimichele-gold-ai-strategy-v2-0": {
+  "139-closed": {
     "median_ms": 3659.829937852919,
     "p95_ms": 3715.4725628672168,
     "n": 20
   },
-  "141-hariss369-crypto-sniper-pro-smart-trend-range-filter-strategy-hariss-369": {
+  "141-closed": {
     "median_ms": 3694.422770757228,
     "p95_ms": 3826.473303302191,
     "n": 20
   },
-  "142-hermescore-momentum-conviction-hermescore": {
+  "142-closed": {
     "median_ms": 4449.165104422718,
     "p95_ms": 4873.498517903499,
     "n": 20
   },
-  "144-igreycrypto-adapted-rsi-w-multi-asset-regime-detection-v1-1": {
+  "144-closed": {
     "median_ms": 2104.31049996987,
     "p95_ms": 2173.8852835725993,
     "n": 20
   },
-  "145-imtiyazali73-imtiyaz-signature-liquidity-compass-smc": {
+  "145-closed": {
     "median_ms": 6717.7059792447835,
     "p95_ms": 7564.783302438445,
     "n": 20
   },
-  "146-inr3d-r3d-jackofxc-rtp-strategy": {
+  "146-closed": {
     "median_ms": 1420.8116456866264,
     "p95_ms": 1502.3287940537557,
     "n": 20
   },
-  "147-jaydeepp095-candle-harry": {
+  "147-closed": {
     "median_ms": 3517.9,
     "p95_ms": 3592.6,
     "n": 20
   },
-  "148-jayendranath4-banknifty-15m-clear-tp-sl-strategy": {
+  "148-closed": {
     "median_ms": 1478.5,
     "p95_ms": 1513.9,
     "n": 20
   },
-  "149-jayentriken-bbwp-macd-ema-trend-strategy": {
+  "149-closed": {
     "median_ms": 2506.3,
     "p95_ms": 2559.4,
     "n": 20
   },
-  "150-jdceagle-zigzag-de-fractales-williams": {
+  "150-closed": {
     "median_ms": 1939.8,
     "p95_ms": 1976.8,
     "n": 20
   },
-  "151-jos-protrader-edward-smart-channel-reversal": {
+  "151-closed": {
     "median_ms": 1503.1,
     "p95_ms": 1557.5,
     "n": 20
   },
-  "152-jos-protrader-edward-smart-liquidity-sweep": {
+  "152-closed": {
     "median_ms": 1615.2,
     "p95_ms": 1665.6,
     "n": 20
   },
-  "153-jos-protrader-edward-smart-momentum-pro": {
+  "153-closed": {
     "median_ms": 1871.2,
     "p95_ms": 1913.9,
     "n": 20
   },
-  "154-khanhtq26-psol-01-donchian-channels": {
+  "154-closed": {
     "median_ms": 1936.3,
     "p95_ms": 2002.0,
     "n": 20
   },
-  "155-legalrice2697-nse-elite-strategy-v6-full-system": {
+  "155-closed": {
     "median_ms": 5155.1,
     "p95_ms": 5273.1,
     "n": 20
   },
-  "156-m-f-atipey-hybrid-3-strategy-smart-system-v6-1": {
+  "156-closed": {
     "median_ms": 6549.7,
     "p95_ms": 6926.8,
     "n": 20
   },
-  "157-madue2014-twe-2-bar-break-strategy": {
+  "157-closed": {
     "median_ms": 1854.3,
     "p95_ms": 1887.9,
     "n": 20
   },
-  "158-market-logic-india-low-lag-strength-oscillator": {
+  "158-closed": {
     "median_ms": 2860.6,
     "p95_ms": 2900.6,
     "n": 20
   },
-  "159-mdfe3757-trade-strategy-v8-4-pine-v6-ready": {
+  "159-closed": {
     "median_ms": 2079.1,
     "p95_ms": 2129.3,
     "n": 20
   },
-  "160-mehranazizi219-goldsiggy-murk": {
+  "160-closed": {
     "median_ms": 1185.7,
     "p95_ms": 1257.7,
     "n": 20
   },
-  "161-mylivingedge-gold-asian-range-breakout-signals": {
+  "161-closed": {
     "median_ms": 3394.6,
     "p95_ms": 3510.4,
     "n": 20
   },
-  "162-nicocashfx-prime-strategy-swing": {
+  "162-closed": {
     "median_ms": 35770.586687373,
     "p95_ms": 36639.063066616654,
     "n": 20
   },
-  "163-nightowlxtrader-azt-strategy-v11-first-draft": {
+  "163-closed": {
     "median_ms": 17046.7,
     "p95_ms": 18839.1,
     "n": 20
   },
-  "164-officialjackofalltrades-concordance-execution-mandate-joat": {
+  "164-closed": {
     "median_ms": 25356.2,
     "p95_ms": 28121.8,
     "n": 20
   },
-  "165-officialjackofalltrades-concordance-regime-synthesis-joat": {
+  "165-closed": {
     "median_ms": 13386.8,
     "p95_ms": 13833.1,
     "n": 20
   },
-  "167-officialjackofalltrades-large-lot-reverse-engineer-joat": {
+  "167-closed": {
     "median_ms": 2087.9,
     "p95_ms": 2133.0,
     "n": 20
   },
-  "168-officialjackofalltrades-parallax-covenant-strategy-joat": {
+  "168-closed": {
     "median_ms": 8613.5,
     "p95_ms": 9111.1,
     "n": 20
   },
-  "169-officialjackofalltrades-regime-execution-strategy-joat": {
+  "169-closed": {
     "median_ms": 3361.2,
     "p95_ms": 3408.7,
     "n": 20
   },
-  "170-ollie-b-ollie-asia-sweep-model": {
+  "170-closed": {
     "median_ms": 2563.7,
     "p95_ms": 2606.2,
     "n": 20
   },
-  "171-options7700-2min-bullish-confluence": {
+  "171-closed": {
     "median_ms": 11438.9,
     "p95_ms": 12531.7,
     "n": 20
   },
-  "172-projectsyndicate-strong-breakout-signals-projectsyndicate": {
+  "172-closed": {
     "median_ms": 5866.7,
     "p95_ms": 6306.5,
     "n": 20
   },
-  "173-quantitativealpha-strategy-forecast-engine": {
+  "173-closed": {
     "median_ms": 1229.4,
     "p95_ms": 1261.8,
     "n": 20
   },
-  "174-quantnomad-ut-bot-v2-atr-trailing-stop": {
+  "174-closed": {
     "median_ms": 2197.2,
     "p95_ms": 2245.6,
     "n": 20
   },
-  "175-rakesh-09-edge-confirmation-system": {
+  "175-closed": {
     "median_ms": 1786.7,
     "p95_ms": 1867.9,
     "n": 20
   },
-  "176-rakesh-09-edge-confirmation-system-ecs-v2-0": {
+  "176-closed": {
     "median_ms": 1740.3,
     "p95_ms": 1919.0,
     "n": 20
   },
-  "177-rampatel9912-super-rsi-strategy": {
+  "177-closed": {
     "median_ms": 1596.7,
     "p95_ms": 1748.8,
     "n": 20
   },
-  "178-remarkablefreddy-ultimate-smc-emas-day-trading-strategy": {
+  "178-closed": {
     "median_ms": 72524.47622921318,
     "p95_ms": 78330.22273224778,
     "n": 20
   },
-  "179-richmondhillcm-richmondhillcm-vwap-volume-spike-suite-v1-3": {
+  "179-closed": {
     "median_ms": 1837.786957854405,
     "p95_ms": 1885.9230360249057,
     "n": 20
   },
-  "180-robmagnaye14-eb-ict-v5-pro-trader-daily-5-10-trade-60-target": {
+  "180-closed": {
     "median_ms": 6660.975333536044,
     "p95_ms": 6973.42943395488,
     "n": 20
   },
-  "181-roi10x-shiva-lt-ls-blend": {
+  "181-closed": {
     "median_ms": 11201.71945844777,
     "p95_ms": 12459.237842168659,
     "n": 20
   },
-  "182-sadtrader9-fair-value-gap-strategy": {
+  "182-closed": {
     "median_ms": 1510.0904165301472,
     "p95_ms": 1534.2255159979686,
     "n": 20
   },
-  "183-shiroi-macd-zero-line-candles-alert": {
+  "183-closed": {
     "median_ms": 789.7988129407167,
     "p95_ms": 821.5279672760516,
     "n": 20
   },
-  "184-shurben5-tradingview-bot-goat": {
+  "184-closed": {
     "median_ms": 1366.7214163579047,
     "p95_ms": 1406.7164519801736,
     "n": 20
   },
-  "185-simon20cent-efi-macd-advanced-pro": {
+  "185-closed": {
     "median_ms": 1755.998604465276,
     "p95_ms": 1784.201114671305,
     "n": 20
   },
-  "186-tharris235106-reversal-signals-with-profit-target-and-continuation": {
+  "186-closed": {
     "median_ms": 1257.9573751427233,
     "p95_ms": 1320.804287889041,
     "n": 20
   },
-  "187-thebitcoin37-9-15-ema-strategy-trade-room": {
+  "187-closed": {
     "median_ms": 1243.9668329898268,
     "p95_ms": 1286.048521171324,
     "n": 20
   },
-  "188-theforexguy0777-9-ema-20-ema-retest-strategy": {
+  "188-closed": {
     "median_ms": 1514.1170001588762,
     "p95_ms": 1548.650418734178,
     "n": 20
   },
-  "189-therealbouga-apex-mtf-index-model": {
+  "189-closed": {
     "median_ms": 8038.5304999072105,
     "p95_ms": 8545.274413237348,
     "n": 20
   },
-  "190-tomukasss-engulfing-mitigation-strategy": {
+  "190-closed": {
     "median_ms": 3651.021854020655,
     "p95_ms": 3687.0230987435207,
     "n": 20
   },
-  "191-tomukasss-trend-pivot-scale-in": {
+  "191-closed": {
     "median_ms": 2629.9950829707086,
     "p95_ms": 2705.247759609483,
     "n": 20
   },
-  "193-ttagkoin-adaptive-multi-facto-9-years": {
+  "193-closed": {
     "median_ms": 3414.8338122759014,
     "p95_ms": 3463.455637404695,
     "n": 20
   },
-  "194-usamotorcars-sedat-xi-crypto-ai-bias-engine": {
+  "194-closed": {
     "median_ms": 2294.1862291190773,
     "p95_ms": 2406.154285580851,
     "n": 20
   },
-  "195-van007trader-micro-momentum-oscillator-dyna": {
+  "195-closed": {
     "median_ms": 2209.8496668040752,
     "p95_ms": 2261.62183790002,
     "n": 20
   },
-  "196-vimalboiling-refined-supertrend-atr-tsl-filters-nifty-banknifty-v2": {
+  "196-closed": {
     "median_ms": 2069.7942920960486,
     "p95_ms": 2129.022449813783,
     "n": 20
   },
-  "198-wellmanapex-ut-bot-stc-conjunction-strategy-tester-v4-8": {
+  "198-closed": {
     "median_ms": 2904.701124643907,
     "p95_ms": 2937.70682325121,
     "n": 20
   },
-  "199-yahmis13-nyo-day-type-early-read": {
+  "199-closed": {
     "median_ms": 1363.5929794982076,
     "p95_ms": 1391.2056094035509,
     "n": 20
   },
-  "200-ygd-consulting-llc-yuri-garcia-narrow-state-strategy-ygils": {
+  "200-closed": {
     "median_ms": 2041.1481875926256,
     "p95_ms": 2092.8386970888823,
     "n": 20
   },
-  "201-robmagnaye14-eb-ict-one-trade-setup-for-life-70-filter-model-v2": {
+  "201-closed": {
     "median_ms": 2639.8321664892137,
     "p95_ms": 2675.17043328844,
     "n": 20

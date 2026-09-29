@@ -27,6 +27,7 @@ import argparse
 import csv
 import math
 import os
+import subprocess
 from collections import defaultdict
 import sys
 from pathlib import Path
@@ -40,8 +41,27 @@ INDIR = ASSETS / "strategies" / "_indicators"
 OUT = BENCH / "results" / "indicator_comparison.md"
 
 
+ASSETS_REPO_URL = "https://github.com/pineforge-4pass/pineforge-benchmarks-assets"
+
+
 def _md_relpath(from_dir: Path, target: Path) -> str:
     return Path(os.path.relpath(target.resolve(), from_dir.resolve())).as_posix()
+
+
+def _source_href(from_dir: Path, target: Path) -> str:
+    """A link to ``target`` that resolves where the report is read.
+
+    GitHub does not resolve a relative link into a submodule path, so a file of
+    the ``benchmarks/assets`` submodule is linked in the assets repository at
+    the last assets commit that changed it. A tree without the submodule (the
+    inline layout ``paths.py`` falls back to) keeps the relative link."""
+    try:
+        rel = target.resolve().relative_to(ASSETS.resolve()).as_posix()
+    except ValueError:
+        return _md_relpath(from_dir, target)
+    sha = subprocess.run(["git", "-C", str(ASSETS), "log", "-1", "--format=%H", "--", rel],
+                         capture_output=True, text=True).stdout.strip()
+    return f"{ASSETS_REPO_URL}/blob/{sha}/{rel}" if sha else _md_relpath(from_dir, target)
 
 INDICATOR_COLS = [
     "ema21", "sma21", "rsi14", "atr14",
@@ -191,7 +211,7 @@ def main() -> int:
         return render_pair_table(name_a, name_b, stats)
 
     pine_src = INDIR / "canonical.pine"
-    pine_href = _md_relpath(out.parent, pine_src)
+    pine_href = _source_href(out.parent, pine_src)
     sections = [
         "# Indicator comparison\n",
         "All three engines compute the canonical indicator script "

@@ -59,16 +59,18 @@
       "origin": "benchmarks/_workdir/vbt_speed.json"
     },
     "2026-09-22-e9ad37dd/pf_speed.json": {
-      "sha256": "f101c9e82bdb072dd5a65a517ff5c76541fc3dd0a8663d7a6ead8a0e47018faa",
+      "sha256": "8a965f01c1d9dc05339d87eb7cc5b5a942a1f9e4d90ff5a61ae5cc139c4597ab",
       "what": "Google Benchmark JSON of lane BENCH2's PineForge sweep at e9ad37dd (201 slots, gate load 3.79); superseded by BENCH3's sweep, kept for the 1.02x cross-window comparison in speed.md",
       "origin": "/tmp/bench3/bench2-workdir/pf_speed.json (BENCH2's benchmarks/_workdir)",
       "origin_sha256": "d5c8e31f6041167dad60799c3b273e7e80a3f4c79e1a68264db7b7bc8d10c6e5",
-      "edit": "context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name)"
+      "edit": "context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name); closed slot names (NNN-<author>-<title>) rewritten to NNN-closed"
     },
     "2026-09-22-e9ad37dd/pc_speed.json": {
-      "sha256": "800879ec8da94f375e4a2da043f96826f72b6103b774fe1d519590efdc888adc",
+      "sha256": "6e2ffeb53f6f2ed018019b8ef7032191cee3578ba1eb8c4e5ccbff3ce4af0f12",
       "what": "PyneCore subprocess timings (median / p95 of 20 runs, 8 concurrent; 196 slots): the published PyneCore column",
-      "origin": "/tmp/bench3/bench2-workdir/pc_speed.json"
+      "origin": "/tmp/bench3/bench2-workdir/pc_speed.json",
+      "origin_sha256": "800879ec8da94f375e4a2da043f96826f72b6103b774fe1d519590efdc888adc",
+      "edit": "closed slot names (NNN-<author>-<title>) rewritten to NNN-closed"
     },
     "2026-09-22-e9ad37dd/pt_speed.json": {
       "sha256": "c9d19fd98320e46c068947b743b0fdac82f0fa0bb2f4887d8786d85e50aa71e9",
@@ -96,11 +98,11 @@
       "origin": "/tmp/bench3/quiet_poll_bench3.tsv"
     },
     "2026-09-22-063e4460/throughput/r1.json": {
-      "sha256": "918da0a89f58920a5c4fc1c185b085904efd5e9a95ef9f67b5531b93d7c85ee4",
+      "sha256": "1e5a666b04b523f0222554c8dafff893d76f35a46b35fe8dccfafb5df46a3a30",
       "what": "throughput package run 1 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), gate at 2026-09-22T13:29:51Z",
       "origin": "/tmp/bench3/tp-q2/benchmark_results.json",
       "origin_sha256": "2028dfc6025b2c700e530fec4360324e435e9438da925091f9be99fe904bb33b",
-      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path); context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name)"
+      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path); context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name); closed slot names (NNN-<author>-<title>) rewritten to NNN-closed"
     },
     "2026-09-22-063e4460/throughput/r1-load.tsv": {
       "sha256": "fcddfe578b3e93c9098d1f23b924bf47a3868d3ef44a4d9701a5097e9715ce6f",
@@ -108,11 +110,11 @@
       "origin": "/tmp/bench3/tp-q2/loadtrace.tsv"
     },
     "2026-09-22-063e4460/throughput/r2.json": {
-      "sha256": "3193941a8a805b8c2b61fb43cc80b76720424784b4dab600ed2452fa1f51c386",
+      "sha256": "39efb7c1d80aefa205fdf8d9d887f03a3b61bafde4bcba9670bd7b5bc6d8b875",
       "what": "throughput package run 2 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), gate at 2026-09-22T13:38:22Z; the median run, published as benchmarks/throughput/benchmark_results.json",
       "origin": "/tmp/bench3/tp-q3/benchmark_results.json",
       "origin_sha256": "905f77ffe6bec684375b7559c40deaeac850fc63c7d331e12ef261e94a9d3d68",
-      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path); context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name)"
+      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path); context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name); closed slot names (NNN-<author>-<title>) rewritten to NNN-closed"
     },
     "2026-09-22-063e4460/throughput/r2-load.tsv": {
       "sha256": "1ac59eb1b491b58ec25a77d3a6523bd792d09c179231aa7e8b3f50110a21073d",
@@ -120,11 +122,11 @@
       "origin": "/tmp/bench3/tp-q3/loadtrace.tsv"
     },
     "2026-09-22-063e4460/throughput/r3.json": {
-      "sha256": "8458207638b42354d3b0ea9584082e5d5592f7fc59dd580335a6de9489085614",
+      "sha256": "cd8570211f98579d8421d27aca0cc244d818d347a3571163c9bb99591f1e05fe",
       "what": "throughput package run 3 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), gate at 2026-09-22T13:46:30Z",
       "origin": "/tmp/bench3/tp-q4/benchmark_results.json",
       "origin_sha256": "81d5204485d09f46ef40889956c94abe3252f583b32f52486b91a8ea5c828f2a",
-      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path); context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name)"
+      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path); context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name); closed slot names (NNN-<author>-<title>) rewritten to NNN-closed"
     },
     "2026-09-22-063e4460/throughput/r3-load.tsv": {
       "sha256": "b736cbd01b3752bb8821586106a27495c1b076566599471fd7cc3de96644332f",
@@ -132,11 +134,11 @@
       "origin": "/tmp/bench3/tp-q4/loadtrace.tsv"
     },
     "2026-09-22-063e4460/throughput/r4.json": {
-      "sha256": "152ec945d6c74edfee1e79f9ce117756f1ea66112122ce761fbbf24d463388f9",
+      "sha256": "b5b24cbaf398bbbd3e5739b1867737b967cc842adb38ad2ae192a5bb00681799",
       "what": "throughput package run 4 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), gate at 2026-09-22T14:00:07Z",
       "origin": "/tmp/bench3/tp-q5/benchmark_results.json",
       "origin_sha256": "f8732abdcc651eb374883f301559fa65ab3a71707ba5b2d70fa5e23025a06579",
-      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path); context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name)"
+      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path); context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name); closed slot names (NNN-<author>-<title>) rewritten to NNN-closed"
     },
     "2026-09-22-063e4460/throughput/r4-load.tsv": {
       "sha256": "3e9238ade8576ddd9fa188f2470628704bb697667ebf112942e44d0d1f91e09c",
@@ -144,11 +146,11 @@
       "origin": "/tmp/bench3/tp-q5/loadtrace.tsv"
     },
     "2026-09-22-063e4460/throughput/r5.json": {
-      "sha256": "7174e2da66f340d82cdfe35e2d0dc4c74e3b02777cc203ffe61a827c31c1b65b",
+      "sha256": "2af80d07e850fd8cb4feafa39ae4cc1c6f34da765985d4c6620c74cc1e89f619",
       "what": "throughput package run 5 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), gate at 2026-09-22T14:08:13Z",
       "origin": "/tmp/bench3/tp-q6/benchmark_results.json",
       "origin_sha256": "ad538bc3b63154492bbf747918cbb9696e06eac3d2873776439d96dff83d179f",
-      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path); context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name)"
+      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path); context.host_name rewritten to \"apple-m4-max\" (the measuring machine's name); closed slot names (NNN-<author>-<title>) rewritten to NNN-closed"
     },
     "2026-09-22-063e4460/throughput/r5-load.tsv": {
       "sha256": "f0bf6ac7ef4d16472713be54d6d0256e0a54dc881fa963e21f1e2da7b2b4ae95",
