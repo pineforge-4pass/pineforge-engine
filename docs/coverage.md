@@ -982,8 +982,9 @@ Currently `ensure_supported_lower_tf_emulation_flags(...)` throws when
 
 ## Verifying the surface yourself
 
-The validation corpus under [corpus/validation/](../corpus/validation/)
-(312 probes at the pinned corpus commit) is the engine's own proof that
+The validation corpus under `corpus/validation/` (the
+[open corpus](https://github.com/pineforge-4pass/pineforge-corpus)
+submodule; 312 probes at the pinned corpus commit) is the engine's own proof that
 this runtime delivers the surface listed above. Run
 `bash scripts/run_corpus.sh` to compile every `generated.cpp`
 against `libpineforge.a` and diff each probe's `engine_trades.csv`
