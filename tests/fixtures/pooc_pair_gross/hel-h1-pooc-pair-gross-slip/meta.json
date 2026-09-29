@@ -1,0 +1,16 @@
+{
+  "title": "hel-h1-pooc-pair-gross-slip",
+  "slug": "hel-h1-pooc-pair-gross-slip",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:22:37.823Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "94a2df30b6e2c7c06b6c50efa4d0c800996d320d98204525973f82e32fc26489",
+  "tv_trades_sha256": "a701588127a118ccbcc1429b4676bfc1de2731eef9353fba332f4431fb5b25c7",
+  "tv_trades_rows": 280
+}

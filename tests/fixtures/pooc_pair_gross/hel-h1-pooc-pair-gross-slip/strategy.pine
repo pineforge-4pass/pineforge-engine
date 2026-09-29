@@ -1,0 +1,26 @@
+//@version=6
+// helios diag synthetic H1 (written from scratch for lane TAIL-D): a flat pair of opposite MARKET
+// strategy.entry calls placed on one bar under process_orders_on_close (no calc_on_order_fills),
+// explicit qty, slippage 1, commission 0.01 %, pyramiding 0, margin at the v6 default.
+// Cells (bar_index % 12): O = each leg 80 % of equity (the pair's gross 160 % is over the equity),
+// U = each leg 30 % (gross 60 %, within). LF = long call first, SF = short call first.
+// Every position is closed with strategy.close_all two bars after its pair.
+strategy("hel-h1-pooc-pair-gross-slip", overlay = true, pyramiding = 0, initial_capital = 100000, commission_type = strategy.commission.percent, commission_value = 0.01, slippage = 1, process_orders_on_close = true)
+phase = bar_index % 12
+flat = strategy.position_size == 0
+qO = math.floor(0.8 * strategy.equity / close * 100) / 100
+qU = math.floor(0.3 * strategy.equity / close * 100) / 100
+if flat and phase == 1
+    strategy.entry("L", strategy.long, qty = qO, comment = "O-LF-L")
+    strategy.entry("S", strategy.short, qty = qO, comment = "O-LF-S")
+if flat and phase == 4
+    strategy.entry("S", strategy.short, qty = qO, comment = "O-SF-S")
+    strategy.entry("L", strategy.long, qty = qO, comment = "O-SF-L")
+if flat and phase == 7
+    strategy.entry("L", strategy.long, qty = qU, comment = "U-LF-L")
+    strategy.entry("S", strategy.short, qty = qU, comment = "U-LF-S")
+if flat and phase == 10
+    strategy.entry("S", strategy.short, qty = qU, comment = "U-SF-S")
+    strategy.entry("L", strategy.long, qty = qU, comment = "U-SF-L")
+if phase == 3 or phase == 6 or phase == 9 or phase == 0
+    strategy.close_all(comment = "X")

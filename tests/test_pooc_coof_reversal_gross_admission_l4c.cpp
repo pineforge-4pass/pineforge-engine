@@ -13,6 +13,10 @@
  * the second source call.  The scratch row is the buy's: TradingView fills
  * the buy first at the close whichever call came first (lab tv
  * w6-f10d-pooc-pair, w6-f10e-pooc-coof-pair; lane W6-ENG-FILL-ORDER).
+ * The decline holds without calc_on_order_fills and with slippage or a
+ * commission too (lab tv tests/fixtures/pooc_pair_gross
+ * hel-h1-pooc-pair-gross-slip and hel-h2-pooc-pair-gross-zero; R5 lane
+ * TAIL-D).
  *
  * Clean-room TV anchors:
  *   pf-probe-coof-pooc-opposite-market-ordering
@@ -374,17 +378,23 @@ static void assert_excluded_pair_uses_legacy_result(
 }
 
 static void test_green_scope_exclusions() {
+    // Without calc_on_order_fills, with a commission and with slippage the
+    // later call is declined as well: one trade, the earlier call's (R5 lane
+    // TAIL-D, lab tv hel-h1-pooc-pair-gross-slip / -h2-...-zero).
     assert_excluded_pair_uses_legacy_result(
-        "exclude without COOF", false, true, 0.0, 100.0, 0);
+        "declined without COOF", false, true, 0.0, 100.0, 0,
+        /*expected_trades=*/1);
     assert_excluded_pair_uses_legacy_result(
         "exclude without POOC", true, false, 0.0, 100.0, 0,
         /*expected_trades=*/1);
     assert_excluded_pair_uses_legacy_result(
-        "exclude commissioned pair", true, true, 0.1, 100.0, 0);
+        "declined with a commission", true, true, 0.1, 100.0, 0,
+        /*expected_trades=*/1);
     assert_excluded_pair_uses_legacy_result(
         "exclude custom margin", true, true, 0.0, 50.0, 0);
     assert_excluded_pair_uses_legacy_result(
-        "exclude slippage", true, true, 0.0, 100.0, 1);
+        "declined with slippage", true, true, 0.0, 100.0, 1,
+        /*expected_trades=*/1);
 
     std::printf("exclude three-call book\n");
     Probe three(true, 30.0);

@@ -1,0 +1,16 @@
+{
+  "title": "hel-h2-pooc-pair-gross-zero",
+  "slug": "hel-h2-pooc-pair-gross-zero",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:23:04.138Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "1D",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "775318a1b41fa2515bb6565ffc74a96642e0a7014475d73382deb3a0e402905e",
+  "tv_trades_sha256": "f6227623f643d1dfc9ac5b5d99a14a33d8be9adf4ec480856932fd440ae944ae",
+  "tv_trades_rows": 280
+}

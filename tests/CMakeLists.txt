@@ -954,6 +954,10 @@ list(APPEND TEST_SOURCES test_coof_open_limit_tapes)
 # the price leg it leaves na is withdrawn (tests/fixtures/exit_reissue_na),
 # on TradingView's tape.
 list(APPEND TEST_SOURCES test_exit_reissue_na_tapes)
+# ... and a flat pair of opposite fixed-quantity market entries whose gross is
+# over the equity keeps only its earlier call under process_orders_on_close
+# and with costs (tests/fixtures/pooc_pair_gross), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_pooc_pair_gross_tapes)
 
 # Lane W8A-SIGSTATE-1 R4: a fill at the day's first tick does not trip
 # strategy.risk.max_intraday_loss (tests/fixtures/intraday_loss_open_fill), on
@@ -2578,6 +2582,10 @@ endif()
 if(TARGET test_exit_reissue_na_tapes)
     target_compile_definitions(test_exit_reissue_na_tapes PRIVATE
         PINEFORGE_TAIL_D_REISSUE_NA_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_reissue_na")
+endif()
+if(TARGET test_pooc_pair_gross_tapes)
+    target_compile_definitions(test_pooc_pair_gross_tapes PRIVATE
+        PINEFORGE_TAIL_D_PAIR_GROSS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_pair_gross")
 endif()
 if(TARGET test_coof_reissued_exit_tapes)
     target_compile_definitions(test_coof_reissued_exit_tapes PRIVATE

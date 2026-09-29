@@ -17766,9 +17766,13 @@ void PineExecutionAdapter::apply_terminal_explicit_market_policy(
 
     const auto& first = candidates[0].snapshot;
     const auto& second = candidates[1].snapshot;
+    // The gross decline holds under process_orders_on_close alone and with
+    // costs as well: a flat pair of opposite fixed-quantity calls whose gross
+    // is over the equity keeps only its earlier call (lab tv tapes
+    // tests/fixtures/pooc_pair_gross hel-h1-pooc-pair-gross-slip, with
+    // slippage 1 and a 0.01 % commission, and hel-h2-pooc-pair-gross-zero;
+    // lane TAIL-D).
     const bool clean_pair = candidates.size() == 2
-        && config_.calc_on_order_fills && config_.slippage == 0
-        && config_.commission_value == 0.0
         && config_.margin_long == 100.0 && config_.margin_short == 100.0
         && entry_attempt_bar_ == context.coordinate.interval_index
         && entry_attempts_on_bar_ == 2
