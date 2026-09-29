@@ -899,6 +899,12 @@ list(APPEND TEST_SOURCES test_security_multi_day_buckets_tapes)
 # TradingView's tapes.
 list(APPEND TEST_SOURCES test_coof_refill_waypoint_tapes)
 
+# Lane TAIL-C: a refill the recalculation of a fill forced onto a leg's end
+# places is live from the next bar's open (second extreme) or rests from the
+# second extreme (first extreme) (tests/fixtures/coof_w2_refill), on
+# TradingView's tapes.
+list(APPEND TEST_SOURCES test_coof_w2_refill_tapes)
+
 # Lane W8E-EXITS: the KI-62 cover takes only a same-id pyramid add
 # (tests/fixtures/ki62_same_id_cover), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_ki62_same_id_cover)
@@ -2556,6 +2562,12 @@ endif()
 if(TARGET test_coof_refill_waypoint_tapes)
     target_compile_definitions(test_coof_refill_waypoint_tapes PRIVATE
         PINEFORGE_COOF_REFILL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_refill_waypoint")
+endif()
+
+# Lane TAIL-C reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_coof_w2_refill_tapes)
+    target_compile_definitions(test_coof_w2_refill_tapes PRIVATE
+        PINEFORGE_COOF_W2_REFILL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_w2_refill")
 endif()
 
 # Lane W8E-EXITS reads its TradingView tapes from the fixture tree; source-bound.

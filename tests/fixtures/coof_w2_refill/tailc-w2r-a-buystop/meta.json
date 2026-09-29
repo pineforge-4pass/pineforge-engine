@@ -1,0 +1,16 @@
+{
+  "title": "tailc-w2r-a-buystop",
+  "slug": "tailc-w2r-a-buystop",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:03:59.533Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "ca3b0143260ada93aeb56589bedf81b1b9942c3ba0642314aa79db4076dafc90",
+  "tv_trades_sha256": "ce12c5524795b50f61a02e66ecccac0b04d44a51f9211a4be898eb0d65826ce8",
+  "tv_trades_rows": 1028
+}

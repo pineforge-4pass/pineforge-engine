@@ -32,15 +32,15 @@
  * requires every trade the tape closes inside those bars to be the engine's:
  * entry and exit time, side, price and quantity.
  *
- * Recorded, not fixed: an R that is not executable at the next extreme either
- * rests at its own level from there in TradingView, filling later in the bar,
- * on a later bar or never (-d's limits, -e's stops). The engine still fills
- * that R at its level when placed: a stop has no kernel trigger that arms at a
- * waypoint, and resting a limit to the chart bar's extreme delayed the
- * refills of a magnified script run unmagnified (bystry1991-ema200) by a bar
- * or more. Those rows are listed per variant, keyed by entry bar and price (a
- * P may open on the same bar): the engine's R TradingView never fills, or
- * fills a bar later at the same level.
+ * An R that is not executable at the next extreme either rests at its own
+ * level from there in TradingView, filling later in the bar, on a later bar
+ * or never (-d's limits, -e's stops). R5 lane TAIL-C rests it so: a limit
+ * arms at the extreme (StopLimit{extreme, level}), a stop rides a trail armed
+ * at the extreme at its level's distance -- no print beyond the extreme
+ * follows on that bar -- and is the plain stop again from the next open. The
+ * rows this file recorded as the engine's own (the level fill at placement)
+ * are gone; every variant replays exactly. (A magnified script's refills rest
+ * from its intrabar path's next point instead, PineExecutionAdapter::entry().)
  */
 
 #include <pineforge/bar.hpp>
@@ -120,11 +120,6 @@ std::int64_t days_from_civil(int y, unsigned m, unsigned d) {
     const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
     const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     return static_cast<std::int64_t>(era) * 146097 + static_cast<std::int64_t>(doe) - 719468;
-}
-
-// 2025-04-<day> <hour>:<minute> UTC.
-std::int64_t at(unsigned day, int hour, int minute) {
-    return ((days_from_civil(2025, 4, day) * 24 + hour) * 60 + minute) * 60'000;
 }
 
 // A tape stamp "YYYY-MM-DD HH:MM" rendered at UTC+8 -> UTC milliseconds.
@@ -298,15 +293,8 @@ int main() {
         {"w8d-coof2-a-buy-marketable", true, -150.0, true, true, 600.0, false, 41, 17, {}, {}},
         {"w8d-coof2-b-sell-marketable", false, 150.0, true, false, -600.0, false, 43, 19, {}, {}},
         {"w8d-coof2-c-buy-resting", true, -150.0, true, true, -60.0, false, 38, 11, {}, {}},
-        {"w8d-coof2-d-buy-after-tp", true, 150.0, false, true, 60.0, false, 41, 11,
-         {{at(1, 4, 30), 8314598}, {at(1, 8, 15), 8390653}, {at(1, 20, 45), 8519054},
-          {at(2, 8, 15), 8454265}, {at(2, 12, 30), 8496933}, {at(3, 4, 30), 8363910},
-          {at(3, 20, 45), 8224172}, {at(4, 0, 15), 8329466}},
-         {{at(1, 4, 45), 8314598}, {at(1, 21, 0), 8519054}, {at(2, 8, 30), 8454265},
-          {at(2, 12, 45), 8496933}, {at(3, 4, 45), 8363910}, {at(4, 0, 30), 8329466}}},
-        {"w8d-coof2-e-buystop-through", true, -150.0, true, true, -300.0, true, 39, 14,
-         {{at(2, 20, 15), 8732620}, {at(4, 10, 0), 8380052}, {at(4, 16, 15), 8297800}},
-         {{at(4, 16, 30), 8297800}}},
+        {"w8d-coof2-d-buy-after-tp", true, 150.0, false, true, 60.0, false, 41, 11, {}, {}},
+        {"w8d-coof2-e-buystop-through", true, -150.0, true, true, -300.0, true, 39, 14, {}, {}},
         {"w8d-coof2-f-sellstop-through", false, 150.0, true, false, 300.0, true, 43, 19, {}, {}},
     };
     for (const Variant& v : variants) {

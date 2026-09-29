@@ -1,0 +1,16 @@
+{
+  "title": "tailc-w2r-b-sellstop",
+  "slug": "tailc-w2r-b-sellstop",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:04:04.033Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "09249ec8bb98b2596480ff42f250133293092f5c005a98bb84389326b9e9fdc0",
+  "tv_trades_sha256": "1f02ee1918658785f4ad6a97b124586fa5ade4e76f4a6dc6fe985b9752e42cb1",
+  "tv_trades_rows": 1032
+}

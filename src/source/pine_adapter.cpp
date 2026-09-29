@@ -6876,6 +6876,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     snapshot.sizing = sizing_snapshot();
     if (finite_positive(coof_market_fill))
         snapshot.forced_execution_price = coof_market_fill;
+    bool coof_priced_next_open = false;
     if (coof_recalc_active_ && !coof_first_open_ && !coof_lower_path && priced) {
         const auto point = detail::callback_point(require_host());
         const double birth = point ? point->price : kNaN;
@@ -6910,7 +6911,10 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         // a magnified script's next point is an intrabar one, and resting
         // it to the chart bar's extreme delayed the unmagnified
         // bystry1991-ema200 refills by a bar or more. Not pinned under
-        // process_orders_on_close, on the close leg or on a leg-end fill.
+        // process_orders_on_close, on the close leg or on a leg-end fill --
+        // but a fill the adapter FORCED onto the first extreme starts the
+        // next leg the same way: its entry fills at the second extreme when
+        // executable there (lab tv tailc-w2r-c/d, 98 rows; R5 lane TAIL-C).
         const bool pure_limit = finite_positive(limit_price) && !finite_positive(stop_price);
         const bool pure_stop = finite_positive(stop_price) && !finite_positive(limit_price);
         const double level = pure_limit ? limit_price : stop_price;
@@ -6918,9 +6922,12 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             return pure_limit ? (is_long ? price <= level : price >= level)
                               : (is_long ? price >= level : price <= level);
         };
+        const bool forced_first_extreme = coof_fill_forced_ && waypoint_index == 2
+            && !coof_fill_at_second_extreme();
         if (!reached && (pure_limit || pure_stop) && !config_.process_orders_on_close
             && (waypoint_index == 1 || waypoint_index == 2) && finite_positive(waypoint)
-            && finite_positive(birth) && !coof_fill_on_path_point()
+            && finite_positive(birth)
+            && (!coof_fill_on_path_point() || forced_first_extreme)
             && executable_at(birth) && executable_at(waypoint)) {
             const double tick = staged_.syminfo.mintick;
             const double booked = source_bar_fill_tick(waypoint, tick);
@@ -6931,7 +6938,44 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             snapshot.forced_execution_price = nearest_tick(waypoint
                 + (pure_limit ? 0.0 : (is_long ? 1.0 : -1.0) * config_.slippage * tick),
                 tick);
+        } else if (!reached && (pure_limit || pure_stop) && !config_.process_orders_on_close
+            && (waypoint_index == 1 || waypoint_index == 2) && finite_positive(waypoint)
+            && finite_positive(birth)
+            && (!coof_fill_on_path_point() || forced_first_extreme)
+            && executable_at(birth) && !executable_at(waypoint)) {
+            // An entry executable at its birth but not at the extreme rests at
+            // its own level from the extreme on (w8d-coof2-d/e/f, and after a
+            // forced first-extreme fill tailc-w2r-a/b: every refill filled
+            // after the extreme or later, none on the leg before it; R5 lane
+            // TAIL-C). A limit arms at the extreme: StopLimit{extreme, level}.
+            // A stop becomes a trail armed at the extreme, riding its level's
+            // distance behind the running best: no print beyond the extreme
+            // follows on this bar, so it is the stop at its own level, booked
+            // there; on_bar_open hands the next bar the plain stop back.
+            if (pure_limit) {
+                request.trigger = native_order::StopLimit{waypoint, limit_price};
+            } else {
+                request.trigger = native_order::Trail{std::abs(stop_price - waypoint), waypoint};
+                snapshot.forced_execution_price = nearest_tick(stop_price
+                    + (is_long ? 1.0 : -1.0) * config_.slippage * staged_.syminfo.mintick,
+                    staged_.syminfo.mintick);
+            }
         }
+        // A pure limit or stop entry placed by the recalculation of a fill
+        // the adapter FORCED onto the bar's second extreme is live only from
+        // the next bar's open, as that recalculation's market orders are
+        // (coof_market_next_open): TradingView never fills it on the rest of
+        // the bar -- at that open when it is executable there, otherwise at
+        // its own level later -- executable at the forced fill or not, and
+        // even when the leg to the close crosses its level (lab tv tapes
+        // tests/fixtures/coof_w2_refill, tailc-w2r-a..f: 1013 refills after
+        // such a fill, none on its bar; R5 lane TAIL-C). Released at the
+        // recalculation, it would also trade on the part of the leg the
+        // kernel walks after the forced fill's trigger, which TradingView has
+        // already passed.
+        coof_priced_next_open = (pure_limit || pure_stop)
+            && !config_.process_orders_on_close && coof_fill_forced_
+            && coof_fill_at_second_extreme();
     }
     if (current == 0.0 && priced && current_point) {
         const auto is_opposite_market_predecessor = [&](const PlacementSnapshot& prior) {
@@ -7664,7 +7708,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         pending_entries_.push_back({std::move(request), std::move(snapshot), id});
         return;
     }
-    if (coof_market_next_open) {
+    if (coof_market_next_open || coof_priced_next_open) {
         pending_coof_requests_.push_back(
             {std::move(request), std::move(snapshot), id, true, 0, true});
         return;
@@ -12986,7 +13030,11 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             return source_bar_fill_tick(facts.raw_price, staged_.syminfo.mintick);
         }
         // ab9714be engine_path_resolve.cpp:365-367: stop-limit fills at unslipped stop activation price when marketable against limit
-        if (std::holds_alternative<native_order::StopLimit>(trigger)) {
+        // A pure limit entry armed at its leg's extreme (entry(): a limit
+        // resting from the extreme) is no stop-limit: it books its level.
+        const bool armed_pure_limit_entry = source.family == PineOrderFamily::Entry
+            && !finite_positive(source.exit_levels.stop);
+        if (std::holds_alternative<native_order::StopLimit>(trigger) && !armed_pure_limit_entry) {
             return directional_tick(facts.raw_price, staged_.syminfo.mintick,
                                     !facts.is_buy);
         }
@@ -17968,14 +18016,42 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     erase_retired_rows(context);
     release_closed_cohort_origins();
     trail_state_at_open_.clear();
+    bool rested_entry_stop = false;
     for (const auto& handle : live_handles_) {
         const auto placement = placement_.find(handle.incarnation);
-        if (placement == placement_.end()
-            || placement->second.family != PineOrderFamily::ExitTrail) {
+        if (placement == placement_.end()) continue;
+        if (placement->second.family == PineOrderFamily::Entry) {
+            rested_entry_stop = rested_entry_stop
+                || (finite_positive(placement->second.forced_execution_price)
+                    && require_host().trail_state(handle).has_value());
             continue;
         }
+        if (placement->second.family != PineOrderFamily::ExitTrail) continue;
         if (const auto state = require_host().trail_state(handle))
             trail_state_at_open_.emplace(handle.incarnation, *state);
+    }
+    // A stop entry entry() rested from its leg's extreme rode a trail pinned
+    // at that extreme for the rest of its bar; from this opening on it is
+    // the plain stop at its own level again, gap-filled at an open beyond it.
+    if (rested_entry_stop) {
+        auto& host = require_host();
+        native_order::ReplaceOptions keep;
+        keep.keep_handle = true;
+        for (const auto& working : host.native_working_requests()) {
+            const auto& definition = *working.definition;
+            if (!std::holds_alternative<native_order::Trail>(definition.request.trigger))
+                continue;
+            const auto found = placement_.find(definition.handle.incarnation);
+            if (found == placement_.end() || found->second.family != PineOrderFamily::Entry
+                || !finite_positive(found->second.exit_levels.stop)) {
+                continue;
+            }
+            native_order::Request plain = definition.request;
+            plain.trigger = native_order::Stop{found->second.exit_levels.stop};
+            const auto result = host.replace(definition.handle, plain, keep);
+            if (result.status == native_order::ReplaceStatus::Replaced)
+                found->second.forced_execution_price = kNaN;
+        }
     }
     // The preceding source broker batch is complete at this next opening.
     // This is deliberately after any POOC after-calculation matching of the

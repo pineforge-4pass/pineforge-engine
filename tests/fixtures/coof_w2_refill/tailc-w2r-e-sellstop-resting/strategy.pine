@@ -1,0 +1,26 @@
+//@version=6
+// TAIL-C synthetic: a calc_on_order_fills refill placed by the recalculation of an exit the path reaches only at a leg's end.
+// P: a stop 40 beyond the slot bar's close (fills inside a leg); X: its take profit 30 beyond the average, placed by
+// P's recalculation and reached at the end of P's leg; R: a SELL STOP 5 inside X's fill price (not executable at X's fill, crossed when the price falls back), placed by X's recalculation.
+// Stateless (every decision reads strategy.* only), so the recalculation's rollback cannot lose it.
+strategy("tailc-w2r-e-sellstop-resting", overlay = true, calc_on_order_fills = true, process_orders_on_close = false, default_qty_type = strategy.fixed, default_qty_value = 1, initial_capital = 10000000)
+nClosed = strategy.closedtrades
+lastExitHere = nClosed > 0 and strategy.closedtrades.exit_bar_index(nClosed - 1) == bar_index
+lastExitWasX = nClosed > 0 and strategy.closedtrades.exit_id(nClosed - 1) == "X"
+flat = strategy.position_size == 0
+openId = strategy.opentrades > 0 ? strategy.opentrades.entry_id(0) : ""
+heldBars = strategy.opentrades > 0 ? bar_index - strategy.opentrades.entry_bar_index(0) : 0
+if flat and not lastExitHere and minute(time) == 0 and hour(time, "UTC") % 2 == 0
+    strategy.entry("P", strategy.long, stop = close + 40)
+if flat and not lastExitHere and minute(time) == 45
+    strategy.cancel("P")
+if openId == "P"
+    strategy.exit("X", "P", limit = strategy.position_avg_price + 30)
+    if heldBars >= 6
+        strategy.close("P")
+if flat and lastExitHere and lastExitWasX
+    strategy.entry("R", strategy.short, stop = strategy.closedtrades.exit_price(nClosed - 1) - 5)
+if flat and not lastExitHere
+    strategy.cancel("R")
+if openId == "R" and heldBars >= 2
+    strategy.close("R")

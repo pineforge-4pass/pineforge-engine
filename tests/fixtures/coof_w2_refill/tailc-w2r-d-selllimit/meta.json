@@ -1,0 +1,16 @@
+{
+  "title": "tailc-w2r-d-selllimit",
+  "slug": "tailc-w2r-d-selllimit",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-28T23:04:11.526Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "6d568a44e91a71b786f6457155becd58fe3a6d3c762303ad6aec8f6bafddb99a",
+  "tv_trades_sha256": "6f7a0718c9e21c2142f78847e09da23eda57a7d5c15e63d408ac3416d4669a61",
+  "tv_trades_rows": 1076
+}
