@@ -1,0 +1,87 @@
+{
+  "context": {
+    "date": "2026-09-29T21:32:38+00:00",
+    "host_name": "aws-c7a-8xlarge",
+    "executable": "./build/bin/pineforge_bench",
+    "num_cpus": 32,
+    "mhz_per_cpu": 2600,
+    "cpu_scaling_enabled": false,
+    "caches": [
+      {
+        "type": "Data",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 1
+      },
+      {
+        "type": "Instruction",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 1
+      },
+      {
+        "type": "Unified",
+        "level": 2,
+        "size": 1048576,
+        "num_sharing": 1
+      },
+      {
+        "type": "Unified",
+        "level": 3,
+        "size": 33554432,
+        "num_sharing": 8
+      }
+    ],
+    "load_avg": [0.923828,0.985352,1.02246],
+    "library_version": "v1.9.0",
+    "library_build_type": "release",
+    "json_schema_version": 1
+  },
+  "benchmarks": [
+    {
+      "name": "52-barstate-isconfirmed-magnifier-off-01b/throughput/with_magnifier/iterations:20",
+      "family_index": 0,
+      "per_family_instance_index": 0,
+      "run_name": "52-barstate-isconfirmed-magnifier-off-01b/throughput/with_magnifier/iterations:20",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 20,
+      "real_time": 9.5274745500091740e+03,
+      "cpu_time": 9.5274085000000014e+03,
+      "time_unit": "us",
+      "items_per_second": 5.6604059750350788e+06
+    },
+    {
+      "name": "87-pyramid-deferred-flip-close-all-01/throughput/with_magnifier/iterations:20",
+      "family_index": 1,
+      "per_family_instance_index": 0,
+      "run_name": "87-pyramid-deferred-flip-close-all-01/throughput/with_magnifier/iterations:20",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 20,
+      "real_time": 1.3815379200013922e+04,
+      "cpu_time": 1.3815377950000000e+04,
+      "time_unit": "us",
+      "items_per_second": 3.9035486539114187e+06
+    },
+    {
+      "name": "97-composite-scalping-integration-01/throughput/with_magnifier/iterations:20",
+      "family_index": 2,
+      "per_family_instance_index": 0,
+      "run_name": "97-composite-scalping-integration-01/throughput/with_magnifier/iterations:20",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 20,
+      "real_time": 1.1459306399979141e+04,
+      "cpu_time": 1.1459381750000004e+04,
+      "time_unit": "us",
+      "items_per_second": 4.7061003094691373e+06
+    }
+  ]
+}

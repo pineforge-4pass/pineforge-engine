@@ -1,0 +1,132 @@
+{
+  "001-analyzer-anvil-percent-costs-01": {
+    "median_ms": 2301.419557999907,
+    "p95_ms": 3519.0275765995902,
+    "n": 10
+  },
+  "004-barstate-isconfirmed-magnifier-off-01b": {
+    "median_ms": 1169.0712184999938,
+    "p95_ms": 2330.619077999879,
+    "n": 10
+  },
+  "005-bracket-compass-partial-ladder-01": {
+    "median_ms": 1983.3009935000518,
+    "p95_ms": 3116.800771699943,
+    "n": 10
+  },
+  "009-bracket-trail-points-with-offset-only-01": {
+    "median_ms": 1145.530079999844,
+    "p95_ms": 1922.3162700004182,
+    "n": 10
+  },
+  "013-composite-boscurv-pivot-bos-trigger-01": {
+    "median_ms": 1784.3140794998362,
+    "p95_ms": 2920.6957453000064,
+    "n": 10
+  },
+  "017-composite-kkb-ema-atr-breakout-band-01": {
+    "median_ms": 1319.2928290000054,
+    "p95_ms": 2493.1206934001216,
+    "n": 10
+  },
+  "021-composite-scalping-integration-01": {
+    "median_ms": 1349.7806195000521,
+    "p95_ms": 2523.8259004997394,
+    "n": 10
+  },
+  "025-composite-vcp-rsi-smooth-divergence-01": {
+    "median_ms": 1145.9909939999307,
+    "p95_ms": 2284.2565834004267,
+    "n": 10
+  },
+  "029-drawing-visual-noise-geometry": {
+    "median_ms": 2105.8402110002135,
+    "p95_ms": 2135.4431163001664,
+    "n": 10
+  },
+  "033-math-kiln-power-efficiency-01": {
+    "median_ms": 1609.5091955003227,
+    "p95_ms": 1666.4300963500864,
+    "n": 10
+  },
+  "037-mtf-daily-array-median-percentrank-01": {
+    "median_ms": 4705.272835999494,
+    "p95_ms": 4833.162652949977,
+    "n": 10
+  },
+  "041-mtf-orbit-trend-01": {
+    "median_ms": 6518.446258500262,
+    "p95_ms": 6742.0311981999475,
+    "n": 10
+  },
+  "045-oca-raw-strategy-order-reduce-01": {
+    "median_ms": 973.9735785001358,
+    "p95_ms": 1008.1635536997965,
+    "n": 10
+  },
+  "049-order-dual-four-bar-stop-no-close-01": {
+    "median_ms": 1266.4724915002807,
+    "p95_ms": 1286.199844700468,
+    "n": 10
+  },
+  "053-order-flip-stop-no-paired-close-01": {
+    "median_ms": 1206.8347280001035,
+    "p95_ms": 1219.010030249683,
+    "n": 10
+  },
+  "057-order-same-id-market-entry-repeat-01": {
+    "median_ms": 1035.505828499936,
+    "p95_ms": 1062.808291750116,
+    "n": 10
+  },
+  "061-pyramid-deferred-flip-close-all-01": {
+    "median_ms": 1765.2989889998025,
+    "p95_ms": 1801.2159380998128,
+    "n": 10
+  },
+  "065-stats-ledger-outcome-throttle-01": {
+    "median_ms": 1899.6948404997056,
+    "p95_ms": 1957.6829613502468,
+    "n": 10
+  },
+  "069-ta-closedtrades-risk-introspection-01": {
+    "median_ms": 1570.7206224997208,
+    "p95_ms": 1614.0527763000136,
+    "n": 10
+  },
+  "073-ta-inside-bar-engulfing-01": {
+    "median_ms": 1687.7054735000456,
+    "p95_ms": 1719.7418131001996,
+    "n": 10
+  },
+  "077-ta-pivot-array-unshift-pop-01": {
+    "median_ms": 2538.490941499731,
+    "p95_ms": 2616.660441250224,
+    "n": 10
+  },
+  "081-ta-rsi-bb-self-bands-01": {
+    "median_ms": 2154.0831629999957,
+    "p95_ms": 2191.883950500005,
+    "n": 10
+  },
+  "085-ta-stdev-sma-expansion-break-01": {
+    "median_ms": 1553.664038500301,
+    "p95_ms": 1605.9936928998468,
+    "n": 10
+  },
+  "089-ta-wpr-14-bands-01": {
+    "median_ms": 1582.1685215000798,
+    "p95_ms": 1603.30266640035,
+    "n": 10
+  },
+  "093-udt-method-in-switch-arms-01": {
+    "median_ms": 1152.008584000214,
+    "p95_ms": 1183.7214970998957,
+    "n": 10
+  },
+  "097-udt-method-udt-return-from-func-01": {
+    "median_ms": 1039.464943999974,
+    "p95_ms": 1082.6832478502183,
+    "n": 10
+  }
+}

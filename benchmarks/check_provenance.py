@@ -48,8 +48,12 @@ SUMMARY = f"{RESULTS}/summary.md"
 SELECTION = f"{RESULTS}/selection.json"
 RAW = f"{RESULTS}/raw"
 MANIFEST = f"{RAW}/manifest.json"
+NOW = f"{RAW}/2026-09-29-35db01c8"  # this refresh's measuring window
+SWEEP = (f"{NOW}/pf_speed_a.json", f"{NOW}/pf_speed_b.json")  # slots 001-100, 101-201
+PC_AB = ("pc-ab-v6103-1", "pc-ab-v6102-1", "pc-ab-v6102-2", "pc-ab-v6103-2")  # new, old, old, new
 BENCH3, BENCH2, JUNE = (f"{RAW}/2026-09-22-063e4460", f"{RAW}/2026-09-22-e9ad37dd",
                         f"{RAW}/2026-06-11-94596bf")
+PREV_TABLE = "35db01c8"  # the commit whose README carries the 2026-09-22 table
 JUNE_TABLE = "933fe583"  # the commit whose README carries the 2026-06-11 table
 SECTION = re.compile(r"^## Headline\n(.*?)^### Where the non-excellent rows come from",
                      re.M | re.S)
@@ -181,6 +185,9 @@ def field(pattern: str, text: str, source: str) -> str:
 # What the sources hold
 # ---------------------------------------------------------------------------
 
+RANK = {"n/a": -1, "minimal": 0, "weak": 1, "moderate": 2, "strong": 3, "excellent": 4}
+
+
 def tallies(tree: Tree) -> dict[tuple[str, str], dict[str, int]]:
     """summary.md's tallies: (scope, engine) -> column -> count."""
     out = {}
@@ -192,22 +199,26 @@ def tallies(tree: Tree) -> dict[tuple[str, str], dict[str, int]]:
     return out
 
 
-def slot_labels(tree: Tree) -> dict[int, dict[str, str]]:
-    """summary.md's per-strategy tiers: slot number -> engine -> label."""
+def labels_of(text: str) -> dict[int, dict[str, str]]:
+    """A summary.md's per-strategy cells: slot number -> engine -> cell text
+    (its tier is ``tier(cell)``). The slot number is the key: a closed slot's
+    name differs between refreshes (NNN-closed since this one)."""
     out = {}
-    for line in tree.text(SUMMARY).splitlines():
+    for line in text.splitlines():
         m = re.fullmatch(r"\| (\d{3})-\S+ \| (?:corpus|closed) \| [^|]+ \| \d+ \| "
                          r"([^|]+) \| ([^|]+) \| [^|]+ \|", line)
         if m:
-            out[int(m[1])] = {"PineForge": m[2].split()[1], "PyneCore": m[3].split()[1]}
+            out[int(m[1])] = {"PineForge": m[2].strip(), "PyneCore": m[3].strip()}
     return out
 
 
-def pineforge_ms(tree: Tree) -> dict[str, float]:
-    """speed.md's per-strategy PineForge times (ms, two decimals): the finest
-    record of the 063e4460 sweep, whose raw files were not kept."""
-    return {m[1]: float(m[2]) for m in re.finditer(r"^\| (\d{3}-\S+) \| ([\d.]+) \|",
-                                                   tree.text(SPEED), re.M)}
+def tier(cell: str) -> str:
+    return cell.split()[1]
+
+
+def slot_labels(tree: Tree) -> dict[int, dict[str, str]]:
+    """summary.md's per-strategy tiers: slot number -> engine -> label."""
+    return {k: {e: tier(c) for e, c in v.items()} for k, v in labels_of(tree.text(SUMMARY)).items()}
 
 
 def gbench(tree: Tree, path: str, variant: str) -> dict[str, dict]:
@@ -218,6 +229,15 @@ def gbench(tree: Tree, path: str, variant: str) -> dict[str, dict]:
 
 def ms(entry: dict) -> float:
     return entry["real_time"] * UNIT_MS[entry.get("time_unit", "us")]
+
+
+def pineforge_ms(tree: Tree) -> dict[str, float]:
+    """The PineForge sweep, slot -> ms per run with the magnifier on, from the
+    window's two Google Benchmark batches (slots 001-100 and 101-201)."""
+    out: dict[str, float] = {}
+    for half in SWEEP:
+        out.update({slug: ms(b) for slug, b in gbench(tree, half, "with_magnifier").items()})
+    return out
 
 
 def feed_bars(tree: Tree) -> int:
@@ -238,9 +258,18 @@ def file_engine(tree: Tree, path: str) -> str:
     return tree.json(MANIFEST)["files"][path[len(RAW) + 1:]]["engine"]
 
 
+def lock_version(text: str, package: str, source: str) -> str:
+    return field(rf'^name = "{package}"\nversion = "([^"]+)"', text, source)
+
+
 def uv_lock_version(tree: Tree, package: str) -> str:
-    return field(rf'^name = "{package}"\nversion = "([^"]+)"', tree.text("benchmarks/uv.lock"),
-                 "uv.lock")
+    return lock_version(tree.text("benchmarks/uv.lock"), package, "uv.lock")
+
+
+def previous_readme(tree: Tree) -> tuple[str, str]:
+    """The README that carries the previous table, and its name. Its own
+    numbers were traced by this check at that commit (--rev)."""
+    return tree.pinned(PREV_TABLE, README), f"{PREV_TABLE}:{README}"
 
 
 # ---------------------------------------------------------------------------
@@ -267,16 +296,30 @@ def claim(pattern: str):
 @claim(r"Last refresh \*\*(?P<asof>[\d-]+)\*\*\. Versions: engine `main` `(?P<engine>\w+)` "
        r"running the committed `generated\.cpp` \(codegen `(?P<codegen>\w+)`\), "
        r"PyneCore (?P<pynecore>[\d.]+), PineTS (?P<pinets>[\d.]+) and vectorbt "
-       r"(?P<vectorbt>[\d.]+), on an (?P<cpu>Apple M\d+ \w+)\.")
+       r"(?P<vectorbt>[\d.]+), on an? (?P<cpu>.+?) running (?P<os>\w+ \d+\.\d+)\.")
 def versions(tree, m):
     speed = tree.text(SPEED)
+    os_line = field(r"^- \*\*OS:\*\* (.+)$", speed, SPEED)
     return {"asof": field(r"^As of: ([\d-]+)\.", speed, SPEED),
             "engine": [field(r"PineForge engine main (\w+);", speed, SPEED), Commit(tree)],
             "codegen": field(r"\(codegen\s+`(\w+)`\)", speed, SPEED),
             "pynecore": uv_lock_version(tree, "pynesys-pynecore"),
             "pinets": field(r"; PineTS ([\d.]+);", speed, SPEED),
             "vectorbt": uv_lock_version(tree, "vectorbt"),
-            "cpu": field(r"^- \*\*CPU:\*\* (.+)$", speed, SPEED)}
+            "cpu": field(r"^- \*\*CPU:\*\* (.+)$", speed, SPEED),
+            "os": field(r"^(\w+ \d+\.\d+)", os_line, f"{SPEED} OS line")}
+
+
+@claim(r"\*\*The host changed\.\*\* The (?P<date>[\d-]+) table was timed on an (?P<old_cpu>[^,]+), "
+       r"this one on an? (?P<host>[^:]+):")
+def host_change(tree, m):
+    readme, src = previous_readme(tree)
+    cpu = field(r"^- \*\*CPU:\*\* (.+)$", tree.text(SPEED), SPEED)
+    if not cpu.startswith(m["host"]):
+        raise Mismatch(f"speed.md's CPU line, {cpu!r}, does not start with {m['host']!r}")
+    return {"date": field(r"^Last refresh \*\*([\d-]+)\*\*", readme, src),
+            "old_cpu": field(r"^- \*\*CPU:\*\* (.+)$", tree.pinned(PREV_TABLE, SPEED), f"{PREV_TABLE}:{SPEED}"),
+            "host": m["host"]}
 
 
 @claim(r"\*\*Population: (?P<strategies>\d+) strategies in (?P<slots>\d+) slots\*\*, "
@@ -342,10 +385,9 @@ def tier_row(tree, m):
 
 
 @claim(r"Counting the (?P<n>\d+) strategies \(slot `(?P<new>\d+)` in place of `(?P<lost>\d+)`\), "
-       r"PineForge grades (?P<pf_excellent>\d+) excellent and (?P<pf_strong>\d+) strong\. PyneCore "
-       r"grades (?P<pc_excellent>\d+) excellent, (?P<pc_strong>\d+) strong, (?P<pc_moderate>\d+) "
-       r"moderate, (?P<pc_weak>\d+) weak and (?P<pc_minimal>\d+) minimal, and (?P<pc_na>\d+) "
-       r"slots have no trade list\.")
+       r"PineForge grades all (?P<pf_excellent>\d+) excellent\. PyneCore grades (?P<pc_excellent>\d+) "
+       r"excellent, (?P<pc_strong>\d+) strong, (?P<pc_moderate>\d+) moderate, (?P<pc_weak>\d+) weak "
+       r"and (?P<pc_minimal>\d+) minimal\.")
 def two_hundred(tree, m):
     new, lost = replacement(tree)
     labels = [v for k, v in slot_labels(tree).items() if k != lost]
@@ -353,65 +395,62 @@ def two_hundred(tree, m):
     def count(engine: str, label: str) -> int:
         return sum(1 for v in labels if v[engine] == label)
     expected = {"n": len(labels), "new": new, "lost": lost,
-                "pf_excellent": count("PineForge", "excellent"), "pf_strong": count("PineForge", "strong"),
-                "pc_na": count("PyneCore", "n/a")}
+                "pf_excellent": count("PineForge", "excellent")}
     for label in ("excellent", "strong", "moderate", "weak", "minimal"):
         expected[f"pc_{label}"] = count("PyneCore", label)
-    if expected["pf_excellent"] + expected["pf_strong"] != len(labels):
-        raise Mismatch("PineForge has tiers the sentence does not list")
+    if expected["pf_excellent"] != len(labels):
+        raise Mismatch("PineForge has tiers other than excellent, which the sentence does not list")
     if sum(v for k, v in expected.items() if k.startswith("pc_")) != len(labels):
         raise Mismatch("PyneCore has tiers the sentence does not list")
     return expected
 
 
-@claim(r"PineForge was re-timed at engine `(?P<engine>\w+)`\. PyneCore, vectorbt and PineTS were not "
-       r"re-measured: their rows come from the same host's earlier (?P<date>[\d-]+) window, at engine "
-       r"`(?P<old>\w+)`\.")
-def windows(tree, m):
-    speed = tree.text(SPEED)
-    row = re.search(r"^\| pynecore-c01 \((\w+) window, not re-measured\) \| ([\d-]+)T", speed, re.M)
-    if not row:
-        raise Unsourced("speed.md has no pynecore-c01 load row")
-    return {"engine": [field(r"PineForge engine main (\w+);", speed, SPEED),
-                       window_engine(tree, BENCH3), Commit(tree)],
-            "date": row[2], "old": [row[1], window_engine(tree, BENCH2), Commit(tree)]}
+@claim(r"Every engine was timed in the same window on this host, at engine `(?P<engine>\w+)`, with the "
+       r"quiet-host gate re-checked before every timing batch")
+def window(tree, m):
+    return {"engine": [field(r"PineForge engine main (\w+);", tree.text(SPEED), SPEED),
+                       window_engine(tree, NOW), Commit(tree)]}
+
+
+BPS = r"(?P<q1>[\d.]+)(?P<q1_unit>[kM]) · \*\*(?P<median>[\d.]+)(?P<median_unit>[kM])\*\* · (?P<q3>[\d.]+)(?P<q3_unit>[kM])"
+SCALE = {"k": 1e3, "M": 1e6}
+
+
+def bars_per_second(m: re.Match, bars: int, times: list[float]) -> dict:
+    """The Q1 / median / Q3 bars/s a row prints, each in the unit it prints (k or M)."""
+    rates = [bars / (t / 1000) for t in times]
+    return {g: Num(quantile(rates, q), scale=SCALE[m[f"{g}_unit"]])
+            for g, q in (("q1", .25), ("median", .5), ("q3", .75))}
 
 
 @claim(r"^\| PineForge \| in-process Google Benchmark, bar magnifier on \| (?P<n>\d+) \| "
-       r"(?P<ms>[\d.]+) ms \| (?P<q1>[\d.]+)k · \*\*(?P<median>[\d.]+)k\*\* · (?P<q3>[\d.]+)k \|$")
+       r"(?P<ms>[\d.]+) ms \| " + BPS + r" \|$")
 def pineforge_row(tree, m):
-    times, bars = list(pineforge_ms(tree).values()), feed_bars(tree)
-    bars_per_s = [bars / (t / 1000) for t in times]
-    # speed.md rounds each time to 0.01 ms; bars/s inherit < 100 of it.
-    return {"n": len(times), "ms": Num(quantile(times, .5), slack=0.005),
-            **{g: Num(quantile(bars_per_s, q), slack=100, scale=1e3)
-               for g, q in (("q1", .25), ("median", .5), ("q3", .75))}}
+    times = list(pineforge_ms(tree).values())
+    return {"n": len(times), "ms": Num(quantile(times, .5)),
+            **bars_per_second(m, feed_bars(tree), times)}
 
 
 @claim(r"^\| PyneCore \| subprocess wall time \(interpreter start, import, backtest\), "
-       r"(?P<workers>\d+) concurrent \| (?P<n>\d+) \| (?P<ms>[\d,]+) ms \| (?P<q1>[\d.]+)k · "
-       r"\*\*(?P<median>[\d.]+)k\*\* · (?P<q3>[\d.]+)k \|$")
+       r"(?P<workers>\d+) concurrent \| (?P<n>\d+) \| (?P<ms>[\d,]+) ms \| " + BPS + r" \|$")
 def pynecore_row(tree, m):
-    times = [v["median_ms"] for v in tree.json(f"{BENCH2}/pc_speed.json").values()]
-    bars = feed_bars(tree)
-    bars_per_s = [bars / (t / 1000) for t in times]
+    times = [v["median_ms"] for v in tree.json(f"{NOW}/pc_speed.json").values()]
     return {"workers": int(field(r"(\d+) strategies timed concurrently", tree.text(SPEED), SPEED)),
             "n": len(times), "ms": Num(quantile(times, .5)),
-            **{g: Num(quantile(bars_per_s, q), scale=1e3)
-               for g, q in (("q1", .25), ("median", .5), ("q3", .75))}}
+            **bars_per_second(m, feed_bars(tree), times)}
 
 
 @claim(r"^\| vectorbt \| in-process, the (?P<ports>\d+) ports that load \| (?P<n>\d+) \| "
        r"(?P<ms>[\d.]+) ms \| — \|$")
 def vectorbt_row(tree, m):
-    times = [v["median_ms"] for v in tree.json(f"{BENCH2}/vbt_speed.json").values()]
+    times = [v["median_ms"] for v in tree.json(f"{NOW}/vbt_speed.json").values()]
     return {"ports": len(times), "n": len(times), "ms": Num(quantile(times, .5))}
 
 
 @claim(r"^\| PineTS \| subprocess wall time of the canonical (?P<indicators>\d+)-indicator script \| "
        r"(?P<n>\d+) \| (?P<ms>[\d.]+) ms \| — \|$")
 def pinets_row(tree, m):
-    timings = tree.json(f"{BENCH2}/pt_speed.json")
+    timings = tree.json(f"{NOW}/pt_speed.json")
     return {"indicators": int(field(r"canonical indicator script \((\d+) indicators\)",
                                     tree.text(SPEED), SPEED)),
             "n": len(timings), "ms": Num(timings["canonical"]["median_ms"])}
@@ -422,8 +461,8 @@ def pinets_row(tree, m):
        r"(?P<vbt>[\d.]+)× over vectorbt across its (?P<vbt_n>\d+) ports\.")
 def speedup(tree, m):
     pf = pineforge_ms(tree)
-    pc = tree.json(f"{BENCH2}/pc_speed.json")
-    vbt = tree.json(f"{BENCH2}/vbt_speed.json")
+    pc = tree.json(f"{NOW}/pc_speed.json")
+    vbt = tree.json(f"{NOW}/vbt_speed.json")
     over_pc = [pc[s]["median_ms"] / pf[s] for s in pf if s in pc]
     over_vbt = [vbt[s]["median_ms"] / pf[s] for s in pf if s in vbt]
     return {"x": Num(quantile(over_pc, .5)), "n": len(over_pc),
@@ -435,8 +474,9 @@ def speedup(tree, m):
        r"strategy\. That figure is over all (?P<n>\d+) slots, and is the median of (?P<runs>\w+) "
        r"quiet runs\.")
 def throughput(tree, m):
+    window_dir = NOW.rsplit("/", 1)[1]
     runs = [f"{RAW}/{p}" for p in tree.json(MANIFEST)["files"]
-            if re.fullmatch(r"2026-09-22-063e4460/throughput/r\d+\.json", p)]
+            if re.fullmatch(rf"{re.escape(window_dir)}/throughput/r\d+\.json", p)]
     medians, sizes = {}, set()
     for run in runs:
         rates = [b["items_per_second"] for b in gbench(tree, run, "no_magnifier").values()]
@@ -455,33 +495,94 @@ def throughput(tree, m):
 @claim(r"The PineForge sweep ran at a (?P<minute>\d+)-minute load of (?P<load_a>[\d.]+) \(slots "
        r"(?P<a_lo>\d+)–(?P<a_hi>\d+)\) and (?P<load_b>[\d.]+) \(slots (?P<b_lo>\d+)–(?P<b_hi>\d+)\)\. "
        r"Against engine `(?P<old>\w+)`, timed alternately with `(?P<new>\w+)` in (?P<windows>\w+) "
-       r"window on (?P<n>\d+) public slots, `(?P<new_again>\w+)` takes (?P<ratio>[\d.]+)× the time "
-       r"per strategy at the median\.")
+       r"window on (?P<n>\d+) slots, `(?P<new_again>\w+)` takes (?P<ratio>[\d.]+)× the time "
+       r"per strategy at the median")
 def sweep_loads_and_ab(tree, m):
     speed = tree.text(SPEED)
     batches = re.findall(r"^\| pineforge (\d+)-(\d+) \(\w+\) \| (\S+) \| ([\d.]+) \|", speed, re.M)
     gate = {row.split("\t")[1]: row.split("\t")[2]
-            for row in tree.text(f"{BENCH3}/speed_loads.tsv").splitlines()}
+            for row in tree.text(f"{NOW}/gate.tsv").splitlines()}
     if len(batches) != 2 or any(gate.get(utc) != load for *_, utc, load in batches):
         raise Mismatch("speed.md's PineForge batch loads are not the raw gate readings")
     (a_lo, a_hi, _, load_a), (b_lo, b_hi, _, load_b) = batches
     passes = ("new1", "old1", "old2", "new2")
-    ab = {p: gbench(tree, f"{BENCH3}/ab/{p}.json", "with_magnifier") for p in passes}
+    ab = {p: gbench(tree, f"{NOW}/ab/{p}.json", "with_magnifier") for p in passes}
     slots = sorted(ab["new1"])
-    if any(sorted(ab[p]) != slots for p in passes) or any(int(s[:3]) > 100 for s in slots):
-        raise Mismatch("the A/B passes do not time the same public slots")
+    if any(sorted(ab[p]) != slots for p in passes):
+        raise Mismatch("the A/B passes do not time the same slots")
     ratio = [(ms(ab["new1"][s]) + ms(ab["new2"][s])) / (ms(ab["old1"][s]) + ms(ab["old2"][s]))
              for s in slots]
-    dates = [datetime.fromisoformat(tree.json(f"{BENCH3}/ab/{p}.json")["context"]["date"])
+    dates = [datetime.fromisoformat(tree.json(f"{NOW}/ab/{p}.json")["context"]["date"])
              for p in passes + ("june1", "june2")]
-    new = [file_engine(tree, f"{BENCH3}/ab/{p}.json") for p in ("new1", "new2")] + [Commit(tree)]
+    new = [file_engine(tree, f"{NOW}/ab/{p}.json") for p in ("new1", "new2")] + [Commit(tree)]
     return {"minute": int(field(r"\| (\d+)-min load \|", speed, SPEED)),
             "load_a": load_a, "a_lo": int(a_lo), "a_hi": int(a_hi),
             "load_b": load_b, "b_lo": int(b_lo), "b_hi": int(b_hi),
-            "old": [file_engine(tree, f"{BENCH3}/ab/{p}.json") for p in ("old1", "old2")] + [Commit(tree)],
+            "old": [file_engine(tree, f"{NOW}/ab/{p}.json") for p in ("old1", "old2")] + [Commit(tree)],
             "new": new, "new_again": new,
             "windows": 1 if max(dates) - min(dates) < timedelta(hours=1) else 2,
             "n": len(slots), "ratio": Num(quantile(ratio, .5))}
+
+
+@claim(r"\*\*Against the (?P<date>[\d-]+) table\*\* \(engine `(?P<engine>\w+)`: PineForge "
+       r"(?P<pf_excellent>\d+) excellent and (?P<pf_strong>\d+) strong; PyneCore (?P<pc>[\d.]+): "
+       r"(?P<pc_excellent>\d+) excellent; (?P<x>\d+)× over PyneCore at a median (?P<bps>\d+)k bars/s "
+       r"per PineForge strategy\)")
+def previous_table(tree, m):
+    readme, src = previous_readme(tree)
+    pf = re.search(r"^\| \*\*all\*\* \| PineForge \| \d+ \| [\d,]+ \| [\d,]+ \| \*\*(\d+)\*\* \| (\d+) \|",
+                   readme, re.M)
+    pc = re.search(r"^\| \*\*all\*\* \| PyneCore \| \d+ \| [\d,]+ \| [\d,]+ \| (\d+) \|", readme, re.M)
+    if not (pf and pc):
+        raise Unsourced(f"{src} has no 'all' tier rows")
+    return {"date": field(r"^Last refresh \*\*([\d-]+)\*\*", readme, src),
+            "engine": [field(r"engine `main` `(\w+)`", readme, src), Commit(tree)],
+            "pf_excellent": int(pf[1]), "pf_strong": int(pf[2]),
+            "pc": field(r"\), PyneCore ([\d.]+), PineTS", readme, src), "pc_excellent": int(pc[1]),
+            "x": int(field(r"median speedup is \*\*(\d+)× over PyneCore\*\*", readme, src)),
+            "bps": int(field(r"· \*\*(\d+)k\*\* ·", readme, src))}
+
+
+@claim(r"PineForge's strong row, closed slot `(?P<pf_slot>\d+)`, grades excellent\. PyneCore "
+       r"(?P<pc_new>[\d.]+) grades (?P<up>\d+) slots higher than (?P<pc_old>[\d.]+) did and none "
+       r"lower; among them are `(?P<a>\d+)`, `(?P<b>\d+)` and `(?P<c>\d+)`, which raised a "
+       r"`RuntimeError` on (?P<pc_old_again>[\d.]+) and now run\.")
+def tier_changes(tree, m):
+    before = labels_of(tree.pinned(PREV_TABLE, SUMMARY))
+    now = labels_of(tree.text(SUMMARY))
+    moved = {e: [k for k in now if tier(now[k][e]) != tier(before[k][e])] for e in ("PineForge", "PyneCore")}
+    pf_up = [k for k in moved["PineForge"]
+             if (tier(before[k]["PineForge"]), tier(now[k]["PineForge"])) == ("strong", "excellent")]
+    if len(pf_up) != 1 or len(moved["PineForge"]) != 1:
+        raise Mismatch(f"PineForge tiers moved on slots {moved['PineForge']}, not on one strong row")
+    up = [k for k in moved["PyneCore"] if RANK[tier(now[k]["PyneCore"])] > RANK[tier(before[k]["PyneCore"])]]
+    if len(up) != len(moved["PyneCore"]):
+        raise Mismatch(f"PyneCore grades slots {sorted(set(moved['PyneCore']) - set(up))} lower")
+    ran = sorted(k for k in up if "RuntimeError" in before[k]["PyneCore"])
+    if len(ran) != 3:
+        raise Mismatch(f"PyneCore ran {ran} after a RuntimeError, not three slots")
+    old = lock_version(tree.pinned(PREV_TABLE, "benchmarks/uv.lock"), "pynesys-pynecore",
+                       f"{PREV_TABLE}:benchmarks/uv.lock")
+    return {"pf_slot": pf_up[0], "pc_new": uv_lock_version(tree, "pynesys-pynecore"), "up": len(up),
+            "pc_old": old, "pc_old_again": old, "a": ran[0], "b": ran[1], "c": ran[2]}
+
+
+@claim(r"On the same host and in the same window, PyneCore (?P<new>[\d.]+) takes (?P<ratio>[\d.]+)× the "
+       r"time of (?P<old>[\d.]+) per strategy at the median, over (?P<n>\d+) public slots timed alternately")
+def pynecore_versions(tree, m):
+    passes = {p: tree.json(f"{NOW}/pc_ab/{p}.json") for p in PC_AB}
+    slots = sorted(passes[PC_AB[0]])
+    if any(sorted(v) != slots for v in passes.values()) or any(int(k[:3]) > 100 for k in slots):
+        raise Mismatch("the PyneCore version passes do not time the same public slots")
+    new_passes, old_passes = PC_AB[0::3], PC_AB[1:3]  # new, old, old, new
+    ratio = [sum(passes[p][k]["median_ms"] for p in new_passes) / sum(passes[p][k]["median_ms"] for p in old_passes)
+             for k in slots]
+    versions = {tree.json(MANIFEST)["files"][f"{NOW[len(RAW) + 1:]}/pc_ab/{p}.json"]["pynecore"] for p in new_passes}
+    olds = {tree.json(MANIFEST)["files"][f"{NOW[len(RAW) + 1:]}/pc_ab/{p}.json"]["pynecore"] for p in old_passes}
+    old_lock = lock_version(tree.pinned(PREV_TABLE, "benchmarks/uv.lock"), "pynesys-pynecore",
+                            f"{PREV_TABLE}:benchmarks/uv.lock")
+    return {"new": list(versions) + [uv_lock_version(tree, "pynesys-pynecore")],
+            "old": list(olds) + [old_lock], "n": len(slots), "ratio": Num(quantile(ratio, .5))}
 
 
 @claim(r"\*\*These numbers are not comparable with the (?P<date>[\d-]+) table\*\* \(PineForge "
@@ -510,24 +611,23 @@ def june_population(tree, m):
             "new": uv_lock_version(tree, "pynesys-pynecore")}
 
 
-@claim(r"The (?P<date>[\d-]+) engine, rebuilt on this host and timed in the same window as the "
-       r"current one, still runs close to its June timings \((?P<lo>\d+)–(?P<hi>\d+) % over them in "
-       r"the quieter pass\)\. On the (?P<probes>\w+) probes both populations share, the current "
-       r"engine is (?P<x_lo>\d+)–(?P<x_hi>\d+)× slower with the magnifier on")
+@claim(r"it was timed on an (?P<old_cpu>[^.]+?)\. The (?P<date>[\d-]+) engine, rebuilt on this host and "
+       r"timed in the same window, runs the (?P<probes>\w+) probes both populations share "
+       r"(?P<x_lo>[\d.]+)–(?P<x_hi>[\d.]+)× faster than `(?P<engine>\w+)` with the magnifier on")
 def june_engine(tree, m):
     def by_probe(path: str) -> dict[str, float]:  # the slot number differs across populations
         return {slug.split("-", 1)[1]: ms(b) for slug, b in gbench(tree, path, "with_magnifier").items()}
-    june = by_probe(f"{JUNE}/pf_speed.json")
-    ab = {p: by_probe(f"{BENCH3}/ab/{p}.json") for p in ("june1", "june2", "new1", "new2")}
-    quieter = min(("june1", "june2"),
-                  key=lambda p: tree.json(f"{BENCH3}/ab/{p}.json")["context"]["load_avg"][0])
-    probes = sorted(set(ab["june1"]) & set(june) & set(ab["new1"]))
-    over = [100 * (ab[quieter][p] / june[p] - 1) for p in probes]
+    ab = {p: by_probe(f"{NOW}/ab/{p}.json") for p in ("june1", "june2", "new1", "new2")}
+    probes = sorted(set(ab["june1"]) & set(ab["new1"]))
     slower = [(ab["new1"][p] + ab["new2"][p]) / (ab["june1"][p] + ab["june2"][p]) for p in probes]
-    return {"date": field(r"^Last refresh: \*\*([\d-]+)\*\*", tree.pinned(JUNE_TABLE, README),
-                          f"{JUNE_TABLE}:{README}"),
-            "lo": Num(min(over)), "hi": Num(max(over)), "probes": len(probes),
-            "x_lo": Num(min(slower)), "x_hi": Num(max(slower))}
+    if min(slower) <= 1:
+        raise Mismatch(f"the current engine is not slower than the June engine on every probe: {slower}")
+    june_readme = tree.pinned(JUNE_TABLE, README)
+    return {"old_cpu": field(r"windows ran on the same (.+?) host", tree.text(f"{RAW}/README.md"),
+                             f"{RAW}/README.md"),
+            "date": field(r"^Last refresh: \*\*([\d-]+)\*\*", june_readme, f"{JUNE_TABLE}:{README}"),
+            "probes": len(probes), "x_lo": Num(min(slower)), "x_hi": Num(max(slower)),
+            "engine": [file_engine(tree, f"{NOW}/ab/{p}.json") for p in ("new1", "new2")] + [Commit(tree)]}
 
 
 # ---------------------------------------------------------------------------

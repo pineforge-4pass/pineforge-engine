@@ -9,7 +9,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/pineforge-4pass/pineforge-engine/ci.yml?branch=main&label=ci&logo=github)](https://github.com/pineforge-4pass/pineforge-engine/actions)
 [![Parity](https://img.shields.io/badge/TradingView%20parity-7%2C989%20%2F%207%2C989%20excellent%20or%20strong-brightgreen)](#validation-scoreboard)
 [![Trades](https://img.shields.io/badge/TradingView%20trades%20graded-4.78M-brightgreen)](#validation-scoreboard)
-[![Speed](https://img.shields.io/badge/median%2015%C3%97%20vs%20PyneCore-success)](benchmarks/results/speed.md)<br>
+[![Speed](https://img.shields.io/badge/median%2036%C3%97%20vs%20PyneCore-success)](benchmarks/results/speed.md)<br>
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/C%2B%2B-17-00599C.svg?logo=cplusplus&logoColor=white)](#)
 [![Docs](https://img.shields.io/badge/docs-cdocs.pineforge.dev-1565c0?logo=readthedocs&logoColor=white)](https://cdocs.pineforge.dev)
@@ -33,7 +33,7 @@ The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pinefo
 
 - **Proven, not promised.** All 7,989 graded probes — 309 open reference strategies, 680 community-shared scripts and 61 probe scripts the maintainers wrote, on 18 market/timeframe lanes — grade *excellent* or *strong* against TradingView's own trade lists: **7,905 excellent, 84 strong, zero below strong**. The graded probes' TradingView trade lists hold 4,776,328 trades; 17 probes with TradingView-side defects are excluded.
 - **Open runtime.** The engine and native live runner are Apache-2.0. The separately distributed [PineForge compiler](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) uses PolyForm Noncommercial terms with additional personal-trading permission; commercial use requires a separate license. Public reference strategies, benchmarks and validation tooling are available in their respective repositories; the community-script test set is not redistributed.
-- **Fast.** In-process, no interpreter: median **15× faster than PyneCore** on 196 timed strategies, measured at engine `063e4460` on 2026-09-22 with PyneCore timed as a subprocess, its interpreter start-up included (a median 603k bars/s per strategy with the bar magnifier on; [method](benchmarks/results/speed.md)). Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
+- **Fast.** In-process, no interpreter: median **36× faster than PyneCore** on the 200 strategies both engines time, measured at engine `35db01c8` on 2026-09-29 on an AWS c7a.8xlarge with PyneCore timed as a subprocess, its interpreter start-up included (PineForge runs a median 807k bars/s per strategy over its 201 slots with the bar magnifier on; [method](benchmarks/results/speed.md)). Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
 - **Deterministic to the bit.** Two runs with the same inputs produce identical trade lists. Same on Linux and macOS.
 - **Yours to embed.** 114 `PF_API` declarations across two headers — `pineforge.h`'s 71 (62 runtime exports and up to 9 per-strategy functions a generated module defines) and `native_c_api.h`'s 43 native-host declarations — an ABI that is append-only within a major version from 1.0 on. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
 
@@ -287,7 +287,7 @@ The corpus feed is a 1-minute Binance ETH/USDT:USDT tape; `scripts/derive_corpus
 [`benchmarks/`](benchmarks/) runs **200 strategies** through PineForge, [PyneCore](https://github.com/PyneSys/pynecore), [PineTS](https://github.com/LuxAlgo/PineTS) and [vectorbt](https://github.com/polakowo/vectorbt). Every engine gets the same 53,929-bar Binance ETH/USDT perpetual 15m feed, and each trade list is graded against TradingView's own export (266,451 trades):
 
 - **100 corpus probes** (slots 001–100) are drawn by mechanism family from the public corpus. Their fixtures are in the public [`benchmarks/assets`](https://github.com/pineforge-4pass/pineforge-benchmarks-assets) submodule.
-- **100 closed strategies** (slots 101–200) are TradingView-scraped community scripts on `BINANCE:ETHUSDT.P` 15m. Their artifacts are in the maintainers' evidence store (sha `6e938f9a…`) and are not public.
+- **100 closed strategies** (slots 101–200) are TradingView-scraped community scripts on `BINANCE:ETHUSDT.P` 15m. Their artifacts are in the maintainers' evidence store (sha `c77a9c70…`) and are not public.
 - PyneSys rejects slot 192's source, so slot 201, from the same stratum, stands in for it in the PyneCore count. PineForge runs all 201 slots.
 
 PyneCore sources are official PyneSys cloud-compiler output, with no hand-ports. PineTS runs only the canonical indicator script: the harness has no PineTS strategy runner, although PineTS has shipped a `strategy.*` namespace since 0.9.17. vectorbt runs the 13 hand-written ports that load. `bash benchmarks/run_all.sh` reproduces the public half with no API keys once the `benchmarks/assets` submodule, uv and Node ≥ 20 are in place ([recipe](benchmarks/README.md#reproduce)).
@@ -295,39 +295,41 @@ PyneCore sources are official PyneSys cloud-compiler output, with no hand-ports.
 | Group | Engine | Slots | Trades emitted | TV trades | 🟢 excellent | 🟢 strong | 🟡 moderate | 🟠 weak | 🔴 minimal | ⚪ n/a |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | corpus | PineForge | 100 | 139,668 | 139,665 | **100** | 0 | 0 | 0 | 0 | 0 |
-| corpus | PyneCore | 100 | 199,063 | 139,665 | 84 | 12 | 0 | 3 | 1 | 0 |
+| corpus | PyneCore | 100 | 199,554 | 139,665 | 86 | 12 | 1 | 1 | 0 | 0 |
 | corpus | vectorbt | 13 | 18,040 | 13,637 | 4 | 6 | 2 | 1 | 0 | — |
-| closed | PineForge | 101 | 126,732 | 126,786 | **100** | 1 | 0 | 0 | 0 | 0 |
-| closed | PyneCore | 101 | 172,535 | 126,786 | 49 | 30 | 8 | 9 | 1 | 4 |
+| closed | PineForge | 101 | 126,731 | 126,786 | **101** | 0 | 0 | 0 | 0 | 0 |
+| closed | PyneCore | 101 | 175,031 | 126,786 | 51 | 34 | 11 | 3 | 1 | 1 |
 
-**PineForge.** The only non-excellent row is closed slot 181. Every TradingView trade is matched, and PineForge emits one extra trade on the window's opening bars.
+**PineForge.** At engine `35db01c8`, running every slot's `generated.cpp` as codegen `121b3e6a` regenerates it, every slot grades excellent. Closed slot 181, strong on 2026-09-22 with one extra trade on the window's opening bars, lost that trade with the regenerated `generated.cpp`: the codegen now converts an `na` double to `int` through its na-preserving cast instead of C++'s undefined conversion.
 
-**PyneCore.** It has 64 graded non-excellent rows, and most come from the harness window and from `request.security`:
+**PyneCore 6.10.3.** It has 63 graded non-excellent rows, and most come from the harness window:
 
-- **29 rows** fail only on PnL (15) or only on trade count (14). In all of them, entries and exits match TradingView to the tick. PyneCore's broker trades from the feed's first bar, five months before TradingView's range opens. As a result, percent-of-equity sizing compounds P&L that TradingView never had, and a position already open at the range start adds one trade at the window's leading edge. The PyneCore runner has no counterpart of PineForge's TradingView-window order gate.
-- **9 multi-timeframe scripts** reproduce 0–85.5 % of TradingView's history; one has no aligned trades.
+- **32 rows** fail only on PnL (16) or only on trade count (16); their fills match TradingView's. PyneCore's broker trades from the feed's first bar, five months before TradingView's range opens. As a result, percent-of-equity sizing compounds P&L that TradingView never had, and a position already open at the range start adds one trade at the window's leading edge. The PyneCore runner has no counterpart of PineForge's TradingView-window order gate.
+- **Multi-timeframe scripts:** 6.10.3's `request.security` fixes lift four of the nine that 6.10.2 reproduced only in part to excellent; four others still reproduce 41.6–91.7 % of TradingView's history.
 - **3 grid bots** drift on FIFO drains, and a `str.match` regex filter grades weak.
-- The remaining rows fail mixed gates.
+- The remaining rows fail other gates.
 
-Four slots have no PyneCore trade list:
+Slot 192 has no PyneCore trade list: PyneSys rejects its source (`"Empty document."`). Slots 140, 166 and 197, which raised a `RuntimeError` in 6.10.2's `request.security` engine, run on 6.10.3.
 
-- **1 compile rejection:** PyneSys rejects slot 192 (`"Empty document."`).
-- **3 runtime errors:** PyneCore raises a `RuntimeError` in its `request.security` engine on slots 140, 166 and 197. It hits the same error intermittently on a fourth slot, 143, which could not be timed.
+**Speed** was measured on an AWS c7a.8xlarge (AMD EPYC 9R14, 32 cores, SMT off) running Ubuntu 24.04, every engine in the same window at engine `35db01c8`, each timing process pinned to fixed cores ([`benchmarks/results/speed.md`](benchmarks/results/speed.md)). The 2026-09-22 table was timed on an Apple M4 Max, so its times are not compared with these; only ratios measured in one window are.
 
-**Speed** was measured on a quiet host ([`benchmarks/results/speed.md`](benchmarks/results/speed.md)). PineForge was re-timed at engine `063e4460`. PyneCore, vectorbt and PineTS were not re-measured; their figures come from the same host's earlier 2026-09-22 window, at engine `e9ad37dd`.
+- **PineForge:** a median of 66.8 ms per strategy over the feed, in-process with the bar magnifier on (807k bars/s; quartiles 505k–1133k).
+- **PyneCore 6.10.3:** a median of 2,629 ms per subprocess (20.5k bars/s). The median per-strategy speedup is **36×** across the 200 strategies both engines time (p5 15×, p95 131×).
+- **vectorbt:** a median of 209.3 ms for its 13 ports; PineForge's median per-strategy speedup on the same 13 is 4.2×, and vectorbt is faster on 2 of them.
+- **PineTS:** 1416.2 ms for the canonical 10-indicator script.
+- **Throughput package** ([`benchmarks/throughput/`](benchmarks/throughput/)): the magnifier-off hot loop runs at a median of **0.78 M bars/s** per strategy (N=201, median of five quiet runs).
 
-- **PineForge:** a median of 89 ms per strategy over the feed, in-process with the bar magnifier on (603k bars/s; quartiles 425k–731k).
-- **PyneCore:** a median of 1,475 ms per subprocess (36.6k bars/s). The median per-strategy speedup is **15×** across the 196 strategies both engines time (p5 6×, p95 68×).
-- **vectorbt:** a median of 102 ms for its 13 ports; PineForge's median per-strategy speedup on the same 13 is 1.3×, and vectorbt is faster on 2 of them.
-- **PineTS:** 486 ms for the canonical 10-indicator script.
-- **Throughput package** ([`benchmarks/throughput/`](benchmarks/throughput/)): the magnifier-off hot loop runs at a median of **0.64 M bars/s** per strategy (N=201, median of five quiet runs).
+**Against the 2026-09-22 table** (engine `063e4460`: PineForge 200 excellent + 1 strong, PyneCore 6.10.2 133 excellent, 15× on the Apple M4 Max):
+
+- **Tiers:** PineForge's strong row is excellent (above), and PyneCore 6.10.3 grades 12 slots higher than 6.10.2 did and none lower.
+- **Speed, on this host and in one window:** engine `35db01c8` takes 0.35× the time of `063e4460` per strategy at the median over all 201 slots, each running its own `generated.cpp`, and PyneCore 6.10.3 takes 1.01× the time of 6.10.2 on 26 public slots.
 
 **Not comparable with the 2026-06-11 table** (PineForge 100/100, PyneCore 85/100, 162×):
 
 - **Tiers:** they now come from the canonical `scripts/verify_corpus.py::analyze_strategy` rubric. The old table graded a different 100-strategy population with `compare.py`'s own copy of the rubric, which had drifted from the canonical one and no longer parsed the current tape format.
-- **Speed:** the ratio fell because the engine is slower per bar, not because the host changed. The 2026-06-11 engine, rebuilt and timed on the same host in the same window, still runs close to its June timings (5–16 % over them in the quieter pass), while engine `063e4460` is 10–18× slower on the probes both populations share ([provenance](benchmarks/results/speed.md#provenance)).
+- **Speed:** that table was timed on the Apple M4 Max. The 2026-06-11 engine, rebuilt on the AWS host and timed in the same window, runs the three probes both populations share 4–8× faster than `35db01c8` ([provenance](benchmarks/results/speed.md#provenance)).
 
-Last refresh **2026-09-22** (engine `063e4460`, PyneCore 6.10.2, PineTS 0.9.34, vectorbt 0.28.2, Apple M4 Max); main has moved on since, and neither the tiers nor the timings were re-measured on it. Per-strategy table: [`benchmarks/results/summary.md`](benchmarks/results/summary.md). Population manifest: [`benchmarks/results/selection.md`](benchmarks/results/selection.md). Method, fairness and the reproduction recipe: [`benchmarks/README.md`](benchmarks/README.md).
+Last refresh **2026-09-29** (engine `35db01c8`, codegen `121b3e6a`, PyneCore 6.10.3, PineTS 0.9.34, vectorbt 0.28.2; timed on an AWS c7a.8xlarge running Ubuntu 24.04); main has moved on since, and neither the tiers nor the timings were re-measured on it. Per-strategy table: [`benchmarks/results/summary.md`](benchmarks/results/summary.md). Population manifest: [`benchmarks/results/selection.md`](benchmarks/results/selection.md). Method, fairness and the reproduction recipe: [`benchmarks/README.md`](benchmarks/README.md).
 
 ---
 

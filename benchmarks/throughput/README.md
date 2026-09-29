@@ -16,17 +16,17 @@ Below is the boxplot chart showing the distribution of backtest throughput acros
 
 | Quartile Metric | Throughput (Millions of Bars per Second - M/s) | Equiv. Execution Time (per 10k bars) |
 | :--- | :---: | :---: |
-| **Minimum** | 0.092 M/s | 109.15 ms |
-| **Q1 (25th Percentile)** | 0.454 M/s | 22.04 ms |
-| **Median (50th Percentile)** | **0.638 M/s** | **15.67 ms** |
-| **Q3 (75th Percentile)** | 0.792 M/s | 12.62 ms |
-| **Maximum** | 1.005 M/s | 9.95 ms |
+| **Minimum** | 0.064 M/s | 156.04 ms |
+| **Q1 (25th Percentile)** | 0.488 M/s | 20.50 ms |
+| **Median (50th Percentile)** | **0.779 M/s** | **12.84 ms** |
+| **Q3 (75th Percentile)** | 1.137 M/s | 8.79 ms |
+| **Maximum** | 2.095 M/s | 4.77 ms |
 
-*Note: the metric is GBench's `<slug>/throughput/no_magnifier` hot loop. Each strategy's shared library is `dlopen`ed once, outside the timed region. Each of the 20 timed iterations runs `strategy_create` plus `run_backtest` over the whole feed with the bar magnifier off, and the table reports the mean.*
+*Note: the metric is GBench's `<slug>/throughput/no_magnifier` hot loop. Each strategy's shared library is `dlopen`ed once, outside the timed region. Each of the 20 timed iterations runs `strategy_create`, applies the slot's `inputs.json` `strategy_overrides` pins, and runs `run_backtest` over the whole feed with the bar magnifier off; the table reports the mean.*
 
-*Last measured 2026-09-22 on an Apple M4 Max (16 cores) with engine `main` `063e4460`. This is the median of five quiet runs: the five run medians were 0.621, 0.638, 0.611, 0.646 and 0.640 M/s, and the table and chart come from the run with the median result (run 2). Every run started at a 1-minute load below 6 with no build or test process running; the loads are in [`../results/speed.md`](../results/speed.md). A public checkout only has the 100 public slots, whose median in the same run is 0.727 M/s. At engine `e9ad37dd` the same package measured 0.614 M/s. The five runs' Google Benchmark files and load traces are in [`../results/raw/2026-09-22-063e4460/throughput/`](../results/raw/2026-09-22-063e4460/throughput/); run 2 is byte-identical to `benchmark_results.json`.*
+*Last measured 2026-09-29 on a dedicated AWS c7a.8xlarge (AMD EPYC 9R14, 32 cores, SMT off) running Ubuntu 24.04, pinned to one core, with engine `main` `35db01c8`. This is the median of five quiet runs: the five run medians were 0.782, 0.786, 0.778, 0.779 and 0.777 M/s, and the table and chart come from the run with the median result (run 4). Every run started at a 1-minute load below 6 with no build or test process running; the loads are in [`../results/speed.md`](../results/speed.md). A public checkout only has the 100 public slots, whose median in the same run is 1.050 M/s. The five runs' Google Benchmark files and load traces are in [`../results/raw/2026-09-29-35db01c8/throughput/`](../results/raw/2026-09-29-35db01c8/throughput/); run 4 is byte-identical to `benchmark_results.json`.*
 
-*The median fell from 17.05 M/s, measured 2026-05-29 on 100 strategies and a 41,307-bar feed. A same-host check against the engine of the 2026-06-11 speed table shows engine `063e4460`'s per-bar cost is 10–18× higher on the probes both populations share (see [`../results/speed.md`](../results/speed.md), Provenance).*
+*Earlier figures were measured on an Apple M4 Max and are not compared with these: 0.638 M/s on 2026-09-22 (engine `063e4460`), and 17.05 M/s on 2026-05-29 (100 strategies, a 41,307-bar feed). On this host, in one window, engine `35db01c8` takes 0.35× the time of `063e4460` per strategy at the median with the magnifier on, and the engine of the 2026-06-11 speed table runs the three probes both populations share 4–8× faster than `35db01c8` (see [`../results/speed.md`](../results/speed.md), Provenance).*
 
 ### 🛠️ FFI Grid Search Optimization Result
 
@@ -34,7 +34,7 @@ Below is the boxplot chart showing the distribution of backtest throughput acros
 
 - **Best configuration:** Fast EMA = 3, Slow EMA = 15, take profit = 20 ticks
 - **Net profit:** **−103.16 USDT**. The probe is a mechanism test, not a profitable strategy: every combination loses. The sweep demonstrates the FFI loop, not an edge.
-- **Trade count:** 5,153 trades over 53,929 bars of 15m ETHUSDT (recorded 2026-09-22 at engine `e9ad37dd`)
+- **Trade count:** 5,153 trades over 53,929 bars of 15m ETHUSDT (recorded 2026-09-29 at engine `35db01c8`, as at `e9ad37dd` on 2026-09-22)
 
 ---
 
@@ -76,7 +76,7 @@ This script will:
 
 ## 🔍 Auditing & Verifying Results (For Sceptics)
 
-You can audit these figures (such as the median hot-loop throughput of 0.64 million bars per second) step by step:
+You can audit these figures (such as the median hot-loop throughput of 0.78 million bars per second) step by step:
 
 ### A. Run a Single Strategy Individually
 Instead of running every slot, you can compile and benchmark a single strategy of your choice (e.g. `001-analyzer-anvil-percent-costs-01`) using Google Benchmark directly to eliminate any script wrapper bias:

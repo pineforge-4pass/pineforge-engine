@@ -1,11 +1,15 @@
 {
   "schema": "pineforge-bench-raw/v1",
   "evidence": {
-    "sha256": "6e938f9a9160eeae6bda5c7c2d02078f1b9795d767a48d125fa68245f69ca539",
-    "bytes": 14696398,
-    "what": "the 101 closed slots (101-201): strategy.pine, generated.cpp, tv_trades.csv, strategy_pyne.py, inputs; TradingView-scraped third-party scripts, not redistributed",
-    "lane": "BENCH1c",
-    "fetch": "lab evidence get <sha256> --out <file> (maintainers, campaign environment); tar -xzf <file> -C benchmarks"
+    "sha256": "c77a9c70891b5e4e97405fe6673389c06652a0cc449b380a4d982f1709e62019",
+    "bytes": 20109399,
+    "what": "the 101 closed slots (101-201): strategy.pine, generated.cpp (codegen 121b3e6a), inputs.json (with the pre-2026-09-24 strategy() default pins), metrics.json, PROVENANCE.json, tv_trades.csv, strategy_pyne.py, pineforge_trades.csv and pynecore_trades.csv of this refresh, and _selection/ with the full selection manifest; TradingView-scraped third-party scripts, not redistributed",
+    "lane": "BENCH-REFRESH",
+    "fetch": "lab evidence get <sha256> --out <file> (maintainers, campaign environment); tar -xzf <file> -C benchmarks",
+    "previous": {
+      "sha256": "6e938f9a9160eeae6bda5c7c2d02078f1b9795d767a48d125fa68245f69ca539",
+      "what": "the 2026-09-22 windows' closed root (generated.cpp from codegen 89645d6), lane BENCH1c"
+    }
   },
   "windows": {
     "2026-06-11-94596bf": {
@@ -33,6 +37,12 @@
         "0ad1e8e4"
       ],
       "utc": "2026-09-22T11:57:36Z..14:22Z"
+    },
+    "2026-09-29-35db01c8": {
+      "lane": "BENCH-REFRESH",
+      "engine": "35db01c8",
+      "utc": "2026-09-29T20:36:00Z..2026-09-29T23:27:19Z",
+      "host": "AWS c7a.8xlarge (AMD EPYC 9R14, 32 cores, SMT off), Ubuntu 24.04.5 LTS (Linux 7.0.0-1013-aws, x86_64)"
     }
   },
   "files": {
@@ -209,6 +219,321 @@
       "sha256": "f9bb345d5f7c5f5d7532e36c826e936c6cec9bf6bf69bbe9569e383c3a66e9ef",
       "what": "1/5/15-min load every 10 s during the A/B window: UTC, load1, load5, load15",
       "origin": "/tmp/bench3/ab/loadtrace.tsv"
+    },
+    "2026-09-29-35db01c8/pf_speed_a.json": {
+      "sha256": "163233c0581d8815a5971e2de14a8f63637b474dd1d286c109c42aee18ea4d0b",
+      "what": "the published PineForge sweep, batch 1: slots 001-100, <slug>/throughput/with_magnifier, pinned to core 2",
+      "engine": "35db01c8",
+      "origin": "the timing host's benchmarks/_workdir/timing/pf_speed_a.json",
+      "origin_sha256": "4edcf4ac239742154c2b455495f385b4d45d7fca0bd96d6863316b217ae19425",
+      "edit": "context.host_name rewritten to \"aws-c7a-8xlarge\" (the timing host's name) and context.executable to \"./build/bin/pineforge_bench\" (its absolute build path)"
+    },
+    "2026-09-29-35db01c8/pf_speed_b.json": {
+      "sha256": "0ae23a5a6ded9213135fd5bc4a42abebf20454ab88094604649ae3fb4b699a40",
+      "what": "the published PineForge sweep, batch 2: slots 101-201, <slug>/throughput/with_magnifier, pinned to core 2",
+      "engine": "35db01c8",
+      "origin": "the timing host's benchmarks/_workdir/timing/pf_speed_b.json",
+      "origin_sha256": "7144b34ba2775febbd7b923e497adcabddadcac59f67ca24a93c213214911000",
+      "edit": "context.host_name rewritten to \"aws-c7a-8xlarge\" (the timing host's name) and context.executable to \"./build/bin/pineforge_bench\" (its absolute build path)"
+    },
+    "2026-09-29-35db01c8/ab/new1.json": {
+      "sha256": "f6a7df01f5d8a1329d81f676d7f23a0d696584c748b5c8aba9cddc9b3bb912b0",
+      "what": "same-window A/B pass new1: engine 35db01c8 on its own generated.cpp, all 201 slots, <slug>/throughput/with_magnifier, pinned to core 2",
+      "engine": "35db01c8",
+      "origin": "the timing host's benchmarks/_workdir/timing/ab/new1.json",
+      "origin_sha256": "d66e4de70b8b4a11850080b807725144f342ab57d1ad5357b40f7f54ba37f83b",
+      "edit": "context.host_name rewritten to \"aws-c7a-8xlarge\" (the timing host's name) and context.executable to \"./build/bin/pineforge_bench\" (its absolute build path)"
+    },
+    "2026-09-29-35db01c8/ab/old1.json": {
+      "sha256": "57ab37eb59cf4b149c0990726d7efba90136fe119c8b9d29a9a427caf2c5f9f9",
+      "what": "same-window A/B pass old1: engine 063e4460 on its own generated.cpp, all 201 slots, <slug>/throughput/with_magnifier, pinned to core 2",
+      "engine": "063e4460",
+      "origin": "the timing host's benchmarks/_workdir/timing/ab/old1.json",
+      "origin_sha256": "dceda73a27429ce7f1b35d6f54af72e864aadf16bc10a09fc11c60c2f0680142",
+      "edit": "context.host_name rewritten to \"aws-c7a-8xlarge\" (the timing host's name) and context.executable to \"./build/bin/pineforge_bench\" (its absolute build path)"
+    },
+    "2026-09-29-35db01c8/ab/june1.json": {
+      "sha256": "23e633f758cf30c026f86e7c514913c98d0827d30c157cfc1d95ea7683191bcd",
+      "what": "same-window A/B pass june1: engine ac011d84 on its own generated.cpp, the three probes the 2026-06-11 population shares, <slug>/throughput/with_magnifier, pinned to core 2",
+      "engine": "ac011d84",
+      "origin": "the timing host's benchmarks/_workdir/timing/ab/june1.json",
+      "origin_sha256": "d921ef3719ba60b0ce305d6762bef203f7acccdca543566146aa713768c203c3",
+      "edit": "context.host_name rewritten to \"aws-c7a-8xlarge\" (the timing host's name) and context.executable to \"./build/bin/pineforge_bench\" (its absolute build path)"
+    },
+    "2026-09-29-35db01c8/ab/old2.json": {
+      "sha256": "b2d3ebdea1bdb3bb24eb9e54e678d96e96398631a479ef9ad9353b74aeb31e5d",
+      "what": "same-window A/B pass old2: engine 063e4460 on its own generated.cpp, all 201 slots, <slug>/throughput/with_magnifier, pinned to core 2",
+      "engine": "063e4460",
+      "origin": "the timing host's benchmarks/_workdir/timing/ab/old2.json",
+      "origin_sha256": "c01b9b36e00f381050196c5829ea7523fc7ce8cc7afd28cfbc90a2965e9ac003",
+      "edit": "context.host_name rewritten to \"aws-c7a-8xlarge\" (the timing host's name) and context.executable to \"./build/bin/pineforge_bench\" (its absolute build path)"
+    },
+    "2026-09-29-35db01c8/ab/new2.json": {
+      "sha256": "1148b31661912f3df50db78ddc49e8d82f494fc4d059484b55ca5ec2c1228060",
+      "what": "same-window A/B pass new2: engine 35db01c8 on its own generated.cpp, all 201 slots, <slug>/throughput/with_magnifier, pinned to core 2",
+      "engine": "35db01c8",
+      "origin": "the timing host's benchmarks/_workdir/timing/ab/new2.json",
+      "origin_sha256": "47390d4243f8aca891e4fb6cec0e75fe00c408261c29648d405dc72b18fab7df",
+      "edit": "context.host_name rewritten to \"aws-c7a-8xlarge\" (the timing host's name) and context.executable to \"./build/bin/pineforge_bench\" (its absolute build path)"
+    },
+    "2026-09-29-35db01c8/ab/june2.json": {
+      "sha256": "3c31b551737c4eb6abe59bce1bbd54cbd624d31c798ac5654360d16b8756f63c",
+      "what": "same-window A/B pass june2: engine ac011d84 on its own generated.cpp, the three probes the 2026-06-11 population shares, <slug>/throughput/with_magnifier, pinned to core 2",
+      "engine": "ac011d84",
+      "origin": "the timing host's benchmarks/_workdir/timing/ab/june2.json",
+      "origin_sha256": "aef1f27a54d81813274b34a9e618a6f38d823961f8fe01a801de616003ca35e5",
+      "edit": "context.host_name rewritten to \"aws-c7a-8xlarge\" (the timing host's name) and context.executable to \"./build/bin/pineforge_bench\" (its absolute build path)"
+    },
+    "2026-09-29-35db01c8/ab/recheck.json": {
+      "sha256": "49fad67fb62244e4177aa4abd17fe314073465458fd462c5edcde4e3aed048df",
+      "what": "the 26 public A/B slots timed once more on the tree the throughput runs use, after its rebuild (see speed.md's provenance), <slug>/throughput/with_magnifier, pinned to core 2",
+      "engine": "35db01c8",
+      "origin": "the timing host's benchmarks/_workdir/timing/ab/recheck.json",
+      "origin_sha256": "21e9e8feda62d0f2b500c51d4ee4d7cf5c9be00bc75b272eaf9e6bf8b3b9e8db",
+      "edit": "context.host_name rewritten to \"aws-c7a-8xlarge\" (the timing host's name) and context.executable to \"./build/bin/pineforge_bench\" (its absolute build path)"
+    },
+    "2026-09-29-35db01c8/throughput/r1.json": {
+      "sha256": "d1e496645c959fefbd648cc551d5aadae8ef0516567ed0a5c669d4a550b3c578",
+      "what": "throughput package run 1 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), pinned to core 2",
+      "engine": "35db01c8",
+      "origin": "the timing host's benchmarks/_workdir/timing/tp-r1/benchmark_results.json",
+      "origin_sha256": "164f4ad1988afd92877b4bb66d962b75dc26cf1e39700adfdec4dd86f1bec9e5",
+      "edit": "context.host_name rewritten to \"aws-c7a-8xlarge\" (the timing host's name) and context.executable to \"./build/bin/pineforge_bench\" (its absolute build path)"
+    },
+    "2026-09-29-35db01c8/throughput/r2.json": {
+      "sha256": "f0a1ecbcf51d2b60c94e3e9c4e3628987fa7af45b7054d77dc008a3bdc725ded",
+      "what": "throughput package run 2 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), pinned to core 2",
+      "engine": "35db01c8",
+      "origin": "the timing host's benchmarks/_workdir/timing/tp-r2/benchmark_results.json",
+      "origin_sha256": "00eb431d6ac541244c9d331cb08d49ad043ef9f614a0418c906d4322ab475c45",
+      "edit": "context.host_name rewritten to \"aws-c7a-8xlarge\" (the timing host's name) and context.executable to \"./build/bin/pineforge_bench\" (its absolute build path)"
+    },
+    "2026-09-29-35db01c8/throughput/r3.json": {
+      "sha256": "8cfb8f33ee49fb96607344b382a981a1dd87efa802df0b90110122394d6fa091",
+      "what": "throughput package run 3 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), pinned to core 2",
+      "engine": "35db01c8",
+      "origin": "the timing host's benchmarks/_workdir/timing/tp-r3/benchmark_results.json",
+      "origin_sha256": "04de4456fbf1a2b23d47956a11f2a7690b9f94bdc3f855a884e967a680ef3365",
+      "edit": "context.host_name rewritten to \"aws-c7a-8xlarge\" (the timing host's name) and context.executable to \"./build/bin/pineforge_bench\" (its absolute build path)"
+    },
+    "2026-09-29-35db01c8/throughput/r4.json": {
+      "sha256": "15c2135439ebecc8b36a3e7e3b499e7d3db659cee8212f65c7716e1c19959641",
+      "what": "throughput package run 4 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), pinned to core 2; the median run, published as benchmarks/throughput/benchmark_results.json",
+      "engine": "35db01c8",
+      "origin": "the timing host's benchmarks/_workdir/timing/tp-r4/benchmark_results.json",
+      "origin_sha256": "cd85dcd231a50fb09da2510cdcba6d514856643df3746c9ded504e3fed1f6b85",
+      "edit": "context.host_name rewritten to \"aws-c7a-8xlarge\" (the timing host's name) and context.executable to \"./build/bin/pineforge_bench\" (its absolute build path)"
+    },
+    "2026-09-29-35db01c8/throughput/r5.json": {
+      "sha256": "20361f6d238fc466fef0ffe77956032b4d3df4a6312f8ff71ee919fcbe8ea469",
+      "what": "throughput package run 5 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), pinned to core 2",
+      "engine": "35db01c8",
+      "origin": "the timing host's benchmarks/_workdir/timing/tp-r5/benchmark_results.json",
+      "origin_sha256": "fd07126bf5a8db2118d3082f996f6aec4ff3c9a25e96f3a1450c25781d18d2f1",
+      "edit": "context.host_name rewritten to \"aws-c7a-8xlarge\" (the timing host's name) and context.executable to \"./build/bin/pineforge_bench\" (its absolute build path)"
+    },
+    "2026-09-29-35db01c8/pc_speed.json": {
+      "sha256": "5eac71b2d0efe3f21669fb23b2e93528eddb1d1986b8e741975c829a43004d6e",
+      "what": "PyneCore 6.10.3 subprocess timings (median / p95 of 20 runs, 8 concurrent on cores 8-15)",
+      "pynecore": "6.10.3",
+      "origin": "the timing host's benchmarks/_workdir/timing/pc_speed.json"
+    },
+    "2026-09-29-35db01c8/pt_speed.json": {
+      "sha256": "3779369cd6190c55fcc177705bd9af8aa287fa2170c28c443830c4ade7542a43",
+      "what": "PineTS 0.9.34 canonical-indicator timing (median / p95 of 20 runs), pinned to core 2",
+      "origin": "the timing host's benchmarks/_workdir/timing/pt_speed.json"
+    },
+    "2026-09-29-35db01c8/vbt_speed.json": {
+      "sha256": "fb9945db251cc91ea675a0f41d90be1188fcdd1c50d144ce0c4f4ce256e2a168",
+      "what": "vectorbt 0.28.2 in-process timings of the ports that load, pinned to core 2",
+      "origin": "the timing host's benchmarks/_workdir/timing/vbt_speed.json"
+    },
+    "2026-09-29-35db01c8/pc_ab/pc-ab-v6103-1.json": {
+      "sha256": "68ce171ceb2b0d41f68291496da10cc08563414067e7e8039bc4cfc1e68f1c70",
+      "what": "PyneCore version A/B pass: PyneCore 6.10.3, the 26 public A/B slots, median / p95 of 10 runs, 8 concurrent on cores 8-15",
+      "pynecore": "6.10.3",
+      "origin": "the timing host's benchmarks/_workdir/timing/pc_ab/pc-ab-v6103-1.json"
+    },
+    "2026-09-29-35db01c8/pc_ab/pc-ab-v6102-1.json": {
+      "sha256": "488f205682d17cea59940082e13d1aa78d5973538d26ca7eb845aae1a5e4252a",
+      "what": "PyneCore version A/B pass: PyneCore 6.10.2, the 26 public A/B slots, median / p95 of 10 runs, 8 concurrent on cores 8-15",
+      "pynecore": "6.10.2",
+      "origin": "the timing host's benchmarks/_workdir/timing/pc_ab/pc-ab-v6102-1.json"
+    },
+    "2026-09-29-35db01c8/pc_ab/pc-ab-v6102-2.json": {
+      "sha256": "be3d5771aa75995c5cc940b109ce607dfd9b3d182a0637f8ca424179900365e3",
+      "what": "PyneCore version A/B pass: PyneCore 6.10.2, the 26 public A/B slots, median / p95 of 10 runs, 8 concurrent on cores 8-15",
+      "pynecore": "6.10.2",
+      "origin": "the timing host's benchmarks/_workdir/timing/pc_ab/pc-ab-v6102-2.json"
+    },
+    "2026-09-29-35db01c8/pc_ab/pc-ab-v6103-2.json": {
+      "sha256": "2c015f3a050daf575b7ec918d01d236252c3462f64988b1adce665f5fa1c18c1",
+      "what": "PyneCore version A/B pass: PyneCore 6.10.3, the 26 public A/B slots, median / p95 of 10 runs, 8 concurrent on cores 8-15",
+      "pynecore": "6.10.3",
+      "origin": "the timing host's benchmarks/_workdir/timing/pc_ab/pc-ab-v6103-2.json"
+    },
+    "2026-09-29-35db01c8/gate.tsv": {
+      "sha256": "7e16a5886ba77f447e744fed7eabd8ca0026f336721382edeb3d54d38891f553",
+      "what": "quiet-gate reading before each timing batch: label, UTC, 1-min load, build/test processes, the busiest pinned core's utilisation over 2 s (%)",
+      "origin": "the timing host's benchmarks/_workdir/timing/gate.tsv"
+    },
+    "2026-09-29-35db01c8/loads/ab-june1-load.tsv": {
+      "sha256": "c05c2b26f476e2db09fe8d74b6742ca981f09aef0f177ce1c353b6928c75fe9f",
+      "what": "1/5/15-min load every 10 s during batch ab-june1: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/ab-june1-load.tsv"
+    },
+    "2026-09-29-35db01c8/loads/ab-june2-load.tsv": {
+      "sha256": "16a703b11115c686488cc447217679354d83eddac7d2fe9d1926274a215cc42b",
+      "what": "1/5/15-min load every 10 s during batch ab-june2: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/ab-june2-load.tsv"
+    },
+    "2026-09-29-35db01c8/loads/ab-new1-load.tsv": {
+      "sha256": "6ac829717adadcf73b573361091793462a17ceeda62dc86f38726da249398412",
+      "what": "1/5/15-min load every 10 s during batch ab-new1: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/ab-new1-load.tsv"
+    },
+    "2026-09-29-35db01c8/loads/ab-new2-load.tsv": {
+      "sha256": "76a428a5e99827cb5c9b9fc462ebd42d21d1e6a370b6ec3d7165d410dc54275f",
+      "what": "1/5/15-min load every 10 s during batch ab-new2: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/ab-new2-load.tsv"
+    },
+    "2026-09-29-35db01c8/loads/ab-old1-load.tsv": {
+      "sha256": "b043c71f1fdacfc9a52cab5475005952d30827b56cfba9c1c412028d5e4bb6c7",
+      "what": "1/5/15-min load every 10 s during batch ab-old1: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/ab-old1-load.tsv"
+    },
+    "2026-09-29-35db01c8/loads/ab-old2-load.tsv": {
+      "sha256": "929516e9749b69b44d801f262d4d119993619a23c92ca4619e856f9b0e3b1b2c",
+      "what": "1/5/15-min load every 10 s during batch ab-old2: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/ab-old2-load.tsv"
+    },
+    "2026-09-29-35db01c8/loads/pc-ab-v6102-1-load.tsv": {
+      "sha256": "a1fb62f2f00469870c69ec3ae0bb065f2a8ae06dd7cf77a02e90e5c4e2853a25",
+      "what": "1/5/15-min load every 10 s during batch pc-ab-v6102-1: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/pc-ab-v6102-1-load.tsv"
+    },
+    "2026-09-29-35db01c8/loads/pc-ab-v6102-2-load.tsv": {
+      "sha256": "4cb479750bf2580c2878924e329a1f04a9de83ad63212f59b8d60e414824b504",
+      "what": "1/5/15-min load every 10 s during batch pc-ab-v6102-2: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/pc-ab-v6102-2-load.tsv"
+    },
+    "2026-09-29-35db01c8/loads/pc-ab-v6103-1-load.tsv": {
+      "sha256": "00c5ce177f4a25f3e65923b2db01d6da352e9fc956d77ab21b8d3c8ceba8b0c8",
+      "what": "1/5/15-min load every 10 s during batch pc-ab-v6103-1: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/pc-ab-v6103-1-load.tsv"
+    },
+    "2026-09-29-35db01c8/loads/pc-ab-v6103-2-load.tsv": {
+      "sha256": "5b3db85f6d1ca3fae0640cd28399fd5c9e1b9b425591884535b5fe80a4c35da0",
+      "what": "1/5/15-min load every 10 s during batch pc-ab-v6103-2: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/pc-ab-v6103-2-load.tsv"
+    },
+    "2026-09-29-35db01c8/loads/pf-a-load.tsv": {
+      "sha256": "a9d7be793004f625213d9718d9469ae076cfaea578802a81eadd95bf22dba263",
+      "what": "1/5/15-min load every 10 s during batch pf-a: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/pf-a-load.tsv"
+    },
+    "2026-09-29-35db01c8/loads/pf-b-load.tsv": {
+      "sha256": "57933a7ed12be24a6c47b15180e2a4e2ce3f467ebaf889ae164d346fa4c4a786",
+      "what": "1/5/15-min load every 10 s during batch pf-b: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/pf-b-load.tsv"
+    },
+    "2026-09-29-35db01c8/loads/pf-recheck-load.tsv": {
+      "sha256": "f56313b1e7d9a26622ae6958187edb0f98047783fbf4060338c7f3119c6a79c7",
+      "what": "1/5/15-min load every 10 s during batch pf-recheck: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/pf-recheck-load.tsv"
+    },
+    "2026-09-29-35db01c8/loads/pinets-load.tsv": {
+      "sha256": "886dc8ac17caaa893ec871dfcc0df6fe2645e150cae0b41f9d34f00875e91044",
+      "what": "1/5/15-min load every 10 s during batch pinets: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/pinets-load.tsv"
+    },
+    "2026-09-29-35db01c8/loads/pynecore-load.tsv": {
+      "sha256": "a2af505e704c5553e358281c33befd9d55610253f335ce10cd3722add8ea8174",
+      "what": "1/5/15-min load every 10 s during batch pynecore: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/pynecore-load.tsv"
+    },
+    "2026-09-29-35db01c8/throughput/r1-load.tsv": {
+      "sha256": "b7f531f23272c9f2ad4729158d2b19d71c07655069632f08a898254dc5d59d66",
+      "what": "1/5/15-min load every 10 s during batch tp-r1: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/tp-r1-load.tsv"
+    },
+    "2026-09-29-35db01c8/throughput/r2-load.tsv": {
+      "sha256": "02933f92125af21819bbef1cf83c209b6a74eff8feec6df4a444af276fdd352b",
+      "what": "1/5/15-min load every 10 s during batch tp-r2: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/tp-r2-load.tsv"
+    },
+    "2026-09-29-35db01c8/throughput/r3-load.tsv": {
+      "sha256": "9879f6aedc8ef67157b6e19b1a73b83fffded41a3cbdd7e2d1fc2f7447a60fc6",
+      "what": "1/5/15-min load every 10 s during batch tp-r3: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/tp-r3-load.tsv"
+    },
+    "2026-09-29-35db01c8/throughput/r4-load.tsv": {
+      "sha256": "127173b24530e8f40dda295b74a292c55ecc7f2ad022f8520aad709defdc9680",
+      "what": "1/5/15-min load every 10 s during batch tp-r4: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/tp-r4-load.tsv"
+    },
+    "2026-09-29-35db01c8/throughput/r5-load.tsv": {
+      "sha256": "20d49d70cbc7260496e7c9704aeb03041f46747c9cbf1247f2ee352ae5239c42",
+      "what": "1/5/15-min load every 10 s during batch tp-r5: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/tp-r5-load.tsv"
+    },
+    "2026-09-29-35db01c8/loads/vectorbt-load.tsv": {
+      "sha256": "9cfc3baff6e3883c4d3d5118969192decaea637eceee8e6b4e057af668f3390e",
+      "what": "1/5/15-min load every 10 s during batch vectorbt: UTC, load1, load5, load15",
+      "origin": "the timing host's benchmarks/_workdir/timing/vectorbt-load.tsv"
+    },
+    "2026-09-29-35db01c8/profile/004-bench-063e4460.gbench.txt": {
+      "sha256": "d800a5c807daa4af441b232141fb6f2b33f0404d97731aa3117e7c66e211c0d7",
+      "what": "after the campaign: engine 063e4460, slot 004, magnifier on, pinned to core 2, sampled with perf at 1999 Hz; the profiled Google Benchmark run's console line",
+      "engine": "063e4460",
+      "origin": "the timing host's runs/profile/004-bench-063e4460.gbench.txt"
+    },
+    "2026-09-29-35db01c8/profile/004-bench-063e4460.top.txt": {
+      "sha256": "3907a0540d5b4113d838b0badfdbc5e66de83554d968f737a061d1b3e0eb6663",
+      "what": "after the campaign: engine 063e4460, slot 004, magnifier on, pinned to core 2, sampled with perf at 1999 Hz; perf report --no-children --sort dso,symbol, top 40 symbols",
+      "engine": "063e4460",
+      "origin": "the timing host's runs/profile/004-bench-063e4460.top.txt"
+    },
+    "2026-09-29-35db01c8/profile/004-bench.gbench.txt": {
+      "sha256": "b6c02b8961bc7b5550cbda91c79ce9d824c2da7489443796a9ddf21cfd15ff8d",
+      "what": "after the campaign: engine 35db01c8, slot 004, magnifier on, pinned to core 2, sampled with perf at 1999 Hz; the profiled Google Benchmark run's console line",
+      "engine": "35db01c8",
+      "origin": "the timing host's runs/profile/004-bench.gbench.txt"
+    },
+    "2026-09-29-35db01c8/profile/004-bench.top.txt": {
+      "sha256": "f4347b0e9279e1f0127ad5a15c7ff45592fb156a712ea1d684f36b88e0dd218a",
+      "what": "after the campaign: engine 35db01c8, slot 004, magnifier on, pinned to core 2, sampled with perf at 1999 Hz; perf report --no-children --sort dso,symbol, top 40 symbols",
+      "engine": "35db01c8",
+      "origin": "the timing host's runs/profile/004-bench.top.txt"
+    },
+    "2026-09-29-35db01c8/profile/021-bench-063e4460.gbench.txt": {
+      "sha256": "8d2f8719b546a47f4da2904f3169687ce50af2e40fe29b808bef831c085a6e0b",
+      "what": "after the campaign: engine 063e4460, slot 021, magnifier on, pinned to core 2, sampled with perf at 1999 Hz; the profiled Google Benchmark run's console line",
+      "engine": "063e4460",
+      "origin": "the timing host's runs/profile/021-bench-063e4460.gbench.txt"
+    },
+    "2026-09-29-35db01c8/profile/021-bench-063e4460.top.txt": {
+      "sha256": "f37fdaefd557dcf8fdc40d5b81ba2a0002d88268a1bb6c75d67a6afdbce1bc94",
+      "what": "after the campaign: engine 063e4460, slot 021, magnifier on, pinned to core 2, sampled with perf at 1999 Hz; perf report --no-children --sort dso,symbol, top 40 symbols",
+      "engine": "063e4460",
+      "origin": "the timing host's runs/profile/021-bench-063e4460.top.txt"
+    },
+    "2026-09-29-35db01c8/profile/021-bench.gbench.txt": {
+      "sha256": "ad9148284a3a6a24d78169ffe598030cb498f389c2b3658f35d7772a75ba1dea",
+      "what": "after the campaign: engine 35db01c8, slot 021, magnifier on, pinned to core 2, sampled with perf at 1999 Hz; the profiled Google Benchmark run's console line",
+      "engine": "35db01c8",
+      "origin": "the timing host's runs/profile/021-bench.gbench.txt"
+    },
+    "2026-09-29-35db01c8/profile/021-bench.top.txt": {
+      "sha256": "3fcbb6b32174e9b4feae0f448b44f36daf83bda0e1479f9e8743dd4c9c7f6df5",
+      "what": "after the campaign: engine 35db01c8, slot 021, magnifier on, pinned to core 2, sampled with perf at 1999 Hz; perf report --no-children --sort dso,symbol, top 40 symbols",
+      "engine": "35db01c8",
+      "origin": "the timing host's runs/profile/021-bench.top.txt"
+    },
+    "2026-09-29-35db01c8/host.json": {
+      "sha256": "bbb81e17d116eecfa96a8688ae3eb82f5c36ba220c0f3b66b6ba4dfaeb91e47e",
+      "what": "the timing host's facts (lscpu, os-release, toolchain, pinning), from host.txt with its paths left out",
+      "origin": "the timing host's benchmarks/_workdir/timing/host.txt"
     }
   }
 }
