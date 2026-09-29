@@ -454,6 +454,18 @@ void emit(Scenario scenario, bool magnifier, const Observed& got) {
 //   kRevive_rows: 1 of 2 lines [W3B F02 ledger booking]
 //   kStopLimitMag_rows: 5 of 10 lines [W3B F02 ledger booking]
 //   kStopLimit_rows: 5 of 10 lines [W3B F02 ledger booking]
+// Lane TAIL-H re-harvested it once on its tree (engine 9e6196ca and the
+// lane's commits) with PINEFORGE_P4_HARVEST: the harvest on the lane's rule-PS commit
+// reproduces every old value and the one on its rule-PK commit every new
+// one, so each move is rule PK's (a margin call hands the position it leaves
+// to the exits in their queue order again, tests/fixtures/exit_reservation);
+// no trade moves. Each moved declaration, with the lines of it that move:
+//   kCascadeMag_final: 1 of 1 lines [TAIL-H PK]
+//   kCascadeMag_rows: 1 of 2 lines [TAIL-H PK]
+//   kCascade_final: 1 of 1 lines [TAIL-H PK]
+//   kCascade_rows: 2 of 2 lines [TAIL-H PK]
+//   kRevive_final: 1 of 1 lines [TAIL-H PK]
+//   kRevive_rows: 2 of 2 lines [TAIL-H PK]
 constexpr std::uint64_t kDeclined_rows[] = {
     10078075251929413260ull, 9021013497480718974ull, 5211498519342463915ull, 8693678377712780894ull,
     3263497715304832018ull, 4887532512140189270ull, 3474228148466484630ull, 8939974732258322358ull,
@@ -606,8 +618,8 @@ constexpr Trade kDeclinedMag_trades[] = {
 //   10980118139031631968ull -> 5462196043591698097ull [H-THIN]
 //   17030525150602589392ull -> 2747991239711285631ull [H-THIN]
 constexpr std::uint64_t kRevive_rows[] = {
-    13853830474015623389ull, 4728749920725358539ull, 4849688479110990770ull, 13321609604203068862ull,
-    1041650372773372953ull, 5462196043591698097ull, 2747991239711285631ull,
+    13853830474015623389ull, 4728749920725358539ull, 4849688479110990770ull, 4831482014707956691ull,
+    15276408895277444338ull, 16811442900876555878ull, 7978209211941437796ull,
 };
 constexpr std::uint64_t kRevive_at_bar[] = {
     4ull, 0ull, 15ull, 10ull,
@@ -629,7 +641,8 @@ constexpr std::uint64_t kRevive_folded[] = {
 // expectation corrected (v19-E): kRevive_final 18153826259251315829ull -> 10634995016395674704ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the receipt bars, folded counts and trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
 // expectation corrected (V19-FIX): kRevive_final 10634995016395674704ull -> 17030525150602589392ull, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the receipt bars, folded counts and trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree.
 // expectation corrected (INT26 v19 hash re-pin): kRevive_final 17030525150602589392ull -> 2747991239711285631ull [H-THIN], because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the receipt bars, folded counts and trades did not move.
-constexpr std::uint64_t kRevive_final = 2747991239711285631ull;
+// expectation corrected (TAIL-H PK): kRevive_final 2747991239711285631ull -> 7978209211941437796ull, because lane TAIL-H's rule PK re-reserves the exits in queue order against the position a margin call leaves (reconcile_exit_reservations_after_margin); old values are the harvest on the lane's rule-PS commit, new ones on its rule-PK commit; the receipt bars, folded counts and trades did not move.
+constexpr std::uint64_t kRevive_final = 7978209211941437796ull;
 constexpr Trade kRevive_trades[] = {
     {1736121660000LL, 1736121780000LL, 100, 170, 47.058823529411768, 0},
     {1736121660000LL, 1736121840000LL, 100, 180, 52.941176470588232, 0},
@@ -729,8 +742,8 @@ constexpr Trade kReviveMag_trades[] = {
 //   17545089905645669552ull -> 4582123328933630207ull [H-THIN]
 //   11022588141404321180ull -> 16894420136553841491ull [H-THIN]
 constexpr std::uint64_t kCascade_rows[] = {
-    11665685740161685773ull, 6762973723098471536ull, 13194180830256499995ull, 5915515851064168701ull,
-    14468652264495611008ull, 4582123328933630207ull, 16894420136553841491ull,
+    11665685740161685773ull, 6762973723098471536ull, 13194180830256499995ull, 454330934550897406ull,
+    12886664947334639359ull, 8630709732198934332ull, 4624298573885067080ull,
 };
 constexpr std::uint64_t kCascade_at_bar[] = {
     4ull, 0ull, 15ull, 10ull,
@@ -752,7 +765,8 @@ constexpr std::uint64_t kCascade_folded[] = {
 // expectation corrected (v19-E): kCascade_final 5566037634063544638ull -> 12854015805238324476ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the receipt bars, folded counts and trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
 // expectation corrected (V19-FIX): kCascade_final 12854015805238324476ull -> 11022588141404321180ull, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the receipt bars, folded counts and trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree.
 // expectation corrected (INT26 v19 hash re-pin): kCascade_final 11022588141404321180ull -> 16894420136553841491ull [H-THIN], because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the receipt bars, folded counts and trades did not move.
-constexpr std::uint64_t kCascade_final = 16894420136553841491ull;
+// expectation corrected (TAIL-H PK): kCascade_final 16894420136553841491ull -> 4624298573885067080ull, because lane TAIL-H's rule PK re-reserves the exits in queue order against the position a margin call leaves (reconcile_exit_reservations_after_margin); old values are the harvest on the lane's rule-PS commit, new ones on its rule-PK commit; the receipt bars, folded counts and trades did not move.
+constexpr std::uint64_t kCascade_final = 4624298573885067080ull;
 constexpr Trade kCascade_trades[] = {
     {1736121660000LL, 1736121780000LL, 100, 170, 47.058823529411768, 0},
     {1736121660000LL, 1736121780000LL, 100, 170, 52.941176470588232, 0},
@@ -792,7 +806,7 @@ constexpr Trade kCascade_trades[] = {
 //   2074679355477699332ull -> 3591493413416270605ull [H-THIN]
 constexpr std::uint64_t kCascadeMag_rows[] = {
     10293226467739870528ull, 15440279261765505431ull, 3033096808895778346ull, 8603410363956848503ull,
-    3716382050228218553ull, 15049237438778114557ull, 3591493413416270605ull,
+    9006302885784878072ull, 6400213912453170356ull, 4986583732974436248ull,
 };
 constexpr std::uint64_t kCascadeMag_at_bar[] = {
     4ull, 0ull, 15ull, 0ull,
@@ -814,7 +828,8 @@ constexpr std::uint64_t kCascadeMag_folded[] = {
 // expectation corrected (v19-E): kCascadeMag_final 8438336155355340534ull -> 8969517760469763972ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the receipt bars, folded counts and trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
 // expectation corrected (V19-FIX): kCascadeMag_final 8969517760469763972ull -> 2074679355477699332ull, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the receipt bars, folded counts and trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree.
 // expectation corrected (INT26 v19 hash re-pin): kCascadeMag_final 2074679355477699332ull -> 3591493413416270605ull [H-THIN], because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the receipt bars, folded counts and trades did not move.
-constexpr std::uint64_t kCascadeMag_final = 3591493413416270605ull;
+// expectation corrected (TAIL-H PK): kCascadeMag_final 3591493413416270605ull -> 4986583732974436248ull, because lane TAIL-H's rule PK re-reserves the exits in queue order against the position a margin call leaves (reconcile_exit_reservations_after_margin); old values are the harvest on the lane's rule-PS commit, new ones on its rule-PK commit; the receipt bars, folded counts and trades did not move.
+constexpr std::uint64_t kCascadeMag_final = 4986583732974436248ull;
 constexpr Trade kCascadeMag_trades[] = {
     {1736121660000LL, 1736121840000LL, 100, 168, 19.047619047619047, 0},
     {1736121660000LL, 1736121840000LL, 100, 168, 80.952380952380949, 0},

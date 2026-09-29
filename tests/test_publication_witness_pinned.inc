@@ -410,6 +410,34 @@
 // closed trades and every count keep their values; the digest takes in the
 // placed and retired order:
 //   Config03: digest 0xc5424169be207aa2ull -> 0xdf3025153dce2e2bull [W13 CP]
+// Lane TAIL-D re-harvested it once on its tree (8988faff and the lane's ten
+// rule commits) with PINEFORGE_D2D_PUBLICATION_HARVEST; the same harvest
+// against 8988faff reproduces every old row. 4 of 156 runs move, digest only
+// (every trade and count unchanged), and a harvest after each rule commit
+// places all four at FP17 (an exit limit the recalculation of an entry's open
+// fill places at or through the open print fills there,
+// tests/fixtures/coof_open_limit):
+//   Storm02: digest 0xc147c03e2f6038feull -> 0x425da535d3f7f803ull [TAIL-D FP17]
+//   Storm05: digest 0x8c67fec9d289937dull -> 0x15759d5d500e7b69ull [TAIL-D FP17]
+//   Storm19: digest 0x2be2f691db8da9c4ull -> 0x1141e20bcecc13caull [TAIL-D FP17]
+//   Storm23: digest 0xb57c9d2a9d2d519full -> 0x613145193da5fe25ull [TAIL-D FP17]
+// R5 lane TAIL-C re-harvested it once on its tree (r5/tail-c: lane W8E-EXITS's
+// rule A picked onto INT29 8988faff, then TAIL-C's six rules) with
+// PINEFORGE_D2D_PUBLICATION_HARVEST; the same harvest against 8988faff
+// reproduces every old row. 4 of 156 runs move, each marked with the commit at
+// whose boundary it moved (a harvest at every commit); their closed trades and
+// every count keep their values (W2 = the refill after a fill forced onto a
+// leg's end, OPEN = the exit stop born through by a later open fill, POOC =
+// the close pass's priced adds):
+//   ConfigFlags103: digest 0xc2c52ca326f4f6d0ull -> 0x405c89f8d0c4f0a8ull [TAIL-C OPEN]
+//   Storm08: digest 0x3c2a5b9c43c4fd89ull -> 0x3fbbfd35e31f33f4ull [TAIL-C OPEN]
+//   Storm12: digest 0x2f7a3a3d3b832e58ull -> 0x7530d5bfdf947e25ull [TAIL-C OPEN]
+//   Storm22: digest 0x6862e0fd009c1790ull -> 0x699bd1943a7cf263ull [TAIL-C OPEN]
+// INT30 harvested it once more on the integrated tree (engine main 7239ab37
+// with lanes TAIL-A, TAIL-B, TAIL-G, TAIL-D, TAIL-H, TAIL-E and TAIL-C picked,
+// in that order) and at each lane boundary of that history: main reproduces
+// every old row, the 4 TAIL-D rows move at TAIL-D's picks and the 4 TAIL-C
+// rows at TAIL-C's, each to its lane's value above; no other pick moves one.
 constexpr Pinned kPinned[] = {
     {"Config01", 0x2338d6688ca58837ull, 144, 44, 144},
     {"ConfigFlags101", 0x6b3262a158c0e86dull, 145, 45, 144},
@@ -420,7 +448,7 @@ constexpr Pinned kPinned[] = {
     {"Config02M", 0x8cddc71b29406412ull, 48, 10, 48},
     {"ConfigFlags102M", 0x000ba0de0f306cb9ull, 144, 49, 144},
     {"Config03", 0xdf3025153dce2e2bull, 144, 53, 144},
-    {"ConfigFlags103", 0xc2c52ca326f4f6d0ull, 182, 62, 144},
+    {"ConfigFlags103", 0x405c89f8d0c4f0a8ull, 182, 62, 144},
     {"Config03M", 0xea3de174c93cccc5ull, 144, 49, 144},
     {"ConfigFlags103M", 0x8f0124d4ee2a443cull, 182, 63, 144},
     {"Config04", 0x5fc85948d1cc71ebull, 144, 21, 144},
@@ -487,19 +515,19 @@ constexpr Pinned kPinned[] = {
     {"DelayedStopsM", 0xeebabaa7a380fb84ull, 66, 20, 40},
     {"Storm01", 0x4fcc1a18f96048beull, 43, 13, 43},
     {"Storm01M", 0x3dc7eab655ecce11ull, 43, 13, 43},
-    {"Storm02", 0xc147c03e2f6038feull, 63, 12, 42},
+    {"Storm02", 0x425da535d3f7f803ull, 63, 12, 42},
     {"Storm02M", 0x745faf07c1b57317ull, 63, 12, 42},
     {"Storm03", 0x689afea66e651a47ull, 41, 17, 41},
     {"Storm03M", 0xc93ba02279910560ull, 41, 17, 41},
     {"Storm04", 0x07c17443f491fb30ull, 54, 24, 54},
     {"Storm04M", 0x74d239698dac5c24ull, 54, 24, 54},
-    {"Storm05", 0x8c67fec9d289937dull, 80, 17, 53},
+    {"Storm05", 0x15759d5d500e7b69ull, 80, 17, 53},
     {"Storm05M", 0xfbdf760609e41925ull, 82, 18, 53},
     {"Storm06", 0x6c7841c84c9be251ull, 40, 13, 40},
     {"Storm06M", 0x2d5832871b33599cull, 40, 13, 40},
     {"Storm07", 0x8c50963e152ddba8ull, 55, 13, 55},
     {"Storm07M", 0xa75412c0c52f6ac1ull, 55, 13, 55},
-    {"Storm08", 0x3c2a5b9c43c4fd89ull, 81, 14, 58},
+    {"Storm08", 0x3fbbfd35e31f33f4ull, 81, 14, 58},
     {"Storm08M", 0x7bfabcd35099442cull, 81, 14, 58},
     {"Storm09", 0xf36667634a185ebdull, 48, 23, 48},
     {"Storm09M", 0xce00b799a8f5fce2ull, 48, 22, 48},
@@ -507,7 +535,7 @@ constexpr Pinned kPinned[] = {
     {"Storm10M", 0x862537a926bed30eull, 64, 13, 57},
     {"Storm11", 0xbaf0b6cf451e3aa8ull, 59, 23, 59},
     {"Storm11M", 0x67cb9e94d9a557faull, 59, 23, 59},
-    {"Storm12", 0x2f7a3a3d3b832e58ull, 85, 19, 56},
+    {"Storm12", 0x7530d5bfdf947e25ull, 85, 19, 56},
     {"Storm12M", 0x6a900d649bc55ad8ull, 85, 19, 56},
     {"Storm13", 0x97f4432edb19a7e9ull, 46, 25, 46},
     {"Storm13M", 0x1170d6964f4f90eaull, 46, 25, 46},
@@ -521,15 +549,15 @@ constexpr Pinned kPinned[] = {
     {"Storm17M", 0xee2c56f66947ceacull, 78, 17, 54},
     {"Storm18", 0xf12b91d86413533cull, 79, 22, 49},
     {"Storm18M", 0x979b7bbd26c38a56ull, 79, 22, 49},
-    {"Storm19", 0x2be2f691db8da9c4ull, 81, 20, 49},
+    {"Storm19", 0x1141e20bcecc13caull, 81, 20, 49},
     {"Storm19M", 0x937badd205890225ull, 82, 21, 49},
     {"Storm20", 0x411a4fdcd5c11299ull, 44, 11, 42},
     {"Storm20M", 0x08c037a58815f21eull, 43, 10, 42},
     {"Storm21", 0xf7b8d2e1e5dbff53ull, 47, 14, 47},
     {"Storm21M", 0x261cd4c819b89bccull, 47, 14, 47},
-    {"Storm22", 0x6862e0fd009c1790ull, 76, 19, 50},
+    {"Storm22", 0x699bd1943a7cf263ull, 76, 19, 50},
     {"Storm22M", 0xbf55a11e282da39full, 76, 19, 50},
-    {"Storm23", 0xb57c9d2a9d2d519full, 87, 28, 54},
+    {"Storm23", 0x613145193da5fe25ull, 87, 28, 54},
     {"Storm23M", 0x6b9e5e8f5194fdfbull, 87, 28, 54},
     {"Storm24", 0x63f5f7e8631c6674ull, 54, 25, 54},
     {"Storm24M", 0x8ec5900090e03ba1ull, 54, 25, 54},

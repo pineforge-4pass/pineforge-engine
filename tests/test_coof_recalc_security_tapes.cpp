@@ -22,9 +22,11 @@
  * previous chart bar's finer values. It now feeds the slice at the bar's first
  * recalculation before the close callback, rebasing the script-state
  * checkpoint on it; a recalculation after the close callback (a fill the close
- * books, strategy.close(immediately = true)) finds the slice that callback
- * fed and feeds nothing (the fourth probe: a double feed would step the 5m
- * site twice, and on the run's last bar would find its routing cleared).
+ * books) finds the slice that callback fed and feeds nothing. The fourth
+ * probe closes immediately (strategy.close(immediately = true)) in the close
+ * callback, a fill TradingView runs no recalculation after (lane TAIL-E,
+ * tests/fixtures/coof_immediate_close): the callback is its bar's only one
+ * and reads the slice it fed once.
  *
  * The ports register the probes' sites over the corpus 1m bars as the
  * auxiliary feed (bars.inc), as the verifier's split-feed route runs them, and
@@ -279,8 +281,8 @@ public:
             break;
         case Probe::LateClose:
             // Each entry is closed at the close of a later bar that fills
-            // nothing before it, immediately: that fill's recalculation runs
-            // after the bar's close callback. The second is the run's last bar.
+            // nothing before it, immediately: no recalculation follows that
+            // fill (lane TAIL-E). The second is the run's last bar.
             if (t == at(0, 15)) strategy_entry("LA", true, kNaN, kNaN, kNaN, "LA");
             if (t == at(1, 0) && size > 0.0) strategy_close("", "late", kNaN, kNaN, true);
             if (t == at(2, 30)) strategy_entry("LB", false, kNaN, kNaN, kNaN, "LB");
@@ -443,12 +445,14 @@ void test_site_kinds_readout() {
 }
 
 void test_recalculation_after_the_close_feeds_nothing() {
-    std::printf("-- a fill the close callback books recalculates on the slice that callback fed\n");
+    std::printf("-- a close the close callback executes runs no recalculation after it\n");
     const Run r = run(Probe::LateClose);
     CHECK(r.error.empty());
     if (!r.error.empty()) std::printf("  run error: %s\n", r.error.c_str());
-    // Both immediate closes filled on their own bar, and each fill ran a
-    // recalculation after the bar's close callback (a second callback there).
+    // Both immediate closes filled on their own bar, and no recalculation
+    // followed either fill: the bar's close callback is its only one
+    // (TradingView's tapes te-coof-immediate-reentry-*; lane TAIL-E re-pins
+    // the two callbacks this row held before).
     CHECK(r.trades.size() == 2);
     if (r.trades.size() == 2) {
         CHECK(r.trades[0].exit_time == at(1, 0));
@@ -457,7 +461,7 @@ void test_recalculation_after_the_close_feeds_nothing() {
     for (const std::int64_t bar : {at(1, 0), at(3, 0)}) {
         int callbacks = 0;
         for (const Read& read : r.reads) callbacks += read.time == bar ? 1 : 0;
-        CHECK(callbacks == 2);
+        CHECK(callbacks == 1);
     }
     CHECK(check_reads_whole_bar("late-close", r.reads) > 0);
 }
