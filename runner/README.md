@@ -241,7 +241,6 @@ This limit does not discard events or reset their IDs. There is no implicit
 skip/rewrite of a failed order.
 
 This runner has its own ledger/schema and native tick semantics. It does not
-open Python `pineforge-live` journals or claim the older Python runtime's
-Cloud Run evidence as validation of this new execution path. Keep the Python
-repo available during migration; native parity and recovery evidence must be
-recorded separately before replacing a deployment.
+open journals of the retired Python `pineforge-live` runtime, and that runtime's
+evidence does not validate this execution path: record native parity and
+recovery evidence before replacing a Python deployment.

@@ -13,10 +13,9 @@ uses this lifecycle directly. It includes native transport, custom C++ parser
 plugins, SQLite recovery and order-action webhooks; see the
 [native runner guide](https://github.com/pineforge-4pass/pineforge-engine/blob/main/runner/README.md).
 
-The separate [Python `pineforge-live` project](https://github.com/pineforge-4pass/pineforge-live)
-uses accumulated-bar `run_backtest_full` recomputation and the
-[ABI v4 live surface](@ref live_surface) instead. Its verification evidence
-and journals are separate from the native runner. Tick-stream fills at observed
+A host can instead recompute `run_backtest_full` over its accumulated bars
+with the [ABI v4 live surface](@ref live_surface); the earlier Python runtime
+that did so is retired. Tick-stream fills at observed
 prices/times can differ from batch OHLC path assumptions.
 
 This is the runtime model used by a continuously running strategy:

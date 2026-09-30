@@ -61,8 +61,8 @@ the one a host programs against.
   Start with **[Historical to realtime streaming](@ref streaming)** for
   the warmup, ordered-trade, clock and report lifecycle, then run
   `tutorial/run_stream.py` against the bundled MACD strategy. The optional
-  native C++ runner is documented in `runner/README.md`. For the separate
-  Python `pineforge-live` recompute project, read
+  native C++ runner is documented in `runner/README.md`. To recompute
+  `run_backtest_full` over accumulated bars in your own host instead, read
   **[ABI v4 live surface](@ref live_surface)**.
 
 - <b class="tab-title">I'm analysing backtest results</b>

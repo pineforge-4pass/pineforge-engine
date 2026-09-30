@@ -3,8 +3,9 @@
 @tableofcontents
 
 **ABI v4** (`PF_ABI_VERSION == 4`) appends 24 exports and two `pf_report_t`
-fields for the separate Python `pineforge-live` recompute-based project built on top
-of this engine (see the [Python `pineforge-live` project](https://github.com/pineforge-4pass/pineforge-live)).
+fields for a host that runs a strategy live by recomputing `run_backtest_full`
+over its accumulated bars. They were written for the earlier Python `pineforge-live`
+runtime, which is retired; the native runner in `runner/` replaces it.
 ABI v4 ships in v1.0.0; v0.13.1, the last 0.x release, has ABI 3. Every one
 of the 24 symbols is
 **default off / read-only** and **never changes a historical run**: the
@@ -15,8 +16,8 @@ internal use. Historical identity is pinned on synthetic tapes by the CTest row
 abort, leave the trades unchanged), and was measured over the corpus when the
 surface landed ([Evidence](#live_surface_evidence)).
 
-**No new evaluator in this surface.** The Python runtime recomputes
-`run_backtest_full`. The optional native C++ runner in this engine repository
+**No new evaluator in this surface.** A recomputing host calls
+`run_backtest_full` again. The optional native C++ runner in this engine repository
 uses `strategy_stream_*` instead (see @ref streaming and `runner/README.md`).
 Its live extension API, journals and verification scope are separate from
 these recomputation controls.
@@ -52,7 +53,7 @@ these recomputation controls.
 
 ## Flag semantics
 
-The four semantics below keep the numbering (§3.1–§3.4) of the `pineforge-live` design they were written for;
+The four semantics below keep the numbering (§3.1–§3.4) of the retired Python runtime's design they were written for;
 see `include/pineforge/pineforge.h` for the full doxygen (dispatch-path
 scope caveats, interaction with `calc_on_order_fills` and the bar
 magnifier, etc.) — the header is this repository's source of truth.
