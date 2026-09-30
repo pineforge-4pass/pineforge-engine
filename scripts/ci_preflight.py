@@ -88,12 +88,31 @@ STANDARD_RUNNERS = ('ubuntu-24.04', 'ubuntu-latest')
 TRUSTED_ONLY_WORKFLOWS = ('release.yml',)
 TRUSTED_ONLY_EVENTS = {'push', 'schedule', 'workflow_dispatch'}
 # A docs-only change (scripts/ci_docs_only.py) skips the proof jobs. Each waits
-# for the changes job alone and skips only on its docs_only answer, so a failed
-# or unanswered classification runs it; the build aggregate reads both.
+# for the changes job alone and skips only when it succeeded and answered
+# docs-only -- exactly the skip the build aggregate accepts -- so a failed or
+# unanswered classification runs it.
 PROOF_JOBS = {'build': 'BUILD_RESULT', 'sanitizers': 'SANITIZER_RESULT',
               'kernel-only': 'KERNEL_RESULT', 'native-live': 'NATIVE_RESULT',
               'corpus-parity-subset': 'PARITY_RESULT'}
-DOCS_ONLY_SKIP = "${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}"
+DOCS_ONLY_SKIP = ("${{ !cancelled() && (needs.changes.result != 'success' || "
+                  "needs.changes.outputs.docs_only != 'true') }}")
+# The classification step, exactly: the base's copy of the rule judges the
+# change, a base without one runs every job, and the answer is the script's.
+CLASSIFY_STEP = """      - name: Classify the change
+        id: classify
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_FORCED: ${{ github.event.forced }}
+        run: |
+          if git show HEAD^1:scripts/ci_docs_only.py > "$RUNNER_TEMP/ci_docs_only.py"; then
+            python3 "$RUNNER_TEMP/ci_docs_only.py" --root . --github-output "$GITHUB_OUTPUT"
+          else
+            echo "not docs-only: the base holds no scripts/ci_docs_only.py"
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
+"""
+_CONTINUE_ON_ERROR = re.compile(r'\s*(?:-\s+)?["\']?continue-on-error["\']?\s*:')
 GATE_NEEDS = ('needs: [changes, preflight, build, sanitizers, native-live, kernel-only, '
               'corpus-parity-subset]')
 # One stage's bound. The verifier self-tests (test_ci_verify.py) drive the real
@@ -332,10 +351,15 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
                             'and skip only a docs-only change')
     changes = jobs.get('changes', '')
     if ('      docs_only: ${{ steps.classify.outputs.docs_only }}\n' not in changes
-            or '        id: classify\n' not in changes
-            or 'run: python3 scripts/ci_docs_only.py --github-output "$GITHUB_OUTPUT"'
-            not in changes):
-        findings.append("changes must publish scripts/ci_docs_only.py's answer")
+            or CLASSIFY_STEP not in changes + '\n'):
+        findings.append("changes must publish the base's scripts/ci_docs_only.py answer, exactly")
+    # A job or step that continues on error reports success to the aggregate
+    # however it ended.
+    for name, workflow in (('ci.yml', ci), ('native-live.yml', native),
+                           ('corpus-parity.yml', parity)):
+        for job, body in _jobs(workflow).items():
+            if any(_CONTINUE_ON_ERROR.match(line) for line in _code(body)):
+                findings.append(f'{name} job {job} must not continue on error')
     gate = jobs.get('build-gate', '')
     if GATE_NEEDS not in gate or '    if: always()' not in gate or '    name: build' not in gate:
         findings.append('build-gate must aggregate every proof job, preflight and changes')

@@ -10,8 +10,9 @@ python3 scripts/ci_preflight.py
 This checks the CI/native workflow syntax, expressions and shell commands,
 source ABI/hash/schema guards, and the verifier's failure-handling tests. A
 failure fails the advisory aggregate `build` job and retains logs in
-`build-ci-preflight/`. The compilation lanes start alongside preflight.
-A documentation-only change skips them and runs preflight alone
+`build-ci-preflight/`. The compilation lanes start alongside preflight, as
+soon as the few-second `changes` job has classified the change, and a
+documentation-only change skips them
 ([Documentation-only changes](#documentation-only-changes)).
 It does not compile the engine or replace any complete verification profile.
 
@@ -612,9 +613,9 @@ parity subset with their full sets;
 both Debug jobs, sanitizers and native-live run the registered set excluding
 the 29 CTest rows labelled `slow` in `tests/CMakeLists.txt`. The first 27 were
 chosen from INT23/INT24 job logs: over 60 seconds in either sanitizer run or
-over 30 seconds in either Debug run. Preflight and all proof jobs start in
-parallel. The proof jobs wait only for the few-second `changes` job, which
-decides whether the change is documentation only. The advisory `build`
+over 30 seconds in either Debug run. Preflight starts at once, and the proof
+jobs start alongside it as soon as the few-second `changes` job has decided
+whether the change is documentation only. The advisory `build`
 aggregate succeeds only if every job succeeds, or was skipped for a
 documentation-only change. INT25 re-measured the rows wave G enlarged or added (RATIO-HARDEN's timing
 legs, V19-FIX's scaling rows, and the new KERNEL-EDGE, K-ULP4, C-SURFACE-1 and
@@ -674,7 +675,8 @@ The first job of `ci.yml`, `changes`, decides with
 [`scripts/ci_docs_only.py`](../scripts/ci_docs_only.py). A changed path is
 documentation when it is a Markdown file (`*.md`) or lies under `docs/`,
 unless it lies under `.github/`, `benchmarks/`, `scripts/` or `tests/`, is a
-CMake file, or is one of the four files a proof job reads:
+CMake file or a git control file such as `.gitattributes`, or is one of the
+four files a proof job reads:
 `docs/pages/pine-to-native.md` and `docs/pages/native-engine.md`, whose code
 blocks `test_pine_to_native_worked` and `test_native_engine_complete_host`
 compile and run; `docs/adr/0001-kernel-adapter-boundary.md`, which
@@ -682,18 +684,26 @@ compile and run; `docs/adr/0001-kernel-adapter-boundary.md`, which
 profile's `kernel-residuals` stage hold the kernel against; and
 `docs/build.sh`, whose retry self-test is `test_docs_doxygen_retry`. A change
 to one of those four runs every job. A change is documentation only when every
-path it changes, both sides of a rename, is documentation. For a pull request
-the change is the merge GitHub tests against the base it merged into; for a
-push, the pushed commit against the previous tip. Every doubt answers no and
-runs the proof jobs in full: a manual dispatch, a push that creates the branch
-or is forced, a merge that is not the pull request head's, a commit git cannot
-read, an empty change, and a `changes` job that fails or never answers.
+path it changes, both sides of a rename, is documentation. The change is the
+checked-out commit against its first parent: for a pull request, the merge
+GitHub tests against the base it merged into; for a push, the pushed commit
+against the previous tip, which must be that parent. `changes` runs the copy of
+the script that parent holds, so a change to the rule is judged by the rule it
+changes and never by itself, and a base without the script runs every job.
+Every doubt answers no, and every proof job runs: a manual dispatch, a push
+that creates the branch, is forced or carries more than one commit, a merge
+that is not the pull request head's, a commit git cannot read, an empty change,
+and a `changes` job that fails or never answers.
 
-Each proof job waits for `changes` alone, seconds on the standard runner;
-`preflight` waits for nothing. The advisory `build` aggregate passes a proof
-job that succeeded, or one that was skipped while `changes` succeeded and
-answered documentation-only. A proof job skipped for any other reason fails
-it, and so does any `preflight` result but success.
+Each proof job waits for `changes` alone, a few seconds once a standard runner
+takes it, and skips only when `changes` succeeded and answered
+documentation-only: `!cancelled() && (needs.changes.result != 'success' ||
+needs.changes.outputs.docs_only != 'true')`. `preflight` waits for nothing.
+The advisory `build` aggregate passes a proof job that succeeded, or one that
+was skipped under that same answer. A proof job skipped for any other reason
+fails it, and so does any `preflight` result but success. A skipped matrix is
+never expanded, so a documentation-only run shows one skipped `build` check
+under its unexpanded name instead of the four legs.
 
 A push to `main` follows the same rule, since nothing downstream needs the
 proof jobs to have run on a merged commit: `release.yml` starts only on a
@@ -702,14 +712,20 @@ manual dispatch and builds and verifies its own tarballs,
 statuses on the pull request head, no workflow here starts on `workflow_run`,
 and the ruleset requires only those two statuses. A documentation merge
 therefore does not rebuild; the `ci.yml` run on its commit is `preflight` and
-the skip.
+the skip. That run is `main`'s latest, the one the README badge shows, so after
+a documentation merge the badge reports the documentation guards, and the last
+full run on `main` holds the code's verdict.
 
 `scripts/test_ci_docs_only.py` (`docs-only-tests`, a `ci_preflight` stage)
 holds the rule against real git histories, pull request merges and pushes
-alike, and fails when a CMake file reads a path the rule would call
-documentation. The `ci-workflow-contract` stage pins the wiring, and
-`scripts/test_ci_preflight.py` runs the aggregate's own shell over every
-outcome of every lane.
+alike. It also fails when a CMake file names, through `${PROJECT_SOURCE_DIR}`
+or a sibling source-directory variable, a path the rule would call
+documentation. The four files above were found by reading every CMake file,
+every `ci_verify.py` stage and every script a CTest row runs; a reader added
+outside CMake must list its file in `PROOF_READS` by hand. The
+`ci-workflow-contract` stage pins the wiring, the classification step
+verbatim, and `scripts/test_ci_preflight.py` runs that step's own shell and
+the aggregate's own shell, the latter over every outcome of every lane.
 
 ### CI-LITE timing estimate
 
@@ -797,10 +813,12 @@ commands are chained, blocked or carried, with the flag and its value on one
 line), or any other `--jobs` or `JOBS` value fails preflight, and so does a jobs
 line or `runs-on` the check cannot read; `scripts/test_ci_preflight.py` holds
 the mutations. The same stage pins the documentation-only skip: `changes` and
-`preflight` wait for nothing and run on every event, each proof job needs
-`changes` alone and carries the one skip condition
-(`!cancelled() && needs.changes.outputs.docs_only != 'true'`), and the
-`build` aggregate reads every result and the answer.
+`preflight` wait for nothing and run on every event, the classification step
+is pinned verbatim, each proof job needs `changes` alone and carries the one
+skip condition, and the `build` aggregate reads every result and the answer. No
+job of `ci.yml`, `native-live.yml` or `corpus-parity.yml`, nor any of their
+steps, may continue on error: that would report success to the aggregate
+however it ended.
 
 More cores do not shorten every job. The `test_ci_verify` CTest row
 (`scripts/test_ci_verify.py`) is one Python process, and in the main run at

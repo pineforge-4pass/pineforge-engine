@@ -3,8 +3,9 @@
 proof jobs on a documentation-only change. A ci_preflight stage runs them.
 
 The event cases run the script against throwaway git repositories: a pull
-request is the merge GitHub tests, a push is before..after, and every doubt
-must answer "not docs-only"."""
+request is the merge GitHub tests, a push is its one commit, and every doubt
+must answer "not docs-only". The workflow runs the base's copy of the script
+with --root; scripts/test_ci_preflight.py runs that step's own shell."""
 from __future__ import annotations
 
 import os
@@ -102,7 +103,9 @@ class RuleTests(unittest.TestCase):
                      'benchmarks/README.md', 'benchmarks/results/speed.md',
                      'tests/twin_parity_ledger.md', 'tests/fixtures/cash_fee_sizing/README.md',
                      'scripts/README.md', 'corpus', '.gitmodules', 'VERSION', 'LICENSE',
-                     'README', 'README.MD', 'docs', 'documentation/x.md.txt'):
+                     'README', 'README.MD', 'docs', 'documentation/x.md.txt',
+                     # A git control file decides how the checkout writes its neighbours.
+                     'docs/.gitattributes', 'docs/pages/.gitignore', '.gitattributes'):
             with self.subTest(path=path):
                 self.assertFalse(is_documentation(path))
 
@@ -250,30 +253,21 @@ class EventTests(unittest.TestCase):
         for before, reason in (('0' * 40, 'the push created the branch'),
                                ('', "before='' names no commit"),
                                ('HEAD~1', "before='HEAD~1' names no commit"),
-                               ('e' * 40, 'git fetch')):
+                               ('e' * 40, 'is not the parent of HEAD')):
             with self.subTest(before=before):
                 docs_only, lines = decide({**head, 'PUSH_BEFORE': before}, self.repo.path)
                 self.assertFalse(docs_only)
                 self.assertIn(reason, lines[0])
 
-    def test_a_before_the_shallow_checkout_lacks_is_fetched(self) -> None:
-        # The workflow checks out two commits deep; a push of several commits
-        # names a before below that, which the script fetches from origin.
-        middle = self.repo.commit('code', {'src/engine.cpp': 'int z;\n'})
-        self.repo.commit('docs one', {'docs/ci.md': 'one\n'})
-        self.repo.commit('docs two', {'README.md': 'two\n'})
-        clone = self.tmp / 'clone'
-        subprocess.run(['git', 'clone', '--quiet', '--depth=1', self.repo.path.as_uri(), str(clone)],
-                       check=True, capture_output=True, env={**os.environ, **GIT_ENV})
-        self.assertNotEqual(subprocess.run(['git', '-C', str(clone), 'cat-file', '-e', middle],
-                                           capture_output=True).returncode, 0)
-        docs_only, lines = decide({'GITHUB_EVENT_NAME': 'push', 'PUSH_BEFORE': middle,
-                                   'PUSH_FORCED': 'false'}, clone)
-        self.assertTrue(docs_only, lines)
-        self.assertEqual(lines[-2:], ['  README.md', '  docs/ci.md'])
-        docs_only, _ = decide({'GITHUB_EVENT_NAME': 'push', 'PUSH_BEFORE': self.base,
-                               'PUSH_FORCED': 'false'}, clone)
+    def test_a_push_of_several_commits_is_a_doubt(self) -> None:
+        # The checkout holds HEAD and its parent; a push whose before is older
+        # carried commits the check cannot see one by one, so it runs everything.
+        self.repo.commit('code', {'src/engine.cpp': 'int z;\n'})
+        self.repo.commit('docs', {'docs/ci.md': 'new\n'})
+        docs_only, lines = decide({'GITHUB_EVENT_NAME': 'push', 'PUSH_BEFORE': self.base,
+                                   'PUSH_FORCED': 'false'}, self.repo.path)
         self.assertFalse(docs_only)
+        self.assertIn('the push carried more than its one commit', lines[0])
 
     def test_every_other_event_runs_everything(self) -> None:
         for event in ('workflow_dispatch', 'schedule', 'merge_group', 'pull_request_target', ''):
@@ -287,14 +281,19 @@ class EventTests(unittest.TestCase):
 class CommandLineTests(unittest.TestCase):
     """The script as the workflow runs it: its own checkout, its output file."""
 
-    def run_script(self, repo: Path, env: dict[str, str], output: Path) -> subprocess.CompletedProcess:
-        (repo / 'scripts').mkdir(exist_ok=True)
-        shutil.copyfile(SCRIPT, repo / 'scripts/ci_docs_only.py')
+    def run_script(self, repo: Path, env: dict[str, str], output: Path,
+                   outside: Path | None = None) -> subprocess.CompletedProcess:
+        """Run a copy of the script: inside the checkout, or, as the workflow
+        does, from a directory of its own with --root naming the checkout."""
+        home = outside if outside is not None else repo / 'scripts'
+        home.mkdir(exist_ok=True)
+        shutil.copyfile(SCRIPT, home / 'ci_docs_only.py')
         environment = {key: value for key, value in os.environ.items()
                        if key not in ('GITHUB_EVENT_NAME', 'PR_HEAD_SHA', 'PUSH_BEFORE', 'PUSH_FORCED')}
-        return subprocess.run([sys.executable, str(repo / 'scripts/ci_docs_only.py'),
-                               '--github-output', str(output)], capture_output=True, text=True,
-                              env={**environment, **GIT_ENV, **env}, timeout=60)
+        root = ['--root', '.'] if outside is not None else []
+        return subprocess.run([sys.executable, str(home / 'ci_docs_only.py'), *root,
+                               '--github-output', str(output)], cwd=repo, capture_output=True,
+                              text=True, env={**environment, **GIT_ENV, **env}, timeout=60)
 
     def test_appends_the_answer_and_exits_zero(self) -> None:
         directory = tempfile.TemporaryDirectory()
@@ -303,17 +302,19 @@ class CommandLineTests(unittest.TestCase):
         base = repo.commit('base', BASE_FILES)
         repo.commit('docs', {'docs/ci.md': 'new\n'})
         output = Path(directory.name) / 'github_output'
+        outside = Path(directory.name) / 'runner-temp'
         for env, answer in (({'GITHUB_EVENT_NAME': 'push', 'PUSH_BEFORE': base,
                               'PUSH_FORCED': 'false'}, 'true'),
                             ({'GITHUB_EVENT_NAME': 'workflow_dispatch'}, 'false'),
                             ({'GITHUB_EVENT_NAME': 'push', 'PUSH_BEFORE': base,
                               'PUSH_FORCED': 'true'}, 'false')):
-            with self.subTest(env=env):
-                output.write_text('earlier=1\n')
-                result = self.run_script(repo.path, env, output)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(output.read_text(), f'earlier=1\ndocs_only={answer}\n')
-                self.assertIn('docs-only', result.stdout)
+            for where in (None, outside):
+                with self.subTest(env=env, outside=where is not None):
+                    output.write_text('earlier=1\n')
+                    result = self.run_script(repo.path, env, output, where)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(output.read_text(), f'earlier=1\ndocs_only={answer}\n')
+                    self.assertIn('docs-only', result.stdout)
 
 
 if __name__ == '__main__':

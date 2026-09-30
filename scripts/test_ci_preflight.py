@@ -24,9 +24,9 @@ CI_SOURCES = ('.github/workflows/ci.yml', '.github/workflows/native-live.yml',
               '.github/workflows/corpus-parity.yml', '.github/workflows/docs.yml')
 
 
-def gate_script(ci):
-    """The build aggregate's shell, exactly as the runner receives it."""
-    lines = _jobs(ci)['build-gate'].split('\n')
+def job_script(ci, job):
+    """A job's run block, exactly as the runner receives it."""
+    lines = _jobs(ci)[job].split('\n')
     start = next(index for index, line in enumerate(lines) if line.strip() == 'run: |')
     depth = len(lines[start + 1]) - len(lines[start + 1].lstrip(' '))
     script = []
@@ -78,8 +78,15 @@ class PreflightFailures(unittest.TestCase):
             # The docs-only answer is the classifier's, never a constant.
             (0, '      docs_only: ${{ steps.classify.outputs.docs_only }}\n',
                 "      docs_only: 'true'\n"),
-            (0, 'run: python3 scripts/ci_docs_only.py --github-output "$GITHUB_OUTPUT"',
-                'run: echo docs_only=true >> "$GITHUB_OUTPUT"'),
+            # The base's copy judges; the answer is the script's alone.
+            (0, 'python3 "$RUNNER_TEMP/ci_docs_only.py" --root . --github-output "$GITHUB_OUTPUT"',
+                'python3 scripts/ci_docs_only.py --github-output "$GITHUB_OUTPUT"'),
+            (0, 'git show HEAD^1:scripts/ci_docs_only.py', 'git show HEAD:scripts/ci_docs_only.py'),
+            (0, '--root . --github-output "$GITHUB_OUTPUT"\n',
+                '--root . --github-output "$GITHUB_OUTPUT" || echo docs_only=true >> "$GITHUB_OUTPUT"\n'),
+            (0, 'echo "docs_only=false" >> "$GITHUB_OUTPUT"', 'echo "docs_only=true" >> "$GITHUB_OUTPUT"'),
+            (0, '          PUSH_FORCED: ${{ github.event.forced }}\n', ''),
+            (0, '        id: classify\n', '        id: classify\n        continue-on-error: true\n'),
             (0, '  changes:\n', '  classify:\n'),
             (0, '  sanitizers:\n', '  sanitizers:\n    needs: preflight\n'),
             (0, "matrix.build_type == 'Debug' && '--exclude-label slow'", "'--exclude-label slow'"),
@@ -334,6 +341,9 @@ class PreflightFailures(unittest.TestCase):
                 (job, skip, "    if: ${{ !cancelled() && needs.changes.outputs.docs_only == 'false' }}\n",
                  refused),
                 (job, skip, skip.replace("!= 'true'", "!= 'true' && github.event_name != 'push'"),
+                 refused),
+                # A skip the aggregate would not accept: a failed classification.
+                (job, skip, "    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}\n",
                  refused)]
         mutations += [
             ('preflight', '    timeout-minutes: 45\n', '    timeout-minutes: 45\n    needs: changes\n',
@@ -344,7 +354,15 @@ class PreflightFailures(unittest.TestCase):
              'changes must start at once'),
             ('changes', '    timeout-minutes: 5\n',
              "    timeout-minutes: 5\n    if: github.event_name != 'pull_request'\n",
-             'changes must start at once')]
+             'changes must start at once'),
+            # A lane that continues on error reports success however it ended.
+            ('sanitizers', '    timeout-minutes: 120\n', '    timeout-minutes: 120\n    continue-on-error: true\n',
+             'ci.yml job sanitizers must not continue on error'),
+            ('build-gate', '        shell: bash\n', '        shell: bash\n        continue-on-error: true\n',
+             'ci.yml job build-gate must not continue on error'),
+            ('preflight', '        run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight\n',
+             '        run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight\n'
+             '        continue-on-error: true\n', 'ci.yml job preflight must not continue on error')]
         for job, before, after, finding in mutations:
             with self.subTest(job=job, after=after):
                 changed = original.copy()
@@ -368,7 +386,7 @@ class PreflightFailures(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         script = Path(directory.name) / 'gate.sh'
-        script.write_text(gate_script(self.ci_sources()[0]))
+        script.write_text(job_script(self.ci_sources()[0], 'build-gate'))
         env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin')}
         lanes = list(PROOF_JOBS.values())
         vectors = set()
@@ -385,10 +403,14 @@ class PreflightFailures(unittest.TestCase):
         # One bash reads every case; each runs the step in a subshell with the
         # options GitHub gives a bash step (-e, pipefail).
         names = ['CHANGES_RESULT', 'DOCS_ONLY', 'PREFLIGHT_RESULT', *lanes]
-        driver = ('while read -r ' + ' '.join(name.lower() for name in names) + '; do\n'
-                  '  [ "$docs_only" = - ] && docs_only=\n'
+        # The harness's own variables share no name with the step's.
+        columns = [f'case_{name.lower()}' for name in names]
+        driver = ('while read -r ' + ' '.join(columns) + '; do\n'
+                  '  [ "$case_docs_only" = - ] && case_docs_only=\n'
                   '  ( set -eo pipefail\n'
-                  '    export ' + ' '.join(f'{name}="${name.lower()}"' for name in names) + '\n'
+                  '    export ' + ' '.join(f'{name}="${column}"' for name, column in zip(names, columns))
+                  + '\n'
+                  '    unset ' + ' '.join(columns) + '\n'
                   '    . "$1" ) >/dev/null 2>&1\n'
                   '  echo "$?"\n'
                   'done\n')
@@ -413,6 +435,62 @@ class PreflightFailures(unittest.TestCase):
                 self.assertEqual(result.returncode, code, result.stdout + result.stderr)
                 self.assertIn('preflight: success', result.stdout)
                 self.assertIn('matrix: skipped', result.stdout)
+
+    def test_the_classification_is_the_base_copy_of_the_rule(self):
+        """Run the changes job's own shell in throwaway repositories: the
+        parent's scripts/ci_docs_only.py judges the change, so a change that
+        breaks the rule cannot skip its own proof jobs, and a parent without
+        the script runs every job."""
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        step = root / 'classify.sh'
+        step.write_text(job_script(self.ci_sources()[0], 'changes'))
+        git_env = {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1',
+                   'GIT_AUTHOR_NAME': 'ci', 'GIT_AUTHOR_EMAIL': 'ci@example.invalid',
+                   'GIT_COMMITTER_NAME': 'ci', 'GIT_COMMITTER_EMAIL': 'ci@example.invalid'}
+        rule = (ROOT / 'scripts/ci_docs_only.py').read_text()
+        broken = rule.replace('def is_documentation(path: str) -> bool:\n',
+                              'def is_documentation(path: str) -> bool:\n    return True\n', 1)
+        self.assertNotEqual(broken, rule)
+
+        def classify(name, base_files, change):
+            repo = root / name
+            repo.mkdir()
+            run = lambda *args: subprocess.run(['git', '-C', str(repo), *args], check=True,
+                                               capture_output=True, text=True,
+                                               env={**os.environ, **git_env}).stdout
+            run('init', '--quiet', '--initial-branch=main')
+            run('config', 'commit.gpgsign', 'false')
+            for files in (base_files, change):
+                for path, text in files.items():
+                    (repo / path).parent.mkdir(parents=True, exist_ok=True)
+                    (repo / path).write_text(text)
+                run('add', '--all')
+                run('commit', '--quiet', '--allow-empty', '-m', 'commit')
+            before = run('rev-parse', 'HEAD^1').strip()
+            temp, output = root / f'{name}-temp', root / f'{name}-output'
+            temp.mkdir()
+            output.write_text('')
+            result = subprocess.run(
+                ['bash', '-e', str(step)], cwd=repo, capture_output=True, text=True,
+                env={**os.environ, **git_env, 'GITHUB_EVENT_NAME': 'push', 'PUSH_BEFORE': before,
+                     'PUSH_FORCED': 'false', 'RUNNER_TEMP': str(temp), 'GITHUB_OUTPUT': str(output)})
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return output.read_text(), result.stdout
+
+        page = {'docs/ci.md': 'new\n'}
+        answer, _ = classify('docs', {'scripts/ci_docs_only.py': rule, 'docs/ci.md': 'old\n'}, page)
+        self.assertEqual(answer, 'docs_only=true\n')
+        # A change that breaks the rule is judged by the rule it breaks.
+        answer, out = classify('rule', {'scripts/ci_docs_only.py': rule, 'docs/ci.md': 'old\n'},
+                               {'scripts/ci_docs_only.py': broken, 'src/engine.cpp': 'int x;\n', **page})
+        self.assertEqual(answer, 'docs_only=false\n', out)
+        self.assertIn('scripts/ci_docs_only.py', out)
+        # A base without the rule runs every job.
+        answer, out = classify('bare', {'docs/ci.md': 'old\n'}, {'scripts/ci_docs_only.py': rule, **page})
+        self.assertEqual(answer, 'docs_only=false\n', out)
+        self.assertIn('the base holds no scripts/ci_docs_only.py', out)
 
     def test_harmless_spellings_are_not_findings(self):
         original, others = self.ci_sources(), self.other_sources()
