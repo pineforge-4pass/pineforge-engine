@@ -77,7 +77,7 @@ builder and the id book over the primitives below.
 `<pineforge/native_module.hpp>` is separate: it is needed only to export a host
 as a loadable module (see @ref native_engine_examples).
 `<pineforge/native_c_api.h>` is the C host surface: it drives the same kernel
-through a callback table, and what it does not spell in the planned 1.0 (not yet tagged) is the 1.0 C
+through a callback table, and what it does not spell in 1.0 is the 1.0 C
 boundary table (*Driving the kernel from C*).
 
 Coming from PineScript? **[PineScript to native C++](@ref pine_to_native)** maps
@@ -4335,10 +4335,10 @@ where the C surface declares a field or a call it answers the C++ value
 (`tests/test_native_c_api.c` and its C++ twins). It does not declare
 everything. Every C++ capability the 1.0 C surface does not expose is a row
 below, with its reason, the C route where there is one, and the row that fails
-when the gap closes or the capability goes. 1.0 is a planned release, not a
-tagged one: this C surface is on main only (v0.13.1, the last tagged release,
-has no `native_c_api.h`), and the planned 1.0 makes no C/C++ parity claim
-beyond the declared fields and calls, and none for these rows. Four gaps are
+when the gap closes or the capability goes. This C surface ships in
+v1.0.0 (v0.13.1, the last 0.x release, has no `native_c_api.h`), and 1.0
+makes no C/C++ parity claim beyond the declared fields and calls, and none
+for these rows. Four gaps are
 planned for 1.1.0: the execution preview, the applied event's origin and
 label, a closed row's entry comment and the replace options. The rest are
 not scheduled. The checker rows are three kinds: a `[--]` row
@@ -4651,17 +4651,17 @@ surface"); the short version:
   layer alone, and a bare host's `strategy_pending_orders_len` is 0. The
   neutral view is `native_working_requests()`. Each family has its ADR row,
   listing every name, and the gate above holds the list.
-- **Deprecated public spellings, removed on main for the planned 1.0**
+- **Deprecated public spellings, removed for 1.0**
   (`docs/adr/0001-kernel-adapter-boundary.md`, "Deprecated public spellings" —
   a separate table, outside the residual section the gate parses, because none
   of these names is a symbol or a literal in the archive). The C ABI's
   `pf_equity_stats_t::sharpe_monthly` / `sortino_monthly` are spelled
-  `sharpe_tv` / `sortino_tv` in v0.13.1, the last tagged release: the same
-  `double` at the same offset; on main the old spelling is gone, nothing an FFI consumer links or reads moved, and
+  `sharpe_tv` / `sortino_tv` in v0.13.1, the last 0.x release: the same
+  `double` at the same offset; in v1.0.0 the old spelling is gone, nothing an FFI consumer links or reads moved, and
   the serialized report key stays `sharpe_tv`. The standalone `lifecycle_v1`
   enumerators `exit_legs::Domain::FillRecalc` / `MagnifierFillRecalc` (the
   fill-recalculation re-entry pass) were also spelled `Coof` / `MagnifierCoof`
-  on main before the removal (no tagged release has either spelling), with
+  in development builds before the removal (no tagged release has those two spellings), with
   the same values. `test_removed_public_spellings` holds that
   each old spelling fails to compile.
 - **The ambient EMA seeding default.** `ta::EMA` seeds from its first finite

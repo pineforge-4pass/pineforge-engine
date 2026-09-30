@@ -5,8 +5,8 @@
 **ABI v4** (`PF_ABI_VERSION == 4`) appends 24 exports and two `pf_report_t`
 fields for the separate Python `pineforge-live` recompute-based project built on top
 of this engine (see the [Python `pineforge-live` project](https://github.com/pineforge-4pass/pineforge-live)).
-ABI v4 is on `main` and not in a tagged release: v0.13.1, the last tagged
-release, predates it. Every one of the 24 symbols is
+ABI v4 ships in v1.0.0; v0.13.1, the last 0.x release, has ABI 3. Every one
+of the 24 symbols is
 **default off / read-only** and **never changes a historical run**: the
 four configuration setters below default to the pre-v4 behavior, and every
 accessor is a pure read over state the engine already computed for its own

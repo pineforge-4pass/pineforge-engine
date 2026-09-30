@@ -29,7 +29,7 @@ PineForge is a C++17 engine for backtesting and forward execution, with a C ABI 
 1. **A generic kernel** — a Pine-agnostic backtest and forward-execution state machine: order matching and fills, sizing, margin and settlement, the bar magnifier, indicator classes, `request.security()`, time and session math. Some TradingView-shaped names survive in its archive, each ruled in [ADR 0001](docs/adr/0001-kernel-adapter-boundary.md) and held there by `scripts/check_kernel_residuals.py`.
 2. **A source-adapter parity runtime** (`src/source/` and `src/compat/pine/`, `PineExecutionAdapter` + `PineStrategyHost`) — maps Pine/TradingView execution semantics onto that kernel. This is where TradingView parity lives.
 
-The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss), translates a PineScript v6 script into a C++ strategy that attaches the engine's Pine execution adapter (its main branch does; the PyPI release 0.10.4 predates the adapter); it owns translation, not execution semantics. TradingView comparisons measure this Pine path under the tested configurations. The [order model](docs/pages/fill-model.md) describes the current submodels and the remaining migration work; [Architecture](#architecture-kernel-vs-parity) states the boundary.
+The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss), translates a PineScript v6 script into a C++ strategy that attaches the engine's Pine execution adapter (its release 1.0.0 does; 0.10.4 predates the adapter); it owns translation, not execution semantics. TradingView comparisons measure this Pine path under the tested configurations. The [order model](docs/pages/fill-model.md) describes the current submodels and the remaining migration work; [Architecture](#architecture-kernel-vs-parity) states the boundary.
 
 - **Proven, not promised.** All 7,989 graded probes — 309 open reference strategies, 680 community-shared scripts and 61 probe scripts the maintainers wrote, on 18 market/timeframe lanes — grade *excellent* or *strong* against TradingView's own trade lists: **7,905 excellent, 84 strong, zero below strong**. The graded probes' TradingView trade lists hold 4,776,328 trades; 17 probes with TradingView-side defects are excluded.
 - **Open runtime.** The engine and native live runner are Apache-2.0. The separately distributed [PineForge compiler](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) uses PolyForm Noncommercial terms with additional personal-trading permission; commercial use requires a separate license. Public reference strategies, benchmarks and validation tooling are available in their respective repositories; the community-script test set is not redistributed.
@@ -62,7 +62,7 @@ For Cursor, which expands `${workspaceFolder}`, or any MCP client (in Claude Des
 }
 ```
 
-Then ask: *"Fetch BTC/USDT 15m for the last 90 days and backtest this strategy"* — the container transpiles Pine → C++ with the bundled [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss), compiles, runs, and hands the agent the trade list. The image bundles engine v0.13.1, the last tagged release, with codegen 0.10.4, not this repository's main. Your Pine and data stay on your machine; only the Binance tools (`fetch_binance_ohlcv`, `binance_symbols`) call out, to Binance's public API. Mount a directory at `/work`; `-i` is required and `-t` must not be added (a TTY corrupts the JSON-RPC stream).
+Then ask: *"Fetch BTC/USDT 15m for the last 90 days and backtest this strategy"* — the container transpiles Pine → C++ with the bundled [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss), compiles, runs, and hands the agent the trade list. The image bundles engine v1.0.0 with codegen 1.0.0. Your Pine and data stay on your machine; only the Binance tools (`fetch_binance_ohlcv`, `binance_symbols`) call out, to Binance's public API. Mount a directory at `/work`; `-i` is required and `-t` must not be added (a TTY corrupts the JSON-RPC stream).
 
 | Ask | Tool |
 |---|---|
@@ -87,6 +87,10 @@ python3 tutorial/run_stream.py                  # OHLCV warm-up → realtime tra
 The [shared local/CI verifier](docs/ci.md) includes source guards, tests and installed-package smoke checks. Its ABI check links callers against both the current library and seven separately built, pinned historical libraries. Preparation uses local Git history and the configured compiler, fetching a pinned commit the clone lacks; see the [ABI fixture guide](tests/fixtures/settlement_cpp_abi/README.md) for repeated checks. The first run needs network (the verifier initialises the public `corpus` submodule itself; configure fetches Eigen when no system copy is found) and a full clone: a depth-1 clone fails the benchmark provenance row ([CI guide](docs/ci.md)). CTest itself stays offline.
 
 Prerequisites: CMake ≥ 3.16 to build (the verifier and `ctest --test-dir` need 3.20), a C++17 compiler whose standard library has floating-point `std::to_chars` (libstdc++ from GCC 11 or later, or libc++ 14 or later; on macOS a deployment target of 13.3 or later; CI builds with GCC on Ubuntu 24.04 and Apple Clang on macOS 26), Eigen 3.3+ (fetched automatically if absent), Python 3 for the tests (`-DPINEFORGE_BUILD_TESTS=OFF -DPINEFORGE_BUILD_TUTORIAL=OFF` for a library-only build). `cmake --install build --prefix /usr/local` installs `lib/libpineforge.a` and `lib/libpineforge_kernel.a`, `include/pineforge/`, and the `find_package(PineForge)` config.
+
+### Prebuilt library
+
+The [v1.0.0 release](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.0.0) attaches the library prebuilt: `pineforge-v1.0.0-linux-x86_64.tar.gz`, `pineforge-v1.0.0-linux-aarch64.tar.gz` and `pineforge-v1.0.0-macos-universal.tar.gz`, each with a `.sha256`. Each unpacks to one directory holding what the install above writes (the two archives, `include/pineforge/` and the `find_package(PineForge)` config) plus `LICENSE`, `NOTICE` and `VERSION`; point `CMAKE_PREFIX_PATH` at it. The package asks for Eigen 3.3+: install it on Linux, while the macOS tarball carries Eigen 3.4.0 ([install guide](docs/pages/install.md)).
 
 ### Embedded in your own harness
 
@@ -119,7 +123,7 @@ Lifecycle-aware compiled modules reset Pine variables, indicator/history buffers
 The engine can be driven three ways. All three run the same kernel, so for the
 same requests they match trigger, price fills, book lots and settle
 identically; what differs is who writes the strategy, who owns TradingView's
-quirks and, for C, the C++ capabilities the C surface planned for 1.0 does not spell (the
+quirks and, for C, the C++ capabilities the 1.0 C surface does not spell (the
 1.0 C boundary table in the [native engine guide](docs/pages/native-engine.md)).
 
 ### 1. PineScript, through codegen
@@ -129,14 +133,14 @@ TradingView's execution semantics on top of the kernel; this is the path the
 validation scoreboard below measures.
 
 ```bash
-pip install "git+https://github.com/pineforge-4pass/pineforge-codegen-oss@main"
+pip install "pineforge-codegen==1.0.0"
 python3 -c "from pathlib import Path; from pineforge_codegen import transpile; Path('generated.cpp').write_text(transpile(Path('strategy.pine').read_text(), filename='strategy.pine'))"
 c++ -std=c++17 -O2 -ffp-contract=off -fbracket-depth=1024 -shared -fPIC generated.cpp \
     -Wl,-force_load,/usr/local/lib/libpineforge.a -o strategy.so
 python3 scripts/run_strategy.py . --ohlcv tutorial/data/btcusdt_15m_7d.csv --no-trim-output   # or drive it over the C ABI
 ```
 
-Run it from the engine checkout, with `strategy.pine` there, after the `cmake --install` above. This tree pairs with pineforge-codegen's `main` branch; neither is released yet. The PyPI release (`pip install pineforge-codegen`, 0.10.4) emits C++ for engine v0.13.1, the last tagged release, which main's headers no longer compile. Neither has a command-line entry point, so transpile through `transpile()`. The compile line is macOS/Clang's: on Linux link `-Wl,--whole-archive /usr/local/lib/libpineforge.a -Wl,--no-whole-archive`, and drop `-fbracket-depth` for GCC. Linking the whole archive is what puts the runtime's C exports (`pf_abi_version`, the `strategy_stream_*` family) in the module; a script that uses `matrix.*` also needs Eigen's include directory.
+Run it from the engine checkout, with `strategy.pine` there, after the `cmake --install` above (with a prebuilt tarball instead, add `-I<its directory>/include` and link its `lib/libpineforge.a`). Engine v1.0.0 pairs with pineforge-codegen 1.0.0; codegen 0.10.4 emits C++ for engine v0.13.1, which v1.0.0's headers no longer compile. Neither codegen release has a command-line entry point, so transpile through `transpile()`. The compile line is macOS/Clang's: on Linux link `-Wl,--whole-archive /usr/local/lib/libpineforge.a -Wl,--no-whole-archive`, and drop `-fbracket-depth` for GCC. Linking the whole archive is what puts the runtime's C exports (`pf_abi_version`, the `strategy_stream_*` family) in the module; a script that uses `matrix.*` also needs Eigen's include directory.
 
 ### 2. C++, against the kernel
 
@@ -222,7 +226,7 @@ live behavior or real broker fills.
 
 ## Validation scoreboard
 
-**Measured 2026-09-29** on engine `35db01c8` with codegen-oss `70c2b4af` (the maintainers' baseline `pineforge-parity-baseline-20260929-engine-35db01c8`): **7,989 graded probes, 7,905 excellent + 84 strong**, none below *strong*, across 18 market/timeframe lanes. Their TradingView trade lists hold 4,776,328 trades.
+**Measured 2026-09-29** on engine `35db01c8` with codegen-oss `70c2b4af` (the maintainers' baseline `pineforge-parity-baseline-20260929-engine-35db01c8`): **7,989 graded probes, 7,905 excellent + 84 strong**, none below *strong*, across 18 market/timeframe lanes. Their TradingView trade lists hold 4,776,328 trades. Engine v1.0.0, released 2026-09-30 from main `133f5714`, includes `35db01c8`, codegen 1.0.0 carries `70c2b4af`'s code, and the releases changed no grade.
 
 | Board | Test set | Result |
 |---|---|---|
@@ -329,7 +333,7 @@ Slot 192 has no PyneCore trade list: PyneSys rejects its source (`"Empty documen
 - **Tiers:** they now come from the canonical `scripts/verify_corpus.py::analyze_strategy` rubric. The old table graded a different 100-strategy population with `compare.py`'s own copy of the rubric, which had drifted from the canonical one and no longer parsed the current tape format.
 - **Speed:** that table was timed on the Apple M4 Max. The 2026-06-11 engine, rebuilt on the AWS host and timed in the same window, runs the three probes both populations share 4–8× faster than `35db01c8` ([provenance](benchmarks/results/speed.md#provenance)).
 
-Last refresh **2026-09-29** (engine `35db01c8`, codegen `121b3e6a`, PyneCore 6.10.3, PineTS 0.9.34, vectorbt 0.28.2; timed on an AWS c7a.8xlarge running Ubuntu 24.04); main has moved on since, and neither the tiers nor the timings were re-measured on it. Per-strategy table: [`benchmarks/results/summary.md`](benchmarks/results/summary.md). Population manifest: [`benchmarks/results/selection.md`](benchmarks/results/selection.md). Method, fairness and the reproduction recipe: [`benchmarks/README.md`](benchmarks/README.md).
+Last refresh **2026-09-29** (engine `35db01c8`, codegen `121b3e6a`, PyneCore 6.10.3, PineTS 0.9.34, vectorbt 0.28.2; timed on an AWS c7a.8xlarge running Ubuntu 24.04); v1.0.0 was released after it, and neither the tiers nor the timings were re-measured on the release. Per-strategy table: [`benchmarks/results/summary.md`](benchmarks/results/summary.md). Population manifest: [`benchmarks/results/selection.md`](benchmarks/results/selection.md). Method, fairness and the reproduction recipe: [`benchmarks/README.md`](benchmarks/README.md).
 
 ---
 
@@ -421,7 +425,7 @@ ground written for an agent that has been handed a brief in this repository.
 - `benchmarks/` — the cross-engine comparison harness (PineForge, PyneCore, PineTS, vectorbt) and the throughput package.
 - `scripts/` — `run_corpus.sh`, `verify_corpus.py`, `run_strategy.py` (load any `.so` via ctypes), `regen_corpus_cpp.sh`, `coverage.sh`.
 
-**This is the runtime, not the compiler.** The PineScript → C++ transpiler is [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss) (its `main` branch pairs with this tree; `pip install pineforge-codegen` gets the release that pairs with v0.13.1), bundled with the runtime in the [`pineforge-release`](https://github.com/pineforge-4pass/pineforge-release) image that the MCP server builds on. **It is a backtest engine, not a chart:** `plot` and `bgcolor` compile and draw nothing; `line`, `box`, `label` and `linefill` objects are kept as data the script can read back, never rendered. **It is not a TradingView clone:** where TradingView's behaviour is undocumented or platform-specific (the bar magnifier's intrabar path, float ordering) PineForge chooses deterministic rules and documents them; where it converges, it converges exactly.
+**This is the runtime, not the compiler.** The PineScript → C++ transpiler is [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss) (its release 1.0.0, `pip install "pineforge-codegen==1.0.0"`, pairs with engine v1.0.0), bundled with the runtime in the [`pineforge-release`](https://github.com/pineforge-4pass/pineforge-release) image that the MCP server builds on. **It is a backtest engine, not a chart:** `plot` and `bgcolor` compile and draw nothing; `line`, `box`, `label` and `linefill` objects are kept as data the script can read back, never rendered. **It is not a TradingView clone:** where TradingView's behaviour is undocumented or platform-specific (the bar magnifier's intrabar path, float ordering) PineForge chooses deterministic rules and documents them; where it converges, it converges exactly.
 
 Full coverage map — every TA class, every order primitive, every `request.security()` semantic, and what is deliberately not implemented: [`docs/coverage.md`](docs/coverage.md).
 
@@ -600,8 +604,8 @@ Documentation: [C ABI reference](https://cdocs.pineforge.dev) · [Getting starte
 
 ## Releases
 
-- **Unreleased** (`main`, `VERSION` 0.14.0, not tagged) — every change since v0.13.1: C ABI version 4, the native kernel and its C host API, the script ABI epoch v19. What a 0.13.1 user must act on is in [CHANGELOG.md](CHANGELOG.md); what 1.x will promise is the [public contract](docs/pages/public-contract.md).
-- **v0.13.1** (2026-09-06, the last tagged release) — the parity campaign's rounds 7–11: TradingView's broker rules pinned with sensor exports and landed with replay tests — ten-significant-digit money, trailing-stop restarts, zero-offset trails, declined-reversal bracket legs, the surviving `strategy.close`, sparse `ta.atr`/`ta.tr`, same-bar market transactions, early-close higher-timeframe buckets; the corpus keeps every USDT-quoted book in USDT. Closed test 3,880/3,881; corpus 309/309. ABI v3, 32 symbols, 198 tests.
+- **v1.0.0** (2026-09-30) — the first stable release under semantic versioning; from it the engine and pineforge-codegen release one version (codegen 1.0.0; the hub image `pineforge-release:1.0.0` carries the pair). Every change since v0.13.1: C ABI version 4, the native kernel and its C host API, the script ABI epoch v19. What a 0.13.1 user must act on is in [CHANGELOG.md](CHANGELOG.md); what 1.x promises is the [public contract](docs/pages/public-contract.md).
+- **v0.13.1** (2026-09-06) — the parity campaign's rounds 7–11: TradingView's broker rules pinned with sensor exports and landed with replay tests — ten-significant-digit money, trailing-stop restarts, zero-offset trails, declined-reversal bracket legs, the surviving `strategy.close`, sparse `ta.atr`/`ta.tr`, same-bar market transactions, early-close higher-timeframe buckets; the corpus keeps every USDT-quoted book in USDT. Closed test 3,880/3,881; corpus 309/309. ABI v3, 32 symbols, 198 tests.
 - **v0.13.0** (2026-09-05) — native higher-timeframe and auxiliary `request.security()` feeds, TradingView's range-end close (ABI v3, `pf_trade_t::open_at_end`), the market-entry affordability gate for fixed, cash and explicit-quantity entries, `na` handling in the extremes and `ta.stdev`.
 - **v0.7 – v0.12** (June–August 2026) — ABI v2 metrics + equity curve (v0.10.2), historical-to-realtime streaming and `calc_on_order_fills` (v0.11.0), a timestamped account-currency FX series (v0.12.1). See [GitHub releases](https://github.com/pineforge-4pass/pineforge-engine/releases).
 - **v0.6.0** — performance sprint: cached static inputs, thread-local timestamp caching, lazy timezone caching; up to 6.7M bars/s.

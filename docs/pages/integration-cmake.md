@@ -11,7 +11,7 @@ projects pull it in with one `find_package` call.
 cmake_minimum_required(VERSION 3.16)
 project(my_strategy_runner LANGUAGES C CXX)   # the archive is C++: link with CXX
 
-find_package(PineForge 0.13 REQUIRED)            # v0.13.1, or a build of main
+find_package(PineForge 1.0 REQUIRED)             # v1.0.0 or any later 1.x
 
 add_executable(runner runner.c)
 target_link_libraries(runner PRIVATE PineForge::pineforge)
@@ -46,18 +46,23 @@ Or set `CMAKE_PREFIX_PATH=/opt/pineforge`.
 ## Version selection
 
 ```cmake
-find_package(PineForge 0.13 REQUIRED)         # 0.13.x or any later 0.x.y
-find_package(PineForge 0.13.1 EXACT REQUIRED) # v0.13.1, or a git-checkout build of main
+find_package(PineForge 1.0 REQUIRED)          # 1.0.0 or any later 1.x.y
+find_package(PineForge 1.0.0 EXACT REQUIRED)  # 1.0.0 only (MAJOR.MINOR.PATCH, see below)
 ```
 
 The package config is `SameMajorVersion`: a minimum pins its major version, so
 `find_package(PineForge 0.14 REQUIRED)` does not find a 1.x install, and
 `1.0` does not find a 0.x one. From 1.0.0, within a major version PineForge guarantees C
 ABI back-compat — see [ABI stability](@ref abi_stability) — so a minimum `1.x`
-(any compatible later 1.x.y) is the recommended pin from 1.0.0. No 1.x release
-exists: v0.13.1 is the last tagged release, a git checkout of main configures
-as `0.13.1-<n>-g<sha>` (`git describe`) and a `-DPINEFORGE_VERSION_SOURCE=FILE`
-build as main's `VERSION` file, `0.14.0`; a minimum `0.13` finds all three.
+(any compatible later 1.x.y) is the recommended pin from 1.0.0. The version
+file is `write_basic_package_version_file(... COMPATIBILITY SameMajorVersion)`
+over the numeric MAJOR.MINOR.PATCH: a request is met by an install of its
+major version at or above it, so against v1.0.0 a minimum `1.0` or `1` finds
+it and `0.13`, `1.1` or `2.0` do not. v1.0.0's tarballs and a
+`-DPINEFORGE_VERSION_SOURCE=FILE` build install as the `VERSION` file,
+`1.0.0`; a git clone with tags configures from `git describe` (the default
+`AUTO`), as `1.0.0` at the `v1.0.0` tag and `1.0.0-<n>-g<sha>` past it, which
+`find_package` compares as `1.0.0`.
 
 `find_package` compares MAJOR.MINOR.PATCH only. A release candidate `X.Y.Z-rc.N`
 installs as `PineForge_VERSION` `X.Y.Z` with `PineForge_VERSION_FULL`
@@ -100,7 +105,7 @@ libdir=${prefix}/lib
 
 Name: pineforge
 Description: Deterministic PineScript v6 backtest runtime
-Version: 0.14.0
+Version: 1.0.0
 Cflags: -I${includedir} -ffp-contract=off
 Libs: -L${libdir} -lpineforge -lstdc++ -lm
 ```

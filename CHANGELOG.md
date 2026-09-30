@@ -1,22 +1,39 @@
 # Changelog
 
 Notable changes to pineforge-engine. Earlier releases are summarized in the
-README's *Releases* section and on the GitHub releases page. From the next
-release, planned as 1.0.0, the version number is to follow semantic
-versioning over the surfaces the
+README's *Releases* section and on the GitHub releases page. From 1.0.0 the
+version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
-## Unreleased
+## 1.0.0 — 2026-09-30
 
-Nothing below is released: `main` is ahead of v0.13.1, the last tagged
-release (2026-09-06), by everything this section lists. `VERSION` reads 0.14.0
-from 439bd520 on, and 0.14.0 was never tagged. The next version is the owner's
-call. It is planned as 1.0.0, which the engine and pineforge-codegen are to
-release together; from it on the only supported pair is the same version,
-prerelease included. Where a section below speaks of 1.0, it describes that
-plan.
+The first stable release under semantic versioning. From it on the engine and
+pineforge-codegen release one version number, and the only supported pair is
+the same version, prerelease included: engine v1.0.0 pairs with
+pineforge-codegen 1.0.0, the pair the release hub's image
+`ghcr.io/pineforge-4pass/pineforge-release:1.0.0` carries. The GitHub release
+attaches the prebuilt static libraries, headers and CMake package for three
+platforms, `pineforge-v1.0.0-linux-x86_64.tar.gz`,
+`pineforge-v1.0.0-linux-aarch64.tar.gz` and
+`pineforge-v1.0.0-macos-universal.tar.gz`, each with a `.sha256`
+(docs/pages/install.md).
 
-### What the planned 1.0 means
+The release candidate v1.0.0-rc.1 (bb9ec14f) came out the same day. v1.0.0
+(5718c5dc, whose only change is `VERSION`) is built from main 133f5714, the
+one commit after the candidate (#308). That commit fixes a CI flake of
+`test_adapter_lookup_index_scaling`, which now times its two tapes in turn, in
+user CPU; lets CI skip its proof jobs on a documentation-only change
+(`scripts/ci_docs_only.py`), as docs/ci.md, CONTRIBUTING.md and AGENTS.md now
+say; and refreshes the benchmark, re-measured at engine 35db01c8 against
+PyneCore 6.10.3 on an AWS c7a.8xlarge, with README.md's figures. No file under
+`src/`, `include/`, `cmake/` or `examples/`, and no CMake file, changed
+between the candidate and the release.
+
+The notes below are the notable changes since v0.13.1 (2026-09-06). Development
+builds from 439bd520 until the candidate read `VERSION` 0.14.0, a version that
+was never tagged.
+
+### What 1.0 means
 
 - **The kernel runs without any Pine adapter.** A C++ host
   (`NativeStrategyHost`, `<pineforge/native_host.hpp>` and the native headers)
@@ -32,7 +49,7 @@ plan.
   `BacktestEngine` (#253), and generated Pine execution was lowered onto the
   native kernel, retiring the legacy loop (#254). Its host
   (`PineStrategyHost`) and headers live under `include/pineforge/source/`.
-- **From 1.0.0 the version number is to promise something:** the C ABI, the
+- **From 1.0.0 the version number promises something:** the C ABI, the
   native C++ API, the script ABI epoch and its state-hash values, the 1.0
   C-surface boundary and the pairing with codegen, as the
   [public contract](docs/pages/public-contract.md) states.
@@ -56,17 +73,17 @@ plan.
 - **Regenerate and relink every generated strategy.** The C++ a generated
   strategy compiles against now carries the script ABI epoch
   `engine_script_run_v19` (an inline namespace 0.13.1 did not have), so an
-  object built against 0.13.1's headers does not link. Transpile with the
-  pineforge-codegen that pairs with this tree -- its main branch; its last
-  release, v0.10.4, predates it -- and rebuild; from 1.0.0 on the pair is the
-  codegen release of the same version. `PF_ABI_VERSION` equality alone does
-  not make a pair.
+  object built against 0.13.1's headers does not link. Transpile with
+  pineforge-codegen 1.0.0, the release that pairs with this one (its 0.10.4
+  predates the epoch), and rebuild; from 1.0.0 on the pair is the codegen
+  release of the same version. `PF_ABI_VERSION` equality alone does not make
+  a pair.
 - **State hashes are new, and v19's.** The broker-state hash, the per-bar hash
   rows, the stream fingerprint and the native continuation hash did not exist
-  in 0.13.1; their values are the v19 epoch's as main computes them (#282,
+  in 0.13.1; their values are the v19 epoch's as 1.0.0 computes them (#282,
   #283, #284, #286, #289; #294, #295 and #297 fold new source-layer state
   where a run sets it), and a value recorded by an earlier development build
-  is not comparable. From 1.0.0 their recipe is to stay fixed for all of 1.x.
+  is not comparable. From 1.0.0 their recipe stays fixed for all of 1.x.
 - **Event retention defaults to a window.** `NativeRunSpec::event_retention`
   defaults to `NativeEventRetention::Window`, which keeps the command journal
   only until every reader has consumed it (#283). A C++ host that reads the
@@ -85,13 +102,10 @@ plan.
   (e71e589c); new code includes `<pineforge/ta_compare_band.hpp>`. A
   kernel-only build installs neither `include/pineforge/source/` nor
   `include/pineforge/compat/`.
-- **CMake pins move to 1 with the 1.0.0 release.** The package's version file
-  is `SameMajorVersion`, so `find_package(PineForge 0.N ...)` will not find a
-  1.x install: pin `find_package(PineForge 1.0 REQUIRED)` then
-  (docs/pages/integration-cmake.md). Until then a build of main installs a 0.x
-  package -- 0.13.1 from `git describe` in a clone with tags (the default
-  `PINEFORGE_VERSION_SOURCE=AUTO`), 0.14.0 from `VERSION` otherwise -- which a
-  1.0 pin does not find.
+- **CMake pins move to 1.** The package's version file is
+  `SameMajorVersion`, so `find_package(PineForge 0.N ...)` does not find a 1.x
+  install: pin `find_package(PineForge 1.0 REQUIRED)`
+  (docs/pages/integration-cmake.md).
 - **Versions may carry a prerelease.** `VERSION` is `X.Y.Z` or `X.Y.Z-rc.N`.
   `PINEFORGE_VERSION_STRING`, `PineForge_VERSION` and `pf_version_get()` stay
   numeric; the full version is `PINEFORGE_VERSION_FULL`, the package's new
@@ -198,7 +212,7 @@ plan.
   historical run. A `request.security` of another symbol then runs on that
   symbol's bars in the requested context -- history, TA, `bar_index`,
   `time_close` and `syminfo.*` are the requested symbol's -- where only the
-  run's own symbol was addressable; pineforge-codegen's main branch lowers
+  run's own symbol was addressable; pineforge-codegen 1.0.0 lowers
   such a site (its b8197fcf). An invalid symbol reads `na` under
   `ignore_invalid_symbol` and stops the run without it, a symbol with no feed
   stops the run naming it, an aggregated chart is refused, and a feed or
@@ -222,7 +236,7 @@ TradingView behaviour it matches.
   that omits `initial_capital`, `default_qty_type` or `default_qty_value` runs
   with 100000, `strategy.percent_of_equity` and 100 (100 whatever the type:
   100 contracts under `strategy.fixed`, 100 of the account currency under
-  `strategy.cash`), which pineforge-codegen's main branch (78715160, after its
+  `strategy.cash`), which pineforge-codegen 1.0.0 (78715160, after its
   v0.10.4) declares in the generated constructor. Code generated by an earlier codegen and a hand-built
   `PineStrategyConfig` keep 1000000, `strategy.fixed` and 1. To keep a v6 script's old sizing, declare
   the three in its `strategy()` call and transpile it again.
@@ -261,7 +275,7 @@ TradingView behaviour it matches.
   `session.isfirstbar` / `session.islastbar` mark the chart's session day, its
   pre- and post-market bars included, and `session.isfirstbar_regular` /
   `session.islastbar_regular` the regular session's, which
-  pineforge-codegen's main branch reads (its fdcdcbb9); the two pairs were one
+  pineforge-codegen 1.0.0 reads (its fdcdcbb9); the two pairs were one
   (#293, 962960b3; #295, 9e6196ca).
 - `time()` / `time_close()` and the session predicates read a session
   argument as TradingView does: each `HHMM` is minutes after midnight,
@@ -280,8 +294,9 @@ TradingView behaviour it matches.
   are not modelled (#295, 9e6196ca).
 - Pine v6's `time()` / `time_close()` with `bars_back` and
   `timeframe_bars_back` read another bar through
-  `PineStrategyHost::pine_time_offset`, which pineforge-codegen's main branch
-  lowers them onto (its 70c2b4af; they were refused at transpile time): a
+  `PineStrategyHost::pine_time_offset`, which pineforge-codegen 1.0.0
+  lowers them onto (its 70c2b4af; 0.10.4 ignored both arguments and read the
+  current bar's time): a
   past bar from the chart's history, a bar ahead from the input the run holds
   and then the symbol's session calendar, closed days included, and a
   timeframe's bar stepped on that calendar (#297, 0411892c).
@@ -489,7 +504,7 @@ TradingView behaviour it matches.
   switched off (`set_margin_call_enabled(false)`, which TradingView has no
   counterpart for); it used to return a price.
 - A `ta.*` call whose length is neither a constant nor an input compiles and
-  computes as TradingView does, with pineforge-codegen's main branch
+  computes as TradingView does, with pineforge-codegen 1.0.0
   (29bfd210, after its v0.10.4; it refused every such call): a simple length -- fixed for the run, such as one derived
   from `syminfo` or chosen by an input -- gives exactly the constant length's
   answers; a series length re-windows `ta.highest`, `ta.lowest`,

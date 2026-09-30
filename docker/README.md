@@ -26,7 +26,7 @@ pair; same-version pairing starts at 1.0.0), for Linux `amd64` and `arm64`.
 docker pull ghcr.io/pineforge-4pass/pineforge-release:latest
 # or pin a hub release (its own X.Y.Z) or an engine/codegen pair:
 docker pull ghcr.io/pineforge-4pass/pineforge-release:X.Y.Z
-docker pull ghcr.io/pineforge-4pass/pineforge-release:engine0.13.1-codegen0.10.4
+docker pull ghcr.io/pineforge-4pass/pineforge-release:engine1.0.0-codegen1.0.0
 ```
 
 A stable release is tagged `X.Y.Z`, `X.Y`, `latest`,
@@ -218,9 +218,9 @@ reversible, no key required:
   "token":  "<base64 of the canonical provenance JSON>",
   "digest": "sha256:<hex>",
   "provenance": {
-    "engine":   { "version_string": "...", "major": 0, "minor": 13, "patch": 1, "commit_sha": "..." },
+    "engine":   { "version_string": "...", "major": 1, "minor": 0, "patch": 0, "commit_sha": "..." },
     "feed":     { "canonicalization": "pf-ohlcv-barc-le-v1", "source_values_sha256": "..." },
-    "codegen":  { "version": "0.10.4", "generated_cpp_sha256": "...", "transpiled_from_pine": true },
+    "codegen":  { "version": "1.0.0", "generated_cpp_sha256": "...", "transpiled_from_pine": true },
     "strategy": { "initial_capital": 1000000.0, "pyramiding": 1, "commission_type": "percent", "...": "all strategy() params, effective" },
     "inputs":   { "Fast Length": { "type": "int", "default": 12, "value": "8" }, "...": "all input()s, effective" },
     "applied":  { "inputs": { "Fast Length": "8" }, "overrides": {} },

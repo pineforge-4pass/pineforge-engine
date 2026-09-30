@@ -190,8 +190,8 @@ lib = ctypes.CDLL("./my_strategy.so")
 # ABI guard — pf_report_t is CALLER-allocated, so running an old .so
 # against the v4 mirror above (or vice versa) silently corrupts memory.
 # Verify the .so's layout version before any run:
-EXPECTED_PF_ABI = 4   # PF_ABI_VERSION in <pineforge/pineforge.h> on main (not yet
-                      # released); a v0.13.1 .so answers 3 and needs that release's mirror
+EXPECTED_PF_ABI = 4   # PF_ABI_VERSION in <pineforge/pineforge.h> as of v1.0.0;
+                      # a v0.13.1 .so answers 3 and needs that release's mirror
 try:
     lib.pf_abi_version.restype = ctypes.c_int
     abi = lib.pf_abi_version()

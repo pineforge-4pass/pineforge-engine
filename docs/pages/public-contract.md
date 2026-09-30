@@ -2,8 +2,8 @@
 
 @tableofcontents
 
-1.0.0 is not released: v0.13.1 is the last tagged release, and `main` carries
-the surfaces below ahead of it. From 1.0.0 the engine's version number is a
+1.0.0 was released on 2026-09-30: engine v1.0.0 with pineforge-codegen 1.0.0.
+From 1.0.0 the engine's version number is a
 semantic version over the surfaces this page lists, and over nothing else: a PATCH release fixes behaviour, a
 MINOR release adds to a surface, and only a MAJOR release removes or changes
 one. Each rule below names the checker or the CTest row that holds it on this

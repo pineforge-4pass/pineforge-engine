@@ -42,7 +42,7 @@ are illustrative, standing in for your own strategies.
   threads with zero coordination.
 - **One runtime per `.so`** — each `.so` carries its own copy of the
   runtime, so `.so` files built against different engine releases load side
-  by side. `pf_report_t` grows with the ABI (4 on main, 3 in v0.13.1), so
+  by side. `pf_report_t` grows with the ABI (4 in v1.0.0, 3 in v0.13.1), so
   check each one's `pf_abi_version()` before handing it the `ReportC` below
   (see [ABI stability](@ref abi_stability)).
 

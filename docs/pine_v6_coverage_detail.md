@@ -542,7 +542,7 @@ All 6 `line.style_*` constants are **⏭️ Parse-and-skip** — drawing style c
 
 ### Functions — footprint.* (9 entries)
 
-All **❌ Unsupported** — hard-reject via `UNSUPPORTED_NAMESPACES` (`support_checker.py`): footprint requires tick-level data the engine does not consume. On codegen-oss main one member is read: `delta()` (`footprint.delta(fp)`) of a footprint that another symbol's `request.security` returns, from that symbol's pinned feed column; every other member is refused by name.
+All **❌ Unsupported** — hard-reject via `UNSUPPORTED_NAMESPACES` (`support_checker.py`): footprint requires tick-level data the engine does not consume. On codegen-oss 1.0.0 one member is read: `delta()` (`footprint.delta(fp)`) of a footprint that another symbol's `request.security` returns, from that symbol's pinned feed column; every other member is refused by name.
 
 ### Functions — input.*
 
@@ -669,16 +669,16 @@ All **✅ Runtime** — backed by `PineMatrix` (`matrix.hpp` / `matrix.cpp`) for
 | Identifier | Kind | Status | Backing | Notes |
 |---|---|---|---|---|
 | `request.currency_rate()` | fn | ❌ Unsupported | Rejected at transpile | No FX data feed |
-| `request.dividends()` | fn | ❌ Unsupported (codegen v0.10.4) | v0.10.4 rejects it at transpile; codegen-oss main reads TradingView's recorded answers by request key (`strategy_set_recorded_series`) and `na` when the value reaches only display sinks | No fundamentals feed |
-| `request.earnings()` | fn | ❌ Unsupported (codegen v0.10.4) | v0.10.4 rejects it at transpile; codegen-oss main reads TradingView's recorded answers by request key (`strategy_set_recorded_series`) and `na` when the value reaches only display sinks | No fundamentals feed |
+| `request.dividends()` | fn | ✅ Runtime | v0.10.4 rejects it at transpile; codegen-oss 1.0.0 reads TradingView's recorded answers by request key (`strategy_set_recorded_series`) and `na` when the value reaches only display sinks | No fundamentals feed |
+| `request.earnings()` | fn | ✅ Runtime | v0.10.4 rejects it at transpile; codegen-oss 1.0.0 reads TradingView's recorded answers by request key (`strategy_set_recorded_series`) and `na` when the value reaches only display sinks | No fundamentals feed |
 | `request.economic()` | fn | ❌ Unsupported | Rejected at transpile | No macro data feed |
-| `request.financial()` | fn | ❌ Unsupported (codegen v0.10.4) | v0.10.4 rejects it at transpile; codegen-oss main reads TradingView's recorded answers by request key (`strategy_set_recorded_series`) and `na` when the value reaches only display sinks | No fundamentals feed |
-| `request.footprint()` | fn | ❌ Unsupported (codegen v0.10.4) | On codegen-oss main: `na` when the value reaches only display sinks; `delta()` of a footprint that is another symbol's whole `request.security` expression reads that symbol's pinned feed column; otherwise the run stops where it is read | TradingView's delta depends on the chart range |
+| `request.financial()` | fn | ✅ Runtime | v0.10.4 rejects it at transpile; codegen-oss 1.0.0 reads TradingView's recorded answers by request key (`strategy_set_recorded_series`) and `na` when the value reaches only display sinks | No fundamentals feed |
+| `request.footprint()` | fn | ❌ Unsupported | v0.10.4 rejects it at transpile. On codegen-oss 1.0.0: `na` when the value reaches only display sinks; `delta()` of a footprint that is another symbol's whole `request.security` expression reads that symbol's pinned feed column; otherwise the run stops where it is read | TradingView's delta depends on the chart range |
 | `request.quandl()` | fn | ❌ Unsupported | Deprecated upstream; rejected | |
-| `request.security()` | fn | ✅ Runtime | `SecurityEvalState` + full TF aggregation machinery | Same-symbol MTF + higher-TF aggregation; another symbol's installed bars (`strategy_set_symbol_feed`, XSYM-D), which codegen-oss main lowers onto (not in a release yet) |
+| `request.security()` | fn | ✅ Runtime | `SecurityEvalState` + full TF aggregation machinery | Same-symbol MTF + higher-TF aggregation; another symbol's installed bars (`strategy_set_symbol_feed`, XSYM-D), which codegen-oss 1.0.0 lowers onto |
 | `request.security_lower_tf()` | fn | ✅ Runtime | Lower-TF emulation via `synthesize_lower_tf_bars` | Intraday same-symbol only |
 | `request.seed()` | fn | ❌ Unsupported | TV-infrastructure-dependent; rejected | |
-| `request.splits()` | fn | ❌ Unsupported (codegen v0.10.4) | v0.10.4 rejects it at transpile; codegen-oss main reads TradingView's recorded answers by request key (`strategy_set_recorded_series`) and `na` when the value reaches only display sinks | No corporate actions feed |
+| `request.splits()` | fn | ✅ Runtime | v0.10.4 rejects it at transpile; codegen-oss 1.0.0 reads TradingView's recorded answers by request key (`strategy_set_recorded_series`) and `na` when the value reaches only display sinks | No corporate actions feed |
 
 ### Functions — runtime.error
 
@@ -876,14 +876,14 @@ All **❌ Unsupported** — hard-reject via `UNSUPPORTED_NAMESPACES` (`support_c
 | `for` | kw | 🔧 Transpiler | C++ `for` | |
 | `for...in` | kw | 🔧 Transpiler | Range-based for | |
 | `if` | kw | 🔧 Transpiler | C++ `if` | |
-| `import` | kw | 🔧 Transpiler | On codegen-oss main (not in a release yet): the library source handed to `transpile(..., libraries=...)` is inlined; a built-in namespace import naming only built-ins is a no-op | |
+| `import` | kw | 🔧 Transpiler | On codegen-oss 1.0.0: the library source handed to `transpile(..., libraries=...)` is inlined; a built-in namespace import naming only built-ins is a no-op | |
 | `method` | kw | 🔧 Transpiler | UDT method generation | |
 | `not` | kw | 🔧 Transpiler | C++ `!` | |
 | `or` | kw | 🔧 Transpiler | C++ `||` | |
 | `switch` | kw | 🔧 Transpiler | C++ `switch` | |
 | `type` | kw | 🔧 Transpiler | UDT struct generation | |
 | `var` | kw | 🔧 Transpiler | Persistent variable (static in on_bar) | |
-| `varip` | kw | 🔧 Transpiler | On codegen-oss main (not in a release yet; v0.10.4 rejects it): kept like `var` on historical bars and left out of the `calc_on_order_fills` rollback | 2026-05-29 (codegen#13) made it a loud reject; 2026-09-28 (29bfd21) accepts it |
+| `varip` | kw | 🔧 Transpiler | On codegen-oss 1.0.0 (v0.10.4 rejects it): kept like `var` on historical bars and left out of the `calc_on_order_fills` rollback | 2026-05-29 (codegen#13) made it a loud reject; 2026-09-28 (29bfd21) accepts it |
 | `while` | kw | 🔧 Transpiler | C++ `while` | |
 
 ### Operators
@@ -933,14 +933,14 @@ All **❌ Unsupported** — hard-reject via `UNSUPPORTED_NAMESPACES` (`support_c
 
 These identifiers are rejected at transpile time with a loud error or produce a no-op with `na`. Strategies relying on them cannot run on PineForge without modification.
 
-### Fundamentals and external data (hard reject)
+### Fundamentals and external data
 
-The released codegen (v0.10.4) rejects every call below. On pineforge-codegen main (not in a release yet) `request.financial`, `dividends`, `earnings` and `splits` read TradingView's recorded answers by request key instead (`strategy_set_recorded_series`), and read `na` when their value reaches only plots and alerts.
+Codegen v0.10.4 rejects every call below. In pineforge-codegen 1.0.0 `request.financial`, `dividends`, `earnings` and `splits` read TradingView's recorded answers by request key instead (`strategy_set_recorded_series`), and read `na` when their value reaches only plots and alerts.
 
-- `request.financial(symbol, field, period)` — fundamental data fetch. No external data feed; transpiler rejects.
-- `request.dividends(ticker, field, gaps, lookahead, ignore_startbar, currency)` — corporate action data. Rejected.
-- `request.earnings(ticker, field, gaps, lookahead, ignore_startbar, currency)` — earnings data. Rejected.
-- `request.splits(ticker, field, gaps, lookahead, ignore_startbar)` — corporate action data. Rejected.
+- `request.financial(symbol, field, period)` — fundamental data fetch. No external data feed; codegen 0.10.4 rejects it, 1.0.0 reads recorded answers (above).
+- `request.dividends(ticker, field, gaps, lookahead, ignore_startbar, currency)` — corporate action data. Rejected by 0.10.4; 1.0.0 reads recorded answers (above).
+- `request.earnings(ticker, field, gaps, lookahead, ignore_startbar, currency)` — earnings data. Rejected by 0.10.4; 1.0.0 reads recorded answers (above).
+- `request.splits(ticker, field, gaps, lookahead, ignore_startbar)` — corporate action data. Rejected by 0.10.4; 1.0.0 reads recorded answers (above).
 - `request.economic(country_code, field, ...)` — macro economic data. Rejected.
 - `request.currency_rate(from, to, ignore_startbar)` — FX rate feed. Rejected.
 - `request.seed(source, symbol, expression)` — TV user-published time series. Rejected (infrastructure-dependent).
@@ -962,11 +962,11 @@ The released codegen (v0.10.4) rejects every call below. On pineforge-codegen ma
 
 ### varip (keyword)
 
-pineforge-codegen main accepts `varip` (not in a release yet; v0.10.4 still rejects it at transpile, the 2026-05-29 codegen#13 behaviour): a historical bar executes once, so a `varip` keeps its value like `var`, and it is left out of the `calc_on_order_fills` rollback.
+pineforge-codegen 1.0.0 accepts `varip` (v0.10.4 rejects it at transpile, the 2026-05-29 codegen#13 behaviour): a historical bar executes once, so a `varip` keeps its value like `var`, and it is left out of the `calc_on_order_fills` rollback.
 
 ### Library system
 
-`library()` scripts and a stray `export` in a strategy are refused. The released codegen (v0.10.4) refuses every `import`; pineforge-codegen main inlines an imported library whose source the caller hands `transpile(..., libraries=...)`.
+`library()` scripts and a stray `export` in a strategy are refused. Codegen v0.10.4 refuses every `import`; pineforge-codegen 1.0.0 inlines an imported library whose source the caller hands `transpile(..., libraries=...)`.
 
 ### Drawing / plotting (parse-and-skip — silent)
 

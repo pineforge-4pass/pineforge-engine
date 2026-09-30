@@ -64,8 +64,8 @@ typedef struct pf_report_s {
 
 @note The `metrics` / `equity_curve` fields were appended in **ABI
 version 2** (`PF_ABI_VERSION`). `pf_report_t` is caller-allocated, so
-consumers must check `pf_abi_version() == 4` (main; a v0.13.1 `.so`, the
-last tagged release, answers 3) before running — a `.so`
+consumers must check `pf_abi_version() == 4` (v1.0.0; a v0.13.1 `.so`
+answers 3) before running — a `.so`
 with no `pf_abi_version` symbol is ABI v1 and predates these fields.
 **ABI version 3** appends `pf_trade_t::open_at_end`, the range-end close
 flag; a v2 reader would misindex the trades array. **ABI version 4**

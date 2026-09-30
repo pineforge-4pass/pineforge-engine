@@ -112,8 +112,8 @@ jq '.summary' report.json
 ```
 
 The image transpiles the `.pine` with its own codegen and runs it on its own
-engine, so it gives the numbers of the engine release it carries; main, which
-Path A builds, is not yet released.
+engine, so it gives the numbers of the engine release it carries; the hub's
+1.0.0 image (engine v1.0.0, codegen 1.0.0) gives Path A's numbers above.
 To build the image yourself, use pineforge-release's `docker/Dockerfile`,
 which vendors this tree's `docker/` harness; this repository ships no
 Dockerfile.

@@ -20,8 +20,8 @@ From 1.0.0, within one `PINEFORGE_VERSION_MAJOR` (the
   values never change.
 
 Before 1.0 a MINOR release could grow a caller-visible struct: v0.13.0
-appended `pf_trade_t::open_at_end`, and `main` appends the ABI v4 fields to
-`pf_report_t`. Each growth bumped `PF_ABI_VERSION`, so a consumer checks
+appended `pf_trade_t::open_at_end`, and the ABI v4 fields of `pf_report_t`
+were appended between v0.13.1 and v1.0.0. Each growth bumped `PF_ABI_VERSION`, so a consumer checks
 `pf_abi_version() == PF_ABI_VERSION` before it runs a strategy.
 
 ## What this means in practice
@@ -180,8 +180,8 @@ aggregate controls each exercise that pair; no caller executable is run. The
 `host-ab9714b` v16 archive stays the runtime-budget baseline
 (`scripts/check_runtime_budget.py`) and a historical input.
 
-On `main` (unreleased; `VERSION` reads 0.14.0), this is an internal C++ epoch
-transition rather than a public C ABI break: `PF_ABI_VERSION` remains 4 and the append-only C ABI
+The v18 to v19 step, between development builds before v1.0.0, is an internal C++ epoch
+transition rather than a public C ABI break: `PF_ABI_VERSION` is 4 on both sides and the append-only C ABI
 guarantee remains in force.
 
 R5 lane D2-A adds two non-virtual `NativeStrategyHost` members inside v19,
@@ -324,8 +324,8 @@ the auxiliary request.security feed folds as the digest taken when it is set.
 The values the tree pins were re-pinned once more, each marked "expectation
 corrected ... because v19-E folds live adapter state".
 R5 lane V19-FIX moves every Pine broker-state, recorded per-bar,
-host-extension and continuation value once more, inside the unreleased v19
-epoch and with the source extension still v4, because two of those reads
+host-extension and continuation value once more, inside the v19 epoch before
+its first release and with the source extension still v4, because two of those reads
 still cost what the run had done. An exit the script cancelled and re-placed
 every bar at one level kept its lifecycle for a revival that never reads a
 cancelled exit, one row per bar the whole position cycle long: a strategy.cancel
@@ -343,7 +343,7 @@ v19fix-cancel-at-1000, v19fix-gapped-stop-cancel and
 v19fix-gapped-stop-cancel-after-pair show TradingView never does; the values
 the tree pins were re-pinned once more, each marked "expectation corrected
 (V19-FIX, ...)".
-R5 lane H-THIN moves them once more, inside the unreleased v19 epoch and with
+R5 lane H-THIN moves them once more, inside the v19 epoch before its first release and with
 the source extension still v4, in one hash step. The Pine host no longer owns
 lot excursions: it keeps the kernel's `owns_lot_excursions()` default, so the
 extension's fold no longer carries the retired host model's state (its
@@ -384,23 +384,23 @@ lift the missing surface into the public ABI.
 
 ## Version macros
 
-The generated `<pineforge/version.h>` exposes, for a `VERSION` of
-`1.0.0-rc.1` built from a tarball or at that release candidate's tag:
+The generated `<pineforge/version.h>` exposes, for v1.0.0 as its release
+tarballs ship it and a build at its tag writes it:
 
 ```c
 #define PINEFORGE_VERSION_MAJOR  1
 #define PINEFORGE_VERSION_MINOR  0
 #define PINEFORGE_VERSION_PATCH  0
 #define PINEFORGE_VERSION_STRING "1.0.0"
-#define PINEFORGE_VERSION_FULL   "1.0.0-rc.1"   /* or "1.0.0-rc.1-3-gabc1234-dirty" */
-#define PINEFORGE_GIT_SHA        "<sha>"
+#define PINEFORGE_VERSION_FULL   "1.0.0"   /* or "1.0.0-3-gabc1234-dirty" */
+#define PINEFORGE_GIT_SHA        "5718c5d"
 ```
 
 `PINEFORGE_VERSION_STRING` is MAJOR.MINOR.PATCH, as are CMake's
 `project(VERSION)`, the package's `PineForge_VERSION` and #pf_version_get; a
 release candidate's `-rc.N` lives in `PINEFORGE_VERSION_FULL`, the package's
-`PineForge_VERSION_FULL` and #pf_version_string. A final release reads the
-same with no `-rc.N`: `FULL` is `"1.0.0"`. The trailing `-N-gSHA[-dirty]` is
+`PineForge_VERSION_FULL` and #pf_version_string. The candidate v1.0.0-rc.1
+reads the same but for its sha and `FULL`, `"1.0.0-rc.1"`. The trailing `-N-gSHA[-dirty]` is
 `git describe`'s, for a git checkout past its tag; a tarball build, or one
 configured with `-DPINEFORGE_VERSION_SOURCE=FILE`, carries the `VERSION` file
 exactly. `scripts/test_cmake_version_source.py` (CTest

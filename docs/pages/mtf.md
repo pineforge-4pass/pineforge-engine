@@ -57,8 +57,8 @@ while a run is in progress. The merge itself is the kernel's (`NativeRunSpec::in
 `scripts/run_strategy.py` installs a probe's pinned feeds, facts and recorded
 request values (`strategy_set_recorded_series`, TradingView's per-chart-bar
 fundamentals; a tape with a header only is a request na on every chart bar)
-from `PINEFORGE_REQUESTS_ROOT/<probe>/requests.json` when that variable is set. pineforge-codegen's main branch lowers a foreign `request.security` onto
-this surface; its v0.10.4 PyPI release still refuses a symbol that is not the
+from `PINEFORGE_REQUESTS_ROOT/<probe>/requests.json` when that variable is set. pineforge-codegen 1.0.0 lowers a foreign `request.security` onto
+this surface; its 0.10.4 release refuses a symbol that is not the
 chart's.
 
 ## The script_tf / input_tf model
