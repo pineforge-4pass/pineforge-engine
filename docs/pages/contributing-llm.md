@@ -101,6 +101,21 @@ finding to report, not a step to take.
    `scripts/corpus_parity_baseline.txt` at the recorded gitlink.
    *Enforced:* `scripts/check_corpus_parity.sh`.
 
+   `Excellent` also requires distinct-entry identity parity at each exact
+   time, price and direction where TradingView exports two or more distinct,
+   non-empty entry Signals. The engine must supply non-empty incarnation
+   identities whose distinct count equals the Signal count, not merely the
+   same number of fragment rows. The identity check resolves prices against
+   every TradingView entry key, including one-Signal and empty-Signal keys.
+   Exact equality keeps its own key. Otherwise, an engine price can count
+   at a multi-Signal key only if it is the sole TradingView key within the
+   strict relative entry tolerance, less than 0.01%, with time and direction
+   exact. Overlapping neighborhoods, missing identities and count mismatches
+   refuse `Excellent`. Fragment consolidation, trade matching and all
+   thresholds stay unchanged; a nearby extra entry must still fail the count
+   gate. *Enforced:* `scripts/test_verify_corpus_metrics.py`, including
+   `tests/fixtures/coof_cascade_identity/README.md`'s regression tape.
+
 8. **A frozen assertion is not rewritten to fit new behaviour.** The twin
    suites pin legacy `CHECK`s at a historical commit; changing one is arguing
    with the pin, not with the code. *Enforced:*

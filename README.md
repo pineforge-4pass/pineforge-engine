@@ -263,11 +263,35 @@ The hard lane holds the 309 public-corpus probes and 700 closed-test probes (640
 
 Every script is exported from TradingView as-is (its own inputs, its own defaults) with the chart's trade list at full precision, transpiled with [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss), and run by this engine on the same OHLCV bars. The two trade lists are aligned trade-for-trade and graded by [`scripts/verify_corpus.py`](scripts/verify_corpus.py):
 
-- **excellent** — the same number of trades, ≥ 99% of TradingView's trades matched, entry and exit prices within 0.01% and PnL within 1% at the 90th percentile (trailing-stop scripts are graded on the *production* profile: exits within 0.05% and PnL within 100%, since a trail fill depends on TradingView's sub-bar path);
+- **excellent** — the same number of trades, ≥ 99% of TradingView's trades matched, the distinct-entry identity check passed, entry and exit prices within 0.01% and PnL within 1% at the 90th percentile (trailing-stop scripts are graded on the *production* profile: exits within 0.05% and PnL within 100%, since a trail fill depends on TradingView's sub-bar path);
 - **strong** — ≥ 95% matched, trade count within 6%, entries within 0.1% and exits within 0.5% at p90;
 - **moderate** — ≥ 75% coverage with ≥ 90% of the in-window trades matched; **weak** — at least one match; **minimal** — none.
 
 The closed-test grades are the maintainers' own measurement of a fixed population; only the public board can be re-run from this repository.
+
+### Distinct-entry identity
+
+At an exact entry time, price and direction, two or more distinct, non-empty
+TradingView entry `Signal` values prove separate entries. For `excellent`,
+the engine must provide non-empty entry-incarnation identities and exactly
+as many distinct identities at each such key as TradingView has Signals.
+Raw trade-row count is not identity evidence: one entry can have several
+partial-close or FIFO fragments.
+
+The identity check considers **every TradingView entry key**, including keys
+with only one Signal or none. Time and direction must match exactly. An
+engine price exactly equal to any of those keys belongs only to that key;
+it cannot count toward a nearby multi-Signal key. Without an exact match,
+the price may map to a multi-Signal key only when that is the sole
+TradingView key within the strict relative entry tolerance, less than
+0.01%. A price within tolerance of that key and any other TradingView key
+is ambiguous and refuses `excellent`, as do missing engine identities or
+a distinct-identity count mismatch.
+
+This projection does not change fragment consolidation, trade matching or
+any threshold. In particular, an extra engine entry at a nearby price must
+not be merged away to pass the count gate. The regression tape and tests
+are described in `tests/fixtures/coof_cascade_identity/README.md`.
 
 ### How a change is judged
 
