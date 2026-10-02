@@ -2664,6 +2664,14 @@ bool PineExecutionAdapter::same_bar_market_tx_scope() const {
         && !config_.calc_on_order_fills && same_point_pair_scope();
 }
 
+bool PineExecutionAdapter::fixed_unmargined_market_batch_scope() const {
+    return config_.pyramiding > 0
+        && config_.default_qty_type == static_cast<int>(QtyType::FIXED)
+        && config_.margin_long == 0.0 && config_.margin_short == 0.0
+        && config_.commission_value == 0.0 && !config_.calc_on_order_fills
+        && same_point_pair_scope();
+}
+
 // R5 lane W6B-ENG-PAIRS: where the flat-pair rules of W6-ENG-FILL-ORDER hold
 // -- the order at one fill point, the later call's transaction of its own
 // quantity plus the pending market's, and that transaction's admission. The
@@ -6470,7 +6478,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         && risk_.max_position_size <= 0.0 && !risk_.halted && !cap.active()
         && explicit_fixed && !priced && oca_name.empty();
     const bool same_bar_market_candidate = (same_bar_market_tx_scope()
-        || p2_flat_market_candidate)
+        || p2_flat_market_candidate || fixed_unmargined_market_batch_scope())
         && !priced && oca_name.empty()
         && (qty_type < 0 || qty_type == static_cast<int>(QtyType::FIXED))
         && (default_sized || finite_positive(qty));
@@ -7523,6 +7531,52 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         stage_flat_children_before_parent(
             id, source_point->decision.coordinate.interval_index,
             source_point->decision.script_bar_open_ms);
+    }
+    if (same_bar_market_candidate && fixed_unmargined_market_batch_scope()) {
+        const double own_units = floor_quantity_grid(default_sized
+                ? config_.default_qty_value : std::abs(qty), staged_.quantity_grid);
+        if (!finite_positive(own_units)) return;
+        double projected_units = current;
+        std::size_t projected_entries = detail::run_position(require_host()).lot_count;
+        for (const auto& pending : pending_same_bar_commands_) {
+            const auto& prior = pending.snapshot;
+            if (pending.replacement_key == id || !pending.opening
+                || prior.family != PineOrderFamily::Entry
+                || !prior.frozen_market_instruction) {
+                continue;
+            }
+            const bool opposite = projected_units != 0.0
+                && ((projected_units > 0.0) != prior.is_long);
+            projected_entries = opposite ? 1U : projected_entries + 1U;
+            projected_units += prior.is_long ? prior.frozen_market_transaction_units
+                                            : -prior.frozen_market_transaction_units;
+        }
+        const bool same_side = projected_units != 0.0
+            && ((projected_units > 0.0) == is_long);
+        const auto entry_cap = static_cast<std::size_t>(std::max(1, config_.pyramiding));
+        if (same_side && projected_entries >= entry_cap) return;
+        const double held_opposite = projected_units != 0.0 && !same_side
+            ? std::abs(projected_units) : 0.0;
+        const double transaction = own_units + held_opposite;
+        request.intent = native_order::Transact{is_long ? transaction : -transaction};
+        snapshot.reverse_to = false;
+        snapshot.projection_over_pyramiding = false;
+        snapshot.frozen_market_instruction = true;
+        snapshot.frozen_market_own_units = own_units;
+        snapshot.frozen_market_transaction_units = transaction;
+        auto existing = std::find_if(pending_same_bar_commands_.begin(),
+            pending_same_bar_commands_.end(), [&](const PendingSameBarCommand& pending) {
+                return !pending.snapshot.frozen_market_targeted_close
+                    && pending.replacement_key == id;
+            });
+        PendingSameBarCommand pending{std::move(request), std::move(snapshot), id, true};
+        if (existing == pending_same_bar_commands_.end()) {
+            pending_same_bar_commands_.push_back(std::move(pending));
+        } else {
+            source_batch_mutated_ = true;
+            *existing = std::move(pending);
+        }
+        return;
     }
     if (same_bar_market_candidate) {
         // Default percent/cash commands are already frozen at their source
@@ -11686,7 +11740,8 @@ void PineExecutionAdapter::flush_pending_same_bar_commands(bool flat_pair_follow
         && queued[1].snapshot.oca_name.empty()
         && queued[0].snapshot.frozen_market_instruction
         && queued[1].snapshot.frozen_market_instruction;
-    if (config_.pyramiding == 2 && !p2_explicit_pair && !potential_short_seed) {
+    if (config_.pyramiding == 2 && !p2_explicit_pair && !potential_short_seed
+        && !fixed_unmargined_market_batch_scope()) {
         // Exact pair finalization is a whole-source-batch decision. Any
         // replacement/cancel, third entry-like instruction, prior resting
         // entry, or live risk/config deviation sends every survivor through
@@ -11866,7 +11921,7 @@ void PineExecutionAdapter::flush_pending_same_bar_commands(bool flat_pair_follow
                     continue;
                 }
             }
-            if (single_entry) {
+            if (single_entry && !fixed_unmargined_market_batch_scope()) {
                 const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), opening,
                                                         command.replacement_key);
                 apply_known_reversal_gap(accepted);
@@ -14232,7 +14287,10 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     // placed -- no entry gate, pyramiding included, reads it (lab tv tape
     // w13-b1s-close-f 2025-04-10: the close_all's 4 and the follow-up's 1
     // both open long at the 9.135 open).
-    if (source.crosses_zero) return NativePrecommitVerdict::AdmitWithHostMargin;
+    if (source.crosses_zero
+        || (source.frozen_market_instruction && fixed_unmargined_market_batch_scope())) {
+        return NativePrecommitVerdict::AdmitWithHostMargin;
+    }
     // Entries a bar placed while the book was flat all fill where they reach
     // their fill point, the later ones behind a book of their own side that
     // only the earlier ones opened: TradingView judges each on its own cost
@@ -21324,6 +21382,10 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
                                   - std::abs(physical.signed_units));
             *partition = 1;
             kernel_close_only = !(*qty > 1e-10);
+            sized = true;
+        } else if (owner_->fixed_unmargined_market_batch_scope()) {
+            *qty = snapshot.frozen_market_transaction_units;
+            *partition = 1;
             sized = true;
         } else if (physical.signed_units != 0.0
                    && ((physical.signed_units > 0.0) == snapshot.is_long)

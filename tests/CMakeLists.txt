@@ -1,4 +1,5 @@
 set(TEST_SOURCES
+    px-f1-samebar-entries
     # R4-D L4a native-route behavioral twins.  These retain the legacy
     # oracle literals while driving the switched host only through its public
     # source commands and projections.

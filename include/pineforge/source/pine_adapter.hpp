@@ -1919,6 +1919,7 @@ private:
                          bool include_next_open = false);
     native_order::Owner owner_for_close(const SourceId&, bool dynamic) const;
     bool same_bar_market_tx_scope() const;
+    bool fixed_unmargined_market_batch_scope() const;
     void flush_pending_same_bar_commands(bool flat_pair_follows = false);
     // The placement-time default quantity: the core's own conversion, read as
     // a query (NativeStrategyHost::native_sized_units) and floored by the
