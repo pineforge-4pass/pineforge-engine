@@ -267,7 +267,11 @@ Every script is exported from TradingView as-is (its own inputs, its own default
 - **strong** — ≥ 95% matched, trade count within 6%, entries within 0.1% and exits within 0.5% at p90;
 - **moderate** — ≥ 75% coverage with ≥ 90% of the in-window trades matched; **weak** — at least one match; **minimal** — none.
 
-The closed-test grades are the maintainers' own measurement of a fixed population; only the public board can be re-run from this repository. The formal gate requires **no hard-surface regression** and strictly positive pooled movement across the target excellent and excellent+strong bands. A documented native-correctness exception permits exactly zero target-band movement with no individual regression, after full comparison and independent review; its actual FAIL remains recorded and baseline promotion is deferred. Negative movement is outside this exception. The merge ruleset requires the maintainers' `pineforge/verify` and `pineforge/parity` commit statuses on the exact PR head; GitHub Actions CI is advisory. Baseline promotion also requires a recorded PASS and an exact-head merge.
+The closed-test grades are the maintainers' own measurement of a fixed population; only the public board can be re-run from this repository.
+
+### How a change is judged
+
+A change is judged by what it moves: the same population is graded before and after it, and two rules must both hold. On the hard surface (ETHUSDT.P at 15 minutes) **no probe may regress**: none may lose a grade, stop reporting a metric or become an engine error. Every other market and timeframe is pooled and scored over two bands, excellent and excellent+strong: +1 each time a probe enters a band, −1 each time one leaves it. A score above 0 passes, as long as no probe that leaves a band falls more than one grade. A score of exactly 0 passes only if no probe lost a grade or became an engine error and no hard-surface probe got worse on a graded metric; it is flagged *no-improve-no-regression*, or *improved* when a probe got better where the bands cannot see it (a grade rising below them or on the hard surface, or an engine error fixed). Any other 0 fails, and so does a negative score. The merge ruleset requires the maintainers' `pineforge/verify` and `pineforge/parity` commit statuses on the exact PR head; GitHub Actions CI is advisory. Baseline promotion also requires a recorded PASS and an exact-head merge.
 
 ### What the closed test taught the engine
 
