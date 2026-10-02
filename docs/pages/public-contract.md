@@ -3,7 +3,8 @@
 @tableofcontents
 
 1.0.0 was released on 2026-09-30: engine v1.0.0 with pineforge-codegen 1.0.0.
-From 1.0.0 the engine's version number is a
+1.0.1 followed on 2026-10-02: engine v1.0.1, which changes only documentation,
+with pineforge-codegen 1.0.1. From 1.0.0 the engine's version number is a
 semantic version over the surfaces this page lists, and over nothing else: a PATCH release fixes behaviour, a
 MINOR release adds to a surface, and only a MAJOR release removes or changes
 one. Each rule below names the checker or the CTest row that holds it on this
@@ -167,11 +168,12 @@ the fields and calls the C surface declares.
 - **From 1.0.0 the engine and the codegen share one version number, and the
   only supported pair is the same `X.Y.Z`, prerelease included:** engine
   `v1.0.0-rc.1` with codegen `1.0.0-rc.1` (PyPI spells it `1.0.0rc1`), engine
-  `v1.0.0` with codegen `1.0.0`. Any other pair is unsupported: a release
-  candidate with its final release, two minors, or two builds that agree only
-  on `PF_ABI_VERSION`. Generated strategy code compiles against the engine's
-  internal C++ headers, which the C ABI does not cover and the script ABI
-  checks above version (@ref abi_stability, "What's *not* guaranteed").
+  `v1.0.0` with codegen `1.0.0`, engine `v1.0.1` with codegen `1.0.1`. Any other
+  pair is unsupported: a release candidate with its final release, two minors,
+  or two builds that agree only on `PF_ABI_VERSION`. Generated strategy code
+  compiles against the engine's internal C++ headers, which the C ABI does not
+  cover and the script ABI checks above version (@ref abi_stability, "What's
+  *not* guaranteed").
   Regenerate the C++ and relink the strategy library on every pair change.
 - **The release hub enforces it.** `release.yml` dispatches `engine-release`
   to pineforge-release with `client_payload` `{version: "vX.Y.Z[-rc.N]",

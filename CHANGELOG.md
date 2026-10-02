@@ -5,6 +5,31 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
+## 1.0.1 — 2026-10-02
+
+A documentation-only release that pairs with pineforge-codegen 1.0.1, the pair
+the release hub's image `ghcr.io/pineforge-4pass/pineforge-release:1.0.1`
+carries. Since v1.0.0 no file under `src/`, `include/`, `cmake/` or
+`examples/`, no CMake file and nothing under `docker/` but its README changed:
+the library, the C ABI (`PF_ABI_VERSION` 4), the native C++ API, the script ABI
+epoch `engine_script_run_v19` and its state-hash values, and the JSON report
+keys of `docker/run_json.py` (`metrics.equity.sharpe_tv` / `sortino_tv`
+included) are v1.0.0's. The GitHub release attaches the three prebuilt
+tarballs, `pineforge-v1.0.1-linux-x86_64.tar.gz`,
+`pineforge-v1.0.1-linux-aarch64.tar.gz` and
+`pineforge-v1.0.1-macos-universal.tar.gz`, each with a `.sha256`.
+
+- **Why a release.** From 1.0.0 the engine and pineforge-codegen release one
+  version number, and codegen 1.0.1 fixes C++ that did not compile and a value
+  that came out silently wrong (its
+  [changelog](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/CHANGELOG.md)).
+  Regenerate strategy C++ with codegen 1.0.1 and relink it against v1.0.1's
+  headers and `libpineforge.a`: the pair changed, though no ABI number did.
+- **Documentation.** The README, the docs pages and this changelog describe
+  the v1.0.0 release (#309). The docs no longer point at the retired Python
+  `pineforge-live` runtime; the native `pineforge-live` runner in `runner/`
+  replaces it (#310).
+
 ## 1.0.0 — 2026-09-30
 
 The first stable release under semantic versioning. From it on the engine and
