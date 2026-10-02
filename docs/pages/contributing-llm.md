@@ -286,9 +286,14 @@ to decide a merge. The public corpus is 312 probes; the closed TradingView test
 set is larger and is not redistributed.
 
 **band 1 / band 2** — the grade bands a campaign's merge rule is stated in:
-*excellent* and *excellent-or-strong*. The rule is no individual regression and
-net movement ≥ 0 across both; a documented exception permits exactly net 0 with
-no individual regression, and negative movement is outside it.
+*excellent* and *excellent-or-strong*. Each entry into a band scores +1 and
+each exit −1, summed over both. With no regression on the hard surface
+(ETHUSDT.P at 15 minutes), a score above 0 passes if no probe that leaves a band
+falls more than one grade;
+exactly 0 passes only if no probe lost a grade or became an engine error and no
+hard-surface probe got worse on a graded metric (flagged
+*no-improve-no-regression*, or *improved* when a probe got better where the
+bands cannot see it); any other 0 fails, and so does a negative score.
 
 ## Where to read next
 

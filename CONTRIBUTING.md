@@ -301,13 +301,18 @@ and the documentation build and skips the rest; `docs/ci.md` names the rule.
 ### How a parity campaign gates a merge
 
 For changes measured against the closed TradingView test set, a sweep is run
-before and after over a **fixed** population, and the merge rule is stated in
-terms of movement between grade bands: **no individual regression, and net
-movement ≥ 0** across the target excellent and excellent+strong bands. A
-documented native-correctness exception permits exactly **net 0** with no
-individual regression, after full comparison, independent review and green CI;
-its FAIL stays on the record and baseline promotion is deferred. Negative
-movement is outside the exception — it is not traded against anything.
+before and after over a **fixed** population, and two rules must both hold. On
+the hard surface (ETHUSDT.P at 15 minutes) **no probe may regress**: none may
+lose a grade, stop reporting a metric or become an engine error. Every other
+market and timeframe is pooled and scored over two bands, excellent and
+excellent+strong: +1 each time a probe enters a band, −1 each time one leaves
+it. A score above 0 passes, as long as no probe that leaves a band falls more
+than one grade. A score of exactly 0 passes only if no probe lost a grade or
+became an engine error and no hard-surface probe got worse on a graded metric;
+it is flagged *no-improve-no-regression*, or *improved* when a probe got better
+where the bands cannot see it (a grade rising below them or on the hard
+surface, or an engine error fixed). Any other 0 fails, and so does a negative
+score.
 
 ## Reporting a bug
 
