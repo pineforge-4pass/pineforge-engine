@@ -226,7 +226,7 @@ live behavior or real broker fills.
 
 ## Validation scoreboard
 
-**Measured 2026-09-29** on engine `35db01c8` with codegen-oss `70c2b4af` (the maintainers' baseline `pineforge-parity-baseline-20260929-engine-35db01c8`): **7,989 graded probes, 7,905 excellent + 84 strong**, none below *strong*, across 18 market/timeframe lanes. Their TradingView trade lists hold 4,776,328 trades. Engine v1.0.0, released 2026-09-30 from main `133f5714`, includes `35db01c8`, codegen 1.0.0 carries `70c2b4af`'s code, and the releases changed no grade. The 1.0.1 releases (2026-10-02) were not re-graded: engine v1.0.1 changes only documentation since v1.0.0, and codegen 1.0.1 transpiles the public corpus and the 1,384 real-world strategy sources its pull requests measured to the same C++ as 1.0.0.
+**Measured 2026-09-29** on engine `35db01c8` with codegen-oss `70c2b4af` (the maintainers' baseline `pineforge-parity-baseline-20260929-engine-35db01c8`): **7,989 graded probes, 7,905 excellent + 84 strong**, none below *strong*, across 18 market/timeframe lanes. Their TradingView trade lists hold 4,776,328 trades. Engine v1.0.0, released 2026-09-30 from main `133f5714`, includes `35db01c8`, codegen 1.0.0 carries `70c2b4af`'s code, and the releases changed no grade. The 1.0.1 code was graded before it merged: codegen-oss `67892cda`, the code of codegen 1.0.1, with engine `b2a578ce`, whose library source is v1.0.0's, graded the same 7,989 probes with no probe changing tier (baseline `pineforge-parity-baseline-20261001-codegen-67892cda`); engine v1.0.1 changes only documentation since v1.0.0.
 
 | Board | Test set | Result |
 |---|---|---|
