@@ -1,6 +1,5 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/checked_settings.hpp>
-#include "../runner/json.hpp"
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
@@ -11,6 +10,23 @@
 
 namespace {
 int allocation_failure = 0;
+
+std::string receipt_field(const std::string& document, const std::string& name,
+                          const std::string& field) {
+    const auto row = document.find("{\"name\":\"" + name + "\"");
+    assert(row != std::string::npos);
+    const auto key = "\"" + field + "\":";
+    const auto found = document.find(key, row);
+    assert(found != std::string::npos && found < document.find('}', row));
+    const auto begin = found + key.size();
+    if (document[begin] == '"') {
+        const auto end = document.find('"', begin + 1);
+        return document.substr(begin + 1, end - begin - 1);
+    }
+    const auto end = document[begin] == '[' ? document.find(']', begin) + 1
+                                           : document.find_first_of(",}", begin);
+    return document.substr(begin, end - begin);
+}
 }
 
 void* operator new(std::size_t size) {
@@ -39,7 +55,6 @@ void operator delete[](void* allocation, const std::nothrow_t&) noexcept { ::ope
 
 int main() {
     using namespace pineforge::checked_settings;
-    using pineforge::live::parse_json;
     assert(number(0xffff0000LL) == "4294901760");
     assert(strategy_settings_api_version() == PF_SETTINGS_API_VERSION);
     char error[256]{};
@@ -77,7 +92,7 @@ int main() {
     const auto defaults = receipt();
     for (const auto& setting : std::vector<std::pair<const char*, const char*>>{
              {"Lenght", "7"}, {"undeclared", "5"}, {"Length", "14suffix"},
-             {"Length", "2.0"}, {"Length", "0"}, {"Length", "51"},
+             {"Length", "5.5"}, {"Length", "5.0000000000000001"}, {"Length", "0"}, {"Length", "51"},
              {"Length", "2147483648"}, {"Threshold", "nan"}, {"Threshold", "NaN"},
              {"Threshold", "inf"}, {"Threshold", "-Inf"}, {"Threshold", "1e999"},
              {"Threshold", "1e-999"}, {"Threshold", "1e-310"}, {"Length", "+-1"},
@@ -92,12 +107,20 @@ int main() {
              {"default_qty_typo", "cash"}, {"default_qty_type", "typo"},
              {"commission_type", "3"}, {"process_orders_on_close", "falsex"},
              {"calc_on_order_fills", "2"}, {"close_entries_rule", "random"},
-             {"slippage", "-1"}, {"pyramiding", "2.0"}, {"initial_capital", "1suffix"},
+             {"slippage", "-1"}, {"pyramiding", "2.5"}, {"initial_capital", "1suffix"},
              {"commission_value", "NaN"}, {"default_qty_value", "Inf"}}) {
         assert(override_setting(setting.first, setting.second) == PF_SETTINGS_INVALID_ARGUMENT);
         assert(error[0]);
         assert(receipt() == defaults);
     }
+    assert(input("Length", "5.0") == PF_SETTINGS_OK);
+    assert(receipt_field(receipt(), "Length", "effective_value") == "5");
+    assert(input("Length", "5e0") == PF_SETTINGS_OK);
+    assert(receipt_field(receipt(), "Length", "effective_value") == "5");
+    assert(integer("9223372036854775807.0", 64) == std::numeric_limits<std::int64_t>::max());
+    assert(integer("-9223372036854775808e0", 64) == std::numeric_limits<std::int64_t>::min());
+    assert(input("Side", "short") == PF_SETTINGS_INVALID_ARGUMENT);
+    assert(std::string(error) == "invalid enum option");
     assert(input("Length", "4") == PF_SETTINGS_OK);
     assert(input("Threshold", "3.125") == PF_SETTINGS_OK);
     assert(input("Enabled", "0") == PF_SETTINGS_OK);
@@ -110,29 +133,32 @@ int main() {
     assert(override_setting("commission_type", "2") == PF_SETTINGS_OK);
     assert(override_setting("close_entries_rule", "any") == PF_SETTINGS_OK);
     assert(override_setting("process_orders_on_close", "1") == PF_SETTINGS_OK);
-    const auto document = parse_json(receipt());
-    assert(document.members.at("version").value == "1");
-    const auto& inputs = document.members.at("inputs").items;
-    assert(inputs.size() == 8);
-    assert(inputs[0].members.at("name").value == "Length");
-    assert(inputs[0].members.at("type").value == "int");
-    assert(inputs[0].members.at("min").value == "1");
-    assert(inputs[0].members.at("max").value == "50");
-    assert(inputs[0].members.at("step").value == "2");
-    assert(inputs[0].members.at("effective_value").value == "4");
-    assert(inputs[1].members.at("effective_value").value == "3.125");
-    assert(inputs[2].members.at("effective_value").value == "false");
-    assert(inputs[3].members.at("options").items.size() == 2);
-    assert(inputs[4].members.at("effective_value").value == "2");
-    assert(inputs[5].members.at("effective_value").value == "open");
-    assert(inputs[6].members.at("effective_value").value == "1700000000000");
-    const auto& overrides = document.members.at("overrides").items;
-    assert(overrides.size() == 10);
-    assert(overrides[2].members.at("effective_value").value == "200");
-    assert(overrides[5].members.at("effective_value").value == "true");
-    assert(overrides[7].members.at("effective_value").value == "ANY");
-    assert(overrides[8].members.at("effective_value").value == "cash");
-    assert(overrides[9].members.at("effective_value").value == "cash_per_contract");
+    const auto document = receipt();
+    assert(document.find("{\"version\":1,\"inputs\":[") == 0);
+    const auto split = document.find("],\"overrides\":[");
+    assert(split != std::string::npos);
+    assert(std::count(document.begin(), document.begin() + split, '{') == 9);
+    assert(std::count(document.begin() + split, document.end(), '{') == 10);
+    assert(receipt_field(document, "Length", "type") == "int");
+    assert(receipt_field(document, "Length", "kind") == "int");
+    assert(receipt_field(document, "Tint", "type") == "int");
+    assert(receipt_field(document, "Tint", "kind") == "string");
+    assert(receipt_field(document, "Length", "min") == "1");
+    assert(receipt_field(document, "Length", "max") == "50");
+    assert(receipt_field(document, "Length", "step") == "2");
+    assert(receipt_field(document, "Length", "effective_value") == "4");
+    assert(receipt_field(document, "Threshold", "effective_value") == "3.125");
+    assert(receipt_field(document, "Enabled", "effective_value") == "false");
+    assert(receipt_field(document, "Mode", "options") == "[\"fast\",\"slow\"]");
+    assert(receipt_field(document, "Side", "effective_value") == "2");
+    assert(receipt_field(document, "Source", "effective_value") == "open");
+    assert(receipt_field(document, "Stamp", "effective_value") == "1700000000000");
+    assert(receipt_field(document, "default_qty_value", "default") == "1");
+    assert(receipt_field(document, "default_qty_value", "effective_value") == "200");
+    assert(receipt_field(document, "process_orders_on_close", "effective_value") == "true");
+    assert(receipt_field(document, "close_entries_rule", "effective_value") == "ANY");
+    assert(receipt_field(document, "default_qty_type", "effective_value") == "cash");
+    assert(receipt_field(document, "commission_type", "effective_value") == "cash_per_contract");
     const std::string allocation_value(512, '1');
     for (int failure : {1, 2}) {
         allocation_failure = failure;
@@ -140,12 +166,16 @@ int main() {
         assert(error[0]);
         allocation_failure = failure;
         assert(override_setting("pyramiding", "9") == PF_SETTINGS_EXCEPTION);
+        pf_strategy_t failed = strategy_create(nullptr);
         allocation_failure = failure;
-        strategy_set_input(strategy, "Length", allocation_value.c_str());
+        strategy_set_input(failed, "Length", allocation_value.c_str());
         assert(allocation_failure == 0);
+        assert(std::string(strategy_get_last_error(failed)).find("strategy_set_input:") == 0);
         allocation_failure = failure;
-        strategy_set_override(strategy, "initial_capital", allocation_value.c_str());
+        strategy_set_override(failed, "initial_capital", allocation_value.c_str());
         assert(allocation_failure == 0);
+        assert(std::string(strategy_get_last_error(failed)).find("strategy_set_override:") == 0);
+        strategy_free(failed);
     }
     pf_report_t report{};
     assert(run_backtest_full_checked(strategy, nullptr, -1, "", "", 0, 4,
@@ -159,6 +189,9 @@ int main() {
         run_backtest_full(strategy, nullptr, 0, long_timeframe.c_str(), "", 0, 4,
                           PF_MAGNIFIER_ENDPOINTS, &report);
         assert(allocation_failure == 0);
+        assert(std::string(strategy_get_last_error(strategy)).find("run_backtest_full:") == 0);
+        if (failure == 2)
+            assert(std::string(strategy_get_last_error(strategy)).find("unknown C++ exception") != std::string::npos);
     }
     assert(boundary(error, sizeof(error), [] { throw std::runtime_error("standard failure"); }) == PF_SETTINGS_EXCEPTION);
     assert(std::string(error) == "standard failure");
@@ -171,6 +204,21 @@ int main() {
         bars[index] = {100, 102, 99, 101, 5,
                        static_cast<std::int64_t>(index) * 60000};
     }
+    pf_strategy_t poisoned = strategy_create(nullptr);
+    strategy_set_override(poisoned, "pyramiding", "abc");
+    const auto setter_failure = std::string(strategy_get_last_error(poisoned));
+    assert(setter_failure.find("strategy_set_override:") == 0 && setter_failure.size() > 23);
+    strategy_set_input(poisoned, "Length", "4");
+    report.total_trades = 99;
+    run_backtest_full(poisoned, bars, 8, "1", "1", 0, 4, PF_MAGNIFIER_ENDPOINTS, &report);
+    assert(report.total_trades == 0 && std::string(strategy_get_last_error(poisoned)) == setter_failure);
+    assert(run_backtest_full_checked(poisoned, bars, 8, "1", "1", 0, 4,
+           PF_MAGNIFIER_ENDPOINTS, &report, error, sizeof(error)) == PF_SETTINGS_RUN_FAILED);
+    assert(std::string(error) == setter_failure);
+    report.total_trades = 99;
+    run_backtest(poisoned, bars, 8, &report);
+    assert(report.total_trades == 0 && std::string(strategy_get_last_error(poisoned)) == setter_failure);
+    strategy_free(poisoned);
     assert(run_backtest_full_checked(strategy, bars, 8, "1", "1", 0, 4,
            PF_MAGNIFIER_ENDPOINTS, &report, error, sizeof(error)) == PF_SETTINGS_OK);
     assert(report.total_trades == 0);

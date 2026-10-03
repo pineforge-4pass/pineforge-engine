@@ -1547,6 +1547,11 @@ PF_API const char* pf_version_string(void);
 
 /** @} */ /* end of pf_version */
 
+/** @defgroup pf_settings Generated Strategy Settings
+ *  Additive, opt-in validation and effective-settings receipts.
+ *  @{ */
+
+/** Current generated-strategy settings extension version. */
 #define PF_SETTINGS_API_VERSION 1u
 
 /** Status codes for the opt-in generated-strategy settings extension. */
@@ -1558,6 +1563,8 @@ typedef enum pf_settings_status_t {
     PF_SETTINGS_BUFFER_TOO_SMALL = 4,
     PF_SETTINGS_RUN_FAILED = 5
 } pf_settings_status_t;
+
+/** @} */ /* end of pf_settings */
 
 #ifndef PINEFORGE_NO_STRATEGY_DECLS
 

@@ -211,32 +211,49 @@ public:
         }
         pineforge::source::PineStrategyHost::set_strategy_override(overrides);
     }
+    void _pf_record_failure(const char* entrypoint, const char* message) noexcept {
+        try { last_error_ = entrypoint; last_error_ += ": "; last_error_ += message; } catch (...) {}
+    }
+    bool _pf_refuse_failed_setting(ReportC* out) const noexcept {
+        if (last_error_.compare(0, 13, "strategy_set_") != 0) return false;
+        if (out) *out = ReportC{};
+        return true;
+    }
 #ifdef PF_SETTINGS_API_VERSION
+    static pineforge::source::PineStrategyConfig _pf_settings_declared_config() {
+        pineforge::source::PineStrategyConfig cfg{};
+        cfg.initial_capital = 10000.0;
+        cfg.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
+        cfg.default_qty_value = 1.0;
+        cfg.src_series_active = true;
+        return cfg;
+    }
     std::vector<pineforge::checked_settings::Setting> _pf_settings_inputs() const {
         return {
-            {"Length", "int", pineforge::checked_settings::number(3), {}, 1, 50, 2, 32, true, {}},
-            {"Threshold", "float", pineforge::checked_settings::number(2.5), {}, 0, 10, 0.25, 32, true, {}},
-            {"Enabled", "bool", pineforge::checked_settings::number(true), {}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 32, true, {}},
-            {"Mode", "string", std::string("fast"), {std::string("fast"), std::string("slow")}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 32, true, {}},
-            {"Side", "enum", pineforge::checked_settings::number(Side__long_), {"Side.long", "Side.short"}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 32, true, {"1", "2"}},
-            {"Source", "source", "close", {"close", "high", "hl2", "hlc3", "hlcc4", "low", "ohlc4", "open", "volume"}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 32, true, {}},
-            {"Stamp", "int", pineforge::checked_settings::number(1577836800000), {}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 64, true, {}},
-            {"Tint", "int", pineforge::checked_settings::number(pine_color::red), {}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 64, true, {}},
+            {"Length", "int", pineforge::checked_settings::number(3), {}, 1, 50, 2, 32, true, {}, "int"},
+            {"Threshold", "float", pineforge::checked_settings::number(2.5), {}, 0, 10, 0.25, 32, true, {}, "float"},
+            {"Enabled", "bool", pineforge::checked_settings::number(true), {}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 32, true, {}, "bool"},
+            {"Mode", "string", std::string("fast"), {std::string("fast"), std::string("slow")}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 32, true, {}, "string"},
+            {"Side", "enum", pineforge::checked_settings::number(Side__long_), {"Side.long", "Side.short"}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 32, true, {"1", "2"}, "enum"},
+            {"Source", "source", "close", {"close", "high", "hl2", "hlc3", "hlcc4", "low", "ohlc4", "open", "volume"}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 32, true, {}, "source"},
+            {"Stamp", "int", pineforge::checked_settings::number(1577836800000), {}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 64, true, {}, "int"},
+            {"Tint", "int", pineforge::checked_settings::number(pine_color::red), {}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 64, true, {}, "string"},
         };
     }
     std::vector<pineforge::checked_settings::Setting> _pf_settings_overrides() const {
         const double _pf_nan = std::numeric_limits<double>::quiet_NaN();
+        const auto _pf_defaults = _pf_settings_declared_config();
         return {
-            {"initial_capital", "float", pineforge::checked_settings::number(config_.initial_capital), {}, 0.0},
-            {"commission_value", "float", pineforge::checked_settings::number(config_.commission_value), {}, 0.0},
-            {"default_qty_value", "float", pineforge::checked_settings::number(config_.default_qty_value), {}, 0.0},
-            {"pyramiding", "int", pineforge::checked_settings::number(config_.pyramiding), {}, 0.0},
-            {"slippage", "int", pineforge::checked_settings::number(config_.slippage), {}, 0.0},
-            {"process_orders_on_close", "bool", pineforge::checked_settings::number(config_.process_orders_on_close), {}, _pf_nan},
-            {"calc_on_order_fills", "bool", pineforge::checked_settings::number(config_.calc_on_order_fills), {}, _pf_nan},
-            {"close_entries_rule", "string", _pf_close_entries_rule_word(config_.close_entries_rule_any), {"FIFO", "ANY"}, _pf_nan},
-            {"default_qty_type", "string", _pf_default_qty_type_word(config_.default_qty_type), {"fixed", "percent_of_equity", "cash"}, _pf_nan},
-            {"commission_type", "string", _pf_commission_type_word(config_.commission_type), {"percent", "cash_per_order", "cash_per_contract"}, _pf_nan},
+            {"initial_capital", "float", pineforge::checked_settings::number(_pf_defaults.initial_capital), {}, 0.0},
+            {"commission_value", "float", pineforge::checked_settings::number(_pf_defaults.commission_value), {}, 0.0},
+            {"default_qty_value", "float", pineforge::checked_settings::number(_pf_defaults.default_qty_value), {}, 0.0},
+            {"pyramiding", "int", pineforge::checked_settings::number(_pf_defaults.pyramiding), {}, 0.0},
+            {"slippage", "int", pineforge::checked_settings::number(_pf_defaults.slippage), {}, 0.0},
+            {"process_orders_on_close", "bool", pineforge::checked_settings::number(_pf_defaults.process_orders_on_close), {}, _pf_nan},
+            {"calc_on_order_fills", "bool", pineforge::checked_settings::number(_pf_defaults.calc_on_order_fills), {}, _pf_nan},
+            {"close_entries_rule", "string", _pf_close_entries_rule_word(_pf_defaults.close_entries_rule_any), {"FIFO", "ANY"}, _pf_nan},
+            {"default_qty_type", "string", _pf_default_qty_type_word(_pf_defaults.default_qty_type), {"fixed", "percent_of_equity", "cash"}, _pf_nan},
+            {"commission_type", "string", _pf_commission_type_word(_pf_defaults.commission_type), {"percent", "cash_per_order", "cash_per_contract"}, _pf_nan},
         };
     }
     static std::string _pf_close_entries_rule_word(int _pf_value) {
@@ -389,9 +406,14 @@ extern "C" {
     void run_backtest(void* s, Bar* bars, int n, ReportC* out) {
         try {
         auto* strat = static_cast<GeneratedStrategy*>(s);
+        if (strat->_pf_refuse_failed_setting(out)) return;
         strat->run(bars, n);
         strat->fill_report(out);
-        } catch (...) {}
+        } catch (const std::exception& _pf_error) {
+            if (s) static_cast<GeneratedStrategy*>(s)->_pf_record_failure("run_backtest", _pf_error.what());
+        } catch (...) {
+            if (s) static_cast<GeneratedStrategy*>(s)->_pf_record_failure("run_backtest", "unknown C++ exception");
+        }
     }
     static void _pf_run_backtest_full_impl(void* s, Bar* bars, int n,
                            const char* input_tf, const char* script_tf,
@@ -399,6 +421,7 @@ extern "C" {
                            int magnifier_dist,
                            ReportC* out) {
         auto* strat = static_cast<GeneratedStrategy*>(s);
+        if (strat->_pf_refuse_failed_setting(out)) return;
         std::string itf = input_tf ? input_tf : "";
         std::string stf = script_tf ? script_tf : "";
         bool needs_full_run = (bar_magnifier != 0)
@@ -413,7 +436,9 @@ extern "C" {
     }
     void run_backtest_full(void* s, Bar* bars, int n, const char* input_tf, const char* script_tf,
                            int bar_magnifier, int magnifier_samples, int magnifier_dist, ReportC* out) {
-        try { _pf_run_backtest_full_impl(s, bars, n, input_tf, script_tf, bar_magnifier, magnifier_samples, magnifier_dist, out); } catch (...) {}
+        try { _pf_run_backtest_full_impl(s, bars, n, input_tf, script_tf, bar_magnifier, magnifier_samples, magnifier_dist, out); }
+        catch (const std::exception& _pf_error) { if (s) static_cast<GeneratedStrategy*>(s)->_pf_record_failure("run_backtest_full", _pf_error.what()); }
+        catch (...) { if (s) static_cast<GeneratedStrategy*>(s)->_pf_record_failure("run_backtest_full", "unknown C++ exception"); }
     }
     void strategy_free(void* s) {
         try { delete static_cast<GeneratedStrategy*>(s); } catch (...) {}
@@ -423,15 +448,21 @@ extern "C" {
     }
     void strategy_set_input(void* s, const char* key, const char* value) {
         if (!s || !key || !value) return;
-        try { static_cast<GeneratedStrategy*>(s)->set_input(key, value); } catch (...) {}
+        try { static_cast<GeneratedStrategy*>(s)->set_input(key, value); }
+        catch (const std::exception& _pf_error) { static_cast<GeneratedStrategy*>(s)->_pf_record_failure("strategy_set_input", _pf_error.what()); }
+        catch (...) { static_cast<GeneratedStrategy*>(s)->_pf_record_failure("strategy_set_input", "unknown C++ exception"); }
     }
     void strategy_set_override(void* s, const char* key, const char* value) {
         if (!s || !key || !value) return;
-        try { static_cast<GeneratedStrategy*>(s)->set_strategy_override(key, value); } catch (...) {}
+        try { static_cast<GeneratedStrategy*>(s)->set_strategy_override(key, value); }
+        catch (const std::exception& _pf_error) { static_cast<GeneratedStrategy*>(s)->_pf_record_failure("strategy_set_override", _pf_error.what()); }
+        catch (...) { static_cast<GeneratedStrategy*>(s)->_pf_record_failure("strategy_set_override", "unknown C++ exception"); }
     }
     void strategy_set_magnifier_volume_weighted(void* s, int on) {
         if (!s) return;
-        try { static_cast<GeneratedStrategy*>(s)->set_magnifier_volume_weighted(on != 0); } catch (...) {}
+        try { static_cast<GeneratedStrategy*>(s)->set_magnifier_volume_weighted(on != 0); }
+        catch (const std::exception& _pf_error) { static_cast<GeneratedStrategy*>(s)->_pf_record_failure("strategy_set_magnifier_volume_weighted", _pf_error.what()); }
+        catch (...) { static_cast<GeneratedStrategy*>(s)->_pf_record_failure("strategy_set_magnifier_volume_weighted", "unknown C++ exception"); }
     }
 #ifdef PF_SETTINGS_API_VERSION
     uint32_t strategy_settings_api_version(void) { return PF_SETTINGS_API_VERSION; }

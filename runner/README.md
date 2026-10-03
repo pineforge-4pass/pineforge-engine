@@ -4,6 +4,8 @@ Regenerated strategies can provide the additive [checked settings extension](../
 The runner validates inputs and overrides before ledger binding, includes the
 effective receipt in the deployment identity, and returns it in the run summary.
 Older libraries remain usable with a warning and their legacy settings behavior.
+If the capability symbol is present, any settings API version other than 1 is
+refused rather than treated as a legacy library.
 
 `pineforge-live` is an optional C++17 executable built with this engine. It
 loads a compiled strategy, warms it on confirmed historical bars, keeps that

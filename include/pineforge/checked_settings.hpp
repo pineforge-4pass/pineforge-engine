@@ -68,6 +68,48 @@ inline std::string number(bool value) { return value ? "true" : "false"; }
 
 inline std::int64_t integer(const std::string& value, int bits = 32) {
     require(!value.empty(), "expected an integer");
+    if (value.find_first_of(".eE") != std::string::npos) {
+        std::size_t offset = 0;
+        const bool negative = value[offset] == '-';
+        if (value[offset] == '+' || negative) ++offset;
+        std::string digits;
+        while (offset < value.size() && value[offset] >= '0' && value[offset] <= '9')
+            digits += value[offset++];
+        std::size_t fractional_digits = 0;
+        if (offset < value.size() && value[offset] == '.') {
+            ++offset;
+            const auto fractional_begin = digits.size();
+            while (offset < value.size() && value[offset] >= '0' && value[offset] <= '9')
+                digits += value[offset++];
+            fractional_digits = digits.size() - fractional_begin;
+        }
+        require(!digits.empty(), "expected an integer");
+        std::int64_t exponent = 0;
+        if (offset < value.size() && (value[offset] == 'e' || value[offset] == 'E')) {
+            ++offset;
+            const auto exponent_text = value.substr(offset);
+            require(exponent_text.find_first_of(".eE") == std::string::npos, "invalid integer exponent");
+            exponent = integer(exponent_text);
+            offset = value.size();
+        }
+        require(offset == value.size(), "invalid integer or trailing bytes");
+        const auto nonzero = digits.find_first_not_of('0');
+        if (nonzero == std::string::npos) return 0;
+        digits.erase(0, nonzero);
+        const auto shift = exponent - static_cast<std::int64_t>(fractional_digits);
+        if (shift < 0) {
+            require(-shift <= static_cast<std::int64_t>(digits.size()), "expected an integral value");
+            const auto integral_end = digits.size() - static_cast<std::size_t>(-shift);
+            require(digits.find_first_not_of('0', integral_end) == std::string::npos,
+                    "expected an integral value");
+            digits.resize(integral_end);
+        } else {
+            require(shift <= 19 && digits.size() + static_cast<std::size_t>(shift) <= 19,
+                    "integer out of range");
+            digits.append(static_cast<std::size_t>(shift), '0');
+        }
+        return integer((negative ? "-" : "") + digits, bits);
+    }
     const char* begin = value.data();
     const char* end = begin + value.size();
     if (*begin == '+') {
@@ -143,6 +185,7 @@ struct Setting {
     int integer_bits = 32;
     bool supported = true;
     std::vector<std::string> option_values{};
+    std::string kind{};
 };
 
 inline std::string validate(const Setting& setting, const std::string& value) {
@@ -164,9 +207,14 @@ inline std::string validate(const Setting& setting, const std::string& value) {
         is_numeric = true;
     } else if (setting.type == "enum") {
         const auto found = std::find(setting.options.begin(), setting.options.end(), value);
-        const auto index = found == setting.options.end() ? integer(value)
-            : setting.option_values.empty() ? std::distance(setting.options.begin(), found)
-            : integer(setting.option_values[static_cast<std::size_t>(std::distance(setting.options.begin(), found))]);
+        std::int64_t index = 0;
+        try {
+            index = found == setting.options.end() ? integer(value)
+                : setting.option_values.empty() ? std::distance(setting.options.begin(), found)
+                : integer(setting.option_values[static_cast<std::size_t>(std::distance(setting.options.begin(), found))]);
+        } catch (const Error&) {
+            throw Error{PF_SETTINGS_INVALID_ARGUMENT, "invalid enum option"};
+        }
         require(setting.option_values.empty()
             ? index >= 0 && static_cast<std::size_t>(index) < setting.options.size()
             : std::find(setting.option_values.begin(), setting.option_values.end(), number(index)) != setting.option_values.end(), "invalid enum option");
@@ -202,7 +250,9 @@ inline std::string quote(const std::string& value) {
 
 inline std::string describe(const Setting& setting, const std::string& effective) {
     std::string result = "{\"name\":" + quote(setting.name)
-        + ",\"type\":" + quote(setting.type) + ",\"default\":" + quote(setting.default_value)
+        + ",\"type\":" + quote(setting.type)
+        + ",\"kind\":" + quote(setting.kind.empty() ? setting.type : setting.kind)
+        + ",\"default\":" + quote(setting.default_value)
         + ",\"effective_value\":" + quote(effective)
         + ",\"supported\":" + (setting.supported ? "true" : "false") + ",\"options\":[";
     for (std::size_t index = 0; index < setting.options.size(); ++index) {
