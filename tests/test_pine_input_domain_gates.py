@@ -37,12 +37,12 @@ class PineInputDomainGates(unittest.TestCase):
         pinned = {pin['line'] for pin in PINS}
         self.assertTrue({14178, 15016, 18762, 21206}.issubset(pinned))
 
-    def test_future_sibling_touch_stays_excluded_from_streams(self):
+    def test_sibling_touch_uses_the_modeled_input_domain(self):
         source = (ROOT / 'src/source/pine_adapter.cpp').read_text()
         self.assertTrue('            && leftover_flat_stop\n'
                       '            && policy_script_bar_valid_\n'
                       '            && !config_.calc_on_order_fills\n'
-                      '            && !stream_mode_) {' in source)
+                      '            && modeled_input()) {' in source)
 
     def test_pairless_callback_keys_on_the_open_hook_epoch(self):
         source = (ROOT / 'src/source/pine_adapter.cpp').read_text()

@@ -36,9 +36,10 @@ modeled OHLC and Pine order policies as backtests; only genuine observed trades
 use tick prices instead of the historical OHLC path. The following historical
 look-ahead information is unavailable to a continuing live run:
 
-- Opening sibling-stop arbitration can inspect a complete script candle's high
-  and low in history. Live aggregation has only the children received so far;
-  the opening script-bar seed likewise cannot contain its later children.
+- A historical opening script-bar seed can contain the complete script candle's
+  high and low. Live aggregation has only the children received so far and cannot
+  include later children; sibling-stop ordering still applies to the confirmed
+  policy bar already supplied, without projecting those future children.
 - Historical `request.security(..., lookahead_on)` can project a requested
   period's final OHLC before that period closes. Live publishes only information
   that has arrived, not the future period close.

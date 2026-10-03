@@ -14557,7 +14557,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         // fill. A same-direction pyramid while still in position is the
         // exception and is admitted below by the not-flat check. Not gated on
         // process_orders_on_close (the owner applies it at the POOC fill
-        // point too); COOF and stream stay excluded.
+        // point too); COOF stays excluded.
         const bool leftover_flat_stop = view.definition
             && std::holds_alternative<native_order::Stop>(view.definition->request.trigger)
             && !finite_positive(source.exit_levels.limit);
@@ -14571,7 +14571,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             && leftover_flat_stop
             && policy_script_bar_valid_
             && !config_.calc_on_order_fills
-            && !stream_mode_) {
+            && modeled_input()) {
             for (const auto& handle : live_handles_) {
                 if (handle == view.target) continue;
                 const auto found = placement_.find(handle.incarnation);

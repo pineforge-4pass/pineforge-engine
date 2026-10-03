@@ -100,7 +100,7 @@
   },
   {
     "file": "src/source/pine_adapter.cpp",
-    "line": 14157,
+    "line": 14521,
     "rule": "All-in money default sizing scope",
     "class": "D",
     "evidence": "R4; resolve_terms default_money_candidate; source-time frozen equity; introducing/current blame 73817c1d",
@@ -570,5 +570,16 @@
     "old": "                && !stream_mode_ && !bar_magnifier_;",
     "new": "                && modeled_input() && !bar_magnifier_;",
     "window": "                && std::holds_alternative<native_order::Stop>(event.request().trigger)\n                && !sibling_book && !placed_add\n                && !config_.process_orders_on_close && !config_.calc_on_order_fills\n                && modeled_input() && !bar_magnifier_;\n            // The 10-significant-digit long residual is same-currency,\n            // pointvalue-one policy.  A non-unit point value does not inherit\n            // an exact-money opening slice merely because the generic"
+  },
+  {
+    "file": "src/source/pine_adapter.cpp",
+    "line": 14157,
+    "rule": "Older touched same-side stop consumes from-flat carry before a later stop",
+    "class": "T",
+    "evidence": "R4; legacy pine_fills 3687-3788/7470-7516; corpus dual-stop, opposite-entry-close, pyramid-flip-stop; one-gate throwaway flip passes both handoffs with unchanged batch bytes and no future-data provider",
+    "predicate": "Modeled confirmed OHLC input, excluding observed prints; use only the supplied policy bar",
+    "old": "            && !stream_mode_) {",
+    "new": "            && modeled_input()) {",
+    "window": "        if (source.family == PineOrderFamily::Entry\n            && view.account.would_open\n            && physical.signed_units == 0.0\n            && leftover_flat_stop\n            && policy_script_bar_valid_\n            && !config_.calc_on_order_fills\n            && modeled_input()) {"
   }
 ]
