@@ -744,6 +744,11 @@ def profile_min_tests(profile: Profile, source: Path) -> int | None:
     return profile.min_tests
 
 
+def runner_e2e_test_names(source: Path) -> set[str]:
+    return {path.stem for path in (source / 'tests').glob('native_live*_e2e.py')
+            if path.stem != 'native_live_equivalence_e2e'}
+
+
 @dataclass
 class Completed:
     returncode: int
@@ -1861,8 +1866,7 @@ class Driver:
                             'test_native_example_batch', 'test_native_example_selected'}
                 if (self.cfg.source / 'runner' / 'transport.cpp').is_file():
                     required.add('test_native_live_websocket')
-                required.update(path.stem for path in
-                                (self.cfg.source / 'tests').glob('native_live*_e2e.py'))
+                required.update(runner_e2e_test_names(self.cfg.source))
                 if inventory.returncode != 0 or required - names:
                     raise RuntimeError('missing runner CTest rows: ' +
                                        ', '.join(sorted(required - names)))

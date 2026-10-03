@@ -92,7 +92,9 @@ Linux transport proof.
 `build-ci-live-sanitizers/runner` CTest inventory (at least twelve rows while
 `runner/transport.cpp` exists, eleven after its removal), including
 `native_live_e2e` and `native_live_startup_e2e`, and requires any additional
-`tests/native_live*_e2e.py` on the tree to be registered too. It does not rerun
+runner `tests/native_live*_e2e.py` on the tree to be registered too. The standalone
+corpus equivalence driver is not a runner CTest row; its harness unit tests remain
+in the engine-wide inventory. The profile does not rerun
 the engine-wide CTest set or prepare historical ABI providers; those remain
 covered by `sanitizers`. It refuses label exclusions, missing runner compile
 commands, missing ASan/UBSan or frame-pointer flags, skipped/disabled tests,

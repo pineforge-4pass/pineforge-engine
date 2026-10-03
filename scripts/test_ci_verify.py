@@ -227,8 +227,7 @@ class Scripted:
                          'test_native_example_batch', 'test_native_example_selected'}
                 if (self.source / 'runner' / 'transport.cpp').is_file():
                     names.add('test_native_live_websocket')
-                names.update(path.stem for path in
-                             (self.source / 'tests').glob('native_live*_e2e.py'))
+                names.update(ci_verify.runner_e2e_test_names(self.source))
                 names.discard(self.exits.get('live_missing_test'))
                 return Completed(0, json.dumps({'tests': [{'name': name}
                                   for name in sorted(names)]}).encode(), b'')
@@ -780,6 +779,8 @@ class ProfileOptions(unittest.TestCase):
         self.assertEqual(config.min_tests, LIVE_SANITIZERS_MIN_TESTS)
         with self.assertRaisesRegex(ConfigError, 'must run every runner row'):
             self.definitions('live-tsan', ['--exclude-label', 'slow'])
+        self.assertIn('native_live_routing_e2e', ci_verify.runner_e2e_test_names(ROOT))
+        self.assertNotIn('native_live_equivalence_e2e', ci_verify.runner_e2e_test_names(ROOT))
 
     def test_kernel_drops_the_source_layer_and_keeps_the_live_runner(self):
         values, argv = self.definitions('kernel')
@@ -1888,7 +1889,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                     self.assertNotIn('build', scripted.names())
 
     def test_live_sanitizers_refuse_a_missing_required_row(self):
-        names = {path.stem for path in (ROOT / 'tests').glob('native_live*_e2e.py')}
+        names = ci_verify.runner_e2e_test_names(ROOT)
         if (ROOT / 'runner' / 'transport.cpp').is_file():
             names.add('test_native_live_websocket')
         for name in sorted(names):
