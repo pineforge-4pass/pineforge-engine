@@ -226,16 +226,16 @@ live behavior or real broker fills.
 
 ## Validation scoreboard
 
-**Measured <!-- pf:scoreboard.date -->2026-10-03<!-- /pf -->** on main engine `<!-- pf:scoreboard.engineCommit|short -->8d47fa2d<!-- /pf -->` with codegen-oss `<!-- pf:scoreboard.codegenCommit|short -->8b42cd4a<!-- /pf -->` (baseline `<!-- pf:scoreboard.id -->pineforge-parity-baseline-20261003-engine-8d47fa2d<!-- /pf -->`, snapshot `<!-- pf:scoreboard.snapshotSha256|short -->88718b41<!-- /pf -->`): **<!-- pf:scoreboard.graded|int -->7,989<!-- /pf --> graded probes, <!-- pf:scoreboard.excellent|int -->7,949<!-- /pf --> excellent + <!-- pf:scoreboard.strong|int -->40<!-- /pf --> strong**, <!-- pf:scoreboard.belowStrong|int -->0<!-- /pf --> below strong and <!-- pf:scoreboard.engineErrors|int -->0<!-- /pf --> engine errors across <!-- pf:scoreboard.lanes|int -->18<!-- /pf --> market/timeframe lanes. Their TradingView trade lists hold <!-- pf:inventory.tvTrades|int -->4,776,328<!-- /pf --> trades.
+**Measured <!-- pf:scoreboard.date -->2026-10-03<!-- /pf -->** on main engine <!-- pf:scoreboard.engineCommit|short-code -->`700c5d24`<!-- /pf --> with codegen-oss <!-- pf:scoreboard.codegenCommit|short-code -->`13b9ccfd`<!-- /pf --> (baseline <!-- pf:scoreboard.id|code -->`pineforge-parity-baseline-20261003-engine-700c5d24`<!-- /pf -->, snapshot <!-- pf:scoreboard.snapshotSha256|short-code -->`3ee846c5`<!-- /pf -->): **<!-- pf:scoreboard.graded|int -->7,989<!-- /pf --> graded probes, <!-- pf:scoreboard.excellent|int -->7,949<!-- /pf --> excellent + <!-- pf:scoreboard.strong|int -->40<!-- /pf --> strong**, <!-- pf:scoreboard.belowStrong|int -->0<!-- /pf --> below strong and <!-- pf:scoreboard.engineErrors|int -->0<!-- /pf --> engine errors across <!-- pf:scoreboard.lanes|int -->18<!-- /pf --> market/timeframe lanes. The historical release 1.0.1 inventory holds <!-- pf:inventory.tvTrades|int -->4,776,328<!-- /pf --> trades.
 
-Release **1.0.1 still grades <!-- pf:releases[1.0.1].scoreboard.excellent|int -->7,905<!-- /pf --> excellent / <!-- pf:releases[1.0.1].scoreboard.strong|int -->84<!-- /pf --> strong until the next release**, on <!-- pf:releases[1.0.1].scoreboard.graded|int -->7,989<!-- /pf --> probes (baseline `<!-- pf:releases[1.0.1].scoreboard.id -->pineforge-parity-baseline-20261001-codegen-67892cda<!-- /pf -->`, <!-- pf:releases[1.0.1].scoreboard.date -->2026-10-01<!-- /pf -->). A main scoreboard advance does not change release results.
+Release **1.0.1 still grades <!-- pf:releases[1.0.1].scoreboard.excellent|int -->7,905<!-- /pf --> excellent / <!-- pf:releases[1.0.1].scoreboard.strong|int -->84<!-- /pf --> strong until the next release**, on <!-- pf:releases[1.0.1].scoreboard.graded|int -->7,989<!-- /pf --> probes (baseline <!-- pf:releases[1.0.1].scoreboard.id|code -->`pineforge-parity-baseline-20261001-codegen-67892cda`<!-- /pf -->, <!-- pf:releases[1.0.1].scoreboard.date -->2026-10-01<!-- /pf -->). A main scoreboard advance does not change release results.
 
-The quantities above render from the public [facts tokens](https://github.com/pineforge-4pass/pineforge-release/blob/d70c5cabbfcbf14c59c6b4fc3bb86d5833ffdc5c/facts/facts.json). Maintain them with `lab facts render --repo . --facts <local facts file or pinned raw URL>`; `lab facts check` with the same inputs reports drift. Grades are registry-derived; the authored-script and closed-trade inventory is explicitly sourced to a historical public README for the identical population, not to registry row or slug totals.
+The quantities above render from the public [facts tokens](https://github.com/pineforge-4pass/pineforge-release/blob/main/facts/facts.json). Maintain them with `lab facts render --repo . --facts <local facts file or pinned raw URL>`; `lab facts check` with the same inputs reports drift. Grades are registry-derived; the authored-script and closed-trade inventory is explicitly sourced to a historical public README for release 1.0.1, independent of future main population rebinds, not to registry row or slug totals.
 
 | Board | Test set | Result |
 |---|---|---|
-| **Public** — [open corpus](https://github.com/pineforge-4pass/pineforge-corpus) | 312 reference strategies on BINANCE:ETHUSDT.P 15m, Apache-2.0, reproducible by anyone | this repository's sweep: **311 excellent + 1 declared anomaly**; the <!-- pf:scoreboard.corpusProbes|int -->309<!-- /pf --> of them in the measured population: **<!-- pf:scoreboard.scopes.corpus.excellent|int -->309<!-- /pf --> excellent** |
-| **Closed test** | <!-- pf:inventory.closedProbes|int -->7,680<!-- /pf --> probes of <!-- pf:inventory.closedScripts|int -->741<!-- /pf --> TradingView scripts across the <!-- pf:scoreboard.lanes|int -->18<!-- /pf --> lanes: <!-- pf:inventory.communityScripts|int -->680<!-- /pf --> community-shared scripts (<!-- pf:inventory.communityProbes|int -->7,179<!-- /pf --> probes), private under TradingView's Terms of Service, and <!-- pf:inventory.probeScripts|int -->61<!-- /pf --> probe scripts the maintainers wrote (<!-- pf:inventory.probeScriptProbes|int -->501<!-- /pf --> probes) | **<!-- pf:scoreboard.scopes.closed.excellent|int -->7,640<!-- /pf --> excellent + <!-- pf:scoreboard.scopes.closed.strong|int -->40<!-- /pf --> strong** |
+| **Public** — [open corpus](https://github.com/pineforge-4pass/pineforge-corpus) | 312 reference strategies on BINANCE:ETHUSDT.P 15m, Apache-2.0, reproducible by anyone | this repository's sweep: **311 excellent + 1 declared anomaly**; the <!-- pf:scoreboard.corpusProbes\|int -->309<!-- /pf --> of them in the measured population: **<!-- pf:scoreboard.scopes.corpus.excellent\|int -->309<!-- /pf --> excellent** |
+| **Closed test** | <!-- pf:inventory.closedProbes\|int -->7,680<!-- /pf --> probes of <!-- pf:inventory.closedScripts\|int -->741<!-- /pf --> TradingView scripts across the <!-- pf:scoreboard.lanes\|int -->18<!-- /pf --> lanes: <!-- pf:inventory.communityScripts\|int -->680<!-- /pf --> community-shared scripts (<!-- pf:inventory.communityProbes\|int -->7,179<!-- /pf --> probes), private under TradingView's Terms of Service, and <!-- pf:inventory.probeScripts\|int -->61<!-- /pf --> probe scripts the maintainers wrote (<!-- pf:inventory.probeScriptProbes\|int -->501<!-- /pf --> probes) | **<!-- pf:scoreboard.scopes.closed.excellent\|int -->7,640<!-- /pf --> excellent + <!-- pf:scoreboard.scopes.closed.strong\|int -->40<!-- /pf --> strong** |
 
 ### Lane by lane
 
@@ -243,9 +243,9 @@ The quantities above render from the public [facts tokens](https://github.com/pi
 
 | Market · timeframe | Probes graded | Excellent | Strong | Below strong |
 |---|---:|---:|---:|---:|
+| BINANCE:ETHUSDT.P · 15m *(hard lane: zero regression allowed)* | 1,009 | 1,000 | 9 | 0 |
 | BINANCE:BTCUSDT · 15m | 668 | 664 | 4 | 0 |
 | BINANCE:BTCUSDT · 1D | 516 | 516 | 0 | 0 |
-| BINANCE:ETHUSDT.P · 15m *(hard lane: zero regression allowed)* | 1,009 | 1,000 | 9 | 0 |
 | BINANCE:ETHUSDT.P · 1D | 540 | 539 | 1 | 0 |
 | CME_MINI:ES1! · 15m | 76 | 76 | 0 | 0 |
 | CME_MINI:ES1! · 1D | 35 | 35 | 0 | 0 |
@@ -265,7 +265,7 @@ The quantities above render from the public [facts tokens](https://github.com/pi
 
 <!-- /pf -->
 
-The hard lane combines public-corpus and closed-test probes for BINANCE:ETHUSDT.P 15m; zero regression is allowed. TradingView-side defects are excluded from grading.
+The hard lane combines <!-- pf:scoreboard.hardLane.corpusProbes|int -->309<!-- /pf --> public-corpus + <!-- pf:scoreboard.hardLane.closedProbes|int -->700<!-- /pf --> closed-test probes for <!-- pf:scoreboard.hardLane.symbol|code -->`BINANCE:ETHUSDT.P`<!-- /pf --> <!-- pf:scoreboard.hardLane.timeframe -->15<!-- /pf -->m (<!-- pf:scoreboard.hardLane.hardProbes|int -->1,009<!-- /pf --> probes); zero regression is allowed. <!-- pf:scoreboard.anomaliesExcluded|int -->17<!-- /pf --> TradingView-side defects are excluded from grading.
 
 ### How a probe is graded
 
