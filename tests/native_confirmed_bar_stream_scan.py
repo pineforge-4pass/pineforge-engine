@@ -15,6 +15,8 @@ with probe, directory, feed and optional input_tf fields. Run this on a build
 host, not on the supervisor's Mac.
 Saved evidence may be compressed as .archives/<case>.tar.gz under the output
 directory. --recompare reads those modes without extracting them to disk.
+The first stream runs before batch so an actual native refusal needs no batch
+replay. Supported cases still compare all three fresh runs in one library.
 """
 
 import argparse
@@ -381,8 +383,7 @@ def scan_case(case):
         result.update(library_sha256=sha256(library_path), generated_sha256=sha256(directory / "generated.cpp"),
                       feed=str(feed), count=count, first_ms=bars[0].timestamp,
                       last_ms=bars[count - 1].timestamp, input_tf=kwargs["input_tf"], script_tf=kwargs["script_tf"])
-        batch = run_mode(strategy, observer, directory, params, kwargs, destination / "batch")
-        result["batch_actions"] = len(batch["actions"])
+        batch = None
         differences = []
         for split in splits:
             try:
@@ -394,6 +395,9 @@ def scan_case(case):
                     raise
                 result.update(result="STREAM-UNSUPPORTED", refusal=refusal)
                 break
+            if batch is None:
+                batch = run_mode(strategy, observer, directory, params, kwargs, destination / "batch")
+                result["batch_actions"] = len(batch["actions"])
             difference = describe_difference(batch, stream, split, bars)
             result["splits"].append({"index": split, "time_ms": bars[split].timestamp,
                                      "result": "FAIL" if difference else "PASS",

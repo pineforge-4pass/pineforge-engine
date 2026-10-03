@@ -5,6 +5,9 @@ import tarfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
+
+import native_confirmed_bar_stream_scan as scan
 
 from native_confirmed_bar_stream_scan import (
     compare_saved, semantic_actions, semantic_state, stream_splits, SETTINGS,
@@ -27,6 +30,30 @@ def state():
 
 
 class ConfirmedScanTests(unittest.TestCase):
+    def test_native_refusal_does_not_run_a_batch(self):
+        with TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            SETTINGS.update(out=output, reuse=True)
+            bars = [SimpleNamespace(timestamp=index * 60000) for index in range(3)]
+            library = SimpleNamespace(strategy_stream_begin=Mock(),
+                                      strategy_stream_fill_report=Mock(),
+                                      confirmed_scan_push_bars=Mock())
+            refusal = 'strategy_stream_begin: rc=-1: calc_on_order_fills is not supported'
+            with patch.object(scan, 'resolve_case', return_value=(output, {}, output, {
+                    'input_tf': '1', 'script_tf': '1'}, bars, len(bars))), \
+                    patch.object(scan, 'stream_splits', return_value=[1, 2]), \
+                    patch.object(scan, 'compile_probe'), \
+                    patch.object(scan, 'Strategy', return_value=SimpleNamespace(lib=library)), \
+                    patch.object(scan, 'make_observer'), \
+                    patch.object(scan, 'sha256', return_value='test-digest'), \
+                    patch.object(scan, 'run_mode', side_effect=RuntimeError(refusal)) as run:
+                result = scan.scan_case({'probe': 'refused'})
+            self.assertEqual(result['result'], 'STREAM-UNSUPPORTED')
+            self.assertEqual(result['refusal'], refusal)
+            self.assertNotIn('batch_actions', result)
+            run.assert_called_once()
+            self.assertEqual(run.call_args.args[-1], 1)
+
     def test_recompare_reads_archived_modes_without_extracting_them(self):
         with TemporaryDirectory() as temporary:
             output = Path(temporary)
