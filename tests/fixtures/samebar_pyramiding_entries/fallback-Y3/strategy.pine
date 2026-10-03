@@ -1,0 +1,12 @@
+//@version=6
+strategy("Same-bar fallback Y3", pyramiding=10, initial_capital=1000000, default_qty_type=strategy.fixed, default_qty_value=1, margin_long=0, margin_short=0)
+
+if bar_index == 0
+    strategy.entry("seed", strategy.long)
+if bar_index == 2
+    strategy.entry("S", strategy.short)
+    strategy.entry("L", strategy.long)
+    strategy.entry("S2", strategy.short)
+    strategy.close("seed")
+if bar_index == 7
+    strategy.close_all()

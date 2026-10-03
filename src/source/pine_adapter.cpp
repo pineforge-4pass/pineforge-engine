@@ -6198,6 +6198,16 @@ std::size_t PineExecutionAdapter::accepted_entries_in_cycle(
     return accepted_in_cycle;
 }
 
+bool PineExecutionAdapter::opposite_entry_opening_pending(bool is_long) const {
+    return std::any_of(live_handles_.begin(), live_handles_.end(),
+        [&](const native_order::RequestHandle& handle) {
+            const auto existing = placement_.find(handle.incarnation);
+            return existing != placement_.end() && existing->second.opening
+                && existing->second.family == PineOrderFamily::Entry
+                && existing->second.is_long != is_long;
+        });
+}
+
 void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_price,
                                  double stop_price, double qty, const std::string& comment,
                                  const std::string& oca_name, int oca_type, int qty_type) {
@@ -6461,13 +6471,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     }
     const bool short_seed_final_candidate = current < 0.0 && !is_long
         && short_seed_long_candidate_.incarnation != 0;
-    const bool opposite_opening_pending = std::any_of(live_handles_.begin(), live_handles_.end(),
-        [&](const native_order::RequestHandle& handle) {
-            const auto existing = placement_.find(handle.incarnation);
-            return existing != placement_.end() && existing->second.opening
-                && existing->second.family == PineOrderFamily::Entry
-                && existing->second.is_long != is_long;
-        });
+    const bool opposite_opening_pending = opposite_entry_opening_pending(is_long);
     // Under process_orders_on_close a pending opposite opening defers the
     // pyramiding cap below to the close pass, where ab9714be counted the
     // entries then filled (add_to_pyramid_market's position_entry_count_) and
@@ -11717,8 +11721,9 @@ void PineExecutionAdapter::reroute_fixed_entries_before_request(bool invalidate_
     // Dependent requests break the entry-only projection. Restore exact placement
     // requests in source order; begin_source_evaluation resets the invalidation.
     for (auto& command : queued) {
-        if (command.unbatched_request && command.unbatched_snapshot
-            && command.snapshot.placement_script_open_ms == script_open) {
+        const bool restore_command = command.unbatched_request && command.unbatched_snapshot
+            && command.snapshot.placement_script_open_ms == script_open;
+        if (restore_command) {
             command.request = std::move(*command.unbatched_request);
             command.snapshot = std::move(*command.unbatched_snapshot);
             // Restore the ordinary flat-pair sizing against preceding restored
@@ -11741,9 +11746,12 @@ void PineExecutionAdapter::reroute_fixed_entries_before_request(bool invalidate_
                 }
             }
         }
-        if (command.unbatched_request && command.unbatched_snapshot) {
+        if (restore_command) {
+            auto context = command.unbatched_context;
+            context.opposite_opening_pending = opposite_entry_opening_pending(
+                command.snapshot.is_long);
             submit_entry_with_policy(std::move(command.request), std::move(command.snapshot),
-                                     command.replacement_key, command.unbatched_context);
+                                     command.replacement_key, context);
         } else {
             (void)submit_or_replace(std::move(command.request), std::move(command.snapshot),
                                     command.opening, command.replacement_key);

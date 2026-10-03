@@ -1940,6 +1940,7 @@ private:
     bool fixed_unmargined_market_batch_scope() const;
     void reroute_fixed_entries_before_request(bool invalidate_batch = true);
     std::size_t accepted_entries_in_cycle(bool is_long, const SourceId& id) const;
+    bool opposite_entry_opening_pending(bool is_long) const;
     void submit_entry_with_policy(native_order::Request request, PlacementSnapshot snapshot,
                                  const SourceId& id, const EntrySubmissionContext& context);
     void reroute_incomplete_fixed_batch(bool invalidate_batch);

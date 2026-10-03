@@ -33,6 +33,7 @@ public:
     using PineStrategyHost::strategy_entry;
     using PineStrategyHost::strategy_order;
     using PineStrategyHost::strategy_exit;
+    using PineStrategyHost::strategy_close;
     using PineStrategyHost::strategy_cancel_all;
     using PineStrategyHost::strategy_close_all;
 private:
@@ -73,6 +74,10 @@ inline std::pair<int, int> run_cases(const char* filter) {
 #include "fixtures/samebar_pyramiding_entries/fallback-S43/case.hpp"
 #include "fixtures/samebar_pyramiding_entries/fallback-S28/case.hpp"
 #include "fixtures/samebar_pyramiding_entries/fallback-seeded-three-leg-exit/case.hpp"
+#include "fixtures/samebar_pyramiding_entries/fallback-X8c/case.hpp"
+#include "fixtures/samebar_pyramiding_entries/fallback-Y3/case.hpp"
+#include "fixtures/samebar_pyramiding_entries/fallback-seeded-three-leg-exit-default/case.hpp"
+#include "fixtures/samebar_pyramiding_entries/live-exit-two-sided-entry/case.hpp"
     };
     int passed = 0;
     int failed = 0;

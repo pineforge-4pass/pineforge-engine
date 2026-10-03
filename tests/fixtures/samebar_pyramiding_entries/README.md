@@ -67,6 +67,19 @@ Incomplete batches restore before delayed orders are released; the older batch
 policy retains its existing release order. S28 deliberately falls back to main:
 no resting-order TradingView tape is claimed and no scope is widened.
 
+Three more main-pinned default-quantity fixtures cover X8c, Y3 and the default
+quantity twin of the seeded three-leg exit. All three fail on the stale restored
+pending-direction flag and pass when that flag is refreshed from live entry
+handles in source order. They assert four complete main rows each.
+
+`live-exit-two-sided-entry` includes a fresh synthetic TradingView export on
+BINANCE:ETHUSDT.P, 15 minutes, 2025-04-01 through 2025-04-02, with covered range
+proof. Its distant resting bracket remains unfilled: TradingView books A/S,
+L/S (zero length), then L/close, not main's A/S and S/L. The projected route is
+therefore retained beside this live exit. The accompanying constant-price feed
+asserts that trade topology and timing, not the export's market prices or PnL.
+The executable now has 103 checks; the 13 known-open full tapes are unchanged.
+
 The unit test replays seven constant-price bars (100) to isolate side, quantity,
 entry/exit identity, fill times, zero-length trades, flat terminal position and
 zero errors/PnL. CSV times are UTC+8; embedded epochs subtract eight hours.
