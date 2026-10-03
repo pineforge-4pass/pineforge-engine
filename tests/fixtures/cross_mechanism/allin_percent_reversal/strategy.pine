@@ -1,0 +1,21 @@
+//@version=6
+strategy("All-in reversal with ancestral percentage exits", initial_capital=100000, pyramiding=3, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100)
+var bool recreated = false
+var bool finished = false
+if time == timestamp("UTC", 2025, 4, 1, 0, 15)
+    strategy.entry("L", strategy.long)
+    strategy.exit("take", from_entry="L", limit=1827, qty_percent=50)
+if time == timestamp("UTC", 2025, 4, 1, 0, 45)
+    strategy.exit("remaining", from_entry="L", limit=1900, qty_percent=50)
+if time == timestamp("UTC", 2025, 4, 1, 1, 30)
+    strategy.entry("S", strategy.short)
+    strategy.exit("take", from_entry="S", limit=1820, qty_percent=50)
+if strategy.position_size < 0 and strategy.closedtrades > 2 and not recreated
+    strategy.cancel("take")
+    strategy.exit("remaining", from_entry="S", limit=1900, qty_percent=50)
+    recreated := true
+if strategy.position_size < 0 and strategy.closedtrades > 3 and recreated and not finished
+    strategy.exit("last", from_entry="S", limit=1900, qty_percent=50)
+    finished := true
+if time == timestamp("UTC", 2025, 4, 2, 0, 0)
+    strategy.close_all()

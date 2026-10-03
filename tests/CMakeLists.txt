@@ -1083,6 +1083,7 @@ list(APPEND TEST_SOURCES test_foreign_break_stamp_tapes)
 # (tests/fixtures/exit_reservation), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_exit_reservation_tapes)
 list(APPEND TEST_SOURCES test_percent_entry_reservation_tapes)
+list(APPEND TEST_SOURCES test_cross_mechanism_tapes)
 # Lane TAIL-C: an explicit-quantity market buy from flat is admitted at its
 # signal close's tick plus the slippage ticks its fill carries
 # (tests/fixtures/explicit_market_admission), on TradingView's tapes.
@@ -2698,7 +2699,7 @@ if(TARGET test_exit_fifo_cross_tapes)
     target_compile_definitions(test_exit_fifo_cross_tapes PRIVATE
         PINEFORGE_TAIL_D_FIFO_CROSS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_fifo_cross")
 endif()
-foreach(tape_target IN ITEMS test_carried_trail_open_tapes test_pooc_pending_stop_tapes
+foreach(tape_target IN ITEMS test_cross_mechanism_tapes test_carried_trail_open_tapes test_pooc_pending_stop_tapes
                             test_coof_marketable_stop_tapes test_coof_close_slippage_tapes)
     if(TARGET ${tape_target})
         target_compile_definitions(${tape_target} PRIVATE
