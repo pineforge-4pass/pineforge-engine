@@ -248,9 +248,10 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
         started_at = time.monotonic()
         process = run(isolation_ledger, isolation)
         assert time.monotonic() - started_at < 3.5
+        first_sent_at = min(row['at'] for row in entries.rows if row['action']['sequence'] == 1)
         newer = [row for row in entries.rows if row['action']['sequence'] == 3]
-        assert len(newer) == 1 and newer[0]['at'] - started_at < 0.8, (started_at, entries.rows)
-        assert all(row['at'] - started_at < 0.8 for row in exits.rows)
+        assert len(newer) == 1 and newer[0]['at'] - first_sent_at < 0.4, (first_sent_at, [row['at'] for row in newer])
+        assert all(row['at'] - first_sent_at < 0.4 for row in exits.rows)
         assert len([row for row in exits.rows if row['action']['sequence'] == 2]) == 1
         assert len([row for row in entries.rows if row['action']['sequence'] == 1]) == 3
         assert query(isolation_ledger, 'SELECT count(*) FROM inputs')[0][0] == len(events)
