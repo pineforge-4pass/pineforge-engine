@@ -212,7 +212,8 @@ reference underneath it.
 
 The optional C++17 `pineforge-live` executable uses this engine's native
 warmup-to-stream lifecycle. It accepts normalized ticks or confirmed OHLCV bars,
-supports user-defined C++ parsers for broker/provider messages, and commits
+accepts only normalized PineForge feed events from stdin, a file or your own
+feed service (exchange translation belongs in an external feed adapter), and commits
 inputs plus order-action webhooks to a durable SQLite ledger. Hand-written
 C++ strategies use the native contract; generated Pine strategies retain their
 compatibility path. Both expose the versioned C ABI used by the runner.
@@ -220,7 +221,7 @@ compatibility path. Both expose the versioned C ABI used by the runner.
 Build with `-DPINEFORGE_BUILD_LIVE_RUNNER=ON`; the option is off by default,
 so core-only users do not acquire SQLite/libcurl/OpenSSL dependencies. See
 the [native runner guide](runner/README.md) for feed modes, symbol metadata,
-parser ABI, recovery and execution limitations. The existing validation
+feed format, recovery and execution limitations. The existing validation
 scoreboard below describes batch backtests; it does not certify new native
 live behavior or real broker fills.
 

@@ -315,9 +315,9 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #      labelled by its stamp: OANDA's 17:00 ET break stamps)
 #   +1 test_symbol_calendar (TradingView's symbol calendar as a run input: the
 #      tape converter, the loader, the harness's syminfo-metadata transport)
-# Both register in release too. 301 registered, 300 run: the WebSocket row
+# Both register in release too. 300 registered, 299 run after parser removal: the WebSocket row
 # still skips on a system libcurl.
-KERNEL_MIN_TESTS = 300
+KERNEL_MIN_TESTS = 299
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a

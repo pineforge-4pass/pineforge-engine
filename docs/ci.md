@@ -55,7 +55,7 @@ even when the current benchmark files are correct.
 | `release` | Release, tutorial enabled | Standard CI checks behind a row floor (`RELEASE_MIN_TESTS`; `--min-tests N` overrides it), installed package, and installed native include-independence proof |
 | `debug` | Debug, tutorial enabled | The standard checks and installed package without Release optimization; no default row floor, examples, include-independence proof or twin-parity guard |
 | `sanitizers` | Debug, ASan and UBSan | Instrumented library, tests and installed consumer; Linux CI also requires leak detection |
-| `native` | Release, live runner enabled | Parser, journal, transport tests, installed runner help, and installed native include-independence proof |
+| `native` | Release, live runner enabled | JSON, journal, transport tests, installed runner help, and installed native include-independence proof |
 | `live-sanitizers` | Debug, live runner enabled, ASan and UBSan | Every runner target instrumented and audited from compile commands; all runner CTest rows, Python E2Es and installed runner help; WebSocket-enabled curl mandatory while `runner/transport.cpp` exists, no skips accepted |
 | `kernel` | Release, live runner enabled, Pine source layer OFF | The source-free CTest set behind a row floor (`KERNEL_MIN_TESTS`; `--min-tests N` overrides it), installed package, and the `nm` half of the include-independence proof over `libpineforge_kernel.a` |
 
@@ -130,7 +130,7 @@ plus wave G's six rows, wave H's twenty-four, INT26's own tape row, INT27's
 thirteen, XSYM-D's four, K-SESSION-WINDOWS' four, INT28's twenty-four,
 INT28-FIX's four, INT29's seven, W15-KERNEL-CAL's two, INT30's twenty-four,
 TAIL-I's one, XAU-CAL's four and FIX-E1E2's two). The full-run release and
-kernel floors are 792 and 300 rows that ran; full runs do not exclude a label.
+kernel floors are 792 and 299 rows that ran; full runs do not exclude a label.
 
 Preflight also runs the detached-comment census of the kernel compile closure
 (`detached-comments`: `scripts/measure_detached_comments.py --check-ceiling`)
