@@ -204,10 +204,55 @@ void confirmed_period_closure() {
     CHECK(!source::PineScheduler::confirmed_script_interval_complete(context));
 }
 
+void confirmed_interval_open_anchors() {
+    source::PineScheduler scheduler;
+    NativeBeginArgs begin{};
+    begin.is_stream = true;
+    scheduler.capture_begin(begin);
+    for (int index = 0; index < 2880; ++index) {
+        const auto open = input((index / 1440) * 1440).timestamp;
+        scheduler.retain_confirmed_input(input(index), open);
+    }
+    CHECK(scheduler.confirmed_input_count() == 8);
+    CHECK(scheduler.confirmed_input_bar_at(input(0).timestamp).has_value());
+    CHECK(scheduler.confirmed_input_bar_at(input(1440).timestamp).has_value());
+    CHECK(!scheduler.confirmed_input_bar_at(input(1).timestamp));
+    BrokerStateHashSink first;
+    scheduler.hash_state(first);
+    auto changed = input(0);
+    changed.low -= 0.5;
+    scheduler.retain_confirmed_input(changed, changed.timestamp);
+    BrokerStateHashSink second;
+    scheduler.hash_state(second);
+    CHECK(first.h != second.h);
+    for (int index = 2880; index < 2896; ++index)
+        scheduler.retain_confirmed_input(input(index), input(2880).timestamp);
+    CHECK(!scheduler.confirmed_input_bar_at(input(0).timestamp));
+    CHECK(scheduler.confirmed_input_bar_at(input(1440).timestamp).has_value());
+    CHECK(scheduler.confirmed_input_bar_at(input(2880).timestamp).has_value());
+    CloseReport host(false);
+    NativeDecisionContext point{};
+    point.sub_bar_open_ms = input(1440).timestamp;
+    const auto broker = scheduler.broker_bar(host, point);
+    CHECK(broker.has_value());
+    if (broker) CHECK(same(broker->high, input(1440).high));
+    scheduler.capture_begin(begin);
+    CHECK(!scheduler.confirmed_input_bar_at(input(1440).timestamp));
+    begin.is_stream = false;
+    scheduler.capture_begin(begin);
+    BrokerStateHashSink empty;
+    scheduler.hash_state(empty);
+    scheduler.retain_confirmed_input(input(0), input(0).timestamp);
+    BrokerStateHashSink batch;
+    scheduler.hash_state(batch);
+    CHECK(empty.h == batch.h);
+}
+
 }
 
 int main() {
     confirmed_input_window();
+    confirmed_interval_open_anchors();
     confirmed_period_closure();
     confirmed_cap_prices();
     terminal_reports();

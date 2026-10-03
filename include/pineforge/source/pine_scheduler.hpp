@@ -83,8 +83,26 @@ public:
     }
     bool retains_stream() const noexcept { return retained_.is_stream; }
     bool input_is_observed_ticks() const noexcept { return input_is_observed_ticks_; }
-    void retain_confirmed_input(const Bar& bar) noexcept {
+    void retain_confirmed_input(const Bar& bar, std::int64_t script_open_ms =
+            std::numeric_limits<std::int64_t>::min()) noexcept {
         if (!retained_.is_stream) return;
+        if (bar.timestamp == script_open_ms) {
+            bool replaced = false;
+            for (std::size_t index = 0; index < confirmed_open_input_count_; ++index) {
+                if (confirmed_open_input_bars_[index].timestamp == bar.timestamp) {
+                    confirmed_open_input_bars_[index] = bar;
+                    replaced = true;
+                    break;
+                }
+            }
+            if (!replaced) {
+                confirmed_open_input_bars_[confirmed_open_input_next_] = bar;
+                confirmed_open_input_next_ =
+                    (confirmed_open_input_next_ + 1) % confirmed_open_input_bars_.size();
+                confirmed_open_input_count_ =
+                    std::min(confirmed_open_input_count_ + 1, confirmed_open_input_bars_.size());
+            }
+        }
         for (std::size_t index = 0; index < confirmed_input_count_; ++index) {
             auto& existing = confirmed_input_bars_[index];
             if (existing.timestamp == bar.timestamp) {
@@ -101,6 +119,10 @@ public:
         for (std::size_t index = 0; index < confirmed_input_count_; ++index) {
             if (confirmed_input_bars_[index].timestamp == timestamp)
                 return confirmed_input_bars_[index];
+        }
+        for (std::size_t index = 0; index < confirmed_open_input_count_; ++index) {
+            if (confirmed_open_input_bars_[index].timestamp == timestamp)
+                return confirmed_open_input_bars_[index];
         }
         return std::nullopt;
     }
@@ -252,6 +274,9 @@ private:
     std::array<Bar, 8> confirmed_input_bars_{};
     std::size_t confirmed_input_next_ = 0;
     std::size_t confirmed_input_count_ = 0;
+    std::array<Bar, 2> confirmed_open_input_bars_{};
+    std::size_t confirmed_open_input_next_ = 0;
+    std::size_t confirmed_open_input_count_ = 0;
     DeferredBoundaryInput deferred_boundary_input_{};
     // R5 lane V19-E: running digests of the consumed input prefix -- the bars,
     // their script completions and their boundary completions -- each element

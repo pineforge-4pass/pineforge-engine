@@ -27,6 +27,9 @@ void PineScheduler::capture_begin(const NativeBeginArgs& args) {
     confirmed_input_bars_ = {};
     confirmed_input_next_ = 0;
     confirmed_input_count_ = 0;
+    confirmed_open_input_bars_ = {};
+    confirmed_open_input_next_ = 0;
+    confirmed_open_input_count_ = 0;
     reset_consumed_digests();
 }
 
@@ -67,6 +70,9 @@ void PineScheduler::reset_language() {
     confirmed_input_bars_ = {};
     confirmed_input_next_ = 0;
     confirmed_input_count_ = 0;
+    confirmed_open_input_bars_ = {};
+    confirmed_open_input_next_ = 0;
+    confirmed_open_input_count_ = 0;
     deferred_boundary_input_ = {};
     reset_consumed_digests();
 }
@@ -359,7 +365,7 @@ void PineScheduler::fixture_publish_source_series(const Bar& bar, bool new_histo
 void PineScheduler::input(
     const Bar& bar, const NativeInputContext& context, PineStrategyHost& host) {
     input_is_observed_ticks_ = false;
-    retain_confirmed_input(bar);
+    retain_confirmed_input(bar, context.script_interval.open_ms);
     struct InputBarIndexScope {
         PineStrategyHost& host;
         int previous;

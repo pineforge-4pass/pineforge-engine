@@ -738,6 +738,12 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
             f.d(bar.open); f.d(bar.high); f.d(bar.low); f.d(bar.close); f.d(bar.volume);
             f.i(bar.timestamp);
         }
+        f.u(confirmed_open_input_next_);
+        f.u(confirmed_open_input_count_);
+        for (const auto& bar : confirmed_open_input_bars_) {
+            f.d(bar.open); f.d(bar.high); f.d(bar.low); f.d(bar.close); f.d(bar.volume);
+            f.i(bar.timestamp);
+        }
     }
     f.d(deferred_boundary_input_.bar.open); f.d(deferred_boundary_input_.bar.high);
     f.d(deferred_boundary_input_.bar.low); f.d(deferred_boundary_input_.bar.close);
