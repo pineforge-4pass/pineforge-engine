@@ -1,0 +1,11 @@
+//@version=6
+strategy("Completed remainder across absent levels", overlay=true, initial_capital=1000000, margin_long=0, margin_short=0)
+if time == timestamp("UTC",2025,4,4,14,0)
+    strategy.entry("seed",strategy.short,qty=56)
+if strategy.position_size < 0
+    bool absent = time >= timestamp("UTC",2025,4,5,0,0) and time < timestamp("UTC",2025,4,5,7,0)
+    float target = absent ? na : 1771.14
+    float stopLevel = absent ? na : time < timestamp("UTC",2025,4,5,7,0) ? 1813.82 : 1810.36
+    float armTicks = absent ? na : 20
+    strategy.exit("take","seed",limit=target,qty_percent=50)
+    strategy.exit("runner","seed",stop=stopLevel,trail_points=armTicks)

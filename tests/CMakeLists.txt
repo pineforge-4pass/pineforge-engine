@@ -1082,6 +1082,7 @@ list(APPEND TEST_SOURCES test_foreign_break_stamp_tapes)
 # what it reserved when margin calls shrink the position
 # (tests/fixtures/exit_reservation), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_exit_reservation_tapes)
+list(APPEND TEST_SOURCES test_percent_entry_reservation_tapes)
 # Lane TAIL-C: an explicit-quantity market buy from flat is admitted at its
 # signal close's tick plus the slippage ticks its fill carries
 # (tests/fixtures/explicit_market_admission), on TradingView's tapes.
@@ -2981,6 +2982,10 @@ endif()
 if(TARGET test_exit_reservation_tapes)
     target_compile_definitions(test_exit_reservation_tapes PRIVATE
         PINEFORGE_EXIT_RESERVATION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_reservation")
+endif()
+if(TARGET test_percent_entry_reservation_tapes)
+    target_compile_definitions(test_percent_entry_reservation_tapes PRIVATE
+        PINEFORGE_PERCENT_ENTRY_RESERVATION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/percent_entry_reservation")
 endif()
 
 # std::thread needs an explicit pthread link on some toolchains.

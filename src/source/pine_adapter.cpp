@@ -4546,7 +4546,7 @@ double PineExecutionAdapter::quantize_percent_exit_units(
 bool PineExecutionAdapter::compute_exit_reservation(
         const SourceId& exit_id, const SourceId& from_entry,
         double requested_qty, double& qty_percent, double live_basis,
-        double& reserved_qty) const {
+        double percentage_basis, double& reserved_qty) const {
     qty_percent = std::isfinite(qty_percent)
         ? std::clamp(qty_percent, 0.0, 100.0) : 100.0;
     reserved_qty = kNaN;
@@ -4669,7 +4669,7 @@ bool PineExecutionAdapter::compute_exit_reservation(
         // turn the legacy execute_market_exit branch into a dust reduction
         // (ab9714be:src/source/pine_fills.cpp:6893-6932; A33).
         double requested = qty_percent >= 100.0 - internal::kFullPercentEps
-            ? live_basis : live_basis * qty_percent / 100.0;
+            ? live_basis : percentage_basis * qty_percent / 100.0;
         if (qty_percent < 100.0 - internal::kFullPercentEps) {
             requested = quantize_percent_exit_units(requested, available);
         }
@@ -9983,36 +9983,50 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     // entry's own quantity -- the oldest lots first -- not the whole book
     // (tests/test_pyramiding_count_differential.cpp, P10 on its lab tv tape).
     const bool fifo_named_entry = !config_.close_entries_rule_any && !from_entry.empty();
-    // TradingView sizes a percent exit on the quantity its entry filled: the
-    // slices margin calls took from the position are not taken off it (lab tv
-    // tapes tests/fixtures/margin_v6 w5-qp-*: 35 % of the 62.3911 a short
-    // filled, though margin calls of 0.0028 and 1.6712 precede the exit's
-    // placement; lane W5-ENG-MARGIN-V6).
-    double margin_sliced_units = 0.0;
+    // The tests/fixtures/percent_entry_reservation tapes prove named, absolute,
+    // limit-only targets size from still-live entry ancestry after partial/runner and
+    // margin slices complete; reservation capacity remains live exposure.
+    // Two-sided brackets retain main's pending-close/margin basis: those tapes
+    // do not cover their completed-partial sizing, and the broader rule changed
+    // physical outcomes in 36 frozen live-state transcripts without TV proof.
+    const bool ancestry_sized_target = !from_entry.empty() && std::isfinite(limit_price)
+        && std::isnan(stop_price) && std::isnan(profit_ticks)
+        && std::isnan(loss_ticks) && !has_trail_request;
+    // The non-ancestry path keeps W5's margin rule: percent exits include the
+    // entry's margin slices (tests/fixtures/margin_v6 w5-qp-*; 35% of 62.3911
+    // despite prior slices of 0.0028 and 1.6712; lane W5-ENG-MARGIN-V6).
+    double completed_entry_units = 0.0;
     if (std::isnan(qty) && std::isfinite(requested_qty_percent)
         && requested_qty_percent < 100.0 && physical.signed_units != 0.0
         && position_open_script_bar_ != std::numeric_limits<std::int64_t>::min()) {
         const auto& host = require_host();
-        for (int k = host.trade_count() - 1; k >= 0; --k) {
-            const Trade& trade = host.get_trade(k);
+        for (int index = host.trade_count() - 1; index >= 0; --index) {
+            const Trade& trade = host.get_trade(index);
             if (trade.exit_time < position_open_script_bar_) break;
-            if (trade.exit_id != kMarginCallLabel
-                || trade.is_long != (physical.signed_units > 0.0)
-                || (fifo_named_entry && trade.entry_id != from_entry)) {
-                continue;
-            }
-            margin_sliced_units += trade.qty;
+            if (trade.is_long != (physical.signed_units > 0.0)) continue;
+            const bool include_completed = ancestry_sized_target
+                ? std::any_of(cohorts_by_id_.begin(), cohorts_by_id_.end(),
+                    [&](const auto& cohort) {
+                        return (!fifo_named_entry || cohort.first == from_entry)
+                            && cohort.second.live_units_by_origin.count(
+                                trade.entry_incarnation) != 0;
+                    })
+                : trade.exit_id == kMarginCallLabel
+                    && (!fifo_named_entry || trade.entry_id == from_entry);
+            if (include_completed) completed_entry_units += trade.qty;
         }
     }
     const double book_basis = (fifo_named_entry
         ? std::min(std::abs(physical.signed_units), cohort_exposure_for(from_entry))
-        : std::abs(physical.signed_units)) + margin_sliced_units;
+        : std::abs(physical.signed_units)) + (ancestry_sized_target ? 0.0 : completed_entry_units);
     const double live_reservation_basis = binds_pending_reversal_entry ? 0.0
         : std::max(0.0, book_basis
                          - pending_same_bar_close_qty_ + pending_parent_units);
-    const bool reservation_ok = compute_exit_reservation(
-        exit_id, from_entry, qty, qty_percent, live_reservation_basis,
-        reserved_exit_qty);
+    const double percentage_basis = ancestry_sized_target
+        ? book_basis + completed_entry_units + pending_parent_units
+        : live_reservation_basis;
+    const bool reservation_ok = compute_exit_reservation(exit_id, from_entry, qty, qty_percent,
+        live_reservation_basis, percentage_basis, reserved_exit_qty);
     if (!reservation_ok) {
         // clear_existing_exit_order ran before sizing on the legacy route:
         // a zero-capacity reissue removes its predecessor as well as refusing

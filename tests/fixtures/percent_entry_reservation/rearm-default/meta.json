@@ -1,0 +1,18 @@
+{
+  "title": "Completed implicit remainder repeated",
+  "slug": "completed-implicit-remainder-repeated",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T04:44:11.802Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-07"
+  },
+  "pine_sha256": "32e68b21bee8297843dd167cf33c06630c56ceaa6263a118ae3a0f6e5b488fd3",
+  "tv_trades_sha256": "b82a54924f11c9304c5487ac11d9dfd47948fdfbfc0648cec83edd73d62fdbe5",
+  "tv_trades_rows": 4,
+  "fixture_csv_sha256": "1d62359dc90c08f6313dadaafbaf34acecbb41b6831cbfadf980c9d0283e6745",
+  "fixture_normalization": "CSV line endings are LF with a final newline; exported tape row contents are unchanged"
+}

@@ -1,0 +1,18 @@
+{
+  "title": "New percentage after partial completion",
+  "slug": "new-percentage-after-partial-completion",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T04:44:13.643Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-07"
+  },
+  "pine_sha256": "1b5d6c22700a74d1335ef41a21fd38c57231df2f97f030ac77b3d1df164151c4",
+  "tv_trades_sha256": "3aa0c938bd2189ad6cd4715478264783f57e76e679ec24fdc0f801e91b51ef22",
+  "tv_trades_rows": 4,
+  "fixture_csv_sha256": "67f1ad3fd65b55caf3941dd0507bc1af88034e99a28b9963f1a12944c96d68d7",
+  "fixture_normalization": "CSV line endings are LF with a final newline; exported tape row contents are unchanged"
+}
