@@ -801,89 +801,89 @@ int run(Config c) {
             throw std::runtime_error("input snapshot omits committed prefix");
     };
     try {
-    if (c.feed_url.empty()) {
-        if (c.feed == "-") {
-            std::uint64_t index = c.from_input;
-            std::string pending;
-            char buffer[65536];
-            while (!stopped && !(c.max_events && processed >= c.max_events)) {
-                delivery.check();
-                pollfd fd{STDIN_FILENO, POLLIN, 0};
-                int rc = poll(&fd, 1, 100);
-                if (rc < 0) {
-                    if (errno == EINTR)
+        if (c.feed_url.empty()) {
+            if (c.feed == "-") {
+                std::uint64_t index = c.from_input;
+                std::string pending;
+                char buffer[65536];
+                while (!stopped && !(c.max_events && processed >= c.max_events)) {
+                    delivery.check();
+                    pollfd fd{STDIN_FILENO, POLLIN, 0};
+                    int rc = poll(&fd, 1, 100);
+                    if (rc < 0) {
+                        if (errno == EINTR)
+                            continue;
+                        throw std::runtime_error("stdin poll failed");
+                    }
+                    if (!rc)
                         continue;
-                    throw std::runtime_error("stdin poll failed");
-                }
-                if (!rc)
-                    continue;
-                auto n = read(STDIN_FILENO, buffer, sizeof buffer);
-                if (n < 0) {
-                    if (errno == EINTR)
-                        continue;
-                    throw std::runtime_error("stdin read failed");
-                }
-                if (!n) {
-                    if (!blank(pending))
-                        consume_message(pending, index);
-                    break;
-                }
-                pending.append(buffer, static_cast<std::size_t>(n));
-                for (;;) {
-                    auto end = pending.find('\n');
-                    if (end == std::string::npos)
+                    auto n = read(STDIN_FILENO, buffer, sizeof buffer);
+                    if (n < 0) {
+                        if (errno == EINTR)
+                            continue;
+                        throw std::runtime_error("stdin read failed");
+                    }
+                    if (!n) {
+                        if (!blank(pending))
+                            consume_message(pending, index);
                         break;
-                    if (end > MAX_FRAME)
+                    }
+                    pending.append(buffer, static_cast<std::size_t>(n));
+                    for (;;) {
+                        auto end = pending.find('\n');
+                        if (end == std::string::npos)
+                            break;
+                        if (end > MAX_FRAME)
+                            throw std::runtime_error("input line exceeds 1 MiB");
+                        auto message = pending.substr(0, end);
+                        pending.erase(0, end + 1);
+                        if (!blank(message))
+                            consume_message(message, index);
+                        if (stopped || (c.max_events && processed >= c.max_events))
+                            break;
+                    }
+                    if (pending.size() > MAX_FRAME)
                         throw std::runtime_error("input line exceeds 1 MiB");
-                    auto message = pending.substr(0, end);
-                    pending.erase(0, end + 1);
-                    if (!blank(message))
-                        consume_message(message, index);
-                    if (stopped || (c.max_events && processed >= c.max_events))
-                        break;
                 }
-                if (pending.size() > MAX_FRAME)
-                    throw std::runtime_error("input line exceeds 1 MiB");
+            } else {
+                std::ifstream input(c.feed);
+                if (!input)
+                    throw std::runtime_error("cannot open feed");
+                consume(input, c.from_input, true);
             }
+        } else if (c.feed_url.rfind("ws://", 0) == 0 || c.feed_url.rfind("wss://", 0) == 0) {
+            HttpOptions feed;
+            feed.url = c.feed_url;
+            feed.allow_insecure_http = c.allow_http;
+            std::string subscription =
+                c.subscribe_path.empty() ? "" : read_file(c.subscribe_path, MAX_FRAME);
+            std::uint64_t index = c.from_input;
+            receive_websocket(
+                feed, subscription,
+                [&](std::string_view bytes) {
+                    consume_message(std::string(bytes), index);
+                    return !stopped && !(c.max_events && processed >= c.max_events);
+                },
+                [&] { delivery.check(); return stopped != 0; });
         } else {
-            std::ifstream input(c.feed);
-            if (!input)
-                throw std::runtime_error("cannot open feed");
-            consume(input, c.from_input, true);
-        }
-    } else if (c.feed_url.rfind("ws://", 0) == 0 || c.feed_url.rfind("wss://", 0) == 0) {
-        HttpOptions feed;
-        feed.url = c.feed_url;
-        feed.allow_insecure_http = c.allow_http;
-        std::string subscription =
-            c.subscribe_path.empty() ? "" : read_file(c.subscribe_path, MAX_FRAME);
-        std::uint64_t index = c.from_input;
-        receive_websocket(
-            feed, subscription,
-            [&](std::string_view bytes) {
-                consume_message(std::string(bytes), index);
-                return !stopped && !(c.max_events && processed >= c.max_events);
-            },
-            [&] { delivery.check(); return stopped != 0; });
-    } else {
-        HttpOptions feed;
-        feed.url = c.feed_url;
-        feed.allow_insecure_http = c.allow_http;
-        do {
-            delivery.check();
-            auto snapshot = get_feed_snapshot(feed);
-            std::istringstream input(snapshot);
-            consume(input, 0, true);
-            recorded = ledger.input_count();
-            if (c.check || stopped || (c.max_events && processed >= c.max_events))
-                break;
-            for (long n = 0; n < c.poll_ms && !stopped; n += 100) {
+            HttpOptions feed;
+            feed.url = c.feed_url;
+            feed.allow_insecure_http = c.allow_http;
+            do {
                 delivery.check();
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
-        } while (!stopped);
-    }
-    delivery.finish(stopped != 0);
+                auto snapshot = get_feed_snapshot(feed);
+                std::istringstream input(snapshot);
+                consume(input, 0, true);
+                recorded = ledger.input_count();
+                if (c.check || stopped || (c.max_events && processed >= c.max_events))
+                    break;
+                for (long n = 0; n < c.poll_ms && !stopped; n += 100) {
+                    delivery.check();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+            } while (!stopped);
+        }
+        delivery.finish(stopped != 0);
     } catch (const std::exception& error) {
         delivery.limit_drain();
         try { delivery.finish(false); } catch (...) {}
