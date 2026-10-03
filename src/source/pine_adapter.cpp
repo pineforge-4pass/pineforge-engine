@@ -4350,13 +4350,14 @@ double PineExecutionAdapter::percent_commission_live_equity(
     }
     const double marked = strategy_equity_at(mark, fx);
     if (!std::isfinite(marked)) return marked;
-    // `marked_equity()` accounts for every open entry fee.  The money gates
-    // and the margin money read an equity that subtracts only surviving
-    // PERCENT entry commissions, so restore the adapter-recorded
+    // `marked_equity()` accounts for every open entry fee.  The legacy money
+    // gates read an equity that subtracts only surviving PERCENT entry
+    // commissions, so restore the adapter-recorded
     // cash-per-order/contract fees without changing generic accounting or
     // marked equity itself.  A percent-of-equity default QUANTITY does not
     // read this: TradingView sizes it from strategy.equity, cash fees charged
-    // (default_sizing_cash, R5 lane PAR-CASHFEE).
+    // (default_sizing_cash, R5 lane PAR-CASHFEE).  source_margin_money also
+    // charges cash-per-contract fees for its tape-pinned margin policy.
     double restored = 0.0;
     for (const auto& fact : open_entry_fees_) {
         if (!std::isfinite(fact.nonpercent_fee))
@@ -13811,7 +13812,12 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         const bool opposite_now = facts.position.signed_units != 0.0
             && ((facts.position.signed_units > 0.0) != source.is_long);
         if (source.affordability_close_only) {
-            result.units = opposite_now ? facts.opposite_book_units : 0.0;
+            const bool stopped_flat_reversal = !opposite_now
+                && facts.position.signed_units == 0.0
+                && std::holds_alternative<native_order::Stop>(trigger)
+                && finite_positive(source.projection_tv_carry_qty);
+            result.units = opposite_now ? facts.opposite_book_units
+                : (stopped_flat_reversal ? source.projection_tv_carry_qty : 0.0);
             result.shape = opposite_now ? native_order::OpeningShape::CloseOpposite
                                         : native_order::OpeningShape::Transact;
             return result;
@@ -14436,6 +14442,28 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     if (source.crosses_zero
         || (source.frozen_market_instruction && fixed_unmargined_market_batch_scope())) {
         return NativePrecommitVerdict::AdmitWithHostMargin;
+    }
+    const double placed_reversal_units = finite_positive(source.projection_affordability_held_qty)
+        ? source.projection_affordability_held_qty : source.projection_tv_carry_qty;
+    if (source.family == PineOrderFamily::Entry && source.reverse_to
+        && std::holds_alternative<native_order::Stop>(view.definition->request.trigger)
+        && physical_now.signed_units == 0.0
+        && source.projection_position_side != static_cast<std::int32_t>(PositionSide::FLAT)
+        && (source.projection_position_side == static_cast<std::int32_t>(PositionSide::LONG))
+            != source.is_long
+        && finite_positive(placed_reversal_units)
+        && finite_positive(source.sizing.equity)) {
+        const double own_units = std::abs(view.inspected_opened_units)
+            - placed_reversal_units;
+        const double margin_pct = source.is_long ? config_.margin_long : config_.margin_short;
+        const double required = own_units * view.resolved_price * staged_.syminfo.pointvalue
+            * active_staged_fx(view.cursor.point.effective_time_ms) * margin_pct / 100.0;
+        const double guard = std::max(1e-9, std::abs(source.sizing.equity) * 1e-12);
+        if (std::abs(margin_pct - 100.0) < 1e-12
+            && finite_positive(own_units) && std::isfinite(required)
+            && required <= source.sizing.equity + guard) {
+            return NativePrecommitVerdict::AdmitWithHostMargin;
+        }
     }
     // Entries a bar placed while the book was flat all fill where they reach
     // their fill point, the later ones behind a book of their own side that
@@ -15292,6 +15320,14 @@ PineExecutionAdapter::SourceMarginMoney PineExecutionAdapter::source_margin_mone
     }
     // ab9714be pine_fills.cpp:1411-1423: fee-adjusted live equity.
     money.equity = percent_commission_live_equity(mark_price);
+    // Cash-per-contract margin charges the open entry fees. Cash-per-order
+    // retains the legacy restoring basis: cash_fee_sizing/pcf-order-p100-m100
+    // shows TradingView charging fees too, but its distinct margin schedule
+    // remains a recorded divergence, not covered by the contract-fee rule.
+    if (config_.commission_type == static_cast<int>(CommissionType::CASH_PER_CONTRACT)
+        && config_.commission_value > 0.0) {
+        money.equity = strategy_equity_at(mark_price, std::nullopt);
+    }
     money.valid = finite_positive(money.unit_margin) && std::isfinite(money.equity);
     return money;
 }
@@ -16350,6 +16386,35 @@ void PineExecutionAdapter::follow_margin_call(
         at = next;
         phase = next_phase;
     }
+}
+
+bool PineExecutionAdapter::schedule_priced_opening_margin(
+        const Bar& bar, const NativeDecisionContext& context, double fill) {
+    const auto position = detail::run_position(require_host());
+    if (position.signed_units == 0.0 || !source_margin_call_enabled_) return false;
+    const bool buy = position.signed_units < 0.0;
+    const double mark = next_source_path_waypoint(
+        bar, context.coordinate.path_phase, fill, source_path_uses_high_first(bar));
+    if (!finite_positive(mark)) return false;
+    const double units = source_margin_units(
+        source_margin_money(mark, context.sub_bar_open_ms), false);
+    if (!(units > 0.0)) return false;
+    native_order::Request request;
+    request.intent = native_order::Reduce{native_order::ExplicitUnits{units}};
+    request.label = kMarginCallLabel;
+    request.comment = "Margin call";
+    request.trigger = (buy ? mark > fill : mark < fill)
+        ? native_order::Trigger{native_order::Stop{mark}}
+        : native_order::Trigger{native_order::Limit{mark, true}};
+    PlacementSnapshot snapshot;
+    snapshot.family = PineOrderFamily::Margin;
+    snapshot.source_id = request.label;
+    snapshot.requested_qty = units;
+    snapshot.forced_execution_price = source_margin_fill_price(mark, buy);
+    snapshot.waypoint_margin_call = true;
+    snapshot.sizing = sizing_snapshot();
+    return submit_or_replace(std::move(request), std::move(snapshot), false,
+                             "__margin_priced_opening__").has_value();
 }
 
 bool PineExecutionAdapter::schedule_margin_call_path(
@@ -20865,11 +20930,25 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 && context.coordinate.path_phase == NativePathPhase::Close
                 && position_open_phase_ == NativePathPhase::Close
                 && position_open_script_bar_ == context.script_bar_open_ms;
+            const bool stopped_flat_reversal = opened_position.signed_units < 0.0
+                && std::abs(config_.margin_short - 100.0) < 1e-12 && event.closed_units == 0.0
+                && placement_snapshot->reverse_to
+                && std::holds_alternative<native_order::Stop>(event.request().trigger)
+                && context.coordinate.path_phase != NativePathPhase::Open;
+            const bool priced_opening_waypoint = (stopped_flat_reversal
+                || (long_full_margin && !std::isfinite(placement_snapshot->requested_qty)
+                    && context.coordinate.path_phase != NativePathPhase::Open))
+                && position_open_priced_
+                && placement_snapshot->family == PineOrderFamily::Entry
+                && std::holds_alternative<native_order::Stop>(event.request().trigger)
+                && !sibling_book && !placed_add
+                && !config_.process_orders_on_close && !config_.calc_on_order_fills
+                && !stream_mode_ && !bar_magnifier_;
             // The 10-significant-digit long residual is same-currency,
             // pointvalue-one policy.  A non-unit point value does not inherit
             // an exact-money opening slice merely because the generic
             // floating ledger rounds its fill cost differently.
-            if (!zero_fee_true_flat_default && !called_at_next_open
+            if (!zero_fee_true_flat_default && !called_at_next_open && !priced_opening_waypoint
                 && !short_preempted_by_priced_exit && !sibling_fill_follows
                 && !add_fill_follows && !pooc_add_book
                 && !flat_dual_stop_member && !prearmed_entry_bar_margin
@@ -20900,7 +20979,19 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 const bool slipped_market_short = opened_position.signed_units < 0.0
                     && config_.slippage != 0 && !config_.process_orders_on_close
                     && std::holds_alternative<native_order::Market>(event.request().trigger);
-                if (!defer_slipped_pooc_rounding && slipped_market_short) {
+                const bool cash_contract_market_opening = config_.commission_value > 0.0
+                    && config_.commission_type == static_cast<int>(CommissionType::CASH_PER_CONTRACT)
+                    && !config_.process_orders_on_close
+                    && std::holds_alternative<native_order::Market>(event.request().trigger);
+                if (!defer_slipped_pooc_rounding && cash_contract_market_opening) {
+                    const double print = source_bar_fill_tick(
+                        event.resolved_price - (opened_position.signed_units > 0.0 ? 1.0 : -1.0)
+                            * config_.slippage * staged_.syminfo.mintick,
+                        staged_.syminfo.mintick);
+                    const double units = source_margin_units(
+                        source_margin_money(print, context.sub_bar_open_ms), false);
+                    (void)submit_margin_call_units(print, context, units, true);
+                } else if (!defer_slipped_pooc_rounding && slipped_market_short) {
                     const double print = source_bar_fill_tick(
                         event.resolved_price + config_.slippage * staged_.syminfo.mintick,
                         staged_.syminfo.mintick);
@@ -20959,7 +21050,10 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 && position_open_phase_ == NativePathPhase::Close;
             if (!terminal_pooc_open && !flat_dual_stop_member
                 && !prearmed_entry_bar_margin) {
-                if (long_full_margin) {
+                if (priced_opening_waypoint) {
+                    (void)schedule_priced_opening_margin(
+                        policy_script_bar_, context, event.resolved_price);
+                } else if (long_full_margin) {
                     (void)schedule_tv_money_long_margin_before_trail(
                         policy_script_bar_, context);
                 } else {

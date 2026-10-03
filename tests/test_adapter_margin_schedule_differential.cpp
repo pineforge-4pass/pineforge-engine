@@ -145,10 +145,12 @@ struct Config {
     double margin_short = 50.0;
     double qty_step = 0.0;
     double mintick = 0.01;
+    double pointvalue = 1.0;
     bool pooc = false;
     bool coof = false;
     CommissionType commission = CommissionType::PERCENT;
     double commission_value = 0.0;
+    int slippage = 0;
     int pyramiding = 1;
     QtyType qty_type = QtyType::FIXED;
     double qty_value = 1.0;
@@ -245,6 +247,7 @@ struct PineSide final : source::PineStrategyHost {
         tv.default_qty_value = c.qty_value;
         tv.commission_type = static_cast<int>(c.commission);
         tv.commission_value = c.commission_value;
+        tv.slippage = c.slippage;
         tv.margin_long = c.margin_long;
         tv.margin_short = c.margin_short;
         tv.process_orders_on_close = c.pooc;
@@ -253,6 +256,7 @@ struct PineSide final : source::PineStrategyHost {
         initial_capital_ = c.capital;
         qty_step_ = c.qty_step;
         syminfo_mintick_ = c.mintick;
+        set_syminfo_pointvalue(c.pointvalue);
         set_margin_call_enabled(true);
         fixture_retain_all_events();
     }
@@ -267,6 +271,10 @@ struct PineSide final : source::PineStrategyHost {
     }
     void close(const char* id) { strategy_close(id); }
     void close_all() { strategy_close_all(); }
+    void cancel_all() { strategy_cancel_all(); }
+    void stop_exit(const char* id, const char* entry_id, double stop) {
+        strategy_exit(id, entry_id, kNaN, stop);
+    }
     std::string entry_id0() const { return open_trade_entry_id(0); }
     // strategy.equity at the script's calculation: realized plus open profit.
     double strategy_equity() const {
@@ -1881,6 +1889,287 @@ void half_tick_fills_on_tapes() {
 
 }  // namespace
 
+void px_cash_entry_margin() {
+    Config configuration;
+    configuration.capital = 100000.0;
+    configuration.margin_long = 100.0;
+    configuration.margin_short = 100.0;
+    configuration.qty_step = 0.01;
+    configuration.mintick = 0.00001;
+    configuration.commission = CommissionType::CASH_PER_CONTRACT;
+    configuration.commission_value = 0.25;
+    configuration.slippage = 1;
+    PineSide adapter(configuration);
+    adapter.script = [](PineSide& host, int index) {
+        if (index == 0) host.entry("test", true, kNaN, kNaN, 87939.0);
+    };
+    const auto bars = tape({
+        {1.07867, 1.08122, 1.07853, 1.08111},
+        {1.08111, 1.08125, 1.07940, 1.07950},
+        {1.07950, 1.08116, 1.07939, 1.08086},
+    });
+    adapter.run_bars(bars);
+    const auto calls = margin_fills(adapter);
+    print_side("PX cash", calls, adapter.position(), adapter.equity());
+    REQUIRE(calls.size() == 1);
+    CHECK(same_value(calls.front().units, 63110.52));
+    CHECK(same_value(calls.front().price, 1.08110));
+    CHECK(same_value(adapter.position(), 24828.48));
+}
+
+void px_priced_reversal_margin() {
+    Config configuration;
+    configuration.capital = 100000.0;
+    configuration.margin_long = 100.0;
+    configuration.margin_short = 100.0;
+    configuration.qty_type = QtyType::PERCENT_OF_EQUITY;
+    configuration.qty_value = 100.0;
+    configuration.qty_step = 0.0001;
+    configuration.mintick = 0.01;
+    configuration.pyramiding = 0;
+    PineSide adapter(configuration);
+    adapter.script = [](PineSide& host, int index) {
+        if (index == 0) host.entry("seed", false, kNaN, kNaN, 10.0);
+        if (index == 11) host.entry("test", true, kNaN, 2524.31, kNaN);
+    };
+    const auto bars = tape({
+        {2513.48, 2521.28, 2510.00, 2519.62},
+        {2519.63, 2533.97, 2515.00, 2530.67},
+        {2530.66, 2544.97, 2526.91, 2527.75},
+        {2527.76, 2534.57, 2521.36, 2530.21},
+        {2530.20, 2548.00, 2527.27, 2535.82},
+        {2535.81, 2538.86, 2510.86, 2517.07},
+        {2517.07, 2517.60, 2490.00, 2508.30},
+        {2508.30, 2515.13, 2502.98, 2504.48},
+        {2504.48, 2514.48, 2501.06, 2507.97},
+        {2507.93, 2523.69, 2502.66, 2515.77},
+        {2515.76, 2535.09, 2515.76, 2520.81},
+        {2520.81, 2527.40, 2510.50, 2521.78},
+        {2521.77, 2521.78, 2508.57, 2515.31},
+        {2515.31, 2526.28, 2509.75, 2515.40},
+        {2515.40, 2519.65, 2510.10, 2513.06},
+    });
+    adapter.run_bars(bars);
+    const auto calls = margin_fills(adapter);
+    print_side("PX priced", calls, adapter.position(), adapter.equity());
+    REQUIRE(calls.size() == 1);
+    CHECK(same_value(calls.front().units, 0.0396));
+    CHECK(same_value(calls.front().price, 2526.28));
+    CHECK(same_value(adapter.position(), 39.5666));
+}
+
+void px_stop_after_flat_margin(bool default_sized = false) {
+    Config configuration;
+    configuration.capital = 99829.25;
+    configuration.margin_long = 100.0;
+    configuration.margin_short = 100.0;
+    configuration.qty_step = 1.0;
+    configuration.mintick = 0.05;
+    configuration.pyramiding = 0;
+    if (default_sized) {
+        configuration.qty_type = QtyType::PERCENT_OF_EQUITY;
+        configuration.qty_value = 100.0;
+    }
+    PineSide adapter(configuration);
+    adapter.script = [default_sized](PineSide& host, int index) {
+        if (index == 0) host.entry("seed", true, kNaN, kNaN, 3.0);
+        if (index == 1) {
+            host.stop_exit("risk", "seed", 25820.0);
+            host.entry("test", false, kNaN, 25820.0, default_sized ? kNaN : 3.0);
+        }
+    };
+    adapter.run_bars(tape({
+        {25960.0, 25964.0, 25940.0, 25963.0},
+        {25963.15, 25980.0, 25860.0, 25884.1},
+        {25766.3, 25826.75, 25766.3, 25823.2},
+        {25824.0, 25879.15, 25819.0, 25856.2},
+    }));
+    const auto calls = margin_fills(adapter);
+    print_side("PX stop", calls, adapter.position(), adapter.equity());
+    REQUIRE(calls.size() == 1);
+    CHECK(same_value(calls.front().units, 6.0));
+    CHECK(same_value(calls.front().price, 25766.3));
+    CHECK(same_value(adapter.position(), 0.0));
+}
+
+void margin_fee_reversal_tapes() {
+    struct TapeCase {
+        const char* name;
+        bool is_long;
+        bool stop_entry;
+        bool percent_fee;
+    };
+    const TapeCase cases[] = {
+        {"margin_market_long_cash", true, false, false},
+        {"margin_market_short_cash", false, false, false},
+        {"margin_stop_long_cash", true, true, false},
+        {"margin_stop_long_percent", true, true, true},
+    };
+    for (const auto& testcase : cases) {
+        const std::string directory = std::string(PINEFORGE_HM_M7A_FIXTURE_DIR)
+            + "/../" + testcase.name;
+        std::ifstream feed(directory + "/bars.csv");
+        REQUIRE(feed.is_open());
+        std::string line;
+        std::getline(feed, line);
+        std::vector<Bar> bars;
+        while (std::getline(feed, line)) {
+            const auto cells = csv_cells(line);
+            REQUIRE(cells.size() == 6);
+            bars.push_back({std::stod(cells[1]), std::stod(cells[2]), std::stod(cells[3]),
+                            std::stod(cells[4]), std::stod(cells[5]), std::stoll(cells[0])});
+        }
+        REQUIRE(!bars.empty());
+        Config configuration;
+        configuration.capital = 100000.0;
+        configuration.margin_long = 100.0;
+        configuration.margin_short = 100.0;
+        configuration.qty_step = 0.0001;
+        configuration.qty_type = QtyType::PERCENT_OF_EQUITY;
+        configuration.qty_value = 100.0;
+        configuration.pyramiding = 0;
+        configuration.commission = testcase.percent_fee ? CommissionType::PERCENT
+                                                        : CommissionType::CASH_PER_CONTRACT;
+        configuration.commission_value = testcase.percent_fee ? 0.1 : 0.25;
+        PineSide adapter(configuration);
+        int counter = 0;
+        adapter.script = [&counter, &testcase](PineSide& host, int) {
+            if (host.last_time >= 1747008000000LL) ++counter;
+            if (counter == 1) host.entry("seed", !testcase.is_long, kNaN, kNaN, kNaN);
+            if (counter == 12) {
+                const double stop = testcase.stop_entry ? host.last_close * 1.001 : kNaN;
+                host.entry("test", testcase.is_long, kNaN, stop, kNaN);
+            }
+            if (counter == 24) {
+                host.cancel_all();
+                host.close_all();
+            }
+        };
+        adapter.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false);
+        CHECK(adapter.last_error().empty());
+        std::vector<ProbeExit> actual;
+        for (int index = 0; index < adapter.trade_count(); ++index) {
+            const Trade& trade = adapter.get_trade(index);
+            actual.push_back({trade.exit_time - trade.exit_time % (15 * 60000LL),
+                              trade.exit_price, trade.qty, trade.exit_comment == "Margin call",
+                              trade.entry_price});
+        }
+        std::sort(actual.begin(), actual.end(), exit_order);
+        const auto expected = tape_exit_rows(directory);
+        REQUIRE(!expected.empty());
+        std::printf("-- margin fee reversal %s\n", testcase.name);
+        print_exits("tape", expected);
+        print_exits("adapter", actual);
+        CHECK(same_exits(actual, expected));
+        const auto rows = tape_rows(directory);
+        CHECK(rows.size() == expected.size() * 2);
+        for (const auto& cells : rows) {
+            REQUIRE(cells.size() >= 10);
+            const int index = std::stoi(cells[0]) - 1;
+            REQUIRE(index >= 0 && index < adapter.trade_count());
+            const Trade& trade = adapter.get_trade(index);
+            const bool entry_row = cells[1].rfind("Entry", 0) == 0;
+            const auto event_time = entry_row ? trade.entry_time : trade.exit_time;
+            CHECK(event_time - event_time % (15 * 60000LL) == tape_ms(cells[2]));
+            CHECK(trade.is_long == (cells[1].find("long") != std::string::npos));
+            if (entry_row) CHECK(trade.entry_id == cells[3]);
+            else CHECK((trade.exit_comment == "Margin call") == (cells[3] == "Margin call"));
+            const double commission = std::stod(cells[9]);
+            const double pnl = std::stod(cells[7]);
+            CHECK(std::abs(trade.commission - commission)
+                  <= 1e-9 * std::fmax(1.0, std::abs(commission)));
+            CHECK(std::abs(trade.pnl - pnl)
+                  <= 1e-7 * (std::abs(pnl) + std::abs(commission)) + 1e-6);
+        }
+    }
+}
+
+void default_long_stop_gap_open_keeps_opening_checkpoint() {
+    Config configuration;
+    configuration.capital = 10000.0;
+    configuration.margin_long = 100.0;
+    configuration.margin_short = 100.0;
+    configuration.qty_type = QtyType::PERCENT_OF_EQUITY;
+    configuration.qty_value = 100.0;
+    configuration.qty_step = 1.0;
+    configuration.mintick = 0.01;
+    configuration.commission_value = 0.1;
+    configuration.pyramiding = 0;
+    PineSide adapter(configuration);
+    adapter.script = [](PineSide& host, int index) {
+        if (index == 0) host.entry("test", true, kNaN, 110.0, kNaN);
+    };
+    adapter.run_bars(tape({
+        {100.0, 101.0, 99.0, 100.0},
+        {111.01, 112.0, 110.5, 111.2},
+    }));
+    const auto calls = margin_fills(adapter);
+    print_side("gap-open long stop", calls, adapter.position(), adapter.equity());
+    REQUIRE(!calls.empty());
+    CHECK(calls.front().phase == NativePathPhase::Open);
+    CHECK(same_value(calls.front().price, 111.01));
+    CHECK(adapter.last_error().empty());
+}
+
+void px_close_all_stop_margin() {
+    Config configuration;
+    configuration.capital = 970000.0;
+    configuration.margin_long = 100.0;
+    configuration.margin_short = 100.0;
+    configuration.qty_step = 1.0;
+    configuration.mintick = 0.25;
+    configuration.pointvalue = 50.0;
+    configuration.pyramiding = 4;
+    PineSide adapter(configuration);
+    adapter.script = [](PineSide& host, int index) {
+        if (index == 0) host.entry("seed", true, kNaN, kNaN, 2.0);
+        if (index == 1) {
+            host.entry("test", false, kNaN, 6613.25, 1.0);
+            host.close_all();
+        }
+    };
+    adapter.run_bars(tape({
+        {6600.0, 6604.0, 6598.0, 6603.0},
+        {6603.0, 6635.0, 6602.0, 6615.75},
+        {6615.75, 6616.75, 6608.5, 6609.25},
+        {6609.5, 6612.25, 6595.25, 6606.75},
+    }));
+    const auto calls = margin_fills(adapter);
+    print_side("PX reset", calls, adapter.position(), adapter.equity());
+    REQUIRE(calls.size() == 1);
+    CHECK(same_value(calls.front().units, 1.0));
+    CHECK(same_value(calls.front().price, 6608.5));
+    CHECK(same_value(adapter.position(), -2.0));
+}
+
+void px_close_all_stop_close_only_control() {
+    Config configuration;
+    configuration.capital = 970000.0;
+    configuration.margin_long = 100.0;
+    configuration.margin_short = 100.0;
+    configuration.qty_step = 1.0;
+    configuration.mintick = 0.25;
+    configuration.pointvalue = 50.0;
+    configuration.pyramiding = 4;
+    PineSide adapter(configuration);
+    adapter.script = [](PineSide& host, int index) {
+        if (index == 0) host.entry("seed", true, kNaN, kNaN, 2.0);
+        if (index == 1) {
+            host.entry("test", false, kNaN, 6613.25, 4.0);
+            host.close_all();
+        }
+    };
+    adapter.run_bars(tape({
+        {6633.75, 6635.0, 6621.25, 6623.0},
+        {6623.25, 6624.5, 6615.75, 6615.75},
+        {6615.75, 6616.75, 6608.5, 6609.25},
+        {6609.5, 6612.25, 6595.25, 6606.75},
+    }));
+    CHECK(margin_fills(adapter).empty());
+    CHECK(same_value(adapter.position(), -2.0));
+    CHECK(same_value(adapter.equity(), 969250.0));
+}
+
 int main() {
     test("M7-A leveraged opening", m7_leveraged_opening_entry_bar);
     test("M7-B mid-bar add", m7_mid_bar_add);
@@ -1901,6 +2190,14 @@ int main() {
     test("PAR-MARGIN-2 intrabar shapes", intrabar_shapes_on_tapes);
     test("PAR-MARGIN-2 TradingView intrabars", tradingview_intrabars);
     test("PAR-MARGIN-2 half-tick fills", half_tick_fills_on_tapes);
+    test("PX cash entry margin", px_cash_entry_margin);
+    test("PX priced reversal margin", px_priced_reversal_margin);
+    test("PX stop after flat margin", [] { px_stop_after_flat_margin(); });
+    test("PX percent stop after flat margin", [] { px_stop_after_flat_margin(true); });
+    test("margin fee reversal tapes", margin_fee_reversal_tapes);
+    test("default long stop gap opening", default_long_stop_gap_open_keeps_opening_checkpoint);
+    test("PX close_all stop margin", px_close_all_stop_margin);
+    test("PX stop close-only control", px_close_all_stop_close_only_control);
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

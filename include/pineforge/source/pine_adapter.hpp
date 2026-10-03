@@ -1813,6 +1813,7 @@ private:
                             const NativeDecisionContext&);
     bool declined_reversal_at_open(const Bar&) const;
     bool schedule_margin_call_path(const Bar&, const NativeDecisionContext&);
+    bool schedule_priced_opening_margin(const Bar&, const NativeDecisionContext&, double fill);
     bool close_point_margin_scope() const noexcept;
     void withdraw_waypoint_margin_calls();
     bool rest_waypoint_margin_call(const Bar&, int from, int to, const NativeDecisionContext&);
