@@ -1543,6 +1543,12 @@ bool source::PineStrategyHost::same_symbol_sites_routable(
     declared.reserve(security_eval_states_.size());
     for (std::size_t i = 0; i < security_eval_states_.size(); ++i) {
         const SecurityEvalState& state = security_eval_states_[i];
+        const bool minute_day = calendar_period_for(state.tf) == CalendarPeriod::NONE
+            && tf_to_seconds(state.tf) == 86400;
+        if (minute_day && !pine_security_state(state.sec_id).lookahead_on
+            && script_tf_seconds_ > 0 && script_tf_seconds_ < 86400) {
+            return false;
+        }
         // The kernel registers sec_id = index, which is what generated code
         // dispatches on.
         if (state.sec_id != static_cast<int>(i) || state.tf.empty()) return false;

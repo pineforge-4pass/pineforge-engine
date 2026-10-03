@@ -6,6 +6,7 @@
 #include "../engine_internal.hpp"
 #include "../native_execution_consumer.hpp"
 
+#include <pineforge/source/pine_security_timeframe.hpp>
 #include <pineforge/ta.hpp>
 
 #include <algorithm>
@@ -257,15 +258,55 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
     }
     const std::size_t begin = aux_security_chart_begin_[idx];
     const std::size_t end = aux_security_chart_end_[idx];
+    const Bar* calling_bar = scheduler_.current_script_bar();
+    if (calling_bar == nullptr) {
+        throw std::runtime_error(
+            "auxiliary request.security routing requires a calling chart bar");
+    }
+    const auto chart_timeframe = native_calendar::parse_timeframe(script_tf_);
+    const auto input_timeframe = native_calendar::parse_timeframe(input_tf_);
+    const bool native_calendar_input = chart_timeframe && input_timeframe
+        && same_calendar_timeframe(*input_timeframe, *chart_timeframe);
+    std::vector<bool> uses_native_chart;
+    uses_native_chart.reserve(security_eval_states_.size());
+    for (const auto& state : security_eval_states_) {
+        const auto& pine = pine_security_state(state.sec_id);
+        const auto requested_timeframe = native_calendar::parse_timeframe(state.tf);
+        uses_native_chart.push_back(native_calendar_input && requested_timeframe
+            && same_calendar_timeframe(*requested_timeframe, *chart_timeframe)
+            && !pine.heikinashi && !pine.lower_tf_array_requested);
+    }
+    for (std::size_t state_index = 0; state_index < security_eval_states_.size();
+         ++state_index) {
+        auto& state = security_eval_states_[state_index];
+        if (!uses_native_chart[state_index]
+            || security_input_precedes_range_start(state, calling_bar->timestamp)) {
+            continue;
+        }
+        auto& pine = pine_security_state(state.sec_id);
+        if (pine.no_loaded_bars
+            || (state.eval_complete_count > 0
+                && state.current_bar.timestamp == calling_bar->timestamp)) {
+            continue;
+        }
+        state.current_bar = *calling_bar;
+        state.current_sub_bar_count = 1;
+        ++state.feed_count;
+        ++state.eval_complete_count;
+        pine.last_published_label = calling_bar->timestamp;
+        internal::AmbientEmaSeedingScope warmup_scope(
+            NativeExecutionConsumer::bound(*this).pump_ambient(),
+            security_range_start_na_warmup_);
+        dispatch_security_eval(state, *calling_bar, true,
+                               state.eval_complete_count - 1);
+    }
     const std::size_t missing = std::numeric_limits<std::size_t>::max();
     if (begin == missing || end == missing) return;
 
     security_calling_close_ms_ = aux_security_calling_close_ms();
     // The calling chart bar's time, where TradingView merges a finer
     // lookahead_on request (calling_open_latches_first).
-    const Bar* calling_bar = scheduler_.current_script_bar();
-    const int64_t calling_open_ms =
-        calling_bar != nullptr ? calling_bar->timestamp : current_bar_.timestamp;
+    const int64_t calling_open_ms = calling_bar->timestamp;
 
     // A first-bucket-latched evaluator (calling_open_latches_first) starts
     // every chart bar's slice live and is deferred once its first bucket of
@@ -291,7 +332,10 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
         // last bar (security_next_input_ms_).
         security_next_input_ms_ = (i + 1 < aux_security_bars_.size())
             ? aux_security_bars_[i + 1].timestamp : 0;
-        for (auto& state : security_eval_states_) {
+        for (std::size_t state_index = 0; state_index < security_eval_states_.size();
+             ++state_index) {
+            auto& state = security_eval_states_[state_index];
+            if (uses_native_chart[state_index]) continue;
             PineSecurityEvalState& pine = pine_security_state(state.sec_id);
             if (!pine.lower_tf_array_requested) {
                 // TradingView merges the requested bar opening at or before

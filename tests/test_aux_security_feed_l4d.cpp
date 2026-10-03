@@ -14,6 +14,8 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
+#include <pineforge/source/pine_security_timeframe.hpp>
+#include <pineforge/ta.hpp>
 
 #include <cassert>
 #include <cmath>
@@ -28,6 +30,15 @@ using namespace pineforge;
 #endif
 
 namespace {
+
+void test_native_calendar_context_compares_unit_and_count() {
+    const auto month = native_calendar::parse_timeframe("M");
+    assert(!source::same_calendar_timeframe(*native_calendar::parse_timeframe("2M"), *month));
+    assert(!source::same_calendar_timeframe(*native_calendar::parse_timeframe("3M"), *month));
+    assert(source::same_calendar_timeframe(*native_calendar::parse_timeframe("1M"), *month));
+    assert(source::same_calendar_timeframe(*native_calendar::parse_timeframe("D"),
+                                          *native_calendar::parse_timeframe("1D")));
+}
 
 class SplitFeedProbe final : public pineforge::source::PineStrategyHost {
 public:
@@ -106,6 +117,149 @@ class RoutingOnlyProbe final : public pineforge::source::PineStrategyHost {
 public:
     void on_source_bar(const Bar&) override {}
 };
+
+class NativeChartContextProbe final : public source::PineStrategyHost {
+public:
+    std::vector<double> daily_values;
+    std::vector<double> projected_values;
+    std::vector<double> intrabar_values;
+    std::vector<double> daily_at_close;
+    std::vector<double> projected_at_close;
+    ta::EMA daily_ema{3};
+    ta::EMA projected_ema{3};
+    double daily = na<double>();
+    double projected = na<double>();
+
+    void configure_security_evaluators() override {
+        security_eval_states_.clear();
+        register_security_eval(0, "D", input_tf_, false, false);
+        register_security_eval(1, "1D", input_tf_, true, true);
+        register_security_eval(2, "1", input_tf_, false, false);
+    }
+
+    void evaluate_security(int sec_id, const Bar& bar, bool complete) override {
+        if (!complete) return;
+        if (sec_id == 0) {
+            daily = daily_ema.compute(bar.close);
+            daily_values.push_back(daily);
+        } else if (sec_id == 1) {
+            projected = projected_ema.compute(bar.close);
+            projected_values.push_back(projected);
+        } else {
+            intrabar_values.push_back(bar.close);
+        }
+    }
+
+    void on_source_bar(const Bar&) override {
+        daily_at_close.push_back(daily);
+        projected_at_close.push_back(projected);
+    }
+};
+
+void test_native_chart_context_keeps_history_before_auxiliary_epoch() {
+    constexpr std::int64_t epoch = 1704067200000;
+    constexpr std::int64_t day = 86400000;
+    const Bar chart[] = {
+        {100, 100, 100, 100, 1, epoch},
+        {120, 120, 120, 120, 1, epoch + day},
+        {180, 180, 180, 180, 1, epoch + 2 * day},
+        {140, 140, 140, 140, 1, epoch + 3 * day},
+        {200, 200, 200, 200, 1, epoch + 4 * day},
+    };
+    const Bar auxiliary[] = {
+        {900, 900, 900, 900, 1, epoch + 3 * day},
+        {910, 910, 910, 910, 1, epoch + 4 * day},
+    };
+    NativeChartContextProbe probe;
+    assert(probe.set_aux_security_feed(auxiliary, 2, "1"));
+    probe.run(chart, 5, "1D", "1D", false, 4,
+              MagnifierDistribution::ENDPOINTS);
+    assert(probe.last_error().empty());
+    const std::vector<double> expected{100, 110, 145, 142.5, 171.25};
+    assert(probe.daily_values == expected);
+    assert(probe.projected_values == expected);
+    assert(probe.daily_at_close == expected);
+    assert(probe.projected_at_close == expected);
+    assert((probe.intrabar_values == std::vector<double>{900, 910}));
+}
+
+class SessionCloseContextProbe final : public source::PineStrategyHost {
+public:
+    double requested_close = na<double>();
+    std::vector<double> published_closes;
+    std::vector<double> values_at_close;
+
+    void configure_security_evaluators() override {
+        security_eval_states_.clear();
+        register_security_eval(0, "1440", input_tf_, false, false);
+    }
+
+    void evaluate_security(int, const Bar& bar, bool complete) override {
+        if (!complete) return;
+        requested_close = bar.close;
+        published_closes.push_back(bar.close);
+    }
+
+    void on_source_bar(const Bar&) override {
+        values_at_close.push_back(requested_close);
+    }
+};
+
+void test_full_day_minute_context_publishes_on_session_close() {
+    const Bar chart[] = {
+        {100, 100, 100, 100, 1, 1772807400000},
+        {120, 120, 120, 120, 1, 1772829900000},
+        {200, 200, 200, 200, 1, 1773063000000},
+        {220, 220, 220, 220, 1, 1773085500000},
+    };
+    SessionCloseContextProbe probe;
+    strategy_set_syminfo_timezone(static_cast<pf_strategy_t>(&probe),
+                                  "America/New_York");
+    strategy_set_syminfo_session(static_cast<pf_strategy_t>(&probe),
+                                 "0930-1600");
+    probe.run(chart, 4, "15", "15", false, 4,
+              MagnifierDistribution::ENDPOINTS);
+    assert(probe.last_error().empty());
+    assert((probe.published_closes == std::vector<double>{120, 220}));
+    assert(std::isnan(probe.values_at_close[0]));
+    assert(probe.values_at_close[1] == 120);
+    assert(probe.values_at_close[2] == 120);
+    assert(probe.values_at_close[3] == 220);
+}
+
+void test_full_day_minute_split_feed_respects_early_close_policy() {
+    const Bar chart[] = {
+        {100, 100, 100, 100, 1, 1772807400000},
+        {120, 120, 120, 120, 1, 1772819100000},
+        {200, 200, 200, 200, 1, 1773063000000},
+        {220, 220, 220, 220, 1, 1773085500000},
+    };
+    const Bar auxiliary[] = {
+        {100, 100, 100, 100, 1, 1772807400000},
+        {120, 120, 120, 120, 1, 1772819880000},
+        {200, 200, 200, 200, 1, 1773063000000},
+        {220, 220, 220, 220, 1, 1773086340000},
+    };
+    for (const auto* kind : {"stock", "cfd"}) {
+        SessionCloseContextProbe probe;
+        strategy_set_syminfo_timezone(static_cast<pf_strategy_t>(&probe),
+                                      "America/New_York");
+        strategy_set_syminfo_session(static_cast<pf_strategy_t>(&probe), "0930-1600");
+        strategy_set_syminfo_type(static_cast<pf_strategy_t>(&probe), kind);
+        assert(probe.set_aux_security_feed(auxiliary, 4, "1"));
+        probe.run(chart, 4, "15", "15", false, 4,
+                  MagnifierDistribution::ENDPOINTS);
+        assert(probe.last_error().empty());
+        if (std::string(kind) == "stock") {
+            assert(probe.values_at_close[1] == 120);
+        } else {
+            assert(std::isnan(probe.values_at_close[1]));
+        }
+        assert(probe.values_at_close[2] == 120);
+        assert(probe.values_at_close[3] == 220);
+        assert((probe.published_closes == std::vector<double>{120, 220}));
+    }
+}
 
 bool near(double a, double b) {
     return std::abs(a - b) < 1e-9;
@@ -441,6 +595,10 @@ void test_overnight_daily_lower_tf_array_does_not_split_at_utc_midnight() {
 }  // namespace
 
 int main() {
+    test_native_calendar_context_compares_unit_and_count();
+    test_native_chart_context_keeps_history_before_auxiliary_epoch();
+    test_full_day_minute_context_publishes_on_session_close();
+    test_full_day_minute_split_feed_respects_early_close_policy();
     test_native_chart_and_auxiliary_security_are_isolated();
     test_intraday_aux_feed_running_past_the_chart_range_end_is_inert();
     test_intraday_aux_label_inside_native_span_without_chart_bar_fails();

@@ -1,0 +1,9 @@
+//@version=6
+strategy("Full day request clock control", initial_capital=10000000, margin_long=0, margin_short=0, process_orders_on_close=true)
+[minute_day_open, minute_day_close, minute_day_period, minute_day_index, minute_day_rsi] = request.security(syminfo.tickerid, "1440", [time, time_close, timeframe.period, bar_index, ta.rsi(ohlc4, 33)[1]])
+[calendar_day_open, calendar_day_close, calendar_day_period, calendar_day_index, calendar_day_rsi] = request.security(syminfo.tickerid, "D", [time, time_close, timeframe.period, bar_index, ta.rsi(ohlc4, 33)[1]])
+sample = time >= timestamp("UTC", 2025, 11, 27, 0, 0) and time < timestamp("UTC", 2025, 12, 2, 0, 0)
+detail = "T=" + str.tostring(time) + ";TC=" + str.tostring(time_close) + ";MO=" + str.tostring(minute_day_open) + ";MC=" + str.tostring(minute_day_close) + ";MP=" + minute_day_period + ";MI=" + str.tostring(minute_day_index) + ";MR=" + str.tostring(minute_day_rsi, "#.##########") + ";DO=" + str.tostring(calendar_day_open) + ";DC=" + str.tostring(calendar_day_close) + ";DP=" + calendar_day_period + ";DI=" + str.tostring(calendar_day_index) + ";DR=" + str.tostring(calendar_day_rsi, "#.##########")
+if sample
+    strategy.order("observe-in", strategy.long, qty=1, comment=detail)
+    strategy.order("observe-out", strategy.short, qty=1, comment=detail)
