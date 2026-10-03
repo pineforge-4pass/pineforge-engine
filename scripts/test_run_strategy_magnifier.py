@@ -152,6 +152,36 @@ class PlanTests(unittest.TestCase):
         self.assertEqual((plan.status, plan.detail),
                          ("declared-not-run", "the chart feed has no bar in the run's bounds"))
 
+    def test_report_quote_is_pinned_and_does_not_change_execution_inputs(self) -> None:
+        baseline = _declared_magnifier_plan({"script_tf": "15"}, self.chart, self.kwargs, self.env())
+        supplied = self.env(**{
+            run_strategy.REPORT_QUOTE_FEED_ENV: str(self.chart),
+            run_strategy.REPORT_QUOTE_SHA256_ENV: _sha(self.chart),
+        })
+        quoted = _declared_magnifier_plan({"script_tf": "15"}, self.chart, self.kwargs, supplied)
+        self.assertEqual(quoted.run_kwargs["report_terminal_quote"][0], RANGE_END)
+        execution = dict(quoted.run_kwargs)
+        execution.pop("report_terminal_quote")
+        self.assertEqual(execution, baseline.run_kwargs)
+        self.assertEqual(quoted.ohlcv_path, baseline.ohlcv_path)
+        self.assertNotIn("native_security_feeds", quoted.run_kwargs)
+        exclusive = _declared_magnifier_plan({"script_tf": "15"}, self.chart,
+            {**self.kwargs, "ohlcv_end_ms": RANGE_END - 1}, supplied)
+        self.assertEqual(exclusive.run_kwargs["report_terminal_quote"][0], RANGE_END - MIN15)
+
+    def test_report_quote_refuses_unpinned_or_different_chart_bytes(self) -> None:
+        for supplied in (
+            {run_strategy.REPORT_QUOTE_FEED_ENV: str(self.chart)},
+            {run_strategy.REPORT_QUOTE_SHA256_ENV: _sha(self.chart)},
+            {run_strategy.REPORT_QUOTE_FEED_ENV: str(self.chart),
+             run_strategy.REPORT_QUOTE_SHA256_ENV: "0" * 64},
+            {run_strategy.REPORT_QUOTE_FEED_ENV: str(self.finer),
+             run_strategy.REPORT_QUOTE_SHA256_ENV: _sha(self.finer)},
+        ):
+            with self.subTest(supplied=supplied), self.assertRaises(ValueError):
+                _declared_magnifier_plan({"script_tf": "15"}, self.chart, self.kwargs,
+                    self.env(**supplied))
+
     def test_chart_tf_from_the_feed_when_the_probe_names_none(self) -> None:
         plan = _declared_magnifier_plan({}, self.chart, self.kwargs, self.env())
         self.assertEqual(plan.status, "declared")

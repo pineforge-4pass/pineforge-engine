@@ -2369,6 +2369,7 @@ class Strategy:
             aux_security_input_tf: str | None = None,
             aux_security_source_file_sha256: str | None = None,
             native_security_feeds: dict | None = None,
+            report_terminal_quote: tuple | None = None,
             ohlcv_start_ms: int | None = None,
             ohlcv_end_ms: int | None = None,
             bar_magnifier: bool = False,
@@ -2570,6 +2571,18 @@ class Strategy:
                             state, str(mkey).encode(), float(mval))
                     except (TypeError, ValueError):
                         continue
+            if report_terminal_quote is not None:
+                quote_time, quote_close = report_terminal_quote
+                if (isinstance(quote_time, bool) or not isinstance(quote_time, int)
+                        or not 0 <= quote_time <= 9007199254740991
+                        or not math.isfinite(quote_close) or quote_close <= 0):
+                    raise ValueError("report_terminal_quote must be (epoch milliseconds, finite positive close)")
+                if not hasattr(self.lib, "strategy_set_syminfo_metadata"):
+                    raise RuntimeError("strategy library lacks report-only metadata support; rebuild it")
+                self.lib.strategy_set_syminfo_metadata(
+                    state, b"report_terminal_quote_time_ms", float(quote_time))
+                self.lib.strategy_set_syminfo_metadata(
+                    state, b"report_terminal_quote_close", float(quote_close))
             if account_currency_fx_series is not None:
                 if not hasattr(self.lib, "strategy_set_account_currency_fx_series"):
                     raise RuntimeError(
@@ -3711,6 +3724,8 @@ def _infer_bar_interval_ms(csv_path: Path) -> int:
 # The case runner names the lane's 1m feed (and its sha256) here for every
 # case; a script that declares use_bar_magnifier = true is run on it.
 MAGNIFIER_FEED_ENV = "PINEFORGE_RUN_MAGNIFIER_FEED"
+REPORT_QUOTE_FEED_ENV = "PINEFORGE_RUN_REPORT_CHART_QUOTE"
+REPORT_QUOTE_SHA256_ENV = "PINEFORGE_RUN_REPORT_CHART_QUOTE_SHA256"
 MAGNIFIER_FEED_SHA256_ENV = "PINEFORGE_RUN_MAGNIFIER_FEED_SHA256"
 
 
@@ -3962,6 +3977,25 @@ def _declared_magnifier_plan(params: dict, chart_ohlcv: Path, run_kwargs: dict,
                                    "source_file_sha256": chart_sha}
             detail += f"; the chart's daily bars are its daily feed (sha256 {chart_sha})"
         magnified["native_security_feeds"] = installed
+    elif env.get(REPORT_QUOTE_FEED_ENV) or env.get(REPORT_QUOTE_SHA256_ENV):
+        quote_path = Path(str(env.get(REPORT_QUOTE_FEED_ENV) or "")).resolve()
+        quote_sha = str(env.get(REPORT_QUOTE_SHA256_ENV) or "").strip().lower()
+        if not env.get(REPORT_QUOTE_FEED_ENV) or not re.fullmatch(r"[a-f0-9]{64}", quote_sha):
+            raise ValueError("report-only native chart quote requires an explicit path and sha256 pin")
+        if _sha256_file(quote_path) != quote_sha:
+            raise ValueError("report-only native chart quote sha256 does not match its pin")
+        if _sha256_file(chart_ohlcv) != quote_sha:
+            raise ValueError("report-only native chart quote must be the declared chart feed")
+        quote_bars, quote_count, _ = _load_bars(quote_path,
+            ohlcv_start_ms=run_kwargs.get("ohlcv_start_ms"),
+            ohlcv_end_ms=run_kwargs.get("ohlcv_end_ms"))
+        if quote_count == 0:
+            raise ValueError("report-only native chart quote has no bar in the inclusive run range")
+        terminal = quote_bars[quote_count - 1]
+        if not math.isfinite(terminal.close) or terminal.close <= 0:
+            raise ValueError("report-only native chart quote close must be finite and positive")
+        magnified["report_terminal_quote"] = (int(terminal.timestamp), float(terminal.close))
+        detail += f"; report-only native chart quote sha256 {quote_sha} at {_fmt_utc_ms(terminal.timestamp)}"
     return MagnifierPlan("declared", detail, feed, magnified)
 
 # --- docker runner (pineforge-release image) ---------------------------

@@ -964,6 +964,17 @@ void source::PineStrategyHost::attach_pine_execution_adapter() {
 
 void source::PineStrategyHost::set_syminfo_metadata(
         const std::string& key, double value) {
+    if (key == "report_terminal_quote_time_ms") {
+        report_quote_time_ms_ = std::isfinite(value) && value >= 0.0
+            && value <= 9007199254740991.0 && std::floor(value) == value
+            ? static_cast<std::int64_t>(value) : -1;
+        return;
+    }
+    if (key == "report_terminal_quote_close") {
+        report_quote_close_ = std::isfinite(value) && value > 0.0
+            ? value : std::numeric_limits<double>::quiet_NaN();
+        return;
+    }
     BacktestEngine::set_syminfo_metadata(key, value);
     // TradingView's symbol calendar (set_symbol_calendar) over the C ABI:
     // "symbol_calendar_days" = N, then "symbol_calendar_open:<i>" and
@@ -1023,6 +1034,19 @@ void source::PineStrategyHost::set_syminfo_metadata(
     adapter_.set_configuration(config_);
     adapter_.priority.metadata(key, value);
     adapter_.cap.metadata(key, value);
+}
+
+bool source::PineStrategyHost::set_report_terminal_quote(std::int64_t time_ms, double close) {
+    if (time_ms < 0 || time_ms > 9007199254740991LL
+        || !std::isfinite(close) || close <= 0.0) return false;
+    report_quote_time_ms_ = time_ms;
+    report_quote_close_ = close;
+    return true;
+}
+
+void source::PineStrategyHost::clear_report_terminal_quote() {
+    report_quote_time_ms_ = -1;
+    report_quote_close_ = std::numeric_limits<double>::quiet_NaN();
 }
 
 int source::PineStrategyHost::observe_last_bar_dual_entry_path_v1() const {
@@ -1686,14 +1710,45 @@ void source::PineStrategyHost::present_report(ReportC* out) const {
     if (out->equity_curve_len == 0 || range_end_trades_.empty() || !native_bound()) return;
     const auto state = as_native_consumer(execution_consumer()).view();
     if (!state.spec
-        || state.spec->report_policy != NativeReportPolicy::KernelRecordedAtHostMarks
-        || (stream_phase_ != StreamPhase::REALTIME
-            && state.completion != NativeCompletion::StreamEnded)) return;
-    double range_end_pnl = 0.0;
-    for (const auto& row : range_end_trades_) range_end_pnl += row.pnl;
+        || state.spec->report_policy != NativeReportPolicy::KernelRecordedAtHostMarks) return;
     auto& last = out->equity_curve[out->equity_curve_len - 1];
-    last.open_profit = 0.0;
-    last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl;
+    if (stream_phase_ == StreamPhase::REALTIME
+        || state.completion == NativeCompletion::StreamEnded) {
+        double range_end_pnl = 0.0;
+        for (const auto& row : range_end_trades_) range_end_pnl += row.pnl;
+        last.open_profit = 0.0;
+        last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl;
+    }
+    if (state.kind != NativeLifecycleKind::Completed || !bar_magnifier_enabled_
+        || script_tf_seconds_ <= 60 || script_tf_seconds_ >= 86400
+        || report_quote_time_ms_ < last.time_ms
+        || report_quote_time_ms_ - last.time_ms > static_cast<std::int64_t>(script_tf_seconds_) * 1000
+        || !std::isfinite(report_quote_close_)
+        || range_end_trades_.size() != pyramid_entries_.size()) return;
+    const double price = bar_fill_price(report_quote_close_);
+    const double fx = account_currency_fx_at(report_quote_time_ms_);
+    double change = 0.0;
+    std::size_t lot_index = 0;
+    for (int index = 0; index < out->trades_len; ++index) {
+        auto& row = out->trades[index];
+        if (!row.open_at_end) continue;
+        const auto& lot = pyramid_entries_[lot_index++];
+        execution::PhysicalExecutionContext context;
+        context.effective_time_ms = report_quote_time_ms_;
+        context.interval_index = row.exit_bar_index;
+        context.account_fx = fx;
+        const auto mark = build_close_trade_with_costs(lot, row.qty, price, row.is_long != 0,
+            allocated_entry_commission(lot, row.qty), calc_commission_at(price, row.qty, fx), context);
+        change += mark.pnl - row.pnl;
+        row.exit_time = report_quote_time_ms_;
+        row.exit_price = price;
+        row.pnl = mark.pnl;
+        row.pnl_pct = mark.pnl_pct;
+        row.commission = mark.commission;
+    }
+    out->net_profit += change;
+    last.time_ms = report_quote_time_ms_;
+    last.equity += change;
 }
 
 void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_bar) {

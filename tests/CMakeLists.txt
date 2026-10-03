@@ -97,6 +97,7 @@ set(TEST_SOURCES
     test_native_margin_fx_roll
     test_native_margin_fx_clock
     test_adapter_report_relower
+    test_report_terminal_quote
     test_adapter_margin_relower
     test_adapter_risk_relower
     test_adapter_range_end_relower
