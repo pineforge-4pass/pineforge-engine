@@ -40,6 +40,15 @@ class PineInputDomainGates(unittest.TestCase):
         header = (ROOT / 'include/pineforge/source/pine_input_domain.hpp').read_text()
         self.assertIn('return !is_stream || provenance != NativePriceProvenance::ObservedPrint;', header)
 
+    def test_tick_derived_close_calculations_keep_the_observed_input_domain(self):
+        source = (ROOT / 'src/source/pine_adapter.cpp').read_text()
+        self.assertIn('if (stream_mode_ && pine_host && pine_host->scheduler_.input_is_observed_ticks())', source)
+        scheduler = (ROOT / 'src/source/pine_scheduler_native.cpp').read_text()
+        self.assertIn('input_is_observed_ticks_ = true;', scheduler)
+        self.assertIn('input_is_observed_ticks_ = false;', scheduler)
+        hashing = (ROOT / 'src/source/pine_state_hash.cpp').read_text()
+        self.assertIn('if (retained_.is_stream) f.b(input_is_observed_ticks_);', hashing)
+
     def test_known_confirmed_script_label_is_not_rewritten_at_handoff(self):
         source = (ROOT / 'src/source/pine_scheduler_native.cpp').read_text()
         self.assertIn('script_bar.timestamp = context.script_bar_open_ms;', source)

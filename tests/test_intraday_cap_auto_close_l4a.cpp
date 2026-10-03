@@ -1207,11 +1207,8 @@ void test_pooc_close_count_candidate_excludes_stream_realtime() {
     CHECK(strat.stream_end(false));
 }
 
-// B's next-ordinary-bar-open model cannot cross stream_begin's historical to
-// realtime boundary: realtime ticks do not route through dispatch_bar(). The
-// warmup therefore stays on established immediate-cap-close semantics.
-void test_pooc_deferred_cap_candidate_excludes_stream_warmup() {
-    std::printf("test_pooc_deferred_cap_candidate_excludes_stream_warmup\n");
+void test_pooc_deferred_cap_candidate_includes_confirmed_stream_warmup() {
+    std::printf("test_pooc_deferred_cap_candidate_includes_confirmed_stream_warmup\n");
 
     class Strat : public pineforge::source::PineStrategyHost {
     public:
@@ -1236,14 +1233,15 @@ void test_pooc_deferred_cap_candidate_excludes_stream_warmup() {
     Strat strat;
     Bar warmup[] = {{100, 102, 98, 101, 50, kT0_UTC}};
     CHECK(strat.stream_begin(warmup, 1, "1", "1"));
-    CHECK(strat.trade_count() == 1);
-    CHECK(std::fabs(strat.position_size()) < 1e-9);
-    CHECK(!strat.deferred_close_pending());
+    CHECK(strat.trade_count() == 0);
+    CHECK(std::fabs(strat.position_size() - 1.0) < 1e-9);
+    CHECK(strat.deferred_close_pending());
 
-    TradeTick next_tick{kT0_UTC + 60'001LL, 1, 102.0, 1.0};
-    CHECK(strat.stream_push_tick(next_tick));
+    Bar next_bar{102, 103, 100, 101, 50, kT0_UTC + 60'000LL};
+    CHECK(strat.stream_push_bar(next_bar));
     CHECK(std::fabs(strat.position_size()) < 1e-9);
     CHECK(strat.trade_count() == 1);
+    CHECK(!strat.deferred_close_pending());
     CHECK(strat.stream_end(false));
 }
 
@@ -1286,7 +1284,7 @@ int main() {
     test_pooc_close_count_candidate_excludes_coof();
     test_pooc_close_count_candidate_excludes_any_mode();
     test_pooc_close_count_candidate_excludes_stream_realtime();
-    test_pooc_deferred_cap_candidate_excludes_stream_warmup();
+    test_pooc_deferred_cap_candidate_includes_confirmed_stream_warmup();
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;
 }

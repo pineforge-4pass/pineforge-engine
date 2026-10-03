@@ -81,6 +81,7 @@ public:
         return std::nullopt;
     }
     bool retains_stream() const noexcept { return retained_.is_stream; }
+    bool input_is_observed_ticks() const noexcept { return input_is_observed_ticks_; }
     // The input the run retains -- a batch's, or a stream's warmup -- in
     // time order, and whether each of its bars is a chart bar (no
     // aggregation to a coarser script timeframe).
@@ -218,6 +219,7 @@ private:
     std::vector<unsigned char> input_script_completes_;
     std::vector<unsigned char> input_script_boundary_completes_;
     bool uses_aux_security_feed_ = false;
+    bool input_is_observed_ticks_ = false;
     DeferredBoundaryInput deferred_boundary_input_{};
     // R5 lane V19-E: running digests of the consumed input prefix -- the bars,
     // their script completions and their boundary completions -- each element

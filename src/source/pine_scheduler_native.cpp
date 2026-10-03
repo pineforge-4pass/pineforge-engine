@@ -60,6 +60,7 @@ void PineScheduler::reset_language() {
     input_script_completes_.clear();
     input_script_boundary_completes_.clear();
     uses_aux_security_feed_ = false;
+    input_is_observed_ticks_ = false;
     deferred_boundary_input_ = {};
     reset_consumed_digests();
 }
@@ -350,7 +351,8 @@ void PineScheduler::fixture_publish_source_series(const Bar& bar, bool new_histo
 }
 
 void PineScheduler::input(
-        const Bar& bar, const NativeInputContext& context, PineStrategyHost& host) {
+    const Bar& bar, const NativeInputContext& context, PineStrategyHost& host) {
+    input_is_observed_ticks_ = false;
     struct InputBarIndexScope {
         PineStrategyHost& host;
         int previous;
@@ -469,6 +471,7 @@ void PineScheduler::input(
 void PineScheduler::tick(const Bar& bar, const NativeTickContext& context,
                          PineStrategyHost& host) {
     if (!retained_.is_stream) return;
+    input_is_observed_ticks_ = true;
     const auto& interval = context.decision.input_interval;
     if (last_stream_input_open_ms_ == interval.open_ms) return;
     if (prior_input_script_open_ms_ != std::numeric_limits<std::int64_t>::min()
