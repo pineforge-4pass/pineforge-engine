@@ -113,7 +113,9 @@ void compare(bool long_side, bool stream, bool magnifier = true,
                       before.broker_state_hash_len * sizeof(std::uint64_t)) == 0);
     double change = 0.0;
     int marks = 0;
-    const bool presented = !stream && magnifier && quote_offset >= -900000 && quote_offset <= 0;
+    const bool presented = !stream && magnifier && (quote_offset == -900000 || quote_offset == 0);
+    CHECK(quoted.report_terminal_quote_applied(after) == presented);
+    CHECK(!baseline.report_terminal_quote_applied(before));
     for (int index = 0; index < before.trades_len; ++index) {
         auto normalized = canonical_trade(after.trades[index]);
         const auto original = canonical_trade(before.trades[index]);
@@ -134,13 +136,16 @@ void compare(bool long_side, bool stream, bool magnifier = true,
     }
     CHECK(marks == (presented ? 2 : 0));
     CHECK(presented ? change != 0.0 : change == 0.0);
-    CHECK(after.net_profit == before.net_profit + change);
+    double row_net_profit = 0.0;
+    for (int index = 0; index < after.trades_len; ++index) row_net_profit += after.trades[index].pnl;
+    CHECK(presented ? after.net_profit == row_net_profit : after.net_profit == before.net_profit);
+    CHECK(!presented || after.net_profit == after.metrics.all.net_profit);
     CHECK(before.equity_curve_len == after.equity_curve_len);
     for (std::int64_t index = 0; index < before.equity_curve_len; ++index) {
         auto normalized = after.equity_curve[index];
         if (presented && index + 1 == before.equity_curve_len) {
             CHECK(normalized.time_ms == quote_time);
-            CHECK(normalized.equity == before.equity_curve[index].equity + change);
+            CHECK(normalized.equity == 10000.0 + row_net_profit);
             normalized.time_ms = before.equity_curve[index].time_ms;
             normalized.equity = before.equity_curve[index].equity;
         }
@@ -172,6 +177,10 @@ int main() {
         compare(long_side, false, false);
         compare(long_side, false, true, -3600000);
         compare(long_side, false, true, 3600000);
+        compare(long_side, false, true, -900000);
+        compare(long_side, false, true, -899999);
+        compare(long_side, false, true, -900001);
+        compare(long_side, false, true, 1);
         compare(long_side, false, true, 0, true);
         compare(long_side, false, true, 0, false, CommissionType::CASH_PER_CONTRACT);
         compare(long_side, false, true, 0, false, CommissionType::CASH_PER_ORDER);

@@ -410,6 +410,7 @@ public:
     void set_syminfo_metadata(const std::string&, double) override;
     bool set_report_terminal_quote(std::int64_t time_ms, double close);
     void clear_report_terminal_quote();
+    bool report_terminal_quote_applied(const ReportC&) const;
     // TradingView's session calendar for the chart's symbol (lane XAU-CAL):
     // per session day, its open and its close, ascending, each day opening
     // before it closes and no later than the next opens. Where it holds a
@@ -950,6 +951,7 @@ private:
     void publish_security_eval_state_at_calling_boundary(SecurityEvalState& state);
     void scheduler_record_range_end(const Bar&);
     void present_report(ReportC*) const override;
+    bool report_terminal_quote_eligible() const;
     std::int64_t report_quote_time_ms_ = -1;
     double report_quote_close_ = std::numeric_limits<double>::quiet_NaN();
     // One report point per published source slot. The kernel records it

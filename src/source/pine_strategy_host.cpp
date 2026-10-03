@@ -1706,6 +1706,34 @@ static bool same_bar_exit_group_possible(const std::vector<Trade>& trades) noexc
 #endif
 }
 
+bool source::PineStrategyHost::report_terminal_quote_eligible() const {
+    if (equity_curve_.empty() || range_end_trades_.empty() || !native_bound()) return false;
+    const auto state = as_native_consumer(execution_consumer()).view();
+    const auto interval = static_cast<std::int64_t>(script_tf_seconds_) * 1000;
+    const auto last_time = equity_curve_.back().time_ms;
+    return state.spec && state.spec->report_policy == NativeReportPolicy::KernelRecordedAtHostMarks
+        && state.kind == NativeLifecycleKind::Completed && bar_magnifier_enabled_
+        && script_tf_seconds_ > 60 && script_tf_seconds_ < 86400
+        && report_quote_time_ms_ >= last_time && report_quote_time_ms_ - last_time <= interval
+        && (report_quote_time_ms_ - last_time) % interval == 0
+        && std::isfinite(report_quote_close_)
+        && range_end_trades_.size() == pyramid_entries_.size();
+}
+
+bool source::PineStrategyHost::report_terminal_quote_applied(const ReportC& report) const {
+    if (!report_terminal_quote_eligible() || report.equity_curve_len == 0
+        || report.equity_curve[report.equity_curve_len - 1].time_ms != report_quote_time_ms_) return false;
+    std::size_t rows = 0;
+    for (int index = 0; index < report.trades_len; ++index) {
+        const auto& row = report.trades[index];
+        if (!row.open_at_end) continue;
+        if (row.exit_time != report_quote_time_ms_ || row.exit_price != bar_fill_price(report_quote_close_))
+            return false;
+        ++rows;
+    }
+    return rows == pyramid_entries_.size();
+}
+
 void source::PineStrategyHost::present_report(ReportC* out) const {
     if (out->equity_curve_len == 0 || range_end_trades_.empty() || !native_bound()) return;
     const auto state = as_native_consumer(execution_consumer()).view();
@@ -1719,15 +1747,9 @@ void source::PineStrategyHost::present_report(ReportC* out) const {
         last.open_profit = 0.0;
         last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl;
     }
-    if (state.kind != NativeLifecycleKind::Completed || !bar_magnifier_enabled_
-        || script_tf_seconds_ <= 60 || script_tf_seconds_ >= 86400
-        || report_quote_time_ms_ < last.time_ms
-        || report_quote_time_ms_ - last.time_ms > static_cast<std::int64_t>(script_tf_seconds_) * 1000
-        || !std::isfinite(report_quote_close_)
-        || range_end_trades_.size() != pyramid_entries_.size()) return;
+    if (!report_terminal_quote_eligible()) return;
     const double price = bar_fill_price(report_quote_close_);
     const double fx = account_currency_fx_at(report_quote_time_ms_);
-    double change = 0.0;
     std::size_t lot_index = 0;
     for (int index = 0; index < out->trades_len; ++index) {
         auto& row = out->trades[index];
@@ -1739,16 +1761,16 @@ void source::PineStrategyHost::present_report(ReportC* out) const {
         context.account_fx = fx;
         const auto mark = build_close_trade_with_costs(lot, row.qty, price, row.is_long != 0,
             allocated_entry_commission(lot, row.qty), calc_commission_at(price, row.qty, fx), context);
-        change += mark.pnl - row.pnl;
         row.exit_time = report_quote_time_ms_;
         row.exit_price = price;
         row.pnl = mark.pnl;
         row.pnl_pct = mark.pnl_pct;
         row.commission = mark.commission;
     }
-    out->net_profit += change;
+    out->net_profit = 0.0;
+    for (int index = 0; index < out->trades_len; ++index) out->net_profit += out->trades[index].pnl;
     last.time_ms = report_quote_time_ms_;
-    last.equity += change;
+    last.equity = initial_capital_ + out->net_profit;
 }
 
 void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_bar) {

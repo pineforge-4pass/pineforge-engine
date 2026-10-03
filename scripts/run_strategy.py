@@ -690,6 +690,13 @@ def build_runtime_provenance(run_kwargs: dict, trade_start_ms: int | None) -> di
     calendar = _session_calendar_provenance(run_kwargs.get("syminfo_metadata"))
     if calendar is not None:
         runtime["session_calendar"] = calendar
+    quote = run_kwargs.get("report_terminal_quote")
+    if quote is not None:
+        runtime["report_terminal_quote"] = {
+            "time_ms": int(quote[0]),
+            "close": float(quote[1]),
+            "source_file_sha256": run_kwargs.get("report_terminal_quote_source_sha256") or "",
+        }
     return runtime
 
 
@@ -2370,6 +2377,7 @@ class Strategy:
             aux_security_source_file_sha256: str | None = None,
             native_security_feeds: dict | None = None,
             report_terminal_quote: tuple | None = None,
+            report_terminal_quote_source_sha256: str | None = None,
             ohlcv_start_ms: int | None = None,
             ohlcv_end_ms: int | None = None,
             bar_magnifier: bool = False,
@@ -2750,10 +2758,27 @@ class Strategy:
                 result["native_security_feeds"] = native_feed_report
             if probe_requests is not None:
                 result["probe_requests"] = probe_requests_provenance(probe_requests)
+            if report_terminal_quote is not None:
+                result["report_terminal_quote"] = {
+                    "time_ms": int(report_terminal_quote[0]),
+                    "close": float(report_terminal_quote[1]),
+                    "source_file_sha256": report_terminal_quote_source_sha256 or "",
+                    "applied": _report_terminal_quote_applied(result, report_terminal_quote,
+                                                               script_tf or input_tf or ""),
+                }
             return result
         finally:
             self.lib.report_free(ctypes.byref(report))
             self.lib.strategy_free(state)
+
+
+def _report_terminal_quote_applied(report: dict, quote: tuple, script_tf: str) -> bool:
+    rows = [row for row in report["trades"] if row.get("open_at_end")]
+    times = report["equity_curve_time_ms"]
+    return bool(60 < _tf_seconds(script_tf) < 86400
+                and report["bar_magnifier_enabled"] and rows and times
+                and times[-1] == int(quote[0])
+                and all(row["exit_time"] == int(quote[0]) for row in rows))
 
 
 def _with_tail_bar(bars, n: int, tail: tuple):
@@ -3995,7 +4020,8 @@ def _declared_magnifier_plan(params: dict, chart_ohlcv: Path, run_kwargs: dict,
         if not math.isfinite(terminal.close) or terminal.close <= 0:
             raise ValueError("report-only native chart quote close must be finite and positive")
         magnified["report_terminal_quote"] = (int(terminal.timestamp), float(terminal.close))
-        detail += f"; report-only native chart quote sha256 {quote_sha} at {_fmt_utc_ms(terminal.timestamp)}"
+        magnified["report_terminal_quote_source_sha256"] = quote_sha
+        detail += f"; declared report-only native chart quote sha256 {quote_sha} at {_fmt_utc_ms(terminal.timestamp)}"
     return MagnifierPlan("declared", detail, feed, magnified)
 
 # --- docker runner (pineforge-release image) ---------------------------
@@ -4430,6 +4456,11 @@ def main() -> int:
             trade_start_ms = signal_start_ms
             emit_window = (signal_start_ms, emit_window[1])
             report = run_engine(trade_start_ms)
+    if run_kwargs.get("report_terminal_quote") is not None:
+        quote_result = report.get("report_terminal_quote") or {}
+        quote_status = "APPLIED" if quote_result.get("applied") else "INERT"
+        print(f"  magnifier: report-only native chart quote {quote_status}; "
+              f"sha256 {run_kwargs.get('report_terminal_quote_source_sha256', '')}")
     raw_trade_count = len(report["trades"])
     trades_to_write = _filter_trades_to_window(report["trades"], report_window)
     # The trades the verifier grades are the CSV's — run_strategy.py writes

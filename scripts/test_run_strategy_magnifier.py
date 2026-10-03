@@ -162,12 +162,23 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(quoted.run_kwargs["report_terminal_quote"][0], RANGE_END)
         execution = dict(quoted.run_kwargs)
         execution.pop("report_terminal_quote")
+        self.assertEqual(execution.pop("report_terminal_quote_source_sha256"), _sha(self.chart))
         self.assertEqual(execution, baseline.run_kwargs)
         self.assertEqual(quoted.ohlcv_path, baseline.ohlcv_path)
         self.assertNotIn("native_security_feeds", quoted.run_kwargs)
         exclusive = _declared_magnifier_plan({"script_tf": "15"}, self.chart,
             {**self.kwargs, "ohlcv_end_ms": RANGE_END - 1}, supplied)
         self.assertEqual(exclusive.run_kwargs["report_terminal_quote"][0], RANGE_END - MIN15)
+
+    def test_report_quote_observable_checks_the_presented_rows(self) -> None:
+        report = {"trades": [{"open_at_end": True, "exit_time": RANGE_END}],
+                  "equity_curve_time_ms": [RANGE_END], "bar_magnifier_enabled": 1}
+        quote = (RANGE_END, 112.0)
+        self.assertTrue(run_strategy._report_terminal_quote_applied(report, quote, "15"))
+        self.assertFalse(run_strategy._report_terminal_quote_applied(report, quote, "1D"))
+        self.assertFalse(run_strategy._report_terminal_quote_applied(report, (RANGE_END + 1, 112.0), "15"))
+        self.assertFalse(run_strategy._report_terminal_quote_applied({**report, "trades": []}, quote, "15"))
+        self.assertFalse(run_strategy._report_terminal_quote_applied({**report, "bar_magnifier_enabled": 0}, quote, "15"))
 
     def test_report_quote_refuses_unpinned_or_different_chart_bytes(self) -> None:
         for supplied in (
