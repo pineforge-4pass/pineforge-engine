@@ -93,7 +93,7 @@ summary of it.
   (`native_execution_consumer.cpp:1060-1074`) in the v19 continuation. The Pine
   adapter keeps its pending-book and chart-sampling policy in the source layer,
   reading the named input coordinate through `projection_bar_index`
-  (`pine_adapter.cpp:779-785`) where Pine still needs input cadence, and
+  (`pine_adapter.cpp:791-797`) where Pine still needs input cadence, and
   does not rewrite the kernel's lot or row indices.
 - **Requests.** `submit` / `replace` / `cancel` / `submit_market` / `replace_market`
   (`native_host.hpp:1227-1232`), plus `cancel_all` (`native_host.hpp:1267`) and `cancel_where`
@@ -226,7 +226,7 @@ kernel and own these quirks, each at its site:
   lowering moved the excursion cells of 335 trades in 19 corpus probes: 324 now equal
   TradingView's, 11 moved closer, none farther (`tests/fixtures/e19_allin_trim` tapes the all-in
   residual's own entry-bar call). `process_orders_on_close` becomes
-  `NativeCloseExecution::AfterCalculation` in the projected spec (`pine_adapter.cpp:2283-2284`);
+  `NativeCloseExecution::AfterCalculation` in the projected spec (`pine_adapter.cpp:2300-2301`);
   calc cadence and language publication are `PineScheduler`'s (`pine_scheduler.hpp:20`).
 - **Batching and open-order priority.** Same-bar command batching and its deferred queues
   (`PendingSameBarCommand` pine_adapter.hpp:1627, `pending_bracket_legs_` pine_adapter.hpp:2101-2119); the retained parent-before-child ordering of live handles — an
@@ -335,7 +335,7 @@ kernel and own these quirks, each at its site:
   the language-state snapshot/restore around a recalculation, the waypoint-only refill deferral
   (`next_source_path_waypoint` `pine_adapter.cpp:9066`), the first-open execution chain and its
   own loop guard (`kFirstOpenLoopGuard` `pine_scheduler_native.cpp:766`), and the two fills Pine refuses to
-  recalculate on (`suppress_grouped_stop_recalc` `pine_adapter.cpp:5812`).
+  recalculate on (`suppress_grouped_stop_recalc` `pine_adapter.cpp:5881`).
 - **Pine language state and harness flags.** Series, the tick-level barstate flags and
   position-view freezing (`PineLanguageState` `pine_language_state.hpp:12`); the session flags,
   `PineStrategyHost` members since R5 lane F5 (`session_ismarket_`
