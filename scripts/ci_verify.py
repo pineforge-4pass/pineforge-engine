@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Shared local/CI verification driver. Stdlib only. Not a command generator.
 
-Profiles: release, debug, sanitizers, native, live-sanitizers, kernel. Default dir build-ci-PROFILE.
+Profiles: release, debug, sanitizers, native, live-sanitizers, live-tsan, kernel. Default dir build-ci-PROFILE.
 Source guards, explicit configure, full rebuild, pinned e60/0e/v13/v14/v15/v16 ABI prepare/reuse,
 CTest, install+find_package+VERSION smoke, native help / required WebSocket.
 Fail fast on configure/build. After a successful build collect independent
@@ -33,7 +33,8 @@ from prepare_settlement_cpp_abi_base import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-PROFILES = ('release', 'debug', 'sanitizers', 'native', 'live-sanitizers', 'kernel')
+PROFILES = ('release', 'debug', 'sanitizers', 'native', 'live-sanitizers', 'live-tsan', 'kernel')
+LIVE_ONLY_PROFILES = frozenset(('live-sanitizers', 'live-tsan'))
 DEFAULT_JOBS = 4
 JOBS_MIN, JOBS_MAX = 1, 64
 SCHEMA = 'pineforge-ci-verify/v1'
@@ -643,7 +644,7 @@ EXCLUDED_REGISTERED_MIN = {'debug': 773, 'sanitizers': 773, 'native': 782}
 # minutes.
 CTEST_TIMEOUT = 1800
 SANITIZERS_FULL_CTEST_TIMEOUT = 3600
-LIVE_SANITIZERS_MIN_TESTS = 9
+LIVE_SANITIZERS_MIN_TESTS = 12
 
 
 def ctest_timeout(cfg: 'VerifyConfig') -> int:
@@ -721,6 +722,7 @@ class Profile:
     source_layer: bool
     # Minimum CTest rows the profile must run; None leaves the count ungated.
     min_tests: int | None = None
+    thread_sanitizers: bool = False
 
 
 PROFILE = {
@@ -730,12 +732,14 @@ PROFILE = {
     'native': Profile('native', 'Release', False, True, False, True),
     'live-sanitizers': Profile('live-sanitizers', 'Debug', True, True, False, True,
                                LIVE_SANITIZERS_MIN_TESTS),
+    'live-tsan': Profile('live-tsan', 'Debug', False, True, False, True,
+                         LIVE_SANITIZERS_MIN_TESTS, True),
     'kernel': Profile('kernel', 'Release', False, True, False, False, KERNEL_MIN_TESTS),
 }
 
 
 def profile_min_tests(profile: Profile, source: Path) -> int | None:
-    if profile.name == 'live-sanitizers' and not (source / 'runner' / 'transport.cpp').is_file():
+    if profile.name in LIVE_ONLY_PROFILES and not (source / 'runner' / 'transport.cpp').is_file():
         return LIVE_SANITIZERS_MIN_TESTS - 1
     return profile.min_tests
 
@@ -922,6 +926,8 @@ def cmake_cache_definitions(cfg: VerifyConfig) -> dict[str, str]:
         'PINEFORGE_REQUIRE_ABI_RECEIPTS': 'ON',
         'PINEFORGE_VERSION_SOURCE': 'FILE',
     }
+    if profile.live_runner:
+        values['PINEFORGE_LIVE_TSAN'] = 'ON' if profile.thread_sanitizers else 'OFF'
     if cfg.curl_dir is not None:
         values['CURL_DIR'] = str(cfg.curl_dir)
     if cfg.ccache_path:
@@ -947,7 +953,7 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
         'profile', choices=PROFILES,
         help='release/debug keep tutorial ON and native OFF; '
              'sanitizers enable PUBLIC ASan/UBSan; native enables the live runner; '
-             'live-sanitizers instrument every runner target and run all runner tests; '
+             'live-sanitizers/live-tsan instrument every runner target and run all runner tests; '
              'kernel is native with the Pine source layer built OFF')
     parser.add_argument('--build-dir', type=Path, default=None,
                         help='default: <source>/build-ci-PROFILE')
@@ -958,8 +964,8 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
     parser.add_argument('--ccache', action='store_true',
                         help='require installed ccache and bind CMAKE_*_COMPILER_LAUNCHER')
     parser.add_argument('--require-websocket', action='store_true',
-                        help='native/live-sanitizers: execute test_native_live_websocket and '
-                             'refuse skip (77); automatic in live-sanitizers while transport.cpp exists')
+                        help='native/live-sanitizers/live-tsan: execute test_native_live_websocket and '
+                             'refuse skip (77); automatic in runner sanitizer profiles while transport.cpp exists')
     parser.add_argument('--exclude-label', default=None,
                         help='exclude one CTest label; verify the run count against '
                              'CTest discovery with and without -LE')
@@ -967,7 +973,7 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
                         help='fail the ctest-floor stage unless at least N CTest rows ran '
                              '(a skipped or not-run row is listed, never counted); '
                              f'the kernel profile defaults to {KERNEL_MIN_TESTS}, the release '
-                             f'profile to {RELEASE_MIN_TESTS}, live-sanitizers to '
+                             f'profile to {RELEASE_MIN_TESTS}, runner sanitizer profiles to '
                              f'{LIVE_SANITIZERS_MIN_TESTS} with transport.cpp or '
                              f'{LIVE_SANITIZERS_MIN_TESTS - 1} without it, '
                              'the others to no floor')
@@ -981,11 +987,11 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
                     which: Callable[[str], str | None] = shutil.which) -> VerifyConfig:
     if not JOBS_MIN <= args.jobs <= JOBS_MAX:
         raise ConfigError(f'--jobs must be {JOBS_MIN}..{JOBS_MAX}')
-    if args.require_websocket and args.profile not in {'native', 'live-sanitizers'}:
+    if args.require_websocket and args.profile not in {'native', 'live-sanitizers', 'live-tsan'}:
         raise ConfigError('--require-websocket is only valid with the native or '
-                          'live-sanitizers profile')
-    if args.profile == 'live-sanitizers' and args.exclude_label is not None:
-        raise ConfigError('live-sanitizers must run every runner row; --exclude-label is invalid')
+                          'live-sanitizers or live-tsan profile')
+    if args.profile in LIVE_ONLY_PROFILES and args.exclude_label is not None:
+        raise ConfigError(f'{args.profile} must run every runner row; --exclude-label is invalid')
     if args.exclude_label is not None:
         label = args.exclude_label.strip()
         if not label or any(not (char.isalnum() or char in '_.-') for char in label):
@@ -1018,7 +1024,7 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
         curl_dir=args.curl_dir.resolve() if args.curl_dir is not None else None,
         ccache_path=ccache_path,
         require_websocket=bool(args.require_websocket or
-                               (args.profile == 'live-sanitizers' and
+                               (args.profile in LIVE_ONLY_PROFILES and
                                 (source / 'runner' / 'transport.cpp').is_file())),
         runner=default_runner,
         exclude_label=args.exclude_label,
@@ -1116,7 +1122,8 @@ def runner_translation_units(source: Path) -> list[Path]:
                   if unit.suffix.lower() in {'.c', '.cc', '.cpp', '.cxx'} and unit.is_file())
 
 
-def runner_sanitizer_coverage(build_dir: Path, source: Path) -> list[str]:
+def runner_sanitizer_coverage(build_dir: Path, source: Path,
+                              sanitizer_flag: str = SANITIZER_FLAG) -> list[str]:
     path = build_dir / 'compile_commands.json'
     if not path.is_file():
         raise RuntimeError('compile_commands.json missing; runner instrumentation cannot be verified')
@@ -1139,8 +1146,9 @@ def runner_sanitizer_coverage(build_dir: Path, source: Path) -> list[str]:
         label = f'{target}: {location}'
         disabled = any(flag.startswith('-fno-sanitize=') or
                        flag == '-fomit-frame-pointer' for flag in argv)
-        if SANITIZER_FLAG not in argv or '-fno-omit-frame-pointer' not in argv or disabled:
-            raise RuntimeError(f'runner compile lacks ASan/UBSan/frame pointers: {label}')
+        if sanitizer_flag not in argv or '-fno-omit-frame-pointer' not in argv or disabled:
+            instrumentation = 'ASan/UBSan' if sanitizer_flag == SANITIZER_FLAG else 'ThreadSanitizer'
+            raise RuntimeError(f'runner compile lacks {instrumentation}/frame pointers: {label}')
         compiled.add(unit)
         coverage.append(label)
     required = {unit.resolve() for unit in runner_translation_units(source)}
@@ -1457,6 +1465,8 @@ class Driver:
         self.write_summary()
 
     def sanitizer_env(self) -> dict[str, str] | None:
+        if self.cfg.profile.thread_sanitizers:
+            return {'TSAN_OPTIONS': 'halt_on_error=1:second_deadlock_stack=1'}
         return dict(SANITIZER_RUN_ENV) if self.cfg.profile.sanitizers else None
 
     def collect_tool_versions(self) -> bool:
@@ -1526,6 +1536,7 @@ class Driver:
             ('PINEFORGE_BUILD_LIVE_RUNNER', profile.live_runner),
             ('PINEFORGE_BUILD_SOURCE_LAYER', profile.source_layer),
             ('PINEFORGE_ENABLE_SANITIZERS', profile.sanitizers),
+            ('PINEFORGE_LIVE_TSAN', profile.thread_sanitizers),
             ('PINEFORGE_BUILD_EXAMPLES', profile.name in EXAMPLES_PROFILES),
             ('PINEFORGE_REQUIRE_ABI_RECEIPTS', True),
         ):
@@ -1742,6 +1753,14 @@ class Driver:
                 self.pass_stage('live-sanitizer-coverage',
                                 f'all {len(coverage)} runner compiles use ASan/UBSan and '
                                 'frame pointers:\n' + '\n'.join(coverage))
+        if self.cfg.profile.thread_sanitizers:
+            try:
+                coverage = runner_sanitizer_coverage(self.cfg.build_dir, self.cfg.source, '-fsanitize=thread')
+            except Exception as error:
+                self.fail_stage('runner-thread-sanitizer-coverage', str(error))
+                return self.finish('failed', 1)
+            self.pass_stage('runner-thread-sanitizer-coverage',
+                            f'{len(coverage)} runner compile units use ThreadSanitizer and frame pointers:\n' + '\n'.join(coverage))
         # The examples (release, kernel) and the live runner's two modules
         # built from example sources (kernel, native).
         if self.cfg.profile.name in EXAMPLES_PROFILES or self.cfg.profile.live_runner:
@@ -1802,7 +1821,7 @@ class Driver:
         else:
             self.pass_stage('native-binary', 'live runner absent as required for this profile')
 
-        if self.cfg.profile.name == 'live-sanitizers':
+        if self.cfg.profile.name in LIVE_ONLY_PROFILES:
             self.pass_stage('abi-providers-skipped',
                             'runner-only CTest inventory has no receipt-backed ABI rows')
         elif self.cfg.profile.source_layer:
@@ -1829,7 +1848,7 @@ class Driver:
                       and not cxx_name.startswith('g++'))
         ctest_jobs = 1 if apple_asan else self.cfg.jobs
         test_dir = self.cfg.build_dir
-        if self.cfg.profile.name == 'live-sanitizers':
+        if self.cfg.profile.name in LIVE_ONLY_PROFILES:
             test_dir /= 'runner'
             inventory = self.invoke('live-test-inventory',
                                     ['ctest', '--test-dir', str(test_dir), '--show-only=json-v1'],
@@ -1838,6 +1857,7 @@ class Driver:
                 names = {test['name'] for test in json.loads(inventory.stdout)['tests']}
                 required = {'native_live_help', 'test_live_json',
                             'test_native_live_startup', 'test_native_live_store',
+                            'test_native_live_routing',
                             'test_native_example_batch', 'test_native_example_selected'}
                 if (self.cfg.source / 'runner' / 'transport.cpp').is_file():
                     required.add('test_native_live_websocket')
@@ -1875,11 +1895,11 @@ class Driver:
         ran = self.invoke('ctest', ctest, extra_env=self.sanitizer_env(),
                           timeout=ctest_timeout(self.cfg))
         self.enforce_test_floor(ran, registered=registered, selected=selected)
-        if self.cfg.profile.name == 'live-sanitizers':
+        if self.cfg.profile.name in LIVE_ONLY_PROFILES:
             try:
                 rows = ctest_rows(ran.stdout + ran.stderr)
                 if rows is None or rows.skipped or rows.not_run or rows.disabled:
-                    raise RuntimeError('live-sanitizers cannot accept skipped, disabled or unreadable rows')
+                    raise RuntimeError(f'{self.cfg.profile.name} cannot accept skipped, disabled or unreadable rows')
             except Exception as error:
                 self.fail_stage('live-test-skips', str(error))
 

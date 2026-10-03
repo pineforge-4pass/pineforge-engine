@@ -124,6 +124,17 @@ jobs:
           CURL_CACHE_HIT: ${{ steps.curl-cache.outputs.cache-hit }}
         run: python3 scripts/collect_ci_diagnostics.py --build-dir build-live --profile native --dependency-dir build-native-deps
 
+      - name: Verify every live runner target with ThreadSanitizer
+        if: ${{ !cancelled() }}
+        env:
+          CC: clang
+          CXX: clang++
+        run: python3 scripts/ci_verify.py live-tsan --build-dir build-live-tsan --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ github.workspace }}/build-native-deps/curl-install/lib/cmake/CURL" --ccache
+
+      - name: Stage thread sanitizer diagnostics
+        if: always()
+        run: python3 scripts/collect_ci_diagnostics.py --build-dir build-live-tsan --profile live-tsan --output ci-diagnostics/live-tsan --dependency-dir build-native-deps
+
       - name: Stage live sanitizer diagnostics
         if: always()
         run: python3 scripts/collect_ci_diagnostics.py --build-dir build-live-sanitizers --profile live-sanitizers --output ci-diagnostics/live-sanitizers --dependency-dir build-native-deps

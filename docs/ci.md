@@ -57,6 +57,7 @@ even when the current benchmark files are correct.
 | `sanitizers` | Debug, ASan and UBSan | Instrumented library, tests and installed consumer; Linux CI also requires leak detection |
 | `native` | Release, live runner enabled | JSON, journal, transport tests, installed runner help, and installed native include-independence proof |
 | `live-sanitizers` | Debug, live runner enabled, ASan and UBSan | Every runner target instrumented and audited from compile commands; all runner CTest rows, Python E2Es and installed runner help; WebSocket-enabled curl mandatory while `runner/transport.cpp` exists, no skips accepted |
+| `live-tsan` | Debug, live runner enabled, ThreadSanitizer | Separate build instruments every runner target, audits compile commands and runs all runner rows and Python E2Es; WebSocket-enabled curl is mandatory and skips are refused |
 | `kernel` | Release, live runner enabled, Pine source layer OFF | The source-free CTest set behind a row floor (`KERNEL_MIN_TESTS`; `--min-tests N` overrides it), installed package, and the `nm` half of the include-independence proof over `libpineforge_kernel.a` |
 
 By default each profile uses `build-ci-<profile>`. Keep separate build directories
@@ -76,6 +77,8 @@ python3 scripts/ci_verify.py native --curl-dir /path/to/curl/lib/cmake/CURL \
   --require-websocket --jobs 4
 python3 scripts/ci_verify.py live-sanitizers --curl-dir /path/to/curl/lib/cmake/CURL \
   --jobs 4
+python3 scripts/ci_verify.py live-tsan --curl-dir /path/to/curl/lib/cmake/CURL \
+  --jobs 4
 ```
 
 The sanitizer profile uses the Linux CI ASan/UBSan environment, including
@@ -86,8 +89,8 @@ curl may report the existing unsupported-WebSocket skip; that is not the require
 Linux transport proof.
 
 `live-sanitizers` performs a full all-target build, then runs the complete
-`build-ci-live-sanitizers/runner` CTest inventory (at least nine rows while
-`runner/transport.cpp` exists, eight after its removal), including
+`build-ci-live-sanitizers/runner` CTest inventory (at least twelve rows while
+`runner/transport.cpp` exists, eleven after its removal), including
 `native_live_e2e` and `native_live_startup_e2e`, and requires any additional
 `tests/native_live*_e2e.py` on the tree to be registered too. It does not rerun
 the engine-wide CTest set or prepare historical ABI providers; those remain
@@ -98,8 +101,10 @@ skip even without `--require-websocket`. After transport removal those two
 automatic gates no longer apply; an explicit `--require-websocket` still
 requires the WebSocket test.
 The runner's curl version floor still applies at configure time.
-`native-live.yml` runs this profile alongside `native`, reusing the same
-checksum-pinned WebSocket-enabled curl, and retains both profiles' diagnostics.
+`live-tsan` runs the same inventory in a separate ThreadSanitizer build,
+checks every runner compile unit for instrumentation, and stops on a race.
+`native-live.yml` runs both profiles alongside `native`, reusing the same
+checksum-pinned WebSocket-enabled curl, and retains all profiles' diagnostics.
 
 The kernel profile also gates the CTest row count: `tests/CMakeLists.txt`
 drops every test TU whose include closure reaches `pineforge/source/` or

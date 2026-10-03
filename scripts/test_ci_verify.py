@@ -223,6 +223,7 @@ class Scripted:
             if '--show-only=json-v1' in argv:
                 names = {'native_live_help', 'test_live_json',
                          'test_native_live_startup', 'test_native_live_store',
+                         'test_native_live_routing',
                          'test_native_example_batch', 'test_native_example_selected'}
                 if (self.source / 'runner' / 'transport.cpp').is_file():
                     names.add('test_native_live_websocket')
@@ -391,13 +392,14 @@ class Scripted:
         return commands
 
     def _runner_compile_commands(self) -> list[dict]:
-        if self.profile != 'live-sanitizers':
+        if self.profile not in ci_verify.LIVE_ONLY_PROFILES:
             return []
         commands = []
         for unit in ci_verify.runner_translation_units(self.source):
             if self.exits.get('runner_command_missing') == unit.name:
                 continue
-            flags = SANITIZER_FLAG + ' -fno-omit-frame-pointer'
+            sanitizer = '-fsanitize=thread' if self.profile == 'live-tsan' else SANITIZER_FLAG
+            flags = sanitizer + ' -fno-omit-frame-pointer'
             if self.exits.get('runner_flag_missing') == unit.name:
                 flags = '-fno-omit-frame-pointer'
             obj = f'runner/CMakeFiles/runner_{unit.stem}.dir/{unit.name}.o'
@@ -765,6 +767,18 @@ class ProfileOptions(unittest.TestCase):
                         source=source), source=source)
                     self.assertTrue(override.require_websocket)
                     self.assertEqual(override.min_tests, 4)
+
+    def test_live_tsan_is_separate_and_requires_complete_runner_coverage(self):
+        values, _ = self.definitions('live-tsan')
+        self.assertEqual(values['CMAKE_BUILD_TYPE'], 'Debug')
+        self.assertEqual(values['PINEFORGE_BUILD_LIVE_RUNNER'], 'ON')
+        self.assertEqual(values['PINEFORGE_LIVE_TSAN'], 'ON')
+        self.assertEqual(values['PINEFORGE_ENABLE_SANITIZERS'], 'OFF')
+        config = validate_config(parse_args(['live-tsan'], source=ROOT))
+        self.assertEqual(config.require_websocket, (ROOT / 'runner' / 'transport.cpp').is_file())
+        self.assertEqual(config.min_tests, LIVE_SANITIZERS_MIN_TESTS)
+        with self.assertRaisesRegex(ConfigError, 'must run every runner row'):
+            self.definitions('live-tsan', ['--exclude-label', 'slow'])
 
     def test_kernel_drops_the_source_layer_and_keeps_the_live_runner(self):
         values, argv = self.definitions('kernel')
@@ -1852,6 +1866,24 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                     code, summary, scripted, _ = self.run_profile('live-sanitizers', **{key: unit.name})
                     self.assertEqual(code, 1)
                     self.assertIn('live-sanitizer-coverage', failure_stages(summary))
+                    self.assertNotIn('build', scripted.names())
+
+    def test_live_tsan_runs_the_same_inventory_and_catches_missing_instrumentation(self):
+        code, summary, scripted, _ = self.run_profile('live-tsan')
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertIn('runner-thread-sanitizer-coverage', stage_names(summary))
+        self.assertIn('live-test-inventory-required', stage_names(summary))
+        self.assertNotIn('sanitizer-public-flag', stage_names(summary))
+        self.assertNotIn('live-sanitizer-coverage', stage_names(summary))
+        for name in ('ctest', 'native-help', 'require-websocket'):
+            stage = next(stage for stage in summary['stages'] if stage['name'] == name)
+            self.assertEqual(stage['extraEnvKeys'], ['TSAN_OPTIONS'])
+        for unit in ci_verify.runner_translation_units(ROOT):
+            for key in ('runner_flag_missing', 'runner_command_missing'):
+                with self.subTest(unit=unit.name, defect=key):
+                    code, summary, scripted, _ = self.run_profile('live-tsan', **{key: unit.name})
+                    self.assertEqual(code, 1)
+                    self.assertIn('runner-thread-sanitizer-coverage', failure_stages(summary))
                     self.assertNotIn('build', scripted.names())
 
     def test_live_sanitizers_refuse_a_missing_required_row(self):
