@@ -17,9 +17,12 @@ already-active stream keeps its begin-time settings until it ends.
 After a failed stream begin, recreate the strategy handle before starting again.
 
 The optional **native C++ `pineforge-live` executable** in this repository
-uses this lifecycle directly. It includes native transport, custom C++ parser
-plugins, SQLite recovery and order-action webhooks; see the
+uses this lifecycle directly. It includes native normalized-feed transport,
+SQLite recovery and order-action webhooks; see the
 [native runner guide](https://github.com/pineforge-4pass/pineforge-engine/blob/main/runner/README.md).
+Webhooks are optional: use `--webhook-routes` for per-action routing or read
+committed actions with `pineforge-live actions --ledger L --after 0 --follow`.
+Delivery timing and receiver errors never influence computation.
 
 A host can instead recompute `run_backtest_full` over its accumulated bars
 with the [ABI v4 live surface](@ref live_surface); the earlier Python runtime

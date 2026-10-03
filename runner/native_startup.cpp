@@ -513,8 +513,7 @@ Json timezone_rule_identity(std::string_view timezone, bool required) {
 }
 
 std::string identity_document(const LegacyIdentityFields& fields, const std::string& warmup,
-                              const std::string& library, const std::string& parser_bytes,
-                              const std::string& parser_config) {
+                              const std::string& library) {
     Json j = Json::object({{"schema", Json::string("pineforge-native-ledger/v1")},
                            {"library", Json::string(sha256_hex(library))},
                            {"warmup", Json::string(sha256_hex(warmup))},
@@ -527,8 +526,8 @@ std::string identity_document(const LegacyIdentityFields& fields, const std::str
                            {"symbol", Json::string(fields.symbol)},
                            {"name", Json::string(fields.name)},
                            {"webhook", Json::string(fields.webhook)},
-                           {"parser", Json::string(sha256_hex(parser_bytes))},
-                           {"parser_config", Json::string(sha256_hex(parser_config))}});
+                           {"parser", Json::string(sha256_hex(""))},
+                           {"parser_config", Json::string(sha256_hex("{}"))}});
     Json input, overrides;
     input.kind = overrides.kind = Json::Kind::Array;
     for (const auto& [k, v] : fields.inputs)
@@ -546,16 +545,13 @@ std::string identity_document(const LegacyIdentityFields& fields, const std::str
 }
 
 std::string identity(const LegacyIdentityFields& fields, const std::string& warmup,
-                     const std::string& library, const std::string& parser_bytes,
-                     const std::string& parser_config) {
-    return sha256_hex(identity_document(fields, warmup, library, parser_bytes, parser_config));
+                     const std::string& library) {
+    return sha256_hex(identity_document(fields, warmup, library));
 }
 
 std::string native_identity_document(const NativeConfigValues& native, const std::string& mode,
                                      const std::string& name, const std::string& webhook,
-                                     const std::string& warmup, const std::string& library,
-                                     const std::string& parser_bytes,
-                                     const std::string& parser_config) {
+                                     const std::string& warmup, const std::string& library) {
     Json execution = Json::object({
         {"initial_capital", json_real(native.initial_capital)},
         {"point_value", json_real(native.point_value)},
@@ -580,8 +576,8 @@ std::string native_identity_document(const NativeConfigValues& native, const std
         {"library", Json::string(sha256_hex(library))},
         {"warmup", Json::string(sha256_hex(warmup))},
         {"mode", Json::string(mode)},
-        {"parser", Json::string(sha256_hex(parser_bytes))},
-        {"parser_config", Json::string(sha256_hex(parser_config))},
+        {"parser", Json::string(sha256_hex(""))},
+        {"parser_config", Json::string(sha256_hex("{}"))},
         {"timezone_dependency", timezone_rule_identity(native.timezone, true)},
         {"chart_timezone_dependency", timezone_rule_identity(native.chart_timezone, false)},
         {"run", Json::object({{"session_key", Json::string(native.session_key)},
@@ -608,10 +604,8 @@ std::string native_identity_document(const NativeConfigValues& native, const std
 
 std::string native_identity(const NativeConfigValues& native, const std::string& mode,
                             const std::string& name, const std::string& webhook,
-                            const std::string& warmup, const std::string& library,
-                            const std::string& parser_bytes, const std::string& parser_config) {
-    return sha256_hex(native_identity_document(native, mode, name, webhook, warmup, library,
-                                               parser_bytes, parser_config));
+                            const std::string& warmup, const std::string& library) {
+    return sha256_hex(native_identity_document(native, mode, name, webhook, warmup, library));
 }
 
 }  // namespace pineforge::live

@@ -55,7 +55,9 @@ even when the current benchmark files are correct.
 | `release` | Release, tutorial enabled | Standard CI checks behind a row floor (`RELEASE_MIN_TESTS`; `--min-tests N` overrides it), installed package, and installed native include-independence proof |
 | `debug` | Debug, tutorial enabled | The standard checks and installed package without Release optimization; no default row floor, examples, include-independence proof or twin-parity guard |
 | `sanitizers` | Debug, ASan and UBSan | Instrumented library, tests and installed consumer; Linux CI also requires leak detection |
-| `native` | Release, live runner enabled | Parser, journal, transport tests, installed runner help, and installed native include-independence proof |
+| `native` | Release, live runner enabled | JSON, journal, transport tests, installed runner help, and installed native include-independence proof |
+| `live-sanitizers` | Debug, live runner enabled, ASan and UBSan | Every runner target instrumented and audited from compile commands; all runner CTest rows, Python E2Es and installed runner help; WebSocket-enabled curl mandatory while `runner/transport.cpp` exists, no skips accepted |
+| `live-tsan` | Debug, live runner enabled, ThreadSanitizer | Separate build instruments every runner target, audits compile commands and runs all runner rows and Python E2Es; WebSocket-enabled curl is mandatory and skips are refused |
 | `kernel` | Release, live runner enabled, Pine source layer OFF | The source-free CTest set behind a row floor (`KERNEL_MIN_TESTS`; `--min-tests N` overrides it), installed package, and the `nm` half of the include-independence proof over `libpineforge_kernel.a` |
 
 By default each profile uses `build-ci-<profile>`. Keep separate build directories
@@ -73,6 +75,10 @@ python3 scripts/ci_verify.py debug --jobs 4
 python3 scripts/ci_verify.py sanitizers --jobs 4
 python3 scripts/ci_verify.py native --curl-dir /path/to/curl/lib/cmake/CURL \
   --require-websocket --jobs 4
+python3 scripts/ci_verify.py live-sanitizers --curl-dir /path/to/curl/lib/cmake/CURL \
+  --jobs 4
+python3 scripts/ci_verify.py live-tsan --curl-dir /path/to/curl/lib/cmake/CURL \
+  --jobs 4
 ```
 
 The sanitizer profile uses the Linux CI ASan/UBSan environment, including
@@ -81,6 +87,26 @@ checksum-pinned curl with WebSocket support and passes `--require-websocket`.
 That flag turns a transport skip into failure. A local native run using system
 curl may report the existing unsupported-WebSocket skip; that is not the required
 Linux transport proof.
+
+`live-sanitizers` performs a full all-target build, then runs the complete
+`build-ci-live-sanitizers/runner` CTest inventory (at least twelve rows while
+`runner/transport.cpp` exists, eleven after its removal), including
+`native_live_e2e` and `native_live_startup_e2e`, and requires any additional
+runner `tests/native_live*_e2e.py` on the tree to be registered too. The standalone
+corpus equivalence driver is not a runner CTest row; its harness unit tests remain
+in the engine-wide inventory. The profile does not rerun
+the engine-wide CTest set or prepare historical ABI providers; those remain
+covered by `sanitizers`. It refuses label exclusions, missing runner compile
+commands, missing ASan/UBSan or frame-pointer flags, skipped/disabled tests,
+and, while `runner/transport.cpp` exists, a missing WebSocket row or transport
+skip even without `--require-websocket`. After transport removal those two
+automatic gates no longer apply; an explicit `--require-websocket` still
+requires the WebSocket test.
+The runner's curl version floor still applies at configure time.
+`live-tsan` runs the same inventory in a separate ThreadSanitizer build,
+checks every runner compile unit for instrumentation, and stops on a race.
+`native-live.yml` runs both profiles alongside `native`, reusing the same
+checksum-pinned WebSocket-enabled curl, and retains all profiles' diagnostics.
 
 The kernel profile also gates the CTest row count: `tests/CMakeLists.txt`
 drops every test TU whose include closure reaches `pineforge/source/` or
@@ -111,7 +137,7 @@ plus wave G's six rows, wave H's twenty-four, INT26's own tape row, INT27's
 thirteen, XSYM-D's four, K-SESSION-WINDOWS' four, INT28's twenty-four,
 INT28-FIX's four, INT29's seven, W15-KERNEL-CAL's two, INT30's twenty-four,
 TAIL-I's one, XAU-CAL's four and FIX-E1E2's two). The full-run release and
-kernel floors are 792 and 300 rows that ran; full runs do not exclude a label.
+kernel floors are 792 and 299 rows that ran; full runs do not exclude a label.
 
 Preflight also runs the detached-comment census of the kernel compile closure
 (`detached-comments`: `scripts/measure_detached_comments.py --check-ceiling`)

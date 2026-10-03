@@ -26,6 +26,7 @@ from ci_verify import (
     Completed,
     ConfigError,
     KERNEL_MIN_TESTS,
+    LIVE_SANITIZERS_MIN_TESTS,
     PROFILES,
     RELEASE_MIN_TESTS,
     ROOT,
@@ -134,10 +135,14 @@ class Scripted:
     def __call__(self, argv, *, extra_env=None, timeout=600, combine_stderr=True,
                  stream_output=False) -> Completed:
         argv = list(map(str, argv))
+        if argv[0] == 'setarch':
+            if argv[2] != '-R':
+                raise AssertionError('ThreadSanitizer must disable ASLR only for its child')
+            argv = argv[3:]
         self.timeouts.append((argv, timeout))
         # Discovery invocations are asserted through Driver stages. Keep the
         # existing execution-call fixture stable for pre-existing tests.
-        if argv[0] != 'ctest' or '-N' not in argv:
+        if argv[0] != 'ctest' or ('-N' not in argv and '--show-only=json-v1' not in argv):
             self.calls.append(argv)
         extra_env = extra_env or {}
         joined = ' '.join(argv)
@@ -219,13 +224,25 @@ class Scripted:
         if argv[0] == 'cmake' and '--install' in argv:
             return self._install()
         if argv[0] == 'ctest':
+            if '--show-only=json-v1' in argv:
+                names = {'native_live_help', 'test_live_json',
+                         'test_native_live_startup', 'test_native_live_store',
+                         'test_native_live_routing',
+                         'test_native_example_batch', 'test_native_example_selected'}
+                if (self.source / 'runner' / 'transport.cpp').is_file():
+                    names.add('test_native_live_websocket')
+                names.update(ci_verify.runner_e2e_test_names(self.source))
+                names.discard(self.exits.get('live_missing_test'))
+                return Completed(0, json.dumps({'tests': [{'name': name}
+                                  for name in sorted(names)]}).encode(), b'')
             if self.exits.get('actual_empty_ctest'):
                 return default_runner(argv, extra_env=extra_env, timeout=timeout,
                                       combine_stderr=combine_stderr, stream_output=False)
             registered = self.exits.get(
                 'ctest_registered',
                 ci_verify.EXCLUDED_REGISTERED_MIN.get(
-                    self.profile, ci_verify.PROFILE[self.profile].min_tests or KERNEL_MIN_TESTS))
+                    self.profile, ci_verify.profile_min_tests(
+                        ci_verify.PROFILE[self.profile], self.source) or KERNEL_MIN_TESTS))
             labelled = self.exits.get('ctest_labelled', 5)
             if '-N' in argv:
                 stage = 'ctest-list-selected' if '-LE' in argv else 'ctest-list-all'
@@ -235,7 +252,7 @@ class Scripted:
                 return Completed(int(self.exits.get(stage, 0)),
                                  f'Total Tests: {count}\n'.encode(), b'')
             env_ok = True
-            if self.profile == 'sanitizers':
+            if ci_verify.PROFILE[self.profile].sanitizers:
                 env_ok = extra_env == SANITIZER_RUN_ENV
             if not env_ok:
                 return Completed(1, b'', b'sanitizer env missing\n')
@@ -247,7 +264,8 @@ class Scripted:
             if 'ctest_raw' in self.exits:
                 return Completed(int(self.exits.get('ctest', 0)), self.exits['ctest_raw'], b'')
             default_rows = (registered - labelled if '-LE' in argv else
-                            ci_verify.PROFILE[self.profile].min_tests or KERNEL_MIN_TESTS)
+                            ci_verify.profile_min_tests(
+                                ci_verify.PROFILE[self.profile], self.source) or KERNEL_MIN_TESTS)
             rows = self.exits.get('ctest_rows', default_rows)
             if rows == 'absent':
                 return Completed(int(self.exits.get('ctest', 0)), b'tests\n', b'')
@@ -267,12 +285,13 @@ class Scripted:
         return Completed(1, b'', f'unhandled command: {argv}\n'.encode())
 
     def _cache_values(self) -> dict[str, str]:
-        tutorial = 'OFF' if self.profile in {'native', 'kernel'} else 'ON'
-        live = 'ON' if self.profile in {'native', 'kernel'} else 'OFF'
-        sanitizers = 'ON' if self.profile == 'sanitizers' else 'OFF'
+        profile = ci_verify.PROFILE[self.profile]
+        tutorial = 'ON' if profile.tutorial else 'OFF'
+        live = 'ON' if profile.live_runner else 'OFF'
+        sanitizers = 'ON' if profile.sanitizers else 'OFF'
         source_layer = 'OFF' if self.profile == 'kernel' else 'ON'
         examples = 'ON' if self.profile in {'release', 'kernel'} else 'OFF'
-        build_type = 'Debug' if self.profile in {'debug', 'sanitizers'} else 'Release'
+        build_type = profile.build_type
         values = {
             'CMAKE_HOME_DIRECTORY': str(self.source),
             'CMAKE_CXX_COMPILER': self.cxx,
@@ -282,6 +301,7 @@ class Scripted:
             'PINEFORGE_BUILD_TESTS': 'ON',
             'PINEFORGE_BUILD_TUTORIAL': tutorial,
             'PINEFORGE_BUILD_LIVE_RUNNER': live,
+            'PINEFORGE_LIVE_TSAN': 'ON' if ci_verify.PROFILE[self.profile].thread_sanitizers else 'OFF',
             'PINEFORGE_BUILD_SOURCE_LAYER': source_layer,
             'PINEFORGE_ENABLE_SANITIZERS': sanitizers,
             'PINEFORGE_BUILD_EXAMPLES': examples,
@@ -308,7 +328,8 @@ class Scripted:
         # 'example_commands' == 'absent' scripts a configure that wrote no
         # compile database at all.
         if self.exits.get('example_commands') != 'absent':
-            commands = self._library_compile_commands() + self._example_compile_commands()
+            commands = (self._library_compile_commands() + self._example_compile_commands()
+                        + self._runner_compile_commands())
             (self.build_dir / 'compile_commands.json').write_text(json.dumps(commands))
         for role in ('e60', '0e', 'v13', 'v14', 'v15-frozen', 'v16-frozen', 'v18-frozen'):
             self._maybe_seed_abi_base(role)
@@ -323,7 +344,8 @@ class Scripted:
         if self.exits.get('library_commands') == 'none':
             return []
         flag = ''
-        if self.profile == 'sanitizers' and self.exits.get('sanitizer_flag') != 'absent':
+        if (ci_verify.PROFILE[self.profile].sanitizers and
+                self.exits.get('sanitizer_flag') != 'absent'):
             flag = ' ' + SANITIZER_FLAG
         unit = self.source / 'src/matrix.cpp'
         commands = []
@@ -360,6 +382,10 @@ class Scripted:
                                             ('example_hello_kernel_c', 'hello_kernel_c.c'))]
         commands = []
         for directory, target, object_path, source, extra in rows:
+            if ci_verify.PROFILE[self.profile].thread_sanitizers:
+                extra += ' -fsanitize=thread -fno-omit-frame-pointer'
+            elif ci_verify.PROFILE[self.profile].sanitizers:
+                extra += ' ' + SANITIZER_FLAG + ' -fno-omit-frame-pointer'
             undebug = '' if self.exits.get('example_ndebug') == target else ' -UNDEBUG'
             obj = f'CMakeFiles/{target}.dir/{object_path}.o'
             commands.append({
@@ -369,6 +395,23 @@ class Scripted:
                 'command': f'{self.cxx} -O3 -DNDEBUG -ffp-contract=off{extra}{undebug} -o '
                            f'{obj} -c {examples}/{source}',
             })
+        return commands
+
+    def _runner_compile_commands(self) -> list[dict]:
+        if self.profile not in ci_verify.LIVE_ONLY_PROFILES:
+            return []
+        commands = []
+        for unit in ci_verify.runner_translation_units(self.source):
+            if self.exits.get('runner_command_missing') == unit.name:
+                continue
+            sanitizer = '-fsanitize=thread' if self.profile == 'live-tsan' else SANITIZER_FLAG
+            flags = sanitizer + ' -fno-omit-frame-pointer'
+            if self.exits.get('runner_flag_missing') == unit.name:
+                flags = '-fno-omit-frame-pointer'
+            obj = f'runner/CMakeFiles/runner_{unit.stem}.dir/{unit.name}.o'
+            commands.append({'directory': str(self.build_dir), 'file': str(unit),
+                             'output': obj,
+                             'arguments': [self.cxx, *flags.split(), '-o', obj, '-c', str(unit)]})
         return commands
 
     def _build(self) -> Completed:
@@ -383,12 +426,13 @@ class Scripted:
             archive.write_bytes(b'!<arch>\nci-verify-test\n')
             if self.exits.get('stale_archive') == name:
                 os.utime(archive, (1, 1))
-        if self.profile in {'native', 'kernel'} or self.exits.get('create_native_binaries'):
+        if ci_verify.PROFILE[self.profile].live_runner or self.exits.get('create_native_binaries'):
             binary = self.build_dir / 'bin' / 'pineforge-live'
             binary.parent.mkdir(parents=True, exist_ok=True)
             binary.write_bytes(b'live')
-            ws = self.build_dir / 'bin' / 'test_native_live_websocket'
-            ws.write_bytes(b'ws')
+            if (self.source / 'runner' / 'transport.cpp').is_file():
+                ws = self.build_dir / 'bin' / 'test_native_live_websocket'
+                ws.write_bytes(b'ws')
         if self.exits.get('omit_ws_binary'):
             ws = self.build_dir / 'bin' / 'test_native_live_websocket'
             if ws.exists():
@@ -401,7 +445,7 @@ class Scripted:
             return Completed(code, b'', b'install failed\n')
         prefix = self.build_dir / 'ci-install'
         (prefix / 'lib' / 'cmake' / 'PineForge').mkdir(parents=True, exist_ok=True)
-        if self.profile in {'native', 'kernel'}:
+        if ci_verify.PROFILE[self.profile].live_runner:
             help_bin = prefix / 'bin' / 'pineforge-live'
             help_bin.parent.mkdir(parents=True, exist_ok=True)
             help_bin.write_bytes(b'live')
@@ -695,6 +739,55 @@ class ProfileOptions(unittest.TestCase):
         self.assertEqual(values['PINEFORGE_BUILD_TUTORIAL'], 'ON')
         self.assertIn('-DPINEFORGE_ENABLE_SANITIZERS=ON', argv)
 
+    def test_live_sanitizers_enable_runner_and_gate_websockets_without_opt_in(self):
+        values, _ = self.definitions('live-sanitizers')
+        self.assertEqual(values['CMAKE_BUILD_TYPE'], 'Debug')
+        self.assertEqual(values['PINEFORGE_BUILD_LIVE_RUNNER'], 'ON')
+        self.assertEqual(values['PINEFORGE_ENABLE_SANITIZERS'], 'ON')
+        self.assertEqual(values['PINEFORGE_BUILD_SOURCE_LAYER'], 'ON')
+        self.assertEqual(values['PINEFORGE_BUILD_TUTORIAL'], 'OFF')
+        cfg = validate_config(parse_args(['live-sanitizers'], source=ROOT))
+        present = (ROOT / 'runner' / 'transport.cpp').is_file()
+        self.assertEqual(cfg.require_websocket, present)
+        self.assertEqual(cfg.min_tests, LIVE_SANITIZERS_MIN_TESTS - int(not present))
+        with self.assertRaisesRegex(ConfigError, 'must run every runner row'):
+            self.definitions('live-sanitizers', ['--exclude-label', 'slow'])
+
+    def test_live_sanitizers_config_follows_transport_presence_and_preserves_overrides(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / 'source'
+            transport = source / 'runner' / 'transport.cpp'
+            transport.parent.mkdir(parents=True)
+            for present in (True, False):
+                if present:
+                    transport.write_text('int transport_fixture;\n')
+                else:
+                    transport.unlink()
+                with self.subTest(transport_present=present):
+                    args = parse_args(['live-sanitizers'], source=source)
+                    cfg = validate_config(args, source=source)
+                    self.assertEqual(cfg.require_websocket, present)
+                    self.assertEqual(cfg.min_tests, LIVE_SANITIZERS_MIN_TESTS - int(not present))
+                    override = validate_config(parse_args(
+                        ['live-sanitizers', '--min-tests', '4', '--require-websocket'],
+                        source=source), source=source)
+                    self.assertTrue(override.require_websocket)
+                    self.assertEqual(override.min_tests, 4)
+
+    def test_live_tsan_is_separate_and_requires_complete_runner_coverage(self):
+        values, _ = self.definitions('live-tsan')
+        self.assertEqual(values['CMAKE_BUILD_TYPE'], 'Debug')
+        self.assertEqual(values['PINEFORGE_BUILD_LIVE_RUNNER'], 'ON')
+        self.assertEqual(values['PINEFORGE_LIVE_TSAN'], 'ON')
+        self.assertEqual(values['PINEFORGE_ENABLE_SANITIZERS'], 'OFF')
+        config = validate_config(parse_args(['live-tsan'], source=ROOT))
+        self.assertEqual(config.require_websocket, (ROOT / 'runner' / 'transport.cpp').is_file())
+        self.assertEqual(config.min_tests, LIVE_SANITIZERS_MIN_TESTS)
+        with self.assertRaisesRegex(ConfigError, 'must run every runner row'):
+            self.definitions('live-tsan', ['--exclude-label', 'slow'])
+        self.assertIn('native_live_routing_e2e', ci_verify.runner_e2e_test_names(ROOT))
+        self.assertNotIn('native_live_equivalence_e2e', ci_verify.runner_e2e_test_names(ROOT))
+
     def test_kernel_drops_the_source_layer_and_keeps_the_live_runner(self):
         values, argv = self.definitions('kernel')
         self.assertEqual(values['CMAKE_BUILD_TYPE'], 'Release')
@@ -734,6 +827,59 @@ class ProfileOptions(unittest.TestCase):
         self.assertEqual(values['CURL_DIR'], str(Path(curl.name).resolve()))
         self.assertIn('-G', argv)
         self.assertIn('Ninja', argv)
+
+
+class RunnerSanitizerCoverage(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.source = root / 'source'
+        self.build_dir = root / 'build'
+        (self.source / 'runner').mkdir(parents=True)
+        self.build_dir.mkdir()
+        self.commands = []
+        for suffix in ('.c', '.cc', '.cpp', '.cxx'):
+            unit = self.source / 'runner' / ('fixture' + suffix)
+            unit.write_text('int coverage_fixture;\n')
+            self.commands.append(self.command(unit))
+
+    def command(self, unit: Path) -> dict:
+        output = f'runner/CMakeFiles/coverage.dir/{unit.name}.o'
+        return {'directory': str(self.build_dir), 'file': str(unit), 'output': output,
+                'arguments': ['c++', SANITIZER_FLAG, '-fno-omit-frame-pointer',
+                              '-o', output, '-c', str(unit)]}
+
+    def coverage(self, commands: list[dict]) -> list[str]:
+        (self.build_dir / 'compile_commands.json').write_text(json.dumps(commands))
+        return ci_verify.runner_sanitizer_coverage(self.build_dir, self.source)
+
+    def test_all_c_and_cxx_suffixes_require_compile_commands(self):
+        self.assertEqual(len(self.coverage(self.commands)), len(self.commands))
+        for command in self.commands:
+            with self.subTest(unit=command['file']):
+                without_unit = [entry for entry in self.commands if entry is not command]
+                with self.assertRaisesRegex(RuntimeError, re.escape(Path(command['file']).name)):
+                    self.coverage(without_unit)
+
+    def test_out_of_tree_units_are_instrumented_and_reported(self):
+        generated = self.build_dir / 'generated.cc'
+        generated.write_text('int generated_fixture;\n')
+        command = self.command(generated)
+        coverage = self.coverage([*self.commands, command])
+        self.assertIn(f'coverage: {generated.resolve()} (outside source tree)', coverage)
+        command['arguments'].remove(SANITIZER_FLAG)
+        with self.assertRaisesRegex(RuntimeError, 'outside source tree'):
+            self.coverage([*self.commands, command])
+
+    def test_sanitizer_and_frame_pointer_opt_out_flags_are_rejected(self):
+        for flag in ('-fno-sanitize=address', '-fno-sanitize=undefined',
+                     '-fno-sanitize=all', '-fomit-frame-pointer'):
+            with self.subTest(flag=flag):
+                command = dict(self.commands[0])
+                command['arguments'] = [*command['arguments'], flag]
+                with self.assertRaisesRegex(RuntimeError, 'lacks ASan/UBSan/frame pointers'):
+                    self.coverage([command, *self.commands[1:]])
 
 
 class RuntimeBudgetLanes(unittest.TestCase):
@@ -1687,6 +1833,91 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         self.assertEqual(ctest['extraEnvKeys'], ['ASAN_OPTIONS', 'UBSAN_OPTIONS'])
         self.assertNotIn('ctest', failure_stages(summary))
 
+    def test_live_sanitizers_follow_transport_presence_and_run_e2es_under_strict_env(self):
+        original_is_file = Path.is_file
+        for present in (True, False):
+            def is_file(path):
+                if path == ROOT / 'runner' / 'transport.cpp':
+                    return present
+                return original_is_file(path)
+            with self.subTest(transport_present=present), mock.patch.object(
+                    Path, 'is_file', autospec=True, side_effect=is_file):
+                code, summary, scripted, build_dir = self.run_profile('live-sanitizers')
+                self.assertEqual(code, 0, summary['failures'])
+                self.assertIn('live-sanitizer-coverage', stage_names(summary))
+                self.assertIn('live-test-inventory-required', stage_names(summary))
+                self.assertIn('abi-providers-skipped', stage_names(summary))
+                self.assertEqual(summary['requireWebsocket'], present)
+                self.assertEqual(summary['minTests'], LIVE_SANITIZERS_MIN_TESTS - int(not present))
+                self.assertEqual(summary['ctestRows'], summary['minTests'])
+                inventory = next(stage for stage in summary['stages']
+                                 if stage['name'] == 'live-test-inventory-required')
+                inventory_log = (build_dir / inventory['log']).read_text()
+                self.assertEqual('test_native_live_websocket' in inventory_log, present)
+                self.assertEqual('require-websocket' in stage_names(summary), present)
+                self.assertEqual((build_dir / 'bin' / 'test_native_live_websocket').is_file(), present)
+                ctest = next(stage for stage in summary['stages'] if stage['name'] == 'ctest')
+                self.assertIn(str((build_dir / 'runner').resolve()), ctest['argv'])
+                for name in ('ctest', 'native-help', *(['require-websocket'] if present else [])):
+                    stage = next(stage for stage in summary['stages'] if stage['name'] == name)
+                    self.assertEqual(stage['extraEnvKeys'], ['ASAN_OPTIONS', 'UBSAN_OPTIONS'])
+                self.assertNotIn('abi-base-prepare', scripted.names())
+                code, below_floor, _, _ = self.run_profile(
+                    'live-sanitizers', ctest_rows=summary['minTests'] - 1)
+                self.assertEqual(code, 1)
+                self.assertIn('ctest-floor', failure_stages(below_floor))
+
+    def test_live_sanitizers_refuse_an_uninstrumented_or_missing_runner_compile(self):
+        for unit in ci_verify.runner_translation_units(ROOT):
+            for key in ('runner_flag_missing', 'runner_command_missing'):
+                with self.subTest(unit=unit, defect=key):
+                    code, summary, scripted, _ = self.run_profile('live-sanitizers', **{key: unit.name})
+                    self.assertEqual(code, 1)
+                    self.assertIn('live-sanitizer-coverage', failure_stages(summary))
+                    self.assertNotIn('build', scripted.names())
+
+    def test_live_tsan_runs_the_same_inventory_and_catches_missing_instrumentation(self):
+        code, summary, scripted, _ = self.run_profile('live-tsan')
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertIn('runner-thread-sanitizer-coverage', stage_names(summary))
+        self.assertIn('live-test-inventory-required', stage_names(summary))
+        self.assertNotIn('sanitizer-public-flag', stage_names(summary))
+        self.assertNotIn('live-sanitizer-coverage', stage_names(summary))
+        for name in ('ctest', 'native-help', 'require-websocket'):
+            stage = next(stage for stage in summary['stages'] if stage['name'] == name)
+            self.assertEqual(stage['extraEnvKeys'], ['TSAN_OPTIONS'])
+            self.assertEqual(stage['argv'][:3], ['setarch', os.uname().machine, '-R'])
+        for unit in ci_verify.runner_translation_units(ROOT):
+            for key in ('runner_flag_missing', 'runner_command_missing'):
+                with self.subTest(unit=unit.name, defect=key):
+                    code, summary, scripted, _ = self.run_profile('live-tsan', **{key: unit.name})
+                    self.assertEqual(code, 1)
+                    self.assertIn('runner-thread-sanitizer-coverage', failure_stages(summary))
+                    self.assertNotIn('build', scripted.names())
+
+    def test_live_sanitizers_refuse_a_missing_required_row(self):
+        names = ci_verify.runner_e2e_test_names(ROOT)
+        if (ROOT / 'runner' / 'transport.cpp').is_file():
+            names.add('test_native_live_websocket')
+        for name in sorted(names):
+            with self.subTest(row=name):
+                code, summary, scripted, _ = self.run_profile(
+                    'live-sanitizers', live_missing_test=name)
+                self.assertEqual(code, 1)
+                self.assertIn('live-test-inventory-required', failure_stages(summary))
+                self.assertNotIn('ctest', scripted.names())
+
+    def test_live_sanitizers_refuse_skips_and_unsupported_websockets(self):
+        cases = [({'ctest_rows': LIVE_SANITIZERS_MIN_TESTS + 1,
+                   'ctest_skipped': ['native_live_e2e']}, 'live-test-skips')]
+        if (ROOT / 'runner' / 'transport.cpp').is_file():
+            cases.append(({'require-websocket': 77}, 'require-websocket-skip'))
+        for defects, stage in cases:
+            with self.subTest(defects=defects):
+                code, summary, _, _ = self.run_profile('live-sanitizers', **defects)
+                self.assertEqual(code, 1)
+                self.assertIn(stage, failure_stages(summary))
+
     def test_smoke_ignores_stderr_noise_and_checks_stdout(self):
         code, summary, _, _ = self.run_profile(**{'smoke-stderr': 'AddressSanitizer noise'})
         self.assertEqual(code, 0, summary['failures'])
@@ -2143,14 +2374,33 @@ class ReceiptRecipe(unittest.TestCase):
             for role in check_abi_receipt_skips.PROVIDER_ROLES])
 
 class DiagnosticsCollection(unittest.TestCase):
-    def collect(self, build: Path, output: Path) -> None:
+    def collect(self, build: Path, output: Path, profile='release') -> None:
         env = os.environ.copy()
         env.pop('GITHUB_STEP_SUMMARY', None)
         result = subprocess.run(
             [sys.executable, str(ROOT / 'scripts/collect_ci_diagnostics.py'),
-             '--build-dir', str(build), '--profile', 'release', '--output', str(output)],
+             '--build-dir', str(build), '--profile', profile, '--output', str(output)],
             capture_output=True, text=True, env=env, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_live_sanitizers_retain_runner_last_test_log_separately(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            build = root / 'build'
+            logs = {'Testing/Temporary/LastTest.log': 'engine CTest output\n',
+                    'runner/Testing/Temporary/LastTest.log': 'runner ASan/UBSan output\n'}
+            for relative, content in logs.items():
+                path = build / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content)
+            output = root / 'diagnostics'
+            self.collect(build, output, profile='live-sanitizers')
+            self.assertEqual((output / 'LastTest.log').read_text(),
+                             logs['Testing/Temporary/LastTest.log'])
+            self.assertEqual((output / 'runner-LastTest.log').read_text(),
+                             logs['runner/Testing/Temporary/LastTest.log'])
+            missing = json.loads((output / 'missing.json').read_text())
+            self.assertFalse(set(logs) & set(missing))
 
     def test_v13_provider_diagnostics_survive_without_binaries(self):
         with tempfile.TemporaryDirectory() as temporary:

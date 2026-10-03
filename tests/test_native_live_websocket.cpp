@@ -107,9 +107,9 @@ public:
     std::pair<unsigned char, std::string> pong;
 
     WebSocketServer(std::vector<std::string> frames, bool read_subscription = false,
-                    bool read_pong = false, int delay_ms = 0)
+                    bool read_pong = false, int delay_ms = 0, int hold_ms = 0)
         : frames_(std::move(frames)), read_subscription_(read_subscription),
-          read_pong_(read_pong), delay_ms_(delay_ms) {
+          read_pong_(read_pong), delay_ms_(delay_ms), hold_ms_(hold_ms) {
         listener_ = socket(AF_INET, SOCK_STREAM, 0);
         if (listener_ < 0) throw std::runtime_error("WS test socket failed");
         sockaddr_in address {};
@@ -138,6 +138,7 @@ private:
     bool read_subscription_ = false;
     bool read_pong_ = false;
     int delay_ms_ = 0;
+    int hold_ms_ = 0;
     std::string error_;
 
     void serve() noexcept {
@@ -174,6 +175,7 @@ private:
             if (delay_ms_) std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms_));
             for (const auto& bytes : frames_) send_all(client, bytes);
             if (read_pong_) pong = read_client_frame(client);
+            if (hold_ms_) std::this_thread::sleep_for(std::chrono::milliseconds(hold_ms_));
         } catch (const std::exception& e) { error_ = e.what(); }
         if (client >= 0) close(client);
     }
@@ -209,6 +211,13 @@ void websocket_tests() {
     CHECK(received.size() == 1 && received[0] == large);
     CHECK(large_message.subscription.first == 0x81 && large_message.subscription.second == large);
 
+    WebSocketServer empty_final({frame(1, large, false), frame(9, "alive"), frame(0, "")});
+    options.url = empty_final.url();
+    received.clear();
+    receive_websocket(options, "", capture, running);
+    empty_final.finish();
+    CHECK(received == std::vector<std::string>{large});
+
     for (const auto& bad : {frame(2, "binary"), frame(1, std::string("\xc0\x80", 2)),
                             frame(1, large + "x"), frame(1, "unfinished", false),
                             std::string("\x81\x0a", 2) + "abc", frame(8, "")}) {
@@ -219,6 +228,21 @@ void websocket_tests() {
         CHECK(received.empty());
         server.finish();
     }
+    WebSocketServer unfinished_ping({frame(1, "unfinished", false), frame(9, "alive"),
+                                    frame(0, "still unfinished", false), frame(9, "again")},
+                                   false, false, 0, 100);
+    options.url = unfinished_ping.url();
+    options.connect_timeout_ms = 20;
+    options.total_timeout_ms = 30;
+    received.clear();
+    bool timeout_error = false;
+    try { receive_websocket(options, "", capture, running); }
+    catch (const std::exception& error) {
+        timeout_error = std::string(error.what()).find("timeout") != std::string::npos;
+    }
+    CHECK(timeout_error);
+    CHECK(received.empty());
+    unfinished_ping.finish();
     WebSocketServer idle({}, false, false, 100);
     options.url = idle.url();
     options.connect_timeout_ms = 20;
@@ -239,6 +263,28 @@ void websocket_tests() {
 
 int main() {
     try {
+        const auto* info = curl_version_info(CURLVERSION_NOW);
+        if (!info || info->version_num < 0x080e01) {
+            for (const auto* url : {"ws://127.0.0.1:1/feed", "wss://127.0.0.1:1/feed"}) {
+                HttpOptions options;
+                options.url = url;
+                options.allow_insecure_http = true;
+                bool clear_error = false;
+                try { validate_websocket(options); }
+                catch (const std::exception& error) {
+                    clear_error = std::string(error.what()).find("libcurl 8.14.1 or newer") != std::string::npos;
+                }
+                CHECK(clear_error);
+                bool called = false;
+                CHECK(throws([&] {
+                    receive_websocket(options, "", [&](std::string_view) { called = true; return false; },
+                                      [] { return false; });
+                }));
+                CHECK(!called);
+            }
+            std::puts("native WebSocket: unqualified-runtime refusal verified; no message callback");
+            return failures ? 1 : 0;
+        }
         if (!supports_ws()) {
             HttpOptions options;
             options.url = "wss://127.0.0.1:1/feed";

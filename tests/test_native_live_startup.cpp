@@ -108,21 +108,18 @@ void legacy_identity_golden() {
     const std::string warmup =
         "timestamp,open,high,low,close,volume\n0,100,102,99,101,4\n";
     const std::string library = "legacy-library-bytes";
-    const std::string parser;
-    const std::string parser_config = "{}";
-    const auto dump =
-        identity_document(fields, warmup, library, parser, parser_config);
+    const auto dump = identity_document(fields, warmup, library);
     const std::string expected =
         std::string("{\"chart_timezone\":\"UTC\",\"input_tf\":\"1\",\"inputs\":[],\"library\":\"") +
         sha256_hex(library) + "\",\"mode\":\"bars\",\"name\":\"strategy\",\"overrides\":[],\"parser\":\"" +
-        sha256_hex(parser) + "\",\"parser_config\":\"" + sha256_hex(parser_config) +
+        sha256_hex("") + "\",\"parser_config\":\"" + sha256_hex("{}") +
         "\",\"schema\":\"pineforge-native-ledger/v1\",\"script_tf\":\"3\",\"session\":\"24x7\","
         "\"symbol\":\"TEST:MOCK\",\"syminfo\":{},\"timezone\":\"UTC\",\"warmup\":\"" +
         sha256_hex(warmup) + "\",\"webhook\":\"https://receiver.example/order-actions\"}";
     CHECK(dump == expected);
     CHECK(dump.find("pineforge-native-run/v1") == std::string::npos);
     CHECK(dump.find("timezone_dependency") == std::string::npos);
-    CHECK(identity(fields, warmup, library, parser, parser_config) == sha256_hex(expected));
+    CHECK(identity(fields, warmup, library) == sha256_hex(expected));
 }
 
 void parse_refusals() {
@@ -261,39 +258,30 @@ void native_identity_changes() {
     validate_native_config(n);
     const std::string warmup = "timestamp,open,high,low,close,volume\n0,100,102,99,101,4\n";
     const std::string library = "lib-a";
-    const auto base = native_identity(n, "bars", "strategy", "http://example/hook", warmup, library,
-                                      "", "{}");
+    const auto base = native_identity(n, "bars", "strategy", "http://example/hook", warmup, library);
     auto other = n;
     other.run_number = 2;
-    CHECK(native_identity(other, "bars", "strategy", "http://example/hook", warmup, library, "",
-                          "{}") != base);
+    CHECK(native_identity(other, "bars", "strategy", "http://example/hook", warmup, library) != base);
     other = n;
     other.session_key = "live-2";
-    CHECK(native_identity(other, "bars", "strategy", "http://example/hook", warmup, library, "",
-                          "{}") != base);
-    CHECK(native_identity(n, "ticks", "strategy", "http://example/hook", warmup, library, "",
-                          "{}") != base);
-    CHECK(native_identity(n, "bars", "strategy", "http://example/hook", warmup, "lib-b", "",
-                          "{}") != base);
-    CHECK(native_identity(n, "bars", "strategy", "http://example/hook", warmup + "x", library, "",
-                          "{}") != base);
+    CHECK(native_identity(other, "bars", "strategy", "http://example/hook", warmup, library) != base);
+    CHECK(native_identity(n, "ticks", "strategy", "http://example/hook", warmup, library) != base);
+    CHECK(native_identity(n, "bars", "strategy", "http://example/hook", warmup, "lib-b") != base);
+    CHECK(native_identity(n, "bars", "strategy", "http://example/hook", warmup + "x", library) != base);
     other = n;
     other.timezone = "UTC+5";
     validate_native_config(other);
-    CHECK(native_identity(other, "bars", "strategy", "http://example/hook", warmup, library, "",
-                          "{}") != base);
+    CHECK(native_identity(other, "bars", "strategy", "http://example/hook", warmup, library) != base);
     other = n;
     other.timezone = "America/New_York";
     validate_native_config(other);
-    CHECK(native_identity(other, "bars", "strategy", "http://example/hook", warmup, library, "",
-                          "{}") != base);
+    CHECK(native_identity(other, "bars", "strategy", "http://example/hook", warmup, library) != base);
     other = n;
     other.chart_timezone = "UTC";
     validate_native_config(other);
-    CHECK(native_identity(other, "bars", "strategy", "http://example/hook", warmup, library, "",
-                          "{}") != base);
+    CHECK(native_identity(other, "bars", "strategy", "http://example/hook", warmup, library) != base);
     const auto dump = native_identity_document(n, "bars", "strategy", "http://example/hook",
-                                               warmup, library, "", "{}");
+                                               warmup, library);
     CHECK(dump.find("pineforge-native-run/v1") != std::string::npos);
     CHECK(dump.find("unavailable:") == std::string::npos);
     CHECK(dump.find("\"chart_timezone\":\"\"") != std::string::npos);

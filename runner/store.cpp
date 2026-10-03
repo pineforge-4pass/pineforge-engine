@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "store.hpp"
+#include "json.hpp"
 
 #include <sqlite3.h>
 
@@ -7,6 +8,7 @@
 #include <cerrno>
 #include <filesystem>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <string_view>
 
@@ -47,6 +49,13 @@ public:
             throw std::runtime_error("native ledger ordinal exceeds SQLite range");
         if (sqlite3_bind_int64(stmt_, col, static_cast<sqlite3_int64>(value)) != SQLITE_OK)
             database_error();
+    }
+    void bind_null(int col) {
+        if (sqlite3_bind_null(stmt_, col) != SQLITE_OK) database_error();
+    }
+    bool is_null(int col) const { return sqlite3_column_type(stmt_, col) == SQLITE_NULL; }
+    std::uint64_t steps() const {
+        return static_cast<std::uint64_t>(sqlite3_stmt_status(stmt_, SQLITE_STMTSTATUS_VM_STEP, 0));
     }
     bool row() {
         const int rc = sqlite3_step(stmt_);
@@ -111,12 +120,24 @@ StoredEvent read_event(const Statement& q, int start = 0) {
     return event;
 }
 
+StoredEvent read_routed_event(const Statement& query) {
+    auto event = read_event(query);
+    event.target_id = query.is_null(4) ? std::nullopt : std::optional<std::string>(query.text(4));
+    event.delivery_id = query.text(5);
+    return event;
+}
+
+constexpr const char* unsent_predicate =
+    "e.acknowledged=0 AND r.target_id IS NOT NULL AND NOT EXISTS "
+    "(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id AND d.phase='completed')";
+
 } // namespace
 
 struct Ledger::Impl {
     sqlite3* db = nullptr;
     int lock_fd = -1;
     int database_fd = -1;
+    mutable std::recursive_mutex mutex;
     ~Impl() {
         if (db) sqlite3_close_v2(db);
         if (database_fd >= 0) close(database_fd);
@@ -140,8 +161,10 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity)
         throw std::runtime_error("native ledger requires an on-disk path");
     const std::string canonical = std::filesystem::weakly_canonical(path).string();
     impl_->lock_fd = open((canonical + ".lock").c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
-    if (impl_->lock_fd < 0 || flock(impl_->lock_fd, LOCK_EX | LOCK_NB) != 0)
-        throw std::runtime_error("native ledger is locked or its lock file cannot be opened");
+    if (impl_->lock_fd < 0)
+        throw std::runtime_error("native ledger lock file cannot be opened");
+    if (flock(impl_->lock_fd, LOCK_EX | LOCK_NB) != 0)
+        throw std::runtime_error("the runner is running: stop it first; it resumes from its ledger");
     impl_->database_fd = open(canonical.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
     struct stat st {};
     if (impl_->database_fd < 0 || fstat(impl_->database_fd, &st) != 0 ||
@@ -177,15 +200,29 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity)
         Statement q(impl_->db, "INSERT INTO metadata VALUES(1,1,?)");
         q.bind(1, deployment_identity);
         q.done();
-    } else if (table_count != 3) {
+    } else if (table_count != 3 && table_count != 6) {
         throw std::runtime_error("native ledger is not an empty or supported ledger database");
     }
     {
         Statement q(impl_->db, "SELECT schema_version,identity FROM metadata WHERE singleton=1");
         if (!q.row() || q.integer(0) != 1 || q.text(1) != deployment_identity)
-            throw std::runtime_error("native ledger deployment identity or schema mismatch");
+            throw std::runtime_error("native ledger deployment identity or schema mismatch (including webhook routing); restore the original configuration or use a new ledger");
         if (q.row() || scalar(impl_->db, "SELECT COUNT(*) FROM metadata") != 1) database_error();
     }
+    exec(impl_->db,
+        "CREATE TABLE IF NOT EXISTS routing_configuration (singleton INTEGER PRIMARY KEY CHECK(singleton=1),document TEXT NOT NULL);"
+        "CREATE TABLE IF NOT EXISTS event_routes (ordinal INTEGER PRIMARY KEY REFERENCES events(ordinal),"
+        "target_id TEXT,delivery_id TEXT NOT NULL);"
+        "CREATE TABLE IF NOT EXISTS delivery_log (log_id INTEGER PRIMARY KEY,event_id TEXT NOT NULL REFERENCES events(event_id),"
+        "target_id TEXT NOT NULL,delivery_id TEXT NOT NULL,attempt INTEGER NOT NULL CHECK(attempt>0),"
+        "phase TEXT NOT NULL CHECK(phase IN ('started','completed')),started_at INTEGER NOT NULL,ended_at INTEGER,"
+        "http_status INTEGER NOT NULL DEFAULT 0,error_category TEXT NOT NULL DEFAULT '',success INTEGER NOT NULL DEFAULT 0 CHECK(success IN (0,1)),"
+        "UNIQUE(event_id,attempt,phase));"
+        "CREATE INDEX IF NOT EXISTS delivery_results ON delivery_log(event_id,phase,log_id);"
+        "CREATE TRIGGER IF NOT EXISTS delivery_log_no_update BEFORE UPDATE ON delivery_log BEGIN SELECT RAISE(ABORT,'delivery log is append-only'); END;"
+        "CREATE TRIGGER IF NOT EXISTS delivery_log_no_delete BEFORE DELETE ON delivery_log BEGIN SELECT RAISE(ABORT,'delivery log is append-only'); END;"
+        "INSERT INTO event_routes(ordinal,target_id,delivery_id) SELECT ordinal,'default',event_id FROM events "
+        "WHERE ordinal NOT IN (SELECT ordinal FROM event_routes);");
     // Refuse holes/corruption before any delivery can occur. All source rows
     // and immutable event bytes are also compared by the runner during replay.
     const auto count = scalar(impl_->db, "SELECT COUNT(*) FROM inputs");
@@ -206,10 +243,6 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity)
         "OR (current.input_index=previous.input_index AND current.input_position<>previous.input_position+1) "
         "OR (current.input_index>previous.input_index AND current.input_position<>0)") != 0)
         throw std::runtime_error("native ledger event order differs from input order");
-    if (scalar(impl_->db,
-        "SELECT COUNT(*) FROM events WHERE acknowledged=1 AND ordinal>"
-        "(SELECT MIN(ordinal) FROM events WHERE acknowledged=0)") != 0)
-        throw std::runtime_error("native ledger acknowledged events violate delivery order");
     {
         Statement q(impl_->db, "PRAGMA foreign_key_check");
         if (q.row()) database_error();
@@ -224,10 +257,12 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity)
 Ledger::~Ledger() = default;
 
 std::uint64_t Ledger::input_count() const {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     return scalar(impl_->db, "SELECT COALESCE(MAX(input_index)+1,0) FROM inputs");
 }
 
 std::optional<RecordedInput> Ledger::input(std::uint64_t index) const {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     Statement q(impl_->db, "SELECT canonical_json,state_hash FROM inputs WHERE input_index=?");
     q.bind(1, index);
     if (!q.row()) return std::nullopt;
@@ -235,15 +270,16 @@ std::optional<RecordedInput> Ledger::input(std::uint64_t index) const {
     result.index = index;
     result.canonical_json = q.text(0);
     result.state_hash = q.text(1);
-    Statement e(impl_->db, "SELECT ordinal,event_id,payload,attempts FROM events "
-                           "WHERE input_index=? ORDER BY input_position");
+    Statement e(impl_->db, "SELECT e.ordinal,e.event_id,e.payload,e.attempts,r.target_id,r.delivery_id FROM events e "
+                           "JOIN event_routes r ON r.ordinal=e.ordinal WHERE input_index=? ORDER BY input_position");
     e.bind(1, index);
-    while (e.row()) result.events.push_back(read_event(e));
+    while (e.row()) result.events.push_back(read_routed_event(e));
     return result;
 }
 
 void Ledger::commit_input(std::uint64_t index, const std::string& canonical_json,
                           std::uint64_t state_hash, const std::vector<Event>& events) {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     validate_bytes(canonical_json, "input");
     for (const auto& e : events) {
         validate_bytes(e.id, "event id");
@@ -255,7 +291,9 @@ void Ledger::commit_input(std::uint64_t index, const std::string& canonical_json
         bool same = old->canonical_json == canonical_json && old->state_hash == hash &&
                     old->events.size() == events.size();
         for (std::size_t i = 0; same && i < events.size(); ++i)
-            same = old->events[i].id == events[i].id && old->events[i].payload == events[i].payload;
+            same = old->events[i].id == events[i].id && old->events[i].payload == events[i].payload &&
+                   old->events[i].target_id == events[i].target_id && old->events[i].delivery_id ==
+                   (events[i].delivery_id.empty() ? events[i].id : events[i].delivery_id);
         if (!same) throw std::runtime_error("native ledger replay differs from committed input, state or events");
         tx.commit();
         return;
@@ -271,11 +309,19 @@ void Ledger::commit_input(std::uint64_t index, const std::string& canonical_json
                                "VALUES(?,?,?,?,?)");
         q.bind(1, ++ordinal); q.bind(2, index); q.bind(3, static_cast<std::uint64_t>(i));
         q.bind(4, events[i].id); q.bind(5, events[i].payload); q.done();
+        Statement route(impl_->db, "INSERT INTO event_routes(ordinal,target_id,delivery_id) VALUES(?,?,?)");
+        route.bind(1, ordinal);
+        if (events[i].target_id) route.bind(2, *events[i].target_id);
+        else route.bind_null(2);
+        route.bind(3, events[i].delivery_id.empty() ? events[i].id : events[i].delivery_id);
+        route.done();
     }
     tx.commit();
 }
 
+#ifdef PINEFORGE_LIVE_LEGACY_TEST_API
 std::optional<StoredEvent> Ledger::pending_event() const {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     Statement q(impl_->db, "SELECT ordinal,event_id,payload,attempts FROM events "
                            "WHERE acknowledged=0 ORDER BY ordinal LIMIT 1");
     if (!q.row()) return std::nullopt;
@@ -283,10 +329,12 @@ std::optional<StoredEvent> Ledger::pending_event() const {
 }
 
 std::uint64_t Ledger::pending_count() const {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     return scalar(impl_->db, "SELECT COUNT(*) FROM events WHERE acknowledged=0");
 }
 
 void Ledger::begin_delivery(const std::string& event_id) {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     Transaction tx(impl_->db);
     const auto head = impl_->require_head(event_id);
     if (head.attempts == std::numeric_limits<std::uint32_t>::max())
@@ -296,6 +344,7 @@ void Ledger::begin_delivery(const std::string& event_id) {
 }
 
 void Ledger::record_delivery_failure(const std::string& event_id, const std::string& error_category) {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     Transaction tx(impl_->db);
     if (impl_->require_head(event_id).attempts == 0)
         throw std::runtime_error("native ledger delivery has not begun");
@@ -304,11 +353,212 @@ void Ledger::record_delivery_failure(const std::string& event_id, const std::str
 }
 
 void Ledger::acknowledge(const std::string& event_id) {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     Transaction tx(impl_->db);
     if (impl_->require_head(event_id).attempts == 0)
         throw std::runtime_error("native ledger delivery has not begun");
     Statement q(impl_->db, "UPDATE events SET acknowledged=1,last_error='' WHERE event_id=?");
     q.bind(1, event_id); q.done(); tx.commit();
+}
+
+#endif
+
+void Ledger::bind_routing(const std::string& document) {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
+    validate_bytes(document, "routing configuration");
+    Statement query(impl_->db, "INSERT INTO routing_configuration(singleton,document) VALUES(1,?) "
+                               "ON CONFLICT(singleton) DO UPDATE SET document=excluded.document");
+    query.bind(1, document);
+    query.done();
+}
+
+std::vector<StoredEvent> Ledger::unsent_events(std::uint64_t after, std::size_t limit) const {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
+    const auto sql = std::string("SELECT e.ordinal,e.event_id,e.payload,e.attempts,r.target_id,r.delivery_id "
+                                 "FROM events e JOIN event_routes r ON r.ordinal=e.ordinal WHERE e.ordinal>? AND ") +
+                     unsent_predicate + " ORDER BY e.ordinal LIMIT ?";
+    Statement query(impl_->db, sql.c_str());
+    query.bind(1, after); query.bind(2, static_cast<std::uint64_t>(limit));
+    std::vector<StoredEvent> result;
+    while (query.row()) result.push_back(read_routed_event(query));
+    return result;
+}
+
+std::uint64_t Ledger::unsent_count() const {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
+    const auto sql = std::string("SELECT COUNT(*) FROM events e JOIN event_routes r ON r.ordinal=e.ordinal WHERE ") + unsent_predicate;
+    return scalar(impl_->db, sql.c_str());
+}
+
+std::optional<DeliveryScan> Ledger::next_delivery_event(std::uint64_t after,
+                                                       std::uint64_t* steps) const {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
+    Statement query(impl_->db, "SELECT e.ordinal,e.event_id,e.payload,e.attempts,r.target_id,r.delivery_id,"
+        "e.acknowledged=0 AND r.target_id IS NOT NULL AND NOT EXISTS "
+        "(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id AND d.phase='completed') "
+        "FROM events e JOIN event_routes r ON r.ordinal=e.ordinal WHERE e.ordinal>? ORDER BY e.ordinal LIMIT 1");
+    query.bind(1, after);
+    const bool found = query.row();
+    if (steps) *steps = query.steps();
+    if (!found) return std::nullopt;
+    return DeliveryScan{read_routed_event(query), query.integer(6) != 0};
+}
+
+DeliveryAttempt Ledger::start_attempt(const StoredEvent& event, std::uint64_t started_at) {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
+    if (!event.target_id) throw std::runtime_error("journal-only action cannot be delivered");
+    Transaction transaction(impl_->db);
+    Statement query(impl_->db, "SELECT e.ordinal,e.event_id,e.payload,e.attempts,r.target_id,r.delivery_id "
+                               "FROM events e JOIN event_routes r ON r.ordinal=e.ordinal WHERE e.event_id=?");
+    query.bind(1, event.id);
+    if (!query.row()) database_error();
+    DeliveryAttempt result{read_routed_event(query), 0, started_at};
+    if (result.event.target_id != event.target_id || result.event.delivery_id != event.delivery_id ||
+        result.event.payload != event.payload || result.event.attempts == UINT32_MAX)
+        throw std::runtime_error("native ledger delivery identity mismatch or attempt counter exhausted");
+    result.attempt = result.event.attempts + 1;
+    Statement update(impl_->db, "UPDATE events SET attempts=attempts+1 WHERE event_id=?");
+    update.bind(1, event.id); update.done();
+    Statement log(impl_->db, "INSERT INTO delivery_log(event_id,target_id,delivery_id,attempt,phase,started_at) "
+                             "VALUES(?,?,?,?,'started',?)");
+    log.bind(1, event.id); log.bind(2, *event.target_id); log.bind(3, event.delivery_id);
+    log.bind(4, result.attempt); log.bind(5, started_at); log.done();
+    transaction.commit();
+    return result;
+}
+
+void Ledger::finish_attempt(const DeliveryAttempt& attempt, std::uint64_t ended_at,
+                            long http_status, bool success, const std::string& error) {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
+    Transaction transaction(impl_->db);
+    const auto& event = attempt.event;
+    Statement log(impl_->db, "INSERT INTO delivery_log(event_id,target_id,delivery_id,attempt,phase,started_at,ended_at,http_status,error_category,success) "
+                             "VALUES(?,?,?,?,'completed',?,?,?,?,?)");
+    log.bind(1, event.id); log.bind(2, *event.target_id); log.bind(3, event.delivery_id);
+    log.bind(4, attempt.attempt); log.bind(5, attempt.started_at); log.bind(6, ended_at);
+    log.bind(7, static_cast<std::uint64_t>(http_status));
+    log.bind(8, success ? "" : safe_category(error)); log.bind(9, static_cast<std::uint64_t>(success)); log.done();
+    Statement update(impl_->db, "UPDATE events SET acknowledged=?,last_error=? WHERE event_id=?");
+    update.bind(1, static_cast<std::uint64_t>(success));
+    update.bind(2, success ? "" : safe_category(error)); update.bind(3, event.id); update.done();
+    transaction.commit();
+}
+
+struct LedgerView::Impl {
+    sqlite3* db = nullptr;
+    bool routed = false;
+    ~Impl() { if (db) sqlite3_close_v2(db); }
+};
+
+LedgerView::LedgerView(const std::string& path) : impl_(std::make_unique<Impl>()) {
+    if (path.empty() || path == ":memory:" || path.find('\0') != std::string::npos ||
+        sqlite3_open_v2(path.c_str(), &impl_->db, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nullptr) != SQLITE_OK)
+        throw std::runtime_error("cannot open native ledger for reading");
+    sqlite3_busy_timeout(impl_->db, 5000);
+    Statement metadata(impl_->db, "SELECT schema_version FROM metadata WHERE singleton=1");
+    if (!metadata.row() || metadata.integer(0) != 1) database_error();
+    impl_->routed = scalar(impl_->db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='event_routes'") == 1;
+}
+
+LedgerView::~LedgerView() = default;
+
+std::string LedgerView::identity() const {
+    Statement query(impl_->db, "SELECT identity FROM metadata WHERE singleton=1");
+    if (!query.row()) database_error();
+    return query.text(0);
+}
+
+std::string LedgerView::routing_document() const {
+    if (!impl_->routed) return "";
+    Statement query(impl_->db, "SELECT document FROM routing_configuration WHERE singleton=1");
+    return query.row() ? query.text(0) : "";
+}
+
+std::vector<StoredEvent> LedgerView::actions_after(std::uint64_t after, std::size_t limit) const {
+    Statement query(impl_->db, impl_->routed
+        ? "SELECT e.ordinal,e.event_id,e.payload,e.attempts,r.target_id,r.delivery_id FROM events e "
+          "JOIN event_routes r ON r.ordinal=e.ordinal WHERE e.ordinal>? ORDER BY e.ordinal LIMIT ?"
+        : "SELECT ordinal,event_id,payload,attempts,'default',event_id FROM events WHERE ordinal>? ORDER BY ordinal LIMIT ?");
+    query.bind(1, after); query.bind(2, static_cast<std::uint64_t>(limit));
+    std::vector<StoredEvent> result;
+    while (query.row()) result.push_back(read_routed_event(query));
+    return result;
+}
+
+std::vector<StoredEvent> LedgerView::redelivery_events(const std::string& target,
+                                                      std::uint64_t from, bool failed_only) const {
+    if (!impl_->routed) throw std::runtime_error("resume this phase-A ledger with run before redelivering");
+    std::string sql = "SELECT e.ordinal,e.event_id,e.payload,e.attempts,r.target_id,r.delivery_id FROM events e "
+                      "JOIN event_routes r ON r.ordinal=e.ordinal WHERE r.target_id=? AND e.ordinal>=?";
+    if (failed_only)
+        sql += " AND (SELECT success FROM delivery_log d WHERE d.event_id=e.event_id AND d.phase='completed' "
+               "ORDER BY d.log_id DESC LIMIT 1)=0";
+    sql += " ORDER BY e.ordinal";
+    Statement query(impl_->db, sql.c_str());
+    query.bind(1, target); query.bind(2, from);
+    std::vector<StoredEvent> result;
+    while (query.row()) result.push_back(read_routed_event(query));
+    return result;
+}
+
+std::string LedgerView::status_json() const {
+    exec(impl_->db, "BEGIN");
+    struct ReadEnd {
+        sqlite3* database;
+        ~ReadEnd() { sqlite3_exec(database, "ROLLBACK", nullptr, nullptr, nullptr); }
+    } read_end{impl_->db};
+    Json targets = Json::object({});
+    const auto initialize = [&](const std::string& name) -> Json& {
+        auto [position, inserted] = targets.members.emplace(name, Json{});
+        if (inserted) position->second = Json::object({{"sent", Json::number("0")}, {"failed", Json::number("0")},
+            {"unsent", Json::number("0")}, {"last_success", Json{}}, {"last_error", Json{}}, {"last_attempt", Json{}}});
+        return position->second;
+    };
+    if (const auto document = routing_document(); !document.empty()) {
+        const auto stored = parse_json(document);
+        const auto& config = stored.at("configuration");
+        if (stored.at("routed").value == "true")
+            for (const auto& [name, value] : config.at("targets").members) { (void)value; initialize(name); }
+        else if (!config.at("url").text().empty()) initialize("default");
+    }
+    if (impl_->routed) {
+        Statement log(impl_->db, "SELECT target_id,SUM(phase='completed' AND success=1),"
+            "SUM(phase='completed' AND success=0),MAX(started_at),"
+            "MAX(CASE WHEN phase='completed' AND success=1 THEN ended_at END),"
+            "MAX(CASE WHEN phase='completed' AND success=0 THEN log_id END) FROM delivery_log GROUP BY target_id");
+        while (log.row()) {
+            auto& status = initialize(log.text(0));
+            status.members["sent"] = Json::number(std::to_string(log.integer(1)));
+            status.members["failed"] = Json::number(std::to_string(log.integer(2)));
+            status.members["last_attempt"] = Json::number(std::to_string(log.integer(3)));
+            if (!log.is_null(4)) status.members["last_success"] = Json::number(std::to_string(log.integer(4)));
+            if (!log.is_null(5)) {
+                Statement error(impl_->db, "SELECT error_category,http_status,ended_at FROM delivery_log WHERE log_id=?");
+                error.bind(1, log.integer(5));
+                if (!error.row()) database_error();
+                status.members["last_error"] = Json::object({{"category", Json::string(error.text(0))},
+                    {"http_status", Json::number(std::to_string(error.integer(1)))},
+                    {"at", Json::number(std::to_string(error.integer(2)))}});
+            }
+        }
+    }
+    Statement legacy(impl_->db, impl_->routed
+        ? "SELECT r.target_id,COUNT(*) FROM events e JOIN event_routes r ON r.ordinal=e.ordinal WHERE e.acknowledged=1 "
+          "AND NOT EXISTS(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id) GROUP BY r.target_id"
+        : "SELECT 'default',COUNT(*) FROM events WHERE acknowledged=1 HAVING COUNT(*)>0");
+    while (legacy.row()) {
+        if (legacy.is_null(0)) continue;
+        auto& count = initialize(legacy.text(0)).members["sent"];
+        count = Json::number(std::to_string(count.integer<std::uint64_t>() + legacy.integer(1)));
+    }
+    Statement unsent(impl_->db, impl_->routed
+        ? "SELECT r.target_id,COUNT(*) FROM events e JOIN event_routes r ON r.ordinal=e.ordinal WHERE "
+          "e.acknowledged=0 AND r.target_id IS NOT NULL AND NOT EXISTS "
+          "(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id AND d.phase='completed') GROUP BY r.target_id"
+        : "SELECT 'default',COUNT(*) FROM events WHERE acknowledged=0 HAVING COUNT(*)>0");
+    while (unsent.row()) initialize(unsent.text(0)).members["unsent"] = Json::number(std::to_string(unsent.integer(1)));
+    return Json::object({{"schema_version", Json::number("1")}, {"targets", std::move(targets)},
+        {"actions", Json::number(std::to_string(scalar(impl_->db, "SELECT COUNT(*) FROM events")))}}).dump();
 }
 
 } // namespace pineforge::live

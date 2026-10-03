@@ -9,7 +9,9 @@
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <cstdlib>
 #include <limits>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <utility>
@@ -21,6 +23,7 @@ namespace {
 
 constexpr std::size_t max_feed_bytes = 4 * 1024 * 1024;
 constexpr std::size_t max_event_bytes = 1024 * 1024;
+std::string http_proxy, https_proxy, all_proxy, no_proxy;
 
 std::string hex(const unsigned char* data, std::size_t length) {
     constexpr char digits[] = "0123456789abcdef";
@@ -39,6 +42,11 @@ struct CurlGlobal {
     }
     ~CurlGlobal() { curl_global_cleanup(); }
 };
+
+void initialize_curl() {
+    static CurlGlobal global;
+    (void)global;
+}
 
 using CurlHandle = std::unique_ptr<CURL, decltype(&curl_easy_cleanup)>;
 using UrlHandle = std::unique_ptr<CURLU, decltype(&curl_url_cleanup)>;
@@ -90,19 +98,16 @@ void check_url(const HttpOptions& options, bool websocket) {
 }
 
 CurlHandle make_handle(const HttpOptions& options, bool websocket = false) {
-    static CurlGlobal global;
-    (void)global;
-    check_url(options, websocket);
-    if (websocket) {
-        const auto* info = curl_version_info(CURLVERSION_NOW);
-        bool found = false;
-        for (const char* const* p = info ? info->protocols : nullptr; p && *p; ++p)
-            if (std::string_view(*p) == (options.url.rfind("wss:", 0) == 0 ? "wss" : "ws")) found = true;
-        if (!found) throw std::runtime_error("native WebSocket requires a libcurl build with WS/WSS support enabled");
-    }
+    initialize_curl();
+    if (websocket) validate_websocket(options);
+    else check_url(options, false);
     CurlHandle curl(curl_easy_init(), &curl_easy_cleanup);
     if (!curl) throw std::runtime_error("native HTTP handle allocation failed");
     option(curl.get(), CURLOPT_URL, options.url.c_str());
+    const auto& proxy = (options.url.rfind("https:", 0) == 0 || options.url.rfind("wss:", 0) == 0)
+        ? https_proxy : http_proxy;
+    option(curl.get(), CURLOPT_PROXY, (proxy.empty() ? all_proxy : proxy).c_str());
+    option(curl.get(), CURLOPT_NOPROXY, no_proxy.c_str());
     option(curl.get(), CURLOPT_CONNECTTIMEOUT_MS, options.connect_timeout_ms);
     option(curl.get(), CURLOPT_TIMEOUT_MS, options.total_timeout_ms);
     option(curl.get(), CURLOPT_NOSIGNAL, 1L);
@@ -148,13 +153,14 @@ std::size_t receive(char* data, std::size_t size, std::size_t nmemb, void* userd
     return count;
 }
 
-DeliveryResult perform(CURL* curl, Response& response) {
-    option(curl, CURLOPT_WRITEFUNCTION, &receive);
-    option(curl, CURLOPT_WRITEDATA, &response);
-    const auto code = curl_easy_perform(curl);
+DeliveryResult response_result(CURL* curl, const Response& response, CURLcode code) {
     DeliveryResult result;
     if (curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result.status) != CURLE_OK)
         throw std::runtime_error("native HTTP response status unavailable");
+    if (result.status >= 300) {
+        result.error = "http_status";
+        return result;
+    }
     if (code != CURLE_OK) {
         if (response.too_large) result.error = "response_too_large";
         else if (response.allocation_failed) result.error = "response_allocation_failed";
@@ -163,11 +169,21 @@ DeliveryResult perform(CURL* curl, Response& response) {
                  code == CURLE_SSL_CERTPROBLEM || code == CURLE_SSL_CACERT_BADFILE)
             result.error = "tls_failure";
         else result.error = "network_error";
+        result.retryable = result.status == 0 && !response.too_large && !response.allocation_failed &&
+            (code == CURLE_COULDNT_CONNECT || code == CURLE_COULDNT_RESOLVE_HOST ||
+             code == CURLE_COULDNT_RESOLVE_PROXY || code == CURLE_OPERATION_TIMEDOUT ||
+             code == CURLE_SEND_ERROR || code == CURLE_RECV_ERROR || code == CURLE_GOT_NOTHING);
         return result;
     }
     result.success = result.status >= 200 && result.status <= 299;
     if (!result.success) result.error = "http_status";
     return result;
+}
+
+DeliveryResult perform(CURL* curl, Response& response) {
+    option(curl, CURLOPT_WRITEFUNCTION, &receive);
+    option(curl, CURLOPT_WRITEDATA, &response);
+    return response_result(curl, response, curl_easy_perform(curl));
 }
 
 bool valid_utf8(std::string_view bytes) {
@@ -257,6 +273,7 @@ std::string hmac_sha256_hex(std::string_view secret, std::string_view bytes) {
     return hex(digest.data(), length);
 }
 
+#ifdef PINEFORGE_LIVE_LEGACY_TEST_API
 DeliveryResult post_webhook(const HttpOptions& options, const StoredEvent& event) {
     if (event.id.empty() || event.id.size() > 256 ||
         event.id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:")
@@ -266,7 +283,7 @@ DeliveryResult post_webhook(const HttpOptions& options, const StoredEvent& event
     auto curl = make_handle(options);
     Headers headers;
     headers.add("Content-Type: application/json");
-    headers.add("Idempotency-Key: " + event.id);
+    headers.add("Idempotency-Key: " + (event.delivery_id.empty() ? event.id : event.delivery_id));
     headers.add("X-PineForge-Event-Id: " + event.id);
     headers.add("Expect:");
     if (!options.hmac_secret.empty())
@@ -278,6 +295,7 @@ DeliveryResult post_webhook(const HttpOptions& options, const StoredEvent& event
     Response response;
     return perform(curl.get(), response);
 }
+#endif
 
 std::string get_feed_snapshot(const HttpOptions& options) {
     auto curl = make_handle(options);
@@ -292,15 +310,129 @@ std::string get_feed_snapshot(const HttpOptions& options) {
     return std::move(response.body);
 }
 
+void validate_http(const HttpOptions& options) {
+    initialize_curl();
+    check_url(options, false);
+}
+
+struct WebhookMulti::Impl {
+    struct Request {
+        StoredEvent event;
+        std::uint64_t key;
+        Headers headers;
+        Response response;
+        CurlHandle curl;
+
+        Request(std::uint64_t request_key, const HttpOptions& options, const StoredEvent& stored)
+            : event(stored), key(request_key), curl(make_handle(options)) {
+            if (event.id.empty() || event.delivery_id.empty() || event.id.size() > 256 ||
+                event.delivery_id.size() > 256 ||
+                event.id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:") != std::string::npos ||
+                event.delivery_id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:") != std::string::npos ||
+                event.payload.empty() || event.payload.size() > max_event_bytes)
+                throw std::runtime_error("native HTTP event id or payload is invalid");
+            headers.add("Content-Type: application/json");
+            headers.add("Idempotency-Key: " + event.delivery_id);
+            headers.add("X-PineForge-Event-Id: " + event.id);
+            headers.add("Expect:");
+            if (!options.hmac_secret.empty())
+                headers.add("X-PineForge-Signature: sha256=" + hmac_sha256_hex(options.hmac_secret, event.payload));
+            option(curl.get(), CURLOPT_HTTPHEADER, headers.value);
+            option(curl.get(), CURLOPT_POST, 1L);
+            option(curl.get(), CURLOPT_POSTFIELDS, event.payload.data());
+            option(curl.get(), CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(event.payload.size()));
+            option(curl.get(), CURLOPT_WRITEFUNCTION, &receive);
+            option(curl.get(), CURLOPT_WRITEDATA, &response);
+        }
+    };
+    CURLM* multi = nullptr;
+    std::map<CURL*, std::unique_ptr<Request>> requests;
+    ~Impl() {
+        for (const auto& [handle, request] : requests) {
+            (void)request;
+            curl_multi_remove_handle(multi, handle);
+        }
+        requests.clear();
+        if (multi) curl_multi_cleanup(multi);
+    }
+};
+
+WebhookMulti::WebhookMulti() : impl_(std::make_unique<Impl>()) {
+    initialize_curl();
+    impl_->multi = curl_multi_init();
+    if (!impl_->multi) throw std::runtime_error("native HTTP multi allocation failed");
+}
+
+WebhookMulti::~WebhookMulti() = default;
+
+void WebhookMulti::add(std::uint64_t key, const HttpOptions& options, const StoredEvent& event) {
+    auto request = std::make_unique<Impl::Request>(key, options, event);
+    auto* handle = request->curl.get();
+    impl_->requests.emplace(handle, std::move(request));
+    if (curl_multi_add_handle(impl_->multi, handle) != CURLM_OK) {
+        impl_->requests.erase(handle);
+        throw std::runtime_error("native HTTP multi add failed");
+    }
+    int running = 0;
+    if (curl_multi_perform(impl_->multi, &running) != CURLM_OK)
+        throw std::runtime_error("native HTTP multi perform failed");
+}
+
+std::vector<CompletedWebhook> WebhookMulti::poll(int timeout_ms) {
+    int running = 0;
+    if (curl_multi_perform(impl_->multi, &running) != CURLM_OK ||
+        curl_multi_poll(impl_->multi, nullptr, 0, timeout_ms, nullptr) != CURLM_OK ||
+        curl_multi_perform(impl_->multi, &running) != CURLM_OK)
+        throw std::runtime_error("native HTTP multi polling failed");
+    std::vector<CompletedWebhook> completed;
+    int remaining = 0;
+    while (auto* message = curl_multi_info_read(impl_->multi, &remaining)) {
+        if (message->msg != CURLMSG_DONE) continue;
+        const auto found = impl_->requests.find(message->easy_handle);
+        if (found == impl_->requests.end()) throw std::runtime_error("native HTTP unknown completed request");
+        const auto& request = *found->second;
+        completed.push_back({request.key, response_result(message->easy_handle, request.response, message->data.result)});
+        if (curl_multi_remove_handle(impl_->multi, message->easy_handle) != CURLM_OK)
+            throw std::runtime_error("native HTTP multi remove failed");
+        impl_->requests.erase(found);
+    }
+    return completed;
+}
+
+void capture_proxy_environment() {
+    const auto read = [](const char* lower, const char* upper) {
+        const char* value = std::getenv(lower);
+        if (!value && upper) value = std::getenv(upper);
+        return std::string(value ? value : "");
+    };
+    http_proxy = read("http_proxy", nullptr);
+    https_proxy = read("https_proxy", "HTTPS_PROXY");
+    all_proxy = read("all_proxy", "ALL_PROXY");
+    no_proxy = read("no_proxy", "NO_PROXY");
+}
+
+void validate_websocket(const HttpOptions& options) {
+    initialize_curl();
+    check_url(options, true);
+    const auto* info = curl_version_info(CURLVERSION_NOW);
+    if (!info || info->version_num < 0x080e01)
+        throw std::runtime_error("native WebSocket requires libcurl 8.14.1 or newer for complete-message finality (loaded " +
+                                 std::string(info && info->version ? info->version : "unknown") + ")");
+    const std::string_view protocol = options.url.rfind("wss:", 0) == 0 ? "wss" : "ws";
+    for (const char* const* entry = info->protocols; entry && *entry; ++entry)
+        if (std::string_view(*entry) == protocol) return;
+    throw std::runtime_error("native WebSocket requires a libcurl build with WS/WSS support enabled");
+}
+
 void receive_websocket(const HttpOptions& options, std::string_view subscription,
                        const std::function<bool(std::string_view)>& on_message,
                        const std::function<bool()>& stopped) {
     if (!on_message || !stopped || subscription.size() > max_event_bytes || !valid_utf8(subscription))
         throw std::runtime_error("native WebSocket invalid callbacks or subscription");
     if (stopped()) return;
-#if LIBCURL_VERSION_NUM < 0x075600
+#if LIBCURL_VERSION_NUM < 0x080e01
     (void)options;
-    throw std::runtime_error("native WebSocket requires libcurl 7.86 or newer with WS/WSS support enabled");
+    throw std::runtime_error("native WebSocket requires libcurl 8.14.1 or newer with WS/WSS support enabled");
 #else
     auto curl = make_handle(options, true);
     option(curl.get(), CURLOPT_CONNECT_ONLY, 2L);
@@ -316,6 +448,7 @@ void receive_websocket(const HttpOptions& options, std::string_view subscription
     bool assembling = false;
     std::string message;
     std::uint64_t frame_offset = 0;
+    int frame_flags = 0;
     for (;;) {
         if (stopped()) return;
         const auto deadline = assembling ? std::min(idle_deadline, message_deadline) : idle_deadline;
@@ -342,8 +475,10 @@ void receive_websocket(const HttpOptions& options, std::string_view subscription
         }
         if ((meta->flags & CURLWS_BINARY) || !(meta->flags & CURLWS_TEXT) ||
             meta->offset < 0 || meta->bytesleft < 0 ||
-            static_cast<std::uint64_t>(meta->offset) != frame_offset || received > buffer.size())
+            static_cast<std::uint64_t>(meta->offset) != frame_offset || received > buffer.size() ||
+            meta->len != received || (frame_offset && meta->flags != frame_flags))
             throw std::runtime_error("native WebSocket requires ordered text frames");
+        frame_flags = meta->flags;
         if (!assembling) {
             message_deadline = Clock::now() + timeout;
             assembling = true;

@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "json.hpp"
 #include "native_startup.hpp"
-#include "parser.hpp"
 #include "store.hpp"
 #include "transport.hpp"
+#include "delivery.hpp"
 #include <pineforge/pineforge.h>
 
 #include <algorithm>
 #include <cerrno>
-#include <memory>
 #include <chrono>
 #include <climits>
 #include <csignal>
@@ -30,7 +29,8 @@
 namespace {
 using namespace pineforge::live;
 namespace fs = std::filesystem;
-volatile std::sig_atomic_t stopped = 0;
+std::atomic<std::sig_atomic_t> stopped{0};
+static_assert(std::atomic<std::sig_atomic_t>::is_always_lock_free);
 void signal_stop(int) { stopped = 1; }
 constexpr std::size_t MAX_FRAME = 1024 * 1024;
 
@@ -38,7 +38,8 @@ struct Config {
     std::string strategy, warmup, feed = "-", ledger, webhook, mode = "", input_tf = "1", script_tf,
                                   symbol, name = "strategy";
     std::string session = "24x7", timezone = "UTC", chart_timezone = "UTC", secret_env, feed_url,
-                parser_path, parser_config_path, subscribe_path, native_config;
+                subscribe_path, native_config, routes_path;
+    RoutingConfig routing;
     std::vector<std::pair<std::string, std::string>> inputs, overrides, syminfo;
     std::set<std::string> explicit_flags;
     NativeConfigValues native;
@@ -51,14 +52,14 @@ void help() {
     std::cout << "PineForge native live runner (C++17)\n"
                  "Usage: pineforge-live run --strategy strategy.so --warmup history.csv\n"
                  "       --script-tf 15 --mode ticks|bars --ledger orders.sqlite3\n"
-                 "       --webhook-url https://receiver.example/events --symbol EXCHANGE:SYMBOL\n"
+                 "       --symbol EXCHANGE:SYMBOL [--webhook-url https://receiver.example/events]\n"
                  "       [--feed events.jsonl|- | --feed-url https://...|wss://...]\n"
                  "Options: --input-tf 1 --name NAME --session 24x7 --timezone UTC\n"
                  "         --input TITLE=VALUE --override KEY=VALUE (repeatable)\n"
                  "         --syminfo KEY=VALUE --chart-timezone UTC\n"
-                 "         --parser parser.so --parser-config mapping.json\n"
                  "         --subscribe subscription.json (WebSocket only)\n"
                  "         --webhook-secret-env NAME --allow-insecure-http\n"
+                 "         --webhook-routes FILE (strict per-action routing; optional webhooks)\n"
                  "         --from-input N --max-events N --max-attempts 8\n"
                  "         --native-config FILE (strict native run specification)\n"
                  "         --check (one HTTP snapshot) --poll-ms 1000\n"
@@ -69,7 +70,11 @@ void help() {
                  "       {\"type\":\"time\",\"ts\":120000} (tick mode only)\n"
                  "Recovery replays immutable warmup + ledger inputs before any delivery.\n"
                  "File/HTTP input defaults to the full recorded prefix; --from-input declares\n"
-                 "the zero-based start of a resumed tail. HTTP polls use full snapshots.\n";
+                 "the zero-based start of a resumed tail. HTTP polls use full snapshots.\n"
+                 "Usage: pineforge-live actions --ledger L --after N [--follow] [--deployment D]\n"
+                 "       pineforge-live status --ledger L [--deployment D]\n"
+                 "       pineforge-live redeliver --ledger L --deployment D --target T [--from N] [--failed-only]\n"
+                 "Redeliver is offline: stop the runner first; it resumes from its ledger.\n";
 }
 std::uint64_t unsigned_arg(const std::string &s) {
     return Json::number(s).integer<std::uint64_t>();
@@ -100,6 +105,8 @@ Config args(int argc, char **argv) {
     std::set<std::string> seen;
     for (int i = 2; i < argc; ++i) {
         std::string a = argv[i];
+        if (a == "--parser" || a == "--parser-config")
+            throw std::runtime_error("in-runner parsers were removed; use an external feed adapter (runner/README.md#feed-format)");
         if (a != "--input" && a != "--override" && a != "--syminfo" && !seen.insert(a).second)
             throw std::runtime_error("duplicate option: " + a);
         c.explicit_flags.insert(a);
@@ -126,6 +133,8 @@ Config args(int argc, char **argv) {
             c.ledger = v;
         else if (a == "--webhook-url")
             c.webhook = v;
+        else if (a == "--webhook-routes")
+            c.routes_path = v;
         else if (a == "--mode")
             c.mode = v;
         else if (a == "--input-tf")
@@ -146,10 +155,6 @@ Config args(int argc, char **argv) {
             c.chart_timezone = v;
         else if (a == "--syminfo")
             c.syminfo.push_back(pair_arg(v));
-        else if (a == "--parser")
-            c.parser_path = v;
-        else if (a == "--parser-config")
-            c.parser_config_path = v;
         else if (a == "--subscribe")
             c.subscribe_path = v;
         else if (a == "--input")
@@ -172,8 +177,8 @@ Config args(int argc, char **argv) {
         } else
             throw std::runtime_error("unknown option: " + a);
     }
-    if (c.strategy.empty() || c.warmup.empty() || c.ledger.empty() || c.webhook.empty())
-        throw std::runtime_error("strategy, warmup, ledger and webhook-url are required");
+    if (c.strategy.empty() || c.warmup.empty() || c.ledger.empty())
+        throw std::runtime_error("strategy, warmup and ledger are required");
     if (c.mode != "bars" && c.mode != "ticks")
         throw std::runtime_error("mode must be bars or ticks");
     if (!c.native_config.empty()) {
@@ -195,8 +200,6 @@ Config args(int argc, char **argv) {
         throw std::runtime_error("HTTP snapshots require from-input 0");
     if (!c.subscribe_path.empty() && !websocket)
         throw std::runtime_error("subscribe requires WebSocket feed-url");
-    if (!c.parser_config_path.empty() && c.parser_path.empty())
-        throw std::runtime_error("parser-config requires parser");
     if (!c.max_attempts || c.max_attempts > 1000)
         throw std::runtime_error("max-attempts must be 1..1000");
     if (!c.allow_http && (c.webhook.rfind("http://", 0) == 0 ||
@@ -214,7 +217,7 @@ Config args(int argc, char **argv) {
             throw std::runtime_error("native runner supports close-only strategy calculation");
     auto ledger = fs::weakly_canonical(fs::absolute(c.ledger));
     for (const auto &src : {c.strategy, c.warmup, c.feed == "-" ? std::string{} : c.feed,
-                            c.parser_path, c.parser_config_path, c.subscribe_path})
+                            c.subscribe_path, c.routes_path, c.native_config})
         if (!src.empty()) {
             auto path = fs::weakly_canonical(fs::absolute(src));
             for (const auto &suffix : {"", "-wal", "-shm", ".lock"})
@@ -524,7 +527,9 @@ void apply(Strategy &s, const Config &c, Cursor &cursor, const Json &frame) {
         if (c.mode != "bars")
             throw std::runtime_error("ticks mode uses trade ticks and explicit time boundaries");
         const auto &j = frame.at("bar");
-        only_fields(j, {"ts_open", "o", "h", "l", "c", "v"});
+        only_fields(j, {"ts_open", "o", "h", "l", "c", "v", "trade_count"});
+        if (j.find("trade_count"))
+            j.at("trade_count").integer<std::uint64_t>();
         pf_bar_t b{};
         b.timestamp = j.at("ts_open").integer<std::int64_t>();
         b.open = j.at("o").real();
@@ -585,7 +590,18 @@ std::vector<Event> actions(Strategy &s, const Config &c, const std::string &depl
                    {"price", real(a.price)},
                    {"reduce_only", Json::boolean(!a.is_entry)},
                    {"entry_incarnation", num(a.entry_incarnation)}})}});
-        out.push_back({std::move(id), payload.dump()});
+        const std::string kind = a.is_entry ? "entry" : "exit";
+        const std::string side = a.is_long ? "long" : "short";
+        const auto target = c.routing.select(a.order_id ? a.order_id : "", kind, side);
+        const auto delivery_id = c.routing.routed ? delivery_identity(id, target) : id;
+        if (c.routing.routed) {
+            payload.members["schema_version"] = Json::string("pineforge-native-order-action/v2");
+            payload.members["target_id"] = target ? Json::string(*target) : Json{};
+            payload.members["delivery_id"] = Json::string(delivery_id);
+            payload.members["order"].members["kind"] = Json::string(kind);
+            payload.members["order"].members["side"] = Json::string(side);
+        }
+        out.push_back({std::move(id), payload.dump(), target, delivery_id});
     }
     return out;
 }
@@ -601,55 +617,49 @@ void apply_record(Strategy &strategy, const Config &c, Cursor &cursor, const Jso
     for (const auto &event : events.items)
         apply(strategy, c, cursor, event);
 }
-std::vector<Json> normalize(Parser *parser, const std::string &message) {
-    if (!parser)
-        return {parse_json(message)};
-    std::vector<Json> result;
-    for (const auto &event : parser->parse(message)) {
-        auto ts = Json::number(std::to_string(event.timestamp));
-        if (event.kind == PF_LIVE_PARSER_TICK)
-            result.push_back(Json::object({{"type", Json::string("tick")},
-                                           {"ts", ts},
-                                           {"seq", num(event.sequence)},
-                                           {"price", real(event.price)},
-                                           {"qty", real(event.quantity)}}));
-        else if (event.kind == PF_LIVE_PARSER_TIME)
-            result.push_back(Json::object({{"type", Json::string("time")}, {"ts", ts}}));
-        else
-            result.push_back(Json::object({{"type", Json::string("bar")},
-                                           {"bar", Json::object({{"ts_open", ts},
-                                                                 {"o", real(event.open)},
-                                                                 {"h", real(event.high)},
-                                                                 {"l", real(event.low)},
-                                                                 {"c", real(event.close)},
-                                                                 {"v", real(event.volume)}})}}));
-    }
-    return result;
+void require_feed_event(const Json &event) {
+    const auto type = event.at("type").text();
+    if (type == "tick") {
+        only_fields(event, {"type", "ts", "seq", "price", "qty"});
+        event.at("ts").integer<std::int64_t>();
+        event.at("seq").integer<std::uint64_t>();
+        event.at("price").real();
+        event.at("qty").real();
+    } else if (type == "time") {
+        only_fields(event, {"type", "ts"});
+        event.at("ts").integer<std::int64_t>();
+    } else if (type == "bar") {
+        only_fields(event, {"type", "bar"});
+        const auto &bar = event.at("bar");
+        only_fields(bar, {"ts_open", "o", "h", "l", "c", "v", "trade_count"});
+        if (bar.find("trade_count"))
+            bar.at("trade_count").integer<std::uint64_t>();
+        bar.at("ts_open").integer<std::int64_t>();
+        for (const auto *field : {"o", "h", "l", "c", "v"})
+            bar.at(field).real();
+    } else
+        throw std::runtime_error("expected tick, time or confirmed bar event");
 }
-bool drain(Ledger &ledger, const HttpOptions &options, const Config &c, std::uint64_t &delivered) {
-    while (!stopped) {
-        auto e = ledger.pending_event();
-        if (!e)
-            return true;
-        if (e->attempts >= c.max_attempts)
-            throw std::runtime_error("webhook retry limit reached; queued event remains in ledger");
-        ledger.begin_delivery(e->id);
-        auto result = post_webhook(options, *e);
-        if (result.success) {
-            ledger.acknowledge(e->id);
-            ++delivered;
-            continue;
-        }
-        ledger.record_delivery_failure(e->id, result.error);
-        if (result.status >= 300 && result.status < 500 && result.status != 408 &&
-            result.status != 429)
-            throw std::runtime_error("webhook receiver refused event; event remains queued");
-        const auto delay =
-            std::min<std::uint64_t>(5000, 100ULL << std::min<std::uint32_t>(e->attempts, 5));
-        for (std::uint64_t n = 0; n < delay && !stopped; n += 100)
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+Json feed_record(const std::string &message) {
+    try {
+        auto record = parse_json(message);
+        if (record.kind == Json::Kind::Array)
+            record = Json::object({{"type", Json::string("batch")}, {"events", std::move(record)}});
+        if (record.at("type").text() == "batch") {
+            only_fields(record, {"type", "events"});
+            const auto &events = record.at("events");
+            if (events.kind != Json::Kind::Array || events.items.empty() || events.items.size() > 1024)
+                throw std::runtime_error("normalized batch requires 1..1024 events");
+            for (const auto &event : events.items)
+                require_feed_event(event);
+        } else
+            require_feed_event(record);
+        return record;
+    } catch (const std::exception &error) {
+        throw std::runtime_error(
+            std::string("invalid feed message: ") + error.what() +
+            "; PineForge feed events required; use an external feed adapter (runner/README.md#feed-format)");
     }
-    return false;
 }
 LegacyIdentityFields legacy_fields(const Config &c) {
     return {c.mode,     c.input_tf, c.script_tf, c.session, c.timezone, c.chart_timezone,
@@ -657,6 +667,20 @@ LegacyIdentityFields legacy_fields(const Config &c) {
 }
 
 int run(Config c) {
+    c.routing = c.routes_path.empty()
+        ? single_target(c.webhook, c.secret_env, c.allow_http)
+        : parse_routes(read_file(c.routes_path, MAX_FRAME), c.allow_http, c.webhook, c.secret_env);
+    auto targets = c.routing.load_secrets();
+    if (c.routing.routed)
+        c.webhook = c.routing.default_target ? c.routing.targets.at(*c.routing.default_target).url : "";
+    else if (c.explicit_flags.count("--max-attempts"))
+        c.routing.delivery.transport_retries = static_cast<unsigned>(std::min<std::uint64_t>(2, c.max_attempts - 1));
+    if (c.feed_url.rfind("ws://", 0) == 0 || c.feed_url.rfind("wss://", 0) == 0) {
+        HttpOptions feed;
+        feed.url = c.feed_url;
+        feed.allow_insecure_http = c.allow_http;
+        validate_websocket(feed);
+    }
     if (!c.native_config.empty()) {
         c.native = parse_native_config(read_file(c.native_config, MAX_FRAME));
         NativeClockBindings clock{c.input_tf, c.script_tf, c.timezone, c.session,
@@ -669,19 +693,11 @@ int run(Config c) {
         c.chart_timezone = clock.chart_timezone;
         c.symbol = clock.symbol;
         validate_native_config(c.native);
+        if (c.input_tf != "1")
+            throw std::runtime_error("native runner input-tf currently must be 1 minute");
     }
     auto original = read_file(c.warmup, 512ULL * 1024 * 1024);
     auto library = read_file(c.strategy, 512ULL * 1024 * 1024);
-    std::string parser_bytes =
-        c.parser_path.empty() ? "" : read_file(c.parser_path, 64ULL * 1024 * 1024);
-    std::string parser_config =
-        c.parser_config_path.empty() ? "{}" : read_file(c.parser_config_path, MAX_FRAME);
-    std::unique_ptr<Parser> parser;
-    if (!c.parser_path.empty())
-        parser = std::make_unique<Parser>(c.parser_path, parser_config);
-    if (!c.parser_path.empty() &&
-        sha256_hex(read_file(c.parser_path, 64ULL * 1024 * 1024)) != sha256_hex(parser_bytes))
-        throw std::runtime_error("parser library changed during initialization");
     Strategy strategy;
     strategy.load(c.strategy);
     if (sha256_hex(read_file(c.strategy, 512ULL * 1024 * 1024)) != sha256_hex(library))
@@ -692,11 +708,13 @@ int run(Config c) {
     const auto settings_receipt = strategy.effective_settings();
     std::string deployment =
         c.native.present
-            ? native_identity(c.native, c.mode, c.name, c.webhook, original, library, parser_bytes,
-                              parser_config)
-            : identity(legacy_fields(c), original, library, parser_bytes, parser_config);
+            ? native_identity(c.native, c.mode, c.name, c.webhook, original, library)
+            : identity(legacy_fields(c), original, library);
     if (!settings_receipt.empty())
         deployment = sha256_hex(deployment + ":settings-v1:" + settings_receipt);
+    if (c.routing.routed)
+        deployment = sha256_hex(Json::object({{"deployment", Json::string(deployment)},
+            {"webhook_routes", Json::string(c.routing.file_identity)}}).dump());
     try {
         // A switched PineStrategyHost is native-bound but owns its run spec
         // through prepare_native_begin.  Let that provider admit the stream
@@ -721,6 +739,7 @@ int run(Config c) {
     if (c.native.present)
         require_native_warmup(c.native, warmup);
     Ledger ledger(c.ledger, deployment);
+    ledger.bind_routing(c.routing.stored_document());
     Cursor cursor;
     auto recorded = ledger.input_count();
     for (std::uint64_t i = 0; i < recorded; ++i) {
@@ -735,36 +754,19 @@ int run(Config c) {
             events.size() != row->events.size())
             throw std::runtime_error("native replay state/action count mismatch");
         for (std::size_t k = 0; k < events.size(); ++k)
-            if (events[k].id != row->events[k].id || events[k].payload != row->events[k].payload)
+            if (events[k].id != row->events[k].id || events[k].payload != row->events[k].payload ||
+                events[k].target_id != row->events[k].target_id || events[k].delivery_id != row->events[k].delivery_id)
                 throw std::runtime_error("native replay order-action mismatch");
         strategy.clear(strategy.state);
     }
-    HttpOptions webhook;
-    webhook.url = c.webhook;
-    webhook.allow_insecure_http = c.allow_http;
-    if (!c.secret_env.empty()) {
-        const char *value = std::getenv(c.secret_env.c_str());
-        if (!value || !*value)
-            throw std::runtime_error("webhook secret environment variable is missing or empty");
-        webhook.hmac_secret = value;
-    }
     if (c.from_input > recorded)
         throw std::runtime_error("from-input skips unrecorded inputs");
-    std::uint64_t delivered = 0, processed = 0, replayed_prefix = 0;
-    drain(ledger, webhook, c, delivered);
+    std::uint64_t processed = 0, replayed_prefix = 0;
+    DeliveryWorker delivery(ledger, c.routing.delivery, std::move(targets), std::nullopt,
+                            [] { return stopped != 0; });
     auto consume_message = [&](const std::string &message, std::uint64_t &index) {
-        auto frames = normalize(parser.get(), message);
-        if (frames.empty())
-            return;
-        Json frame;
-        if (frames.size() == 1)
-            frame = std::move(frames.front());
-        else {
-            Json events;
-            events.kind = Json::Kind::Array;
-            events.items = std::move(frames);
-            frame = Json::object({{"type", Json::string("batch")}, {"events", std::move(events)}});
-        }
+        delivery.check();
+        auto frame = feed_record(message);
         auto canonical = frame.dump();
         if (auto previous = ledger.input(index)) {
             if (previous->canonical_json != canonical)
@@ -773,7 +775,7 @@ int run(Config c) {
         } else {
             if (index != ledger.input_count())
                 throw std::runtime_error("input sequence is not contiguous");
-            // The entire provider message advances in memory before one
+            // The entire feed message advances in memory before one
             // input/state/outbox transaction. Failure discards this instance;
             // interruption and delivery begin only after every event commits.
             apply_record(strategy, c, cursor, frame);
@@ -781,8 +783,6 @@ int run(Config c) {
             ledger.commit_input(index, canonical, strategy.hash(strategy.state), events);
             strategy.clear(strategy.state);
             ++processed;
-            if (!drain(ledger, webhook, c, delivered))
-                return;
         }
         ++index;
     };
@@ -800,101 +800,196 @@ int run(Config c) {
             index < recorded)
             throw std::runtime_error("input snapshot omits committed prefix");
     };
-    if (c.feed_url.empty()) {
-        if (c.feed == "-") {
-            std::uint64_t index = c.from_input;
-            std::string pending;
-            char buffer[65536];
-            while (!stopped && !(c.max_events && processed >= c.max_events)) {
-                pollfd fd{STDIN_FILENO, POLLIN, 0};
-                int rc = poll(&fd, 1, 100);
-                if (rc < 0) {
-                    if (errno == EINTR)
+    try {
+        if (c.feed_url.empty()) {
+            if (c.feed == "-") {
+                std::uint64_t index = c.from_input;
+                std::string pending;
+                char buffer[65536];
+                while (!stopped && !(c.max_events && processed >= c.max_events)) {
+                    delivery.check();
+                    pollfd fd{STDIN_FILENO, POLLIN, 0};
+                    int rc = poll(&fd, 1, 100);
+                    if (rc < 0) {
+                        if (errno == EINTR)
+                            continue;
+                        throw std::runtime_error("stdin poll failed");
+                    }
+                    if (!rc)
                         continue;
-                    throw std::runtime_error("stdin poll failed");
-                }
-                if (!rc)
-                    continue;
-                auto n = read(STDIN_FILENO, buffer, sizeof buffer);
-                if (n < 0) {
-                    if (errno == EINTR)
-                        continue;
-                    throw std::runtime_error("stdin read failed");
-                }
-                if (!n) {
-                    if (!blank(pending))
-                        consume_message(pending, index);
-                    break;
-                }
-                pending.append(buffer, static_cast<std::size_t>(n));
-                for (;;) {
-                    auto end = pending.find('\n');
-                    if (end == std::string::npos)
+                    auto n = read(STDIN_FILENO, buffer, sizeof buffer);
+                    if (n < 0) {
+                        if (errno == EINTR)
+                            continue;
+                        throw std::runtime_error("stdin read failed");
+                    }
+                    if (!n) {
+                        if (!blank(pending))
+                            consume_message(pending, index);
                         break;
-                    if (end > MAX_FRAME)
+                    }
+                    pending.append(buffer, static_cast<std::size_t>(n));
+                    for (;;) {
+                        auto end = pending.find('\n');
+                        if (end == std::string::npos)
+                            break;
+                        if (end > MAX_FRAME)
+                            throw std::runtime_error("input line exceeds 1 MiB");
+                        auto message = pending.substr(0, end);
+                        pending.erase(0, end + 1);
+                        if (!blank(message))
+                            consume_message(message, index);
+                        if (stopped || (c.max_events && processed >= c.max_events))
+                            break;
+                    }
+                    if (pending.size() > MAX_FRAME)
                         throw std::runtime_error("input line exceeds 1 MiB");
-                    auto message = pending.substr(0, end);
-                    pending.erase(0, end + 1);
-                    if (!blank(message))
-                        consume_message(message, index);
-                    if (stopped || (c.max_events && processed >= c.max_events))
-                        break;
                 }
-                if (pending.size() > MAX_FRAME)
-                    throw std::runtime_error("input line exceeds 1 MiB");
+            } else {
+                std::ifstream input(c.feed);
+                if (!input)
+                    throw std::runtime_error("cannot open feed");
+                consume(input, c.from_input, true);
             }
+        } else if (c.feed_url.rfind("ws://", 0) == 0 || c.feed_url.rfind("wss://", 0) == 0) {
+            HttpOptions feed;
+            feed.url = c.feed_url;
+            feed.allow_insecure_http = c.allow_http;
+            std::string subscription =
+                c.subscribe_path.empty() ? "" : read_file(c.subscribe_path, MAX_FRAME);
+            std::uint64_t index = c.from_input;
+            receive_websocket(
+                feed, subscription,
+                [&](std::string_view bytes) {
+                    consume_message(std::string(bytes), index);
+                    return !stopped && !(c.max_events && processed >= c.max_events);
+                },
+                [&] { delivery.check(); return stopped != 0; });
         } else {
-            std::ifstream input(c.feed);
-            if (!input)
-                throw std::runtime_error("cannot open feed");
-            consume(input, c.from_input, true);
+            HttpOptions feed;
+            feed.url = c.feed_url;
+            feed.allow_insecure_http = c.allow_http;
+            do {
+                delivery.check();
+                auto snapshot = get_feed_snapshot(feed);
+                std::istringstream input(snapshot);
+                consume(input, 0, true);
+                recorded = ledger.input_count();
+                if (c.check || stopped || (c.max_events && processed >= c.max_events))
+                    break;
+                for (long n = 0; n < c.poll_ms && !stopped; n += 100) {
+                    delivery.check();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+            } while (!stopped);
         }
-    } else if (c.feed_url.rfind("ws://", 0) == 0 || c.feed_url.rfind("wss://", 0) == 0) {
-        HttpOptions feed;
-        feed.url = c.feed_url;
-        feed.allow_insecure_http = c.allow_http;
-        std::string subscription =
-            c.subscribe_path.empty() ? "" : read_file(c.subscribe_path, MAX_FRAME);
-        std::uint64_t index = c.from_input;
-        receive_websocket(
-            feed, subscription,
-            [&](std::string_view bytes) {
-                consume_message(std::string(bytes), index);
-                return !stopped && !(c.max_events && processed >= c.max_events);
-            },
-            [] { return stopped != 0; });
-    } else {
-        HttpOptions feed;
-        feed.url = c.feed_url;
-        feed.allow_insecure_http = c.allow_http;
-        do {
-            auto snapshot = get_feed_snapshot(feed);
-            std::istringstream input(snapshot);
-            consume(input, 0, true);
-            recorded = ledger.input_count();
-            if (c.check || stopped || (c.max_events && processed >= c.max_events))
-                break;
-            for (long n = 0; n < c.poll_ms && !stopped; n += 100)
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        } while (!stopped);
+        delivery.finish(stopped != 0);
+    } catch (const std::exception& error) {
+        delivery.limit_drain();
+        try { delivery.finish(false); } catch (...) {}
+        const auto pending = ledger.unsent_count();
+        const auto status = parse_json(LedgerView(c.ledger).status_json());
+        std::string guidance;
+        for (const auto& [target, value] : status.at("targets").members)
+            if (value.at("unsent").integer<std::uint64_t>())
+                guidance += "; run `pineforge-live redeliver --ledger " + c.ledger +
+                    " --deployment " + deployment + " --target " + target + "`";
+        throw std::runtime_error(std::string(error.what()) + "; " + std::to_string(pending) +
+                                 " actions not sent" + guidance);
     }
-    auto pending = ledger.pending_count();
+    auto pending = ledger.unsent_count();
     std::cout << Json::object(
                      {{"deployment", Json::string(deployment)},
                       {"effective_settings", settings_receipt.empty() ? Json{} : parse_json(settings_receipt)},
                       {"inputs_committed", num(ledger.input_count())},
                       {"inputs_processed", num(processed)},
                       {"prefix_skipped", num(replayed_prefix)},
-                      {"webhooks_delivered", num(delivered)},
+                      {"webhooks_delivered", num(delivery.delivered())},
+                      {"webhook_failures", num(delivery.failed())},
                       {"webhooks_pending", num(pending)},
                       {"last_tick_sequence", cursor.seen_tick ? num(cursor.tick_seq) : Json{}}})
                      .dump()
               << '\n';
-    return stopped ? 130 : pending ? 2 : 0;
+    return stopped ? 130 : 0;
+}
+
+int ledger_command(int argc, char** argv) {
+    const std::string command = argv[1];
+    std::string path, target, deployment;
+    std::uint64_t after = 0, from = 1;
+    bool follow = false, failed_only = false;
+    std::set<std::string> seen;
+    for (int index = 2; index < argc; ++index) {
+        const std::string option = argv[index];
+        if (!seen.insert(option).second) throw std::runtime_error("duplicate option: " + option);
+        if (command == "actions" && option == "--follow") { follow = true; continue; }
+        if (command == "redeliver" && option == "--failed-only") { failed_only = true; continue; }
+        if (index + 1 == argc) throw std::runtime_error("missing option value: " + option);
+        const std::string value = argv[++index];
+        if (option == "--ledger") path = value;
+        else if (option == "--deployment") deployment = value;
+        else if (command == "actions" && option == "--after") after = unsigned_arg(value);
+        else if (command == "redeliver" && option == "--from") from = unsigned_arg(value);
+        else if (command == "redeliver" && option == "--target") target = value;
+        else throw std::runtime_error("unknown option: " + option);
+    }
+    if (path.empty()) throw std::runtime_error("ledger is required");
+    if (command == "redeliver" && deployment.empty())
+        throw std::runtime_error("redeliver requires --deployment <id>");
+    LedgerView view(path);
+    if (!deployment.empty() && deployment != view.identity())
+        throw std::runtime_error("ledger deployment identity mismatch");
+    if (command == "status") {
+        std::cout << view.status_json() << '\n';
+        return 0;
+    }
+    if (command == "actions") {
+        do {
+            const auto events = view.actions_after(after);
+            for (const auto& event : events) {
+                std::cout << event.payload << '\n' << std::flush;
+                after = event.ordinal;
+            }
+            if (events.size() == 256) continue;
+            if (!follow) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        } while (!stopped);
+        return stopped ? 130 : 0;
+    }
+    if (target.empty()) throw std::runtime_error("redeliver requires target");
+    const auto document = view.routing_document();
+    if (document.empty()) throw std::runtime_error("resume this phase-A ledger with run before redelivering");
+    auto routing = restore_routes(document);
+    if (!routing.targets.count(target)) throw std::runtime_error("undefined webhook target: " + target);
+    for (auto position = routing.targets.begin(); position != routing.targets.end();) {
+        if (position->first != target) position = routing.targets.erase(position);
+        else ++position;
+    }
+    auto targets = routing.load_secrets();
+    Ledger ledger(path, view.identity());
+    auto events = view.redelivery_events(target, from, failed_only);
+    const auto selected = events.size();
+    std::set<std::string> selected_ids;
+    for (const auto& event : events) selected_ids.insert(event.id);
+    DeliveryWorker delivery(ledger, routing.delivery, std::move(targets), std::move(events),
+                            [] { return stopped != 0; });
+    delivery.finish();
+    std::uint64_t failed = 0, pending = 0;
+    for (const auto& event : view.redelivery_events(target, from, true))
+        if (selected_ids.count(event.id)) ++failed;
+    auto low = from ? from - 1 : 0;
+    while (const auto next = ledger.next_delivery_event(low)) {
+        low = next->event.ordinal;
+        if (next->unsent && selected_ids.count(next->event.id)) ++pending;
+    }
+    std::cout << Json::object({{"selected", num(selected)}, {"delivered", num(delivery.delivered())},
+        {"failed", num(failed)}, {"pending", num(pending)}}).dump() << '\n';
+    return stopped ? 130 : (failed || pending ? 2 : 0);
 }
 } // namespace
 int main(int argc, char **argv) {
     std::locale::global(std::locale::classic());
+    capture_proxy_environment();
     std::signal(SIGINT, signal_stop);
     std::signal(SIGTERM, signal_stop);
     try {
@@ -903,6 +998,9 @@ int main(int argc, char **argv) {
             help();
             return 0;
         }
+        const std::string command = argv[1];
+        if (command == "actions" || command == "status" || command == "redeliver")
+            return ledger_command(argc, argv);
         return run(args(argc, argv));
     } catch (const std::exception &e) {
         std::cerr << "pineforge-live: " << e.what() << '\n';
