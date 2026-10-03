@@ -1243,12 +1243,21 @@ void test_pooc_deferred_cap_candidate_includes_confirmed_stream_warmup() {
     CHECK(strat.trade_count() == 1);
     CHECK(!strat.deferred_close_pending());
 
-    TradeTick next_tick{kT0_UTC + 120'001LL, 1, 102.0, 1.0};
-    CHECK(strat.stream_push_tick(next_tick));
-    CHECK(std::fabs(strat.position_size()) < 1e-9);
-    CHECK(strat.trade_count() == 1);
-    CHECK(!strat.deferred_close_pending());
     CHECK(strat.stream_end(false));
+
+    {
+        Strat strat;
+        Bar observed_warmup[] = {warmup[0], next_bar};
+        CHECK(strat.stream_begin(observed_warmup, 2, "1", "1"));
+        CHECK(strat.trade_count() == 1);
+        CHECK(std::fabs(strat.position_size()) < 1e-9);
+        CHECK(!strat.deferred_close_pending());
+        TradeTick next_tick{kT0_UTC + 120'001LL, 1, 102.0, 1.0};
+        CHECK(strat.stream_push_tick(next_tick));
+        CHECK(std::fabs(strat.position_size()) < 1e-9);
+        CHECK(strat.trade_count() == 1);
+        CHECK(strat.stream_end(false));
+    }
 }
 
 }  // namespace
