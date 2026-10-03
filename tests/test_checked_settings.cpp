@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -26,6 +27,56 @@ public:
 private:
     Kind kind_;
 };
+
+class PreparationCounterProbe final : public pineforge::source::PineStrategyHost {
+public:
+    int callbacks = 0;
+    void prepare_script_run(const pineforge::Bar*, int, bool) override { callbacks = 0; }
+    void on_source_bar(const pineforge::Bar&) override { ++callbacks; }
+};
+
+void test_refused_report_allocations() {
+    std::vector<pf_bar_t> bars;
+    for (int index = 0; index < 60; ++index) {
+        const double price = 100 + index % 7;
+        bars.push_back({price, price + 2, price - 1, price + 1, 5,
+                       1577836800000LL + static_cast<std::int64_t>(index) * 60000});
+    }
+    for (int mode = 0; mode < 3; ++mode) {
+        pf_strategy_t strategy = strategy_create(nullptr);
+        assert(strategy);
+        pf_report_t successful{};
+        run_backtest_full(strategy, bars.data(), 60, "1", "1", 0, 4,
+                          PF_MAGNIFIER_ENDPOINTS, &successful);
+        assert(successful.total_trades > 0 && successful.trades && successful.equity_curve);
+        report_free(&successful);
+        strategy_set_override(strategy, "pyramiding", "abc");
+        const std::string failure = strategy_get_last_error(strategy);
+        assert(failure.find("strategy_set_override:") == 0);
+        auto invalid = bars;
+        invalid[0].open = std::numeric_limits<double>::quiet_NaN();
+        pf_report_t refused{};
+        refused.total_trades = 99;
+        if (mode == 0) {
+            run_backtest(strategy, invalid.data(), 60, &refused);
+        } else if (mode == 1) {
+            run_backtest_full(strategy, invalid.data(), 60, "1", "1", 0, 4,
+                              PF_MAGNIFIER_ENDPOINTS, &refused);
+        } else {
+            char error[256]{};
+            assert(run_backtest_full_checked(strategy, invalid.data(), 60, "1", "1", 0, 4,
+                   PF_MAGNIFIER_ENDPOINTS, &refused, error, sizeof(error)) == PF_SETTINGS_RUN_FAILED);
+            assert(std::string(error) == failure);
+        }
+        assert(refused.total_trades == 0 && refused.trades_len == 0 && !refused.trades);
+        assert(refused.equity_curve_len == 0 && !refused.equity_curve);
+        assert(refused.security_diag_len == 0 && !refused.security_diag);
+        assert(std::string(strategy_get_last_error(strategy)) == failure);
+        report_free(&refused);
+        strategy_free(strategy);
+    }
+    std::cout << "latched report refusal: legacy, full and checked allocation regression PASS\n";
+}
 
 std::string receipt_field(const std::string& document, const std::string& name,
                           const std::string& field) {
@@ -69,7 +120,9 @@ void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
 void operator delete(void* allocation, const std::nothrow_t&) noexcept { ::operator delete(allocation); }
 void operator delete[](void* allocation, const std::nothrow_t&) noexcept { ::operator delete[](allocation); }
 
-int main() {
+int main(int argc, char** argv) {
+    test_refused_report_allocations();
+    if (argc == 2 && std::string(argv[1]) == "--report-leak-only") return 0;
     using namespace pineforge::checked_settings;
     assert(number(0xffff0000LL) == "4294901760");
     assert(strategy_settings_api_version() == PF_SETTINGS_API_VERSION);
@@ -265,6 +318,14 @@ int main() {
         assert(strategy_last_run_status(&stream_probe) == 1);
     }
     std::cout << "source preparation: all stream exceptions refused; batch compatibility PASS\n";
+    PreparationCounterProbe running_probe;
+    assert(running_probe.stream_begin(source_bars, 2, "1", "1"));
+    assert(running_probe.stream_push_bar({100, 102, 99, 101, 5, 120000}));
+    const int before_batch = running_probe.callbacks;
+    assert(before_batch == 3);
+    running_probe.run(source_bars, 2, "1", "1");
+    assert(running_probe.callbacks == before_batch);
+    std::cout << "failed configure: running stream preparation counter unchanged PASS\n";
     pf_strategy_t poisoned = strategy_create(nullptr);
     strategy_set_override(poisoned, "pyramiding", "abc");
     const auto setter_failure = std::string(strategy_get_last_error(poisoned));

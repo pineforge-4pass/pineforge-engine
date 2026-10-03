@@ -434,8 +434,7 @@ extern "C" {
         if (strat->_pf_refuse_failed_setting(out)) return;
 #endif
         strat->run(bars, n);
-        strat->fill_report(out);
-        strat->_pf_refuse_failed_setting(out);
+        if (!strat->_pf_refuse_failed_setting(out)) strat->fill_report(out);
         } catch (const std::exception& _pf_error) {
             if (out) *out = ReportC{};
             if (s) static_cast<GeneratedStrategy*>(s)->_pf_record_failure("run_backtest", _pf_error.what());
@@ -463,8 +462,7 @@ extern "C" {
             strat->run(bars, n, itf, stf, bar_magnifier != 0, magnifier_samples,
                        static_cast<MagnifierDistribution>(magnifier_dist));
         }
-        strat->fill_report(out);
-        strat->_pf_refuse_failed_setting(out);
+        if (!strat->_pf_refuse_failed_setting(out)) strat->fill_report(out);
     }
     void run_backtest_full(void* s, Bar* bars, int n, const char* input_tf, const char* script_tf,
                            int bar_magnifier, int magnifier_samples, int magnifier_dist, ReportC* out) {
