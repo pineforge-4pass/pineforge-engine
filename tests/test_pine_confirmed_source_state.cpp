@@ -49,6 +49,12 @@ public:
     double units() const { return signed_position_size(); }
     void clear_provider() { range_end_trades_.clear(); }
     double stored_profit() const { return equity_curve_.back().open_profit; }
+    double retain_flat_mark() {
+        auto& mark = equity_curve_.back();
+        mark.open_profit = 0.0;
+        mark.equity = std::nextafter(initial_capital_ + net_profit_sum_, 0.0);
+        return mark.equity;
+    }
 private:
     bool close_;
 };
@@ -132,6 +138,34 @@ void terminal_reports() {
         }
         BacktestEngine::free_report(&first);
         BacktestEngine::free_report(&second);
+    }
+}
+
+void already_flat_curve_marks() {
+    std::vector<Bar> bars;
+    for (int index = 0; index < 3; ++index) bars.push_back(input(index));
+    for (const bool is_stream : {false, true}) {
+        CloseReport strategy(true);
+        if (is_stream) {
+            CHECK(strategy.stream_begin(bars.data(), 1, "1", "1"));
+            CHECK(strategy.stream_push_bar(bars[1]));
+            CHECK(strategy.stream_push_bar(bars[2]));
+            CHECK(strategy.stream_end(false));
+        } else {
+            strategy.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+            CHECK(strategy.last_error().empty());
+        }
+        CHECK(strategy.units() == 0.0);
+        strategy.clear_provider();
+        const double retained = strategy.retain_flat_mark();
+        const auto before = strategy.stream_state_hash();
+        ReportC report{};
+        strategy.fill_report(&report);
+        CHECK(report.equity_curve_len == 3);
+        CHECK(same(retained, report.equity_curve[report.equity_curve_len - 1].equity));
+        CHECK(report.equity_curve[report.equity_curve_len - 1].open_profit == 0.0);
+        CHECK(strategy.stream_state_hash() == before);
+        BacktestEngine::free_report(&report);
     }
 }
 
@@ -256,6 +290,7 @@ int main() {
     confirmed_period_closure();
     confirmed_cap_prices();
     terminal_reports();
+    already_flat_curve_marks();
     std::printf("confirmed source state: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

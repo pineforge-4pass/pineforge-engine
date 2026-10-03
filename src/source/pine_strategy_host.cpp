@@ -1740,7 +1740,8 @@ void source::PineStrategyHost::present_report(ReportC* out) const {
     if ((stream_phase_ == StreamPhase::REALTIME
          || state.completion == NativeCompletion::StreamEnded)
         && (!range_end_trades_.empty()
-            || (position.signed_units == 0.0 && position.lot_count == 0))) {
+            || (position.signed_units == 0.0 && position.lot_count == 0
+                && last.open_profit != 0.0))) {
         double range_end_pnl = 0.0;
         for (const auto& row : range_end_trades_) range_end_pnl += row.pnl;
         last.open_profit = 0.0;
