@@ -789,6 +789,27 @@ def main() -> int:
     check("run_strategy: same effective gate has deterministic digest",
           gated_fp["digest"] == same_gate_fp["digest"])
 
+    quote_kwargs = dict(runtime_kwargs, report_terminal_quote=(gate_ms, 112.0),
+                        report_terminal_quote_source_sha256="a" * 64)
+    quote_runtime = rs.build_runtime_provenance(quote_kwargs, gate_ms)
+    quote_fp = rs.build_fingerprint({"runtime": quote_runtime})["digest"]
+    check("run_strategy: OFF runtime keeps its existing quote-free shape",
+          "report_terminal_quote" not in gated_runtime)
+    check("run_strategy: quote provenance pins time, close and feed digest",
+          quote_runtime["report_terminal_quote"] == {
+              "time_ms": gate_ms, "close": 112.0, "source_file_sha256": "a" * 64})
+    check("run_strategy: quote ON and OFF fingerprints differ",
+          quote_fp != gated_fp["digest"])
+    for field, value in (("report_terminal_quote", (gate_ms + 1, 112.0)),
+                         ("report_terminal_quote", (gate_ms, 113.0)),
+                         ("report_terminal_quote_source_sha256", "b" * 64)):
+        changed = rs.build_runtime_provenance(dict(quote_kwargs, **{field: value}), gate_ms)
+        check(f"run_strategy: changing quote {field} changes the fingerprint",
+              rs.build_fingerprint({"runtime": changed})["digest"] != quote_fp)
+    check("run_strategy: quote runtime helper is deterministic and pure",
+          rs.build_runtime_provenance(quote_kwargs, gate_ms) == quote_runtime
+          and quote_kwargs["report_terminal_quote"] == (gate_ms, 112.0))
+
     # Timestamped FX provenance is pinned to the exact effective C-ABI values,
     # not only to a provider-file hash, point count, or endpoints.  Changing an
     # interior rate must therefore change both the value digest and the final
