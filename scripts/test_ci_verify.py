@@ -378,7 +378,9 @@ class Scripted:
                                             ('example_hello_kernel_c', 'hello_kernel_c.c'))]
         commands = []
         for directory, target, object_path, source, extra in rows:
-            if ci_verify.PROFILE[self.profile].sanitizers:
+            if ci_verify.PROFILE[self.profile].thread_sanitizers:
+                extra += ' -fsanitize=thread -fno-omit-frame-pointer'
+            elif ci_verify.PROFILE[self.profile].sanitizers:
                 extra += ' ' + SANITIZER_FLAG + ' -fno-omit-frame-pointer'
             undebug = '' if self.exits.get('example_ndebug') == target else ' -UNDEBUG'
             obj = f'CMakeFiles/{target}.dir/{object_path}.o'
