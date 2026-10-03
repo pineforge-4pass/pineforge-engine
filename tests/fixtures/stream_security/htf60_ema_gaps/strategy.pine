@@ -1,0 +1,10 @@
+//@version=6
+strategy("E")
+h = request.security(syminfo.tickerid, "60", ta.ema(close, 3), gaps=barmerge.gaps_on)
+var float last = na
+if not na(h)
+    last := h
+if close > last and strategy.position_size == 0
+    strategy.entry("L", strategy.long)
+if close < last
+    strategy.close("L")
