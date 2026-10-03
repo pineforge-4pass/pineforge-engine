@@ -11657,22 +11657,32 @@ void PineExecutionAdapter::reroute_fixed_entries_before_close() {
                 && command.snapshot.placement_script_open_ms == script_open;
         });
     if (!frozen_entry) return;
+    // This run-level flag stays sticky for later ordering, like cancel/replacement mutations.
     source_batch_mutated_ = true;
     auto queued = std::move(pending_same_bar_commands_);
     pending_same_bar_commands_.clear();
     pending_same_bar_close_qty_ = 0.0;
+    const double placement_position = detail::run_position(require_host()).signed_units;
     // A close breaks the entry-only projection. Restore ordinary source order
-    // and HostSized reversals before the close is submitted, without regrouping.
+    // and placement intents before the close is submitted, without regrouping.
     for (auto& command : queued) {
         if (command.opening && command.snapshot.family == PineOrderFamily::Entry
             && command.snapshot.frozen_market_instruction
             && command.snapshot.placement_script_open_ms == script_open) {
-            command.request.intent = native_order::HostSized{
-                native_order::HostSizedKind::Open,
-                command.snapshot.is_long ? native_order::Side::Long
-                                         : native_order::Side::Short};
+            const bool reverses = placement_position != 0.0
+                && command.snapshot.is_long != (placement_position > 0.0);
+            if (reverses) {
+                command.request.intent = native_order::HostSized{
+                    native_order::HostSizedKind::Open,
+                    command.snapshot.is_long ? native_order::Side::Long
+                                             : native_order::Side::Short};
+            } else {
+                const double own = command.snapshot.frozen_market_own_units;
+                command.request.intent = native_order::Transact{
+                    command.snapshot.is_long ? own : -own};
+            }
             command.snapshot.frozen_market_instruction = false;
-            command.snapshot.reverse_to = true;
+            command.snapshot.reverse_to = reverses;
         }
         (void)submit_or_replace(std::move(command.request), std::move(command.snapshot),
                                 command.opening, command.replacement_key);

@@ -30,7 +30,9 @@ the route.
 in `tests/samebar_pyramiding_entries_tapes.hpp`. The three entry matrices cover
 flat / short 1-2 / long 1-2 and LS, SL, LSL, SLS, LLS, SSL. Explicit and default
 pyramiding-7 tapes agree. All 60 pyramiding-7 rows, the 21 already-matching
-pyramiding-1 rows, and X00, X01, X00d, X01d are asserted: 85 cases total.
+pyramiding-1 rows, and X00, X01, X00d, X01d are asserted: 85 full-tape cases.
+X04 additionally asserts only the flat book after the batch fill bar and the
+absence of any trade closed by the final close_all: 86 checks total.
 
 The unit test replays seven constant-price bars (100) to isolate side, quantity,
 entry/exit identity, fill times, zero-length trades, flat terminal position and
@@ -38,21 +40,24 @@ zero errors/PnL. CSV times are UTC+8; embedded epochs subtract eight hours.
 TradingView's close display label maps to the adapter's internal close identity.
 This structural test does not claim to replay ETH prices or raw PnL.
 
-## Recorded known-open rows (not asserted)
+## Recorded known-open rows (full tapes not asserted)
 
 - Pyramiding 1: C02, C08, C10, C15, C17, C20, C22, C27, C29 match TradingView only
   under the excluded projected-entry route. Keeping main's old block deliberately
   leaves these nine discrepancies open; their exact TV rows remain recorded.
 - Close/entry: X02, X03, X04, X05 remain open. X02/X03/X05 need general projected
   close ordering to retain the surviving qty-1 lot. X04 includes TradingView's
-  close-owned long-1 artifact, absent on main; no X04 trade is asserted here.
+  close-owned long-1 artifact, absent on main. Its full trade list remains open;
+  only the flat-after-batch result and absence of a final close_all trade are
+  asserted, since both TradingView and main agree on those properties.
 - Raw `strategy.order`: the entire p7-explicit-order matrix is an unasserted
   boundary control; baseline discrepancies include C01, C03, C05, C08, C17.
 - Process-on-close: the entire p7-explicit-entry-pooc matrix is an unasserted
   timing control. It does not justify widening this route.
 
-The executable records the 13 embedded known-open entry/close rows separately
-and never substitutes main's divergent values for the TradingView expectations.
+The executable records the 13 embedded known-open entry/close full tapes
+separately and never substitutes main's divergent values for the TradingView
+expectations. X04's partial position check does not assert its artifact lot.
 
 ## Export digests
 

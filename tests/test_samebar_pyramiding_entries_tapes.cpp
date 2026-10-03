@@ -45,14 +45,18 @@ public:
                 strategy_entry(id, is_long, missing, missing, quantity);
             }
         }
+        if (bar == 3) position_after_batch_ = live_position_size();
         if (bar == 5) strategy_close_all();
     }
 
+    double position_after_batch() const { return position_after_batch_; }
+
 private:
     const SamebarPyramidingCaseTape& tape_;
+    double position_after_batch_ = missing;
 };
 
-bool run_case(const SamebarPyramidingCaseTape& tape) {
+bool run_case(const SamebarPyramidingCaseTape& tape, bool flat_after_batch_only = false) {
     SamebarPyramidingHost host(tape);
     std::vector<pineforge::Bar> bars;
     for (int bar = 0; bar < 7; ++bar) {
@@ -60,9 +64,16 @@ bool run_case(const SamebarPyramidingCaseTape& tape) {
                         tape.start_time + bar * 900000LL});
     }
     host.run(bars.data(), static_cast<int>(bars.size()));
-    bool passed = host.last_error().empty() && host.live_position_size() == 0.0
-        && host.trade_count() == static_cast<int>(tape.trades.size());
-    for (std::size_t index = 0; index < tape.trades.size()
+    bool passed = host.last_error().empty() && host.live_position_size() == 0.0;
+    if (flat_after_batch_only) {
+        passed = passed && host.position_after_batch() == 0.0;
+        for (int index = 0; index < host.trade_count(); ++index) {
+            passed = passed && host.get_trade(index).exit_id != "__close__";
+        }
+    } else {
+        passed = passed && host.trade_count() == static_cast<int>(tape.trades.size());
+    }
+    for (std::size_t index = 0; !flat_after_batch_only && index < tape.trades.size()
          && index < static_cast<std::size_t>(host.trade_count()); ++index) {
         const auto& expected = tape.trades[index];
         const auto& actual = host.get_trade(static_cast<int>(index));
@@ -82,9 +93,15 @@ bool run_case(const SamebarPyramidingCaseTape& tape) {
             && actual.exit_time == expected.exit_time;
     }
     if (!passed) {
-        std::printf("FAIL %s: expected %zu trades, got %d, error=%s\n",
-                    tape.name.c_str(), tape.trades.size(), host.trade_count(),
-                    host.last_error().c_str());
+        if (flat_after_batch_only) {
+            std::printf("FAIL %s: expected flat after batch and no final close_all trade, "
+                        "got position %.8f, error=%s\n", tape.name.c_str(),
+                        host.position_after_batch(), host.last_error().c_str());
+        } else {
+            std::printf("FAIL %s: expected %zu trades, got %d, error=%s\n",
+                        tape.name.c_str(), tape.trades.size(), host.trade_count(),
+                        host.last_error().c_str());
+        }
         for (int index = 0; index < host.trade_count(); ++index) {
             const auto& trade = host.get_trade(index);
             std::printf("  %s %s %.8f -> %s %lld/%lld\n", trade.entry_id.c_str(),
@@ -104,11 +121,12 @@ int main(int argc, char** argv) {
     int known_open = 0;
     for (const auto& tape : samebar_pyramiding_tapes) {
         if (argc > 1 && tape.name.find(argv[1]) == std::string::npos) continue;
+        const bool flat_after_batch_only = tape.name == "entry-close-X04";
         if (tape.known_open) {
             ++known_open;
-            continue;
+            if (!flat_after_batch_only) continue;
         }
-        if (run_case(tape)) ++passed;
+        if (run_case(tape, flat_after_batch_only)) ++passed;
         else ++failed;
     }
     std::printf("test_samebar_pyramiding_entries_tapes: %d passed, %d failed\n", passed, failed);
