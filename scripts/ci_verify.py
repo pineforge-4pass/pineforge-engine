@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Shared local/CI verification driver. Stdlib only. Not a command generator.
 
-Profiles: release, debug, sanitizers, native, live-sanitizers, kernel.
-Default build dir build-ci-PROFILE.
+Profiles: release, debug, sanitizers, native, live-sanitizers, kernel. Default dir build-ci-PROFILE.
 Source guards, explicit configure, full rebuild, pinned e60/0e/v13/v14/v15/v16 ABI prepare/reuse,
 CTest, install+find_package+VERSION smoke, native help / required WebSocket.
 Fail fast on configure/build. After a successful build collect independent

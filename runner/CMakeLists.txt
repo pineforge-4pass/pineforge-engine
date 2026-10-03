@@ -8,7 +8,6 @@ if(PINEFORGE_ENABLE_SANITIZERS)
     add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
     add_link_options(-fsanitize=address,undefined)
 endif()
-
 add_library(pineforge_live_support STATIC store.cpp transport.cpp)
 target_compile_features(pineforge_live_support PUBLIC cxx_std_17)
 target_include_directories(pineforge_live_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -19,21 +18,18 @@ else()
 endif()
 target_link_libraries(pineforge_live_support PUBLIC ${_pf_sqlite_target} CURL::libcurl OpenSSL::Crypto Threads::Threads)
 target_compile_options(pineforge_live_support PRIVATE -Wall -Wextra -Wpedantic)
-
 add_library(pineforge_live_startup STATIC native_startup.cpp)
 target_compile_features(pineforge_live_startup PUBLIC cxx_std_17)
 target_include_directories(pineforge_live_startup PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
 target_link_libraries(pineforge_live_startup PUBLIC pineforge_live_support PineForge::pineforge)
 target_compile_options(pineforge_live_startup PRIVATE -Wall -Wextra -Wpedantic -ffp-contract=off)
-
 add_executable(pineforge-live main.cpp parser.cpp)
 target_include_directories(pineforge-live PRIVATE
     ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
 target_link_libraries(pineforge-live PRIVATE pineforge_live_startup ${CMAKE_DL_LIBS})
 target_compile_options(pineforge-live PRIVATE -Wall -Wextra -Wpedantic -ffp-contract=off)
 install(TARGETS pineforge-live RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-
 # examples/strategy.cpp derives from pineforge::source::PineStrategyHost, so
 # it is the one example that a kernel-only build cannot compile.
 if(PINEFORGE_BUILD_SOURCE_LAYER)
@@ -46,7 +42,6 @@ else()
         "Live runner example strategy.cpp skipped: it is Pine-bound and "
         "PINEFORGE_BUILD_SOURCE_LAYER is OFF")
 endif()
-
 add_library(native_market_example MODULE
     ${PROJECT_SOURCE_DIR}/examples/native/native_market_strategy.cpp)
 target_link_libraries(native_market_example PRIVATE PineForge::pineforge)
