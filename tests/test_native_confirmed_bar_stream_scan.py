@@ -1,7 +1,8 @@
 import unittest
+from types import SimpleNamespace
 
 from native_confirmed_bar_stream_scan import (
-    compare_saved, semantic_actions, semantic_state,
+    compare_saved, semantic_actions, semantic_state, stream_splits, SETTINGS,
 )
 
 
@@ -47,6 +48,18 @@ class ConfirmedScanTests(unittest.TestCase):
         batch = {"actions": [action(20)], "state": state()}
         stream = {"actions": [], "state": state()}
         self.assertEqual(compare_saved(batch, stream, 1, 20)["time_ms"], 20)
+
+    def test_session_chart_opens_align_without_utc_midnight(self):
+        bars = [SimpleNamespace(timestamp=1000 + index * 60000) for index in range(100)]
+        SETTINGS["splits"] = [0.8, 0.9]
+        opens = [bars[index].timestamp for index in (0, 40, 82, 93)]
+        self.assertEqual(stream_splits(bars, len(bars), "1D", opens), [82, 93])
+
+    def test_chart_handoff_must_exist(self):
+        bars = [SimpleNamespace(timestamp=1000 + index * 60000) for index in range(100)]
+        SETTINGS["splits"] = [0.8, 0.9]
+        with self.assertRaisesRegex(RuntimeError, "no chart boundary"):
+            stream_splits(bars, len(bars), "1D", [bars[40].timestamp])
 
 
 if __name__ == "__main__":

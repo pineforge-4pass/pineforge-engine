@@ -147,13 +147,21 @@ def resolve_case(case):
     return directory, params, feed, kwargs, bars, count
 
 
-def stream_splits(bars, count, script_tf):
+def stream_splits(bars, count, script_tf, chart_opens=None):
     period = _tf_seconds(script_tf) * 1000
     candidates = []
     for fraction in SETTINGS["splits"]:
         index = max(1, min(count - 1, int(count * fraction)))
-        while index < count - 1 and bars[index].timestamp % period:
-            index += 1
+        if chart_opens:
+            boundary = bisect_left(chart_opens, bars[index].timestamp)
+            if boundary == len(chart_opens):
+                raise RuntimeError("no chart boundary after the requested handoff")
+            index = bisect_left(bars, chart_opens[boundary], key=lambda bar: bar.timestamp)
+            if index >= count:
+                raise RuntimeError("chart handoff is beyond the supplied input feed")
+        else:
+            while index < count - 1 and bars[index].timestamp % period:
+                index += 1
         if index not in candidates:
             candidates.append(index)
     if len(candidates) != len(SETTINGS["splits"]):
@@ -323,7 +331,11 @@ def scan_case(case):
     result = {"probe": name, "result": "FAIL", "splits": []}
     try:
         directory, params, feed, kwargs, bars, count = resolve_case(case)
-        splits = stream_splits(bars, count, kwargs["script_tf"])
+        chart_opens = None
+        if case.get("chart_feed"):
+            chart_bars, chart_count = load_feed(Path(case["chart_feed"]).resolve())
+            chart_opens = [chart_bars[index].timestamp for index in range(chart_count)]
+        splits = stream_splits(bars, count, kwargs["script_tf"], chart_opens)
         library_path = destination / "strategy.so"
         if not SETTINGS["reuse"] or not library_path.is_file():
             compile_probe(directory, library_path)
