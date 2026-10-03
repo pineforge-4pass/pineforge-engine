@@ -156,7 +156,10 @@ try:
         first = received[0]
         invoke(options)
         assert len(received) == 4
-        retry = subprocess.run([runner, 'redeliver', '--ledger', str(ledger), '--target', 'default', '--failed-only'],
+        with sqlite3.connect(ledger) as db:
+            deployment = db.execute('SELECT identity FROM metadata WHERE singleton=1').fetchone()[0]
+        retry = subprocess.run([runner, 'redeliver', '--ledger', str(ledger), '--deployment', deployment,
+                                '--target', 'default', '--failed-only'],
                                capture_output=True, text=True, env=dict(os.environ, PINEFORGE_TEST_HMAC=secret), timeout=25)
         assert retry.returncode == 0, retry.stderr
         assert received[4] == first
@@ -185,7 +188,10 @@ try:
         first = received[0]
         invoke(options)
         assert len(received) == 4 and len({e['event_id'] for e in received}) == 4
-        retry = subprocess.run([runner, 'redeliver', '--ledger', str(ledger), '--target', 'default', '--failed-only'],
+        with sqlite3.connect(ledger) as db:
+            deployment = db.execute('SELECT identity FROM metadata WHERE singleton=1').fetchone()[0]
+        retry = subprocess.run([runner, 'redeliver', '--ledger', str(ledger), '--deployment', deployment,
+                                '--target', 'default', '--failed-only'],
                                capture_output=True, text=True, env=dict(os.environ, PINEFORGE_TEST_HMAC=secret), timeout=25)
         assert retry.returncode == 0, retry.stderr
         assert received[4] == first

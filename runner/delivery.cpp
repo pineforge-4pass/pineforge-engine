@@ -125,6 +125,7 @@ void DeliveryWorker::run() {
         const bool waiting = std::any_of(pending.begin(), pending.end(),
             [](const auto& target) { return !target.second.empty(); });
         if (!drain_until_) for (auto position = retries.begin(); position != retries.end();) {
+            if (drain_until_ || cancelling_ || (stopped_ && stopped_())) break;
             if (position->due <= DeliveryClock::now() && in_flight[*position->event.target_id] < settings_.max_in_flight) {
                 start(position->event, position->retries);
                 position = retries.erase(position);

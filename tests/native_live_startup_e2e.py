@@ -266,6 +266,7 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
         assert example['prefix_skipped'] == len(failed_rows['inputs']), example
         assert len(received) == 2, received
         redelivery = invoke([runner, 'redeliver', '--ledger', str(example_ledger),
+                             '--deployment', identity_of(example_ledger),
                              '--target', 'default', '--failed-only'])
         assert redelivery['delivered'] == 2, redelivery
         committed_rows = ledger_rows(example_ledger)
