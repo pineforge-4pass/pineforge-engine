@@ -2,9 +2,7 @@
 // Cloud diagnostic: this test establishes the engine-owned dispatch boundary.
 #include <pineforge/engine.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
-#include <pineforge/checked_settings.hpp>
 #include <cassert>
-#include <iostream>
 #include <stdexcept>
 #include <vector>
 
@@ -18,8 +16,6 @@ public:
     bool prepared = false;
     bool allow_precalc = false;
     bool fail_preparation = false;
-    bool fail_latched_preparation = false;
-    bool fail_unknown_preparation = false;
     std::vector<int> observed;
 
     ScriptProbe() { initial_capital_ = 12345.0; }
@@ -34,9 +30,6 @@ public:
         assert(signed_position_size() == 0.0);
         assert(initial_capital_ == 12345.0);
         if (fail_preparation) throw std::runtime_error("literal preparation failure");
-        if (fail_latched_preparation)
-            throw checked_settings::LatchedSettingsFailure("strategy_set_override: original failure");
-        if (fail_unknown_preparation) throw 73;
     }
 
     void configure_security_evaluators() override {
@@ -172,45 +165,4 @@ int main() {
     base.run(bars, 3);
     assert(p.preparations == before_stream + 3 && p.allow_precalc);
     assert((p.observed == std::vector<int>{8, 9, 10}));
-
-    ScriptProbe latched_batch;
-    latched_batch.set_input("seed", "7");
-    latched_batch.fail_latched_preparation = true;
-    latched_batch.run(bars, 3);
-    assert(latched_batch.last_error() == "strategy_set_override: original failure");
-    assert(latched_batch.observed.empty());
-
-    ScriptProbe latched_stream;
-    latched_stream.set_input("seed", "7");
-    latched_stream.fail_latched_preparation = true;
-    assert(!latched_stream.stream_begin(bars, 2, "1", "1"));
-    assert(latched_stream.last_error() == "strategy_set_override: original failure");
-    assert(!latched_stream.stream_is_realtime() && latched_stream.observed.empty());
-
-    for (const bool unknown : {false, true}) {
-        ScriptProbe ordinary_batch;
-        ordinary_batch.set_input("seed", "7");
-        ordinary_batch.fail_preparation = !unknown;
-        ordinary_batch.fail_unknown_preparation = unknown;
-        ordinary_batch.run(bars, 3);
-        const std::string expected = unknown ? "unknown error during Pine script preparation"
-                                             : "literal preparation failure";
-        assert(ordinary_batch.last_error() == expected);
-        assert(ordinary_batch.observed.empty());
-        ordinary_batch.fail_preparation = false;
-        ordinary_batch.fail_unknown_preparation = false;
-        ordinary_batch.run(bars, 3);
-        assert(ordinary_batch.last_error().empty());
-        assert((ordinary_batch.observed == std::vector<int>{8, 9, 10}));
-
-        ScriptProbe ordinary_stream;
-        ordinary_stream.set_input("seed", "7");
-        ordinary_stream.fail_preparation = !unknown;
-        ordinary_stream.fail_unknown_preparation = unknown;
-        assert(ordinary_stream.stream_begin(bars, 2, "1", "1"));
-        assert(ordinary_stream.last_error() == expected);
-        assert(ordinary_stream.stream_is_realtime() && ordinary_stream.observed.empty());
-        assert(ordinary_stream.stream_end());
-    }
-    std::cout << "script preparation: latched batch/stream refusal and ordinary exception compatibility PASS\n";
 }

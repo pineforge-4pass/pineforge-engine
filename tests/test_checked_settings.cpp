@@ -1,5 +1,6 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/checked_settings.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
@@ -10,6 +11,21 @@
 
 namespace {
 int allocation_failure = 0;
+
+class PreparationFailureProbe final : public pineforge::source::PineStrategyHost {
+public:
+    enum class Kind { Standard, Unknown, Latched };
+    explicit PreparationFailureProbe(Kind kind) : kind_(kind) {}
+    int callbacks = 0;
+    void prepare_script_run(const pineforge::Bar*, int, bool) override {
+        if (kind_ == Kind::Standard) throw std::runtime_error("literal preparation failure");
+        if (kind_ == Kind::Unknown) throw 73;
+        throw pineforge::checked_settings::LatchedSettingsFailure("strategy_set_override: original failure");
+    }
+    void on_source_bar(const pineforge::Bar&) override { ++callbacks; }
+private:
+    Kind kind_;
+};
 
 std::string receipt_field(const std::string& document, const std::string& name,
                           const std::string& field) {
@@ -205,6 +221,25 @@ int main() {
         bars[index] = {100, 102, 99, 101, 5,
                        static_cast<std::int64_t>(index) * 60000};
     }
+    const pineforge::Bar source_bars[]{{100, 102, 99, 101, 5, 0},
+                                     {100, 102, 99, 101, 5, 60000}};
+    for (const auto kind : {PreparationFailureProbe::Kind::Standard,
+                           PreparationFailureProbe::Kind::Unknown,
+                           PreparationFailureProbe::Kind::Latched}) {
+        const bool latched = kind == PreparationFailureProbe::Kind::Latched;
+        const std::string expected = latched ? "strategy_set_override: original failure"
+            : kind == PreparationFailureProbe::Kind::Standard ? "literal preparation failure"
+            : "unknown error during Pine script preparation";
+        PreparationFailureProbe batch_probe(kind);
+        batch_probe.run(source_bars, 2);
+        assert(batch_probe.last_error() == expected && batch_probe.callbacks == 0);
+        PreparationFailureProbe stream_probe(kind);
+        assert(stream_probe.stream_begin(source_bars, 2, "1", "1") == !latched);
+        assert(stream_probe.last_error() == expected && stream_probe.callbacks == 0);
+        assert(stream_probe.stream_is_realtime() == !latched);
+        if (!latched) assert(stream_probe.stream_end());
+    }
+    std::cout << "source preparation: latched batch/stream refusal and ordinary exception compatibility PASS\n";
     pf_strategy_t poisoned = strategy_create(nullptr);
     strategy_set_override(poisoned, "pyramiding", "abc");
     const auto setter_failure = std::string(strategy_get_last_error(poisoned));
