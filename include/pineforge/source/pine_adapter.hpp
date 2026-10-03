@@ -1537,6 +1537,17 @@ public:
     // Reorders trade_exit_phase_[start..) to follow a same-bar exit-group sort:
     // slot start + i takes the phase of the trade previously at indices[i].
     void permute_exit_phases(std::size_t start, const std::vector<std::size_t>& indices);
+    // The place of each of `ids` among the children one global strategy.exit
+    // fill closes, in TradingView's entry-id table (exit_rank_keys_); nullopt
+    // where the pinned table does not reach (PineStrategyHost::
+    // order_global_exit_children).
+    std::optional<std::vector<std::uint32_t>> global_exit_child_ranks(
+        const std::vector<SourceId>& ids) const;
+    // Whether a live leg of any exit other than `exit_id` (a strategy.exit
+    // that names no entry, of which `filled` is the leg that filled) would
+    // trigger at `price` too, closing a position of the given side.
+    bool other_exit_reaches(double price, bool closing_long, const SourceId& exit_id,
+                            const native_order::RequestHandle& filled) const;
     void hash_state(BrokerStateHashSink&) const;
     // The v4 folds of one dropped-close receipt and one exit phase, onto a
     // running digest (pine_state_hash.cpp).
@@ -2289,6 +2300,17 @@ private:
         std::numeric_limits<std::int64_t>::min();
     PendingIntentView pending_view_{};
     std::vector<std::uint8_t> trade_exit_phase_;
+    // TradingView's entry-id table (global_exit_child_ranks): every entry id
+    // in the order of its first fill, never removed, with a running digest,
+    // and the most keys it ever held counting one transient key per live
+    // strategy.close / close_all order -- and, for the alternative the tapes
+    // leave open, per live strategy.order market order too.
+    std::vector<SourceId> exit_rank_keys_;
+    std::uint64_t exit_rank_keys_digest_ = 1469598103934665603ULL;
+    std::uint32_t exit_rank_peak_ = 0;
+    std::uint32_t exit_rank_alt_peak_ = 0;
+    void note_exit_rank_key(const SourceId&);
+    void note_exit_rank_transients();
     // R5 lane V19-E: the exit phases of the trades before exit_phase_final_
     // are final (a same-bar exit sort reorders only its own bar's rows) and
     // folded once into exit_phase_digest_; a write below the mark refolds.

@@ -1,5 +1,6 @@
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/checked_settings.hpp>
+#include <pineforge/source/pine_policy_support.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
 
@@ -612,6 +613,15 @@ void source::PineStrategyHost::on_native_applied(
             position_entry_count_ = static_cast<int>(pyramid_entries_.size());
         }
     }
+    // Read before the adapter retires the legs this fill leaves without a lot.
+    bool other_exit_here = false;
+    if (event.closed_trade_count >= 2 && event.first_trade_index < trades_.size()) {
+        const auto own = adapter_.placement_.find(event.handle().incarnation);
+        other_exit_here = own == adapter_.placement_.end()
+            || adapter_.other_exit_reaches(trades_[event.first_trade_index].exit_price,
+                                           trades_[event.first_trade_index].is_long,
+                                           own->second.source_id, event.handle());
+    }
     adapter_.on_applied(event, context);
     precommit_held_units_ = std::numeric_limits<double>::quiet_NaN();
     if (adapter_.take_intraday_loss_relabel(event.ordinal)) {
@@ -642,6 +652,7 @@ void source::PineStrategyHost::on_native_applied(
         }
     }
     project_short_seed_report_rows(event);
+    if (!other_exit_here) order_global_exit_children(event);
     scheduler_.applied(event);
     // R6: with calc_on_order_fills the kernel drives this event's
     // recalculation next, in the same drain iteration and at the same cursor
@@ -1807,6 +1818,160 @@ void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_ba
         if (const auto moved = sort_same_bar_exit_trades(trades_, adapter_))
             native_closed_rows_amended(*moved);
     }
+}
+
+// TradingView keeps one child of a strategy.exit that names no entry for every
+// open entry. When one path point triggers several, it fills them one at a
+// time: the children of the entry id that comes first in its entry-id table
+// first (PineExecutionAdapter::global_exit_child_ranks), and an older entry's
+// child before a newer one's of the same id. Each child is a transaction of
+// its entry's quantity, settled against its own entry under
+// close_entries_rule = "ANY" and against the oldest lots first otherwise. Each
+// settled slice is a row of its own, and its fee is its share of its lot's
+// entry fee plus its share of its transaction's exit fee, each on
+// TradingView's ten-significant-digit money (the N5 pin: 127 `lab tv` tapes,
+// tests/fixtures/global_exit_children).
+// The kernel fills such a leg once for the whole position, oldest lots first,
+// one row per lot. Its rows are still the last ones and not final until this
+// notification returns, so they are re-cut here into the children's rows.
+// Every shape the pin does not reach keeps the kernel's rows:
+//   - a fill that leaves part of the position open;
+//   - a trailing leg;
+//   - an exit filled at the same point before it, or a leg of any other
+//     exit live at the fill that its price also reaches (the order of a
+//     named child, or another exit's, against these; on_native_applied reads
+//     it before the adapter retires that leg);
+//   - a table the pin does not size (global_exit_child_ranks);
+//   - calc_on_order_fills, process_orders_on_close or an intrabar feed;
+//   - a non-unit account rate, a cash-per-order fee or a negative fee;
+//   - a lot quantity off TradingView's ten significant digits.
+void source::PineStrategyHost::order_global_exit_children(
+        const native_order::ExecutionAppliedEvent& event) {
+    const std::size_t first = event.first_trade_index;
+    const std::size_t count = event.closed_trade_count;
+    if (count < 2 || event.opened_units != 0.0 || first + count != trades_.size()
+        || !pyramid_entries_.empty()) {
+        return;
+    }
+    const auto& run = adapter_.config_;
+    if (run.calc_on_order_fills || run.process_orders_on_close || bar_magnifier_enabled_
+        || active_account_currency_fx() != 1.0 || commission_value_ < 0.0
+        || (commission_value_ != 0.0 && commission_type_ == CommissionType::CASH_PER_ORDER)) {
+        return;
+    }
+    const auto placement = adapter_.placement_.find(event.handle().incarnation);
+    if (placement == adapter_.placement_.end()) return;
+    const auto& cause = placement->second;
+    if ((cause.family != PineOrderFamily::ExitLimit && cause.family != PineOrderFamily::ExitStop)
+        || !cause.from_entry.empty()) {
+        return;
+    }
+    const Trade& head = trades_[first];
+    std::vector<std::string> ids;
+    for (std::size_t index = first; index < first + count; ++index) {
+        const Trade& row = trades_[index];
+        if (row.exit_time != head.exit_time || row.exit_price != head.exit_price
+            || row.exit_id != head.exit_id || row.is_long != head.is_long
+            || !(row.qty > 0.0) || row.open_at_end) {
+            return;
+        }
+        for (std::size_t earlier = first; earlier < index; ++earlier)
+            if (trades_[earlier].entry_incarnation == row.entry_incarnation) return;
+        if (std::find(ids.begin(), ids.end(), row.entry_id) == ids.end())
+            ids.push_back(row.entry_id);
+    }
+    if (ids.size() < 2) return;
+    if (first > 0 && trades_[first - 1].exit_time == head.exit_time
+        && trades_[first - 1].exit_price == head.exit_price) {
+        return;
+    }
+    const auto ranks = adapter_.global_exit_child_ranks(ids);
+    if (!ranks) return;
+    const auto rank_of = [&](std::size_t lot) {
+        const auto id = std::find(ids.begin(), ids.end(), trades_[first + lot].entry_id);
+        return (*ranks)[static_cast<std::size_t>(id - ids.begin())];
+    };
+    std::vector<std::size_t> children(count);
+    std::iota(children.begin(), children.end(), std::size_t{0});
+    std::stable_sort(children.begin(), children.end(),
+        [&](std::size_t a, std::size_t b) { return rank_of(a) < rank_of(b); });
+    // Children in lot order settle exactly as the kernel's one fill did.
+    if (std::is_sorted(children.begin(), children.end())) return;
+    std::vector<Trade> rows;
+    std::vector<std::size_t> sources;
+    // The rule the adapter runs under, not the host's live copy a body writes.
+    if (run.close_entries_rule_any) {
+        for (const auto lot : children) {
+            rows.push_back(trades_[first + lot]);
+            sources.push_back(first + lot);
+        }
+    } else {
+        const bool fees = commission_value_ != 0.0;
+        struct Slice { std::size_t lot; double qty; std::size_t child; };
+        std::vector<Slice> slices;
+        std::vector<double> left(count);
+        for (std::size_t lot = 0; lot < count; ++lot) {
+            left[lot] = trades_[first + lot].qty;
+            if (tv_money_round(left[lot]) != left[lot]) return;
+        }
+        std::size_t lot = 0;
+        for (std::size_t child = 0; child < children.size(); ++child) {
+            double wanted = trades_[first + children[child]].qty;
+            while (wanted > internal::kQtyEpsilon && lot < count) {
+                const double taken = std::min(left[lot], wanted);
+                slices.push_back({lot, taken, child});
+                left[lot] = tv_money_round(left[lot] - taken);
+                wanted = tv_money_round(wanted - taken);
+                if (left[lot] <= internal::kQtyEpsilon) ++lot;
+            }
+            if (wanted > internal::kQtyEpsilon) return;
+        }
+        if (lot != count) return;
+        for (const auto& slice : slices) {
+            const Trade& whole = trades_[first + slice.lot];
+            const double transaction = trades_[first + children[slice.child]].qty;
+            const double share = slice.qty / whole.qty;
+            double commission = 0.0;
+            if (fees) {
+                const double exit_fee = calc_commission_at(whole.exit_price, whole.qty, 1.0);
+                const double entry_part =
+                    tv_money_round(std::max(0.0, whole.commission - exit_fee) * share);
+                const double transaction_fee =
+                    tv_money_round(calc_commission_at(whole.exit_price, transaction, 1.0));
+                const double exit_part = tv_money_round(transaction_fee * slice.qty / transaction);
+                commission = tv_money_round(entry_part + exit_part);
+            }
+            Trade row = whole;
+            row.qty = slice.qty;
+            row.commission = commission;
+            row.pnl = tv_money_round((whole.pnl + whole.commission) * share) - commission;
+            const double cost = whole.entry_price * slice.qty * syminfo_.pointvalue;
+            row.pnl_pct = cost > 0.0 ? row.pnl / cost * 100.0 : 0.0;
+            // The lot's excursions taken by share: an approximation where the
+            // slice's lot is not its child's own (excursions are not graded).
+            row.max_runup = whole.max_runup * share;
+            row.max_drawdown = whole.max_drawdown * share;
+            rows.push_back(std::move(row));
+            sources.push_back(first + slice.lot);
+        }
+    }
+    // strategy.wintrades / losstrades / eventrades and the gross sums count
+    // rows: count the children's instead of the kernel's. net_profit_sum_ (the
+    // equity) stays the kernel's whole-lot sum: the slices' PnLs can differ
+    // from it by at most half a unit in the tenth significant digit of each
+    // slice's gross and fee, which no tape has shown in strategy.netprofit or
+    // in an equity-sized quantity.
+    const auto tally = [this](double pnl, int sign) {
+        if (pnl > 0.0) { gross_profit_sum_ += sign * pnl; win_trades_count_ += sign; }
+        else if (pnl < 0.0) { gross_loss_sum_ += sign * pnl; loss_trades_count_ += sign; }
+        else { eventrades_count_ += sign; }
+    };
+    for (std::size_t index = first; index < first + count; ++index) tally(trades_[index].pnl, -1);
+    for (const auto& row : rows) tally(row.pnl, 1);
+    trades_.resize(first);
+    for (auto& row : rows) trades_.push_back(std::move(row));
+    adapter_.permute_exit_phases(first, sources);
+    native_closed_rows_amended(first);
 }
 
 // ab9714be pine_fills.cpp:664-670: same-bar bracket exit trades sort by script command sequence created_seq

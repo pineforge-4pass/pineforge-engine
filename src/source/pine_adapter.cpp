@@ -149,6 +149,45 @@ std::uint64_t fnv_string(std::string_view value) noexcept {
     return fnv_append(1469598103934665603ULL, value.data(), value.size());
 }
 
+// java.lang.String.hashCode of a UTF-8 id: h = 31 * h + u over its UTF-16 code
+// units, wrapping at 32 bits. False for a malformed UTF-8 sequence: a bad lead
+// or continuation byte, an overlong form, an encoded surrogate or a code point
+// past U+10FFFF (none of which a Pine string can hold).
+bool java_string_hash(std::string_view text, std::uint32_t& hash) noexcept {
+    std::uint32_t h = 0;
+    for (std::size_t i = 0; i < text.size();) {
+        const auto lead = static_cast<unsigned char>(text[i]);
+        std::uint32_t point = 0;
+        std::size_t width = 0;
+        if (lead < 0x80) { point = lead; width = 1; }
+        else if ((lead & 0xE0) == 0xC0) { point = lead & 0x1FU; width = 2; }
+        else if ((lead & 0xF0) == 0xE0) { point = lead & 0x0FU; width = 3; }
+        else if ((lead & 0xF8) == 0xF0) { point = lead & 0x07U; width = 4; }
+        else return false;
+        if (i + width > text.size()) return false;
+        for (std::size_t k = 1; k < width; ++k) {
+            const auto next = static_cast<unsigned char>(text[i + k]);
+            if ((next & 0xC0) != 0x80) return false;
+            point = (point << 6) | (next & 0x3FU);
+        }
+        if ((width == 2 && point < 0x80U) || (width == 3 && point < 0x800U)
+            || (width == 4 && (point < 0x10000U || point > 0x10FFFFU))
+            || (point >= 0xD800U && point <= 0xDFFFU)) {
+            return false;
+        }
+        i += width;
+        if (point >= 0x10000U) {
+            point -= 0x10000U;
+            h = 31U * h + (0xD800U + (point >> 10));
+            h = 31U * h + (0xDC00U + (point & 0x3FFU));
+        } else {
+            h = 31U * h + point;
+        }
+    }
+    hash = h;
+    return true;
+}
+
 void copy_pending_string(std::string_view value, char* out, std::uint8_t* truncated,
                          std::uint64_t* hash) noexcept {
     *hash = fnv_string(value);
@@ -2142,6 +2181,10 @@ void PineExecutionAdapter::reset_for_run() {
     trade_exit_phase_.clear();
     exit_phase_final_ = 0;
     exit_phase_digest_ = 1469598103934665603ULL;
+    exit_rank_keys_.clear();
+    exit_rank_keys_digest_ = 1469598103934665603ULL;
+    exit_rank_peak_ = 0;
+    exit_rank_alt_peak_ = 0;
     admission_events_folded_ = 0;
     admission_events_last_ = 0;
     admission_events_digest_ = 1469598103934665603ULL;
@@ -2859,6 +2902,13 @@ void PineExecutionAdapter::remember(const native_order::RequestHandle& handle,
     if (!inserted.second) placement_.replace(handle.incarnation, std::move(snapshot));
     if (std::find(live_handles_.begin(), live_handles_.end(), handle) == live_handles_.end())
         live_handles_.push_back(handle);
+    // A close order is a transient key of the entry-id table while it waits
+    // (global_exit_child_ranks).
+    const auto family = placement_.at(handle.incarnation).family;
+    if (family == PineOrderFamily::Close || family == PineOrderFamily::CloseAll
+        || family == PineOrderFamily::Order) {
+        note_exit_rank_transients();
+    }
     update_l4c_priority();
     refresh_pending_view();
 }
@@ -5613,6 +5663,123 @@ void PineExecutionAdapter::permute_exit_phases(std::size_t start,
         if (target >= trade_exit_phase_.size() && permuted[i] == none) continue;
         set_exit_phase(target, permuted[i]);
     }
+}
+
+// TradingView orders the children of a strategy.exit that names no entry,
+// when one path point triggers several, by the entry ids' place in a table
+// that iterates as a java.util.HashMap<String, ?> keyed by String.hashCode
+// spread as h ^ (h >>> 16) over power-of-two buckets: buckets ascending, the
+// newest key first inside one. Its keys are every entry id from its first
+// fill on, never removed, and one transient key per strategy.close /
+// close_all order from the call to its fill (an entry order still waiting is
+// no key); it starts at 16 buckets and doubles once the keys exceed 13/16 of
+// them, never shrinking (127 TradingView tapes of synthetic scripts,
+// tests/fixtures/global_exit_children). The pin reaches 16 and 32 buckets
+// and, in a grown table, no two of the ids in one bucket; whether a
+// strategy.order market order is a transient key too it leaves open, so a
+// table the two readings size differently is out of its reach.
+void PineExecutionAdapter::note_exit_rank_key(const SourceId& id) {
+    // Past 26 keys the table needs 64 buckets, which the pin does not reach;
+    // the peak keeps it there, so the ids beyond need no record.
+    if (exit_rank_keys_.size() > 26
+        || std::find(exit_rank_keys_.begin(), exit_rank_keys_.end(), id)
+            != exit_rank_keys_.end()) {
+        return;
+    }
+    exit_rank_keys_.push_back(id);
+    const std::uint64_t size = id.size();
+    exit_rank_keys_digest_ = fnv_append(exit_rank_keys_digest_, &size, sizeof(size));
+    exit_rank_keys_digest_ = fnv_append(exit_rank_keys_digest_, id.data(), id.size());
+    note_exit_rank_transients();
+}
+
+void PineExecutionAdapter::note_exit_rank_transients() {
+    std::uint32_t closes = 0;
+    std::uint32_t markets = 0;
+    for (const auto& handle : live_handles_) {
+        const auto row = placement_.find(handle.incarnation);
+        if (row == placement_.end()) continue;
+        const auto family = row->second.family;
+        if (family == PineOrderFamily::Close || family == PineOrderFamily::CloseAll) {
+            ++closes;
+        } else if (family == PineOrderFamily::Order
+                   && !finite_positive(row->second.exit_levels.limit)
+                   && !finite_positive(row->second.exit_levels.stop)) {
+            ++markets;
+        }
+    }
+    const auto keys = static_cast<std::uint32_t>(exit_rank_keys_.size());
+    exit_rank_peak_ = std::max(exit_rank_peak_, keys + closes);
+    exit_rank_alt_peak_ = std::max(exit_rank_alt_peak_, keys + closes + markets);
+}
+
+std::optional<std::vector<std::uint32_t>> PineExecutionAdapter::global_exit_child_ranks(
+        const std::vector<SourceId>& ids) const {
+    const auto buckets_for = [](std::uint32_t peak) {
+        std::uint32_t capacity = 16;
+        while (static_cast<std::uint64_t>(peak) * 16U > static_cast<std::uint64_t>(capacity) * 13U)
+            capacity *= 2;
+        return capacity;
+    };
+    const std::uint32_t capacity = buckets_for(exit_rank_peak_);
+    if (capacity > 32 || buckets_for(exit_rank_alt_peak_) != capacity) return std::nullopt;
+    std::vector<std::uint32_t> bucket(exit_rank_keys_.size());
+    std::vector<std::uint32_t> load(capacity, 0);
+    for (std::size_t age = 0; age < exit_rank_keys_.size(); ++age) {
+        std::uint32_t hash = 0;
+        if (!java_string_hash(exit_rank_keys_[age], hash)) return std::nullopt;
+        bucket[age] = (hash ^ (hash >> 16)) & (capacity - 1);
+        // A bin of eight would make java.util.HashMap treeify or resize. The
+        // count is of entry ids only: a transient close key landing in a bin
+        // of seven would do the same, which no tape reaches.
+        if (++load[bucket[age]] >= 8) return std::nullopt;
+    }
+    std::vector<std::size_t> ages;
+    ages.reserve(ids.size());
+    for (const auto& id : ids) {
+        const auto found = std::find(exit_rank_keys_.begin(), exit_rank_keys_.end(), id);
+        if (found == exit_rank_keys_.end()) return std::nullopt;
+        const auto age = static_cast<std::size_t>(found - exit_rank_keys_.begin());
+        if (capacity > 16) {
+            for (const auto other : ages)
+                if (bucket[other] == bucket[age]) return std::nullopt;
+        }
+        ages.push_back(age);
+    }
+    std::vector<std::uint32_t> ranks;
+    ranks.reserve(ids.size());
+    for (const auto age : ages) {
+        std::uint32_t rank = 0;
+        for (std::size_t other = 0; other < bucket.size(); ++other) {
+            if (bucket[other] < bucket[age] || (bucket[other] == bucket[age] && other > age))
+                ++rank;
+        }
+        ranks.push_back(rank);
+    }
+    return ranks;
+}
+
+bool PineExecutionAdapter::other_exit_reaches(double price, bool closing_long,
+                                              const SourceId& exit_id,
+                                              const native_order::RequestHandle& filled) const {
+    for (const auto& handle : live_handles_) {
+        if (handle == filled) continue;
+        const auto row = placement_.find(handle.incarnation);
+        if (row == placement_.end()) continue;
+        const auto& leg = row->second;
+        // The filled exit's own other leg is one of the same children.
+        if (leg.from_entry.empty() && leg.source_id == exit_id) continue;
+        if (leg.family == PineOrderFamily::ExitTrail) return true;
+        if (leg.family == PineOrderFamily::ExitLimit && finite_positive(leg.exit_levels.limit)
+            && (closing_long ? price >= leg.exit_levels.limit : price <= leg.exit_levels.limit)) {
+            return true;
+        }
+        if (leg.family == PineOrderFamily::ExitStop && finite_positive(leg.exit_levels.stop)
+            && (closing_long ? price <= leg.exit_levels.stop : price >= leg.exit_levels.stop)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void PineExecutionAdapter::set_exit_phase(std::size_t trade_index, std::uint8_t phase) {
@@ -13436,6 +13603,53 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             * config_.slippage * staged_.syminfo.mintick;
         return directional_tick(slipped, staged_.syminfo.mintick, facts.is_buy);
     };
+    // A named stop whose entry filled at this very point is matched from that
+    // fill on (the kernel's cause floor), and the kernel reaches one already
+    // through there at the fill's own print. TradingView fills it at once at
+    // that print with the stop's slippage, never at a level the bar crossed
+    // before the entry filled (the N5 pin: tests/fixtures/global_exit_children
+    // eth-member and eth-fresh, a short limit entry whose break-even stop the
+    // bar rose through before the entry filled). Scoped to the pinned shape:
+    // no calc_on_order_fills, no intrabar feed.
+    const auto newborn_stop_through = [&]() -> std::optional<double> {
+        if (source.family != PineOrderFamily::ExitStop || source.from_entry.empty()
+            || config_.calc_on_order_fills
+            || facts.price_kind != native_order::NativeCandidatePriceKind::PointPrice
+            || facts.cursor.point.provenance != NativePriceProvenance::Confirmed
+            || facts.cursor.point.path_phase == NativePathPhase::Open
+            || facts.cursor.point.path_phase == NativePathPhase::None
+            || !host_state.spec || !host_state.spec->intrabar.is_none()) {
+            return std::nullopt;
+        }
+        const auto* pine = pine_view_of(&require_host());
+        if (!pine) return std::nullopt;
+        const PyramidEntry* newest = nullptr;
+        for (const auto& lot : pine->pyramid_entries_) {
+            if (lot.entry_id == source.from_entry
+                && (!newest || lot.entry_incarnation > newest->entry_incarnation)) {
+                newest = &lot;
+            }
+        }
+        if (!newest || newest->entry_bar_index != facts.cursor.point.interval_index)
+            return std::nullopt;
+        // Already through at that point: a buy stop at or below it, a sell
+        // stop at or above it.
+        const double stop = source.exit_levels.stop;
+        if (!finite_positive(stop) || (facts.is_buy ? stop > facts.raw_price : stop < facts.raw_price))
+            return std::nullopt;
+        // The entry is a limit order that filled here: the point is its
+        // trigger threshold, half a tick from the level it booked, and that
+        // booked fill is the print the stop fills at.
+        const auto opening = placement_.find(newest->entry_incarnation);
+        if (opening == placement_.end() || opening->second.family != PineOrderFamily::Entry
+            || !finite_positive(opening->second.exit_levels.limit)
+            || finite_positive(opening->second.exit_levels.stop)
+            || std::abs(newest->price - facts.raw_price)
+                > 0.5 * staged_.syminfo.mintick + 1e-9 * std::abs(facts.raw_price)) {
+            return std::nullopt;
+        }
+        return newest->price;
+    };
     const auto source_stop_resolved = [&]() {
         // ab9714be pine_fills.cpp:8002-8018: a realtime print gaps to the
         // observed price; an opening print already through the stop books
@@ -13443,6 +13657,11 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         // not a same-pass close's fill price).
         if (facts.cursor.point.provenance == NativePriceProvenance::ObservedPrint)
             return source_bar_fill();
+        if (const auto print = newborn_stop_through()) {
+            const double slipped = *print + (facts.is_buy ? 1.0 : -1.0)
+                * config_.slippage * staged_.syminfo.mintick;
+            return directional_tick(slipped, staged_.syminfo.mintick, facts.is_buy);
+        }
         const double source_level = source.family == PineOrderFamily::ExitTrail
             ? source.exit_levels.trail_price : source.exit_levels.stop;
         const double level = finite_positive(source_level) ? source_level
@@ -19774,6 +19993,11 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         adopted.sizing = sizing_snapshot();
         placement_.try_emplace(event.handle().incarnation, adopted);
         placement_snapshot = adopted;
+    }
+    if (placement_snapshot && event.opened_units != 0.0
+        && (placement_snapshot->family == PineOrderFamily::Entry
+            || placement_snapshot->family == PineOrderFamily::Order)) {
+        note_exit_rank_key(placement_snapshot->source_id);
     }
     if (placement_snapshot && event.closed_trade_count > 0) {
         for (std::size_t i = 0; i < event.closed_trade_count; ++i) {

@@ -431,6 +431,12 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.u(trade_exit_phase_.size()); f.u(exit_phase_final_); f.u(exit_phase_digest_);
     for (std::size_t index = exit_phase_final_; index < trade_exit_phase_.size(); ++index)
         f.u(trade_exit_phase_[index]);
+    // The entry-id table orders children once it holds two ids, and its size
+    // matters once its peak passes 13 keys; below both it decides nothing.
+    if (exit_rank_keys_.size() >= 2 || exit_rank_peak_ > 13 || exit_rank_alt_peak_ > 13) {
+        f.u(exit_rank_keys_.size()); f.u(exit_rank_keys_digest_);
+        f.u(exit_rank_peak_); f.u(exit_rank_alt_peak_);
+    }
     std::vector<std::uint64_t> current_debit_ordinals;
     current_debit_ordinals.reserve(current_debited_applied_ordinals_.size());
     for (const auto ordinal : current_debited_applied_ordinals_) current_debit_ordinals.push_back(ordinal);

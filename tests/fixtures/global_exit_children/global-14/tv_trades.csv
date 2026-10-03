@@ -1,0 +1,5 @@
+﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)
+1,Exit long,2025-08-01 20:45,Wick,1.15439,3,3.4644,-0.00123,-0.04,0,0.00624,0.18,-0.04692,-1.35,-0.00123,0.00,218
+1,Entry long,2025-07-30 14:15,Long,1.1548,3,3.4644,-0.00123,-0.04,0,0.00624,0.18,-0.04692,-1.35,-0.00123,0.00,218
+2,Exit long,2025-08-01 20:45,Wick,1.15439,7,8.00142,0.07931,0.99,0,0.07931,0.99,-0.0273,-0.34,0.07808,0.00,104
+2,Entry long,2025-07-31 18:45,Long,1.14306,7,8.00142,0.07931,0.99,0,0.07931,0.99,-0.0273,-0.34,0.07808,0.00,104

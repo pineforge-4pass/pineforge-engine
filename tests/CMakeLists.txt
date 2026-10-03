@@ -986,6 +986,12 @@ list(APPEND TEST_SOURCES test_coof_timeframe_change_tapes)
 # that entry, so a FIFO close of its lot by another id's exit leaves its own
 # reservation (tests/fixtures/exit_fifo_cross), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_exit_fifo_cross_tapes)
+# ... and the children of a global strategy.exit one path point triggers fill
+# in the order of TradingView's entry-id table, each a transaction settled
+# FIFO or against its own entry, and a named stop already through at its
+# limit entry's fill fills at that fill (tests/fixtures/global_exit_children),
+# on TradingView's tapes.
+list(APPEND TEST_SOURCES test_global_exit_children_tapes)
 # ... and under calc_on_order_fills an exit limit the recalculation of an
 # entry's open fill places at or through the open print fills there at once
 # (tests/fixtures/coof_open_limit), on TradingView's tape.
@@ -2745,6 +2751,10 @@ endif()
 if(TARGET test_exit_fifo_cross_tapes)
     target_compile_definitions(test_exit_fifo_cross_tapes PRIVATE
         PINEFORGE_TAIL_D_FIFO_CROSS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_fifo_cross")
+endif()
+if(TARGET test_global_exit_children_tapes)
+    target_compile_definitions(test_global_exit_children_tapes PRIVATE
+        PINEFORGE_GLOBAL_EXIT_CHILDREN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/global_exit_children")
 endif()
 foreach(tape_target IN ITEMS test_cross_mechanism_tapes test_carried_trail_open_tapes test_pooc_pending_stop_tapes
                             test_coof_marketable_stop_tapes test_coof_close_slippage_tapes)

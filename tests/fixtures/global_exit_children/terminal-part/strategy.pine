@@ -1,0 +1,8 @@
+//@version=6
+strategy("n5b-15-terminal-part",initial_capital=500000,pyramiding=20,margin_long=0,margin_short=0,close_entries_rule="FIFO",commission_type=strategy.commission.percent,commission_value=0.05)
+if time == timestamp("UTC",2025,7,30,6,0,0)
+    strategy.entry("Long",strategy.long,qty=2164.89)
+if time == timestamp("UTC",2025,7,31,10,30,0)
+    strategy.entry("Long_Add",strategy.long,qty=4374.3)
+if time == timestamp("UTC",2025,8,1,12,30,0)
+    strategy.order("Part",strategy.short,qty=3000)

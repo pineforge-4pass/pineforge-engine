@@ -131,31 +131,47 @@
 //   round_robin/A1: hash=1927432040325474646 -> hash=8731081580846022313
 //   round_robin/B: hash=13106388348010577033 -> hash=7355849797745033112
 //   round_robin/A2: hash=1927432040325474646 -> hash=8731081580846022313
+// expectation corrected (N5): the broker-state hash of every run of host class B
+// moved once, because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (the N5 pin's global exit children, pineforge-source-adapter/v4);
+// trades, trade digests, net profits and errors did not move; harvested with
+// PF_HOST_VIEW_MEMO_DUMP=1 against main 700c5d24 (every old pin reproduced) and this tree:
+//   batch/B: hash=3001060687180726304 -> hash=15614000236465510904
+//   stream/B: hash=7355849797745033112 -> hash=18079279218813467184
+//   interleaved/B: hash=7355849797745033112 -> hash=18079279218813467184
+//   round_robin/B: hash=7355849797745033112 -> hash=18079279218813467184
+//   rebuilt/1: hash=3001060687180726304 -> hash=15614000236465510904
+//   rebuilt/3: hash=3001060687180726304 -> hash=15614000236465510904
+// Re-harvested once more with PF_HOST_VIEW_MEMO_DUMP=1 after the global exit children change was rebased
+// onto main 5089d44d (its confirmed-bar stream change re-pinned this table): these runs move from the merged
+// pins in their broker-state hash only; trades, trade digests, net profits and errors did not move:
+//   stream/B: hash=17910290071998838724 -> hash=4502510350709822124
+//   interleaved/B: hash=17910290071998838724 -> hash=4502510350709822124
+//   round_robin/B: hash=17910290071998838724 -> hash=4502510350709822124
 constexpr Pinned kPinned[] = {
     {"batch/A",
      "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=14113207875665531755 error=''"},
     {"batch/B",
-     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=3001060687180726304 error=''"},
+     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=15614000236465510904 error=''"},
     {"stream/A",
      "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=10392177668692518367 error=''"},
     {"stream/B",
-     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=17910290071998838724 error=''"},
+     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=4502510350709822124 error=''"},
     {"interleaved/A",
      "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=10392177668692518367 error=''"},
     {"interleaved/B",
-     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=17910290071998838724 error=''"},
+     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=4502510350709822124 error=''"},
     {"round_robin/A1",
      "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=10392177668692518367 error=''"},
     {"round_robin/B",
-     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=17910290071998838724 error=''"},
+     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=4502510350709822124 error=''"},
     {"round_robin/A2",
      "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=10392177668692518367 error=''"},
     {"rebuilt/0",
      "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=14113207875665531755 error=''"},
     {"rebuilt/1",
-     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=3001060687180726304 error=''"},
+     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=15614000236465510904 error=''"},
     {"rebuilt/2",
      "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=14113207875665531755 error=''"},
     {"rebuilt/3",
-     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=3001060687180726304 error=''"},
+     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=15614000236465510904 error=''"},
 };

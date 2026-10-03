@@ -1,0 +1,107 @@
+{
+  "pin": "N5 (global/sibling exit reservation and entry-incarnation ownership)",
+  "tape": "n5b-11-named-xz",
+  "channel": "ws-report-v1",
+  "exporter": "lab tv --no-note",
+  "symbol": "OANDA:EURUSD",
+  "interval": "15",
+  "from": "2025-07-30",
+  "to": "2025-08-04",
+  "exports": 2,
+  "exportsByteIdentical": true,
+  "sourceSha256": "3f0c13c18cccd5acfe869f2649b8e70a3919821db339b30be5c4b33e70b356de",
+  "tvTradesCsvSha256": "97fb90962b0a44e0f5b9db778c3f04edcef31a30b77eac7988d54462c03fd83f",
+  "bars": "bars/eurusd-2025-07-30-2025-08-04.csv",
+  "barsSha256": "347cd39cd2f69945830b26dbbc8c6b6595d9879bbedcd07f2357d934c8ee1e29",
+  "status": "asserted",
+  "parameters": {
+    "symbol": "OANDA:EURUSD",
+    "from": "2025-07-30",
+    "to": "2025-08-04",
+    "tick": 1e-05,
+    "step": 0.01,
+    "family": "gid",
+    "costs": false,
+    "rule": "FIFO",
+    "pyramiding": 20,
+    "margin": 0,
+    "capital": 500000,
+    "blocks": [
+      {
+        "type": "at",
+        "time": "2025-07-30T06:00:00Z",
+        "ops": [
+          {
+            "op": "entry",
+            "id": "Z",
+            "side": 1,
+            "qty": 3
+          }
+        ]
+      },
+      {
+        "type": "while",
+        "cond": "long",
+        "ops": [
+          {
+            "op": "exit",
+            "exitId": "XA",
+            "from": "A",
+            "stop": 0.9,
+            "limit": 1.3
+          },
+          {
+            "op": "exit",
+            "exitId": "XZ",
+            "from": "Z",
+            "stop": 0.9,
+            "limit": 1.3
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-31T10:30:00Z",
+        "ops": [
+          {
+            "op": "entry",
+            "id": "A",
+            "side": 1,
+            "qty": 7
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-08-01T12:30:00Z",
+        "ops": [
+          {
+            "op": "exit",
+            "exitId": "XA",
+            "from": "A",
+            "stop": 0.9,
+            "limit": 1.15439
+          },
+          {
+            "op": "exit",
+            "exitId": "XZ",
+            "from": "Z",
+            "stop": 0.9,
+            "limit": 1.15439
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-08-01T16:00:00Z",
+        "ops": [
+          {
+            "op": "close_all"
+          }
+        ]
+      }
+    ],
+    "name": "n5b-11-named-xz",
+    "pineSha256": "3f0c13c18cccd5acfe869f2649b8e70a3919821db339b30be5c4b33e70b356de"
+  }
+}

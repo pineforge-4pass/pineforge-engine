@@ -972,6 +972,7 @@ private:
                                       bool advance_source_index = true);
     void scheduler_publish_suppressed_tail(const Bar&);
     void project_short_seed_report_rows(const native_order::ExecutionAppliedEvent&);
+    void order_global_exit_children(const native_order::ExecutionAppliedEvent&);
     bool scheduler_coof_enabled() const noexcept { return config_.calc_on_order_fills; }
     // The range-end row an applied execution may complete. It stays ordered
     // after the fill's calc_on_order_fills recalculation, which can advance

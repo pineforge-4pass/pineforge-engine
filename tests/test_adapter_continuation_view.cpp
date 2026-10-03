@@ -449,12 +449,16 @@ constexpr std::uint64_t k_magnifier[] = {
 //   13031512803108236715ull -> 12703961494282243636ull [H-THIN]
 //   6906214955679447270ull -> 4636245846172056503ull [H-THIN]
 //   6906214955679447270ull -> 4636245846172056503ull [H-THIN]
+// expectation corrected (N5, k_aggregated, 3 of 5 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (the N5 pin's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_P1_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
+//   12703961494282243636ull -> 12041604811111138262ull
+//   4636245846172056503ull -> 16843987575962729789ull
+//   4636245846172056503ull -> 16843987575962729789ull
 constexpr std::uint64_t k_aggregated[] = {
     16542564830293500828ull,
-    12703961494282243636ull,
-    4636245846172056503ull,
+    12041604811111138262ull,
+    16843987575962729789ull,
     10543459672655655434ull,
-    4636245846172056503ull,
+    16843987575962729789ull,
 };
 // expectation corrected (k_aggregated_magnifier, 5 of 5 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19):
 //   12594241837591534357ull -> 2376229218543853263ull
@@ -485,12 +489,16 @@ constexpr std::uint64_t k_aggregated[] = {
 //   7363580706773703120ull -> 6822321611223800121ull [H-THIN]
 //   5380311451522306220ull -> 1968062868302397607ull [H-THIN]
 //   5380311451522306220ull -> 1968062868302397607ull [H-THIN]
+// expectation corrected (N5, k_aggregated_magnifier, 3 of 5 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (the N5 pin's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_P1_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
+//   6822321611223800121ull -> 1121975842132629243ull
+//   1968062868302397607ull -> 980215841112202357ull
+//   1968062868302397607ull -> 980215841112202357ull
 constexpr std::uint64_t k_aggregated_magnifier[] = {
     14031106247497767919ull,
-    6822321611223800121ull,
-    1968062868302397607ull,
+    1121975842132629243ull,
+    980215841112202357ull,
     12265832737220737843ull,
-    1968062868302397607ull,
+    980215841112202357ull,
 };
 // expectation corrected (k_coof, 10 of 10 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19):
 //   10454171698854540065ull -> 8160477046829279565ull

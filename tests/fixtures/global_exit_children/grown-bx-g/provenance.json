@@ -1,0 +1,307 @@
+{
+  "pin": "N5 (global/sibling exit reservation and entry-incarnation ownership)",
+  "tape": "n5b-25-grown-bx-g",
+  "channel": "ws-report-v1",
+  "exporter": "lab tv --no-note",
+  "symbol": "OANDA:EURUSD",
+  "interval": "15",
+  "from": "2025-07-30",
+  "to": "2025-08-04",
+  "exports": 2,
+  "exportsByteIdentical": true,
+  "sourceSha256": "ecaf09da58a1532273becba29ca1e2c16bada1961416a5bacd5b45e4c857ba5f",
+  "tvTradesCsvSha256": "009645e03ad2d37b670c4a4880e394c4b17bb562e128c086821db5a032d23970",
+  "bars": "bars/eurusd-2025-07-30-2025-08-04.csv",
+  "barsSha256": "347cd39cd2f69945830b26dbbc8c6b6595d9879bbedcd07f2357d934c8ee1e29",
+  "status": "asserted",
+  "parameters": {
+    "symbol": "OANDA:EURUSD",
+    "from": "2025-07-30",
+    "to": "2025-08-04",
+    "tick": 1e-05,
+    "step": 0.01,
+    "family": "gid",
+    "costs": false,
+    "rule": "ANY",
+    "pyramiding": 20,
+    "margin": 0,
+    "capital": 500000,
+    "blocks": [
+      {
+        "type": "while",
+        "cond": "long",
+        "ops": [
+          {
+            "op": "exit",
+            "exitId": "Wick",
+            "from": null,
+            "stop": 0.9,
+            "limit": 1.3
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-30T06:00:00Z",
+        "ops": [
+          {
+            "op": "entry",
+            "id": "h01",
+            "side": 1,
+            "qty": 1
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-30T06:15:00Z",
+        "ops": [
+          {
+            "op": "close",
+            "id": "h01"
+          },
+          {
+            "op": "entry",
+            "id": "h02",
+            "side": 1,
+            "qty": 1
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-30T06:30:00Z",
+        "ops": [
+          {
+            "op": "close",
+            "id": "h02"
+          },
+          {
+            "op": "entry",
+            "id": "h03",
+            "side": 1,
+            "qty": 1
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-30T06:45:00Z",
+        "ops": [
+          {
+            "op": "close",
+            "id": "h03"
+          },
+          {
+            "op": "entry",
+            "id": "h04",
+            "side": 1,
+            "qty": 1
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-30T07:00:00Z",
+        "ops": [
+          {
+            "op": "close",
+            "id": "h04"
+          },
+          {
+            "op": "entry",
+            "id": "h05",
+            "side": 1,
+            "qty": 1
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-30T07:15:00Z",
+        "ops": [
+          {
+            "op": "close",
+            "id": "h05"
+          },
+          {
+            "op": "entry",
+            "id": "h06",
+            "side": 1,
+            "qty": 1
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-30T07:30:00Z",
+        "ops": [
+          {
+            "op": "close",
+            "id": "h06"
+          },
+          {
+            "op": "entry",
+            "id": "h07",
+            "side": 1,
+            "qty": 1
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-30T07:45:00Z",
+        "ops": [
+          {
+            "op": "close",
+            "id": "h07"
+          },
+          {
+            "op": "entry",
+            "id": "h08",
+            "side": 1,
+            "qty": 1
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-30T08:00:00Z",
+        "ops": [
+          {
+            "op": "close",
+            "id": "h08"
+          },
+          {
+            "op": "entry",
+            "id": "h09",
+            "side": 1,
+            "qty": 1
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-30T08:15:00Z",
+        "ops": [
+          {
+            "op": "close",
+            "id": "h09"
+          },
+          {
+            "op": "entry",
+            "id": "h10",
+            "side": 1,
+            "qty": 1
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-30T08:30:00Z",
+        "ops": [
+          {
+            "op": "close",
+            "id": "h10"
+          },
+          {
+            "op": "entry",
+            "id": "h11",
+            "side": 1,
+            "qty": 1
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-30T08:45:00Z",
+        "ops": [
+          {
+            "op": "close",
+            "id": "h11"
+          },
+          {
+            "op": "entry",
+            "id": "h12",
+            "side": 1,
+            "qty": 1
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-30T09:00:00Z",
+        "ops": [
+          {
+            "op": "close",
+            "id": "h12"
+          },
+          {
+            "op": "entry",
+            "id": "h13",
+            "side": 1,
+            "qty": 1
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-30T09:15:00Z",
+        "ops": [
+          {
+            "op": "close",
+            "id": "h13"
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-31T10:30:00Z",
+        "ops": [
+          {
+            "op": "entry",
+            "id": "BX",
+            "side": 1,
+            "qty": 3
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-31T10:45:00Z",
+        "ops": [
+          {
+            "op": "entry",
+            "id": "G",
+            "side": 1,
+            "qty": 7
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-08-01T12:30:00Z",
+        "ops": [
+          {
+            "op": "exit",
+            "exitId": "Wick",
+            "from": null,
+            "stop": 0.9,
+            "limit": 1.15439
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-08-01T16:00:00Z",
+        "ops": [
+          {
+            "op": "close_all"
+          }
+        ]
+      }
+    ],
+    "name": "n5b-25-grown-bx-g",
+    "pineSha256": "ecaf09da58a1532273becba29ca1e2c16bada1961416a5bacd5b45e4c857ba5f"
+  }
+}

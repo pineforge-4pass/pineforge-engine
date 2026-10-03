@@ -1,0 +1,107 @@
+{
+  "pin": "N5 (global/sibling exit reservation and entry-incarnation ownership)",
+  "tape": "n5b-13-apex-third",
+  "channel": "ws-report-v1",
+  "exporter": "lab tv --no-note",
+  "symbol": "OANDA:EURUSD",
+  "interval": "15",
+  "from": "2025-07-30",
+  "to": "2025-08-04",
+  "exports": 2,
+  "exportsByteIdentical": true,
+  "sourceSha256": "39b5342a1428bb8b16f923bc4406d77b01061a5d9ebbb4b58d4780dda3bf51f2",
+  "tvTradesCsvSha256": "58d360f4f8409a52aa3fa306c37637a53039007ac30ad57e2931ce4b4108fe8f",
+  "bars": "bars/eurusd-2025-07-30-2025-08-04.csv",
+  "barsSha256": "347cd39cd2f69945830b26dbbc8c6b6595d9879bbedcd07f2357d934c8ee1e29",
+  "status": "asserted",
+  "parameters": {
+    "symbol": "OANDA:EURUSD",
+    "from": "2025-07-30",
+    "to": "2025-08-04",
+    "tick": 1e-05,
+    "step": 0.01,
+    "family": "gid",
+    "costs": true,
+    "rule": "FIFO",
+    "pyramiding": 10,
+    "margin": 1,
+    "capital": 5000,
+    "commissionType": "percent",
+    "commissionValue": 0.05,
+    "blocks": [
+      {
+        "type": "at",
+        "time": "2025-07-30T06:00:00Z",
+        "ops": [
+          {
+            "op": "entry",
+            "id": "Long",
+            "side": 1,
+            "qty": 2164.89
+          }
+        ]
+      },
+      {
+        "type": "while",
+        "cond": "long",
+        "ops": [
+          {
+            "op": "exit",
+            "exitId": "Wick_Exit_L",
+            "from": null,
+            "stop": 0.9,
+            "limit": 1.3
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-31T10:30:00Z",
+        "ops": [
+          {
+            "op": "entry",
+            "id": "Long_Add",
+            "side": 1,
+            "qty": 4374.3
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-08-01T12:15:00Z",
+        "ops": [
+          {
+            "op": "entry",
+            "id": "Long_Add",
+            "side": 1,
+            "qty": 8771.85
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-08-01T12:45:00Z",
+        "ops": [
+          {
+            "op": "exit",
+            "exitId": "Wick_Exit_L",
+            "from": null,
+            "stop": 1.15439,
+            "limit": 1.3
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-08-01T16:00:00Z",
+        "ops": [
+          {
+            "op": "close_all"
+          }
+        ]
+      }
+    ],
+    "name": "n5b-13-apex-third",
+    "pineSha256": "39b5342a1428bb8b16f923bc4406d77b01061a5d9ebbb4b58d4780dda3bf51f2"
+  }
+}
