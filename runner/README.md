@@ -69,6 +69,22 @@ integration tests (`tests/native_live_e2e.py`, `tests/native_live_startup_e2e.py
 `tests/native_live_websocket_e2e.py`),
 never by the running executable.
 
+For sanitizer verification, use a WebSocket-enabled curl meeting the version
+floor above and run:
+
+```sh
+python3 scripts/ci_verify.py live-sanitizers --jobs 4 \
+  --curl-dir /path/to/curl/lib/cmake/CURL
+```
+
+This enables ASan and UBSan for every target declared by the runner build,
+including main, startup, store, parser, examples, test plugins and transport
+while it exists. No global compiler flags are necessary. Compile-command
+coverage is checked before building; all runner CTest rows and Python E2Es
+run with strict ASan/UBSan settings (including Linux leak detection).
+WebSocket support is mandatory and no runner row may skip. This focused
+profile supplements, rather than replaces, engine-wide sanitizer verification.
+
 The build includes `build-live/lib/native-live-example.so`, a hand-written
 C++ example, `native-market-example.so`, `native-selected-example.so`, and
 `native-live-parser-example.so`, an illustrative parser. The platform's CMake

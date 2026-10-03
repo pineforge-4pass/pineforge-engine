@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Shared local/CI verification driver. Stdlib only. Not a command generator.
 
-Profiles: release, debug, sanitizers, native, kernel. Default build dir build-ci-PROFILE.
+Profiles: release, debug, sanitizers, native, live-sanitizers, kernel.
+Default build dir build-ci-PROFILE.
 Source guards, explicit configure, full rebuild, pinned e60/0e/v13/v14/v15/v16 ABI prepare/reuse,
 CTest, install+find_package+VERSION smoke, native help / required WebSocket.
 Fail fast on configure/build. After a successful build collect independent
@@ -33,7 +34,7 @@ from prepare_settlement_cpp_abi_base import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-PROFILES = ('release', 'debug', 'sanitizers', 'native', 'kernel')
+PROFILES = ('release', 'debug', 'sanitizers', 'native', 'live-sanitizers', 'kernel')
 DEFAULT_JOBS = 4
 JOBS_MIN, JOBS_MAX = 1, 64
 SCHEMA = 'pineforge-ci-verify/v1'
@@ -727,6 +728,7 @@ PROFILE = {
     'debug': Profile('debug', 'Debug', False, False, True, True),
     'sanitizers': Profile('sanitizers', 'Debug', True, False, True, True),
     'native': Profile('native', 'Release', False, True, False, True),
+    'live-sanitizers': Profile('live-sanitizers', 'Debug', True, True, False, True, 10),
     'kernel': Profile('kernel', 'Release', False, True, False, False, KERNEL_MIN_TESTS),
 }
 
@@ -938,6 +940,7 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
         'profile', choices=PROFILES,
         help='release/debug keep tutorial ON and native OFF; '
              'sanitizers enable PUBLIC ASan/UBSan; native enables the live runner; '
+             'live-sanitizers instrument every runner target and run all runner tests; '
              'kernel is native with the Pine source layer built OFF')
     parser.add_argument('--build-dir', type=Path, default=None,
                         help='default: <source>/build-ci-PROFILE')
@@ -948,7 +951,8 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
     parser.add_argument('--ccache', action='store_true',
                         help='require installed ccache and bind CMAKE_*_COMPILER_LAUNCHER')
     parser.add_argument('--require-websocket', action='store_true',
-                        help='native only: execute test_native_live_websocket and refuse skip (77)')
+                        help='native/live-sanitizers: execute test_native_live_websocket and '
+                             'refuse skip (77); mandatory in live-sanitizers')
     parser.add_argument('--exclude-label', default=None,
                         help='exclude one CTest label; verify the run count against '
                              'CTest discovery with and without -LE')
@@ -956,7 +960,8 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
                         help='fail the ctest-floor stage unless at least N CTest rows ran '
                              '(a skipped or not-run row is listed, never counted); '
                              f'the kernel profile defaults to {KERNEL_MIN_TESTS}, the release '
-                             f'profile to {RELEASE_MIN_TESTS}, the others to no floor')
+                             f'profile to {RELEASE_MIN_TESTS}, live-sanitizers to 10, '
+                             'the others to no floor')
     args = parser.parse_args(argv)
     if args.build_dir is None:
         args.build_dir = default_build_dir(source, args.profile)
@@ -967,8 +972,11 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
                     which: Callable[[str], str | None] = shutil.which) -> VerifyConfig:
     if not JOBS_MIN <= args.jobs <= JOBS_MAX:
         raise ConfigError(f'--jobs must be {JOBS_MIN}..{JOBS_MAX}')
-    if args.require_websocket and args.profile != 'native':
-        raise ConfigError('--require-websocket is only valid with the native profile')
+    if args.require_websocket and args.profile not in {'native', 'live-sanitizers'}:
+        raise ConfigError('--require-websocket is only valid with the native or '
+                          'live-sanitizers profile')
+    if args.profile == 'live-sanitizers' and args.exclude_label is not None:
+        raise ConfigError('live-sanitizers must run every runner row; --exclude-label is invalid')
     if args.exclude_label is not None:
         label = args.exclude_label.strip()
         if not label or any(not (char.isalnum() or char in '_.-') for char in label):
@@ -1000,7 +1008,7 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
         generator=args.generator,
         curl_dir=args.curl_dir.resolve() if args.curl_dir is not None else None,
         ccache_path=ccache_path,
-        require_websocket=bool(args.require_websocket),
+        require_websocket=bool(args.require_websocket or args.profile == 'live-sanitizers'),
         runner=default_runner,
         exclude_label=args.exclude_label,
         min_tests=args.min_tests if args.min_tests is not None else PROFILE[args.profile].min_tests,
@@ -1089,6 +1097,40 @@ def compile_target(entry: dict, argv: list[str]) -> str | None:
         (value for flag, value in zip(argv, argv[1:]) if flag == '-o'), '')
     match = OBJECT_DIR.search(output)
     return match.group(1) if match else None
+
+
+def runner_sanitizer_coverage(build_dir: Path, source: Path) -> list[str]:
+    path = build_dir / 'compile_commands.json'
+    if not path.is_file():
+        raise RuntimeError('compile_commands.json missing; runner instrumentation cannot be verified')
+    runner_build = (build_dir / 'runner').resolve()
+    compiled = set()
+    coverage = []
+    for entry in json.loads(path.read_text()):
+        argv = compile_argv(entry)
+        output = entry.get('output') or next(
+            (value for flag, value in zip(argv, argv[1:]) if flag == '-o'), '')
+        object_path = Path(output)
+        if not object_path.is_absolute():
+            object_path = Path(entry.get('directory') or build_dir) / object_path
+        if runner_build not in object_path.resolve().parents:
+            continue
+        unit = compile_unit(entry)
+        target = compile_target(entry, argv)
+        label = f'{target}: {unit.relative_to(source.resolve())}'
+        disabled = any(flag.startswith('-fno-sanitize=') or
+                       flag == '-fomit-frame-pointer' for flag in argv)
+        if SANITIZER_FLAG not in argv or '-fno-omit-frame-pointer' not in argv or disabled:
+            raise RuntimeError(f'runner compile lacks ASan/UBSan/frame pointers: {label}')
+        compiled.add(unit)
+        coverage.append(label)
+    required = {unit.resolve() for unit in (source / 'runner').rglob('*.cpp')}
+    missing = required - compiled
+    if not coverage or missing:
+        raise RuntimeError('runner compile commands missing: ' +
+                           ', '.join(str(unit.relative_to(source.resolve()))
+                                     for unit in sorted(missing)))
+    return sorted(coverage)
 
 
 def example_targets_with_ndebug(build_dir: Path, source: Path) -> tuple[list[str], list[str]]:
@@ -1672,6 +1714,15 @@ class Driver:
                 self.fail_stage('sanitizer-public-flag', str(error))
                 return self.finish('failed', 1)
             self.pass_stage('sanitizer-public-flag', f'library compile uses {SANITIZER_FLAG}')
+            if self.cfg.profile.live_runner:
+                try:
+                    coverage = runner_sanitizer_coverage(self.cfg.build_dir, self.cfg.source)
+                except Exception as error:
+                    self.fail_stage('live-sanitizer-coverage', str(error))
+                    return self.finish('failed', 1)
+                self.pass_stage('live-sanitizer-coverage',
+                                f'all {len(coverage)} runner compiles use ASan/UBSan and '
+                                'frame pointers:\n' + '\n'.join(coverage))
         # The examples (release, kernel) and the live runner's two modules
         # built from example sources (kernel, native).
         if self.cfg.profile.name in EXAMPLES_PROFILES or self.cfg.profile.live_runner:
@@ -1732,7 +1783,10 @@ class Driver:
         else:
             self.pass_stage('native-binary', 'live runner absent as required for this profile')
 
-        if self.cfg.profile.source_layer:
+        if self.cfg.profile.name == 'live-sanitizers':
+            self.pass_stage('abi-providers-skipped',
+                            'runner-only CTest inventory has no receipt-backed ABI rows')
+        elif self.cfg.profile.source_layer:
             self.ensure_abi_base()
             self.ensure_abi_prior()
             self.ensure_abi_v13()
@@ -1755,6 +1809,28 @@ class Driver:
         apple_asan = (self.cfg.profile.sanitizers and sys.platform == 'darwin'
                       and not cxx_name.startswith('g++'))
         ctest_jobs = 1 if apple_asan else self.cfg.jobs
+        test_dir = self.cfg.build_dir
+        if self.cfg.profile.name == 'live-sanitizers':
+            test_dir /= 'runner'
+            inventory = self.invoke('live-test-inventory',
+                                    ['ctest', '--test-dir', str(test_dir), '--show-only=json-v1'],
+                                    timeout=120, stream_output=False)
+            try:
+                names = {test['name'] for test in json.loads(inventory.stdout)['tests']}
+                required = {'native_live_help', 'test_live_json', 'test_live_parser',
+                            'test_native_live_startup', 'test_native_live_store',
+                            'test_native_live_websocket', 'test_native_example_batch',
+                            'test_native_example_selected'}
+                required.update(path.stem for path in
+                                (self.cfg.source / 'tests').glob('native_live*_e2e.py'))
+                if inventory.returncode != 0 or required - names:
+                    raise RuntimeError('missing runner CTest rows: ' +
+                                       ', '.join(sorted(required - names)))
+            except Exception as error:
+                self.fail_stage('live-test-inventory-required', str(error))
+                return self.finish('failed', 1)
+            self.pass_stage('live-test-inventory-required',
+                            'all required runner rows registered: ' + ', '.join(sorted(names)))
         registered = selected = None
         if self.cfg.exclude_label:
             listing = ['ctest', '--test-dir', str(self.cfg.build_dir), '-N']
@@ -1770,7 +1846,7 @@ class Driver:
             self.summary['ctestRegistered'] = registered
             self.summary['ctestSelected'] = selected
             self.write_summary()
-        ctest = ['ctest', '--test-dir', str(self.cfg.build_dir),
+        ctest = ['ctest', '--test-dir', str(test_dir),
                  '--output-on-failure', '--no-tests=error', '--parallel', str(ctest_jobs)]
         if self.cfg.exclude_label:
             ctest += ['-LE', self.cfg.exclude_label]
@@ -1779,6 +1855,13 @@ class Driver:
         ran = self.invoke('ctest', ctest, extra_env=self.sanitizer_env(),
                           timeout=ctest_timeout(self.cfg))
         self.enforce_test_floor(ran, registered=registered, selected=selected)
+        if self.cfg.profile.name == 'live-sanitizers':
+            try:
+                rows = ctest_rows(ran.stdout + ran.stderr)
+                if rows is None or rows.skipped or rows.not_run or rows.disabled:
+                    raise RuntimeError('live-sanitizers cannot accept skipped, disabled or unreadable rows')
+            except Exception as error:
+                self.fail_stage('live-test-skips', str(error))
 
         installed = self.invoke(
             'install',
@@ -1791,7 +1874,8 @@ class Driver:
                 if not help_bin.is_file():
                     self.fail_stage('native-help', f'installed native executable missing: {help_bin}')
                 else:
-                    self.invoke('native-help', [str(help_bin), '--help'], timeout=30)
+                    self.invoke('native-help', [str(help_bin), '--help'],
+                                extra_env=self.sanitizer_env(), timeout=30)
         if self.cfg.require_websocket:
             ws = self.cfg.build_dir / 'bin' / 'test_native_live_websocket'
             if not ws.is_file():
