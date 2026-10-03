@@ -7,6 +7,21 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- **Native runner routing and delivery:** webhooks are optional; `--webhook-routes`
+  adds first-match per-action targets and payload `pineforge-native-order-action/v2`.
+  New `actions`, `status` and offline `redeliver` commands expose the journal and
+  delivery audit. `redeliver` requires the ledger's `--deployment` identity.
+  Existing `--webhook-url` deployments keep one default target, exact v1 payload
+  bytes and event-id idempotency keys, but delivery behavior changes: HTTP errors
+  are final, normal runs exit 0 even with failed deliveries, and `--max-attempts N`
+  caps transport retries at `min(2, N-1)` rather than stopping computation.
+  Default delivery timeouts are now 2 s connect / 5 s total (formerly 5 s / 15 s).
+  Fatal exits drain for at most one total timeout and report unsent actions;
+  SIGINT/SIGTERM exit 130. Redelivery exits 2 for failed or pending selections.
+  Schema-1 native ledgers migrate additively to an append-only delivery log without
+  rewriting actions. This migration is one-way: older runner binaries cannot open
+  the migrated ledger. Back up the ledger before upgrading. The engine is unchanged.
+
 - **Runner tooling removal:** the native live runner accepts only normalized
   PineForge feed events from stdin, files, or a user's own HTTP/WebSocket feed
   service. The installed `pineforge/live_parser.h` header, its

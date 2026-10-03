@@ -211,7 +211,7 @@ does not prove that completeness. Crossing a boundary also closes prior
 input bars. Existing native semantics create zero-volume carry-forward bars
 for quiet in-session intervals and skip configured out-of-session intervals.
 
-### Confirmed OHLCV mode
+### Feed field validation
 
 Fields are strict: unknown keys are fatal and JSON numeric strings are not
 numbers. All fields shown below are required, except `trade_count`.
@@ -230,6 +230,8 @@ numbers. All fields shown below are required, except `trade_count`.
 Unlike the retired provider parser, `forming` is refused, tick mode uses
 explicit `time` boundaries, and duplicate input is accepted only as an
 index-aligned identical prefix, including identical message framing.
+
+### Confirmed OHLCV mode
 
 ```json
 {"type":"bar","bar":{"ts_open":120000,"o":102,"h":104,"l":101,"c":103,"v":4}}
@@ -332,10 +334,11 @@ your own applications, never exchanges or fill-ingestion endpoints.
                "transport_retries": 2, "retry_backoff_ms": [1000, 2000]}
 }
 ```
-- Without `--webhook-routes`, today's `--webhook-url` / `--webhook-secret-env` behaviour is unchanged: one default target.
+- Without `--webhook-routes`, `--webhook-url` / `--webhook-secret-env` retain one default target, exact v1 payload bytes and `Idempotency-Key = event_id`. Delivery behavior is not unchanged: HTTP errors are final, normal runs exit 0 despite delivery failures, `--max-attempts N` caps transport retries at `min(2, N-1)`, and timeouts default to 2 s connect / 5 s total. The webhook URL is optional; see §5 and the changelog for migration and recovery.
 - With it, those two flags set the default target, and they must agree with the file.
 - URLs are HTTPS with no user info and no redirects. Plain HTTP stays a test-only opt-in.
 - Secret values never appear in the file, the ledger, a payload or a log.
+- Target URLs are stored in clear in the ledger's routing configuration for offline redelivery. A URL must not carry a token; use `secret_env` for signing credentials.
 
 ### 2. Matching
 - Rules are checked in file order and the **first match wins**; with no match, the default target is used. Every predicate given must match; an omitted predicate matches anything. Matching is exact and case-sensitive.
@@ -349,6 +352,7 @@ your own applications, never exchanges or fill-ingestion endpoints.
 - `"target": null`, in a rule or as `default_target`, means journal-only: the action is recorded but sent nowhere.
 - A runner with no webhook configured runs fully journal-only.
 - Programs that do not want HTTP read the actions from the ledger with `pineforge-live actions --ledger L --after <n> [--follow]`, which prints one JSON action per line. This serves the hosted app and self-hosted scripts.
+- `actions` and `status` accept optional `--deployment <id>` and compare it with the ledger's deployment identity. `redeliver` requires `--deployment <id>` and is an offline operation: stop the runner first; it resumes from its ledger. Live redelivery is planned for the runner-service follow-up.
 
 ### 4. Payload `pineforge-native-order-action/v2`
 - It keeps all of v1's fields: event, event_id, deployment, strategy, symbol, timeframe, sequence, timestamp, bar_index, order id/comment, buy/sell, leg, contracts, price, reduce_only, entry_incarnation.
@@ -357,18 +361,20 @@ your own applications, never exchanges or fill-ingestion endpoints.
 - Rotating a secret changes only the signature.
 
 ### 5. Delivery: alert-like, never blocking
-- **Send once, in commit order.** Each action is committed to the ledger first. Then it is POSTed to its target immediately, in commit order, with no queue in front of it.
+- **Send once, in commit order.** Each action is committed to the ledger first, then POSTed in commit order when its target has capacity.
 - **Configurable, validated at startup.** The `delivery` block sets `max_in_flight`, `connect_timeout_ms`, `total_timeout_ms`, `transport_retries` and `retry_backoff_ms`. The defaults are the numbers below, and any omitted key takes its default.
-- **Nothing blocks.** Up to 8 requests per target can be in flight, so a slow or failing receiver never delays the next action, for that target or any other. Each request has a 2 s connect timeout and a 5 s total timeout. Requests can complete out of order: receivers order by `sequence`.
+- **Computation never blocks on HTTP.** Up to 8 requests per target can be in flight. Each request has a 2 s connect timeout and a 5 s total timeout. Requests can complete out of order: receivers order by `sequence`.
+- **Saturation.** An action whose target is at its in-flight limit remains durably unsent until that target has a slot. It never blocks computation or another target. Waiting actions start in commit order, ahead of due transport retries.
 - **Errors are shown, then sending continues.** When the receiver answers non-2xx, or the request times out or cannot connect, the runner:
   - records the result as an append-only delivery-log row;
   - updates that target's status (last error, redacted; failure count; time of last success);
   - writes one structured log line;
-  - and goes on with the next actions. There is no parking, no head-of-line blocking and no retry queue.
-- **One small transport retry.** A connection failure, a timeout before any response, or a reset is retried at most 2 times, after 1 s and then 2 s. The retries run beside newer actions and never delay them. An HTTP error response (any non-2xx, redirects included) is final, so it is shown and not retried.
-- **Nothing is lost.** Every action and every delivery result stays in the ledger. `pineforge-live redeliver --ledger L --target T [--from <seq>] [--failed-only]` re-sends selected actions in commit order, with the same `delivery_id`, and records each new attempt. `pineforge-live actions --follow` streams every committed action, whatever happened to its delivery.
+  - and goes on with the next actions. A failed action never parks newer actions behind its retries.
+- **Bounded transport retries.** A connection failure, a timeout before any response, or a reset is retried at most 2 times, after 1 s and then 2 s. The retries run beside newer actions and never delay them. An HTTP error response (any non-2xx, redirects included) is final, so it is shown and not retried.
+- **Nothing is lost.** Every action and every delivery result stays in the ledger. `pineforge-live redeliver --ledger L --deployment D --target T [--from <seq>] [--failed-only]` re-sends selected actions in commit order, with the same `delivery_id`, and records each new attempt. Deployment D must match the ledger's `metadata.identity`. Redelivery is offline: while the runner owns the ledger it says exactly "the runner is running: stop it first; it resumes from its ledger". Live redelivery is a runner-service follow-up. Redelivery counts selected, delivered, failed and pending actions, exits 2 if any selected action failed or is pending, and reads only the selected target's secret. `pineforge-live actions --follow` streams every committed action, whatever happened to its delivery.
 - **Restart.** After the usual replay verification, an action that was committed but has no delivery result yet (the process died before sending, or mid-request) is sent once. An action whose delivery failed is not re-sent automatically; `redeliver` does that.
-- **Status:** `pineforge-live status --ledger L` prints, as JSON, per target: sent, failed, last success, last error (redacted), last attempt.
+- **Fatal exit:** delivery drains without retries for at most one `total_timeout_ms` in total, regardless of targets or action count. The final error reports actions with no delivery result and gives `pineforge-live redeliver --ledger L --deployment D --target T` guidance. SIGINT/SIGTERM promptly cancel delivery, including EOF drain and redelivery, and exit 130.
+- **Status:** `pineforge-live status --ledger L [--deployment D]` prints a consistent read snapshot as JSON, per target: sent, failed, unsent (committed actions with no delivery result), last success, last error (redacted), last attempt. Use offline `redeliver` for failed or unsent actions; omit `--failed-only` to include unsent actions.
 - **Audit (closes audit finding F11):** every attempt is a new delivery-log row: target, delivery_id, attempt, start/end time, HTTP status or error class. Nothing is updated in place.
 
 ### 6. Idempotency and security
@@ -407,14 +413,21 @@ its result afterwards, sharing the attempt number and start time. Interrupted
 attempts therefore remain visible without mutating a row. SQLite triggers
 refuse updates or deletions of delivery-log rows. The main thread and the
 single delivery worker serialize database operations; no database lock is
-held during HTTP. Only the main thread accesses the strategy.
+held during HTTP. Only the main thread accesses the strategy. No delivery
+worker starts in fully journal-only mode. Delivery scans advance an in-memory
+low-water ledger ordinal using constant-size statements, never rescanning old
+journal-only or failed actions during normal delivery. Proxy environment values
+are captured once on the main thread and supplied explicitly to libcurl handles.
+The system libcurl, SQLite, libc and resolver are not instrumented by TSan;
+resolver/library environment access beyond proxy settings remains outside its coverage.
 
 `status` reports `targets`, including targets with no attempts. `sent` counts
 successful attempts (including previously acknowledged v1 events), `failed`
 counts failed attempts, and timestamps are epoch milliseconds. `last_error`
 contains only a fixed category, HTTP status and time, never receiver response
 text or a URL. `actions --after N` is exclusive; `redeliver --from N` is
-inclusive. Both cursors are action sequences. `--failed-only` selects actions
+inclusive. Both cursors are ledger action ordinals, equal to the action sequence
+in this runner. `--failed-only` selects actions
 whose latest completed attempt failed, not successful or never-attempted
 actions. Redelivery reads target endpoints and environment variable names
 from the ledger; it cannot change an action’s target.

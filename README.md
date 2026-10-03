@@ -211,8 +211,8 @@ reference underneath it.
 ## Native live runner
 
 The optional C++17 `pineforge-live` executable uses this engine's native
-warmup-to-stream lifecycle. It accepts normalized ticks or confirmed OHLCV bars,
-accepts only normalized PineForge feed events from stdin, a file or your own
+warmup-to-stream lifecycle. It accepts only normalized ticks or confirmed OHLCV
+bars as PineForge feed events from stdin, a file or your own
 feed service (exchange translation belongs in an external feed adapter), and commits
 inputs plus order-action webhooks to a durable SQLite ledger. Hand-written
 C++ strategies use the native contract; generated Pine strategies retain their
