@@ -1766,7 +1766,14 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.b(script_.modeled_ohlc);
     f.b(has_forming_);
     if (has_forming_) hash_bar(f, forming_);
-    if (input_mode_ == InputMode::ObservedTicks) {
+    const auto has_tick_volume_extension = [](const TickVolume& volume, double published_volume) {
+        return volume.units != 0 || (volume.sum != 0.0 && volume.sum != published_volume)
+            || volume.compensation != 0.0 || volume.divisor != 1.0
+            || volume.decimal_places != 0 || volume.exact;
+    };
+    if (input_mode_ == InputMode::ObservedTicks
+        && (has_tick_volume_extension(forming_tick_volume_, has_forming_ ? forming_.volume : 0.0)
+            || has_tick_volume_extension(partial_tick_volume_, partial_has_ ? partial_.volume : 0.0))) {
         const auto hash_volume = [&f](const TickVolume& volume) {
             f.i(volume.units);
             f.d(volume.sum);

@@ -526,14 +526,15 @@ void differential(const char* label, Host& host, std::vector<FoldField> fields) 
 
 // 1. Completeness, field by field.
 void every_folded_member_moves_the_value() {
-    {
+    for (const auto quantity_grid : {std::optional<double>{0.1}, std::optional<double>{}}) {
         Host host;
         auto spec = base_spec();
-        spec.quantity_grid = 0.1;
+        spec.quantity_grid = quantity_grid;
         CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
         const Bar warmup{100, 100, 100, 100, 1, 0};
         CHECK(host.stream_begin(&warmup, 1, "1", "1"));
         CHECK(host.stream_push_tick({60001, 1, 100, 0.1}));
+        if (!quantity_grid) CHECK(host.stream_push_tick({60002, 2, 100, 0.2}));
         differential("tick volume", host, NativeExecutionConsumerProbe::tick_volume(host.consumer()));
     }
     {
