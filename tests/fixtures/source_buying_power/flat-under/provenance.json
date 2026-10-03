@@ -1,0 +1,17 @@
+{
+  "channel": "ws-report-v1",
+  "symbol": "NYSE:F",
+  "interval": "15",
+  "from": "2025-07-09",
+  "to": "2025-07-10",
+  "rangeProof": "covered",
+  "sourceSha256": "a7fe89d6ee6ff1a7337982fa9bd0dc10276bf9b80a595289e46e0a9fb2b8b4e3",
+  "barsSha256": "54fca572a2e3a7141d6bdca1f5a548434a90c19b121085611a5c71f9d1bf831e",
+  "rawFrameSha256": "c661fcd7af2666d05217adfb23a6462d7cee9a0a4e0e4e54128f76aaa2b3ff44",
+  "decodedReportSha256": "1bc55dd5c819193df9d9c1f349119683b8e752505de2bbd183fa094caddce2b7",
+  "closedTrades": 0,
+  "exportTapeSha256": "86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c",
+  "fixtureTapeSha256": "0ebc2c52490a810e2f85c4e48350724d0e9c66104e967f167de851b0ae561354",
+  "fixtureSourceSha256": "a7fe89d6ee6ff1a7337982fa9bd0dc10276bf9b80a595289e46e0a9fb2b8b4e3",
+  "fixtureBarsSha256": "54fca572a2e3a7141d6bdca1f5a548434a90c19b121085611a5c71f9d1bf831e"
+}

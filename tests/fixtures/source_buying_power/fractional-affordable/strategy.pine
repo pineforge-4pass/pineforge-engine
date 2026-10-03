@@ -1,0 +1,8 @@
+//@version=6
+strategy("Synthetic buying power px-held-eth-gap",overlay=true,initial_capital=16356.13181699999,default_qty_type=strategy.percent_of_equity,default_qty_value=100,margin_long=100,margin_short=100)
+if time == timestamp("UTC",2025,11,1,20,0)
+    strategy.entry("held",strategy.long,qty=4.2153)
+if time == timestamp("UTC",2025,11,1,22,0)
+    strategy.entry("reverse",strategy.short)
+if time == timestamp("UTC",2025,11,2,2,0)
+    strategy.close_all()

@@ -1,0 +1,6 @@
+//@version=6
+strategy("Synthetic buying power px-pooc-whole-equal",overlay=true,initial_capital=100491.24,default_qty_type=strategy.percent_of_equity,default_qty_value=100,margin_long=100,margin_short=100,process_orders_on_close=true,pyramiding=2)
+if time == timestamp("UTC",2026,4,2,16,30)
+    strategy.entry("boundary",strategy.long)
+if time == timestamp("UTC",2026,4,2,18,0)
+    strategy.close_all()

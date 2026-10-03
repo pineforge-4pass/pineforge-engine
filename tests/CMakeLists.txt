@@ -1006,6 +1006,8 @@ list(APPEND TEST_SOURCES test_pooc_pair_gross_tapes)
 # equity is dropped flat and keeps only its closing leg as a reversal
 # (tests/fixtures/whole_lot_tie), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_whole_lot_tie_tapes)
+# Source-time money and market-price bands (tests/fixtures/source_buying_power).
+list(APPEND TEST_SOURCES test_source_buying_power_tapes)
 
 # Lane W8A-SIGSTATE-1 R4: a fill at the day's first tick does not trip
 # strategy.risk.max_intraday_loss (tests/fixtures/intraday_loss_open_fill), on
@@ -2718,6 +2720,10 @@ endif()
 if(TARGET test_whole_lot_tie_tapes)
     target_compile_definitions(test_whole_lot_tie_tapes PRIVATE
         PINEFORGE_TAIL_D_WHOLE_LOT_TIE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/whole_lot_tie")
+endif()
+if(TARGET test_source_buying_power_tapes)
+    target_compile_definitions(test_source_buying_power_tapes PRIVATE
+        PINEFORGE_BUYING_POWER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/source_buying_power")
 endif()
 if(TARGET test_coof_reissued_exit_tapes)
     target_compile_definitions(test_coof_reissued_exit_tapes PRIVATE

@@ -453,6 +453,18 @@ double source_money_round(double value) noexcept {
     return value < 0.0 ? -rounded : rounded;
 }
 
+// TV's market band is inclusive against its tick-index product, not a strict
+// decimal-price test: band-{reversal,flat}-equal admits 3865.5, whereas
+// fractional-fill-band and band-flat-residue refuse the 3386.68 tick product
+// (tests/fixtures/source_buying_power). Rebuild that operand from the grid
+// index rather than allowing an incidental resolved-price ULP to decide it.
+bool source_price_band_affordable(double equity, double units,
+                                  double fill_price, double tick) noexcept {
+    if (!finite_positive(units) || !finite_positive(tick)) return false;
+    const double affordable = source_money_round(source_money_round(equity) / units);
+    return affordable >= nearest_tick(fill_price, tick);
+}
+
 double source_money_floor_lot(double units, const std::optional<double>& grid) noexcept {
     if (!grid || !std::isfinite(*grid) || *grid <= 0.0) return units;
     if (!std::isfinite(units) || units <= 0.0) return units;
@@ -14141,6 +14153,57 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                 && !cap.active() && risk_.max_intraday_loss <= 0.0
                 && risk_.max_drawdown <= 0.0 && risk_.max_cons_loss_days == 0
                 && ordinary_book;
+            // Flat money ties use rounded notional, with TAIL-D's settled
+            // agreement or no-gap qualification preserved (source_buying_power
+            // flat-*/pooc-* and whole_lot_tie). Pyramiding does not affect a
+            // genuinely flat book with no competing opening.
+            const bool whole_flat_money = *staged_.quantity_grid == 1.0
+                && staged_.syminfo.pointvalue == 1.0 && source.sizing.fx == 1.0
+                && staged_.account_fx_effective_from_ms.empty()
+                && config_.commission_value == 0.0 && config_.slippage == 0
+                && !config_.calc_on_order_fills && !stream_mode_
+                && finite_positive(staged_.syminfo.mintick)
+                && !source.birth.from_fill() && source.oca_name.empty()
+                && !cap.active() && risk_.max_intraday_loss <= 0.0
+                && risk_.max_drawdown <= 0.0 && risk_.max_cons_loss_days == 0
+                && source.projection_position_side
+                    == static_cast<std::int32_t>(PositionSide::FLAT)
+                && !source.projection_after_close && source.projection_predecessor == 0
+                && facts.position.signed_units == 0.0
+                && std::none_of(live_handles_.begin(), live_handles_.end(),
+                    [&](const auto& handle) {
+                        if (handle == facts.target) return false;
+                        const auto peer = placement_.find(handle.incarnation);
+                        return peer != placement_.end() && peer->second.opening;
+                    });
+            if (whole_flat_money) {
+                const double rounded_cost = source_money_round(
+                    *result.units * source.sizing.price);
+                double settled = source.sizing.equity;
+                const auto* pine = pine_view_of(host_);
+                if (pine && std::isfinite(pine->net_profit_sum_)
+                    && same_double_bits(percent_commission_live_equity(source.sizing.mark),
+                                        source.sizing.equity)) {
+                    settled = pine->initial_capital_
+                        + source_money_round(pine->net_profit_sum_);
+                    const double direction = pine->position_side_ == PositionSide::SHORT
+                        ? -1.0 : 1.0;
+                    for (const auto& lot : pine->pyramid_entries_) {
+                        settled += direction * (source.sizing.mark - lot.price) * lot.qty
+                            * staged_.syminfo.pointvalue * source.sizing.fx
+                            - pine->open_entry_commission(lot);
+                    }
+                }
+                const bool no_gap_tie = nearest_tick(
+                    result.resolved_price, staged_.syminfo.mintick) == source.sizing.price
+                    && rounded_cost == source_money_round(source.sizing.equity);
+                if (std::isfinite(rounded_cost) && source.sizing.equity < rounded_cost
+                    && (settled < rounded_cost || no_gap_tie)) {
+                    result.units = 0.0;
+                    result.shape = native_order::OpeningShape::Transact;
+                    return result;
+                }
+            }
             const auto native_state = detail::run_state(require_host());
             const bool pooc_flat_money = config_.process_orders_on_close
                 && source.projection_position_side
@@ -14222,7 +14285,16 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                 const double rounded_cost = source_money_round(
                     notional_per_price
                         * (pooc_flat_money ? source.sizing.mark : source.sizing.price));
-                if (source.sizing.equity + 1e-9 < rounded_cost) {
+                // The no-epsilon tape proves ordinary low-value opposite
+                // market entries only (source_buying_power forex-under/equal).
+                // Preserve the prior guard for fractional POOC, costs, fill
+                // births, other pyramiding, and projected-close books.
+                const bool exact_money_scope = low_value_lot && ordinary_fractional
+                    && opposite && !source.projection_after_close
+                    && !source.birth.from_fill() && source.oca_name.empty()
+                    && config_.pyramiding == 0;
+                const double money_guard = exact_money_scope ? 0.0 : 1e-9;
+                if (source.sizing.equity + money_guard < rounded_cost) {
                     result.units = keep_mc_close_surplus ? 1.0
                         : (opposite ? facts.opposite_book_units : 0.0);
                     result.shape = keep_mc_close_surplus
@@ -14917,7 +14989,9 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             * staged_.syminfo.pointvalue * fx * margin / 100.0;
         const double equity = source.sizing.equity;
         const double guard = std::max(1e-9, std::abs(equity) * 1e-12);
-        const bool nested_price_gap_affordable = margin == 100.0
+        const bool nested_price_gap_scope = margin == 100.0
+            && std::holds_alternative<native_order::Market>(view.definition->request.trigger)
+            && finite_positive(staged_.syminfo.mintick)
             && staged_.quantity_grid && *staged_.quantity_grid > 0.0
             && *staged_.quantity_grid < 1.0
             && staged_.syminfo.pointvalue == 1.0 && source.sizing.fx == 1.0
@@ -14925,10 +14999,12 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             && config_.commission_type == static_cast<int>(CommissionType::PERCENT)
             && config_.commission_value == 0.0 && config_.slippage == 0
             && !config_.process_orders_on_close && !config_.calc_on_order_fills
-            && !stream_mode_ && view.resolved_price > source.sizing.price
-            && source_money_round(source_money_round(equity)
-                / source.sizing.frozen_units) >= view.resolved_price;
+            && !stream_mode_ && view.resolved_price > source.sizing.price;
+        const bool nested_price_gap_affordable = nested_price_gap_scope
+            && source_price_band_affordable(equity, source.sizing.frozen_units,
+                view.resolved_price, staged_.syminfo.mintick);
         if (!std::isfinite(required) || !std::isfinite(equity)
+            || (nested_price_gap_scope && !nested_price_gap_affordable)
             || (required > equity + guard && !nested_price_gap_affordable)) {
             return NativePrecommitVerdict::Refuse;
         }
@@ -15093,6 +15169,8 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             const bool magnified = native_state.spec
                 && !native_state.spec->intrabar.is_none();
             const bool price_gap_scope = source.family == PineOrderFamily::Entry
+                && std::holds_alternative<native_order::Market>(view.definition->request.trigger)
+                && finite_positive(staged_.syminfo.mintick)
                 && !std::isfinite(source.requested_qty)
                 && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
                 && config_.default_qty_value == 100.0
@@ -15114,8 +15192,10 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
                      && !paired_market_opening)
                     || reversal);
             const bool price_gap_affordable = price_gap_scope
-                && source_money_round(source_money_round(source.sizing.equity)
-                    / source.sizing.frozen_units) >= view.resolved_price;
+                && source_price_band_affordable(source.sizing.equity,
+                    source.sizing.frozen_units, view.resolved_price, staged_.syminfo.mintick);
+            if (price_gap_scope && !price_gap_affordable)
+                return NativePrecommitVerdict::Refuse;
             const bool true_flat_gap_scope = source.family == PineOrderFamily::Entry
                 && source.projection_position_side
                     == static_cast<std::int32_t>(PositionSide::FLAT)

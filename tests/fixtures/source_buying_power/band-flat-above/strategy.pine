@@ -1,0 +1,6 @@
+//@version=6
+strategy("Synthetic exact price band flat above equality",overlay=true,initial_capital=16294.242192,default_qty_type=strategy.percent_of_equity,default_qty_value=100,margin_long=100,margin_short=100)
+if time == timestamp("UTC",2025,11,1,22,0)
+    strategy.entry("reverse",strategy.long)
+if time == timestamp("UTC",2025,11,2,2,0)
+    strategy.close_all()

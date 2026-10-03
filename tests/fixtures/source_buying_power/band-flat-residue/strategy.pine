@@ -1,0 +1,6 @@
+//@version=6
+strategy("Synthetic residue class price band flat entry",overlay=true,initial_capital=89853.02309299953,default_qty_type=strategy.percent_of_equity,default_qty_value=100,margin_long=100,margin_short=100)
+if time == timestamp("UTC",2025,11,6,9,30)
+    strategy.entry("reverse",strategy.long)
+if time == timestamp("UTC",2025,11,6,11,0)
+    strategy.close_all()
