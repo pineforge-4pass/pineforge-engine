@@ -28,6 +28,14 @@ void operator delete(void* allocation, std::size_t) noexcept { std::free(allocat
 void* operator new[](std::size_t size) { return ::operator new(size); }
 void operator delete[](void* allocation) noexcept { ::operator delete(allocation); }
 void operator delete[](void* allocation, std::size_t) noexcept { ::operator delete(allocation); }
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+    try { return ::operator new(size); } catch (...) { return nullptr; }
+}
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+    try { return ::operator new[](size); } catch (...) { return nullptr; }
+}
+void operator delete(void* allocation, const std::nothrow_t&) noexcept { ::operator delete(allocation); }
+void operator delete[](void* allocation, const std::nothrow_t&) noexcept { ::operator delete[](allocation); }
 
 int main() {
     using namespace pineforge::checked_settings;

@@ -141,7 +141,7 @@ The public C surface is **120 `PF_API` declarations** across two headers:
   per-strategy generated exports (`strategy_declares_bar_magnifier` only in a
   script that declares `use_bar_magnifier = true`). This is what a compiled
   strategy `.so` exports and what a harness calls. Older modules lack the six
-  opt-in [checked-settings exports](../checked-settings.md).
+  opt-in checked-settings exports (repository guide: `docs/checked-settings.md`).
 - `<pineforge/native_c_api.h>` (included by `pineforge.h`) — **43**: the other
   direction, where the host drives the kernel itself. Submit, replace, cancel,
   execute, read the book, read the lots. Additive: no symbol, struct or
