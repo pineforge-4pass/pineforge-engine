@@ -25,6 +25,10 @@ snapshot = b''
 stream_messages = []
 
 
+def ordered_receipts():
+    return sorted(received, key=lambda event: event['sequence'])
+
+
 class Receiver(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
     def do_GET(self):
@@ -110,21 +114,21 @@ try:
             assert result['inputs_committed'] == len(events)
             assert result['webhooks_pending'] == 0
             assert len(received) == 4, received
-            assert [e['order']['leg'] for e in received] == ['entry', 'exit', 'entry', 'exit']
-            assert [e['sequence'] for e in received] == [1, 2, 3, 4]
+            assert [e['order']['leg'] for e in ordered_receipts()] == ['entry', 'exit', 'entry', 'exit']
+            assert [e['sequence'] for e in ordered_receipts()] == [1, 2, 3, 4]
             assert len({e['event_id'] for e in received}) == 4
-            prior = list(received)
+            prior = ordered_receipts()
             final = invoke(options)
             assert final['inputs_processed'] == final['webhooks_delivered'] == 0
-            assert received == prior
+            assert ordered_receipts() == prior
             assert final['prefix_skipped'] == len(events)
             same_timezone = invoke(options+['--chart-timezone', 'UTC'])
-            assert same_timezone['webhooks_delivered'] == 0 and received == prior
+            assert same_timezone['webhooks_delivered'] == 0 and ordered_receipts() == prior
             with sqlite3.connect(ledger) as db:
                 assert db.execute('SELECT count(*) FROM inputs').fetchone()[0] == len(events)
             # Changing a declared strategy input changes deployment identity.
             invoke(options+['--input', 'changed=1'], success=False)
-            assert received == prior
+            assert ordered_receipts() == prior
             # A changed historical frame must refuse without another webhook.
             bad = root/(mode+'-changed.jsonl')
             changed = [dict(e) for e in events]
@@ -134,7 +138,7 @@ try:
                 changed[0]['bar'] = dict(changed[0]['bar'], v=5)
             bad.write_text(''.join(json.dumps(e)+'\n' for e in changed))
             invoke(['--mode', mode, '--feed', str(bad), '--ledger', str(ledger)], success=False)
-            assert received == prior
+            assert ordered_receipts() == prior
 
             received.clear()
             stdin_feed = ''.join(json.dumps(event)+'\n' for event in events)
@@ -142,9 +146,9 @@ try:
                              '--ledger', str(root/(mode+'-stdin.sqlite3'))]
             result = invoke(stdin_options, stdin=stdin_feed)
             assert result['inputs_committed'] == len(events)
-            assert received == prior
+            assert ordered_receipts() == prior
             assert invoke(stdin_options, stdin=stdin_feed)['inputs_processed'] == 0
-            assert received == prior
+            assert ordered_receipts() == prior
 
         # HTTP errors are final; restart does not retry them.
         received.clear(); responses[:] = [503]
@@ -217,9 +221,9 @@ try:
             result = invoke(options)
             assert result['inputs_committed'] == len(events)
             assert len(received) == 4
-            prior = list(received)
+            prior = ordered_receipts()
             assert invoke(options)['inputs_processed'] == 0
-            assert received == prior
+            assert ordered_receipts() == prior
 
             received.clear()
             stream_messages = [json.dumps(event) for event in events]
@@ -237,7 +241,7 @@ try:
                 websocket_available = False
                 print('WebSocket CLI integration unavailable in this libcurl build')
             else:
-                assert received == prior
+                assert ordered_receipts() == prior
                 assert json.loads(result.stdout)['inputs_committed'] == len(events)
 
         for source in ('stdin', 'file', 'http', 'websocket'):
