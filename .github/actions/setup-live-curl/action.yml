@@ -1,0 +1,37 @@
+name: Set up native runner libcurl
+description: Cache and build the checksum-pinned WebSocket-enabled libcurl
+outputs:
+  curl-dir:
+    description: CMake package directory for ci_verify.py --curl-dir
+    value: ${{ steps.dependencies.outputs.curl-dir }}
+  cache-hit:
+    description: Whether the pinned installation was restored from cache
+    value: ${{ steps.curl-cache.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - name: Identify pinned dependency environment
+      id: dependencies
+      shell: bash
+      run: |
+        bash scripts/build_live_curl.sh --metadata >> "$GITHUB_OUTPUT"
+        mkdir -p build-native-deps
+        {
+          printf '%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}" "${GITHUB_WORKSPACE}"
+          cc --version
+          cmake --version
+          dpkg-query -W libssl-dev zlib1g-dev
+        } > build-native-deps/environment.txt
+        echo "identity=$(sha256sum build-native-deps/environment.txt | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+        echo "curl-dir=${GITHUB_WORKSPACE}/build-native-deps/curl-install/lib/cmake/CURL" >> "$GITHUB_OUTPUT"
+    - name: Restore pinned WebSocket-enabled libcurl
+      id: curl-cache
+      uses: actions/cache@v4
+      with:
+        path: build-native-deps/curl-install
+        key: curl-${{ steps.dependencies.outputs.version }}-${{ steps.dependencies.outputs.sha256 }}-${{ steps.dependencies.outputs.identity }}-${{ hashFiles('.github/actions/setup-live-curl/action.yml', 'scripts/build_live_curl.sh') }}-${{ runner.os }}-${{ runner.arch }}
+    - name: Build pinned WebSocket-enabled libcurl
+      shell: bash
+      env:
+        CURL_CACHE_HIT: ${{ steps.curl-cache.outputs.cache-hit }}
+      run: bash scripts/build_live_curl.sh build-native-deps 4

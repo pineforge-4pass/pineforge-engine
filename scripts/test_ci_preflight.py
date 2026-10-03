@@ -17,7 +17,8 @@ from ci_preflight import (CORES, DOCS_ONLY_SKIP, JOB_RUNNERS, LINUX_RUNNER, MATR
 
 ROOT = Path(__file__).resolve().parents[1]
 KERNEL_VERIFY = ('run: python3 scripts/ci_verify.py kernel --build-dir build-kernel '
-                 '--jobs "$(getconf _NPROCESSORS_ONLN)" --ccache')
+                 '--jobs "$(getconf _NPROCESSORS_ONLN)" --ccache '
+                 '--curl-dir "${{ steps.curl-deps.outputs.curl-dir }}"')
 # ci_workflow_findings' arguments, in order.
 CI_SOURCES = ('.github/workflows/ci.yml', '.github/workflows/native-live.yml',
               '.github/workflows/promote-baseline.yml', 'tests/CMakeLists.txt',
@@ -268,8 +269,8 @@ class PreflightFailures(unittest.TestCase):
              'ci.yml job kernel-only must size'),
             (0, 'kernel-only', f'run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs {CORES} --ccache',
              'run: $VERIFY', 'ci.yml job kernel-only must size'),
-            (0, 'kernel-only', f'run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs {CORES} --ccache\n',
-             f'run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs {CORES} --ccache\n\n'
+            (0, 'kernel-only', KERNEL_VERIFY + '\n',
+             KERNEL_VERIFY + '\n\n'
              '      - run: PYTHONPATH=scripts python3 -m ci_verify kernel --build-dir build-kernel --ccache\n',
              'ci.yml job kernel-only must size'),
             # A second, unsized call however it is chained, blocked or carried.
@@ -684,6 +685,34 @@ class PreflightFailures(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(summary['status'], 'passed')
         self.assertIn('full verification still required', summary['scope'])
+
+
+class PinnedLiveCurl(unittest.TestCase):
+    def test_all_live_profiles_use_the_shared_pinned_dependency(self):
+        kernel = _jobs((ROOT / CI_SOURCES[0]).read_text())['kernel-only']
+        native = _jobs((ROOT / CI_SOURCES[1]).read_text())['native-live']
+        for job in (kernel, native):
+            self.assertIn('uses: ./.github/actions/setup-live-curl', job)
+            self.assertNotIn('libcurl4-openssl-dev', job)
+            for line in job.splitlines():
+                if 'run: python3 scripts/ci_verify.py ' in line:
+                    self.assertIn('--curl-dir "${{ steps.curl-deps.outputs.curl-dir }}"', line)
+        action = (ROOT / '.github/actions/setup-live-curl/action.yml').read_text()
+        self.assertIn('bash scripts/build_live_curl.sh --metadata', action)
+        self.assertIn('uses: actions/cache@v4', action)
+        self.assertIn('bash scripts/build_live_curl.sh build-native-deps 4', action)
+
+    def test_shared_curl_pin_and_websocket_build_flags(self):
+        script = ROOT / 'scripts/build_live_curl.sh'
+        result = subprocess.run(['bash', str(script), '--metadata'],
+                                check=True, capture_output=True, text=True)
+        self.assertEqual(result.stdout, 'version=8.14.1\nsha256='
+                         'f4619a1e2474c4bbfedc88a7c2191209c8334b48fa1f4e53fd584cc12e9120dd\n')
+        build = script.read_text()
+        self.assertIn('sha256sum -c -', build)
+        self.assertIn('-DENABLE_WEBSOCKETS=ON', build)
+        self.assertIn('-DBUILD_STATIC_LIBS=ON', build)
+        self.assertIn('-DCURL_USE_OPENSSL=ON', build)
 
 
 if __name__ == '__main__':

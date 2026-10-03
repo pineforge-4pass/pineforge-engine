@@ -284,7 +284,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev libcurl4-openssl-dev ccache
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache
 
       - name: Restore ccache
         uses: actions/cache@v4
@@ -294,12 +294,16 @@ jobs:
           restore-keys: |
             ccache-${{ runner.os }}-${{ runner.arch }}-kernel-
 
+      - name: Set up pinned WebSocket-enabled libcurl
+        id: curl-deps
+        uses: ./.github/actions/setup-live-curl
+
       - name: Verify (kernel)
-        run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache
+        run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}"
 
       - name: Stage and summarize diagnostics
         if: always()
-        run: python3 scripts/collect_ci_diagnostics.py --build-dir build-kernel --profile kernel
+        run: python3 scripts/collect_ci_diagnostics.py --build-dir build-kernel --profile kernel --dependency-dir build-native-deps
 
       - name: Retain CI diagnostics
         if: always()

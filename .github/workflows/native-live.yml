@@ -24,8 +24,6 @@ env:
   CCACHE_COMPILERCHECK: content
   CCACHE_COMPRESS: "1"
   CCACHE_MAXSIZE: 500M
-  CURL_VERSION: "8.14.1"
-  CURL_SHA256: "f4619a1e2474c4bbfedc88a7c2191209c8334b48fa1f4e53fd584cc12e9120dd"
 
 # The organization's 16-core larger runner for a push, the schedule, a
 # dispatch and a pull request from a branch of this repository; every other
@@ -65,68 +63,26 @@ jobs:
           restore-keys: |
             ccache-${{ runner.os }}-${{ runner.arch }}-native-
 
-      - name: Identify native dependency environment
-        id: native-deps
-        shell: bash
-        run: |
-          mkdir -p build-native-deps
-          {
-            printf '%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}" "${GITHUB_WORKSPACE}"
-            cc --version
-            cmake --version
-            dpkg-query -W libssl-dev zlib1g-dev
-          } > build-native-deps/environment.txt
-          echo "identity=$(sha256sum build-native-deps/environment.txt | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore pinned WebSocket-enabled libcurl
-        id: curl-cache
-        uses: actions/cache@v4
-        with:
-          path: build-native-deps/curl-install
-          key: curl-${{ env.CURL_VERSION }}-${{ env.CURL_SHA256 }}-${{ steps.native-deps.outputs.identity }}-${{ hashFiles('.github/workflows/native-live.yml') }}-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Build pinned WebSocket-enabled libcurl
-        env:
-          CURL_CACHE_HIT: ${{ steps.curl-cache.outputs.cache-hit }}
-        run: |
-          set -euo pipefail
-          cmake_file="build-native-deps/curl-install/lib/cmake/CURL/CURLConfig.cmake"
-          if [[ "${CURL_CACHE_HIT}" == "true" && -f "$cmake_file" ]]; then
-            echo "Using cached libcurl at ${cmake_file}"
-            exit 0
-          fi
-          mkdir -p build-native-deps
-          cd build-native-deps
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            "https://curl.se/download/curl-${CURL_VERSION}.tar.xz" -o curl.tar.xz
-          echo "${CURL_SHA256}  curl.tar.xz" | sha256sum -c -
-          tar -xf curl.tar.xz
-          cmake -S "curl-${CURL_VERSION}" -B curl-build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/curl-install" \
-            -DBUILD_CURL_EXE=OFF -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON \
-            -DBUILD_TESTING=OFF -DCURL_USE_OPENSSL=ON -DENABLE_WEBSOCKETS=ON \
-            -DHTTP_ONLY=ON -DCURL_USE_LIBPSL=OFF -DUSE_LIBIDN2=OFF \
-            -DCURL_USE_LIBSSH2=OFF -DCURL_BROTLI=OFF -DCURL_ZSTD=OFF \
-            2>&1 | tee curl-configure.log
-          cmake --build curl-build -j 4 2>&1 | tee curl-build.log
-          cmake --install curl-build 2>&1 | tee curl-install.log
+      - name: Set up pinned WebSocket-enabled libcurl
+        id: curl-deps
+        uses: ./.github/actions/setup-live-curl
 
       - name: Verify native live
-        run: python3 scripts/ci_verify.py native --build-dir build-live --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ github.workspace }}/build-native-deps/curl-install/lib/cmake/CURL" --ccache --require-websocket ${{ inputs.exclude_slow && '--exclude-label slow' || '' }}
+        run: python3 scripts/ci_verify.py native --build-dir build-live --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" --ccache --require-websocket ${{ inputs.exclude_slow && '--exclude-label slow' || '' }}
 
       - name: Verify every live runner target with ASan and UBSan
         if: ${{ !cancelled() }}
-        run: python3 scripts/ci_verify.py live-sanitizers --build-dir build-live-sanitizers --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ github.workspace }}/build-native-deps/curl-install/lib/cmake/CURL" --ccache
+        run: python3 scripts/ci_verify.py live-sanitizers --build-dir build-live-sanitizers --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" --ccache
 
       - name: Stage and summarize diagnostics
         if: always()
         env:
-          CURL_CACHE_HIT: ${{ steps.curl-cache.outputs.cache-hit }}
+          CURL_CACHE_HIT: ${{ steps.curl-deps.outputs.cache-hit }}
         run: python3 scripts/collect_ci_diagnostics.py --build-dir build-live --profile native --dependency-dir build-native-deps
 
       - name: Verify every live runner target with ThreadSanitizer
         if: ${{ !cancelled() }}
-        run: python3 scripts/ci_verify.py live-tsan --build-dir build-live-tsan --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ github.workspace }}/build-native-deps/curl-install/lib/cmake/CURL" --ccache
+        run: python3 scripts/ci_verify.py live-tsan --build-dir build-live-tsan --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" --ccache
 
       - name: Stage thread sanitizer diagnostics
         if: always()
