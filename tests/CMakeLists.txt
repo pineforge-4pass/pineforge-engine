@@ -2189,8 +2189,12 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
         endif()
         add_test(NAME test_stream_security_${security_case}
             COMMAND test_stream_security_${security_case} 1 500)
+        foreach(warmup 1 30 499 501 3999)
+            add_test(NAME test_stream_security_${security_case}_warmup${warmup}
+                COMMAND test_stream_security_${security_case} 1 ${warmup})
+        endforeach()
     endforeach()
-    add_test(NAME test_stream_security_control_tf5 COMMAND test_stream_security_htf5_close 5 500)
+    add_test(NAME test_stream_security_control_tf5 COMMAND test_stream_security_htf15_sma_pooc 5 500)
     add_test(NAME test_stream_security_control_tf15 COMMAND test_stream_security_htf60_close 15 500)
 
     add_library(checked_settings_fixture OBJECT fixtures/checked_settings/generated.cpp)

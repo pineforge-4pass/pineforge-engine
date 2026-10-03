@@ -8,6 +8,15 @@ The handoff preserves broker state, position and equity, pending orders, Pine
 series and variables, TA objects, `request.security()` evaluators, and a
 partially formed higher-timeframe candle.
 
+With #strategy_stream_push_bar, chart-symbol `request.security()` evaluators
+advance on every confirmed warmup and realtime input, including when input and
+script timeframes are equal. This includes higher-timeframe close and TA
+expressions, chart `ticker.heikinashi()` requests, `barmerge.gaps_on`, and
+`timeframe.period` requests. A larger script timeframe is not required to keep
+these evaluators advancing. This does not admit external symbol feeds or
+recorded request series, which remain historical-only. Tick-stream broker fills
+still follow the observed ticks rather than a batch OHLC path.
+
 Stream begin fails when script preparation throws, for both standard and unknown
 C++ exceptions. It returns failure, exposes the preparation message through
 #strategy_get_last_error, and reports NOT_COMPLETED through
@@ -170,7 +179,9 @@ separate surfaces and are not implied by using this lifecycle.
   the first realtime bar, so its live results can differ from a backtest of
   the same bars. Batch backtests are not affected. Workaround: run the stream
   with a script timeframe larger than the input timeframe (for example input
-  `1`, script `5`), or use the batch backtest. A fix is in progress.
+  `1`, script `5`), or use the batch backtest. Current source fixes the
+  confirmed-bar stream path so these evaluators advance on every input;
+  released v1.0.0 and v1.0.1 still require the workaround.
 
 See [Lifecycle](@ref lifecycle) for handle ownership and
 [FFI from Python](@ref ffi_python) for the complete POD mirrors.

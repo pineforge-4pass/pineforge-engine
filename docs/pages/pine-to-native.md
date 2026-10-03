@@ -618,22 +618,22 @@ span the same rows followed by the range-end rows
 `report_open_position_at_end` native_run_spec.hpp:683 adds. In C the report's
 `pf_report_t::trades` pineforge.h:371 carries the numeric fields, and the
 strings and the cause come from `strategy_closed_trade_entry_id`
-pineforge.h:1167, `strategy_closed_trade_exit_id` pineforge.h:1180,
-`strategy_closed_trade_exit_comment` pineforge.h:1182 and
-`strategy_closed_trade_close_cause` pineforge.h:1249, which index exactly the
+pineforge.h:1171, `strategy_closed_trade_exit_id` pineforge.h:1184,
+`strategy_closed_trade_exit_comment` pineforge.h:1186 and
+`strategy_closed_trade_close_cause` pineforge.h:1253, which index exactly the
 rows of that array.
 
 | Pine | C++ | C | Runs in | Notes |
 | --- | --- | --- | --- | --- |
 | `strategy.closedtrades` | `closed_trade_count` engine.hpp:1823 | `total_trades` pineforge.h:368 | `native_open_lots_strategy.cpp` | `closed_trade_count` counts booked closed rows. The C report's `total_trades` also includes range-end rows when `report_open_position_at_end` is enabled; filter `pf_trade_t::open_at_end == 0` to match Pine `strategy.closedtrades`. |
 | `strategy.closedtrades.first_index` | none — the kernel keeps every row | — | `native_open_lots_strategy.cpp` | TradingView drops old rows past a 9000-trade cap and advances `first_index` when it does. The kernel caps nothing, so the first index is always 0 and codegen emits the literal. |
-| `strategy.closedtrades.entry_id()` | `entry_id` engine.hpp:183 | `strategy_closed_trade_entry_id` pineforge.h:1167 | `native_open_lots_strategy.cpp` | The same string the lot carried as `entry_label` native_host.hpp:333. |
-| `strategy.closedtrades.entry_comment()` | `entry_comment` engine.hpp:184 | — | `native_open_lots_strategy.cpp` | No C accessor: `strategy_closed_trade_entry_id` pineforge.h:1167 answers the id, not the comment, and `pf_trade_t` carries no strings. A C host that needs it reads the open lot's `entry_comment` (`pf_native_open_lot_v1` native_c_api.h:1767) before the close. |
+| `strategy.closedtrades.entry_id()` | `entry_id` engine.hpp:183 | `strategy_closed_trade_entry_id` pineforge.h:1171 | `native_open_lots_strategy.cpp` | The same string the lot carried as `entry_label` native_host.hpp:333. |
+| `strategy.closedtrades.entry_comment()` | `entry_comment` engine.hpp:184 | — | `native_open_lots_strategy.cpp` | No C accessor: `strategy_closed_trade_entry_id` pineforge.h:1171 answers the id, not the comment, and `pf_trade_t` carries no strings. A C host that needs it reads the open lot's `entry_comment` (`pf_native_open_lot_v1` native_c_api.h:1767) before the close. |
 | `strategy.closedtrades.entry_bar_index()` | `entry_bar_index` engine.hpp:181 | `pf_trade_t` pineforge.h:203 | `native_open_lots_strategy.cpp` | Copied from the lot. |
 | `strategy.closedtrades.entry_time()` | `entry_time` engine.hpp:173 | `pf_trade_t` pineforge.h:203 | `native_open_lots_strategy.cpp` | Unix ms. |
 | `strategy.closedtrades.entry_price()` | `entry_price` engine.hpp:175 | `pf_trade_t` pineforge.h:203 | `native_open_lots_strategy.cpp` | |
-| `strategy.closedtrades.exit_id()` | `exit_id` engine.hpp:186 | `strategy_closed_trade_exit_id` pineforge.h:1180 | `native_margin_strategy.cpp` | For a kernel liquidation this is the model's own `liquidation_label` native_run_spec.hpp:251, which is how a reporting layer classifies the row. |
-| `strategy.closedtrades.exit_comment()` | `exit_comment` engine.hpp:185 | `strategy_closed_trade_exit_comment` pineforge.h:1182 | `native_margin_strategy.cpp` | |
+| `strategy.closedtrades.exit_id()` | `exit_id` engine.hpp:186 | `strategy_closed_trade_exit_id` pineforge.h:1184 | `native_margin_strategy.cpp` | For a kernel liquidation this is the model's own `liquidation_label` native_run_spec.hpp:251, which is how a reporting layer classifies the row. |
+| `strategy.closedtrades.exit_comment()` | `exit_comment` engine.hpp:185 | `strategy_closed_trade_exit_comment` pineforge.h:1186 | `native_margin_strategy.cpp` | |
 | `strategy.closedtrades.exit_bar_index()` | `exit_bar_index` engine.hpp:182 | `pf_trade_t` pineforge.h:203 | `native_open_lots_strategy.cpp` | |
 | `strategy.closedtrades.exit_time()` | `exit_time` engine.hpp:174 | `pf_trade_t` pineforge.h:203 | `native_open_lots_strategy.cpp` | |
 | `strategy.closedtrades.exit_price()` | `exit_price` engine.hpp:176 | `pf_trade_t` pineforge.h:203 | `native_open_lots_strategy.cpp` | |
@@ -648,7 +648,7 @@ rows of that array.
 
 Pine has no word for *why* a row closed. The native row does:
 `closed_trade_close_cause` engine.hpp:1849 (C:
-`strategy_closed_trade_close_cause` pineforge.h:1249) distinguishes a script
+`strategy_closed_trade_close_cause` pineforge.h:1253) distinguishes a script
 close, a liquidation, a risk flatten and the range end — the kernel states the
 last three itself. The bracket-leg cause (`2`) is the kernel's too for a close
 its owner's fill armed — a `WaitForApplied` owner relation with an intent that
@@ -669,7 +669,7 @@ classifies its own rows by order family instead. Which leg closed a row is its
 | `barmerge.lookahead_off` | `NativeTimeframeSubscription::lookahead` native_run_spec.hpp:494 set false | `pf_native_subscription_v1::lookahead` = `PF_NATIVE_LOOKAHEAD_AT_COMPLETION` native_c_api.h:800 | `native_htf_strategy.cpp` | The default and the honest one: a bucket is delivered when it completes. |
 | `barmerge.lookahead_on` | `NativeTimeframeSubscription::lookahead` native_run_spec.hpp:494 set true | `pf_native_subscription_v1::lookahead` = `PF_NATIVE_LOOKAHEAD_AT_FIRST_INPUT` native_c_api.h:802 | `tests/test_native_htf_subscriptions.cpp` | Delivers a bucket's final values on the input that held its first bar. It is lookahead: use it to reproduce a chart, never to trade. |
 | `request.currency_rate()` | none — no FX data feed | `strategy_configure_native_fx_curve_v1` pineforge.h:546 | `native_fx_roll_strategy.cpp` / `tests/test_native_fx_curve.cpp` | The kernel converts with the curve you stage; it fetches nothing. |
-| `request.dividends()` | none — no fundamentals feed | — | — | For a Pine script, pineforge-codegen 1.0.0 (0.10.4 rejects the call at transpile) reads TradingView's recorded answers by request key from the source host (`strategy_set_recorded_series` pineforge.h:1493), reads `na` when the value reaches only plots and alerts, and otherwise stops the run where the value is read if nothing is recorded. A native host fetches and models it itself. |
+| `request.dividends()` | none — no fundamentals feed | — | — | For a Pine script, pineforge-codegen 1.0.0 (0.10.4 rejects the call at transpile) reads TradingView's recorded answers by request key from the source host (`strategy_set_recorded_series` pineforge.h:1497), reads `na` when the value reaches only plots and alerts, and otherwise stops the run where the value is read if nothing is recorded. A native host fetches and models it itself. |
 | `request.earnings()` | none — no fundamentals feed | — | — | Same. |
 | `request.financial()` | none — no fundamentals feed | — | — | Same. |
 | `request.splits()` | none — no corporate-actions feed | — | — | Same. |

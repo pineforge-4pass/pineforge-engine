@@ -158,6 +158,14 @@ settings. The bundled example has no inputs or configurable overrides. It also e
 `run_backtest`/`run_backtest_full`/`report_free`, so the same C++ strategy can
 be loaded by either a batch or native live harness.
 
+In `--mode bars`, chart-symbol `request.security()` evaluators advance on every
+confirmed warmup and realtime input, including equal `--input-tf` and
+`--script-tf`. Higher-timeframe close and TA expressions, chart
+`ticker.heikinashi()` requests, `barmerge.gaps_on`, and `timeframe.period`
+requests do not require a larger script timeframe to keep advancing. External
+symbol feeds and recorded request series remain historical-only. In tick mode,
+broker fills follow observed ticks rather than the batch OHLC path.
+
 ## Feed format
 
 The feed is a small, broker-neutral JSON contract. Your external feed adapter

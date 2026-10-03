@@ -729,6 +729,10 @@ PF_API uint64_t strategy_closed_trade_entry_incarnation(
  *  Normalized ticks start at or after the next input bar's open. This
  *  lifecycle uses close-only strategy calculation (the Pine strategy default)
  *  while resting broker orders are evaluated on every normalized trade.
+ *  On confirmed-bar streams, chart-symbol request.security evaluators advance
+ *  on every warmup and realtime input, including equal input/script timeframes,
+ *  chart Heikin-Ashi requests, gaps_on and timeframe.period requests. A larger
+ *  script timeframe is not required to keep these evaluators advancing.
  *
  *  A generated Pine strategy using this entry point rejects calc_on_order_fills,
  *  historical probe/tail overrides, timestamped FX and auxiliary/native

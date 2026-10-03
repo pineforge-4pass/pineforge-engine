@@ -411,7 +411,8 @@ void PineScheduler::input(
     bool calling_bar_complete = context.completes_script_interval;
     bool boundary = prior_input_script_open_ms_
         != std::numeric_limits<std::int64_t>::min()
-        && prior_input_script_open_ms_ != context.script_interval.open_ms;
+        && prior_input_script_open_ms_ != context.script_interval.open_ms
+        && prior_input_script_open_ms_ != last_published_script_open_ms_;
     if (context.input_index >= 0
         && context.input_index < static_cast<int>(input_script_completes_.size())) {
         calling_bar_complete = input_script_completes_[

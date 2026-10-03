@@ -226,7 +226,8 @@ scoreboard below describes batch backtests; it does not certify new native
 live behavior or real broker fills.
 Known issue (v1.0.0, v1.0.1): a stream whose input and script timeframes are
 equal serves stale `request.security` values after the first realtime bar; see
-[Streaming known issues](docs/pages/streaming.md) for the workaround.
+[Streaming known issues](docs/pages/streaming.md) for the workaround. Current
+source fixes this confirmed-bar stream defect; those releases remain affected.
 
 ## Validation scoreboard
 

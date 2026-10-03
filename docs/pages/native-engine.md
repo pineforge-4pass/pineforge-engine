@@ -2239,13 +2239,13 @@ under the ticket the model or the run named. A host running its own forced
 close states the cause on the row it produced.
 
 `closed_trade_close_cause(i)` (`engine.hpp:1849`) is the C++ read and
-`strategy_closed_trade_close_cause` (`pineforge.h:1249`) the C one, with the
+`strategy_closed_trade_close_cause` (`pineforge.h:1253`) the C one, with the
 same numbering: `-1` for a bad index or a NULL handle, `0` UNKNOWN, `1`
 SCRIPT, `2` BRACKET, `3` MARGIN_CALL, `4` INTRADAY_LOSS_CAP, `5`
 INTRADAY_FILL_CAP, `6` RANGE_END. A row closed at the end of the run
 (`open_at_end`) always answers `6`, ahead of every other cause. The ticket a
 row was booked under is `strategy_closed_trade_entry_id` /
-`_exit_id` / `_exit_comment` (`pineforge.h:1167-1182`), which index exactly the
+`_exit_id` / `_exit_comment` (`pineforge.h:1186-1201`), which index exactly the
 rows of `fill_report`'s trade array and take any handle this engine produces
 — including a `pf_strategy_t` from `strategy_native_host_create_v1`, which is
 how a C host reads back the ticket its own margin model declared.
@@ -3173,7 +3173,7 @@ These are existing refusals, not implied future features:
   recorded request series
 
 A C host has the same stream and the same commands. Streaming needs no new
-symbol — `strategy_stream_begin` and its family (`pineforge.h:739`) take
+symbol — `strategy_stream_begin` and its family (`pineforge.h:743`) take
 a `pf_strategy_t` from `strategy_native_host_create_v1` unchanged — and
 `strategy_native_submit_v1` (`native_c_api.h:2723`) obeys the one legality
 rule its C++ spelling does.
