@@ -324,7 +324,11 @@ void test_xauusd_1d_stream_realtime_bar() {
     CHECK(eng.stream_end(false));
 
     check_every_bar_is_the_session(eng, 5);
-    for (const SeenBar& s : eng.seen) CHECK(s.raw_ismarket == false);
+    for (const SeenBar& s : eng.seen) {
+        if (s.ts != eng.seen.back().ts) CHECK(s.raw_ismarket == false);
+    }
+    CHECK(eng.seen.back().ts == fri_1700 - 23 * 60 * kMinuteMs);
+    CHECK(eng.seen.back().raw_ismarket == true);
 }
 
 // --- the chart-timeframe forms directly ------------------------------------

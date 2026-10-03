@@ -173,10 +173,23 @@ void cap_stream_phase() {
     CHECK(host.stream_end(false));
     CHECK(host.calculations.size() >= 2U);
     if (host.calculations.size() >= 2U) {
-        CHECK(host.calculations.front().stream_warmup);
+        CHECK(!host.calculations.front().stream_warmup);
         CHECK(host.calculations.front().stream_idle);
         CHECK(!host.calculations.back().stream_warmup);
-        CHECK(!host.calculations.back().stream_idle);
+        CHECK(host.calculations.back().stream_idle);
+    }
+
+    CapPhaseProbe ticks;
+    CHECK(ticks.stream_begin(&warmup, 1, "1", "1"));
+    CHECK(ticks.stream_push_tick(TradeTick{60'000, 1, 101.0, 1.0}));
+    CHECK(ticks.stream_advance_time(120'000));
+    CHECK(ticks.stream_end(false));
+    CHECK(ticks.calculations.size() >= 2U);
+    if (ticks.calculations.size() >= 2U) {
+        CHECK(!ticks.calculations.front().stream_warmup);
+        CHECK(ticks.calculations.front().stream_idle);
+        CHECK(!ticks.calculations.back().stream_warmup);
+        CHECK(!ticks.calculations.back().stream_idle);
     }
 }
 
