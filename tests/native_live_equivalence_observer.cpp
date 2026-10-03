@@ -48,6 +48,20 @@ const char* trigger_name(const orders::Trigger& trigger) {
     return "market";
 }
 
+Json trigger_levels(const orders::Trigger& trigger) {
+    if (const auto* limit = std::get_if<orders::Limit>(&trigger))
+        return Json::object({{"limit", number(limit->price)}});
+    if (const auto* stop = std::get_if<orders::Stop>(&trigger))
+        return Json::object({{"stop", number(stop->price)}});
+    if (const auto* stop_limit = std::get_if<orders::StopLimit>(&trigger))
+        return Json::object({{"stop", number(stop_limit->stop)}, {"limit", number(stop_limit->limit)}});
+    if (const auto* trail = std::get_if<orders::Trail>(&trigger))
+        return Json::object({{"offset", number(trail->offset)},
+            {"arm", trail->arm_price ? number(*trail->arm_price) : Json{}},
+            {"best_seed", trail->best_seed ? number(*trail->best_seed) : Json{}}});
+    return Json::object({});
+}
+
 Json action(std::int64_t timestamp, int bar_index, bool is_entry,
             bool is_long, double units, double price,
             const std::string& label, std::uint64_t incarnation, int origin) {
@@ -170,8 +184,21 @@ extern "C" int equivalence_export_receipts(void* state, const char* path) {
         std::ofstream output(path);
         if (!output) return -1;
         int origin = -1;
+        std::int64_t timestamp = -1;
+        std::uint64_t sequence = 0;
+        double raw_price = 0.0;
+        double resolved_price = 0.0;
+        int provenance = -1;
+        int path_phase = -1;
         for (const auto& event : host->native_events(0)) {
-            if (event.driver) origin = event.driver->coordinate.input_interval_index;
+            if (event.driver) {
+                origin = event.driver->coordinate.input_interval_index;
+                timestamp = event.driver->coordinate.effective_time_ms;
+                sequence = event.driver->sequence.value_or(0);
+                raw_price = event.driver->raw_price;
+                provenance = static_cast<int>(event.driver->coordinate.provenance);
+                path_phase = static_cast<int>(event.driver->coordinate.path_phase);
+            }
             if (!event.command) continue;
             orders::DefinitionRef definition;
             const char* kind = nullptr;
@@ -191,6 +218,11 @@ extern "C" int equivalence_export_receipts(void* state, const char* path) {
             } else if (const auto* applied = std::get_if<orders::ExecutionAppliedEvent>(&*event.command)) {
                 definition = applied->definition;
                 origin = applied->cursor.point.input_interval_index;
+                timestamp = applied->effective_time_ms();
+                raw_price = applied->raw_price;
+                resolved_price = applied->resolved_price;
+                provenance = applied->provenance();
+                path_phase = static_cast<int>(applied->cursor.point.path_phase);
                 kind = "executed";
             }
             if (!kind || !definition) continue;
@@ -199,7 +231,16 @@ extern "C" int equivalence_export_receipts(void* state, const char* path) {
                 {"kind", Json::string(kind)},
                 {"type", Json::string(trigger_name(definition->request.trigger))},
                 {"id", Json::string(definition->request.label)},
-                {"origin_input_index", integer(origin)}
+                {"origin_input_index", integer(origin)},
+                {"timestamp", integer(timestamp)},
+                {"sequence", integer(static_cast<std::int64_t>(sequence))},
+                {"request_incarnation", integer(static_cast<std::int64_t>(definition->handle.incarnation))},
+                {"not_before", integer(definition->birth.decision_time_lower_bound)},
+                {"levels", trigger_levels(definition->request.trigger)},
+                {"raw_price", number(raw_price)},
+                {"resolved_price", number(resolved_price)},
+                {"provenance", integer(provenance)},
+                {"path_phase", integer(path_phase)}
             }).dump() << '\n';
         }
         return output ? 0 : -1;

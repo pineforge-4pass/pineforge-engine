@@ -631,7 +631,17 @@ def main():
     parser.add_argument("--qualification-only", action="store_true")
     parser.add_argument("--ticks", action="store_true", help="check explicitly synthetic-print replay and OHLCV reconstruction")
     parser.add_argument("--ticks-only", action="store_true", help="qualify observers and run only the tick checks")
+    parser.add_argument("--tick-tape", type=Path, help="local genuine aggTrades CSV with a checked manifest")
+    parser.add_argument("--tick-manifest", type=Path)
+    parser.add_argument("--venue-klines", type=Path)
+    parser.add_argument("--tick-scenarios", nargs="+")
+    parser.add_argument("--tick-reference-only", action="store_true")
+    parser.add_argument("--tick-rb-only", action="store_true", help="offline bar/path checks without claiming runner qualification")
+    parser.add_argument("--tick-batch-only", action="store_true", help="supplemental large-tape runner checks at 1024-event message boundaries")
     arguments = parser.parse_args()
+    if arguments.tick_tape:
+        from native_live_tick_tape import run_genuine_tape
+        return run_genuine_tape(arguments)
     root = arguments.root.resolve()
     build = arguments.build_dir.resolve()
     output = arguments.out.resolve()

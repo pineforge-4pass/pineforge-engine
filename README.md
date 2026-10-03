@@ -35,7 +35,7 @@ The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pinefo
 - **Open runtime.** The engine and native live runner are Apache-2.0. The separately distributed [PineForge compiler](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) uses PolyForm Noncommercial terms with additional personal-trading permission; commercial use requires a separate license. Public reference strategies, benchmarks and validation tooling are available in their respective repositories; the community-script test set is not redistributed.
 - **Fast.** In-process, no interpreter: median **36× faster than PyneCore** on the 200 strategies both engines time, measured at engine `35db01c8` on 2026-09-29 on an AWS c7a.8xlarge with PyneCore timed as a subprocess, its interpreter start-up included (PineForge runs a median 807k bars/s per strategy over its 201 slots with the bar magnifier on; [method](benchmarks/results/speed.md)). Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
 - **Deterministic to the bit.** Two runs with the same inputs produce identical trade lists. Same on Linux and macOS.
-- **Yours to embed.** 114 `PF_API` declarations across two headers — `pineforge.h`'s 71 (62 runtime exports and up to 9 per-strategy functions a generated module defines) and `native_c_api.h`'s 43 native-host declarations — an ABI that is append-only within a major version from 1.0 on. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
+- **Yours to embed.** 120 `PF_API` declarations across two headers — `pineforge.h`'s 77 (62 runtime exports and up to 15 per-strategy functions a generated module defines) and `native_c_api.h`'s 43 native-host declarations — an ABI that is append-only within a major version from 1.0 on. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
 
 ---
 
@@ -478,11 +478,12 @@ API, the script ABI epoch and the pairing with codegen — is the
 [public contract](docs/pages/public-contract.md); what a 0.x user must act on
 is in [CHANGELOG.md](CHANGELOG.md).
 
-A built strategy `.so` exposes 70 compiled-strategy `PF_API` declarations
-(62 runtime implementations plus eight generated exports) plus 43 native-host
-declarations: 113 `PF_API` exports in total; a script that declares
+A newly generated strategy `.so` exposes 76 compiled-strategy `PF_API` declarations
+(62 runtime implementations plus fourteen generated exports) plus 43 native-host
+declarations: 119 `PF_API` exports in total; a script that declares
 `use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, the
-71st declaration of `pineforge.h`. In an optimized build `nm -gU` also shows libc++'s
+77th declaration of `pineforge.h`. Older modules lack the six opt-in
+[checked-settings exports](docs/checked-settings.md). In an optimized build `nm -gU` also shows libc++'s
 `std::piecewise_construct`; no project-internal C++ symbol is exported. The two
 inventories are pinned by `scripts/check_c_abi_runtime.py`:
 

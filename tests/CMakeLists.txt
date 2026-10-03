@@ -841,6 +841,7 @@ list(APPEND TEST_SOURCES test_native_sizing_price_rule)
 # core-plus-override differential.
 list(APPEND TEST_SOURCES test_adapter_sizing_relower)
 list(APPEND TEST_SOURCES test_adapter_fifo_lot_boundary)
+list(APPEND TEST_SOURCES test_margin_residual_resolved_fill)
 
 # R5 E9: TradingView's trail activation tapes (tests/fixtures/
 # trail_activation_tick_reach) replayed through the Pine adapter, with the
@@ -1244,6 +1245,7 @@ list(APPEND TEST_SOURCES test_native_batch_log_presize)
 # kernel-recorded per-bar hashes linear and takes a row once it is final.
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_state_continuation)
+list(APPEND TEST_SOURCES test_native_tick_volume)
 # R5 V19-B: the order core's journal is a window (native_order_v7) -- absolute
 # journal positions, the chain index against a journal oracle over randomized
 # command streams, chain membership that is not a chain walk (scaling), and a
@@ -2171,6 +2173,18 @@ endif()
 
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/test_native_market_vertical.cpp"
      PINEFORGE_NATIVE_MARKET_VERTICAL_SHA256)
+
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_library(checked_settings_fixture OBJECT fixtures/checked_settings/generated.cpp)
+    target_link_libraries(checked_settings_fixture PRIVATE pineforge)
+    target_compile_options(checked_settings_fixture PRIVATE -ffp-contract=off)
+    set_target_properties(checked_settings_fixture PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    add_executable(test_checked_settings test_checked_settings.cpp
+        $<TARGET_OBJECTS:checked_settings_fixture>)
+    target_link_libraries(test_checked_settings PRIVATE pineforge)
+    target_compile_options(test_checked_settings PRIVATE -UNDEBUG -ffp-contract=off)
+    add_test(NAME test_checked_settings COMMAND test_checked_settings)
+endif()
 
 foreach(test_name ${TEST_SOURCES})
     add_executable(${test_name} ${test_name}.cpp)

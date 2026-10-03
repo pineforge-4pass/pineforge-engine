@@ -135,18 +135,19 @@ directly, so a Pine-layer symbol reaching one is a link error.
 
 ## API at a glance
 
-The public C surface is **114 `PF_API` declarations** across two headers:
+The public C surface is **120 `PF_API` declarations** across two headers:
 
-- `<pineforge/pineforge.h>` — **71**: 62 runtime implementations plus nine
+- `<pineforge/pineforge.h>` — **77**: 62 runtime implementations plus fifteen
   per-strategy generated exports (`strategy_declares_bar_magnifier` only in a
   script that declares `use_bar_magnifier = true`). This is what a compiled
-  strategy `.so` exports and what a harness calls.
+  strategy `.so` exports and what a harness calls. Older modules lack the six
+  opt-in checked-settings exports (repository guide: `docs/checked-settings.md`).
 - `<pineforge/native_c_api.h>` (included by `pineforge.h`) — **43**: the other
   direction, where the host drives the kernel itself. Submit, replace, cancel,
   execute, read the book, read the lots. Additive: no symbol, struct or
   behaviour of the first set changes.
 
-`scripts/check_c_abi_runtime.py` pins both symbol inventories (71 and 43);
+`scripts/check_c_abi_runtime.py` pins both symbol inventories (77 and 43);
 `scripts/check_native_c_api_surface.py` separately pins the host COVERAGE block.
 
 | Group | Symbols | Reference |
@@ -160,9 +161,9 @@ The public C surface is **114 `PF_API` declarations** across two headers:
 | Types | `pf_bar_t`, `pf_trade_tick_t`, `pf_trade_t`, `pf_report_t`, metrics, diagnostics, trace, equity, version, and `pf_magnifier_distribution_t` | @ref pf_types |
 | Native kernel host (C) | `strategy_native_host_create_v1`, `strategy_native_run_v1`, the submit / replace / cancel family, the position, working-book, open-lot, event and state reads, the cohort and subscription calls, and `strategy_configure_native_ext_v1` / `_result_v1` | `native_c_api.h` |
 
-A built PineForge strategy `.so` exports 113 `PF_API` symbols (70 compiled-strategy
+A newly generated PineForge strategy `.so` exports 119 `PF_API` symbols (76 compiled-strategy
 declarations plus 41 `strategy_native_*` declarations and two
-`strategy_configure_native_ext_*` declarations; 114 with
+`strategy_configure_native_ext_*` declarations; 120 with
 `strategy_declares_bar_magnifier` in a script that declares the magnifier) and the toolchain
 `std::piecewise_construct` symbol; no project-internal C++ symbol is exported — see
 **[ABI stability](@ref abi_stability)** for the full guarantee.

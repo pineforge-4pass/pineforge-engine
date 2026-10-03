@@ -1,4 +1,5 @@
 #include <pineforge/source/pine_strategy_host.hpp>
+#include <pineforge/checked_settings.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
 
@@ -252,9 +253,16 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
         : (path_order_mode_ == 2 ? NativePathOrder::LowFirst
                                  : NativePathOrder::Auto);
     const NativeRunSpec spec = adapter_.project(effective, staged, args, path_order);
+    const bool failed_before = native_state().kind == NativeLifecycleKind::Failed;
     const auto setup = configure_native(spec);
-    if (setup.status != NativeSetupStatus::Applied)
+    if (setup.status != NativeSetupStatus::Applied) {
+        if (failed_before) {
+            try { prepare_script_run(nullptr, 0, false); }
+            catch (const checked_settings::LatchedSettingsFailure&) { throw; }
+            catch (...) {}
+        }
         throw std::logic_error("Pine native adapter failed to configure projected run spec");
+    }
     config_ = effective;
     source_configuration_captured_ = true;
 }
@@ -285,10 +293,15 @@ void source::PineStrategyHost::on_native_run_begin() {
     try {
         install_symbol_calendar_metadata();
         scheduler_.run_begin(*this);
+    } catch (const checked_settings::LatchedSettingsFailure&) {
+        throw;
     } catch (const std::exception& error) {
+        if (adapter_.stream_mode_) throw;
         source_prepare_failed_ = true;
         last_error_ = error.what();
     } catch (...) {
+        if (adapter_.stream_mode_)
+            throw std::runtime_error("unknown error during Pine script preparation");
         source_prepare_failed_ = true;
         last_error_ = "unknown error during Pine script preparation";
     }
