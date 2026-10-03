@@ -100,6 +100,11 @@ def query(ledger, sql):
         return database.execute(sql).fetchall()
 
 
+def first_attempt_time(ledger):
+    epoch_seconds = query(ledger, 'SELECT min(started_at) FROM delivery_log')[0][0] / 1000
+    return time.monotonic() - (time.time() - epoch_seconds)
+
+
 def invoke(arguments, expected=0, env=None):
     process = subprocess.run([runner] + arguments, capture_output=True, text=True,
                              env=environment if env is None else env, timeout=25)
@@ -302,9 +307,9 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
         disconnected_routes = save_routes('disconnected', disconnected)
         exits.clear()
         disconnected_ledger = root / 'disconnected.sqlite'
-        started_at = time.monotonic()
         run(disconnected_ledger, disconnected_routes)
-        assert all(row['at'] - started_at < 0.8 for row in exits.rows)
+        started_at = first_attempt_time(disconnected_ledger)
+        assert all(row['at'] - started_at < 0.4 for row in exits.rows)
         failed = query(disconnected_ledger, "SELECT event_id,attempt,started_at FROM delivery_log WHERE phase='completed' AND target_id='entries' ORDER BY log_id")
         for event_id in {row[0] for row in failed}:
             timeline = [row[2] for row in failed if row[0] == event_id]
