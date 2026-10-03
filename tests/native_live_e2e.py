@@ -227,8 +227,10 @@ try:
         result = subprocess.run(base+options, capture_output=True, text=True,
                                 env=dict(os.environ, PINEFORGE_TEST_HMAC=secret), timeout=25)
         if result.returncode:
-            assert 'libcurl build with WS/WSS support enabled' in result.stderr, (result.stdout,result.stderr)
+            assert ('libcurl build with WS/WSS support enabled' in result.stderr or
+                    'libcurl 8.14.1 or newer' in result.stderr), (result.stdout,result.stderr)
             assert not received
+            assert not (root/'websocket.sqlite3').exists()
             print('WebSocket CLI integration unavailable in this libcurl build')
         else:
             assert len(received) == 4

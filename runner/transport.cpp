@@ -40,6 +40,11 @@ struct CurlGlobal {
     ~CurlGlobal() { curl_global_cleanup(); }
 };
 
+void initialize_curl() {
+    static CurlGlobal global;
+    (void)global;
+}
+
 using CurlHandle = std::unique_ptr<CURL, decltype(&curl_easy_cleanup)>;
 using UrlHandle = std::unique_ptr<CURLU, decltype(&curl_url_cleanup)>;
 
@@ -90,16 +95,9 @@ void check_url(const HttpOptions& options, bool websocket) {
 }
 
 CurlHandle make_handle(const HttpOptions& options, bool websocket = false) {
-    static CurlGlobal global;
-    (void)global;
-    check_url(options, websocket);
-    if (websocket) {
-        const auto* info = curl_version_info(CURLVERSION_NOW);
-        bool found = false;
-        for (const char* const* p = info ? info->protocols : nullptr; p && *p; ++p)
-            if (std::string_view(*p) == (options.url.rfind("wss:", 0) == 0 ? "wss" : "ws")) found = true;
-        if (!found) throw std::runtime_error("native WebSocket requires a libcurl build with WS/WSS support enabled");
-    }
+    initialize_curl();
+    if (websocket) validate_websocket(options);
+    else check_url(options, false);
     CurlHandle curl(curl_easy_init(), &curl_easy_cleanup);
     if (!curl) throw std::runtime_error("native HTTP handle allocation failed");
     option(curl.get(), CURLOPT_URL, options.url.c_str());
@@ -292,15 +290,28 @@ std::string get_feed_snapshot(const HttpOptions& options) {
     return std::move(response.body);
 }
 
+void validate_websocket(const HttpOptions& options) {
+    initialize_curl();
+    check_url(options, true);
+    const auto* info = curl_version_info(CURLVERSION_NOW);
+    if (!info || info->version_num < 0x080e01)
+        throw std::runtime_error("native WebSocket requires libcurl 8.14.1 or newer for complete-message finality (loaded " +
+                                 std::string(info && info->version ? info->version : "unknown") + ")");
+    const std::string_view protocol = options.url.rfind("wss:", 0) == 0 ? "wss" : "ws";
+    for (const char* const* entry = info->protocols; entry && *entry; ++entry)
+        if (std::string_view(*entry) == protocol) return;
+    throw std::runtime_error("native WebSocket requires a libcurl build with WS/WSS support enabled");
+}
+
 void receive_websocket(const HttpOptions& options, std::string_view subscription,
                        const std::function<bool(std::string_view)>& on_message,
                        const std::function<bool()>& stopped) {
     if (!on_message || !stopped || subscription.size() > max_event_bytes || !valid_utf8(subscription))
         throw std::runtime_error("native WebSocket invalid callbacks or subscription");
     if (stopped()) return;
-#if LIBCURL_VERSION_NUM < 0x075600
+#if LIBCURL_VERSION_NUM < 0x080e01
     (void)options;
-    throw std::runtime_error("native WebSocket requires libcurl 7.86 or newer with WS/WSS support enabled");
+    throw std::runtime_error("native WebSocket requires libcurl 8.14.1 or newer with WS/WSS support enabled");
 #else
     auto curl = make_handle(options, true);
     option(curl.get(), CURLOPT_CONNECT_ONLY, 2L);
@@ -316,6 +327,7 @@ void receive_websocket(const HttpOptions& options, std::string_view subscription
     bool assembling = false;
     std::string message;
     std::uint64_t frame_offset = 0;
+    int frame_flags = 0;
     for (;;) {
         if (stopped()) return;
         const auto deadline = assembling ? std::min(idle_deadline, message_deadline) : idle_deadline;
@@ -342,8 +354,10 @@ void receive_websocket(const HttpOptions& options, std::string_view subscription
         }
         if ((meta->flags & CURLWS_BINARY) || !(meta->flags & CURLWS_TEXT) ||
             meta->offset < 0 || meta->bytesleft < 0 ||
-            static_cast<std::uint64_t>(meta->offset) != frame_offset || received > buffer.size())
+            static_cast<std::uint64_t>(meta->offset) != frame_offset || received > buffer.size() ||
+            meta->len != received || (frame_offset && meta->flags != frame_flags))
             throw std::runtime_error("native WebSocket requires ordered text frames");
+        frame_flags = meta->flags;
         if (!assembling) {
             message_deadline = Clock::now() + timeout;
             assembling = true;

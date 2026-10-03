@@ -1,6 +1,6 @@
 # Dependencies belong only to the optional executable, not PineForge::pineforge.
 find_package(SQLite3 REQUIRED)
-find_package(CURL 7.86 REQUIRED)
+find_package(CURL 8.14.1 REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 find_package(Threads REQUIRED)
 
@@ -164,6 +164,12 @@ if(PINEFORGE_BUILD_TESTS)
         set_tests_properties(${native_test} PROPERTIES TIMEOUT 120)
     endforeach()
     set_tests_properties(test_native_live_websocket PROPERTIES SKIP_RETURN_CODE 77)
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        add_test(NAME native_live_websocket_e2e COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/tests/native_live_websocket_e2e.py $<TARGET_FILE:pineforge-live>
+            $<TARGET_FILE:native_live_example>)
+        set_tests_properties(native_live_websocket_e2e PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+    endif()
 endif()
 
 if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)

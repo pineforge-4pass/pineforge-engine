@@ -657,6 +657,12 @@ LegacyIdentityFields legacy_fields(const Config &c) {
 }
 
 int run(Config c) {
+    if (c.feed_url.rfind("ws://", 0) == 0 || c.feed_url.rfind("wss://", 0) == 0) {
+        HttpOptions feed;
+        feed.url = c.feed_url;
+        feed.allow_insecure_http = c.allow_http;
+        validate_websocket(feed);
+    }
     if (!c.native_config.empty()) {
         c.native = parse_native_config(read_file(c.native_config, MAX_FRAME));
         NativeClockBindings clock{c.input_tf, c.script_tf, c.timezone, c.session,

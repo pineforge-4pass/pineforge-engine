@@ -33,6 +33,7 @@ DeliveryResult post_webhook(const HttpOptions& options, const StoredEvent& event
 // Fetch a finite provider-neutral JSONL snapshot. Maximum response 4 MiB;
 // requires HTTP 2xx and never attaches webhook HMAC/idempotency headers.
 std::string get_feed_snapshot(const HttpOptions& options);
+void validate_websocket(const HttpOptions& options);
 // Native WS/WSS intake. Complete UTF-8 text messages only, at most 1 MiB.
 // total_timeout_ms bounds idle time and assembly of each message. A closure
 // or transport failure throws; reconnection/continuity is never inferred.

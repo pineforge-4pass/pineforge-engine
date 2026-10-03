@@ -32,13 +32,41 @@ ctest --test-dir build-live --output-on-failure
 
 The option defaults to **OFF**. Core-only engine users gain no SQLite,
 networking or cryptography dependencies. The optional runner requires
-SQLite3, libcurl 7.86+ and OpenSSL Crypto. WebSockets additionally require a
+SQLite3, libcurl 8.14.1+ and OpenSSL Crypto. Older curl versions are refused
+at configure time, including for a runner intended only for file/HTTP feeds.
+Core-only engine builds remain unaffected. WebSockets additionally require a
 libcurl build with the `ws`/`wss` protocols enabled; some system curl builds
 omit them even when the version is recent. Such a build refuses WebSocket
-input explicitly. Set `CURL_DIR` to a curl CMake package when using a custom
+input explicitly, before opening or binding the ledger. A WebSocket startup
+check also refuses a runtime libcurl older than 8.14.1, even if the runner was
+built with newer headers. File/HTTP feeds do not use this WebSocket runtime
+check.
+
+The floor is necessary for reliable fragmented-message finality. Curl 8.13.0
+first corrected FIN/CONT reporting: [curl's release notes](https://curl.se/ch/8.13.0.html) list
+“ws: corrected curlws_cont to reflect its documented purpose”
+([`fa3d1e7`](https://github.com/curl/curl/commit/fa3d1e7d43bf0e4f589aeae73715348645318a83))
+and “ws: fix and extend CURLWS_CONT handling”
+([`3588df9`](https://github.com/curl/curl/commit/3588df9478d7c27046b34cdb510728a26bedabc7)).
+Older versions can report an unfinished FIN=0 text frame as complete. However,
+8.13.0 and 8.14.0 still lose fragmentation state around control frames and
+accept a new text message before the unfinished one terminates. Curl 8.14.1
+(June 4, 2025) qualifies both cases: its [release notes](https://curl.se/ch/8.14.1.html)
+include “ws: tests and fixes”
+([`d3594be`](https://github.com/curl/curl/commit/d3594be6531df3d5eafcdd09f84ad9dee1777028)),
+which preserves state across interleaved ping/pong and rejects invalid
+fragment sequences. In 8.14.1+, `CURLWS_CONT` reflects a non-final data frame, consistently across
+all chunks of that frame; `bytesleft == 0` alone proves only the end of a
+frame, not the end of a message. The runner checks ordered chunks and stable
+frame flags, and delivers text only after the entire final frame arrives
+(`bytesleft == 0` and no `CURLWS_CONT`). libcurl's public metadata exposes no
+separate raw FIN bit, so assembly cannot repair unreliable older metadata.
+
+Set `CURL_DIR` to a curl CMake package when using a custom
 build; its imported target must include any transitive static dependencies.
 The executable targets POSIX macOS/Linux. Python is used only by optional
-integration tests (`tests/native_live_e2e.py`, `tests/native_live_startup_e2e.py`),
+integration tests (`tests/native_live_e2e.py`, `tests/native_live_startup_e2e.py`,
+`tests/native_live_websocket_e2e.py`),
 never by the running executable.
 
 The build includes `build-live/lib/native-live-example.so`, a hand-written
