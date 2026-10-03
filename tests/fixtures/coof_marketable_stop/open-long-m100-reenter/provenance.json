@@ -1,0 +1,16 @@
+{
+  "channel": "ws-report-v1",
+  "symbol": "BINANCE:BTCUSDT",
+  "interval": "15",
+  "from": "2025-04-06",
+  "to": "2025-04-08",
+  "rangeProof": "covered",
+  "sourceSha256": "e9d3480f036bb838138706ceb50fd6258cd44cdf847e5c64950029d359c06e9d",
+  "barsSha256": "45b8ffe8c3b5efc14bc3e738b31883a8fcec3af1f5ea874ce083d51cbfa5d6ae",
+  "chartFeedSha256": "6b54c44ac6de8b7b588b3fcc6ddc29b09e5fe12ce9559d811dca7859217e6270",
+  "rawFrameSha256": "8bebf79137a0829885d9ebf6e4863c9295d59078dfb8792f54c1c56326e55568",
+  "decodedReportSha256": "2b26df1c3d2edc4d93e2086d609a4bbf2208ea6b296953eb0bca8523eaa644a9",
+  "exportTapeSha256": "03885245121a9eb0a194e608e7e9509a16407358c3b7913cdd645b9fef8091c4",
+  "fixtureTapeSha256": "ec5440094343902bbb6faf06fdb5dea07ff43b306452d1afada8845cc367acd0",
+  "closedTrades": 2
+}

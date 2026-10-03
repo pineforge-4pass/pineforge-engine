@@ -17,6 +17,7 @@ chart bars in UTC milliseconds; symbol tick and lot grids are set explicitly by
 | `band-reversal-above`, `band-flat-above` | A band just above 3865.5 admits; the affordable band is not rounded to whole ticks. |
 | `fractional-affordable` | An affordable upward-gap reversal admits and retains its entry-bar margin slice. |
 | `forex-under`, `forex-equal` | An opposite entry compares exact source equity to money-grid notional without an additive epsilon; equality admits. No currency conversion is used. |
+| `fx-1-{under,equal,above}`, `fx-omitted-{under,equal,above}` | Explicit and default pyramiding 1 use the same exact source-money comparison as pyramiding 0; a one-ULP deficit refuses the opening leg, equality and one-ULP surplus admit. |
 
 The fixtures preserve the exported Pine bytes, including hash-pinned scratch
 names in older strategy titles; those titles are export identities, not a
@@ -34,6 +35,11 @@ This is TradingView's representation-qualified inclusive comparison, not a
 strict decimal inequality; money-notional equality separately admits.
 
 The epsilon removal is restricted to the ordinary, no-cost low-value opposite
-market shape proved by `forex-under/equal`; other fractional/POOC/cost shapes
+market shape proved by `forex-under/equal` and the explicit/default pyramiding-1
+controls; other fractional/POOC/cost shapes
 retain their previous guard. Flat whole-lot admission retains TAIL-D's settled
 agreement or no-gap qualification. No realized-cash rounding rule is prescribed.
+
+The six pyramiding-1 controls fail the two under-capital row-set comparisons
+against wave head `a747ad5b`. Their sources, trade tapes, and provenance were
+exported independently, not derived from population strategy sources.

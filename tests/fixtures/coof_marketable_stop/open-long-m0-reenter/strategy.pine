@@ -1,0 +1,13 @@
+//@version=6
+strategy("PX opening callback long 0 true", initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, margin_long=0, margin_short=0, pyramiding=0, calc_on_order_fills=true)
+varip int issued = 0
+if time == timestamp("UTC", 2025, 4, 6, 9, 45) and issued == 0
+    strategy.entry("opening", strategy.long)
+    issued := 1
+if strategy.position_size != 0 and strategy.opentrades.entry_id(0) == "opening"
+    strategy.exit("new-stop", "opening", stop=83100)
+if true and time == timestamp("UTC", 2025, 4, 6, 10, 0) and strategy.position_size == 0 and issued == 1
+    strategy.entry("second", strategy.long)
+    issued := 2
+if time == timestamp("UTC", 2025, 4, 7, 1, 0)
+    strategy.close_all()

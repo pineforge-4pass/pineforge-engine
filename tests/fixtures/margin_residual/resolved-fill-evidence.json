@@ -1,0 +1,870 @@
+[
+  {
+    "name": "px-f2b-eth-short-0",
+    "role": "passing-pin",
+    "source": "//@version=6\nstrategy(\"px-f2b-eth-short-0\", initial_capital=10646.935793, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=2, process_orders_on_close=true)\nif time == timestamp(\"UTC\", 2025, 4, 8, 13, 45)\n    strategy.entry(\"test\", strategy.short, qty=6.7883)\nif time == timestamp(\"UTC\", 2025, 4, 8, 14, 30)\n    strategy.close_all()\nplot(strategy.equity)\n",
+    "tradesCsv": "﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)\n1,Exit short,2025-04-08 22:00,Margin call,1567.69,0.0004,0.627052,-0.000651064,-0.10,0.000627064,0,0.00,-0.000337526,-0.05,-5.321109,-0.05,1\n1,Entry short,2025-04-08 21:45,test,1567.63,0.0004,0.627052,-0.000651064,-0.10,0.000627064,0,0.00,-0.000337526,-0.05,-5.321109,-0.05,1\n2,Exit short,2025-04-08 22:00,Margin call,1567.69,1,1567.63,-1.62766,-0.10,1.5676600001,0,0.00,-0.843815,-0.05,-6.1649537,-0.06,1\n2,Entry short,2025-04-08 21:45,test,1567.63,1,1567.63,-1.62766,-0.10,1.5676600001,0,0.00,-0.843815,-0.05,-6.1649537,-0.06,1\n3,Exit short,2025-04-08 22:30,Close position order,1546.37,5.7879,9073.285677,114.038994,1.26,9.011760301,128.9902,1.42,-91.99181,-1.01,112.41068,1.06,3\n3,Entry short,2025-04-08 21:45,test,1567.63,5.7879,9073.285677,114.038994,1.26,9.011760301,128.9902,1.42,-91.99181,-1.01,112.41068,1.06,3",
+    "metrics": {
+      "validationEligible": true,
+      "strategy": "px-f2b-eth-short-0",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "from": "2025-04-08",
+      "to": "2025-04-09",
+      "deepBacktesting": true,
+      "trades": 3,
+      "tvTradesCsv": "tv_trades.csv",
+      "tapeChannel": "ws-report-v1",
+      "sourceCanonicalization": "pine-facade-v1",
+      "sourceArtifactHash": "63684dc217dd4b17819df5c03c5be766f8925e004e0c780212b8920c2f171599",
+      "tvTradesCsvHash": "f37f7b4cb76fc13d1b209ba7599dae811440905dfb8ab6b54f11a9a76849afcf",
+      "wsProvenance": {
+        "schemaVersion": 1,
+        "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+        "authUser": "luisleo52655",
+        "accountType": "pro_premium_expert",
+        "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+        "pineVersion": "0.91370",
+        "symbol": "BINANCE:ETHUSDT.P",
+        "interval": "15",
+        "requestedRange": {
+          "from": 1744070400000,
+          "to": 1744156800000
+        },
+        "returnedRange": {
+          "from": 1744070400000,
+          "to": 1744156800000
+        },
+        "rangeProof": "covered",
+        "rawFrameSha256": "1bfa60d9feae8fed15b17c4127b4e0c8f13e50e73f134ce7c516669d0be4395c",
+        "decodedReportSha256": "8442c2993d43c667e26e756d33ce481375021141c5243a55006103890b8f9c32",
+        "closedTrades": 3,
+        "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+        "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+      },
+      "backtestedAt": "2026-10-03T11:01:13.411Z"
+    },
+    "provenance": {
+      "title": "px-f2b-eth-short-0",
+      "slug": "px-f2b-eth-short-0",
+      "source": "pineforge-workflow campaign lab tv",
+      "channel": "ws-report-v1",
+      "exportedAt": "2026-10-03T11:01:13.412Z",
+      "chart": {
+        "symbol": "BINANCE:ETHUSDT.P",
+        "interval": "15",
+        "from": "2025-04-08",
+        "to": "2025-04-09"
+      },
+      "pine_sha256": "63684dc217dd4b17819df5c03c5be766f8925e004e0c780212b8920c2f171599",
+      "tv_trades_sha256": "f37f7b4cb76fc13d1b209ba7599dae811440905dfb8ab6b54f11a9a76849afcf",
+      "tv_trades_rows": 6
+    }
+  },
+  {
+    "name": "px-f2b-eth-short-1",
+    "role": "passing-pin",
+    "source": "//@version=6\nstrategy(\"px-f2b-eth-short-1\", initial_capital=10646.9358, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=2, process_orders_on_close=true)\nif time == timestamp(\"UTC\", 2025, 4, 8, 13, 45)\n    strategy.entry(\"test\", strategy.short, qty=6.7883)\nif time == timestamp(\"UTC\", 2025, 4, 8, 14, 30)\n    strategy.close_all()\nplot(strategy.equity)\n",
+    "tradesCsv": "﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)\n1,Exit short,2025-04-08 22:00,Margin call,1567.69,0.0004,0.627052,-0.000651064,-0.10,0.000627064,0,0.00,-0.000337526,-0.05,-5.321109,-0.05,1\n1,Entry short,2025-04-08 21:45,test,1567.63,0.0004,0.627052,-0.000651064,-0.10,0.000627064,0,0.00,-0.000337526,-0.05,-5.321109,-0.05,1\n2,Exit short,2025-04-08 22:00,Margin call,1567.69,1,1567.63,-1.62766,-0.10,1.5676600001,0,0.00,-0.843815,-0.05,-6.1649537,-0.06,1\n2,Entry short,2025-04-08 21:45,test,1567.63,1,1567.63,-1.62766,-0.10,1.5676600001,0,0.00,-0.843815,-0.05,-6.1649537,-0.06,1\n3,Exit short,2025-04-08 22:30,Close position order,1546.37,5.7879,9073.285677,114.038994,1.26,9.011760301,128.9902,1.42,-91.99181,-1.01,112.41068,1.06,3\n3,Entry short,2025-04-08 21:45,test,1567.63,5.7879,9073.285677,114.038994,1.26,9.011760301,128.9902,1.42,-91.99181,-1.01,112.41068,1.06,3",
+    "metrics": {
+      "validationEligible": true,
+      "strategy": "px-f2b-eth-short-1",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "from": "2025-04-08",
+      "to": "2025-04-09",
+      "deepBacktesting": true,
+      "trades": 3,
+      "tvTradesCsv": "tv_trades.csv",
+      "tapeChannel": "ws-report-v1",
+      "sourceCanonicalization": "pine-facade-v1",
+      "sourceArtifactHash": "f49090cff3605c9f6d3d9b958ffadbe9757e25656fbfbbe049267b081aad7b3e",
+      "tvTradesCsvHash": "f37f7b4cb76fc13d1b209ba7599dae811440905dfb8ab6b54f11a9a76849afcf",
+      "wsProvenance": {
+        "schemaVersion": 1,
+        "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+        "authUser": "luisleo52655",
+        "accountType": "pro_premium_expert",
+        "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+        "pineVersion": "0.91371",
+        "symbol": "BINANCE:ETHUSDT.P",
+        "interval": "15",
+        "requestedRange": {
+          "from": 1744070400000,
+          "to": 1744156800000
+        },
+        "returnedRange": {
+          "from": 1744070400000,
+          "to": 1744156800000
+        },
+        "rangeProof": "covered",
+        "rawFrameSha256": "8646cb7f97e607a787318e58918b075690a13b53667b7bace235e3c731727d8b",
+        "decodedReportSha256": "a60efe6274599511bdcc552bdcc7a3c2c7f10c423dc788bbf90b977d4e6f4ac7",
+        "closedTrades": 3,
+        "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+        "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+      },
+      "backtestedAt": "2026-10-03T11:01:14.465Z"
+    },
+    "provenance": {
+      "title": "px-f2b-eth-short-1",
+      "slug": "px-f2b-eth-short-1",
+      "source": "pineforge-workflow campaign lab tv",
+      "channel": "ws-report-v1",
+      "exportedAt": "2026-10-03T11:01:14.466Z",
+      "chart": {
+        "symbol": "BINANCE:ETHUSDT.P",
+        "interval": "15",
+        "from": "2025-04-08",
+        "to": "2025-04-09"
+      },
+      "pine_sha256": "f49090cff3605c9f6d3d9b958ffadbe9757e25656fbfbbe049267b081aad7b3e",
+      "tv_trades_sha256": "f37f7b4cb76fc13d1b209ba7599dae811440905dfb8ab6b54f11a9a76849afcf",
+      "tv_trades_rows": 6
+    }
+  },
+  {
+    "name": "px-f2b-eth-short-2",
+    "role": "passing-pin",
+    "source": "//@version=6\nstrategy(\"px-f2b-eth-short-2\", initial_capital=10647.1065643645, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=2, process_orders_on_close=true)\nif time == timestamp(\"UTC\", 2025, 4, 8, 13, 45)\n    strategy.entry(\"test\", strategy.short, qty=6.7883)\nif time == timestamp(\"UTC\", 2025, 4, 8, 14, 30)\n    strategy.close_all()\nplot(strategy.equity)\n",
+    "tradesCsv": "﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)\n1,Exit short,2025-04-08 22:00,Margin call,1567.69,1,1567.63,-1.62766,-0.10,1.5676600001,0,0.00,-0.843815,-0.05,-6.1646166,-0.06,1\n1,Entry short,2025-04-08 21:45,test,1567.63,1,1567.63,-1.62766,-0.10,1.5676600001,0,0.00,-0.843815,-0.05,-6.1646166,-0.06,1\n2,Exit short,2025-04-08 22:30,Close position order,1546.37,5.7883,9073.912729,114.046875,1.26,9.012383101,128.99913,1.42,-91.99817,-1.01,112.41921,1.06,3\n2,Entry short,2025-04-08 21:45,test,1567.63,5.7883,9073.912729,114.046875,1.26,9.012383101,128.99913,1.42,-91.99817,-1.01,112.41921,1.06,3",
+    "metrics": {
+      "validationEligible": true,
+      "strategy": "px-f2b-eth-short-2",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "from": "2025-04-08",
+      "to": "2025-04-09",
+      "deepBacktesting": true,
+      "trades": 2,
+      "tvTradesCsv": "tv_trades.csv",
+      "tapeChannel": "ws-report-v1",
+      "sourceCanonicalization": "pine-facade-v1",
+      "sourceArtifactHash": "dac835951a9a9f359870394a44daf137c5231e8df5e0c4a61e20cb9ae26eda86",
+      "tvTradesCsvHash": "10b45d3d42177ce23c21719631d35e5d6f42ab9a67725fb4722c0cf4f62d4c8f",
+      "wsProvenance": {
+        "schemaVersion": 1,
+        "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+        "authUser": "luisleo52655",
+        "accountType": "pro_premium_expert",
+        "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+        "pineVersion": "0.91372",
+        "symbol": "BINANCE:ETHUSDT.P",
+        "interval": "15",
+        "requestedRange": {
+          "from": 1744070400000,
+          "to": 1744156800000
+        },
+        "returnedRange": {
+          "from": 1744070400000,
+          "to": 1744156800000
+        },
+        "rangeProof": "covered",
+        "rawFrameSha256": "6c332478b993bde677d9543a3c713f1a3caf66095df6548a5e6a00d591371d0b",
+        "decodedReportSha256": "066133b0357f18546bad0c6af5837f5b77760d6970156238af5f958567a33f26",
+        "closedTrades": 2,
+        "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+        "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+      },
+      "backtestedAt": "2026-10-03T11:01:15.341Z"
+    },
+    "provenance": {
+      "title": "px-f2b-eth-short-2",
+      "slug": "px-f2b-eth-short-2",
+      "source": "pineforge-workflow campaign lab tv",
+      "channel": "ws-report-v1",
+      "exportedAt": "2026-10-03T11:01:15.342Z",
+      "chart": {
+        "symbol": "BINANCE:ETHUSDT.P",
+        "interval": "15",
+        "from": "2025-04-08",
+        "to": "2025-04-09"
+      },
+      "pine_sha256": "dac835951a9a9f359870394a44daf137c5231e8df5e0c4a61e20cb9ae26eda86",
+      "tv_trades_sha256": "10b45d3d42177ce23c21719631d35e5d6f42ab9a67725fb4722c0cf4f62d4c8f",
+      "tv_trades_rows": 4
+    }
+  },
+  {
+    "name": "px-f2b-eth-short-3",
+    "role": "passing-pin",
+    "source": "//@version=6\nstrategy(\"px-f2b-eth-short-3\", initial_capital=10645.2, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=2, process_orders_on_close=true)\nif time == timestamp(\"UTC\", 2025, 4, 8, 13, 45)\n    strategy.entry(\"test\", strategy.short, qty=6.7883)\nif time == timestamp(\"UTC\", 2025, 4, 8, 14, 30)\n    strategy.close_all()\nplot(strategy.equity)\n",
+    "tradesCsv": "﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)\n1,Exit short,2025-04-08 22:00,Margin call,1567.69,0.0048,7.524624,-0.007812768,-0.10,0.007524768,0,0.00,-0.004050312,-0.05,-5.324822,-0.05,1\n1,Entry short,2025-04-08 21:45,test,1567.63,0.0048,7.524624,-0.007812768,-0.10,0.007524768,0,0.00,-0.004050312,-0.05,-5.324822,-0.05,1\n2,Exit short,2025-04-08 22:00,Margin call,1582.76,0.5032,788.831416,-8.4060545,-1.07,0.792638124,1.4976163,0.19,-8.007832,-1.01,-13.33646,-0.13,1\n2,Entry short,2025-04-08 21:45,test,1567.63,0.5032,788.831416,-8.4060545,-1.07,0.792638124,1.4976163,0.19,-8.007832,-1.01,-13.33646,-0.13,1\n3,Exit short,2025-04-08 22:30,Close position order,1546.37,6.2803,9845.186689,123.74075,1.26,9.778427101,139.96393,1.42,-99.943535,-1.01,115.32688,1.08,3\n3,Entry short,2025-04-08 21:45,test,1567.63,6.2803,9845.186689,123.74075,1.26,9.778427101,139.96393,1.42,-99.943535,-1.01,115.32688,1.08,3",
+    "metrics": {
+      "validationEligible": true,
+      "strategy": "px-f2b-eth-short-3",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "from": "2025-04-08",
+      "to": "2025-04-09",
+      "deepBacktesting": true,
+      "trades": 3,
+      "tvTradesCsv": "tv_trades.csv",
+      "tapeChannel": "ws-report-v1",
+      "sourceCanonicalization": "pine-facade-v1",
+      "sourceArtifactHash": "4539f8e209dc57360c41b697a9cfb2295df5060235ed49faf02e8ce574ff51d8",
+      "tvTradesCsvHash": "3e959e410ba70f6ad818ea8b2be7e0aa987182a7ad6e0cd753b15cc5a3a62c8b",
+      "wsProvenance": {
+        "schemaVersion": 1,
+        "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+        "authUser": "luisleo52655",
+        "accountType": "pro_premium_expert",
+        "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+        "pineVersion": "0.91373",
+        "symbol": "BINANCE:ETHUSDT.P",
+        "interval": "15",
+        "requestedRange": {
+          "from": 1744070400000,
+          "to": 1744156800000
+        },
+        "returnedRange": {
+          "from": 1744070400000,
+          "to": 1744156800000
+        },
+        "rangeProof": "covered",
+        "rawFrameSha256": "817f60171e0c49d30e1b0913705906156e96d16f3fe4e9121e8dc50db79a7b85",
+        "decodedReportSha256": "ec35bf3d614fe74229f567367a1c20161346614abb8db284d4cdba29cdb4957b",
+        "closedTrades": 3,
+        "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+        "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+      },
+      "backtestedAt": "2026-10-03T11:01:16.554Z"
+    },
+    "provenance": {
+      "title": "px-f2b-eth-short-3",
+      "slug": "px-f2b-eth-short-3",
+      "source": "pineforge-workflow campaign lab tv",
+      "channel": "ws-report-v1",
+      "exportedAt": "2026-10-03T11:01:16.555Z",
+      "chart": {
+        "symbol": "BINANCE:ETHUSDT.P",
+        "interval": "15",
+        "from": "2025-04-08",
+        "to": "2025-04-09"
+      },
+      "pine_sha256": "4539f8e209dc57360c41b697a9cfb2295df5060235ed49faf02e8ce574ff51d8",
+      "tv_trades_sha256": "3e959e410ba70f6ad818ea8b2be7e0aa987182a7ad6e0cd753b15cc5a3a62c8b",
+      "tv_trades_rows": 6
+    }
+  },
+  {
+    "name": "px-f2b-eth-short-4",
+    "role": "passing-pin",
+    "source": "//@version=6\nstrategy(\"px-f2b-eth-short-4\", initial_capital=10648.2, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=2, process_orders_on_close=true)\nif time == timestamp(\"UTC\", 2025, 4, 8, 13, 45)\n    strategy.entry(\"test\", strategy.short, qty=6.7883)\nif time == timestamp(\"UTC\", 2025, 4, 8, 14, 30)\n    strategy.close_all()\nplot(strategy.equity)\n",
+    "tradesCsv": "﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)\n1,Exit short,2025-04-08 22:00,Margin call,1582.76,0.5148,807.015924,-8.599834,-1.07,0.810910386,1.53214,0.19,-8.192432,-1.01,-13.517097,-0.13,1\n1,Entry short,2025-04-08 21:45,test,1567.63,0.5148,807.015924,-8.599834,-1.07,0.810910386,1.53214,0.19,-8.192432,-1.01,-13.517097,-0.13,1\n2,Exit short,2025-04-08 22:30,Close position order,1546.37,6.2735,9834.526805,123.60677,1.26,9.767839501,139.81238,1.42,-99.83532,-1.01,115.006935,1.08,3\n2,Entry short,2025-04-08 21:45,test,1567.63,6.2735,9834.526805,123.60677,1.26,9.767839501,139.81238,1.42,-99.83532,-1.01,115.006935,1.08,3",
+    "metrics": {
+      "validationEligible": true,
+      "strategy": "px-f2b-eth-short-4",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "from": "2025-04-08",
+      "to": "2025-04-09",
+      "deepBacktesting": true,
+      "trades": 2,
+      "tvTradesCsv": "tv_trades.csv",
+      "tapeChannel": "ws-report-v1",
+      "sourceCanonicalization": "pine-facade-v1",
+      "sourceArtifactHash": "728e9272a56a8dfbeffd0132e3c5cf780d9803df7d9907dbf822750899c18a73",
+      "tvTradesCsvHash": "084c5973d41e787e6b6a2ee95f333f97cc2551c1a6cdcdb5d5191d8293e7a2e7",
+      "wsProvenance": {
+        "schemaVersion": 1,
+        "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+        "authUser": "luisleo52655",
+        "accountType": "pro_premium_expert",
+        "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+        "pineVersion": "0.91374",
+        "symbol": "BINANCE:ETHUSDT.P",
+        "interval": "15",
+        "requestedRange": {
+          "from": 1744070400000,
+          "to": 1744156800000
+        },
+        "returnedRange": {
+          "from": 1744070400000,
+          "to": 1744156800000
+        },
+        "rangeProof": "covered",
+        "rawFrameSha256": "59ba0387946a77e9f41ed8e7069952166a2c9471e96f2d275017e4574ee0001a",
+        "decodedReportSha256": "615d5f69fa467ddbf0b3dc20ec304920ebbcad6a7d25c2b29ec93f792d06c877",
+        "closedTrades": 2,
+        "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+        "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+      },
+      "backtestedAt": "2026-10-03T11:01:17.683Z"
+    },
+    "provenance": {
+      "title": "px-f2b-eth-short-4",
+      "slug": "px-f2b-eth-short-4",
+      "source": "pineforge-workflow campaign lab tv",
+      "channel": "ws-report-v1",
+      "exportedAt": "2026-10-03T11:01:17.684Z",
+      "chart": {
+        "symbol": "BINANCE:ETHUSDT.P",
+        "interval": "15",
+        "from": "2025-04-08",
+        "to": "2025-04-09"
+      },
+      "pine_sha256": "728e9272a56a8dfbeffd0132e3c5cf780d9803df7d9907dbf822750899c18a73",
+      "tv_trades_sha256": "084c5973d41e787e6b6a2ee95f333f97cc2551c1a6cdcdb5d5191d8293e7a2e7",
+      "tv_trades_rows": 4
+    }
+  },
+  {
+    "name": "px-f2b-eth-slip-0",
+    "role": "passing-pin",
+    "source": "//@version=6\nstrategy(\"px-f2b-eth-slip-0\", initial_capital=10646.800094883001, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=0, process_orders_on_close=true)\nif time == timestamp(\"UTC\", 2025, 4, 8, 13, 45)\n    strategy.entry(\"test\", strategy.short, qty=6.7883)\nif time == timestamp(\"UTC\", 2025, 4, 8, 14, 30)\n    strategy.close_all()\nplot(strategy.equity)\n",
+    "tradesCsv": "﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)\n1,Exit short,2025-04-08 22:00,Margin call,1567.67,0.0004,0.62706,-0.000635064,-0.10,0.000627064,0,0.00,-0.00032153,-0.05,-5.321161,-0.05,1\n1,Entry short,2025-04-08 21:45,test,1567.65,0.0004,0.62706,-0.000635064,-0.10,0.000627064,0,0.00,-0.00032153,-0.05,-5.321161,-0.05,1\n2,Exit short,2025-04-08 22:00,Margin call,1582.74,0.5164,809.53446,-8.6059065,-1.06,0.813430698,1.5472248,0.19,-8.197244,-1.01,-13.522301,-0.13,1\n2,Entry short,2025-04-08 21:45,test,1567.65,0.5164,809.53446,-8.6059065,-1.06,0.813430698,1.5472248,0.19,-8.197244,-1.01,-13.522301,-0.13,1\n3,Exit short,2025-04-08 22:30,Close position order,1546.35,6.2715,9831.516975,123.81822,1.26,9.764725501,139.89317,1.42,-99.5527,-1.01,115.211685,1.08,3\n3,Entry short,2025-04-08 21:45,test,1567.65,6.2715,9831.516975,123.81822,1.26,9.764725501,139.89317,1.42,-99.5527,-1.01,115.211685,1.08,3",
+    "metrics": {
+      "validationEligible": true,
+      "strategy": "px-f2b-eth-slip-0",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "from": "2025-04-08",
+      "to": "2025-04-09",
+      "deepBacktesting": true,
+      "trades": 3,
+      "tvTradesCsv": "tv_trades.csv",
+      "tapeChannel": "ws-report-v1",
+      "sourceCanonicalization": "pine-facade-v1",
+      "sourceArtifactHash": "f56763abb7450c402f68f2bde442961b0f78d37b6c9fd1c002346b1766d69527",
+      "tvTradesCsvHash": "3a0b426f9c5b0316cd5fa2fc5790575779659cbacc0558ea8e09cb7d13b224af",
+      "wsProvenance": {
+        "schemaVersion": 1,
+        "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+        "authUser": "luisleo52655",
+        "accountType": "pro_premium_expert",
+        "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+        "pineVersion": "0.91402",
+        "symbol": "BINANCE:ETHUSDT.P",
+        "interval": "15",
+        "requestedRange": {
+          "from": 1744070400000,
+          "to": 1744156800000
+        },
+        "returnedRange": {
+          "from": 1744070400000,
+          "to": 1744156800000
+        },
+        "rangeProof": "covered",
+        "rawFrameSha256": "611cc17b1803a2f2baf2d1f0b216bf30cdaccb4f60caf84e07ae3783242a1f11",
+        "decodedReportSha256": "316649045bd7349a268c06d7538cb80569b39c77a8642a6bfe83e8d6b3b6ac30",
+        "closedTrades": 3,
+        "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+        "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+      },
+      "backtestedAt": "2026-10-03T11:24:12.338Z"
+    },
+    "provenance": {
+      "title": "px-f2b-eth-slip-0",
+      "slug": "px-f2b-eth-slip-0",
+      "source": "pineforge-workflow campaign lab tv",
+      "channel": "ws-report-v1",
+      "exportedAt": "2026-10-03T11:24:12.339Z",
+      "chart": {
+        "symbol": "BINANCE:ETHUSDT.P",
+        "interval": "15",
+        "from": "2025-04-08",
+        "to": "2025-04-09"
+      },
+      "pine_sha256": "f56763abb7450c402f68f2bde442961b0f78d37b6c9fd1c002346b1766d69527",
+      "tv_trades_sha256": "3a0b426f9c5b0316cd5fa2fc5790575779659cbacc0558ea8e09cb7d13b224af",
+      "tv_trades_rows": 6
+    }
+  },
+  {
+    "name": "px-f2b-eth-slip-1",
+    "role": "passing-pin",
+    "source": "//@version=6\nstrategy(\"px-f2b-eth-slip-1\", initial_capital=10646.867943941501, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=1, process_orders_on_close=true)\nif time == timestamp(\"UTC\", 2025, 4, 8, 13, 45)\n    strategy.entry(\"test\", strategy.short, qty=6.7883)\nif time == timestamp(\"UTC\", 2025, 4, 8, 14, 30)\n    strategy.close_all()\nplot(strategy.equity)\n",
+    "tradesCsv": "﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)\n1,Exit short,2025-04-08 22:00,Margin call,1567.68,0.0004,0.627056,-0.000643064,-0.10,0.000627064,0,0.00,-0.000329528,-0.05,-5.321135,-0.05,1\n1,Entry short,2025-04-08 21:45,test,1567.64,0.0004,0.627056,-0.000643064,-0.10,0.000627064,0,0.00,-0.000329528,-0.05,-5.321135,-0.05,1\n2,Exit short,2025-04-08 22:00,Margin call,1582.75,0.5164,809.529296,-8.616235,-1.06,0.813430698,1.5420634,0.19,-8.207569,-1.01,-13.532605,-0.13,1\n2,Entry short,2025-04-08 21:45,test,1567.64,0.5164,809.529296,-8.616235,-1.06,0.813430698,1.5420634,0.19,-8.207569,-1.01,-13.532605,-0.13,1\n3,Exit short,2025-04-08 22:30,Close position order,1546.36,6.2715,9831.45426,123.692795,1.26,9.7647255,139.83049,1.42,-99.67809,-1.01,115.07592,1.08,3\n3,Entry short,2025-04-08 21:45,test,1567.64,6.2715,9831.45426,123.692795,1.26,9.7647255,139.83049,1.42,-99.67809,-1.01,115.07592,1.08,3",
+    "metrics": {
+      "validationEligible": true,
+      "strategy": "px-f2b-eth-slip-1",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "from": "2025-04-08",
+      "to": "2025-04-09",
+      "deepBacktesting": true,
+      "trades": 3,
+      "tvTradesCsv": "tv_trades.csv",
+      "tapeChannel": "ws-report-v1",
+      "sourceCanonicalization": "pine-facade-v1",
+      "sourceArtifactHash": "a98fc7fca112e828d1183af461d4de5e18c6db8cec74016e2e97ca21b6b9ab89",
+      "tvTradesCsvHash": "1b5dcfc82ac6b9807fc7f78c4e2200e8087473bdaf72dd36ecf800130fcfaa01",
+      "wsProvenance": {
+        "schemaVersion": 1,
+        "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+        "authUser": "luisleo52655",
+        "accountType": "pro_premium_expert",
+        "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+        "pineVersion": "0.91401",
+        "symbol": "BINANCE:ETHUSDT.P",
+        "interval": "15",
+        "requestedRange": {
+          "from": 1744070400000,
+          "to": 1744156800000
+        },
+        "returnedRange": {
+          "from": 1744070400000,
+          "to": 1744156800000
+        },
+        "rangeProof": "covered",
+        "rawFrameSha256": "4a81d2020001879d4552d53bd9d1a273f7d2f329b805adf39e4ca2f6b1b12df4",
+        "decodedReportSha256": "b5d38b9cbe899499acb34fa1d9c969ca6597f73ccc67ef2febdc51cf7c10aae3",
+        "closedTrades": 3,
+        "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+        "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+      },
+      "backtestedAt": "2026-10-03T11:24:11.499Z"
+    },
+    "provenance": {
+      "title": "px-f2b-eth-slip-1",
+      "slug": "px-f2b-eth-slip-1",
+      "source": "pineforge-workflow campaign lab tv",
+      "channel": "ws-report-v1",
+      "exportedAt": "2026-10-03T11:24:11.499Z",
+      "chart": {
+        "symbol": "BINANCE:ETHUSDT.P",
+        "interval": "15",
+        "from": "2025-04-08",
+        "to": "2025-04-09"
+      },
+      "pine_sha256": "a98fc7fca112e828d1183af461d4de5e18c6db8cec74016e2e97ca21b6b9ab89",
+      "tv_trades_sha256": "1b5dcfc82ac6b9807fc7f78c4e2200e8087473bdaf72dd36ecf800130fcfaa01",
+      "tv_trades_rows": 6
+    }
+  },
+  {
+    "name": "px-f2b-eth-slip-3",
+    "role": "passing-pin",
+    "source": "//@version=6\nstrategy(\"px-f2b-eth-slip-3\", initial_capital=10647.0036420585, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=3, process_orders_on_close=true)\nif time == timestamp(\"UTC\", 2025, 4, 8, 13, 45)\n    strategy.entry(\"test\", strategy.short, qty=6.7883)\nif time == timestamp(\"UTC\", 2025, 4, 8, 14, 30)\n    strategy.close_all()\nplot(strategy.equity)\n",
+    "tradesCsv": "﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)\n1,Exit short,2025-04-08 22:00,Margin call,1567.7,0.0004,0.627048,-0.000659064,-0.11,0.000627064,0,0.00,-0.000345524,-0.06,-5.321083,-0.05,1\n1,Entry short,2025-04-08 21:45,test,1567.62,0.0004,0.627048,-0.000659064,-0.11,0.000627064,0,0.00,-0.000345524,-0.06,-5.321083,-0.05,1\n2,Exit short,2025-04-08 22:00,Margin call,1567.7,0.0004,0.627048,-0.000659064,-0.11,0.000627064,0,0.00,-0.000345524,-0.06,-5.3214283,-0.05,1\n2,Entry short,2025-04-08 21:45,test,1567.62,0.0004,0.627048,-0.000659064,-0.11,0.000627064,0,0.00,-0.000345524,-0.06,-5.3214283,-0.05,1\n3,Exit short,2025-04-08 22:00,Margin call,1582.77,0.5148,807.010776,-8.61013,-1.07,0.810910386,1.5269946,0.19,-8.202725,-1.02,-13.528053,-0.13,1\n3,Entry short,2025-04-08 21:45,test,1567.62,0.5148,807.010776,-8.61013,-1.07,0.810910386,1.5269946,0.19,-8.202725,-1.02,-13.528053,-0.13,1\n4,Exit short,2025-04-08 22:30,Close position order,1546.38,6.2727,9833.209974,123.46555,1.25,9.7665939,139.73186,1.42,-99.94801,-1.02,114.8541,1.08,3\n4,Entry short,2025-04-08 21:45,test,1567.62,6.2727,9833.209974,123.46555,1.25,9.7665939,139.73186,1.42,-99.94801,-1.02,114.8541,1.08,3",
+    "metrics": {
+      "validationEligible": true,
+      "strategy": "px-f2b-eth-slip-3",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "from": "2025-04-08",
+      "to": "2025-04-09",
+      "deepBacktesting": true,
+      "trades": 4,
+      "tvTradesCsv": "tv_trades.csv",
+      "tapeChannel": "ws-report-v1",
+      "sourceCanonicalization": "pine-facade-v1",
+      "sourceArtifactHash": "dc0e412d891393eba9a1940a5e4d0ddda804f9319563f9e3edd3478bd421a39a",
+      "tvTradesCsvHash": "664392a558812cdc9eae1b8933c6b84930a455e226cfa0458c9a342a74ea1a5c",
+      "wsProvenance": {
+        "schemaVersion": 1,
+        "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+        "authUser": "luisleo52655",
+        "accountType": "pro_premium_expert",
+        "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+        "pineVersion": "0.91403",
+        "symbol": "BINANCE:ETHUSDT.P",
+        "interval": "15",
+        "requestedRange": {
+          "from": 1744070400000,
+          "to": 1744156800000
+        },
+        "returnedRange": {
+          "from": 1744070400000,
+          "to": 1744156800000
+        },
+        "rangeProof": "covered",
+        "rawFrameSha256": "66a9a001ed273fe18def9c53ad56a2497b7fdb9861ac0f912d86693d0d3997c3",
+        "decodedReportSha256": "f2323cd468917b114fa6405a5bf90cbdcce4638b62e12ff6a0ae9314ed4bb623",
+        "closedTrades": 4,
+        "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+        "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+      },
+      "backtestedAt": "2026-10-03T11:24:14.616Z"
+    },
+    "provenance": {
+      "title": "px-f2b-eth-slip-3",
+      "slug": "px-f2b-eth-slip-3",
+      "source": "pineforge-workflow campaign lab tv",
+      "channel": "ws-report-v1",
+      "exportedAt": "2026-10-03T11:24:14.617Z",
+      "chart": {
+        "symbol": "BINANCE:ETHUSDT.P",
+        "interval": "15",
+        "from": "2025-04-08",
+        "to": "2025-04-09"
+      },
+      "pine_sha256": "dc0e412d891393eba9a1940a5e4d0ddda804f9319563f9e3edd3478bd421a39a",
+      "tv_trades_sha256": "664392a558812cdc9eae1b8933c6b84930a455e226cfa0458c9a342a74ea1a5c",
+      "tv_trades_rows": 8
+    }
+  },
+  {
+    "name": "px-f2b-eth-slip-5",
+    "role": "initial-checkpoint-counterexample",
+    "source": "//@version=6\nstrategy(\"px-f2b-eth-slip-5\", initial_capital=10647.139340175501, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=5, process_orders_on_close=true)\nif time == timestamp(\"UTC\", 2025, 4, 8, 13, 45)\n    strategy.entry(\"test\", strategy.short, qty=6.7883)\nif time == timestamp(\"UTC\", 2025, 4, 8, 14, 30)\n    strategy.close_all()\nplot(strategy.equity)\n",
+    "tradesCsv": "﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)\n1,Exit short,2025-04-08 22:00,Margin call,1567.72,0.0012,1.88112,-0.002025192,-0.11,0.001881192,0,0.00,-0.00108456,-0.06,-5.321754,-0.05,1\n1,Entry short,2025-04-08 21:45,test,1567.6,0.0012,1.88112,-0.002025192,-0.11,0.001881192,0,0.00,-0.00108456,-0.06,-5.321754,-0.05,1\n2,Exit short,2025-04-08 22:00,Margin call,1582.79,0.5132,804.49232,-8.603898,-1.07,0.808390074,1.5119898,0.19,-8.197754,-1.02,-13.523406,-0.13,1\n2,Entry short,2025-04-08 21:45,test,1567.6,0.5132,804.49232,-8.603898,-1.07,0.808390074,1.5119898,0.19,-8.197754,-1.02,-13.523406,-0.13,1\n3,Exit short,2025-04-08 22:30,Close position order,1546.4,6.2739,9834.96564,123.23822,1.25,9.7684623,139.63318,1.42,-100.218025,-1.02,114.63229,1.08,3\n3,Entry short,2025-04-08 21:45,test,1567.6,6.2739,9834.96564,123.23822,1.25,9.7684623,139.63318,1.42,-100.218025,-1.02,114.63229,1.08,3",
+    "metrics": {
+      "validationEligible": true,
+      "strategy": "px-f2b-eth-slip-5",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "from": "2025-04-08",
+      "to": "2025-04-09",
+      "deepBacktesting": true,
+      "trades": 3,
+      "tvTradesCsv": "tv_trades.csv",
+      "tapeChannel": "ws-report-v1",
+      "sourceCanonicalization": "pine-facade-v1",
+      "sourceArtifactHash": "6c992084ddd74d2b53188c89372622a4f97c31cd7771326640d8bde78580c41d",
+      "tvTradesCsvHash": "151a55153de264e61541dfc722acf14c61480bdcb85c2d785ff9cc4da916c3c7",
+      "wsProvenance": {
+        "schemaVersion": 1,
+        "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+        "authUser": "luisleo52655",
+        "accountType": "pro_premium_expert",
+        "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+        "pineVersion": "0.91404",
+        "symbol": "BINANCE:ETHUSDT.P",
+        "interval": "15",
+        "requestedRange": {
+          "from": 1744070400000,
+          "to": 1744156800000
+        },
+        "returnedRange": {
+          "from": 1744070400000,
+          "to": 1744156800000
+        },
+        "rangeProof": "covered",
+        "rawFrameSha256": "b7f72c9112a4d422d4b6afb9e17a48827f5f38a452c6c63e116c54bdc335cc05",
+        "decodedReportSha256": "837c7f7388384d40e781fc3da3c71db3eab0966f94c7579b9ab73f0905bb8a5d",
+        "closedTrades": 3,
+        "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+        "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+      },
+      "backtestedAt": "2026-10-03T11:24:16.768Z"
+    },
+    "provenance": {
+      "title": "px-f2b-eth-slip-5",
+      "slug": "px-f2b-eth-slip-5",
+      "source": "pineforge-workflow campaign lab tv",
+      "channel": "ws-report-v1",
+      "exportedAt": "2026-10-03T11:24:16.768Z",
+      "chart": {
+        "symbol": "BINANCE:ETHUSDT.P",
+        "interval": "15",
+        "from": "2025-04-08",
+        "to": "2025-04-09"
+      },
+      "pine_sha256": "6c992084ddd74d2b53188c89372622a4f97c31cd7771326640d8bde78580c41d",
+      "tv_trades_sha256": "151a55153de264e61541dfc722acf14c61480bdcb85c2d785ff9cc4da916c3c7",
+      "tv_trades_rows": 6
+    }
+  },
+  {
+    "name": "px-f2b-eur-rawfloor-0",
+    "role": "passing-pin",
+    "source": "//@version=6\nstrategy(\"px-f2b-eur-rawfloor-0\", initial_capital=996097.5955029, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100, commission_value=0)\nif time == timestamp(\"UTC\", 2025, 4, 2, 19, 45)\n    strategy.entry(\"test\", strategy.short)\nif time == timestamp(\"UTC\", 2025, 4, 2, 20, 15)\n    strategy.close_all()\nplot(strategy.equity)\n",
+    "tradesCsv": "﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)\n1,Exit short,2025-04-03 04:00,Margin call,1.08989,33087.2,35898.288512,-163.1199,-0.45,0,55.255623,0.15,-163.1199,-0.45,-163.1199,-0.02,0\n1,Entry short,2025-04-03 04:00,test,1.08496,33087.2,35898.288512,-163.1199,-0.45,0,55.255623,0.15,-163.1199,-0.45,-163.1199,-0.02,0\n2,Exit short,2025-04-03 04:30,Close position order,1.08536,884975.09,960162.573646,-353.99002,-0.04,0,3044.3142,0.32,-6619.614,-0.69,-517.1099,-0.05,2\n2,Entry short,2025-04-03 04:00,test,1.08496,884975.09,960162.573646,-353.99002,-0.04,0,3044.3142,0.32,-6619.614,-0.69,-517.1099,-0.05,2",
+    "metrics": {
+      "validationEligible": true,
+      "strategy": "px-f2b-eur-rawfloor-0",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "from": "2025-04-02",
+      "to": "2025-04-03",
+      "deepBacktesting": true,
+      "trades": 2,
+      "tvTradesCsv": "tv_trades.csv",
+      "tapeChannel": "ws-report-v1",
+      "sourceCanonicalization": "pine-facade-v1",
+      "sourceArtifactHash": "3b4c0af839b5a85b2bc0576f1b92c6379c32e60f5dc977730fced2811c7e94a0",
+      "tvTradesCsvHash": "ac2a7b60a8d87dbd6ecf4632a11d4ceab13908b6af31ea21cbeb679fdf61c991",
+      "wsProvenance": {
+        "schemaVersion": 1,
+        "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+        "authUser": "luisleo52655",
+        "accountType": "pro_premium_expert",
+        "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+        "pineVersion": "0.91379",
+        "symbol": "OANDA:EURUSD",
+        "interval": "15",
+        "requestedRange": {
+          "from": 1743552000000,
+          "to": 1743638400000
+        },
+        "returnedRange": {
+          "from": 1743552000000,
+          "to": 1743638400000
+        },
+        "rangeProof": "covered",
+        "rawFrameSha256": "766961fc5749aa21b0c229c5e78f0331e8614ab8d54617c9b0af3bcbfc698344",
+        "decodedReportSha256": "3d697a6b0ca31c6677e4c4b503f11457da4af4172658ae23125910434230d3e3",
+        "closedTrades": 2,
+        "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+        "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+      },
+      "backtestedAt": "2026-10-03T11:12:15.274Z"
+    },
+    "provenance": {
+      "title": "px-f2b-eur-rawfloor-0",
+      "slug": "px-f2b-eur-rawfloor-0",
+      "source": "pineforge-workflow campaign lab tv",
+      "channel": "ws-report-v1",
+      "exportedAt": "2026-10-03T11:12:15.275Z",
+      "chart": {
+        "symbol": "OANDA:EURUSD",
+        "interval": "15",
+        "from": "2025-04-02",
+        "to": "2025-04-03"
+      },
+      "pine_sha256": "3b4c0af839b5a85b2bc0576f1b92c6379c32e60f5dc977730fced2811c7e94a0",
+      "tv_trades_sha256": "ac2a7b60a8d87dbd6ecf4632a11d4ceab13908b6af31ea21cbeb679fdf61c991",
+      "tv_trades_rows": 4
+    }
+  },
+  {
+    "name": "px-f2b-eur-rawfloor-1",
+    "role": "passing-pin",
+    "source": "//@version=6\nstrategy(\"px-f2b-eur-rawfloor-1\", initial_capital=996097.5954, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100, commission_value=0)\nif time == timestamp(\"UTC\", 2025, 4, 2, 19, 45)\n    strategy.entry(\"test\", strategy.short)\nif time == timestamp(\"UTC\", 2025, 4, 2, 20, 15)\n    strategy.close_all()\nplot(strategy.equity)\n",
+    "tradesCsv": "﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)\n1,Exit short,2025-04-03 04:00,Margin call,1.08989,33087.2,35898.288512,-163.1199,-0.45,0,55.255623,0.15,-163.1199,-0.45,-163.1199,-0.02,0\n1,Entry short,2025-04-03 04:00,test,1.08496,33087.2,35898.288512,-163.1199,-0.45,0,55.255623,0.15,-163.1199,-0.45,-163.1199,-0.02,0\n2,Exit short,2025-04-03 04:30,Close position order,1.08536,884975.09,960162.573646,-353.99002,-0.04,0,3044.3142,0.32,-6619.614,-0.69,-517.1099,-0.05,2\n2,Entry short,2025-04-03 04:00,test,1.08496,884975.09,960162.573646,-353.99002,-0.04,0,3044.3142,0.32,-6619.614,-0.69,-517.1099,-0.05,2",
+    "metrics": {
+      "validationEligible": true,
+      "strategy": "px-f2b-eur-rawfloor-1",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "from": "2025-04-02",
+      "to": "2025-04-03",
+      "deepBacktesting": true,
+      "trades": 2,
+      "tvTradesCsv": "tv_trades.csv",
+      "tapeChannel": "ws-report-v1",
+      "sourceCanonicalization": "pine-facade-v1",
+      "sourceArtifactHash": "6a9ff524ddb1c4bf82e68fd720d12104739e0f8ff10f77da323768b477f02e34",
+      "tvTradesCsvHash": "ac2a7b60a8d87dbd6ecf4632a11d4ceab13908b6af31ea21cbeb679fdf61c991",
+      "wsProvenance": {
+        "schemaVersion": 1,
+        "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+        "authUser": "luisleo52655",
+        "accountType": "pro_premium_expert",
+        "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+        "pineVersion": "0.91381",
+        "symbol": "OANDA:EURUSD",
+        "interval": "15",
+        "requestedRange": {
+          "from": 1743552000000,
+          "to": 1743638400000
+        },
+        "returnedRange": {
+          "from": 1743552000000,
+          "to": 1743638400000
+        },
+        "rangeProof": "covered",
+        "rawFrameSha256": "ff03d32dac5cbf8dd4e63878ba59d820f6d7a0e6ecc80da827b9081fb880313d",
+        "decodedReportSha256": "abb54b711b0b5200bd747d431b1c1ce397cdec22ce2410b91b584c2541c520a0",
+        "closedTrades": 2,
+        "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+        "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+      },
+      "backtestedAt": "2026-10-03T11:12:17.190Z"
+    },
+    "provenance": {
+      "title": "px-f2b-eur-rawfloor-1",
+      "slug": "px-f2b-eur-rawfloor-1",
+      "source": "pineforge-workflow campaign lab tv",
+      "channel": "ws-report-v1",
+      "exportedAt": "2026-10-03T11:12:17.192Z",
+      "chart": {
+        "symbol": "OANDA:EURUSD",
+        "interval": "15",
+        "from": "2025-04-02",
+        "to": "2025-04-03"
+      },
+      "pine_sha256": "6a9ff524ddb1c4bf82e68fd720d12104739e0f8ff10f77da323768b477f02e34",
+      "tv_trades_sha256": "ac2a7b60a8d87dbd6ecf4632a11d4ceab13908b6af31ea21cbeb679fdf61c991",
+      "tv_trades_rows": 4
+    }
+  },
+  {
+    "name": "px-f2b-eur-rawfloor-2",
+    "role": "passing-pin",
+    "source": "//@version=6\nstrategy(\"px-f2b-eur-rawfloor-2\", initial_capital=996097.5956, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100, commission_value=0)\nif time == timestamp(\"UTC\", 2025, 4, 2, 19, 45)\n    strategy.entry(\"test\", strategy.short)\nif time == timestamp(\"UTC\", 2025, 4, 2, 20, 15)\n    strategy.close_all()\nplot(strategy.equity)\n",
+    "tradesCsv": "﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)",
+    "metrics": {
+      "validationEligible": true,
+      "strategy": "px-f2b-eur-rawfloor-2",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "from": "2025-04-02",
+      "to": "2025-04-03",
+      "deepBacktesting": true,
+      "trades": 0,
+      "tvTradesCsv": "tv_trades.csv",
+      "tapeChannel": "ws-report-v1",
+      "sourceCanonicalization": "pine-facade-v1",
+      "sourceArtifactHash": "cc1b2b52e7994aa7d84852c7572c0f32887ae36d7fe3c81ac62bab18bc0ea907",
+      "tvTradesCsvHash": "86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c",
+      "wsProvenance": {
+        "schemaVersion": 1,
+        "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+        "authUser": "luisleo52655",
+        "accountType": "pro_premium_expert",
+        "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+        "pineVersion": "0.91380",
+        "symbol": "OANDA:EURUSD",
+        "interval": "15",
+        "requestedRange": {
+          "from": 1743552000000,
+          "to": 1743638400000
+        },
+        "returnedRange": {
+          "from": 1743552000000,
+          "to": 1743638400000
+        },
+        "rangeProof": "covered",
+        "rawFrameSha256": "6b9e5eb21a02c1211cfe8a755d4b451be8a763fd358ef69bd128831bba7a6d54",
+        "decodedReportSha256": "98dc4ace25eda12b09ae19dca695a9a58fe3cb5135c27dff5d17d1f2ac78ef25",
+        "closedTrades": 0,
+        "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+        "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+      },
+      "backtestedAt": "2026-10-03T11:12:15.896Z"
+    },
+    "provenance": {
+      "title": "px-f2b-eur-rawfloor-2",
+      "slug": "px-f2b-eur-rawfloor-2",
+      "source": "pineforge-workflow campaign lab tv",
+      "channel": "ws-report-v1",
+      "exportedAt": "2026-10-03T11:12:15.897Z",
+      "chart": {
+        "symbol": "OANDA:EURUSD",
+        "interval": "15",
+        "from": "2025-04-02",
+        "to": "2025-04-03"
+      },
+      "pine_sha256": "cc1b2b52e7994aa7d84852c7572c0f32887ae36d7fe3c81ac62bab18bc0ea907",
+      "tv_trades_sha256": "86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c",
+      "tv_trades_rows": 0
+    }
+  },
+  {
+    "name": "px-f2b-eur-rawfloor-3",
+    "role": "passing-pin",
+    "source": "//@version=6\nstrategy(\"px-f2b-eur-rawfloor-3\", initial_capital=996097.5957, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100, commission_value=0)\nif time == timestamp(\"UTC\", 2025, 4, 2, 19, 45)\n    strategy.entry(\"test\", strategy.short)\nif time == timestamp(\"UTC\", 2025, 4, 2, 20, 15)\n    strategy.close_all()\nplot(strategy.equity)\n",
+    "tradesCsv": "﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)",
+    "metrics": {
+      "validationEligible": true,
+      "strategy": "px-f2b-eur-rawfloor-3",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "from": "2025-04-02",
+      "to": "2025-04-03",
+      "deepBacktesting": true,
+      "trades": 0,
+      "tvTradesCsv": "tv_trades.csv",
+      "tapeChannel": "ws-report-v1",
+      "sourceCanonicalization": "pine-facade-v1",
+      "sourceArtifactHash": "2d86d7fff950ca5250cf477dd9249abab5c8fb70d618ec0be9144273763e7427",
+      "tvTradesCsvHash": "86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c",
+      "wsProvenance": {
+        "schemaVersion": 1,
+        "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+        "authUser": "luisleo52655",
+        "accountType": "pro_premium_expert",
+        "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+        "pineVersion": "0.91382",
+        "symbol": "OANDA:EURUSD",
+        "interval": "15",
+        "requestedRange": {
+          "from": 1743552000000,
+          "to": 1743638400000
+        },
+        "returnedRange": {
+          "from": 1743552000000,
+          "to": 1743638400000
+        },
+        "rangeProof": "covered",
+        "rawFrameSha256": "fe2cae21f437df2f9d24e538d903b2a25c015d2ac3ed10229ffaf282aeb4c2c0",
+        "decodedReportSha256": "98dc4ace25eda12b09ae19dca695a9a58fe3cb5135c27dff5d17d1f2ac78ef25",
+        "closedTrades": 0,
+        "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+        "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+      },
+      "backtestedAt": "2026-10-03T11:12:18.760Z"
+    },
+    "provenance": {
+      "title": "px-f2b-eur-rawfloor-3",
+      "slug": "px-f2b-eur-rawfloor-3",
+      "source": "pineforge-workflow campaign lab tv",
+      "channel": "ws-report-v1",
+      "exportedAt": "2026-10-03T11:12:18.761Z",
+      "chart": {
+        "symbol": "OANDA:EURUSD",
+        "interval": "15",
+        "from": "2025-04-02",
+        "to": "2025-04-03"
+      },
+      "pine_sha256": "2d86d7fff950ca5250cf477dd9249abab5c8fb70d618ec0be9144273763e7427",
+      "tv_trades_sha256": "86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c",
+      "tv_trades_rows": 0
+    }
+  },
+  {
+    "name": "px-f2b-eur-rawfloor-4",
+    "role": "passing-pin",
+    "source": "//@version=6\nstrategy(\"px-f2b-eur-rawfloor-4\", initial_capital=996097.596, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100, commission_value=0)\nif time == timestamp(\"UTC\", 2025, 4, 2, 19, 45)\n    strategy.entry(\"test\", strategy.short)\nif time == timestamp(\"UTC\", 2025, 4, 2, 20, 15)\n    strategy.close_all()\nplot(strategy.equity)\n",
+    "tradesCsv": "﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)\n1,Exit short,2025-04-03 04:00,Margin call,1.08989,33087.24,35898.3319104,-163.12009,-0.45,0,55.25569,0.15,-163.12009,-0.45,-163.12009,-0.02,0\n1,Entry short,2025-04-03 04:00,test,1.08496,33087.24,35898.3319104,-163.12009,-0.45,0,55.25569,0.15,-163.12009,-0.45,-163.12009,-0.02,0\n2,Exit short,2025-04-03 04:30,Close position order,1.08536,884975.06,960162.541098,-353.99002,-0.04,0,3044.3142,0.32,-6619.6133,-0.69,-517.1101,-0.05,2\n2,Entry short,2025-04-03 04:00,test,1.08496,884975.06,960162.541098,-353.99002,-0.04,0,3044.3142,0.32,-6619.6133,-0.69,-517.1101,-0.05,2",
+    "metrics": {
+      "validationEligible": true,
+      "strategy": "px-f2b-eur-rawfloor-4",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "from": "2025-04-02",
+      "to": "2025-04-03",
+      "deepBacktesting": true,
+      "trades": 2,
+      "tvTradesCsv": "tv_trades.csv",
+      "tapeChannel": "ws-report-v1",
+      "sourceCanonicalization": "pine-facade-v1",
+      "sourceArtifactHash": "46cda5fbbefee68ab0b90612938e0a866503d9b136c3c506759f9090fbda7786",
+      "tvTradesCsvHash": "200dd26755d33834ccc15559f2c4da4e64da19cabb232fdc4ed169beba66e97b",
+      "wsProvenance": {
+        "schemaVersion": 1,
+        "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+        "authUser": "luisleo52655",
+        "accountType": "pro_premium_expert",
+        "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+        "pineVersion": "0.91383",
+        "symbol": "OANDA:EURUSD",
+        "interval": "15",
+        "requestedRange": {
+          "from": 1743552000000,
+          "to": 1743638400000
+        },
+        "returnedRange": {
+          "from": 1743552000000,
+          "to": 1743638400000
+        },
+        "rangeProof": "covered",
+        "rawFrameSha256": "37bb76c1c1f89f124a5410245ce6e1f2503cbb7c7f84fc265d0fac7255d3865e",
+        "decodedReportSha256": "86f7f7ab11237490a5b53be6f8f467a47caee9152b2ae89bbbf5082b0cf0c5d3",
+        "closedTrades": 2,
+        "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+        "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+      },
+      "backtestedAt": "2026-10-03T11:12:19.952Z"
+    },
+    "provenance": {
+      "title": "px-f2b-eur-rawfloor-4",
+      "slug": "px-f2b-eur-rawfloor-4",
+      "source": "pineforge-workflow campaign lab tv",
+      "channel": "ws-report-v1",
+      "exportedAt": "2026-10-03T11:12:19.952Z",
+      "chart": {
+        "symbol": "OANDA:EURUSD",
+        "interval": "15",
+        "from": "2025-04-02",
+        "to": "2025-04-03"
+      },
+      "pine_sha256": "46cda5fbbefee68ab0b90612938e0a866503d9b136c3c506759f9090fbda7786",
+      "tv_trades_sha256": "200dd26755d33834ccc15559f2c4da4e64da19cabb232fdc4ed169beba66e97b",
+      "tv_trades_rows": 4
+    }
+  }
+]

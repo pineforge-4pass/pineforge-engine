@@ -1,0 +1,21 @@
+//@version=6
+strategy("Carried market parent coincident callback re-entry", overlay=true, initial_capital=1000000, default_qty_type=strategy.fixed, default_qty_value=1, margin_long=100, margin_short=100, pyramiding=2, calc_on_order_fills=true)
+varip bool priorSent = false
+varip bool carriedSent = false
+varip bool secondSent = false
+varip bool closeSent = false
+if time == timestamp("UTC", 2025, 4, 6, 9, 15) and not priorSent
+    strategy.entry("prior", strategy.short)
+    priorSent := true
+if time == timestamp("UTC", 2025, 4, 6, 9, 45) and not carriedSent
+    strategy.exit("prior-stop", "prior", stop=83075.15)
+    strategy.entry("carried", strategy.short)
+    carriedSent := true
+if strategy.opentrades > 0 and strategy.opentrades.entry_id(strategy.opentrades - 1) == "carried"
+    strategy.exit("callback-stop", "carried", stop=83000)
+if time == timestamp("UTC", 2025, 4, 6, 10, 0) and strategy.closedtrades > 0 and strategy.closedtrades.exit_id(strategy.closedtrades - 1) == "callback-stop" and not secondSent
+    strategy.entry("second", strategy.short)
+    secondSent := true
+if time == timestamp("UTC", 2025, 4, 6, 10, 15) and not closeSent
+    strategy.close_all()
+    closeSent := true
