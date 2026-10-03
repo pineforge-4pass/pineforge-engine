@@ -254,8 +254,14 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
                                  : NativePathOrder::Auto);
     const NativeRunSpec spec = adapter_.project(effective, staged, args, path_order);
     const auto setup = configure_native(spec);
-    if (setup.status != NativeSetupStatus::Applied)
+    if (setup.status != NativeSetupStatus::Applied) {
+        try {
+            prepare_script_run(args.bars, args.n, args.bar_magnifier);
+        } catch (const checked_settings::LatchedSettingsFailure&) {
+            throw;
+        } catch (...) {}
         throw std::logic_error("Pine native adapter failed to configure projected run spec");
+    }
     config_ = effective;
     source_configuration_captured_ = true;
 }
@@ -289,9 +295,12 @@ void source::PineStrategyHost::on_native_run_begin() {
     } catch (const checked_settings::LatchedSettingsFailure&) {
         throw;
     } catch (const std::exception& error) {
+        if (adapter_.stream_mode_) throw;
         source_prepare_failed_ = true;
         last_error_ = error.what();
     } catch (...) {
+        if (adapter_.stream_mode_)
+            throw std::runtime_error("unknown error during Pine script preparation");
         source_prepare_failed_ = true;
         last_error_ = "unknown error during Pine script preparation";
     }

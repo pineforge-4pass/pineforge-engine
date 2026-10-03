@@ -8,6 +8,13 @@ The handoff preserves broker state, position and equity, pending orders, Pine
 series and variables, TA objects, `request.security()` evaluators, and a
 partially formed higher-timeframe candle.
 
+Stream begin fails when script preparation throws, for both standard and unknown
+C++ exceptions. It returns failure, exposes the preparation message through
+#strategy_get_last_error, and reports NOT_COMPLETED through
+#strategy_last_run_status; no warmup or realtime computation starts. A thrown
+legacy setter likewise permanently refuses later begins on that handle. An
+already-active stream keeps its begin-time settings until it ends.
+
 The optional **native C++ `pineforge-live` executable** in this repository
 uses this lifecycle directly. It includes native transport, custom C++ parser
 plugins, SQLite recovery and order-action webhooks; see the

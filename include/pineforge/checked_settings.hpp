@@ -95,7 +95,11 @@ inline std::int64_t integer(const std::string& value, int bits = 32) {
             ++offset;
             const auto exponent_text = value.substr(offset);
             require(exponent_text.find_first_of(".eE") == std::string::npos, "invalid integer exponent");
-            exponent = integer(exponent_text);
+            try {
+                exponent = integer(exponent_text);
+            } catch (const Error&) {
+                throw Error{PF_SETTINGS_INVALID_ARGUMENT, "invalid integer exponent"};
+            }
             offset = value.size();
         }
         require(offset == value.size(), "invalid integer or trailing bytes");
@@ -125,6 +129,7 @@ inline std::int64_t integer(const std::string& value, int bits = 32) {
     require(begin != end && (*begin != '-' || begin + 1 != end), "expected an integer");
     std::int64_t parsed = 0;
     const auto result = std::from_chars(begin, end, parsed);
+    require(result.ec != std::errc::result_out_of_range, "integer out of range");
     require(result.ec == std::errc{} && result.ptr == end, "invalid integer or trailing bytes");
     require(bits == 64 || (parsed >= std::numeric_limits<int>::min()
                           && parsed <= std::numeric_limits<int>::max()), "integer out of range");

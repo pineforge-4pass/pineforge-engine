@@ -1320,8 +1320,8 @@ the bars cost 3.8 times the CPU with a round trip every ten bars
 script point, not after the run's teardown, so that it is one value with
 recording on or off (`broker_state_hash_projection`
 pine_strategy_host.cpp:104-112). `capture_script_continuation_hash`
-pine_strategy_host.cpp:386-394 takes that snapshot at the last batch bar
-(`last_batch` pine_strategy_host.cpp:463-473), and taking it is one full
+pine_strategy_host.cpp:395-403 takes that snapshot at the last batch bar
+(`last_batch` pine_strategy_host.cpp:472-482), and taking it is one full
 continuation fold per run. Measured on the gated replay — `ReissueReplay` on
 43,008 bars, `run()` process CPU, best of 5, three rounds — it is 0.2116 /
 0.2137 / 0.2141 s with the capture and 0.1632 / 0.1614 / 0.1652 s with it

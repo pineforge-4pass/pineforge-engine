@@ -13,8 +13,21 @@ the existing empty-report failure shape; checked batch calls return
 `PF_SETTINGS_RUN_FAILED`. Recreate the handle to configure again. Non-throwing
 legacy setters still retain their historical acceptance and silent-ignore rules.
 Generated script preparation throws `checked_settings::LatchedSettingsFailure`
-with the original setter message. The source host propagates only this exception
-to native begin; all other preparation exceptions retain their existing behavior.
+with the original setter message. With the paired engine, batch and stream
+refuse through the same native-begin seam and report NOT_COMPLETED. Old engines
+use the legacy batch wrapper's empty-report fallback instead. Standard and
+unknown script-preparation exceptions also fail stream begin with the
+preparation message and NOT_COMPLETED. Batch retains its historical behavior
+for these ordinary exceptions: preparation is disabled, the report is empty,
+the message is readable, and the run status is completed.
+
+Every checked setter and receipt query on a latched handle returns
+`PF_SETTINGS_RUN_FAILED` with the original message. A throwing legacy setter
+mid-stream does not alter the active stream's begin-time settings: subsequent
+pushes continue with those settings and may clear the diagnostic, but all later
+begins remain refused. Legacy `stoi` exception wording depends on the standard
+library (for example `stoi` or `stoi: no conversion`); the first message is
+retained verbatim within the handle. Legacy batch catch paths zero the report.
 
 Discover `strategy_settings_api_version()` with `dlsym`; version 1 is
 `PF_SETTINGS_API_VERSION`. This does not increment `PF_ABI_VERSION`. An older
@@ -80,6 +93,11 @@ and `overrides` arrays. Each row includes `name`, `type`, `kind`, `default`,
 `effective_value`, `supported`, `options`, `option_values`, `min`, `max`, `step`.
 Enum `option_values` records the actual indices of an explicitly restricted
 options list, rather than renumbering the remaining members.
+Immutable identifier enum defaults are folded to their declared member for both
+the getter and receipt. An unresolved default is marked unsupported and uses
+`na` in the receipt without reading a script member; its legacy getter is
+unchanged. Enum options are supported only when every option is a literal member
+of the same enum. Merge the paired engine before releasing this codegen.
 Values are canonical serialized strings; absent numeric constraints are null.
 `type` is the generated storage type; `kind` is the manifest form type (for
 example a color has storage `int` and form `string`). Override defaults describe

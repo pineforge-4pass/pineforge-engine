@@ -112,6 +112,7 @@ public:
     double threshold = 0.0;
     bool enabled = false;
     std::string mode = std::string("");
+    int defaultSide = 0;
     double side = 0.0;
     double source = 0.0;
     int64_t stamp = 0;
@@ -123,11 +124,12 @@ public:
         decltype(GeneratedStrategy::threshold) _pf_value_1;
         decltype(GeneratedStrategy::enabled) _pf_value_2;
         decltype(GeneratedStrategy::mode) _pf_value_3;
-        decltype(GeneratedStrategy::side) _pf_value_4;
-        decltype(GeneratedStrategy::source) _pf_value_5;
-        decltype(GeneratedStrategy::stamp) _pf_value_6;
-        decltype(GeneratedStrategy::tint) _pf_value_7;
-        decltype(GeneratedStrategy::_inputs_initialized_) _pf_value_8;
+        decltype(GeneratedStrategy::defaultSide) _pf_value_4;
+        decltype(GeneratedStrategy::side) _pf_value_5;
+        decltype(GeneratedStrategy::source) _pf_value_6;
+        decltype(GeneratedStrategy::stamp) _pf_value_7;
+        decltype(GeneratedStrategy::tint) _pf_value_8;
+        decltype(GeneratedStrategy::_inputs_initialized_) _pf_value_9;
     };
     static_assert(std::is_copy_constructible_v<_PFScriptState>, "generated Pine state must be deep-copy constructible");
     static_assert(std::is_copy_assignable_v<_PFScriptState>, "generated Pine state must be deep-copy assignable");
@@ -139,6 +141,7 @@ public:
             threshold,
             enabled,
             mode,
+            defaultSide,
             side,
             source,
             stamp,
@@ -153,11 +156,12 @@ public:
         this->threshold = _pf_script_state_checkpoint_->_pf_value_1;
         this->enabled = _pf_script_state_checkpoint_->_pf_value_2;
         this->mode = _pf_script_state_checkpoint_->_pf_value_3;
-        this->side = _pf_script_state_checkpoint_->_pf_value_4;
-        this->source = _pf_script_state_checkpoint_->_pf_value_5;
-        this->stamp = _pf_script_state_checkpoint_->_pf_value_6;
-        this->tint = _pf_script_state_checkpoint_->_pf_value_7;
-        this->_inputs_initialized_ = _pf_script_state_checkpoint_->_pf_value_8;
+        this->defaultSide = _pf_script_state_checkpoint_->_pf_value_4;
+        this->side = _pf_script_state_checkpoint_->_pf_value_5;
+        this->source = _pf_script_state_checkpoint_->_pf_value_6;
+        this->stamp = _pf_script_state_checkpoint_->_pf_value_7;
+        this->tint = _pf_script_state_checkpoint_->_pf_value_8;
+        this->_inputs_initialized_ = _pf_script_state_checkpoint_->_pf_value_9;
     }
 
     void commit_script_state() override {
@@ -224,7 +228,11 @@ public:
         _pf_refuse_failed_setting(nullptr);
     }
     void _pf_require_settings_ok() const {
-        if (_pf_setting_failed_) throw pineforge::checked_settings::LatchedSettingsFailure(_pf_setting_failure_.empty() ? "legacy strategy setter failed" : _pf_setting_failure_);
+#ifdef PF_SETTINGS_API_VERSION
+        if (_pf_setting_failed_) throw ::pineforge::checked_settings::LatchedSettingsFailure(_pf_setting_failure_.empty() ? "legacy strategy setter failed" : _pf_setting_failure_);
+#else
+        if (_pf_setting_failed_) throw std::runtime_error(_pf_setting_failure_.empty() ? "legacy strategy setter failed" : _pf_setting_failure_);
+#endif
     }
     bool _pf_refuse_failed_setting(ReportC* out) noexcept {
         if (!_pf_setting_failed_) return false;
@@ -241,29 +249,29 @@ public:
         cfg.src_series_active = true;
         return cfg;
     }
-    std::vector<pineforge::checked_settings::Setting> _pf_settings_inputs() const {
+    std::vector<::pineforge::checked_settings::Setting> _pf_settings_inputs() const {
         return {
-            {"Length", "int", pineforge::checked_settings::number(3), {}, 1, 50, 2, 32, true, {}, "int"},
-            {"Threshold", "float", pineforge::checked_settings::number(2.5), {}, 0, 10, 0.25, 32, true, {}, "float"},
-            {"Enabled", "bool", pineforge::checked_settings::number(true), {}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 32, true, {}, "bool"},
+            {"Length", "int", ::pineforge::checked_settings::number(3), {}, 1, 50, 2, 32, true, {}, "int"},
+            {"Threshold", "float", ::pineforge::checked_settings::number(2.5), {}, 0, 10, 0.25, 32, true, {}, "float"},
+            {"Enabled", "bool", ::pineforge::checked_settings::number(true), {}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 32, true, {}, "bool"},
             {"Mode", "string", std::string("fast"), {std::string("fast"), std::string("slow")}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 32, true, {}, "string"},
-            {"Side", "enum", pineforge::checked_settings::number(Side__long_), {"Side.long", "Side.short"}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 32, true, {"1", "2"}, "enum"},
+            {"Side", "enum", ::pineforge::checked_settings::number(Side__long_), {"Side.long", "Side.short"}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 32, true, {"1", "2"}, "enum"},
             {"Source", "source", "close", {"close", "high", "hl2", "hlc3", "hlcc4", "low", "ohlc4", "open", "volume"}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 32, true, {}, "source"},
-            {"Stamp", "int", pineforge::checked_settings::number(1577836800000), {}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 64, true, {}, "int"},
-            {"Tint", "int", pineforge::checked_settings::number(pine_color::red), {}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 64, true, {}, "string"},
+            {"Stamp", "int", ::pineforge::checked_settings::number(1577836800000), {}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 64, true, {}, "int"},
+            {"Tint", "int", ::pineforge::checked_settings::number(pine_color::red), {}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), 64, true, {}, "string"},
         };
     }
-    std::vector<pineforge::checked_settings::Setting> _pf_settings_overrides() const {
+    std::vector<::pineforge::checked_settings::Setting> _pf_settings_overrides() const {
         const double _pf_nan = std::numeric_limits<double>::quiet_NaN();
         const auto _pf_defaults = _pf_settings_declared_config();
         return {
-            {"initial_capital", "float", pineforge::checked_settings::number(_pf_defaults.initial_capital), {}, 0.0},
-            {"commission_value", "float", pineforge::checked_settings::number(_pf_defaults.commission_value), {}, 0.0},
-            {"default_qty_value", "float", pineforge::checked_settings::number(_pf_defaults.default_qty_value), {}, 0.0},
-            {"pyramiding", "int", pineforge::checked_settings::number(_pf_defaults.pyramiding), {}, 0.0},
-            {"slippage", "int", pineforge::checked_settings::number(_pf_defaults.slippage), {}, 0.0},
-            {"process_orders_on_close", "bool", pineforge::checked_settings::number(_pf_defaults.process_orders_on_close), {}, _pf_nan},
-            {"calc_on_order_fills", "bool", pineforge::checked_settings::number(_pf_defaults.calc_on_order_fills), {}, _pf_nan},
+            {"initial_capital", "float", ::pineforge::checked_settings::number(_pf_defaults.initial_capital), {}, 0.0},
+            {"commission_value", "float", ::pineforge::checked_settings::number(_pf_defaults.commission_value), {}, 0.0},
+            {"default_qty_value", "float", ::pineforge::checked_settings::number(_pf_defaults.default_qty_value), {}, 0.0},
+            {"pyramiding", "int", ::pineforge::checked_settings::number(_pf_defaults.pyramiding), {}, 0.0},
+            {"slippage", "int", ::pineforge::checked_settings::number(_pf_defaults.slippage), {}, 0.0},
+            {"process_orders_on_close", "bool", ::pineforge::checked_settings::number(_pf_defaults.process_orders_on_close), {}, _pf_nan},
+            {"calc_on_order_fills", "bool", ::pineforge::checked_settings::number(_pf_defaults.calc_on_order_fills), {}, _pf_nan},
             {"close_entries_rule", "string", _pf_close_entries_rule_word(_pf_defaults.close_entries_rule_any), {"FIFO", "ANY"}, _pf_nan},
             {"default_qty_type", "string", _pf_default_qty_type_word(_pf_defaults.default_qty_type), {"fixed", "percent_of_equity", "cash"}, _pf_nan},
             {"commission_type", "string", _pf_commission_type_word(_pf_defaults.commission_type), {"percent", "cash_per_order", "cash_per_contract"}, _pf_nan},
@@ -287,23 +295,23 @@ public:
         return "invalid";
     }
     void _pf_set_input_checked(const std::string& _pf_key, const std::string& _pf_value) {
-        using namespace pineforge::checked_settings;
-        require(script_bars_processed() == 0 && stream_phase_ == StreamPhase::IDLE, "settings are frozen after execution begins", PF_SETTINGS_UNSUPPORTED);
+        if (_pf_refuse_failed_setting(nullptr)) throw ::pineforge::checked_settings::Error{PF_SETTINGS_RUN_FAILED, last_error_.c_str()};
+        ::pineforge::checked_settings::require(script_bars_processed() == 0 && stream_phase_ == StreamPhase::IDLE, "settings are frozen after execution begins", PF_SETTINGS_UNSUPPORTED);
         const auto _pf_inputs = _pf_settings_inputs();
-        const Setting* _pf_match = nullptr;
+        const ::pineforge::checked_settings::Setting* _pf_match = nullptr;
         for (const auto& _pf_input : _pf_inputs) {
             if (_pf_input.name != _pf_key) continue;
-            require(_pf_match == nullptr, "ambiguous input key", PF_SETTINGS_UNSUPPORTED);
+            ::pineforge::checked_settings::require(_pf_match == nullptr, "ambiguous input key", PF_SETTINGS_UNSUPPORTED);
             _pf_match = &_pf_input;
         }
-        require(_pf_match != nullptr, "unknown input key");
-        const auto _pf_canonical = validate(*_pf_match, _pf_value);
+        ::pineforge::checked_settings::require(_pf_match != nullptr, "unknown input key");
+        const auto _pf_canonical = ::pineforge::checked_settings::validate(*_pf_match, _pf_value);
         set_input(_pf_key, _pf_canonical);
-        require(inputs_.count(_pf_key) && inputs_.at(_pf_key) == _pf_canonical, "input was not installed", PF_SETTINGS_UNSUPPORTED);
+        ::pineforge::checked_settings::require(inputs_.count(_pf_key) && inputs_.at(_pf_key) == _pf_canonical, "input was not installed", PF_SETTINGS_UNSUPPORTED);
     }
     void _pf_set_override_checked(const std::string& _pf_key, const std::string& _pf_value) {
-        using namespace pineforge::checked_settings;
-        require(script_bars_processed() == 0 && stream_phase_ == StreamPhase::IDLE, "settings are frozen after execution begins", PF_SETTINGS_UNSUPPORTED);
+        if (_pf_refuse_failed_setting(nullptr)) throw ::pineforge::checked_settings::Error{PF_SETTINGS_RUN_FAILED, last_error_.c_str()};
+        ::pineforge::checked_settings::require(script_bars_processed() == 0 && stream_phase_ == StreamPhase::IDLE, "settings are frozen after execution begins", PF_SETTINGS_UNSUPPORTED);
         for (const auto& _pf_override : _pf_settings_overrides()) {
             if (_pf_override.name != _pf_key) continue;
             auto _pf_alias = _pf_value;
@@ -321,52 +329,52 @@ public:
                 if (_pf_value == "1" || _pf_value == "strategy.commission.cash_per_order") _pf_alias = "cash_per_order";
                 if (_pf_value == "2" || _pf_value == "strategy.commission.cash_per_contract") _pf_alias = "cash_per_contract";
             }
-            const auto _pf_canonical = validate(_pf_override, _pf_alias);
+            const auto _pf_canonical = ::pineforge::checked_settings::validate(_pf_override, _pf_alias);
             set_strategy_override(_pf_key, _pf_canonical);
             return;
         }
-        throw Error{PF_SETTINGS_INVALID_ARGUMENT, "unknown override key"};
+        throw ::pineforge::checked_settings::Error{PF_SETTINGS_INVALID_ARGUMENT, "unknown override key"};
     }
     std::string _pf_settings_receipt() const {
-        using namespace pineforge::checked_settings;
+        ::pineforge::checked_settings::require(!_pf_setting_failed_, _pf_setting_failure_.empty() ? "legacy strategy setter failed" : _pf_setting_failure_.c_str(), PF_SETTINGS_RUN_FAILED);
         std::string _pf_document = "{\"version\":1,\"inputs\":[";
         const auto _pf_inputs = _pf_settings_inputs();
-        _pf_document += describe(_pf_inputs[0], pineforge::checked_settings::number(get_input_int("Length", 3)));
+        _pf_document += ::pineforge::checked_settings::describe(_pf_inputs[0], ::pineforge::checked_settings::number(get_input_int("Length", 3)));
         _pf_document += ',';
-        _pf_document += describe(_pf_inputs[1], pineforge::checked_settings::number(get_input_double("Threshold", 2.5)));
+        _pf_document += ::pineforge::checked_settings::describe(_pf_inputs[1], ::pineforge::checked_settings::number(get_input_double("Threshold", 2.5)));
         _pf_document += ',';
-        _pf_document += describe(_pf_inputs[2], pineforge::checked_settings::number(get_input_bool("Enabled", true)));
+        _pf_document += ::pineforge::checked_settings::describe(_pf_inputs[2], ::pineforge::checked_settings::number(get_input_bool("Enabled", true)));
         _pf_document += ',';
-        _pf_document += describe(_pf_inputs[3], get_input_string("Mode", std::string("fast")));
+        _pf_document += ::pineforge::checked_settings::describe(_pf_inputs[3], get_input_string("Mode", std::string("fast")));
         _pf_document += ',';
-        _pf_document += describe(_pf_inputs[4], pineforge::checked_settings::number(get_input_int("Side", Side__long_)));
+        _pf_document += ::pineforge::checked_settings::describe(_pf_inputs[4], ::pineforge::checked_settings::number(get_input_int("Side", Side__long_)));
         _pf_document += ',';
-        _pf_document += describe(_pf_inputs[5], (inputs_.count("Source") ? inputs_.at("Source") : "close"));
+        _pf_document += ::pineforge::checked_settings::describe(_pf_inputs[5], (inputs_.count("Source") ? inputs_.at("Source") : "close"));
         _pf_document += ',';
-        _pf_document += describe(_pf_inputs[6], pineforge::checked_settings::number(get_input_int64("Stamp", 1577836800000)));
+        _pf_document += ::pineforge::checked_settings::describe(_pf_inputs[6], ::pineforge::checked_settings::number(get_input_int64("Stamp", 1577836800000)));
         _pf_document += ',';
-        _pf_document += describe(_pf_inputs[7], pineforge::checked_settings::number(get_input_int64("Tint", pine_color::red)));
+        _pf_document += ::pineforge::checked_settings::describe(_pf_inputs[7], ::pineforge::checked_settings::number(get_input_int64("Tint", pine_color::red)));
         _pf_document += "],\"overrides\":[";
         const auto _pf_overrides = _pf_settings_overrides();
-        _pf_document += describe(_pf_overrides[0], pineforge::checked_settings::number((std::isnan(override_.initial_capital) ? config_.initial_capital : override_.initial_capital)));
+        _pf_document += ::pineforge::checked_settings::describe(_pf_overrides[0], ::pineforge::checked_settings::number((std::isnan(override_.initial_capital) ? config_.initial_capital : override_.initial_capital)));
         _pf_document += ',';
-        _pf_document += describe(_pf_overrides[1], pineforge::checked_settings::number((std::isnan(override_.commission_value) ? config_.commission_value : override_.commission_value)));
+        _pf_document += ::pineforge::checked_settings::describe(_pf_overrides[1], ::pineforge::checked_settings::number((std::isnan(override_.commission_value) ? config_.commission_value : override_.commission_value)));
         _pf_document += ',';
-        _pf_document += describe(_pf_overrides[2], pineforge::checked_settings::number((std::isnan(override_.default_qty_value) ? config_.default_qty_value : override_.default_qty_value)));
+        _pf_document += ::pineforge::checked_settings::describe(_pf_overrides[2], ::pineforge::checked_settings::number((std::isnan(override_.default_qty_value) ? config_.default_qty_value : override_.default_qty_value)));
         _pf_document += ',';
-        _pf_document += describe(_pf_overrides[3], pineforge::checked_settings::number((override_.pyramiding < 0 ? config_.pyramiding : override_.pyramiding)));
+        _pf_document += ::pineforge::checked_settings::describe(_pf_overrides[3], ::pineforge::checked_settings::number((override_.pyramiding < 0 ? config_.pyramiding : override_.pyramiding)));
         _pf_document += ',';
-        _pf_document += describe(_pf_overrides[4], pineforge::checked_settings::number((override_.slippage < 0 ? config_.slippage : override_.slippage)));
+        _pf_document += ::pineforge::checked_settings::describe(_pf_overrides[4], ::pineforge::checked_settings::number((override_.slippage < 0 ? config_.slippage : override_.slippage)));
         _pf_document += ',';
-        _pf_document += describe(_pf_overrides[5], pineforge::checked_settings::number(static_cast<bool>((override_.process_orders_on_close < 0 ? config_.process_orders_on_close : override_.process_orders_on_close))));
+        _pf_document += ::pineforge::checked_settings::describe(_pf_overrides[5], ::pineforge::checked_settings::number(static_cast<bool>((override_.process_orders_on_close < 0 ? config_.process_orders_on_close : override_.process_orders_on_close))));
         _pf_document += ',';
-        _pf_document += describe(_pf_overrides[6], pineforge::checked_settings::number(static_cast<bool>((override_.calc_on_order_fills < 0 ? config_.calc_on_order_fills : override_.calc_on_order_fills))));
+        _pf_document += ::pineforge::checked_settings::describe(_pf_overrides[6], ::pineforge::checked_settings::number(static_cast<bool>((override_.calc_on_order_fills < 0 ? config_.calc_on_order_fills : override_.calc_on_order_fills))));
         _pf_document += ',';
-        _pf_document += describe(_pf_overrides[7], _pf_close_entries_rule_word((override_.close_entries_rule < 0 ? config_.close_entries_rule_any : override_.close_entries_rule)));
+        _pf_document += ::pineforge::checked_settings::describe(_pf_overrides[7], _pf_close_entries_rule_word((override_.close_entries_rule < 0 ? config_.close_entries_rule_any : override_.close_entries_rule)));
         _pf_document += ',';
-        _pf_document += describe(_pf_overrides[8], _pf_default_qty_type_word((override_.default_qty_type < 0 ? config_.default_qty_type : override_.default_qty_type)));
+        _pf_document += ::pineforge::checked_settings::describe(_pf_overrides[8], _pf_default_qty_type_word((override_.default_qty_type < 0 ? config_.default_qty_type : override_.default_qty_type)));
         _pf_document += ',';
-        _pf_document += describe(_pf_overrides[9], _pf_commission_type_word((override_.commission_type < 0 ? config_.commission_type : override_.commission_type)));
+        _pf_document += ::pineforge::checked_settings::describe(_pf_overrides[9], _pf_commission_type_word((override_.commission_type < 0 ? config_.commission_type : override_.commission_type)));
         return _pf_document + "]}";
     }
 #endif
@@ -382,6 +390,7 @@ public:
         this->threshold = 0.0;
         this->enabled = false;
         this->mode = std::string("");
+        this->defaultSide = 0;
         this->side = 0.0;
         this->source = 0.0;
         this->stamp = 0;
@@ -401,12 +410,13 @@ public:
             tint = get_input_int64("Tint", pine_color::red);
             _inputs_initialized_ = true;
         }
+        defaultSide = Side__long_;
         source = get_input_source("Source", _src_close_)[0];
         if ((enabled && ([&]{ auto _pna_l = (std::fmod((double)(pine_bar_index()), (double)(length))); auto _pna_r = (0); double _pfc_l = static_cast<double>(_pna_l); double _pfc_r = static_cast<double>(_pna_r); bool _pfc_eq = (_pfc_l == _pfc_r) || (std::isfinite(_pfc_l) && std::isfinite(_pfc_r) && std::fabs(_pfc_l - _pfc_r) <= 1e-10); return !is_na(_pna_l) && !is_na(_pna_r) && (_pfc_eq); }()))) {
             strategy_entry(std::string("entry"), true, na<double>(), na<double>(), threshold, "", "", 0, -1);
         }
         if (([&]{ auto _pna_l = (std::fmod((double)(pine_bar_index()), (double)(length))); auto _pna_r = (1); double _pfc_l = static_cast<double>(_pna_l); double _pfc_r = static_cast<double>(_pna_r); bool _pfc_eq = (_pfc_l == _pfc_r) || (std::isfinite(_pfc_l) && std::isfinite(_pfc_r) && std::fabs(_pfc_l - _pfc_r) <= 1e-10); return !is_na(_pna_l) && !is_na(_pna_r) && (_pfc_eq); }())) {
-            strategy_close(std::string("entry"), "", na<double>(), na<double>(), false, 77309411347ULL);
+            strategy_close(std::string("entry"), "", na<double>(), na<double>(), false, 81604378643ULL);
         }
     }
 
@@ -420,12 +430,17 @@ extern "C" {
     void run_backtest(void* s, Bar* bars, int n, ReportC* out) {
         try {
         auto* strat = static_cast<GeneratedStrategy*>(s);
+#ifndef PF_SETTINGS_API_VERSION
         if (strat->_pf_refuse_failed_setting(out)) return;
+#endif
         strat->run(bars, n);
         strat->fill_report(out);
+        strat->_pf_refuse_failed_setting(out);
         } catch (const std::exception& _pf_error) {
+            if (out) *out = ReportC{};
             if (s) static_cast<GeneratedStrategy*>(s)->_pf_record_failure("run_backtest", _pf_error.what());
         } catch (...) {
+            if (out) *out = ReportC{};
             if (s) static_cast<GeneratedStrategy*>(s)->_pf_record_failure("run_backtest", "unknown C++ exception");
         }
     }
@@ -435,7 +450,9 @@ extern "C" {
                            int magnifier_dist,
                            ReportC* out) {
         auto* strat = static_cast<GeneratedStrategy*>(s);
+#ifndef PF_SETTINGS_API_VERSION
         if (strat->_pf_refuse_failed_setting(out)) return;
+#endif
         std::string itf = input_tf ? input_tf : "";
         std::string stf = script_tf ? script_tf : "";
         bool needs_full_run = (bar_magnifier != 0)
@@ -447,12 +464,13 @@ extern "C" {
                        static_cast<MagnifierDistribution>(magnifier_dist));
         }
         strat->fill_report(out);
+        strat->_pf_refuse_failed_setting(out);
     }
     void run_backtest_full(void* s, Bar* bars, int n, const char* input_tf, const char* script_tf,
                            int bar_magnifier, int magnifier_samples, int magnifier_dist, ReportC* out) {
         try { _pf_run_backtest_full_impl(s, bars, n, input_tf, script_tf, bar_magnifier, magnifier_samples, magnifier_dist, out); }
-        catch (const std::exception& _pf_error) { if (s) static_cast<GeneratedStrategy*>(s)->_pf_record_failure("run_backtest_full", _pf_error.what()); }
-        catch (...) { if (s) static_cast<GeneratedStrategy*>(s)->_pf_record_failure("run_backtest_full", "unknown C++ exception"); }
+        catch (const std::exception& _pf_error) { if (out) *out = ReportC{}; if (s) static_cast<GeneratedStrategy*>(s)->_pf_record_failure("run_backtest_full", _pf_error.what()); }
+        catch (...) { if (out) *out = ReportC{}; if (s) static_cast<GeneratedStrategy*>(s)->_pf_record_failure("run_backtest_full", "unknown C++ exception"); }
     }
     void strategy_free(void* s) {
         try { delete static_cast<GeneratedStrategy*>(s); } catch (...) {}
@@ -482,37 +500,37 @@ extern "C" {
     uint32_t strategy_settings_api_version(void) { return PF_SETTINGS_API_VERSION; }
     int strategy_create_checked(const char* params_json, void** out, char* error, size_t error_capacity) {
         if (out) *out = nullptr;
-        return pineforge::checked_settings::boundary(error, error_capacity, [&] {
-            pineforge::checked_settings::require(out != nullptr, "strategy output pointer is null");
-            pineforge::checked_settings::require(!params_json || !*params_json, "params_json is reserved; use checked setters", PF_SETTINGS_UNSUPPORTED);
+        return ::pineforge::checked_settings::boundary(error, error_capacity, [&] {
+            ::pineforge::checked_settings::require(out != nullptr, "strategy output pointer is null");
+            ::pineforge::checked_settings::require(!params_json || !*params_json, "params_json is reserved; use checked setters", PF_SETTINGS_UNSUPPORTED);
             *out = new GeneratedStrategy();
         });
     }
     int strategy_set_input_checked(void* s, const char* key, const char* value, char* error, size_t error_capacity) {
-        return pineforge::checked_settings::boundary(error, error_capacity, [&] {
-            pineforge::checked_settings::require(s && key && value, "null strategy, key or value");
+        return ::pineforge::checked_settings::boundary(error, error_capacity, [&] {
+            ::pineforge::checked_settings::require(s && key && value, "null strategy, key or value");
             static_cast<GeneratedStrategy*>(s)->_pf_set_input_checked(key, value);
         });
     }
     int strategy_set_override_checked(void* s, const char* key, const char* value, char* error, size_t error_capacity) {
-        return pineforge::checked_settings::boundary(error, error_capacity, [&] {
-            pineforge::checked_settings::require(s && key && value, "null strategy, key or value");
+        return ::pineforge::checked_settings::boundary(error, error_capacity, [&] {
+            ::pineforge::checked_settings::require(s && key && value, "null strategy, key or value");
             static_cast<GeneratedStrategy*>(s)->_pf_set_override_checked(key, value);
         });
     }
     int strategy_get_effective_settings(void* s, char* json, size_t capacity, size_t* required, char* error, size_t error_capacity) {
         if (required) *required = 0;
-        return pineforge::checked_settings::boundary(error, error_capacity, [&] {
-            pineforge::checked_settings::require(s != nullptr, "null strategy");
-            pineforge::checked_settings::receipt(static_cast<GeneratedStrategy*>(s)->_pf_settings_receipt(), json, capacity, required);
+        return ::pineforge::checked_settings::boundary(error, error_capacity, [&] {
+            ::pineforge::checked_settings::require(s != nullptr, "null strategy");
+            ::pineforge::checked_settings::receipt(static_cast<GeneratedStrategy*>(s)->_pf_settings_receipt(), json, capacity, required);
         });
     }
     int run_backtest_full_checked(void* s, Bar* bars, int n, const char* input_tf, const char* script_tf, int bar_magnifier, int magnifier_samples, int magnifier_dist, ReportC* out, char* error, size_t error_capacity) {
-        return pineforge::checked_settings::boundary(error, error_capacity, [&] {
-            pineforge::checked_settings::require(s && out && n >= 0 && (n == 0 || bars), "invalid batch arguments");
+        return ::pineforge::checked_settings::boundary(error, error_capacity, [&] {
+            ::pineforge::checked_settings::require(s && out && n >= 0 && (n == 0 || bars), "invalid batch arguments");
             _pf_run_backtest_full_impl(s, bars, n, input_tf, script_tf, bar_magnifier, magnifier_samples, magnifier_dist, out);
             const auto& _pf_error = static_cast<GeneratedStrategy*>(s)->last_error();
-            pineforge::checked_settings::require(_pf_error.empty(), _pf_error.c_str(), PF_SETTINGS_RUN_FAILED);
+            ::pineforge::checked_settings::require(_pf_error.empty(), _pf_error.c_str(), PF_SETTINGS_RUN_FAILED);
         });
     }
 #endif

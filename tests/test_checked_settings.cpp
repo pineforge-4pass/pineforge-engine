@@ -135,6 +135,10 @@ int main() {
     assert(receipt_field(receipt(), "Length", "effective_value") == "5");
     assert(integer("9223372036854775807.0", 64) == std::numeric_limits<std::int64_t>::max());
     assert(integer("-9223372036854775808e0", 64) == std::numeric_limits<std::int64_t>::min());
+    assert(boundary(error, sizeof(error), [] { integer("9223372036854775808e0", 64); }) == PF_SETTINGS_INVALID_ARGUMENT);
+    assert(std::string(error) == "integer out of range");
+    assert(boundary(error, sizeof(error), [] { integer("1e-99999999999"); }) == PF_SETTINGS_INVALID_ARGUMENT);
+    assert(std::string(error) == "invalid integer exponent");
     assert(input("Side", "short") == PF_SETTINGS_INVALID_ARGUMENT);
     assert(std::string(error) == "invalid enum option");
     assert(input("Length", "4") == PF_SETTINGS_OK);
@@ -203,9 +207,11 @@ int main() {
         assert(run_backtest_full_checked(strategy, nullptr, 0, long_timeframe.c_str(), "",
                0, 4, PF_MAGNIFIER_ENDPOINTS, &report, error, sizeof(error)) == PF_SETTINGS_EXCEPTION);
         allocation_failure = failure;
+        report.total_trades = 99;
         run_backtest_full(strategy, nullptr, 0, long_timeframe.c_str(), "", 0, 4,
                           PF_MAGNIFIER_ENDPOINTS, &report);
         assert(allocation_failure == 0);
+        assert(report.total_trades == 0 && report.trades == nullptr);
         assert(std::string(strategy_get_last_error(strategy)).find("run_backtest_full:") == 0);
         if (failure == 2)
             assert(std::string(strategy_get_last_error(strategy)).find("unknown C++ exception") != std::string::npos);
@@ -223,6 +229,20 @@ int main() {
     }
     const pineforge::Bar source_bars[]{{100, 102, 99, 101, 5, 0},
                                      {100, 102, 99, 101, 5, 60000}};
+    pf_strategy_t enum_default = strategy_create(nullptr);
+    std::size_t enum_required = 0;
+    assert(strategy_get_effective_settings(enum_default, nullptr, 0, &enum_required, error, sizeof(error)) == PF_SETTINGS_BUFFER_TOO_SMALL);
+    std::vector<char> enum_receipt(enum_required);
+    assert(strategy_get_effective_settings(enum_default, enum_receipt.data(), enum_receipt.size(), &enum_required, error, sizeof(error)) == PF_SETTINGS_OK);
+    const std::string enum_before = enum_receipt.data();
+    assert(receipt_field(enum_before, "Side", "default") == "1");
+    assert(receipt_field(enum_before, "Side", "effective_value") == "1");
+    pf_report_t enum_report{};
+    run_backtest(enum_default, bars, 8, &enum_report);
+    report_free(&enum_report);
+    assert(strategy_get_effective_settings(enum_default, enum_receipt.data(), enum_receipt.size(), &enum_required, error, sizeof(error)) == PF_SETTINGS_OK);
+    assert(enum_before == enum_receipt.data());
+    strategy_free(enum_default);
     for (const auto kind : {PreparationFailureProbe::Kind::Standard,
                            PreparationFailureProbe::Kind::Unknown,
                            PreparationFailureProbe::Kind::Latched}) {
@@ -233,13 +253,18 @@ int main() {
         PreparationFailureProbe batch_probe(kind);
         batch_probe.run(source_bars, 2);
         assert(batch_probe.last_error() == expected && batch_probe.callbacks == 0);
+        assert(strategy_last_run_status(&batch_probe) == (latched ? 1 : 0));
+        pineforge::ReportC batch_report{};
+        batch_probe.fill_report(&batch_report);
+        assert(batch_report.total_trades == 0);
+        pineforge::BacktestEngine::free_report(&batch_report);
         PreparationFailureProbe stream_probe(kind);
-        assert(stream_probe.stream_begin(source_bars, 2, "1", "1") == !latched);
+        assert(!stream_probe.stream_begin(source_bars, 2, "1", "1"));
         assert(stream_probe.last_error() == expected && stream_probe.callbacks == 0);
-        assert(stream_probe.stream_is_realtime() == !latched);
-        if (!latched) assert(stream_probe.stream_end());
+        assert(!stream_probe.stream_is_realtime());
+        assert(strategy_last_run_status(&stream_probe) == 1);
     }
-    std::cout << "source preparation: latched batch/stream refusal and ordinary exception compatibility PASS\n";
+    std::cout << "source preparation: all stream exceptions refused; batch compatibility PASS\n";
     pf_strategy_t poisoned = strategy_create(nullptr);
     strategy_set_override(poisoned, "pyramiding", "abc");
     const auto setter_failure = std::string(strategy_get_last_error(poisoned));
@@ -251,6 +276,7 @@ int main() {
     report.total_trades = 99;
     run_backtest_full(poisoned, bars, 8, "1", "1", 0, 4, PF_MAGNIFIER_ENDPOINTS, &report);
     assert(report.total_trades == 0 && std::string(strategy_get_last_error(poisoned)) == setter_failure);
+    assert(strategy_last_run_status(poisoned) == 1);
     assert(run_backtest_full_checked(poisoned, bars, 8, "1", "1", 0, 4,
            PF_MAGNIFIER_ENDPOINTS, &report, error, sizeof(error)) == PF_SETTINGS_RUN_FAILED);
     assert(std::string(error) == setter_failure);
