@@ -30,7 +30,11 @@ session gap are inert. Direct hosts can inspect
 `report_terminal_quote_applied(report)` without mutating state. The harness
 returns `report_terminal_quote.applied` from the presented terminal timestamps
 and logs `APPLIED` or `INERT` after the run, rather than treating declaration as
-application. A quote persists on a reused host until explicitly cleared.
+application. It reads timestamps only, not the exit price, so a quote stamped at
+the completed mark itself, where the terminal timestamps already match without
+it, logs `APPLIED` even if the engine declined it. A quote one interval later,
+the shape the measured probes use, is reported exactly. A quote persists on a
+reused host until explicitly cleared.
 
 Runtime fingerprint provenance includes the declared quote's timestamp, close
 and native feed SHA-256, even when inert. ON and OFF fingerprints differ, as do
