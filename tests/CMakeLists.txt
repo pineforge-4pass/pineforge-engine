@@ -1663,6 +1663,7 @@ list(APPEND TEST_SOURCES test_zero_trail_sibling_stop)
 #   E5's pending-entry arm and E14's anchored-leg seed (AUDIT3 H6 tapes).
 list(APPEND TEST_SOURCES test_pending_entry_trail_tapes)
 list(APPEND TEST_SOURCES test_pine_input_domain)
+list(APPEND TEST_SOURCES test_pine_confirmed_source_state)
 #   G2-22 / E19 the host-owned excursion model against the kernel sampler.
 list(APPEND TEST_SOURCES test_e19_excursion_tape)
 #   G2-21 the short-seed report swaps against the kernel's lot identities.

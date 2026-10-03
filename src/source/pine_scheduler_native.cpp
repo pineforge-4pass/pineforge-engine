@@ -24,6 +24,9 @@ void PineScheduler::capture_begin(const NativeBeginArgs& args) {
     next.is_stream = args.is_stream; next.warmup_n = args.warmup_n;
     next.simple_run = args.simple_run;
     retained_ = std::move(next);
+    confirmed_input_bars_ = {};
+    confirmed_input_next_ = 0;
+    confirmed_input_count_ = 0;
     reset_consumed_digests();
 }
 
@@ -61,6 +64,9 @@ void PineScheduler::reset_language() {
     input_script_boundary_completes_.clear();
     uses_aux_security_feed_ = false;
     input_is_observed_ticks_ = false;
+    confirmed_input_bars_ = {};
+    confirmed_input_next_ = 0;
+    confirmed_input_count_ = 0;
     deferred_boundary_input_ = {};
     reset_consumed_digests();
 }
@@ -353,6 +359,7 @@ void PineScheduler::fixture_publish_source_series(const Bar& bar, bool new_histo
 void PineScheduler::input(
     const Bar& bar, const NativeInputContext& context, PineStrategyHost& host) {
     input_is_observed_ticks_ = false;
+    retain_confirmed_input(bar);
     struct InputBarIndexScope {
         PineStrategyHost& host;
         int previous;
@@ -420,6 +427,9 @@ void PineScheduler::input(
             static_cast<std::size_t>(context.input_index)] != 0U;
         boundary = input_script_boundary_completes_[
             static_cast<std::size_t>(context.input_index)] != 0U;
+    } else if (retained_.is_stream && context.input_index >= 0) {
+        calling_bar_complete = confirmed_script_interval_complete(context);
+        boundary = false;
     }
     // The final sparse magnifier child is a partial requested bucket.  The
     // legacy lower-TF pump does not promote that tail to a completed

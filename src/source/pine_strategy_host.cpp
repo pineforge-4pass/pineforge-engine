@@ -1731,13 +1731,16 @@ bool source::PineStrategyHost::report_terminal_quote_applied(const ReportC& repo
 }
 
 void source::PineStrategyHost::present_report(ReportC* out) const {
-    if (out->equity_curve_len == 0 || range_end_trades_.empty() || !native_bound()) return;
+    if (out->equity_curve_len == 0 || !native_bound()) return;
     const auto state = as_native_consumer(execution_consumer()).view();
     if (!state.spec
         || state.spec->report_policy != NativeReportPolicy::KernelRecordedAtHostMarks) return;
+    const auto position = as_native_consumer(execution_consumer()).position(*this);
     auto& last = out->equity_curve[out->equity_curve_len - 1];
-    if (stream_phase_ == StreamPhase::REALTIME
-        || state.completion == NativeCompletion::StreamEnded) {
+    if ((stream_phase_ == StreamPhase::REALTIME
+         || state.completion == NativeCompletion::StreamEnded)
+        && (!range_end_trades_.empty()
+            || (position.signed_units == 0.0 && position.lot_count == 0))) {
         double range_end_pnl = 0.0;
         for (const auto& row : range_end_trades_) range_end_pnl += row.pnl;
         last.open_profit = 0.0;

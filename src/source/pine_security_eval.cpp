@@ -473,8 +473,7 @@ bool source::PineStrategyHost::security_input_precedes_range_start(
         && script_tf_seconds_ > 0 && script_tf_seconds_ < 86400
         && (state.tf == "D" || state.tf == "1D")
         && !pine.lower_tf_requested && !pine.lower_tf_array_requested
-        && (syminfo_.type == "forex" || syminfo_.type == "cfd")
-        && !stream_warmup_mode_ && stream_phase_ == StreamPhase::IDLE) {
+        && (syminfo_.type == "forex" || syminfo_.type == "cfd")) {
         const int64_t stamp = session_period_open_ms(
             input_ts, syminfo_.timezone, syminfo_.session, CalendarPeriod::DAY);
         // Metals stamp the D bar at 17:00 ET but first trade at 18:00.

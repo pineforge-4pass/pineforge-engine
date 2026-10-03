@@ -4,6 +4,7 @@
 #include <pineforge/source/pine_language_state.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -82,6 +83,32 @@ public:
     }
     bool retains_stream() const noexcept { return retained_.is_stream; }
     bool input_is_observed_ticks() const noexcept { return input_is_observed_ticks_; }
+    void retain_confirmed_input(const Bar& bar) noexcept {
+        if (!retained_.is_stream) return;
+        for (std::size_t index = 0; index < confirmed_input_count_; ++index) {
+            auto& existing = confirmed_input_bars_[index];
+            if (existing.timestamp == bar.timestamp) {
+                existing = bar;
+                return;
+            }
+        }
+        confirmed_input_bars_[confirmed_input_next_] = bar;
+        confirmed_input_next_ = (confirmed_input_next_ + 1) % confirmed_input_bars_.size();
+        confirmed_input_count_ = std::min(confirmed_input_count_ + 1, confirmed_input_bars_.size());
+    }
+    std::size_t confirmed_input_count() const noexcept { return confirmed_input_count_; }
+    std::optional<Bar> confirmed_input_bar_at(std::int64_t timestamp) const noexcept {
+        for (std::size_t index = 0; index < confirmed_input_count_; ++index) {
+            if (confirmed_input_bars_[index].timestamp == timestamp)
+                return confirmed_input_bars_[index];
+        }
+        return std::nullopt;
+    }
+    static bool confirmed_script_interval_complete(const NativeInputContext& context) noexcept {
+        return context.script_interval.last_traded_close_ms > context.script_interval.open_ms
+            && context.input_interval.last_traded_close_ms
+                >= context.script_interval.last_traded_close_ms;
+    }
     // The input the run retains -- a batch's, or a stream's warmup -- in
     // time order, and whether each of its bars is a chart bar (no
     // aggregation to a coarser script timeframe).
@@ -132,6 +159,7 @@ public:
     std::optional<Bar> broker_bar(const PineStrategyHost& host,
                                   const NativeDecisionContext& context) const {
         if (const Bar* sub = lower_path_bar_at(host, context)) return *sub;
+        if (const auto observed = confirmed_input_bar_at(context.sub_bar_open_ms)) return observed;
         const auto& bars = retained_.bars;
         const std::size_t n = bars.size();
         if (n > 0) {
@@ -154,6 +182,7 @@ public:
                 return *found;
             }
         }
+        if (retained_.is_stream && !input_is_observed_ticks_) return std::nullopt;
         return current_script_bar_valid_ ? std::optional<Bar>{current_script_bar_}
                                          : std::nullopt;
     }
@@ -220,6 +249,9 @@ private:
     std::vector<unsigned char> input_script_boundary_completes_;
     bool uses_aux_security_feed_ = false;
     bool input_is_observed_ticks_ = false;
+    std::array<Bar, 8> confirmed_input_bars_{};
+    std::size_t confirmed_input_next_ = 0;
+    std::size_t confirmed_input_count_ = 0;
     DeferredBoundaryInput deferred_boundary_input_{};
     // R5 lane V19-E: running digests of the consumed input prefix -- the bars,
     // their script completions and their boundary completions -- each element
