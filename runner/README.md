@@ -181,7 +181,7 @@ An optional `--subscribe subscription.json` sends that file as the initial
 text subscription/authentication message. Feed requests never receive webhook
 HMAC or idempotency headers. WebSocket close, malformed/binary frames or an
 idle/message timeout stop the runner. Reconnection and gap healing are not
-guessed: reconnect using the provider's resume mechanism and a verified
+guessed: reconnect using your feed service's resume mechanism and a verified
 input prefix/tail. The default native transport timeout is 15 seconds.
 
 HTTP and WebSocket URLs identify **your own normalized feed service**, never
@@ -212,6 +212,24 @@ input bars. Existing native semantics create zero-volume carry-forward bars
 for quiet in-session intervals and skip configured out-of-session intervals.
 
 ### Confirmed OHLCV mode
+
+Fields are strict: unknown keys are fatal and JSON numeric strings are not
+numbers. All fields shown below are required, except `trade_count`.
+
+| Field | JSON type | Range |
+| --- | --- | --- |
+| `type` | string | `tick`, `time`, `bar`, or `batch` |
+| `ts`, `bar.ts_open` | integer | Non-negative milliseconds, within int64 |
+| `seq` | integer | Positive uint64; subsequent ticks are contiguous |
+| `price`, `qty` | number | Finite and positive |
+| `bar.o`, `bar.h`, `bar.l`, `bar.c` | number | Finite, positive, valid OHLC range |
+| `bar.v` | number | Finite and non-negative |
+| `bar.trade_count` | integer, optional | Non-negative uint64; accepted but ignored |
+| `events` | array | 1..1024 non-batch events |
+
+Unlike the retired provider parser, `forming` is refused, tick mode uses
+explicit `time` boundaries, and duplicate input is accepted only as an
+index-aligned identical prefix, including identical message framing.
 
 ```json
 {"type":"bar","bar":{"ts_open":120000,"o":102,"h":104,"l":101,"c":103,"v":4}}

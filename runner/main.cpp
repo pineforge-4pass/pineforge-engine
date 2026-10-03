@@ -97,6 +97,8 @@ Config args(int argc, char **argv) {
     std::set<std::string> seen;
     for (int i = 2; i < argc; ++i) {
         std::string a = argv[i];
+        if (a == "--parser" || a == "--parser-config")
+            throw std::runtime_error("in-runner parsers were removed; use an external feed adapter (runner/README.md#feed-format)");
         if (a != "--input" && a != "--override" && a != "--syminfo" && !seen.insert(a).second)
             throw std::runtime_error("duplicate option: " + a);
         c.explicit_flags.insert(a);
@@ -515,7 +517,9 @@ void apply(Strategy &s, const Config &c, Cursor &cursor, const Json &frame) {
         if (c.mode != "bars")
             throw std::runtime_error("ticks mode uses trade ticks and explicit time boundaries");
         const auto &j = frame.at("bar");
-        only_fields(j, {"ts_open", "o", "h", "l", "c", "v"});
+        only_fields(j, {"ts_open", "o", "h", "l", "c", "v", "trade_count"});
+        if (j.find("trade_count"))
+            j.at("trade_count").integer<std::uint64_t>();
         pf_bar_t b{};
         b.timestamp = j.at("ts_open").integer<std::int64_t>();
         b.open = j.at("o").real();
@@ -606,7 +610,9 @@ void require_feed_event(const Json &event) {
     } else if (type == "bar") {
         only_fields(event, {"type", "bar"});
         const auto &bar = event.at("bar");
-        only_fields(bar, {"ts_open", "o", "h", "l", "c", "v"});
+        only_fields(bar, {"ts_open", "o", "h", "l", "c", "v", "trade_count"});
+        if (bar.find("trade_count"))
+            bar.at("trade_count").integer<std::uint64_t>();
         bar.at("ts_open").integer<std::int64_t>();
         for (const auto *field : {"o", "h", "l", "c", "v"})
             bar.at(field).real();
@@ -630,9 +636,8 @@ Json feed_record(const std::string &message) {
         return record;
     } catch (const std::exception &error) {
         throw std::runtime_error(
-            std::string("PineForge feed events required; use an external feed adapter "
-                        "(runner/README.md#feed-format) to normalize raw provider messages: ") +
-            error.what());
+            std::string("invalid feed message: ") + error.what() +
+            "; PineForge feed events required; use an external feed adapter (runner/README.md#feed-format)");
     }
 }
 bool drain(Ledger &ledger, const HttpOptions &options, const Config &c, std::uint64_t &delivered) {
@@ -768,7 +773,7 @@ int run(Config c) {
         } else {
             if (index != ledger.input_count())
                 throw std::runtime_error("input sequence is not contiguous");
-            // The entire provider message advances in memory before one
+            // The entire feed message advances in memory before one
             // input/state/outbox transaction. Failure discards this instance;
             // interruption and delivery begin only after every event commits.
             apply_record(strategy, c, cursor, frame);
