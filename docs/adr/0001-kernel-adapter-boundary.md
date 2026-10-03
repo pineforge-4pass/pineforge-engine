@@ -93,7 +93,7 @@ summary of it.
   (`native_execution_consumer.cpp:1060-1074`) in the v19 continuation. The Pine
   adapter keeps its pending-book and chart-sampling policy in the source layer,
   reading the named input coordinate through `projection_bar_index`
-  (`pine_adapter.cpp:791-797`) where Pine still needs input cadence, and
+  (`pine_adapter.cpp:802-808`) where Pine still needs input cadence, and
   does not rewrite the kernel's lot or row indices.
 - **Requests.** `submit` / `replace` / `cancel` / `submit_market` / `replace_market`
   (`native_host.hpp:1227-1232`), plus `cancel_all` (`native_host.hpp:1267`) and `cancel_where`
@@ -213,8 +213,8 @@ kernel and own these quirks, each at its site:
 - **Seams the adapter overrides.** The kernel is driven, not patched. `PineStrategyHost` overrides
   `resolve_execution_terms` (`pine_strategy_host.cpp:681`) for TV sizing and fill spelling;
   `validate_execution_precommit` (`pine_strategy_host.cpp:706`), whose
-  `validate_precommit` (`pine_adapter.cpp:14522`) returns `AdmitWithHostMargin`
-  (`pine_adapter.cpp:14694`) to own the opening margin decision; `on_native_tick`
+  `validate_precommit` (`pine_adapter.cpp:14532`) returns `AdmitWithHostMargin`
+  (`pine_adapter.cpp:14704`) to own the opening margin decision; `on_native_tick`
   (`pine_strategy_host.cpp:424`) / `on_native_applied` (`pine_strategy_host.cpp:492`) for
   `calc_on_order_fills` re-entry. It does not own lot excursions: since R5 lane H-THIN it keeps
   the kernel's `owns_lot_excursions()` default, so the kernel's sampler books every Pine lot's
@@ -226,7 +226,7 @@ kernel and own these quirks, each at its site:
   lowering moved the excursion cells of 335 trades in 19 corpus probes: 324 now equal
   TradingView's, 11 moved closer, none farther (`tests/fixtures/e19_allin_trim` tapes the all-in
   residual's own entry-bar call). `process_orders_on_close` becomes
-  `NativeCloseExecution::AfterCalculation` in the projected spec (`pine_adapter.cpp:2315-2316`);
+  `NativeCloseExecution::AfterCalculation` in the projected spec (`pine_adapter.cpp:2326-2327`);
   calc cadence and language publication are `PineScheduler`'s (`pine_scheduler.hpp:20`).
 - **Batching and open-order priority.** Same-bar command batching and its deferred queues
   (`PendingSameBarCommand` pine_adapter.hpp:1628, `pending_bracket_legs_` pine_adapter.hpp:2120-2138); the retained parent-before-child ordering of live handles — an
@@ -237,11 +237,11 @@ kernel and own these quirks, each at its site:
   (`select_exit_activation` src/compat/pine/exit_activation.cpp:42, `select_exit_suspension` src/compat/pine/exit_lifecycle.cpp:10, `select_replacement_revival_definition` src/compat/pine/exit_lifecycle.cpp:46) and historical birth reach
   (`order_birth.cpp` `src/compat/pine/order_birth.cpp:5-14`).
 - **Trail and tick conventions.** The half-tick arm threshold measured against tick-quantized
-  extremes while the raw running best is retained (`has_trail_request` `pine_adapter.cpp:11010-11015`); the half-tick
-  trigger threshold (`source_trigger_threshold` pine_adapter.cpp:285) and raw-vs-booked fill spelling, behind the
-  adapter's terms seam (`resolve_terms` `pine_adapter.cpp:13142`).
+  extremes while the raw running best is retained (`has_trail_request` `pine_adapter.cpp:11052-11057`); the half-tick
+  trigger threshold (`source_trigger_threshold` pine_adapter.cpp:296) and raw-vs-booked fill spelling, behind the
+  adapter's terms seam (`resolve_terms` `pine_adapter.cpp:13153`).
 - **Money arithmetic.** Ten-significant-digit half-up money (`source_money_round`
-  `pine_adapter.cpp:448-454`, twin `tv_money_round` `pine_policy_support.hpp:9-15`).
+  `pine_adapter.cpp:459-465`, twin `tv_money_round` `pine_policy_support.hpp:9-15`).
 - **Quantity dust.** After every applied execution the Pine host erases any lot of at most
   `kQtyEpsilon` (`1e-10`) from the book it shares with the kernel, with no closing row
   (`on_native_applied` `pine_strategy_host.cpp:492`), inside a live book as well as at a flat
@@ -260,8 +260,8 @@ kernel and own these quirks, each at its site:
   (`select_reservation_growth_sources` src/compat/pine/reservation_expansion.cpp:9).
 - **Margin.** The kernel owns the margin *mechanism* — the level solve, the check points, the
   kernel request, its re-pricing, the receipt — and the adapter answers its three policy hooks
-  with TradingView's: `margin_check_allowed` (`pine_adapter.cpp:15797`) for the scheduling,
-  `resolve_margin_requirement` (`pine_adapter.cpp:15866`) for the ten-significant-digit money,
+  with TradingView's: `margin_check_allowed` (`pine_adapter.cpp:15807`) for the scheduling,
+  `resolve_margin_requirement` (`pine_adapter.cpp:15876`) for the ten-significant-digit money,
   and `resolve_margin_call_units` for the lot-floored 4x restore. That hook answers every call
   on purpose (R5 lane F7): TradingView floors the restore onto the lot grid before the multiple,
   so on a gridded tape the kernel's own `ShortfallMultiple 4` books 5 lots where TradingView
@@ -272,7 +272,7 @@ kernel and own these quirks, each at its site:
   margin since F7), while the roll point measures at the remaining path's adverse mark (MG-FX:
   0.4116 @ 97 there against TradingView's 0.3996 @ 100). What has no kernel check point at all
   stays adapter-side: the `process_orders_on_close` chronology exception
-  (`non_pooc_commissioned_short` `pine_adapter.cpp:19725`) and
+  (`non_pooc_commissioned_short` `pine_adapter.cpp:19735`) and
   the 1x-long money call — plus the TV admission scopes
   (`explicit_pair_scope` `src/compat/pine/market_admission.cpp:33-46`) and the review fold they feed
   (`awaits_pair_review` `:67-72`, `fold_admission_history` `:79-136`).
@@ -333,9 +333,9 @@ kernel and own these quirks, each at its site:
   projects `NativeCalculationTrigger::BarCloseAndFills` with TradingView's guard literal as
   `max_recalculations_per_point`. What stays are the specifics COOF adds on top —
   the language-state snapshot/restore around a recalculation, the waypoint-only refill deferral
-  (`next_source_path_waypoint` `pine_adapter.cpp:9212`), the first-open execution chain and its
-  own loop guard (`kFirstOpenLoopGuard` `pine_scheduler_native.cpp:766`), and the two fills Pine refuses to
-  recalculate on (`suppress_grouped_stop_recalc` `pine_adapter.cpp:5899`).
+  (`next_source_path_waypoint` `pine_adapter.cpp:9223`), the first-open execution chain and its
+  own loop guard (`kFirstOpenLoopGuard` `pine_scheduler_native.cpp:756`), and the two fills Pine refuses to
+  recalculate on (`suppress_grouped_stop_recalc` `pine_adapter.cpp:5910`).
 - **Pine language state and harness flags.** Series, the tick-level barstate flags and
   position-view freezing (`PineLanguageState` `pine_language_state.hpp:12`); the session flags,
   `PineStrategyHost` members since R5 lane F5 (`session_ismarket_`
@@ -602,7 +602,7 @@ name is usually a plain word. The fourth audit found these gaps (AUDIT4-opus X10
 | the auxiliary-feed seams -- `source_aux_security_feed_enabled`, `source_aux_security_input_view` (`include/pineforge/engine.hpp`, behind `PINEFORGE_HAS_AUX_SECURITY_FEED_V1`) -- and `last_error_` | the kernel declares both seams with an inert default (disabled, no bars: `src/engine_consumer.cpp`). It asks them once, in `prepare_native_security_feeds` (`src/engine_aux_security.cpp`), for the auxiliary slice it feeds the `request.security` evaluators. The Pine host overrides both from `strategy_set_aux_security_feed`'s bars (`src/source/pine_aux_security.cpp`). It writes `last_error_` when that setter refuses its input and when its run's preparation throws | **retained with the `auxiliary_feed` adapter-policy ruling above**. The Pine host drives its own auxiliary slice (lane N7's three measurements), and these seams are how that slice reaches the kernel's feed preparation. A bare host declares `NativeRunSpec::auxiliary_feed` and never meets them. `last_error_` is the handle's one error slot, which any layer that refuses a call writes |
 | `source_stream_entry_comment` (`include/pineforge/engine.hpp`) | nobody. The kernel's default (`src/engine_consumer.cpp`) and the Pine host's override (`src/source/pine_strategy_host.cpp`) both do nothing, so `stream_observe_entry` keeps the lot's own comment (`src/engine_stream.cpp`) | **dead, kept for the script ABI**. It is a virtual of `BacktestEngine`, which every generated strategy derives from, so deleting it moves every generated script's vtable: an `engine_script_run` epoch. It goes at the next one (`docs/native-refactor-progress.md`, "Scheduled for the next script-ABI epoch") |
 | the magnifier report facts -- `bar_magnifier_enabled_`, `diag_magnifier_sub_bars_processed_`, `diag_magnifier_sample_ticks_processed_` (`include/pineforge/engine.hpp`) | the kernel, from the run spec's intrabar path and its driver statistics (`src/native_execution_consumer.cpp`). The Pine host writes them again at every bar callback, from its scheduler's magnifier switch and the context's driver statistics (`on_native_bar_open`, `on_native_bar`) | **retained, report-only**: the report's `bar_magnifier_enabled` and magnifier totals (`src/engine_report.cpp`), outside the hashed region. The kernel publishes them for a bare host itself (the C-surface row "kernel-owned report facts" above), so the Pine host's second write is an adapter-thinness question, not a boundary one |
-| the timeframe report facts -- `diag_script_tf_ratio_`, `diag_needs_aggregation_` (`include/pineforge/engine.hpp`) | the Pine host alone. Its scheduler's run begin stores the ratio of the run spec's script and input timeframes and whether the run aggregates (`diag_script_tf_ratio_` `pine_scheduler_native.cpp:129`, in `PineScheduler::run_begin`), as the retired scheduler's run did before #254. A bare host's report reads 0 for both: the kernel does not write them | **retained, report-only** (R5 lane FIX-E1E2): the report's `script_tf_ratio` and `needs_aggregation` (`src/engine_report.cpp`), outside the hashed region. Execution never reads them |
+| the timeframe report facts -- `diag_script_tf_ratio_`, `diag_needs_aggregation_` (`include/pineforge/engine.hpp`) | the Pine host alone. Its scheduler's run begin stores the ratio of the run spec's script and input timeframes and whether the run aggregates (`diag_script_tf_ratio_` `pine_scheduler_native.cpp:130`, in `PineScheduler::run_begin`), as the retired scheduler's run did before #254. A bare host's report reads 0 for both: the kernel does not write them | **retained, report-only** (R5 lane FIX-E1E2): the report's `script_tf_ratio` and `needs_aggregation` (`src/engine_report.cpp`), outside the hashed region. Execution never reads them |
 | `broker_fill_event_seq_` (`include/pineforge/engine.hpp`, in the hashed region) | the Pine host alone, one step per applied broker instruction (`broker_fill_event_seq_` `pine_strategy_host.cpp:587`, in `on_native_applied`); the kernel only resets and folds it | **retained, hashed: the adapter's counter on the kernel's class**. Its placement facts (`signal_close_mc_fill_seq`) compare against it in fill-time gates that cross a bar; the execution authority is the kernel's own ordinal. It is folded into the broker-state hash (`src/engine_state_hash.cpp`), so moving it to the source layer's hash extension moves every run's hash: an epoch decision, not a docs change |
 | `broker_state_hashes_` (`include/pineforge/engine.hpp`) | the kernel under `KernelRecorded` (`src/native_execution_consumer.cpp`), and the Pine host at each script point it marks while recording is on (`scheduler_record_broker_hash` `pine_strategy_host.cpp:2131`) | **retained, per driving mode** (design Q4): the report's per-bar hash series, waived as append-only report output that execution never consults |
 | the position book's mirror -- `position_qty_`, `position_entry_price_`, `position_entry_count_`, `pyramid_entries_` (`include/pineforge/engine.hpp`, all hashed) | the kernel books and settles them. The Pine host writes them in two places. After every applied event it erases each lot at or below `internal::kQtyEpsilon` and recomputes the position's size, average price and count (`pyramid_entries_` `pine_strategy_host.cpp:552-578`, in `on_native_applied`, restating `ab9714be`'s partial-exit settlement). Before every script body it overwrites `position_entry_count_` with its own entry-slot count (`source_entry_slot_count` `pine_strategy_host.cpp:2055`) | **OPEN, two rulings nobody has made**. The dust sweep erases a lot inside a live book, which the fourth audit found with neither a row nor a tape (its item 32): lane H-THIN's A4-DUST. The count overwrite gives one hashed member two writers with two meanings: the kernel's lots in the current direction, Pine's opened entry slots. It is recorded here first and has no lane yet |
@@ -800,7 +800,7 @@ The table records, at the tree the doc wave read, what each block described and 
 | `src/engine_run.cpp`, lines 162-186 | `process_orders_on_close` semantics | the spec field `NativeCloseExecution::AfterCalculation` (`NativeCloseExecution::AfterCalculation` `native_run_spec.hpp:35`) |
 | `include/pineforge/engine.hpp`, lines 1262-1330 | TradingView freezes default market-order sizing at the signal bar | `native_order::SizePrice` (`Signal`, `SignalOnTick`) with `SizeTime::AtAcceptance` — a request value that names no platform |
 | `include/pineforge/engine.hpp`, lines 1352-1381 | TradingView liquidates intrabar, before the bar-close script body | `NativeLiquidationCheck` (`NativeLiquidationCheck` `native_run_spec.hpp:158`), whose three values are three broker models |
-| `include/pineforge/engine.hpp`, lines 918-952 (the row first named lines 73-180, which were and are live code: `ClosedLotExcursionFacts`, `PyramidEntry`, `Trade`) | the ten-significant-digit money rule | adapter-side arithmetic (`source_money_round` `pine_adapter.cpp:448-454`) |
+| `include/pineforge/engine.hpp`, lines 918-952 (the row first named lines 73-180, which were and are live code: `ClosedLotExcursionFacts`, `PyramidEntry`, `Trade`) | the ten-significant-digit money rule | adapter-side arithmetic (`source_money_round` `pine_adapter.cpp:459-465`) |
 
 ### B. Live kernel mechanisms with a calibrated number — each passes the amended rule 2
 
