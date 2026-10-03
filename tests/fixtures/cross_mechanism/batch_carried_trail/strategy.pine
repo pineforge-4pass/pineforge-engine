@@ -1,0 +1,10 @@
+//@version=6
+strategy("Batch entries with carried sub-tick trail", initial_capital=1000000, pyramiding=3, default_qty_type=strategy.fixed, default_qty_value=1, margin_long=0, margin_short=0)
+if time == timestamp("UTC", 2026, 3, 4, 20, 0)
+    strategy.entry("A", strategy.short, qty=1)
+    strategy.entry("B", strategy.short, qty=1)
+    strategy.entry("C", strategy.short, qty=1)
+if time == timestamp("UTC", 2026, 3, 4, 20, 15)
+    strategy.exit("trail", from_entry="B", trail_points=23, trail_offset=1.3134)
+if time == timestamp("UTC", 2026, 3, 4, 20, 45)
+    strategy.close_all(immediately=true)

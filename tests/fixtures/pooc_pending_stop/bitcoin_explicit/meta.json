@@ -1,0 +1,16 @@
+{
+  "title": "PX stop equals closing high",
+  "slug": "px-pooc-stop-btc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T00:18:18.288Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "5796bd3f45ceb324e98618d8e87d302a335b930aefe40d9184f9fab4e1ec3a3c",
+  "tv_trades_sha256": "968ffa78193c051087e5a95385b72d489ced0f85e9a0b6ebeec3df4188257a0c",
+  "tv_trades_rows": 2
+}

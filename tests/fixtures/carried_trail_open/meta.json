@@ -1,0 +1,16 @@
+{
+  "title": "PX carried sub-tick trail",
+  "slug": "px-native-trail-half-tick",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T00:18:20.498Z",
+  "chart": {
+    "symbol": "NASDAQ:AAPL",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "881403f7a66b53247ab7c2fc4c018931ad45310d425fc1521fe783ac438c47a6",
+  "tv_trades_sha256": "966808484e0aa4fafb17a549a7cbad68de0c12fe35fb3b4917e8a032c3254f02",
+  "tv_trades_rows": 2
+}

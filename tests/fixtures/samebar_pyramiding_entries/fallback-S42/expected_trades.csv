@@ -1,0 +1,4 @@
+entry_id,exit_id,is_long,qty,entry_price,exit_price,pnl,entry_time,exit_time
+A,B,true,1,100,100,0,1743466500000,1743466500000
+C,P,true,1,100,100.5,0.5,1743466500000,1743466500000
+P,__close__,false,1,100.5,100,0.5,1743466500000,1743472800000

@@ -92,6 +92,7 @@ struct ExitActivationContext {
     bool fx_series_empty = true;
     bool bar_path_high_first = false;
     double tick_high = std::numeric_limits<double>::quiet_NaN();
+    bool first_open_fill = false;
 };
 
 ExitActivationPolicy select_exit_activation(const ExitActivationRequest& request,

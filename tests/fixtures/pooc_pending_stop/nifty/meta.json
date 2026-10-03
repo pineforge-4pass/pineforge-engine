@@ -1,0 +1,16 @@
+{
+  "title": "PX NSE pending stop and closing bracket",
+  "slug": "px-pooc-pair-nifty",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T00:43:54.295Z",
+  "chart": {
+    "symbol": "NSE:NIFTY",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "5eb56bec8c5a1a2dd71e04bab24e6e68e148d1c01bc8b3159f1c5db60ffb6deb",
+  "tv_trades_sha256": "75bccb34c81a64959fcb96c87fcfa18a9d329a3d662121722b91f85244cdbda6",
+  "tv_trades_rows": 2
+}

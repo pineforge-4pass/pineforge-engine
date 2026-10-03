@@ -1,3 +1,10 @@
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_library(native_live_equivalence_observer OBJECT native_live_equivalence_observer.cpp)
+    target_link_libraries(native_live_equivalence_observer PRIVATE pineforge)
+    target_include_directories(native_live_equivalence_observer PRIVATE ${PROJECT_SOURCE_DIR}/runner)
+    set_target_properties(native_live_equivalence_observer PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
+
 set(TEST_SOURCES
     # R4-D L4a native-route behavioral twins.  These retain the legacy
     # oracle literals while driving the switched host only through its public
@@ -819,6 +826,7 @@ list(APPEND TEST_SOURCES
 # R4-D L4b public native-route policy witness.  Kept as an appended target so
 # the retired owner inventory above remains mechanically intact for merge.
 list(APPEND TEST_SOURCES test_l4b_policy_regressions)
+list(APPEND TEST_SOURCES test_stream_report_equivalence)
 
 # R5 L3 kernel sizing bases and fractional reduces.  Appended for the same
 # reason: the inventory above stays mechanically intact.
@@ -832,6 +840,7 @@ list(APPEND TEST_SOURCES test_native_sizing_price_rule)
 # Sized intent: the classification, the neutrality of the re-lowering and the
 # core-plus-override differential.
 list(APPEND TEST_SOURCES test_adapter_sizing_relower)
+list(APPEND TEST_SOURCES test_adapter_fifo_lot_boundary)
 
 # R5 E9: TradingView's trail activation tapes (tests/fixtures/
 # trail_activation_tick_reach) replayed through the Pine adapter, with the
@@ -885,6 +894,10 @@ list(APPEND TEST_SOURCES test_margin_v6_tapes)
 # opposite entry pair, a reversing stop against a protective stop
 # (tests/fixtures/same_point_entries), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_same_point_entries_tapes)
+
+# Fixed, unmargined same-bar entries under pyramiding, with close/entry
+# regression tapes and independently recorded out-of-scope controls.
+list(APPEND TEST_SOURCES test_samebar_pyramiding_entries_tapes)
 
 # Lane W8C-SECURITY: a finer lookahead_on request.security merges the
 # requested bar opening at or before the calling bar's open
@@ -979,6 +992,12 @@ list(APPEND TEST_SOURCES test_coof_open_limit_tapes)
 # the price leg it leaves na is withdrawn (tests/fixtures/exit_reissue_na),
 # on TradingView's tape.
 list(APPEND TEST_SOURCES test_exit_reissue_na_tapes)
+# Adapter opening-print and callback projections, independently taped.
+list(APPEND TEST_SOURCES
+    test_carried_trail_open_tapes
+    test_pooc_pending_stop_tapes
+    test_coof_marketable_stop_tapes
+    test_coof_close_slippage_tapes)
 # ... and a flat pair of opposite fixed-quantity market entries whose gross is
 # over the equity keeps only its earlier call under process_orders_on_close
 # and with costs (tests/fixtures/pooc_pair_gross), on TradingView's tapes.
@@ -987,6 +1006,8 @@ list(APPEND TEST_SOURCES test_pooc_pair_gross_tapes)
 # equity is dropped flat and keeps only its closing leg as a reversal
 # (tests/fixtures/whole_lot_tie), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_whole_lot_tie_tapes)
+# Source-time money and market-price bands (tests/fixtures/source_buying_power).
+list(APPEND TEST_SOURCES test_source_buying_power_tapes)
 
 # Lane W8A-SIGSTATE-1 R4: a fill at the day's first tick does not trip
 # strategy.risk.max_intraday_loss (tests/fixtures/intraday_loss_open_fill), on
@@ -1061,6 +1082,8 @@ list(APPEND TEST_SOURCES test_foreign_break_stamp_tapes)
 # what it reserved when margin calls shrink the position
 # (tests/fixtures/exit_reservation), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_exit_reservation_tapes)
+list(APPEND TEST_SOURCES test_percent_entry_reservation_tapes)
+list(APPEND TEST_SOURCES test_cross_mechanism_tapes)
 # Lane TAIL-C: an explicit-quantity market buy from flat is admitted at its
 # signal close's tick plus the slippage ticks its fill carries
 # (tests/fixtures/explicit_market_admission), on TradingView's tapes.
@@ -2676,6 +2699,14 @@ if(TARGET test_exit_fifo_cross_tapes)
     target_compile_definitions(test_exit_fifo_cross_tapes PRIVATE
         PINEFORGE_TAIL_D_FIFO_CROSS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_fifo_cross")
 endif()
+foreach(tape_target IN ITEMS test_cross_mechanism_tapes test_carried_trail_open_tapes test_pooc_pending_stop_tapes
+                            test_coof_marketable_stop_tapes test_coof_close_slippage_tapes)
+    if(TARGET ${tape_target})
+        target_compile_definitions(${tape_target} PRIVATE
+            PINEFORGE_ORDER_PRINT_FIXTURE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+    endif()
+endforeach()
+
 if(TARGET test_coof_open_limit_tapes)
     target_compile_definitions(test_coof_open_limit_tapes PRIVATE
         PINEFORGE_TAIL_D_OPEN_LIMIT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_open_limit")
@@ -2691,6 +2722,10 @@ endif()
 if(TARGET test_whole_lot_tie_tapes)
     target_compile_definitions(test_whole_lot_tie_tapes PRIVATE
         PINEFORGE_TAIL_D_WHOLE_LOT_TIE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/whole_lot_tie")
+endif()
+if(TARGET test_source_buying_power_tapes)
+    target_compile_definitions(test_source_buying_power_tapes PRIVATE
+        PINEFORGE_BUYING_POWER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/source_buying_power")
 endif()
 if(TARGET test_coof_reissued_exit_tapes)
     target_compile_definitions(test_coof_reissued_exit_tapes PRIVATE
@@ -2949,6 +2984,10 @@ if(TARGET test_exit_reservation_tapes)
     target_compile_definitions(test_exit_reservation_tapes PRIVATE
         PINEFORGE_EXIT_RESERVATION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_reservation")
 endif()
+if(TARGET test_percent_entry_reservation_tapes)
+    target_compile_definitions(test_percent_entry_reservation_tapes PRIVATE
+        PINEFORGE_PERCENT_ENTRY_RESERVATION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/percent_entry_reservation")
+endif()
 
 # std::thread needs an explicit pthread link on some toolchains.
 target_link_libraries(test_timezone_concurrency PRIVATE Threads::Threads)
@@ -3073,6 +3112,8 @@ add_test(NAME test_market_admission_schema_mutations COMMAND ${Python3_EXECUTABL
     ${PROJECT_SOURCE_DIR}/scripts/test_market_admission_schema.py)
 add_test(NAME test_cancellation_hash_coverage COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/check_cancellation_hash_coverage.py)
+add_test(NAME test_native_live_equivalence_harness COMMAND ${Python3_EXECUTABLE} -B
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_native_live_equivalence_harness.py)
 
 # R5 N11: no NativeRunSpec field the Pine adapter's project() sets is then
 # unconditionally shadowed by one of its own host hooks (audit D2), plus the

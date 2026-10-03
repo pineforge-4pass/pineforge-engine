@@ -1,3 +1,8 @@
+// expectation corrected (F09, 1 of 276 rows), because the REALTIME range-end
+// hook no longer re-marks the stored point or re-folds hashed extremes; harvested
+// against 227c2236 and the corrected 8da00ac9 runtime tree. Only the recorded-row
+// digest moves; boundary/trade/final hashes and counts stay identical:
+//   Stream/0/1: rows 0xca31c77c5a63ae01ull -> 0x8c7324fade164a50ull
 // R5 lane PERF-L4: the values tests/test_adapter_quiet_bar.cpp pins, one
 // row per run of its battery (scenario, magnifier, recording; the digests
 // of the source folds, the recorded rows and the trades; the final
@@ -1803,6 +1808,27 @@
 //   Random44/0/0: boundary 0x732debc0dd6f7cd7ull -> 0x6c0411f1f58edd3dull, trades 0x01cadf1a08d256deull -> 0x4398ebf224294454ull, final_hash 0xc64966b83e7cef78ull -> 0x58aa329b6e21b01aull [TAIL-D then TAIL-C]
 //   Random45/0/1: boundary 0xa9aede02d7738b3eull -> 0x2bcba0ebccc11c6full, rows 0xfc0f5911f30d9d12ull -> 0x2b431fb4e22ef313ull, trades 0x3b74877f071e9e8dull -> 0x9e927212c83cadc5ull, final_hash 0x7929e5e00aefb02aull -> 0x1acb90ed825ee455ull, bar count 97 -> 95, boundary count 26 -> 25 [TAIL-D then TAIL-C]
 //   Random45/0/0: boundary 0xa9aede02d7738b3eull -> 0x2bcba0ebccc11c6full, trades 0x3b74877f071e9e8dull -> 0x9e927212c83cadc5ull, final_hash 0x7929e5e00aefb02aull -> 0x1acb90ed825ee455ull, bar count 97 -> 95, boundary count 26 -> 25 [TAIL-D then TAIL-C]
+// expectation corrected Random37/0/1: boundary 0x0e8497b06337b313 -> 0x30f7b45c06e02747,
+// rows 0x1adac0628692b36c -> 0xf8824766258a7c0a, trades 0x3698e45959c0e3fa -> 0xd8069e61ccd6cf22,
+// final_hash 0x09ada14085aa6800 -> 0x42a2b41cd76e3600; Random37/0/0 changes the same
+// boundary, trades and final_hash, because the opening callback close uses the raw
+// opening print before its own slippage, not the slipped entry execution price.
+// TradingView's coof_close_slippage tape books the short's buy-close at 5912.50
+// rather than 5912.25; coof_open_limit/td-fp17-coof-open proves the same projection
+// for default non-immediate single-cohort closes, LC 499555 and SD 503600 ticks.
+// coof_close_slippage/partial independently proves the 50% non-immediate close:
+// TradingView books 24977.80 from raw open 24977.85, not slipped entry 24977.90.
+// Random45/0/1 and Random45/0/0 retain the original baseline pins: the corrected
+// non-immediate projection is not applied across distinct entry cohorts.
+// Opening-stop shape audit, both recording modes on the ordinary path:
+// Random08/0/{1,0}: short, slippage 0; stop 92, callback 93.75, limit 98.
+// Random18/0/{1,0}: short, slippage 0; stop 98, callback 98.5, limit 101.5.
+// Random44/0/{1,0}: short, slippage 0; stop/callback 91.75/94.5 and 80.75/82.25.
+// These margin-backed bracket shapes keep the baseline digits. The independent
+// coof_marketable_stop and carried tapes cover margin-free, unslipped shorts;
+// the new activation and Market conversion are narrowed to that taped scope.
+// Random08/1/{1,0} and Random44/1/{1,0} also retain baseline digits: first_open_fill
+// requires the same ordinary (!spec || spec->intrabar.is_none()) path as conversion.
 constexpr Pinned kPinned[] = {
     {"Quiet", 0, 1, 0xcd8d3ecb4d2c740aull, 0xe6da4342a82c460cull, 0x47fe0d7eaf8e51e3ull, 0x458f1ecf00ef1d5cull, 40, 40, 0},
     {"Quiet", 0, 0, 0xcd8d3ecb4d2c740aull, 0x14650fb0739d0383ull, 0x47fe0d7eaf8e51e3ull, 0x458f1ecf00ef1d5cull, 40, 0, 0},
@@ -1886,7 +1912,7 @@ constexpr Pinned kPinned[] = {
     {"CommissionedShort", 1, 0, 0x350b092698bdf8fdull, 0x14650fb0739d0383ull, 0x35b634c9ced2d3caull, 0xd73d8e053dbf5cd2ull, 32, 0, 1},
     {"AccountFx", 0, 1, 0xd27340484425ff52ull, 0x4e596d61c552597eull, 0x3b853d0c008c3078ull, 0xea884b09a27ea73bull, 48, 48, 1},
     {"AccountFx", 0, 0, 0xd27340484425ff52ull, 0x14650fb0739d0383ull, 0x3b853d0c008c3078ull, 0xea884b09a27ea73bull, 48, 0, 1},
-    {"Stream", 0, 1, 0x4f42bff80af50865ull, 0xca31c77c5a63ae01ull, 0xce38e7485b22ec04ull, 0xeb75594695696b2full, 40, 40, 5},
+    {"Stream", 0, 1, 0x4f42bff80af50865ull, 0x8c7324fade164a50ull, 0xce38e7485b22ec04ull, 0xeb75594695696b2full, 40, 40, 5},
     {"Stream", 0, 0, 0x4f42bff80af50865ull, 0x14650fb0739d0383ull, 0xce38e7485b22ec04ull, 0xeb75594695696b2full, 40, 0, 5},
     {"Random01", 0, 1, 0xb7cb18e9c32443c1ull, 0xf4ebe6782bc3ee5eull, 0xe6d673a2f0d40429ull, 0x44b3af95af8e40ebull, 55, 55, 15},
     {"Random01", 0, 0, 0xb7cb18e9c32443c1ull, 0x14650fb0739d0383ull, 0xe6d673a2f0d40429ull, 0x44b3af95af8e40ebull, 55, 0, 15},
@@ -2032,8 +2058,8 @@ constexpr Pinned kPinned[] = {
     {"Random36", 0, 0, 0x5530362ed60c126dull, 0x14650fb0739d0383ull, 0xf4c314289e107873ull, 0x212db54b7b40d9baull, 84, 0, 20},
     {"Random36", 1, 1, 0x10f19e1df0bfc765ull, 0xff9b419c51942aadull, 0x4957248d03a59eeaull, 0x0ca6ed8a848b4f88ull, 84, 60, 20},
     {"Random36", 1, 0, 0x10f19e1df0bfc765ull, 0x14650fb0739d0383ull, 0x4957248d03a59eeaull, 0x0ca6ed8a848b4f88ull, 84, 0, 20},
-    {"Random37", 0, 1, 0x0e8497b06337b313ull, 0x1adac0628692b36cull, 0x3698e45959c0e3faull, 0x09ada14085aa6800ull, 68, 45, 15},
-    {"Random37", 0, 0, 0x0e8497b06337b313ull, 0x14650fb0739d0383ull, 0x3698e45959c0e3faull, 0x09ada14085aa6800ull, 68, 0, 15},
+    {"Random37", 0, 1, 0x30f7b45c06e02747ull, 0xf8824766258a7c0aull, 0xd8069e61ccd6cf22ull, 0x42a2b41cd76e3600ull, 68, 45, 15},
+    {"Random37", 0, 0, 0x30f7b45c06e02747ull, 0x14650fb0739d0383ull, 0xd8069e61ccd6cf22ull, 0x42a2b41cd76e3600ull, 68, 0, 15},
     {"Random37", 1, 1, 0x2cd9ee6e0acb218bull, 0xe626fb41292b2064ull, 0x6905921f420a2e09ull, 0xf428d94da051f1a3ull, 68, 45, 15},
     {"Random37", 1, 0, 0x2cd9ee6e0acb218bull, 0x14650fb0739d0383ull, 0x6905921f420a2e09ull, 0xf428d94da051f1a3ull, 68, 0, 15},
     {"Random38", 0, 1, 0x7a72e075d0bcf84full, 0x8fb7a63eda294548ull, 0x54a52d324e3f9a97ull, 0x536763f10d3d8e4bull, 54, 54, 9},

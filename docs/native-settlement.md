@@ -230,12 +230,26 @@ TradingView policy, not the kernel's: TradingView's decimal quantities leave no
 remnant row (tape `tests/fixtures/g232_decimal_dust/hm-g232-decimal-dust`), which the Pine host books
 row for row while a bare host books four 2.8e-17-unit dust rows beside them
 (`tests/test_pine_dust_sweep_paired.cpp`). Since K-ULP3 an exact-sum close no
-longer leaves such a lot, but a decimal sum binary64 misses (0.1 + 0.2 closed
-by 0.3) still does.
+longer leaves such a lot; a bare host can still leave one when a decimal sum
+binary64 misses (0.1 + 0.2 closed by 0.3). The adapter owns two FIFO-boundary
+rules with the same `internal::kQtyEpsilon` (`1e-10`): the batched
+process-orders-on-close (POOC) path binds an interior prefix as a selected
+`Flatten`, while an ambiguous ordinary deferred `strategy.close` uses
+`HostSized` and resolves its `Reduce` to the exact physical FIFO prefix sum
+at fill time. Ordinary ambiguity is checked only at the current prefix and
+prefixes reachable after already-pending closes on that bar, not arbitrary
+suffixes; non-ambiguous closes retain their literal request and readback/hash.
+The physical roster matters because the Pine mirror can already have swept
+a sub-epsilon fragment. The same-bar market-transaction path, `immediately`
+closes and the ShortSeed placeholder are outside this ordinary normalization;
+the ANY entry rule is unchanged. The synthetic sources and TradingView tapes
+are pinned in `tests/fixtures/fifo_lot_boundary/README.md`.
 The adapter does not declare the kernel's quantity tolerance (ADR-0001,
 "Kernel capabilities the Pine adapter does not declare"): its FIFO endpoint
-test settles a snapped prefix as a selected `Flatten`, charged the lots it
-holds, where the tolerance charges a `Reduce` its request, and its sweep
+test on the batched POOC path settles a snapped prefix as a selected
+`Flatten`, charged the lots it holds, where the tolerance charges a `Reduce`
+its request. The ordinary deferred path instead authenticates the exact live
+prefix sum for its `Reduce`, preserving chained-close settlement order. Its sweep
 erases dust without a row, where the kernel books every lot it closes. R5
 lane H-THIN measured the sweep with every other quantity epsilon of the Pine
 host and adapter, 85 comparisons, each evaluated in its epsilon form and its

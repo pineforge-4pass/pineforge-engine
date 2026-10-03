@@ -1,0 +1,17 @@
+{
+  "channel": "ws-report-v1",
+  "symbol": "BINANCE:ETHUSDT.P",
+  "interval": "15",
+  "from": "2025-11-01",
+  "to": "2025-11-03",
+  "rangeProof": "covered",
+  "sourceSha256": "662a08b03c4be819d205fde2f6b0aa01bef40598b1db9cfa537f32da1fda006d",
+  "barsSha256": "f80cdc8648bc0de0c6d89c6da61822faa61dec40710c7d36abfd2963d0392eb0",
+  "rawFrameSha256": "6a38f03219bb86e369a0ac6aee7ac7ce8039e8bfcbc1bd9e9131900fb0fde467",
+  "decodedReportSha256": "103835e2aeeec35c25142a641eeb9aaf4fddbeace3f08410ae3745a6543b45ba",
+  "closedTrades": 3,
+  "exportTapeSha256": "de6d56e9cf1764a2e2b11c01d459e1f900eda84e828a1c2e57affca3e5465a4f",
+  "fixtureTapeSha256": "27a77ac52d1ebf7dd4f7489387911e7f1488dcbd85ad878efab483f6eacbcaec",
+  "fixtureSourceSha256": "662a08b03c4be819d205fde2f6b0aa01bef40598b1db9cfa537f32da1fda006d",
+  "fixtureBarsSha256": "f80cdc8648bc0de0c6d89c6da61822faa61dec40710c7d36abfd2963d0392eb0"
+}

@@ -353,6 +353,17 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     for (const auto& command : pending_same_bar_commands_) {
         hash_native_request(f, command.request); hash_placement(f, command.snapshot);
         f.s(command.replacement_key); f.b(command.opening);
+        if (command.unbatched_request && command.unbatched_snapshot) {
+            f.u(0x756e626174636865ULL);
+            hash_native_request(f, *command.unbatched_request);
+            hash_placement(f, *command.unbatched_snapshot);
+            const auto& context = command.unbatched_context;
+            f.d(context.current); f.d(context.limit_price); f.d(context.stop_price);
+            f.b(context.default_sized); f.b(context.priced); f.b(context.reverses);
+            f.b(context.opposite_opening_pending); f.b(context.pure_stop_entry);
+            f.b(context.coof_market_next_open); f.b(context.coof_priced_next_open);
+            f.b(context.coof_market_at_second_extreme); f.b(context.paired_all_in_reentry);
+        }
         // Folded only when set, so a batch without an R1 reissue keeps its digest.
         if (command.staged_reversal) {
             f.b(command.staged_reversal); f.d(command.staged_reversal_held_units);

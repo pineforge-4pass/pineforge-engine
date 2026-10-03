@@ -1,0 +1,18 @@
+{
+  "title": "Margin sliced remainder across absent levels",
+  "slug": "margin-sliced-remainder-across-absent-levels",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T04:39:29.939Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-07"
+  },
+  "pine_sha256": "86abaf109f3f21b8ae1b433b8d74e2256e053ed4c6b842475c2772ef37e4c1d2",
+  "tv_trades_sha256": "56cfe7f1c0f5f21c0998e1c430dff9c36bf1689ba2d729bda6fd94b310ed76f9",
+  "tv_trades_rows": 6,
+  "fixture_csv_sha256": "58bcc6a7a3a6aebae72d2bb939512f9af788ea7c970f1c6940fd42fb46e65730",
+  "fixture_normalization": "CSV line endings are LF with a final newline; exported tape row contents are unchanged"
+}

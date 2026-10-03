@@ -1,0 +1,10 @@
+//@version=6
+strategy("New percentage after partial completion",overlay=true,initial_capital=1000000,margin_long=0,margin_short=0)
+if time == timestamp("UTC",2025,4,4,14,0)
+    strategy.entry("seed",strategy.short,qty=56)
+if strategy.position_size < 0 and time < timestamp("UTC",2025,4,5,0,0)
+    strategy.exit("partial","seed",stop=1813.82,trail_points=20,qty_percent=50)
+if strategy.position_size < 0 and time >= timestamp("UTC",2025,4,5,7,0)
+    strategy.exit("new","seed",limit=1771.14,qty_percent=50)
+if time == timestamp("UTC",2025,4,6,0,0)
+    strategy.close_all(comment="end")

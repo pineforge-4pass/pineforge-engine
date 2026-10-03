@@ -1,0 +1,39 @@
+{
+  "symbol": "OANDA:XAUUSD",
+  "interval": "15",
+  "from": "2025-04-01",
+  "to": "2026-05-01",
+  "deepBacktesting": true,
+  "tapeChannel": "ws-report-v1",
+  "sourceCanonicalization": "pine-facade-v1",
+  "sourceArtifactHash": "2c8ac59a01e130c3ed2a7f535b15538c242723d2a4d4394f5fce9a931dbe1954",
+  "tvTradesCsvHash": "d7c04b0a6204111cef2bc4d6a4d976ee10d6ef8e19cc45a7cd9ad77f46cdba82",
+  "wsProvenance": {
+    "schemaVersion": 1,
+    "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+    "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+    "pineVersion": "0.91322",
+    "symbol": "OANDA:XAUUSD",
+    "interval": "15",
+    "requestedRange": {
+      "from": 1743465600000,
+      "to": 1777593600000
+    },
+    "returnedRange": {
+      "from": 1743465600000,
+      "to": 1777593600000
+    },
+    "rangeProof": "covered",
+    "rawFrameSha256": "119d8f389fef7f70fce1af5cbf9153157de06f5d5b24a84b01f150d2b227e249",
+    "decodedReportSha256": "28af379b17eba97b503ccb530e23123cb6c5d387995708f9cc82bc4743d3f154",
+    "closedTrades": 267,
+    "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+    "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+  },
+  "backtestedAt": "2026-10-03T08:21:14.690Z",
+  "exportedTvTradesCsvHash": "d7c04b0a6204111cef2bc4d6a4d976ee10d6ef8e19cc45a7cd9ad77f46cdba82",
+  "fixtureSourceSha256": "2c8ac59a01e130c3ed2a7f535b15538c242723d2a4d4394f5fce9a931dbe1954",
+  "fixtureTvTradesCsvSha256": "5ffbb6d0a1e26ffe6562b9361310a6578f9b987bd571d00a6127302a42b18ca8",
+  "fixtureNormalization": "Trailing LF added to exported CSV; source and original CSV digests retained.",
+  "exportMethod": "lab tv --no-note; independently authored clock control, only the sampling window widened."
+}

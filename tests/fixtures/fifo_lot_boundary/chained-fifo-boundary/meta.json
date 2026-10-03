@@ -1,0 +1,16 @@
+{
+  "title": "chained FIFO decimal boundary",
+  "slug": "chained-fifo-boundary",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T02:57:09.912Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-05-01",
+    "to": "2025-05-03"
+  },
+  "pine_sha256": "873b40007c5205cab0cedc2fb4a9b97ed928b0e6e32dd72294220bcd15f98ab7",
+  "tv_trades_sha256": "b56e0675d078046ed195ed7482d1125648363de31f21f08abb8ccf28359f1c89",
+  "tv_trades_rows": 10
+}

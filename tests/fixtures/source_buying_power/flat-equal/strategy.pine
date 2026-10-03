@@ -1,0 +1,7 @@
+//@version=6
+strategy("Synthetic buying power px-flat-fraction-equal",overlay=true,initial_capital=94381.88,default_qty_type=strategy.percent_of_equity,default_qty_value=100,margin_long=100,margin_short=100)
+if time == timestamp("UTC",2025,7,9,16,45)
+    strategy.entry("boundary",strategy.long)
+    strategy.exit("bracket","boundary",stop=11.5,limit=12.2)
+if time == timestamp("UTC",2025,7,9,18,0)
+    strategy.close_all()

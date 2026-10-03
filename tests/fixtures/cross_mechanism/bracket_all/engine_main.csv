@@ -1,0 +1,4 @@
+entry_time_utc_ms,exit_time_utc_ms,is_long,entry_price,exit_price,quantity,entry_id,exit_id
+1743466500000,1743466500000,1,1821.48,1827,1,A,bracket
+1743466500000,1743466500000,1,1821.48,1827,2,B,bracket
+1743466500000,1743466500000,1,1821.48,1827,3,C,bracket

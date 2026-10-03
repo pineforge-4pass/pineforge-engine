@@ -1,0 +1,9 @@
+//@version=6
+strategy("Independent request epochs", process_orders_on_close=true, initial_capital=10000000, margin_long=0, margin_short=0)
+seconds_low = request.security(syminfo.tickerid, "5S", ta.ema(low, 48))
+[daily_time, daily_index, daily_low] = request.security(syminfo.tickerid, "D", [time, bar_index, ta.ema(low, 48)])
+sample = (time >= timestamp("UTC", 2025, 4, 1, 0, 0) and time <= timestamp("UTC", 2025, 4, 5, 0, 0)) or (time >= timestamp("UTC", 2026, 1, 26, 0, 0) and time <= timestamp("UTC", 2026, 1, 30, 0, 0))
+detail = "DT=" + str.tostring(daily_time) + ";DI=" + str.tostring(daily_index) + ";DL=" + str.tostring(daily_low, "#.##########") + ";SL=" + str.tostring(seconds_low, "#.##########")
+if sample
+    strategy.order("sample-in", strategy.long, qty=1, comment=detail)
+    strategy.order("sample-out", strategy.short, qty=1, comment=detail)

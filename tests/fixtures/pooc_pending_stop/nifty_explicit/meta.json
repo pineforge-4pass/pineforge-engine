@@ -1,0 +1,16 @@
+{
+  "title": "PX stop equals closing high NSE",
+  "slug": "px-pooc-stop-nifty",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T00:18:16.614Z",
+  "chart": {
+    "symbol": "NSE:NIFTY",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "9f6d43105bf3a6e5e82ce4d7290cf03e75f7852a80ed3a73c629efee5df8a2ae",
+  "tv_trades_sha256": "5aed04e5b2895078060b292746e5472a7a79dd1b9c1f9a0d0dbb8572ecb0d1b0",
+  "tv_trades_rows": 2
+}

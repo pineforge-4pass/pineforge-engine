@@ -1,0 +1,16 @@
+{
+  "title": "add-on lot identities",
+  "slug": "addon-lot-identities",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T02:57:08.412Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-05-01",
+    "to": "2025-05-03"
+  },
+  "pine_sha256": "b0edd4dc98199fdf6607ff56ba32526eaae8ff7b9939288aceb88ad1654326fe",
+  "tv_trades_sha256": "ca04884f0c50cfd786287e576e7bbb3dcf2ece1ec90c1d4d610b66b663e8399c",
+  "tv_trades_rows": 8
+}

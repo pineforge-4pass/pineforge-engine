@@ -1,0 +1,18 @@
+{
+  "title": "Standing target absent operand",
+  "slug": "standing-target-absent-operand",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T04:39:29.311Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-07"
+  },
+  "pine_sha256": "b762731a9945df34999a05467e463f79f993cb52006472a822b7611ff4e53dae",
+  "tv_trades_sha256": "faf4613cebf6d22b516e9ff4d4501b7e72edda19d5339b02c8166e82795519d6",
+  "tv_trades_rows": 2,
+  "fixture_csv_sha256": "efbf31803ce6b441ed0c75d75cb92fa1e2160b44bd9b8f32a776133f9c54bfc5",
+  "fixture_normalization": "CSV line endings are LF with a final newline; exported tape row contents are unchanged"
+}

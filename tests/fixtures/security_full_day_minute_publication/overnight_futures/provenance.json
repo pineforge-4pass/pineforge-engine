@@ -1,0 +1,39 @@
+{
+  "symbol": "CME_MINI:NQ1!",
+  "interval": "15",
+  "from": "2025-04-01",
+  "to": "2026-05-01",
+  "deepBacktesting": true,
+  "tapeChannel": "ws-report-v1",
+  "sourceCanonicalization": "pine-facade-v1",
+  "sourceArtifactHash": "dc593d22b689d089249dc417d18111f4e6f9a142ceaf207543a342326e4c4de0",
+  "tvTradesCsvHash": "cc39d22d1da8cff299a7fcb39de579e9331c3c187092bf53fa0f5acb36c7d388",
+  "wsProvenance": {
+    "schemaVersion": 1,
+    "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+    "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+    "pineVersion": "0.91321",
+    "symbol": "CME_MINI:NQ1!",
+    "interval": "15",
+    "requestedRange": {
+      "from": 1743465600000,
+      "to": 1777593600000
+    },
+    "returnedRange": {
+      "from": 1743465600000,
+      "to": 1777593600000
+    },
+    "rangeProof": "covered",
+    "rawFrameSha256": "3366953b2916d2d5be417d97affbe7ce8e69a2140b01a75da58f82335c8823cd",
+    "decodedReportSha256": "7462360d673db76fff77ae2fc42fe470dc6a16bdaf8b28c4e0de9ba18ee5ebe0",
+    "closedTrades": 188,
+    "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+    "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+  },
+  "backtestedAt": "2026-10-03T08:18:58.237Z",
+  "exportedTvTradesCsvHash": "cc39d22d1da8cff299a7fcb39de579e9331c3c187092bf53fa0f5acb36c7d388",
+  "fixtureSourceSha256": "dc593d22b689d089249dc417d18111f4e6f9a142ceaf207543a342326e4c4de0",
+  "fixtureTvTradesCsvSha256": "0fd0b2514a9bf8ece8b9f23918056d73b93dc001facc3f22b65b55cf7f3f4e9c",
+  "fixtureNormalization": "Trailing LF added to exported CSV; source and original CSV digests retained.",
+  "exportMethod": "lab tv --no-note; independently authored clock control, only the sampling window widened."
+}

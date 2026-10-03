@@ -1543,6 +1543,12 @@ bool source::PineStrategyHost::same_symbol_sites_routable(
     declared.reserve(security_eval_states_.size());
     for (std::size_t i = 0; i < security_eval_states_.size(); ++i) {
         const SecurityEvalState& state = security_eval_states_[i];
+        const bool minute_day = calendar_period_for(state.tf) == CalendarPeriod::NONE
+            && tf_to_seconds(state.tf) == 86400;
+        if (minute_day && !pine_security_state(state.sec_id).lookahead_on
+            && script_tf_seconds_ > 0 && script_tf_seconds_ < 86400) {
+            return false;
+        }
         // The kernel registers sec_id = index, which is what generated code
         // dispatches on.
         if (state.sec_id != static_cast<int>(i) || state.tf.empty()) return false;
@@ -1663,6 +1669,20 @@ static bool same_bar_exit_group_possible(const std::vector<Trade>& trades) noexc
 #endif
 }
 
+void source::PineStrategyHost::present_report(ReportC* out) const {
+    if (out->equity_curve_len == 0 || range_end_trades_.empty() || !native_bound()) return;
+    const auto state = as_native_consumer(execution_consumer()).view();
+    if (!state.spec
+        || state.spec->report_policy != NativeReportPolicy::KernelRecordedAtHostMarks
+        || (stream_phase_ != StreamPhase::REALTIME
+            && state.completion != NativeCompletion::StreamEnded)) return;
+    double range_end_pnl = 0.0;
+    for (const auto& row : range_end_trades_) range_end_pnl += row.pnl;
+    auto& last = out->equity_curve[out->equity_curve_len - 1];
+    last.open_profit = 0.0;
+    last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl;
+}
+
 void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_bar) {
     range_end_trades_.clear();
     if (stream_warmup_mode_ || realtime_tail_
@@ -1681,14 +1701,16 @@ void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_ba
     const double range_end_pnl = as_native_consumer(execution_consumer())
         .append_open_position_report_rows(*this, fill_price, mark_time, bar_index_,
                                           account_currency_fx_at(mark_time));
-    auto& last = equity_curve_.back();
-    last.open_profit = 0.0;
-    last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl;
-    max_equity_ = initial_capital_;
-    min_equity_ = initial_capital_;
-    max_drawdown_ = 0.0;
-    max_runup_ = 0.0;
-    for (const auto& point : equity_curve_) fold_equity_extreme(point.equity);
+    if (stream_phase_ != StreamPhase::REALTIME) {
+        auto& last = equity_curve_.back();
+        last.open_profit = 0.0;
+        last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl;
+        max_equity_ = initial_capital_;
+        min_equity_ = initial_capital_;
+        max_drawdown_ = 0.0;
+        max_runup_ = 0.0;
+        for (const auto& point : equity_curve_) fold_equity_extreme(point.equity);
+    }
     if (same_bar_exit_group_possible(trades_)) {
         if (const auto moved = sort_same_bar_exit_trades(trades_, adapter_))
             native_closed_rows_amended(*moved);

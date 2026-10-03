@@ -1,0 +1,12 @@
+//@version=6
+strategy("Same-bar entries beside a resting exit", pyramiding=3, initial_capital=1000000, default_qty_type=strategy.fixed, default_qty_value=1, margin_long=0, margin_short=0)
+
+if time == timestamp("UTC", 2025, 4, 1, 0, 0)
+    strategy.entry("A", strategy.long, qty=1)
+if time == timestamp("UTC", 2025, 4, 1, 0, 15)
+    strategy.exit("X", "A", limit=close * 1.5, stop=close * 0.5)
+if time == timestamp("UTC", 2025, 4, 1, 0, 30)
+    strategy.entry("S", strategy.short, qty=1)
+    strategy.entry("L", strategy.long, qty=1)
+if time == timestamp("UTC", 2025, 4, 1, 1, 45)
+    strategy.close_all()

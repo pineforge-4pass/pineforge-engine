@@ -1,0 +1,8 @@
+//@version=6
+strategy("Synthetic buying power px-held-forex-under",overlay=true,initial_capital=101651.65627359997,default_qty_type=strategy.percent_of_equity,default_qty_value=100,margin_long=100,margin_short=100)
+if time == timestamp("UTC",2025,7,15,6,15)
+    strategy.entry("held",strategy.short,qty=86816.14)
+if time == timestamp("UTC",2025,7,15,7,15)
+    strategy.entry("reverse",strategy.long)
+if time == timestamp("UTC",2025,7,15,10,0)
+    strategy.close_all()

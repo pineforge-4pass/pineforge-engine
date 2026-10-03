@@ -1,0 +1,5 @@
+//@version=6
+strategy("PX carried sub-tick trail",overlay=true,initial_capital=1000000,margin_long=0,margin_short=0)
+if time == timestamp("UTC",2026,3,4,20,15)
+    strategy.entry("fall",strategy.short,qty=1)
+    strategy.exit("trail","fall",trail_points=1.3134,trail_offset=1.3134)

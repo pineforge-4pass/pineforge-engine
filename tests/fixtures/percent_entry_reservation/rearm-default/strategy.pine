@@ -1,0 +1,10 @@
+//@version=6
+strategy("Completed implicit remainder repeated",overlay=true,initial_capital=1000000,margin_long=0,margin_short=0)
+if time == timestamp("UTC",2025,4,4,14,0)
+    strategy.entry("seed",strategy.short,qty=56)
+if strategy.position_size < 0
+    if time < timestamp("UTC",2025,4,5,0,0)
+        strategy.exit("take","seed",limit=1771.14,qty_percent=50)
+    strategy.exit("runner","seed",stop=time < timestamp("UTC",2025,4,5,7,0) ? 1813.82 : 1810.36,trail_points=20)
+if time == timestamp("UTC",2025,4,6,0,0)
+    strategy.close_all(comment="end")

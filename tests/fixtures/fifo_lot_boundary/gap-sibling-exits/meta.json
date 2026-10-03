@@ -1,0 +1,16 @@
+{
+  "title": "distinct sibling stop exits",
+  "slug": "gap-sibling-exits",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T02:57:14.744Z",
+  "chart": {
+    "symbol": "OANDA:XAUUSD",
+    "interval": "15",
+    "from": "2025-05-21",
+    "to": "2025-05-23"
+  },
+  "pine_sha256": "a40492bed97d0db7f8f890c32b568945ee7e54541a2182d4a45404a8689be729",
+  "tv_trades_sha256": "1b1408c6759615be94446621c2ced4f439037bccf01332f307a6fc3657f7997f",
+  "tv_trades_rows": 4
+}

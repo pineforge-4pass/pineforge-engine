@@ -1,0 +1,16 @@
+{
+  "title": "PX pending stop with bracket on closing print",
+  "slug": "px-pooc-pair-btc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T00:43:48.995Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "9bea5e930e0d67b93dff52e473eeea5b2178b901633dbd77523f5bf589545fba",
+  "tv_trades_sha256": "5140fe7c7386b3980a46e5f19952aa8b74afc7a5dfff2b630f2a8683b552ffc3",
+  "tv_trades_rows": 2
+}

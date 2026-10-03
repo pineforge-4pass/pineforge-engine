@@ -1,0 +1,16 @@
+{
+  "title": "cash sizing at a lot boundary",
+  "slug": "cash-sizing-floor",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T02:57:12.403Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-05-06",
+    "to": "2025-05-07"
+  },
+  "pine_sha256": "6de0757689fe97470a0acfd1300bbce043411ca366edab0e492257c27e07e379",
+  "tv_trades_sha256": "4f46ff7c192d191d38c871a009fb7d7625bdafe393d826eef305456e5dd7e3dd",
+  "tv_trades_rows": 2
+}

@@ -1,0 +1,8 @@
+//@version=6
+strategy("Opening partial close slippage", calc_on_order_fills=true, slippage=1, initial_capital=1000000, margin_long=0, margin_short=0)
+if time == timestamp("Asia/Kolkata", 2025, 6, 16, 9, 15) and strategy.position_size == 0
+    strategy.entry("B", strategy.long, qty=2)
+if strategy.position_size == 2
+    strategy.close("B", qty_percent=50)
+if time >= timestamp("Asia/Kolkata", 2025, 6, 18, 9, 15) and strategy.position_size != 0
+    strategy.close_all()

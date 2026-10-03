@@ -1,0 +1,62 @@
+{
+  "channel": "ws-report-v1",
+  "syntheticSource": true,
+  "exportCommand": "lab tv --no-note",
+  "chart": {
+    "symbol": "NASDAQ:AAPL",
+    "interval": "15",
+    "from": "2026-03-04",
+    "to": "2026-03-06"
+  },
+  "exportedAt": "2026-10-03T10:35:48.857Z",
+  "sourceSha256": "274c794da8119b055d70b70906e6edbfd1f953b35be5737a49e06df1e86063e0",
+  "upstreamTvTradesSha256": "a861e0cf8b37e2dc7e6cc5b1414d311f258c712339cf70b7af2e6c76151c955a",
+  "tvTradesSha256": "85697e79e823976d6be04da8ec1c3999ee2c6ebd51b32b69357ebc37ad767320",
+  "fixtureNormalization": "LF and one final newline; TradingView row contents unchanged",
+  "barsSha256": "46571101bc0b174d211c627b857674d4a021f97ba0d2b6d721a995a759f92fb0",
+  "barsOrigin": {
+    "path": "tests/fixtures/carried_trail_open/bars.csv",
+    "sha256": "46571101bc0b174d211c627b857674d4a021f97ba0d2b6d721a995a759f92fb0"
+  },
+  "feedRows": 4,
+  "feedWindow": {
+    "from": 1772654400000,
+    "to": 1772657100000
+  },
+  "requestedRange": {
+    "from": 1772582400000,
+    "to": 1772755200000
+  },
+  "returnedRange": {
+    "from": 1772634600000,
+    "to": 1772743500000
+  },
+  "rangeProof": "covered",
+  "rawFrameSha256": "2a21e5bf0f5080662f94c294cf5f6106958df80b4ad46a7db2a54181ea3ce24d",
+  "decodedReportSha256": "98324f87dcfd3a30a04c1d79c57d11c06c17a887bb274cfa91162cc1d3dcfec0",
+  "closedTrades": 3,
+  "timestampConvention": {
+    "bars": "UTC milliseconds",
+    "tv_trades": "UTC+8"
+  },
+  "barReduction": "Four contiguous regular-session bars covering every command and fill",
+  "engineObservations": {
+    "platform": "Linux x86_64; GCC 13.3.0; Release; C++17",
+    "method": "PineStrategyHost replay; --record output; engine CSVs are evidence only, never an oracle",
+    "harnessSha256": "785f3299852b36c34a9d3ecee2e6800292ac5e859fd48ceb982f655f88731728",
+    "wave": {
+      "runtimeCommit": "a747ad5bf5d98e7b81c2abd44a49bfa20f532ab7",
+      "file": "engine_wave.csv",
+      "sha256": "a1467b3592e655a15bfce12bca64241973f6ce5888015053471c983460cfc97f",
+      "closedTrades": 3,
+      "agreesWithTradingView": true
+    },
+    "main": {
+      "runtimeCommit": "227c2236e4769ae926d2c6e4811c37ff5119c4a0",
+      "file": "engine_main.csv",
+      "sha256": "6af47207a5f05327c4492d1003dc5ac2440c018cce0fbf27a8624eaca548030f",
+      "closedTrades": 3,
+      "agreesWithTradingView": false
+    }
+  }
+}

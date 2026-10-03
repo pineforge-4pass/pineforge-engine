@@ -1,0 +1,11 @@
+//@version=6
+strategy("Opposite batch and fractional FIFO partial", initial_capital=1000000, pyramiding=3, default_qty_type=strategy.fixed, default_qty_value=1, margin_long=0, margin_short=0)
+if time == timestamp("UTC", 2025, 4, 1, 0, 0)
+    strategy.entry("S", strategy.short, qty=0.0003)
+    strategy.entry("A", strategy.long, qty=0.0005)
+    strategy.entry("B", strategy.long, qty=0.0006)
+    strategy.entry("C", strategy.long, qty=0.0022)
+if time == timestamp("UTC", 2025, 4, 1, 0, 15)
+    strategy.close("C", qty_percent=50)
+if time == timestamp("UTC", 2025, 4, 1, 6, 0)
+    strategy.close_all()

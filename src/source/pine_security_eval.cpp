@@ -798,6 +798,32 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
     // close reaches the period's -- see security_calling_close_ms_.
     AggregatedBar ab = state.aggregator.feed(input_bar, security_next_input_ms_,
                                              security_calling_close_ms_);
+    // timeframe.cpp excludes target_seconds >= kSecPerDay from its sub-day
+    // session-close rule. A minute-spelled day closes at the day's close,
+    // deliberately not at an intermediate session window's close.
+    const bool minute_day = calendar_period_for(state.tf) == CalendarPeriod::NONE
+        && tf_to_seconds(state.tf) == 86400;
+    if (!ab.is_complete && minute_day && !pine.lookahead_on
+        && state.aggregator.has_pending_partial()) {
+        const int input_seconds = tf_to_seconds(security_input_tf_);
+        const auto session_open = session_period_open_ms(
+            input_bar.timestamp, syminfo_.timezone, syminfo_.session,
+            CalendarPeriod::DAY);
+        const bool next_session = state.aggregator.early_close_completes()
+            && security_next_input_ms_ > 0
+            && session_period_open_ms(security_next_input_ms_, syminfo_.timezone,
+                                      syminfo_.session, CalendarPeriod::DAY)
+                != session_open;
+        const auto session_close = session_period_close_ms(
+            input_bar.timestamp, syminfo_.timezone, syminfo_.session,
+            CalendarPeriod::DAY);
+        const bool reaches_close = input_seconds > 0
+            && input_bar.timestamp + static_cast<int64_t>(input_seconds) * 1000
+                >= session_close;
+        if (next_session || reaches_close) {
+            ab = state.aggregator.complete_pending_partial();
+        }
+    }
     state.feed_count++;
     state.current_sub_bar_count = ab.sub_bar_count;
     if (ab.is_complete) {

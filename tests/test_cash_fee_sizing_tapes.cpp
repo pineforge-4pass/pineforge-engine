@@ -454,17 +454,6 @@ const PinnedRow kOrderMarginRows[] = {
     {"T2", "__close__", false, 1744281900000LL, 1590.36, 1744287300000LL, 1595.90, 51.8243},
     {"U1", "__close__", true, 1744452900000LL, 1592.65, 1744460100000LL, 1596.00, 54.0841},
 };
-const PinnedRow kContractMarginRows[] = {
-    {"P1", "__close__", true, 1743588900000LL, 1880.02, 1743596100000LL, 1865.26, 52.6307},
-    {"Q1", "__close__", true, 1743675300000LL, 1811.58, 1743682500000LL, 1797.78, 53.0244},
-    {"R1", "__close__", false, 1743761700000LL, 1812.69, 1743768900000LL, 1780.11, 51.4351},
-    {"T1", "T2", true, 1744280100000LL, 1601.17, 1744281900000LL, 1590.36, 57.911},
-    {"T2", "__margin_call__", false, 1744281900000LL, 1590.36, 1744281900000LL, 1590.36, 0.0356},
-    {"T2", "__margin_call__", false, 1744281900000LL, 1590.36, 1744281900000LL, 1594.81, 1.1732},
-    {"T2", "__margin_call__", false, 1744281900000LL, 1590.36, 1744286400000LL, 1621.14, 3.9272},
-    {"T2", "__close__", false, 1744281900000LL, 1590.36, 1744287300000LL, 1595.90, 52.0557},
-    {"U1", "__close__", true, 1744452900000LL, 1592.65, 1744460100000LL, 1596.00, 54.7167},
-};
 
 void check_margin_tape(const Tape& tape, const PinnedRow* pinned, std::size_t pinned_count) {
     const auto engine = replay(tape);
@@ -502,21 +491,28 @@ void check_margin_tape(const Tape& tape, const PinnedRow* pinned, std::size_t pi
     }
 }
 
-void test_margin_100_tapes_are_recorded_divergences() {
+void test_margin_100_cash_fee_tapes() {
     const Tape order{"pcf-order-p100-m100", CommissionType::CASH_PER_ORDER, 1000.0, 100.0, 1,
                      100.0, Market::Eth, 100000.0, margin_steps()};
     const Tape contract{"pcf-contract-p100-m100", CommissionType::CASH_PER_CONTRACT, 20.0,
                         100.0, 1, 100.0, Market::Eth, 100000.0, margin_steps()};
     check_margin_tape(order, kOrderMarginRows, sizeof(kOrderMarginRows) / sizeof(kOrderMarginRows[0]));
-    check_margin_tape(contract, kContractMarginRows,
-                      sizeof(kContractMarginRows) / sizeof(kContractMarginRows[0]));
+    const auto engine = replay(contract);
+    const auto tv = read_tape(contract.slug);
+    CHECK(tv.size() == 9);
+    CHECK(engine.size() == tv.size());
+    for (std::size_t index = 0; index < engine.size() && index < tv.size(); ++index) {
+        const bool matches = books_tape_trade(engine[index], tv[index]);
+        CHECK(matches);
+        if (!matches) print_mismatch(contract.slug, index, engine[index], tv[index]);
+    }
 }
 
 }  // namespace
 
 int main() {
     test_tapes_book_tradingview_trades();
-    test_margin_100_tapes_are_recorded_divergences();
+    test_margin_100_cash_fee_tapes();
     std::printf("PAR-CASHFEE cash-fee sizing tapes: %d checks, %d failures\n",
                 tests_passed + tests_failed, tests_failed);
     return tests_failed == 0 ? 0 : 1;

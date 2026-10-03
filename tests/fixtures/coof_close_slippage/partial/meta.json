@@ -1,0 +1,16 @@
+{
+  "title": "Opening partial close slippage",
+  "slug": "opening-partial-close-slippage",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T06:00:56.926Z",
+  "chart": {
+    "symbol": "NSE:NIFTY",
+    "interval": "1D",
+    "from": "2025-06-13",
+    "to": "2025-06-20"
+  },
+  "pine_sha256": "fbcf41dd1045dc071e7c40380bb33d9a758036c0bf07e7766dad5187ac21ea35",
+  "tv_trades_sha256": "5427c14f181877264ff2c3ad428971f264ac85c1dbaf483bf32806c6f2b9ee50",
+  "tv_trades_rows": 4
+}

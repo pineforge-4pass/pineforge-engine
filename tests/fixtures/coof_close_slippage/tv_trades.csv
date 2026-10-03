@@ -1,0 +1,3 @@
+﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)
+1,Exit short,2025-05-30 06:00,Close entry(s) order one-tick-short,5912.5,1,295600,-25,-0.01,0,0,0.00,-25,-0.01,-25,0.00,0
+1,Entry short,2025-05-30 06:00,one-tick-short,5912,1,295600,-25,-0.01,0,0,0.00,-25,-0.01,-25,0.00,0

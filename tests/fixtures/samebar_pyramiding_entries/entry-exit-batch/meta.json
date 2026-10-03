@@ -1,0 +1,1 @@
+{"evidenceKind":"main-regression","engineCommit":"227c2236e4769ae926d2c6e4811c37ff5119c4a0","feed":"bars.csv","expectedTrades":"expected_trades.csv","tradingViewExport":false,"scope":"Original adapter request path; synthetic opposite market entries followed by named bracket."}

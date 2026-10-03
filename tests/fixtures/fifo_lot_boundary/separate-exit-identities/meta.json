@@ -1,0 +1,16 @@
+{
+  "title": "separate exit identities",
+  "slug": "separate-exit-identities",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T02:57:07.808Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-05-01",
+    "to": "2025-05-03"
+  },
+  "pine_sha256": "0da19915ed5f054db097a96a707bb53bb408b590179c664057ecc9ed41d4c098",
+  "tv_trades_sha256": "d8702847a1b5e4109b0080c8ff9e45107119a19d762399558113486a2ea28d99",
+  "tv_trades_rows": 4
+}

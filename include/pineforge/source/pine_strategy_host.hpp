@@ -947,6 +947,7 @@ private:
     // requested value before the retained boundary input is fed.
     void publish_security_eval_state_at_calling_boundary(SecurityEvalState& state);
     void scheduler_record_range_end(const Bar&);
+    void present_report(ReportC*) const override;
     // One report point per published source slot. The kernel records it
     // (NativeReportPolicy::KernelRecordedAtHostMarks); this host owns only
     // the Pine cadence that says where the points fall.

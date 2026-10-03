@@ -1,0 +1,6 @@
+//@version=6
+strategy("distinct sibling stop exits", initial_capital=500000, commission_type=strategy.commission.cash_per_contract, commission_value=20, pyramiding=2)
+if time == timestamp("UTC", 2025, 5, 21, 13, 30)
+    strategy.entry("E", strategy.long, qty=2)
+    strategy.exit("T1", "E", qty=1, limit=close+10, stop=3300.545)
+    strategy.exit("T2", "E", qty=1, limit=close+20, stop=3300.545)

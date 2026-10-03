@@ -1,0 +1,10 @@
+//@version=6
+strategy("Synthetic buying power px-held-whole-equal",overlay=true,initial_capital=104012.8,default_qty_type=strategy.percent_of_equity,default_qty_value=100,margin_long=100,margin_short=100)
+if time == timestamp("UTC",2025,8,5,13,30)
+    strategy.entry("held",strategy.long,qty=9429)
+if time == timestamp("UTC",2025,8,5,14,30)
+    strategy.entry("reverse",strategy.short)
+if time == timestamp("UTC",2025,8,5,15,0)
+    strategy.entry("reverse-again",strategy.long)
+if time == timestamp("UTC",2025,8,5,19,30)
+    strategy.close_all()

@@ -1,0 +1,16 @@
+{
+  "title": "short named close at decimal FIFO boundary",
+  "slug": "short-fifo-boundary",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T02:57:16.909Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-05-01",
+    "to": "2025-05-03"
+  },
+  "pine_sha256": "6a4446466727caf47b4c286821fe1feba50dc2376a6452547a723cd1618a3f9f",
+  "tv_trades_sha256": "a739fd1b85798dfab19d8323656021f25f69acca2f045460ae29bc2bbbdc519a",
+  "tv_trades_rows": 8
+}

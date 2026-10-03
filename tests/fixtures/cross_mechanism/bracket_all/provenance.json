@@ -1,0 +1,62 @@
+{
+  "channel": "ws-report-v1",
+  "syntheticSource": true,
+  "exportCommand": "lab tv --no-note",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-07"
+  },
+  "exportedAt": "2026-10-03T10:32:29.542Z",
+  "sourceSha256": "5b103361bcc417c8e28eababa2c3869aa34931c578c0e1d544e36e06b5d28d6b",
+  "upstreamTvTradesSha256": "73bee7ffd6d7fe9c5e3681b51e457ac8e71e3f7f482bcf6b945779e621fc5f9f",
+  "tvTradesSha256": "06a97743d61af9cb34ca1819e3db17089713bf39598da3e72a8abc7fcae54f48",
+  "fixtureNormalization": "LF and one final newline; TradingView row contents unchanged",
+  "barsSha256": "7a513b780a1f760f25c3fcb50938877f2f9186d7964c76190dc0fcbe8e946cf9",
+  "barsOrigin": {
+    "path": "tests/fixtures/percent_entry_reservation/bars.inc",
+    "sha256": "a064a305475b1dc1df2cbd3934206929472fea8bfb5e9c5c6a3f0a3bafc2713f"
+  },
+  "feedRows": 577,
+  "feedWindow": {
+    "from": 1743465600000,
+    "to": 1743984000000
+  },
+  "requestedRange": {
+    "from": 1743465600000,
+    "to": 1743984000000
+  },
+  "returnedRange": {
+    "from": 1743465600000,
+    "to": 1743984000000
+  },
+  "rangeProof": "covered",
+  "rawFrameSha256": "6cf7980f6d9de6089b03d9efee91a0587d91518acc59b57403d10a747681fa9a",
+  "decodedReportSha256": "58ad6320f3f77c7a7bdf2c7a647c763012e51b8d6b5f8cd7356159830b290450",
+  "closedTrades": 3,
+  "timestampConvention": {
+    "bars": "UTC milliseconds",
+    "tv_trades": "UTC+8"
+  },
+  "barReduction": "Complete inclusive exported window, copied from the committed ETH tape feed",
+  "engineObservations": {
+    "platform": "Linux x86_64; GCC 13.3.0; Release; C++17",
+    "method": "PineStrategyHost replay; --record output; engine CSVs are evidence only, never an oracle",
+    "harnessSha256": "785f3299852b36c34a9d3ecee2e6800292ac5e859fd48ceb982f655f88731728",
+    "wave": {
+      "runtimeCommit": "a747ad5bf5d98e7b81c2abd44a49bfa20f532ab7",
+      "file": "engine_wave.csv",
+      "sha256": "03a4170b349cbdafb3ea48dc3f40b251824d022095a654643ff49836b0f15d12",
+      "closedTrades": 3,
+      "agreesWithTradingView": true
+    },
+    "main": {
+      "runtimeCommit": "227c2236e4769ae926d2c6e4811c37ff5119c4a0",
+      "file": "engine_main.csv",
+      "sha256": "03a4170b349cbdafb3ea48dc3f40b251824d022095a654643ff49836b0f15d12",
+      "closedTrades": 3,
+      "agreesWithTradingView": true
+    }
+  }
+}

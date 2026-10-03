@@ -1,0 +1,16 @@
+{
+  "title": "fractional cash FIFO chain",
+  "slug": "fractional-cost-chain",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T02:57:13.523Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-05-01",
+    "to": "2025-05-03"
+  },
+  "pine_sha256": "1e51497047624a08c7614cde6acd4f851cc4223a7c26a0a502d230c60e77fd1f",
+  "tv_trades_sha256": "e7c2bfb094916e9b2002795370bbd1a4765b2d24130ee5e6e9f0dd259fecd639",
+  "tv_trades_rows": 14
+}

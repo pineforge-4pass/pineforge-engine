@@ -1,0 +1,8 @@
+//@version=6
+strategy("PX fill-callback market-price slippage", overlay=true, initial_capital=1000000, margin_long=0, margin_short=0, slippage=1, calc_on_order_fills=true)
+var bool entered = false
+if time == timestamp("UTC", 2025, 5, 28, 22, 0) and not entered
+    strategy.entry("one-tick-short", strategy.short, qty=1)
+    entered := true
+if strategy.position_size < 0
+    strategy.close("one-tick-short", immediately=true)

@@ -1,0 +1,8 @@
+//@version=6
+strategy("Half margin batch and opening fees", initial_capital=2735, pyramiding=3, default_qty_type=strategy.fixed, default_qty_value=1, margin_long=50, margin_short=50, commission_type=strategy.commission.cash_per_contract, commission_value=1)
+if time == timestamp("UTC", 2025, 4, 1, 0, 0)
+    strategy.entry("A", strategy.long, qty=1)
+    strategy.entry("B", strategy.long, qty=1)
+    strategy.entry("C", strategy.long, qty=1)
+if time == timestamp("UTC", 2025, 4, 1, 6, 0)
+    strategy.close_all()
