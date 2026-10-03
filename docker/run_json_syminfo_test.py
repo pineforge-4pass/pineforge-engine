@@ -82,6 +82,7 @@ def test_mincontract_sets_the_lot_grid_before_the_other_setters(tmp_path, doc, l
                          ("strategy_set_syminfo_metadata", ST, b"mincontract", lot)] + FOUR_CALLS
     assert all(type(c[3]) is float for c in lib.calls[:2])
     assert got == {"qty_step": lot, "mincontract": lot}
+    assert all(type(v) is float for v in got.values())  # an integer mincontract is recorded as a float
 
 
 @pytest.mark.parametrize("setters", [SETTERS, SETTERS[1:]], ids=["setter", "no-setter"])
@@ -94,6 +95,10 @@ def test_mincontract_absent_or_null_applies_no_grid(tmp_path, doc, setters):
     lib = FakeLib(setters)
     assert run_json.apply_syminfo(lib, ST, write(tmp_path, doc)) == {}
     assert lib.calls == FOUR_CALLS
+
+
+def test_syminfo_error_is_a_value_error():
+    assert issubclass(run_json.SyminfoError, ValueError)
 
 
 HUGE_INT = "1" + "0" * 400
@@ -178,12 +183,16 @@ def test_main_records_the_grid_in_the_report_and_the_fingerprint(harness):
     _, plain = harness(fake_lib())
     status, out = harness(fake_lib(), syminfo=dict(FOUR, mincontract=0.25))
     rep = report_of(out)
-    prov = json.loads(base64.b64decode(rep["fingerprint"]["token"]))
+    token = base64.b64decode(rep["fingerprint"]["token"])
+    prov = json.loads(token)
     grid = {"qty_step": 0.25, "mincontract": 0.25}
     assert status == 0
     assert rep["applied_runtime"]["syminfo"] == grid
     assert prov["runtime"]["syminfo"] == grid
     assert rep["fingerprint"]["digest"] != report_of(plain)["fingerprint"]["digest"]
+    # The digested bytes carry the grid in canonical form, and only when one was applied.
+    assert b'"syminfo":{"mincontract":0.25,"qty_step":0.25}' in token
+    assert b"syminfo" not in base64.b64decode(report_of(plain)["fingerprint"]["token"])
 
 
 def test_main_bench_applies_the_grid_to_every_state(harness):

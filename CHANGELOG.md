@@ -12,8 +12,9 @@ version number follows semantic versioning over the surfaces the
   `qty_step` plus the `mincontract` key a script's `syminfo.mincontract` reads, so a
   percent-of-equity strategy no longer trades sub-lot quantities. Absent or `null`
   changes nothing: the report and its fingerprint are as before, apart from
-  `elapsed_seconds`. A value that is not a positive finite number, or a strategy
-  library without `strategy_set_syminfo_metadata`, fails the run (one
+  `elapsed_seconds`. A value that is not a positive finite number, or, when
+  `mincontract` is set, a strategy library without
+  `strategy_set_syminfo_metadata`, fails the run (one
   `{"engine":"pineforge","error":...}` line, harness exit 1, entrypoint exit 4)
   instead of running without the grid. An applied grid is recorded as
   `applied_runtime.syminfo`, so a gridded run has its own fingerprint digest. The

@@ -136,12 +136,12 @@ header) are configured via separate env vars:
 | `PINEFORGE_BAR_MAGNIFIER`     | `false`        | `true` enables intra-bar OHLC path sampling for stop/limit fills      |
 | `PINEFORGE_MAGNIFIER_SAMPLES` | `4`            | Sub-bar sample count when magnifier is on (≥2)                        |
 | `PINEFORGE_MAGNIFIER_DIST`    | `endpoints`    | `uniform`, `cosine`, `triangle`, `endpoints`, `front_loaded`, `back_loaded` |
-| `PINEFORGE_SYMINFO`           | none           | Path to the instrument's metadata JSON (the harness's `--syminfo`); see below |
 
 ### Instrument metadata (`PINEFORGE_SYMINFO`)
 
-`PINEFORGE_SYMINFO` names a JSON file holding the instrument's metadata, either a
-flat object or `{"syminfo": {...}}`; a catalog object can be passed as is, keys
+`PINEFORGE_SYMINFO` (the harness's `--syminfo`) names a JSON file holding the
+instrument's metadata, either a flat object or `{"syminfo": {...}}`; an object
+with extra keys (for example a full instrument record) can be passed as is, keys
 the harness does not use are ignored. It applies `mincontract` first, then
 `mintick`, `pointvalue`, `timezone` and `session`, each through the strategy
 library's `strategy_set_syminfo_*` setters.
@@ -155,10 +155,12 @@ library's `strategy_set_syminfo_*` setters.
   `"0.001"`, `true`, `NaN`, `Infinity`, a list or an object) fails the run
   before it starts: one line `{"engine":"pineforge","error":"syminfo.mincontract
   must be a positive finite number, got <value>"}` on stdout, where `<value>` is
-  the value's JSON text cut to 80 characters (`got true`, `got "0.001"`),
-  harness exit status 1, entrypoint exit 4. A strategy library without
-  `strategy_set_syminfo_metadata` fails the same way when `mincontract` is set:
-  the harness never runs without the grid it was given.
+  the parsed value re-encoded as JSON (so `1e-400` shows as `0.0`) cut to 80
+  characters (`got true`, `got "0.001"`), harness exit status 1, entrypoint exit
+  4. A strategy library without `strategy_set_syminfo_metadata` fails the same
+  way when `mincontract` is set: the harness never runs without the grid it was
+  given. A file that is not valid JSON, or not a JSON object, is not covered by
+  this: the harness ends in a Python traceback, as before.
 - An applied grid is recorded as `applied_runtime.syminfo`
   (`{"qty_step": <v>, "mincontract": <v>}`) and so in
   `fingerprint.provenance.runtime`: its fingerprint digest differs from the
