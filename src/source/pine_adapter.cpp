@@ -15867,7 +15867,7 @@ std::optional<double> PineExecutionAdapter::resolve_margin_call_units(
 // every resting liquidation now.
 bool PineExecutionAdapter::submit_margin_call_slice(
         double mark_price, const NativeDecisionContext& context,
-        bool opening_checkpoint) {
+        bool opening_checkpoint, std::optional<double> resolved_execution_price) {
     const auto position = detail::run_position(require_host());
     const auto money = source_margin_money(mark_price, context.sub_bar_open_ms);
     mark_price = money.mark;
@@ -15891,12 +15891,12 @@ bool PineExecutionAdapter::submit_margin_call_slice(
                 * config_.slippage * staged_.syminfo.mintick,
             staged_.syminfo.mintick);
     }
-    return submit_margin_call_units(close_base, context, units);
+    return submit_margin_call_units(close_base, context, units, true, resolved_execution_price);
 }
 
 bool PineExecutionAdapter::submit_margin_call_units(
         double mark_price, const NativeDecisionContext& context, double units,
-        bool force_execution_price) {
+        bool force_execution_price, std::optional<double> resolved_execution_price) {
     const auto position = detail::run_position(require_host());
     const double held = std::abs(position.signed_units);
     if (!(units > 0.0) || !std::isfinite(units) || !(held > 0.0)
@@ -15913,17 +15913,18 @@ bool PineExecutionAdapter::submit_margin_call_units(
     snapshot.source_id = request.label;
     snapshot.requested_qty = units;
     if (force_execution_price) {
-        // ab9714be pine_fills.cpp:1712-1726 and :2649-2658: the margin-call
-        // close helper books bar_fill_price(fire) and then applies the EXIT
-        // side's own market slippage exactly as the adverse-extreme cascade
-        // does.  The generic forced-execution fact only rounds to the chart
-        // tick, so the closing slippage step is reproduced here on the fire
-        // price before it is pinned.  Reducing a long is a sell (slippage
-        // subtracts); reducing a short is a buy (slippage adds).  At zero
-        // slippage this is the identity, leaving every slippage-free tape
-        // byte-identical.
+        // ab9714be pine_fills.cpp:1712-1726 and :2649-2658: ordinary margin-call
+        // closes book bar_fill_price(fire), then apply EXIT-side market slippage,
+        // as does the adverse-extreme cascade. The default branch reproduces
+        // that slippage before pinning: subtract for a long's sell, add for a
+        // short's buy. An already-resolved recheck fill bypasses slippage and
+        // is pinned unchanged; TradingView books repeated calls at one price
+        // (tests/fixtures/margin_residual px-f2b-eth-short-0/1, -eth-slip-3).
+        // The generic forced-execution fact rounds to the chart tick; at zero
+        // slippage the default remains the identity.
         snapshot.forced_execution_price =
-            source_margin_fill_price(mark_price, position.signed_units < 0.0);
+            resolved_execution_price ? *resolved_execution_price
+                : source_margin_fill_price(mark_price, position.signed_units < 0.0);
     }
     snapshot.sizing = sizing_snapshot();
     const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
@@ -20983,13 +20984,13 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 && policy_script_bar_valid_
                 && policy_script_bar_.timestamp == context.script_bar_open_ms
                 && after_margin.signed_units != 0.0 && !one_x_long) {
-                // The opening call of a short process_orders_on_close filled
-                // at the previous close is checked again at its own slipped
-                // fill: TradingView calls again there while the survivor is
-                // still short of margin (the second opening calls of lab tv
-                // tape officialjackofalltrades-caldera-meridian-strategy-joat,
-                // 1 or 4 x the lot remainder; lane W5-ENG-MARGIN-V6). The
-                // re-check's own slice re-enters here until it covers.
+                // A carried POOC short filled at the previous close rechecks
+                // its already-slipped fill: mark and forced execution both
+                // reuse event.resolved_price unchanged until margin is covered.
+                // TradingView repeats at one price (tests/fixtures/margin_residual
+                // px-f2b-eth-short-0/1, -eth-slip-3). Population confirmations:
+                // ETHUSDT.P 1D caldera 2026-01-21; EURUSD axealgo 2025-06-25
+                // and caldera 2025-04-22 (both OANDA).
                 const bool recheck_at_fill = config_.process_orders_on_close
                     && !config_.calc_on_order_fills && config_.slippage != 0
                     && after_margin.signed_units < 0.0
@@ -21001,7 +21002,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 // unconsumed bar suffix.  Submission from this Applied point
                 // uses A35 remaining-path eligibility and sizes from the
                 // already-reduced physical book.
-                if (!recheck_at_fill || !submit_margin_call_slice(event.resolved_price, context))
+                if (!recheck_at_fill || !submit_margin_call_slice(
+                        event.resolved_price, context, false, event.resolved_price))
                     (void)schedule_margin_call_path(policy_script_bar_, context);
             }
         }

@@ -1785,11 +1785,16 @@ private:
     bool leveraged_entry_bar_checked() const noexcept;
     bool preopen_slice_class(const PlacementSnapshot&,
                              const NativeDecisionContext&) const noexcept;
+    // For both helpers, resolved_execution_price == nullopt prices at mark_price
+    // with exit-side slippage; a value pins that already-resolved price unchanged
+    // when the execution price is forced.
     bool submit_margin_call_slice(double mark_price, const NativeDecisionContext&,
-                                  bool opening_checkpoint = false);
+                                  bool opening_checkpoint = false,
+                                  std::optional<double> resolved_execution_price = std::nullopt);
     bool submit_margin_call_units(double mark_price, const NativeDecisionContext&,
                                   double units,
-                                  bool force_execution_price = true);
+                                  bool force_execution_price = true,
+                                  std::optional<double> resolved_execution_price = std::nullopt);
     bool submit_tv_money_long_margin_call(const Bar&, const NativeDecisionContext&,
                                           int* fired_waypoint = nullptr);
     bool slipped_pooc_opening_money_scope(
