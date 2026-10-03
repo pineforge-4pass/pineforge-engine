@@ -2176,6 +2176,23 @@ file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/test_native_market_vertical.cpp"
      PINEFORGE_NATIVE_MARKET_VERTICAL_SHA256)
 
 if(PINEFORGE_BUILD_SOURCE_LAYER)
+    foreach(security_case htf5_close htf15_sma_pooc htf60_close daily_close heikinashi5 htf60_ema_gaps period_previous)
+        add_executable(test_stream_security_${security_case}
+            test_stream_security_equivalence.cpp
+            fixtures/stream_security/${security_case}/generated.cpp)
+        target_link_libraries(test_stream_security_${security_case} PRIVATE pineforge)
+        target_compile_options(test_stream_security_${security_case} PRIVATE -UNDEBUG -ffp-contract=off)
+        target_compile_definitions(test_stream_security_${security_case} PRIVATE
+            PINEFORGE_SECURITY_CASE="${security_case}")
+        if(PINEFORGE_ENABLE_COVERAGE)
+            target_compile_options(test_stream_security_${security_case} PRIVATE ${_pf_cov_test_flags})
+        endif()
+        add_test(NAME test_stream_security_${security_case}
+            COMMAND test_stream_security_${security_case} 1 500)
+    endforeach()
+    add_test(NAME test_stream_security_control_tf5 COMMAND test_stream_security_htf5_close 5 500)
+    add_test(NAME test_stream_security_control_tf15 COMMAND test_stream_security_htf60_close 15 500)
+
     add_library(checked_settings_fixture OBJECT fixtures/checked_settings/generated.cpp)
     target_link_libraries(checked_settings_fixture PRIVATE pineforge)
     target_compile_options(checked_settings_fixture PRIVATE -ffp-contract=off)
