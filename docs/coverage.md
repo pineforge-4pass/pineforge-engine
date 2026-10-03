@@ -62,10 +62,11 @@
 ## Public C ABI
 
 `<pineforge/pineforge.h>` is the **single canonical consumer header**. It has
-exactly 71 public `PF_API` declarations: 62 runtime implementations and nine
+exactly 77 public `PF_API` declarations: 62 runtime implementations and fifteen
 per-strategy generated exports. Every compiled PineForge strategy `.so` exports
 that public set, except that `strategy_declares_bar_magnifier` is exported only
-by a script that declares `use_bar_magnifier = true`. The historical 28-symbol module sentence was not a current
+by a script that declares `use_bar_magnifier = true`; older modules lack the six
+opt-in [checked-settings exports](checked-settings.md). The historical 28-symbol module sentence was not a current
 module inventory; the grouped table below is a guide, not the count:
 
 
@@ -130,7 +131,7 @@ single `.hpp`):
 
 | Module             | Header                   | Source                                                                                                                                                                                                                                   | Pine-facing role                                                                                                                                              |
 | ------------------ | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Public C ABI       | `pineforge.h`            | `c_abi.cpp` (+ layout `static_assert`s)                                                                                                                                                                                                                       | 71 public `PF_API` declarations: 62 runtime implementations plus nine per-strategy generated exports. `strategy_configure_native_fx_curve_v1` stages the additive native FX curve. |
+| Public C ABI       | `pineforge.h`            | `c_abi.cpp` (+ layout `static_assert`s)                                                                                                                                                                                                                       | 77 public `PF_API` declarations: 62 runtime implementations plus fifteen per-strategy generated exports. `strategy_configure_native_fx_curve_v1` stages the additive native FX curve. |
 | Engine             | `engine.hpp`             | `engine_run.cpp`, `engine_stream.cpp`, `engine_execution.cpp`, `engine_orders.cpp`, `engine_path_resolve.cpp`, `engine_trade_accessors.cpp`, `engine_security.cpp`, `engine_lower_tf.cpp`, `engine_report.cpp`, `native_execution_consumer.cpp` | One-shot and continuous lifecycle, native request matching/settlement, orders, reports, inputs / syminfo, magnifier, TF aggregation, and `request.security` plumbing.                  |
 | Engine internals   | `engine_internal.hpp`    | (private cross-TU header)                                                                                                                                                                                                                | `pineforge::internal::*` types and helpers shared between engine `.cpp` partitions; not part of the public ABI.                                               |
 | Technical analysis | `ta.hpp`                 | `ta_moving_averages.cpp`, `ta_oscillators.cpp`, `ta_volatility_trend.cpp`, `ta_extremes_volume.cpp`, `ta_misc.cpp`                                                                                                                       | Official `ta.*` functions and series variables backed by stateful runtime classes with `compute` / `recompute`, plus `pivot_point_levels(...)` free function. |

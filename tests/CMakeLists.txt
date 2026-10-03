@@ -2173,6 +2173,18 @@ endif()
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/test_native_market_vertical.cpp"
      PINEFORGE_NATIVE_MARKET_VERTICAL_SHA256)
 
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_library(checked_settings_fixture OBJECT fixtures/checked_settings/generated.cpp)
+    target_link_libraries(checked_settings_fixture PRIVATE pineforge)
+    target_compile_options(checked_settings_fixture PRIVATE -ffp-contract=off)
+    set_target_properties(checked_settings_fixture PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    add_executable(test_checked_settings test_checked_settings.cpp
+        $<TARGET_OBJECTS:checked_settings_fixture>)
+    target_link_libraries(test_checked_settings PRIVATE pineforge)
+    target_compile_options(test_checked_settings PRIVATE -UNDEBUG -ffp-contract=off)
+    add_test(NAME test_checked_settings COMMAND test_checked_settings)
+endif()
+
 foreach(test_name ${TEST_SOURCES})
     add_executable(${test_name} ${test_name}.cpp)
     target_link_libraries(${test_name} PRIVATE pineforge)

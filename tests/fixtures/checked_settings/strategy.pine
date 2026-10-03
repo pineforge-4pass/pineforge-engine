@@ -1,0 +1,18 @@
+//@version=6
+strategy("Checked settings fixture", initial_capital=10000, default_qty_value=1)
+enum Side
+    neutral
+    long
+    short
+length = input.int(3, "Length", minval=1, maxval=50, step=2)
+threshold = input.float(2.5, "Threshold", minval=0, maxval=10, step=0.25)
+enabled = input.bool(true, "Enabled")
+mode = input.string("fast", "Mode", options=["fast", "slow"])
+side = input.enum(Side.long, "Side", options=[Side.long, Side.short])
+source = input.source(close, "Source")
+stamp = input.time(1577836800000, "Stamp")
+tint = input.color(color.red, "Tint")
+if enabled and bar_index % length == 0
+    strategy.entry("entry", strategy.long, qty=threshold)
+if bar_index % length == 1
+    strategy.close("entry")

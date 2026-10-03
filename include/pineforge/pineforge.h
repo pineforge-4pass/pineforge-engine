@@ -1547,6 +1547,80 @@ PF_API const char* pf_version_string(void);
 
 /** @} */ /* end of pf_version */
 
+#define PF_SETTINGS_API_VERSION 1u
+
+/** Status codes for the opt-in generated-strategy settings extension. */
+typedef enum pf_settings_status_t {
+    PF_SETTINGS_OK = 0,
+    PF_SETTINGS_INVALID_ARGUMENT = 1,
+    PF_SETTINGS_UNSUPPORTED = 2,
+    PF_SETTINGS_EXCEPTION = 3,
+    PF_SETTINGS_BUFFER_TOO_SMALL = 4,
+    PF_SETTINGS_RUN_FAILED = 5
+} pf_settings_status_t;
+
+#ifndef PINEFORGE_NO_STRATEGY_DECLS
+
+/** Generated-strategy settings extension version (currently 1).
+ *  Older compiled strategies lack this symbol. This is independent of
+ *  #pf_abi_version and does not change the legacy entry points. */
+PF_API uint32_t strategy_settings_api_version(void);
+
+/** Allocate a strategy without allowing any exception across the C boundary.
+ *  @p params_json is reserved: pass NULL or an empty string. Nonempty values
+ *  are refused, unlike the legacy factory which ignores them.
+ *  @p out is required and is set to NULL before allocation.
+ *  All checked calls return #pf_settings_status_t; an optional caller-owned
+ *  error buffer receives a NUL-terminated, possibly truncated message.
+ *  A successful call clears that buffer. No error buffer allocation is needed. */
+PF_API int strategy_create_checked(const char* params_json, pf_strategy_t* out,
+                                   char* error, size_t error_capacity);
+
+/** Validate and install a declared input before execution.
+ *  Rejects unknown or ambiguous keys, invalid options/booleans, non-finite
+ *  numbers, trailing bytes, range violations and unsupported input forms.
+ *  Invalid values leave the existing setting unchanged. Pine's numeric step
+ *  is UI metadata, not a restriction on programmatically supplied values.
+ *  Calls after execution starts are refused; use the legacy setter for its
+ *  historical subsequent-run behavior. */
+PF_API int strategy_set_input_checked(pf_strategy_t s, const char* key,
+                                      const char* value, char* error,
+                                      size_t error_capacity);
+
+/** Validate and install a supported strategy override before execution.
+ *  Accepts the legacy documented enum aliases, but never silently defaults
+ *  an unknown key, invalid enum, invalid boolean or invalid numeric value. */
+PF_API int strategy_set_override_checked(pf_strategy_t s, const char* key,
+                                         const char* value, char* error,
+                                         size_t error_capacity);
+
+/** Read a deterministic UTF-8 JSON receipt of effective settings.
+ *  Lists every declared input and supported override, including type,
+ *  options, min/max/step constraints, default and effective value. Values
+ *  use canonical serialized strings. No new execution state is retained.
+ *  @p required is required and receives the byte count INCLUDING the NUL.
+ *  Pass NULL/0 for @p json/capacity to query that count; this returns
+ *  #PF_SETTINGS_BUFFER_TOO_SMALL. No partial JSON is returned.
+ *  The receipt describes source settings, not a native run-spec capability. */
+PF_API int strategy_get_effective_settings(pf_strategy_t s, char* json,
+                                           size_t capacity, size_t* required,
+                                           char* error, size_t error_capacity);
+
+/** Exception-contained counterpart of #run_backtest_full.
+ *  Validates pointers and bar count, then uses the identical batch dispatch.
+ *  Returns #PF_SETTINGS_RUN_FAILED for a runtime-reported failure and
+ *  #PF_SETTINGS_EXCEPTION for an escaping C++ exception. Initialize @p out
+ *  to zero and release any populated arrays with #report_free, including
+ *  after a failed call. */
+PF_API int run_backtest_full_checked(pf_strategy_t s, pf_bar_t* bars, int n,
+                                     const char* input_tf, const char* script_tf,
+                                     int bar_magnifier, int magnifier_samples,
+                                     pf_magnifier_distribution_t magnifier_dist,
+                                     pf_report_t* out, char* error,
+                                     size_t error_capacity);
+
+#endif
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

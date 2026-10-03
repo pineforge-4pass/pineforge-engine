@@ -165,3 +165,18 @@ if(PINEFORGE_BUILD_TESTS)
     endforeach()
     set_tests_properties(test_native_live_websocket PROPERTIES SKIP_RETURN_CODE 77)
 endif()
+
+if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
+    add_library(checked_settings_example MODULE $<TARGET_OBJECTS:checked_settings_fixture>)
+    target_link_libraries(checked_settings_example PRIVATE PineForge::pineforge)
+    if(APPLE)
+        target_link_options(checked_settings_example PRIVATE "LINKER:-u,_pf_abi_version")
+    else()
+        target_link_options(checked_settings_example PRIVATE "LINKER:-u,pf_abi_version")
+    endif()
+    set_target_properties(checked_settings_example PROPERTIES PREFIX "")
+    add_test(NAME checked_settings_e2e COMMAND ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/checked_settings_e2e.py $<TARGET_FILE:pineforge-live>
+        $<TARGET_FILE:checked_settings_example> $<TARGET_FILE:native_live_example>)
+    set_tests_properties(checked_settings_e2e PROPERTIES TIMEOUT 120)
+endif()
