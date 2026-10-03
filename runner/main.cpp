@@ -594,13 +594,22 @@ void apply_record(Strategy &strategy, const Config &c, Cursor &cursor, const Jso
 }
 void require_feed_event(const Json &event) {
     const auto type = event.at("type").text();
-    if (type == "tick")
+    if (type == "tick") {
         only_fields(event, {"type", "ts", "seq", "price", "qty"});
-    else if (type == "time")
+        event.at("ts").integer<std::int64_t>();
+        event.at("seq").integer<std::uint64_t>();
+        event.at("price").real();
+        event.at("qty").real();
+    } else if (type == "time") {
         only_fields(event, {"type", "ts"});
-    else if (type == "bar") {
+        event.at("ts").integer<std::int64_t>();
+    } else if (type == "bar") {
         only_fields(event, {"type", "bar"});
-        only_fields(event.at("bar"), {"ts_open", "o", "h", "l", "c", "v"});
+        const auto &bar = event.at("bar");
+        only_fields(bar, {"ts_open", "o", "h", "l", "c", "v"});
+        bar.at("ts_open").integer<std::int64_t>();
+        for (const auto *field : {"o", "h", "l", "c", "v"})
+            bar.at(field).real();
     } else
         throw std::runtime_error("expected tick, time or confirmed bar event");
 }
@@ -619,7 +628,7 @@ Json feed_record(const std::string &message) {
         } else
             require_feed_event(record);
         return record;
-    } catch (const std::runtime_error &error) {
+    } catch (const std::exception &error) {
         throw std::runtime_error(
             std::string("PineForge feed events required; use an external feed adapter "
                         "(runner/README.md#feed-format) to normalize raw provider messages: ") +
