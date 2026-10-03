@@ -1,0 +1,18 @@
+//@version=6
+// w7-coof-cascade-identity: a calc_on_order_fills refill cascade of unique-id
+// adds. The first add, placed on a bar's close, fills at the next open; each
+// fill's recalculation places the next add, so one bar books four entries:
+// two at its open, one at the extreme the bar's path reaches first and one at
+// the other. A bar that opens within the grader's strict entry tolerance of
+// that first extreme exports a two-Signal entry key at the open and a
+// one-Signal key beside it, at the same time and on the same side.
+strategy("w7-coof-cascade-identity", overlay=true, calc_on_order_fills=true,
+     pyramiding=4, initial_capital=1000000,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     commission_type=strategy.commission.percent, commission_value=0)
+
+cascadeHour = hour % 4 == 0
+if cascadeHour and (minute == 30 or minute == 45) and strategy.position_size < 4
+    strategy.entry("L" + str.tostring(strategy.opentrades), strategy.long)
+if hour % 4 == 1 and minute == 0 and strategy.position_size > 0
+    strategy.close_all()

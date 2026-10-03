@@ -629,6 +629,7 @@ def distinct_entry_fill_keys(pairs: list[TradePair]) -> set[EntryFillKey]:
 def _project_entry_fill_keys(
     observed_keys: Iterable[EntryFillKey],
     proven_keys: set[EntryFillKey] | frozenset[EntryFillKey],
+    oracle_keys: set[EntryFillKey] | frozenset[EntryFillKey] = frozenset(),
 ) -> tuple[
     dict[EntryFillKey, EntryFillKey],
     dict[EntryFillKey, set[EntryFillKey]],
@@ -642,30 +643,49 @@ def _project_entry_fill_keys(
     tolerance; overlapping tolerance neighborhoods are returned as ambiguous
     so callers can fail closed instead of choosing a nearest key or allowing
     one engine row to satisfy multiple distinct TV prices.
+
+    ``oracle_keys`` are every entry key the tape exported, proven or not
+    (the proven keys are among them). An observed key equal to one of them
+    is that TV entry's own key and is never projected onto a proven
+    neighbour, and a price inside the tolerance of a proven key and of any
+    other TV key is ambiguous. A calc_on_order_fills refill cascade shows
+    why: it fills twice at a bar's open (a proven two-Signal key) and once
+    at the high a tick above (a one-Signal key inside the tolerance); the
+    engine row at the high is that one-Signal entry, never a third entry at
+    the open, and it must not make up the count of an entry the engine
+    merged there. Without ``oracle_keys`` only the proven keys are known,
+    as before: :func:`consolidate_fragments` passes none, so every key
+    inside a proven key's tolerance stays identity-sensitive there and
+    keeps its physical entries apart; only the identity gate needs to know
+    which TV entry a row is.
     """
-    proven_by_scope: dict[tuple[int, str], list[EntryFillKey]] = {}
-    for key in proven_keys:
-        proven_by_scope.setdefault((key[0], key[2]), []).append(key)
+    proven = set(proven_keys)
+    tv_by_scope: dict[tuple[int, str], list[EntryFillKey]] = {}
+    for key in proven | set(oracle_keys):
+        tv_by_scope.setdefault((key[0], key[2]), []).append(key)
 
     projected: dict[EntryFillKey, EntryFillKey] = {}
     ambiguous: dict[EntryFillKey, set[EntryFillKey]] = {}
     for observed in set(observed_keys):
-        candidates = proven_by_scope.get((observed[0], observed[2]), [])
+        candidates = tv_by_scope.get((observed[0], observed[2]), [])
         exact = next(
             (candidate for candidate in candidates
              if candidate[1] == observed[1]),
             None,
         )
         if exact is not None:
-            projected[observed] = exact
+            if exact in proven:
+                projected[observed] = exact
             continue
         tolerant = {
             candidate for candidate in candidates
             if relative_max(candidate[1], observed[1]) < STRICT_ENTRY_DELTA
         }
+        if not tolerant & proven:
+            continue
         if len(tolerant) == 1:
             projected[observed] = next(iter(tolerant))
-        elif len(tolerant) > 1:
+        else:
             ambiguous[observed] = tolerant
     return projected, ambiguous
 
@@ -688,13 +708,17 @@ def distinct_entry_fill_mismatches(
     it may refuse Excellent, but it cannot certify multiplicity from row count.
     Missing identity or an engine price inside multiple TV-key tolerance
     neighborhoods fails the affected keys closed even when raw row counts
-    happen to match.
+    happen to match. Every entry key of ``tv`` is an oracle key: an engine
+    row exactly at another TV entry's price belongs to that entry, not to a
+    proven key beside it.
     """
     tv_signals: dict[EntryFillKey, set[str]] = {}
+    tv_keys: set[EntryFillKey] = set()
     engine_identities: dict[EntryFillKey, set[str]] = {}
     engine_rows: dict[EntryFillKey, list[TradePair]] = {}
     for trade in tv:
         key = (trade.entry_time, trade.entry_price, trade.direction)
+        tv_keys.add(key)
         if trade.entry_signal:
             tv_signals.setdefault(key, set()).add(trade.entry_signal)
     observed_engine_rows: dict[EntryFillKey, list[TradePair]] = {}
@@ -703,11 +727,12 @@ def distinct_entry_fill_mismatches(
         observed_engine_rows.setdefault(key, []).append(trade)
 
     projected, ambiguous = _project_entry_fill_keys(
-        observed_engine_rows, proven_keys)
+        observed_engine_rows, proven_keys, tv_keys)
     ambiguous_proven_keys = {
         candidate
         for candidates in ambiguous.values()
         for candidate in candidates
+        if candidate in proven_keys
     }
     for observed, rows in observed_engine_rows.items():
         key = projected.get(observed)

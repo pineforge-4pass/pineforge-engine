@@ -187,6 +187,18 @@ matter. The baseline, not the corpus's committed trades, is the oracle: the
 tapes `pineforge-corpus` committed were written by an older harness and no
 longer reproduce.
 
+An `excellent` grade also requires distinct-entry identity parity wherever
+TradingView has two or more distinct, non-empty entry Signals at one exact
+time, price and direction. Compare engine incarnation counts, not fragment
+row counts. Use every TradingView entry key to resolve prices: an exact
+match keeps its own key, even if that key has only one Signal or none; a
+non-exact price must be within the strict entry tolerance of only one key
+to count there. Overlap with another key, missing identities and count
+mismatches refuse `excellent`. Fragment consolidation and all other gates
+remain unchanged. See [Distinct-entry identity](README.md#distinct-entry-identity)
+and `tests/fixtures/coof_cascade_identity/README.md` for the nearby-price
+regression and the extra-entry and ambiguity guards.
+
 A refresh is deliberate and carries its evidence in the same commit:
 
 ```bash
