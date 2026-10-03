@@ -1,5 +1,7 @@
 import unittest
 import json
+import io
+import tarfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -8,6 +10,7 @@ from native_confirmed_bar_stream_scan import (
     compare_saved, semantic_actions, semantic_state, stream_splits, SETTINGS,
     is_stream_refusal,
     recompare,
+    read_saved_mode,
 )
 
 
@@ -24,6 +27,27 @@ def state():
 
 
 class ConfirmedScanTests(unittest.TestCase):
+    def test_recompare_reads_archived_modes_without_extracting_them(self):
+        with TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            case = output / "case"
+            case.mkdir()
+            archives = output / ".archives"
+            archives.mkdir()
+            with tarfile.open(archives / "case.tar.gz", "w:gz") as archive:
+                for mode, price in (("batch", 0.0), ("stream-1", -0.0)):
+                    for filename, content in (("state.json", json.dumps(state())),
+                                              ("actions.jsonl", json.dumps(action(20, price=price)) + "\n")):
+                        data = content.encode()
+                        member = tarfile.TarInfo("case/" + mode + "/" + filename)
+                        member.size = len(data)
+                        archive.addfile(member, io.BytesIO(data))
+            batch = read_saved_mode(case, "batch")
+            stream = read_saved_mode(case, "stream-1")
+            self.assertIsNotNone(compare_saved(batch, stream, 1, 20))
+            self.assertFalse((case / "batch").exists())
+            self.assertFalse((case / "stream-1").exists())
+
     def test_aligned_warmup_excludes_prior_actions(self):
         self.assertEqual(semantic_actions([action(10), action(20)], 20),
                          semantic_actions([action(20)], 20))

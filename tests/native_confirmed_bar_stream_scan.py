@@ -13,6 +13,8 @@ chart bounds are expanded to the corresponding genuine 1m input buckets;
 neither OHLCV nor ticks are fabricated. --manifest accepts population cases
 with probe, directory, feed and optional input_tf fields. Run this on a build
 host, not on the supervisor's Mac.
+Saved evidence may be compressed as .archives/<case>.tar.gz under the output
+directory. --recompare reads those modes without extracting them to disk.
 """
 
 import argparse
@@ -27,6 +29,7 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
+import tarfile
 import time
 from types import SimpleNamespace
 
@@ -301,6 +304,22 @@ def compare_saved(batch, stream, split, split_time):
     return None
 
 
+def read_saved_mode(directory, mode):
+    saved = directory / mode
+    if (saved / "state.json").is_file():
+        return {"actions": read_rows(saved / "actions.jsonl"),
+                "state": json.loads((saved / "state.json").read_text())}
+    archive_path = directory.parent / ".archives" / (directory.name + ".tar.gz")
+    with tarfile.open(archive_path, "r:gz") as archive:
+        prefix = directory.name + "/" + mode + "/"
+        actions = archive.extractfile(prefix + "actions.jsonl")
+        state = archive.extractfile(prefix + "state.json")
+        if actions is None or state is None:
+            raise RuntimeError("incomplete saved mode: " + prefix)
+        return {"actions": [json.loads(line) for line in actions if line.strip()],
+                "state": json.load(state)}
+
+
 def recompare(output):
     results = []
     for path in sorted(output.glob("*/result.json")):
@@ -310,14 +329,10 @@ def recompare(output):
             result.pop("proof_gap", None)
             write_json(path, result)
         if result.get("splits") and result["result"] != "STREAM-UNSUPPORTED":
-            batch_directory = path.parent / "batch"
-            batch = {"actions": read_rows(batch_directory / "actions.jsonl"),
-                     "state": json.loads((batch_directory / "state.json").read_text())}
+            batch = read_saved_mode(path.parent, "batch")
             differences = []
             for row in result["splits"]:
-                stream_directory = path.parent / f"stream-{row['index']}"
-                stream = {"actions": read_rows(stream_directory / "actions.jsonl"),
-                          "state": json.loads((stream_directory / "state.json").read_text())}
+                stream = read_saved_mode(path.parent, f"stream-{row['index']}")
                 difference = compare_saved(batch, stream, row["index"], row["time_ms"])
                 row.update(result="FAIL" if difference else "PASS", difference=difference)
                 if difference:
