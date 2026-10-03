@@ -1059,7 +1059,7 @@ is what makes the engine's protected presentation-error string (returned by
 
 Two example modules are built twice — as executables by
 `PINEFORGE_BUILD_EXAMPLES` CMakeLists.txt:37, and as the runner's MODULE
-targets `native_market_example` runner/CMakeLists.txt:45 and `native_selected_example` runner/CMakeLists.txt:51 — from the same sources.
+targets `native_market_example` runner/CMakeLists.txt:54 and `native_selected_example` runner/CMakeLists.txt:60 — from the same sources.
 
 ## Verifying parity {#pine_to_native_parity}
 

@@ -249,7 +249,7 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
         process = run(isolation_ledger, isolation)
         assert time.monotonic() - started_at < 3.5
         newer = [row for row in entries.rows if row['action']['sequence'] == 3]
-        assert len(newer) == 1 and newer[0]['at'] - started_at < 0.8
+        assert len(newer) == 1 and newer[0]['at'] - started_at < 0.8, (started_at, entries.rows)
         assert all(row['at'] - started_at < 0.8 for row in exits.rows)
         assert len([row for row in exits.rows if row['action']['sequence'] == 2]) == 1
         assert len([row for row in entries.rows if row['action']['sequence'] == 1]) == 3
