@@ -8,7 +8,7 @@
     "predicate": "Modeled confirmed-bar calculation, not ObservedPrint; use the same domain at 14938",
     "old": "    context.stream_idle = !stream_mode_;",
     "new": "    context.stream_idle = modeled_input();",
-    "window": "    context.magnifier = point && point->decision.sub_count > 1;\n    context.process_on_close = config_.process_orders_on_close;\n    context.warmup = !modeled_input() && detail::run_state(require_host()).phase == NativeRunPhase::Warmup;\n    context.stream_idle = modeled_input();\n    const auto opening_parent = placement_.find(coof_market_entry_recalc_incarnation_);\n    const bool carried_opening_parent = point && opening_parent != placement_.end()\n        && opening_parent->second.placement_script_open_ms < point->decision.script_bar_open_ms;"
+    "window": "    context.magnifier = point && point->decision.sub_count > 1;\n    context.process_on_close = config_.process_orders_on_close;\n    context.warmup = !modeled_input() && detail::run_state(require_host()).phase == NativeRunPhase::Warmup;\n    context.stream_idle = modeled_input();\n    context.first_open_fill = opening_market_short_scope(snapshot.family);"
   },
   {
     "file": "src/source/pine_adapter.cpp",
@@ -470,7 +470,7 @@
     "predicate": "Historical confirmed-bar replay semantics including warmup; tick handshake only for actual tick input",
     "old": "    context.warmup = detail::run_state(require_host()).phase == NativeRunPhase::Warmup;",
     "new": "    context.warmup = !modeled_input() && detail::run_state(require_host()).phase == NativeRunPhase::Warmup;",
-    "window": "    context.scheduler = config_.calc_on_order_fills;\n    context.magnifier = point && point->decision.sub_count > 1;\n    context.process_on_close = config_.process_orders_on_close;\n    context.warmup = !modeled_input() && detail::run_state(require_host()).phase == NativeRunPhase::Warmup;\n    context.stream_idle = modeled_input();\n    const auto opening_parent = placement_.find(coof_market_entry_recalc_incarnation_);\n    const bool carried_opening_parent = point && opening_parent != placement_.end()"
+    "window": "    context.scheduler = config_.calc_on_order_fills;\n    context.magnifier = point && point->decision.sub_count > 1;\n    context.process_on_close = config_.process_orders_on_close;\n    context.warmup = !modeled_input() && detail::run_state(require_host()).phase == NativeRunPhase::Warmup;\n    context.stream_idle = modeled_input();\n    context.first_open_fill = opening_market_short_scope(snapshot.family);"
   },
   {
     "file": "src/source/pine_adapter.cpp",
