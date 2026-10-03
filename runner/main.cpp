@@ -3,6 +3,7 @@
 #include "native_startup.hpp"
 #include "store.hpp"
 #include "transport.hpp"
+#include "delivery.hpp"
 #include <pineforge/pineforge.h>
 
 #include <algorithm>
@@ -36,7 +37,8 @@ struct Config {
     std::string strategy, warmup, feed = "-", ledger, webhook, mode = "", input_tf = "1", script_tf,
                                   symbol, name = "strategy";
     std::string session = "24x7", timezone = "UTC", chart_timezone = "UTC", secret_env, feed_url,
-                subscribe_path, native_config;
+                subscribe_path, native_config, routes_path;
+    RoutingConfig routing;
     std::vector<std::pair<std::string, std::string>> inputs, overrides, syminfo;
     std::set<std::string> explicit_flags;
     NativeConfigValues native;
@@ -49,13 +51,14 @@ void help() {
     std::cout << "PineForge native live runner (C++17)\n"
                  "Usage: pineforge-live run --strategy strategy.so --warmup history.csv\n"
                  "       --script-tf 15 --mode ticks|bars --ledger orders.sqlite3\n"
-                 "       --webhook-url https://receiver.example/events --symbol EXCHANGE:SYMBOL\n"
+                 "       --symbol EXCHANGE:SYMBOL [--webhook-url https://receiver.example/events]\n"
                  "       [--feed events.jsonl|- | --feed-url https://...|wss://...]\n"
                  "Options: --input-tf 1 --name NAME --session 24x7 --timezone UTC\n"
                  "         --input TITLE=VALUE --override KEY=VALUE (repeatable)\n"
                  "         --syminfo KEY=VALUE --chart-timezone UTC\n"
                  "         --subscribe subscription.json (WebSocket only)\n"
                  "         --webhook-secret-env NAME --allow-insecure-http\n"
+                 "         --webhook-routes FILE (strict per-action routing; optional webhooks)\n"
                  "         --from-input N --max-events N --max-attempts 8\n"
                  "         --native-config FILE (strict native run specification)\n"
                  "         --check (one HTTP snapshot) --poll-ms 1000\n"
@@ -66,7 +69,10 @@ void help() {
                  "       {\"type\":\"time\",\"ts\":120000} (tick mode only)\n"
                  "Recovery replays immutable warmup + ledger inputs before any delivery.\n"
                  "File/HTTP input defaults to the full recorded prefix; --from-input declares\n"
-                 "the zero-based start of a resumed tail. HTTP polls use full snapshots.\n";
+                 "the zero-based start of a resumed tail. HTTP polls use full snapshots.\n"
+                 "Usage: pineforge-live actions --ledger L --after N [--follow]\n"
+                 "       pineforge-live status --ledger L\n"
+                 "       pineforge-live redeliver --ledger L --target T [--from N] [--failed-only]\n";
 }
 std::uint64_t unsigned_arg(const std::string &s) {
     return Json::number(s).integer<std::uint64_t>();
@@ -125,6 +131,8 @@ Config args(int argc, char **argv) {
             c.ledger = v;
         else if (a == "--webhook-url")
             c.webhook = v;
+        else if (a == "--webhook-routes")
+            c.routes_path = v;
         else if (a == "--mode")
             c.mode = v;
         else if (a == "--input-tf")
@@ -167,8 +175,8 @@ Config args(int argc, char **argv) {
         } else
             throw std::runtime_error("unknown option: " + a);
     }
-    if (c.strategy.empty() || c.warmup.empty() || c.ledger.empty() || c.webhook.empty())
-        throw std::runtime_error("strategy, warmup, ledger and webhook-url are required");
+    if (c.strategy.empty() || c.warmup.empty() || c.ledger.empty())
+        throw std::runtime_error("strategy, warmup and ledger are required");
     if (c.mode != "bars" && c.mode != "ticks")
         throw std::runtime_error("mode must be bars or ticks");
     if (!c.native_config.empty()) {
@@ -207,7 +215,7 @@ Config args(int argc, char **argv) {
             throw std::runtime_error("native runner supports close-only strategy calculation");
     auto ledger = fs::weakly_canonical(fs::absolute(c.ledger));
     for (const auto &src : {c.strategy, c.warmup, c.feed == "-" ? std::string{} : c.feed,
-                            c.subscribe_path})
+                            c.subscribe_path, c.routes_path, c.native_config})
         if (!src.empty()) {
             auto path = fs::weakly_canonical(fs::absolute(src));
             for (const auto &suffix : {"", "-wal", "-shm", ".lock"})
@@ -580,7 +588,18 @@ std::vector<Event> actions(Strategy &s, const Config &c, const std::string &depl
                    {"price", real(a.price)},
                    {"reduce_only", Json::boolean(!a.is_entry)},
                    {"entry_incarnation", num(a.entry_incarnation)}})}});
-        out.push_back({std::move(id), payload.dump()});
+        const std::string kind = a.is_entry ? "entry" : "exit";
+        const std::string side = a.is_long ? "long" : "short";
+        const auto target = c.routing.select(a.order_id ? a.order_id : "", kind, side);
+        const auto delivery_id = c.routing.routed ? delivery_identity(id, target) : id;
+        if (c.routing.routed) {
+            payload.members["schema_version"] = Json::string("pineforge-native-order-action/v2");
+            payload.members["target_id"] = target ? Json::string(*target) : Json{};
+            payload.members["delivery_id"] = Json::string(delivery_id);
+            payload.members["order"].members["kind"] = Json::string(kind);
+            payload.members["order"].members["side"] = Json::string(side);
+        }
+        out.push_back({std::move(id), payload.dump(), target, delivery_id});
     }
     return out;
 }
@@ -640,37 +659,20 @@ Json feed_record(const std::string &message) {
             "; PineForge feed events required; use an external feed adapter (runner/README.md#feed-format)");
     }
 }
-bool drain(Ledger &ledger, const HttpOptions &options, const Config &c, std::uint64_t &delivered) {
-    while (!stopped) {
-        auto e = ledger.pending_event();
-        if (!e)
-            return true;
-        if (e->attempts >= c.max_attempts)
-            throw std::runtime_error("webhook retry limit reached; queued event remains in ledger");
-        ledger.begin_delivery(e->id);
-        auto result = post_webhook(options, *e);
-        if (result.success) {
-            ledger.acknowledge(e->id);
-            ++delivered;
-            continue;
-        }
-        ledger.record_delivery_failure(e->id, result.error);
-        if (result.status >= 300 && result.status < 500 && result.status != 408 &&
-            result.status != 429)
-            throw std::runtime_error("webhook receiver refused event; event remains queued");
-        const auto delay =
-            std::min<std::uint64_t>(5000, 100ULL << std::min<std::uint32_t>(e->attempts, 5));
-        for (std::uint64_t n = 0; n < delay && !stopped; n += 100)
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-    return false;
-}
 LegacyIdentityFields legacy_fields(const Config &c) {
     return {c.mode,     c.input_tf, c.script_tf, c.session, c.timezone, c.chart_timezone,
             c.symbol,   c.name,     c.webhook,   c.inputs,  c.overrides, c.syminfo};
 }
 
 int run(Config c) {
+    c.routing = c.routes_path.empty()
+        ? single_target(c.webhook, c.secret_env, c.allow_http)
+        : parse_routes(read_file(c.routes_path, MAX_FRAME), c.allow_http, c.webhook, c.secret_env);
+    auto targets = c.routing.load_secrets();
+    if (c.routing.routed)
+        c.webhook = c.routing.default_target ? c.routing.targets.at(*c.routing.default_target).url : "";
+    else if (c.explicit_flags.count("--max-attempts"))
+        c.routing.delivery.transport_retries = static_cast<unsigned>(std::min<std::uint64_t>(2, c.max_attempts - 1));
     if (c.feed_url.rfind("ws://", 0) == 0 || c.feed_url.rfind("wss://", 0) == 0) {
         HttpOptions feed;
         feed.url = c.feed_url;
@@ -708,6 +710,9 @@ int run(Config c) {
             : identity(legacy_fields(c), original, library);
     if (!settings_receipt.empty())
         deployment = sha256_hex(deployment + ":settings-v1:" + settings_receipt);
+    if (c.routing.routed)
+        deployment = sha256_hex(Json::object({{"deployment", Json::string(deployment)},
+            {"webhook_routes", Json::string(c.routing.file_identity)}}).dump());
     try {
         // A switched PineStrategyHost is native-bound but owns its run spec
         // through prepare_native_begin.  Let that provider admit the stream
@@ -732,6 +737,7 @@ int run(Config c) {
     if (c.native.present)
         require_native_warmup(c.native, warmup);
     Ledger ledger(c.ledger, deployment);
+    ledger.bind_routing(c.routing.stored_document());
     Cursor cursor;
     auto recorded = ledger.input_count();
     for (std::uint64_t i = 0; i < recorded; ++i) {
@@ -746,23 +752,15 @@ int run(Config c) {
             events.size() != row->events.size())
             throw std::runtime_error("native replay state/action count mismatch");
         for (std::size_t k = 0; k < events.size(); ++k)
-            if (events[k].id != row->events[k].id || events[k].payload != row->events[k].payload)
+            if (events[k].id != row->events[k].id || events[k].payload != row->events[k].payload ||
+                events[k].target_id != row->events[k].target_id || events[k].delivery_id != row->events[k].delivery_id)
                 throw std::runtime_error("native replay order-action mismatch");
         strategy.clear(strategy.state);
     }
-    HttpOptions webhook;
-    webhook.url = c.webhook;
-    webhook.allow_insecure_http = c.allow_http;
-    if (!c.secret_env.empty()) {
-        const char *value = std::getenv(c.secret_env.c_str());
-        if (!value || !*value)
-            throw std::runtime_error("webhook secret environment variable is missing or empty");
-        webhook.hmac_secret = value;
-    }
     if (c.from_input > recorded)
         throw std::runtime_error("from-input skips unrecorded inputs");
-    std::uint64_t delivered = 0, processed = 0, replayed_prefix = 0;
-    drain(ledger, webhook, c, delivered);
+    std::uint64_t processed = 0, replayed_prefix = 0;
+    DeliveryWorker delivery(ledger, c.routing.delivery, std::move(targets));
     auto consume_message = [&](const std::string &message, std::uint64_t &index) {
         auto frame = feed_record(message);
         auto canonical = frame.dump();
@@ -781,8 +779,6 @@ int run(Config c) {
             ledger.commit_input(index, canonical, strategy.hash(strategy.state), events);
             strategy.clear(strategy.state);
             ++processed;
-            if (!drain(ledger, webhook, c, delivered))
-                return;
         }
         ++index;
     };
@@ -878,19 +874,75 @@ int run(Config c) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
         } while (!stopped);
     }
-    auto pending = ledger.pending_count();
+    delivery.finish(stopped != 0);
+    auto pending = ledger.unsent_count();
     std::cout << Json::object(
                      {{"deployment", Json::string(deployment)},
                       {"effective_settings", settings_receipt.empty() ? Json{} : parse_json(settings_receipt)},
                       {"inputs_committed", num(ledger.input_count())},
                       {"inputs_processed", num(processed)},
                       {"prefix_skipped", num(replayed_prefix)},
-                      {"webhooks_delivered", num(delivered)},
+                      {"webhooks_delivered", num(delivery.delivered())},
+                      {"webhook_failures", num(delivery.failed())},
                       {"webhooks_pending", num(pending)},
                       {"last_tick_sequence", cursor.seen_tick ? num(cursor.tick_seq) : Json{}}})
                      .dump()
               << '\n';
-    return stopped ? 130 : pending ? 2 : 0;
+    return stopped ? 130 : 0;
+}
+
+int ledger_command(int argc, char** argv) {
+    const std::string command = argv[1];
+    std::string path, target;
+    std::uint64_t after = 0, from = 1;
+    bool follow = false, failed_only = false;
+    std::set<std::string> seen;
+    for (int index = 2; index < argc; ++index) {
+        const std::string option = argv[index];
+        if (!seen.insert(option).second) throw std::runtime_error("duplicate option: " + option);
+        if (command == "actions" && option == "--follow") { follow = true; continue; }
+        if (command == "redeliver" && option == "--failed-only") { failed_only = true; continue; }
+        if (index + 1 == argc) throw std::runtime_error("missing option value: " + option);
+        const std::string value = argv[++index];
+        if (option == "--ledger") path = value;
+        else if (command == "actions" && option == "--after") after = unsigned_arg(value);
+        else if (command == "redeliver" && option == "--from") from = unsigned_arg(value);
+        else if (command == "redeliver" && option == "--target") target = value;
+        else throw std::runtime_error("unknown option: " + option);
+    }
+    if (path.empty()) throw std::runtime_error("ledger is required");
+    LedgerView view(path);
+    if (command == "status") {
+        std::cout << view.status_json() << '\n';
+        return 0;
+    }
+    if (command == "actions") {
+        do {
+            const auto events = view.actions_after(after);
+            for (const auto& event : events) {
+                std::cout << event.payload << '\n' << std::flush;
+                after = event.ordinal;
+            }
+            if (events.size() == 256) continue;
+            if (!follow) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        } while (!stopped);
+        return stopped ? 130 : 0;
+    }
+    if (target.empty()) throw std::runtime_error("redeliver requires target");
+    const auto document = view.routing_document();
+    if (document.empty()) throw std::runtime_error("resume this phase-A ledger with run before redelivering");
+    auto routing = restore_routes(document);
+    if (!routing.targets.count(target)) throw std::runtime_error("undefined webhook target: " + target);
+    auto targets = routing.load_secrets();
+    Ledger ledger(path, view.identity());
+    auto events = view.redelivery_events(target, from, failed_only);
+    const auto selected = events.size();
+    DeliveryWorker delivery(ledger, routing.delivery, std::move(targets), std::move(events));
+    delivery.finish();
+    std::cout << Json::object({{"selected", num(selected)}, {"delivered", num(delivery.delivered())},
+        {"failed", num(delivery.failed())}}).dump() << '\n';
+    return 0;
 }
 } // namespace
 int main(int argc, char **argv) {
@@ -903,6 +955,9 @@ int main(int argc, char **argv) {
             help();
             return 0;
         }
+        const std::string command = argv[1];
+        if (command == "actions" || command == "status" || command == "redeliver")
+            return ledger_command(argc, argv);
         return run(args(argc, argv));
     } catch (const std::exception &e) {
         std::cerr << "pineforge-live: " << e.what() << '\n';

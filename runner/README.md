@@ -295,14 +295,14 @@ price come from actual engine fill observations, including same-input
 roundtrips and partial exits; no net-position-only inference is used.
 Pending-order create/replace/cancel operations are not fill actions.
 
-Delivery is **at least once**: a receiver may accept a request before the
-runner can persist its acknowledgment. Deduplicate `event_id` before trading.
-Attempts are saved before requests. The oldest unacknowledged event blocks
-later delivery; bounded exponential delays retry transient errors. Permanent
-HTTP refusal, including redirects, stops the process. After investigating, restart to retry, raising
-`--max-attempts` beyond the durable count if its default of 8 was exhausted.
-This limit does not discard events or reset their IDs. There is no implicit
-skip/rewrite of a failed order.
+Delivery runs independently of computation, in commit order with bounded
+per-target concurrency. A receiver can accept a request before its result is
+durable, so it must deduplicate the idempotency key. HTTP errors are final;
+only transport errors receive bounded retries. Failures stay visible in the
+append-only delivery log and `status`; use `redeliver` to resend them. No HTTP
+failure stops or influences the strategy. With no webhook, actions are still
+committed and can be read with `actions --follow`. See routing below for v2,
+per-target HMAC, delivery configuration and migration details.
 
 This runner has its own ledger/schema and native tick semantics. It does not
 open journals of the retired Python `pineforge-live` runtime, and that runtime's
@@ -311,10 +311,11 @@ recovery evidence before replacing a Python deployment.
 
 ## Routing order actions to webhook targets
 
-**Proposal only — awaiting approval; not implemented.** Today
-`--webhook-url` selects one global receiver and the outbox has one ordered
-queue. Proposed `--webhook-routes routes.json` reads a strict JSON file:
+Implemented B1 routing is runner-only. The engine only computes; receivers are
+your own applications, never exchanges or fill-ingestion endpoints.
 
+### 1. Configuration
+`pineforge-live run ... --webhook-routes routes.json` reads a strict JSON file. Unknown keys, an undefined target, or an unsupported selector fail at startup, before any input is read.
 ```json
 {
   "schema_version": 1,
@@ -324,77 +325,101 @@ queue. Proposed `--webhook-routes routes.json` reads a strict JSON file:
     "entries": {"url": "https://entry-consumer.example/actions", "secret_env": "ENTRY_HMAC"}
   },
   "rules": [
-    {"match": {"order_id": "Long", "kind": "entry", "side": "long"}, "target": "entries"}
+    {"match": {"order_id": "Long", "kind": "entry", "side": "long"}, "target": "entries"},
+    {"match": {"order_id": "Hedge"}, "target": null}
   ],
-  "delivery": {"retry_initial_ms": 1000, "retry_max_ms": 60000,
-               "warn_age_ms": 86400000, "warn_pending_events": 100000,
-               "warn_pending_bytes": 104857600}
+  "delivery": {"max_in_flight": 8, "connect_timeout_ms": 2000, "total_timeout_ms": 5000,
+               "transport_retries": 2, "retry_backoff_ms": [1000, 2000]}
 }
 ```
+- Without `--webhook-routes`, today's `--webhook-url` / `--webhook-secret-env` behaviour is unchanged: one default target.
+- With it, those two flags set the default target, and they must agree with the file.
+- URLs are HTTPS with no user info and no redirects. Plain HTTP stays a test-only opt-in.
+- Secret values never appear in the file, the ledger, a payload or a log.
 
-Without this flag, existing URL, secret, payload and idempotency behavior stays
-unchanged. With it, `--webhook-url` supplies the named default target's URL
-and `--webhook-secret-env` supplies its secret environment-variable name;
-values also present in the file must agree, otherwise startup fails. A file
-may supply both instead. Target IDs are unique and stable; every rule names a
-defined target, and unknown keys or unsupported selectors fail before input.
-URLs must be HTTPS, without user information or redirects; explicit insecure
-HTTP remains restricted to opt-in testing. Secret values never enter the file,
-ledger, payload or diagnostics. Each target has its own `secret_env` and sends
-`X-PineForge-Signature: sha256=<HMAC-SHA256 of exact body bytes>`.
+### 2. Matching
+- Rules are checked in file order and the **first match wins**; with no match, the default target is used. Every predicate given must match; an omitted predicate matches anything. Matching is exact and case-sensitive.
+- **One target per action** (no fan-out), so the same action is never sent to two venues by accident.
+- Selectors:
+  - **B1:** `order_id` (the `strategy.entry` / `strategy.exit` / `strategy.order` id), `kind` (`entry` / `exit`) and `side` (the position side: long / short). These are available today.
+  - **B2 (planned):** `alert_message` and `kind: "close"`. These need a small additive engine + codegen extension that carries Pine's `alert_message` and a distinct close provenance with each action. Until a strategy library provides it, a rule using these selectors is refused at startup, never guessed.
 
-Rules match exact, case-sensitive `order_id` values (the emitted
-`strategy.entry` / `strategy.exit` / `strategy.order` ID), `kind`
-(`entry`, `exit`, or, when explicitly exposed, `close`), position `side`
-(`long` / `short`), and `alert_message` when the strategy contract exposes it.
-All supplied predicates must match; omitted predicates are wildcards. Evaluate
-rules in file order: **first match wins**, otherwise use the default. This
-makes priority explicit, unlike ambiguous specificity scoring. **One target
-per action**, no fan-out, avoids accidental duplicate venue submissions.
-Exits' side is the position side, not their buy/sell transaction direction.
+### 3. Webhooks are optional
+- Every action is always committed to the runner's ledger first.
+- `"target": null`, in a rule or as `default_target`, means journal-only: the action is recorded but sent nowhere.
+- A runner with no webhook configured runs fully journal-only.
+- Programs that do not want HTTP read the actions from the ledger with `pineforge-live actions --ledger L --after <n> [--follow]`, which prints one JSON action per line. This serves the hosted app and self-hosted scripts.
 
-Current `pf_stream_order_action_t` exposes ID, comment, entry/exit and position
-side, but neither distinct close provenance nor `alert_message`. Generated
-code currently warns that Pine's `alert_message` is ignored; `comment` is not
-a substitute. Rules requesting `close` or `alert_message` must be rejected
-for these strategies, never guessed or silently ignored. Supporting those
-selectors requires a separately approved, versioned strategy-metadata
-extension. Routing never reads venue fills or changes engine behavior.
+### 4. Payload `pineforge-native-order-action/v2`
+- It keeps all of v1's fields: event, event_id, deployment, strategy, symbol, timeframe, sequence, timestamp, bar_index, order id/comment, buy/sell, leg, contracts, price, reduce_only, entry_incarnation.
+- It adds `target_id`, `delivery_id`, `order.kind` and `order.side`. `order.alert_message` is added only where B2 provides it.
+- The routing decision and the payload bytes are fixed when the action is committed. A restart never re-routes queued actions under changed rules.
+- Rotating a secret changes only the signature.
 
-The routed payload is proposed as `pineforge-native-order-action/v2`, retaining
-v1's event, event ID, deployment, strategy, symbol, timeframe, action sequence,
-timestamp, bar index, and order ID/comment, buy/sell action, leg, contracts,
-reference price, reduce-only and entry incarnation. Add `target_id`,
-`delivery_id`, `order.kind` and `order.side`; include `order.alert_message`
-only when available. Freeze target, payload bytes and routing-config identity
-atomically with each input/action. Replay must verify that decision; restart
-cannot rematch queued actions under changed rules. Secret rotation changes
-only the signature, not routing, payload or IDs.
+### 5. Delivery: alert-like, never blocking
+- **Send once, in commit order.** Each action is committed to the ledger first. Then it is POSTed to its target immediately, in commit order, with no queue in front of it.
+- **Configurable, validated at startup.** The `delivery` block sets `max_in_flight`, `connect_timeout_ms`, `total_timeout_ms`, `transport_retries` and `retry_backoff_ms`. The defaults are the numbers below, and any omitted key takes its default.
+- **Nothing blocks.** Up to 8 requests per target can be in flight, so a slow or failing receiver never delays the next action, for that target or any other. Each request has a 2 s connect timeout and a 5 s total timeout. Requests can complete out of order: receivers order by `sequence`.
+- **Errors are shown, then sending continues.** When the receiver answers non-2xx, or the request times out or cannot connect, the runner:
+  - records the result as an append-only delivery-log row;
+  - updates that target's status (last error, redacted; failure count; time of last success);
+  - writes one structured log line;
+  - and goes on with the next actions. There is no parking, no head-of-line blocking and no retry queue.
+- **One small transport retry.** A connection failure, a timeout before any response, or a reset is retried at most 2 times, after 1 s and then 2 s. The retries run beside newer actions and never delay them. An HTTP error response (any non-2xx, redirects included) is final, so it is shown and not retried.
+- **Nothing is lost.** Every action and every delivery result stays in the ledger. `pineforge-live redeliver --ledger L --target T [--from <seq>] [--failed-only]` re-sends selected actions in commit order, with the same `delivery_id`, and records each new attempt. `pineforge-live actions --follow` streams every committed action, whatever happened to its delivery.
+- **Restart.** After the usual replay verification, an action that was committed but has no delivery result yet (the process died before sending, or mid-request) is sent once. An action whose delivery failed is not re-sent automatically; `redeliver` does that.
+- **Status:** `pineforge-live status --ledger L` prints, as JSON, per target: sent, failed, last success, last error (redacted), last attempt.
+- **Audit (closes audit finding F11):** every attempt is a new delivery-log row: target, delivery_id, attempt, start/end time, HTTP status or error class. Nothing is updated in place.
 
-Delivery is **durable, ordered and at least once per target**: one in-flight
-head request per target, independently scheduled queues and bounded request
-timeouts. A failed head never lets a newer action overtake it on that target;
-other targets keep committing and delivering in their own action-sequence
-order. Persist attempts, next retry time and acknowledgments. Retry connection
-errors, timeouts, HTTP 408/429 and 5xx indefinitely with deterministic
-exponential delays of 1, 2, 4, 8, 16, 32, then 60 seconds (configurable initial
-and cap); a valid Retry-After may extend the delay. Other non-2xx responses,
-redirects or a missing secret park only that target until operator repair and
-explicit resume. Never reroute, skip or discard its failed head.
+### 6. Idempotency and security
+- `delivery_id` = SHA-256 of `{"event_id","target_id"}`, sent as `Idempotency-Key`; the original `event_id` goes in `X-PineForge-Event-Id`. Both are stable across retries and restarts.
+- Receivers must deduplicate on `delivery_id` and answer 2xx only after accepting the action.
+- Each target signs with its own `X-PineForge-Signature: sha256=<HMAC-SHA256 of the exact body>`.
 
-Unacknowledged actions are retained indefinitely: **no automatic maximum age
-or queue size**, and no retry-count expiry. The example's age/count/byte limits
-are warning thresholds, not eviction limits. Machine-readable status and
-operator logs expose each target's pending count/bytes, oldest age, attempts,
-last redacted error, next retry and parked state, including threshold warnings.
-Operators provision disk and repair or pause/resume targets; disk exhaustion
-stops new atomic input commits with a nonzero error and preserves queued
-actions. Failure isolation assumes available durable storage; it cannot
-promise infinite retention on a full disk.
+#### Validation and ledger compatibility
 
-`delivery_id` is SHA-256 of canonical UTF-8 JSON
-`{"event_id":"...","target_id":"..."}` (sorted keys, no insignificant
-whitespace). Send it as `Idempotency-Key`, with the original `event_id` as
-`X-PineForge-Event-Id`. IDs survive retries/restarts. Receivers must durably
-deduplicate `delivery_id` before acting and return 2xx only after accepting
-the action; a lost acknowledgment can always cause repeat delivery.
+Target names contain 1..128 identifier characters (letters, digits, `_`, `.`,
+`:` or `-`). A file supports at most 128 targets and 4096 rules. Environment
+variable names must be valid identifiers, not literal secrets. Every named
+target requires `url` and `secret_env`; the legacy CLI may omit signing.
+
+`max_in_flight` is an integer in 1..1024. Timeouts are integer milliseconds in
+1..300000, with connect timeout no greater than total timeout. Retries are
+0..2. Backoffs are an array of at most two integer delays in 1..300000 ms,
+with a delay for each enabled retry. Omitting a key uses its documented default.
+An action at a target whose in-flight limit is reached stays durable and
+unsent until that target has a slot; it never blocks computation or another
+target. New actions take priority over due transport retries.
+
+The routing file bytes join deployment identity. Restore the original file
+or choose a new ledger after any routing configuration change. Secrets are
+read from the environment at startup, so rotating their values does not
+change deployment identity or payload bytes.
+
+The phase-A schema-1 ledger receives additive `event_routes`,
+`routing_configuration` and `delivery_log` tables. Existing event IDs, payloads,
+input records and acknowledged flags are not rewritten. Old acknowledged
+events remain delivered; old unacknowledged events with no new delivery result
+are sent once after replay. Old v1 events retain `Idempotency-Key = event_id`.
+
+Each attempt appends a `started` row before HTTP and a `completed` row with
+its result afterwards, sharing the attempt number and start time. Interrupted
+attempts therefore remain visible without mutating a row. SQLite triggers
+refuse updates or deletions of delivery-log rows. The main thread and the
+single delivery worker serialize database operations; no database lock is
+held during HTTP. Only the main thread accesses the strategy.
+
+`status` reports `targets`, including targets with no attempts. `sent` counts
+successful attempts (including previously acknowledged v1 events), `failed`
+counts failed attempts, and timestamps are epoch milliseconds. `last_error`
+contains only a fixed category, HTTP status and time, never receiver response
+text or a URL. `actions --after N` is exclusive; `redeliver --from N` is
+inclusive. Both cursors are action sequences. `--failed-only` selects actions
+whose latest completed attempt failed, not successful or never-attempted
+actions. Redelivery reads target endpoints and environment variable names
+from the ledger; it cannot change an action’s target.
+
+The legacy `--max-attempts` option remains accepted; when explicitly supplied
+without a routes file, it caps transport retries to `min(2, N-1)`. HTTP errors
+are always final. Delivery failures do not stop feed computation or change
+the run exit status; they are reported in stderr, the audit log and status.

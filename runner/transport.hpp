@@ -3,8 +3,10 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "store.hpp"
 
@@ -21,12 +23,32 @@ struct HttpOptions {
 struct DeliveryResult {
     long status = 0;
     bool success = false;
+    bool retryable = false;
     // A fixed category, never a URL, response body, header or libcurl error buffer.
     std::string error;
 };
 
 std::string sha256_hex(std::string_view bytes);
 std::string hmac_sha256_hex(std::string_view secret, std::string_view bytes);
+void validate_http(const HttpOptions& options);
+
+struct CompletedWebhook {
+    std::uint64_t key = 0;
+    DeliveryResult result;
+};
+
+class WebhookMulti {
+public:
+    WebhookMulti();
+    ~WebhookMulti();
+    WebhookMulti(const WebhookMulti&) = delete;
+    WebhookMulti& operator=(const WebhookMulti&) = delete;
+    void add(std::uint64_t key, const HttpOptions& options, const StoredEvent& event);
+    std::vector<CompletedWebhook> poll(int timeout_ms);
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
 // Blocking, bounded native libcurl delivery. Only HTTP(S), no redirects,
 // verified TLS, JSON body, stable idempotency and optional HMAC headers.
 DeliveryResult post_webhook(const HttpOptions& options, const StoredEvent& event);

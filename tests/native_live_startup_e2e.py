@@ -249,13 +249,13 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
                        '--webhook-url', f'http://127.0.0.1:{server.server_port}/webhook',
                        '--allow-insecure-http', '--feed', str(example_feed),
                        '--native-config', str(cfg), '--name', 'native-example']
-        failed_delivery = invoke(example_cmd + ['--max-attempts', '1'], success=False)
-        assert 'webhook retry limit reached; queued event remains in ledger' in failed_delivery.stderr, failed_delivery.stderr
+        failed_delivery = invoke(example_cmd + ['--max-attempts', '1'])
+        assert failed_delivery['webhook_failures'] == 2, failed_delivery
         failed_rows = ledger_rows(example_ledger)
-        assert len(received) == 1, received
-        assert len(failed_rows['events']) == 1, failed_rows
-        assert failed_rows['events'][0][5:] == (1, 0), failed_rows
-        assert 0 < len(failed_rows['inputs']) < len(feed_rows), failed_rows
+        assert len(received) == 2, received
+        assert len(failed_rows['events']) == 2, failed_rows
+        assert all(row[5:] == (1, 0) for row in failed_rows['events']), failed_rows
+        assert len(failed_rows['inputs']) == len(feed_rows), failed_rows
         assert all(row[2].isdigit() and int(row[2]) != 0 for row in failed_rows['inputs'])
         failed_payload = received_bytes[0]
         assert failed_rows['events'][0][4] == failed_payload
@@ -264,15 +264,19 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
         example = invoke(example_cmd)
         assert example['inputs_committed'] == len(feed_rows), example
         assert example['prefix_skipped'] == len(failed_rows['inputs']), example
+        assert len(received) == 2, received
+        redelivery = invoke([runner, 'redeliver', '--ledger', str(example_ledger),
+                             '--target', 'default', '--failed-only'])
+        assert redelivery['delivered'] == 2, redelivery
         committed_rows = ledger_rows(example_ledger)
         assert len(committed_rows['events']) == 2, committed_rows
-        assert len(received) == 3, received
-        assert received_bytes[0] == received_bytes[1] == failed_payload
+        assert len(received) == 4, received
+        assert received_bytes[0] == received_bytes[2] == failed_payload
         assert committed_rows['inputs'][:len(failed_rows['inputs'])] == failed_rows['inputs']
         assert committed_rows['events'][0][:5] == failed_rows['events'][0][:5]
         assert committed_rows['events'][0][5:] == (2, 1), committed_rows
-        assert committed_rows['events'][1][5:] == (1, 1), committed_rows
-        assert [row[4] for row in committed_rows['events']] == received_bytes[1:]
+        assert committed_rows['events'][1][5:] == (2, 1), committed_rows
+        assert [row[4] for row in committed_rows['events']] == received_bytes[2:]
         assert len({row[3] for row in committed_rows['events']}) == 2
         actions = [json.loads(row[4]) for row in committed_rows['events']]
         assert [(a['timestamp'], a['order']['action'], a['order']['contracts'],

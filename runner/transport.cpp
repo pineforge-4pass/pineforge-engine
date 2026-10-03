@@ -10,6 +10,7 @@
 #include <cerrno>
 #include <chrono>
 #include <limits>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <utility>
@@ -146,13 +147,14 @@ std::size_t receive(char* data, std::size_t size, std::size_t nmemb, void* userd
     return count;
 }
 
-DeliveryResult perform(CURL* curl, Response& response) {
-    option(curl, CURLOPT_WRITEFUNCTION, &receive);
-    option(curl, CURLOPT_WRITEDATA, &response);
-    const auto code = curl_easy_perform(curl);
+DeliveryResult response_result(CURL* curl, const Response& response, CURLcode code) {
     DeliveryResult result;
     if (curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result.status) != CURLE_OK)
         throw std::runtime_error("native HTTP response status unavailable");
+    if (result.status >= 300) {
+        result.error = "http_status";
+        return result;
+    }
     if (code != CURLE_OK) {
         if (response.too_large) result.error = "response_too_large";
         else if (response.allocation_failed) result.error = "response_allocation_failed";
@@ -161,11 +163,21 @@ DeliveryResult perform(CURL* curl, Response& response) {
                  code == CURLE_SSL_CERTPROBLEM || code == CURLE_SSL_CACERT_BADFILE)
             result.error = "tls_failure";
         else result.error = "network_error";
+        result.retryable = result.status == 0 && !response.too_large && !response.allocation_failed &&
+            (code == CURLE_COULDNT_CONNECT || code == CURLE_COULDNT_RESOLVE_HOST ||
+             code == CURLE_COULDNT_RESOLVE_PROXY || code == CURLE_OPERATION_TIMEDOUT ||
+             code == CURLE_SEND_ERROR || code == CURLE_RECV_ERROR || code == CURLE_GOT_NOTHING);
         return result;
     }
     result.success = result.status >= 200 && result.status <= 299;
     if (!result.success) result.error = "http_status";
     return result;
+}
+
+DeliveryResult perform(CURL* curl, Response& response) {
+    option(curl, CURLOPT_WRITEFUNCTION, &receive);
+    option(curl, CURLOPT_WRITEDATA, &response);
+    return response_result(curl, response, curl_easy_perform(curl));
 }
 
 bool valid_utf8(std::string_view bytes) {
@@ -264,7 +276,7 @@ DeliveryResult post_webhook(const HttpOptions& options, const StoredEvent& event
     auto curl = make_handle(options);
     Headers headers;
     headers.add("Content-Type: application/json");
-    headers.add("Idempotency-Key: " + event.id);
+    headers.add("Idempotency-Key: " + (event.delivery_id.empty() ? event.id : event.delivery_id));
     headers.add("X-PineForge-Event-Id: " + event.id);
     headers.add("Expect:");
     if (!options.hmac_secret.empty())
@@ -288,6 +300,95 @@ std::string get_feed_snapshot(const HttpOptions& options) {
     if (!result.success)
         throw std::runtime_error("native HTTP feed request failed: " + result.error);
     return std::move(response.body);
+}
+
+void validate_http(const HttpOptions& options) {
+    initialize_curl();
+    check_url(options, false);
+}
+
+struct WebhookMulti::Impl {
+    struct Request {
+        StoredEvent event;
+        std::uint64_t key;
+        Headers headers;
+        Response response;
+        CurlHandle curl;
+
+        Request(std::uint64_t request_key, const HttpOptions& options, const StoredEvent& stored)
+            : event(stored), key(request_key), curl(make_handle(options)) {
+            if (event.id.empty() || event.delivery_id.empty() || event.id.size() > 256 ||
+                event.delivery_id.size() > 256 ||
+                event.id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:") != std::string::npos ||
+                event.delivery_id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:") != std::string::npos ||
+                event.payload.empty() || event.payload.size() > max_event_bytes)
+                throw std::runtime_error("native HTTP event id or payload is invalid");
+            headers.add("Content-Type: application/json");
+            headers.add("Idempotency-Key: " + event.delivery_id);
+            headers.add("X-PineForge-Event-Id: " + event.id);
+            headers.add("Expect:");
+            if (!options.hmac_secret.empty())
+                headers.add("X-PineForge-Signature: sha256=" + hmac_sha256_hex(options.hmac_secret, event.payload));
+            option(curl.get(), CURLOPT_HTTPHEADER, headers.value);
+            option(curl.get(), CURLOPT_POST, 1L);
+            option(curl.get(), CURLOPT_POSTFIELDS, event.payload.data());
+            option(curl.get(), CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(event.payload.size()));
+            option(curl.get(), CURLOPT_WRITEFUNCTION, &receive);
+            option(curl.get(), CURLOPT_WRITEDATA, &response);
+        }
+    };
+    CURLM* multi = nullptr;
+    std::map<CURL*, std::unique_ptr<Request>> requests;
+    ~Impl() {
+        for (const auto& [handle, request] : requests) {
+            (void)request;
+            curl_multi_remove_handle(multi, handle);
+        }
+        requests.clear();
+        if (multi) curl_multi_cleanup(multi);
+    }
+};
+
+WebhookMulti::WebhookMulti() : impl_(std::make_unique<Impl>()) {
+    initialize_curl();
+    impl_->multi = curl_multi_init();
+    if (!impl_->multi) throw std::runtime_error("native HTTP multi allocation failed");
+}
+
+WebhookMulti::~WebhookMulti() = default;
+
+void WebhookMulti::add(std::uint64_t key, const HttpOptions& options, const StoredEvent& event) {
+    auto request = std::make_unique<Impl::Request>(key, options, event);
+    auto* handle = request->curl.get();
+    impl_->requests.emplace(handle, std::move(request));
+    if (curl_multi_add_handle(impl_->multi, handle) != CURLM_OK) {
+        impl_->requests.erase(handle);
+        throw std::runtime_error("native HTTP multi add failed");
+    }
+    int running = 0;
+    if (curl_multi_perform(impl_->multi, &running) != CURLM_OK)
+        throw std::runtime_error("native HTTP multi perform failed");
+}
+
+std::vector<CompletedWebhook> WebhookMulti::poll(int timeout_ms) {
+    int running = 0;
+    if (curl_multi_perform(impl_->multi, &running) != CURLM_OK ||
+        curl_multi_poll(impl_->multi, nullptr, 0, timeout_ms, nullptr) != CURLM_OK ||
+        curl_multi_perform(impl_->multi, &running) != CURLM_OK)
+        throw std::runtime_error("native HTTP multi polling failed");
+    std::vector<CompletedWebhook> completed;
+    int remaining = 0;
+    while (auto* message = curl_multi_info_read(impl_->multi, &remaining)) {
+        if (message->msg != CURLMSG_DONE) continue;
+        const auto found = impl_->requests.find(message->easy_handle);
+        if (found == impl_->requests.end()) throw std::runtime_error("native HTTP unknown completed request");
+        const auto& request = *found->second;
+        completed.push_back({request.key, response_result(message->easy_handle, request.response, message->data.result)});
+        if (curl_multi_remove_handle(impl_->multi, message->easy_handle) != CURLM_OK)
+            throw std::runtime_error("native HTTP multi remove failed");
+        impl_->requests.erase(found);
+    }
+    return completed;
 }
 
 void validate_websocket(const HttpOptions& options) {

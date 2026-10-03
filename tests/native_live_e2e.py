@@ -7,6 +7,7 @@ import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -145,41 +146,49 @@ try:
             assert invoke(stdin_options, stdin=stdin_feed)['inputs_processed'] == 0
             assert received == prior
 
-        # Failed HTTP response leaves the same immutable event queued. Restart
-        # replays input before retrying that event, with its identical id/body.
+        # HTTP errors are final; restart does not retry them.
         received.clear(); responses[:] = [503]
         feed = root/'retry.jsonl'; feed.write_text(''.join(json.dumps(e)+'\n' for e in bar_events))
         ledger = root/'retry.sqlite3'
         options = ['--mode', 'bars', '--feed', str(feed), '--ledger', str(ledger)]
-        invoke(options+['--max-attempts', '1'], success=False)
-        assert len(received) == 1
+        invoke(options+['--max-attempts', '1'])
+        assert len(received) == 4
         first = received[0]
         invoke(options)
-        assert received[1] == first
+        assert len(received) == 4
+        retry = subprocess.run([runner, 'redeliver', '--ledger', str(ledger), '--target', 'default', '--failed-only'],
+                               capture_output=True, text=True, env=dict(os.environ, PINEFORGE_TEST_HMAC=secret), timeout=25)
+        assert retry.returncode == 0, retry.stderr
+        assert received[4] == first
         assert len({e['event_id'] for e in received}) == 4
 
-        # Redirect refusal is permanent, with one durable attempt per invocation.
+        # Redirect refusal is permanent and does not stop later actions.
         received.clear(); responses[:] = [302]
         redirect_ledger = root/'redirect.sqlite3'
-        invoke(['--mode','bars','--feed',str(feed),'--ledger',str(redirect_ledger)],success=False)
-        assert len(received) == 1
+        invoke(['--mode','bars','--feed',str(feed),'--ledger',str(redirect_ledger)])
+        assert len(received) == 4
         with sqlite3.connect(redirect_ledger) as db:
             assert db.execute('SELECT attempts FROM events WHERE acknowledged=0 ORDER BY ordinal LIMIT 1').fetchone()[0] == 1
 
-        # A complete provider batch is one durable input, even when delivery
+        # A complete feed batch is one durable input, even when delivery
         # fails or max-events requests a stop. No remaining event is lost.
         received.clear(); responses[:] = [503]
         feed = root/'batch.jsonl'
         feed.write_text(json.dumps({'type':'batch','events':bar_events})+'\n')
         ledger = root/'batch.sqlite3'
         options = ['--mode','bars','--feed',str(feed),'--ledger',str(ledger),'--max-events','1']
-        invoke(options+['--max-attempts','1'],success=False)
+        result = invoke(options+['--max-attempts','1'])
+        assert result['webhook_failures'] == 1
         with sqlite3.connect(ledger) as db:
             assert db.execute('SELECT COUNT(*) FROM inputs').fetchone()[0] == 1
             assert db.execute('SELECT COUNT(*) FROM events').fetchone()[0] == 4
         first = received[0]
         invoke(options)
-        assert received[1] == first and len({e['event_id'] for e in received}) == 4
+        assert len(received) == 4 and len({e['event_id'] for e in received}) == 4
+        retry = subprocess.run([runner, 'redeliver', '--ledger', str(ledger), '--target', 'default', '--failed-only'],
+                               capture_output=True, text=True, env=dict(os.environ, PINEFORGE_TEST_HMAC=secret), timeout=25)
+        assert retry.returncode == 0, retry.stderr
+        assert received[4] == first
 
         # A later invalid event in a batch must not commit any of the message.
         received.clear()
