@@ -211,11 +211,24 @@ public:
         }
         pineforge::source::PineStrategyHost::set_strategy_override(overrides);
     }
+    bool _pf_setting_failed_ = false;
+    std::string _pf_setting_failure_;
     void _pf_record_failure(const char* entrypoint, const char* message) noexcept {
         try { last_error_ = entrypoint; last_error_ += ": "; last_error_ += message; } catch (...) {}
     }
-    bool _pf_refuse_failed_setting(ReportC* out) const noexcept {
-        if (last_error_.compare(0, 13, "strategy_set_") != 0) return false;
+    void _pf_record_setting_failure(const char* entrypoint, const char* message) noexcept {
+        if (!_pf_setting_failed_) {
+            _pf_setting_failed_ = true;
+            try { _pf_setting_failure_ = entrypoint; _pf_setting_failure_ += ": "; _pf_setting_failure_ += message; } catch (...) {}
+        }
+        _pf_refuse_failed_setting(nullptr);
+    }
+    void _pf_require_settings_ok() const {
+        if (_pf_setting_failed_) throw pineforge::checked_settings::LatchedSettingsFailure(_pf_setting_failure_.empty() ? "legacy strategy setter failed" : _pf_setting_failure_);
+    }
+    bool _pf_refuse_failed_setting(ReportC* out) noexcept {
+        if (!_pf_setting_failed_) return false;
+        try { last_error_ = _pf_setting_failure_.empty() ? "legacy strategy setter failed" : _pf_setting_failure_; } catch (...) {}
         if (out) *out = ReportC{};
         return true;
     }
@@ -362,6 +375,7 @@ public:
 #error "Generated lifecycle reset requires a matching PineForge engine; rebuild with script-run preparation support"
 #endif
     void prepare_script_run(const Bar* bars, int n, bool allow_precalculation) override {
+        _pf_require_settings_ok();
         _pf_script_state_checkpoint_.reset();
         this->_use_precalc = false;
         this->length = 0;
@@ -449,20 +463,20 @@ extern "C" {
     void strategy_set_input(void* s, const char* key, const char* value) {
         if (!s || !key || !value) return;
         try { static_cast<GeneratedStrategy*>(s)->set_input(key, value); }
-        catch (const std::exception& _pf_error) { static_cast<GeneratedStrategy*>(s)->_pf_record_failure("strategy_set_input", _pf_error.what()); }
-        catch (...) { static_cast<GeneratedStrategy*>(s)->_pf_record_failure("strategy_set_input", "unknown C++ exception"); }
+        catch (const std::exception& _pf_error) { static_cast<GeneratedStrategy*>(s)->_pf_record_setting_failure("strategy_set_input", _pf_error.what()); }
+        catch (...) { static_cast<GeneratedStrategy*>(s)->_pf_record_setting_failure("strategy_set_input", "unknown C++ exception"); }
     }
     void strategy_set_override(void* s, const char* key, const char* value) {
         if (!s || !key || !value) return;
         try { static_cast<GeneratedStrategy*>(s)->set_strategy_override(key, value); }
-        catch (const std::exception& _pf_error) { static_cast<GeneratedStrategy*>(s)->_pf_record_failure("strategy_set_override", _pf_error.what()); }
-        catch (...) { static_cast<GeneratedStrategy*>(s)->_pf_record_failure("strategy_set_override", "unknown C++ exception"); }
+        catch (const std::exception& _pf_error) { static_cast<GeneratedStrategy*>(s)->_pf_record_setting_failure("strategy_set_override", _pf_error.what()); }
+        catch (...) { static_cast<GeneratedStrategy*>(s)->_pf_record_setting_failure("strategy_set_override", "unknown C++ exception"); }
     }
     void strategy_set_magnifier_volume_weighted(void* s, int on) {
         if (!s) return;
         try { static_cast<GeneratedStrategy*>(s)->set_magnifier_volume_weighted(on != 0); }
-        catch (const std::exception& _pf_error) { static_cast<GeneratedStrategy*>(s)->_pf_record_failure("strategy_set_magnifier_volume_weighted", _pf_error.what()); }
-        catch (...) { static_cast<GeneratedStrategy*>(s)->_pf_record_failure("strategy_set_magnifier_volume_weighted", "unknown C++ exception"); }
+        catch (const std::exception& _pf_error) { static_cast<GeneratedStrategy*>(s)->_pf_record_setting_failure("strategy_set_magnifier_volume_weighted", _pf_error.what()); }
+        catch (...) { static_cast<GeneratedStrategy*>(s)->_pf_record_setting_failure("strategy_set_magnifier_volume_weighted", "unknown C++ exception"); }
     }
 #ifdef PF_SETTINGS_API_VERSION
     uint32_t strategy_settings_api_version(void) { return PF_SETTINGS_API_VERSION; }

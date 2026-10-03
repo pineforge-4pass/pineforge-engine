@@ -19,6 +19,12 @@
 
 namespace pineforge::checked_settings {
 
+/** A thrown legacy setter's original message, propagated to native begin. */
+class LatchedSettingsFailure : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 struct Error {
     int status;
     const char* message;

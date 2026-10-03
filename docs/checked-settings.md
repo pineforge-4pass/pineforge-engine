@@ -7,10 +7,14 @@ factory, setters and batch calls keep their successful-call behavior and
 default computations; all generated C boundaries now contain C++ exceptions.
 Legacy run and setter exceptions are readable through `strategy_get_last_error`,
 including the entry point and `what()` (or `unknown C++ exception`). A thrown
-legacy setter permanently blocks subsequent batch calls on that handle, which
-return the existing empty-report failure shape; checked batch calls return
+legacy setter permanently blocks subsequent batch and stream begins on that
+handle, independently of calls that clear `last_error_`. Batch calls return
+the existing empty-report failure shape; checked batch calls return
 `PF_SETTINGS_RUN_FAILED`. Recreate the handle to configure again. Non-throwing
 legacy setters still retain their historical acceptance and silent-ignore rules.
+Generated script preparation throws `checked_settings::LatchedSettingsFailure`
+with the original setter message. The source host propagates only this exception
+to native begin; all other preparation exceptions retain their existing behavior.
 
 Discover `strategy_settings_api_version()` with `dlsym`; version 1 is
 `PF_SETTINGS_API_VERSION`. This does not increment `PF_ABI_VERSION`. An older

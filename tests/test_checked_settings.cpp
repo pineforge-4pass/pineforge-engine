@@ -171,10 +171,11 @@ int main() {
         strategy_set_input(failed, "Length", allocation_value.c_str());
         assert(allocation_failure == 0);
         assert(std::string(strategy_get_last_error(failed)).find("strategy_set_input:") == 0);
+        const std::string first_failure = strategy_get_last_error(failed);
         allocation_failure = failure;
         strategy_set_override(failed, "initial_capital", allocation_value.c_str());
         assert(allocation_failure == 0);
-        assert(std::string(strategy_get_last_error(failed)).find("strategy_set_override:") == 0);
+        assert(std::string(strategy_get_last_error(failed)) == first_failure);
         strategy_free(failed);
     }
     pf_report_t report{};
@@ -208,6 +209,8 @@ int main() {
     strategy_set_override(poisoned, "pyramiding", "abc");
     const auto setter_failure = std::string(strategy_get_last_error(poisoned));
     assert(setter_failure.find("strategy_set_override:") == 0 && setter_failure.size() > 23);
+    assert(strategy_set_aux_security_feed(poisoned, nullptr, 0, "1") == 0);
+    assert(std::string(strategy_get_last_error(poisoned)).empty());
     strategy_set_input(poisoned, "Length", "4");
     report.total_trades = 99;
     run_backtest_full(poisoned, bars, 8, "1", "1", 0, 4, PF_MAGNIFIER_ENDPOINTS, &report);
@@ -216,6 +219,12 @@ int main() {
            PF_MAGNIFIER_ENDPOINTS, &report, error, sizeof(error)) == PF_SETTINGS_RUN_FAILED);
     assert(std::string(error) == setter_failure);
     report.total_trades = 99;
+    run_backtest(poisoned, bars, 8, &report);
+    assert(report.total_trades == 0 && std::string(strategy_get_last_error(poisoned)) == setter_failure);
+    assert(strategy_set_aux_security_feed(poisoned, nullptr, 0, "1") == 0);
+    assert(std::string(strategy_get_last_error(poisoned)).empty());
+    assert(strategy_stream_begin(poisoned, bars, 8, "1", "1") == -1);
+    assert(std::string(strategy_get_last_error(poisoned)) == setter_failure);
     run_backtest(poisoned, bars, 8, &report);
     assert(report.total_trades == 0 && std::string(strategy_get_last_error(poisoned)) == setter_failure);
     strategy_free(poisoned);

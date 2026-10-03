@@ -1,4 +1,5 @@
 #include <pineforge/source/pine_strategy_host.hpp>
+#include <pineforge/checked_settings.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
 
@@ -285,6 +286,8 @@ void source::PineStrategyHost::on_native_run_begin() {
     try {
         install_symbol_calendar_metadata();
         scheduler_.run_begin(*this);
+    } catch (const checked_settings::LatchedSettingsFailure&) {
+        throw;
     } catch (const std::exception& error) {
         source_prepare_failed_ = true;
         last_error_ = error.what();
