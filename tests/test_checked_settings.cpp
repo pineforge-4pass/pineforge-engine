@@ -245,6 +245,7 @@ int main() {
     const auto setter_failure = std::string(strategy_get_last_error(poisoned));
     assert(setter_failure.find("strategy_set_override:") == 0 && setter_failure.size() > 23);
     assert(strategy_set_aux_security_feed(poisoned, nullptr, 0, "1") == 0);
+    assert(strategy_set_native_security_feed(poisoned, "D", nullptr, 0) == 0);
     assert(std::string(strategy_get_last_error(poisoned)).empty());
     strategy_set_input(poisoned, "Length", "4");
     report.total_trades = 99;
@@ -257,6 +258,7 @@ int main() {
     run_backtest(poisoned, bars, 8, &report);
     assert(report.total_trades == 0 && std::string(strategy_get_last_error(poisoned)) == setter_failure);
     assert(strategy_set_aux_security_feed(poisoned, nullptr, 0, "1") == 0);
+    assert(strategy_set_native_security_feed(poisoned, "D", nullptr, 0) == 0);
     assert(std::string(strategy_get_last_error(poisoned)).empty());
     assert(strategy_stream_begin(poisoned, bars, 8, "1", "1") == -1);
     assert(std::string(strategy_get_last_error(poisoned)) == setter_failure);
