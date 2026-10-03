@@ -125,6 +125,7 @@ void BacktestEngine::fill_metrics_section(ReportC* out) const {
     } else {
         out->equity_curve = nullptr;
     }
+    present_report(out);
     using metrics::TradeFilter;
     out->metrics.all = metrics::compute_trade_stats(
         out->trades, out->trades_len, TradeFilter::ALL, initial_capital_);

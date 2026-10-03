@@ -1,6 +1,7 @@
 // K-IDX follow-up: re-pins v19 broker-state hashes after the coordinate fold.
-// Harvested by test_adapter_host_view_memo at the lane's base (fc7aad62) with
-// PF_HOST_VIEW_MEMO_DUMP=1.
+// Current expectations: historical v19 harvest plus later corrections below.
+// F09 live correction harvested with PF_HOST_VIEW_MEMO_DUMP=1 against
+// 227c2236 and the corrected 8da00ac9 runtime tree; historical pins unchanged.
 // expectation corrected: every run's broker-state hash moved once, because v19
 // folds the continuation over live state word-wise (native-consumer/v9) and
 // the broker-state hash folds a running closed-row digest
@@ -120,25 +121,35 @@
 //   rebuilt/1: hash=5316201723780989919 -> hash=3001060687180726304 [H-THIN]
 //   rebuilt/2: hash=496593797863776142 -> hash=14113207875665531755 [H-THIN]
 //   rebuilt/3: hash=5316201723780989919 -> hash=3001060687180726304 [H-THIN]
+// expectation corrected (F09, 7 live values), because the REALTIME range-end hook
+// no longer re-marks the stored point or re-folds hashed extremes; trades,
+// trade digests, net profits, errors and historical hashes do not move:
+//   stream/A: hash=1927432040325474646 -> hash=8731081580846022313
+//   stream/B: hash=13106388348010577033 -> hash=7355849797745033112
+//   interleaved/A: hash=1927432040325474646 -> hash=8731081580846022313
+//   interleaved/B: hash=13106388348010577033 -> hash=7355849797745033112
+//   round_robin/A1: hash=1927432040325474646 -> hash=8731081580846022313
+//   round_robin/B: hash=13106388348010577033 -> hash=7355849797745033112
+//   round_robin/A2: hash=1927432040325474646 -> hash=8731081580846022313
 constexpr Pinned kPinned[] = {
     {"batch/A",
      "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=14113207875665531755 error=''"},
     {"batch/B",
      "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=3001060687180726304 error=''"},
     {"stream/A",
-     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=1927432040325474646 error=''"},
+     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=8731081580846022313 error=''"},
     {"stream/B",
-     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=13106388348010577033 error=''"},
+     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=7355849797745033112 error=''"},
     {"interleaved/A",
-     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=1927432040325474646 error=''"},
+     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=8731081580846022313 error=''"},
     {"interleaved/B",
-     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=13106388348010577033 error=''"},
+     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=7355849797745033112 error=''"},
     {"round_robin/A1",
-     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=1927432040325474646 error=''"},
+     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=8731081580846022313 error=''"},
     {"round_robin/B",
-     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=13106388348010577033 error=''"},
+     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=7355849797745033112 error=''"},
     {"round_robin/A2",
-     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=1927432040325474646 error=''"},
+     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=8731081580846022313 error=''"},
     {"rebuilt/0",
      "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=14113207875665531755 error=''"},
     {"rebuilt/1",

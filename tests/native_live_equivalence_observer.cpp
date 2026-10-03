@@ -1,0 +1,209 @@
+#include <pineforge/source/pine_strategy_host.hpp>
+
+#include "json.hpp"
+
+#include <cmath>
+#include <cstdint>
+#include <fstream>
+#include <iomanip>
+#include <limits>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <variant>
+
+namespace {
+
+using pineforge::live::Json;
+using Host = pineforge::source::PineStrategyHost;
+namespace orders = pineforge::native_order;
+
+class SourceReadback : public Host {
+public:
+    static pineforge::Bar read(const Host& host) {
+        const auto bar = &SourceReadback::current_bar_;
+        return host.*bar;
+    }
+};
+
+Host* host_of(void* state) {
+    return dynamic_cast<Host*>(static_cast<pineforge::BacktestEngine*>(state));
+}
+
+Json number(double value) {
+    std::ostringstream text;
+    text << std::setprecision(17) << value;
+    return Json::number(text.str());
+}
+
+Json integer(std::int64_t value) {
+    return Json::number(std::to_string(value));
+}
+
+const char* trigger_name(const orders::Trigger& trigger) {
+    if (std::holds_alternative<orders::Limit>(trigger)) return "limit";
+    if (std::holds_alternative<orders::Stop>(trigger)) return "stop";
+    if (std::holds_alternative<orders::StopLimit>(trigger)) return "stop_limit";
+    if (std::holds_alternative<orders::Trail>(trigger)) return "trail";
+    return "market";
+}
+
+Json action(std::int64_t timestamp, int bar_index, bool is_entry,
+            bool is_long, double units, double price,
+            const std::string& label, std::uint64_t incarnation, int origin) {
+    return Json::object({
+        {"timestamp", integer(timestamp)},
+        {"bar_index", integer(bar_index)},
+        {"origin_input_index", integer(origin)},
+        {"order", Json::object({
+            {"id", Json::string(label)},
+            {"action", Json::string(is_entry == is_long ? "buy" : "sell")},
+            {"leg", Json::string(is_entry ? "entry" : "exit")},
+            {"contracts", number(units)},
+            {"price", number(price)},
+            {"reduce_only", Json::boolean(!is_entry)},
+            {"entry_incarnation", integer(static_cast<std::int64_t>(incarnation))}
+        })}
+    });
+}
+
+}
+
+extern "C" int equivalence_retain_events(void* state) {
+    try {
+        auto* host = host_of(state);
+        if (!host) return -1;
+        host->fixture_retain_all_events();
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
+extern "C" int equivalence_pending_priced(void* state) {
+    try {
+        auto* host = host_of(state);
+        if (!host) return -1;
+        int count = 0;
+        for (const auto& row : host->native_working_requests()) {
+            if (!std::holds_alternative<orders::Market>(row.definition->request.trigger)) ++count;
+        }
+        return count;
+    } catch (...) {
+        return -1;
+    }
+}
+
+extern "C" int equivalence_open_lots(void* state) {
+    try {
+        auto* host = host_of(state);
+        if (!host) return -1;
+        return static_cast<int>(host->native_open_lots(
+            std::numeric_limits<double>::quiet_NaN()).size());
+    } catch (...) {
+        return -1;
+    }
+}
+
+extern "C" int equivalence_source_bar(void* state, std::int64_t timeframe_ms,
+                                      pineforge::Bar* out) {
+    try {
+        const auto* host = host_of(state);
+        if (!host || !out || timeframe_ms <= 0) return -1;
+        *out = SourceReadback::read(*host);
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
+extern "C" int equivalence_export_actions(void* state, const char* path) {
+    try {
+        auto* host = host_of(state);
+        if (!host || !path) return -1;
+        std::ofstream output(path);
+        if (!output) return -1;
+        const auto lots = host->native_open_lots(std::numeric_limits<double>::quiet_NaN());
+        for (const auto& event : host->native_events(0)) {
+            if (!event.command) continue;
+            const auto* applied = std::get_if<orders::ExecutionAppliedEvent>(&*event.command);
+            if (!applied) continue;
+            const int origin = applied->cursor.point.input_interval_index;
+            for (std::size_t offset = 0; offset < applied->closed_trade_count; ++offset) {
+                const auto& trade = host->closed_trade(applied->first_trade_index + offset);
+                output << action(applied->effective_time_ms(), applied->cursor.point.interval_index, false,
+                    trade.is_long, trade.qty, trade.exit_price, trade.exit_id,
+                    trade.entry_incarnation, origin).dump() << '\n';
+            }
+            if (!applied->opened_lot_incarnation) continue;
+            bool found = false;
+            for (const auto& lot : lots) {
+                if (lot.entry_incarnation != applied->opened_lot_incarnation) continue;
+                output << action(applied->effective_time_ms(), applied->cursor.point.interval_index, true,
+                    lot.signed_units > 0, std::abs(applied->opened_units), lot.entry_price,
+                    lot.entry_label, lot.entry_incarnation, origin).dump() << '\n';
+                found = true;
+                break;
+            }
+            if (found) continue;
+            for (std::size_t index = 0; index < host->closed_trade_count(); ++index) {
+                const auto& trade = host->closed_trade(index);
+                if (trade.entry_incarnation != applied->opened_lot_incarnation) continue;
+                output << action(applied->effective_time_ms(), applied->cursor.point.interval_index, true,
+                    trade.is_long, std::abs(applied->opened_units), trade.entry_price,
+                    trade.entry_id, trade.entry_incarnation, origin).dump() << '\n';
+                found = true;
+                break;
+            }
+            if (!found) throw std::runtime_error("opening metadata unavailable");
+        }
+        return output ? 0 : -1;
+    } catch (...) {
+        return -1;
+    }
+}
+
+extern "C" int equivalence_export_receipts(void* state, const char* path) {
+    try {
+        auto* host = host_of(state);
+        if (!host || !path) return -1;
+        std::ofstream output(path);
+        if (!output) return -1;
+        int origin = -1;
+        for (const auto& event : host->native_events(0)) {
+            if (event.driver) origin = event.driver->coordinate.input_interval_index;
+            if (!event.command) continue;
+            orders::DefinitionRef definition;
+            const char* kind = nullptr;
+            if (const auto* accepted = std::get_if<orders::AcceptedEvent>(&*event.command)) {
+                definition = accepted->definition;
+                kind = "accepted";
+            } else if (const auto* replaced = std::get_if<orders::ReplacedEvent>(&*event.command)) {
+                definition = replaced->successor_definition;
+                kind = "replaced";
+            } else if (const auto* cancelled = std::get_if<orders::CancelledEvent>(&*event.command)) {
+                definition = cancelled->definition;
+                kind = "cancelled";
+            } else if (const auto* activated = std::get_if<orders::ActivatedEvent>(&*event.command)) {
+                definition = activated->definition;
+                origin = activated->cursor.point.input_interval_index;
+                kind = "activated";
+            } else if (const auto* applied = std::get_if<orders::ExecutionAppliedEvent>(&*event.command)) {
+                definition = applied->definition;
+                origin = applied->cursor.point.input_interval_index;
+                kind = "executed";
+            }
+            if (!kind || !definition) continue;
+            output << Json::object({
+                {"ordinal", integer(static_cast<std::int64_t>(event.ordinal))},
+                {"kind", Json::string(kind)},
+                {"type", Json::string(trigger_name(definition->request.trigger))},
+                {"id", Json::string(definition->request.label)},
+                {"origin_input_index", integer(origin)}
+            }).dump() << '\n';
+        }
+        return output ? 0 : -1;
+    } catch (...) {
+        return -1;
+    }
+}

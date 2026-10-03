@@ -1,3 +1,8 @@
+// expectation corrected (F09, 1 of 276 rows), because the REALTIME range-end
+// hook no longer re-marks the stored point or re-folds hashed extremes; harvested
+// against 227c2236 and the corrected 8da00ac9 runtime tree. Only the recorded-row
+// digest moves; boundary/trade/final hashes and counts stay identical:
+//   Stream/0/1: rows 0xca31c77c5a63ae01ull -> 0x8c7324fade164a50ull
 // R5 lane PERF-L4: the values tests/test_adapter_quiet_bar.cpp pins, one
 // row per run of its battery (scenario, magnifier, recording; the digests
 // of the source folds, the recorded rows and the trades; the final
@@ -1886,7 +1891,7 @@ constexpr Pinned kPinned[] = {
     {"CommissionedShort", 1, 0, 0x350b092698bdf8fdull, 0x14650fb0739d0383ull, 0x35b634c9ced2d3caull, 0xd73d8e053dbf5cd2ull, 32, 0, 1},
     {"AccountFx", 0, 1, 0xd27340484425ff52ull, 0x4e596d61c552597eull, 0x3b853d0c008c3078ull, 0xea884b09a27ea73bull, 48, 48, 1},
     {"AccountFx", 0, 0, 0xd27340484425ff52ull, 0x14650fb0739d0383ull, 0x3b853d0c008c3078ull, 0xea884b09a27ea73bull, 48, 0, 1},
-    {"Stream", 0, 1, 0x4f42bff80af50865ull, 0xca31c77c5a63ae01ull, 0xce38e7485b22ec04ull, 0xeb75594695696b2full, 40, 40, 5},
+    {"Stream", 0, 1, 0x4f42bff80af50865ull, 0x8c7324fade164a50ull, 0xce38e7485b22ec04ull, 0xeb75594695696b2full, 40, 40, 5},
     {"Stream", 0, 0, 0x4f42bff80af50865ull, 0x14650fb0739d0383ull, 0xce38e7485b22ec04ull, 0xeb75594695696b2full, 40, 0, 5},
     {"Random01", 0, 1, 0xb7cb18e9c32443c1ull, 0xf4ebe6782bc3ee5eull, 0xe6d673a2f0d40429ull, 0x44b3af95af8e40ebull, 55, 55, 15},
     {"Random01", 0, 0, 0xb7cb18e9c32443c1ull, 0x14650fb0739d0383ull, 0xe6d673a2f0d40429ull, 0x44b3af95af8e40ebull, 55, 0, 15},

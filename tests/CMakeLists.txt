@@ -1,3 +1,10 @@
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_library(native_live_equivalence_observer OBJECT native_live_equivalence_observer.cpp)
+    target_link_libraries(native_live_equivalence_observer PRIVATE pineforge)
+    target_include_directories(native_live_equivalence_observer PRIVATE ${PROJECT_SOURCE_DIR}/runner)
+    set_target_properties(native_live_equivalence_observer PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
+
 set(TEST_SOURCES
     # R4-D L4a native-route behavioral twins.  These retain the legacy
     # oracle literals while driving the switched host only through its public
@@ -819,6 +826,7 @@ list(APPEND TEST_SOURCES
 # R4-D L4b public native-route policy witness.  Kept as an appended target so
 # the retired owner inventory above remains mechanically intact for merge.
 list(APPEND TEST_SOURCES test_l4b_policy_regressions)
+list(APPEND TEST_SOURCES test_stream_report_equivalence)
 
 # R5 L3 kernel sizing bases and fractional reduces.  Appended for the same
 # reason: the inventory above stays mechanically intact.
@@ -3078,6 +3086,8 @@ add_test(NAME test_market_admission_schema_mutations COMMAND ${Python3_EXECUTABL
     ${PROJECT_SOURCE_DIR}/scripts/test_market_admission_schema.py)
 add_test(NAME test_cancellation_hash_coverage COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/check_cancellation_hash_coverage.py)
+add_test(NAME test_native_live_equivalence_harness COMMAND ${Python3_EXECUTABLE} -B
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_native_live_equivalence_harness.py)
 
 # R5 N11: no NativeRunSpec field the Pine adapter's project() sets is then
 # unconditionally shadowed by one of its own host hooks (audit D2), plus the
