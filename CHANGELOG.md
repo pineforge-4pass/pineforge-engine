@@ -7,6 +7,18 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- **Harness lot grid:** `docker/run_json.py` applies `mincontract` from the
+  `--syminfo` (`PINEFORGE_SYMINFO`) file as the engine's lot grid, the metadata key
+  `qty_step` plus the `mincontract` key a script's `syminfo.mincontract` reads, so a
+  percent-of-equity strategy no longer trades sub-lot quantities. Absent or `null`
+  changes nothing: the report and its fingerprint are as before, apart from
+  `elapsed_seconds`. A value that is not a positive finite number, or a strategy
+  library without `strategy_set_syminfo_metadata`, fails the run (one
+  `{"engine":"pineforge","error":...}` line, harness exit 1, entrypoint exit 4)
+  instead of running without the grid. An applied grid is recorded as
+  `applied_runtime.syminfo`, so a gridded run has its own fingerprint digest. The
+  engine library is unchanged.
+
 - **Native runner routing and delivery:** webhooks are optional; `--webhook-routes`
   adds first-match per-action targets and payload `pineforge-native-order-action/v2`.
   New `actions`, `status` and offline `redeliver` commands expose the journal and

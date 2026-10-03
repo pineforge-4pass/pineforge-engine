@@ -36,6 +36,14 @@
 #   PINEFORGE_MAGNIFIER_DIST     Sample distribution: uniform / cosine / triangle /
 #                                endpoints (default) / front_loaded / back_loaded.
 #
+# Optional env var (instrument metadata):
+#   PINEFORGE_SYMINFO    Path to a syminfo JSON file, a flat object or {"syminfo": {...}}.
+#                        Keys applied: mincontract (the lot size: order quantities are
+#                        floored to it), then mintick, pointvalue, timezone, session; other
+#                        keys are ignored. mincontract absent or null: no lot grid. Any other
+#                        mincontract that is not a positive finite number fails the run
+#                        (exit 4, one {"engine":"pineforge","error":...} line on stdout).
+#
 # Exit codes:
 #   0  success (JSON report, or C++ in transpile-only mode, on stdout)
 #   2  missing input mount
@@ -131,7 +139,7 @@ echo "[pineforge] running backtest ..." >&2
 #   PINEFORGE_TRADE_START_MS            unix-ms; suppress orders before it
 #   PINEFORGE_CHART_TZ                  IANA tz for date builtins
 #   PINEFORGE_MAGNIFIER_VOLUME_WEIGHTED 1/true → vw magnifier (needs BAR_MAGNIFIER)
-#   PINEFORGE_SYMINFO                   path to a syminfo.json
+#   PINEFORGE_SYMINFO                   path to a syminfo.json (see the header)
 #   PINEFORGE_BENCH (+_WARMUP/_REPEATS) 1/true → timing mode
 extra=()
 [[ -n "${PINEFORGE_TRADE_START_MS:-}" ]] && extra+=(--trade-start-ms "${PINEFORGE_TRADE_START_MS}")

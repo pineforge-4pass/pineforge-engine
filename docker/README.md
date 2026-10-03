@@ -136,6 +136,39 @@ header) are configured via separate env vars:
 | `PINEFORGE_BAR_MAGNIFIER`     | `false`        | `true` enables intra-bar OHLC path sampling for stop/limit fills      |
 | `PINEFORGE_MAGNIFIER_SAMPLES` | `4`            | Sub-bar sample count when magnifier is on (≥2)                        |
 | `PINEFORGE_MAGNIFIER_DIST`    | `endpoints`    | `uniform`, `cosine`, `triangle`, `endpoints`, `front_loaded`, `back_loaded` |
+| `PINEFORGE_SYMINFO`           | none           | Path to the instrument's metadata JSON (the harness's `--syminfo`); see below |
+
+### Instrument metadata (`PINEFORGE_SYMINFO`)
+
+`PINEFORGE_SYMINFO` names a JSON file holding the instrument's metadata, either a
+flat object or `{"syminfo": {...}}`; a catalog object can be passed as is, keys
+the harness does not use are ignored. It applies `mincontract` first, then
+`mintick`, `pointvalue`, `timezone` and `session`, each through the strategy
+library's `strategy_set_syminfo_*` setters.
+
+- `mincontract` is the instrument's lot size (TradingView's
+  `syminfo.mincontract`). It is set as the engine's `qty_step` metadata, so order
+  quantities are floored to that grid, and as `mincontract` metadata, so a
+  script's `syminfo.mincontract` reads return the same value.
+- Absent or `null`: no lot grid, and the run is the same as without the key.
+- Any other value that is not a positive finite JSON number (`0`, `-1`,
+  `"0.001"`, `true`, `NaN`, `Infinity`, a list or an object) fails the run
+  before it starts: one line `{"engine":"pineforge","error":"syminfo.mincontract
+  must be a positive finite number, got <value>"}` on stdout, where `<value>` is
+  the value's JSON text cut to 80 characters (`got true`, `got "0.001"`),
+  harness exit status 1, entrypoint exit 4. A strategy library without
+  `strategy_set_syminfo_metadata` fails the same way when `mincontract` is set:
+  the harness never runs without the grid it was given.
+- An applied grid is recorded as `applied_runtime.syminfo`
+  (`{"qty_step": <v>, "mincontract": <v>}`) and so in
+  `fingerprint.provenance.runtime`: its fingerprint digest differs from the
+  gridless run's. Without a grid the key is absent and the report, fingerprint
+  included, is what it was before this key was supported, apart from
+  `elapsed_seconds` (and, with `--bench`, the timing samples). `mintick`,
+  `pointvalue`, `timezone` and `session` are not recorded.
+
+`docker/run_json.py` is vendored: pineforge-release copies it from the engine tag
+at every release, so the lot-grid handling (`mincontract`) lives in this file.
 
 The engine catches every error (TF mismatch, unsupported emulation
 flags, unknown-input-TF, etc.) into `strategy_get_last_error()`; the
