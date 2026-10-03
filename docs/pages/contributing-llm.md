@@ -19,8 +19,8 @@ a **kernel** that matches triggers, prices fills, books lots and settles, and a
 **Pine adapter** that reproduces TradingView's execution semantics on top of
 it. A separate project transpiles PineScript into C++ that attaches the
 adapter. The engine's value is that its output is *byte-reproducible* and graded
-*trade for trade against TradingView* on a fixed population (8,006 probes at
-the current baseline; 7,905 of the 7,989 graded are excellent, 84 strong), so
+*trade for trade against TradingView* on a fixed population (<!-- pf:scoreboard.population|int -->8,006<!-- /pf --> probes at
+the current baseline; <!-- pf:scoreboard.excellent|int -->7,949<!-- /pf --> of the <!-- pf:scoreboard.graded|int -->7,989<!-- /pf --> graded are excellent, <!-- pf:scoreboard.strong|int -->40<!-- /pf --> strong), so
 almost every rule below exists to keep a change from quietly moving a byte.
 
 ## Repo map
