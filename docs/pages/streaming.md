@@ -29,6 +29,40 @@ with the [ABI v4 live surface](@ref live_surface); the earlier Python runtime
 that did so is retired. Tick-stream fills at observed
 prices/times can differ from batch OHLC path assumptions.
 
+## Backtest vs live {#backtest_vs_live}
+
+Backtest and live are modes of one engine. Confirmed-bar streams use the same
+modeled OHLC and Pine order policies as backtests; only genuine observed trades
+use tick prices instead of the historical OHLC path. The following historical
+look-ahead information is unavailable to a continuing live run:
+
+- Opening sibling-stop arbitration can inspect a complete script candle's high
+  and low in history. Live aggregation has only the children received so far;
+  the opening script-bar seed likewise cannot contain its later children.
+- Historical `request.security(..., lookahead_on)` can project a requested
+  period's final OHLC before that period closes. Live publishes only information
+  that has arrived, not the future period close.
+- Historical next-source-bar lookup can inspect a retained future candle.
+  Live has no such candle; requested-context feeding also cannot inspect the
+  next actual input timestamp before that input arrives.
+- A one-bar historical run can accept an undetected timeframe. Live startup
+  needs explicit timeframe metadata or enough confirmed timestamps to infer
+  cadence; both the adapter fallback and startup validation have this limit.
+- History knows the final retained source-bar index. A continuing warmup cannot
+  know that eventual index, while realtime `barstate.islast` describes the latest
+  available bar rather than hindsight's final bar.
+- Historical EOF can seal the final run/session boundary. Live needs an explicit
+  end event or a known calendar boundary; provisional last-regular-session-bar
+  facts cannot assume an unseen next bar or session closure.
+
+These look-ahead differences are deliberate, like TradingView history versus
+realtime. They are not emulated by supplying future data to live execution.
+Batch also tolerates gappy historical exports, but a stream refuses a missing
+confirmed bar: the feed adapter must recover it from REST or stop, never invent
+a candle. `calc_on_order_fills` is refused in streams today because the native
+stream's close-only source callback contract does not support fill-triggered
+re-entry; this is future source-layer work, not an inherent look-ahead limit.
+
 This is the runtime model used by a continuously running strategy:
 
 1. Call #strategy_stream_begin with every confirmed historical input bar.
