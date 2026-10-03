@@ -1766,6 +1766,23 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.b(script_.modeled_ohlc);
     f.b(has_forming_);
     if (has_forming_) hash_bar(f, forming_);
+    if (input_mode_ == InputMode::ObservedTicks) {
+        const auto hash_volume = [&f](const TickVolume& volume) {
+            f.i(volume.units);
+            f.d(volume.sum);
+            f.d(volume.compensation);
+            f.d(volume.divisor);
+            f.i(volume.decimal_places);
+            f.b(volume.exact);
+        };
+        hash_volume(forming_tick_volume_);
+        hash_volume(partial_tick_volume_);
+        f.b(partial_has_);
+        if (partial_has_) {
+            hash_bar(f, partial_);
+            f.i(partial_script_open_ms_);
+        }
+    }
     f.b(has_last_price_);
     f.d(last_price_);
     f.i(last_print_time_ms_);
@@ -2406,6 +2423,8 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     has_tick_sequence_ = false;
     script_ = ScriptBucket{};
     has_forming_ = false;
+    forming_tick_volume_ = TickVolume{};
+    partial_tick_volume_ = TickVolume{};
     has_last_price_ = false;
     // Stream print state is run-scoped: a reused host must not carry the
     // previous run's last print into the next run's decision coordinates
@@ -6895,6 +6914,7 @@ void NativeExecutionConsumer::clear_partial() noexcept {
     partial_has_ = false;
     partial_ = Bar{};
     partial_script_open_ms_ = 0;
+    partial_tick_volume_ = TickVolume{};
 }
 
 std::optional<Bar> NativeExecutionConsumer::partial_bar() const {
@@ -9746,6 +9766,78 @@ bool NativeExecutionConsumer::stream_push_bar(BacktestEngine& engine, const Bar&
     }
 }
 
+void NativeExecutionConsumer::TickVolume::reset(const std::optional<double>& step) noexcept {
+    *this = TickVolume{};
+    if (!step) return;
+    double scale = 1.0;
+    for (int places = 0; places <= 22; ++places, scale *= 10.0) {
+        if (*step != 1.0 / scale) continue;
+        divisor = scale;
+        decimal_places = places;
+        exact = true;
+        return;
+    }
+}
+
+double NativeExecutionConsumer::TickVolume::decimal_value(int64_t quantity_units) const noexcept {
+    if (quantity_units <= (int64_t{1} << 53))
+        return static_cast<double>(quantity_units) / divisor;
+    uint64_t numerator = static_cast<uint64_t>(quantity_units);
+    uint64_t denominator = 1;
+    for (int places = 0; places < decimal_places; ++places) denominator *= 5;
+    int exponent = -decimal_places;
+    while (denominator <= numerator / 2) {
+        denominator *= 2;
+        ++exponent;
+    }
+    while (numerator < denominator) {
+        numerator *= 2;
+        --exponent;
+    }
+    uint64_t remainder = numerator - denominator;
+    uint64_t significand = 1;
+    for (int bit = 0; bit < 52; ++bit) {
+        remainder *= 2;
+        significand *= 2;
+        if (remainder >= denominator) {
+            remainder -= denominator;
+            ++significand;
+        }
+    }
+    const uint64_t complement = denominator - remainder;
+    if (remainder > complement || (remainder == complement && (significand & 1)))
+        ++significand;
+    return std::ldexp(static_cast<double>(significand), exponent - 52);
+}
+
+void NativeExecutionConsumer::TickVolume::add(double quantity) noexcept {
+    const double next_sum = sum + quantity;
+    if (std::isfinite(next_sum)) {
+        compensation += sum >= quantity
+            ? (sum - next_sum) + quantity : (quantity - next_sum) + sum;
+    } else {
+        compensation = 0.0;
+    }
+    sum = next_sum;
+    if (!exact) return;
+    const double rounded = std::round(quantity * divisor);
+    if (!std::isfinite(rounded) || rounded >= std::ldexp(1.0, 63)) {
+        exact = false;
+        return;
+    }
+    const int64_t quantity_units = static_cast<int64_t>(rounded);
+    if (decimal_value(quantity_units) != quantity
+        || quantity_units > std::numeric_limits<int64_t>::max() - units) {
+        exact = false;
+        return;
+    }
+    units += quantity_units;
+}
+
+double NativeExecutionConsumer::TickVolume::value() const noexcept {
+    return exact ? decimal_value(units) : sum + compensation;
+}
+
 bool NativeExecutionConsumer::preflight_ticks(BacktestEngine& engine, const TradeTick* ticks, int n) {
     if (n < 0 || (n > 0 && ticks == nullptr)) {
         present_refusal(engine, "native tick array is invalid");
@@ -9763,11 +9855,15 @@ bool NativeExecutionConsumer::preflight_ticks(BacktestEngine& engine, const Trad
     uint64_t prev_sequence = last_tick_sequence_;
     bool prev_has_sequence = has_tick_sequence_;
     uint64_t ordinals = next_timeline_ordinal_;
+    const auto* spec = spec_ptr();
+    const auto step = spec ? spec->quantity_grid : std::optional<double>{};
     std::optional<int64_t> volume_slot;
-    double volume = 0.0;
+    TickVolume volume = forming_tick_volume_;
+    std::optional<int64_t> partial_slot;
+    TickVolume partial_volume = partial_tick_volume_;
+    if (partial_has_) partial_slot = partial_script_open_ms_;
     if (has_forming_) {
         volume_slot = forming_.timestamp;
-        volume = forming_.volume;
     }
     int64_t prev_array_ts = 0;
     bool has_array_prev = false;
@@ -9812,10 +9908,17 @@ bool NativeExecutionConsumer::preflight_ticks(BacktestEngine& engine, const Trad
         }
         if (!volume_slot || *volume_slot != interval->open_ms) {
             volume_slot = interval->open_ms;
-            volume = 0.0;
+            volume.reset(step);
         }
-        volume += tick.quantity;
-        if (!std::isfinite(volume)) {
+        volume.add(tick.quantity);
+        const auto script_interval = script_interval_at(tick.timestamp);
+        const int64_t script_open = script_interval ? script_interval->open_ms : interval->open_ms;
+        if (!partial_slot || *partial_slot != script_open) {
+            partial_slot = script_open;
+            partial_volume.reset(step);
+        }
+        partial_volume.add(tick.quantity);
+        if (!std::isfinite(volume.value()) || !std::isfinite(partial_volume.value())) {
             present_refusal(engine, "native tick volume overflow");
             return false;
         }
@@ -9896,10 +9999,12 @@ bool NativeExecutionConsumer::finalize_observed_tick_slot(
             }
         }
         has_forming_ = false;
+        forming_tick_volume_ = TickVolume{};
         return !failed();
     }
     const Bar formed = forming_;
     has_forming_ = false;
+    forming_tick_volume_ = TickVolume{};
     if (!contribute_input(engine, formed, interval, next_interval_index_,
                           InputContribution::ObservedTickSlot)) {
         return false;
@@ -9993,7 +10098,13 @@ bool NativeExecutionConsumer::deliver_tick(BacktestEngine& engine, const TradeTi
     calculating_bar_has_ = true;
     // The print is the cursor, and it is real traded activity: the bar so far
     // folds its price and its quantity before the observation hook runs.
-    note_partial_point(tick_context.decision.script_bar_open_ms, tick.price, tick.quantity);
+    const auto* spec = spec_ptr();
+    const auto step = spec ? spec->quantity_grid : std::optional<double>{};
+    if (!partial_has_ || partial_script_open_ms_ != tick_context.decision.script_bar_open_ms)
+        partial_tick_volume_.reset(step);
+    note_partial_point(tick_context.decision.script_bar_open_ms, tick.price, 0.0);
+    partial_tick_volume_.add(tick.quantity);
+    partial_.volume = partial_tick_volume_.value();
     if (!invoke_tick_callback(engine, tick_bar, tick_context)) {
         processing_input_ = false;
         return false;
@@ -10010,15 +10121,17 @@ bool NativeExecutionConsumer::deliver_tick(BacktestEngine& engine, const TradeTi
     has_last_price_ = true;
     last_print_time_ms_ = tick.timestamp;
     if (!has_forming_) {
-        forming_ = Bar{tick.price, tick.price, tick.price, tick.price, tick.quantity,
+        forming_tick_volume_.reset(step);
+        forming_ = Bar{tick.price, tick.price, tick.price, tick.price, 0.0,
                        interval->open_ms};
         has_forming_ = true;
     } else {
         forming_.high = std::max(forming_.high, tick.price);
         forming_.low = std::min(forming_.low, tick.price);
         forming_.close = tick.price;
-        forming_.volume += tick.quantity;
     }
+    forming_tick_volume_.add(tick.quantity);
+    forming_.volume = forming_tick_volume_.value();
     last_observed_slot_open_ = interval->open_ms;
     if (tick.sequence != 0) {
         last_tick_sequence_ = tick.sequence;

@@ -1637,6 +1637,21 @@ private:
         certified_cycle_last_ = 0;
         interval_cache_.forget_priors();
     }
+    struct TickVolume {
+        int64_t units = 0;
+        double sum = 0.0;
+        double compensation = 0.0;
+        double divisor = 1.0;
+        int decimal_places = 0;
+        bool exact = false;
+
+        void reset(const std::optional<double>& step) noexcept;
+        void add(double quantity) noexcept;
+        double value() const noexcept;
+        double decimal_value(int64_t quantity_units) const noexcept;
+    };
+    TickVolume forming_tick_volume_{};
+    TickVolume partial_tick_volume_{};
     Bar forming_{};
     bool has_forming_ = false;
     double last_price_ = 0.0;
