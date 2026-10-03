@@ -498,7 +498,10 @@ std::string LedgerView::status_json() const {
         Statement log(impl_->db, "SELECT target_id,phase,started_at,ended_at,http_status,error_category,success FROM delivery_log ORDER BY log_id");
         while (log.row()) {
             auto& status = initialize(log.text(0));
-            status.members["last_attempt"] = Json::number(std::to_string(log.integer(2)));
+            auto& last_attempt = status.members["last_attempt"];
+            if (last_attempt.kind == Json::Kind::Null ||
+                log.integer(2) > last_attempt.integer<std::uint64_t>())
+                last_attempt = Json::number(std::to_string(log.integer(2)));
             if (log.text(1) != "completed") continue;
             const bool success = log.integer(6) == 1;
             auto& count = status.members[success ? "sent" : "failed"];

@@ -119,6 +119,19 @@ void ledger_audit() {
         }
         writer.join();
         assert(ledger.input_count() == 51);
+        ledger.commit_input(51, "{}", 51, {{"third", "{\"sequence\":3}", "main", "delivery-third"},
+                                          {"fourth", "{\"sequence\":4}", "main", "delivery-fourth"}});
+        const auto concurrent = ledger.unsent_events(2);
+        assert(concurrent.size() == 2);
+        const auto older = ledger.start_attempt(concurrent[0], 300);
+        const auto newer = ledger.start_attempt(concurrent[1], 400);
+        ledger.finish_attempt(newer, 401, 204, true, "");
+        ledger.finish_attempt(older, 500, 500, false, "http_status");
+        const auto unordered = parse_json(view.status_json()).at("targets").at("main");
+        assert(unordered.at("last_attempt").integer<std::uint64_t>() == 400);
+        assert(unordered.at("last_success").integer<std::uint64_t>() == 401);
+        assert(unordered.at("last_error").at("at").integer<std::uint64_t>() == 500);
+        assert(unordered.at("sent").integer<int>() == 2 && unordered.at("failed").integer<int>() == 2);
     }
     {
         Ledger ledger(path, "deployment");
