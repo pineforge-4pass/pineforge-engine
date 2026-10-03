@@ -1,0 +1,16 @@
+{
+  "title": "unrelated suffix is not a FIFO boundary",
+  "slug": "unrelated-suffix",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T02:57:19.232Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-05-01",
+    "to": "2025-05-03"
+  },
+  "pine_sha256": "4a1a20611128d46b20dce160e6fbb7f7a2668e21896d42bca566465ecfd095cb",
+  "tv_trades_sha256": "c002e29b6254fd2a8b7655f5d41ef7e6bf0493037e1b5896e029dd5b656de719",
+  "tv_trades_rows": 12
+}

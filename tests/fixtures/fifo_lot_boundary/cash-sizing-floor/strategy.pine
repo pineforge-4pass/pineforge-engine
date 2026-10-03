@@ -1,0 +1,6 @@
+//@version=6
+strategy("cash sizing at a lot boundary", initial_capital=8362.172842, default_qty_type=strategy.cash, default_qty_value=8362.172842, margin_long=0, margin_short=0)
+if time == timestamp("UTC", 2025, 5, 6, 12, 0)
+    strategy.entry("Cash", strategy.long)
+if time == timestamp("UTC", 2025, 5, 6, 12, 30)
+    strategy.close_all()

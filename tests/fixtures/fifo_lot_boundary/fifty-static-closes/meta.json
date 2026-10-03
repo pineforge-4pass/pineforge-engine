@@ -1,0 +1,16 @@
+{
+  "title": "fifty static fractional FIFO closes",
+  "slug": "fifty-static-closes",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T02:57:16.602Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-05-01",
+    "to": "2025-05-03"
+  },
+  "pine_sha256": "f53e880a97a24a58be4a661e16e3ae044ad14bf81e949121d9b08cbf35ec6758",
+  "tv_trades_sha256": "21fe943546b5f8e9df10b621da16b3b95c9eff305f4343b2dd220864d8c11e37",
+  "tv_trades_rows": 204
+}

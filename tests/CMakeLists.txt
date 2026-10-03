@@ -832,6 +832,7 @@ list(APPEND TEST_SOURCES test_native_sizing_price_rule)
 # Sized intent: the classification, the neutrality of the re-lowering and the
 # core-plus-override differential.
 list(APPEND TEST_SOURCES test_adapter_sizing_relower)
+list(APPEND TEST_SOURCES test_adapter_fifo_lot_boundary)
 
 # R5 E9: TradingView's trail activation tapes (tests/fixtures/
 # trail_activation_tick_reach) replayed through the Pine adapter, with the

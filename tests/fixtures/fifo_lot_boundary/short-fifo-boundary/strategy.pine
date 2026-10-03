@@ -1,0 +1,11 @@
+//@version=6
+strategy("short named close at decimal FIFO boundary", initial_capital=1000000, pyramiding=10, margin_long=0, margin_short=0)
+if time == timestamp("UTC", 2025, 5, 1, 0, 0)
+    strategy.entry("A", strategy.short, qty=0.00047)
+    strategy.entry("B", strategy.short, qty=0.00057)
+    strategy.entry("C", strategy.short, qty=0.00097)
+    strategy.entry("D", strategy.short, qty=0.00117)
+if time == timestamp("UTC", 2025, 5, 1, 0, 15)
+    strategy.close("C")
+if time == timestamp("UTC", 2025, 5, 1, 0, 45)
+    strategy.close_all()

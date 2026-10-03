@@ -1,0 +1,7 @@
+//@version=6
+strategy("separate exit identities", initial_capital=1000000, pyramiding=10, margin_long=0, margin_short=0)
+if time == timestamp("UTC", 2025, 5, 1, 0, 0)
+    strategy.entry("E", strategy.long, qty=2)
+if time == timestamp("UTC", 2025, 5, 1, 0, 15)
+    strategy.exit("T1", "E", qty=1, limit=close * 0.5)
+    strategy.exit("T2", "E", qty=1, limit=close * 0.5)

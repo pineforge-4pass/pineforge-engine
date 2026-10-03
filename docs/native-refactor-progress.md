@@ -199,7 +199,7 @@ unless the retention is Full, and `presize_logs`
 (`src/native_execution_consumer.cpp:9440-9451`) sizes no journal under Window.
 `NativeRunSpec::event_retention` (`include/pineforge/native_run_spec.hpp:714`)
 defaults to Window, and the Pine adapter declares
-`NativeEventRetention::Window` (`src/source/pine_adapter.cpp:2411`). K4 still
+`NativeEventRetention::Window` (`src/source/pine_adapter.cpp:2462`). K4 still
 sizes Full runs (driver log and journal) and Commands runs (journal), and its
 witness, `tests/test_native_batch_log_presize.cpp`, runs under Full. PERF-K24's
 replay figure (14.9 % less CPU on Linux aarch64) describes the tree before V19-B. In

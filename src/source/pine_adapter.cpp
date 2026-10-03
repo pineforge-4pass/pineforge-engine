@@ -394,6 +394,57 @@ double floor_quantity_grid(double units, const std::optional<double>& grid) noex
     return floored < units ? floored : units;
 }
 
+double source_fifo_close_units(double units, const std::vector<NativeOpenLot>& lots) noexcept {
+    if (!std::isfinite(units) || units <= 0.0) return units;
+    const double lower = units - internal::kQtyEpsilon;
+    const double upper = units + internal::kQtyEpsilon;
+    double prefix = 0.0;
+    for (const auto& lot : lots) {
+        prefix += std::abs(lot.signed_units);
+        if (prefix >= lower && prefix <= upper) return prefix;
+        if (prefix > upper) break;
+    }
+    return units;
+}
+
+bool source_fifo_close_needs_resolution(double units,
+                                        const std::vector<PyramidEntry>& lots,
+                                        const std::vector<double>& preceding_closes) {
+    if (!std::isfinite(units) || units <= 0.0) return false;
+    std::vector<double> remaining;
+    remaining.reserve(lots.size());
+    for (const auto& lot : lots) remaining.push_back(lot.qty);
+    const auto ambiguous_prefix = [&] {
+        double prefix = 0.0;
+        for (const double quantity : remaining) {
+            prefix += quantity;
+            if (prefix == units) return false;
+            if (std::abs(prefix - units) <= internal::kQtyEpsilon)
+                return true;
+            if (prefix > units + internal::kQtyEpsilon) break;
+        }
+        return false;
+    };
+    if (ambiguous_prefix()) return true;
+    for (const double quantity : preceding_closes) {
+        if (!std::isfinite(quantity) || quantity <= 0.0) continue;
+        double closed = 0.0;
+        double left = quantity;
+        for (auto& lot : remaining) {
+            if (!(left > internal::kQtyEpsilon)) break;
+            const double amount = std::min(lot, left);
+            lot -= amount;
+            closed += amount;
+            left = quantity - closed;
+        }
+        remaining.erase(std::remove_if(remaining.begin(), remaining.end(), [](double lot) {
+            return lot <= internal::kQtyEpsilon;
+        }), remaining.end());
+        if (ambiguous_prefix()) return true;
+    }
+    return false;
+}
+
 double source_money_round(double value) noexcept {
     if (!std::isfinite(value) || value == 0.0) return value;
     const double magnitude = std::floor(std::log10(std::abs(value)));
@@ -8854,10 +8905,38 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         pending_same_bar_close_qty_ += frozen_qty;
         return;
     }
-    // P-DA4: an immediate close has a live cohort at the command boundary;
-    // materialize its percentage quantity and bind that fixed roster before
-    // invoking execute_current.  Deferred exits retain HostSized/BindCohort.
-    const bool host_sized = std::isnan(frozen_qty) && !immediately && !default_fifo_close;
+    // P-DA4: immediate closes keep their command-time cohort. Only an
+    // ambiguous FIFO boundary uses HostSized to re-read the physical roster
+    // at fill time; the Pine mirror can hide a <= kQtyEpsilon native fragment.
+    // Preserve literal Reduce requests for every non-ambiguous FIFO close.
+    const auto* close_pine_view = pine_view_of(host_);
+    std::vector<double> preceding_fifo_closes;
+    if (default_fifo_close && !immediately && close_pine_view
+        && close_pine_view->pyramid_entries_.size() > 1U) {
+        const auto point = detail::callback_point(require_host());
+        for (const auto& handle : live_handles_) {
+            const auto found = placement_.find(handle.incarnation);
+            if (found == placement_.end()) continue;
+            const auto& pending = found->second;
+            if (pending.family != PineOrderFamily::Close || pending.immediately
+                || !pending.from_entry.empty()
+                || pending.frozen_market_instruction
+                || !point || pending.placement_script_open_ms
+                    != point->decision.script_bar_open_ms) continue;
+            if (callsite_token != 0) {
+                const auto prior = live_by_source_key_.find(key_for(
+                    "__pine_close_site__" + std::to_string(callsite_token)));
+                if (prior != live_by_source_key_.end() && prior->second == handle) continue;
+            }
+            preceding_fifo_closes.push_back(pending.projection_remaining_qty);
+        }
+    }
+    const bool fractional_fifo_book = default_fifo_close && close_pine_view
+        && close_pine_view->pyramid_entries_.size() > 1U
+        && source_fifo_close_needs_resolution(
+            frozen_qty, close_pine_view->pyramid_entries_, preceding_fifo_closes);
+    const bool host_sized = !immediately
+        && (fractional_fifo_book || (std::isnan(frozen_qty) && !default_fifo_close));
     const bool default_full_any = config_.close_entries_rule_any
         && std::isnan(qty) && std::isnan(qty_percent) && !immediately;
     const bool pooc_cap_full_close = default_fifo_close
@@ -13682,6 +13761,18 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         // against its scope, never fills, and strands a sub-lot remainder
         // that the 1x-margin path later fragments.
         const auto cover_full_scope = [&](double units) {
+            if (source.family == PineOrderFamily::Close
+                && !config_.close_entries_rule_any
+                && std::holds_alternative<execution::Book>(facts.scope)) {
+                const double close_units = std::min(units, facts.scope_exposure_units);
+                const double boundary_units = source_fifo_close_units(
+                    close_units, require_host().native_open_lots(kNaN));
+                if (boundary_units != close_units) {
+                    result.grid_policy = native_order::ExecutionGridPolicy::ExplicitUnits;
+                    return boundary_units;
+                }
+                units = close_units;
+            }
             if (facts.scope_exposure_units > 0.0
                 && units >= facts.scope_exposure_units - internal::kQtyEpsilon) {
                 // The covered residual IS the literal selected exposure, which

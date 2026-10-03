@@ -1,0 +1,16 @@
+{
+  "title": "percent sizing at a half tick",
+  "slug": "percent-sizing-floor",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T02:57:10.881Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-05-06",
+    "to": "2025-05-07"
+  },
+  "pine_sha256": "6e606b1390c84ceec9c5f1f3577364dae53580bcefc598b7f31825e28db9913c",
+  "tv_trades_sha256": "24561b06b0a55f15eece1b43449dab96149f80d136959b477c7f08ec0f2b0011",
+  "tv_trades_rows": 2
+}

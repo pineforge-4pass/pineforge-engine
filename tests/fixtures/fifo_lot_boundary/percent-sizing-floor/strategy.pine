@@ -1,0 +1,6 @@
+//@version=6
+strategy("percent sizing at a half tick", initial_capital=8362.172842, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=0, margin_short=0)
+if time == timestamp("UTC", 2025, 5, 6, 12, 0)
+    strategy.entry("Percent", strategy.long)
+if time == timestamp("UTC", 2025, 5, 6, 12, 30)
+    strategy.close_all()
