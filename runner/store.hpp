@@ -34,6 +34,11 @@ struct DeliveryAttempt {
     std::uint64_t started_at = 0;
 };
 
+struct DeliveryScan {
+    StoredEvent event;
+    bool unsent = false;
+};
+
 // One process owns a ledger for its entire lifetime. All exceptions are fatal
 // to an advanced in-memory strategy: recreate it and replay durable inputs.
 // Payloads are opaque bytes and are never reserialized or changed on delivery.
@@ -53,6 +58,7 @@ public:
     void commit_input(std::uint64_t index, const std::string& canonical_json,
                       std::uint64_t state_hash, const std::vector<Event>& events);
 
+#ifdef PINEFORGE_LIVE_LEGACY_TEST_API
     std::optional<StoredEvent> pending_event() const;
     std::uint64_t pending_count() const;
     // Persist the attempt before sending. A crash leaves an unacknowledged
@@ -61,8 +67,11 @@ public:
     void record_delivery_failure(const std::string& event_id,
                                  const std::string& error_category);
     void acknowledge(const std::string& event_id);
+#endif
     void bind_routing(const std::string& document);
     std::vector<StoredEvent> unsent_events(std::uint64_t after, std::size_t limit = 256) const;
+    std::optional<DeliveryScan> next_delivery_event(std::uint64_t after,
+                                                   std::uint64_t* steps = nullptr) const;
     DeliveryAttempt start_attempt(const StoredEvent& event, std::uint64_t started_at);
     void finish_attempt(const DeliveryAttempt& attempt, std::uint64_t ended_at,
                         long http_status, bool success, const std::string& error);

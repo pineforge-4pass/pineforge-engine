@@ -144,10 +144,78 @@ void ledger_audit() {
     sqlite3_close(database);
     std::filesystem::remove_all(directory);
 }
+
+void incremental_scan_and_migration() {
+    std::string pattern = (std::filesystem::temp_directory_path() / "pineforge-scan-XXXXXX").string();
+    std::vector<char> name(pattern.begin(), pattern.end()); name.push_back('\0');
+    const char* directory = mkdtemp(name.data());
+    assert(directory);
+    const auto path = std::string(directory) + "/scan.sqlite";
+    {
+        Ledger ledger(path, "scan");
+        std::vector<Event> events;
+        for (unsigned index = 0; index < 4096; ++index)
+            events.push_back({"journal-" + std::to_string(index), "{}", std::nullopt, ""});
+        events.push_back({"failed", "{}", "main", "failed-delivery"});
+        ledger.commit_input(0, "{}", 1, events);
+        const auto failed = ledger.unsent_events(0).front();
+        const auto attempt = ledger.start_attempt(failed, 1);
+        ledger.finish_attempt(attempt, 2, 500, false, "http_status");
+        std::uint64_t low = 0, visited = 0, steps = 0;
+        while (const auto next = ledger.next_delivery_event(low, &steps)) {
+            assert(steps < 150);
+            assert(!next->unsent);
+            low = next->event.ordinal;
+            ++visited;
+        }
+        assert(visited == events.size());
+        for (unsigned iteration = 0; iteration < 100; ++iteration) {
+            assert(!ledger.next_delivery_event(low, &steps));
+            assert(steps < 25);
+        }
+        ledger.commit_input(1, "{}", 2, {{"new", "{}", "main", "new-delivery"}});
+        const auto next = ledger.next_delivery_event(low, &steps);
+        assert(next && next->unsent && next->event.ordinal == low + 1 && steps < 150);
+        assert(!ledger.next_delivery_event(next->event.ordinal, &steps) && steps < 25);
+    }
+    const auto legacy = std::string(directory) + "/phase-a.sqlite";
+    sqlite3* database = nullptr;
+    assert(sqlite3_open(legacy.c_str(), &database) == SQLITE_OK);
+    assert(sqlite3_exec(database,
+        "CREATE TABLE metadata(singleton INTEGER PRIMARY KEY,schema_version INTEGER,identity TEXT);"
+        "CREATE TABLE inputs(input_index INTEGER PRIMARY KEY,canonical_json TEXT,state_hash TEXT);"
+        "CREATE TABLE events(ordinal INTEGER PRIMARY KEY,input_index INTEGER,input_position INTEGER,event_id TEXT UNIQUE,"
+        "payload TEXT,attempts INTEGER,acknowledged INTEGER,last_error TEXT);"
+        "INSERT INTO metadata VALUES(1,1,'phase-a'); INSERT INTO inputs VALUES(0,'{}','123');"
+        "INSERT INTO events VALUES(1,0,0,'ack','{\"sequence\":1}',2,1,'');"
+        "INSERT INTO events VALUES(2,0,1,'unack','{ \"sequence\" : 2 }',2,0,'timeout');",
+        nullptr, nullptr, nullptr) == SQLITE_OK);
+    sqlite3_close(database);
+    {
+        Ledger ledger(legacy, "phase-a");
+        const auto events = ledger.input(0)->events;
+        assert(events.size() == 2 && events[0].id == "ack" && events[1].id == "unack");
+        assert(events[1].payload == "{ \"sequence\" : 2 }");
+        assert(ledger.unsent_count() == 1);
+        const auto pending = ledger.unsent_events(0).front();
+        assert(pending.id == "unack" && pending.delivery_id == "unack" && pending.attempts == 2);
+        const auto attempt = ledger.start_attempt(pending, 3);
+        assert(attempt.attempt == 3);
+        ledger.finish_attempt(attempt, 4, 204, true, "");
+        assert(ledger.unsent_count() == 0);
+        assert(ledger.input(0)->events[1].payload == events[1].payload);
+        LedgerView view(legacy);
+        const auto status = parse_json(view.status_json()).at("targets").at("default");
+        assert(status.at("sent").integer<int>() == 2 && status.at("unsent").integer<int>() == 0);
+    }
+    std::filesystem::remove_all(directory);
+    std::cout << "PASS incremental delivery scan visits only new rows and phase-A three-table migration preserves bytes and attempts\n";
+}
 }
 
 int main() {
     configuration();
     ledger_audit();
+    incremental_scan_and_migration();
     std::cout << "PASS native routing configuration, identity, append-only delivery audit and serialized ledger\n";
 }

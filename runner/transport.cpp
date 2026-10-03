@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <cstdlib>
 #include <limits>
 #include <map>
 #include <memory>
@@ -22,6 +23,7 @@ namespace {
 
 constexpr std::size_t max_feed_bytes = 4 * 1024 * 1024;
 constexpr std::size_t max_event_bytes = 1024 * 1024;
+std::string http_proxy, https_proxy, all_proxy, no_proxy;
 
 std::string hex(const unsigned char* data, std::size_t length) {
     constexpr char digits[] = "0123456789abcdef";
@@ -102,6 +104,10 @@ CurlHandle make_handle(const HttpOptions& options, bool websocket = false) {
     CurlHandle curl(curl_easy_init(), &curl_easy_cleanup);
     if (!curl) throw std::runtime_error("native HTTP handle allocation failed");
     option(curl.get(), CURLOPT_URL, options.url.c_str());
+    const auto& proxy = (options.url.rfind("https:", 0) == 0 || options.url.rfind("wss:", 0) == 0)
+        ? https_proxy : http_proxy;
+    option(curl.get(), CURLOPT_PROXY, (proxy.empty() ? all_proxy : proxy).c_str());
+    option(curl.get(), CURLOPT_NOPROXY, no_proxy.c_str());
     option(curl.get(), CURLOPT_CONNECTTIMEOUT_MS, options.connect_timeout_ms);
     option(curl.get(), CURLOPT_TIMEOUT_MS, options.total_timeout_ms);
     option(curl.get(), CURLOPT_NOSIGNAL, 1L);
@@ -267,6 +273,7 @@ std::string hmac_sha256_hex(std::string_view secret, std::string_view bytes) {
     return hex(digest.data(), length);
 }
 
+#ifdef PINEFORGE_LIVE_LEGACY_TEST_API
 DeliveryResult post_webhook(const HttpOptions& options, const StoredEvent& event) {
     if (event.id.empty() || event.id.size() > 256 ||
         event.id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:")
@@ -288,6 +295,7 @@ DeliveryResult post_webhook(const HttpOptions& options, const StoredEvent& event
     Response response;
     return perform(curl.get(), response);
 }
+#endif
 
 std::string get_feed_snapshot(const HttpOptions& options) {
     auto curl = make_handle(options);
@@ -389,6 +397,18 @@ std::vector<CompletedWebhook> WebhookMulti::poll(int timeout_ms) {
         impl_->requests.erase(found);
     }
     return completed;
+}
+
+void capture_proxy_environment() {
+    const auto read = [](const char* lower, const char* upper) {
+        const char* value = std::getenv(lower);
+        if (!value && upper) value = std::getenv(upper);
+        return std::string(value ? value : "");
+    };
+    http_proxy = read("http_proxy", nullptr);
+    https_proxy = read("https_proxy", "HTTPS_PROXY");
+    all_proxy = read("all_proxy", "ALL_PROXY");
+    no_proxy = read("no_proxy", "NO_PROXY");
 }
 
 void validate_websocket(const HttpOptions& options) {

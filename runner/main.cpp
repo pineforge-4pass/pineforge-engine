@@ -29,7 +29,8 @@
 namespace {
 using namespace pineforge::live;
 namespace fs = std::filesystem;
-volatile std::sig_atomic_t stopped = 0;
+std::atomic<std::sig_atomic_t> stopped{0};
+static_assert(std::atomic<std::sig_atomic_t>::is_always_lock_free);
 void signal_stop(int) { stopped = 1; }
 constexpr std::size_t MAX_FRAME = 1024 * 1024;
 
@@ -70,9 +71,10 @@ void help() {
                  "Recovery replays immutable warmup + ledger inputs before any delivery.\n"
                  "File/HTTP input defaults to the full recorded prefix; --from-input declares\n"
                  "the zero-based start of a resumed tail. HTTP polls use full snapshots.\n"
-                 "Usage: pineforge-live actions --ledger L --after N [--follow]\n"
-                 "       pineforge-live status --ledger L\n"
-                 "       pineforge-live redeliver --ledger L --target T [--from N] [--failed-only]\n";
+                 "Usage: pineforge-live actions --ledger L --after N [--follow] [--deployment D]\n"
+                 "       pineforge-live status --ledger L [--deployment D]\n"
+                 "       pineforge-live redeliver --ledger L --deployment D --target T [--from N] [--failed-only]\n"
+                 "Redeliver is offline: stop the runner first; it resumes from its ledger.\n";
 }
 std::uint64_t unsigned_arg(const std::string &s) {
     return Json::number(s).integer<std::uint64_t>();
@@ -760,8 +762,10 @@ int run(Config c) {
     if (c.from_input > recorded)
         throw std::runtime_error("from-input skips unrecorded inputs");
     std::uint64_t processed = 0, replayed_prefix = 0;
-    DeliveryWorker delivery(ledger, c.routing.delivery, std::move(targets));
+    DeliveryWorker delivery(ledger, c.routing.delivery, std::move(targets), std::nullopt,
+                            [] { return stopped != 0; });
     auto consume_message = [&](const std::string &message, std::uint64_t &index) {
+        delivery.check();
         auto frame = feed_record(message);
         auto canonical = frame.dump();
         if (auto previous = ledger.input(index)) {
@@ -796,12 +800,14 @@ int run(Config c) {
             index < recorded)
             throw std::runtime_error("input snapshot omits committed prefix");
     };
+    try {
     if (c.feed_url.empty()) {
         if (c.feed == "-") {
             std::uint64_t index = c.from_input;
             std::string pending;
             char buffer[65536];
             while (!stopped && !(c.max_events && processed >= c.max_events)) {
+                delivery.check();
                 pollfd fd{STDIN_FILENO, POLLIN, 0};
                 int rc = poll(&fd, 1, 100);
                 if (rc < 0) {
@@ -858,23 +864,39 @@ int run(Config c) {
                 consume_message(std::string(bytes), index);
                 return !stopped && !(c.max_events && processed >= c.max_events);
             },
-            [] { return stopped != 0; });
+            [&] { delivery.check(); return stopped != 0; });
     } else {
         HttpOptions feed;
         feed.url = c.feed_url;
         feed.allow_insecure_http = c.allow_http;
         do {
+            delivery.check();
             auto snapshot = get_feed_snapshot(feed);
             std::istringstream input(snapshot);
             consume(input, 0, true);
             recorded = ledger.input_count();
             if (c.check || stopped || (c.max_events && processed >= c.max_events))
                 break;
-            for (long n = 0; n < c.poll_ms && !stopped; n += 100)
+            for (long n = 0; n < c.poll_ms && !stopped; n += 100) {
+                delivery.check();
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
         } while (!stopped);
     }
     delivery.finish(stopped != 0);
+    } catch (const std::exception& error) {
+        delivery.limit_drain();
+        try { delivery.finish(false); } catch (...) {}
+        const auto pending = ledger.unsent_count();
+        const auto status = parse_json(LedgerView(c.ledger).status_json());
+        std::string guidance;
+        for (const auto& [target, value] : status.at("targets").members)
+            if (value.at("unsent").integer<std::uint64_t>())
+                guidance += "; run `pineforge-live redeliver --ledger " + c.ledger +
+                    " --deployment " + deployment + " --target " + target + "`";
+        throw std::runtime_error(std::string(error.what()) + "; " + std::to_string(pending) +
+                                 " actions not sent" + guidance);
+    }
     auto pending = ledger.unsent_count();
     std::cout << Json::object(
                      {{"deployment", Json::string(deployment)},
@@ -893,7 +915,7 @@ int run(Config c) {
 
 int ledger_command(int argc, char** argv) {
     const std::string command = argv[1];
-    std::string path, target;
+    std::string path, target, deployment;
     std::uint64_t after = 0, from = 1;
     bool follow = false, failed_only = false;
     std::set<std::string> seen;
@@ -905,13 +927,18 @@ int ledger_command(int argc, char** argv) {
         if (index + 1 == argc) throw std::runtime_error("missing option value: " + option);
         const std::string value = argv[++index];
         if (option == "--ledger") path = value;
+        else if (option == "--deployment") deployment = value;
         else if (command == "actions" && option == "--after") after = unsigned_arg(value);
         else if (command == "redeliver" && option == "--from") from = unsigned_arg(value);
         else if (command == "redeliver" && option == "--target") target = value;
         else throw std::runtime_error("unknown option: " + option);
     }
     if (path.empty()) throw std::runtime_error("ledger is required");
+    if (command == "redeliver" && deployment.empty())
+        throw std::runtime_error("redeliver requires --deployment <id>");
     LedgerView view(path);
+    if (!deployment.empty() && deployment != view.identity())
+        throw std::runtime_error("ledger deployment identity mismatch");
     if (command == "status") {
         std::cout << view.status_json() << '\n';
         return 0;
@@ -934,19 +961,35 @@ int ledger_command(int argc, char** argv) {
     if (document.empty()) throw std::runtime_error("resume this phase-A ledger with run before redelivering");
     auto routing = restore_routes(document);
     if (!routing.targets.count(target)) throw std::runtime_error("undefined webhook target: " + target);
+    for (auto position = routing.targets.begin(); position != routing.targets.end();) {
+        if (position->first != target) position = routing.targets.erase(position);
+        else ++position;
+    }
     auto targets = routing.load_secrets();
     Ledger ledger(path, view.identity());
     auto events = view.redelivery_events(target, from, failed_only);
     const auto selected = events.size();
-    DeliveryWorker delivery(ledger, routing.delivery, std::move(targets), std::move(events));
+    std::set<std::string> selected_ids;
+    for (const auto& event : events) selected_ids.insert(event.id);
+    DeliveryWorker delivery(ledger, routing.delivery, std::move(targets), std::move(events),
+                            [] { return stopped != 0; });
     delivery.finish();
+    std::uint64_t failed = 0, pending = 0;
+    for (const auto& event : view.redelivery_events(target, from, true))
+        if (selected_ids.count(event.id)) ++failed;
+    auto low = from ? from - 1 : 0;
+    while (const auto next = ledger.next_delivery_event(low)) {
+        low = next->event.ordinal;
+        if (next->unsent && selected_ids.count(next->event.id)) ++pending;
+    }
     std::cout << Json::object({{"selected", num(selected)}, {"delivered", num(delivery.delivered())},
-        {"failed", num(delivery.failed())}}).dump() << '\n';
-    return 0;
+        {"failed", num(failed)}, {"pending", num(pending)}}).dump() << '\n';
+    return stopped ? 130 : (failed || pending ? 2 : 0);
 }
 } // namespace
 int main(int argc, char **argv) {
     std::locale::global(std::locale::classic());
+    capture_proxy_environment();
     std::signal(SIGINT, signal_stop);
     std::signal(SIGTERM, signal_stop);
     try {

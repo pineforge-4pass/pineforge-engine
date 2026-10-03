@@ -54,6 +54,9 @@ public:
         if (sqlite3_bind_null(stmt_, col) != SQLITE_OK) database_error();
     }
     bool is_null(int col) const { return sqlite3_column_type(stmt_, col) == SQLITE_NULL; }
+    std::uint64_t steps() const {
+        return static_cast<std::uint64_t>(sqlite3_stmt_status(stmt_, SQLITE_STMTSTATUS_VM_STEP, 0));
+    }
     bool row() {
         const int rc = sqlite3_step(stmt_);
         if (rc == SQLITE_ROW) return true;
@@ -158,8 +161,10 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity)
         throw std::runtime_error("native ledger requires an on-disk path");
     const std::string canonical = std::filesystem::weakly_canonical(path).string();
     impl_->lock_fd = open((canonical + ".lock").c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
-    if (impl_->lock_fd < 0 || flock(impl_->lock_fd, LOCK_EX | LOCK_NB) != 0)
-        throw std::runtime_error("native ledger is locked or its lock file cannot be opened");
+    if (impl_->lock_fd < 0)
+        throw std::runtime_error("native ledger lock file cannot be opened");
+    if (flock(impl_->lock_fd, LOCK_EX | LOCK_NB) != 0)
+        throw std::runtime_error("the runner is running: stop it first; it resumes from its ledger");
     impl_->database_fd = open(canonical.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
     struct stat st {};
     if (impl_->database_fd < 0 || fstat(impl_->database_fd, &st) != 0 ||
@@ -314,6 +319,7 @@ void Ledger::commit_input(std::uint64_t index, const std::string& canonical_json
     tx.commit();
 }
 
+#ifdef PINEFORGE_LIVE_LEGACY_TEST_API
 std::optional<StoredEvent> Ledger::pending_event() const {
     std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     Statement q(impl_->db, "SELECT ordinal,event_id,payload,attempts FROM events "
@@ -355,6 +361,8 @@ void Ledger::acknowledge(const std::string& event_id) {
     q.bind(1, event_id); q.done(); tx.commit();
 }
 
+#endif
+
 void Ledger::bind_routing(const std::string& document) {
     std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     validate_bytes(document, "routing configuration");
@@ -380,6 +388,20 @@ std::uint64_t Ledger::unsent_count() const {
     std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     const auto sql = std::string("SELECT COUNT(*) FROM events e JOIN event_routes r ON r.ordinal=e.ordinal WHERE ") + unsent_predicate;
     return scalar(impl_->db, sql.c_str());
+}
+
+std::optional<DeliveryScan> Ledger::next_delivery_event(std::uint64_t after,
+                                                       std::uint64_t* steps) const {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
+    Statement query(impl_->db, "SELECT e.ordinal,e.event_id,e.payload,e.attempts,r.target_id,r.delivery_id,"
+        "e.acknowledged=0 AND r.target_id IS NOT NULL AND NOT EXISTS "
+        "(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id AND d.phase='completed') "
+        "FROM events e JOIN event_routes r ON r.ordinal=e.ordinal WHERE e.ordinal>? ORDER BY e.ordinal LIMIT 1");
+    query.bind(1, after);
+    const bool found = query.row();
+    if (steps) *steps = query.steps();
+    if (!found) return std::nullopt;
+    return DeliveryScan{read_routed_event(query), query.integer(6) != 0};
 }
 
 DeliveryAttempt Ledger::start_attempt(const StoredEvent& event, std::uint64_t started_at) {
@@ -480,11 +502,16 @@ std::vector<StoredEvent> LedgerView::redelivery_events(const std::string& target
 }
 
 std::string LedgerView::status_json() const {
+    exec(impl_->db, "BEGIN");
+    struct ReadEnd {
+        sqlite3* database;
+        ~ReadEnd() { sqlite3_exec(database, "ROLLBACK", nullptr, nullptr, nullptr); }
+    } read_end{impl_->db};
     Json targets = Json::object({});
     const auto initialize = [&](const std::string& name) -> Json& {
         auto [position, inserted] = targets.members.emplace(name, Json{});
         if (inserted) position->second = Json::object({{"sent", Json::number("0")}, {"failed", Json::number("0")},
-            {"last_success", Json{}}, {"last_error", Json{}}, {"last_attempt", Json{}}});
+            {"unsent", Json::number("0")}, {"last_success", Json{}}, {"last_error", Json{}}, {"last_attempt", Json{}}});
         return position->second;
     };
     if (const auto document = routing_document(); !document.empty()) {
@@ -495,21 +522,24 @@ std::string LedgerView::status_json() const {
         else if (!config.at("url").text().empty()) initialize("default");
     }
     if (impl_->routed) {
-        Statement log(impl_->db, "SELECT target_id,phase,started_at,ended_at,http_status,error_category,success FROM delivery_log ORDER BY log_id");
+        Statement log(impl_->db, "SELECT target_id,SUM(phase='completed' AND success=1),"
+            "SUM(phase='completed' AND success=0),MAX(started_at),"
+            "MAX(CASE WHEN phase='completed' AND success=1 THEN ended_at END),"
+            "MAX(CASE WHEN phase='completed' AND success=0 THEN log_id END) FROM delivery_log GROUP BY target_id");
         while (log.row()) {
             auto& status = initialize(log.text(0));
-            auto& last_attempt = status.members["last_attempt"];
-            if (last_attempt.kind == Json::Kind::Null ||
-                log.integer(2) > last_attempt.integer<std::uint64_t>())
-                last_attempt = Json::number(std::to_string(log.integer(2)));
-            if (log.text(1) != "completed") continue;
-            const bool success = log.integer(6) == 1;
-            auto& count = status.members[success ? "sent" : "failed"];
-            count = Json::number(std::to_string(count.integer<std::uint64_t>() + 1));
-            if (success) status.members["last_success"] = Json::number(std::to_string(log.integer(3)));
-            else status.members["last_error"] = Json::object({{"category", Json::string(log.text(5))},
-                {"http_status", Json::number(std::to_string(log.integer(4)))},
-                {"at", Json::number(std::to_string(log.integer(3)))}});
+            status.members["sent"] = Json::number(std::to_string(log.integer(1)));
+            status.members["failed"] = Json::number(std::to_string(log.integer(2)));
+            status.members["last_attempt"] = Json::number(std::to_string(log.integer(3)));
+            if (!log.is_null(4)) status.members["last_success"] = Json::number(std::to_string(log.integer(4)));
+            if (!log.is_null(5)) {
+                Statement error(impl_->db, "SELECT error_category,http_status,ended_at FROM delivery_log WHERE log_id=?");
+                error.bind(1, log.integer(5));
+                if (!error.row()) database_error();
+                status.members["last_error"] = Json::object({{"category", Json::string(error.text(0))},
+                    {"http_status", Json::number(std::to_string(error.integer(1)))},
+                    {"at", Json::number(std::to_string(error.integer(2)))}});
+            }
         }
     }
     Statement legacy(impl_->db, impl_->routed
@@ -521,6 +551,12 @@ std::string LedgerView::status_json() const {
         auto& count = initialize(legacy.text(0)).members["sent"];
         count = Json::number(std::to_string(count.integer<std::uint64_t>() + legacy.integer(1)));
     }
+    Statement unsent(impl_->db, impl_->routed
+        ? "SELECT r.target_id,COUNT(*) FROM events e JOIN event_routes r ON r.ordinal=e.ordinal WHERE "
+          "e.acknowledged=0 AND r.target_id IS NOT NULL AND NOT EXISTS "
+          "(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id AND d.phase='completed') GROUP BY r.target_id"
+        : "SELECT 'default',COUNT(*) FROM events WHERE acknowledged=0 HAVING COUNT(*)>0");
+    while (unsent.row()) initialize(unsent.text(0)).members["unsent"] = Json::number(std::to_string(unsent.integer(1)));
     return Json::object({{"schema_version", Json::number("1")}, {"targets", std::move(targets)},
         {"actions", Json::number(std::to_string(scalar(impl_->db, "SELECT COUNT(*) FROM events")))}}).dump();
 }

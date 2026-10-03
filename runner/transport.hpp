@@ -31,6 +31,7 @@ struct DeliveryResult {
 std::string sha256_hex(std::string_view bytes);
 std::string hmac_sha256_hex(std::string_view secret, std::string_view bytes);
 void validate_http(const HttpOptions& options);
+void capture_proxy_environment();
 
 struct CompletedWebhook {
     std::uint64_t key = 0;
@@ -51,7 +52,9 @@ private:
 };
 // Blocking, bounded native libcurl delivery. Only HTTP(S), no redirects,
 // verified TLS, JSON body, stable idempotency and optional HMAC headers.
+#ifdef PINEFORGE_LIVE_LEGACY_TEST_API
 DeliveryResult post_webhook(const HttpOptions& options, const StoredEvent& event);
+#endif
 // Fetch a finite provider-neutral JSONL snapshot. Maximum response 4 MiB;
 // requires HTTP 2xx and never attaches webhook HMAC/idempotency headers.
 std::string get_feed_snapshot(const HttpOptions& options);

@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <exception>
+#include <functional>
 #include <map>
 #include <thread>
 
@@ -14,11 +15,14 @@ class DeliveryWorker {
 public:
     DeliveryWorker(Ledger& ledger, DeliveryOptions settings,
                    std::map<std::string, HttpOptions> targets,
-                   std::optional<std::vector<StoredEvent>> redeliver = std::nullopt);
+                   std::optional<std::vector<StoredEvent>> redeliver = std::nullopt,
+                   std::function<bool()> stopped = {});
     ~DeliveryWorker();
     DeliveryWorker(const DeliveryWorker&) = delete;
     DeliveryWorker& operator=(const DeliveryWorker&) = delete;
     void finish(bool cancel = false);
+    void limit_drain();
+    void check() const;
     std::uint64_t delivered() const { return delivered_.load(); }
     std::uint64_t failed() const { return failed_.load(); }
 private:
@@ -27,7 +31,10 @@ private:
     DeliveryOptions settings_;
     std::map<std::string, HttpOptions> targets_;
     std::optional<std::vector<StoredEvent>> redeliver_;
+    std::function<bool()> stopped_;
     std::atomic<bool> finishing_{false}, cancelling_{false};
+    std::atomic<bool> worker_failed_{false};
+    std::atomic<std::int64_t> drain_until_{0};
     std::atomic<std::uint64_t> delivered_{0}, failed_{0};
     std::exception_ptr error_;
     std::thread worker_;

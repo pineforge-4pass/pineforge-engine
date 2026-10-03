@@ -51,4 +51,4 @@ RoutingConfig restore_routes(const std::string& document);
 std::string delivery_identity(const std::string& event_id,
                               const std::optional<std::string>& target);
 
-} 
+}

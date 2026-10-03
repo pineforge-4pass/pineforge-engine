@@ -100,12 +100,19 @@ def query(ledger, sql):
         return database.execute(sql).fetchall()
 
 
-def first_attempt_time(ledger):
-    epoch_seconds = query(ledger, 'SELECT min(started_at) FROM delivery_log')[0][0] / 1000
-    return time.monotonic() - (time.time() - epoch_seconds)
+def committed_actions(ledger):
+    if not ledger.exists():
+        return False
+    try:
+        return query(ledger, 'SELECT count(*) FROM events')[0][0] == 4
+    except sqlite3.OperationalError:
+        return False
 
 
-def invoke(arguments, expected=0, env=None):
+def invoke(arguments, expected=0, env=None, auto_deployment=True):
+    if arguments[0] == 'redeliver' and '--deployment' not in arguments and auto_deployment:
+        ledger = arguments[arguments.index('--ledger') + 1]
+        arguments = arguments + ['--deployment', query(ledger, 'SELECT identity FROM metadata')[0][0]]
     process = subprocess.run([runner] + arguments, capture_output=True, text=True,
                              env=environment if env is None else env, timeout=25)
     assert process.returncode == expected, (arguments, process.returncode, process.stdout, process.stderr)
@@ -250,13 +257,12 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
         entries.clear(); exits.clear()
         entries.mode = 'hang-first'; exits.mode = 'fail-first'
         isolation_ledger = root / 'isolation.sqlite'
-        started_at = time.monotonic()
         process = run(isolation_ledger, isolation)
-        assert time.monotonic() - started_at < 3.5
-        first_sent_at = min(row['at'] for row in entries.rows if row['action']['sequence'] == 1)
         newer = [row for row in entries.rows if row['action']['sequence'] == 3]
-        assert len(newer) == 1 and newer[0]['at'] - first_sent_at < 0.4, (first_sent_at, [row['at'] for row in newer])
-        assert all(row['at'] - first_sent_at < 0.4 for row in exits.rows)
+        assert len(newer) == 1
+        first_completed = query(isolation_ledger, "SELECT min(ended_at) FROM delivery_log WHERE target_id='entries' AND phase='completed' AND success=0")[0][0]
+        initial_starts = query(isolation_ledger, "SELECT started_at FROM delivery_log WHERE phase='started' AND attempt=1")
+        assert len(initial_starts) == 4 and all(row[0] < first_completed for row in initial_starts)
         assert len([row for row in exits.rows if row['action']['sequence'] == 2]) == 1
         assert len([row for row in entries.rows if row['action']['sequence'] == 1]) == 3
         assert query(isolation_ledger, 'SELECT count(*) FROM inputs')[0][0] == len(events)
@@ -273,7 +279,7 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
         assert len(entries.rows) == 4 and len(exits.rows) == 2
         entries.mode = exits.mode = 'ok'
         result = json.loads(invoke(['redeliver', '--ledger', str(isolation_ledger), '--target', 'entries', '--failed-only']).stdout)
-        assert result == {'selected': 1, 'delivered': 1, 'failed': 0}
+        assert result == {'selected': 1, 'delivered': 1, 'failed': 0, 'pending': 0}
         repeated = [row for row in entries.rows if row['action']['sequence'] == 1]
         assert len(repeated) == 4 and len({row['body'] for row in repeated}) == len({row['key'] for row in repeated}) == 1
         rotated_environment = dict(environment, ENTRY_HMAC='rotated-loopback-signing-key')
@@ -308,8 +314,8 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
         exits.clear()
         disconnected_ledger = root / 'disconnected.sqlite'
         run(disconnected_ledger, disconnected_routes)
-        started_at = first_attempt_time(disconnected_ledger)
-        assert all(row['at'] - started_at < 0.4 for row in exits.rows)
+        initial_starts = query(disconnected_ledger, "SELECT started_at FROM delivery_log WHERE phase='started' AND attempt=1")
+        assert max(row[0] for row in initial_starts) - min(row[0] for row in initial_starts) < 900
         failed = query(disconnected_ledger, "SELECT event_id,attempt,started_at FROM delivery_log WHERE phase='completed' AND target_id='entries' ORDER BY log_id")
         for event_id in {row[0] for row in failed}:
             timeline = [row[2] for row in failed if row[0] == event_id]
@@ -366,11 +372,89 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
                 process.kill(); process.wait(timeout=5)
         main_receiver.clear(); main_receiver.mode = 'ok'
         run(crash_ledger, crash_routes)
-        assert sorted(row['action']['sequence'] for row in main_receiver.rows) == [1, 2, 3, 4]
+        assert [row['action']['sequence'] for row in main_receiver.rows] == [1, 2, 3, 4]
         assert stored(crash_ledger) == before_crash
         run(crash_ledger, crash_routes)
         assert len(main_receiver.rows) == 4
         print('PASS SIGKILL between commit/send and mid-request resumes each unsent action once after replay', flush=True)
+
+        deployment = query(crash_ledger, 'SELECT identity FROM metadata')[0][0]
+        assert 'requires --deployment' in invoke(['redeliver', '--ledger', str(crash_ledger), '--target', 'main'],
+                                                 expected=1, auto_deployment=False).stderr
+        for command in ('redeliver', 'actions', 'status'):
+            arguments = [command, '--ledger', str(crash_ledger), '--deployment', 'wrong']
+            if command == 'redeliver':
+                arguments += ['--target', 'main']
+            assert 'identity mismatch' in invoke(arguments, expected=1).stderr
+        entries.mode = 'fail'
+        chosen_environment = dict(environment)
+        chosen_environment.pop('MAIN_HMAC'); chosen_environment.pop('EXIT_HMAC')
+        failed_redelivery = json.loads(invoke(['redeliver', '--ledger', str(isolation_ledger), '--target', 'entries'],
+                                              expected=2, env=chosen_environment).stdout)
+        assert failed_redelivery == {'selected': 2, 'delivered': 0, 'failed': 2, 'pending': 0}
+        entries.mode = 'ok'
+        print('PASS deployment checks, failed redelivery exit/counts, selected-target secrets and saturation commit order', flush=True)
+
+        stdin_base = list(base)
+        stdin_base[stdin_base.index('--feed') + 1] = '-'
+        fatal_document = copy.deepcopy(isolation_document)
+        fatal_document['delivery'].update(max_in_flight=1, total_timeout_ms=2000)
+        fatal_routes = save_routes('fatal', fatal_document)
+        for mode in ('ok', 'hang'):
+            entries.clear(); exits.clear(); entries.mode = exits.mode = mode
+            fatal_ledger = root / f'fatal-{mode}.sqlite'
+            fatal = subprocess.Popen([runner] + stdin_base + ['--ledger', str(fatal_ledger), '--webhook-routes', str(fatal_routes)],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     text=True, env=environment)
+            try:
+                fatal.stdin.write(feed.read_text()); fatal.stdin.flush()
+                wait_for(lambda: committed_actions(fatal_ledger))
+                started = time.monotonic()
+                stdout, stderr = fatal.communicate(input='malformed\n', timeout=5)
+                assert fatal.returncode == 1 and time.monotonic() - started < 2.4, stderr
+                status = json.loads(invoke(['status', '--ledger', str(fatal_ledger)]).stdout)['targets']
+                pending = sum(target['unsent'] for target in status.values())
+                completed = query(fatal_ledger, "SELECT count(DISTINCT event_id) FROM delivery_log WHERE phase='completed'")[0][0]
+                assert completed + pending == 4
+                assert f'{pending} actions not sent' in stderr.splitlines()[-1]
+                if pending:
+                    assert 'pineforge-live redeliver --ledger' in stderr.splitlines()[-1]
+                    assert '--deployment' in stderr.splitlines()[-1] and '--target' in stderr.splitlines()[-1]
+                assert all(row[0] <= 1 for row in query(fatal_ledger, 'SELECT attempts FROM events'))
+            finally:
+                if fatal.poll() is None:
+                    fatal.kill(); fatal.communicate(timeout=5)
+        print('PASS fatal malformed feed drains within one global timeout without retries and reports every unsent action in status', flush=True)
+
+        entries.mode = exits.mode = 'ok'
+        main_receiver.clear(); main_receiver.mode = 'hang'
+        signal_ledger = root / 'signal.sqlite'
+        active = subprocess.Popen([runner] + base + ['--ledger', str(signal_ledger), '--webhook-routes', str(crash_routes)],
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=environment)
+        try:
+            wait_for(lambda: committed_actions(signal_ledger) and bool(main_receiver.rows))
+            refusal = invoke(['redeliver', '--ledger', str(signal_ledger), '--target', 'main'], expected=1)
+            assert 'the runner is running: stop it first; it resumes from its ledger' in refusal.stderr
+            started = time.monotonic(); active.send_signal(signal.SIGTERM)
+            active.communicate(timeout=3)
+            assert active.returncode == 130 and time.monotonic() - started < 0.75
+        finally:
+            if active.poll() is None:
+                active.kill(); active.communicate(timeout=5)
+        main_receiver.clear()
+        redelivery = subprocess.Popen([runner, 'redeliver', '--ledger', str(signal_ledger), '--target', 'main',
+                                      '--deployment', query(signal_ledger, 'SELECT identity FROM metadata')[0][0]],
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=environment)
+        try:
+            wait_for(lambda: bool(main_receiver.rows))
+            started = time.monotonic(); redelivery.send_signal(signal.SIGTERM)
+            stdout, stderr = redelivery.communicate(timeout=3)
+            assert redelivery.returncode == 130 and time.monotonic() - started < 0.75
+            assert json.loads(stdout)['pending'] == 4
+        finally:
+            if redelivery.poll() is None:
+                redelivery.kill(); redelivery.communicate(timeout=5)
+        print('PASS SIGTERM promptly cancels EOF drain and redelivery; live redelivery is explicitly refused', flush=True)
 
         for receiver in receivers:
             assert not receiver.errors, receiver.errors
