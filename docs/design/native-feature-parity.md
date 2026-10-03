@@ -301,7 +301,7 @@ Depends on L7 (working view), L3 (so `Sized` is in v1 of the C request) and the 
 
 - Move `runner/examples/native_market_strategy.cpp` and `native_selected_strategy.cpp` to a top-level `examples/native/`, built by `PINEFORGE_BUILD_EXAMPLES` (then "none yet" and guarding nothing CMakeLists.txt:37; the examples build only under `PINEFORGE_BUILD_LIVE_RUNNER` CMakeLists.txt:465-466, with `native_market_example` runner/CMakeLists.txt:45). Link the kernel target (S), or `PineForge::pineforge` during migration (O) — no SQLite / curl / OpenSSL (runner/CMakeLists.txt:1-4).
 - Build (1) standalone executables with a `main()` that runs batch + stream on embedded bars (the guide already contains that `main` native-engine.md:3237-3305) and (2) the same MODULE targets the runner tests load; keep the C-ABI shims so the live runner can still `dlopen` them (F, O, S).
-- Update the three places that pin the paths: `native_market_example` runner/CMakeLists.txt:45, `NATIVE_EXAMPLES` check_native_include_independence.py:49, the tests at `test_native_example_batch` runner/CMakeLists.txt:128.
+- Update the three places that pin the paths: `native_market_example` runner/CMakeLists.txt:45, `NATIVE_EXAMPLES` check_native_include_independence.py:49, the tests at `test_native_example_batch` runner/CMakeLists.txt:113.
 - Add a minimal "hello, kernel" host (~60 lines, no C ABI — O) and one example per v1 feature lane as it lands; each doubles as that lane's twin host (F).
 - Add `include/pineforge/native_module.hpp` with `PINEFORGE_EXPORT_NATIVE_STRATEGY(Class)` to replace the ~70 hand-written `extern "C"` lines per example (F, single-source).
 - Ship the native API reference and the standard dual-run harness of §3.1 b (S lane J).
