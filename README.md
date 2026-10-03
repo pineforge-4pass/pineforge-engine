@@ -31,7 +31,7 @@ PineForge is a C++17 engine for backtesting and forward execution, with a C ABI 
 
 The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss), translates a PineScript v6 script into a C++ strategy that attaches the engine's Pine execution adapter (its releases 1.0.0 and 1.0.1 do; 0.10.4 predates the adapter); it owns translation, not execution semantics. TradingView comparisons measure this Pine path under the tested configurations. The [order model](docs/pages/fill-model.md) describes the current submodels and the remaining migration work; [Architecture](#architecture-kernel-vs-parity) states the boundary.
 
-- **Proven, not promised.** All <!-- pf:scoreboard.graded|int -->7,989<!-- /pf --> graded probes — <!-- pf:inventory.corpusScripts|int -->309<!-- /pf --> open reference strategies, <!-- pf:inventory.communityScripts|int -->680<!-- /pf --> community-shared scripts and <!-- pf:inventory.probeScripts|int -->61<!-- /pf --> probe scripts the maintainers wrote, on <!-- pf:scoreboard.lanes|int -->18<!-- /pf --> market/timeframe lanes — grade against TradingView's own trade lists: **<!-- pf:scoreboard.excellent|int -->7,946<!-- /pf --> excellent, <!-- pf:scoreboard.strong|int -->43<!-- /pf --> strong, <!-- pf:scoreboard.belowStrong|int -->0<!-- /pf --> below strong**. The graded probes' TradingView trade lists hold <!-- pf:inventory.tvTrades|int -->4,776,328<!-- /pf --> trades; <!-- pf:scoreboard.anomaliesExcluded|int -->17<!-- /pf --> probes with TradingView-side defects are excluded.
+- **Proven, not promised.** All <!-- pf:scoreboard.graded|int -->7,989<!-- /pf --> graded probes — <!-- pf:inventory.corpusScripts|int -->309<!-- /pf --> open reference strategies, <!-- pf:inventory.communityScripts|int -->680<!-- /pf --> community-shared scripts and <!-- pf:inventory.probeScripts|int -->61<!-- /pf --> probe scripts the maintainers wrote, on <!-- pf:scoreboard.lanes|int -->18<!-- /pf --> market/timeframe lanes — grade against TradingView's own trade lists: **<!-- pf:scoreboard.excellent|int -->7,949<!-- /pf --> excellent, <!-- pf:scoreboard.strong|int -->40<!-- /pf --> strong, <!-- pf:scoreboard.belowStrong|int -->0<!-- /pf --> below strong**. The graded probes' TradingView trade lists hold <!-- pf:inventory.tvTrades|int -->4,776,328<!-- /pf --> trades; <!-- pf:scoreboard.anomaliesExcluded|int -->17<!-- /pf --> probes with TradingView-side defects are excluded.
 - **Open runtime.** The engine and native live runner are Apache-2.0. The separately distributed [PineForge compiler](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) uses PolyForm Noncommercial terms with additional personal-trading permission; commercial use requires a separate license. Public reference strategies, benchmarks and validation tooling are available in their respective repositories; the community-script test set is not redistributed.
 - **Fast.** In-process, no interpreter: median **36× faster than PyneCore** on the 200 strategies both engines time, measured at engine `35db01c8` on 2026-09-29 on an AWS c7a.8xlarge with PyneCore timed as a subprocess, its interpreter start-up included (PineForge runs a median 807k bars/s per strategy over its 201 slots with the bar magnifier on; [method](benchmarks/results/speed.md)). Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
 - **Deterministic to the bit.** Two runs with the same inputs produce identical trade lists. Same on Linux and macOS.
@@ -226,16 +226,16 @@ live behavior or real broker fills.
 
 ## Validation scoreboard
 
-**Measured <!-- pf:scoreboard.date -->2026-10-03<!-- /pf -->** on main engine `<!-- pf:scoreboard.engineCommit|short -->a744bee8<!-- /pf -->` with codegen-oss `<!-- pf:scoreboard.codegenCommit|short -->8b42cd4a<!-- /pf -->` (baseline `<!-- pf:scoreboard.id -->pineforge-parity-baseline-20261003-engine-a744bee8<!-- /pf -->`, snapshot `<!-- pf:scoreboard.snapshotSha256|short -->37c78b3d<!-- /pf -->`): **<!-- pf:scoreboard.graded|int -->7,989<!-- /pf --> graded probes, <!-- pf:scoreboard.excellent|int -->7,946<!-- /pf --> excellent + <!-- pf:scoreboard.strong|int -->43<!-- /pf --> strong**, <!-- pf:scoreboard.belowStrong|int -->0<!-- /pf --> below strong and <!-- pf:scoreboard.engineErrors|int -->0<!-- /pf --> engine errors across <!-- pf:scoreboard.lanes|int -->18<!-- /pf --> market/timeframe lanes. Their TradingView trade lists hold <!-- pf:inventory.tvTrades|int -->4,776,328<!-- /pf --> trades.
+**Measured <!-- pf:scoreboard.date -->2026-10-03<!-- /pf -->** on main engine `<!-- pf:scoreboard.engineCommit|short -->8d47fa2d<!-- /pf -->` with codegen-oss `<!-- pf:scoreboard.codegenCommit|short -->8b42cd4a<!-- /pf -->` (baseline `<!-- pf:scoreboard.id -->pineforge-parity-baseline-20261003-engine-8d47fa2d<!-- /pf -->`, snapshot `<!-- pf:scoreboard.snapshotSha256|short -->88718b41<!-- /pf -->`): **<!-- pf:scoreboard.graded|int -->7,989<!-- /pf --> graded probes, <!-- pf:scoreboard.excellent|int -->7,949<!-- /pf --> excellent + <!-- pf:scoreboard.strong|int -->40<!-- /pf --> strong**, <!-- pf:scoreboard.belowStrong|int -->0<!-- /pf --> below strong and <!-- pf:scoreboard.engineErrors|int -->0<!-- /pf --> engine errors across <!-- pf:scoreboard.lanes|int -->18<!-- /pf --> market/timeframe lanes. Their TradingView trade lists hold <!-- pf:inventory.tvTrades|int -->4,776,328<!-- /pf --> trades.
 
 Release **1.0.1 still grades <!-- pf:releases[1.0.1].scoreboard.excellent|int -->7,905<!-- /pf --> excellent / <!-- pf:releases[1.0.1].scoreboard.strong|int -->84<!-- /pf --> strong until the next release**, on <!-- pf:releases[1.0.1].scoreboard.graded|int -->7,989<!-- /pf --> probes (baseline `<!-- pf:releases[1.0.1].scoreboard.id -->pineforge-parity-baseline-20261001-codegen-67892cda<!-- /pf -->`, <!-- pf:releases[1.0.1].scoreboard.date -->2026-10-01<!-- /pf -->). A main scoreboard advance does not change release results.
 
-The quantities above render from the public [facts tokens](https://github.com/pineforge-4pass/pineforge-release/blob/7238bb3d1a30c68cc857197cadf883bce29680f0/facts/facts.json). Maintain them with `lab facts render --repo . --facts <local facts file or pinned raw URL>`; `lab facts check` with the same inputs reports drift. Grades are registry-derived; the authored-script and closed-trade inventory is explicitly sourced to a historical public README for the identical population, not to registry row or slug totals.
+The quantities above render from the public [facts tokens](https://github.com/pineforge-4pass/pineforge-release/blob/d70c5cabbfcbf14c59c6b4fc3bb86d5833ffdc5c/facts/facts.json). Maintain them with `lab facts render --repo . --facts <local facts file or pinned raw URL>`; `lab facts check` with the same inputs reports drift. Grades are registry-derived; the authored-script and closed-trade inventory is explicitly sourced to a historical public README for the identical population, not to registry row or slug totals.
 
 | Board | Test set | Result |
 |---|---|---|
 | **Public** — [open corpus](https://github.com/pineforge-4pass/pineforge-corpus) | 312 reference strategies on BINANCE:ETHUSDT.P 15m, Apache-2.0, reproducible by anyone | this repository's sweep: **311 excellent + 1 declared anomaly**; the <!-- pf:scoreboard.corpusProbes|int -->309<!-- /pf --> of them in the measured population: **<!-- pf:scoreboard.scopes.corpus.excellent|int -->309<!-- /pf --> excellent** |
-| **Closed test** | <!-- pf:inventory.closedProbes|int -->7,680<!-- /pf --> probes of <!-- pf:inventory.closedScripts|int -->741<!-- /pf --> TradingView scripts across the <!-- pf:scoreboard.lanes|int -->18<!-- /pf --> lanes: <!-- pf:inventory.communityScripts|int -->680<!-- /pf --> community-shared scripts (<!-- pf:inventory.communityProbes|int -->7,179<!-- /pf --> probes), private under TradingView's Terms of Service, and <!-- pf:inventory.probeScripts|int -->61<!-- /pf --> probe scripts the maintainers wrote (<!-- pf:inventory.probeScriptProbes|int -->501<!-- /pf --> probes) | **<!-- pf:scoreboard.scopes.closed.excellent|int -->7,637<!-- /pf --> excellent + <!-- pf:scoreboard.scopes.closed.strong|int -->43<!-- /pf --> strong** |
+| **Closed test** | <!-- pf:inventory.closedProbes|int -->7,680<!-- /pf --> probes of <!-- pf:inventory.closedScripts|int -->741<!-- /pf --> TradingView scripts across the <!-- pf:scoreboard.lanes|int -->18<!-- /pf --> lanes: <!-- pf:inventory.communityScripts|int -->680<!-- /pf --> community-shared scripts (<!-- pf:inventory.communityProbes|int -->7,179<!-- /pf --> probes), private under TradingView's Terms of Service, and <!-- pf:inventory.probeScripts|int -->61<!-- /pf --> probe scripts the maintainers wrote (<!-- pf:inventory.probeScriptProbes|int -->501<!-- /pf --> probes) | **<!-- pf:scoreboard.scopes.closed.excellent|int -->7,640<!-- /pf --> excellent + <!-- pf:scoreboard.scopes.closed.strong|int -->40<!-- /pf --> strong** |
 
 ### Lane by lane
 
@@ -243,9 +243,9 @@ The quantities above render from the public [facts tokens](https://github.com/pi
 
 | Market · timeframe | Probes graded | Excellent | Strong | Below strong |
 |---|---:|---:|---:|---:|
-| BINANCE:BTCUSDT · 15m | 668 | 663 | 5 | 0 |
+| BINANCE:BTCUSDT · 15m | 668 | 664 | 4 | 0 |
 | BINANCE:BTCUSDT · 1D | 516 | 516 | 0 | 0 |
-| BINANCE:ETHUSDT.P · 15m *(hard lane: zero regression allowed)* | 1,009 | 999 | 10 | 0 |
+| BINANCE:ETHUSDT.P · 15m *(hard lane: zero regression allowed)* | 1,009 | 1,000 | 9 | 0 |
 | BINANCE:ETHUSDT.P · 1D | 540 | 539 | 1 | 0 |
 | CME_MINI:ES1! · 15m | 76 | 76 | 0 | 0 |
 | CME_MINI:ES1! · 1D | 35 | 35 | 0 | 0 |
@@ -257,11 +257,11 @@ The quantities above render from the public [facts tokens](https://github.com/pi
 | NSE:NIFTY · 1D | 225 | 225 | 0 | 0 |
 | NYSE:F · 15m | 637 | 625 | 12 | 0 |
 | NYSE:F · 1D | 505 | 502 | 3 | 0 |
-| OANDA:EURUSD · 15m | 653 | 647 | 6 | 0 |
+| OANDA:EURUSD · 15m | 653 | 648 | 5 | 0 |
 | OANDA:EURUSD · 1D | 453 | 453 | 0 | 0 |
 | OANDA:XAUUSD · 15m | 695 | 692 | 3 | 0 |
 | OANDA:XAUUSD · 1D | 456 | 456 | 0 | 0 |
-| **Total** | **7,989** | **7,946** | **43** | **0** |
+| **Total** | **7,989** | **7,949** | **40** | **0** |
 
 <!-- /pf -->
 
