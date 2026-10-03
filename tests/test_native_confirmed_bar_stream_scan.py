@@ -1,8 +1,13 @@
 import unittest
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 from native_confirmed_bar_stream_scan import (
     compare_saved, semantic_actions, semantic_state, stream_splits, SETTINGS,
+    is_stream_refusal,
+    recompare,
 )
 
 
@@ -60,6 +65,33 @@ class ConfirmedScanTests(unittest.TestCase):
         SETTINGS["splits"] = [0.8, 0.9]
         with self.assertRaisesRegex(RuntimeError, "no chart boundary"):
             stream_splits(bars, len(bars), "1D", [bars[40].timestamp])
+
+    def test_pushed_bar_preflight_is_a_refusal_not_trade_divergence(self):
+        self.assertTrue(is_stream_refusal(
+            "strategy_stream_push_bar[5]: rc=-1: native stream has an in-session gap"))
+        self.assertFalse(is_stream_refusal("equivalence_export_actions: rc=-1"))
+
+    def test_cumulative_report_subnormal_difference_is_not_rounded(self):
+        batch = {"actions": [], "state": state()}
+        stream = {"actions": [], "state": state()}
+        stream["state"]["totals"]["net_profit"] = float.fromhex("0x0.0000000000001p-1022")
+        difference = compare_saved(batch, stream, 1, 20)
+        self.assertEqual(difference["path"], "state.totals.net_profit")
+
+    def test_recompare_preserves_refusal_after_completed_handoff(self):
+        with TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            case = output / "case"
+            case.mkdir()
+            result = {"probe": "case", "result": "FAIL", "proof_gap": True,
+                      "error": "strategy_stream_push_bar[5]: rc=-1: native stream has an in-session gap",
+                      "splits": [{"index": 1, "time_ms": 20, "result": "PASS"}]}
+            (case / "result.json").write_text(json.dumps(result))
+            recompare(output)
+            saved = json.loads((case / "result.json").read_text())
+            self.assertEqual(saved["result"], "STREAM-UNSUPPORTED")
+            self.assertEqual(saved["splits"], result["splits"])
+            self.assertNotIn("proof_gap", saved)
 
 
 if __name__ == "__main__":

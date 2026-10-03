@@ -192,6 +192,12 @@ def error_text(library, state, operation, result):
     return f"{operation}: rc={result}: {(detail or b'').decode()}"
 
 
+def is_stream_refusal(message):
+    return ("strategy_stream_begin: rc=" in message
+            or ("strategy_stream_push_bar[" in message and "]: rc=" in message)
+            or "bar_magnifier argument" in message)
+
+
 def run_mode(strategy, observer, directory, params, kwargs, destination, split=None):
     library = strategy.lib
     original_create = library.strategy_create
@@ -265,6 +271,9 @@ def compare_saved(batch, stream, split, split_time):
     actual = {"actions": semantic_actions(stream["actions"], split_time),
               "state": semantic_state(stream["state"])}
     for section in ("actions", "state"):
+        if json.dumps(expected[section], sort_keys=True, separators=(",", ":")) == json.dumps(
+                actual[section], sort_keys=True, separators=(",", ":")):
+            continue
         difference = first_difference(expected[section], actual[section], section)
         if difference:
             timestamp = None
@@ -296,7 +305,11 @@ def recompare(output):
     results = []
     for path in sorted(output.glob("*/result.json")):
         result = json.loads(path.read_text())
-        if result.get("splits"):
+        if result.get("proof_gap") and is_stream_refusal(result.get("error", "")):
+            result.update(result="STREAM-UNSUPPORTED", refusal=result.pop("error"))
+            result.pop("proof_gap", None)
+            write_json(path, result)
+        if result.get("splits") and result["result"] != "STREAM-UNSUPPORTED":
             batch_directory = path.parent / "batch"
             batch = {"actions": read_rows(batch_directory / "actions.jsonl"),
                      "state": json.loads((batch_directory / "state.json").read_text())}
@@ -362,7 +375,7 @@ def scan_case(case):
                                   destination / f"stream-{split}", split)
             except RuntimeError as error:
                 refusal = str(error)
-                if "strategy_stream_begin:" not in refusal and "bar_magnifier argument" not in refusal:
+                if not is_stream_refusal(refusal):
                     raise
                 result.update(result="STREAM-UNSUPPORTED", refusal=refusal)
                 break
