@@ -867,7 +867,7 @@ class RunnerSanitizerCoverage(unittest.TestCase):
         generated.write_text('int generated_fixture;\n')
         command = self.command(generated)
         coverage = self.coverage([*self.commands, command])
-        self.assertIn(f'coverage: {generated} (outside source tree)', coverage)
+        self.assertIn(f'coverage: {generated.resolve()} (outside source tree)', coverage)
         command['arguments'].remove(SANITIZER_FLAG)
         with self.assertRaisesRegex(RuntimeError, 'outside source tree'):
             self.coverage([*self.commands, command])
@@ -1857,7 +1857,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                 self.assertEqual('require-websocket' in stage_names(summary), present)
                 self.assertEqual((build_dir / 'bin' / 'test_native_live_websocket').is_file(), present)
                 ctest = next(stage for stage in summary['stages'] if stage['name'] == 'ctest')
-                self.assertIn(str(build_dir / 'runner'), ctest['argv'])
+                self.assertIn(str((build_dir / 'runner').resolve()), ctest['argv'])
                 for name in ('ctest', 'native-help', *(['require-websocket'] if present else [])):
                     stage = next(stage for stage in summary['stages'] if stage['name'] == name)
                     self.assertEqual(stage['extraEnvKeys'], ['ASAN_OPTIONS', 'UBSAN_OPTIONS'])
