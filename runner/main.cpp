@@ -259,6 +259,9 @@ class Strategy {
     void *library_ = nullptr;
     decltype(&strategy_stream_begin) begin_ = nullptr;
     decltype(&strategy_configure_native_v1) configure_native_ = nullptr;
+    decltype(&strategy_set_input_checked) set_input_checked_ = nullptr;
+    decltype(&strategy_set_override_checked) set_override_checked_ = nullptr;
+    decltype(&strategy_get_effective_settings) settings_receipt_ = nullptr;
     template <class T> T symbol(const char *name) {
         auto p = dlsym(library_, name);
         if (!p)
@@ -323,7 +326,23 @@ class Strategy {
             clear = symbol<decltype(clear)>("strategy_stream_order_actions_clear");
             hash = symbol<decltype(hash)>("strategy_stream_state_hash");
             begin_ = symbol<decltype(&strategy_stream_begin)>("strategy_stream_begin");
-            state = symbol<decltype(&strategy_create)>("strategy_create")(nullptr);
+            auto settings_version = optional_symbol<decltype(&strategy_settings_api_version)>(
+                "strategy_settings_api_version");
+            if (settings_version) {
+                if (settings_version() != PF_SETTINGS_API_VERSION)
+                    throw std::runtime_error("settings extension version mismatch");
+                set_input_checked_ = symbol<decltype(set_input_checked_)>("strategy_set_input_checked");
+                set_override_checked_ = symbol<decltype(set_override_checked_)>("strategy_set_override_checked");
+                settings_receipt_ = symbol<decltype(settings_receipt_)>("strategy_get_effective_settings");
+                char message[512]{};
+                auto create = symbol<decltype(&strategy_create_checked)>("strategy_create_checked");
+                if (create(nullptr, &state, message, sizeof(message)) != PF_SETTINGS_OK)
+                    throw std::runtime_error(std::string("strategy creation failed: ") + message);
+            } else {
+                std::cerr << "pineforge-live: warning: compiled strategy lacks checked settings; "
+                             "legacy settings may be ignored or defaulted\n";
+                state = symbol<decltype(&strategy_create)>("strategy_create")(nullptr);
+            }
             if (!state)
                 throw std::runtime_error("strategy creation failed");
             auto contract_fn = optional_symbol<decltype(&strategy_execution_contract)>(
@@ -341,6 +360,22 @@ class Strategy {
             release();
             throw;
         }
+    }
+    std::string effective_settings() const {
+        if (!settings_receipt_)
+            return {};
+        char message[512]{};
+        std::size_t required = 0;
+        if (settings_receipt_(state, nullptr, 0, &required, message, sizeof(message)) !=
+                PF_SETTINGS_BUFFER_TOO_SMALL || required == 0 || required > MAX_FRAME)
+            throw std::runtime_error(std::string("settings receipt refused: ") + message);
+        std::vector<char> receipt(required);
+        if (settings_receipt_(state, receipt.data(), receipt.size(), &required, message,
+                              sizeof(message)) != PF_SETTINGS_OK)
+            throw std::runtime_error(std::string("settings receipt refused: ") + message);
+        std::string document(receipt.data());
+        parse_json(document);
+        return document;
     }
     void require_contract(const Config &c) const {
         if (c.native.present) {
@@ -392,10 +427,26 @@ class Strategy {
         }
         auto set_input = symbol<decltype(&strategy_set_input)>("strategy_set_input");
         auto set_override = symbol<decltype(&strategy_set_override)>("strategy_set_override");
-        for (const auto &[k, v] : c.inputs)
-            set_input(state, k.c_str(), v.c_str());
-        for (const auto &[k, v] : c.overrides)
-            set_override(state, k.c_str(), v.c_str());
+        for (const auto &[key, value] : c.inputs) {
+            if (set_input_checked_) {
+                char message[512]{};
+                if (set_input_checked_(state, key.c_str(), value.c_str(), message,
+                                       sizeof(message)) != PF_SETTINGS_OK)
+                    throw std::runtime_error("input '" + key + "' refused: " + message);
+            } else {
+                set_input(state, key.c_str(), value.c_str());
+            }
+        }
+        for (const auto &[key, value] : c.overrides) {
+            if (set_override_checked_) {
+                char message[512]{};
+                if (set_override_checked_(state, key.c_str(), value.c_str(), message,
+                                          sizeof(message)) != PF_SETTINGS_OK)
+                    throw std::runtime_error("override '" + key + "' refused: " + message);
+            } else {
+                set_override(state, key.c_str(), value.c_str());
+            }
+        }
         symbol<decltype(&strategy_set_syminfo_timezone)>("strategy_set_syminfo_timezone")(
             state, c.timezone.c_str());
         symbol<decltype(&strategy_set_chart_timezone)>("strategy_set_chart_timezone")(
@@ -637,12 +688,15 @@ int run(Config c) {
         throw std::runtime_error("strategy library changed during initialization");
     strategy.require_contract(c);
     auto warmup = history(original, c.native.present);
+    strategy.configure(c);
+    const auto settings_receipt = strategy.effective_settings();
     std::string deployment =
         c.native.present
             ? native_identity(c.native, c.mode, c.name, c.webhook, original, library, parser_bytes,
                               parser_config)
             : identity(legacy_fields(c), original, library, parser_bytes, parser_config);
-    strategy.configure(c);
+    if (!settings_receipt.empty())
+        deployment = sha256_hex(deployment + ":settings-v1:" + settings_receipt);
     try {
         // A switched PineStrategyHost is native-bound but owns its run spec
         // through prepare_native_begin.  Let that provider admit the stream
@@ -827,6 +881,7 @@ int run(Config c) {
     auto pending = ledger.pending_count();
     std::cout << Json::object(
                      {{"deployment", Json::string(deployment)},
+                      {"effective_settings", settings_receipt.empty() ? Json{} : parse_json(settings_receipt)},
                       {"inputs_committed", num(ledger.input_count())},
                       {"inputs_processed", num(processed)},
                       {"prefix_skipped", num(replayed_prefix)},
@@ -851,6 +906,9 @@ int main(int argc, char **argv) {
         return run(args(argc, argv));
     } catch (const std::exception &e) {
         std::cerr << "pineforge-live: " << e.what() << '\n';
+        return 1;
+    } catch (...) {
+        std::cerr << "pineforge-live: unknown C++ exception\n";
         return 1;
     }
 }
