@@ -24,7 +24,7 @@ target_include_directories(pineforge_live_startup PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
 target_link_libraries(pineforge_live_startup PUBLIC pineforge_live_support PineForge::pineforge)
 target_compile_options(pineforge_live_startup PRIVATE -Wall -Wextra -Wpedantic -ffp-contract=off)
-add_executable(pineforge-live main.cpp parser.cpp)
+add_executable(pineforge-live main.cpp)
 target_include_directories(pineforge-live PRIVATE
     ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
 target_link_libraries(pineforge-live PRIVATE pineforge_live_startup ${CMAKE_DL_LIBS})
@@ -65,15 +65,6 @@ foreach(_pf_example_module native_market_example native_selected_example)
     target_compile_options(${_pf_example_module} PRIVATE -UNDEBUG)
 endforeach()
 
-add_library(native_live_parser_example MODULE examples/demo_parser.cpp)
-target_include_directories(native_live_parser_example PRIVATE ${PROJECT_SOURCE_DIR}/include)
-# The runner's own two example modules (examples/strategy.cpp above and this
-# parser) take -UNDEBUG as well, so an assert() added to either checks
-# instead of compiling to a no-op. Neither holds one today, and neither is an
-# examples/native source, so the examples-assert-live stage does not read them.
-target_compile_options(native_live_parser_example PRIVATE -UNDEBUG)
-set_target_properties(native_live_parser_example PROPERTIES PREFIX "" OUTPUT_NAME "native-live-parser-example")
-
 if(PINEFORGE_BUILD_TESTS)
     add_executable(test_live_json ${PROJECT_SOURCE_DIR}/tests/test_live_json.cpp)
     target_include_directories(test_live_json PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -84,24 +75,11 @@ if(PINEFORGE_BUILD_TESTS)
     target_compile_options(test_native_live_startup PRIVATE -UNDEBUG)
     add_test(NAME test_native_live_startup COMMAND test_native_live_startup)
     add_test(NAME native_live_help COMMAND pineforge-live --help)
-    add_executable(test_live_parser ${PROJECT_SOURCE_DIR}/tests/test_live_parser.cpp parser.cpp)
-    target_include_directories(test_live_parser PRIVATE ${PROJECT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR})
-    target_compile_options(test_live_parser PRIVATE -UNDEBUG)
-    target_link_libraries(test_live_parser PRIVATE ${CMAKE_DL_LIBS})
-    foreach(parser_kind fixture wrong_abi)
-        add_library(live_parser_${parser_kind} MODULE ${PROJECT_SOURCE_DIR}/tests/test_live_parser.cpp)
-        target_include_directories(live_parser_${parser_kind} PRIVATE ${PROJECT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR})
-        target_compile_definitions(live_parser_${parser_kind} PRIVATE PF_LIVE_PARSER_TEST_PLUGIN=1)
-    endforeach()
-    target_compile_definitions(live_parser_wrong_abi PRIVATE PF_LIVE_PARSER_TEST_ABI=2)
-    add_test(NAME test_live_parser COMMAND test_live_parser $<TARGET_FILE:native_live_parser_example>
-        $<TARGET_FILE:live_parser_fixture> $<TARGET_FILE:live_parser_wrong_abi>)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     if(PINEFORGE_BUILD_SOURCE_LAYER)
         add_test(NAME native_live_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_e2e.py $<TARGET_FILE:pineforge-live>
-            $<TARGET_FILE:native_live_example> $<TARGET_FILE:native_live_parser_example>
-            $<TARGET_FILE:live_parser_fixture>)
+            $<TARGET_FILE:native_live_example>)
         set_tests_properties(native_live_e2e PROPERTIES TIMEOUT 120)
     endif()
     foreach(contract_kind absent unknown native_no_export native_stub)

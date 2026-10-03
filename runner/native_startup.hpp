@@ -51,20 +51,15 @@ void require_native_warmup(const NativeConfigValues& spec, const std::vector<pf_
 Json timezone_rule_identity(std::string_view timezone, bool required);
 
 std::string identity_document(const LegacyIdentityFields& fields, const std::string& warmup,
-                              const std::string& library, const std::string& parser_bytes,
-                              const std::string& parser_config);
+                              const std::string& library);
 std::string identity(const LegacyIdentityFields& fields, const std::string& warmup,
-                     const std::string& library, const std::string& parser_bytes,
-                     const std::string& parser_config);
+                     const std::string& library);
 
 std::string native_identity_document(const NativeConfigValues& native, const std::string& mode,
                                      const std::string& name, const std::string& webhook,
-                                     const std::string& warmup, const std::string& library,
-                                     const std::string& parser_bytes,
-                                     const std::string& parser_config);
+                                     const std::string& warmup, const std::string& library);
 std::string native_identity(const NativeConfigValues& native, const std::string& mode,
                             const std::string& name, const std::string& webhook,
-                            const std::string& warmup, const std::string& library,
-                            const std::string& parser_bytes, const std::string& parser_config);
+                            const std::string& warmup, const std::string& library);
 
 }  // namespace pineforge::live

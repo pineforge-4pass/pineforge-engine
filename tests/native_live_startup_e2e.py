@@ -37,7 +37,7 @@ def native_config(path, **clock):
         'run': {'session_key': clock.pop('session_key', 'live-1'),
                 'run_number': clock.pop('run_number', 1)},
         'clock': {
-            'input_tf': clock.pop('input_tf', '5'),
+            'input_tf': clock.pop('input_tf', '1'),
             'script_tf': clock.pop('script_tf', '10'),
             'timezone': clock.pop('timezone', 'UTC'),
             'session': clock.pop('session', '24x7'),
@@ -96,9 +96,9 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
     warmup1m = root / 'w1m.csv'
     warmup_csv(warmup1m, [0, 60000, 120000])
     warmup5 = root / 'w5.csv'
-    warmup_csv(warmup5, [0, 300000, 600000, 900000])
+    warmup_csv(warmup5, list(range(0, 1200000, 60000)))
     warmup5_gap = root / 'w5gap.csv'
-    warmup_csv(warmup5_gap, [0, 300000, 900000])
+    warmup_csv(warmup5_gap, [0, 60000, 180000])
     cfg = root / 'native.json'
     native_config(cfg)
 
@@ -144,11 +144,11 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
 
     # Explicit CLI contradiction never binds.
     ledger = root / 'cli.sqlite3'
-    p = invoke(base_cmd(stub, warmup5, ledger, cfg, extra=['--input-tf', '1']), success=False)
+    p = invoke(base_cmd(stub, warmup5, ledger, cfg, extra=['--input-tf', '5']), success=False)
     assert 'contradicts' in p.stderr
     assert not ledger_bound(ledger)
 
-    # Omitted CLI clock values take the file (default 1m is not a contradiction).
+    # Omitted CLI clock values take the file.
     ledger = root / 'omit.sqlite3'
     result = invoke(base_cmd(stub, warmup5, ledger, cfg))
     assert ledger_bound(ledger)
@@ -182,7 +182,7 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
     assert identity_of(ledger) == first_identity
 
     other_warmup = root / 'w5b.csv'
-    warmup_csv(other_warmup, [0, 300000, 600000, 900000, 1200000])
+    warmup_csv(other_warmup, list(range(0, 1260000, 60000)))
     p = invoke(base_cmd(stub, other_warmup, ledger, cfg), success=False)
     assert 'identity' in p.stderr
     assert identity_of(ledger) == first_identity
@@ -193,14 +193,15 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
     assert ledger_bound(legacy_ledger)
     ident = identity_of(legacy_ledger)
     assert len(ident) == 64
-    # Changing a legacy input changes identity; a misaligned 1-minute warmup with
-    # a native config is refused by the native stream preflight.
+    # Changing a legacy input changes identity; wider native input is refused.
     p = invoke(base_cmd(absent, warmup1m, legacy_ledger, extra=['--input', 'changed=1']),
                success=False)
     assert 'identity' in p.stderr
-    p = invoke(base_cmd(legacy_library, warmup1m, root / 'legacy-real-nativecfg.sqlite3', cfg),
+    wider_cfg = root / 'wider-native.json'
+    native_config(wider_cfg, input_tf='5')
+    p = invoke(base_cmd(legacy_library, warmup1m, root / 'legacy-real-nativecfg.sqlite3', wider_cfg),
                success=False)
-    assert 'native stream refused' in p.stderr, p.stderr
+    assert 'input-tf currently must be 1 minute' in p.stderr, p.stderr
     assert not ledger_bound(root / 'legacy-real-nativecfg.sqlite3')
 
     # Real native example: nonempty physical actions, durable delivery failure,
@@ -237,11 +238,11 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
     try:
         example_ledger = root / 'example.sqlite3'
         example_warmup = root / 'native-example-warmup.csv'
-        warmup_csv(example_warmup, [0, 300000])
+        warmup_csv(example_warmup, list(range(0, 600000, 60000)))
         example_feed = root / 'native-example.jsonl'
         feed_rows = [{'type': 'bar', 'bar': {
-            'ts_open': 600000 + i * 300000, 'o': 100, 'h': 102, 'l': 99, 'c': 101, 'v': 4,
-        }} for i in range(8)]
+            'ts_open': 600000 + i * 60000, 'o': 100, 'h': 102, 'l': 99, 'c': 101, 'v': 0.8,
+        }} for i in range(40)]
         example_feed.write_text(''.join(json.dumps(row) + '\n' for row in feed_rows))
         example_cmd = [runner, 'run', '--strategy', native_example, '--warmup', str(example_warmup),
                        '--mode', 'bars', '--ledger', str(example_ledger),

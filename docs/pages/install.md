@@ -42,7 +42,6 @@ ${prefix}/
 └── include/pineforge/
     ├── pineforge.h        # public C ABI
     ├── native_c_api.h     # C native-host API (included by pineforge.h)
-    ├── live_parser.h      # parser-plugin ABI of the native live runner
     ├── version.h          # generated version macros
     ├── native_*.hpp       # kernel / native C++ API (see Public contract)
     ├── *.hpp              # the other C++ headers (no stability guarantee)

@@ -5,6 +5,26 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
+## Unreleased
+
+- **Runner tooling removal:** the native live runner accepts only normalized
+  PineForge feed events from stdin, files, or a user's own HTTP/WebSocket feed
+  service. The installed `pineforge/live_parser.h` header, its
+  `PF_LIVE_PARSER_*` types/constants and `pf_live_parser_abi_version` /
+  `pf_live_parse_message` plugin exports, the `--parser` / `--parser-config`
+  flags, and the example plugin are removed. This breaks callers that included
+  that header, authored native parser plugins, or passed raw provider messages
+  through the runner. Migrate translation to an **external feed adapter** that
+  emits [PineForge feed events](runner/README.md#feed-format); feed URLs address
+  that adapter, not an exchange. The outbound order-action webhook remains.
+  Strict native runner configurations now also require 1m input; higher script
+  timeframes still aggregate those minutes.
+  No versioned engine `PF_API` export, native C++ surface, script ABI epoch or
+  engine behavior changes. Frozen historical ABI header manifests and archives
+  remain intact. Plugin-free ledger identity bytes remain unchanged; ledgers
+  bound to removed plugins cannot be resumed by this runner and must not be
+  silently rewritten.
+
 ## 1.0.1 — 2026-10-02
 
 A documentation-only release that pairs with pineforge-codegen 1.0.1, the pair

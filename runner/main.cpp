@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "json.hpp"
 #include "native_startup.hpp"
-#include "parser.hpp"
 #include "store.hpp"
 #include "transport.hpp"
 #include <pineforge/pineforge.h>
 
 #include <algorithm>
 #include <cerrno>
-#include <memory>
 #include <chrono>
 #include <climits>
 #include <csignal>
@@ -38,7 +36,7 @@ struct Config {
     std::string strategy, warmup, feed = "-", ledger, webhook, mode = "", input_tf = "1", script_tf,
                                   symbol, name = "strategy";
     std::string session = "24x7", timezone = "UTC", chart_timezone = "UTC", secret_env, feed_url,
-                parser_path, parser_config_path, subscribe_path, native_config;
+                subscribe_path, native_config;
     std::vector<std::pair<std::string, std::string>> inputs, overrides, syminfo;
     std::set<std::string> explicit_flags;
     NativeConfigValues native;
@@ -56,7 +54,6 @@ void help() {
                  "Options: --input-tf 1 --name NAME --session 24x7 --timezone UTC\n"
                  "         --input TITLE=VALUE --override KEY=VALUE (repeatable)\n"
                  "         --syminfo KEY=VALUE --chart-timezone UTC\n"
-                 "         --parser parser.so --parser-config mapping.json\n"
                  "         --subscribe subscription.json (WebSocket only)\n"
                  "         --webhook-secret-env NAME --allow-insecure-http\n"
                  "         --from-input N --max-events N --max-attempts 8\n"
@@ -146,10 +143,6 @@ Config args(int argc, char **argv) {
             c.chart_timezone = v;
         else if (a == "--syminfo")
             c.syminfo.push_back(pair_arg(v));
-        else if (a == "--parser")
-            c.parser_path = v;
-        else if (a == "--parser-config")
-            c.parser_config_path = v;
         else if (a == "--subscribe")
             c.subscribe_path = v;
         else if (a == "--input")
@@ -195,8 +188,6 @@ Config args(int argc, char **argv) {
         throw std::runtime_error("HTTP snapshots require from-input 0");
     if (!c.subscribe_path.empty() && !websocket)
         throw std::runtime_error("subscribe requires WebSocket feed-url");
-    if (!c.parser_config_path.empty() && c.parser_path.empty())
-        throw std::runtime_error("parser-config requires parser");
     if (!c.max_attempts || c.max_attempts > 1000)
         throw std::runtime_error("max-attempts must be 1..1000");
     if (!c.allow_http && (c.webhook.rfind("http://", 0) == 0 ||
@@ -214,7 +205,7 @@ Config args(int argc, char **argv) {
             throw std::runtime_error("native runner supports close-only strategy calculation");
     auto ledger = fs::weakly_canonical(fs::absolute(c.ledger));
     for (const auto &src : {c.strategy, c.warmup, c.feed == "-" ? std::string{} : c.feed,
-                            c.parser_path, c.parser_config_path, c.subscribe_path})
+                            c.subscribe_path})
         if (!src.empty()) {
             auto path = fs::weakly_canonical(fs::absolute(src));
             for (const auto &suffix : {"", "-wal", "-shm", ".lock"})
@@ -601,30 +592,39 @@ void apply_record(Strategy &strategy, const Config &c, Cursor &cursor, const Jso
     for (const auto &event : events.items)
         apply(strategy, c, cursor, event);
 }
-std::vector<Json> normalize(Parser *parser, const std::string &message) {
-    if (!parser)
-        return {parse_json(message)};
-    std::vector<Json> result;
-    for (const auto &event : parser->parse(message)) {
-        auto ts = Json::number(std::to_string(event.timestamp));
-        if (event.kind == PF_LIVE_PARSER_TICK)
-            result.push_back(Json::object({{"type", Json::string("tick")},
-                                           {"ts", ts},
-                                           {"seq", num(event.sequence)},
-                                           {"price", real(event.price)},
-                                           {"qty", real(event.quantity)}}));
-        else if (event.kind == PF_LIVE_PARSER_TIME)
-            result.push_back(Json::object({{"type", Json::string("time")}, {"ts", ts}}));
-        else
-            result.push_back(Json::object({{"type", Json::string("bar")},
-                                           {"bar", Json::object({{"ts_open", ts},
-                                                                 {"o", real(event.open)},
-                                                                 {"h", real(event.high)},
-                                                                 {"l", real(event.low)},
-                                                                 {"c", real(event.close)},
-                                                                 {"v", real(event.volume)}})}}));
+void require_feed_event(const Json &event) {
+    const auto type = event.at("type").text();
+    if (type == "tick")
+        only_fields(event, {"type", "ts", "seq", "price", "qty"});
+    else if (type == "time")
+        only_fields(event, {"type", "ts"});
+    else if (type == "bar") {
+        only_fields(event, {"type", "bar"});
+        only_fields(event.at("bar"), {"ts_open", "o", "h", "l", "c", "v"});
+    } else
+        throw std::runtime_error("expected tick, time or confirmed bar event");
+}
+Json feed_record(const std::string &message) {
+    try {
+        auto record = parse_json(message);
+        if (record.kind == Json::Kind::Array)
+            record = Json::object({{"type", Json::string("batch")}, {"events", std::move(record)}});
+        if (record.at("type").text() == "batch") {
+            only_fields(record, {"type", "events"});
+            const auto &events = record.at("events");
+            if (events.kind != Json::Kind::Array || events.items.empty() || events.items.size() > 1024)
+                throw std::runtime_error("normalized batch requires 1..1024 events");
+            for (const auto &event : events.items)
+                require_feed_event(event);
+        } else
+            require_feed_event(record);
+        return record;
+    } catch (const std::runtime_error &error) {
+        throw std::runtime_error(
+            std::string("PineForge feed events required; use an external feed adapter "
+                        "(runner/README.md#feed-format) to normalize raw provider messages: ") +
+            error.what());
     }
-    return result;
 }
 bool drain(Ledger &ledger, const HttpOptions &options, const Config &c, std::uint64_t &delivered) {
     while (!stopped) {
@@ -675,19 +675,11 @@ int run(Config c) {
         c.chart_timezone = clock.chart_timezone;
         c.symbol = clock.symbol;
         validate_native_config(c.native);
+        if (c.input_tf != "1")
+            throw std::runtime_error("native runner input-tf currently must be 1 minute");
     }
     auto original = read_file(c.warmup, 512ULL * 1024 * 1024);
     auto library = read_file(c.strategy, 512ULL * 1024 * 1024);
-    std::string parser_bytes =
-        c.parser_path.empty() ? "" : read_file(c.parser_path, 64ULL * 1024 * 1024);
-    std::string parser_config =
-        c.parser_config_path.empty() ? "{}" : read_file(c.parser_config_path, MAX_FRAME);
-    std::unique_ptr<Parser> parser;
-    if (!c.parser_path.empty())
-        parser = std::make_unique<Parser>(c.parser_path, parser_config);
-    if (!c.parser_path.empty() &&
-        sha256_hex(read_file(c.parser_path, 64ULL * 1024 * 1024)) != sha256_hex(parser_bytes))
-        throw std::runtime_error("parser library changed during initialization");
     Strategy strategy;
     strategy.load(c.strategy);
     if (sha256_hex(read_file(c.strategy, 512ULL * 1024 * 1024)) != sha256_hex(library))
@@ -698,9 +690,8 @@ int run(Config c) {
     const auto settings_receipt = strategy.effective_settings();
     std::string deployment =
         c.native.present
-            ? native_identity(c.native, c.mode, c.name, c.webhook, original, library, parser_bytes,
-                              parser_config)
-            : identity(legacy_fields(c), original, library, parser_bytes, parser_config);
+            ? native_identity(c.native, c.mode, c.name, c.webhook, original, library)
+            : identity(legacy_fields(c), original, library);
     if (!settings_receipt.empty())
         deployment = sha256_hex(deployment + ":settings-v1:" + settings_receipt);
     try {
@@ -759,18 +750,7 @@ int run(Config c) {
     std::uint64_t delivered = 0, processed = 0, replayed_prefix = 0;
     drain(ledger, webhook, c, delivered);
     auto consume_message = [&](const std::string &message, std::uint64_t &index) {
-        auto frames = normalize(parser.get(), message);
-        if (frames.empty())
-            return;
-        Json frame;
-        if (frames.size() == 1)
-            frame = std::move(frames.front());
-        else {
-            Json events;
-            events.kind = Json::Kind::Array;
-            events.items = std::move(frames);
-            frame = Json::object({{"type", Json::string("batch")}, {"events", std::move(events)}});
-        }
+        auto frame = feed_record(message);
         auto canonical = frame.dump();
         if (auto previous = ledger.input(index)) {
             if (previous->canonical_json != canonical)

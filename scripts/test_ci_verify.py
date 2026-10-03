@@ -221,7 +221,7 @@ class Scripted:
             return self._install()
         if argv[0] == 'ctest':
             if '--show-only=json-v1' in argv:
-                names = {'native_live_help', 'test_live_json', 'test_live_parser',
+                names = {'native_live_help', 'test_live_json',
                          'test_native_live_startup', 'test_native_live_store',
                          'test_native_example_batch', 'test_native_example_selected'}
                 if (self.source / 'runner' / 'transport.cpp').is_file():

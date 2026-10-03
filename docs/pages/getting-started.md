@@ -40,7 +40,7 @@ This installs:
   `native_toolkit.hpp`) and internal ones; `source/` and `compat/pine/` hold
   the Pine adapter's
 - `include/pineforge/pineforge.h` — **the public C ABI**, with
-  `native_c_api.h` (the C native-host API it includes) and `live_parser.h`
+  `native_c_api.h` (the C native-host API it includes)
 - `include/pineforge/version.h` — generated version macros
 - `lib/cmake/PineForge/PineForge{Config,Targets,ConfigVersion}.cmake`
 

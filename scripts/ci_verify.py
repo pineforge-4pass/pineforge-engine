@@ -643,7 +643,7 @@ EXCLUDED_REGISTERED_MIN = {'debug': 773, 'sanitizers': 773, 'native': 782}
 # minutes.
 CTEST_TIMEOUT = 1800
 SANITIZERS_FULL_CTEST_TIMEOUT = 3600
-LIVE_SANITIZERS_MIN_TESTS = 10
+LIVE_SANITIZERS_MIN_TESTS = 9
 
 
 def ctest_timeout(cfg: 'VerifyConfig') -> int:
@@ -1836,7 +1836,7 @@ class Driver:
                                     timeout=120, stream_output=False)
             try:
                 names = {test['name'] for test in json.loads(inventory.stdout)['tests']}
-                required = {'native_live_help', 'test_live_json', 'test_live_parser',
+                required = {'native_live_help', 'test_live_json',
                             'test_native_live_startup', 'test_native_live_store',
                             'test_native_example_batch', 'test_native_example_selected'}
                 if (self.cfg.source / 'runner' / 'transport.cpp').is_file():

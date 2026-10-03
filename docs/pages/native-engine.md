@@ -3938,10 +3938,9 @@ same sources, as the MODULE targets the live runner `dlopen`s
 `-UNDEBUG` too, and `examples-assert-live` checks them wherever the runner is
 built: in the `kernel` profile beside the `example_*` executables, and in the
 `native` profile, which builds no `example_*` target, for them alone. The
-runner's own two example modules — `native_live_example` and
-`native_live_parser_example`, built from `runner/examples/` — also compile
-with `-UNDEBUG`. Neither holds an `assert()`, and the stage does not read
-them: neither is an `examples/native` source.
+runner's own example module, `native_live_example`, built from
+`runner/examples/`, also compiles with `-UNDEBUG`. It holds no `assert()`,
+and the stage does not read it: it is not an `examples/native` source.
 
 A host becomes such a module through one macro from
 `<pineforge/native_module.hpp>`:
