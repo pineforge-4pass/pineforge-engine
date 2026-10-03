@@ -113,6 +113,78 @@ bool run_case(const SamebarPyramidingCaseTape& tape, bool flat_after_batch_only 
     return passed;
 }
 
+class EntryExitFallbackHost : public pineforge::source::PineStrategyHost {
+public:
+    explicit EntryExitFallbackHost(bool two_entries) : two_entries_(two_entries) {
+        pineforge::source::PineStrategyConfig config;
+        config.initial_capital = 1000000.0;
+        config.default_qty_type = static_cast<int>(pineforge::QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.pyramiding = 10;
+        config.margin_long = 0.0;
+        config.margin_short = 0.0;
+        configure_pine_strategy(config);
+        set_syminfo_mintick(0.01);
+    }
+
+    void on_source_bar(const pineforge::Bar&) override {
+        if (pine_bar_index() != 0) return;
+        strategy_entry("E", true, missing, missing, 2.0);
+        if (two_entries_) strategy_entry("S", false, missing, missing, 1.0);
+        strategy_exit("T1", "E", 105.0, 95.0, missing, missing, missing,
+                      100.0, {}, 1.0);
+        if (!two_entries_) {
+            strategy_exit("T2", "E", 105.0, 95.0, missing, missing, missing,
+                          100.0, {}, 1.0);
+        }
+    }
+
+private:
+    bool two_entries_;
+};
+
+bool run_entry_exit_fallback(bool two_entries) {
+    EntryExitFallbackHost host(two_entries);
+    const std::int64_t start_time = 1743465600000LL;
+    std::vector<pineforge::Bar> bars;
+    for (int ordinal = 0; ordinal < 7; ++ordinal) {
+        bars.push_back({100.0, ordinal == 1 ? 106.0 : 101.0,
+                        ordinal == 1 ? 94.0 : 99.0, 100.0, 1.0,
+                        start_time + ordinal * 900000LL});
+    }
+    host.run(bars.data(), static_cast<int>(bars.size()), "15", "15");
+    const std::string name = two_entries ? "entry-exit-batch" : "entry-exit-single";
+    const int expected_count = two_entries ? 1 : 2;
+    const double expected_position = two_entries ? -1.0 : 0.0;
+    bool passed = host.last_error().empty() && host.trade_count() == expected_count
+        && host.live_position_size() == expected_position;
+    for (int index = 0; index < host.trade_count(); ++index) {
+        const auto& trade = host.get_trade(index);
+        const bool market_exit = two_entries && index == 0;
+        const std::string exit_id = market_exit ? "S"
+            : two_entries || index == 0 ? "T1" : "T2";
+        const double exit_price = market_exit ? 100.0 : 95.0;
+        const double quantity = market_exit ? 2.0 : 1.0;
+        passed = passed && trade.entry_id == "E" && trade.exit_id == exit_id
+            && trade.is_long && trade.qty == quantity && trade.entry_price == 100.0
+            && trade.exit_price == exit_price
+            && trade.pnl == quantity * (exit_price - 100.0)
+            && trade.entry_time == start_time + 900000LL
+            && trade.exit_time == start_time + 900000LL;
+        std::printf("%s row %d %s/%s long=%d qty=%.17g entry=%.17g exit=%.17g "
+                    "pnl=%.17g times=%lld/%lld\n", name.c_str(), index,
+                    trade.entry_id.c_str(), trade.exit_id.c_str(), trade.is_long,
+                    trade.qty, trade.entry_price, trade.exit_price, trade.pnl,
+                    static_cast<long long>(trade.entry_time),
+                    static_cast<long long>(trade.exit_time));
+    }
+    if (!passed) std::printf("FAIL %s: expected %d trades and position=%.17g; "
+                            "got %d trades, position=%.17g, error=%s\n", name.c_str(),
+                            expected_count, expected_position, host.trade_count(), host.live_position_size(),
+                            host.last_error().c_str());
+    return passed;
+}
+
 }
 
 int main(int argc, char** argv) {
@@ -127,6 +199,12 @@ int main(int argc, char** argv) {
             if (!flat_after_batch_only) continue;
         }
         if (run_case(tape, flat_after_batch_only)) ++passed;
+        else ++failed;
+    }
+    for (const bool two_entries : {false, true}) {
+        const std::string name = two_entries ? "entry-exit-batch" : "entry-exit-single";
+        if (argc > 1 && name.find(argv[1]) == std::string::npos) continue;
+        if (run_entry_exit_fallback(two_entries)) ++passed;
         else ++failed;
     }
     std::printf("test_samebar_pyramiding_entries_tapes: %d passed, %d failed\n", passed, failed);

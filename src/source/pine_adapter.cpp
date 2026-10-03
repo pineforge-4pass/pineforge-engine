@@ -6477,7 +6477,14 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         && risk_.max_drawdown <= 0.0 && risk_.max_intraday_loss <= 0.0
         && risk_.max_position_size <= 0.0 && !risk_.halted && !cap.active()
         && explicit_fixed && !priced && oca_name.empty();
+    if (std::any_of(pending_same_bar_commands_.begin(), pending_same_bar_commands_.end(),
+        [&](const PendingSameBarCommand& command) {
+            return command.unbatched_request && command.replacement_key == id;
+        })) {
+        reroute_fixed_entries_before_request();
+    }
     const bool fixed_market_batch_candidate = fixed_unmargined_market_batch_scope()
+        && !source_batch_mutated_
         && !close_precedes_entry && pending_same_bar_close_qty_ == 0.0
         && (!source_point || close_all_pending_script_bar_
             != source_point->decision.script_bar_open_ms);
@@ -6486,6 +6493,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         && !priced && oca_name.empty()
         && (qty_type < 0 || qty_type == static_cast<int>(QtyType::FIXED))
         && (default_sized || finite_positive(qty));
+    if (!same_bar_market_candidate) reroute_fixed_entries_before_request();
     if (!same_bar_market_candidate && config_.pyramiding == 2
         && !pending_same_bar_commands_.empty()) {
         source_batch_mutated_ = true;
@@ -7539,6 +7547,8 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     if (same_bar_market_candidate && fixed_market_batch_candidate
         && !close_precedes_entry && pending_same_bar_close_qty_ == 0.0
         && !close_all_precedes) {
+        auto unbatched_request = request;
+        auto unbatched_snapshot = snapshot;
         const double own_units = floor_quantity_grid(default_sized
                 ? config_.default_qty_value : std::abs(qty), staged_.quantity_grid);
         if (!finite_positive(own_units)) return;
@@ -7577,6 +7587,8 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                     && pending.replacement_key == id;
             });
         PendingSameBarCommand pending{std::move(request), std::move(snapshot), id, true};
+        pending.unbatched_request = std::move(unbatched_request);
+        pending.unbatched_snapshot = std::move(unbatched_snapshot);
         if (existing == pending_same_bar_commands_.end()) {
             pending_same_bar_commands_.push_back(std::move(pending));
         } else {
@@ -8243,7 +8255,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         point && cap_placement_denied(point->decision)) {
         return;
     }
-    reroute_fixed_entries_before_close();
+    reroute_fixed_entries_before_request();
     // The calc_on_order_fills recalculation of a fill inside a leg has no
     // current price to close at: TradingView fills its `immediately` close
     // where the same close placed without it fills, at the end of that leg
@@ -9085,12 +9097,12 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
 
 void PineExecutionAdapter::close_all() {
     if (intraday_loss_orders_blocked()) return;
+    reroute_fixed_entries_before_request();
     if (detail::run_position(require_host()).signed_units == 0.0) return;
     if (const auto point = detail::callback_point(require_host());
         point && cap_placement_denied(point->decision)) {
         return;
     }
-    reroute_fixed_entries_before_close();
     if (const auto point = detail::callback_point(require_host())) {
         close_all_pending_script_bar_ = point->decision.script_bar_open_ms;
     }
@@ -9338,6 +9350,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         point && cap_placement_denied(point->decision)) {
         return;
     }
+    reroute_fixed_entries_before_request();
     if (!from_entry.empty()) {
         const auto token = named_entry_cancel_tokens_.find(from_entry);
         if (token != named_entry_cancel_tokens_.end()) {
@@ -11645,44 +11658,46 @@ void PineExecutionAdapter::flush_pending_entries() {
     }
 }
 
-void PineExecutionAdapter::reroute_fixed_entries_before_close() {
-    if (!fixed_unmargined_market_batch_scope()) return;
+void PineExecutionAdapter::reroute_fixed_entries_before_request(bool invalidate_batch) {
     const auto point = detail::callback_point(require_host());
     if (!point) return;
     const auto script_open = point->decision.script_bar_open_ms;
     const bool frozen_entry = std::any_of(pending_same_bar_commands_.begin(),
         pending_same_bar_commands_.end(), [&](const PendingSameBarCommand& command) {
-            return command.opening && command.snapshot.family == PineOrderFamily::Entry
-                && command.snapshot.frozen_market_instruction
+            return command.unbatched_request && command.unbatched_snapshot
                 && command.snapshot.placement_script_open_ms == script_open;
         });
     if (!frozen_entry) return;
-    // This run-level flag stays sticky for later ordering, like cancel/replacement mutations.
-    source_batch_mutated_ = true;
+    if (invalidate_batch) source_batch_mutated_ = true;
     auto queued = std::move(pending_same_bar_commands_);
     pending_same_bar_commands_.clear();
     pending_same_bar_close_qty_ = 0.0;
-    const double placement_position = detail::run_position(require_host()).signed_units;
-    // A close breaks the entry-only projection. Restore ordinary source order
-    // and placement intents before the close is submitted, without regrouping.
+    // Dependent requests break the entry-only projection. Restore exact placement
+    // requests in source order; begin_source_evaluation resets the invalidation.
     for (auto& command : queued) {
-        if (command.opening && command.snapshot.family == PineOrderFamily::Entry
-            && command.snapshot.frozen_market_instruction
+        if (command.unbatched_request && command.unbatched_snapshot
             && command.snapshot.placement_script_open_ms == script_open) {
-            const bool reverses = placement_position != 0.0
-                && command.snapshot.is_long != (placement_position > 0.0);
-            if (reverses) {
-                command.request.intent = native_order::HostSized{
-                    native_order::HostSizedKind::Open,
-                    command.snapshot.is_long ? native_order::Side::Long
-                                             : native_order::Side::Short};
-            } else {
-                const double own = command.snapshot.frozen_market_own_units;
-                command.request.intent = native_order::Transact{
-                    command.snapshot.is_long ? own : -own};
+            command.request = std::move(*command.unbatched_request);
+            command.snapshot = std::move(*command.unbatched_snapshot);
+            // Restore the ordinary flat-pair sizing against preceding restored
+            // requests, which were not live when this batch member was staged.
+            const auto& snapshot = command.snapshot;
+            if (detail::run_position(require_host()).signed_units == 0.0
+                && finite_positive(snapshot.requested_qty)
+                && (snapshot.qty_type < 0
+                    || snapshot.qty_type == static_cast<int>(QtyType::FIXED))
+                && same_point_pair_scope() && same_point_two_leg_book(
+                    snapshot.source_id, snapshot.placement_script_open_ms)) {
+                const double pending = pending_opposite_market_units(
+                    snapshot.is_long, snapshot.placement_script_open_ms,
+                    snapshot.source_id);
+                if (finite_positive(pending)) {
+                    const double transaction = floor_quantity_grid(
+                        snapshot.requested_qty, staged_.quantity_grid) + pending;
+                    command.request.intent = native_order::Transact{
+                        snapshot.is_long ? transaction : -transaction};
+                }
             }
-            command.snapshot.frozen_market_instruction = false;
-            command.snapshot.reverse_to = reverses;
         }
         (void)submit_or_replace(std::move(command.request), std::move(command.snapshot),
                                 command.opening, command.replacement_key);
@@ -11690,6 +11705,17 @@ void PineExecutionAdapter::reroute_fixed_entries_before_close() {
 }
 
 void PineExecutionAdapter::flush_pending_same_bar_commands(bool flat_pair_follows) {
+    bool fixed_long = false;
+    bool fixed_short = false;
+    for (const auto& command : pending_same_bar_commands_) {
+        if (!command.unbatched_request) continue;
+        if (command.snapshot.is_long) fixed_long = true;
+        else fixed_short = true;
+    }
+    if ((fixed_long || fixed_short)
+        && (!(fixed_long && fixed_short) || !fixed_unmargined_market_batch_scope())) {
+        reroute_fixed_entries_before_request(false);
+    }
     auto queued = std::move(pending_same_bar_commands_);
     pending_same_bar_commands_.clear();
     pending_same_bar_close_qty_ = 0.0;
@@ -12515,6 +12541,7 @@ std::optional<double> PineExecutionAdapter::resolve_anchored_level(
 void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
                                                const SourceId& from_entry,
                                                const std::string&) {
+    reroute_fixed_entries_before_request();
     const auto key = key_for(exit_id, from_entry);
     pending_relative_exits_.erase(std::remove_if(pending_relative_exits_.begin(), pending_relative_exits_.end(),
         [&](const PendingRelativeExit& value) {
@@ -12540,6 +12567,7 @@ void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
 }
 
 void PineExecutionAdapter::cancel(const SourceId& id) {
+    reroute_fixed_entries_before_request();
     NamedEntryCancelToken token;
     for (const auto& handle : live_handles_) {
         const auto snapshot = placement_.find(handle.incarnation);
@@ -12604,6 +12632,7 @@ void PineExecutionAdapter::cancel(const SourceId& id) {
 }
 
 void PineExecutionAdapter::cancel_all() {
+    reroute_fixed_entries_before_request();
     // The margin call a breach at this bar's close owes is an order the
     // script's cancel_all() withdraws too (close_point_margin_call).
     if (const auto point = detail::callback_point(require_host()))
@@ -12641,6 +12670,7 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
         point && cap_placement_denied(point->decision)) {
         return;
     }
+    reroute_fixed_entries_before_request();
     // ab9714be pine_strategy_commands.cpp:2120-2203: strategy.order appends to pending book after earlier script commands
     if (!pending_same_bar_commands_.empty()) {
         source_batch_mutated_ = true;

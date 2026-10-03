@@ -1,7 +1,7 @@
 # Same-bar pyramiding entry tapes
 
-These independently authored synthetic sources and TradingView exports are public,
-self-contained evidence. Every export uses BINANCE:ETHUSDT.P, 15 minutes,
+These independently authored synthetic sources and their evidence are public and
+self-contained. The six TradingView-export fixtures use BINANCE:ETHUSDT.P, 15 minutes,
 April 1-4, 2025, through `lab tv --no-note`; every `rangeProof` is `covered`.
 Only the synthetic strategy titles were renamed before re-export. The close
 fixture additionally exports explicit/default X00/X01 variants. No population
@@ -14,9 +14,15 @@ relative. Range proof and raw/decoded report digests are retained.
 The new route requires pyramiding >= 2, fixed default sizing, margin_long ==
 margin_short == 0, no commission, slippage, process_orders_on_close,
 calc_on_order_fills, OCA or active risk gate, ordinary batch phase, FIFO and no
-active intrabar sampler. Same-bar close/close_all commands fall back to the old
-path, including entries staged before the close. Pyramiding <= 1 retains main's
-old block. This change does not generalize projected closes or margin admission.
+active intrabar sampler. Only multiple mixed-direction market entries materialize
+the projected route. Single entries and all-same-direction batches restore their
+exact original placement requests. Same-bar exit (named or all-entry), bracket
+cancellation, cancel/cancel_all, order, close/close_all, same-ID reissue or an
+incompatible entry restores the original requests before the dependent request
+is processed. The projection stays disabled for the rest of that source callback;
+the existing begin_source_evaluation reset permits it on later bars. Pyramiding
+<= 1 retains main's old block. This change does not generalize projected closes,
+entry/exit batches or margin admission.
 
 The 173 campaign guards never take this route; byte-identical guard and corpus
 results are out-of-scope regression controls, not behavioural coverage of the
@@ -33,6 +39,16 @@ pyramiding-7 tapes agree. All 60 pyramiding-7 rows, the 21 already-matching
 pyramiding-1 rows, and X00, X01, X00d, X01d are asserted: 85 full-tape cases.
 X04 additionally asserts only the flat book after the batch fill bar and the
 absence of any trade closed by the final close_all: 86 checks total.
+
+Two additional synthetic main-regression fixtures, `entry-exit-single` and
+`entry-exit-batch`, assert the complete original-path trades on the committed
+`bars.csv` feed: a long qty-2 entry with two qty-1 brackets, and a long qty-2 /
+short qty-1 batch followed by a named qty-1 bracket. The single entry books two
+long qty-1 trades and finishes flat. The mixed batch follows main's existing
+flat-pair sizing: E/S closes long qty 2, the short qty 1 stays open, and the
+bracket cannot close the already-consumed E lot. Their `expected_trades.csv` and `meta.json` pin main
+227c2236; they are not TradingView exports and make no claim about entry/exit
+batch parity. With these regressions the executable has 88 asserted cases.
 
 The unit test replays seven constant-price bars (100) to isolate side, quantity,
 entry/exit identity, fill times, zero-length trades, flat terminal position and

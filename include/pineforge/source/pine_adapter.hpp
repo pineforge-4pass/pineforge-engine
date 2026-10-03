@@ -1619,6 +1619,8 @@ private:
         // short-seed book puts back.
         bool staged_reversal = false;
         double staged_reversal_held_units = 0.0;
+        std::optional<native_order::Request> unbatched_request;
+        std::optional<PlacementSnapshot> unbatched_snapshot;
     };
 
     // A source command can remain observable through the enclosing source
@@ -1920,7 +1922,7 @@ private:
     native_order::Owner owner_for_close(const SourceId&, bool dynamic) const;
     bool same_bar_market_tx_scope() const;
     bool fixed_unmargined_market_batch_scope() const;
-    void reroute_fixed_entries_before_close();
+    void reroute_fixed_entries_before_request(bool invalidate_batch = true);
     void flush_pending_same_bar_commands(bool flat_pair_follows = false);
     // The placement-time default quantity: the core's own conversion, read as
     // a query (NativeStrategyHost::native_sized_units) and floored by the

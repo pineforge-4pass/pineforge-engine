@@ -1,0 +1,3 @@
+entry_id,exit_id,is_long,qty,entry_price,exit_price,pnl,entry_time,exit_time
+E,T1,1,1,100,95,-5,1743466500000,1743466500000
+E,T2,1,1,100,95,-5,1743466500000,1743466500000
