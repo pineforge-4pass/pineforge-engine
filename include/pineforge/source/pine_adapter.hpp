@@ -1732,6 +1732,7 @@ private:
     };
 
     NativeStrategyHost& require_host() const;
+    bool modeled_input() const;
     native_order::CohortHandle cohort_for(const SourceId& id);
     std::optional<native_order::RequestHandle> submit_or_replace(
         native_order::Request request, PlacementSnapshot snapshot, bool opening,

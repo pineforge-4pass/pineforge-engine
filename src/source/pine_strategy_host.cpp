@@ -727,10 +727,6 @@ void source::PineStrategyHost::set_strategy_override(const StrategyOverrides& ov
 }
 
 void source::PineStrategyHost::set_syminfo_session(const std::string& session) {
-    if (stream_warmup_mode_) {
-        (void)session;
-        return;
-    }
     BacktestEngine::set_syminfo_session(session);
 }
 

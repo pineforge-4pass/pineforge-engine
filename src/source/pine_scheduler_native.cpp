@@ -527,19 +527,6 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
         == context.script_bar_open_ms;
     Bar script_bar = value;
     script_bar.timestamp = context.script_bar_open_ms;
-    if (retained_.is_stream && !retained_.bars.empty()
-        && source_bar_count_ >= static_cast<int>(retained_.bars.size())) {
-        const int input_seconds = tf_to_seconds(retained_.input_tf);
-        const std::int64_t expected_open = retained_.bars.back().timestamp
-            + static_cast<std::int64_t>(std::max(input_seconds, 0)) * 1000;
-        if (input_seconds > 0 && script_bar.timestamp < expected_open) {
-            // ab9714be pine_stream.cpp:112-125 labels the first realtime
-            // source bar at last_warmup + input_duration.  A tolerant native
-            // calendar can report its aligned interval label instead; retain
-            // the source-visible raw stream label without changing matching.
-            script_bar.timestamp = expected_open;
-        }
-    }
     current_script_bar_ = script_bar;
     current_script_bar_valid_ = true;
     const bool completes_awaiting_legacy_script = awaiting_legacy_script_open_ms_

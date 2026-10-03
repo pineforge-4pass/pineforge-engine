@@ -1662,6 +1662,7 @@ list(APPEND TEST_SOURCES test_pyramiding_count_differential)
 list(APPEND TEST_SOURCES test_zero_trail_sibling_stop)
 #   E5's pending-entry arm and E14's anchored-leg seed (AUDIT3 H6 tapes).
 list(APPEND TEST_SOURCES test_pending_entry_trail_tapes)
+list(APPEND TEST_SOURCES test_pine_input_domain)
 #   G2-22 / E19 the host-owned excursion model against the kernel sampler.
 list(APPEND TEST_SOURCES test_e19_excursion_tape)
 #   G2-21 the short-seed report swaps against the kernel's lot identities.
@@ -3129,6 +3130,10 @@ add_test(NAME test_cancellation_hash_coverage COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/check_cancellation_hash_coverage.py)
 add_test(NAME test_native_live_equivalence_harness COMMAND ${Python3_EXECUTABLE} -B
     ${CMAKE_CURRENT_SOURCE_DIR}/test_native_live_equivalence_harness.py)
+add_test(NAME test_pine_input_domain_gates COMMAND ${Python3_EXECUTABLE} -B
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_pine_input_domain_gates.py)
+add_test(NAME test_native_confirmed_bar_stream_comparator COMMAND ${Python3_EXECUTABLE} -B
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_native_confirmed_bar_stream_scan.py)
 
 # R5 N11: no NativeRunSpec field the Pine adapter's project() sets is then
 # unconditionally shadowed by one of its own host hooks (audit D2), plus the
