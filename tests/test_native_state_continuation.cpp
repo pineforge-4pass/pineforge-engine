@@ -316,6 +316,30 @@ struct NativeExecutionConsumerProbe {
         return out;
     }
 
+    static std::vector<FoldField> tick_volume(C&) {
+        std::vector<FoldField> out;
+        for (const auto member : {&C::forming_tick_volume_, &C::partial_tick_volume_}) {
+            const std::string name = member == &C::forming_tick_volume_ ? "forming volume" : "partial volume";
+            out.push_back(field(name + " units", [=](C& consumer) -> int64_t& {
+                return (consumer.*member).units; }, [](auto& value) { ++value; }));
+            out.push_back(field(name + " sum", [=](C& consumer) -> double& {
+                return (consumer.*member).sum; }, [](auto& value) { value += 1; }));
+            out.push_back(field(name + " compensation", [=](C& consumer) -> double& {
+                return (consumer.*member).compensation; }, [](auto& value) { value += 1; }));
+            out.push_back(field(name + " divisor", [=](C& consumer) -> double& {
+                return (consumer.*member).divisor; }, [](auto& value) { value += 1; }));
+            out.push_back(field(name + " decimal places", [=](C& consumer) -> int& {
+                return (consumer.*member).decimal_places; }, [](auto& value) { ++value; }));
+            out.push_back(field(name + " exact", [=](C& consumer) -> bool& {
+                return (consumer.*member).exact; }, [](auto& value) { value = !value; }));
+        }
+        out.push_back(field("tick partial volume", [](C& consumer) -> double& {
+            return consumer.partial_.volume; }, [](auto& value) { value += 1; }));
+        out.push_back(field("tick partial timestamp", [](C& consumer) -> int64_t& {
+            return consumer.partial_script_open_ms_; }, [](auto& value) { ++value; }));
+        return out;
+    }
+
     static std::vector<FoldField> subscriptions(C&) {
         std::vector<FoldField> out;
         const auto bump = [](auto& v) { v += 1; };
@@ -502,6 +526,17 @@ void differential(const char* label, Host& host, std::vector<FoldField> fields) 
 
 // 1. Completeness, field by field.
 void every_folded_member_moves_the_value() {
+    for (const auto quantity_grid : {std::optional<double>{0.1}, std::optional<double>{}}) {
+        Host host;
+        auto spec = base_spec();
+        spec.quantity_grid = quantity_grid;
+        CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
+        const Bar warmup{100, 100, 100, 100, 1, 0};
+        CHECK(host.stream_begin(&warmup, 1, "1", "1"));
+        CHECK(host.stream_push_tick({60001, 1, 100, 0.1}));
+        if (!quantity_grid) CHECK(host.stream_push_tick({60002, 2, 100, 0.2}));
+        differential("tick volume", host, NativeExecutionConsumerProbe::tick_volume(host.consumer()));
+    }
     {
         Host host;
         host.bar_script = busy_script;

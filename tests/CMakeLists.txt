@@ -1245,6 +1245,7 @@ list(APPEND TEST_SOURCES test_native_batch_log_presize)
 # kernel-recorded per-bar hashes linear and takes a row once it is final.
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_state_continuation)
+list(APPEND TEST_SOURCES test_native_tick_volume)
 # R5 V19-B: the order core's journal is a window (native_order_v7) -- absolute
 # journal positions, the chain index against a journal oracle over randomized
 # command streams, chain membership that is not a chain walk (scaling), and a
