@@ -1,0 +1,5 @@
+﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)
+1,Exit long,2025-07-15 21:15,runner,3019.57,13.5131,40531.19214,272.55923,0.67,0,331.47635,0.82,-8.10786,-0.02,272.55923,0.00,1
+1,Entry long,2025-07-15 21:00,ticket,2999.4,13.5131,40531.19214,272.55923,0.67,0,331.47635,0.82,-8.10786,-0.02,272.55923,0.00,1
+2,Exit long,2025-07-15 21:15,target,3026.99,13.5131,40531.19214,372.82642,0.92,0,372.82642,0.92,-8.10786,-0.02,645.3857,0.01,1
+2,Entry long,2025-07-15 21:00,ticket,2999.4,13.5131,40531.19214,372.82642,0.92,0,372.82642,0.92,-8.10786,-0.02,645.3857,0.01,1

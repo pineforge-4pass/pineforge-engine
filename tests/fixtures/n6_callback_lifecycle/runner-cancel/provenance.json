@@ -1,0 +1,33 @@
+{
+  "synthetic": true,
+  "authored_for": "N6 callback and lifecycle pin (independently authored; no population source was sent)",
+  "pin_family": "runner-cancel",
+  "export": {
+    "tool": "lab tv --no-note",
+    "channel": "ws-report-v1",
+    "exported_at": "2026-10-03T14:44:37.470Z",
+    "chart": {
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "from": "2025-10-13",
+      "to": "2025-10-17",
+      "timeoutMs": 120000
+    },
+    "exports_identical": 4
+  },
+  "strategy_pine_sha256": "f8f599d6c997e38b83418feb4753668175e12702ef95adeb427bde01303fd325",
+  "tv_trades_sha256": "90e5fe2bf04202ea8d7c70f93a64cf305f846f8f59baa1f4dd7c05f52ab86b5f",
+  "tv_trades_rows": 4,
+  "chart_feed": {
+    "symbol": "NYSE:F",
+    "timeframe": "15",
+    "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32",
+    "rows_from_ms": 1760313600000,
+    "rows_to_ms": 1760659200000
+  },
+  "generated_cpp": {
+    "codegen_commit": "d9b92c7",
+    "sha256": "63f27b9924ebe3e00980685a4900a73e3664bb58e0ba8e40498c952217d880cf"
+  },
+  "timestamps": "tv_trades.csv is UTC+8; bars.csv is epoch milliseconds UTC"
+}

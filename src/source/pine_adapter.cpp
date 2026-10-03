@@ -15,6 +15,7 @@
 #include "../timezone.hpp"
 #include "pine_host_reads.hpp"
 #include "pine_quiet_bar.hpp"
+#include "pine_n6_rules.hpp"
 #include "pine_reissue_binding.hpp"
 
 #include <algorithm>
@@ -593,6 +594,34 @@ bool any_live_row(const std::vector<native_order::RequestHandle>& live,
     return false;
 }
 
+} // namespace
+
+namespace detail {
+namespace {
+// The N6 switches: process-wide like carry_bindings, and for the same reason.
+std::atomic<bool> n6_rules[kPineN6RuleCount] = {true, true, true};
+} // namespace
+void set_pine_n6_rule(PineN6Rule rule, bool on) noexcept {
+    const int index = static_cast<int>(rule);
+    if (index >= 0 && index < kPineN6RuleCount)
+        n6_rules[index].store(on, std::memory_order_relaxed);
+}
+bool pine_n6_rule(PineN6Rule rule) noexcept {
+    const int index = static_cast<int>(rule);
+    return index < 0 || index >= kPineN6RuleCount
+        || n6_rules[index].load(std::memory_order_relaxed);
+}
+}  // namespace detail
+
+namespace {
+// trail_points as whole ticks (compat::pine::trail_points_to_ticks): with
+// the mintick-scaled tolerance TradingView applies, or the constant one when
+// the N6 trail switch is off.
+double source_trail_points_ticks(double trail_points, double mintick) noexcept {
+    return detail::pine_n6_rule(detail::PineN6Rule::TrailPointsMintickTolerance)
+        ? compat::pine::trail_points_to_ticks(trail_points, mintick)
+        : compat::pine::trail_points_to_ticks(trail_points);
+}
 } // namespace
 
 #if PINEFORGE_PINE_QUIET_BAR_PROBE
@@ -1717,6 +1746,43 @@ void PineExecutionAdapter::suspend_declined_reversal_brackets(
                                  domain, exit_legs::Phase::Observation};
     suspend_brackets_for_reversal(reversal->second, cause,
         policy_script_bar_valid_ ? policy_script_bar_.open : reversal->second.sizing.mark);
+}
+
+bool PineExecutionAdapter::reissue_revives_declined_exit(
+        const PlacementSnapshot& previous) const noexcept {
+    // A declined reversal kills the held position's stop and limit exits
+    // (round 9 family X: an exit issued once never fills after the decline,
+    // test_famx_declined_reversal_trail_leg_l4c). Re-issued by a later
+    // calculation the exit is a new order and lives, as the replacement path
+    // already treats a changed re-issue (fresh_after_dormant): an unchanged
+    // re-issue must not keep the killed row either, whatever the side, the
+    // sizing or the exit's kind. `lab tv` synthetics in
+    // tests/fixtures/n6_callback_lifecycle, BINANCE:ETHUSDT.P 15m 2025-05-28,
+    // a 100%-of-equity reversal declined at the 19:45 open and the exit
+    // re-issued on every bar, 4 identical exports each: the long's limit
+    // (range-breakout-may-rev, -rev-sl), the short mirror's limit
+    // (declined-reissue-short) and a partial stop (declined-reissue-stop)
+    // each fill on their first reaching bar after the decline. Fixed and
+    // cash sizing never reach this row: their unaffordable reversal keeps
+    // its close leg and flattens the long (declined-reissue-fixed, -cash).
+    //
+    // Only the kill revives: the entry/strategy.close pair hold
+    // (hold_reversal_pair_brackets) also makes a row dormant, behind a
+    // barrier that keeps the pending reversal ahead of the position's own
+    // gapped bracket at the next open; a re-issue in the pair's calculation
+    // keeps that barrier (pair-hold-reissue: the admitted pair closes the
+    // long at the gap open, its gapped stop never fills). The
+    // fill-recalculation pass declines through its own path and keeps its
+    // dormant rows.
+    if (!detail::pine_n6_rule(detail::PineN6Rule::DeclinedReversalReissueRevives)
+        || config_.calc_on_order_fills
+        || (previous.family != PineOrderFamily::ExitLimit
+            && previous.family != PineOrderFamily::ExitStop)) {
+        return false;
+    }
+    const auto& suspension = previous.legs.suspension();
+    return suspension && !suspension->hold && suspension->window
+        && !suspension->replacement;
 }
 
 void PineExecutionAdapter::suspend_brackets_for_reversal(
@@ -4114,7 +4180,8 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                 // untouched. Its source cohort remains live and its dynamic
                 // close quantity is resolved at fill time, so a normal-bar
                 // reissue has no new executable fact to record.
-                if (unchanged_dynamic_exit(previous->second)) {
+                if (unchanged_dynamic_exit(previous->second)
+                    && !reissue_revives_declined_exit(previous->second)) {
                     if (previous->second.void_issue && !snapshot.void_issue)
                         unvoid_exit(previous->second);
                     return existing_handle;
@@ -9914,7 +9981,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         if (!finite_positive(stop_price) && finite_positive(loss_ticks))
             stop_price = entry_price - (long_side ? 1.0 : -1.0) * loss_ticks * tick;
         if (std::isfinite(source_trail_points)) {
-            const double trail_ticks = std::ceil(source_trail_points - 5e-5);
+            const double trail_ticks = source_trail_points_ticks(source_trail_points, tick);
             trail_price = directional_tick(entry_price
                 + (long_side ? 1.0 : -1.0) * trail_ticks * tick,
                 tick, long_side);
@@ -10086,7 +10153,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             || !std::isnan(prior.exit_levels.trail_offset)
             || !std::isnan(prior.exit_levels.trail_price)
             || !std::isnan(prior.exit_levels.profit_ticks)
-            || !std::isnan(prior.exit_levels.loss_ticks)) {
+            || !std::isnan(prior.exit_levels.loss_ticks)
+            || reissue_revives_declined_exit(prior)) {
             return false;
         }
         return (family == PineOrderFamily::ExitLimit
@@ -10320,8 +10388,21 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     // through O->W1 and gets one gap attempt at W1.
                     const bool marketable = closing_long
                         ? point->price >= limit_price : point->price <= limit_price;
+                    // The leg end is reached on its tick-built print, the
+                    // level staying raw: a buy limit at 11.608273 is not
+                    // reached by an L of 11.605, which prints 11.61, and a
+                    // sell limit at 10.145 is not reached by an H of 10.145,
+                    // which prints 10.14 (`lab tv` synthetics
+                    // tests/fixtures/n6_callback_lifecycle runner-target-r1,
+                    // long-high-raw and short-low-raw, NYSE:F 15m, 4 identical
+                    // exports each).
+                    const double reach_level =
+                        detail::pine_n6_rule(detail::PineN6Rule::CallbackLimitTickReach)
+                        ? source_trigger_threshold(limit_price, staged_.syminfo.mintick,
+                                                   !closing_long, true)
+                        : limit_price;
                     const bool endpoint_satisfies = closing_long
-                        ? endpoint >= limit_price : endpoint <= limit_price;
+                        ? endpoint >= reach_level : endpoint <= reach_level;
                     const bool endpoint_ahead = closing_long
                         ? endpoint > point->price : endpoint < point->price;
                     // An exit the recalculation re-issues unchanged was not
@@ -12683,7 +12764,8 @@ PineExecutionAdapter::relative_leg_shapes(const PendingRelativeExit& value,
                           -side * value.loss_ticks, value.loss_ticks});
     }
     if (std::isfinite(value.trail_points) && !finite_positive(value.trail_price)) {
-        const double trail_ticks = std::ceil(value.trail_points - 5e-5);
+        const double trail_ticks = source_trail_points_ticks(
+            value.trail_points, staged_.syminfo.mintick);
         const bool has_offset = std::isfinite(value.trail_offset) && value.trail_offset >= 0.0;
         const double offset_ticks = has_offset ? std::floor(value.trail_offset) : kNaN;
         if (trail_ticks >= 1.0 && has_offset && offset_ticks >= 1.0) {
@@ -14028,7 +14110,8 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         if (!finite_positive(activation)
             && std::isfinite(source.exit_levels.trail_points)
             && finite_positive(staged_.syminfo.mintick)) {
-            const double ticks = std::ceil(source.exit_levels.trail_points - 5e-5);
+            const double ticks = source_trail_points_ticks(
+                source.exit_levels.trail_points, staged_.syminfo.mintick);
             activation = require_host().position_avg_price()
                 + (closing_long ? 1.0 : -1.0) * ticks * staged_.syminfo.mintick;
             activation = directional_tick(
@@ -16544,8 +16627,8 @@ bool PineExecutionAdapter::schedule_tv_money_long_margin_before_trail(
         double activation = owned_trail->trail_activation_level;
         if (!finite_positive(activation) && finite_positive(tick)) {
             activation = require_host().position_avg_price()
-                + compat::pine::trail_points_to_ticks(
-                    owned_trail->exit_levels.trail_points) * tick;
+                + source_trail_points_ticks(
+                    owned_trail->exit_levels.trail_points, tick) * tick;
         }
         const double offset = compat::pine::trail_offset_to_ticks(
             owned_trail->exit_levels.trail_offset) * tick;
@@ -22331,7 +22414,7 @@ int PendingIntentView::effective_levels(int index, double* stop, double* limit,
     *trail_activation = kNaN;
     if (!std::isnan(trail_points)) {
         if (resolved) {
-            const double ticks = compat::pine::trail_points_to_ticks(trail_points);
+            const double ticks = source_trail_points_ticks(trail_points, tick);
             *trail_activation = compat::pine::snap_trail_level_to_tick_grid(
                 entry + direction * ticks * tick, tick);
         }
@@ -23401,3 +23484,4 @@ void PineExecutionAdapter::order_same_point_entries() {
 }
 
 } // namespace pineforge::source
+

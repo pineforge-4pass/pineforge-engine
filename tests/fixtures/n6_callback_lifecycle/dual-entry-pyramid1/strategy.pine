@@ -1,0 +1,11 @@
+//@version=6
+strategy("N6 independent dual-entry-pyramid1", overlay=true, initial_capital=10000000, calc_on_order_fills=false, process_orders_on_close=false, pyramiding=1, margin_long=100, margin_short=100, commission_value=0, slippage=0)
+if time == timestamp("UTC",2026,2,13,20,0)
+    strategy.entry("Short", strategy.short, qty=3)
+if time == timestamp("UTC",2026,2,13,20,30) or time == timestamp("UTC",2026,2,13,20,45)
+    strategy.entry("Long", strategy.long, qty=3)
+    strategy.entry("Short", strategy.short, qty=3)
+if strategy.position_size < 0 and time >= timestamp("UTC",2026,2,13,20,45)
+    strategy.exit("Exit Short", "Short", stop=257.0, limit=250.0)
+if time >= timestamp("UTC",2026,2,17,15,0)
+    strategy.close_all(comment="cleanup")

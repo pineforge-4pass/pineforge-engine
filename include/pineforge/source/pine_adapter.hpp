@@ -2047,6 +2047,7 @@ private:
         const PlacementSnapshot&, const exit_legs::Frame&, double open_price);
     void suspend_declined_reversal_brackets(
         const native_order::MatchRejectedEvent&);
+    bool reissue_revives_declined_exit(const PlacementSnapshot&) const noexcept;
     void suspend_coof_declined_reversal_at_open(
         const Bar&, const NativeDecisionContext&);
     void hold_reversal_pair_brackets(const SourceId&);

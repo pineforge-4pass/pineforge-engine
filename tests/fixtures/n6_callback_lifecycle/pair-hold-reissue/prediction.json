@@ -1,0 +1,25 @@
+{
+ "basis": "pair barrier stays: the admitted entry/close reversal pair is judged at the 05-15 open before the long's gapped stop re-issued in the pair's calculation; the stop never fills",
+ "trades": [
+  [
+   "long",
+   900.0,
+   "2025-05-14 18:15",
+   "2025-05-15 13:30",
+   10.66,
+   10.59
+  ],
+  [
+   "short",
+   1000.0,
+   "2025-05-15 13:30",
+   "2025-05-15 14:15",
+   10.59,
+   10.66
+  ]
+ ],
+ "if_barrier_defeated": "SL 450 @10.59 at 05-15 13:30 before the reversal, then 450 closed by the reversal: three trade rows",
+ "strategy_pine_sha256": "60520915f75fc69a89ffa4de033a714064b5a97d7cab0c23ba41d9c6cfe9efa1",
+ "written_at": "2026-10-03T22:15:26.555752+00:00",
+ "timestamps": "UTC"
+}

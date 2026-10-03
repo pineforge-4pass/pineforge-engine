@@ -1,0 +1,17 @@
+{
+ "basis": "engine model: an unaffordable cash-size reversal keeps its close leg; no kill, R4 not engaged",
+ "trades": [
+  [
+   "long",
+   32.0449,
+   "2025-05-28 17:15",
+   "2025-05-28 19:45",
+   2652.52,
+   2619.22
+  ]
+ ],
+ "alternative_if_whole_drop": "long stays; TP BUY half @2681.5 at 23:30; cleanup half at 23:45 @2675.99",
+ "strategy_pine_sha256": "5c407f1dab1303e67e0d17ef1dbd60b9a8c24712bc20b5c4897e9f08ded8cd6c",
+ "written_at": "2026-10-03T22:15:26.555464+00:00",
+ "timestamps": "UTC"
+}

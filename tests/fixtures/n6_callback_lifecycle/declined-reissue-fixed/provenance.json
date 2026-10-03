@@ -1,0 +1,35 @@
+{
+  "synthetic": true,
+  "authored_for": "N6 fix round 1: the R4 re-issue rule's general shape and the pair-hold barrier (independently authored; no population source was sent)",
+  "pin_family": "declined-reissue-fixed",
+  "prediction": "prediction.json, written before the first export",
+  "export": {
+    "tool": "lab tv --no-note",
+    "channel": "ws-report-v1",
+    "exported_at": "2026-10-03T22:15:35.088Z",
+    "chart": {
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "from": "2025-05-28",
+      "to": "2025-05-29",
+      "timeoutMs": 120000
+    },
+    "exports_identical": 4,
+    "range_proof": "covered"
+  },
+  "strategy_pine_sha256": "307bf4738909d1042eb7eaec2038c369b8d81a035c31672c9ec23055c460caa2",
+  "tv_trades_sha256": "69d99c25d127a03ac4d8c7c8a1e30dd4091ac7581a55acb101ef331a14827cea",
+  "tv_trades_rows": 2,
+  "chart_feed": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "timeframe": "15",
+    "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026",
+    "rows_from_ms": 1748390400000,
+    "rows_to_ms": 1748476800000
+  },
+  "generated_cpp": {
+    "codegen_commit": "d9b92c7",
+    "sha256": "b67c917992f51b4e30f12e57e293d12a73d6d17c64c0cbee6ed6fe57c30b4127"
+  },
+  "timestamps": "tv_trades.csv is UTC+8; bars.csv is epoch milliseconds UTC"
+}

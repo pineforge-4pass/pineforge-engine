@@ -1,0 +1,10 @@
+//@version=6
+strategy("N6B orb-july-session", overlay=true, initial_capital=10000000, calc_on_order_fills=false, process_orders_on_close=false, pyramiding=0, margin_long=100, margin_short=100, commission_value=0, slippage=0)
+sessionStart = timestamp('Europe/Amsterdam', year, month, dayofmonth, 14, 0)
+sessionEnd = timestamp('Europe/Amsterdam', year, month, dayofmonth, 23, 0)
+inSession = time >= sessionStart and time <= sessionEnd
+string tag = "ss=" + str.tostring(sessionStart) + " in=" + str.tostring(inSession)
+if (time == timestamp("UTC",2025,7,15,11,45) or time == timestamp("UTC",2025,7,15,12,0) or time == timestamp("UTC",2025,7,15,12,45) or time == timestamp("UTC",2025,7,15,20,45) or time == timestamp("UTC",2025,7,15,21,0)) and inSession
+    strategy.entry("BUY", strategy.long, qty=1, comment=tag)
+if strategy.position_size > 0
+    strategy.close_all(comment="x " + tag)

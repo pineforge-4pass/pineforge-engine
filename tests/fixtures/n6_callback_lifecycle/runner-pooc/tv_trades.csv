@@ -1,0 +1,5 @@
+﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)
+1,Exit short,2025-10-15 03:30,first,11.64,65,761.8,5.2,0.68,0,5.2,0.68,-0.65,-0.09,5.2,0.00,5
+1,Entry short,2025-10-15 02:15,ticket,11.72,65,761.8,5.2,0.68,0,5.2,0.68,-0.65,-0.09,5.2,0.00,5
+2,Exit short,2025-10-15 21:30,runner,11.69,65,761.8,1.95,0.26,0,7.15,0.94,-0.65,-0.09,7.15,0.00,7
+2,Entry short,2025-10-15 02:15,ticket,11.72,65,761.8,1.95,0.26,0,7.15,0.94,-0.65,-0.09,7.15,0.00,7

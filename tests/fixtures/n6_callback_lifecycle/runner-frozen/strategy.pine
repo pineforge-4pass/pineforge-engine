@@ -1,0 +1,12 @@
+//@version=6
+strategy("N6 independent runner-frozen", overlay=true, initial_capital=10000000, calc_on_order_fills=true, process_orders_on_close=false, pyramiding=0, margin_long=100, margin_short=100, commission_value=0, slippage=0)
+var int placed = -1
+if time == timestamp("UTC",2025,10,14,18,15) and placed != bar_index
+    placed := bar_index
+    strategy.entry("ticket", strategy.short, qty=130)
+if strategy.position_size < 0
+    bool afterPartial = math.abs(strategy.position_size) < 130
+    strategy.exit("first", "ticket", qty=65, limit=11.64, stop=11.76)
+    strategy.exit("runner", "ticket", qty=65, stop=afterPartial ? 11.69 : 11.76)
+if time >= timestamp("UTC",2025,10,16,19,30)
+    strategy.close_all(comment="cleanup")

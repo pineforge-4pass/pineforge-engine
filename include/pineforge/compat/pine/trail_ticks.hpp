@@ -33,11 +33,34 @@ namespace pineforge::compat::pine {
 // 08-18 03:30Z @115208.79 (235120 ticks); std::ceil gave 235121 -> .78.
 // The ceil tolerance is bounded in [1e-5, 1e-4) by the 14.00001 / 14.0001
 // pair; 5e-5 sits in the middle. Round 5's sub-tick pins hold: 0.0006 ->
-// 1 tick, offsets 0 / 0.5 / 0.9 -> 0, 1.4 -> 1.
+// 1 tick, offsets 0 / 0.5 / 0.9 -> 0, 1.4 -> 1. Since N6 this constant is
+// only the fallback for a run without a usable mintick: TradingView's
+// tolerance is c * mintick ticks (the two-argument overload below), which
+// at mintick 0.01 also satisfies every pin above.
 constexpr double kTrailPointsCeilEps = 5e-5;
 
 inline double trail_points_to_ticks(double trail_points) {
     return std::ceil(trail_points - kTrailPointsCeilEps);  // NaN stays NaN
+}
+
+// The tolerance is not a constant number of ticks: it is c * mintick ticks.
+// Pinned with `lab tv` synthetics (4 identical exports each; the N6
+// callback-lifecycle test tapes, *-trailpts-*), each long's trail
+// filling at its activation:
+//   BINANCE:ETHUSDT.P (0.01): 24.000057417376482 -> 24, 24.00001 -> 24,
+//     24.0001 / 24.001 / 24.4 / 24.6 -> 25
+//   OANDA:XAUUSD (0.001): 1000.0 / 1000.000003 -> 1000, 1000.00003 -> 1001
+//   OANDA:EURUSD (1e-5): 20.0 -> 20, 20.000001 / 20.00003 / 20.02 / 20.2 -> 21
+// The ETH pair bounds c to (5.7417e-3, 1e-2); the XAU and EUR rows refute
+// any constant tick or price tolerance, and 8e-3 sits inside the interval.
+// At mintick 0.01 the tolerance is 8e-5 ticks, so every F and BTC pin above
+// still holds. Without a usable mintick the constant rule applies.
+constexpr double kTrailPointsCeilMintickScale = 8e-3;
+
+inline double trail_points_to_ticks(double trail_points, double mintick) {
+    if (!(mintick > 0.0) || !std::isfinite(mintick))
+        return trail_points_to_ticks(trail_points);
+    return std::ceil(trail_points - kTrailPointsCeilMintickScale * mintick);
 }
 
 inline double trail_offset_to_ticks(double trail_offset) {

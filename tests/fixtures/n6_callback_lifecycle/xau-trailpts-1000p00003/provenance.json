@@ -1,0 +1,33 @@
+{
+  "synthetic": true,
+  "authored_for": "N6 callback and lifecycle pin (independently authored; no population source was sent)",
+  "pin_family": "xau-trailpts-1000p00003",
+  "export": {
+    "tool": "lab tv --no-note",
+    "channel": "ws-report-v1",
+    "exported_at": "2026-10-03T19:22:39.709Z",
+    "chart": {
+      "symbol": "OANDA:XAUUSD",
+      "interval": "15",
+      "from": "2025-06-11",
+      "to": "2025-06-13",
+      "timeoutMs": 120000
+    },
+    "exports_identical": 4
+  },
+  "strategy_pine_sha256": "3aab1c4cf5dd48685e46c5a094c8d3172592db7370ab5a7dc3e0f05699e49339",
+  "tv_trades_sha256": "c26c2ae558fb8f0710c9e96011527c7c71ace45b93fd89429f8b86c5f409c372",
+  "tv_trades_rows": 2,
+  "chart_feed": {
+    "symbol": "OANDA:XAUUSD",
+    "timeframe": "15",
+    "feed_sha256": "248086b8b82d6560277cdf7bb877a269f04067b8cdb8c1577a02323772c48579",
+    "rows_from_ms": 1749600000000,
+    "rows_to_ms": 1749772800000
+  },
+  "generated_cpp": {
+    "codegen_commit": "d9b92c7",
+    "sha256": "41f4706184d8f7c69cd823bb0960e049cb0804a8ea78aaf0be1f0c894f9f7895"
+  },
+  "timestamps": "tv_trades.csv is UTC+8; bars.csv is epoch milliseconds UTC"
+}

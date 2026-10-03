@@ -1,0 +1,11 @@
+//@version=6
+strategy("N6R pair-hold-reissue", overlay=true, initial_capital=10658, default_qty_type=strategy.percent_of_equity, default_qty_value=100, calc_on_order_fills=false, process_orders_on_close=false, pyramiding=0, margin_long=100, margin_short=50, commission_value=0, slippage=0)
+if time == timestamp("UTC",2025,5,14,18,0)
+    strategy.entry('L', strategy.long, qty = 900)
+if time == timestamp("UTC",2025,5,14,19,45)
+    strategy.entry('S', strategy.short)
+    strategy.close('L')
+if strategy.position_size > 0
+    strategy.exit('SL', from_entry = 'L', stop = 10.62, qty_percent = 50)
+if time == timestamp("UTC",2025,5,15,14,0)
+    strategy.close_all(comment = "cleanup")

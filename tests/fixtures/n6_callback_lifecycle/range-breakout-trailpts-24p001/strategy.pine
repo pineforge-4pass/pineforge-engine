@@ -1,0 +1,9 @@
+//@version=6
+strategy("N6B orb-trailpts-24p001", overlay=true, initial_capital=10000000, calc_on_order_fills=false, process_orders_on_close=false, pyramiding=0, margin_long=100, margin_short=100, commission_value=0, slippage=0)
+if time == timestamp("UTC",2025,6,13,20,30)
+    strategy.entry("BUY", strategy.long, qty=34.489)
+if strategy.position_size > 0
+    strategy.exit("TP BUY", "BUY", limit=2588.6, qty_percent=50)
+    strategy.exit("RUNNER BUY", "BUY", trail_points=24.001, stop=2514.32)
+if time >= timestamp("UTC",2025,6,14,20,0)
+    strategy.close_all(comment="cleanup")

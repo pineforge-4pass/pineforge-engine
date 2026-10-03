@@ -1,0 +1,3 @@
+﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)
+1,Exit long,2025-05-29 03:45,SELL,2619.22,30,79575.6,-999,-1.26,0,344.4,0.43,-1031.7,-1.30,-999,-1.17,10
+1,Entry long,2025-05-29 01:15,BUY,2652.52,30,79575.6,-999,-1.26,0,344.4,0.43,-1031.7,-1.30,-999,-1.17,10

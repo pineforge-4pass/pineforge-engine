@@ -1,0 +1,12 @@
+//@version=6
+strategy("N6 independent signed-short-order", overlay=true, initial_capital=10000000, calc_on_order_fills=false, process_orders_on_close=false, pyramiding=2, margin_long=100, margin_short=100, commission_value=0, slippage=0)
+var int staged = 0
+if time == timestamp("UTC",2026,2,13,19,45) and staged == 0
+    staged := 1
+    strategy.entry("Short", strategy.short, qty=5)
+if time == timestamp("UTC",2026,2,13,20,45) and staged == 1
+    staged := 2
+    strategy.exit("Exit Short", "Short", stop=257.91, limit=257.80)
+    strategy.order("Exit Short", strategy.short, qty=8)
+if time >= timestamp("UTC",2026,2,17,15,0)
+    strategy.close_all(comment="cleanup")

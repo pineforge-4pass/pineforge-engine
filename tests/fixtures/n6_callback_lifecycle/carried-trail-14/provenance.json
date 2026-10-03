@@ -1,0 +1,33 @@
+{
+  "synthetic": true,
+  "authored_for": "N6 callback and lifecycle pin (independently authored; no population source was sent)",
+  "pin_family": "legal-trail-14",
+  "export": {
+    "tool": "lab tv --no-note",
+    "channel": "ws-report-v1",
+    "exported_at": "2026-10-03T15:33:13.929Z",
+    "chart": {
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "from": "2025-05-21",
+      "to": "2025-05-24",
+      "timeoutMs": 120000
+    },
+    "exports_identical": 4
+  },
+  "strategy_pine_sha256": "afee2590d72402528de34f2700f3d72f7dbf5b2ee6cb14a4e4d873c4c88cbe43",
+  "tv_trades_sha256": "01acadeb089938f025bab16bbaa6c3e02b7123aa642bcc9655bc22f61ad36981",
+  "tv_trades_rows": 2,
+  "chart_feed": {
+    "symbol": "NYSE:F",
+    "timeframe": "15",
+    "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32",
+    "rows_from_ms": 1747785600000,
+    "rows_to_ms": 1748044800000
+  },
+  "generated_cpp": {
+    "codegen_commit": "d9b92c7",
+    "sha256": "8faa9ad1342e06634cb69b654c31421af8025310a14e715d5b5ce8229fe6a11e"
+  },
+  "timestamps": "tv_trades.csv is UTC+8; bars.csv is epoch milliseconds UTC"
+}
