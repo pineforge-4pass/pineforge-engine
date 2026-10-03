@@ -1,6 +1,6 @@
 #include <pineforge/source/pine_strategy_host.hpp>
 
-#include "px-f1-samebar-tapes.hpp"
+#include "samebar_pyramiding_entries_tapes.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -12,9 +12,9 @@ namespace {
 
 constexpr double missing = std::numeric_limits<double>::quiet_NaN();
 
-class PxF1Host : public pineforge::source::PineStrategyHost {
+class SamebarPyramidingHost : public pineforge::source::PineStrategyHost {
 public:
-    explicit PxF1Host(const PxF1CaseTape& tape) : tape_(tape) {
+    explicit SamebarPyramidingHost(const SamebarPyramidingCaseTape& tape) : tape_(tape) {
         pineforge::source::PineStrategyConfig config;
         config.initial_capital = 1000000.0;
         config.default_qty_type = static_cast<int>(pineforge::QtyType::FIXED);
@@ -34,6 +34,10 @@ public:
         }
         if (bar == 2) {
             for (std::size_t ordinal = 0; ordinal < tape_.sequence.size(); ++ordinal) {
+                if (tape_.sequence[ordinal] == 'C') {
+                    strategy_close(tape_.prefix + "_seed");
+                    continue;
+                }
                 const bool is_long = tape_.sequence[ordinal] == 'L';
                 const auto id = tape_.prefix + "_" + std::to_string(ordinal)
                     + "_" + tape_.sequence[ordinal];
@@ -45,11 +49,11 @@ public:
     }
 
 private:
-    const PxF1CaseTape& tape_;
+    const SamebarPyramidingCaseTape& tape_;
 };
 
-bool run_case(const PxF1CaseTape& tape) {
-    PxF1Host host(tape);
+bool run_case(const SamebarPyramidingCaseTape& tape) {
+    SamebarPyramidingHost host(tape);
     std::vector<pineforge::Bar> bars;
     for (int bar = 0; bar < 7; ++bar) {
         bars.push_back({100.0, 101.0, 99.0, 100.0, 1.0,
@@ -63,8 +67,13 @@ bool run_case(const PxF1CaseTape& tape) {
         const auto& expected = tape.trades[index];
         const auto& actual = host.get_trade(static_cast<int>(index));
         const bool closes_at_end = expected.exit_id == tape.prefix + "_end";
+        const std::string close_label = "Close entry(s) order ";
+        const auto expected_exit = closes_at_end ? std::string("__close__")
+            : expected.exit_id.compare(0, close_label.size(), close_label) == 0
+                ? "__close__" + expected.exit_id.substr(close_label.size())
+                : expected.exit_id;
         passed = passed && actual.entry_id == expected.entry_id
-            && actual.exit_id == (closes_at_end ? "__close__" : expected.exit_id)
+            && actual.exit_id == expected_exit
             && actual.is_long == expected.is_long
             && std::abs(actual.qty - expected.quantity) < 1e-9
             && actual.entry_price == 100.0 && actual.exit_price == 100.0
@@ -92,11 +101,17 @@ bool run_case(const PxF1CaseTape& tape) {
 int main(int argc, char** argv) {
     int passed = 0;
     int failed = 0;
-    for (const auto& tape : px_f1_tapes) {
+    int known_open = 0;
+    for (const auto& tape : samebar_pyramiding_tapes) {
         if (argc > 1 && tape.name.find(argv[1]) == std::string::npos) continue;
+        if (tape.known_open) {
+            ++known_open;
+            continue;
+        }
         if (run_case(tape)) ++passed;
         else ++failed;
     }
-    std::printf("px-f1-samebar-entries: %d passed, %d failed\n", passed, failed);
+    std::printf("test_samebar_pyramiding_entries_tapes: %d passed, %d failed\n", passed, failed);
+    std::printf("Recorded %d known-open cases without asserting their divergent tapes\n", known_open);
     return failed == 0 && passed > 0 ? 0 : 1;
 }

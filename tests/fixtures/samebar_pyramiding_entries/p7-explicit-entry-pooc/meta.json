@@ -1,0 +1,16 @@
+{
+  "title": "Same-bar pyramiding p7-explicit-entry-pooc",
+  "slug": "samebar-pyramiding-p7-explicit-entry-pooc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T01:53:58.713Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-04"
+  },
+  "pine_sha256": "6c4cf9db7868eb609f3c5ffddab8f84ffdbe87bf9f5c55cc3de75756dddacad1",
+  "tv_trades_sha256": "7e916690667c9e421f634354468f9614e506f5f372ba82569e18631cc5e8e92b",
+  "tv_trades_rows": 208
+}

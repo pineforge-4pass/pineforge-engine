@@ -1,5 +1,4 @@
 set(TEST_SOURCES
-    px-f1-samebar-entries
     # R4-D L4a native-route behavioral twins.  These retain the legacy
     # oracle literals while driving the switched host only through its public
     # source commands and projections.
@@ -886,6 +885,10 @@ list(APPEND TEST_SOURCES test_margin_v6_tapes)
 # opposite entry pair, a reversing stop against a protective stop
 # (tests/fixtures/same_point_entries), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_same_point_entries_tapes)
+
+# Fixed, unmargined same-bar entries under pyramiding, with close/entry
+# regression tapes and independently recorded out-of-scope controls.
+list(APPEND TEST_SOURCES test_samebar_pyramiding_entries_tapes)
 
 # Lane W8C-SECURITY: a finer lookahead_on request.security merges the
 # requested bar opening at or before the calling bar's open

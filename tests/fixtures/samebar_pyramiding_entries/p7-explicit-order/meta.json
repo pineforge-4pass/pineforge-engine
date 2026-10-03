@@ -1,0 +1,16 @@
+{
+  "title": "Same-bar pyramiding p7-explicit-order",
+  "slug": "samebar-pyramiding-p7-explicit-order",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T01:53:56.487Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-04"
+  },
+  "pine_sha256": "0bb32695611f7c4e0cd341c20cc01d802f1cbe46be36e483deb53232af125210",
+  "tv_trades_sha256": "be6478557dff6e33d2b444fa8c7002cd2859c46ebeab1bce870288e38753b9d4",
+  "tv_trades_rows": 156
+}

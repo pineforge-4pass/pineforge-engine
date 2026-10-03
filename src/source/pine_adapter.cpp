@@ -2665,7 +2665,7 @@ bool PineExecutionAdapter::same_bar_market_tx_scope() const {
 }
 
 bool PineExecutionAdapter::fixed_unmargined_market_batch_scope() const {
-    return config_.pyramiding > 0
+    return config_.pyramiding >= 2
         && config_.default_qty_type == static_cast<int>(QtyType::FIXED)
         && config_.margin_long == 0.0 && config_.margin_short == 0.0
         && config_.commission_value == 0.0 && !config_.calc_on_order_fills
@@ -6477,8 +6477,12 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         && risk_.max_drawdown <= 0.0 && risk_.max_intraday_loss <= 0.0
         && risk_.max_position_size <= 0.0 && !risk_.halted && !cap.active()
         && explicit_fixed && !priced && oca_name.empty();
+    const bool fixed_market_batch_candidate = fixed_unmargined_market_batch_scope()
+        && !close_precedes_entry && pending_same_bar_close_qty_ == 0.0
+        && (!source_point || close_all_pending_script_bar_
+            != source_point->decision.script_bar_open_ms);
     const bool same_bar_market_candidate = (same_bar_market_tx_scope()
-        || p2_flat_market_candidate || fixed_unmargined_market_batch_scope())
+        || p2_flat_market_candidate || fixed_market_batch_candidate)
         && !priced && oca_name.empty()
         && (qty_type < 0 || qty_type == static_cast<int>(QtyType::FIXED))
         && (default_sized || finite_positive(qty));
@@ -7532,12 +7536,15 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             id, source_point->decision.coordinate.interval_index,
             source_point->decision.script_bar_open_ms);
     }
-    if (same_bar_market_candidate && fixed_unmargined_market_batch_scope()) {
+    if (same_bar_market_candidate && fixed_market_batch_candidate
+        && !close_precedes_entry && pending_same_bar_close_qty_ == 0.0
+        && !close_all_precedes) {
         const double own_units = floor_quantity_grid(default_sized
                 ? config_.default_qty_value : std::abs(qty), staged_.quantity_grid);
         if (!finite_positive(own_units)) return;
         double projected_units = current;
         std::size_t projected_entries = detail::run_position(require_host()).lot_count;
+        // A same-id reissue replaces its earlier row; project only the remaining rows.
         for (const auto& pending : pending_same_bar_commands_) {
             const auto& prior = pending.snapshot;
             if (pending.replacement_key == id || !pending.opening
@@ -8236,6 +8243,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         point && cap_placement_denied(point->decision)) {
         return;
     }
+    reroute_fixed_entries_before_close();
     // The calc_on_order_fills recalculation of a fill inside a leg has no
     // current price to close at: TradingView fills its `immediately` close
     // where the same close placed without it fills, at the end of that leg
@@ -9082,6 +9090,7 @@ void PineExecutionAdapter::close_all() {
         point && cap_placement_denied(point->decision)) {
         return;
     }
+    reroute_fixed_entries_before_close();
     if (const auto point = detail::callback_point(require_host())) {
         close_all_pending_script_bar_ = point->decision.script_bar_open_ms;
     }
@@ -11633,6 +11642,40 @@ void PineExecutionAdapter::flush_pending_entries() {
     for (auto& entry : queued) {
         (void)submit_or_replace(std::move(entry.request), std::move(entry.snapshot), true,
                                 entry.replacement_key);
+    }
+}
+
+void PineExecutionAdapter::reroute_fixed_entries_before_close() {
+    if (!fixed_unmargined_market_batch_scope()) return;
+    const auto point = detail::callback_point(require_host());
+    if (!point) return;
+    const auto script_open = point->decision.script_bar_open_ms;
+    const bool frozen_entry = std::any_of(pending_same_bar_commands_.begin(),
+        pending_same_bar_commands_.end(), [&](const PendingSameBarCommand& command) {
+            return command.opening && command.snapshot.family == PineOrderFamily::Entry
+                && command.snapshot.frozen_market_instruction
+                && command.snapshot.placement_script_open_ms == script_open;
+        });
+    if (!frozen_entry) return;
+    source_batch_mutated_ = true;
+    auto queued = std::move(pending_same_bar_commands_);
+    pending_same_bar_commands_.clear();
+    pending_same_bar_close_qty_ = 0.0;
+    // A close breaks the entry-only projection. Restore ordinary source order
+    // and HostSized reversals before the close is submitted, without regrouping.
+    for (auto& command : queued) {
+        if (command.opening && command.snapshot.family == PineOrderFamily::Entry
+            && command.snapshot.frozen_market_instruction
+            && command.snapshot.placement_script_open_ms == script_open) {
+            command.request.intent = native_order::HostSized{
+                native_order::HostSizedKind::Open,
+                command.snapshot.is_long ? native_order::Side::Long
+                                         : native_order::Side::Short};
+            command.snapshot.frozen_market_instruction = false;
+            command.snapshot.reverse_to = true;
+        }
+        (void)submit_or_replace(std::move(command.request), std::move(command.snapshot),
+                                command.opening, command.replacement_key);
     }
 }
 
@@ -14287,6 +14330,9 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     // placed -- no entry gate, pyramiding included, reads it (lab tv tape
     // w13-b1s-close-f 2025-04-10: the close_all's 4 and the follow-up's 1
     // both open long at the 9.135 open).
+    // The scope includes the current batch phase. Cross-phase frozen sizing
+    // remains outside this route; persisting placement scope also needs the
+    // snapshot's state-hash and placement-receipt representation.
     if (source.crosses_zero
         || (source.frozen_market_instruction && fixed_unmargined_market_batch_scope())) {
         return NativePrecommitVerdict::AdmitWithHostMargin;
@@ -21384,6 +21430,7 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
             kernel_close_only = !(*qty > 1e-10);
             sized = true;
         } else if (owner_->fixed_unmargined_market_batch_scope()) {
+            // Match precommit's batch boundary without an unpersisted scope flag.
             *qty = snapshot.frozen_market_transaction_units;
             *partition = 1;
             sized = true;

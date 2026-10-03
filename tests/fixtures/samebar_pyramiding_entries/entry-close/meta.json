@@ -1,0 +1,16 @@
+{
+  "title": "Same-bar pyramiding entry-close",
+  "slug": "samebar-pyramiding-entry-close",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T01:53:51.668Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-04"
+  },
+  "pine_sha256": "e8fe0ede40a3fb4726cc9a7518a0520ac9d3cf3e2efcda5afe2bc074e5e81155",
+  "tv_trades_sha256": "7b1d99d40d376ec08de02619d68f9e4df49cbf6a0814fd500b4715c9ffa2fcdc",
+  "tv_trades_rows": 40
+}
