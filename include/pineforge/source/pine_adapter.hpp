@@ -1609,6 +1609,21 @@ private:
     // open, while each member retains its placement-time physical quantity.
     // Keep the batch outside the generic core; it contains source ids and the
     // targeted-close artifact that the generic request model must not learn.
+    struct EntrySubmissionContext {
+        double current = 0.0;
+        double limit_price = std::numeric_limits<double>::quiet_NaN();
+        double stop_price = std::numeric_limits<double>::quiet_NaN();
+        bool default_sized = false;
+        bool priced = false;
+        bool reverses = false;
+        bool opposite_opening_pending = false;
+        bool pure_stop_entry = false;
+        bool coof_market_next_open = false;
+        bool coof_priced_next_open = false;
+        bool coof_market_at_second_extreme = false;
+        bool paired_all_in_reentry = false;
+    };
+
     struct PendingSameBarCommand {
         native_order::Request request;
         PlacementSnapshot snapshot;
@@ -1621,6 +1636,7 @@ private:
         double staged_reversal_held_units = 0.0;
         std::optional<native_order::Request> unbatched_request;
         std::optional<PlacementSnapshot> unbatched_snapshot;
+        EntrySubmissionContext unbatched_context;
     };
 
     // A source command can remain observable through the enclosing source
@@ -1923,7 +1939,12 @@ private:
     bool same_bar_market_tx_scope() const;
     bool fixed_unmargined_market_batch_scope() const;
     void reroute_fixed_entries_before_request(bool invalidate_batch = true);
-    void flush_pending_same_bar_commands(bool flat_pair_follows = false);
+    std::size_t accepted_entries_in_cycle(bool is_long, const SourceId& id) const;
+    void submit_entry_with_policy(native_order::Request request, PlacementSnapshot snapshot,
+                                 const SourceId& id, const EntrySubmissionContext& context);
+    void reroute_incomplete_fixed_batch(bool invalidate_batch);
+    void flush_pending_same_bar_commands(bool flat_pair_follows = false,
+                                         bool invalidate_batch = true);
     // The placement-time default quantity: the core's own conversion, read as
     // a query (NativeStrategyHost::native_sized_units) and floored by the
     // source.  The source's money band and affordability gates consume the

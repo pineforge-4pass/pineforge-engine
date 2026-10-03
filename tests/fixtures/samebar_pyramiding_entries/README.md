@@ -50,6 +50,23 @@ bracket cannot close the already-consumed E lot. Their `expected_trades.csv` and
 227c2236; they are not TradingView exports and make no claim about entry/exit
 batch parity. With these regressions the executable has 88 asserted cases.
 
+Eleven additional main-pinned fallback fixtures reproduce S2, S29, S30, S22b,
+S25, S25b, S22, S42, S43, S28, and a short-seeded three-leg batch followed by
+an exit. Each `fallback-*` directory contains the executable synthetic callback
+in `case.hpp`, its Pine equivalent, its nine-bar feed, main's exact closed rows,
+and metadata pinned to main 227c2236. These are not TradingView exports.
+The first ten callbacks are copied from the independent integration probes;
+the three-leg callback adds route-sensitive dependent-exit coverage. The test
+asserts all trade identities, directions, sizes, prices, PnL, timestamps,
+terminal position, and absence of engine errors: 99 checks in total.
+
+The projected route excludes existing opening requests, including resting stops,
+stop-limits, pure limits, and earlier `strategy.order` calls. Restored requests
+use the same admission count and submission-tail policy as ordinary entries.
+Incomplete batches restore before delayed orders are released; the older batch
+policy retains its existing release order. S28 deliberately falls back to main:
+no resting-order TradingView tape is claimed and no scope is widened.
+
 The unit test replays seven constant-price bars (100) to isolate side, quantity,
 entry/exit identity, fill times, zero-length trades, flat terminal position and
 zero errors/PnL. CSV times are UTC+8; embedded epochs subtract eight hours.

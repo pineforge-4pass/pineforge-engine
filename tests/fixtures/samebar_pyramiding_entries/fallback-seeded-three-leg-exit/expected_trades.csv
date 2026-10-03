@@ -1,0 +1,4 @@
+entry_id,exit_id,is_long,qty,entry_price,exit_price,pnl,entry_time,exit_time
+seed,L,false,1,100,100,0,1743466500000,1743468300000
+L,S,true,1,100,100,0,1743468300000,1743468300000
+L2,X,true,1,100,95,-5,1743468300000,1743468300000

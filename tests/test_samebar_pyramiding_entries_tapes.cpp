@@ -1,6 +1,7 @@
 #include <pineforge/source/pine_strategy_host.hpp>
 
 #include "samebar_pyramiding_entries_tapes.hpp"
+#include "samebar_pyramiding_fallback_cases.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -207,6 +208,9 @@ int main(int argc, char** argv) {
         if (run_entry_exit_fallback(two_entries)) ++passed;
         else ++failed;
     }
+    const auto fallback_results = samebar_fallback::run_cases(argc > 1 ? argv[1] : nullptr);
+    passed += fallback_results.first;
+    failed += fallback_results.second;
     std::printf("test_samebar_pyramiding_entries_tapes: %d passed, %d failed\n", passed, failed);
     std::printf("Recorded %d known-open cases without asserting their divergent tapes\n", known_open);
     return failed == 0 && passed > 0 ? 0 : 1;

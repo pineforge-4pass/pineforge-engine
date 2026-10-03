@@ -6168,6 +6168,36 @@ void PineExecutionAdapter::flush_coof_tail(
     }
 }
 
+std::size_t PineExecutionAdapter::accepted_entries_in_cycle(
+        bool is_long, const SourceId& id) const {
+    std::size_t accepted_in_cycle = 0;
+    std::vector<SourceId> cohort_ids;
+    cohort_ids.reserve(cohorts_by_id_.size());
+    for (const auto& row : cohorts_by_id_) cohort_ids.push_back(row.first);
+    std::sort(cohort_ids.begin(), cohort_ids.end());
+    for (const auto& cohort_id : cohort_ids) {
+        const auto cohort = cohorts_by_id_.find(cohort_id);
+        if (cohort == cohorts_by_id_.end()) continue;
+        for (const auto& origin : cohort->second.opened) {
+            const auto placement = placement_.find(origin.incarnation);
+            if (placement != placement_.end() && placement->second.is_long == is_long)
+                ++accepted_in_cycle;
+        }
+    }
+    for (const auto& handle : live_handles_) {
+        const auto placement = placement_.find(handle.incarnation);
+        // ab9714be pine_strategy_commands.cpp:446-464: remove_same_id_pending_orders excludes replaced id before pyramiding check
+        // TradingView counts a pending same-side MARKET entry against the
+        // cap and never a pending LIMIT entry (lane W8A-SIGSTATE-1 R-B,
+        // tests/fixtures/pyramiding_open_order).
+        if (placement != placement_.end() && placement->second.opening
+            && placement->second.source_id != id
+            && placement->second.is_long == is_long
+            && !pure_limit_entry(placement->second)) ++accepted_in_cycle;
+    }
+    return accepted_in_cycle;
+}
+
 void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_price,
                                  double stop_price, double qty, const std::string& comment,
                                  const std::string& oca_name, int oca_type, int qty_type) {
@@ -6485,6 +6515,14 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     }
     const bool fixed_market_batch_candidate = fixed_unmargined_market_batch_scope()
         && !source_batch_mutated_
+        && std::none_of(live_handles_.begin(), live_handles_.end(), [&](const auto& handle) {
+            const auto prior = placement_.find(handle.incarnation);
+            return prior != placement_.end() && prior->second.opening;
+        })
+        && std::none_of(pending_entries_.begin(), pending_entries_.end(),
+            [](const auto& pending) { return pending.snapshot.opening; })
+        && std::none_of(delayed_market_orders_.begin(), delayed_market_orders_.end(),
+            [](const auto& pending) { return pending.snapshot.opening; })
         && !close_precedes_entry && pending_same_bar_close_qty_ == 0.0
         && (!source_point || close_all_pending_script_bar_
             != source_point->decision.script_bar_open_ms);
@@ -6552,31 +6590,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     if (!same_bar_market_candidate && config_.pyramiding > 0 && current != 0.0
         && ((current > 0.0) == is_long)
         && !(priced && config_.process_orders_on_close)) {
-        std::size_t accepted_in_cycle = 0;
-        std::vector<SourceId> cohort_ids;
-        cohort_ids.reserve(cohorts_by_id_.size());
-        for (const auto& row : cohorts_by_id_) cohort_ids.push_back(row.first);
-        std::sort(cohort_ids.begin(), cohort_ids.end());
-        for (const auto& cohort_id : cohort_ids) {
-            const auto cohort = cohorts_by_id_.find(cohort_id);
-            if (cohort == cohorts_by_id_.end()) continue;
-            for (const auto& origin : cohort->second.opened) {
-                const auto placement = placement_.find(origin.incarnation);
-                if (placement != placement_.end() && placement->second.is_long == is_long)
-                    ++accepted_in_cycle;
-            }
-        }
-        for (const auto& handle : live_handles_) {
-            const auto placement = placement_.find(handle.incarnation);
-            // ab9714be pine_strategy_commands.cpp:446-464: remove_same_id_pending_orders excludes replaced id before pyramiding check
-            // TradingView counts a pending same-side MARKET entry against the
-            // cap and never a pending LIMIT entry (lane W8A-SIGSTATE-1 R-B,
-            // tests/fixtures/pyramiding_open_order).
-            if (placement != placement_.end() && placement->second.opening
-                && placement->second.source_id != id
-                && placement->second.is_long == is_long
-                && !pure_limit_entry(placement->second)) ++accepted_in_cycle;
-        }
+        const auto accepted_in_cycle = accepted_entries_in_cycle(is_long, id);
         // Pine's cap is a monotone entry-incarnation count for the current
         // position cycle; a partial close does not free a pyramiding slot.
         if (!(config_.process_orders_on_close && close_precedes_entry)
@@ -7544,6 +7558,10 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             id, source_point->decision.coordinate.interval_index,
             source_point->decision.script_bar_open_ms);
     }
+    const EntrySubmissionContext submission_context{
+        current, limit_price, stop_price, default_sized, priced, reverses,
+        opposite_opening_pending, pure_stop_entry, coof_market_next_open,
+        coof_priced_next_open, coof_market_at_second_extreme, paired_all_in_reentry};
     if (same_bar_market_candidate && fixed_market_batch_candidate
         && !close_precedes_entry && pending_same_bar_close_qty_ == 0.0
         && !close_all_precedes) {
@@ -7553,7 +7571,8 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                 ? config_.default_qty_value : std::abs(qty), staged_.quantity_grid);
         if (!finite_positive(own_units)) return;
         double projected_units = current;
-        std::size_t projected_entries = detail::run_position(require_host()).lot_count;
+        std::size_t projected_entries = current == 0.0 ? 0U
+            : accepted_entries_in_cycle(current > 0.0, id);
         // A same-id reissue replaces its earlier row; project only the remaining rows.
         for (const auto& pending : pending_same_bar_commands_) {
             const auto& prior = pending.snapshot;
@@ -7589,6 +7608,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         PendingSameBarCommand pending{std::move(request), std::move(snapshot), id, true};
         pending.unbatched_request = std::move(unbatched_request);
         pending.unbatched_snapshot = std::move(unbatched_snapshot);
+        pending.unbatched_context = submission_context;
         if (existing == pending_same_bar_commands_.end()) {
             pending_same_bar_commands_.push_back(std::move(pending));
         } else {
@@ -7752,6 +7772,27 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         pending_entries_.push_back({std::move(request), std::move(snapshot), id});
         return;
     }
+    submit_entry_with_policy(std::move(request), std::move(snapshot), id, submission_context);
+}
+
+void PineExecutionAdapter::submit_entry_with_policy(
+        native_order::Request request, PlacementSnapshot snapshot, const SourceId& id,
+        const EntrySubmissionContext& context) {
+    const double current = context.current;
+    const double limit_price = context.limit_price;
+    const double stop_price = context.stop_price;
+    const bool default_sized = context.default_sized;
+    const bool priced = context.priced;
+    const bool reverses = context.reverses;
+    const bool opposite_opening_pending = context.opposite_opening_pending;
+    const bool pure_stop_entry = context.pure_stop_entry;
+    const bool coof_market_next_open = context.coof_market_next_open;
+    const bool coof_priced_next_open = context.coof_priced_next_open;
+    const bool coof_market_at_second_extreme = context.coof_market_at_second_extreme;
+    const bool paired_all_in_reentry = context.paired_all_in_reentry;
+    const bool is_long = snapshot.is_long;
+    const auto oca_name = snapshot.oca_name;
+    const auto source_point = detail::callback_point(require_host());
     const bool source_same_side_market_add = default_sized
         && config_.default_qty_type == static_cast<int>(QtyType::FIXED)
         && !config_.calc_on_order_fills
@@ -11574,8 +11615,9 @@ void PineExecutionAdapter::flush_pending_entries() {
         pending_same_bar_close_qty_ = 0.0;
         return;
     }
+    reroute_incomplete_fixed_batch(false);
     release_delayed_orders();
-    flush_pending_same_bar_commands();
+    flush_pending_same_bar_commands(false, false);
     auto queued = std::move(pending_entries_);
     pending_entries_.clear();
     auto deferred = std::remove_if(queued.begin(), queued.end(), [&](PendingEntry& entry) {
@@ -11699,12 +11741,17 @@ void PineExecutionAdapter::reroute_fixed_entries_before_request(bool invalidate_
                 }
             }
         }
-        (void)submit_or_replace(std::move(command.request), std::move(command.snapshot),
-                                command.opening, command.replacement_key);
+        if (command.unbatched_request && command.unbatched_snapshot) {
+            submit_entry_with_policy(std::move(command.request), std::move(command.snapshot),
+                                     command.replacement_key, command.unbatched_context);
+        } else {
+            (void)submit_or_replace(std::move(command.request), std::move(command.snapshot),
+                                    command.opening, command.replacement_key);
+        }
     }
 }
 
-void PineExecutionAdapter::flush_pending_same_bar_commands(bool flat_pair_follows) {
+void PineExecutionAdapter::reroute_incomplete_fixed_batch(bool invalidate_batch) {
     bool fixed_long = false;
     bool fixed_short = false;
     for (const auto& command : pending_same_bar_commands_) {
@@ -11714,8 +11761,13 @@ void PineExecutionAdapter::flush_pending_same_bar_commands(bool flat_pair_follow
     }
     if ((fixed_long || fixed_short)
         && (!(fixed_long && fixed_short) || !fixed_unmargined_market_batch_scope())) {
-        reroute_fixed_entries_before_request(false);
+        reroute_fixed_entries_before_request(invalidate_batch);
     }
+}
+
+void PineExecutionAdapter::flush_pending_same_bar_commands(
+        bool flat_pair_follows, bool invalidate_batch) {
+    reroute_incomplete_fixed_batch(invalidate_batch);
     auto queued = std::move(pending_same_bar_commands_);
     pending_same_bar_commands_.clear();
     pending_same_bar_close_qty_ = 0.0;

@@ -1,0 +1,11 @@
+{
+  "evidence": "synthetic main-path regression, not a TradingView export",
+  "baselineEngine": "227c2236e4769ae926d2c6e4811c37ff5119c4a0",
+  "reviewCase": "seeded-three-leg-exit",
+  "pyramiding": 7,
+  "finalPosition": 0,
+  "tradeCount": 3,
+  "interval": "15",
+  "startTime": 1743465600000,
+  "crossBar": 3
+}
