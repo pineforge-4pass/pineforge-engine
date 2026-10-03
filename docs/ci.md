@@ -86,8 +86,8 @@ curl may report the existing unsupported-WebSocket skip; that is not the require
 Linux transport proof.
 
 `live-sanitizers` performs a full all-target build, then runs the complete
-`build-ci-live-sanitizers/runner` CTest inventory (at least ten rows while
-`runner/transport.cpp` exists, nine after its removal), including
+`build-ci-live-sanitizers/runner` CTest inventory (at least nine rows while
+`runner/transport.cpp` exists, eight after its removal), including
 `native_live_e2e` and `native_live_startup_e2e`, and requires any additional
 `tests/native_live*_e2e.py` on the tree to be registered too. It does not rerun
 the engine-wide CTest set or prepare historical ABI providers; those remain
