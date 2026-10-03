@@ -298,7 +298,7 @@ class Scripted:
             'PINEFORGE_BUILD_TESTS': 'ON',
             'PINEFORGE_BUILD_TUTORIAL': tutorial,
             'PINEFORGE_BUILD_LIVE_RUNNER': live,
-            'PINEFORGE_LIVE_TSAN': 'ON' if PROFILE[self.profile].thread_sanitizers else 'OFF',
+            'PINEFORGE_LIVE_TSAN': 'ON' if ci_verify.PROFILE[self.profile].thread_sanitizers else 'OFF',
             'PINEFORGE_BUILD_SOURCE_LAYER': source_layer,
             'PINEFORGE_ENABLE_SANITIZERS': sanitizers,
             'PINEFORGE_BUILD_EXAMPLES': examples,
