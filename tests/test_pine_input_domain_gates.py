@@ -12,7 +12,8 @@ class PineInputDomainGates(unittest.TestCase):
         source = (ROOT / 'src/source/pine_adapter.cpp').read_text()
         for pin in PINS:
             with self.subTest(rule=pin['rule'], baseline_line=pin['line']):
-                self.assertIn(pin['window'], source)
+                self.assertTrue(pin['window'] in source, pin['rule'])
+                self.assertIn(pin['new'], pin['window'])
                 old = pin['old']
                 if pin['class'] == 'T':
                     expected = old.replace('!stream_mode_', 'modeled_input()').replace(
@@ -35,6 +36,18 @@ class PineInputDomainGates(unittest.TestCase):
     def test_wave_gates_are_measured_pins(self):
         pinned = {pin['line'] for pin in PINS}
         self.assertTrue({14178, 15016, 18762, 21206}.issubset(pinned))
+
+    def test_future_sibling_touch_stays_excluded_from_streams(self):
+        source = (ROOT / 'src/source/pine_adapter.cpp').read_text()
+        self.assertTrue('            && leftover_flat_stop\n'
+                      '            && policy_script_bar_valid_\n'
+                      '            && !config_.calc_on_order_fills\n'
+                      '            && !stream_mode_) {' in source)
+
+    def test_pairless_callback_keys_on_the_open_hook_epoch(self):
+        source = (ROOT / 'src/source/pine_adapter.cpp').read_text()
+        self.assertTrue('    if (last_bar_dual_entry_script_open_ms_ != context.script_bar_open_ms) {\n'
+                        '        last_bar_dual_entry_path_ = 0;' in source)
 
     def test_batch_input_domain_does_not_exempt_observed_provenance(self):
         header = (ROOT / 'include/pineforge/source/pine_input_domain.hpp').read_text()

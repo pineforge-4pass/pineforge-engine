@@ -140,7 +140,7 @@
     "predicate": "Modeled interval/bar opening count, not observed-print input",
     "old": "            && !stream_mode_) {",
     "new": "            && modeled_input()) {",
-    "window": "            && view.cursor.point.interval_index == entry_openings_interval_index_\n            && leftover_flat_stop\n            && !config_.calc_on_order_fills\n            && !stream_mode_) {\n            // The legacy throttle is OrderEligibility::Skip for the bar; the\n            // order keeps resting. A generic Refuse is terminal, so re-arm the\n            // original stop at the bar close (L9g)."
+    "window": "            && view.cursor.point.interval_index == entry_openings_interval_index_\n            && leftover_flat_stop\n            && !config_.calc_on_order_fills\n            && modeled_input()) {\n            // The legacy throttle is OrderEligibility::Skip for the bar; the\n            // order keeps resting. A generic Refuse is terminal, so re-arm the\n            // original stop at the bar close (L9g)."
   },
   {
     "file": "src/source/pine_adapter.cpp",

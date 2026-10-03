@@ -14571,7 +14571,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             && leftover_flat_stop
             && policy_script_bar_valid_
             && !config_.calc_on_order_fills
-            && modeled_input()) {
+            && !stream_mode_) {
             for (const auto& handle : live_handles_) {
                 if (handle == view.target) continue;
                 const auto found = placement_.find(handle.incarnation);
@@ -14625,7 +14625,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             && view.cursor.point.interval_index == entry_openings_interval_index_
             && leftover_flat_stop
             && !config_.calc_on_order_fills
-            && !stream_mode_) {
+            && modeled_input()) {
             // The legacy throttle is OrderEligibility::Skip for the bar; the
             // order keeps resting. A generic Refuse is terminal, so re-arm the
             // original stop at the bar close (L9g).
@@ -19665,8 +19665,7 @@ void PineExecutionAdapter::on_bar_close(
     // A tolerant stream can synthesize a pair-less script callback without a
     // separate open hook. Batch bars always pass through on_bar_open and keep
     // their completed arbitration observable after the run.
-    if (stream_mode_
-        && last_bar_dual_entry_script_open_ms_ != context.script_bar_open_ms) {
+    if (last_bar_dual_entry_script_open_ms_ != context.script_bar_open_ms) {
         last_bar_dual_entry_path_ = 0;
         last_bar_dual_entry_script_open_ms_ = context.script_bar_open_ms;
     }
