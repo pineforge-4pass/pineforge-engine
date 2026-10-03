@@ -1,0 +1,16 @@
+{
+  "title": "PX marketable short stop from opening callback",
+  "slug": "px-coof-marketable-stop",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T00:18:21.876Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "f9dbf8f4bfec777c2f108bb054923f65ed58e1b8c79ece1c1432565f15d4e59d",
+  "tv_trades_sha256": "f0d02eb848b5bd7c5b91c0d52fee866763285207002c9fc1f20b07ee34b49e8e",
+  "tv_trades_rows": 2
+}

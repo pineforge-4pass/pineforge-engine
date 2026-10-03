@@ -1,0 +1,5 @@
+﻿Trade number,Type,Date and time,Signal,Price NONE,Size (qty),Size (value),Net PnL NONE,Return %,Commission NONE,Favorable excursion NONE,Favorable excursion %,Adverse excursion NONE,Adverse excursion %,Cumulative PnL NONE,Cumulative PnL %,Duration (bars)
+1,Exit long,2025-06-17 11:45,Close entry(s) order B,24977.8,1,24977.9,-0.1,0.00,0,0,0.00,-0.1,0.00,-0.1,0.00,0
+1,Entry long,2025-06-17 11:45,B,24977.9,1,24977.9,-0.1,0.00,0,0,0.00,-0.1,0.00,-0.1,0.00,0
+2,Exit long,2025-06-19 11:45,Close position order,24803.2,1,24977.9,-174.7,-0.70,0,4.15,0.02,-227.45,-0.91,-174.8,-0.02,2
+2,Entry long,2025-06-17 11:45,B,24977.9,1,24977.9,-174.7,-0.70,0,4.15,0.02,-227.45,-0.91,-174.8,-0.02,2

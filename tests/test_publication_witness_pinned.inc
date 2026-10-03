@@ -438,6 +438,12 @@
 // in that order) and at each lane boundary of that history: main reproduces
 // every old row, the 4 TAIL-D rows move at TAIL-D's picks and the 4 TAIL-C
 // rows at TAIL-C's, each to its lane's value above; no other pick moves one.
+// Ordinary opening-stop audit: Storm02 has long and short callbacks, slippage 0;
+// Storm05 and Storm23 have short callbacks, slippage 0. The long Storm02 callback
+// is outside the short-only coof_marketable_stop tapes; their short callbacks
+// are margin-backed shapes, outside those margin-free tapes. Activation and
+// Market conversion are narrowed accordingly; all six ordinary/magnified Storm
+// digits remain at baseline. No publication expectation is refreshed.
 constexpr Pinned kPinned[] = {
     {"Config01", 0x2338d6688ca58837ull, 144, 44, 144},
     {"ConfigFlags101", 0x6b3262a158c0e86dull, 145, 45, 144},

@@ -1,0 +1,6 @@
+//@version=6
+strategy("PX stop equals closing high",overlay=true,initial_capital=1000000,margin_long=0,margin_short=0,process_orders_on_close=true)
+if time == timestamp("UTC",2025,6,3,14,30)
+    strategy.entry("touch",strategy.long,qty=1,stop=high)
+if time == timestamp("UTC",2025,6,3,15,15)
+    strategy.close_all()

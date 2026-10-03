@@ -931,6 +931,11 @@ void PineExecutionAdapter::initialize_l4c_policy(PlacementSnapshot& snapshot,
     context.process_on_close = config_.process_orders_on_close;
     context.warmup = detail::run_state(require_host()).phase == NativeRunPhase::Warmup;
     context.stream_idle = !stream_mode_;
+    const auto opening_parent = placement_.find(coof_market_entry_recalc_incarnation_);
+    const bool carried_opening_parent = point && opening_parent != placement_.end()
+        && opening_parent->second.placement_script_open_ms < point->decision.script_bar_open_ms;
+    context.first_open_fill = snapshot.family == PineOrderFamily::ExitStop && coof_recalc_active_ && coof_market_entry_recalc_incarnation_ != 0 && (coof_first_open_ || carried_opening_parent) && config_.slippage == 0 && config_.margin_short == 0.0 && physical.signed_units < 0.0 && (!detail::run_state(require_host()).spec || detail::run_state(require_host()).spec->intrabar.is_none())
+        && point && point->decision.coordinate.path_phase == NativePathPhase::Open;
     context.after_first_open_fill = coof_recalc_active_ && !coof_first_open_
         && point && point->decision.coordinate.path_phase == NativePathPhase::Open;
     context.recalc_leg = recalc_leg;
@@ -6762,6 +6767,10 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         stop_price = directional_tick(stop_price, staged_.syminfo.mintick, is_long);
         const double signal = source_point
             ? nearest_tick(source_point->price, staged_.syminfo.mintick) : kNaN;
+        if (config_.process_orders_on_close && source_level_on_price_grid(stop_price, staged_.syminfo.mintick) == source_level_on_price_grid(signal, staged_.syminfo.mintick)) {
+            stop_price = source_level_on_price_grid(
+                stop_price, staged_.syminfo.mintick);
+        }
         const bool marketable = finite_positive(signal)
             && (is_long ? stop_price <= signal : stop_price >= signal);
         // ab9714be pine_strategy_commands.cpp:325-328: pure stop placement sizing price includes directional slippage ticks
@@ -8508,6 +8517,16 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         snapshot.command_ordinal = command_ordinal;
         snapshot.immediately = immediately;
         snapshot.sizing = sizing_snapshot();
+        if (immediately && config_.slippage > 0 && coof_recalc_active_
+            && coof_first_open_ && coof_script_bar_valid_) {
+            const auto callback_state = detail::run_state(require_host());
+            if ((!callback_state.spec || callback_state.spec->intrabar.is_none()) && detail::callback_point(require_host()) && detail::callback_point(require_host())->decision.coordinate.path_phase == NativePathPhase::Open) {
+                const bool close_is_buy = detail::run_position(require_host()).signed_units < 0.0;
+                coof_close_all_fill = source_bar_fill_tick(
+                    coof_script_bar_.open, staged_.syminfo.mintick)
+                    + (close_is_buy ? 1.0 : -1.0) * config_.slippage * staged_.syminfo.mintick;
+            }
+        }
         snapshot.forced_execution_price = coof_close_all_fill;
         snapshot.crosses_zero = close_sized_before_call;
         (void)qty;
@@ -9044,6 +9063,15 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     snapshot.projection_remaining_qty = frozen_qty;
     snapshot.command_ordinal = command_ordinal;
     snapshot.is_long = false;
+    if ((immediately || cohort_exposure_for(id) >= std::abs(current) - internal::kQtyEpsilon) && config_.slippage > 0 && coof_recalc_active_
+        && coof_first_open_ && coof_script_bar_valid_) {
+        const auto callback_state = detail::run_state(require_host());
+        if ((!callback_state.spec || callback_state.spec->intrabar.is_none()) && detail::callback_point(require_host()) && detail::callback_point(require_host())->decision.coordinate.path_phase == NativePathPhase::Open) {
+            coof_close_fill = source_bar_fill_tick(
+                coof_script_bar_.open, staged_.syminfo.mintick)
+                + (current < 0.0 ? 1.0 : -1.0) * config_.slippage * staged_.syminfo.mintick;
+        }
+    }
     snapshot.forced_execution_price = coof_close_fill;
     snapshot.immediately = immediately; snapshot.deferred_cohort = host_sized; snapshot.sizing = sizing_snapshot();
     if (paired_reversal_parent && !paired_reversal_whole_drop)
@@ -10158,23 +10186,31 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 }
             }
         }
-        // A stop that the recalculation of the bar's first open fill places
-        // already through that fill is executed at the fill: the rest of the
-        // entry bar is live for the exits its recalculation places, so
-        // TradingView books it at the open it was born at (lab tv
-        // w4-f19c-{long,short}-plain-coof cells LA and SA; lane
-        // W4-ENG-POOC-SAMEPASS), where the adapter held it for the next bar.
-        if (coof_recalc_active_ && coof_first_open_ && family == PineOrderFamily::ExitStop
+        // An ordinary opening market-entry callback, including a carried
+        // parent, executes a wrong-side stop immediately for an unslipped
+        // margin-free short (tests/fixtures/coof_marketable_stop and carried).
+        // Other sides, slipped fills and magnified paths keep their existing
+        // Stop projection; the older first-fill cells stay at their level.
+        // Both activation and Market conversion use this same taped scope.
+        const auto opening_parent = placement_.find(coof_market_entry_recalc_incarnation_);
+        const auto opening_point = detail::callback_point(require_host());
+        const bool carried_opening_parent = opening_point && opening_parent != placement_.end()
+            && opening_parent->second.placement_script_open_ms
+                < opening_point->decision.script_bar_open_ms;
+        if (coof_recalc_active_ && (coof_first_open_ || (carried_opening_parent && config_.slippage == 0 && config_.margin_short == 0.0 && physical.signed_units < 0.0))
+            && family == PineOrderFamily::ExitStop
             && finite_positive(stop_price) && physical.signed_units != 0.0) {
             const auto native = detail::run_state(require_host());
             const auto point = detail::callback_point(require_host());
             const bool ordinary_path = !native.spec || native.spec->intrabar.is_none();
             if (ordinary_path && point && finite_positive(point->price)
+                && (coof_first_open_ || point->decision.coordinate.path_phase == NativePathPhase::Open)
                 && (physical.signed_units > 0.0 ? stop_price > point->price
                                                 : stop_price < point->price)) {
                 trigger = native_order::Stop{point->price};
                 coof_stop_waypoint_price = point->price;
                 coof_stop_at_leg_end = true;
+                if (coof_market_entry_recalc_incarnation_ != 0 && config_.slippage == 0 && config_.margin_short == 0.0 && physical.signed_units < 0.0 && point->decision.coordinate.path_phase == NativePathPhase::Open) { trigger = native_order::Market{}; defer_marketable_coof_stop = false; }
             }
         }
         // A limit that recalculation places at or through the bar's open
@@ -10635,6 +10671,9 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     ++stale;
             }
             const std::uint64_t placement_high_water = placement_.high_water();
+            const bool opening_stop_now = family == PineOrderFamily::ExitStop && coof_market_entry_recalc_incarnation_ != 0
+                && coof_recalc_active_ && (coof_first_open_ || carried_opening_parent) && coof_stop_at_leg_end
+                && opening_point && opening_point->decision.coordinate.path_phase == NativePathPhase::Open && std::holds_alternative<native_order::Market>(request.trigger);
             const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
                                                     replacement_key);
             if (accepted) {
@@ -10645,6 +10684,10 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 // the membership scan.
                 if (accepted->incarnation > placement_high_water || !family.holds(*accepted)) {
                     family.push_back(*accepted);
+                }
+                if (opening_stop_now) {
+                    (void)require_host().execute_current(
+                        {*accepted, NativeCurrentPriceRule::NearestTick});
                 }
             }
         };
@@ -18622,6 +18665,38 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     coof_script_bar_valid_ = true;
     policy_script_bar_ = bar;
     policy_script_bar_valid_ = true;
+    if (!stream_mode_ && !context.driver_statistics.intrabar_path_enabled
+        && !trail_state_at_open_.empty()) {
+        const double open_tick = source_bar_fill_tick(bar.open, staged_.syminfo.mintick);
+        native_order::ReplaceOptions keep;
+        keep.keep_handle = true;
+        for (const auto& working : require_host().native_working_requests()) {
+            const auto& definition = *working.definition;
+            const auto carried = trail_state_at_open_.find(definition.handle.incarnation);
+            const auto found = placement_.find(definition.handle.incarnation);
+            if (carried == trail_state_at_open_.end() || !carried->second.activated
+                || found == placement_.end()
+                || !std::holds_alternative<native_order::Trail>(definition.request.trigger)
+                || !(found->second.exit_levels.trail_offset >= 1.0)) {
+                continue;
+            }
+            const double held_units = detail::run_position(require_host()).signed_units;
+            if (held_units == 0.0) continue;
+            const bool is_buy = held_units < 0.0;
+            const double level = carried->second.current_level;
+            const bool raw_reached = is_buy ? bar.open >= level : bar.open <= level;
+            const bool print_reached = is_buy ? open_tick >= level : open_tick <= level;
+            if (raw_reached || !print_reached) continue;
+            native_order::Request request = definition.request;
+            request.trigger = native_order::Market{};
+            const auto replaced = require_host().replace(definition.handle, request, keep);
+            if (replaced.status != native_order::ReplaceStatus::Replaced) continue;
+            found->second.forced_execution_price = open_tick
+                + (is_buy ? 1.0 : -1.0) * config_.slippage * staged_.syminfo.mintick;
+            (void)require_host().execute_current(
+                {definition.handle, NativeCurrentPriceRule::NearestTick});
+        }
+    }
     // The C observer snapshots the ordinary flat two-stop arbitration at the
     // bar boundary, before either native request can fill or be declined.
     // COOF has its own callback scheduling and deliberately leaves this

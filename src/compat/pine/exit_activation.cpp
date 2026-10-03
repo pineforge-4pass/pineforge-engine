@@ -82,9 +82,16 @@ ExitActivationPolicy select_exit_activation(const ExitActivationRequest& request
         continuation = LimitContinuation{LimitContinuationCause::FirstHighRecross,
                                          context.current_fill};
     }
+    const bool opening_stop_continuation = request.from_fill
+        && context.first_open_fill && !context.magnifier
+        && !request.requested_trailing && std::isfinite(stop)
+        && (context.direction > 0 ? stop > context.cursor_price
+                                  : stop < context.cursor_price);
+    const double held_stop = opening_stop_continuation
+        ? std::numeric_limits<double>::quiet_NaN() : stop;
     return ExitActivationPolicy({context.cycle, context.position_open_bar,
                                  context.direction, context.cursor_price,
-                                 stop, limit, continuation});
+                                 held_stop, limit, continuation});
 }
 
 } // namespace pineforge::compat::pine

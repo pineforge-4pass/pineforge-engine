@@ -1,0 +1,6 @@
+//@version=6
+strategy("PX marketable short stop from opening callback",overlay=true,initial_capital=1000000,margin_long=0,margin_short=0,calc_on_order_fills=true)
+if time == timestamp("UTC",2025,4,6,9,45) and strategy.position_size == 0
+    strategy.entry("fall",strategy.short,qty=1)
+if strategy.position_size < 0
+    strategy.exit("wrong-side","fall",stop=83000)

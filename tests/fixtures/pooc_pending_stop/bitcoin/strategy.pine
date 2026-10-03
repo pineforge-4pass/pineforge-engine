@@ -1,0 +1,7 @@
+//@version=6
+strategy("PX pending stop with bracket on closing print",overlay=true,initial_capital=100000,process_orders_on_close=true)
+if time == timestamp("UTC",2025,6,3,14,30)
+    strategy.entry("touch",strategy.long,stop=high)
+    strategy.exit("bracket","touch",stop=low-500,limit=high+1000)
+if time == timestamp("UTC",2025,6,3,15,15)
+    strategy.close_all()

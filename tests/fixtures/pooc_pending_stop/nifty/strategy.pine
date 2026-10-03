@@ -1,0 +1,7 @@
+//@version=6
+strategy("PX NSE pending stop and closing bracket",overlay=true,initial_capital=100000,process_orders_on_close=true)
+if time == timestamp("UTC",2025,4,8,6,30)
+    strategy.entry("touch",strategy.long,stop=high)
+    strategy.exit("bracket","touch",stop=low-100,limit=high+500)
+if time == timestamp("UTC",2025,4,8,9,45)
+    strategy.close_all()

@@ -992,6 +992,12 @@ list(APPEND TEST_SOURCES test_coof_open_limit_tapes)
 # the price leg it leaves na is withdrawn (tests/fixtures/exit_reissue_na),
 # on TradingView's tape.
 list(APPEND TEST_SOURCES test_exit_reissue_na_tapes)
+# Adapter opening-print and callback projections, independently taped.
+list(APPEND TEST_SOURCES
+    test_carried_trail_open_tapes
+    test_pooc_pending_stop_tapes
+    test_coof_marketable_stop_tapes
+    test_coof_close_slippage_tapes)
 # ... and a flat pair of opposite fixed-quantity market entries whose gross is
 # over the equity keeps only its earlier call under process_orders_on_close
 # and with costs (tests/fixtures/pooc_pair_gross), on TradingView's tapes.
@@ -2689,6 +2695,14 @@ if(TARGET test_exit_fifo_cross_tapes)
     target_compile_definitions(test_exit_fifo_cross_tapes PRIVATE
         PINEFORGE_TAIL_D_FIFO_CROSS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_fifo_cross")
 endif()
+foreach(tape_target IN ITEMS test_carried_trail_open_tapes test_pooc_pending_stop_tapes
+                            test_coof_marketable_stop_tapes test_coof_close_slippage_tapes)
+    if(TARGET ${tape_target})
+        target_compile_definitions(${tape_target} PRIVATE
+            PINEFORGE_ORDER_PRINT_FIXTURE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+    endif()
+endforeach()
+
 if(TARGET test_coof_open_limit_tapes)
     target_compile_definitions(test_coof_open_limit_tapes PRIVATE
         PINEFORGE_TAIL_D_OPEN_LIMIT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_open_limit")

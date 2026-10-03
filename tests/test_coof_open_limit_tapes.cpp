@@ -25,10 +25,6 @@
  * tape's bars (bars.inc) and requires every limit cell's trade to be the
  * engine's: entry and exit time, side, price in ticks and quantity.
  *
- * Recorded, not fixed: LC and SD. TradingView fills that close at the open
- * print minus / plus its own slippage (24977.75, 25180.00); the engine books
- * it from the slipped entry fill, its own slippage off (24977.85, 25179.90).
- *
  * Fail-before (lane report): LA, SB, LE and LG exit on a later bar.
  */
 
@@ -238,14 +234,6 @@ int main() {
         const Row engine{t.entry_time, t.is_long, ticks(t.entry_price), std::llround(t.qty),
                          t.exit_time, ticks(t.exit_price)};
         const TapeRow& tv = tape[static_cast<std::size_t>(i)];
-        const bool recorded = tv.entry_signal == "LC" || tv.entry_signal == "SD";
-        if (recorded) {
-            // The same trade, its exit two ticks (its slippage) from TradingView's.
-            CHECK(std::get<0>(engine) == std::get<0>(tv.row));
-            CHECK(std::get<4>(engine) == std::get<4>(tv.row));
-            CHECK(std::llabs(std::get<5>(engine) - std::get<5>(tv.row)) == 2);
-            continue;
-        }
         CHECK(engine == tv.row);
         if (engine != tv.row) {
             std::printf("    cell %s\n", tv.entry_signal.c_str());

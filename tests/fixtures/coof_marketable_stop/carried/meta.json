@@ -1,0 +1,16 @@
+{
+  "title": "Callback stop after a carried entry",
+  "slug": "callback-stop-after-a-carried-entry",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T03:57:16.760Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-05",
+    "to": "2025-04-08"
+  },
+  "pine_sha256": "6000a9830d16ada728710fbfd0b4e08dcbf77cb0629dd23dc85676f5489c9954",
+  "tv_trades_sha256": "fbd5930e99a8543c9dad1dd2895d87182f5512d91f14e572d360da10f9503f0f",
+  "tv_trades_rows": 4
+}
