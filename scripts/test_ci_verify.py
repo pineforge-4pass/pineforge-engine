@@ -135,6 +135,10 @@ class Scripted:
     def __call__(self, argv, *, extra_env=None, timeout=600, combine_stderr=True,
                  stream_output=False) -> Completed:
         argv = list(map(str, argv))
+        if argv[0] == 'setarch':
+            if argv[2] != '-R':
+                raise AssertionError('ThreadSanitizer must disable ASLR only for its child')
+            argv = argv[3:]
         self.timeouts.append((argv, timeout))
         # Discovery invocations are asserted through Driver stages. Keep the
         # existing execution-call fixture stable for pre-existing tests.
@@ -1882,6 +1886,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         for name in ('ctest', 'native-help', 'require-websocket'):
             stage = next(stage for stage in summary['stages'] if stage['name'] == name)
             self.assertEqual(stage['extraEnvKeys'], ['TSAN_OPTIONS'])
+            self.assertEqual(stage['argv'][:3], ['setarch', os.uname().machine, '-R'])
         for unit in ci_verify.runner_translation_units(ROOT):
             for key in ('runner_flag_missing', 'runner_command_missing'):
                 with self.subTest(unit=unit.name, defect=key):

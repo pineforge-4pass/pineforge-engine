@@ -1397,6 +1397,8 @@ class Driver:
     def invoke(self, name: str, argv: list[str], *, extra_env: dict[str, str] | None = None,
                timeout: int = 600, combine_stderr: bool = True,
                stream_output: bool | None = None) -> Completed:
+        if self.cfg.profile.thread_sanitizers and name in {'ctest', 'native-help', 'require-websocket'}:
+            argv = ['setarch', os.uname().machine, '-R', *argv]
         if self.cfg.ccache_path:
             extra_env = {**(extra_env or {}), 'CCACHE_COMPILERCHECK': 'content'}
         log = self.logs / f'{name}.log'

@@ -126,9 +126,6 @@ jobs:
 
       - name: Verify every live runner target with ThreadSanitizer
         if: ${{ !cancelled() }}
-        env:
-          CC: clang
-          CXX: clang++
         run: python3 scripts/ci_verify.py live-tsan --build-dir build-live-tsan --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ github.workspace }}/build-native-deps/curl-install/lib/cmake/CURL" --ccache
 
       - name: Stage thread sanitizer diagnostics
