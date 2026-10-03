@@ -643,6 +643,7 @@ EXCLUDED_REGISTERED_MIN = {'debug': 773, 'sanitizers': 773, 'native': 782}
 # minutes.
 CTEST_TIMEOUT = 1800
 SANITIZERS_FULL_CTEST_TIMEOUT = 3600
+LIVE_SANITIZERS_MIN_TESTS = 10
 
 
 def ctest_timeout(cfg: 'VerifyConfig') -> int:
@@ -727,9 +728,16 @@ PROFILE = {
     'debug': Profile('debug', 'Debug', False, False, True, True),
     'sanitizers': Profile('sanitizers', 'Debug', True, False, True, True),
     'native': Profile('native', 'Release', False, True, False, True),
-    'live-sanitizers': Profile('live-sanitizers', 'Debug', True, True, False, True, 10),
+    'live-sanitizers': Profile('live-sanitizers', 'Debug', True, True, False, True,
+                               LIVE_SANITIZERS_MIN_TESTS),
     'kernel': Profile('kernel', 'Release', False, True, False, False, KERNEL_MIN_TESTS),
 }
+
+
+def profile_min_tests(profile: Profile, source: Path) -> int | None:
+    if profile.name == 'live-sanitizers' and not (source / 'runner' / 'transport.cpp').is_file():
+        return LIVE_SANITIZERS_MIN_TESTS - 1
+    return profile.min_tests
 
 
 @dataclass
@@ -951,7 +959,7 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
                         help='require installed ccache and bind CMAKE_*_COMPILER_LAUNCHER')
     parser.add_argument('--require-websocket', action='store_true',
                         help='native/live-sanitizers: execute test_native_live_websocket and '
-                             'refuse skip (77); mandatory in live-sanitizers')
+                             'refuse skip (77); automatic in live-sanitizers while transport.cpp exists')
     parser.add_argument('--exclude-label', default=None,
                         help='exclude one CTest label; verify the run count against '
                              'CTest discovery with and without -LE')
@@ -959,7 +967,9 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
                         help='fail the ctest-floor stage unless at least N CTest rows ran '
                              '(a skipped or not-run row is listed, never counted); '
                              f'the kernel profile defaults to {KERNEL_MIN_TESTS}, the release '
-                             f'profile to {RELEASE_MIN_TESTS}, live-sanitizers to 10, '
+                             f'profile to {RELEASE_MIN_TESTS}, live-sanitizers to '
+                             f'{LIVE_SANITIZERS_MIN_TESTS} with transport.cpp or '
+                             f'{LIVE_SANITIZERS_MIN_TESTS - 1} without it, '
                              'the others to no floor')
     args = parser.parse_args(argv)
     if args.build_dir is None:
@@ -1007,10 +1017,13 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
         generator=args.generator,
         curl_dir=args.curl_dir.resolve() if args.curl_dir is not None else None,
         ccache_path=ccache_path,
-        require_websocket=bool(args.require_websocket or args.profile == 'live-sanitizers'),
+        require_websocket=bool(args.require_websocket or
+                               (args.profile == 'live-sanitizers' and
+                                (source / 'runner' / 'transport.cpp').is_file())),
         runner=default_runner,
         exclude_label=args.exclude_label,
-        min_tests=args.min_tests if args.min_tests is not None else PROFILE[args.profile].min_tests,
+        min_tests=(args.min_tests if args.min_tests is not None else
+                   profile_min_tests(PROFILE[args.profile], source)),
     )
 
 
@@ -1098,6 +1111,11 @@ def compile_target(entry: dict, argv: list[str]) -> str | None:
     return match.group(1) if match else None
 
 
+def runner_translation_units(source: Path) -> list[Path]:
+    return sorted(unit for unit in (source / 'runner').rglob('*')
+                  if unit.suffix.lower() in {'.c', '.cc', '.cpp', '.cxx'} and unit.is_file())
+
+
 def runner_sanitizer_coverage(build_dir: Path, source: Path) -> list[str]:
     path = build_dir / 'compile_commands.json'
     if not path.is_file():
@@ -1116,18 +1134,20 @@ def runner_sanitizer_coverage(build_dir: Path, source: Path) -> list[str]:
             continue
         unit = compile_unit(entry)
         target = compile_target(entry, argv)
-        label = f'{target}: {unit.relative_to(source.resolve())}'
+        location = (str(unit.relative_to(source.resolve())) if unit.is_relative_to(source.resolve())
+                    else f'{unit} (outside source tree)')
+        label = f'{target}: {location}'
         disabled = any(flag.startswith('-fno-sanitize=') or
                        flag == '-fomit-frame-pointer' for flag in argv)
         if SANITIZER_FLAG not in argv or '-fno-omit-frame-pointer' not in argv or disabled:
             raise RuntimeError(f'runner compile lacks ASan/UBSan/frame pointers: {label}')
         compiled.add(unit)
         coverage.append(label)
-    required = {unit.resolve() for unit in (source / 'runner').rglob('*.cpp')}
+    required = {unit.resolve() for unit in runner_translation_units(source)}
     missing = required - compiled
     if not coverage or missing:
         raise RuntimeError('runner compile commands missing: ' +
-                           ', '.join(str(unit.relative_to(source.resolve()))
+                           ', '.join(os.path.relpath(unit, source.resolve())
                                      for unit in sorted(missing)))
     return sorted(coverage)
 
@@ -1818,8 +1838,9 @@ class Driver:
                 names = {test['name'] for test in json.loads(inventory.stdout)['tests']}
                 required = {'native_live_help', 'test_live_json', 'test_live_parser',
                             'test_native_live_startup', 'test_native_live_store',
-                            'test_native_live_websocket', 'test_native_example_batch',
-                            'test_native_example_selected'}
+                            'test_native_example_batch', 'test_native_example_selected'}
+                if (self.cfg.source / 'runner' / 'transport.cpp').is_file():
+                    required.add('test_native_live_websocket')
                 required.update(path.stem for path in
                                 (self.cfg.source / 'tests').glob('native_live*_e2e.py'))
                 if inventory.returncode != 0 or required - names:

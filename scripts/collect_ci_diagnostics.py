@@ -13,6 +13,7 @@ ARTIFACTS = {
     "ci-logs": "ci-logs",
     "ctest-junit.xml": "ctest-junit.xml",
     "Testing/Temporary/LastTest.log": "LastTest.log",
+    "runner/Testing/Temporary/LastTest.log": "runner-LastTest.log",
     "settlement-abi-base/receipt.json": "settlement-abi-base-receipt.json",
     "settlement-abi-base/configure.log": "settlement-abi-base-configure.log",
     "settlement-abi-base/build.log": "settlement-abi-base-build.log",

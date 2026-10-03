@@ -56,7 +56,7 @@ even when the current benchmark files are correct.
 | `debug` | Debug, tutorial enabled | The standard checks and installed package without Release optimization; no default row floor, examples, include-independence proof or twin-parity guard |
 | `sanitizers` | Debug, ASan and UBSan | Instrumented library, tests and installed consumer; Linux CI also requires leak detection |
 | `native` | Release, live runner enabled | Parser, journal, transport tests, installed runner help, and installed native include-independence proof |
-| `live-sanitizers` | Debug, live runner enabled, ASan and UBSan | Every runner target instrumented and audited from compile commands; all runner CTest rows, Python E2Es and installed runner help; WebSocket-enabled curl mandatory, no skips accepted |
+| `live-sanitizers` | Debug, live runner enabled, ASan and UBSan | Every runner target instrumented and audited from compile commands; all runner CTest rows, Python E2Es and installed runner help; WebSocket-enabled curl mandatory while `runner/transport.cpp` exists, no skips accepted |
 | `kernel` | Release, live runner enabled, Pine source layer OFF | The source-free CTest set behind a row floor (`KERNEL_MIN_TESTS`; `--min-tests N` overrides it), installed package, and the `nm` half of the include-independence proof over `libpineforge_kernel.a` |
 
 By default each profile uses `build-ci-<profile>`. Keep separate build directories
@@ -86,13 +86,17 @@ curl may report the existing unsupported-WebSocket skip; that is not the require
 Linux transport proof.
 
 `live-sanitizers` performs a full all-target build, then runs the complete
-`build-ci-live-sanitizers/runner` CTest inventory (at least ten rows), including
+`build-ci-live-sanitizers/runner` CTest inventory (at least ten rows while
+`runner/transport.cpp` exists, nine after its removal), including
 `native_live_e2e` and `native_live_startup_e2e`, and requires any additional
 `tests/native_live*_e2e.py` on the tree to be registered too. It does not rerun
 the engine-wide CTest set or prepare historical ABI providers; those remain
 covered by `sanitizers`. It refuses label exclusions, missing runner compile
 commands, missing ASan/UBSan or frame-pointer flags, skipped/disabled tests,
-and a WebSocket transport skip even without `--require-websocket`.
+and, while `runner/transport.cpp` exists, a missing WebSocket row or transport
+skip even without `--require-websocket`. After transport removal those two
+automatic gates no longer apply; an explicit `--require-websocket` still
+requires the WebSocket test.
 The runner's curl version floor still applies at configure time.
 `native-live.yml` runs this profile alongside `native`, reusing the same
 checksum-pinned WebSocket-enabled curl, and retains both profiles' diagnostics.
