@@ -847,6 +847,24 @@ OrderBirth PineExecutionAdapter::capture_order_birth() const {
                                        ordinal, ordinal, ordinal);
 }
 
+bool PineExecutionAdapter::opening_market_short_scope(PineOrderFamily family) const {
+    const auto point = detail::callback_point(require_host());
+    const auto opening_parent = placement_.find(coof_market_entry_recalc_incarnation_);
+    const bool carried_opening_parent = point && opening_parent != placement_.end()
+        && opening_parent->second.placement_script_open_ms < point->decision.script_bar_open_ms;
+    const bool opening_high = coof_script_bar_valid_
+        && source_decimal_tick(coof_script_bar_.open, staged_.syminfo.mintick)
+            == source_decimal_tick(coof_script_bar_.high, staged_.syminfo.mintick);
+    const auto native = detail::run_state(require_host());
+    return family == PineOrderFamily::ExitStop && coof_recalc_active_
+        && coof_market_entry_recalc_incarnation_ != 0 && config_.slippage == 0
+        && (opening_high || (config_.margin_short == 0.0
+            && (coof_first_open_ || carried_opening_parent)))
+        && detail::run_position(require_host()).signed_units < 0.0
+        && (!native.spec || native.spec->intrabar.is_none())
+        && point && point->decision.coordinate.path_phase == NativePathPhase::Open;
+}
+
 void PineExecutionAdapter::initialize_l4c_policy(PlacementSnapshot& snapshot,
                                                   native_order::RequestHandle handle) {
     if (snapshot.birth.cause() == OrderBirthCause::Unattributed)
@@ -943,11 +961,7 @@ void PineExecutionAdapter::initialize_l4c_policy(PlacementSnapshot& snapshot,
     context.process_on_close = config_.process_orders_on_close;
     context.warmup = detail::run_state(require_host()).phase == NativeRunPhase::Warmup;
     context.stream_idle = !stream_mode_;
-    const auto opening_parent = placement_.find(coof_market_entry_recalc_incarnation_);
-    const bool carried_opening_parent = point && opening_parent != placement_.end()
-        && opening_parent->second.placement_script_open_ms < point->decision.script_bar_open_ms;
-    context.first_open_fill = snapshot.family == PineOrderFamily::ExitStop && coof_recalc_active_ && coof_market_entry_recalc_incarnation_ != 0 && (coof_first_open_ || carried_opening_parent) && config_.slippage == 0 && config_.margin_short == 0.0 && physical.signed_units < 0.0 && (!detail::run_state(require_host()).spec || detail::run_state(require_host()).spec->intrabar.is_none())
-        && point && point->decision.coordinate.path_phase == NativePathPhase::Open;
+    context.first_open_fill = opening_market_short_scope(snapshot.family);
     context.after_first_open_fill = coof_recalc_active_ && !coof_first_open_
         && point && point->decision.coordinate.path_phase == NativePathPhase::Open;
     context.recalc_leg = recalc_leg;
@@ -2141,6 +2155,7 @@ void PineExecutionAdapter::reset_for_run() {
     source_batch_mutated_ = false;
     coof_recalc_active_ = false;
     coof_first_open_ = false;
+    coof_open_stop_next_waypoint_ = false;
     coof_fill_forced_ = false;
     coof_market_entry_recalc_incarnation_ = 0;
     coof_market_entry_recalc_fill_seq_ = 0;
@@ -5838,6 +5853,8 @@ void PineExecutionAdapter::begin_coof_recalc(
     coof_market_entry_recalc_fill_seq_ = source_fill_sequence;
     coof_market_entry_recalc_incarnation_ = 0;
     const auto placement = placement_.find(event.handle().incarnation);
+    coof_open_stop_next_waypoint_ = placement != placement_.end()
+        && placement->second.coof_open_stop_next_waypoint;
     if (event.opened_units != 0.0
         && std::holds_alternative<native_order::Market>(event.request().trigger)) {
         if (placement != placement_.end()
@@ -5870,6 +5887,7 @@ void PineExecutionAdapter::begin_coof_recalc(
 void PineExecutionAdapter::end_coof_recalc() noexcept {
     coof_recalc_active_ = false;
     coof_first_open_ = false;
+    coof_open_stop_next_waypoint_ = false;
     coof_fill_forced_ = false;
     coof_market_entry_recalc_incarnation_ = 0;
     coof_market_entry_recalc_fill_seq_ = 0;
@@ -6142,6 +6160,14 @@ double PineExecutionAdapter::coof_next_waypoint(int* path_index) const noexcept 
             && !coof_fill_forced_) {
             if (path_index) *path_index = index;
             return path_price[index];
+        }
+        if (index == 0 && coof_open_stop_next_waypoint_
+            && (finite_positive(tick)
+                ? source_decimal_tick(path_price[1], tick)
+                    == source_decimal_tick(path_price[0], tick)
+                : path_price[1] == path_price[0])) {
+            if (path_index) *path_index = 2;
+            return path_price[2];
         }
         if (path_index && index < 3) *path_index = index + 1;
         return index < 3 ? path_price[index + 1] : kNaN;
@@ -10213,8 +10239,10 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             }
         }
         // An ordinary opening market-entry callback, including a carried
-        // parent, executes a wrong-side stop immediately for an unslipped
-        // margin-free short (tests/fixtures/coof_marketable_stop and carried).
+        // parent or a parent born in that callback, executes a wrong-side
+        // stop at the coincident opening high for an unslipped short,
+        // with or without margin
+        // (tests/fixtures/coof_marketable_stop).
         // Other sides, slipped fills and magnified paths keep their existing
         // Stop projection; the older first-fill cells stay at their level.
         // Both activation and Market conversion use this same taped scope.
@@ -10223,7 +10251,11 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         const bool carried_opening_parent = opening_point && opening_parent != placement_.end()
             && opening_parent->second.placement_script_open_ms
                 < opening_point->decision.script_bar_open_ms;
-        if (coof_recalc_active_ && (coof_first_open_ || (carried_opening_parent && config_.slippage == 0 && config_.margin_short == 0.0 && physical.signed_units < 0.0))
+        const bool opening_high = coof_script_bar_valid_
+            && source_decimal_tick(coof_script_bar_.open, staged_.syminfo.mintick)
+                == source_decimal_tick(coof_script_bar_.high, staged_.syminfo.mintick);
+        const bool opening_market_short = opening_market_short_scope(family);
+        if (coof_recalc_active_ && (coof_first_open_ || opening_market_short)
             && family == PineOrderFamily::ExitStop
             && finite_positive(stop_price) && physical.signed_units != 0.0) {
             const auto native = detail::run_state(require_host());
@@ -10236,7 +10268,10 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 trigger = native_order::Stop{point->price};
                 coof_stop_waypoint_price = point->price;
                 coof_stop_at_leg_end = true;
-                if (coof_market_entry_recalc_incarnation_ != 0 && config_.slippage == 0 && config_.margin_short == 0.0 && physical.signed_units < 0.0 && point->decision.coordinate.path_phase == NativePathPhase::Open) { trigger = native_order::Market{}; defer_marketable_coof_stop = false; }
+                if (opening_market_short) {
+                    trigger = native_order::Market{};
+                    defer_marketable_coof_stop = false;
+                }
             }
         }
         // A limit that recalculation places at or through the bar's open
@@ -10697,9 +10732,12 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     ++stale;
             }
             const std::uint64_t placement_high_water = placement_.high_water();
-            const bool opening_stop_now = family == PineOrderFamily::ExitStop && coof_market_entry_recalc_incarnation_ != 0
-                && coof_recalc_active_ && (coof_first_open_ || carried_opening_parent) && coof_stop_at_leg_end
+            const bool opening_stop_now = family == PineOrderFamily::ExitStop
+                && opening_market_short && coof_stop_at_leg_end
                 && opening_point && opening_point->decision.coordinate.path_phase == NativePathPhase::Open && std::holds_alternative<native_order::Market>(request.trigger);
+            snapshot.coof_open_stop_next_waypoint = opening_stop_now && !coof_first_open_
+                && opening_high && !carried_opening_parent;
+            const bool continue_after_open = snapshot.coof_open_stop_next_waypoint;
             const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
                                                     replacement_key);
             if (accepted) {
@@ -10712,8 +10750,12 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     family.push_back(*accepted);
                 }
                 if (opening_stop_now) {
-                    (void)require_host().execute_current(
+                    const auto outcome = require_host().execute_current(
                         {*accepted, NativeCurrentPriceRule::NearestTick});
+                    if (continue_after_open
+                        && std::holds_alternative<native_order::ExecutionAppliedEvent>(outcome)) {
+                        coof_open_stop_next_waypoint_ = true;
+                    }
                 }
             }
         };
@@ -14300,13 +14342,14 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                     notional_per_price
                         * (pooc_flat_money ? source.sizing.mark : source.sizing.price));
                 // The no-epsilon tape proves ordinary low-value opposite
-                // market entries only (source_buying_power forex-under/equal).
+                // market entries with pyramiding zero or one, including its
+                // default (source_buying_power forex and px-fx tapes).
                 // Preserve the prior guard for fractional POOC, costs, fill
                 // births, other pyramiding, and projected-close books.
                 const bool exact_money_scope = low_value_lot && ordinary_fractional
                     && opposite && !source.projection_after_close
                     && !source.birth.from_fill() && source.oca_name.empty()
-                    && config_.pyramiding == 0;
+                    && config_.pyramiding <= 1;
                 const double money_guard = exact_money_scope ? 0.0 : 1e-9;
                 if (source.sizing.equity + money_guard < rounded_cost) {
                     result.units = keep_mc_close_surplus ? 1.0

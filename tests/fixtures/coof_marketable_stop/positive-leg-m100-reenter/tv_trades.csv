@@ -1,0 +1,7 @@
+﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)
+1,Exit short,2025-04-06 18:15,Close entry(s) order prior,82910.09,0.01203,999.7920069,2.3836243,0.24,0,3.113364,0.31,-0.2413218,-0.02,2.3836243,0.02,2
+1,Entry short,2025-04-06 17:45,prior,83108.23,0.01203,999.7920069,2.3836243,0.24,0,3.113364,0.31,-0.2413218,-0.02,2.3836243,0.02,2
+2,Exit short,2025-04-06 18:15,new-stop,82960,0.01206,999.8956854,-0.6019146,-0.06,0,0,0.00,-0.6019146,-0.06,1.7817096,0.02,0
+2,Entry short,2025-04-06 18:15,opening,82910.09,0.01206,999.8956854,-0.6019146,-0.06,0,0,0.00,-0.6019146,-0.06,1.7817096,0.02,0
+3,Exit short,2025-04-07 09:15,Close position order,78860,0.01209,1000.0423641,46.624966,4.66,0,67.252556,6.72,-3.1996186,-0.32,48.406673,0.48,60
+3,Entry short,2025-04-06 18:15,second,82716.49,0.01209,1000.0423641,46.624966,4.66,0,67.252556,6.72,-3.1996186,-0.32,48.406673,0.48,60

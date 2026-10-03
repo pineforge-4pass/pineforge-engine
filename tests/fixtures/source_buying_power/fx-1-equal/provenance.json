@@ -1,0 +1,15 @@
+{
+  "channel": "ws-report-v1",
+  "symbol": "OANDA:EURUSD",
+  "interval": "15",
+  "from": "2025-07-15",
+  "to": "2025-07-16",
+  "rangeProof": "covered",
+  "sourceSha256": "3aead2304f700b468f743f4f8e30c09474dea97946e2676062c5ab83a1f0cf66",
+  "barsSha256": "6506e5891f1c20c5ae91213c7f4294386c151a0aaf693cc9eb9a1e9532490004",
+  "rawFrameSha256": "2b688495aa6823d113f130beee49286c86c6b3f9f86dd7952a2cdf496bcfec66",
+  "decodedReportSha256": "685cbc4e3ba0149371129524493066325bc540b92343887c02a8afdd68baeb48",
+  "exportTapeSha256": "80ffdb555a4f5816e51abeb630ec89367a285b2ad9aa76595fa6c2d1c52e57f4",
+  "fixtureTapeSha256": "82b39c2f61511beee33aa39c4104f85283495bae04f64ae93fddbf90a6bb7b4e",
+  "closedTrades": 2
+}

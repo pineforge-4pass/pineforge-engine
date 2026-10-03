@@ -241,6 +241,15 @@ int main() {
         {"forex-equal", 101651.656274, .00001, .01, false, 0, false,
          86816.14, 1752560100000LL, 1752563700000LL, 0, 1752573600000LL,
          false, false, 2},
+        {"fx-1-under", 101651.65627359999, .00001, .01, false, 1, false,
+         86816.14, 1752560100000LL, 1752563700000LL, 0, 1752573600000LL,
+         false, false, 1},
+        {"fx-1-equal", 101651.65627360001, .00001, .01, false, 1, false,
+         86816.14, 1752560100000LL, 1752563700000LL, 0, 1752573600000LL,
+         false, false, 2},
+        {"fx-1-above", 101651.65627360002, .00001, .01, false, 1, false,
+         86816.14, 1752560100000LL, 1752563700000LL, 0, 1752573600000LL,
+         false, false, 2},
     };
     for (const auto& variant : variants) replay(variant);
     std::printf("%d passed, %d failed\n", passed, failed);

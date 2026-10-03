@@ -1,0 +1,18 @@
+//@version=6
+strategy("PX same-open exit-entry callback 0 true", initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, margin_long=0, margin_short=0, pyramiding=0, calc_on_order_fills=true)
+varip int stage = 0
+if time == timestamp("UTC", 2025, 4, 6, 9, 15) and stage == 0
+    strategy.entry("prior", strategy.short)
+    stage := 1
+if time == timestamp("UTC", 2025, 4, 6, 9, 45) and strategy.position_size < 0
+    strategy.close("prior")
+if time == timestamp("UTC", 2025, 4, 6, 10, 0) and strategy.position_size == 0 and stage == 1
+    strategy.entry("opening", strategy.short)
+    stage := 2
+if strategy.position_size < 0 and strategy.opentrades.entry_id(0) == "opening"
+    strategy.exit("new-stop", "opening", stop=83000)
+if true and time == timestamp("UTC", 2025, 4, 6, 10, 0) and strategy.position_size == 0 and stage == 2 and strategy.closedtrades == 2
+    strategy.entry("second", strategy.short)
+    stage := 3
+if time == timestamp("UTC", 2025, 4, 7, 1, 0)
+    strategy.close_all()

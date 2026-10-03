@@ -294,6 +294,7 @@ struct PlacementSnapshot {
     // request remains owned and settled by the native core; only its
     // immutable terms fact is source-specific.
     double forced_execution_price = std::numeric_limits<double>::quiet_NaN();
+    bool coof_open_stop_next_waypoint = false;
     double projection_tv_carry_qty = 0.0;
     double projection_default_stop_equity = std::numeric_limits<double>::quiet_NaN();
     double projection_default_stop_signal_close = std::numeric_limits<double>::quiet_NaN();
@@ -2001,6 +2002,7 @@ private:
     std::uint64_t key_for(const SourceId&, const SourceId& = {}) const noexcept;
     void refresh_pending_view() noexcept;
     OrderBirth capture_order_birth() const;
+    bool opening_market_short_scope(PineOrderFamily) const;
     void initialize_l4c_policy(PlacementSnapshot&, native_order::RequestHandle);
     void update_l4c_priority();
     void update_l4c_lifecycle(const native_order::ExecutionAppliedEvent&,
@@ -2175,6 +2177,7 @@ private:
     bool source_batch_mutated_ = false;
     bool coof_recalc_active_ = false;
     bool coof_first_open_ = false;
+    bool coof_open_stop_next_waypoint_ = false;
     // Whether the recalculating fill booked the forced_execution_price the
     // adapter set on its request (a fill AT a path point), not the matcher's
     // own price (R5 lane PAR-ORDERS-2). It sits in the padding before the

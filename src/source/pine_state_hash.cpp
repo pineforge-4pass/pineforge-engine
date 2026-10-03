@@ -106,6 +106,7 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.b(value.projection_predecessor_market); f.b(value.projection_predecessor_exit);
     f.b(value.projection_created_during_coof); f.b(value.projection_coof_at_terminal);
     f.b(value.projection_coof_mid_bar); f.d(value.forced_execution_price);
+    if (value.coof_open_stop_next_waypoint) f.u(0x6f70656e73746f70ULL);
     f.d(value.projection_tv_carry_qty);
     f.d(value.projection_default_stop_equity);
     f.d(value.projection_default_stop_signal_close);
@@ -496,6 +497,7 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.u(next_sequential_group_);
     f.b(source_batch_mutated_);
     f.b(coof_recalc_active_); f.b(coof_first_open_);
+    if (coof_open_stop_next_waypoint_) f.u(0x6f70656e6e657874ULL);
     f.u(coof_market_entry_recalc_incarnation_);
     f.u(coof_market_entry_recalc_fill_seq_); f.u(coof_current_fill_seq_);
     // Live only inside a fill recalculation (NaN otherwise); folded then so

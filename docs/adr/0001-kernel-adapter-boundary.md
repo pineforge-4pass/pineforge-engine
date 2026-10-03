@@ -213,8 +213,8 @@ kernel and own these quirks, each at its site:
 - **Seams the adapter overrides.** The kernel is driven, not patched. `PineStrategyHost` overrides
   `resolve_execution_terms` (`pine_strategy_host.cpp:668`) for TV sizing and fill spelling;
   `validate_execution_precommit` (`pine_strategy_host.cpp:693`), whose
-  `validate_precommit` (`pine_adapter.cpp:14479`) returns `AdmitWithHostMargin`
-  (`pine_adapter.cpp:14651`) to own the opening margin decision; `on_native_tick`
+  `validate_precommit` (`pine_adapter.cpp:14522`) returns `AdmitWithHostMargin`
+  (`pine_adapter.cpp:14694`) to own the opening margin decision; `on_native_tick`
   (`pine_strategy_host.cpp:411`) / `on_native_applied` (`pine_strategy_host.cpp:479`) for
   `calc_on_order_fills` re-entry. It does not own lot excursions: since R5 lane H-THIN it keeps
   the kernel's `owns_lot_excursions()` default, so the kernel's sampler books every Pine lot's
@@ -226,10 +226,10 @@ kernel and own these quirks, each at its site:
   lowering moved the excursion cells of 335 trades in 19 corpus probes: 324 now equal
   TradingView's, 11 moved closer, none farther (`tests/fixtures/e19_allin_trim` tapes the all-in
   residual's own entry-bar call). `process_orders_on_close` becomes
-  `NativeCloseExecution::AfterCalculation` in the projected spec (`pine_adapter.cpp:2300-2301`);
+  `NativeCloseExecution::AfterCalculation` in the projected spec (`pine_adapter.cpp:2315-2316`);
   calc cadence and language publication are `PineScheduler`'s (`pine_scheduler.hpp:20`).
 - **Batching and open-order priority.** Same-bar command batching and its deferred queues
-  (`PendingSameBarCommand` pine_adapter.hpp:1627, `pending_bracket_legs_` pine_adapter.hpp:2101-2119); the retained parent-before-child ordering of live handles — an
+  (`PendingSameBarCommand` pine_adapter.hpp:1628, `pending_bracket_legs_` pine_adapter.hpp:2101-2119); the retained parent-before-child ordering of live handles — an
   exactly-shaped entry and its `from_entry` exit, re-created after a named cancel, on a flat book
   under `process_orders_on_close` (`src/compat/pine/order_priority.cpp:13-59`, applied by
   `update_l4c_priority` `pine_adapter.cpp:1076-1146`). Kernel priority is acceptance/incarnation order.
@@ -237,9 +237,9 @@ kernel and own these quirks, each at its site:
   (`select_exit_activation` src/compat/pine/exit_activation.cpp:42, `select_exit_suspension` src/compat/pine/exit_lifecycle.cpp:10, `select_replacement_revival_definition` src/compat/pine/exit_lifecycle.cpp:46) and historical birth reach
   (`order_birth.cpp` `src/compat/pine/order_birth.cpp:5-14`).
 - **Trail and tick conventions.** The half-tick arm threshold measured against tick-quantized
-  extremes while the raw running best is retained (`has_trail_request` `pine_adapter.cpp:10971-10976`); the half-tick
+  extremes while the raw running best is retained (`has_trail_request` `pine_adapter.cpp:11010-11015`); the half-tick
   trigger threshold (`source_trigger_threshold` pine_adapter.cpp:285) and raw-vs-booked fill spelling, behind the
-  adapter's terms seam (`resolve_terms` `pine_adapter.cpp:13100`).
+  adapter's terms seam (`resolve_terms` `pine_adapter.cpp:13142`).
 - **Money arithmetic.** Ten-significant-digit half-up money (`source_money_round`
   `pine_adapter.cpp:448-454`, twin `tv_money_round` `pine_policy_support.hpp:9-15`).
 - **Quantity dust.** After every applied execution the Pine host erases any lot of at most
@@ -260,8 +260,8 @@ kernel and own these quirks, each at its site:
   (`select_reservation_growth_sources` src/compat/pine/reservation_expansion.cpp:9).
 - **Margin.** The kernel owns the margin *mechanism* — the level solve, the check points, the
   kernel request, its re-pricing, the receipt — and the adapter answers its three policy hooks
-  with TradingView's: `margin_check_allowed` (`pine_adapter.cpp:15754`) for the scheduling,
-  `resolve_margin_requirement` (`pine_adapter.cpp:15823`) for the ten-significant-digit money,
+  with TradingView's: `margin_check_allowed` (`pine_adapter.cpp:15797`) for the scheduling,
+  `resolve_margin_requirement` (`pine_adapter.cpp:15866`) for the ten-significant-digit money,
   and `resolve_margin_call_units` for the lot-floored 4x restore. That hook answers every call
   on purpose (R5 lane F7): TradingView floors the restore onto the lot grid before the multiple,
   so on a gridded tape the kernel's own `ShortfallMultiple 4` books 5 lots where TradingView
@@ -333,9 +333,9 @@ kernel and own these quirks, each at its site:
   projects `NativeCalculationTrigger::BarCloseAndFills` with TradingView's guard literal as
   `max_recalculations_per_point`. What stays are the specifics COOF adds on top —
   the language-state snapshot/restore around a recalculation, the waypoint-only refill deferral
-  (`next_source_path_waypoint` `pine_adapter.cpp:9186`), the first-open execution chain and its
+  (`next_source_path_waypoint` `pine_adapter.cpp:9212`), the first-open execution chain and its
   own loop guard (`kFirstOpenLoopGuard` `pine_scheduler_native.cpp:766`), and the two fills Pine refuses to
-  recalculate on (`suppress_grouped_stop_recalc` `pine_adapter.cpp:5881`).
+  recalculate on (`suppress_grouped_stop_recalc` `pine_adapter.cpp:5899`).
 - **Pine language state and harness flags.** Series, the tick-level barstate flags and
   position-view freezing (`PineLanguageState` `pine_language_state.hpp:12`); the session flags,
   `PineStrategyHost` members since R5 lane F5 (`session_ismarket_`

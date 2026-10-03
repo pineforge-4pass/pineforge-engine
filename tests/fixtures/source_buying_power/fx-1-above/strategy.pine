@@ -1,0 +1,8 @@
+//@version=6
+strategy("PX exact money boundary 1 above", initial_capital=101651.65627360002, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100, pyramiding=1)
+if time == timestamp("UTC", 2025, 7, 15, 6, 15)
+    strategy.entry("seed-short", strategy.short, qty=86816.14)
+if time == timestamp("UTC", 2025, 7, 15, 7, 15)
+    strategy.entry("opposite-buy", strategy.long)
+if time == timestamp("UTC", 2025, 7, 15, 10, 0)
+    strategy.close_all()
