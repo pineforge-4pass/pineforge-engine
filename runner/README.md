@@ -438,7 +438,7 @@ your own applications, never exchanges or fill-ingestion endpoints.
 ### 6. Idempotency and security
 - `delivery_id` = SHA-256 of `{"event_id","target_id"}`, sent as `Idempotency-Key`; the original `event_id` goes in `X-PineForge-Event-Id`. Both are stable across retries and restarts.
 - Receivers must deduplicate on `delivery_id` and answer 2xx only after accepting the action.
-- Delivery is at least once: a transport retry or libcurl replay of a POST on a reused connection can repeat a request, so receivers must deduplicate its stable `Idempotency-Key`.
+- A receiver can get the same request more than once: a transport retry or libcurl replay of a POST on a reused connection can repeat a request, so receivers must deduplicate its stable `Idempotency-Key`.
 - Each target signs with its own `X-PineForge-Signature: sha256=<HMAC-SHA256 of the exact body>`.
 
 #### Validation and ledger compatibility
