@@ -177,7 +177,7 @@ void ControlDirectory::poll(const std::string& deployment,
             std::string bytes;
             char buffer[16385];
             const bool valid = fstat(descriptor, &metadata) == 0 && S_ISREG(metadata.st_mode) &&
-                metadata.st_uid == getuid() && metadata.st_nlink == 1 && metadata.st_size <= 16384;
+                metadata.st_uid == getuid() && metadata.st_size <= 16384;
             const auto count = valid ? read(descriptor, buffer, sizeof buffer) : -1;
             close(descriptor);
             if (count < 0 || count > 16384) throw std::runtime_error("invalid control file");

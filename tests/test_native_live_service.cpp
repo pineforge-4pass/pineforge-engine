@@ -50,6 +50,14 @@ int main() {
     controls.submit(request(first));
     controls.poll("deployment", accept);
     assert(called && fs::exists(root / "control" / (first + ".ack.json")));
+    called = false;
+    const std::string publishing(64, 'd');
+    const auto staging = root / "control" / "publishing.new";
+    std::ofstream(staging) << request(publishing).dump();
+    fs::create_hard_link(staging, root / "control" / (publishing + ".request.json"));
+    controls.poll("deployment", accept);
+    assert(called && fs::exists(root / "control" / (publishing + ".ack.json")));
+    fs::remove(staging);
     for (const auto invalid : {Json::number("0"), Json::string("1"), Json::number("18446744073709551615")}) {
         called = false;
         auto malformed = request(std::string(64, 'b'));
