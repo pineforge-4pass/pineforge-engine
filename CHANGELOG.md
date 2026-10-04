@@ -18,17 +18,22 @@ attaches the three prebuilt tarballs, `pineforge-v1.1.0-linux-x86_64.tar.gz`,
 `PF_ABI_VERSION` stays 4: `pineforge.h` only gains declarations, and
 `native_c_api.h` and the native C++ host headers are unchanged, so no published
 layout moves; the frozen historical headers and archives are untouched. The
-script ABI epoch stays `engine_script_run_v19`, and its state-hash recipes keep
-their domain tags, `pineforge-broker-state/v19` and
-`pineforge-source-adapter/v4`. A run whose fills one of the Pine adapter
-changes below alters hashes to new values, and [#316] adds one placement field
-to the adapter's hashed state, for which two witnesses with byte-identical
-trades were re-pinned. The installed header `pineforge/live_parser.h` is
-removed with the runner's parser plugins ([#320]); no surface of the
-[public contract](docs/pages/public-contract.md) covers it. The four rows of
-the 1.0 C boundary that were scheduled for 1.1.0 (C-SURFACE-2: a non-mutating
-execution preview, the origin and label of an applied event, a closed-trade
-entry-comment accessor and a replace-options word) are not in this release.
+script ABI epoch stays `engine_script_run_v19`, and the state hashes keep their
+domain tags, `pineforge-broker-state/v19` and `pineforge-source-adapter/v4`.
+Their values change in two ways. A run whose fills a Pine adapter change below
+alters hashes to new values. Three changes also fold more state, so a run can
+hash differently from 1.0.1 with byte-identical trades: [#315] folds a pending
+same-bar entry's original (unbatched) request and placement and no longer folds
+a stream report's terminal re-mark into the hashed extremes, re-pinning one
+witness row (`Stream/0/1`, whose recorded-row digest alone moves); [#316] folds
+an opening stop's next waypoint, re-pinning `Random44/0/0` and `Random44/0/1`;
+and [#319] folds tick-volume accumulator state only where it adds information,
+so every existing pin holds. The installed header `pineforge/live_parser.h` is
+removed with the runner's parser plugins ([#320]); no surface of the [public
+contract](docs/pages/public-contract.md) covers it. The four rows of the 1.0 C
+boundary that were scheduled for 1.1.0 (C-SURFACE-2: a non-mutating execution
+preview, the origin and label of an applied event, a closed-trade entry-comment
+accessor and a replace-options word) are not in this release.
 
 - **Checked strategy settings ([#317]).** The six functions are
   `strategy_settings_api_version`, `strategy_create_checked`,
@@ -87,8 +92,10 @@ entry-comment accessor and a replace-options word) are not in this release.
   information, so the existing tick, bar and batch hash pins hold.
 
 - **Report-only terminal quote ([#321]).** A magnified intraday batch run can be
-  given the chart's terminal quote: `scripts/run_strategy.py` reads it from
-  `PINEFORGE_RUN_REPORT_CHART_QUOTE` with its `_SHA256` pin, a C host sets the
+  given the chart's terminal quote: `scripts/run_strategy.py` takes the terminal
+  bar's time and close from the chart feed that
+  `PINEFORGE_RUN_REPORT_CHART_QUOTE` names (pinned by
+  `PINEFORGE_RUN_REPORT_CHART_QUOTE_SHA256`), a C host sets the
   metadata keys `report_terminal_quote_time_ms` and
   `report_terminal_quote_close` with `strategy_set_syminfo_metadata`, and a C++
   host calls `PineStrategyHost::set_report_terminal_quote`. The report then
@@ -126,8 +133,9 @@ entry-comment accessor and a replace-options word) are not in this release.
   hub copies `docker/run_json.py` from the engine tag, so `pineforge-release`
   1.1.0 carries it.
 
-- **Native runner routing and delivery ([#320]).** Webhooks are optional; `--webhook-routes`
-  adds first-match per-action targets and payload `pineforge-native-order-action/v2`.
+- **Native runner routing and delivery ([#320]).** Webhooks are optional;
+  `--webhook-routes` adds first-match per-action targets and payload
+  `pineforge-native-order-action/v2`.
   New `actions`, `status` and offline `redeliver` commands expose the journal and
   delivery audit. `redeliver` requires the ledger's `--deployment` identity.
   Existing `--webhook-url` deployments keep one default target, exact v1 payload
@@ -142,9 +150,9 @@ entry-comment accessor and a replace-options word) are not in this release.
   the migrated ledger. Back up the ledger before upgrading. This runner change
   leaves the engine library as it was.
 
-- **Runner tooling removal ([#320]).** The native live runner accepts only normalized
-  PineForge feed events from stdin, files, or a user's own HTTP/WebSocket feed
-  service. The installed `pineforge/live_parser.h` header, its
+- **Runner tooling removal ([#320]).** The native live runner accepts only
+  normalized PineForge feed events from stdin, files, or a user's own
+  HTTP/WebSocket feed service. The installed `pineforge/live_parser.h` header, its
   `PF_LIVE_PARSER_*` types/constants and `pf_live_parser_abi_version` /
   `pf_live_parse_message` plugin exports, the `--parser` / `--parser-config`
   flags, and the example plugin are removed. This breaks callers that included
@@ -154,9 +162,10 @@ entry-comment accessor and a replace-options word) are not in this release.
   that adapter, not an exchange. The outbound order-action webhook remains.
   Strict native runner configurations now also require 1m input; higher script
   timeframes still aggregate those minutes.
-  No versioned engine `PF_API` export, native C++ surface, script ABI epoch or
-  engine behavior changes. Frozen historical ABI header manifests and archives
-  remain intact. Plugin-free ledger identity bytes remain unchanged; ledgers
+  This change itself alters no versioned engine `PF_API` export, native C++
+  surface, script ABI epoch or engine behavior. Frozen historical ABI header
+  manifests and archives remain intact. For a strategy without the checked
+  settings calls, plugin-free ledger identity bytes remain unchanged; ledgers
   bound to removed plugins cannot be resumed by this runner and must not be
   silently rewritten.
 
@@ -178,8 +187,8 @@ entry-comment accessor and a replace-options word) are not in this release.
 
 ### Report keys
 
-The JSON report of `docker/run_json.py`, which pineforge-app parses, from
-v1.0.1 to v1.1.0:
+The JSON report of `docker/run_json.py`, the release image's
+[report schema](docs/pages/report-schema.md), from v1.0.1 to v1.1.0:
 
 - No key is removed or renamed. `EQUITY_REPORT_KEYS` is unchanged:
   `metrics.equity.sharpe_tv` and `sortino_tv` stay.
