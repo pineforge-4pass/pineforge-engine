@@ -55,7 +55,8 @@ std::uint64_t trade_fingerprint(const pf_report_t& report) {
 std::vector<pf_bar_t> make_bars() {
     std::vector<pf_bar_t> bars;
     const std::string case_name = PINEFORGE_SECURITY_CASE;
-    if (case_name == "all_in_reversal" || case_name == "whole_all_in_reversal") {
+    if (case_name == "all_in_reversal" || case_name == "whole_all_in_reversal"
+        || case_name == "slipped_short") {
         for (int index = 0; index < 8; ++index) {
             const double close = index == 3 ? 101.15 : 100.0;
             bars.push_back({100.0, std::max(100.0, close), 100.0, close, 10.0,
@@ -124,7 +125,8 @@ int main(int argc, char** argv) {
     if (!batch || !stream) return 2;
     const std::string case_name = PINEFORGE_SECURITY_CASE;
     const char* input_tf = "1";
-    const bool fractional_sizing = case_name == "pooc_slipped_short" || case_name == "all_in_reversal";
+    const bool fractional_sizing = case_name == "pooc_slipped_short"
+        || case_name == "slipped_short" || case_name == "all_in_reversal";
     const bool whole_sizing = case_name == "whole_all_in_reversal";
     for (pf_strategy_t strategy : {batch, stream}) {
         if (fractional_sizing || whole_sizing) {

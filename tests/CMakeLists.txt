@@ -2179,7 +2179,7 @@ file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/test_native_market_vertical.cpp"
 
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     foreach(security_case htf5_close htf15_sma_pooc htf60_close daily_close heikinashi5 htf60_ema_gaps period_previous
-            dual_stop pooc_dual_stop pooc_limit_reversal pooc_slipped_short all_in_reversal whole_all_in_reversal pooc_short_exit)
+            dual_stop pooc_dual_stop pooc_limit_reversal pooc_slipped_short slipped_short all_in_reversal whole_all_in_reversal pooc_short_exit)
         add_executable(test_stream_security_${security_case}
             test_stream_security_equivalence.cpp
             fixtures/stream_security/${security_case}/generated.cpp)
@@ -2190,7 +2190,8 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
         if(PINEFORGE_ENABLE_COVERAGE)
             target_compile_options(test_stream_security_${security_case} PRIVATE ${_pf_cov_test_flags})
         endif()
-        if(security_case STREQUAL "all_in_reversal" OR security_case STREQUAL "whole_all_in_reversal")
+        if(security_case STREQUAL "all_in_reversal" OR security_case STREQUAL "whole_all_in_reversal"
+                OR security_case STREQUAL "slipped_short")
             add_test(NAME test_stream_security_${security_case}
                 COMMAND test_stream_security_${security_case} 1 3)
             add_test(NAME test_stream_security_${security_case}_early

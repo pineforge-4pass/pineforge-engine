@@ -20,3 +20,4 @@ The harness compares every trade field, entry/exit IDs, net profit, processed-ba
 counts and security feed totals, and emits a bitwise trade fingerprint. Existing
 security batch counts are pinned. Two controls run with script timeframes 5 and
 15 over input timeframe 1; the POOC dual-stop case also runs at script timeframe 5.
+An eight-bar slipped-short case separately pins next-open affordability without POOC.
