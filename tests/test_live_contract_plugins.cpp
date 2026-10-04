@@ -27,6 +27,12 @@ PF_API int strategy_stream_order_action_get(pf_strategy_t, int, pf_stream_order_
 }
 PF_API void strategy_stream_order_actions_clear(pf_strategy_t) {}
 PF_API uint64_t strategy_stream_state_hash(pf_strategy_t) { return 1; }
+PF_API int strategy_stream_fill_report(pf_strategy_t, pf_report_t* report) {
+    if (!report) return -1;
+    *report = {};
+    return 0;
+}
+PF_API void report_free(pf_report_t*) {}
 
 #if defined(PF_LIVE_CONTRACT_UNKNOWN)
 PF_API int strategy_execution_contract(pf_strategy_t) { return 99; }

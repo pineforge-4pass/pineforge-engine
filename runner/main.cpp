@@ -7,9 +7,11 @@
 #include "transport.hpp"
 #include "delivery.hpp"
 #include "report.hpp"
+#include "service.hpp"
 #include <pineforge/pineforge.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <climits>
@@ -42,11 +44,13 @@ struct Config {
                                   symbol, name = "strategy";
     std::string session = "24x7", timezone = "UTC", chart_timezone = "UTC", secret_env, feed_url,
                 subscribe_path, native_config, routes_path;
+    std::string status_file, control_dir;
     RoutingConfig routing;
     std::vector<std::pair<std::string, std::string>> inputs, overrides, syminfo;
     std::set<std::string> explicit_flags;
     NativeConfigValues native;
     std::uint64_t from_input = 0, max_events = 0, max_attempts = 8;
+    std::uint64_t status_interval = 1, max_ledger_bytes = 0, feed_idle_timeout = 15, feed_message_timeout = 15;
     long poll_ms = 1000;
     bool check = false, allow_http = false, report_jsonl = false;
 };
@@ -67,6 +71,9 @@ void help() {
                  "         --native-config FILE (strict native run specification)\n"
                  "         --check (one HTTP snapshot) --poll-ms 1000\n"
                  "         --report-jsonl (mirror committed cumulative reports to stdout)\n"
+                 "         --status-file PATH --status-interval 1 (seconds, 1..300)\n"
+                 "         --feed-idle-timeout 15 --feed-message-timeout 15 (seconds, 1..300)\n"
+                 "         --control-dir PATH --max-ledger-bytes N (0 disables budget)\n"
                  "JSONL: {\"type\":\"tick\",\"ts\":60000,\"seq\":1,\"price\":100,\"qty\":1}\n"
                  "       "
                  "{\"type\":\"bar\",\"bar\":{\"ts_open\":60000,\"o\":100,\"h\":102,\"l\":99,\"c\":"
@@ -78,11 +85,18 @@ void help() {
                  "Usage: pineforge-live actions --ledger L --after N [--follow] [--deployment D]\n"
                  "       pineforge-live status --ledger L [--deployment D]\n"
                  "       pineforge-live report --ledger L [--deployment D] [--at-input N]\n"
+                 "       pineforge-live probe --status-file PATH --max-age S [--ready]\n"
                  "       pineforge-live redeliver --ledger L --deployment D --target T [--from N] [--failed-only]\n"
-                 "Redeliver is offline: stop the runner first; it resumes from its ledger.\n";
+                 "Add --control-dir PATH to redeliver to request resending from a running runner.\n"
+                 "Without --control-dir redeliver is offline and requires the ledger lock.\n";
 }
 std::uint64_t unsigned_arg(const std::string &s) {
     return Json::number(s).integer<std::uint64_t>();
+}
+std::uint64_t seconds_arg(const std::string& value) {
+    const auto seconds = unsigned_arg(value);
+    if (!seconds || seconds > 300) throw std::runtime_error("timeout/interval must be 1..300 seconds");
+    return seconds;
 }
 void validate_script_tf(const std::string &tf) {
     std::string digits = tf;
@@ -178,6 +192,16 @@ Config args(int argc, char **argv) {
             c.max_attempts = unsigned_arg(v);
         else if (a == "--native-config")
             c.native_config = v;
+        else if (a == "--status-file") c.status_file = v;
+        else if (a == "--control-dir") c.control_dir = v;
+        else if (a == "--status-interval") c.status_interval = seconds_arg(v);
+        else if (a == "--feed-idle-timeout") c.feed_idle_timeout = seconds_arg(v);
+        else if (a == "--feed-message-timeout") c.feed_message_timeout = seconds_arg(v);
+        else if (a == "--max-ledger-bytes") {
+            c.max_ledger_bytes = unsigned_arg(v);
+            if (c.max_ledger_bytes > static_cast<std::uint64_t>(INT64_MAX))
+                throw std::runtime_error("ledger budget exceeds supported range");
+        }
         else if (a == "--poll-ms") {
             auto n = unsigned_arg(v);
             if (n < 100 || n > 3600000)
@@ -225,6 +249,13 @@ Config args(int argc, char **argv) {
         if ((k == "calc_on_every_tick" || k == "calc_on_order_fills") && v != "false" && v != "0")
             throw std::runtime_error("native runner supports close-only strategy calculation");
     auto ledger = fs::weakly_canonical(fs::absolute(c.ledger));
+    if (!c.status_file.empty()) {
+        const auto status = fs::weakly_canonical(fs::absolute(c.status_file));
+        for (const auto& protected_path : {c.ledger, c.ledger + "-wal", c.ledger + "-shm", c.ledger + ".lock",
+                c.strategy, c.warmup, c.feed == "-" ? std::string{} : c.feed, c.subscribe_path, c.routes_path, c.native_config})
+            if (!protected_path.empty() && status == fs::weakly_canonical(fs::absolute(protected_path)))
+                throw std::runtime_error("status-file must not replace a ledger or input artifact");
+    }
     for (const auto &src : {c.strategy, c.warmup, c.feed == "-" ? std::string{} : c.feed,
                             c.subscribe_path, c.routes_path, c.native_config})
         if (!src.empty()) {
@@ -732,6 +763,7 @@ LegacyIdentityFields legacy_fields(const Config &c) {
 }
 
 int run(Config c) {
+    ControlDirectory controls(c.control_dir);
     c.routing = c.routes_path.empty()
         ? single_target(c.webhook, c.secret_env, c.allow_http)
         : parse_routes(read_file(c.routes_path, MAX_FRAME), c.allow_http, c.webhook, c.secret_env);
@@ -807,13 +839,23 @@ int run(Config c) {
     if (c.native.present)
         require_native_warmup(c.native, warmup);
     Ledger ledger(c.ledger, deployment);
+    ServiceFile service(c.status_file, c.status_interval * 1000);
     ledger.bind_routing(c.routing.stored_document());
     ledger.verify_report(0, cumulative_report(strategy, deployment, 0));
     Cursor cursor;
     auto recorded = ledger.input_count();
+    auto recovering = Json::object({{"deployment", Json::string(deployment)}, {"state", Json::string("recovering")},
+        {"ready", Json::boolean(false)}, {"readiness", Json::object({
+            {"validated_strategy_warmup", Json::boolean(true)}, {"recovered_ledger", Json::boolean(false)},
+            {"verified_source_prefix", Json::boolean(false)}, {"no_unhealed_input_gap", Json::boolean(true)},
+            {"storage_below_budget", Json::boolean(!c.max_ledger_bytes || ledger_bytes(c.ledger) <= c.max_ledger_bytes)}})},
+        {"metrics", Json::object({{"committed_input", num(recorded)}, {"last_seq", Json{}},
+            {"source_timestamp_ms", Json{}}, {"source_lag_ms", Json{}}, {"queue_bytes", num(0)},
+            {"ledger_bytes", num(ledger_bytes(c.ledger))}, {"report_cursor", num(ledger.report_cursor())}, {"targets", Json::object({})}})}});
+    service.publish(recovering, true);
     for (std::uint64_t i = 0; i < recorded; ++i) {
         if (stopped)
-            return 130;
+            return 0;
         auto row = ledger.input(i);
         if (!row)
             throw std::runtime_error("ledger input hole");
@@ -828,12 +870,54 @@ int run(Config c) {
                 throw std::runtime_error("native replay order-action mismatch");
         ledger.verify_report(i + 1, cumulative_report(strategy, deployment, i + 1));
         strategy.clear(strategy.state);
+        recovering.members["metrics"].members["report_cursor"] = num(ledger.report_cursor());
+        service.publish(recovering);
     }
     if (c.from_input > recorded)
         throw std::runtime_error("from-input skips unrecorded inputs");
     std::uint64_t processed = 0, replayed_prefix = 0;
     DeliveryWorker delivery(ledger, c.routing.delivery, std::move(targets), std::nullopt,
-                            [] { return stopped != 0; });
+                            [] { return stopped != 0; }, c.control_dir, deployment);
+    bool storage_stop = false;
+    bool prefix_verified = recorded == 0 || c.from_input == recorded;
+    std::uint64_t source_timestamp = static_cast<std::uint64_t>(warmup.back().timestamp + 60000);
+    std::uint64_t intake_bytes = 0;
+    const auto source_time = [&](const Json& record, const auto& self) -> std::uint64_t {
+        const auto type = record.at("type").text();
+        if (type == "batch") {
+            std::uint64_t newest = 0;
+            for (const auto& event : record.at("events").items) newest = std::max(newest, self(event, self));
+            return newest;
+        }
+        if (type == "bar") return record.at("bar").at("ts_open").integer<std::uint64_t>() + 60000;
+        return record.at("ts").integer<std::uint64_t>();
+    };
+    if (recorded) source_timestamp = source_time(parse_json(ledger.input(recorded - 1)->canonical_json), source_time);
+    const auto pulse = [&](bool force = false) {
+        if (!service.enabled() && !c.max_ledger_bytes) return;
+        const auto bytes = ledger_bytes(c.ledger);
+        if (c.max_ledger_bytes && bytes > c.max_ledger_bytes) storage_stop = true;
+        if (!service.enabled()) return;
+        const auto now = wall_time_ms();
+        auto pending = parse_json(ledger.delivery_metrics_json(now));
+        for (const auto& [name, target] : c.routing.targets) {
+            (void)target;
+            if (!pending.members.count(name)) pending.members[name] = Json::object({
+                {"pending_count", num(0)}, {"oldest_age_ms", Json{}}});
+        }
+        service.publish(Json::object({{"deployment", Json::string(deployment)},
+            {"state", Json::string(storage_stop ? "storage_budget" : stopped ? "draining" : "running")},
+            {"ready", Json::boolean(prefix_verified && !storage_stop && !stopped)},
+            {"readiness", Json::object({{"validated_strategy_warmup", Json::boolean(true)},
+                {"recovered_ledger", Json::boolean(true)}, {"verified_source_prefix", Json::boolean(prefix_verified)},
+                {"no_unhealed_input_gap", Json::boolean(true)}, {"storage_below_budget", Json::boolean(!storage_stop)}})},
+            {"metrics", Json::object({{"committed_input", num(ledger.input_count())},
+                {"last_seq", cursor.seen_tick ? num(cursor.tick_seq) : Json{}},
+                {"source_timestamp_ms", num(source_timestamp)}, {"source_lag_ms", num(now > source_timestamp ? now - source_timestamp : 0)},
+                {"queue_bytes", num(intake_bytes + delivery.queue_bytes())}, {"ledger_bytes", num(bytes)},
+                {"report_cursor", num(ledger.report_cursor())}, {"targets", std::move(pending)}})}}), force);
+    };
+    pulse(true);
     auto consume_message = [&](const std::string &message, std::uint64_t &index) {
         delivery.check();
         auto frame = feed_record(message);
@@ -854,21 +938,24 @@ int run(Config c) {
             ledger.commit_input(index, canonical, strategy.hash(strategy.state), events, report);
             strategy.clear(strategy.state);
             ++processed;
+            source_timestamp = source_time(frame, source_time);
             if (c.report_jsonl) std::cout << report << '\n' << std::flush;
         }
         ++index;
+        if (index >= recorded) prefix_verified = true;
+        pulse(true);
     };
     auto consume = [&](std::istream &in, std::uint64_t start, bool full_snapshot) {
         std::string row;
         std::uint64_t index = start;
-        while (!stopped && line(in, row)) {
+        while (!stopped && !storage_stop && line(in, row)) {
             if (blank(row))
                 continue;
             consume_message(row, index);
             if (c.max_events && processed >= c.max_events)
                 break;
         }
-        if (full_snapshot && !stopped && !(c.max_events && processed >= c.max_events) &&
+        if (full_snapshot && !stopped && !storage_stop && !(c.max_events && processed >= c.max_events) &&
             index < recorded)
             throw std::runtime_error("input snapshot omits committed prefix");
     };
@@ -878,8 +965,17 @@ int run(Config c) {
                 std::uint64_t index = c.from_input;
                 std::string pending;
                 char buffer[65536];
-                while (!stopped && !(c.max_events && processed >= c.max_events)) {
+                auto last_data = std::chrono::steady_clock::now();
+                auto message_started = last_data;
+                while (!stopped && !storage_stop && !(c.max_events && processed >= c.max_events)) {
                     delivery.check();
+                    intake_bytes = pending.size();
+                    pulse();
+                    if (storage_stop) break;
+                    const auto now = std::chrono::steady_clock::now();
+                    if (now - last_data >= std::chrono::seconds(c.feed_idle_timeout) ||
+                        (!pending.empty() && now - message_started >= std::chrono::seconds(c.feed_message_timeout)))
+                        throw std::runtime_error("native stdin idle or message timeout");
                     pollfd fd{STDIN_FILENO, POLLIN, 0};
                     int rc = poll(&fd, 1, 100);
                     if (rc < 0) {
@@ -889,17 +985,21 @@ int run(Config c) {
                     }
                     if (!rc)
                         continue;
+                    if (stopped) break;
                     auto n = read(STDIN_FILENO, buffer, sizeof buffer);
                     if (n < 0) {
                         if (errno == EINTR)
                             continue;
                         throw std::runtime_error("stdin read failed");
                     }
+                    if (stopped) break;
                     if (!n) {
                         if (!blank(pending))
                             consume_message(pending, index);
                         break;
                     }
+                    last_data = std::chrono::steady_clock::now();
+                    if (pending.empty()) message_started = last_data;
                     pending.append(buffer, static_cast<std::size_t>(n));
                     for (;;) {
                         auto end = pending.find('\n');
@@ -909,9 +1009,11 @@ int run(Config c) {
                             throw std::runtime_error("input line exceeds 1 MiB");
                         auto message = pending.substr(0, end);
                         pending.erase(0, end + 1);
+                        intake_bytes = pending.size();
+                        message_started = std::chrono::steady_clock::now();
                         if (!blank(message))
                             consume_message(message, index);
-                        if (stopped || (c.max_events && processed >= c.max_events))
+                        if (stopped || storage_stop || (c.max_events && processed >= c.max_events))
                             break;
                     }
                     if (pending.size() > MAX_FRAME)
@@ -927,6 +1029,10 @@ int run(Config c) {
             HttpOptions feed;
             feed.url = c.feed_url;
             feed.allow_insecure_http = c.allow_http;
+            feed.total_timeout_ms = static_cast<long>(c.feed_message_timeout * 1000);
+            feed.connect_timeout_ms = std::min<long>(5000, feed.total_timeout_ms);
+            feed.idle_timeout_ms = static_cast<long>(c.feed_idle_timeout * 1000);
+            feed.message_timeout_ms = static_cast<long>(c.feed_message_timeout * 1000);
             std::string subscription =
                 c.subscribe_path.empty() ? "" : read_file(c.subscribe_path, MAX_FRAME);
             std::uint64_t index = c.from_input;
@@ -934,29 +1040,39 @@ int run(Config c) {
                 feed, subscription,
                 [&](std::string_view bytes) {
                     consume_message(std::string(bytes), index);
-                    return !stopped && !(c.max_events && processed >= c.max_events);
+                    return !stopped && !storage_stop && !(c.max_events && processed >= c.max_events);
                 },
-                [&] { delivery.check(); return stopped != 0; });
+                [&] { delivery.check(); pulse(); return stopped != 0 || storage_stop; },
+                [&](std::size_t bytes) { intake_bytes = bytes; });
         } else {
             HttpOptions feed;
             feed.url = c.feed_url;
             feed.allow_insecure_http = c.allow_http;
+            feed.total_timeout_ms = static_cast<long>(c.feed_message_timeout * 1000);
+            feed.connect_timeout_ms = std::min<long>(5000, feed.total_timeout_ms);
+            feed.idle_timeout_ms = static_cast<long>(c.feed_idle_timeout * 1000);
             do {
                 delivery.check();
-                auto snapshot = get_feed_snapshot(feed);
+                pulse();
+                if (storage_stop || stopped) break;
+                auto snapshot = get_feed_snapshot(feed, [&] { pulse(); return stopped != 0 || storage_stop; });
                 std::istringstream input(snapshot);
                 consume(input, 0, true);
                 recorded = ledger.input_count();
-                if (c.check || stopped || (c.max_events && processed >= c.max_events))
+                if (c.check || stopped || storage_stop || (c.max_events && processed >= c.max_events))
                     break;
                 for (long n = 0; n < c.poll_ms && !stopped; n += 100) {
                     delivery.check();
+                    pulse();
+                    if (storage_stop) break;
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 }
-            } while (!stopped);
+            } while (!stopped && !storage_stop);
         }
-        delivery.finish(stopped != 0);
+        if (stopped || storage_stop) delivery.limit_drain();
+        delivery.finish(false);
     } catch (const std::exception& error) {
+        try { service.stop("failed"); } catch (...) {}
         delivery.limit_drain();
         try { delivery.finish(false); } catch (...) {}
         const auto pending = ledger.unsent_count();
@@ -970,6 +1086,8 @@ int run(Config c) {
                                  " actions not sent" + guidance);
     }
     auto pending = ledger.unsent_count();
+    pulse(true);
+    service.stop(storage_stop ? "storage_budget" : "stopped");
     std::cout << Json::object(
                      {{"deployment", Json::string(deployment)},
                       {"effective_settings", settings_receipt.empty() ? Json{} : parse_json(settings_receipt)},
@@ -983,12 +1101,33 @@ int run(Config c) {
                       {"last_tick_sequence", cursor.seen_tick ? num(cursor.tick_seq) : Json{}}})
                      .dump()
               << '\n';
-    return stopped ? 130 : 0;
+    return storage_stop ? 3 : 0;
+}
+
+int probe_command(int argc, char** argv) {
+    std::string path;
+    std::uint64_t max_age = 0;
+    bool ready = false;
+    std::set<std::string> seen;
+    for (int index = 2; index < argc; ++index) {
+        const std::string option = argv[index];
+        if (!seen.insert(option).second) throw std::runtime_error("duplicate probe option");
+        if (option == "--ready") { ready = true; continue; }
+        if (index + 1 == argc) throw std::runtime_error("missing probe option value");
+        const std::string value = argv[++index];
+        if (option == "--status-file") path = value;
+        else if (option == "--max-age") {
+            max_age = unsigned_arg(value);
+            if (!max_age || max_age > 86400) throw std::runtime_error("max-age must be 1..86400 seconds");
+        } else throw std::runtime_error("unknown probe option");
+    }
+    if (path.empty() || !max_age) throw std::runtime_error("probe requires status-file and max-age");
+    return probe_status(parse_json(read_file(path, MAX_FRAME)), max_age * 1000, ready) ? 0 : 1;
 }
 
 int ledger_command(int argc, char** argv) {
     const std::string command = argv[1];
-    std::string path, target, deployment;
+    std::string path, target, deployment, control_dir;
     std::uint64_t after = 0, from = 1;
     std::optional<std::uint64_t> at_input;
     bool follow = false, failed_only = false;
@@ -1006,6 +1145,7 @@ int ledger_command(int argc, char** argv) {
         else if (command == "report" && option == "--at-input") at_input = unsigned_arg(value);
         else if (command == "redeliver" && option == "--from") from = unsigned_arg(value);
         else if (command == "redeliver" && option == "--target") target = value;
+        else if (command == "redeliver" && option == "--control-dir") control_dir = value;
         else throw std::runtime_error("unknown option: " + option);
     }
     if (path.empty()) throw std::runtime_error("ledger is required");
@@ -1040,6 +1180,18 @@ int ledger_command(int argc, char** argv) {
     if (document.empty()) throw std::runtime_error("resume this phase-A ledger with run before redelivering");
     auto routing = restore_routes(document);
     if (!routing.targets.count(target)) throw std::runtime_error("undefined webhook target: " + target);
+    if (!from || from > static_cast<std::uint64_t>(INT64_MAX))
+        throw std::runtime_error("redeliver from must be 1..INT64_MAX");
+    if (!control_dir.empty()) {
+        const auto identifier = sha256_hex(deployment + ":" + std::to_string(getpid()) + ":" +
+            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        ControlDirectory controls(control_dir);
+        controls.submit(Json::object({{"schema_version", Json::string("pineforge-redelivery-request/v1")},
+            {"deployment", Json::string(deployment)}, {"request_id", Json::string(identifier)},
+            {"target", Json::string(target)}, {"from", num(from)}, {"failed_only", Json::boolean(failed_only)}}));
+        std::cout << Json::object({{"request_id", Json::string(identifier)}, {"queued", Json::boolean(true)}}).dump() << '\n';
+        return 0;
+    }
     for (auto position = routing.targets.begin(); position != routing.targets.end();) {
         if (position->first != target) position = routing.targets.erase(position);
         else ++position;
@@ -1063,7 +1215,7 @@ int ledger_command(int argc, char** argv) {
     }
     std::cout << Json::object({{"selected", num(selected)}, {"delivered", num(delivery.delivered())},
         {"failed", num(failed)}, {"pending", num(pending)}}).dump() << '\n';
-    return stopped ? 130 : (failed || pending ? 2 : 0);
+    return stopped ? 0 : (failed || pending ? 2 : 0);
 }
 } // namespace
 int main(int argc, char **argv) {
@@ -1078,6 +1230,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         const std::string command = argv[1];
+        if (command == "probe") return probe_command(argc, argv);
         if (command == "actions" || command == "status" || command == "redeliver" || command == "report")
             return ledger_command(argc, argv);
         return run(args(argc, argv));

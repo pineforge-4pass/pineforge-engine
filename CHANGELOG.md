@@ -36,6 +36,28 @@ version number follows semantic versioning over the surfaces the
 
 ### Native cumulative reports
 
+- **Native runner service controls:** `run --status-file PATH` atomically
+  publishes versioned health/readiness and sanitized metrics after every
+  committed message and every `--status-interval S` seconds (default 1,
+  1..300). `probe --status-file PATH --max-age S [--ready]` gives container
+  exec probes exit 0/1 (S is 1..86400). `--feed-idle-timeout S` and
+  `--feed-message-timeout S` independently bound intake (default 15 seconds
+  each, 1..300); WebSocket PONG keepalive cannot extend partial-message
+  assembly. `run --control-dir PATH` enables private atomic control files;
+  `redeliver --ledger L --deployment D --target T [--from N] [--failed-only]
+  --control-dir PATH` submits safe live redelivery with unchanged delivery
+  IDs, durable deduplication and append-only attempt audit. Offline
+  redelivery still refuses a running ledger. `--max-ledger-bytes N`
+  (default 0/unlimited, 0..INT64_MAX) stops after a whole atomic message with
+  all input/actions/reports intact. SIGTERM/SIGINT finish or roll back the
+  active message and bound delivery drain to one `total_timeout_ms`;
+  run/offline-redelivery graceful signal exit changes from 130 to 0.
+  Fatal errors remain exit 1, selected failed/pending offline redelivery 2,
+  and storage-budget run stops use 3; `actions --follow` retains 130.
+  [Service operation](runner/README.md#service-operation) documents schemas,
+  bounds, restart semantics and supervisor grace periods. The runner never
+  opens an inbound network listener or ingests venue fills.
+
 - **Native cumulative reports:** `pineforge-live report --ledger L
   [--deployment D] [--at-input N]` exports immutable, versioned cumulative
   engine reports. `run --report-jsonl` mirrors new commits to stdout. Input,

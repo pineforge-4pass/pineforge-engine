@@ -17,6 +17,8 @@ struct HttpOptions {
     std::string hmac_secret; // Runtime only; never passed to Ledger.
     long connect_timeout_ms = 5000;
     long total_timeout_ms = 15000;
+    long idle_timeout_ms = 0;
+    long message_timeout_ms = 0;
     bool allow_insecure_http = false;
 };
 
@@ -57,14 +59,16 @@ DeliveryResult post_webhook(const HttpOptions& options, const StoredEvent& event
 #endif
 // Fetch a finite provider-neutral JSONL snapshot. Maximum response 4 MiB;
 // requires HTTP 2xx and never attaches webhook HMAC/idempotency headers.
-std::string get_feed_snapshot(const HttpOptions& options);
+std::string get_feed_snapshot(const HttpOptions& options,
+                              const std::function<bool()>& stopped = {});
 void validate_websocket(const HttpOptions& options);
 // Native WS/WSS intake. Complete UTF-8 text messages only, at most 1 MiB.
-// total_timeout_ms bounds idle time and assembly of each message. A closure
+// Separate idle/message deadlines default to total_timeout_ms. A closure
 // or transport failure throws; reconnection/continuity is never inferred.
 // Returns cleanly only when stopped() or on_message() requests a stop.
 void receive_websocket(const HttpOptions& options, std::string_view subscription,
                        const std::function<bool(std::string_view)>& on_message,
-                       const std::function<bool()>& stopped);
+                       const std::function<bool()>& stopped,
+                       const std::function<void(std::size_t)>& buffered = {});
 
 } // namespace pineforge::live

@@ -33,6 +33,13 @@ struct DeliveryAttempt {
     StoredEvent event;
     std::uint32_t attempt = 0;
     std::uint64_t started_at = 0;
+    std::string request_id;
+};
+
+struct RequestedDelivery {
+    StoredEvent event;
+    std::uint64_t request_order = 0;
+    std::string request_id;
 };
 
 struct DeliveryScan {
@@ -53,6 +60,7 @@ public:
     Ledger& operator=(Ledger&&) = delete;
 
     std::uint64_t input_count() const;
+    std::uint64_t report_cursor() const;
     std::optional<RecordedInput> input(std::uint64_t index) const;
     // A repeated index is accepted only if input, state and ordered events all
     // match the existing transaction byte for byte. No new identity is adopted.
@@ -75,10 +83,16 @@ public:
     std::vector<StoredEvent> unsent_events(std::uint64_t after, std::size_t limit = 256) const;
     std::optional<DeliveryScan> next_delivery_event(std::uint64_t after,
                                                    std::uint64_t* steps = nullptr) const;
-    DeliveryAttempt start_attempt(const StoredEvent& event, std::uint64_t started_at);
+    DeliveryAttempt start_attempt(const StoredEvent& event, std::uint64_t started_at,
+                                  const std::string& request_id = {});
     void finish_attempt(const DeliveryAttempt& attempt, std::uint64_t ended_at,
                         long http_status, bool success, const std::string& error);
     std::uint64_t unsent_count() const;
+    std::string delivery_metrics_json(std::uint64_t now) const;
+    std::uint64_t request_redelivery(const std::string& request_id, const std::string& target,
+                                     std::uint64_t from, bool failed_only);
+    std::optional<RequestedDelivery> next_redelivery_event(std::uint64_t request_order,
+                                                          std::uint64_t after) const;
 
 private:
     struct Impl;

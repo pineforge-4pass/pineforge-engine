@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <filesystem>
 #include <limits>
 #include <mutex>
@@ -94,6 +95,17 @@ std::uint64_t scalar(sqlite3* db, const char* sql) {
     Statement q(db, sql);
     if (!q.row()) database_error();
     return q.integer(0);
+}
+
+bool has_column(sqlite3* database, const char* table, const char* column) {
+    Statement query(database, (std::string("PRAGMA table_info(") + table + ")").c_str());
+    while (query.row()) if (query.text(1) == column) return true;
+    return false;
+}
+
+std::uint64_t commit_time() {
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
 }
 
 void validate_bytes(const std::string& bytes, const char* label) {
@@ -200,7 +212,7 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity)
         Statement q(impl_->db, "INSERT INTO metadata VALUES(1,1,?)");
         q.bind(1, deployment_identity);
         q.done();
-    } else if (table_count != 3 && table_count != 6 && table_count != 7) {
+    } else if (table_count != 3 && table_count != 6 && table_count != 7 && table_count != 8) {
         throw std::runtime_error("native ledger is not an empty or supported ledger database");
     }
     {
@@ -226,6 +238,18 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity)
         "CREATE TRIGGER IF NOT EXISTS delivery_log_no_delete BEFORE DELETE ON delivery_log BEGIN SELECT RAISE(ABORT,'delivery log is append-only'); END;"
         "INSERT INTO event_routes(ordinal,target_id,delivery_id) SELECT ordinal,'default',event_id FROM events "
         "WHERE ordinal NOT IN (SELECT ordinal FROM event_routes);");
+    if (!has_column(impl_->db, "events", "created_at_ms"))
+        exec(impl_->db, "ALTER TABLE events ADD COLUMN created_at_ms INTEGER NOT NULL DEFAULT 0");
+    if (!has_column(impl_->db, "delivery_log", "request_id"))
+        exec(impl_->db, "ALTER TABLE delivery_log ADD COLUMN request_id TEXT NOT NULL DEFAULT ''");
+    exec(impl_->db,
+        "CREATE TABLE IF NOT EXISTS redelivery_requests (request_order INTEGER PRIMARY KEY,request_id TEXT NOT NULL UNIQUE,"
+        "target_id TEXT NOT NULL,from_ordinal INTEGER NOT NULL,through_ordinal INTEGER NOT NULL,"
+        "failed_only INTEGER NOT NULL CHECK(failed_only IN (0,1)),snapshot_log INTEGER NOT NULL,"
+        "selected INTEGER NOT NULL,accepted_at INTEGER NOT NULL);"
+        "CREATE TRIGGER IF NOT EXISTS redelivery_no_update BEFORE UPDATE ON redelivery_requests BEGIN SELECT RAISE(ABORT,'requests are immutable'); END;"
+        "CREATE TRIGGER IF NOT EXISTS redelivery_no_delete BEFORE DELETE ON redelivery_requests BEGIN SELECT RAISE(ABORT,'requests are immutable'); END;"
+        "CREATE INDEX IF NOT EXISTS delivery_request_results ON delivery_log(request_id,event_id,phase);");
     // Refuse holes/corruption before any delivery can occur. All source rows
     // and immutable event bytes are also compared by the runner during replay.
     const auto count = scalar(impl_->db, "SELECT COUNT(*) FROM inputs");
@@ -262,6 +286,11 @@ Ledger::~Ledger() = default;
 std::uint64_t Ledger::input_count() const {
     std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     return scalar(impl_->db, "SELECT COALESCE(MAX(input_index)+1,0) FROM inputs");
+}
+
+std::uint64_t Ledger::report_cursor() const {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
+    return scalar(impl_->db, "SELECT COALESCE(MAX(input_cursor),0) FROM report_snapshots");
 }
 
 std::optional<RecordedInput> Ledger::input(std::uint64_t index) const {
@@ -313,10 +342,10 @@ void Ledger::commit_input(std::uint64_t index, const std::string& canonical_json
     }
     auto ordinal = scalar(impl_->db, "SELECT COALESCE(MAX(ordinal),0) FROM events");
     for (std::size_t i = 0; i < events.size(); ++i) {
-        Statement q(impl_->db, "INSERT INTO events(ordinal,input_index,input_position,event_id,payload) "
-                               "VALUES(?,?,?,?,?)");
+        Statement q(impl_->db, "INSERT INTO events(ordinal,input_index,input_position,event_id,payload,created_at_ms) "
+                               "VALUES(?,?,?,?,?,?)");
         q.bind(1, ++ordinal); q.bind(2, index); q.bind(3, static_cast<std::uint64_t>(i));
-        q.bind(4, events[i].id); q.bind(5, events[i].payload); q.done();
+        q.bind(4, events[i].id); q.bind(5, events[i].payload); q.bind(6, commit_time()); q.done();
         Statement route(impl_->db, "INSERT INTO event_routes(ordinal,target_id,delivery_id) VALUES(?,?,?)");
         route.bind(1, ordinal);
         if (events[i].target_id) route.bind(2, *events[i].target_id);
@@ -432,7 +461,8 @@ std::optional<DeliveryScan> Ledger::next_delivery_event(std::uint64_t after,
     return DeliveryScan{read_routed_event(query), query.integer(6) != 0};
 }
 
-DeliveryAttempt Ledger::start_attempt(const StoredEvent& event, std::uint64_t started_at) {
+DeliveryAttempt Ledger::start_attempt(const StoredEvent& event, std::uint64_t started_at,
+                                      const std::string& request_id) {
     std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     if (!event.target_id) throw std::runtime_error("journal-only action cannot be delivered");
     Transaction transaction(impl_->db);
@@ -440,17 +470,17 @@ DeliveryAttempt Ledger::start_attempt(const StoredEvent& event, std::uint64_t st
                                "FROM events e JOIN event_routes r ON r.ordinal=e.ordinal WHERE e.event_id=?");
     query.bind(1, event.id);
     if (!query.row()) database_error();
-    DeliveryAttempt result{read_routed_event(query), 0, started_at};
+    DeliveryAttempt result{read_routed_event(query), 0, started_at, request_id};
     if (result.event.target_id != event.target_id || result.event.delivery_id != event.delivery_id ||
         result.event.payload != event.payload || result.event.attempts == UINT32_MAX)
         throw std::runtime_error("native ledger delivery identity mismatch or attempt counter exhausted");
     result.attempt = result.event.attempts + 1;
     Statement update(impl_->db, "UPDATE events SET attempts=attempts+1 WHERE event_id=?");
     update.bind(1, event.id); update.done();
-    Statement log(impl_->db, "INSERT INTO delivery_log(event_id,target_id,delivery_id,attempt,phase,started_at) "
-                             "VALUES(?,?,?,?,'started',?)");
+    Statement log(impl_->db, "INSERT INTO delivery_log(event_id,target_id,delivery_id,attempt,phase,started_at,request_id) "
+                             "VALUES(?,?,?,?,'started',?,?)");
     log.bind(1, event.id); log.bind(2, *event.target_id); log.bind(3, event.delivery_id);
-    log.bind(4, result.attempt); log.bind(5, started_at); log.done();
+    log.bind(4, result.attempt); log.bind(5, started_at); log.bind(6, request_id); log.done();
     transaction.commit();
     return result;
 }
@@ -460,16 +490,81 @@ void Ledger::finish_attempt(const DeliveryAttempt& attempt, std::uint64_t ended_
     std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     Transaction transaction(impl_->db);
     const auto& event = attempt.event;
-    Statement log(impl_->db, "INSERT INTO delivery_log(event_id,target_id,delivery_id,attempt,phase,started_at,ended_at,http_status,error_category,success) "
-                             "VALUES(?,?,?,?,'completed',?,?,?,?,?)");
+    Statement log(impl_->db, "INSERT INTO delivery_log(event_id,target_id,delivery_id,attempt,phase,started_at,ended_at,http_status,error_category,success,request_id) "
+                             "VALUES(?,?,?,?,'completed',?,?,?,?,?,?)");
     log.bind(1, event.id); log.bind(2, *event.target_id); log.bind(3, event.delivery_id);
     log.bind(4, attempt.attempt); log.bind(5, attempt.started_at); log.bind(6, ended_at);
     log.bind(7, static_cast<std::uint64_t>(http_status));
-    log.bind(8, success ? "" : safe_category(error)); log.bind(9, static_cast<std::uint64_t>(success)); log.done();
+    log.bind(8, success ? "" : safe_category(error)); log.bind(9, static_cast<std::uint64_t>(success));
+    log.bind(10, attempt.request_id); log.done();
     Statement update(impl_->db, "UPDATE events SET acknowledged=?,last_error=? WHERE event_id=?");
     update.bind(1, static_cast<std::uint64_t>(success));
     update.bind(2, success ? "" : safe_category(error)); update.bind(3, event.id); update.done();
     transaction.commit();
+}
+
+std::string Ledger::delivery_metrics_json(std::uint64_t now) const {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
+    Statement query(impl_->db, "SELECT r.target_id,COUNT(*),MIN(CASE WHEN e.created_at_ms>0 THEN e.created_at_ms "
+        "ELSE (SELECT MIN(started_at) FROM delivery_log d WHERE d.event_id=e.event_id) END) "
+        "FROM events e JOIN event_routes r ON r.ordinal=e.ordinal "
+        "WHERE e.acknowledged=0 AND r.target_id IS NOT NULL GROUP BY r.target_id");
+    Json result = Json::object({});
+    while (query.row()) {
+        Json age;
+        if (!query.is_null(2)) age = Json::number(std::to_string(now > query.integer(2) ? now - query.integer(2) : 0));
+        result.members[query.text(0)] = Json::object({{"pending_count", Json::number(std::to_string(query.integer(1)))},
+            {"oldest_age_ms", std::move(age)}});
+    }
+    return result.dump();
+}
+
+std::uint64_t Ledger::request_redelivery(const std::string& request_id, const std::string& target,
+                                        std::uint64_t from, bool failed_only) {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
+    Transaction transaction(impl_->db);
+    Statement previous(impl_->db, "SELECT target_id,from_ordinal,failed_only,selected FROM redelivery_requests WHERE request_id=?");
+    previous.bind(1, request_id);
+    if (previous.row()) {
+        if (previous.text(0) != target || previous.integer(1) != from || previous.integer(2) != static_cast<unsigned>(failed_only))
+            throw std::invalid_argument("control request id conflicts with an accepted request");
+        const auto selected = previous.integer(3);
+        transaction.commit();
+        return selected;
+    }
+    const auto through = scalar(impl_->db, "SELECT COALESCE(MAX(ordinal),0) FROM events");
+    const auto snapshot_log = scalar(impl_->db, "SELECT COALESCE(MAX(log_id),0) FROM delivery_log");
+    Statement count(impl_->db, "SELECT COUNT(*) FROM events e JOIN event_routes r ON r.ordinal=e.ordinal "
+        "WHERE r.target_id=? AND e.ordinal>=? AND e.ordinal<=? AND (?=0 OR "
+        "(SELECT success FROM delivery_log d WHERE d.event_id=e.event_id AND d.phase='completed' AND d.log_id<=? "
+        "ORDER BY d.log_id DESC LIMIT 1)=0)");
+    count.bind(1, target); count.bind(2, from); count.bind(3, through);
+    count.bind(4, static_cast<unsigned>(failed_only)); count.bind(5, snapshot_log);
+    if (!count.row()) database_error();
+    const auto selected = count.integer(0);
+    Statement insert(impl_->db, "INSERT INTO redelivery_requests(request_id,target_id,from_ordinal,through_ordinal,"
+        "failed_only,snapshot_log,selected,accepted_at) VALUES(?,?,?,?,?,?,?,?)");
+    insert.bind(1, request_id); insert.bind(2, target); insert.bind(3, from); insert.bind(4, through);
+    insert.bind(5, static_cast<unsigned>(failed_only)); insert.bind(6, snapshot_log);
+    insert.bind(7, selected); insert.bind(8, commit_time()); insert.done();
+    transaction.commit();
+    return selected;
+}
+
+std::optional<RequestedDelivery> Ledger::next_redelivery_event(std::uint64_t request_order,
+                                                             std::uint64_t after) const {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
+    Statement query(impl_->db, "SELECT e.ordinal,e.event_id,e.payload,e.attempts,r.target_id,r.delivery_id,"
+        "q.request_order,q.request_id FROM redelivery_requests q JOIN event_routes r ON r.target_id=q.target_id "
+        "JOIN events e ON e.ordinal=r.ordinal WHERE e.ordinal>=q.from_ordinal AND e.ordinal<=q.through_ordinal "
+        "AND (q.request_order>? OR (q.request_order=? AND e.ordinal>?)) "
+        "AND (q.failed_only=0 OR (SELECT success FROM delivery_log d WHERE d.event_id=e.event_id "
+        "AND d.phase='completed' AND d.log_id<=q.snapshot_log ORDER BY d.log_id DESC LIMIT 1)=0) "
+        "AND NOT EXISTS(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id "
+        "AND d.request_id=q.request_id AND d.phase='completed') ORDER BY q.request_order,e.ordinal LIMIT 1");
+    query.bind(1, request_order); query.bind(2, request_order); query.bind(3, after);
+    if (!query.row()) return std::nullopt;
+    return RequestedDelivery{read_routed_event(query), query.integer(6), query.text(7)};
 }
 
 struct LedgerView::Impl {
