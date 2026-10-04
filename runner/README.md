@@ -311,6 +311,10 @@ open journals of the retired Python `pineforge-live` runtime, and that runtime's
 evidence does not validate this execution path: record native parity and
 recovery evidence before replacing a Python deployment.
 
+See [Backtest vs live](../docs/pages/streaming.md#backtest_vs_live) for the
+confirmed-bar contract, historical look-ahead exceptions, missing-bar refusal,
+and the current `calc_on_order_fills` limit.
+
 ## Routing order actions to webhook targets
 
 Implemented B1 routing is runner-only. The engine only computes; receivers are

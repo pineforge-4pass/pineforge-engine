@@ -1,0 +1,10 @@
+//@version=6
+strategy("Slipped flat shorts", initial_capital=10000, slippage=15, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100)
+if bar_index == 0
+    strategy.entry("held", strategy.long, qty=1)
+if bar_index == 2
+    strategy.close("held")
+if bar_index == 4
+    strategy.entry("short", strategy.short)
+if bar_index == 6
+    strategy.close_all()

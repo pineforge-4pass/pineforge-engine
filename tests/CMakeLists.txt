@@ -1662,6 +1662,8 @@ list(APPEND TEST_SOURCES test_pyramiding_count_differential)
 list(APPEND TEST_SOURCES test_zero_trail_sibling_stop)
 #   E5's pending-entry arm and E14's anchored-leg seed (AUDIT3 H6 tapes).
 list(APPEND TEST_SOURCES test_pending_entry_trail_tapes)
+list(APPEND TEST_SOURCES test_pine_input_domain)
+list(APPEND TEST_SOURCES test_pine_confirmed_source_state)
 #   G2-22 / E19 the host-owned excursion model against the kernel sampler.
 list(APPEND TEST_SOURCES test_e19_excursion_tape)
 #   G2-21 the short-seed report swaps against the kernel's lot identities.
@@ -2176,6 +2178,36 @@ file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/test_native_market_vertical.cpp"
      PINEFORGE_NATIVE_MARKET_VERTICAL_SHA256)
 
 if(PINEFORGE_BUILD_SOURCE_LAYER)
+    foreach(security_case htf5_close htf15_sma_pooc htf60_close daily_close heikinashi5 htf60_ema_gaps period_previous
+            dual_stop pooc_dual_stop pooc_limit_reversal pooc_slipped_short slipped_short all_in_reversal whole_all_in_reversal pooc_short_exit)
+        add_executable(test_stream_security_${security_case}
+            test_stream_security_equivalence.cpp
+            fixtures/stream_security/${security_case}/generated.cpp)
+        target_link_libraries(test_stream_security_${security_case} PRIVATE pineforge)
+        target_compile_options(test_stream_security_${security_case} PRIVATE -UNDEBUG -ffp-contract=off)
+        target_compile_definitions(test_stream_security_${security_case} PRIVATE
+            PINEFORGE_SECURITY_CASE="${security_case}")
+        if(PINEFORGE_ENABLE_COVERAGE)
+            target_compile_options(test_stream_security_${security_case} PRIVATE ${_pf_cov_test_flags})
+        endif()
+        if(security_case STREQUAL "all_in_reversal" OR security_case STREQUAL "whole_all_in_reversal"
+                OR security_case STREQUAL "slipped_short")
+            add_test(NAME test_stream_security_${security_case}
+                COMMAND test_stream_security_${security_case} 1 3)
+            add_test(NAME test_stream_security_${security_case}_early
+                COMMAND test_stream_security_${security_case} 1 1)
+        else()
+            add_test(NAME test_stream_security_${security_case}
+                COMMAND test_stream_security_${security_case} 1 500)
+            add_test(NAME test_stream_security_${security_case}_early
+                COMMAND test_stream_security_${security_case} 1 30)
+        endif()
+    endforeach()
+    add_test(NAME test_stream_security_control_tf5 COMMAND test_stream_security_htf5_close 5 500)
+    add_test(NAME test_stream_security_control_tf15 COMMAND test_stream_security_htf60_close 15 500)
+    add_test(NAME test_stream_security_pooc_dual_stop_tf5 COMMAND test_stream_security_pooc_dual_stop 5 500)
+    add_test(NAME test_stream_security_daily_close_late COMMAND test_stream_security_daily_close 1 2000)
+
     add_library(checked_settings_fixture OBJECT fixtures/checked_settings/generated.cpp)
     target_link_libraries(checked_settings_fixture PRIVATE pineforge)
     target_compile_options(checked_settings_fixture PRIVATE -ffp-contract=off)
@@ -3129,6 +3161,10 @@ add_test(NAME test_cancellation_hash_coverage COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/check_cancellation_hash_coverage.py)
 add_test(NAME test_native_live_equivalence_harness COMMAND ${Python3_EXECUTABLE} -B
     ${CMAKE_CURRENT_SOURCE_DIR}/test_native_live_equivalence_harness.py)
+add_test(NAME test_pine_input_domain_gates COMMAND ${Python3_EXECUTABLE} -B
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_pine_input_domain_gates.py)
+add_test(NAME test_native_confirmed_bar_stream_comparator COMMAND ${Python3_EXECUTABLE} -B
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_native_confirmed_bar_stream_scan.py)
 
 # R5 N11: no NativeRunSpec field the Pine adapter's project() sets is then
 # unconditionally shadowed by one of its own host hooks (audit D2), plus the

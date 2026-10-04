@@ -29,6 +29,48 @@ with the [ABI v4 live surface](@ref live_surface); the earlier Python runtime
 that did so is retired. Tick-stream fills at observed
 prices/times can differ from batch OHLC path assumptions.
 
+## Backtest vs live {#backtest_vs_live}
+
+Backtest and live are modes of one engine. Confirmed-bar streams use the same
+modeled OHLC and Pine order policies as backtests; only genuine observed trades
+use tick prices instead of the historical OHLC path. The following historical
+look-ahead information is unavailable to a continuing live run:
+
+- A historical opening script-bar seed can contain the complete script candle's
+  high and low. Live aggregation has only the children received so far and cannot
+  include later children; sibling-stop ordering still applies to the confirmed
+  policy bar already supplied, without projecting those future children.
+- Historical `request.security(..., lookahead_on)` can project a requested
+  period's final OHLC before that period closes. Live publishes only information
+  that has arrived, not the future period close.
+- Historical next-source-bar lookup can inspect a retained future candle.
+  Live has no such candle; requested-context feeding also cannot inspect the
+  next actual input timestamp before that input arrives.
+- A one-bar historical run can accept an undetected timeframe. Live startup
+  needs explicit timeframe metadata or enough confirmed timestamps to infer
+  cadence; both the adapter fallback and startup validation have this limit.
+- History knows the final retained source-bar index. A continuing warmup cannot
+  know that eventual index, while realtime `barstate.islast` describes the latest
+  available bar rather than hindsight's final bar.
+- Historical EOF can seal the final run/session boundary. Live needs an explicit
+  end event or a known calendar boundary; provisional last-regular-session-bar
+  facts cannot assume an unseen next bar or session closure.
+
+These look-ahead differences are deliberate, like TradingView history versus
+realtime. They are not emulated by supplying future data to live execution.
+Batch also tolerates gappy historical exports, but a stream refuses a missing
+confirmed bar: the feed adapter must recover it from REST or stop, never invent
+a candle. `calc_on_order_fills` is refused in streams today because the native
+stream's close-only source callback contract does not support fill-triggered
+re-entry; this is future source-layer work, not an inherent look-ahead limit.
+
+A current source-layer limitation remains for requested periods whose last
+expected child is absent for calendar reasons: batch can seal that period when
+the next tradable input opens, but a confirmed stream does not yet forward that
+deferred calendar boundary. Requested values can therefore publish late or
+remain pending. This is follow-up work, not a deliberate look-ahead difference;
+it does not relax the refusal of a missing in-session confirmed bar.
+
 This is the runtime model used by a continuously running strategy:
 
 1. Call #strategy_stream_begin with every confirmed historical input bar.
@@ -170,7 +212,9 @@ separate surfaces and are not implied by using this lifecycle.
   the first realtime bar, so its live results can differ from a backtest of
   the same bars. Batch backtests are not affected. Workaround: run the stream
   with a script timeframe larger than the input timeframe (for example input
-  `1`, script `5`), or use the batch backtest. A fix is in progress.
+  `1`, script `5`), or use the batch backtest. **Fixed on main (#325); included in
+  the next release.** This change feeds each newly observed confirmed bar to the
+  requested-series evaluator, including equal-timeframe and Heikin-Ashi requests.
 
 See [Lifecycle](@ref lifecycle) for handle ownership and
 [FFI from Python](@ref ffi_python) for the complete POD mirrors.

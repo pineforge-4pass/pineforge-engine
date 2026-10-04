@@ -773,18 +773,10 @@ void test_request_security_finer_tf_sparse_boundary_uses_final_caller_child() {
     require(stream.stream_begin(input_bars.data(), 23, "60", "1D"),
             "stream sparse-boundary warmup should succeed: "
                 + stream.last_error());
-    // Keep the already-configured chart/security aggregators on their 24x7
-    // day grid, but tell the normalized stream that the deliberately absent
-    // 23:00 interval is closed so it is not synthesized as a carry bar.
-    stream.set_syminfo_session("0000-2300:1234567");
-    require(stream.stream_push_tick(
-                TradeTick{day0 + 24 * hour, 1, 200.0, 1.0}),
-            "stream sparse-boundary day1 tick should be accepted: "
-                + stream.last_error());
-    require(stream.stream_advance_time(day0 + 25 * hour),
-            "stream sparse-boundary day1 input should finalize: "
-                + stream.last_error());
-    check(stream, "stream", /*expects_replay=*/true);
+    require(!stream.stream_push_bar(input_bars.back()),
+            "stream must refuse the missing confirmed 23:00 interval");
+    require(stream.last_error().find("in-session gap") != std::string::npos,
+            "stream must name the missing confirmed input: " + stream.last_error());
 
     std::cout << "test_request_security_finer_tf_sparse_boundary_uses_final_caller_child passed.\n";
 }

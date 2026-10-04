@@ -422,6 +422,35 @@ void test_route_only_conditions() {
     }
 }
 
+void test_confirmed_daily_publication() {
+    const auto bars = grid_bars(480, 24);
+    for (const char* type : {"crypto", "forex", "cfd"}) {
+        Shape shape;
+        shape.type = type;
+        GeneratedShape batch;
+        batch.site = Site{"D"};
+        prime(batch, shape);
+        run_pine(batch, bars, shape);
+        for (const int split : {180, 276}) {
+            scenario = "confirmed daily publication";
+            GeneratedShape stream;
+            stream.site = Site{"D"};
+            prime(stream, shape);
+            CHECK(stream.stream_begin(bars.data(), split, "15", "15"));
+            for (int index = split; index < static_cast<int>(bars.size()); ++index)
+                CHECK(stream.stream_push_bar(bars[index]));
+            CHECK(stream.stream_end(false));
+            CHECK(stream.visible.size() == batch.visible.size());
+            for (std::size_t index = 0;
+                 index < stream.visible.size() && index < batch.visible.size(); ++index) {
+                const double expected = batch.visible[index];
+                const double actual = stream.visible[index];
+                CHECK((std::isnan(expected) && std::isnan(actual)) || expected == actual);
+            }
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -430,6 +459,7 @@ int main() {
     test_site_conditions();
     test_kernel_refusal();
     test_route_only_conditions();
+    test_confirmed_daily_publication();
     std::printf("adapter security route conditions: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

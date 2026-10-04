@@ -20,6 +20,17 @@ version number follows semantic versioning over the surfaces the
   `applied_runtime.syminfo`, so a gridded run has its own fingerprint digest. The
   engine library is unchanged.
 
+- **Confirmed-bar streams compute what the batch computes:** a native stream fed
+  confirmed bars now applies the same TradingView-parity rules as a batch backtest over
+  the same bars. Rules that were switched off in any stream are now chosen by the input's
+  domain: historical semantics for batch and confirmed-bar input, observed-print semantics
+  only for genuine tick input. Fixes the v1.0.0/v1.0.1 known issue where same-chart
+  `request.security` stopped updating after the first realtime bar when the input and
+  script timeframes were equal, and two stream-only fill differences (both-sided stop
+  entries with default sizing; `process_orders_on_close` attribution). Batch results are
+  unchanged. The streaming guide gains a "Backtest vs live" section listing what a
+  backtest can see that a live run cannot.
+
 - **Native runner routing and delivery:** webhooks are optional; `--webhook-routes`
   adds first-match per-action targets and payload `pineforge-native-order-action/v2`.
   New `actions`, `status` and offline `redeliver` commands expose the journal and

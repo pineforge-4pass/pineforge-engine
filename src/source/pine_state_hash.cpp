@@ -730,6 +730,21 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
         });
     f.u(boundary_prefix); f.u(consumed_boundaries_digest_);
     f.b(uses_aux_security_feed_);
+    if (retained_.is_stream) f.b(input_is_observed_ticks_);
+    if (retained_.is_stream) {
+        f.u(confirmed_input_next_);
+        f.u(confirmed_input_count_);
+        for (const auto& bar : confirmed_input_bars_) {
+            f.d(bar.open); f.d(bar.high); f.d(bar.low); f.d(bar.close); f.d(bar.volume);
+            f.i(bar.timestamp);
+        }
+        f.u(confirmed_open_input_next_);
+        f.u(confirmed_open_input_count_);
+        for (const auto& bar : confirmed_open_input_bars_) {
+            f.d(bar.open); f.d(bar.high); f.d(bar.low); f.d(bar.close); f.d(bar.volume);
+            f.i(bar.timestamp);
+        }
+    }
     f.d(deferred_boundary_input_.bar.open); f.d(deferred_boundary_input_.bar.high);
     f.d(deferred_boundary_input_.bar.low); f.d(deferred_boundary_input_.bar.close);
     f.d(deferred_boundary_input_.bar.volume); f.i(deferred_boundary_input_.bar.timestamp);
