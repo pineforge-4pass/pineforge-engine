@@ -546,6 +546,17 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
         == context.script_bar_open_ms;
     Bar script_bar = value;
     script_bar.timestamp = context.script_bar_open_ms;
+    if (retained_.is_stream && input_is_observed_ticks_
+        && !retained_.bars.empty() && calendar_period_for(retained_.script_tf) == CalendarPeriod::DAY
+        && tf_to_seconds(retained_.input_tf) == 86400
+        && host.syminfo_.session == "1800-1700"
+        && host.syminfo_.timezone == "America/New_York") {
+        const auto stamp = session_period_open_ms(script_bar.timestamp,
+            host.syminfo_.timezone, host.syminfo_.session, CalendarPeriod::DAY);
+        const auto next_stamp = session_period_open_ms(retained_.bars.back().timestamp + 86400000LL,
+            host.syminfo_.timezone, host.syminfo_.session, CalendarPeriod::DAY);
+        script_bar.timestamp = std::max(stamp, next_stamp);
+    }
     current_script_bar_ = script_bar;
     current_script_bar_valid_ = true;
     const bool completes_awaiting_legacy_script = awaiting_legacy_script_open_ms_
