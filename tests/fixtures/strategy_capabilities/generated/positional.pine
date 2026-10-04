@@ -1,0 +1,6 @@
+//@version=6
+strategy("t","s",true,format.price,2,scale.right,1,true,true)
+if bar_index % 7 == 0
+    strategy.entry("long", strategy.long)
+if bar_index % 7 == 3
+    strategy.entry("short", strategy.short)

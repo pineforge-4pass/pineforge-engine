@@ -1,0 +1,7 @@
+//@version=6
+strategy("join", pyramiding=COUNT)
+const int COUNT = 1
+if bar_index % 7 == 0
+    strategy.entry("long", strategy.long)
+if bar_index % 7 == 3
+    strategy.entry("short", strategy.short)

@@ -1,0 +1,4 @@
+//@version=6
+strategy("join")
+if time == last_bar_time
+    strategy.entry("entry", strategy.long)

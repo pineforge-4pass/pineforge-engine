@@ -1,0 +1,5 @@
+//@version=6
+strategy("join")
+value = request.earnings("NASDAQ:MSFT")
+if value > close
+    strategy.entry("entry", strategy.long)

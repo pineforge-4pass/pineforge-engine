@@ -1554,6 +1554,9 @@ PF_API const char* pf_version_string(void);
 /** Current generated-strategy settings extension version. */
 #define PF_SETTINGS_API_VERSION 1u
 
+/** Current compiled-strategy execution-capabilities extension version. */
+#define PF_CAPABILITIES_API_VERSION 1u
+
 /** Status codes for the opt-in generated-strategy settings extension. */
 typedef enum pf_settings_status_t {
     PF_SETTINGS_OK = 0,
@@ -1572,6 +1575,23 @@ typedef enum pf_settings_status_t {
  *  Older compiled strategies lack this symbol. This is independent of
  *  #pf_abi_version and does not change the legacy entry points. */
 PF_API uint32_t strategy_settings_api_version(void);
+
+/** Compiled execution-capabilities extension version (currently 1).
+ *  Older strategies lack this symbol. Independent of #PF_ABI_VERSION and
+ *  #PF_SETTINGS_API_VERSION; implemented by the generated strategy, not runtime. */
+PF_API uint32_t strategy_capabilities_api_version(void);
+
+/** Read immutable canonical JSON describing compiled execution declarations
+ *  and analyzed request/data requirements, never inferred from runtime state.
+ *  Uses #pf_settings_status_t and the buffer/error protocol of
+ *  #strategy_get_effective_settings: @p required includes the NUL, NULL/0
+ *  queries return #PF_SETTINGS_BUFFER_TOO_SMALL, and no partial JSON is returned.
+ *  @p s and @p required must be non-NULL. Receipt bytes remain identical across
+ *  settings changes, batch runs, stream runs and fresh/reused handles.
+ *  A consumer must separately validate effective settings and staged run data. */
+PF_API int strategy_capabilities_receipt(pf_strategy_t s, char* json,
+                                         size_t capacity, size_t* required,
+                                         char* error, size_t error_capacity);
 
 /** Allocate a strategy without allowing any exception across the C boundary.
  *  @p params_json is reserved: pass NULL or an empty string. Nonempty values

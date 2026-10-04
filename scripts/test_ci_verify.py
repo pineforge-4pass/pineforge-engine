@@ -1053,7 +1053,7 @@ class CAbiRuntimeInventory(unittest.TestCase):
         )
         header = _pf_api_names(ROOT / 'include/pineforge/pineforge.h')
         runtime = _pf_api_names(ROOT / 'src/c_abi.cpp')
-        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 77)
+        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 79)
         self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 62)
         self.assertEqual(len(EXPECTED_RUNTIME), EXPECTED_RUNTIME_IMPLEMENTATIONS)
         self.assertEqual(len(header), EXPECTED_PUBLIC_DECLARATIONS)
@@ -1071,6 +1071,9 @@ class CAbiRuntimeInventory(unittest.TestCase):
         # Generated, only by a script declaring use_bar_magnifier = true.
         self.assertIn('strategy_declares_bar_magnifier', header)
         self.assertNotIn('strategy_declares_bar_magnifier', runtime)
+        for name in ('strategy_capabilities_api_version', 'strategy_capabilities_receipt'):
+            self.assertIn(name, header)
+            self.assertNotIn(name, runtime)
 
     def test_historical_only_setters_say_a_stream_refuses_them(self):
         from check_c_abi_runtime import (

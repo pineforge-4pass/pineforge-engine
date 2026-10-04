@@ -1,0 +1,8 @@
+//@version=6
+strategy("join")
+float value = na
+if true
+    symbol = "NASDAQ:MSFT"
+    value := request.security(symbol, "D", close)
+if not na(value)
+    strategy.entry("entry", strategy.long)

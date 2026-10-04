@@ -248,13 +248,67 @@ produce different fills: ticks reveal an actual intrabar path, whereas OHLC
 bars require the backtest's path assumptions. Native fills are simulated
 engine actions, not broker execution acknowledgments. Native close-only
 execution requires strategies that calculate only on bar close. Do not use
-strategies that require `calc_on_every_tick`: the runner rejects an explicit
-true override, but cannot detect that declaration in every compiled strategy.
-Order-fill recalculation, a nonempty staged account-FX curve, and separately
-installed native/auxiliary security feeds are refused by the native stream
-configuration.
-Ordinary security evaluations derived from the input stream retain the
-existing native engine behavior.
+strategies that require intrabar calculation. Regenerated libraries expose the
+versioned [compiled execution-capabilities receipt](../docs/strategy-capabilities.md).
+The capability extension and receipt-based runner admission are available
+**since the next release**.
+Before beginning execution or binding the ledger, the runner refuses compiled
+`calc_on_every_tick=true`, `calc_on_order_fills=true`, `calc_on_every_history_tick=true`,
+`process_orders_on_close=true` (including CLI overrides on version-1 libraries), `use_bar_magnifier=true`,
+`fill_orders_on_standard_ohlc=true`, and nonzero `backtest_fill_limits_assumption`.
+It also refuses declaration-owned clocks, account-currency conversion/FX curves,
+auxiliary/native security feeds, recorded request series, historical probe/tail
+overrides, `varip` intrabar persistence and unresolved execution requirements.
+Every nonempty `requests` array is refused, including same-chart
+`request.security`, `request.security_lower_tf`, recorded requests and sites
+lowered to unpinned runtime errors. The error names the request kind and says
+"the native stream does not yet reproduce the batch for requested series".
+For receipt-carrying libraries, `pineforge-live` refuses every request whatever
+the input and script timeframes. A legacy library without a capabilities receipt
+warns and runs, including its requests; that compatibility path does not prove
+eligibility. The larger-script-timeframe workaround in the
+[streaming known issue](../docs/pages/streaming.md#streaming_known_issues) matters
+only for direct stream-API hosts and legacy libraries without a receipt running
+the affected v1.0.0/v1.0.1 runtime. The issue is fixed on main: confirmed-bar
+streams now match batch for the tested same-chart `request.security` shapes,
+including `timeframe.period` with `close[1]`, higher-timeframe close/SMA/EMA,
+`gaps_on`, and higher-timeframe Heikin-Ashi chart-symbol requests. This does not
+claim parity for foreign/auxiliary requests, lower-timeframe arrays or future
+look-ahead information. Receipt-carrying libraries still refuse every request;
+relaxing that admission policy is a separate follow-up.
+The error otherwise names the declaration or requirement.
+An override cannot erase an unsupported compiled declaration.
+
+The receipt proves declarations only, not arbitrary batch-versus-stream
+equivalence. The conservative POOC refusal remains even though confirmed-bar
+priced-entry fill attribution is now fixed on main. Plain market-order strategies with no POOC or requests have
+generated-library batch-versus-stream equivalence CTests. No request or POOC
+shape is admitted until a separate equivalence test proves it. Uses of
+`barstate.isrealtime` and `timenow` are conservatively refused by name: generated
+code reads `false` and the current bar timestamp, respectively, in both warmup
+and realtime, not Pine's live phase or wall clock. `barstate.islast`,
+`barstate.islastconfirmedhistory`, `last_bar_index` and `last_bar_time` are also
+refused by name: a stream's delivered endpoint and last-bar flags differ from
+the completed batch's final bar. All six builtin uses are refused **including
+display-only use (plots, labels, tables)**: the receipt conservatively records
+their use and does not certify that display-only code cannot influence strategy
+execution. Installed historical-only feed/FX data remains subject
+to the existing stream-begin validation. A present but malformed, incomplete or
+unknown-version receipt is refused. An older library lacking the extension
+**warns and runs with today's legacy behavior**; the warning says eligibility
+cannot be proved. Recompile it to obtain the check. Accepted receipt bytes are
+hashed into the deployment identity after the settings receipt, before routing
+wrapping, and emitted as
+`execution_capabilities` in the final JSON summary (`null` for old libraries).
+
+Confirmed-bar stream fixes also close the earlier default-sized both-sided stop
+discrepancy (the historical audit measured batch 276 versus stream 277 trades).
+POOC and all request shapes remain refused by this receipt policy; the runtime's
+new equivalence tests do not automatically widen runner admission. See
+[Backtest vs live](../docs/pages/streaming.md#backtest_vs_live) for deliberate
+historical look-ahead differences and the remaining deferred calendar-boundary
+limitation. Capability checks do not change default batch computation, matching
+or margin.
 
 ## Durable orders and recovery
 

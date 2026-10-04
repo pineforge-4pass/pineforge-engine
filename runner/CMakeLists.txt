@@ -79,6 +79,10 @@ if(PINEFORGE_BUILD_TESTS)
     target_include_directories(test_live_json PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_options(test_live_json PRIVATE -UNDEBUG)
     add_test(NAME test_live_json COMMAND test_live_json)
+    add_executable(test_live_identity ${PROJECT_SOURCE_DIR}/tests/test_live_identity.cpp)
+    target_link_libraries(test_live_identity PRIVATE pineforge_live_support)
+    target_compile_options(test_live_identity PRIVATE -UNDEBUG)
+    add_test(NAME test_live_identity COMMAND test_live_identity)
     add_executable(test_native_live_startup ${PROJECT_SOURCE_DIR}/tests/test_native_live_startup.cpp)
     target_link_libraries(test_native_live_startup PRIVATE pineforge_live_startup)
     target_compile_options(test_native_live_startup PRIVATE -UNDEBUG)
@@ -176,4 +180,47 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
         ${PROJECT_SOURCE_DIR}/tests/checked_settings_e2e.py $<TARGET_FILE:pineforge-live>
         $<TARGET_FILE:checked_settings_example> $<TARGET_FILE:native_live_example>)
     set_tests_properties(checked_settings_e2e PROPERTIES TIMEOUT 120)
+    foreach(capabilities_kind unknown)
+        add_library(capabilities_${capabilities_kind} MODULE
+            ${PROJECT_SOURCE_DIR}/tests/fixtures/strategy_capabilities.cpp
+            $<TARGET_OBJECTS:checked_settings_fixture>)
+        target_link_libraries(capabilities_${capabilities_kind} PRIVATE PineForge::pineforge)
+        if(APPLE)
+            target_link_options(capabilities_${capabilities_kind} PRIVATE "LINKER:-u,_pf_abi_version")
+        else()
+            target_link_options(capabilities_${capabilities_kind} PRIVATE "LINKER:-u,pf_abi_version")
+        endif()
+        set_target_properties(capabilities_${capabilities_kind} PROPERTIES PREFIX "")
+    endforeach()
+    target_compile_definitions(capabilities_unknown PRIVATE PF_TEST_CAPABILITIES_VERSION=2)
+    set(capabilities_libraries)
+    foreach(capabilities_kind close clock_flags tick fills pooc magnifier standard limits currency
+            timeframe history_tick unresolved unresolved_tick varip realtime timenow islast
+            lastconfirmedhistory last_bar_index last_bar_time security lower_tf recorded unpinned footprint positional)
+        add_library(capabilities_${capabilities_kind} MODULE
+            ${PROJECT_SOURCE_DIR}/tests/fixtures/strategy_capabilities/generated/${capabilities_kind}.cpp)
+        target_link_libraries(capabilities_${capabilities_kind} PRIVATE PineForge::pineforge)
+        target_compile_options(capabilities_${capabilities_kind} PRIVATE -ffp-contract=off)
+        if(APPLE)
+            target_link_options(capabilities_${capabilities_kind} PRIVATE "LINKER:-u,_pf_abi_version")
+        else()
+            target_link_options(capabilities_${capabilities_kind} PRIVATE "LINKER:-u,pf_abi_version")
+        endif()
+        set_target_properties(capabilities_${capabilities_kind} PROPERTIES PREFIX "")
+        list(APPEND capabilities_libraries "${capabilities_kind}=$<TARGET_FILE:capabilities_${capabilities_kind}>")
+    endforeach()
+    add_test(NAME strategy_capabilities_e2e COMMAND ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/strategy_capabilities_e2e.py $<TARGET_FILE:pineforge-live>
+        $<TARGET_FILE:native_live_example> ${capabilities_libraries}
+        "unknown=$<TARGET_FILE:capabilities_unknown>")
+    set_tests_properties(strategy_capabilities_e2e PROPERTIES TIMEOUT 120)
+    foreach(capabilities_kind close clock_flags)
+        add_executable(test_capabilities_equivalence_${capabilities_kind}
+            ${PROJECT_SOURCE_DIR}/tests/test_capabilities_equivalence.cpp
+            ${PROJECT_SOURCE_DIR}/tests/fixtures/strategy_capabilities/generated/${capabilities_kind}.cpp)
+        target_link_libraries(test_capabilities_equivalence_${capabilities_kind} PRIVATE PineForge::pineforge)
+        target_compile_options(test_capabilities_equivalence_${capabilities_kind} PRIVATE -UNDEBUG -ffp-contract=off)
+        add_test(NAME capabilities_equivalence_${capabilities_kind}
+            COMMAND test_capabilities_equivalence_${capabilities_kind})
+    endforeach()
 endif()
