@@ -74,6 +74,13 @@ Schema:
       }
     }
 
+applied_runtime (and so provenance.runtime) also holds
+"syminfo": {"qty_step": float, "mincontract": float} when --syminfo set a lot
+grid from syminfo.mincontract; without one the key is absent.
+
+A run error or a --syminfo the harness rejects (see apply_syminfo) prints one
+line {"engine": "pineforge", "error": "<text>"} instead, exit status 1.
+
 NaN convention: any metric with an empty/zero denominator is null (JSON has no
 NaN); a real computed 0 stays 0. See the report-schema + metrics reference docs
 for the per-field meaning of every metrics.* key.
@@ -834,6 +841,10 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
     for _n in ("strategy_set_syminfo_timezone", "strategy_set_syminfo_session"):
         if hasattr(lib, _n):
             getattr(lib, _n).argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    if hasattr(lib, "strategy_set_syminfo_metadata"):
+        lib.strategy_set_syminfo_metadata.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_double]
+        lib.strategy_set_syminfo_metadata.restype = None
 
     # Validation-parity setters mirrored from scripts/run_strategy.py. All
     # hasattr-guarded: trade_start_time + chart_timezone are runtime PF exports;
@@ -854,16 +865,52 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
     return lib
 
 
+class SyminfoError(ValueError):
+    """A --syminfo file the harness cannot apply as given. main() reports it as
+    the structured {"engine", "error"} failure (exit 1), never as a traceback."""
+
+
+# This file is vendored: pineforge-release copies it from the pineforge-engine
+# tag at every release. Keep the lot-grid handling (mincontract) identical in
+# both repos, or a sync drops it.
 def apply_syminfo(lib, strat, syminfo_path):
     """Apply syminfo.json (data-worker schema) via strategy_set_syminfo_*.
-    Tolerant: missing keys skipped. Accepts {"syminfo": {...}} or a flat dict."""
+    Tolerant: missing keys skipped. Accepts {"syminfo": {...}} or a flat dict.
+
+    mincontract (TradingView's syminfo.mincontract, the instrument's lot size)
+    is strict: absent or null applies nothing; anything else must be a positive
+    finite JSON number, else SyminfoError before any setter runs. A valid one is
+    set first, as the metadata key qty_step (the engine floors order quantities
+    to that grid) and as mincontract (what syminfo.mincontract reads return).
+    Returns what main() records in applied_runtime["syminfo"]:
+    {"qty_step": v, "mincontract": v}, or {} when no grid was applied."""
     import json
     doc = json.loads(open(syminfo_path).read())
     si = doc.get("syminfo", doc)
+    applied = {}
+    lot = si.get("mincontract")
+    if lot is not None:
+        try:
+            v = (float(lot) if isinstance(lot, (int, float))
+                 and not isinstance(lot, bool) else math.nan)
+        except OverflowError:  # an int beyond binary64
+            v = math.nan
+        if not (math.isfinite(v) and v > 0):
+            raise SyminfoError(
+                "syminfo.mincontract must be a positive finite number, got "
+                + json.dumps(lot)[:80])
+        if not hasattr(lib, "strategy_set_syminfo_metadata"):
+            raise SyminfoError(
+                "the strategy library has no strategy_set_syminfo_metadata, "
+                "so syminfo.mincontract cannot be applied")
+        lib.strategy_set_syminfo_metadata(strat, b"qty_step", v)
+        lib.strategy_set_syminfo_metadata(strat, b"mincontract", v)
+        applied = {"qty_step": v, "mincontract": v}
     if "mintick" in si:    lib.strategy_set_syminfo_mintick(strat, float(si["mintick"]))
     if "pointvalue" in si: lib.strategy_set_syminfo_pointvalue(strat, float(si["pointvalue"]))
     if si.get("timezone"): lib.strategy_set_syminfo_timezone(strat, str(si["timezone"]).encode())
     if si.get("session"):  lib.strategy_set_syminfo_session(strat, str(si["session"]).encode())
+    return applied
 
 
 def fmt_utc(ms: int) -> str:
@@ -1149,17 +1196,28 @@ def main() -> int:
     # Volume-weighted magnifier only meaningful when the magnifier is on.
     vw_on = bool(args.magnifier_volume_weighted) and bar_magnifier == 1
 
+    # The lot grid the last _make_state() applied (the body run's), for
+    # applied_runtime["syminfo"]; {} when none.
+    syminfo_applied: dict = {}
+
     def _make_state():
         """Create + fully configure a fresh strategy state — everything EXCEPT the
         timed run_backtest_full call. Mirrors scripts/run_strategy.py's setup so the
         engine behaves identically to the ctypes validation harness."""
+        nonlocal syminfo_applied
         st = lib.strategy_create(b"{}")
         for k, v in inputs.items():
             lib.strategy_set_input(st, k.encode(), v.encode())
         for k, v in overrides.items():
             lib.strategy_set_override(st, k.encode(), v.encode())
         if args.syminfo:
-            apply_syminfo(lib, st, args.syminfo)
+            try:
+                # A replacement apply_syminfo may return None (or another non-dict).
+                r = apply_syminfo(lib, st, args.syminfo)
+                syminfo_applied = r if isinstance(r, dict) else {}
+            except SyminfoError:
+                lib.strategy_free(st)
+                raise
         if args.trade_start_ms is not None and hasattr(lib, "strategy_set_trade_start_time"):
             lib.strategy_set_trade_start_time(st, int(args.trade_start_ms))
         if args.chart_tz and hasattr(lib, "strategy_set_chart_timezone"):
@@ -1181,31 +1239,38 @@ def main() -> int:
     # isolates the engine hot loop (closest to the GBench harness). dlopen
     # already happened above (load_strategy), outside any loop.
     timing = None
-    if args.bench:
-        warmup = max(0, int(args.warmup))
-        repeats = max(1, int(args.repeats))
-        for _ in range(warmup):
-            st = _make_state(); rep = ReportC()
-            try:
-                _run(st, rep)
-            finally:
-                lib.report_free(ctypes.byref(rep)); lib.strategy_free(st)
-        samples_ns: list[int] = []
-        for _ in range(repeats):
-            st = _make_state(); rep = ReportC()
-            try:
-                t0 = time.perf_counter_ns(); _run(st, rep); t1 = time.perf_counter_ns()
-                samples_ns.append(t1 - t0)
-            finally:
-                lib.report_free(ctypes.byref(rep)); lib.strategy_free(st)
-        timing = _timing_block(
-            samples_ns, warmup=warmup, repeats=repeats,
-            bar_magnifier=bar_magnifier, magnifier_samples=magnifier_samples,
-            magnifier_dist=args.magnifier_dist.strip().lower() or "endpoints",
-            volume_weighted=vw_on)
+    try:
+        if args.bench:
+            warmup = max(0, int(args.warmup))
+            repeats = max(1, int(args.repeats))
+            for _ in range(warmup):
+                st = _make_state(); rep = ReportC()
+                try:
+                    _run(st, rep)
+                finally:
+                    lib.report_free(ctypes.byref(rep)); lib.strategy_free(st)
+            samples_ns: list[int] = []
+            for _ in range(repeats):
+                st = _make_state(); rep = ReportC()
+                try:
+                    t0 = time.perf_counter_ns(); _run(st, rep); t1 = time.perf_counter_ns()
+                    samples_ns.append(t1 - t0)
+                finally:
+                    lib.report_free(ctypes.byref(rep)); lib.strategy_free(st)
+            timing = _timing_block(
+                samples_ns, warmup=warmup, repeats=repeats,
+                bar_magnifier=bar_magnifier, magnifier_samples=magnifier_samples,
+                magnifier_dist=args.magnifier_dist.strip().lower() or "endpoints",
+                volume_weighted=vw_on)
 
-    # --- Body run: one configured run for trades / metrics / diagnostics. ---
-    state = _make_state()
+        # --- Body run: one configured run for trades / metrics / diagnostics. ---
+        state = _make_state()
+    except SyminfoError as e:
+        # A rejected --syminfo: the structured failure, before any stdout.
+        json.dump({"engine": "pineforge", "error": str(e)},
+                  sys.stdout, separators=(",", ":"))
+        sys.stdout.write("\n")
+        return 1
     report = ReportC()
     started = time.time()
     try:
@@ -1234,6 +1299,8 @@ def main() -> int:
             "trade_start_ms":     args.trade_start_ms,
             "chart_tz":           args.chart_tz or "",
         }
+        if syminfo_applied:
+            applied_runtime["syminfo"] = syminfo_applied
         incarnation_accessor = getattr(
             lib, "strategy_closed_trade_entry_incarnation", None)
         trade_entry_incarnations = (
