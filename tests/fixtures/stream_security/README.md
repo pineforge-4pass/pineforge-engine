@@ -19,3 +19,13 @@ warmup boundary need not coincide with a requested-timeframe boundary.
 Every equivalence row includes at least one realtime confirmed input. A
 warmup-only snapshot retains the warmup mark rather than presenting a completed
 batch range, as specified by `tests/test_stream_report_equivalence.cpp`.
+
+## State hash witnesses
+
+The scheduler correction also changes existing equal-clock stream-state hash
+witnesses: a completed caller no longer leaves a stale callback wait and
+deferred input in the source-state fold. The continuation-view, host-view memo
+and quiet-bar pins are refreshed only for those stream-state reads. The base
+runtime reproduces the previous pins; every historical pin, trade digest,
+trade count and profit stays unchanged. The quiet-bar recorded-state digest
+changes with the corrected source state, not with broker trades.
