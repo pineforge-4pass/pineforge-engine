@@ -81,9 +81,65 @@ intrabar persistence. Native feeds and historical probe/tail data are not
 installed by generated scripts: those requirements default false, while
 separately staged runtime data is still validated at stream begin.
 
-## Close-only runner policy
+## Confirmed-bar extension
 
-The runner reads and validates version 1 before execution begins or the ledger
+New generated libraries additionally export `strategy_confirmed_bar_api_version`
+(returning 1) and `strategy_confirmed_bar_receipt`, with the same signature and
+buffer/error protocol as the original receipt. The original version-1 schema
+and exports remain available, without new keys: older runners ignore the new
+symbols rather than rejecting unfamiliar fields. No engine header or runtime
+ABI export is needed for this optional, dynamically discovered adapter receipt.
+
+Its canonical JSON has `version: 1`, `requests` (the original request fields plus
+the lowered `expression`), `orders` (sorted distinct classified order shapes),
+and `intrabar_persistence`. Feed/Heikin-Ashi flags and static clocks come from
+the emitter's registration decisions, not symbol-text inference. Inputs or
+mutable clocks remain unresolved. The runner checks agreement between both
+receipts and fails closed on unknown versions, malformed fields or missing proofs.
+
+New admission requires confirmed one-minute bars, UTC/24x7 source settings,
+no external native configuration, and the following exact proof population:
+
+| Same-chart requested series | Request clock | Script clock | Merge policy |
+| --- | --- | --- | --- |
+| `close` | `5` | `1`, `5` | lookahead off, gaps off |
+| `close` | `60` | `1`, `15` | lookahead off, gaps off |
+| `close` | `D` | `1` | lookahead off, gaps off |
+| `ta.sma(close, 4)` | `15` | `1` | lookahead off, gaps off |
+| `ta.ema(close, 3)` | `60` | `1` | lookahead off, gaps on |
+| `close[1]` | `timeframe.period` | `1` | lookahead off, gaps off |
+| Heikin-Ashi `close` | `5` | `1` | lookahead off, gaps off |
+
+The clocks form an allowlist, not a monthly-clock denylist. Constants and a
+single-literal-call helper resolve to these same clocks. A Heikin-Ashi alias
+keeps the registration's transformation flag. Symbol `""` currently lowers
+through a foreign feed and is therefore refused, not mislabeled as chart data.
+
+POOC admits market, stop and limit entries, market closes and short stop/limit
+brackets on script clock `1`; the both-sided-stop control also uses clock `5`.
+Stop-limit/OCA entries, trailing/relative/partial exits, long brackets,
+`strategy.order`, cancellation and immediate closes remain refused by name.
+Close-only `varip` is admitted on script clock `1`, never observed ticks.
+Every admitted source has a generated C++ batch/stream equivalence row and a
+runner E2E comparing physical actions and every ABI report field bitwise on a
+tape, at two warmup splits and after replay. The original #325 numerical pins
+remain unchanged. See `tests/fixtures/confirmed_capabilities/README.md`.
+
+| Runner | Library | Admission |
+| --- | --- | --- |
+| Old | Original receipt or new dual receipts | Original policy; extra symbols ignored |
+| New | Original receipt only | Original request/POOC/varip refusals preserved |
+| New | Both version-1 receipts | Only the proven table and order shapes admitted |
+| Either | No capability receipt | Existing warning and legacy behavior retained |
+
+The additional receipt is hashed as `SHA256(previous_identity +
+":confirmed-bars-v1:" + receipt)` after the original capability receipt and
+before routing wrapping; its summary field is `confirmed_bar_capabilities`.
+Missing extra metadata leaves the old identity unchanged.
+
+## Original-receipt close-only policy
+
+Without the additional receipt, the runner reads and validates version 1 before execution begins or the ledger
 exists, independently of the settings receipt. It refuses true every-tick,
 order-fill, historical-tick, process-orders-on-close, magnifier and standard-OHLC-fill declarations; nonzero limit
 verification; non-default currency or declaration-owned timeframe; any true
@@ -97,9 +153,9 @@ runner admission policy even after the confirmed-bar stream fixes: same-chart
 close/SMA/EMA (including `gaps_on`), and higher-timeframe Heikin-Ashi chart-symbol
 requests now match batch in the generated stream equivalence tests. This does
 not prove arbitrary requests, foreign/auxiliary feeds, lower-timeframe arrays or
-historical look-ahead projections. Every request from a receipt-carrying library
-and `process_orders_on_close=true` remain refused; relaxing admission is a
-separate follow-up, not an automatic consequence of those runtime fixes.
+historical look-ahead projections. Every request from a library carrying only
+the original receipt and `process_orders_on_close=true` remain refused. New
+admission requires the additional receipt and the proof table above.
 Use of `barstate.isrealtime` and `timenow` is conservatively refused by name:
 codegen currently emits historical-only `false` and the current bar timestamp,
 respectively, in both warmup and realtime, not Pine's live phase/wall clock.
@@ -136,8 +192,8 @@ The confirmed-bar stream fixes close the earlier POOC priced-entry and
 default-sized both-sided-stop discrepancies (the historical audit measured
 batch 276 versus stream 277 trades), while the request tests establish the
 bounded shapes described above. This receipt still proves declarations only,
-not arbitrary order-shape equivalence, and keeps its conservative POOC/request
-refusals. See [Backtest vs live](pages/streaming.md#backtest_vs_live) for deliberate
+not arbitrary order-shape equivalence. Without the additional proof receipt it
+keeps its conservative POOC/request refusals. See [Backtest vs live](pages/streaming.md#backtest_vs_live) for deliberate
 historical look-ahead differences and the remaining deferred calendar-boundary
 limitation. Capability checks do not change default batch computation, matching
 or margin.

@@ -24,5 +24,12 @@ int main() {
     assert(bind_deployment_identity(base, settings, changed_receipt, true, routes) != routed_identity);
     const auto premature_routing = bind_deployment_identity(base, settings, "", true, routes);
     assert(routed_identity != sha256_hex(premature_routing + ":capabilities-v1:" + receipt));
+    const std::string confirmed = "{\"orders\":[\"entry:market\"],\"version\":1}";
+    const auto confirmed_identity = sha256_hex(capabilities_identity + ":confirmed-bars-v1:" + confirmed);
+    assert(bind_deployment_identity(base, settings, receipt, false, routes, confirmed) == confirmed_identity);
+    assert(bind_deployment_identity(base, settings, receipt, true, routes, confirmed) == sha256_hex(Json::object({
+        {"deployment", Json::string(confirmed_identity)},
+        {"webhook_routes", Json::string(routes)}}).dump()));
+    assert(bind_deployment_identity(base, settings, receipt, false, routes, confirmed + " ") != confirmed_identity);
     std::cout << "deployment identity: receipt-only changes and routing-last order PASS\n";
 }

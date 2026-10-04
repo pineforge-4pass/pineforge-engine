@@ -497,6 +497,7 @@ inventories are pinned by `scripts/check_c_abi_runtime.py`:
 |---|---|
 | `strategy_create` / `strategy_free` | Allocate / release a strategy instance |
 | `strategy_capabilities_api_version` / `strategy_capabilities_receipt` | Optional immutable compiled execution requirements for stream admission |
+| `strategy_confirmed_bar_api_version` / `strategy_confirmed_bar_receipt` | Optional versioned metadata for proven confirmed-bar admission; legacy capability exports remain unchanged |
 | `run_backtest` / `run_backtest_full` | Run with auto-detected timeframe / with timeframe + magnifier configuration |
 | `report_free` | Free arrays inside a filled `pf_report_t` |
 | `strategy_closed_trade_entry_incarnation` | Per-run physical entry provenance of a closed trade |

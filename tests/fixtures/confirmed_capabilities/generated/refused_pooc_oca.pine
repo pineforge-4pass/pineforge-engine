@@ -1,0 +1,3 @@
+//@version=6
+strategy("unproven closing", process_orders_on_close=true)
+strategy.entry("L", strategy.long, stop=high, oca_name="group", oca_type=strategy.oca.cancel)

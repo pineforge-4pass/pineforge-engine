@@ -1,17 +1,19 @@
 # Generated capability join fixtures
 
-The `generated/` Pine sources and C++ libraries are snapshots from the paired
-codegen checkout. Regenerate and diff them after every codegen or fixture change;
+The `generated/` Pine sources and C++ libraries are frozen F08 snapshots from
+codegen `285ac035`, with only the original capability receipt. They intentionally
+exercise new-runner/old-library compatibility. Regenerate using that codegen
+revision and diff them after a fixture change;
 do not edit generated C++ by hand. The runner E2E builds these snapshots so its
 admission tests exercise codegen's actual receipt exports.
 
-On a build host, from the engine checkout, with the paired codegen checkout at
-`../codegen`, verify without changing the checkout. This compares tracked and
+On a build host, from the engine checkout, with the frozen codegen checkout at
+`../codegen-f08`, verify without changing the checkout. This compares tracked and
 untracked files alike:
 
 ```sh
 output=$(mktemp -d)
-PYTHONPATH=../codegen python3 tests/fixtures/strategy_capabilities/regenerate.py \
+PYTHONPATH=../codegen-f08 python3 tests/fixtures/strategy_capabilities/regenerate.py \
     --output "$output"
 diff -ru tests/fixtures/strategy_capabilities/generated "$output"
 rm -r "$output"

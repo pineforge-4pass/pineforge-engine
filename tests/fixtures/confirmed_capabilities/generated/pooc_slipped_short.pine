@@ -1,0 +1,8 @@
+//@version=6
+strategy("Slipped closing shorts", process_orders_on_close=true, slippage=15, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+fast = ta.sma(close, 5)
+slow = ta.sma(close, 20)
+if ta.crossover(fast, slow)
+    strategy.entry("L", strategy.long)
+if ta.crossunder(fast, slow)
+    strategy.entry("S", strategy.short)

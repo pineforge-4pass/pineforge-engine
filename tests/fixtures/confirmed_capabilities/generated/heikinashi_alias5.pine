@@ -1,0 +1,8 @@
+//@version=6
+strategy("F")
+symbol = ticker.heikinashi(syminfo.tickerid)
+h = request.security(symbol, "5", close)
+if ta.crossover(close, h)
+    strategy.entry("L", strategy.long)
+if ta.crossunder(close, h)
+    strategy.entry("S", strategy.short)
