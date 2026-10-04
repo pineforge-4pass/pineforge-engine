@@ -205,15 +205,15 @@ separate surfaces and are not implied by using this lifecycle.
 ## Known issues {#streaming_known_issues}
 
 - **`request.security` when the input and script timeframes are equal**
-  (v1.0.0, v1.0.1, v1.1.0). In a stream whose input timeframe equals its script
+  (v1.0.0, v1.0.1). In a stream whose input timeframe equals its script
   timeframe, a strategy that requests its own chart symbol with
   `request.security` (including `ticker.heikinashi` of the chart symbol and
   requests at `timeframe.period`) stops receiving new requested values after
   the first realtime bar, so its live results can differ from a backtest of
   the same bars. Batch backtests are not affected. Workaround: run the stream
   with a script timeframe larger than the input timeframe (for example input
-  `1`, script `5`), or use the batch backtest. **Fixed on main (#325); included in
-  the next release.** This change feeds each newly observed confirmed bar to the
+  `1`, script `5`), or use the batch backtest. **Fixed in 1.1.0 (#325).** This
+  change feeds each newly observed confirmed bar to the
   requested-series evaluator, including equal-timeframe and Heikin-Ashi requests.
 
 See [Lifecycle](@ref lifecycle) for handle ownership and

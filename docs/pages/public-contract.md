@@ -129,24 +129,30 @@ and `<pineforge/native_module.hpp>` (@ref native_engine).
   mismatched pairs to fail on the epoch-qualified
   `BacktestEngine::broker_state_hash` symbol (`scripts/ci_verify.py` requires
   their prepared receipts, so none of them skips there).
-- **State-hash values are stable within the epoch.** The recipe of each state
-  hash — the broker-state hash (`strategy_broker_state_hash`, the per-bar
-  `pf_report_t::broker_state_hash` rows), the stream fingerprint
-  (`strategy_stream_state_hash`) and the native continuation hash — belongs to
-  the epoch, so from 1.0.0 every 1.x engine folds one state to one value, and
-  a new recipe is a new epoch and a major release. Values from builds before
-  1.0.0 are not comparable. `scripts/check_aggregate_cpp_versions.py` and
-  `scripts/check_broker_state_hash_coverage.py` pin the domain tags
-  `pineforge-broker-state/v19` and `pineforge-source-adapter/v4` and the
-  stream fingerprint's version 19; witness rows pin values —
+- **State-hash recipes belong to the epoch.** The recipe of each state hash,
+  which fields it folds and how they are encoded, for the broker-state hash
+  (`strategy_broker_state_hash`, the per-bar `pf_report_t::broker_state_hash`
+  rows), the stream fingerprint (`strategy_stream_state_hash`) and the native
+  continuation hash, is the epoch's. A minor release may change a recipe only
+  by adding a hashed field, with the domain tags unchanged and only when the
+  added field changes no trade or report; its CHANGELOG discloses the addition
+  under *State hashes*, because state hashes from earlier releases of the epoch
+  will not match. A recipe change that removes, renames or re-encodes a hashed
+  field is a new epoch and a major release. Behaviour changes, fixes that
+  change values, trades or reports while the recipe stays the same, are not
+  recipe changes: they follow the normal release and parity rules. The first
+  uses of the addition rule are #315 and #316, in 1.1.0. Values from builds
+  before 1.0.0 are not comparable. `scripts/check_aggregate_cpp_versions.py`
+  and `scripts/check_broker_state_hash_coverage.py` pin the domain tags
+  `pineforge-broker-state/v19` and `pineforge-source-adapter/v4` and the stream
+  fingerprint's version 19; witness rows pin values —
   `test_native_host_hash_extension`, `test_native_lean_path`,
   `test_native_match_hash_witness`, `test_native_continuation_view`,
-  `test_adapter_quiet_bar`, `test_publication_witness` among them. Two
-  limits: the native continuation hash folds the resolved timezone's
-  resource digest, so a tzdata release that rewrites a zone moves the value of
-  a run in that zone (`test_native_report_truth` states why it pins no raw
-  continuation value), and no row pins a `strategy_stream_state_hash` value
-  directly.
+  `test_adapter_quiet_bar`, `test_publication_witness` among them. Two limits:
+  the native continuation hash folds the resolved timezone's resource digest,
+  so a tzdata release that rewrites a zone moves the value of a run in that
+  zone (`test_native_report_truth` states why it pins no raw continuation
+  value), and no row pins a `strategy_stream_state_hash` value directly.
 
 ## The 1.0 C-surface boundary
 
