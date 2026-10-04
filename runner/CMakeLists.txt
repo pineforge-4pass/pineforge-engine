@@ -90,6 +90,29 @@ if(PINEFORGE_BUILD_TESTS)
     add_test(NAME native_live_help COMMAND pineforge-live --help)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     if(PINEFORGE_BUILD_SOURCE_LAYER)
+        target_sources(native_live_example PRIVATE $<TARGET_OBJECTS:native_live_equivalence_observer>)
+        set(_pf_report_strategies $<TARGET_FILE:native_live_example>)
+        foreach(probe ta-rsi14-cross-50-01 order-entry-implicit-reversal-exit-01 order-tranche-partial-market-close-01)
+            add_library(live_report_${probe} MODULE
+                ${PROJECT_SOURCE_DIR}/corpus/validation/${probe}/generated.cpp
+                $<TARGET_OBJECTS:native_live_equivalence_observer>)
+            target_link_libraries(live_report_${probe} PRIVATE PineForge::pineforge)
+            if(APPLE)
+                target_link_options(live_report_${probe} PRIVATE "LINKER:-u,_pf_abi_version")
+            else()
+                target_link_options(live_report_${probe} PRIVATE "LINKER:-u,pf_abi_version")
+            endif()
+            target_compile_options(live_report_${probe} PRIVATE -ffp-contract=off)
+            set_target_properties(live_report_${probe} PROPERTIES PREFIX "")
+            list(APPEND _pf_report_strategies $<TARGET_FILE:live_report_${probe}>)
+        endforeach()
+        add_executable(native_live_report_oracle ${PROJECT_SOURCE_DIR}/tests/native_live_report_oracle.cpp)
+        target_link_libraries(native_live_report_oracle PRIVATE pineforge_live_startup ${CMAKE_DL_LIBS})
+        target_compile_options(native_live_report_oracle PRIVATE -ffp-contract=off)
+        add_test(NAME native_live_report_e2e COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/tests/native_live_report_e2e.py $<TARGET_FILE:pineforge-live>
+            $<TARGET_FILE:native_live_report_oracle> ${_pf_report_strategies})
+        set_tests_properties(native_live_report_e2e PROPERTIES TIMEOUT 120)
         add_test(NAME native_live_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_example>)

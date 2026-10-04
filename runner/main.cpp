@@ -6,6 +6,7 @@
 #include "store.hpp"
 #include "transport.hpp"
 #include "delivery.hpp"
+#include "report.hpp"
 #include <pineforge/pineforge.h>
 
 #include <algorithm>
@@ -47,7 +48,7 @@ struct Config {
     NativeConfigValues native;
     std::uint64_t from_input = 0, max_events = 0, max_attempts = 8;
     long poll_ms = 1000;
-    bool check = false, allow_http = false;
+    bool check = false, allow_http = false, report_jsonl = false;
 };
 
 void help() {
@@ -65,6 +66,7 @@ void help() {
                  "         --from-input N --max-events N --max-attempts 8\n"
                  "         --native-config FILE (strict native run specification)\n"
                  "         --check (one HTTP snapshot) --poll-ms 1000\n"
+                 "         --report-jsonl (mirror committed cumulative reports to stdout)\n"
                  "JSONL: {\"type\":\"tick\",\"ts\":60000,\"seq\":1,\"price\":100,\"qty\":1}\n"
                  "       "
                  "{\"type\":\"bar\",\"bar\":{\"ts_open\":60000,\"o\":100,\"h\":102,\"l\":99,\"c\":"
@@ -75,6 +77,7 @@ void help() {
                  "the zero-based start of a resumed tail. HTTP polls use full snapshots.\n"
                  "Usage: pineforge-live actions --ledger L --after N [--follow] [--deployment D]\n"
                  "       pineforge-live status --ledger L [--deployment D]\n"
+                 "       pineforge-live report --ledger L [--deployment D] [--at-input N]\n"
                  "       pineforge-live redeliver --ledger L --deployment D --target T [--from N] [--failed-only]\n"
                  "Redeliver is offline: stop the runner first; it resumes from its ledger.\n";
 }
@@ -112,6 +115,10 @@ Config args(int argc, char **argv) {
         if (a != "--input" && a != "--override" && a != "--syminfo" && !seen.insert(a).second)
             throw std::runtime_error("duplicate option: " + a);
         c.explicit_flags.insert(a);
+        if (a == "--report-jsonl") {
+            c.report_jsonl = true;
+            continue;
+        }
         if (a == "--check") {
             c.check = true;
             continue;
@@ -298,6 +305,8 @@ class Strategy {
     decltype(&strategy_stream_order_action_get) get = nullptr;
     decltype(&strategy_stream_order_actions_clear) clear = nullptr;
     decltype(&strategy_stream_state_hash) hash = nullptr;
+    decltype(&strategy_stream_fill_report) fill_report = nullptr;
+    decltype(&report_free) free_report = nullptr;
     int contract = 1;
     bool has_configure_native = false;
     Strategy() = default;
@@ -331,6 +340,10 @@ class Strategy {
             get = symbol<decltype(get)>("strategy_stream_order_action_get");
             clear = symbol<decltype(clear)>("strategy_stream_order_actions_clear");
             hash = symbol<decltype(hash)>("strategy_stream_state_hash");
+            fill_report = symbol<decltype(fill_report)>("strategy_stream_fill_report");
+            free_report = optional_symbol<decltype(free_report)>("report_free");
+            if (!free_report)
+                free_report = symbol<decltype(free_report)>("strategy_native_report_free_v1");
             begin_ = symbol<decltype(&strategy_stream_begin)>("strategy_stream_begin");
             auto capabilities_version = optional_symbol<decltype(&strategy_capabilities_api_version)>(
                 "strategy_capabilities_api_version");
@@ -588,6 +601,28 @@ Json real(double value) {
     s << std::setprecision(17) << value;
     return Json::number(s.str());
 }
+std::string cumulative_report(Strategy& strategy, const std::string& deployment,
+                              std::uint64_t cursor) {
+    pf_report_t report{};
+    struct ReleaseReport {
+        Strategy& strategy;
+        pf_report_t& report;
+        ~ReleaseReport() { strategy.free_report(&report); }
+    } release{strategy, report};
+    strategy.check(strategy.fill_report(strategy.state, &report));
+    auto fields = native_report_json(report);
+    Json closed;
+    closed.kind = Json::Kind::Array;
+    for (int index = 0; index < report.trades_len; ++index)
+        if (!report.trades[index].open_at_end) closed.items.push_back(report_trade(report.trades[index]));
+    const auto& curve = fields.at("equity_curve").items;
+    return Json::object({{"schema_version", Json::string("pineforge-native-report/v1")},
+        {"deployment", Json::string(deployment)}, {"input_cursor", num(cursor)},
+        {"state_hash", Json::string(std::to_string(strategy.hash(strategy.state)))},
+        {"equity", curve.empty() ? Json{} : curve.back().at("equity")},
+        {"open_profit", curve.empty() ? Json{} : curve.back().at("open_profit")},
+        {"closed_trades", std::move(closed)}, {"report", std::move(fields)}}).dump();
+}
 std::vector<Event> actions(Strategy &s, const Config &c, const std::string &deployment) {
     std::vector<Event> out;
     int n = s.count(s.state);
@@ -773,6 +808,7 @@ int run(Config c) {
         require_native_warmup(c.native, warmup);
     Ledger ledger(c.ledger, deployment);
     ledger.bind_routing(c.routing.stored_document());
+    ledger.verify_report(0, cumulative_report(strategy, deployment, 0));
     Cursor cursor;
     auto recorded = ledger.input_count();
     for (std::uint64_t i = 0; i < recorded; ++i) {
@@ -790,6 +826,7 @@ int run(Config c) {
             if (events[k].id != row->events[k].id || events[k].payload != row->events[k].payload ||
                 events[k].target_id != row->events[k].target_id || events[k].delivery_id != row->events[k].delivery_id)
                 throw std::runtime_error("native replay order-action mismatch");
+        ledger.verify_report(i + 1, cumulative_report(strategy, deployment, i + 1));
         strategy.clear(strategy.state);
     }
     if (c.from_input > recorded)
@@ -813,9 +850,11 @@ int run(Config c) {
             // interruption and delivery begin only after every event commits.
             apply_record(strategy, c, cursor, frame);
             auto events = actions(strategy, c, deployment);
-            ledger.commit_input(index, canonical, strategy.hash(strategy.state), events);
+            auto report = cumulative_report(strategy, deployment, index + 1);
+            ledger.commit_input(index, canonical, strategy.hash(strategy.state), events, report);
             strategy.clear(strategy.state);
             ++processed;
+            if (c.report_jsonl) std::cout << report << '\n' << std::flush;
         }
         ++index;
     };
@@ -951,6 +990,7 @@ int ledger_command(int argc, char** argv) {
     const std::string command = argv[1];
     std::string path, target, deployment;
     std::uint64_t after = 0, from = 1;
+    std::optional<std::uint64_t> at_input;
     bool follow = false, failed_only = false;
     std::set<std::string> seen;
     for (int index = 2; index < argc; ++index) {
@@ -963,6 +1003,7 @@ int ledger_command(int argc, char** argv) {
         if (option == "--ledger") path = value;
         else if (option == "--deployment") deployment = value;
         else if (command == "actions" && option == "--after") after = unsigned_arg(value);
+        else if (command == "report" && option == "--at-input") at_input = unsigned_arg(value);
         else if (command == "redeliver" && option == "--from") from = unsigned_arg(value);
         else if (command == "redeliver" && option == "--target") target = value;
         else throw std::runtime_error("unknown option: " + option);
@@ -973,6 +1014,10 @@ int ledger_command(int argc, char** argv) {
     LedgerView view(path);
     if (!deployment.empty() && deployment != view.identity())
         throw std::runtime_error("ledger deployment identity mismatch");
+    if (command == "report") {
+        std::cout << view.report_json(at_input) << '\n';
+        return 0;
+    }
     if (command == "status") {
         std::cout << view.status_json() << '\n';
         return 0;
@@ -1033,7 +1078,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         const std::string command = argv[1];
-        if (command == "actions" || command == "status" || command == "redeliver")
+        if (command == "actions" || command == "status" || command == "redeliver" || command == "report")
             return ledger_command(argc, argv);
         return run(args(argc, argv));
     } catch (const std::exception &e) {

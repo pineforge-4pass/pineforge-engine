@@ -25,6 +25,7 @@ struct RecordedInput {
     std::uint64_t index = 0; // Input ordering, beginning at zero.
     std::string canonical_json;
     std::string state_hash; // Decimal uint64; SQLite signed integers are insufficient.
+    std::string report_json;
     std::vector<StoredEvent> events;
 };
 
@@ -56,7 +57,9 @@ public:
     // A repeated index is accepted only if input, state and ordered events all
     // match the existing transaction byte for byte. No new identity is adopted.
     void commit_input(std::uint64_t index, const std::string& canonical_json,
-                      std::uint64_t state_hash, const std::vector<Event>& events);
+                      std::uint64_t state_hash, const std::vector<Event>& events,
+                      const std::string& report_json = {});
+    void verify_report(std::uint64_t cursor, const std::string& report_json);
 
 #ifdef PINEFORGE_LIVE_LEGACY_TEST_API
     std::optional<StoredEvent> pending_event() const;
@@ -94,6 +97,7 @@ public:
     std::vector<StoredEvent> redelivery_events(const std::string& target,
                                               std::uint64_t from, bool failed_only) const;
     std::string status_json() const;
+    std::string report_json(std::optional<std::uint64_t> cursor = std::nullopt) const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

@@ -34,6 +34,15 @@ version number follows semantic versioning over the surfaces the
   Regenerate and relink with the paired next-release engine/codegen to obtain the
   receipt. Default batch computation, matching and margin are unchanged.
 
+### Native cumulative reports
+
+- **Native cumulative reports:** `pineforge-live report --ledger L
+  [--deployment D] [--at-input N]` exports immutable, versioned cumulative
+  engine reports. `run --report-jsonl` mirrors new commits to stdout. Input,
+  actions, state hash and report are committed atomically and replay-verified;
+  reports include every ABI report field, equity, open profit and closed trades.
+  The engine library and batch behavior are unchanged.
+
 ## 1.1.0 — 2026-10-04
 
 A minor release: it adds to the C ABI. `<pineforge/pineforge.h>` declares six

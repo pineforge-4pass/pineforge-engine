@@ -73,6 +73,29 @@ std::string scalar_text(const std::string& path, const char* sql) {
     return result;
 }
 
+void cumulative_reports() {
+    TempDir temp;
+    const auto path = temp.file("report.sqlite");
+    {
+        Ledger ledger(path, "reports");
+        ledger.verify_report(0, "{\"input_cursor\":0}");
+        ledger.commit_input(0, "{}", 1, {{"report-action", "{}"}}, "{\"input_cursor\":1}");
+        CHECK(ledger.input(0)->report_json == "{\"input_cursor\":1}");
+        CHECK(throws([&] { ledger.verify_report(1, "wrong"); }));
+        CHECK(throws([&] { ledger.commit_input(0, "{}", 1, {{"report-action", "{}"}}, "wrong"); }));
+        execute_sql(path, "CREATE TRIGGER reject_report BEFORE INSERT ON report_snapshots WHEN NEW.input_cursor=2 BEGIN SELECT RAISE(ABORT,'test'); END;");
+        CHECK(throws([&] { ledger.commit_input(1, "{}", 2, {{"rolled-back", "{}"}}, "report"); }));
+        CHECK(ledger.input_count() == 1);
+        CHECK(!ledger.input(1));
+        LedgerView view(path);
+        CHECK(view.report_json() == "{\"input_cursor\":1}");
+        CHECK(view.report_json(0) == "{\"input_cursor\":0}");
+        CHECK(view.actions_after(0).size() == 1);
+    }
+    Ledger resumed(path, "reports");
+    resumed.verify_report(1, "{\"input_cursor\":1}");
+}
+
 void ledger_transactions() {
     TempDir temp;
     const auto path = temp.file("orders.sqlite");
@@ -352,6 +375,7 @@ int main(int argc, char** argv) {
         crash_writer(argv[2]);
     try {
         ledger_transactions();
+        cumulative_reports();
         crash_recovery(argv[0]);
         native_http();
     } catch (const std::exception& e) {

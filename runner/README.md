@@ -27,6 +27,48 @@ exchange or ingests venue fills. The consumer owns venue execution,
 reconciliation and risk. The outbound webhook is alert-style delivery of
 computed order actions, not an exchange connection.
 
+## Cumulative reports
+
+```sh
+pineforge-live report --ledger orders.sqlite3
+pineforge-live report --ledger orders.sqlite3 --deployment DEPLOYMENT --at-input 20
+```
+
+`report` exports canonical `pineforge-native-report/v1` JSON. `--at-input N`
+is a committed-message cursor (the number of messages, not the zero-based input
+index, action sequence or bar count); 0 denotes warmup. Omit it for the latest
+committed report. An unavailable cursor or mismatched optional deployment exits
+1. Reading is safe while a runner owns the ledger. `run --report-jsonl` mirrors
+each newly committed report to stdout, followed by the existing operational run
+summary; replayed source-prefix messages are not mirrored again.
+
+The input, engine hash, actions and cumulative report commit in one SQLite
+transaction. Recovery replays and byte-compares every report before delivery.
+Older ledgers acquire reports by deterministic replay; resume them with `run`
+before export. Reports are immutable and never change with webhook timing.
+The deployment already binds strategy-library bytes, warmup bytes, effective
+settings, symbol units, broker configuration and routing. Operational export
+flags do not change it.
+
+Every scalar and array of `pf_report_t` is exported under `report`, including
+metrics, diagnostics, traces, equity points and broker hashes. Finite binary64
+numbers use 17 significant digits; undefined values are the strings `NaN`,
+`Infinity` or `-Infinity`, not omitted fields. `equity` and `open_profit` are
+the last cumulative equity point (null only when there are no points).
+`closed_trades` contains actual closed rows; `report.trades` also includes the
+engine's hypothetical range-end rows (`open_at_end=1`). Those rows and their
+range-end fees match a batch report at the same cursor; they never enqueue
+order actions or close the running position.
+
+Confirmed-bar qualification compares every report field and physical action
+against `run_backtest_full` with identical warmup, complete script buckets,
+settings and symbol units. Tick tapes need the same ticks for replay equality;
+tick-versus-OHLC fill paths are not interchangeable. An incomplete aggregated
+script bucket is still provisional live, whereas a finite batch seals its
+trailing partial bucket; compare at confirmed script-bucket boundaries. The
+existing [stream security limitation](../docs/pages/streaming.md) still applies;
+no report field is silently excluded from the confirmed-bar E2E comparison.
+
 ## Build
 
 ```sh
