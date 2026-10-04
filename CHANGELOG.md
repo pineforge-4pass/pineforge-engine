@@ -31,6 +31,19 @@ version number follows semantic versioning over the surfaces the
   unchanged. The streaming guide gains a "Backtest vs live" section listing what a
   backtest can see that a live run cannot.
 
+- **Harness symbol feeds:** `docker/run_json.py --symbol-feeds` (`PINEFORGE_SYMBOL_FEEDS`)
+  installs other symbols' bars for `request.security` on another symbol: a JSON
+  index keyed by the exact symbol string the script passes and by timeframe, each
+  feed an OHLCV CSV plus the symbol's catalog `syminfo`, through
+  `strategy_set_symbol_facts` / `strategy_set_symbol_feed` (engine and codegen
+  1.0.0 and later). One feed per requested timeframe: nothing aggregates another
+  symbol's bars, so a `1` feed serves neither a `240` nor a `D` request. Unset
+  changes nothing; an index or feed it cannot install fails
+  the run (one `{"engine":"pineforge","error":...}` line, harness exit 1,
+  entrypoint exit 4). What was installed is recorded as
+  `applied_runtime.symbol_feeds`, so such a run has its own fingerprint digest.
+  The engine library is unchanged.
+
 - **Native runner routing and delivery:** webhooks are optional; `--webhook-routes`
   adds first-match per-action targets and payload `pineforge-native-order-action/v2`.
   New `actions`, `status` and offline `redeliver` commands expose the journal and
