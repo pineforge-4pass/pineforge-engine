@@ -20,7 +20,7 @@ a **kernel** that matches triggers, prices fills, books lots and settles, and a
 it. A separate project transpiles PineScript into C++ that attaches the
 adapter. The engine's value is that its output is *byte-reproducible* and graded
 *trade for trade against TradingView* on a fixed population (<!-- pf:scoreboard.population|int -->8,006<!-- /pf --> probes at
-the current baseline; <!-- pf:scoreboard.excellent|int -->7,951<!-- /pf --> of the <!-- pf:scoreboard.graded|int -->7,989<!-- /pf --> graded are excellent, <!-- pf:scoreboard.strong|int -->38<!-- /pf --> strong), so
+the current baseline; <!-- pf:scoreboard.excellent|int -->7,970<!-- /pf --> of the <!-- pf:scoreboard.graded|int -->7,989<!-- /pf --> graded are excellent, <!-- pf:scoreboard.strong|int -->19<!-- /pf --> strong), so
 almost every rule below exists to keep a change from quietly moving a byte.
 
 ## Repo map
