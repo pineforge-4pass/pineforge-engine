@@ -3390,10 +3390,14 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     // whatever the askable origins say, so it is tested before their search:
     // on a chart that gathers input bars K5 keeps every entry row of the run,
     // and this walk visits each of them at every bar open.
+    auto askable_cursor = askable_origins.begin();
     placement_.visit_rows([&](std::uint64_t incarnation, const PlacementSnapshot& value) {
         const bool cycle_held = held_by_cycle(value);
         if (!cycle_held && pinned_by_itself(value)) return false;
-        if (contains(askable_origins, incarnation)) return false;
+        while (askable_cursor != askable_origins.end() && *askable_cursor < incarnation)
+            ++askable_cursor;
+        if (askable_cursor != askable_origins.end() && *askable_cursor == incarnation)
+            return false;
         if (cycle_held) {
             held.push_back({incarnation, &value});
             return false;
@@ -3617,15 +3621,20 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     // The pre-pass stopped at the first row nothing pins: the held legs are
     // gathered here, beside the candidates they are part of.
     if (unpinned) held.clear();
+    auto candidate_origin_cursor = askable_origins.begin();
     placement_.visit_rows([&](std::uint64_t incarnation, const PlacementSnapshot& value) {
         if (value.legs.target().incarnation == 0 || value.placement_cycle != cycle
             || !exit_family(value.family) || value.from_entry.empty()
             || withdrawn(value.legs)) {
             return false;
         }
-        if (unpinned && !contains(askable_origins, incarnation)
-            && !contains(askable_origins, value.bracket_origin.incarnation)) {
-            held.push_back({incarnation, &value});
+        if (unpinned) {
+            while (candidate_origin_cursor != askable_origins.end()
+                   && *candidate_origin_cursor < incarnation) ++candidate_origin_cursor;
+            const bool askable = candidate_origin_cursor != askable_origins.end()
+                && *candidate_origin_cursor == incarnation;
+            if (!askable && !contains(askable_origins, value.bracket_origin.incarnation))
+                held.push_back({incarnation, &value});
         }
         candidates.emplace_back(incarnation, &value);
         candidate_names.push_back(incarnation);
@@ -3661,12 +3670,14 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     }
 
     auto& doomed = sweep.doomed;
+    auto root_cursor = roots.begin();
     placement_.visit_rows([&](std::uint64_t incarnation, const PlacementSnapshot& value) {
         // K1 (but for the legs it releases), K4, K5; then the roots. A row
         // either keeps is kept, so the cheaper test comes first.
         if (pinned_by_itself(value) && (released.empty() || !contains(released, incarnation)))
             return false;
-        if (contains(roots, incarnation)) return false;
+        while (root_cursor != roots.end() && *root_cursor < incarnation) ++root_cursor;
+        if (root_cursor != roots.end() && *root_cursor == incarnation) return false;
         if (value.placement_cycle == cycle) {
             // K2
             if (value.projection_predecessor != 0
@@ -24829,4 +24840,3 @@ void PineExecutionAdapter::order_same_point_entries() {
 }
 
 } // namespace pineforge::source
-
