@@ -2532,6 +2532,17 @@ if(TARGET test_adapter_live_state_scaling AND NOT CMAKE_BUILD_TYPE STREQUAL "Rel
     set_tests_properties(test_adapter_live_state_scaling PROPERTIES
         ENVIRONMENT "PINEFORGE_V19E_SCALING_GATE=0")
 endif()
+# The lookup-index and live-state scaling rows run alone in Release, where
+# their ratios gate (the blocks above turn the gate off elsewhere). Under a
+# parallel ctest, other rows load the box and a best-of-rounds ratio can
+# favour the short leg: the lookup-index row once read 6.15 against its 5.0
+# bound under load, and 4.08 when run by itself. The other rows built on
+# tests/ratio_timing.hpp stay parallel.
+foreach(_pf_ratio_test test_adapter_lookup_index_scaling test_adapter_live_state_scaling)
+    if(TARGET ${_pf_ratio_test} AND CMAKE_BUILD_TYPE STREQUAL "Release")
+        set_tests_properties(${_pf_ratio_test} PROPERTIES RUN_SERIAL TRUE)
+    endif()
+endforeach()
 
 
 # Contract §3.4 / deferred-ANY pin witnesses retain their historical CTest

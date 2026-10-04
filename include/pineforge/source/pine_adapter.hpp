@@ -576,6 +576,24 @@ public:
         const auto next = next_after(incarnation);
         return const_iterator(this, next.first, next.second);
     }
+    // Every row in incarnation order -- the order begin() walks: the older
+    // rows, then the window's -- read straight off the storage rather than
+    // re-found at every step. `visit(incarnation, row)` returns true to stop.
+    // For a whole-table read: no row is inserted or erased while it runs.
+    template<class Visit>
+    [[gnu::always_inline]] void visit_rows(Visit&& visit) const {
+        for (const auto& entry : old_) {
+            if (visit(entry.first, static_cast<const PlacementSnapshot&>(*entry.second))) return;
+        }
+        for (std::size_t index = head_; index < window_.size(); ++index) {
+            const auto& slot = window_[index];
+            if (slot
+                && visit(base_ + static_cast<std::uint64_t>(index - head_),
+                         static_cast<const PlacementSnapshot&>(*slot))) {
+                return;
+            }
+        }
+    }
 
 #if PINEFORGE_PLACEMENT_AUDIT
     iterator find(std::uint64_t incarnation, unsigned line = __builtin_LINE()) noexcept {
@@ -1884,23 +1902,30 @@ private:
     bool submit_tv_money_long_margin_call(const Bar&, const NativeDecisionContext&,
                                           int* fired_waypoint = nullptr);
     void fold_source_money();
+    void fold_source_money_through(const PineStrategyHost& pine, std::uint64_t count);
     bool gain_loss_regime() const;
+    bool gain_loss_run_regime() const;
     double gain_loss_signal_equity(double mark) const;
     double gain_loss_mirror_equity(double mark) const;
     std::optional<double> pooc_fee_units(const PineSizingSnapshot&) const;
     double tv_pooc_fee_grossed_unit(double price) const;
     bool unified_admission_scope(const PlacementSnapshot&, bool market_or_stop,
                                  double signed_units, double units) const;
+    bool unified_admission_terms(const PlacementSnapshot&, const NativeExecutionTermsFacts&,
+                                 bool market_or_stop, bool opposite,
+                                 native_order::ExecutionTerms& result, bool& admitted) const;
     bool unified_fill_admits(const PlacementSnapshot&, double units, double quote) const;
     void record_close_first(bool whole_position);
     void credit_pyramiding_record(const SourceId& id, std::uint64_t incarnation, double units);
     void book_pyramiding_records(const SourceId& id, std::uint64_t armed_for, double units);
     std::optional<std::size_t> open_ledger_records() const;
+    std::optional<std::size_t> held_ledger_records() const;
     std::uint64_t entry_incarnation_of(const SourceId& from_entry) const;
     bool exit_tombstoned(const SourceId& exit_id, const SourceId& from_entry) const;
     bool unified_placement_book_clear() const;
     bool pinned_lot_grid() const;
     bool slipped_long_margin_scope() const;
+    bool slipped_long_book_scope() const;
     double slipped_long_margin_units(double quote) const;
     bool slipped_long_unit_shortfall(double quote) const;
     bool close_all_at_next_point(
@@ -2513,6 +2538,28 @@ private:
         }
     };
     RetiredRowScratch retired_row_scratch_;
+    // The configuration's part of the margin and admission scopes, which the
+    // per-bar path asks several times a bar: each a conjunction of reads of
+    // config_ and staged_ alone, formed again whenever either is set
+    // (set_configuration, set_staged_configuration), the only way either
+    // changes. Not state: a function of config_ and staged_. A run outside a
+    // scope answers it here without the call; inside, the scope's own tests
+    // run as before.
+    struct StagedScopeFacts {
+        bool positive_grid = false;     // a lot step above 0
+        bool unit_grid = false;         // a lot step in (0, 1]
+        bool unit_point_money = false;  // point value 1, no FX series
+        bool unit_money = false;        // and an account FX rate of 1
+        bool mintick = false;           // a finite positive mintick
+    };
+    StagedScopeFacts staged_scopes_{};
+    bool lot_grid_pinned_ = false;          // pinned_lot_grid()
+    bool gain_loss_configured_ = false;     // gain_loss_regime()'s configuration
+    bool slipped_long_configured_ = false;  // slipped_long_margin_scope()'s
+    bool unified_configured_ = false;       // unified_admission_scope()'s
+    bool ledger_records_configured_ = false;  // the pyramiding records'
+    bool pooc_fee_configured_ = false;      // pooc_fee_units()'s
+    void refresh_configuration_scopes(const PineStrategyConfig& config) noexcept;
     // R5 lane W6: after a source evaluation, queue this bar's marketable
     // flat entries in TradingView's order at their shared fill point.
     void order_same_point_entries();
