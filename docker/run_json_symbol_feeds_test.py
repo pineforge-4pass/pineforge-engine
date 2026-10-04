@@ -185,7 +185,6 @@ GOOD = csv_text(bars(T0, H4, 2))
     ({"E": {"feeds": {"240": "nope.csv"}}}, {}, "nope.csv"),
     ({"E": {"feeds": {"240": "f.csv"}}}, {"f.csv": "timestamp,open,high,low\n1,2,3,4\n"},
      "no column close"),
-    ({"E": {"feeds": {"240": "f.csv"}}}, {"f.csv": csv_text([])}, "no bars"),
     ({"E": {"feeds": {"240": "f.csv"}}}, {"f.csv": csv_text([(T0, "x", 1, 1, 1, 1)])},
      "line 2: not a number"),
     ({"E": {"feeds": {"240": "f.csv"}}}, {"f.csv": csv_text([(T0, "inf", 1, 1, 1, 1)])},
@@ -206,7 +205,7 @@ GOOD = csv_text(bars(T0, H4, 2))
     ({"E": {"syminfo": {"session": 5}, "feeds": {"240": "f.csv"}}}, {"f.csv": GOOD},
      "syminfo.session must be a non-empty string"),
 ], ids=["4h", "60m", "D-and-1D", "unknown-entry-key", "feeds-list", "empty-symbol",
-        "control-char", "empty-path", "missing-file", "missing-column", "no-bars", "not-a-number",
+        "control-char", "empty-path", "missing-file", "missing-column", "not-a-number",
         "infinite-price", "negative-volume", "decreasing", "wrong-timeframe", "mintick-zero",
         "mintick-string", "syminfo-list", "session-number"])
 def test_bad_index_or_feed_is_refused_by_name(tmp_path, symbols, files, message):
@@ -248,7 +247,7 @@ def test_an_engine_refusal_names_the_feed_and_the_engine_error(tmp_path):
                    {"strategy_set_symbol_feed": -1, "strategy_get_last_error": b"bars must increase"})
     with pytest.raises(run_json.SymbolFeedsError) as e:
         run_json.install_symbol_feeds(lib, ST, run_json.load_symbol_feeds(eth_index(tmp_path)))
-    assert str(e.value) == ("the engine refused the feed BINANCE:ETHUSDT@240: "
+    assert str(e.value) == ("--symbol-feeds: the engine refused the feed BINANCE:ETHUSDT@240: "
                             "bars must increase")
 
 
@@ -344,7 +343,80 @@ def test_main_without_the_setters_fails_and_frees_the_state(harness, tmp_path):
     lib = fake_lib(())
     status, out = harness(lib, "--symbol-feeds", str(eth_index(tmp_path)))
     assert status == 1
-    assert json.loads(out)["error"].startswith("the strategy library has no "
+    assert json.loads(out)["error"].startswith("--symbol-feeds: the strategy library has no "
                                                "strategy_set_symbol_facts, strategy_set_symbol_feed")
     assert count(lib, "strategy_create") == count(lib, "strategy_free") == 1
     assert count(lib, "run_backtest_full") == 0
+
+
+def test_a_header_only_feed_is_installed_without_bars(tmp_path):
+    # The engine's contract: a feed without bars, whose requests read na.
+    p = index(tmp_path, {"X:Y": {"feeds": {"60": "f.csv"}}}, {"f.csv": csv_text([])})
+    lib = fake_lib()
+    symbols = run_json.load_symbol_feeds(p)
+    run_json.install_symbol_feeds(lib, ST, symbols)
+    assert [(c[2], c[3], c[6]) for c in lib.calls if c[0] == "strategy_set_symbol_feed"] \
+        == [(b"X:Y", b"60", 0)]
+    record = run_json.symbol_feeds_record(symbols)["symbols"]["X:Y"]["feeds"]["60"]
+    assert record["bars"] == 0 and "first_ts" not in record
+
+
+def test_an_empty_time_close_cell_falls_back_to_open_plus_timeframe(tmp_path):
+    rows = [(T0, 1, 2, 0.5, 1.5, 3, ""), (T0 + H4, 1, 2, 0.5, 1.5, 3, T0 + H4 + 3600 * 1000)]
+    p = index(tmp_path, {"X:Y": {"feeds": {"240": "f.csv"}}},
+              {"f.csv": csv_text(rows, "timestamp,open,high,low,close,volume,time_close")})
+    lib = fake_lib()
+    run_json.install_symbol_feeds(lib, ST, run_json.load_symbol_feeds(p))
+    assert feed_calls(lib)[0][4] == [T0 + H4, T0 + H4 + 3600 * 1000]
+
+
+@pytest.mark.parametrize("opens,closes", [
+    ([1764547200000], [1767225600000]),  # 2025-12-01 -> 2026-01-01
+    ([1769817600000], [1772236800000]),  # 2026-01-31 -> 2026-02-28 (day clamped)
+    ([1767225600123], [1769904000123]),  # milliseconds kept
+], ids=["dec-jan", "clamp", "ms"])
+def test_month_close_edges(tmp_path, opens, closes):
+    p = index(tmp_path, {"X:Y": {"feeds": {"1M": "f.csv"}}},
+              {"f.csv": csv_text([(t, 1, 2, 0.5, 1.5, 3) for t in opens])})
+    lib = fake_lib()
+    run_json.install_symbol_feeds(lib, ST, run_json.load_symbol_feeds(p))
+    assert feed_calls(lib)[0][4] == closes
+
+
+def test_a_utf8_bom_is_read(tmp_path):
+    p = index(tmp_path, {"X:Y": {"feeds": {"240": "f.csv"}}})
+    (tmp_path / "f.csv").write_bytes(b"\xef\xbb\xbf" + GOOD.encode())
+    assert run_json.load_symbol_feeds(p)[0]["feeds"][0]["n"] == 2
+
+
+def test_line_numbers_count_blank_lines(tmp_path):
+    text = csv_text([(T0, 1, 2, 0.5, 1.5, 3)]) + "\n" + f"{T0 + H4},x,2,0.5,1.5,3\n"
+    with pytest.raises(run_json.SymbolFeedsError, match="line 4: not a number"):
+        run_json.load_symbol_feeds(index(tmp_path, {"X:Y": {"feeds": {"240": "f.csv"}}},
+                                         {"f.csv": text}))
+
+
+@pytest.mark.parametrize("tf,make,message", [
+    ("240", lambda p: p.write_bytes(b"timestamp,open,high,low,close,volume\n1,caf\xe9,1,1,1,1\n"),
+     "not a UTF-8 CSV"),
+    ("240", lambda p: p.write_text(csv_text([(2**53, 1, 1, 1, 1, 1)])), "within +-9007199254740991"),
+    # Microsecond stamps read as milliseconds: a monthly close beyond the calendar.
+    ("1M", lambda p: p.write_text(csv_text([(1759536000000000, 1, 1, 1, 1, 1)])), "within"),
+], ids=["cp1252", "beyond-2^53", "microseconds-month"])
+def test_undecodable_or_out_of_range_feeds_are_refused(tmp_path, tf, make, message):
+    make(tmp_path / "f.csv")
+    with pytest.raises(run_json.SymbolFeedsError) as e:
+        run_json.load_symbol_feeds(index(tmp_path, {"X:Y": {"feeds": {tf: "f.csv"}}}))
+    assert message in str(e.value)
+
+
+@pytest.mark.parametrize("raw,message", [
+    ('{"symbols": {"\\ud800": {"feeds": {}}}}', "a symbol must be a non-empty string"),
+    ('{"symbols": {"E": {"syminfo": {"mintick": 1' + "0" * 400 + '}, "feeds": {}}}}',
+     "syminfo.mintick must be a positive finite number"),
+    ("[" * 100000 + "]" * 100000, "is not JSON"),
+], ids=["lone-surrogate", "huge-mintick", "deep-nesting"])
+def test_index_values_that_would_raise_are_refused(tmp_path, raw, message):
+    with pytest.raises(run_json.SymbolFeedsError) as e:
+        run_json.load_symbol_feeds(index(tmp_path, raw))
+    assert message in str(e.value)

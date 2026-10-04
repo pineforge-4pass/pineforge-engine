@@ -955,6 +955,7 @@ _SYMBOL_FEED_RECORD = struct.Struct("<5dqq")
 _SYMBOL_TF_RE = re.compile(r"(?:[1-9][0-9]{0,4}|[1-9][0-9]{0,3}[DWMS])")
 _SYMBOL_FEEDS_MAX = 256
 _SYMBOL_KEY_MAX = 256
+_SYMBOL_STAMP_MAX = 2**53 - 1  # unix ms; the record is fingerprinted as a JSON number
 # Catalog syminfo key -> the strategy_set_symbol_facts field it sets.
 _SYMBOL_FACT_KEYS = (("tickerid", "canonical"), ("type", "type"), ("timezone", "timezone"),
                      ("session", "session"), ("currency", "currency"), ("mintick", "mintick"))
@@ -971,6 +972,11 @@ def _shown(value) -> str:
 
 
 def _symbol_text(value, what: str) -> str:
+    try:
+        if isinstance(value, str):
+            value.encode("utf-8")
+    except UnicodeEncodeError:
+        value = None
     if (not isinstance(value, str) or not value or len(value) > _SYMBOL_KEY_MAX
             or any(ord(ch) < 0x20 for ch in value)):
         raise SymbolFeedsError(
@@ -1002,11 +1008,14 @@ def _bar_close_ms(open_ms: int, tf: str) -> int:
         return open_ms + n * {"": 60_000, "S": 1_000, "D": 86_400_000,
                               "W": 604_800_000}[unit]
     secs, ms = divmod(open_ms, 1000)
-    t = datetime.fromtimestamp(secs, tz=timezone.utc)
-    month = t.month - 1 + n
-    year, month = t.year + month // 12, month % 12 + 1
-    day = min(t.day, calendar.monthrange(year, month)[1])
-    return int(t.replace(year=year, month=month, day=day).timestamp()) * 1000 + ms
+    try:
+        t = datetime.fromtimestamp(secs, tz=timezone.utc)
+        month = t.month - 1 + n
+        year, month = t.year + month // 12, month % 12 + 1
+        day = min(t.day, calendar.monthrange(year, month)[1])
+        return int(t.replace(year=year, month=month, day=day).timestamp()) * 1000 + ms
+    except (ValueError, OverflowError, OSError):
+        return None  # out of the calendar's range: refused by the caller
 
 
 def _load_symbol_feed(path: Path, symbol: str, tf: str) -> dict:
@@ -1015,54 +1024,64 @@ def _load_symbol_feed(path: Path, symbol: str, tf: str) -> dict:
     NaN when the symbol publishes none) and optional time_close (unix ms); other
     columns are ignored."""
     where = f"--symbol-feeds: feed {symbol}@{tf} ({path})"
+    rows, lines = [], []
     try:
-        with path.open(newline="", encoding="utf-8") as f:
+        with path.open(newline="", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
             columns = reader.fieldnames or []
             missing = [c for c in ("timestamp", "open", "high", "low", "close")
                        if c not in columns]
             if missing:
                 raise SymbolFeedsError(f"{where}: no column {', '.join(missing)}")
-            rows = []
-            for line, row in enumerate(reader, start=2):
+            for row in reader:
+                line = reader.line_num
                 try:
                     ts = int(row["timestamp"])
                     o, h, l, c = (float(row[k]) for k in ("open", "high", "low", "close"))
                     vol = (row.get("volume") or "").strip()
                     v = float(vol) if vol else math.nan
-                    close = int(row["time_close"]) if "time_close" in columns else None
+                    cell = (row.get("time_close") or "").strip()
+                    close = int(cell) if cell else None  # empty: open + timeframe
                 except (TypeError, ValueError):
                     raise SymbolFeedsError(f"{where} line {line}: not a number") from None
                 if not all(math.isfinite(x) for x in (o, h, l, c)) or v < 0 or math.isinf(v):
                     raise SymbolFeedsError(
                         f"{where} line {line}: prices must be finite and volume "
                         "nonnegative or empty")
+                if close is None:
+                    close = _bar_close_ms(ts, tf)
+                if not all(x is not None and abs(x) <= _SYMBOL_STAMP_MAX for x in (ts, close)):
+                    raise SymbolFeedsError(
+                        f"{where} line {line}: a time must be unix milliseconds "
+                        f"within +-{_SYMBOL_STAMP_MAX}")
                 rows.append((o, h, l, c, v, ts, close))
+                lines.append(line)
     except OSError as e:
         raise SymbolFeedsError(f"{where}: {e.strerror or e}") from None
-    if not rows:
-        raise SymbolFeedsError(f"{where}: no bars")
+    except (UnicodeDecodeError, csv.Error) as e:
+        raise SymbolFeedsError(f"{where}: not a UTF-8 CSV ({e})") from None
     n = len(rows)
     bars = (BarC * n)()
     closes = (ctypes.c_int64 * n)()
     hasher = hashlib.sha256(_SYMBOL_FEED_HASH_PREFIX)
     for i, (o, h, l, c, v, ts, close) in enumerate(rows):
-        if close is None:
-            close = _bar_close_ms(ts, tf)
         next_open = rows[i + 1][5] if i + 1 < n else None
         if next_open is not None and next_open <= ts:
-            raise SymbolFeedsError(f"{where} line {i + 3}: timestamps must increase")
+            raise SymbolFeedsError(f"{where} line {lines[i + 1]}: timestamps must increase")
         if close <= ts or (next_open is not None and close > next_open):
             raise SymbolFeedsError(
-                f"{where} line {i + 2}: its close {close} is not after its open {ts} "
+                f"{where} line {lines[i]}: its close {close} is not after its open {ts} "
                 "and at or before the next bar's open (is the timeframe right?)")
         bars[i].open, bars[i].high, bars[i].low, bars[i].close = o, h, l, c
         bars[i].volume, bars[i].timestamp = v, ts
         closes[i] = close
         hasher.update(_SYMBOL_FEED_RECORD.pack(o, h, l, c, v, ts, close))
-    return {"timeframe": tf, "bars": bars, "close_ms": closes, "n": n,
-            "record": {"bars": n, "first_ts": rows[0][5], "last_ts": rows[-1][5],
-                       "source_values_sha256": hasher.hexdigest()}}
+    # A header-only feed is installed as the engine documents it: its requests
+    # read na on every bar (a symbol with no bars in the window).
+    record = {"bars": n, "source_values_sha256": hasher.hexdigest()}
+    if n:
+        record.update(first_ts=rows[0][5], last_ts=rows[-1][5])
+    return {"timeframe": tf, "bars": bars, "close_ms": closes, "n": n, "record": record}
 
 
 def _symbol_facts(doc, symbol: str) -> list:
@@ -1080,8 +1099,12 @@ def _symbol_facts(doc, symbol: str) -> list:
         if value is None or value == "":
             continue
         if field == "mintick":
-            ok = isinstance(value, (int, float)) and not isinstance(value, bool)
-            if not (ok and math.isfinite(value) and value > 0):
+            try:
+                ok = (isinstance(value, (int, float)) and not isinstance(value, bool)
+                      and math.isfinite(float(value)) and value > 0)
+            except OverflowError:  # an int beyond binary64
+                ok = False
+            if not ok:
                 raise SymbolFeedsError(
                     f"--symbol-feeds: {symbol}: syminfo.mintick must be a positive "
                     f"finite number, got {_shown(value)}")
@@ -1110,7 +1133,7 @@ def load_symbol_feeds(index_path: Path) -> list:
         doc = json.loads(index_path.read_text(encoding="utf-8"), object_pairs_hook=unique)
     except OSError as e:
         raise SymbolFeedsError(f"--symbol-feeds: {index_path}: {e.strerror or e}") from None
-    except ValueError as e:
+    except (ValueError, RecursionError) as e:
         if isinstance(e, SymbolFeedsError):
             raise
         raise SymbolFeedsError(f"--symbol-feeds: {index_path} is not JSON: {e}") from None
@@ -1154,15 +1177,16 @@ def install_symbol_feeds(lib, strat, symbols) -> None:
     missing = [n for n in _SYMBOL_FEED_SETTERS if not hasattr(lib, n)]
     if missing:
         raise SymbolFeedsError(
-            f"the strategy library has no {', '.join(missing)}, so --symbol-feeds "
-            "cannot be installed (engine 1.0.0 or later)")
+            f"--symbol-feeds: the strategy library has no {', '.join(missing)}, so "
+            "other symbols' bars cannot be installed (engine 1.0.0 or later)")
 
     def refused(what):
         detail = ""
         if hasattr(lib, "strategy_get_last_error"):
             err = lib.strategy_get_last_error(strat)
             detail = err.decode("utf-8", "replace") if err else ""
-        raise SymbolFeedsError(f"the engine refused {what}" + (f": {detail}" if detail else ""))
+        raise SymbolFeedsError(f"--symbol-feeds: the engine refused {what}"
+                               + (f": {detail}" if detail else ""))
 
     for sym in symbols:
         key = sym["symbol"].encode()
