@@ -223,8 +223,10 @@ feed format, recovery and execution limitations. The existing validation
 scoreboard below describes batch backtests; it does not certify new native
 live behavior or real broker fills.
 Known issue (v1.0.0, v1.0.1): a stream whose input and script timeframes are
-equal serves stale `request.security` values after the first realtime bar; see
-[Streaming known issues](docs/pages/streaming.md) for the workaround.
+equal serves stale `request.security` values after the first realtime bar.
+Fixed on main; included in the next release. See
+[Streaming known issues](docs/pages/streaming.md#streaming_known_issues) for the
+workaround for those versions.
 
 ## Validation scoreboard
 

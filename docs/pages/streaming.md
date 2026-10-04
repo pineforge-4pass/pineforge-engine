@@ -64,6 +64,13 @@ a candle. `calc_on_order_fills` is refused in streams today because the native
 stream's close-only source callback contract does not support fill-triggered
 re-entry; this is future source-layer work, not an inherent look-ahead limit.
 
+A current source-layer limitation remains for requested periods whose last
+expected child is absent for calendar reasons: batch can seal that period when
+the next tradable input opens, but a confirmed stream does not yet forward that
+deferred calendar boundary. Requested values can therefore publish late or
+remain pending. This is follow-up work, not a deliberate look-ahead difference;
+it does not relax the refusal of a missing in-session confirmed bar.
+
 This is the runtime model used by a continuously running strategy:
 
 1. Call #strategy_stream_begin with every confirmed historical input bar.
@@ -205,7 +212,9 @@ separate surfaces and are not implied by using this lifecycle.
   the first realtime bar, so its live results can differ from a backtest of
   the same bars. Batch backtests are not affected. Workaround: run the stream
   with a script timeframe larger than the input timeframe (for example input
-  `1`, script `5`), or use the batch backtest. A fix is in progress.
+  `1`, script `5`), or use the batch backtest. **Fixed on main; included in the
+  next release.** This change feeds each newly observed confirmed bar to the
+  requested-series evaluator, including equal-timeframe and Heikin-Ashi requests.
 
 See [Lifecycle](@ref lifecycle) for handle ownership and
 [FFI from Python](@ref ffi_python) for the complete POD mirrors.

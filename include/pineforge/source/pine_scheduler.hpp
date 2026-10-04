@@ -83,6 +83,11 @@ public:
     }
     bool retains_stream() const noexcept { return retained_.is_stream; }
     bool input_is_observed_ticks() const noexcept { return input_is_observed_ticks_; }
+    // broker_bar is used only by observe_intraday_cap_fill/noop: their context
+    // names the current sub-bar, or the prior one while its close is dispatched.
+    // Thus two recent inputs suffice; eight retain conservative headroom, not
+    // arbitrary history. Two separate opening anchors cover the current and
+    // preceding script intervals even when either contains more than eight inputs.
     void retain_confirmed_input(const Bar& bar, std::int64_t script_open_ms =
             std::numeric_limits<std::int64_t>::min()) noexcept {
         if (!retained_.is_stream) return;

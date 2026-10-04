@@ -12,7 +12,7 @@ All floats are compared as binary64, in physical action/trade order. Corpus
 chart bounds are expanded to the corresponding genuine 1m input buckets;
 neither OHLCV nor ticks are fabricated. --manifest accepts population cases
 with probe, directory, feed and optional input_tf fields. Run this on a build
-host, not on the supervisor's Mac.
+host with the corpus feeds available.
 Saved evidence may be compressed as .archives/<case>.tar.gz under the output
 directory. --recompare reads those modes without extracting them to disk.
 The first stream runs before batch so an actual native refusal needs no batch
