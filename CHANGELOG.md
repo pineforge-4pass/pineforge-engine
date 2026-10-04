@@ -7,6 +7,17 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- **Harness symbol feeds:** `docker/run_json.py --symbol-feeds` (`PINEFORGE_SYMBOL_FEEDS`)
+  installs other symbols' bars for `request.security` on another symbol: a JSON
+  index keyed by the exact symbol string the script passes and by timeframe, each
+  feed an OHLCV CSV plus the symbol's catalog `syminfo`, through
+  `strategy_set_symbol_facts` / `strategy_set_symbol_feed` (engine and codegen
+  1.0.0 and later). Unset changes nothing; an index or feed it cannot install fails
+  the run (one `{"engine":"pineforge","error":...}` line, harness exit 1,
+  entrypoint exit 4). What was installed is recorded as
+  `applied_runtime.symbol_feeds`, so such a run has its own fingerprint digest.
+  The engine library is unchanged.
+
 - **Harness lot grid:** `docker/run_json.py` applies `mincontract` from the
   `--syminfo` (`PINEFORGE_SYMINFO`) file as the engine's lot grid, the metadata key
   `qty_step` plus the `mincontract` key a script's `syminfo.mincontract` reads, so a

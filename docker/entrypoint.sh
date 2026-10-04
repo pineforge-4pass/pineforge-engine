@@ -43,6 +43,14 @@
 #                        keys are ignored. mincontract absent or null: no lot grid. Any other
 #                        mincontract that is not a positive finite number fails the run
 #                        (exit 4, one {"engine":"pineforge","error":...} line on stdout).
+#   PINEFORGE_SYMBOL_FEEDS  Path to a JSON index of other symbols' bars for
+#                        request.security on another symbol: {"symbols": {"<symbol string>":
+#                        {"syminfo": {...}, "feeds": {"<timeframe>": "<csv path>"}}}}, the
+#                        symbol string exactly as the script passes it, one CSV per
+#                        timeframe the script requests (paths relative to the index). Unset:
+#                        nothing is installed and such a request stops the run where its
+#                        value is read. An index or feed the harness cannot install fails
+#                        the run (exit 4, one {"engine":"pineforge","error":...} line).
 #
 # Exit codes:
 #   0  success (JSON report, or C++ in transpile-only mode, on stdout)
@@ -140,12 +148,14 @@ echo "[pineforge] running backtest ..." >&2
 #   PINEFORGE_CHART_TZ                  IANA tz for date builtins
 #   PINEFORGE_MAGNIFIER_VOLUME_WEIGHTED 1/true → vw magnifier (needs BAR_MAGNIFIER)
 #   PINEFORGE_SYMINFO                   path to a syminfo.json (see the header)
+#   PINEFORGE_SYMBOL_FEEDS              path to other symbols' feed index (see the header)
 #   PINEFORGE_BENCH (+_WARMUP/_REPEATS) 1/true → timing mode
 extra=()
 [[ -n "${PINEFORGE_TRADE_START_MS:-}" ]] && extra+=(--trade-start-ms "${PINEFORGE_TRADE_START_MS}")
 [[ -n "${PINEFORGE_CHART_TZ:-}" ]]       && extra+=(--chart-tz "${PINEFORGE_CHART_TZ}")
 [[ "${PINEFORGE_MAGNIFIER_VOLUME_WEIGHTED:-}" =~ ^(1|true|yes|on)$ ]] && extra+=(--magnifier-volume-weighted)
 [[ -n "${PINEFORGE_SYMINFO:-}" ]]        && extra+=(--syminfo "${PINEFORGE_SYMINFO}")
+[[ -n "${PINEFORGE_SYMBOL_FEEDS:-}" ]]   && extra+=(--symbol-feeds "${PINEFORGE_SYMBOL_FEEDS}")
 if [[ "${PINEFORGE_BENCH:-}" =~ ^(1|true|yes|on)$ ]]; then
     extra+=(--bench --warmup "${PINEFORGE_WARMUP:-3}" --repeats "${PINEFORGE_REPEATS:-20}")
 fi
