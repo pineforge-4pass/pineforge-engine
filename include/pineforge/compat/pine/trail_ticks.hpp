@@ -33,7 +33,7 @@ namespace pineforge::compat::pine {
 // 08-18 03:30Z @115208.79 (235120 ticks); std::ceil gave 235121 -> .78.
 // The ceil tolerance is bounded in [1e-5, 1e-4) by the 14.00001 / 14.0001
 // pair; 5e-5 sits in the middle. Round 5's sub-tick pins hold: 0.0006 ->
-// 1 tick, offsets 0 / 0.5 / 0.9 -> 0, 1.4 -> 1. Since N6 this constant is
+// 1 tick, offsets 0 / 0.5 / 0.9 -> 0, 1.4 -> 1. This constant is
 // only the fallback for a run without a usable mintick: TradingView's
 // tolerance is c * mintick ticks (the two-argument overload below), which
 // at mintick 0.01 also satisfies every pin above.
@@ -44,7 +44,7 @@ inline double trail_points_to_ticks(double trail_points) {
 }
 
 // The tolerance is not a constant number of ticks: it is c * mintick ticks.
-// Pinned with `lab tv` synthetics (4 identical exports each; the N6
+// Pinned with `lab tv` synthetics (4 identical exports each; the
 // callback-lifecycle test tapes, *-trailpts-*), each long's trail
 // filling at its activation:
 //   BINANCE:ETHUSDT.P (0.01): 24.000057417376482 -> 24, 24.00001 -> 24,

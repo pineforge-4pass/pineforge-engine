@@ -1829,7 +1829,7 @@ void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_ba
 // close_entries_rule = "ANY" and against the oldest lots first otherwise. Each
 // settled slice is a row of its own, and its fee is its share of its lot's
 // entry fee plus its share of its transaction's exit fee, each on
-// TradingView's ten-significant-digit money (the N5 pin: 127 `lab tv` tapes,
+// TradingView's ten-significant-digit money (127 TradingView tapes,
 // tests/fixtures/global_exit_children).
 // The kernel fills such a leg once for the whole position, oldest lots first,
 // one row per lot. Its rows are still the last ones and not final until this

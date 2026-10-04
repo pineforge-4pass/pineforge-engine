@@ -1,0 +1,33 @@
+{
+  "synthetic": true,
+  "authored_for": "callback and lifecycle pin (independently authored; no population source was sent)",
+  "pin_family": "runner-pooc",
+  "export": {
+    "tool": "lab tv --no-note",
+    "channel": "ws-report-v1",
+    "exported_at": "2026-10-03T14:44:43.295Z",
+    "chart": {
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "from": "2025-10-13",
+      "to": "2025-10-17",
+      "timeoutMs": 120000
+    },
+    "exports_identical": 4
+  },
+  "strategy_pine_sha256": "d5e26e60073f7627353d6daa9b0ca74794074c3eb31256a84d313ae2f4c3864d",
+  "tv_trades_sha256": "b1827f5076abbeb932eacf54515c70574ec97db92e25cfaff85db96c96a28988",
+  "tv_trades_rows": 4,
+  "chart_feed": {
+    "symbol": "NYSE:F",
+    "timeframe": "15",
+    "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32",
+    "rows_from_ms": 1760313600000,
+    "rows_to_ms": 1760659200000
+  },
+  "generated_cpp": {
+    "codegen_commit": "d9b92c7",
+    "sha256": "d0728243924bdb9b31442128a00c8d4379ceb5bbaeb2fa323e6bcbba9d60204d"
+  },
+  "timestamps": "tv_trades.csv is UTC+8; bars.csv is epoch milliseconds UTC"
+}

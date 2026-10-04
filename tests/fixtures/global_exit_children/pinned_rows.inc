@@ -1,4 +1,4 @@
-// The rows the engine booked on 700c5d24 for the scripts the N5 pin does not
+// The rows the engine booked on 700c5d24 for the scripts the TradingView tapes do not
 // reach (test_global_exit_children_tapes.cpp, unreached_runs). Harvested with
 // -DPINEFORGE_GLOBAL_EXIT_CHILDREN_HARVEST. Generated -- never edit by hand.
 const PinnedRow kPinnedRows[] = {

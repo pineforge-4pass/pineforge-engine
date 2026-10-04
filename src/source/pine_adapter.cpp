@@ -15,7 +15,7 @@
 #include "../timezone.hpp"
 #include "pine_host_reads.hpp"
 #include "pine_quiet_bar.hpp"
-#include "pine_n6_rules.hpp"
+#include "../compat/pine/callback_lifecycle_rules.hpp"
 #include "pine_reissue_binding.hpp"
 
 #include <algorithm>
@@ -598,27 +598,27 @@ bool any_live_row(const std::vector<native_order::RequestHandle>& live,
 
 namespace detail {
 namespace {
-// The N6 switches: process-wide like carry_bindings, and for the same reason.
-std::atomic<bool> n6_rules[kPineN6RuleCount] = {true, true, true};
+// The callback-lifecycle switches: process-wide like carry_bindings, and for the same reason.
+std::atomic<bool> callback_lifecycle_rules[kPineCallbackLifecycleRuleCount] = {true, true, true};
 } // namespace
-void set_pine_n6_rule(PineN6Rule rule, bool on) noexcept {
+void set_pine_callback_lifecycle_rule(PineCallbackLifecycleRule rule, bool on) noexcept {
     const int index = static_cast<int>(rule);
-    if (index >= 0 && index < kPineN6RuleCount)
-        n6_rules[index].store(on, std::memory_order_relaxed);
+    if (index >= 0 && index < kPineCallbackLifecycleRuleCount)
+        callback_lifecycle_rules[index].store(on, std::memory_order_relaxed);
 }
-bool pine_n6_rule(PineN6Rule rule) noexcept {
+bool pine_callback_lifecycle_rule(PineCallbackLifecycleRule rule) noexcept {
     const int index = static_cast<int>(rule);
-    return index < 0 || index >= kPineN6RuleCount
-        || n6_rules[index].load(std::memory_order_relaxed);
+    return index < 0 || index >= kPineCallbackLifecycleRuleCount
+        || callback_lifecycle_rules[index].load(std::memory_order_relaxed);
 }
 }  // namespace detail
 
 namespace {
 // trail_points as whole ticks (compat::pine::trail_points_to_ticks): with
 // the mintick-scaled tolerance TradingView applies, or the constant one when
-// the N6 trail switch is off.
+// the trail switch is off.
 double source_trail_points_ticks(double trail_points, double mintick) noexcept {
-    return detail::pine_n6_rule(detail::PineN6Rule::TrailPointsMintickTolerance)
+    return detail::pine_callback_lifecycle_rule(detail::PineCallbackLifecycleRule::TrailPointsMintickTolerance)
         ? compat::pine::trail_points_to_ticks(trail_points, mintick)
         : compat::pine::trail_points_to_ticks(trail_points);
 }
@@ -1757,7 +1757,7 @@ bool PineExecutionAdapter::reissue_revives_declined_exit(
     // already treats a changed re-issue (fresh_after_dormant): an unchanged
     // re-issue must not keep the killed row either, whatever the side, the
     // sizing or the exit's kind. `lab tv` synthetics in
-    // tests/fixtures/n6_callback_lifecycle, BINANCE:ETHUSDT.P 15m 2025-05-28,
+    // tests/fixtures/callback_lifecycle, BINANCE:ETHUSDT.P 15m 2025-05-28,
     // a 100%-of-equity reversal declined at the 19:45 open and the exit
     // re-issued on every bar, 4 identical exports each: the long's limit
     // (range-breakout-may-rev, -rev-sl), the short mirror's limit
@@ -1774,7 +1774,7 @@ bool PineExecutionAdapter::reissue_revives_declined_exit(
     // long at the gap open, its gapped stop never fills). The
     // fill-recalculation pass declines through its own path and keeps its
     // dormant rows.
-    if (!detail::pine_n6_rule(detail::PineN6Rule::DeclinedReversalReissueRevives)
+    if (!detail::pine_callback_lifecycle_rule(detail::PineCallbackLifecycleRule::DeclinedReversalReissueRevives)
         || config_.calc_on_order_fills
         || (previous.family != PineOrderFamily::ExitLimit
             && previous.family != PineOrderFamily::ExitStop)) {
@@ -10393,11 +10393,11 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     // reached by an L of 11.605, which prints 11.61, and a
                     // sell limit at 10.145 is not reached by an H of 10.145,
                     // which prints 10.14 (`lab tv` synthetics
-                    // tests/fixtures/n6_callback_lifecycle runner-target-r1,
+                    // tests/fixtures/callback_lifecycle runner-target-r1,
                     // long-high-raw and short-low-raw, NYSE:F 15m, 4 identical
                     // exports each).
                     const double reach_level =
-                        detail::pine_n6_rule(detail::PineN6Rule::CallbackLimitTickReach)
+                        detail::pine_callback_lifecycle_rule(detail::PineCallbackLifecycleRule::CallbackLimitTickReach)
                         ? source_trigger_threshold(limit_price, staged_.syminfo.mintick,
                                                    !closing_long, true)
                         : limit_price;
@@ -13689,7 +13689,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     // fill on (the kernel's cause floor), and the kernel reaches one already
     // through there at the fill's own print. TradingView fills it at once at
     // that print with the stop's slippage, never at a level the bar crossed
-    // before the entry filled (the N5 pin: tests/fixtures/global_exit_children
+    // before the entry filled (TradingView tapes: tests/fixtures/global_exit_children
     // eth-member and eth-fresh, a short limit entry whose break-even stop the
     // bar rose through before the entry filled). Scoped to the pinned shape:
     // no calc_on_order_fills, no intrabar feed.

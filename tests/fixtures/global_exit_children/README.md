@@ -1,4 +1,4 @@
-# The children of a global exit that one path point triggers (the N5 pin)
+# The children of a global exit that one path point triggers
 
 TradingView keeps one child of a `strategy.exit` that names no entry for every open entry. When one
 path point triggers several children, it fills them one at a time. The children of the entry id that

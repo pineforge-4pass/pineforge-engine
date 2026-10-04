@@ -1,0 +1,33 @@
+{
+  "synthetic": true,
+  "authored_for": "callback and lifecycle pin (independently authored; no population source was sent)",
+  "pin_family": "orb-trailpts-24p001",
+  "export": {
+    "tool": "lab tv --no-note",
+    "channel": "ws-report-v1",
+    "exported_at": "2026-10-03T18:53:04.955Z",
+    "chart": {
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "from": "2025-06-13",
+      "to": "2025-06-15",
+      "timeoutMs": 120000
+    },
+    "exports_identical": 4
+  },
+  "strategy_pine_sha256": "6c691b1b9fb2e145f08a362f6e2b7857139f29bd430aadd9be1f97b25b42ba29",
+  "tv_trades_sha256": "27047c1db1457f7a9eb1fadf6521ba1526216c994c6abf6e7b097f709066a534",
+  "tv_trades_rows": 4,
+  "chart_feed": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "timeframe": "15",
+    "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026",
+    "rows_from_ms": 1749772800000,
+    "rows_to_ms": 1749945600000
+  },
+  "generated_cpp": {
+    "codegen_commit": "d9b92c7",
+    "sha256": "03f50a15ba978369f8475f4456398115ce51b2c6aff7aad58ccd96a72d7bf9bd"
+  },
+  "timestamps": "tv_trades.csv is UTC+8; bars.csv is epoch milliseconds UTC"
+}

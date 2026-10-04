@@ -1,0 +1,33 @@
+{
+  "synthetic": true,
+  "authored_for": "callback and lifecycle pin (independently authored; no population source was sent)",
+  "pin_family": "signed-coof",
+  "export": {
+    "tool": "lab tv --no-note",
+    "channel": "ws-report-v1",
+    "exported_at": "2026-10-03T14:44:49.984Z",
+    "chart": {
+      "symbol": "NASDAQ:AAPL",
+      "interval": "15",
+      "from": "2026-02-13",
+      "to": "2026-02-18",
+      "timeoutMs": 120000
+    },
+    "exports_identical": 4
+  },
+  "strategy_pine_sha256": "b61dcfd5703541bd18bda0a406e9ba57e549c547fa0bd8b314f0ec4fa293280d",
+  "tv_trades_sha256": "3b0df2b73fd7eff39a186439364e36e5684401525892af15440520a631db9d18",
+  "tv_trades_rows": 4,
+  "chart_feed": {
+    "symbol": "NASDAQ:AAPL",
+    "timeframe": "15",
+    "feed_sha256": "ae2b03d3736f057cf4072185d637b7c2edd9350d7a1d83ddf0178cbf292279a0",
+    "rows_from_ms": 1770940800000,
+    "rows_to_ms": 1771372800000
+  },
+  "generated_cpp": {
+    "codegen_commit": "d9b92c7",
+    "sha256": "21aa43e04da906fa7a4bb621d9909fcbcd3855f2b4a31d56d02777b147cf2e2e"
+  },
+  "timestamps": "tv_trades.csv is UTC+8; bars.csv is epoch milliseconds UTC"
+}

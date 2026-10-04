@@ -1829,7 +1829,7 @@
 // the new activation and Market conversion are narrowed to that taped scope.
 // Random08/1/{1,0} and Random44/1/{1,0} also retain baseline digits: first_open_fill
 // requires the same ordinary (!spec || spec->intrabar.is_none()) path as conversion.
-// expectation corrected (N5, 186 of 276 runs), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (the N5 pin's global exit children, pineforge-source-adapter/v4). Only Random28
+// expectation corrected (global exit children, 186 of 276 runs), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4). Only Random28
 // with the magnifier off moves its trades: its one same-bar trade A->X, a named
 // stop already through when its limit entry fills, now fills at that entry's
 // fill (105.5) instead of the stop level the bar crossed before the entry

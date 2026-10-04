@@ -449,7 +449,7 @@ constexpr std::uint64_t k_magnifier[] = {
 //   13031512803108236715ull -> 12703961494282243636ull [H-THIN]
 //   6906214955679447270ull -> 4636245846172056503ull [H-THIN]
 //   6906214955679447270ull -> 4636245846172056503ull [H-THIN]
-// expectation corrected (N5, k_aggregated, 3 of 5 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (the N5 pin's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_P1_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
+// expectation corrected (global exit children, k_aggregated, 3 of 5 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_P1_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
 //   12703961494282243636ull -> 12041604811111138262ull
 //   4636245846172056503ull -> 16843987575962729789ull
 //   4636245846172056503ull -> 16843987575962729789ull
@@ -489,7 +489,7 @@ constexpr std::uint64_t k_aggregated[] = {
 //   7363580706773703120ull -> 6822321611223800121ull [H-THIN]
 //   5380311451522306220ull -> 1968062868302397607ull [H-THIN]
 //   5380311451522306220ull -> 1968062868302397607ull [H-THIN]
-// expectation corrected (N5, k_aggregated_magnifier, 3 of 5 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (the N5 pin's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_P1_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
+// expectation corrected (global exit children, k_aggregated_magnifier, 3 of 5 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_P1_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
 //   6822321611223800121ull -> 1121975842132629243ull
 //   1968062868302397607ull -> 980215841112202357ull
 //   1968062868302397607ull -> 980215841112202357ull

@@ -1,7 +1,7 @@
 #include <pineforge/compat/pine/exit_lifecycle.hpp>
 
 #include "../../engine_internal.hpp"
-#include "../../source/pine_n6_rules.hpp"
+#include "callback_lifecycle_rules.hpp"
 #include <pineforge/compat/pine/trail_ticks.hpp>
 
 #include <cmath>
@@ -22,8 +22,8 @@ std::optional<exit_legs::Operation> select_exit_suspension(
         double activation = prices.trail_price;
         if (!std::isnan(prices.trail_points)) {
             const double ticks =
-                ::pineforge::source::detail::pine_n6_rule(
-                    ::pineforge::source::detail::PineN6Rule::TrailPointsMintickTolerance)
+                ::pineforge::source::detail::pine_callback_lifecycle_rule(
+                    ::pineforge::source::detail::PineCallbackLifecycleRule::TrailPointsMintickTolerance)
                     ? trail_points_to_ticks(prices.trail_points, context.tick)
                     : trail_points_to_ticks(prices.trail_points);
             activation = snap_trail_level_to_tick_grid(

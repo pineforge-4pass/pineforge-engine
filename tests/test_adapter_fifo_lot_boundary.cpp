@@ -193,7 +193,7 @@ private:
         }
         CHECK(found);
         // Pinned against the unchanged adapter request shape and hash at 227c2236.
-        // expectation corrected (N5): UnrelatedSuffix 4142570753076958590ULL -> 10477892404542602439ULL, CancelledPredecessor 3470493253387916331ULL -> 11961130350211294910ULL, the third mode 10254752463860708201ULL -> 3195506365498973368ULL,
+        // expectation corrected (global exit children): UnrelatedSuffix 4142570753076958590ULL -> 10477892404542602439ULL, CancelledPredecessor 3470493253387916331ULL -> 11961130350211294910ULL, the third mode 10254752463860708201ULL -> 3195506365498973368ULL,
         // because the source adapter's state now folds TradingView's entry-id
         // table once it holds two entry ids (pineforge-source-adapter/v4); every
         // printed row is main 700c5d24's.

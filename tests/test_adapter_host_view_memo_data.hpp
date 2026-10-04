@@ -131,8 +131,8 @@
 //   round_robin/A1: hash=1927432040325474646 -> hash=8731081580846022313
 //   round_robin/B: hash=13106388348010577033 -> hash=7355849797745033112
 //   round_robin/A2: hash=1927432040325474646 -> hash=8731081580846022313
-// expectation corrected (N5): the broker-state hash of every run of host class B
-// moved once, because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (the N5 pin's global exit children, pineforge-source-adapter/v4);
+// expectation corrected (global exit children): the broker-state hash of every run of host class B
+// moved once, because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4);
 // trades, trade digests, net profits and errors did not move; harvested with
 // PF_HOST_VIEW_MEMO_DUMP=1 against main 700c5d24 (every old pin reproduced) and this tree:
 //   batch/B: hash=3001060687180726304 -> hash=15614000236465510904

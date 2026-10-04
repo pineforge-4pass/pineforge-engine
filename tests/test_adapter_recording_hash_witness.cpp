@@ -430,7 +430,7 @@ void emit(Scenario scenario, const Observed& got) {
 //   kOca_rows: 15 of 32 lines [W8A R-B]
 //   kSubmit_reads: 2 of 6 lines [W3B F02 first id; W3B F02 ledger booking]
 //   kSubmit_rows: 9 of 32 lines [W3B F02 first id; W3B F02 ledger booking]
-// expectation corrected (N5, kSubmit_rows, 24 of 32 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (the N5 pin's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_F9_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
+// expectation corrected (global exit children, kSubmit_rows, 24 of 32 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_F9_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
 //   12861386984956007464ull -> 9449029978748182379ull
 //   9636271775313182766ull -> 9296236845939991861ull
 //   14593285784226472543ull -> 6847490445118097064ull
@@ -517,7 +517,7 @@ constexpr std::uint64_t kSubmit_rows[] = {
 //   18016456059351763749ull -> 11582188679677093386ull [H-THIN]
 //   6161691521401770042ull -> 13475769493769981375ull [H-THIN]
 //   11652988695302303084ull -> 10681991124354674742ull [H-THIN]
-// expectation corrected (N5, kSubmit_reads, 4 of 6 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (the N5 pin's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_F9_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
+// expectation corrected (global exit children, kSubmit_reads, 4 of 6 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_F9_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
 //   5919697962280264299ull -> 908288806773219080ull
 //   15895840553361286509ull -> 10022661800093696072ull
 //   13475769493769981375ull -> 14054540774545879068ull
@@ -534,7 +534,7 @@ constexpr std::uint64_t kSubmit_reads[] = {
 // expectation corrected (v19-E): kSubmit_final 6186330499779649827ull -> 8426887344131973464ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
 // expectation corrected (V19-FIX): kSubmit_final 8426887344131973464ull -> 13033963886965614456ull, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree.
 // expectation corrected (INT26 v19 hash re-pin): kSubmit_final 13033963886965614456ull -> 7695240294002266835ull [H-THIN], because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the trades did not move.
-// expectation corrected (N5): kSubmit_final 7695240294002266835ull -> 4504916531370139992ull, because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (the N5 pin's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_F9_HARVEST against main 700c5d24 (every old pin reproduced) and this tree
+// expectation corrected (global exit children): kSubmit_final 7695240294002266835ull -> 4504916531370139992ull, because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_F9_HARVEST against main 700c5d24 (every old pin reproduced) and this tree
 constexpr std::uint64_t kSubmit_final = 4504916531370139992ull;
 constexpr Trade kSubmit_trades[] = {
     {1736121720000LL, 1736122260000LL, 101.5, 102, 2, 0},
@@ -1415,7 +1415,7 @@ constexpr Trade kOca_trades[] = {
 //   8782474388336378853ull -> 11067585398331222410ull [H-THIN]
 //   12830062157342008889ull -> 358041756474409844ull [H-THIN]
 //   11660101618206053704ull -> 8735900797794446825ull [H-THIN]
-// expectation corrected (N5, kReissue_rows, 7 of 32 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (the N5 pin's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_F9_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
+// expectation corrected (global exit children, kReissue_rows, 7 of 32 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_F9_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
 //   4496911868369281609ull -> 9013102684393431912ull
 //   4092312770444862044ull -> 10171046521422328961ull
 //   3103138085614071329ull -> 15321967377461392532ull
@@ -1549,7 +1549,7 @@ constexpr std::uint64_t kReissue_rows[] = {
 //   15829080338314944658ull -> 13855326176576914141ull [H-THIN]
 //   2272828286921366934ull -> 10342641769074306343ull [H-THIN]
 //   16041091954465179468ull -> 11480238464600989237ull [H-THIN]
-// expectation corrected (N5, kReissue_reads, 7 of 22 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (the N5 pin's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_F9_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
+// expectation corrected (global exit children, kReissue_reads, 7 of 22 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_F9_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
 //   8660956339548506257ull -> 17881500630125149780ull
 //   17474680937306256469ull -> 17208157448648654596ull
 //   14583099152188767967ull -> 15884399018721245490ull
@@ -1585,7 +1585,7 @@ constexpr std::uint64_t kReissue_reads[] = {
 // expectation corrected (v19-E): kReissue_final 5214787630894246342ull -> 14699793179829041832ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
 // expectation corrected (V19-FIX): kReissue_final 14699793179829041832ull -> 11660101618206053704ull, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree.
 // expectation corrected (INT26 v19 hash re-pin): kReissue_final 11660101618206053704ull -> 8735900797794446825ull [H-THIN], because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the trades did not move.
-// expectation corrected (N5): kReissue_final 8735900797794446825ull -> 5336484828345527040ull, because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (the N5 pin's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_F9_HARVEST against main 700c5d24 (every old pin reproduced) and this tree
+// expectation corrected (global exit children): kReissue_final 8735900797794446825ull -> 5336484828345527040ull, because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_F9_HARVEST against main 700c5d24 (every old pin reproduced) and this tree
 constexpr std::uint64_t kReissue_final = 5336484828345527040ull;
 constexpr Trade kReissue_trades[] = {
     {1736121660000LL, 1736123040000LL, 100.75, 99.75, 2, 0},

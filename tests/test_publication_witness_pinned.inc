@@ -444,7 +444,7 @@
 // are margin-backed shapes, outside those margin-free tapes. Activation and
 // Market conversion are narrowed accordingly; all six ordinary/magnified Storm
 // digits remain at baseline. No publication expectation is refreshed.
-// N5 re-harvested it the same way on its tree (124 of 156 runs move), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (the N5 pin's global exit children, pineforge-source-adapter/v4).
+// The global exit children change re-harvested it the same way on its tree (124 of 156 runs move), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4).
 // With the three hash inputs taken out (the host-extension fold, the recorded
 // broker-state hash rows, the final hash) this TU prints the same table against
 // main 700c5d24 and this tree except Config16: its 18th trade, a named stop already

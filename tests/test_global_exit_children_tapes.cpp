@@ -1,5 +1,5 @@
 /*
- * test_global_exit_children_tapes.cpp -- the N5 pin (global exit children).
+ * test_global_exit_children_tapes.cpp -- TradingView's global exit children tapes.
  *
  * TradingView keeps one child of a strategy.exit that names no entry for
  * every open entry. When one path point triggers several, it fills them in
@@ -532,7 +532,7 @@ void unreached_keeps_its_rows() {
 }
 #else
 void harvest() {
-    std::printf("// The rows the engine booked on 700c5d24 for the scripts the N5 pin does not\n"
+    std::printf("// The rows the engine booked on 700c5d24 for the scripts the TradingView tapes do not\n"
                 "// reach (test_global_exit_children_tapes.cpp, unreached_runs). Harvested with\n"
                 "// -DPINEFORGE_GLOBAL_EXIT_CHILDREN_HARVEST. Generated -- never edit by hand.\n");
     std::printf("const PinnedRow kPinnedRows[] = {\n");

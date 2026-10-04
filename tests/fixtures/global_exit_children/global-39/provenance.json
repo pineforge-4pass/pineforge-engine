@@ -1,5 +1,5 @@
 {
-  "pin": "N5 (global/sibling exit reservation and entry-incarnation ownership)",
+  "pin": "global/sibling exit reservation and entry-incarnation ownership",
   "tape": "n5-39-global",
   "channel": "ws-report-v1",
   "exporter": "lab tv --no-note",

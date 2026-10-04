@@ -363,7 +363,7 @@ constexpr Point kOrdinary_curve[] = {
 //   17382764399684682567ull -> 10786892065294821214ull [W3B F02 first id]
 //   5569220102658162789ull -> 7242027231279883764ull [W3B F02 first id]
 //   5858716210019128261ull -> 14002008052360269184ull [W3B F02 first id]
-// expectation corrected (N5, kOrdinary_hashes, 5 of 24 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (the N5 pin's global exit children, pineforge-source-adapter/v4); the curves, rows and marks did not move; harvested with PINEFORGE_R1_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
+// expectation corrected (global exit children, kOrdinary_hashes, 5 of 24 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the curves, rows and marks did not move; harvested with PINEFORGE_R1_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
 //   1466897115669479138ull -> 2633552835857763765ull
 //   5672878236048570851ull -> 12304747841121222059ull
 //   10786892065294821214ull -> 2959338040997514218ull
@@ -540,7 +540,7 @@ constexpr Point kCalcOnOrderFills_curve[] = {
 //   565050300121405896ull -> 9481163607627131039ull [W3B F02 first id]
 //   12671085486866481742ull -> 14323795256978485429ull [W3B F02 first id]
 //   9604569239120914630ull -> 14731117152108241157ull [W3B F02 first id]
-// expectation corrected (N5, kCalcOnOrderFills_hashes, 13 of 24 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (the N5 pin's global exit children, pineforge-source-adapter/v4); the curves, rows and marks did not move; harvested with PINEFORGE_R1_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
+// expectation corrected (global exit children, kCalcOnOrderFills_hashes, 13 of 24 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the curves, rows and marks did not move; harvested with PINEFORGE_R1_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
 //   7930584285132978374ull -> 6844259329897013587ull
 //   17064940335416518660ull -> 11863997251748283825ull
 //   9016627554631535731ull -> 14077730934999420898ull
@@ -721,7 +721,7 @@ constexpr Point kSuppressedTail_curve[] = {
 //   17382764399684682567ull -> 10786892065294821214ull [W3B F02 first id]
 //   5569220102658162789ull -> 7242027231279883764ull [W3B F02 first id]
 //   8558103254181104877ull -> 13063501112185034820ull [W3B F02 first id]
-// expectation corrected (N5, kSuppressedTail_hashes, 5 of 24 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (the N5 pin's global exit children, pineforge-source-adapter/v4); the curves, rows and marks did not move; harvested with PINEFORGE_R1_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
+// expectation corrected (global exit children, kSuppressedTail_hashes, 5 of 24 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the curves, rows and marks did not move; harvested with PINEFORGE_R1_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
 //   1466897115669479138ull -> 2633552835857763765ull
 //   5672878236048570851ull -> 12304747841121222059ull
 //   10786892065294821214ull -> 2959338040997514218ull
