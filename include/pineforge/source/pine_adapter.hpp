@@ -576,6 +576,24 @@ public:
         const auto next = next_after(incarnation);
         return const_iterator(this, next.first, next.second);
     }
+    // Every row in incarnation order -- the order begin() walks: the older
+    // rows, then the window's -- read straight off the storage rather than
+    // re-found at every step. `visit(incarnation, row)` returns true to stop.
+    // For a whole-table read: no row is inserted or erased while it runs.
+    template<class Visit>
+    void visit_rows(Visit&& visit) const {
+        for (const auto& entry : old_) {
+            if (visit(entry.first, static_cast<const PlacementSnapshot&>(*entry.second))) return;
+        }
+        for (std::size_t index = head_; index < window_.size(); ++index) {
+            const auto& slot = window_[index];
+            if (slot
+                && visit(base_ + static_cast<std::uint64_t>(index - head_),
+                         static_cast<const PlacementSnapshot&>(*slot))) {
+                return;
+            }
+        }
+    }
 
 #if PINEFORGE_PLACEMENT_AUDIT
     iterator find(std::uint64_t incarnation, unsigned line = __builtin_LINE()) noexcept {
