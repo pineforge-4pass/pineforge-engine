@@ -40,10 +40,19 @@ index, action sequence or bar count); 0 denotes warmup. Omit it for the latest
 committed report. An unavailable cursor or mismatched optional deployment exits
 1. Reading is safe while a runner owns the ledger. `run --report-jsonl` mirrors
 each newly committed report to stdout, followed by the existing operational run
-summary; replayed source-prefix messages are not mirrored again.
+summary; replayed source-prefix messages are not mirrored again. A closed
+stdout pipe fails clearly with exit 1, never SIGPIPE; the last input and report
+are already durable, and export remains available.
 
 The input, engine hash, actions and cumulative report commit in one SQLite
-transaction. Recovery replays and byte-compares every report before delivery.
+transaction. Append-only `pineforge-native-report-delta/v1` rows contain changed
+scalar fields and appended/replaced array suffixes, not historical full-report
+copies. Export folds these rows through the selected cursor into byte-identical
+canonical report JSON. Recovery verifies each input's engine hash, actions and
+exact report delta before delivery. Existing full-report rows remain immutable
+and readable; recovery verifies them against the reconstructed full report, then
+new inputs use deltas. This avoids quadratic report storage without changing the
+export schema or engine computation.
 Older ledgers acquire reports by deterministic replay; resume them with `run`
 before export. Reports are immutable and never change with webhook timing.
 The deployment already binds strategy-library bytes, warmup bytes, effective
@@ -65,7 +74,10 @@ against `run_backtest_full` with identical warmup, complete script buckets,
 settings and symbol units. Tick tapes need the same ticks for replay equality;
 tick-versus-OHLC fill paths are not interchangeable. An incomplete aggregated
 script bucket is still provisional live, whereas a finite batch seals its
-trailing partial bucket; compare at confirmed script-bucket boundaries. The
+trailing partial bucket; compare at confirmed script-bucket boundaries. This
+boundary can replace the last equity point and derived scalar metrics rather
+than append an additional point; earlier confirmed equity points are identical.
+The generated trailing-stop E2E exercises this boundary explicitly. The
 existing [stream security limitation](../docs/pages/streaming.md) still applies;
 no report field is silently excluded from the confirmed-bar E2E comparison.
 
@@ -80,27 +92,37 @@ pineforge-live probe --status-file status.json --max-age 3
 pineforge-live probe --status-file status.json --max-age 3 --ready
 ```
 
-- `--status-file PATH` enables private, fsync-backed atomic JSON replacement
-  after every committed message and at least every `--status-interval S`
-  seconds (default 1, integer 1..300). Its schema is
+- `--status-file PATH` enables private atomic JSON replacement, coalesced to at
+  most once per `--status-interval S` seconds (default 1, integer 1..300),
+  with immediate publication on lifecycle/readiness changes and exit. Commits
+  update the next interval's metrics; neither the file nor its directory is
+  fsynced. The ledger remains the durable authority. Its schema is
   `pineforge-live-status/v1`. Use a distinct path in an existing writable
   directory; it cannot alias the ledger, lock, WAL/SHM or an input artifact.
   Publication starts after strategy/warmup validation and ledger ownership.
+  A status publication I/O failure is fatal with a clear message and exit 1;
+  the active committed input remains durable. Continuing with a stale health
+  file would mislead a supervisor, so publication failure does not degrade
+  silently to readiness-only failure.
 - `liveness.control_loop_heartbeat_ms` advances only when the control loop
   progresses; a periodic writer updates `written_at_ms` but cannot conceal a
   stalled computation or commit. `liveness.alive` becomes false on exit.
   `ready` requires validated strategy/warmup, recovered ledger, verified source
   prefix, no unhealed input gap and storage below budget. A prefix conflict,
   source gap or fatal input error fails closed; no gap healing is invented.
+  `no_unhealed_input_gap` becomes false only for an actual input sequence gap,
+  not for unrelated malformed input, delivery or timeout failures.
 - Metrics are `committed_input`, `last_seq` (tick sequence, null for bars),
   `source_timestamp_ms`, `source_lag_ms` (wall-clock lag from the latest
-  committed source time), `queue_bytes`, `ledger_bytes`, `report_cursor` and
+  committed source time), `queue_bytes`, `ledger_bytes`, `report_cursor`,
+  `control_errors` (distinct ignored control entries/errors this run) and
   per-target `pending_count` / `oldest_age_ms`. Queue bytes cover the buffered
   stdin/WebSocket fragment and bounded delivery queue; engine state and finite feed
   snapshots are not queue bytes. Pending includes failed and never-completed
   routed actions, not journal-only actions; age is null for legacy rows with
   no known creation/attempt time. No secrets, URLs or receiver response text
-  are written to this status file.
+  are written to this status file. Storage/delivery metrics are sampled at the
+  status interval, not on every control-loop heartbeat.
 - `probe --status-file PATH --max-age S [--ready]` exits 0 only for a valid,
   alive control-loop heartbeat no older than S seconds (integer 1..86400).
   Add `--ready` to also require readiness. Missing, malformed, future-dated,
@@ -151,10 +173,13 @@ pineforge-live redeliver --ledger orders.sqlite3 --deployment DEPLOYMENT \
 
 The command atomically creates a request, prints `queued: true` and its
 `request_id`, and exits 0; this is submission, not successful delivery. It
-needs no signing secrets and adds no network listener. The running delivery
+requires an existing private directory and a running owner of the ledger;
+it never creates a missing submission directory. It needs no signing secrets
+and adds no network listener. The running delivery
 worker polls at 100 ms while not draining, validates the deployment and target,
 pins the selected committed range/failure state, and writes
-`REQUEST_ID.ack.json` with `accepted` and `selected`. The accepted request and
+`REQUEST_ID.ack.json` with `accepted`, `selected` and a sanitized `reason`.
+The accepted request and
 every attempt's `request_id` are durable append-only audit rows. Check delivery
 results with `status` or the ledger, not the acknowledgment. Computation does
 not wait for receiver HTTP responses; the in-memory delivery queue is capped
@@ -164,13 +189,19 @@ Requests are `REQUEST_ID.request.json`, where the ID is 64 lowercase hex
 characters. Canonical request fields are `schema_version:
 "pineforge-redelivery-request/v1"`, `deployment`, `request_id`, `target`,
 `from` (global action ordinal, default 1, 1..INT64_MAX) and `failed_only`
-(boolean). Unknown fields, wrong types/identity, symlinks and nonregular or
-oversized (>16 KiB) requests are rejected with a sanitized acknowledgment.
+(boolean). Unknown fields and wrong types/identity receive a sanitized rejection.
+Unreadable files, symlinks, nonregular entries, oversized (>16 KiB) or partial
+JSON files are skipped and left intact. Each bad entry or control-directory
+I/O error is remembered for this run, counted in status `control_errors` and
+logged once without file contents. These errors never kill the delivery worker
+or computation; repair/remove the entry and use a new request ID. Always publish
+requests atomically, never by writing the final filename in place.
 The same accepted ID/selection is idempotent; conflicting reuse is rejected.
 On restart accepted requests resume only unfinished attempts, always with the
 same immutable `delivery_id`; completed attempts, including failures, require
-a new request to resend again. Keep acknowledgments as local receipts and
-remove them explicitly when no longer needed; their directory is outside the
+a new request to resend again. At most 256 owned regular acknowledgments are
+retained; the oldest are removed during polling. Durable audit stays in SQLite,
+not the acknowledgment files. The control directory is outside the
 ledger budget. Without `--control-dir`, `redeliver` remains offline, reads only
 the selected target's secret and refuses while the runner holds the lock.
 

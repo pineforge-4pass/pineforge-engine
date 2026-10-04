@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <thread>
+#include <sys/stat.h>
 #include <unistd.h>
 
 using namespace pineforge::live;
@@ -75,6 +76,41 @@ int main() {
     controls.submit(request(std::string(64, 'c')));
     controls.poll("other", accept);
     assert(!called);
+    bool missing_refused = false;
+    try { ControlDirectory missing((root / "missing").string(), false); }
+    catch (const std::runtime_error&) { missing_refused = true; }
+    assert(missing_refused && !fs::exists(root / "missing"));
+    const auto directory = root / "control";
+    fs::create_directory(directory / (std::string(64, '1') + ".request.json"));
+    fs::create_symlink(root / "outside", directory / (std::string(64, '2') + ".request.json"));
+    const auto unreadable = directory / (std::string(64, '3') + ".request.json");
+    std::ofstream(unreadable) << "{}";
+    chmod(unreadable.c_str(), 0);
+    std::ofstream(directory / (std::string(64, '4') + ".request.json")) << std::string(20000, 'x');
+    std::ofstream(directory / (std::string(64, '5') + ".request.json")) << "{";
+    controls.poll("deployment", accept);
+    assert(controls.errors() == 5);
+    controls.poll("deployment", accept);
+    assert(controls.errors() == 5);
+    chmod(unreadable.c_str(), 0600);
+    for (unsigned index = 0; index < 270; ++index) {
+        auto identifier = std::string(61, 'e') + std::to_string(100 + index);
+        std::ofstream(directory / (identifier + ".ack.json")) << "{}";
+    }
+    controls.poll("deployment", accept);
+    std::size_t acknowledgements = 0;
+    for (const auto& entry : fs::directory_iterator(directory))
+        if (entry.path().filename().string().find(".ack.json") != std::string::npos) ++acknowledgements;
+    assert(acknowledgements <= 256);
+    const std::string denied(64, 'f');
+    controls.submit(request(denied));
+    chmod(directory.c_str(), 0500);
+    controls.poll("deployment", accept);
+    chmod(directory.c_str(), 0700);
+    assert(controls.errors() == 6 && fs::exists(directory / (denied + ".request.json")));
+    fs::remove_all(directory);
+    controls.poll("deployment", accept);
+    assert(controls.errors() == 7);
     {
         Ledger ledger((root / "ledger.sqlite3").string(), "deployment");
         StoredEvent event;

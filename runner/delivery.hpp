@@ -27,6 +27,7 @@ public:
     std::uint64_t delivered() const { return delivered_.load(); }
     std::uint64_t failed() const { return failed_.load(); }
     std::uint64_t queue_bytes() const { return queue_bytes_.load(); }
+    std::uint64_t control_errors() const { return control_errors_.load(); }
 private:
     void run();
     Ledger& ledger_;
@@ -40,6 +41,7 @@ private:
     std::atomic<std::int64_t> drain_until_{0};
     std::atomic<std::uint64_t> delivered_{0}, failed_{0};
     std::atomic<std::uint64_t> queue_bytes_{0};
+    std::atomic<std::uint64_t> control_errors_{0};
     std::exception_ptr error_;
     std::thread worker_;
 };

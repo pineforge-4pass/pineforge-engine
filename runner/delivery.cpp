@@ -86,7 +86,7 @@ void DeliveryWorker::finish(bool cancel) {
 
 void DeliveryWorker::run() {
     WebhookMulti transport;
-    ControlDirectory controls(control_dir_);
+    ControlDirectory controls(control_dir_, false, false);
     std::map<std::uint64_t, ActiveDelivery> active;
     std::map<std::string, std::size_t> in_flight;
     std::map<std::string, std::deque<QueuedDelivery>> pending;
@@ -141,6 +141,7 @@ void DeliveryWorker::run() {
                 return ledger_.request_redelivery(request.at("request_id").text(), target, from,
                     request.at("failed_only").value == "true");
             });
+            control_errors_ = controls.errors();
             control_due = DeliveryClock::now() + std::chrono::milliseconds(100);
         }
         bool exhausted = false;

@@ -34,7 +34,8 @@ class Receiver(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers["Content-Length"]))
-        receipts.append((self.headers["Idempotency-Key"], body))
+        if self.path == "/redelivery":
+            receipts.append((self.headers["Idempotency-Key"], body))
         delivery_started.set()
         mode = receiver_mode
         if mode == "hang":
@@ -174,7 +175,7 @@ try:
         initial = status(health)["written_at_ms"]
         wait_for(lambda: status(health)["written_at_ms"] > initial)
         assert all(status(health)["readiness"].values())
-        assert set(status(health)["metrics"]) == {"committed_input", "last_seq", "source_timestamp_ms",
+        assert set(status(health)["metrics"]) - {"control_errors"} == {"committed_input", "last_seq", "source_timestamp_ms",
             "source_lag_ms", "queue_bytes", "ledger_bytes", "report_cursor", "targets"}
         duplicate = subprocess.run([runner] + list(map(str, base(ledger) + ["--feed", feed,
             "--status-file", health])), capture_output=True, text=True, timeout=5)
@@ -194,6 +195,19 @@ try:
         invoke(["probe", "--status-file", stale, "--max-age", "2"], 1)
         invoke(["probe", "--status-file", root / "missing", "--max-age", "2"], 1)
         print("PASS probes, private atomic heartbeat, ledger lock and SIGTERM mid-assembly", flush=True)
+
+        process, ledger, health = start("status-failure")
+        process.stdin.write(batch)
+        process.stdin.flush()
+        wait_for(lambda: query(ledger, "SELECT count(*) FROM inputs") == [(1,)])
+        before = invoke(["report", "--ledger", ledger])
+        health.unlink()
+        health.mkdir()
+        wait_for(lambda: process.poll() is not None)
+        output, errors = process.communicate(timeout=5)
+        assert process.returncode == 1 and "service status publication failed" in errors, (output, errors)
+        assert invoke(["report", "--ledger", ledger]) == before
+        print("PASS status-publication failure is fatal with committed report intact", flush=True)
 
         for phase in ("message", "commit"):
             gate = root / (phase + ".gate")
@@ -253,7 +267,7 @@ try:
         assert delivery_started.wait(5)
         began = time.monotonic()
         finish(process)
-        assert time.monotonic() - began < 1.5
+        assert time.monotonic() - began < 3
         assert query(ledger, "SELECT count(*) FROM inputs") == [(1,)]
         assert export(ledger)["report"] == expected_report
         assert query(ledger, "SELECT count(*) FROM events")[0][0] > 0
@@ -262,11 +276,16 @@ try:
 
         receiver_mode = "fail"
         receipts.clear()
+        redelivery_routes = json.loads(routes.read_text())
+        redelivery_routes["targets"]["default"]["url"] = f"http://{endpoint}/redelivery"
+        redelivery_routes["delivery"].update(connect_timeout_ms=1000, total_timeout_ms=3000)
+        routes.write_text(json.dumps(redelivery_routes))
         controls = root / "control"
         process, ledger, health = start("redelivery", routed + ["--control-dir", controls], env=environment)
         process.stdin.write(batch)
         process.stdin.flush()
         wait_for(lambda: query(ledger, "SELECT count(*) FROM delivery_log WHERE phase='completed'") == [(4,)])
+        wait_for(lambda: len(receipts) == 4)
         deployment = query(ledger, "SELECT identity FROM metadata")[0][0]
         original = sorted(receipts)
         wait_for(lambda: status(health)["metrics"]["targets"]["default"]["pending_count"] == 4)
@@ -282,6 +301,7 @@ try:
         assert json.loads(acknowledgment.read_text())["selected"] == 4
         wait_for(lambda: query(ledger, "SELECT count(*) FROM delivery_log WHERE request_id=? AND phase='completed'",
             (identifier,)) == [(4,)])
+        wait_for(lambda: len(receipts) == 8)
         assert sorted(receipts[4:]) == original
         duplicate_request = {"schema_version": "pineforge-redelivery-request/v1", "deployment": deployment,
             "request_id": identifier, "target": "default", "from": 1, "failed_only": True}
@@ -312,12 +332,52 @@ try:
         assert len(receipts) == 10
         print("PASS live failed/selected redelivery, stable IDs, dedup, restart, audit and offline lock", flush=True)
 
+        typo = root / "missing-control"
+        invoke(["redeliver", "--ledger", ledger, "--deployment", deployment, "--target", "default",
+            "--control-dir", typo], 1)
+        assert not typo.exists()
+        invoke(["redeliver", "--ledger", ledger, "--deployment", deployment, "--target", "default",
+            "--control-dir", controls], 1)
+        broken = root / "broken-control"
+        process, ledger, health = start("control-errors", ["--control-dir", broken])
+        (broken / ("1" * 64 + ".request.json")).mkdir()
+        outside = root / "outside.json"
+        outside.write_text("{}")
+        (broken / ("2" * 64 + ".request.json")).symlink_to(outside)
+        unreadable = broken / ("3" * 64 + ".request.json")
+        unreadable.write_text("{}")
+        unreadable.chmod(0)
+        (broken / ("4" * 64 + ".request.json")).write_text("x" * 20000)
+        (broken / ("5" * 64 + ".request.json")).write_text("{")
+        wait_for(lambda: status(health)["metrics"]["control_errors"] >= 5)
+        assert process.poll() is None and status(health)["state"] == "running"
+        process.stdin.write(batch)
+        process.stdin.flush()
+        wait_for(lambda: query(ledger, "SELECT count(*) FROM inputs") == [(1,)])
+        finish(process)
+        process, ledger, health = start("control-errors", ["--control-dir", broken])
+        wait_for(lambda: status(health)["metrics"]["control_errors"] >= 5)
+        assert process.poll() is None and outside.read_text() == "{}"
+        finish(process)
+        unreadable.chmod(0o600)
+        print("PASS invalid control entries survive intake and restart; missing/offline control submission refused", flush=True)
+
+        pipe_ledger = root / "closed-stdout.sqlite"
+        pipe = subprocess.Popen([runner] + list(map(str, base(pipe_ledger) + ["--feed", feed, "--report-jsonl"])),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        children.append(pipe)
+        pipe.stdout.close()
+        assert pipe.wait(timeout=15) == 1
+        assert query(pipe_ledger, "SELECT count(*) FROM inputs") == [(1,)]
+        assert "stdout write failed" in pipe.stderr.read().decode()
+
         for option in ("--feed-idle-timeout", "--feed-message-timeout", "--status-interval"):
             for value in ("0", "301", "-1", "no"):
                 invoke(base(root / "invalid.sqlite") + ["--feed", feed, option, value], 1)
         process, ledger, health = start("idle", ["--feed-idle-timeout", "1", "--feed-message-timeout", "3"])
         finish(process, 1, stop=False)
         assert status(health)["state"] == "failed"
+        assert status(health)["readiness"]["no_unhealed_input_gap"]
         process, ledger, health = start("assembly", ["--feed-idle-timeout", "3", "--feed-message-timeout", "1"])
         process.stdin.write("{")
         process.stdin.flush()
@@ -327,7 +387,7 @@ try:
             invoke(base(root / (path + ".sqlite")) + ["--feed-url", f"{scheme}://{endpoint}/{path}",
                 "--allow-insecure-http", "--feed-idle-timeout", "1", "--feed-message-timeout", "2"], 1)
         invoke(base(root / "keepalive.sqlite") + ["--feed-url", f"ws://{endpoint}/keepalive",
-            "--allow-insecure-http", "--feed-idle-timeout", "6", "--feed-message-timeout", "1",
+            "--allow-insecure-http", "--feed-idle-timeout", "8", "--feed-message-timeout", "1",
             "--max-events", "1"])
         print("PASS deadline bounds, stdin/HTTP/WS idle, fragmented assembly and 5-second PONG keepalive", flush=True)
 

@@ -577,6 +577,7 @@ struct Cursor {
     std::uint64_t tick_seq = 0;
     bool seen_tick = false;
 };
+struct InputGap : std::runtime_error { using std::runtime_error::runtime_error; };
 void apply(Strategy &s, const Config &c, Cursor &cursor, const Json &frame) {
     auto type = frame.at("type").text();
     if (type == "tick") {
@@ -592,7 +593,7 @@ void apply(Strategy &s, const Config &c, Cursor &cursor, const Json &frame) {
             throw std::runtime_error("invalid trade tick");
         if (cursor.seen_tick &&
             (cursor.tick_seq == UINT64_MAX || t.sequence != cursor.tick_seq + 1))
-            throw std::runtime_error("tick sequence gap or regression");
+            throw InputGap("tick sequence gap or regression");
         s.check(s.tick(s.state, &t));
         cursor.tick_seq = t.sequence;
         cursor.seen_tick = true;
@@ -633,7 +634,7 @@ Json real(double value) {
     return Json::number(s.str());
 }
 std::string cumulative_report(Strategy& strategy, const std::string& deployment,
-                              std::uint64_t cursor) {
+                              std::uint64_t cursor, ReportDeltas& deltas) {
     pf_report_t report{};
     struct ReleaseReport {
         Strategy& strategy;
@@ -641,18 +642,7 @@ std::string cumulative_report(Strategy& strategy, const std::string& deployment,
         ~ReleaseReport() { strategy.free_report(&report); }
     } release{strategy, report};
     strategy.check(strategy.fill_report(strategy.state, &report));
-    auto fields = native_report_json(report);
-    Json closed;
-    closed.kind = Json::Kind::Array;
-    for (int index = 0; index < report.trades_len; ++index)
-        if (!report.trades[index].open_at_end) closed.items.push_back(report_trade(report.trades[index]));
-    const auto& curve = fields.at("equity_curve").items;
-    return Json::object({{"schema_version", Json::string("pineforge-native-report/v1")},
-        {"deployment", Json::string(deployment)}, {"input_cursor", num(cursor)},
-        {"state_hash", Json::string(std::to_string(strategy.hash(strategy.state)))},
-        {"equity", curve.empty() ? Json{} : curve.back().at("equity")},
-        {"open_profit", curve.empty() ? Json{} : curve.back().at("open_profit")},
-        {"closed_trades", std::move(closed)}, {"report", std::move(fields)}}).dump();
+    return deltas.update(report, deployment, cursor, strategy.hash(strategy.state));
 }
 std::vector<Event> actions(Strategy &s, const Config &c, const std::string &deployment) {
     std::vector<Event> out;
@@ -841,7 +831,8 @@ int run(Config c) {
     Ledger ledger(c.ledger, deployment);
     ServiceFile service(c.status_file, c.status_interval * 1000);
     ledger.bind_routing(c.routing.stored_document());
-    ledger.verify_report(0, cumulative_report(strategy, deployment, 0));
+    ReportDeltas report_deltas;
+    ledger.verify_report(0, cumulative_report(strategy, deployment, 0, report_deltas), [&] { return report_deltas.json(); });
     Cursor cursor;
     auto recorded = ledger.input_count();
     auto recovering = Json::object({{"deployment", Json::string(deployment)}, {"state", Json::string("recovering")},
@@ -868,7 +859,7 @@ int run(Config c) {
             if (events[k].id != row->events[k].id || events[k].payload != row->events[k].payload ||
                 events[k].target_id != row->events[k].target_id || events[k].delivery_id != row->events[k].delivery_id)
                 throw std::runtime_error("native replay order-action mismatch");
-        ledger.verify_report(i + 1, cumulative_report(strategy, deployment, i + 1));
+        ledger.verify_report(i + 1, cumulative_report(strategy, deployment, i + 1, report_deltas), [&] { return report_deltas.json(); });
         strategy.clear(strategy.state);
         recovering.members["metrics"].members["report_cursor"] = num(ledger.report_cursor());
         service.publish(recovering);
@@ -893,11 +884,23 @@ int run(Config c) {
         return record.at("ts").integer<std::uint64_t>();
     };
     if (recorded) source_timestamp = source_time(parse_json(ledger.input(recorded - 1)->canonical_json), source_time);
+    auto last_pulse = std::chrono::steady_clock::time_point{};
+    std::string last_state;
+    bool last_ready = false;
     const auto pulse = [&](bool force = false) {
         if (!service.enabled() && !c.max_ledger_bytes) return;
-        const auto bytes = ledger_bytes(c.ledger);
+        service.heartbeat();
+        const auto clock = std::chrono::steady_clock::now();
+        const auto bytes = c.max_ledger_bytes ? ledger_bytes(c.ledger) : 0;
         if (c.max_ledger_bytes && bytes > c.max_ledger_bytes) storage_stop = true;
         if (!service.enabled()) return;
+        const std::string state = storage_stop ? "storage_budget" : stopped ? "draining" : "running";
+        const bool ready = prefix_verified && !storage_stop && !stopped;
+        const bool changed = state != last_state || ready != last_ready;
+        if (!force && !changed && clock - last_pulse < std::chrono::seconds(c.status_interval)) return;
+        last_pulse = clock;
+        last_state = state;
+        last_ready = ready;
         const auto now = wall_time_ms();
         auto pending = parse_json(ledger.delivery_metrics_json(now));
         for (const auto& [name, target] : c.routing.targets) {
@@ -906,16 +909,17 @@ int run(Config c) {
                 {"pending_count", num(0)}, {"oldest_age_ms", Json{}}});
         }
         service.publish(Json::object({{"deployment", Json::string(deployment)},
-            {"state", Json::string(storage_stop ? "storage_budget" : stopped ? "draining" : "running")},
-            {"ready", Json::boolean(prefix_verified && !storage_stop && !stopped)},
+            {"state", Json::string(state)},
+            {"ready", Json::boolean(ready)},
             {"readiness", Json::object({{"validated_strategy_warmup", Json::boolean(true)},
                 {"recovered_ledger", Json::boolean(true)}, {"verified_source_prefix", Json::boolean(prefix_verified)},
                 {"no_unhealed_input_gap", Json::boolean(true)}, {"storage_below_budget", Json::boolean(!storage_stop)}})},
             {"metrics", Json::object({{"committed_input", num(ledger.input_count())},
                 {"last_seq", cursor.seen_tick ? num(cursor.tick_seq) : Json{}},
                 {"source_timestamp_ms", num(source_timestamp)}, {"source_lag_ms", num(now > source_timestamp ? now - source_timestamp : 0)},
-                {"queue_bytes", num(intake_bytes + delivery.queue_bytes())}, {"ledger_bytes", num(bytes)},
-                {"report_cursor", num(ledger.report_cursor())}, {"targets", std::move(pending)}})}}), force);
+                {"queue_bytes", num(intake_bytes + delivery.queue_bytes())}, {"ledger_bytes", num(c.max_ledger_bytes ? bytes : ledger_bytes(c.ledger))},
+                {"control_errors", num(delivery.control_errors())},
+                {"report_cursor", num(ledger.report_cursor())}, {"targets", std::move(pending)}})}}), force || changed);
     };
     pulse(true);
     auto consume_message = [&](const std::string &message, std::uint64_t &index) {
@@ -927,23 +931,29 @@ int run(Config c) {
                 throw std::runtime_error("input conflicts with committed prefix");
             ++replayed_prefix;
         } else {
-            if (index != ledger.input_count())
-                throw std::runtime_error("input sequence is not contiguous");
+            if (index != ledger.input_count()) {
+                service.input_gap();
+                throw InputGap("input sequence is not contiguous");
+            }
             // The entire feed message advances in memory before one
             // input/state/outbox transaction. Failure discards this instance;
             // interruption and delivery begin only after every event commits.
-            apply_record(strategy, c, cursor, frame);
+            try { apply_record(strategy, c, cursor, frame); }
+            catch (const InputGap&) { service.input_gap(); throw; }
             auto events = actions(strategy, c, deployment);
-            auto report = cumulative_report(strategy, deployment, index + 1);
+            auto report = cumulative_report(strategy, deployment, index + 1, report_deltas);
             ledger.commit_input(index, canonical, strategy.hash(strategy.state), events, report);
             strategy.clear(strategy.state);
             ++processed;
             source_timestamp = source_time(frame, source_time);
-            if (c.report_jsonl) std::cout << report << '\n' << std::flush;
+            if (c.report_jsonl) {
+                std::cout << report_deltas.json() << '\n' << std::flush;
+                if (!std::cout) throw std::runtime_error("report-jsonl stdout write failed; committed input remains durable");
+            }
         }
         ++index;
         if (index >= recorded) prefix_verified = true;
-        pulse(true);
+        pulse();
     };
     auto consume = [&](std::istream &in, std::uint64_t start, bool full_snapshot) {
         std::string row;
@@ -1185,7 +1195,8 @@ int ledger_command(int argc, char** argv) {
     if (!control_dir.empty()) {
         const auto identifier = sha256_hex(deployment + ":" + std::to_string(getpid()) + ":" +
             std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-        ControlDirectory controls(control_dir);
+        ControlDirectory controls(control_dir, false);
+        if (!ledger_running(path)) throw std::runtime_error("no runner owns this ledger; use offline redeliver");
         controls.submit(Json::object({{"schema_version", Json::string("pineforge-redelivery-request/v1")},
             {"deployment", Json::string(deployment)}, {"request_id", Json::string(identifier)},
             {"target", Json::string(target)}, {"from", num(from)}, {"failed_only", Json::boolean(failed_only)}}));
@@ -1223,6 +1234,7 @@ int main(int argc, char **argv) {
     capture_proxy_environment();
     std::signal(SIGINT, signal_stop);
     std::signal(SIGTERM, signal_stop);
+    std::signal(SIGPIPE, SIG_IGN);
     try {
         if (argc == 1 ||
             (argc == 2 && (std::string(argv[1]) == "--help" || std::string(argv[1]) == "help"))) {
