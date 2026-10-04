@@ -1,0 +1,16 @@
+{
+  "title": "n2b-r2-coof-low-call-on",
+  "slug": "n2b-r2-coof-low-call-on",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T18:06:37.636Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-06-22",
+    "to": "2025-06-23"
+  },
+  "pine_sha256": "c7b4c97f8337f636d918cde83f42974d82e3b2809c9384fa88cf36e7afeb8a9f",
+  "tv_trades_sha256": "cd1068c6a4eae1385d7e61aed36844923e57d27cf7f25f18350265e788cfa2e9",
+  "tv_trades_rows": 4
+}

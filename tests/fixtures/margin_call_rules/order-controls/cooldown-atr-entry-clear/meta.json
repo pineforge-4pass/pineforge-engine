@@ -1,0 +1,16 @@
+{
+  "title": "n2c-cooldown-atr-entry-clear",
+  "slug": "n2c-cooldown-atr-entry-clear",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T20:19:51.887Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2026-01-08",
+    "to": "2026-01-10"
+  },
+  "pine_sha256": "fe58fd4a10463be31bf99698b4b460b4588c753c775d2d09299c32ca43e9da0b",
+  "tv_trades_sha256": "e8f14ca3771e5c1e6f59ac8578250597e50a37e461a9183c1caa9d9042c67acf",
+  "tv_trades_rows": 10
+}

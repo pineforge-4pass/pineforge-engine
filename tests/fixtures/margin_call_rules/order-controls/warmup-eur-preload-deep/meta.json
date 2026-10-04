@@ -1,0 +1,16 @@
+{
+  "title": "n2c-warmup-eur-preload-deep",
+  "slug": "n2c-warmup-eur-preload-deep",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T20:03:44.464Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2025-03-27",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "a75f0d1f11a37ebf514674339d995ed290d6a46c2a92e05264c9b1641792570b",
+  "tv_trades_sha256": "76851ebea83c06f336f5ae43170bd1aa8d8643e92b5bf69c674d9d437cd05829",
+  "tv_trades_rows": 2
+}

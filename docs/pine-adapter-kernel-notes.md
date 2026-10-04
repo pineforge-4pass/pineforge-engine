@@ -131,6 +131,372 @@ keeps8595.81; the older 1.085 pin still floors918062.29999999993 to918062.29
 because the next grid point is above that input. Other scales stay unchanged.
 ```
 
+### 1.1 The margin rules pinned in October 2026
+
+The subsections below extend consequences 1, 2, 3 and 5 of the block above.
+One reference model reproduces 563 synthetic TradingView tapes under these
+rules with no counterexample (§1.7). The rules belong to the Pine adapter
+(`src/source/pine_adapter.cpp` and `include/pineforge/source/pine_adapter.hpp`),
+not to the kernel, and each sits behind one switch (§1.6). Where a rule's scope
+ends, the block above applies as written.
+
+Notation (binary64 throughout):
+
+| Symbol | Meaning |
+|---|---|
+| `fl(x)` | the binary64 value of `x` |
+| `sig10(x)` | `x` rounded to ten significant digits, half away from zero, in binary64 (`tv_money_round`) |
+| `tick` | `fl(mintick)` |
+| `c′` | a tick-built price, `ticks × tick` with `ticks = round(p / tick)`; unqualified, the signal bar's close |
+| `D(q)` | the shortest decimal that reads back as the double `q` |
+| `step` | the lot step, a power of ten |
+| `m` | the margin fraction, `margin_long` or `margin_short` over 100 |
+| `side` | +1 for a buy, −1 for a sell |
+| `slip` | the strategy's slippage, in ticks |
+| `E` | the source money at the signal, the block's `E_s` (§1.4) |
+| `Q` | the order's quantity |
+
+### 1.2 Sizing: the decimal lot floor
+
+A default percent-of-equity quantity is
+
+```text
+q = fl(sig10(E) / price)
+Q = floor(D(q) / step) × step        stored as the nearest double
+```
+
+`price` is `c′`, or the stop level for a stop order, and `Q` is frozen at
+placement. The floor reads the quotient's shortest decimal, not its binary
+value: an ETH 15-minute strategy whose `sig10(E) / 2198.9` prints `17.557`
+buys 17.557, where the binary floor took 17.5569, and a quotient printing
+`4.7185` buys 4.7185, not 4.7184. A quotient printing `25.268199999999997`
+still buys 25.2681: the floor never rounds up.
+
+Scope, as implemented (`default_sizing_lot_floor` through `decimal_floor_lot`):
+a percent-of-equity quantity with no commission reserved out of the sizing
+money, point value 1, no FX series and a power-of-ten lot step. Outside it the
+floor of consequence 1 (`source_money_floor_lot`, with its cent-lot case) runs
+unchanged.
+
+The floor moved two frozen oracle pins, 6.2789 to 6.279
+(`tests/oracle/test_oracle_frozen_size.cpp` and
+`tests/test_default_qty_signal_freeze.cpp`), on a TradingView control of the
+same operands (`tests/fixtures/margin_call_rules`
+`sizing/sizing-decimal-floor-oracle-control`): an ETH long at 2525 on an
+equity of 15854.4750001, whose `sig10(E) / 2525` prints `6.279`, buys 6.279,
+in two byte-identical exports.
+
+Under `process_orders_on_close` a default percent-of-equity **market** order is
+sized on its slipped execution price, and with a percentage commission on that
+price grossed up by the fee on the ten-digit money grid (`pooc_fee_sizing`):
+
+```text
+exec = (round(c′ / tick) + side × slip) × tick
+unit = commission > 0 ? sig10(exec × (1 + commission / 100)) : exec
+Q    = floor(D(fl(sig10(E) / unit)) / step) × step
+```
+
+Only the denominator changes; the decimal floor stays. The outer `sig10` is
+load-bearing: a BTC reversal at a close of 85253.54 with a 0.05 % commission
+buys **1.13834** on `sig10(85296.15676499999) = 85296.15676`, where the raw
+product buys 1.13833. At a commission of 0 the unit is `exec` itself, with no
+`sig10` (an ETH long at slippage 1 buys 1.9999 where a rounded unit would
+drop it). A reversal is sized on the placement equity, the old position
+marked at `c′` before its exit is booked, and the new position is funded by the
+broker's cash after the outgoing fill and its exit fee. Non-POOC, stop, limit
+and explicit-quantity sizing are not covered (`pooc_fee_units`), nor is the
+commission-0 unit: `pooc_fee_units` takes a positive percentage commission
+only.
+
+### 1.3 Admission: at the signal and at the fill
+
+Admission has two halves. Both read the money frozen at the signal,
+`E_signal`; neither re-marks a held position at the fill.
+
+**At placement**, on the signal bar:
+
+1. *Money* (consequence 2), at the unslipped signal close: the order fails when
+   the raw `E < sig10(Q × c′ × m)`. An order from flat is dropped; a reversal
+   keeps only its closing leg.
+2. *Price* (consequence 5), at the slipped signal close, for every order type
+   (market and stop, default and explicit quantities): the whole order is
+   dropped when `sig10(sig10(E) / Q) < (round(c′ / tick) + side × slip) × tick`.
+   It applies at margin 100 only (§1.8).
+
+**At the fill**, one check on the price scale, for every order type at every
+margin. The whole order is dropped iff
+
+```text
+sig10(sig10(E_signal) / (Q × m)) < exec
+```
+
+where `exec` is the tick-built fill quote moved `side × slip` ticks:
+
+| Fill | Quote before slippage |
+|---|---|
+| market, at the next bar | the next bar's open |
+| stop | `max(open, stop)` for a buy, `min(open, stop)` for a sell |
+| under process_orders_on_close | the signal close |
+
+No money check runs at the fill quote, at any margin: an order whose per-unit
+budget reaches `exec` fills even when `E_signal < sig10(Q × quote × m)`, and
+the margin call that shortfall triggers follows (§1.5). A
+reversal rejected at the fill keeps its old position: the closing leg is
+dropped with the entry, for explicit and default quantities alike. Both halves
+are pinned at point value 1 without an FX series.
+
+As implemented (`unified_admission_scope`, `unified_fill_admits`,
+`unified_tie_band`), the two halves decide one `strategy.entry` market or stop
+order, from flat or reversing, at a percent-of-equity 100 default or an
+explicit quantity, with no commission, pyramiding at most 1, nothing else
+resting but unpriced closes and no risk rule; a default order's placement half
+is also taken in `entry`, so a whole-dropped reversal leaves the script's own
+closes standing. Two narrowings keep the scraped population's orders on the
+earlier rules: an entry the script placed behind its own `strategy.close` of
+the same bar (an opening after that close, which TradingView fills at a worse
+open and margin-calls) is out of scope, and so is an order whose cost at the
+signal close and at its fill both sit more than `Q × tick × m × (1 + slip)`
+from `sig10(E)`. Outside that scope the engine's earlier admission rules run
+unchanged.
+
+The tree ships this unified admission off: `fill_price_recheck` (§1.6) gates
+it whole, its fill half and the placement half's reach to default orders and
+reversals. With it on, the scraped population lost orders TradingView fills
+at a gap and then margin-calls (§1.8). Off, `slipped_signal_admission` keeps
+the earlier scopes: an explicit quantity from flat at margin 100 (market, or a
+stop under process_orders_on_close) judged in `entry`, a percent-of-equity
+stop from flat under process_orders_on_close, and an explicit market long's
+money check at its next-bar fill on the unslipped quote.
+
+### 1.4 The G+L source money
+
+TradingView's realized money is not one running sum. The adapter keeps it as
+two binary64 accumulators, `G` for the gains and `L` for the losses: every
+closed slice, margin-call slices included, adds its realized profit to one of
+them, in booking order. At each signal
+
+```text
+E  = (initial_capital + (G + L)) + side × (c′ − AP) × Q
+AP = (entry × Q) / Q
+```
+
+with `side` and `Q` those of the held position; flat, the open-profit term is
+zero. `AP` is evaluated in binary64 and can sit one ulp off the entry price;
+no tape holds several lots. This
+`E` sizes the order (§1.2), it is the `E` of both placement checks and the
+`E_signal` of the fill check (§1.3), the equity of the margin-call money and,
+as `initial + (G + L)`, the cash of the residual call (§1.5). `G` and `L` are
+durable adapter state, folded into the broker-state hash wherever their sum
+differs from the engine's running net profit.
+
+As implemented (`gain_loss_signal_equity`), the mirror stands in for the
+engine's equity only inside the regime the tapes pin: no fee at all (none
+configured, none in the run's fee model, none recorded at an opening), point
+value 1, no FX series, a power-of-ten lot step and at most one open lot.
+There it feeds the sizing money (`mark_sizing_equity`), the explicit
+placement checks, the margin-call money (`source_margin_money`) and the dust
+unit, but not the residual call's cash, which stays on the closed-trade
+equity (§1.5). Everywhere else the engine's own equity stands. A wider first
+scope moved closed trades in fuzz runs with no tape behind them: a
+commission written into a live configuration, whose open entry fee the
+mirror never charged; cash fees recorded at an opening; pyramided books; and
+continuous lots, where an unrounded money reached a margin-call quantity.
+`tests/test_publication_witness.cpp` keeps those run-passes as regression
+tests: the mirror must equal the engine's equity there.
+
+The split moves `E` only in its last bits, but the admission checks compare
+`E` with a ten-digit cost at that resolution: an account at
+`73331.99999999993` against a cost of `73332` turns a reversal into a
+close-only order. One sequential sum of the same profits fails 20 of the 563
+tapes (§1.7).
+
+### 1.5 The 1x long residual call and the close point
+
+A margin-100 long whose money covers its cost can still fall short of the
+ten-digit value of the position. The rule is consequence 3's test, equity
+below `sig10` of the position's value, written on the free cash and compared
+with no tolerance:
+
+- *Trigger.* With `free_cash = cash − Q × entry`, one unit is called at a
+  tick-built mark `p` when `free_cash < sig10(Q × p) − Q × p`. Negative free
+  cash calls the unit too.
+- *Schedule.* One schedule: the opening mark of every bar, then the low, then
+  the close point of every bar; the high is not checked. The fill bar is
+  checked from its opening mark when the order did not fill under
+  process_orders_on_close; a process_orders_on_close fill is first checked at
+  the next bar's open.
+- *Fee or slippage.* The generic quantum applies at `p ∓ slip`:
+  `4 × floor(sig10(deficit) / p / m / step) × step`, falling back to one unit.
+- *calc_on_order_fills.* A call at an extreme of a bar whose script placed
+  `strategy.close_all` recalculates the script there, and the close fills at
+  the bar's next price point (the other extreme, or the close) with the
+  close's slippage.
+- *process_orders_on_close.* The close point's call runs beside the bar's own
+  `close_all`, which was sized before the call: the `close_all` sells the
+  pre-call quantity and so reverses the called units into a short, which the
+  range-end rows report at the range end.
+
+As implemented, the rules run in two scopes. Both take a single long lot at
+margin 100 with point value 1, no FX series, a lot step of at most 1, no
+commission and no intraday cap or risk rule.
+
+| Scope | Where | Checks |
+|---|---|---|
+| No slippage: a single-entry book whose net profit carries no tracked roundoff; pyramiding at most 1, unless under process_orders_on_close or with a lot worth under 1; under process_orders_on_close, nothing resting but margin orders and the bar's own `close_all` | `submit_tv_money_long_margin_call` | the open, the low and the close at `c′` with the exact trigger above on the closed-trade equity, at most one call per script bar; negative free cash is left to the guarded check |
+| Slippage: a `strategy.entry` lot with no exit levels on its placement, pyramiding at most 1, nothing pending and nothing resting but margin orders and the bar's `close_all` | `slipped_long_margin_scope` and `slipped_long_margin_units`, from `on_bar_open` | every bar's opening mark: `sig10(Q × open)` against the closed-trade equity plus the open profit, one unit when the shortfall is under one lot's worth (a larger one stays with the existing margin checkpoints); negative free cash calls the unit; the close fill that opened the position takes no call, as `slipped_long_unit_shortfall` moves it to the next open |
+
+Not implemented: the residual call on the G + L cash after a trade history
+whose net profit carries tracked roundoff (it moved TradingView-pinned
+residual and opening-budget tests), the slipped long's call at the low or the
+close (it contradicts `tests/test_pooc_open_money_event_l4b.cpp`), the generic quantum
+and the close-point check for a long with a fee or slippage, the close-point
+reversal when the unslipped scope's opening call falls on the `close_all` bar
+under calc_on_order_fills, and margin checks on the reversed position.
+
+Margin-call slices (a short, or a long below margin 100): the requirement is
+`Q × p × m`, four times the restore
+`floor(sig10(requirement − E) / (p × m) / step) × step` is called, and a dust
+restore falls back to one unit. `source_margin_units` already floors
+`sig10(deficit)`; on the G + L money its `E` is the mirror's, and a shortfall
+of any size is a call (`dust_unit_call`): the engine used to discard a
+restore under 1e-10 units, where TradingView calls one unit (an NYSE:F long
+ledger, a margin-50 ETH long admitted one ulp under its cost).
+
+### 1.6 Switches
+
+`MarginRuleSwitches` (`include/pineforge/source/pine_adapter.hpp`, namespace
+`pineforge::source::detail`, read through `margin_rule_switches()`) holds one
+switch per rule, so a regression bisects per rule. It is process-wide and not
+installed API: no strategy input reaches it, and only tests change a switch.
+The gated code is in `src/source/pine_adapter.cpp`.
+
+| Switch | Pin name | Default | Gates | Where |
+|---|---|---|---|---|
+| `decimal_sizing` | SIZING_DEC | on | the decimal lot floor (§1.2) | `default_sizing_lot_floor` |
+| `slipped_signal_admission` | ADMIT_V2, placement | on | the money check at `c′` and the price check at `c′ ± slip` (§1.3) | placement in `entry` |
+| `fill_price_recheck` | ADMIT_V2, fill | off | the unified admission (§1.3): the fill's price-scale check and its whole-drop, and the placement half for default orders and reversals | `unified_admission_scope`, `unified_fill_admits`, `unified_tie_band`, the default placement in `entry` |
+| `gain_loss_money` | G+L | on | the G+L source money (§1.4), inside the regime its tapes pin | the source money at each signal and the margin-call slices that book into it, not the residual call's cash; the state hash in `src/source/pine_state_hash.cpp` |
+| `dust_unit_call` | margin slices | on | a dust restore's one-unit call on the G + L money (§1.5) | `source_margin_units` |
+| `pooc_fee_sizing` | POOC_FEE_SIZING | on | the process_orders_on_close fee-grossed sizing unit (§1.2) | `pooc_fee_units` |
+| `long_open_close_checks` | LONG_OPEN | on | the residual call's trigger and schedule (§1.5) | `submit_tv_money_long_margin_call`, `slipped_long_margin_scope` |
+| `negative_free_cash_call` | LONG_OPEN | on | the slipped long's unit on negative free cash | `slipped_long_margin_units` |
+| `coof_next_point_close` | COOF_CLOSE | on | the calc_on_order_fills close at the next point | `close_all_at_next_point` |
+| `close_point_reversal` | CLOSE_POINT | on | the `close_all` sized before the close point's call | `submit_tv_money_long_margin_call`, `fill_pooc_close_exits` |
+
+Comments in the adapter that say "margin rule 1" to "margin rule 5" mean the
+pin names SIZING_DEC, ADMIT_V2, LONG_OPEN, COOF_CLOSE and CLOSE_POINT, in that
+order, not the consequences of the block above.
+
+### 1.7 Evidence
+
+One reference model of these rules reproduces all 563 tapes row for row, with
+no counterexample. Every tape is a synthetic script written for these rules
+and exported with the lab's TradingView exporter. The tapes are committed with
+their scripts, parameters and bar windows. The tests replay each tape through
+`PineStrategyHost` and compare TradingView's rows with the engine's report
+rows; a tape the engine does not reproduce must be listed in its test, with
+the reason.
+
+| Format | Tapes | Fixture | Test |
+|---|---:|---|---|
+| single position (slippage, fees, stops, process_orders_on_close, calc_on_order_fills) | 182 | `tests/fixtures/margin_call_rules` | `test_margin_call_rules_tapes` |
+| event ledger (a trade history ahead of the decision) | 381 | `tests/fixtures/margin_ledger_rules` | `test_margin_ledger_rules_tapes` |
+
+The single-position fixture also asserts 13 process_orders_on_close fee-sizing
+tapes, 3 commission-0 controls, the oracle control of §1.2 and 10 order
+controls replayed through handwritten hosts, and it records 67 tapes of the
+short-and-slippage gate (`short-cutoff-gate`) without asserting them. With the
+shipped switches the engine reproduces 170 of the 199 asserted single-position
+tapes and 269 of the 381 ledger tapes; with every switch on, 172 and 373.
+The tests list 3 single-position and 104 ledger tapes as `fill re-check off:
+gap regime unpinned`, each reproduced with every switch on; the
+single-position gap is 2, not 3, because `c1r3-fee0-a-pct-long-s1` matches
+only with the shipped switches. `test_margin_rules_forward_replay` replays a
+sample of both fixtures as a backtest and as a bar-by-bar stream, with every
+switch on, with every switch off and with the shipped switches, and requires
+the two modes to book the same trades.
+
+The admission split rests on a 13-source factorial: slippage 0, 1 or 2; a fill
+exact or one ulp high; `E` just under, at or over the cost; flat and reversal;
+long and short; market, stop, percent and explicit orders; margin 100 and 50.
+Each source was exported four times, all four byte-identical, and each
+prediction was recorded before its export. Its deciding cells:
+
+| Cell | TradingView | Decides |
+|---|---|---|
+| percent long, slippage 2, one-tick gap up, budget just above `c′` + 2 ticks | dropped | the fill check reads the slipped exec (`c′` + 3 ticks), not the quote |
+| explicit long, slippage 1, money passing at the quote | dropped | the price check covers explicit orders |
+| explicit stop long, slippage 1, budget just below the stop + 1 tick | dropped | a stop's exec is the stop plus the slippage |
+| explicit long, `E` one ulp under `sig10(Q × fill)`, exact fill | filled, one-unit call at the open | no money check at the fill |
+| explicit long, per-unit budget at the decimal fill price, tick-built fill one ulp above it | dropped | the per-unit budget meets the tick-built exec |
+| explicit long, margin 50, `E` one ulp under the margin-50 cost | filled, one-unit call | no money check at the fill at margin 50 either |
+| explicit long-to-short reversal rejected at the fill | long kept | a rejection at the fill drops the whole order |
+| margin 50, long and short, fill one ulp high; the exact fill | dropped; filled | the budget at margin `m` is `sig10(sig10(E) / (Q × m))` |
+
+What each alternative costs, in tapes of the 563 the reference model then
+fails:
+
+| Alternative | Fails |
+|---|---:|
+| one sequential realized sum in place of G + L | 20 |
+| the binary lot floor `floor(q / fl(step)) × fl(step)` | 68 |
+| an integer-scaled lot floor | 3 |
+| a money check at the fill quote and no fill price check | 51 |
+| a money check at the fill quote beside the price check | 22 |
+| the fill price check at the unslipped quote | 5 |
+| the fill price check for default quantities only | 17 |
+| the fill price check at margin 100 only | 2 |
+| the fill check on the equity marked at the fill | 58 |
+| an explicit reversal rejected at the fill keeping its closing leg | 4 |
+| no opening-mark residual check | 10 |
+| no close-point check | 2 |
+| no calc_on_order_fills next-point close | 6 |
+| the raw deficit, not `sig10(deficit)`, for margin slices | 16 |
+
+### 1.8 Known gaps
+
+No tape discriminates four choices; the tree keeps the conservative one:
+
+1. `sig10` in binary64 or on the double's exact decimal value: binary64
+   (`tv_money_round`).
+2. The margin requirement when a lot is worth 1 or more, exact or under
+   `sig10`: the existing form of `source_margin_money`.
+3. The opening-basis floor of `source_margin_units`, which floors the raw
+   restore at an opening checkpoint whose requirement is exact: kept.
+4. The price check at placement (§1.3) for margin ≠ 100: the margin-scaled
+   and the margin-100-only forms both reproduce every tape; the tree applies
+   it at margin 100 only.
+
+No tape covers a default-quantity reversal with slippage (the event-ledger
+tapes carry no slippage), nor percent-of-equity sizing above 100 %.
+
+What the tree does not reproduce yet, each listed in its test:
+
+- The fill re-check, and with it the unified admission (§1.3), ships off. On
+  the scraped population it dropped reversals and openings that TradingView
+  fills at a gap of several ticks and then margin-calls at the fill (an NYSE:F
+  short-to-long reversal at 9.09 followed by a 180-unit call; an ETH daily
+  long-to-short reversal). The tapes pin the check only at a one-tick or
+  one-ulp margin, where TradingView whole-drops the order; the gap regime
+  between is unpinned.
+- The residual call on the G + L cash after a trade history (the
+  `proozac-history-k0` ledgers, `G+L residual call: history regime unpinned`).
+- The carried short's source-close and fresh-opening call schedule, a short's
+  call quantum at margin 50, a multi-lot short's call at the high, and a
+  multi-lot long at margin 50 with a per-contract fee.
+- The slipped long's one-unit call at the low (§1.5).
+- The money of a long's one-unit call after a trade history. The slipped
+  long's call (`slipped_long_margin_units`) reads the closed-trade equity, the
+  running net profit, not G + L. On a population NYSE:F strategy, a two-unit
+  long at 13.68 meets a 27.36 cost on TradingView's G + L money,
+  27.359999999956926, and is called; a running sum need not be, and the
+  engine misses the call.
+
+The shipped rules also decide cases no tape covers: the decimal lot floor at
+percentages other than 100, for shorts and for stop orders; the fee-grossed
+unit at percentages and margins other than 100; the dust unit for shorts; and
+the calc_on_order_fills close after a bar's second extreme.
+
 ## 2. `strategy.close`: the per-entry-id ledger and same-bar batching
 
 Was `include/pineforge/engine.hpp:503-565`, next to storage that is the

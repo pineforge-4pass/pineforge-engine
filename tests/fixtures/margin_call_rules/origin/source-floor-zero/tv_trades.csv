@@ -1,0 +1,3 @@
+﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)
+1,Exit long,2025-06-22 22:45,Close position order,2177.53,17.5569,38605.86741,-375.19095,-0.97,0,229.99539,0.60,-768.99225,-1.99,-375.19095,-0.97,3
+1,Entry long,2025-06-22 22:00,probe,2198.9,17.5569,38605.86741,-375.19095,-0.97,0,229.99539,0.60,-768.99225,-1.99,-375.19095,-0.97,3

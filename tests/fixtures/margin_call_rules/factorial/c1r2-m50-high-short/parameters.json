@@ -1,0 +1,21 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 2488.1175,
+  "direction": "short",
+  "qty": 1.5,
+  "sizing": "explicit",
+  "slippage": 0,
+  "fee": 0.0,
+  "margin": 50,
+  "pooc": false,
+  "coof": false,
+  "entry": "2025-01-09T08:30:00+00:00",
+  "close": "2025-01-09T08:45:00+00:00",
+  "from": "2025-01-09",
+  "to": "2025-01-10",
+  "name": "n12-c1r2-m50-high-short",
+  "note": "c 3317.48 open 3317.4900000000002 (dec 3317.49): E = T50 2488.1175; budget 3317.49"
+}

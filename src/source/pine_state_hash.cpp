@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <type_traits>
 #include <variant>
 
@@ -550,6 +551,33 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.u(last_margin_call_entry_incarnation_); f.i(last_margin_call_position_cycle_);
     f.b(last_margin_call_at_script_close_);
     f.d(last_margin_call_closed_units_); f.d(last_margin_call_remaining_units_);
+    // The G + L money mirror (gain_loss_money), over every closed trade
+    // whenever this hash is taken (the stored sums plus the trades booked
+    // since their last fold), so the digest never depends on when they were
+    // folded. Its sum is the engine's netprofit, already in the engine's
+    // state, wherever the two agree bit for bit; the sums are folded where
+    // they part, so a run they never part on keeps its digest.
+    if (source::detail::margin_rule_switches().gain_loss_money) {
+        if (const auto* pine = pine_view_of(host_)) {
+            // A new run's ledger shorter than the stored fold starts over,
+            // as fold_source_money does.
+            const std::uint64_t count = pine->closed_trade_count();
+            const bool restart = count < source_money_folded_;
+            double gains = restart ? 0.0 : source_gains_;
+            double losses = restart ? 0.0 : source_losses_;
+            for (std::uint64_t index = restart ? 0 : source_money_folded_;
+                 index < count; ++index) {
+                const double profit = pine->closed_trade(index).pnl;
+                if (profit > 0.0) gains += profit;
+                else losses += profit;
+            }
+            const double mirrored = gains + losses;
+            const double engine_net = pine->net_profit_sum_;
+            if (count != 0 && std::memcmp(&mirrored, &engine_net, sizeof(double)) != 0) {
+                f.d(gains); f.d(losses); f.u(count);
+            }
+        }
+    }
     f.i(signal_close_mc_event_bar_);
     f.i(signal_close_mc_position_cycle_); f.u(signal_close_mc_entry_incarnation_);
     f.u(signal_close_mc_fill_seq_); f.d(signal_close_mc_before_qty_);

@@ -1,0 +1,41 @@
+//@version=6
+strategy("N1 aapl-history-k10-only-v2-ledger-witness", initial_capital=92055.580000000002, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100)
+var string witness = ""
+var int consumed = 0
+var float nativeSum = 0
+var float directSum = 0
+var float valueSum = 0
+var float gainSum = 0
+var float lossSum = 0
+var string lastTrade = ""
+if strategy.closedtrades > consumed
+    for tradeIndex = consumed to strategy.closedtrades - 1
+        entryPrice = strategy.closedtrades.entry_price(tradeIndex)
+        exitPrice = strategy.closedtrades.exit_price(tradeIndex)
+        signedQuantity = strategy.closedtrades.size(tradeIndex)
+        nativeProfit = strategy.closedtrades.profit(tradeIndex)
+        directProfit = (exitPrice - entryPrice) * signedQuantity
+        nativeSum := nativeSum + nativeProfit
+        directSum := directSum + directProfit
+        valueSum := valueSum + math.sign(signedQuantity) * (exitPrice * math.abs(signedQuantity) - entryPrice * math.abs(signedQuantity))
+        gainSum := gainSum + math.max(nativeProfit, 0)
+        lossSum := lossSum + math.min(nativeProfit, 0)
+        lastTrade := ";LP=" + str.tostring(nativeProfit, "#.################") + ";LE=" + str.tostring(entryPrice, "#.################") + ";LX=" + str.tostring(exitPrice, "#.################") + ";LQ=" + str.tostring(signedQuantity, "#.################")
+    consumed := strategy.closedtrades
+if time == timestamp("UTC", 2026, 4, 1, 18, 15)
+    strategy.entry("Ledger0", strategy.short, qty=361)
+if time == timestamp("UTC", 2026, 4, 1, 18, 30)
+    strategy.entry("Ledger1", strategy.long, qty=361)
+if time == timestamp("UTC", 2026, 4, 1, 18, 45)
+    strategy.entry("Ledger2", strategy.short, qty=360)
+if time == timestamp("UTC", 2026, 4, 1, 19, 0)
+    strategy.entry("Ledger3", strategy.long, qty=359)
+if time == timestamp("UTC", 2026, 4, 1, 19, 45)
+    strategy.entry("Ledger4", strategy.short, qty=359)
+if time == timestamp("UTC", 2026, 4, 2, 14, 45)
+    strategy.entry("Seed", strategy.long, qty=356)
+if time == timestamp("UTC", 2026, 4, 2, 15, 0)
+    witness := "E=" + str.tostring(strategy.equity, "#.################") + ";N=" + str.tostring(strategy.netprofit, "#.################") + ";OP=" + str.tostring(strategy.openprofit, "#.################") + ";P=" + str.tostring(strategy.position_size, "#.################") + ";C=" + str.tostring(close, "#.################") + ";T=" + str.tostring(math.round_to_mintick(close), "#.################") + ";NS=" + str.tostring(nativeSum, "#.################") + ";DS=" + str.tostring(directSum, "#.################") + ";VS=" + str.tostring(valueSum, "#.################") + ";GS=" + str.tostring(gainSum, "#.################") + ";LS=" + str.tostring(lossSum, "#.################") + lastTrade
+    strategy.entry("Turn", strategy.short, comment=witness)
+if time == timestamp("UTC", 2026, 4, 2, 15, 30)
+    strategy.close_all(comment="SENSOR|" + witness)

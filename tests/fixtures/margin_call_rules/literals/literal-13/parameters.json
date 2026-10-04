@@ -1,0 +1,21 @@
+{
+  "symbol": "BINANCE:BTCUSDT",
+  "feed": "btc",
+  "step": 0.00001,
+  "tick": 0.01,
+  "initial_capital": 97047.53842489024,
+  "direction": "short",
+  "qty": 1.1383400000000001,
+  "slippage": 1,
+  "fee": 0.05,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2025-04-12T23:00:00+00:00",
+  "close": "2025-04-13T01:00:00+00:00",
+  "from": "2025-04-12",
+  "to": "2025-04-14",
+  "name": "n2-member-13-literal",
+  "member": 13,
+  "from_": "2025-04-12"
+}

@@ -1,0 +1,16 @@
+{
+  "title": "n2-stopband-market-p001",
+  "slug": "n2-stopband-market-p001",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T15:53:45.051Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2026-02-17",
+    "to": "2026-02-18"
+  },
+  "pine_sha256": "e70a225977867583fb706aec8df6d64784f937b0f57af7c04439dff9d8180534",
+  "tv_trades_sha256": "975bad3331f092d6c94635e9eacb2b269713cf7228ae01bede07d241465b0093",
+  "tv_trades_rows": 10
+}

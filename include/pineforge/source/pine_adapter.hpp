@@ -369,6 +369,36 @@ void placement_audit_scan_hit(const PlacementTable* table, std::uint64_t incarna
 // The erased rows the audit keeps for `table`, ascending, or null.
 const std::vector<std::pair<std::uint64_t, const PlacementSnapshot*>>*
 placement_audit_tombstones(const PlacementTable* table);
+
+// The TradingView margin rules pinned on the tapes under
+// tests/fixtures/margin_call_rules and tests/fixtures/margin_ledger_rules, one
+// switch each so a regression bisects per rule; all on but the unified
+// admission (its gap regime is unpinned), only tests change one. Process-wide,
+// read by every adapter; not installed API and no strategy input reaches it.
+//
+// fill_price_recheck gates two rules, not one: the fill re-check (price scale
+// only, whole-drop) and the unified placement half (rules 2 and 5) for
+// default orders and reversals -- the block in entry() and
+// unified_admission_scope, which also carries the signal half inside
+// resolve_terms, both read it. Off, as shipped, default orders and reversals
+// keep the core's earlier admission, and explicit orders keep
+// slipped_signal_admission's earlier placement plus its next-bar money check
+// on the unslipped quote, which the margin_ledger_rules and margin_call_rules
+// tapes replace with the fill re-check. Splitting the two rules into two
+// switches is a precondition for ever turning this one on.
+struct MarginRuleSwitches {
+    bool decimal_sizing = true;           // shortest decimal of the quotient, floored
+    bool slipped_signal_admission = true; // placement: money at c', price at c' +- slip
+    bool fill_price_recheck = false;      // the unified admission: placement half + fill re-check
+    bool gain_loss_money = true;          // realized money as the G + L sums
+    bool dust_unit_call = true;           // a dust restore calls one unit
+    bool long_open_close_checks = true;   // a long's one-unit call at open, low and close
+    bool negative_free_cash_call = true;  // negative free cash calls the unit too
+    bool coof_next_point_close = true;    // COOF close after a call at the next point
+    bool close_point_reversal = true;     // a close_all sized before a close-point call
+    bool pooc_fee_sizing = true;          // POOC default sizing on the slipped, fee-grossed unit
+};
+MarginRuleSwitches& margin_rule_switches() noexcept;
 } // namespace detail
 
 #ifndef PINEFORGE_PLACEMENT_AUDIT
@@ -1810,6 +1840,23 @@ private:
                                   std::optional<double> resolved_execution_price = std::nullopt);
     bool submit_tv_money_long_margin_call(const Bar&, const NativeDecisionContext&,
                                           int* fired_waypoint = nullptr);
+    void fold_source_money();
+    bool gain_loss_regime() const;
+    double gain_loss_signal_equity(double mark) const;
+    double gain_loss_mirror_equity(double mark) const;
+    std::optional<double> pooc_fee_units(const PineSizingSnapshot&) const;
+    double tv_pooc_fee_grossed_unit(double price) const;
+    bool unified_admission_scope(const PlacementSnapshot&, bool market_or_stop,
+                                 double signed_units, double units) const;
+    bool unified_fill_admits(const PlacementSnapshot&, double units, double quote) const;
+    bool unified_tie_band(const PlacementSnapshot&, double units, double quote) const;
+    bool slipped_long_margin_scope() const;
+    double slipped_long_margin_units(double quote) const;
+    bool slipped_long_unit_shortfall(double quote) const;
+    bool close_all_at_next_point(
+        const Bar&, int fired,
+        const std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>>& closes,
+        const NativeDecisionContext&);
     bool slipped_pooc_opening_money_scope(
         const Bar&, const NativeDecisionContext&) const;
     bool submit_slipped_pooc_opening_money_call(
@@ -2283,6 +2330,11 @@ private:
     bool last_margin_call_at_script_close_ = false;
     double last_margin_call_closed_units_ = 0.0;
     double last_margin_call_remaining_units_ = 0.0;
+    // TradingView's realized money (gain_loss_money): every closed trade's
+    // profit, in booking order, summed into gains and into losses apart.
+    double source_gains_ = 0.0;
+    double source_losses_ = 0.0;
+    std::uint64_t source_money_folded_ = 0;
     std::int64_t risk_coof_direct_script_bar_ = std::numeric_limits<std::int64_t>::min();
     std::uint64_t cap_latest_fill_ = 0;
     bool source_margin_call_enabled_ = true;

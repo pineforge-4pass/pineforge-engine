@@ -1,0 +1,21 @@
+{
+  "symbol": "NYSE:F",
+  "feed": "f",
+  "step": 1.0,
+  "tick": 0.01,
+  "initial_capital": 23.359999999,
+  "direction": "long",
+  "qty": 2.0,
+  "sizing": "explicit",
+  "slippage": 2,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": true,
+  "coof": true,
+  "entry": "2025-09-17T18:30:00+00:00",
+  "close": "2025-09-17T19:00:00+00:00",
+  "from": "2025-09-17",
+  "to": "2025-09-18",
+  "name": "n2b-f-coof-on-close2",
+  "note": "fill 11.68; call at t+1 open, COOF recalc not close bar; close at t+2"
+}

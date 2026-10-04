@@ -1,0 +1,19 @@
+{
+  "name": "f2b-eur-rawfloor-1",
+  "initial_capital": 996097.5954,
+  "direction": "short",
+  "qty": null,
+  "sizing": "percent",
+  "slippage": 0,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": false,
+  "coof": false,
+  "tick": 1e-05,
+  "step": 0.01,
+  "feed": "eur",
+  "entry": "2025-04-02T19:45:00+00:00",
+  "close": "2025-04-02T20:15:00+00:00",
+  "from": "2025-04-02",
+  "to": "2025-04-03"
+}

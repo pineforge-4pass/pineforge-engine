@@ -1,0 +1,16 @@
+{
+  "title": "n2b-size-eth-m6u",
+  "slug": "n2b-size-eth-m6u",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T17:59:32.891Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-08",
+    "to": "2025-04-09"
+  },
+  "pine_sha256": "f7e253e45a4b30bcbafa3c76a553e2d9e707e6c80858e3ff74ae02d0ef28b391",
+  "tv_trades_sha256": "99b48159733e31f1ee5b2e5d9a828cc813e167438d6e84b8a3f0e79ea3178af2",
+  "tv_trades_rows": 2
+}

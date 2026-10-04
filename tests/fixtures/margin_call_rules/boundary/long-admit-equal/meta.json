@@ -1,0 +1,16 @@
+{
+  "title": "n2-long-admit-equal",
+  "slug": "n2-long-admit-equal",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T15:35:41.278Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-12-15",
+    "to": "2025-12-16"
+  },
+  "pine_sha256": "c3bc2ea38462b37447cb97bb051a3791eb93c4c87b8b5621e3e1b0cb7e482ea3",
+  "tv_trades_sha256": "b6d2332ba895634f9e97093bf2875c1f667032f0ebb3087fbf87b0f8c6ad74f5",
+  "tv_trades_rows": 2
+}

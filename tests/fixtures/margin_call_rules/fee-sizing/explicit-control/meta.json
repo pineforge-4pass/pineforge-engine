@@ -1,0 +1,16 @@
+{
+  "title": "n2c-feesize-explicit-control",
+  "slug": "n2c-feesize-explicit-control",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T19:32:50.716Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-12",
+    "to": "2025-04-14"
+  },
+  "pine_sha256": "8b54a9042cd25b418f6b28caafc0577d7beb11f071730fd9aaed8c2da2b64d12",
+  "tv_trades_sha256": "2fea55221e143b00d604ccc84c023fed863cf30ac731dc806505b3b2888208db",
+  "tv_trades_rows": 4
+}

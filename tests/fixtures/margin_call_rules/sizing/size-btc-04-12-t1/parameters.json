@@ -1,0 +1,21 @@
+{
+  "symbol": "BINANCE:BTCUSDT",
+  "feed": "btc",
+  "step": 1e-05,
+  "tick": 0.01,
+  "initial_capital": 99993.801093,
+  "direction": "long",
+  "qty": null,
+  "sizing": "percent",
+  "slippage": 0,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2025-04-12T00:00:00+00:00",
+  "close": "2025-04-12T00:15:00+00:00",
+  "from": "2025-04-12",
+  "to": "2025-04-13",
+  "name": "n2b-r2-size-btc-04-12-t1",
+  "note": "T1: q=1.20075 qdec 1.20075 binary 1.2007400000000001 mul_inv 1.20075"
+}

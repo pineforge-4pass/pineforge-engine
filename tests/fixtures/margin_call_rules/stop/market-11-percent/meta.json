@@ -1,0 +1,16 @@
+{
+  "title": "n2-market-11-percent",
+  "slug": "n2-market-11-percent",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T15:35:52.829Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-02",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "45dd7eb7e46ff56b6c0c5387cd4fb3caa2086157e5ec1cfe93ead0371f492ee0",
+  "tv_trades_sha256": "006e5d86333ff2ad8285725bef74e5ec9720540e900465e43be5006120e79df2",
+  "tv_trades_rows": 2
+}

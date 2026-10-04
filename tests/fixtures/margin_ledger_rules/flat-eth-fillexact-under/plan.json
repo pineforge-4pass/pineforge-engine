@@ -1,0 +1,38 @@
+{
+  "name": "flat-eth-fillexact-under",
+  "symbol": "BINANCE:ETHUSDT.P",
+  "timeframe": "15",
+  "capital": 10762.945689999999,
+  "events": [
+    {
+      "time": 1769997600000,
+      "op": "entry",
+      "id": "Turn",
+      "side": 1,
+      "qty": null,
+      "boundary": true
+    },
+    {
+      "time": 1770000300000,
+      "op": "close_all"
+    }
+  ],
+  "boundary": 1769997600000,
+  "after_close": false,
+  "tick": 0.01,
+  "step": 0.0001,
+  "margin_long": 100,
+  "margin_short": 100,
+  "from": "2026-02-02",
+  "to": "2026-02-03",
+  "metadata": {
+    "Q": 4.7185,
+    "T_sig10_fill_cost": 10762.94569,
+    "raw_product": 10762.945685,
+    "fill_tick": 2281.01,
+    "per_unit": 2281.010001,
+    "E_target": 10762.945689999999,
+    "signal_close_tick": 2281.0,
+    "purpose": "ETH sub-unit lot from-flat: fill-time price-scale vs money-scale"
+  }
+}

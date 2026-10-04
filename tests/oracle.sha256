@@ -5,7 +5,7 @@
     "test_oracle_day_key.cpp": "9571b0753c5e37a71446dcb8861f0a5366b461cd5bef459979ca1a3cb6317081",
     "test_oracle_deferred_any_witnesses.cpp": "c7fc11a952d45971eb42a602bf5a37328b6527aabb1c1948e197383ff7727ab3",
     "test_oracle_deferred_birth.cpp": "1532354df0ffafacb892072d2721f29fb185bce3a53f52ed975f6e0cd5173774",
-    "test_oracle_frozen_size.cpp": "305ce4eae79c7529311bdec7eda6d10b830bb7e025d4c63c2aa0c3193df9eb5c",
+    "test_oracle_frozen_size.cpp": "4446e3985049c3127b41de7f9d9882bf10e4c4a54d5b20c47346e0fa4fa814b0",
     "test_oracle_fx.cpp": "8108d360bc9b48cd9cee8a80e188534e033a24e3e4956a06d47e772a271c9eed",
     "test_oracle_magnifier_barstate.cpp": "fbcee8e3395d361745ca5585900af7fdc45f30257b29ba43b7f90e4858af1f61",
     "test_oracle_magnifier_distribution.cpp": "3ee60f78f8f15085e1cfb19e483f63cc43bafa047db9a55d49aaa6660c88af8e",
@@ -22,5 +22,5 @@
     "test_oracle_stop_snapshot.cpp": "d3a14a771538873144c8f03a9d8cf391256e9967ad31a03e29e1ed46359daf1d"
   },
   "schema": "pineforge-r4-d-oracle-tree/v1",
-  "treeSha256": "e66aee1253b4d9fb89e537554252f82b6f2e33110bbed2de82a584f636614ff8"
+  "treeSha256": "0520c5450824512c7c6867e85a5e3f230ab04a5c5fe4898db3006e48401b6deb"
 }

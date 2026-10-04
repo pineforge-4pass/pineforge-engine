@@ -1,0 +1,21 @@
+{
+  "symbol": "OANDA:EURUSD",
+  "feed": "eur",
+  "step": 0.01,
+  "tick": 1e-05,
+  "initial_capital": 97155.900002,
+  "direction": "short",
+  "qty": 90000.0,
+  "sizing": "explicit",
+  "slippage": 1,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2025-04-02T04:15:00+00:00",
+  "close": "2025-04-02T04:30:00+00:00",
+  "from": "2025-04-02",
+  "to": "2025-04-03",
+  "name": "n2b-admit-eur-short-ulp-s1-p2u",
+  "note": "short slip1: rule5 vs mark (drop) or slipped fill (admit)"
+}

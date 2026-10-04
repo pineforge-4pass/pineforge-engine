@@ -1,0 +1,21 @@
+{
+  "symbol": "NYSE:F",
+  "feed": "f",
+  "step": 1,
+  "tick": 0.01,
+  "initial_capital": 27.35999999,
+  "direction": "long",
+  "qty": 2,
+  "slippage": 2,
+  "fee": 0,
+  "margin": 100,
+  "pooc": true,
+  "coof": true,
+  "entry": "2025-12-15T20:30:00+00:00",
+  "close": "2025-12-15T20:45:00+00:00",
+  "from": "2025-12-15",
+  "to": "2025-12-16",
+  "name": "n2-long-admit-m10n",
+  "member": 24,
+  "from_": "2025-12-15"
+}

@@ -1,0 +1,8 @@
+//@version=6
+strategy("Fractional margin call on FIFO boundary", initial_capital=91.4, pyramiding=3, default_qty_type=strategy.fixed, default_qty_value=1, margin_long=100, margin_short=100)
+if time == timestamp("UTC", 2025, 4, 1, 0, 0)
+    strategy.entry("A", strategy.short, qty=0.0003)
+    strategy.entry("B", strategy.short, qty=0.0005)
+    strategy.entry("C", strategy.short, qty=0.0492)
+if time == timestamp("UTC", 2025, 4, 1, 0, 30)
+    strategy.close_all()

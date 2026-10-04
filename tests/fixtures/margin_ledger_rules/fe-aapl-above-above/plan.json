@@ -1,0 +1,45 @@
+{
+  "name": "fe-aapl-above-above",
+  "symbol": "NASDAQ:AAPL",
+  "timeframe": "15",
+  "capital": 104411.01000000002,
+  "events": [
+    {
+      "time": 1767626100000,
+      "op": "entry",
+      "id": "Seed",
+      "side": 1,
+      "qty": 380.0
+    },
+    {
+      "time": 1767627900000,
+      "op": "entry",
+      "id": "Turn",
+      "side": -1,
+      "qty": null,
+      "boundary": true
+    },
+    {
+      "time": 1767630600000,
+      "op": "close_all"
+    }
+  ],
+  "boundary": 1767627900000,
+  "after_close": false,
+  "tick": 0.01,
+  "step": 1.0,
+  "margin_long": 100,
+  "margin_short": 100,
+  "from": "2026-01-05",
+  "to": "2026-01-06",
+  "metadata": {
+    "Q": 387,
+    "T_sig10_fill_cost": 104114.61,
+    "raw_product": 104114.61000000002,
+    "raw_vs_T": "above",
+    "E_target": 104114.61000000002,
+    "signal_close_tick": 269.02,
+    "fill_tick": 269.03000000000003,
+    "purpose": "fill-stage reversal re-check: >= vs >, sig10 vs raw cost"
+  }
+}

@@ -1,0 +1,7 @@
+//@version=6
+strategy("px-f2b-eth-short-4", initial_capital=10648.2, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=2, process_orders_on_close=true)
+if time == timestamp("UTC", 2025, 4, 8, 13, 45)
+    strategy.entry("test", strategy.short, qty=6.7883)
+if time == timestamp("UTC", 2025, 4, 8, 14, 30)
+    strategy.close_all()
+plot(strategy.equity)

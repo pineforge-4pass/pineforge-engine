@@ -1,0 +1,10 @@
+//@version=6
+strategy("n12-c1-s1-exp-stop-long-s1", initial_capital=3786.269999, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.0, slippage=1, process_orders_on_close=false, calc_on_order_fills=false)
+if time == timestamp("UTC", 2025, 5, 20, 8, 0) and strategy.position_size == 0
+    strategy.entry("probe", strategy.long, qty=1.5, stop=2524.17)
+if time == timestamp("UTC", 2025, 5, 20, 8, 45)
+    strategy.close_all()
+plot(strategy.equity, "equity")
+plot(strategy.position_size, "held")
+plot(strategy.netprofit, "netprofit")
+plot(strategy.openprofit, "openprofit")

@@ -1,0 +1,10 @@
+//@version=6
+strategy("n2-famab-cash00001", initial_capital=992399.54077, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0, slippage=0, process_orders_on_close=false, calc_on_order_fills=false)
+if time == timestamp("UTC", 2025, 4, 21, 0, 0) and strategy.position_size == 0
+    strategy.entry("probe", strategy.long, qty=623.163)
+if time == timestamp("UTC", 2025, 4, 21, 0, 30)
+    strategy.close_all()
+plot(strategy.equity, "equity")
+plot(strategy.position_size, "held")
+plot(strategy.netprofit, "netprofit")
+plot(strategy.openprofit, "openprofit")

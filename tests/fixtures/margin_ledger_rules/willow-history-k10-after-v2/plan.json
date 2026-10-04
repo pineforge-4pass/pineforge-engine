@@ -1,0 +1,93 @@
+{
+  "name": "willow-history-k10-after-v2",
+  "symbol": "NYSE:F",
+  "timeframe": "15",
+  "capital": 74376.69,
+  "events": [
+    {
+      "time": 1773762300000,
+      "op": "entry",
+      "id": "Ledger0",
+      "side": -1,
+      "qty": 6229.0
+    },
+    {
+      "time": 1773769500000,
+      "op": "entry",
+      "id": "Ledger1",
+      "side": 1,
+      "qty": 6260.0
+    },
+    {
+      "time": 1773770400000,
+      "op": "entry",
+      "id": "Ledger2",
+      "side": -1,
+      "qty": 6260.0
+    },
+    {
+      "time": 1773846900000,
+      "op": "entry",
+      "id": "Ledger3",
+      "side": 1,
+      "qty": 6237.0
+    },
+    {
+      "time": 1773852300000,
+      "op": "entry",
+      "id": "Ledger4",
+      "side": -1,
+      "qty": 6237.0
+    },
+    {
+      "time": 1773857700000,
+      "op": "entry",
+      "id": "Seed",
+      "side": 1,
+      "qty": 6299.0
+    },
+    {
+      "time": 1773937800000,
+      "op": "entry",
+      "id": "Turn",
+      "side": -1,
+      "qty": null,
+      "boundary": true
+    },
+    {
+      "time": 1773939600000,
+      "op": "close_all"
+    }
+  ],
+  "boundary": 1773937800000,
+  "after_close": true,
+  "tick": 0.01,
+  "step": 1.0,
+  "margin_long": 100,
+  "margin_short": 100,
+  "from": "2026-03-17",
+  "to": "2026-03-20",
+  "metadata": {
+    "depth": 10,
+    "closed_selected": 10,
+    "previous_profit_decimal": "-25623.310",
+    "source_tape": "member-tapes/willow-tv.csv",
+    "actual_live": [
+      {
+        "number": 1755,
+        "exit_time": 1773938700000,
+        "exit_price": 11.64,
+        "exit_signal": "Short",
+        "side": 1,
+        "qty": 6299.0,
+        "pnl": -1511.76,
+        "entry_time": 1773858600000,
+        "entry_price": 11.88,
+        "entry_signal": "Long"
+      }
+    ],
+    "scheduled_parent_entries": 6,
+    "generated_from_trade_events_only": true,
+    "telemetry_predecessor": "willow-history-k10-after"
+  }
+}

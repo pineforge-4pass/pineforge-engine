@@ -1,0 +1,19 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 1176.1711018855003,
+  "direction": "short",
+  "qty": 0.75,
+  "slippage": 6,
+  "fee": 0.05,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2025-04-08T13:45:00Z",
+  "close": "2025-04-08T14:30:00Z",
+  "from": "2025-04-08",
+  "to": "2025-04-09",
+  "name": "n2-schedule-q0p75-s6"
+}

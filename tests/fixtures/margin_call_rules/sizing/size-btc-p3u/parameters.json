@@ -1,0 +1,21 @@
+{
+  "symbol": "BINANCE:BTCUSDT",
+  "feed": "btc",
+  "step": 1e-05,
+  "tick": 0.01,
+  "initial_capital": 99996.620643,
+  "direction": "long",
+  "qty": null,
+  "sizing": "percent",
+  "slippage": 0,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2025-04-02T00:30:00+00:00",
+  "close": "2025-04-02T00:45:00+00:00",
+  "from": "2025-04-02",
+  "to": "2025-04-03",
+  "name": "n2b-size-btc-p3u",
+  "note": "dec Q 1.176 vs binary 1.17599"
+}

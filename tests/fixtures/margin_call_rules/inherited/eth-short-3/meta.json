@@ -1,0 +1,16 @@
+{
+  "title": "px-f2b-eth-short-3",
+  "slug": "px-f2b-eth-short-3",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T11:01:16.555Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-08",
+    "to": "2025-04-09"
+  },
+  "pine_sha256": "4539f8e209dc57360c41b697a9cfb2295df5060235ed49faf02e8ce574ff51d8",
+  "tv_trades_sha256": "3e959e410ba70f6ad818ea8b2be7e0aa987182a7ad6e0cd753b15cc5a3a62c8b",
+  "tv_trades_rows": 6
+}

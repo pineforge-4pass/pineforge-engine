@@ -1,0 +1,35 @@
+{
+  "name": "c1-b1-exp-long-below-Tm1ulp",
+  "symbol": "NASDAQ:AAPL",
+  "timeframe": "15",
+  "capital": 104617.70999999999,
+  "events": [
+    {
+      "time": 1767625200000,
+      "op": "entry",
+      "id": "Turn",
+      "side": 1,
+      "qty": 387.0,
+      "boundary": true
+    },
+    {
+      "time": 1767627900000,
+      "op": "close_all"
+    }
+  ],
+  "boundary": 1767625200000,
+  "after_close": false,
+  "tick": 0.01,
+  "step": 1.0,
+  "margin_long": 100,
+  "margin_short": 100,
+  "from": "2026-01-05",
+  "to": "2026-01-06",
+  "metadata": {
+    "Q": 387,
+    "T": 104617.71,
+    "fill_tick": 270.33,
+    "E": 104617.70999999999,
+    "purpose": "explicit from-flat fill re-check: money at quote vs per-unit price"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "title": "px-f2b-eur-rawfloor-3",
+  "slug": "px-f2b-eur-rawfloor-3",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T11:12:18.761Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2025-04-02",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "2d86d7fff950ca5250cf477dd9249abab5c8fb70d618ec0be9144273763e7427",
+  "tv_trades_sha256": "86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c",
+  "tv_trades_rows": 0
+}

@@ -1,0 +1,22 @@
+{
+  "symbol": "BINANCE:BTCUSDT",
+  "feed": "btc",
+  "step": 0.00001,
+  "tick": 0.01,
+  "initial_capital": 99600.36215999999,
+  "direction": "long",
+  "qty": null,
+  "slippage": 0,
+  "fee": 0,
+  "margin": 100,
+  "pooc": false,
+  "coof": false,
+  "entry": "2025-04-02T08:00:00Z",
+  "close": "2025-04-02T08:45:00Z",
+  "from": "2025-04-02",
+  "to": "2025-04-03",
+  "member": 11,
+  "explicit": 1.17923,
+  "sizing": "percent",
+  "name": "n2-market-11-percent"
+}

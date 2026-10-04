@@ -1,0 +1,16 @@
+{
+  "title": "n2-short-s3",
+  "slug": "n2-short-s3",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T14:37:21.191Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-08",
+    "to": "2025-04-09"
+  },
+  "pine_sha256": "249cdf642a0f0d4ec0780747d32b85c4479eb0d923d67de04c450ca77db804e3",
+  "tv_trades_sha256": "5405ae4e4a7c68caec0faa1fd466e2802ee9af087415736713c01efcc95e653f",
+  "tv_trades_rows": 8
+}

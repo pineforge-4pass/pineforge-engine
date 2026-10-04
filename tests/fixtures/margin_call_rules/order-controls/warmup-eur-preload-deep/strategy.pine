@@ -1,0 +1,18 @@
+//@version=6
+strategy("n2c-warmup-eur-preload-deep", initial_capital=100000, margin_long=100, margin_short=100)
+fast = ta.sma(close, 21)
+middle = ta.sma(close, 84)
+slow = ta.sma(close, 252)
+upCount = (fast > fast[1] ? 1 : 0) + (middle > middle[1] ? 1 : 0) + (slow > slow[1] ? 1 : 0)
+var bool consumed = false
+if time == timestamp("UTC", 2025, 4, 2, 3, 0) and upCount >= 2
+    consumed := true
+    strategy.entry("probe", strategy.long, qty=92577.16, stop=1.08018)
+if time == timestamp("UTC", 2025, 4, 2, 3, 15)
+    strategy.cancel("probe")
+if time == timestamp("UTC", 2025, 4, 2, 8, 45) and not consumed and upCount >= 2
+    strategy.entry("probe", strategy.long, qty=92577.16, stop=1.08018)
+if time == timestamp("UTC", 2025, 4, 2, 9, 15) and consumed
+    strategy.entry("probe", strategy.long, qty=92566.02, stop=1.08031)
+if time == timestamp("UTC", 2025, 4, 2, 9, 45)
+    strategy.close_all()

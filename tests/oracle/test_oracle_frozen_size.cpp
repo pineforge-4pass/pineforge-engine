@@ -386,10 +386,15 @@ void test_reversal_bracket_binding_survives_freeze() {
 // on ten-digit money — sig10(6279.0000001) = 6279.0, and the RAW double
 // floor of 6.279 / 0.0001 = 62789.99999999999 is 6.2789, one lot below the
 // nudged 6.2790 (TradingView's own floor on famr-rev-everybar 2025-04-02
-// 20:00Z: 918062.29999999992 -> 918062.29, not .30). The frozen quantity is
-// therefore 6.2789 here; the dispatch invariant this test pins — the frozen
-// value reaches the position, lot and ledger UNCHANGED — is unaffected. The
-// explicit-qty controls (I/K) are not default-sized and keep 6.2790.
+// 20:00Z: 918062.29999999992 -> 918062.29, not .30). That 6.2789 was the
+// frozen quantity here until TradingView's tape of the same quotient moved
+// it to 6.279; the dispatch invariant this test pins — the frozen value
+// reaches the position, lot and ledger UNCHANGED — is unaffected. The
+// explicit-qty controls (I/K) are not default-sized and keep 6.2790. Tape:
+// tests/fixtures/margin_call_rules/sizing/sizing-decimal-floor-oracle-control
+// (E 15854.4750001, sig10 15854.475 / 2525.0 = 6.279 at step 0.0001, two
+// byte-identical exports) buys 6.279, the floor of the quotient's shortest
+// decimal, not the binary 6.2789; 918062.29999999992 above still floors to .29.
 class FrozenDispatchBoundaryProbe : public pineforge::source::PineStrategyHost {
 public:
     explicit FrozenDispatchBoundaryProbe(bool explicit_qty)
@@ -451,11 +456,11 @@ void test_frozen_true_flat_market_dispatch_is_not_refloored() {
     CHECK_NEAR(eng.two_floor_qty(), 6.2790, 1e-12);
 
     CHECK(eng.position_side() == PositionSide::LONG);
-    CHECK_NEAR(eng.position_qty(), 6.2789, 1e-12);   // family R raw lot floor
+    CHECK_NEAR(eng.position_qty(), 6.279, 1e-12);    // decimal lot floor
     CHECK(eng.live_lot_count() == 1);
-    CHECK_NEAR(eng.live_lot_qty(), 6.2789, 1e-12);
+    CHECK_NEAR(eng.live_lot_qty(), 6.279, 1e-12);
     CHECK(eng.live_lot_id() == "BOUNDARY");
-    CHECK_NEAR(eng.id_ledger_qty("BOUNDARY"), 6.2789, 1e-12);
+    CHECK_NEAR(eng.id_ledger_qty("BOUNDARY"), 6.279, 1e-12);
 }
 
 void test_explicit_true_flat_market_keeps_single_floor() {
@@ -536,10 +541,10 @@ void test_frozen_market_reversal_is_not_refloored() {
     CHECK_NEAR(eng.one_floor_qty(), 6.2790, 1e-12);
     CHECK_NEAR(eng.two_floor_qty(), 6.2790, 1e-12);
     CHECK(eng.position_side() == PositionSide::LONG);
-    CHECK_NEAR(eng.position_qty(), 6.2789, 1e-12);   // family R raw lot floor (H)
+    CHECK_NEAR(eng.position_qty(), 6.279, 1e-12);    // decimal lot floor (H)
     CHECK(eng.live_lot_count() == 1);
-    CHECK_NEAR(eng.live_lot_qty(), 6.2789, 1e-12);
-    CHECK_NEAR(eng.id_ledger_qty("BOUNDARY"), 6.2789, 1e-12);
+    CHECK_NEAR(eng.live_lot_qty(), 6.279, 1e-12);
+    CHECK_NEAR(eng.id_ledger_qty("BOUNDARY"), 6.279, 1e-12);
 }
 
 void test_explicit_market_reversal_keeps_single_floor() {

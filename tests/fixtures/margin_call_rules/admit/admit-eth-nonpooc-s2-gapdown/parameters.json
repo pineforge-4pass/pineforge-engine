@@ -1,0 +1,21 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 3272.325,
+  "direction": "long",
+  "qty": 1.5,
+  "sizing": "explicit",
+  "slippage": 2,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": false,
+  "coof": false,
+  "entry": "2025-06-22T16:30:00+00:00",
+  "close": "2025-06-22T17:00:00+00:00",
+  "from": "2025-06-22",
+  "to": "2025-06-23",
+  "name": "n2b-r2-admit-eth-nonpooc-s2-gapdown",
+  "note": "c 2181.54 next open 2181.51 exec 2181.53: E=Q*(c+1t): max(c,exec) admits; c+slip at placement drops"
+}

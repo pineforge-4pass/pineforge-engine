@@ -1,0 +1,21 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 792.744999999,
+  "direction": "long",
+  "qty": 0.5,
+  "sizing": "explicit",
+  "slippage": 1,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2025-04-08T03:00:00+00:00",
+  "close": "2025-04-08T03:30:00+00:00",
+  "from": "2025-04-08",
+  "to": "2025-04-09",
+  "name": "n2b-admit-eth-half-s1-m1n",
+  "note": "Q 0.5: call min(1,Q) = whole position at next open?"
+}

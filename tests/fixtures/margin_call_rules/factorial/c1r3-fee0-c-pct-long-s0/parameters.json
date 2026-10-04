@@ -1,0 +1,21 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 5012.44,
+  "direction": "long",
+  "qty": null,
+  "sizing": "percent",
+  "slippage": 0,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2025-06-01T02:45:00+00:00",
+  "close": "2025-06-01T03:15:00+00:00",
+  "from": "2025-06-01",
+  "to": "2025-06-02",
+  "name": "n12-c1r3-fee0-c-pct-long-s0",
+  "note": "pooc pct fee0: c 2506.2200000000003 dec 2506.22: inactive Q 1.9999 / active Q 2.0"
+}

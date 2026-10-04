@@ -1,0 +1,58 @@
+{
+  "name": "aapl-history-k0-after-v2",
+  "symbol": "NASDAQ:AAPL",
+  "timeframe": "15",
+  "capital": 90921.98,
+  "events": [
+    {
+      "time": 1775141100000,
+      "op": "entry",
+      "id": "Seed",
+      "side": 1,
+      "qty": 356.0
+    },
+    {
+      "time": 1775142000000,
+      "op": "entry",
+      "id": "Turn",
+      "side": -1,
+      "qty": null,
+      "boundary": true
+    },
+    {
+      "time": 1775143800000,
+      "op": "close_all"
+    }
+  ],
+  "boundary": 1775142000000,
+  "after_close": true,
+  "tick": 0.01,
+  "step": 1.0,
+  "margin_long": 100,
+  "margin_short": 100,
+  "from": "2026-04-02",
+  "to": "2026-04-03",
+  "metadata": {
+    "depth": 0,
+    "closed_selected": 1,
+    "previous_profit_decimal": "-9078.020",
+    "source_tape": "member-tapes/aapl-tv.csv",
+    "actual_live": [
+      {
+        "number": 1127,
+        "exit_time": 1775144700000,
+        "exit_price": 254.85,
+        "exit_signal": "Short",
+        "side": 1,
+        "qty": 355.0,
+        "pnl": -195.25,
+        "entry_time": 1775142000000,
+        "entry_price": 255.4,
+        "entry_signal": "Long"
+      }
+    ],
+    "scheduled_parent_entries": 1,
+    "generated_from_trade_events_only": true,
+    "telemetry_predecessor": "aapl-history-k0-after"
+  }
+}

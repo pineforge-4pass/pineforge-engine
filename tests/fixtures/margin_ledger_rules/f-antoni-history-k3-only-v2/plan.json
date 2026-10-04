@@ -1,0 +1,65 @@
+{
+  "name": "f-antoni-history-k3-only-v2",
+  "symbol": "NYSE:F",
+  "timeframe": "15",
+  "capital": 104676.98,
+  "events": [
+    {
+      "time": 1754334000000,
+      "op": "entry",
+      "id": "Ledger0",
+      "side": -1,
+      "qty": 9550.0
+    },
+    {
+      "time": 1754400600000,
+      "op": "entry",
+      "id": "Seed",
+      "side": 1,
+      "qty": 9429.0
+    },
+    {
+      "time": 1754404200000,
+      "op": "entry",
+      "id": "Turn",
+      "side": -1,
+      "qty": null,
+      "boundary": true
+    },
+    {
+      "time": 1754406000000,
+      "op": "close_all"
+    }
+  ],
+  "boundary": 1754404200000,
+  "after_close": false,
+  "tick": 0.01,
+  "step": 1.0,
+  "margin_long": 100,
+  "margin_short": 100,
+  "from": "2025-08-04",
+  "to": "2025-08-06",
+  "metadata": {
+    "depth": 3,
+    "closed_selected": 4,
+    "previous_profit_decimal": "4676.980",
+    "source_tape": "member-tapes/f-antoni-tv.csv",
+    "actual_live": [
+      {
+        "number": 264,
+        "exit_time": 1754405100000,
+        "exit_price": 10.93,
+        "exit_signal": "Short",
+        "side": 1,
+        "qty": 9429.0,
+        "pnl": -942.9,
+        "entry_time": 1754401500000,
+        "entry_price": 11.03,
+        "entry_signal": "Long"
+      }
+    ],
+    "scheduled_parent_entries": 2,
+    "generated_from_trade_events_only": true,
+    "telemetry_predecessor": "f-antoni-history-k3-only"
+  }
+}

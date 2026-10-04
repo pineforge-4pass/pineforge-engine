@@ -1,0 +1,21 @@
+{
+  "symbol": "BINANCE:BTCUSDT",
+  "feed": "btc",
+  "interval": "15",
+  "from": "2025-04-12",
+  "to": "2025-04-14",
+  "direction": "short",
+  "qty": 1.13834,
+  "sizing": "explicit",
+  "slippage": 1,
+  "fee": 0.05,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "tick": 0.01,
+  "step": 1e-05,
+  "entry": "2025-04-12T23:00:00Z",
+  "close": "2025-04-13T01:15:00Z",
+  "name": "n2c-feesize-explicit-control",
+  "initial_capital": 97096.02708588642
+}

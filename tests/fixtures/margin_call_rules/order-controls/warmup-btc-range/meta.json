@@ -1,0 +1,16 @@
+{
+  "title": "n2c-warmup-btc-range",
+  "slug": "n2c-warmup-btc-range",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T20:00:17.331Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "f9b8fc83149ed4eada542ab39cb59384818840f5d19322ebe9bff704659f6d11",
+  "tv_trades_sha256": "a44585e8dcb09098c7fccb8f29b30d822dda00e9a1b4e2b698ecb47b2827e693",
+  "tv_trades_rows": 0
+}

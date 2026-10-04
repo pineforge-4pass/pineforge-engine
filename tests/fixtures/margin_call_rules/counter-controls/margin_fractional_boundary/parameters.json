@@ -1,0 +1,26 @@
+{
+  "name": "margin_fractional_boundary",
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "bars_file": "bars.csv",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 91.4,
+  "direction": "short",
+  "qty": 0.05,
+  "lots": [
+    0.0003,
+    0.0005,
+    0.0492
+  ],
+  "sizing": "explicit",
+  "slippage": 0,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": false,
+  "coof": false,
+  "entry": "2025-04-01T00:00:00+00:00",
+  "close": "2025-04-01T00:30:00+00:00",
+  "from": "2025-04-01",
+  "to": "2025-04-07"
+}

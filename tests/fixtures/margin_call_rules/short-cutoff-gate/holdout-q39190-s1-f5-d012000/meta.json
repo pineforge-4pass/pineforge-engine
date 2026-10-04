@@ -1,0 +1,16 @@
+{
+  "title": "n2c-holdout-q39190-s1-f5-d012000",
+  "slug": "n2c-holdout-q39190-s1-f5-d012000",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T20:03:33.391Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2025-04-18",
+    "to": "2025-04-19"
+  },
+  "pine_sha256": "2b8f9ce53ae7663cdad5904f0c12bebaa1e2767e25855f2522fe3aa7416d4903",
+  "tv_trades_sha256": "4c586ab5ef87a11e64e237e8d9ad70b2451ef8540d0a4261220be750e62dbd86",
+  "tv_trades_rows": 4
+}

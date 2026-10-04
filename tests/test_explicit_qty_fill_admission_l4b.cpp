@@ -366,7 +366,11 @@ void test_greenF_priced_and_raw_unaffected() {
 // equity 10000" rule would spuriously drop this.
 void test_greenG_pooc_slippage_no_op() {
     std::printf("-- GREEN-G: POOC + slippage>0 no spurious decline --\n");
-    Probe eng(/*capital=*/10000.0, /*comm=*/0.0, /*slip=*/1, /*margin=*/100.0,
+    // The structural no-op is kept on an equity that funds the slipped
+    // signal close (100 x 100.01 = 10001): TradingView judges an explicit
+    // quantity at its signal close moved by the slippage ticks, so at 10000
+    // it drops the entry (below).
+    Probe eng(/*capital=*/10001.0, /*comm=*/0.0, /*slip=*/1, /*margin=*/100.0,
               /*pooc=*/true, /*enable_mc=*/false);
     eng.entry_qty_ = 100.0;
     eng.script = "L..";
@@ -378,6 +382,18 @@ void test_greenG_pooc_slippage_no_op() {
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.position_side_ == PositionSide::LONG);
     CHECK_NEAR(eng.position_size(), 100.0, 1e-9);
+    // The original operands: sig10(sig10(10000) / 100) = 100 is under the
+    // slipped signal close 100.01, and TradingView drops the whole order
+    // (tests/fixtures/margin_call_rules boundary/long-admit-m1u: NYSE:F 2
+    // at 27.359999 drop at 13.66 + 2 ticks; admit/admit-eth-s3-m07u,
+    // the per-unit boundary at 3 ticks of slippage).
+    Probe dropped(/*capital=*/10000.0, /*comm=*/0.0, /*slip=*/1, /*margin=*/100.0,
+                  /*pooc=*/true, /*enable_mc=*/false);
+    dropped.entry_qty_ = 100.0;
+    dropped.script = "L..";
+    dropped.run(bars.data(), (int)bars.size());
+    CHECK(dropped.position_side_ == PositionSide::FLAT);
+    CHECK_NEAR(dropped.position_size(), 0.0, 1e-9);
 }
 
 // H. Same-bar close-then-explicit-reentry. Bar0 opens a small long (qty 1);

@@ -1,0 +1,21 @@
+{
+  "symbol": "OANDA:EURUSD",
+  "feed": "eur",
+  "step": 0.01,
+  "tick": 0.00001,
+  "initial_capital": 89373.82266657386,
+  "direction": "short",
+  "qty": 78546.87,
+  "slippage": 1,
+  "fee": 0.05,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2025-04-18T13:00:00+00:00",
+  "close": "2025-04-18T14:30:00Z",
+  "from": "2025-04-18",
+  "to": "2025-04-19",
+  "name": "n2-member-37-full-checkpoint",
+  "member": 37,
+  "from_": "2025-04-18"
+}

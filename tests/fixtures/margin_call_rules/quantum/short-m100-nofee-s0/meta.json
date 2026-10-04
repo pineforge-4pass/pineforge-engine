@@ -1,0 +1,16 @@
+{
+  "title": "n2-short-m100-nofee-s0",
+  "slug": "n2-short-m100-nofee-s0",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T14:50:10.072Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-08",
+    "to": "2025-04-09"
+  },
+  "pine_sha256": "38872d523b36f3a242351f9204a8bedcf34257918b4f7e4fc64760f79fea9e13",
+  "tv_trades_sha256": "70ac0fdf02bf4c53dd194d7812fa5c04d2a240094eff82c86c8fea069af1a896",
+  "tv_trades_rows": 6
+}

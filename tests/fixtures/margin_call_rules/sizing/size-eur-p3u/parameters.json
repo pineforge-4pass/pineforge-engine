@@ -1,0 +1,21 @@
+{
+  "symbol": "OANDA:EURUSD",
+  "feed": "eur",
+  "step": 0.01,
+  "tick": 1e-05,
+  "initial_capital": 99999.985593,
+  "direction": "long",
+  "qty": null,
+  "sizing": "percent",
+  "slippage": 0,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2025-04-02T01:30:00+00:00",
+  "close": "2025-04-02T01:45:00+00:00",
+  "from": "2025-04-02",
+  "to": "2025-04-03",
+  "name": "n2b-size-eur-p3u",
+  "note": "dec Q 92659.5 vs binary 92659.49"
+}

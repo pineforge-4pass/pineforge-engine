@@ -1,0 +1,16 @@
+{
+  "title": "n2cmfeesizemp0d000000",
+  "slug": "n2cmfeesizemp0d000000",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T19:33:04.106Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-12",
+    "to": "2025-04-14"
+  },
+  "pine_sha256": "10ed21d44e00705596ae3522da677d3d70369276a1fcca082744b69ad9d2b4c5",
+  "tv_trades_sha256": "2fea55221e143b00d604ccc84c023fed863cf30ac731dc806505b3b2888208db",
+  "tv_trades_rows": 4
+}

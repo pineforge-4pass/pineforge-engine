@@ -1,0 +1,17 @@
+{
+  "title": "n12-c1-a1-pct-long-s2-gapup1",
+  "slug": "n12-c1-a1-pct-long-s2-gapup1",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T20:02:20.055Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-05-20",
+    "to": "2025-05-21",
+    "timeoutMs": 120000
+  },
+  "pine_sha256": "24a5012842f2beadbd8ce93e976a7dc744d35e94e75b4ef4ceac53b8effe9c17",
+  "tv_trades_sha256": "a44585e8dcb09098c7fccb8f29b30d822dda00e9a1b4e2b698ecb47b2827e693",
+  "tv_trades_rows": 0
+}

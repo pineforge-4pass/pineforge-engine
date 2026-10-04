@@ -1,0 +1,16 @@
+{
+  "title": "n2b-r3-close-point-nonclose-bar",
+  "slug": "n2b-r3-close-point-nonclose-bar",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T18:18:37.333Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-05-23",
+    "to": "2025-05-24"
+  },
+  "pine_sha256": "247655be402d833753235a353db09349685f5adfee5e37783897d5cdb91ffa39",
+  "tv_trades_sha256": "7e1d47f50b5bd166c22bf1dd6784a991bc56fe753398d9d506cd1dc580f1bee0",
+  "tv_trades_rows": 4
+}

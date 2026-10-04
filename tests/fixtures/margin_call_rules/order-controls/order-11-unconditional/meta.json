@@ -1,0 +1,16 @@
+{
+  "title": "n2c-order-11-unconditional",
+  "slug": "n2c-order-11-unconditional",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T20:00:15.382Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "cb97b7fdfe57bf1455bc390bfdd2536b77a43fc0a852e4fea5fcf39047ed2105",
+  "tv_trades_sha256": "7c1409136b87e1295ada41020890253cbcaa0a8880246c94ecf220b59d9eba31",
+  "tv_trades_rows": 2
+}

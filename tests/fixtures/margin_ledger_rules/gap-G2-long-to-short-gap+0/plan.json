@@ -1,0 +1,44 @@
+{
+  "name": "gap-G2-long-to-short-gap+0",
+  "symbol": "NYSE:F",
+  "timeframe": "15",
+  "capital": 96643.43,
+  "events": [
+    {
+      "time": 1770056100000,
+      "op": "entry",
+      "id": "Seed",
+      "side": 1,
+      "qty": 7000.0
+    },
+    {
+      "time": 1770057900000,
+      "op": "entry",
+      "id": "Turn",
+      "side": -1,
+      "qty": null,
+      "boundary": true
+    },
+    {
+      "time": 1770060600000,
+      "op": "close_all"
+    }
+  ],
+  "boundary": 1770057900000,
+  "after_close": false,
+  "tick": 0.01,
+  "step": 1.0,
+  "margin_long": 100,
+  "margin_short": 100,
+  "from": "2026-02-02",
+  "to": "2026-02-03",
+  "metadata": {
+    "seed_side": 1,
+    "gap_ticks": 0,
+    "signal_close": 13.81,
+    "next_open": 13.81,
+    "seed_fill_open": 13.8,
+    "nominal_slack": 2.0,
+    "purpose": "fill-stage default reversal: marked vs signal-frozen equity, whole-drop vs close-only"
+  }
+}

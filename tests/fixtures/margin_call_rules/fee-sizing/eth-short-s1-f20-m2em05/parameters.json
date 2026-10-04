@@ -1,0 +1,21 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "interval": "15",
+  "from": "2026-01-08",
+  "to": "2026-01-09",
+  "qty": null,
+  "sizing": "percent",
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "tick": 0.01,
+  "step": 0.0001,
+  "entry": "2026-01-08T23:30:00Z",
+  "close": "2026-01-09T01:15:00Z",
+  "name": "n2c-feesize-eth-short-s1-f20-m2em05",
+  "initial_capital": 53325.794657932005,
+  "direction": "short",
+  "slippage": 1,
+  "fee": 0.2
+}

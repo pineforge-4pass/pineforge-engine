@@ -1,0 +1,17 @@
+{
+  "title": "n12-c1r2-m50-exact-long",
+  "slug": "n12-c1r2-m50-exact-long",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T20:08:18.112Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-01-02",
+    "to": "2025-01-03",
+    "timeoutMs": 120000
+  },
+  "pine_sha256": "a6889f459d53077040a0890dfb7e09fb2c3487d158994be24e24a4a7729e1e07",
+  "tv_trades_sha256": "18bbff210f37202c6f9961be80dc55bbedbaa8c8fb63d6fbf873fe7574b39838",
+  "tv_trades_rows": 2
+}

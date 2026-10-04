@@ -1,0 +1,21 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 68846.1155510002,
+  "direction": "short",
+  "qty": 22.1512,
+  "slippage": 0,
+  "fee": 0,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2026-01-08T23:30:00+00:00",
+  "close": "2026-01-09T00:00:00+00:00",
+  "from": "2026-01-08",
+  "to": "2026-01-10",
+  "name": "n2-member-8-literal",
+  "member": 8,
+  "from_": "2026-01-08"
+}

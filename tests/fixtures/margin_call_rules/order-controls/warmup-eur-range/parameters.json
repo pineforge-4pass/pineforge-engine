@@ -1,0 +1,8 @@
+{
+  "name": "n2c-warmup-eur-range",
+  "symbol": "OANDA:EURUSD",
+  "interval": "15",
+  "from": "2025-04-01",
+  "to": "2025-04-03",
+  "behavior": "SMA-readiness consumes a pivot on order placement, including canceled orders"
+}

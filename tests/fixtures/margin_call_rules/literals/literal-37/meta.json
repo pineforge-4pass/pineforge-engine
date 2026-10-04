@@ -1,0 +1,16 @@
+{
+  "title": "n2-member-37-literal",
+  "slug": "n2-member-37-literal",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T15:21:13.570Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2025-04-18",
+    "to": "2025-04-19"
+  },
+  "pine_sha256": "5797f0303ab3970d1e2486e16048dc46821191c48da0d3e5bf2010c18bb6155c",
+  "tv_trades_sha256": "86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c",
+  "tv_trades_rows": 0
+}

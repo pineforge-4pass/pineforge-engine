@@ -1,0 +1,16 @@
+{
+  "title": "n2-stop-40-percent",
+  "slug": "n2-stop-40-percent",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T15:35:58.589Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2026-02-17",
+    "to": "2026-02-18"
+  },
+  "pine_sha256": "74de56f6d114687589f4f6dfda677113825fed78b2a53fd3142d47e91fc3efac",
+  "tv_trades_sha256": "86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c",
+  "tv_trades_rows": 0
+}

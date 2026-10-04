@@ -1,0 +1,21 @@
+{
+  "symbol": "OANDA:EURUSD",
+  "feed": "eur",
+  "step": 0.01,
+  "tick": 1e-05,
+  "initial_capital": 99999.653183,
+  "direction": "long",
+  "qty": null,
+  "sizing": "percent",
+  "slippage": 0,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2026-02-17T03:15:00+00:00",
+  "close": "2026-02-17T03:30:00+00:00",
+  "from": "2026-02-17",
+  "to": "2026-02-18",
+  "name": "n2b-r2-size-eur-02-17-t2",
+  "note": "T2: q=84455.59999999999 qdec 84455.59 binary 84455.59 mul_inv 84455.6"
+}

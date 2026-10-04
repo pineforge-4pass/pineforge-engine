@@ -1,0 +1,16 @@
+{
+  "title": "n2-fresh-p2-coof",
+  "slug": "n2-fresh-p2-coof",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T15:20:57.628Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-08",
+    "to": "2025-04-09"
+  },
+  "pine_sha256": "2280a91fb1fb587c4d8a69cbde532209e08e824d51cbbd05602b7e8e6b216417",
+  "tv_trades_sha256": "62f53489c496ac85178563274d8b7f37a2de483d5c4764fb50116575c1bb6004",
+  "tv_trades_rows": 8
+}

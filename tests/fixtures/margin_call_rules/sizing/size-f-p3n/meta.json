@@ -1,0 +1,16 @@
+{
+  "title": "n2b-size-f-p3n",
+  "slug": "n2b-size-f-p3n",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T17:59:38.050Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-09-17",
+    "to": "2025-09-18"
+  },
+  "pine_sha256": "494854af5f1e89b9e0fdb721d02e73a1293999b6d6192677797bc82ee947a90a",
+  "tv_trades_sha256": "63b8f24c5dbbf44b1c4a781d9249d9a7fed66a39e56696d3922a5fcbafcf830b",
+  "tv_trades_rows": 2
+}

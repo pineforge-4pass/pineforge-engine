@@ -1,0 +1,10 @@
+//@version=6
+strategy("N1 aapl-fresh-q357-capital100k-avg-witness", initial_capital=100000, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100)
+var string witness = ""
+if time == timestamp("UTC", 2026, 4, 2, 14, 45)
+    strategy.entry("Seed", strategy.long, qty=357)
+if time == timestamp("UTC", 2026, 4, 2, 15, 0)
+    witness := "E=" + str.tostring(strategy.equity, "#.################") + ";N=" + str.tostring(strategy.netprofit, "#.################") + ";OP=" + str.tostring(strategy.openprofit, "#.################") + ";P=" + str.tostring(strategy.position_size, "#.################") + ";C=" + str.tostring(close, "#.################") + ";T=" + str.tostring(math.round_to_mintick(close), "#.################") + ";AP=" + str.tostring(strategy.position_avg_price, "#.################") + ";EP=" + str.tostring(strategy.opentrades.entry_price(0), "#.################") + ";WAP=" + str.tostring(strategy.opentrades.entry_price(0) * math.abs(strategy.position_size) / math.abs(strategy.position_size), "#.################")
+    strategy.entry("Turn", strategy.short, comment=witness)
+if time == timestamp("UTC", 2026, 4, 2, 15, 30)
+    strategy.close_all(comment="SENSOR|" + witness)

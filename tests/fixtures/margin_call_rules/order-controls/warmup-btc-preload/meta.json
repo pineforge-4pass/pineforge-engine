@@ -1,0 +1,16 @@
+{
+  "title": "n2c-warmup-btc-preload",
+  "slug": "n2c-warmup-btc-preload",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T20:00:13.462Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-03-29",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "d058454e30f67d1ad1c7e8772416bf3e478671e29030e9f5fad61484bb166287",
+  "tv_trades_sha256": "cdabf5dc7a9364de76fac7034e372b019df93786e9e00ea27cb3efb4f2c4ddce",
+  "tv_trades_rows": 2
+}

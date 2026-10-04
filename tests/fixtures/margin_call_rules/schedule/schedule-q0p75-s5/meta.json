@@ -1,0 +1,16 @@
+{
+  "title": "n2-schedule-q0p75-s5",
+  "slug": "n2-schedule-q0p75-s5",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T15:20:41.361Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-08",
+    "to": "2025-04-09"
+  },
+  "pine_sha256": "520df038e46f1cc17c43cf0ff3d53d982bbf4ed4a9f17d896ee36e624a353e9c",
+  "tv_trades_sha256": "f6fe3f3dd6d5b861d4964a3a2e53f07ffe3dfa5a90706d5fd0972b0f108cc0e8",
+  "tv_trades_rows": 6
+}

@@ -1,0 +1,21 @@
+{
+  "symbol": "NYSE:F",
+  "feed": "f",
+  "step": 1,
+  "tick": 0.01,
+  "initial_capital": 8801.038430000006,
+  "direction": "short",
+  "qty": 758,
+  "slippage": 2,
+  "fee": 0.05,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2025-09-17T19:00:00+00:00",
+  "close": "2025-09-17T19:30:00+00:00",
+  "from": "2025-09-17",
+  "to": "2025-09-18",
+  "name": "n2-member-21-literal",
+  "member": 21,
+  "from_": "2025-09-17"
+}

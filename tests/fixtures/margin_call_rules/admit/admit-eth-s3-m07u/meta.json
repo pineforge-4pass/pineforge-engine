@@ -1,0 +1,16 @@
+{
+  "title": "n2b-admit-eth-s3-m07u",
+  "slug": "n2b-admit-eth-s3-m07u",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T17:59:22.511Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-08",
+    "to": "2025-04-09"
+  },
+  "pine_sha256": "52899eff559a3abad90705be75cd699ebc35b0d9f0cce4134aae8f42189aee91",
+  "tv_trades_sha256": "a44585e8dcb09098c7fccb8f29b30d822dda00e9a1b4e2b698ecb47b2827e693",
+  "tv_trades_rows": 0
+}

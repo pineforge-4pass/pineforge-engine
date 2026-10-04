@@ -1,0 +1,16 @@
+{
+  "title": "n2c-cooldown-closepoint-late-observer",
+  "slug": "n2c-cooldown-closepoint-late-observer",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T20:19:58.731Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2026-01-08",
+    "to": "2026-01-10"
+  },
+  "pine_sha256": "5d2d44ab34197bb1cbd83b3d15e37ccbcc1d218a48073f0a183567bb20d328ad",
+  "tv_trades_sha256": "582fe5c764fa2c838e51d529f562e2eed1b4b314015883ff117aea207155d19b",
+  "tv_trades_rows": 10
+}

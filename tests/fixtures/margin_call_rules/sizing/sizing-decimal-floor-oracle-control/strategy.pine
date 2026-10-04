@@ -1,0 +1,6 @@
+//@version=6
+strategy("sizing-decimal-floor-oracle-control", initial_capital=15854.4750001, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100)
+if time == timestamp("UTC", 2025, 6, 2, 1, 45) and strategy.position_size == 0
+    strategy.entry("probe", strategy.long)
+if time == timestamp("UTC", 2025, 6, 2, 2, 30)
+    strategy.close_all()

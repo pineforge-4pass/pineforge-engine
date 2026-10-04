@@ -1,0 +1,21 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 4559.829648,
+  "direction": "long",
+  "qty": 2.0014,
+  "sizing": "explicit",
+  "slippage": 0,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2025-06-22T00:00:00+00:00",
+  "close": "2025-06-22T00:15:00+00:00",
+  "from": "2025-06-22",
+  "to": "2025-06-23",
+  "name": "n2b-r2-coof-low-call-off",
+  "note": "same, COOF off: close at bar close"
+}

@@ -1067,6 +1067,15 @@ list(APPEND TEST_SOURCES test_reversal_close_all_tapes)
 # Lane W5B-ENG-MARGIN-RESIDUAL: the margin-family residuals at Pine v6's
 # defaults (tests/fixtures/margin_residual), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_margin_residual_tapes)
+# Margin-call, admission and sizing rules on 172 TradingView tapes of synthetic
+# probes (tests/fixtures/margin_call_rules, README.md there).
+list(APPEND TEST_SOURCES test_margin_call_rules_tapes)
+# One engine, two modes: the margin rules decide the same trades in a batch run
+# and in a forward (stream) run, on a sample of those tapes.
+list(APPEND TEST_SOURCES test_margin_rules_forward_replay)
+# Margin, sizing and admission rules on 381 TradingView tapes of synthetic
+# event-ledger probes (tests/fixtures/margin_ledger_rules, README.md there).
+list(APPEND TEST_SOURCES test_margin_ledger_rules_tapes)
 # Lane INT28-FIX: a slipped all-in short's admission and its one-unit margin
 # calls (tests/fixtures/slipped_short), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_slipped_short_tapes)
@@ -2932,6 +2941,22 @@ endif()
 if(TARGET test_margin_residual_tapes)
     target_compile_definitions(test_margin_residual_tapes PRIVATE
         PINEFORGE_MARGIN_RESIDUAL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_residual")
+endif()
+# The margin-call rules tapes are read from the fixture tree too; source-bound.
+if(TARGET test_margin_call_rules_tapes)
+    target_compile_definitions(test_margin_call_rules_tapes PRIVATE
+        PINEFORGE_MARGIN_CALL_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_call_rules")
+endif()
+# The forward replay reads its sampled tapes from the fixture tree; source-bound.
+if(TARGET test_margin_rules_forward_replay)
+    target_compile_definitions(test_margin_rules_forward_replay PRIVATE
+        PINEFORGE_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+endif()
+# The event-ledger margin rules tapes are read from the fixture tree too;
+# source-bound.
+if(TARGET test_margin_ledger_rules_tapes)
+    target_compile_definitions(test_margin_ledger_rules_tapes PRIVATE
+        PINEFORGE_MARGIN_LEDGER_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_ledger_rules")
 endif()
 
 # Lane INT28-FIX reads its TradingView tapes from the fixture tree;

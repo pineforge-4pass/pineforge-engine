@@ -1,0 +1,8 @@
+{
+  "name": "n2c-order-38-unconditional",
+  "symbol": "OANDA:EURUSD",
+  "interval": "15",
+  "from": "2025-04-01",
+  "to": "2025-04-03",
+  "behavior": "Unconditional reconstructed stop; isolates N2 admission from signal ancestry"
+}
