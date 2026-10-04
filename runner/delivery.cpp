@@ -102,7 +102,10 @@ void DeliveryWorker::run() {
         ~ResetQueue() { bytes = 0; }
     } reset{queue_bytes_};
     const auto should_stop = [&] {
-        if (stopped_ && stopped_()) limit_drain();
+        if (stopped_ && stopped_()) {
+            limit_drain();
+            return true;
+        }
         const auto deadline = drain_until_.load();
         return cancelling_ || (deadline && clock_time() >= deadline);
     };
@@ -196,6 +199,7 @@ void DeliveryWorker::run() {
         if (finishing_ && exhausted && requests_exhausted && !waiting && active.empty() && retries.empty()) return;
         const auto remaining = drain_until_ ? std::max<std::int64_t>(0, drain_until_ - clock_time()) : 20;
         for (const auto& completed : transport.poll(static_cast<int>(std::min<std::int64_t>(20, remaining)))) {
+            if (should_stop()) return;
             const auto found = active.find(completed.key);
             if (found == active.end()) throw std::runtime_error("unknown delivery result");
             const auto& attempt = found->second.attempt;

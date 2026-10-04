@@ -753,7 +753,6 @@ LegacyIdentityFields legacy_fields(const Config &c) {
 }
 
 int run(Config c) {
-    ControlDirectory controls(c.control_dir);
     c.routing = c.routes_path.empty()
         ? single_target(c.webhook, c.secret_env, c.allow_http)
         : parse_routes(read_file(c.routes_path, MAX_FRAME), c.allow_http, c.webhook, c.secret_env);
@@ -828,6 +827,7 @@ int run(Config c) {
     }
     if (c.native.present)
         require_native_warmup(c.native, warmup);
+    ControlDirectory controls(c.control_dir);
     Ledger ledger(c.ledger, deployment);
     ServiceFile service(c.status_file, c.status_interval * 1000);
     ledger.bind_routing(c.routing.stored_document());
