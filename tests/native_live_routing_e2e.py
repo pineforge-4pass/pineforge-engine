@@ -268,9 +268,12 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
         assert query(isolation_ledger, 'SELECT count(*) FROM inputs')[0][0] == len(events)
         warning = ('pineforge-live: warning: compiled strategy lacks checked settings; '
                    'legacy settings may be ignored or defaulted')
+        capability_warning = ('pineforge-live: warning: compiled strategy lacks execution capabilities; '
+                              'close-only eligibility cannot be proved (legacy behavior retained)')
         log_lines = process.stderr.splitlines()
         assert log_lines.count(warning) == 1, process.stderr
-        errors = [json.loads(line) for line in log_lines if line != warning]
+        assert log_lines.count(capability_warning) == 1, process.stderr
+        errors = [json.loads(line) for line in log_lines if line not in (warning, capability_warning)]
         assert len(errors) == 4 and all(row['event'] == 'webhook_delivery_error' for row in errors)
         status = json.loads(invoke(['status', '--ledger', str(isolation_ledger)]).stdout)['targets']
         assert status['entries']['failed'] == 3 and status['exits']['failed'] == 1
