@@ -129,7 +129,7 @@ inline void require_close_only_capabilities(const std::string& receipt,
                     (order.value != "entry:market" && order.value != "entry:stop" &&
                      order.value != "entry:limit" && order.value != "exit:short_bracket" && order.value != "close:market"))
                     refuse("process_orders_on_close: " + order.value);
-                if (script_tf != "1" && !(script_tf == "5" && order.value == "entry:stop"))
+                if (script_tf != "1")
                     refuse("process_orders_on_close (unproven chart clock)");
             }
         } else {

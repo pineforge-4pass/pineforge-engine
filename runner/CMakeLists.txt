@@ -260,7 +260,7 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
         target_compile_features(test_confirmed_capabilities PRIVATE cxx_std_17)
         target_compile_options(test_confirmed_capabilities PRIVATE -UNDEBUG)
         add_test(NAME confirmed_capabilities_policy COMMAND test_confirmed_capabilities)
-        set(_pf_confirmed_cases htf5_close htf15_sma_pooc htf60_close daily_close heikinashi5
+        set(_pf_confirmed_cases htf5_close htf5_close_active htf15_sma_pooc htf60_close daily_close heikinashi5
             htf60_ema_gaps period_previous pooc_dual_stop pooc_limit_reversal pooc_slipped_short
             pooc_short_exit constant_daily helper5 heikinashi_alias5 varip pooc_market pooc_close pooc_close_entry)
         set(_pf_confirmed_refusals refused_clock_W refused_clock_5D refused_clock_30S refused_clock_M
@@ -299,7 +299,7 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
             target_compile_definitions(test_confirmed_equivalence_${confirmed_case} PRIVATE PINEFORGE_SECURITY_CASE="${confirmed_case}")
             add_test(NAME confirmed_capabilities_${confirmed_case}_equivalence COMMAND test_confirmed_equivalence_${confirmed_case} 1 500)
         endforeach()
-        foreach(confirmed_control htf5_close htf60_close pooc_dual_stop)
+        foreach(confirmed_control htf5_close_active htf60_close)
             if(confirmed_control STREQUAL "htf60_close")
                 set(_pf_confirmed_clock 15)
             else()

@@ -57,6 +57,8 @@ int main() {
     refused(legacy, Json{}, "process_orders_on_close");
     refused(legacy, confirmed, "process_orders_on_close", "ticks");
     refused(legacy, confirmed, "process_orders_on_close", "bars", "1", "5");
+    confirmed.members["orders"].items = {Json::string("entry:stop")};
+    refused(legacy, confirmed, "process_orders_on_close", "bars", "1", "5");
     confirmed.members["orders"].items.clear();
     refused(legacy, confirmed, "process_orders_on_close");
     confirmed.members["orders"].items = {Json::string("strategy.entry (unproven order shape)")};

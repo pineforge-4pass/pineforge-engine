@@ -19,6 +19,9 @@ def sources():
     fixtures = Path(__file__).resolve().parent.parent
     result = {name: (fixtures / "stream_security" / name / "strategy.pine").read_text()
               for name in PROVEN}
+    result["htf5_close_active"] = result["htf5_close"].replace(
+        "ta.crossover(close, h)", "ta.crossover(h, ta.sma(h, 3))").replace(
+        "ta.crossunder(close, h)", "ta.crossunder(h, ta.sma(h, 3))")
     result["constant_daily"] = result["daily_close"].replace(
         'h = request.security(syminfo.tickerid, "D", close)',
         'htf = "D"\nh = request.security(syminfo.tickerid, htf, close)')

@@ -116,7 +116,8 @@ keeps the registration's transformation flag. Symbol `""` currently lowers
 through a foreign feed and is therefore refused, not mislabeled as chart data.
 
 POOC admits market, stop and limit entries, market closes and short stop/limit
-brackets on script clock `1`; the both-sided-stop control also uses clock `5`.
+brackets on script clock `1` only. The five-minute both-sided-stop report is
+batch-equivalent, but its physical action timestamps are not; that clock stays refused.
 Stop-limit/OCA entries, trailing/relative/partial exits, long brackets,
 `strategy.order`, cancellation and immediate closes remain refused by name.
 Close-only `varip` is admitted on script clock `1`, never observed ticks.
