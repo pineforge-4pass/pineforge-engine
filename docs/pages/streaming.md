@@ -163,7 +163,7 @@ separate surfaces and are not implied by using this lifecycle.
 ## Known issues {#streaming_known_issues}
 
 - **`request.security` when the input and script timeframes are equal**
-  (v1.0.0, v1.0.1). In a stream whose input timeframe equals its script
+  (v1.0.0, v1.0.1, v1.1.0). In a stream whose input timeframe equals its script
   timeframe, a strategy that requests its own chart symbol with
   `request.security` (including `ticker.heikinashi` of the chart symbol and
   requests at `timeframe.period`) stops receiving new requested values after
