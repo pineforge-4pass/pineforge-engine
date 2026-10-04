@@ -212,8 +212,8 @@ separate surfaces and are not implied by using this lifecycle.
   the first realtime bar, so its live results can differ from a backtest of
   the same bars. Batch backtests are not affected. Workaround: run the stream
   with a script timeframe larger than the input timeframe (for example input
-  `1`, script `5`), or use the batch backtest. **Fixed on main; included in the
-  next release.** This change feeds each newly observed confirmed bar to the
+  `1`, script `5`), or use the batch backtest. **Fixed on main (#325); included in
+  the next release.** This change feeds each newly observed confirmed bar to the
   requested-series evaluator, including equal-timeframe and Heikin-Ashi requests.
 
 See [Lifecycle](@ref lifecycle) for handle ownership and
