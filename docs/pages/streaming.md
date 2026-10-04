@@ -160,5 +160,17 @@ strategy cadence and raw-trade broker fills. `calc_on_every_tick`,
 `calc_on_order_fills`, realtime rollback/`varip`, and alert delivery are
 separate surfaces and are not implied by using this lifecycle.
 
+## Known issues {#streaming_known_issues}
+
+- **`request.security` when the input and script timeframes are equal**
+  (v1.0.0, v1.0.1). In a stream whose input timeframe equals its script
+  timeframe, a strategy that requests its own chart symbol with
+  `request.security` (including `ticker.heikinashi` of the chart symbol and
+  requests at `timeframe.period`) stops receiving new requested values after
+  the first realtime bar, so its live results can differ from a backtest of
+  the same bars. Batch backtests are not affected. Workaround: run the stream
+  with a script timeframe larger than the input timeframe (for example input
+  `1`, script `5`), or use the batch backtest. A fix is in progress.
+
 See [Lifecycle](@ref lifecycle) for handle ownership and
 [FFI from Python](@ref ffi_python) for the complete POD mirrors.
