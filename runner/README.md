@@ -75,8 +75,13 @@ settings and symbol units. Tick tapes need the same ticks for replay equality;
 tick-versus-OHLC fill paths are not interchangeable. An incomplete aggregated
 script bucket is still provisional live, whereas a finite batch seals its
 trailing partial bucket; compare at confirmed script-bucket boundaries. This
-boundary can replace the last equity point and derived scalar metrics rather
-than append an additional point; earlier confirmed equity points are identical.
+boundary can replace the last equity point rather than append an additional
+point; earlier confirmed equity points and closed trades are identical. In the
+trailing-stop fixture, sealing also appends one hypothetical `open_at_end=1`
+trade, changing `report.trades`, `trades_len`, `total_trades`, `net_profit`,
+`metrics.all` and `metrics.longs`; `equity` and `open_profit` reflect the changed
+trailing point. These are explicitly tested mode-boundary differences, not
+excluded fields at confirmed cursors. Every other report field is identical.
 The generated trailing-stop E2E exercises this boundary explicitly. The
 existing [stream security limitation](../docs/pages/streaming.md) still applies;
 no report field is silently excluded from the confirmed-bar E2E comparison.

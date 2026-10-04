@@ -113,10 +113,15 @@ def main():
                     assert len(partial["equity_curve"]) == len(live_partial["equity_curve"])
                     equal(partial["equity_curve"][:-1], live_partial["equity_curve"][:-1], "confirmed bucket prefix")
                     assert partial["equity_curve"][-1] != live_partial["equity_curve"][-1]
-                    equal({key: value for key, value in partial.items() if key not in ("equity_curve", "metrics")},
-                          {key: value for key, value in live_partial.items() if key not in ("equity_curve", "metrics")},
-                          "outside trailing equity and derived metrics")
-                    print("MID-BUCKET: batch replaces one trailing point and derived metrics; all other report fields identical", flush=True)
+                    differences = {"equity_curve", "metrics", "net_profit", "total_trades", "trades", "trades_len"}
+                    equal({key: value for key, value in partial.items() if key not in differences},
+                          {key: value for key, value in live_partial.items() if key not in differences},
+                          "outside documented trailing-bucket fields")
+                    assert len(partial["trades"]) == len(live_partial["trades"]) + 1
+                    equal(partial["trades"][:-1], live_partial["trades"], "confirmed trades")
+                    assert partial["trades"][-1]["open_at_end"] == 1
+                    assert partial["trades"][-1]["exit_time"] == partial["equity_curve"][-1]["time_ms"]
+                    print("MID-BUCKET: trailing equity, hypothetical trade, net_profit, total_trades, trades_len and derived metrics differ; confirmed prefixes and every other field identical", flush=True)
                 before = checked([runner, "report", "--ledger", str(ledger)])
                 checked(command)
                 assert checked([runner, "report", "--ledger", str(ledger)]) == before
