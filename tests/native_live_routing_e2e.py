@@ -30,6 +30,7 @@ class Receiver:
         self.rows = []
         self.errors = []
         self.lock = threading.Lock()
+        self.initial_barrier = None
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -47,6 +48,9 @@ class Receiver:
                         owner.rows.append({'body': body, 'action': action, 'key': self.headers['Idempotency-Key'],
                                            'at': time.monotonic()})
                         mode = owner.mode
+                        initial_barrier = owner.initial_barrier
+                    if initial_barrier is not None:
+                        initial_barrier.wait(timeout=10)
                     if mode == 'reset':
                         self.connection.shutdown(socket.SHUT_RDWR)
                         return
@@ -249,6 +253,27 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
         assert not path.exists()
         print('PASS strict startup validation, B2 refusal, missing secrets and CLI conflicts before input', flush=True)
 
+        concurrent_document = copy.deepcopy(document)
+        concurrent_document['delivery'] = {'max_in_flight': 8, 'connect_timeout_ms': 2000,
+                                           'total_timeout_ms': 20000, 'transport_retries': 0,
+                                           'retry_backoff_ms': []}
+        concurrent_routes = save_routes('concurrent', concurrent_document)
+        entries.clear(); exits.clear()
+        entries.mode = exits.mode = 'ok'
+        initial_barrier = threading.Barrier(4)
+        entries.initial_barrier = exits.initial_barrier = initial_barrier
+        concurrent_ledger = root / 'concurrent.sqlite'
+        try:
+            result = json.loads(run(concurrent_ledger, concurrent_routes).stdout)
+            assert not initial_barrier.broken
+            assert result['webhooks_delivered'] == 4
+            assert not entries.errors and not exits.errors
+            assert len(entries.rows) == len(exits.rows) == 2
+            assert query(concurrent_ledger, 'SELECT count(*) FROM inputs')[0][0] == len(events)
+        finally:
+            entries.initial_barrier = exits.initial_barrier = None
+        print('PASS all initial deliveries in flight while computation produces later actions', flush=True)
+
         isolation_document = copy.deepcopy(document)
         isolation_document['delivery'] = {'max_in_flight': 8, 'connect_timeout_ms': 100,
                                           'total_timeout_ms': 500, 'transport_retries': 2,
@@ -260,9 +285,8 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
         process = run(isolation_ledger, isolation)
         newer = [row for row in entries.rows if row['action']['sequence'] == 3]
         assert len(newer) == 1
-        first_completed = query(isolation_ledger, "SELECT min(ended_at) FROM delivery_log WHERE target_id='entries' AND phase='completed' AND success=0")[0][0]
         initial_starts = query(isolation_ledger, "SELECT started_at FROM delivery_log WHERE phase='started' AND attempt=1")
-        assert len(initial_starts) == 4 and all(row[0] < first_completed for row in initial_starts)
+        assert len(initial_starts) == 4
         assert len([row for row in exits.rows if row['action']['sequence'] == 2]) == 1
         assert len([row for row in entries.rows if row['action']['sequence'] == 1]) == 3
         assert query(isolation_ledger, 'SELECT count(*) FROM inputs')[0][0] == len(events)
