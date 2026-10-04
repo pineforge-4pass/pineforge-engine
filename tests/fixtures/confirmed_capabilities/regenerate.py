@@ -35,6 +35,8 @@ def sources():
     result["pooc_close"] = ('//@version=6\nstrategy("closing close", process_orders_on_close=true)\n'
                             'if bar_index % 7 == 0\n    strategy.entry("long", strategy.long)\n'
                             'if bar_index % 7 == 3\n    strategy.close_all()\n')
+    result["pooc_close_entry"] = result["pooc_close"].replace(
+        'strategy.close_all()', 'strategy.close("long", immediately=false)')
     for clock in ("W", "5D", "30S", "M", "7"):
         result["refused_clock_" + clock] = result["htf5_close"].replace('"5", close', f'"{clock}", close')
     result["refused_foreign"] = result["htf5_close"].replace('syminfo.tickerid', '"NASDAQ:MSFT"')
@@ -47,6 +49,7 @@ def sources():
         "stop_limit": 'strategy.entry("L", strategy.long, stop=high, limit=low)',
         "oca": 'strategy.entry("L", strategy.long, stop=high, oca_name="group", oca_type=strategy.oca.cancel)',
         "long_bracket": 'strategy.entry("L", strategy.long)\nstrategy.exit("X", "L", stop=high, limit=low)',
+        "mixed_bracket": 'strategy.entry("S", strategy.short)\nstrategy.entry(id="S", direction=strategy.long)\nstrategy.exit("X", "S", stop=high, limit=low)',
         "trail": 'strategy.entry("S", strategy.short)\nstrategy.exit("X", "S", trail_points=2, trail_offset=1)',
         "order": 'strategy.order("L", strategy.long)',
         "cancel": 'strategy.entry("L", strategy.long, stop=high)\nstrategy.cancel("L")',

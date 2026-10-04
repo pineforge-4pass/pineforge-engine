@@ -262,11 +262,11 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
         add_test(NAME confirmed_capabilities_policy COMMAND test_confirmed_capabilities)
         set(_pf_confirmed_cases htf5_close htf15_sma_pooc htf60_close daily_close heikinashi5
             htf60_ema_gaps period_previous pooc_dual_stop pooc_limit_reversal pooc_slipped_short
-            pooc_short_exit constant_daily helper5 heikinashi_alias5 varip pooc_market pooc_close)
+            pooc_short_exit constant_daily helper5 heikinashi_alias5 varip pooc_market pooc_close pooc_close_entry)
         set(_pf_confirmed_refusals refused_clock_W refused_clock_5D refused_clock_30S refused_clock_M
             refused_clock_7 refused_foreign refused_empty_symbol refused_lookahead refused_expression
             refused_gaps refused_dynamic refused_pooc_stop_limit refused_pooc_oca refused_pooc_long_bracket
-            refused_pooc_trail refused_pooc_order refused_pooc_cancel refused_pooc_immediate)
+            refused_pooc_mixed_bracket refused_pooc_trail refused_pooc_order refused_pooc_cancel refused_pooc_immediate)
         set(_pf_confirmed_libraries)
         foreach(confirmed_case IN LISTS _pf_confirmed_cases _pf_confirmed_refusals)
             add_library(confirmed_${confirmed_case} MODULE
