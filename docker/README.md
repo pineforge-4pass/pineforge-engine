@@ -214,8 +214,10 @@ docker run --rm \
   empty volume is a symbol that publishes none), paths relative to the index.
   Each bar's close is its open plus the timeframe (calendar months for `M`),
   right for a 24x7 symbol; give a session-bound symbol a `time_close` column
-  (unix ms). Bars before the chart's first bar are delivered as history on it;
-  bars after its last are never read.
+  (unix ms; an empty cell falls back to open plus timeframe). Bars before the
+  chart's first bar are delivered as history on it; bars after its last are
+  never read. A header-only feed installs the symbol without bars: its requests
+  read na on every bar (a symbol with no bars in the window).
 - `syminfo` is the symbol's catalog object, flat or `{"syminfo": {...}}`:
   `tickerid` (as the symbol's canonical id), `type`, `timezone`, `session`,
   `currency` and `mintick` are set as its facts, which `syminfo.*` reads inside
