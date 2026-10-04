@@ -399,6 +399,28 @@ struct MarginRuleSwitches {
     bool pooc_fee_sizing = true;          // POOC default sizing on the slipped, fee-grossed unit
 };
 MarginRuleSwitches& margin_rule_switches() noexcept;
+
+// One switch per TradingView rule pinned on the tapes under
+// tests/fixtures/explicit_qty_floor and tests/fixtures/pooc_close_bar_fills, so
+// a regression bisects per rule. All on; only tests change one. Process-wide,
+// read by every adapter and source host; not installed API, and no strategy
+// input reaches it. The session clock rule keeps its own switch (session_time.hpp).
+struct ScriptRuleSwitches {
+    // An explicit strategy.entry quantity the grid floor would snap UP to a
+    // grid point (within 1e-6 of a lot below it) is floored on its shortest
+    // decimal instead: 3124.9999999999973 trades 3124.
+    bool explicit_qty_decimal_floor = true;
+    // Script-visible strategy.equity / strategy.openprofit mark an open
+    // position at the tick-built close floor(close / mintick + 0.5) * mintick
+    // when the close is off the tick grid (NYSE:F 15m half-cent closes).
+    bool equity_tick_mark = true;
+    // Under process_orders_on_close, a stop entry and its re-issued bracket
+    // that both fill inside one bar settle before the close-time script even
+    // when the book still holds an exit whose entry is neither open nor
+    // working (flush_pending_bracket_legs).
+    bool pooc_bracket_skips_inert_exits = true;
+};
+ScriptRuleSwitches& script_rule_switches() noexcept;
 } // namespace detail
 
 #ifndef PINEFORGE_PLACEMENT_AUDIT

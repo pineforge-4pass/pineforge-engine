@@ -664,6 +664,23 @@ protected:
     double current_equity() const {
         return BacktestEngine::current_equity() - open_entry_fees_paid();
     }
+    // strategy.openprofit and the open part of strategy.equity, as generated
+    // code reads them (open_profit(current_bar_.close)). TradingView marks the
+    // open position at the tick-built close floor(close / mintick + 0.5) *
+    // mintick, not at an off-grid close: NYSE:F 15m closes on half cents
+    // (10.155 marks 10.15, 10.265 marks 10.27;
+    // tests/fixtures/explicit_qty_floor). An on-grid close is read as it is.
+    // The kernel's own marks (equity extremes, reports, sizing) keep
+    // BacktestEngine::open_profit. The tick is syminfo_mintick_: a host that
+    // sets no mintick marks on the engine's 0.01 default, the tick its fills
+    // already round to, and a close within 1e-9 of a tick (relative to the
+    // tick count) counts as on the grid.
+    double open_profit(double current_price) const {
+        return BacktestEngine::open_profit(script_mark_price(current_price));
+    }
+    // The price open_profit marks the position at: `price` itself, or its
+    // tick when it lies off the mintick grid (ScriptRuleSwitches).
+    double script_mark_price(double price) const;
     // Initial capital plus the closed trades' net profit: current_equity()
     // before the open lots' paid entry fees are charged.
     double closed_trade_equity() const { return BacktestEngine::current_equity(); }

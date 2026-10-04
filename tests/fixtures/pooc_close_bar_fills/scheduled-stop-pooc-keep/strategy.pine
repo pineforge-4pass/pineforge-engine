@@ -1,0 +1,9 @@
+//@version=6
+strategy("PX scheduled stop on closing high true false", initial_capital=1000000, margin_long=100, margin_short=100, process_orders_on_close=true)
+if time == timestamp("UTC", 2025, 8, 3, 10, 0)
+    strategy.entry("scheduled", strategy.long, qty=1, stop=113771.47)
+    strategy.exit("bracket", "scheduled", stop=113000, limit=114004.53)
+if false and time == timestamp("UTC", 2025, 8, 3, 10, 15) and strategy.position_size == 0
+    strategy.cancel("scheduled")
+if time == timestamp("UTC", 2025, 8, 3, 12, 0)
+    strategy.close_all()

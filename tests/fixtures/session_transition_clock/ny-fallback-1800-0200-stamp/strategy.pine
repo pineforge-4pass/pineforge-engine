@@ -1,0 +1,8 @@
+//@version=6
+strategy("PX overnight clock across fall back", overlay=true, initial_capital=10000000, margin_long=0, margin_short=0, process_orders_on_close=true)
+int sessionStamp = time("15", "1800-0200", "America/New_York")
+bool sample = time >= timestamp("UTC", 2025, 11, 1, 18, 0) and time <= timestamp("UTC", 2025, 11, 2, 12, 0)
+if sample
+    string label = "NY=" + str.tostring(hour(time, "America/New_York")) + ":" + str.tostring(minute(time, "America/New_York")) + ";SESSION=" + str.tostring(sessionStamp)
+    strategy.order("clock-in", strategy.long, qty=1, comment=label)
+    strategy.order("clock-out", strategy.short, qty=1, comment=label)

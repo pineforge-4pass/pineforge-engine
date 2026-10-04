@@ -1,0 +1,150 @@
+{
+  "schema": "pineforge-qty-step-case/v1",
+  "id": "binance-btcusdt-4h-ema20-50-lot-grid",
+  "purpose": "A percent-of-equity strategy trades sub-lot dust quantities unless the instrument lot grid (TradingView syminfo.mincontract, applied to the engine as the metadata key qty_step) is applied. Same bars and strategy, with and without the grid.",
+  "instrument": {
+    "symbol": "BTCUSDT",
+    "venue": "binance",
+    "market": "spot",
+    "venue_id": "crypto.binance.com.spot",
+    "tradingview_symbol": "BINANCE:BTCUSDT"
+  },
+  "timeframe": "4h",
+  "input_tf": "",
+  "window": {
+    "start_ms": 1759536000000,
+    "end_ms": 1791072000000,
+    "start_utc": "2025-10-04T00:00:00Z",
+    "end_utc": "2026-10-04T00:00:00Z"
+  },
+  "data": {
+    "file": "ohlcv.csv",
+    "columns": [
+      "timestamp",
+      "open",
+      "high",
+      "low",
+      "close",
+      "volume"
+    ],
+    "timestamp_unit": "ms",
+    "source": "Binance public spot klines, BTCUSDT 4h, frozen copy",
+    "rows": 2188,
+    "first_ts": 1759536000000,
+    "last_ts": 1791028800000,
+    "sha256": "a53fc5ab420604ad47b0bae1cceed0ccce45e2ff63804e1d2ab8421efc5cecfb"
+  },
+  "strategy": {
+    "file": "strategy.pine",
+    "sha256": "4637eabedfa5f80386c88bac2e33eb4aee14473c6fe4a7db4ed0a0dada1c234c",
+    "pine_version": 6
+  },
+  "inputs": {
+    "Fast Length": 20,
+    "Slow Length": 50
+  },
+  "strategy_header": {
+    "initial_capital": 10000,
+    "default_qty_type": "percent_of_equity",
+    "default_qty_value": 100,
+    "pyramiding": 0,
+    "commission_type": "percent",
+    "commission_value": 0.1
+  },
+  "engine": {
+    "release_image": "ghcr.io/pineforge-4pass/pineforge-release:1.0.1",
+    "engine": "1.0.1",
+    "codegen": "1.0.1"
+  },
+  "syminfo": {
+    "with_mincontract": {
+      "ticker": "BTCUSDT",
+      "tickerid": "BINANCE:BTCUSDT",
+      "prefix": "BINANCE",
+      "description": "BTC / USDT",
+      "type": "crypto",
+      "main_tickerid": "BINANCE:BTCUSDT",
+      "currency": "USDT",
+      "basecurrency": "BTC",
+      "country": null,
+      "mintick": 0.01,
+      "minmove": 1,
+      "pricescale": 100,
+      "pointvalue": 1.0,
+      "mincontract": 1e-05,
+      "volumetype": "base",
+      "session": "24x7",
+      "session_regular": "24x7",
+      "root": null,
+      "expiration_date": null,
+      "timezone": "UTC"
+    },
+    "without_mincontract": {
+      "ticker": "BTCUSDT",
+      "tickerid": "BINANCE:BTCUSDT",
+      "prefix": "BINANCE",
+      "description": "BTC / USDT",
+      "type": "crypto",
+      "main_tickerid": "BINANCE:BTCUSDT",
+      "currency": "USDT",
+      "basecurrency": "BTC",
+      "country": null,
+      "mintick": 0.01,
+      "minmove": 1,
+      "pricescale": 100,
+      "pointvalue": 1.0,
+      "mincontract": null,
+      "volumetype": "base",
+      "session": "24x7",
+      "session_regular": "24x7",
+      "root": null,
+      "expiration_date": null,
+      "timezone": "UTC"
+    },
+    "mincontract_absent": {
+      "ticker": "BTCUSDT",
+      "tickerid": "BINANCE:BTCUSDT",
+      "prefix": "BINANCE",
+      "description": "BTC / USDT",
+      "type": "crypto",
+      "main_tickerid": "BINANCE:BTCUSDT",
+      "currency": "USDT",
+      "basecurrency": "BTC",
+      "country": null,
+      "mintick": 0.01,
+      "minmove": 1,
+      "pricescale": 100,
+      "pointvalue": 1.0,
+      "volumetype": "base",
+      "session": "24x7",
+      "session_regular": "24x7",
+      "root": null,
+      "expiration_date": null,
+      "timezone": "UTC"
+    }
+  },
+  "syminfo_files": {
+    "with_mincontract": "syminfo-with-mincontract.json",
+    "without_mincontract": "syminfo-without-mincontract.json",
+    "mincontract_absent": "syminfo-mincontract-absent.json"
+  },
+  "expected": {
+    "lot": 1e-05,
+    "without_grid": {
+      "rows": 27,
+      "rows_below_one_lot": 5,
+      "first_trade_qty": 0.081668384426108,
+      "rows_file": "expected-rows-without-grid.json",
+      "first_trade_qty_engine_raw": 0.081668384426108
+    },
+    "with_grid": {
+      "rows": 22,
+      "rows_below_one_lot": 0,
+      "first_trade_qty": 0.08166,
+      "rows_file": "expected-rows-with-grid.json",
+      "first_trade_qty_engine_raw": 0.08166000000000001
+    },
+    "row_definition": "len(report.trades) of the harness JSON report: one row per closed trade, including a position closed at the end of the data",
+    "qty_tolerance": "compare quantities within 1e-12 absolute: the engine reports 8166 lots as 0.08166000000000001 (binary64); a quantity is on the grid when qty/lot is within 1e-6 of an integer"
+  }
+}

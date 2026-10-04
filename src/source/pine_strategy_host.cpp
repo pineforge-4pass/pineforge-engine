@@ -885,6 +885,19 @@ double source::PineStrategyHost::signed_position_size() const {
     return scheduler_.script_position_view(bar_index_, position_side_, position_qty_);
 }
 
+double source::PineStrategyHost::script_mark_price(double price) const {
+    const double tick = syminfo_mintick_;
+    if (!source::detail::script_rule_switches().equity_tick_mark || !std::isfinite(price)
+        || !std::isfinite(tick) || !(tick > 0.0)) {
+        return price;
+    }
+    const double ticks = price / tick;
+    const double nearest = std::floor(ticks + 0.5);
+    // On the grid up to the quotient's own rounding: the close itself.
+    if (std::abs(ticks - nearest) <= 1e-9 * std::max(1.0, std::abs(ticks))) return price;
+    return nearest * tick;
+}
+
 void source::PineStrategyHost::freeze_script_position_view() {
     scheduler_.freeze_script_position_view(
         bar_index_, position_side_, position_qty_, pyramid_entries_);
@@ -2322,7 +2335,8 @@ int64_t source::PineStrategyHost::chart_bar_close_ms(int64_t stamp) const {
         return pine_time_close(stamp, script_tf_, "", "", script_tf_,
                                syminfo_.timezone, syminfo_.session);
     }
-    return pine_time_close(stamp, script_tf_, syminfo_.session, syminfo_.timezone, script_tf_);
+    return pineforge::detail::symbol_session_time_close(stamp, script_tf_, syminfo_.session,
+                                                        syminfo_.timezone, script_tf_);
 }
 
 // TradingView's time(tf, session, tz, bars_back, timeframe_bars_back) (lab tv
@@ -2391,8 +2405,8 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
         }
         return daily_chart ? pine_time_close(open_ms, script_tf_, "", "", script_tf_, sym_tz,
                                              sym_session)
-                           : pine_time_close(open_ms, script_tf_, sym_session, sym_tz,
-                                             script_tf_);
+                           : pineforge::detail::symbol_session_time_close(
+                                 open_ms, script_tf_, sym_session, sym_tz, script_tf_);
     };
     const auto chart_slot_of = [&](std::int64_t ms) -> std::int64_t {
         return pine_time(ms, script_tf_, "", "", script_tf_, sym_tz, sym_session);

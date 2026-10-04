@@ -890,10 +890,46 @@ struct ArgDayBar {
     int64_t close_ms = 0;
 };
 
+// The offset switch whose wall time, read on the offset before it, falls on a
+// local date (detail::SessionClockSwitches::transition_wall_clock): the first
+// instant on the new offset, both offsets in seconds east of UTC, and the
+// switch's pre-transition wall time -- 02:00 in New York both ways, 02:00 in
+// London in autumn and 01:00 in spring.
+struct DaySwitch {
+    bool has = false;
+    int64_t at_ms = 0;
+    long pre_s = 0;
+    long post_s = 0;
+    int pre_wall_minute = 0;
+};
+
+// One window of a session argument on one session day, as TradingView's
+// session clock reads it across a switch (session_argument_intraday_bar).
+// `clock`: the window opens before 24:00 and lasts less than a day, so the
+// clock reads it; any other spelling keeps its plain wall-clock instance
+// [open_ms, end_ms). `deviates`: it starts or ends at the date's switch's
+// pre-transition wall time and reads the post-transition offset throughout.
+struct WallOccurrence {
+    bool traded = false;
+    bool clock = false;
+    bool overnight = false;
+    bool deviates = false;
+    int start_minute = 0;
+    int end_minute = 0;
+    int64_t length_ms = 0;
+    int64_t start_wall = 0;  // wall clock, ms since 1970-01-01 read as UTC
+    int64_t end_wall = 0;
+    long post_s = 0;
+    int64_t open_ms = 0;     // the first instant in the window
+    int64_t end_ms = 0;      // its end instant
+};
+
 // One session argument in one zone, read once per thread: its windows and day
 // list, and each session day's D bar (per chart kind) and window instances,
 // resolved once. A script's several session sites, in several zones, keep one
-// entry each, so reading one never evicts another's days.
+// entry each, so reading one never evicts another's days. The session clock's
+// switch and occurrences of a day are kept apart from the plain instances, so
+// the two readings never mix.
 struct ArgCache {
     struct Day {
         int64_t day = 0;
@@ -902,6 +938,10 @@ struct ArgCache {
         ArgDayBar bar[2];
         bool windows_done = false;
         std::vector<std::pair<int64_t, int64_t>> windows;
+        bool switch_done = false;
+        DaySwitch day_switch;
+        bool occurrences_done = false;
+        std::vector<WallOccurrence> occurrences;
     };
     static constexpr int kDays = 64;
     std::string session;
@@ -1030,15 +1070,284 @@ const std::vector<std::pair<int64_t, int64_t>>& arg_day_windows(ArgCache& cache,
     return slot.windows;
 }
 
+// ---------------------------------------------------------------------------
+// TradingView's session clock across an offset switch (TradingView tapes of
+// synthetic BINANCE:ETHUSDT.P 15 scripts: ten controls exported twice,
+// byte-identical, and one earlier overnight tape;
+// tests/fixtures/session_transition_clock). In the zone, a window's
+// occurrence is a day window on its date D, or an overnight window ending on
+// D.
+//  1. An occurrence deviates when D has a switch and the window starts or
+//     ends at the switch's pre-transition wall time (New York 02:00 both ways,
+//     London 02:00 in autumn and 01:00 in spring).
+//  2. A deviating occurrence reads the post-transition offset throughout: it
+//     ends at D@end - post offset, owns the bars after the previous date's
+//     occurrence's end up to and including its own end, and such a bar is in
+//     the session when its time of day on the post-transition offset is in
+//     the window -- so New York's 1800-0200 opens at 18:00 EST (23:00 UTC) on
+//     2025-11-01, not 18:00 EDT, and reads 06:15-06:45 UTC that morning.
+//  3. Any other bar: a day window holds [I(D, start), I(D, end)), a repeated
+//     wall time on its earlier instant and a skipped one on the
+//     post-transition offset unmoved (wall - post offset); an overnight window
+//     holds the wall clock [(D-1)@start, D@end) before I(D, end), a repeated
+//     end on its later instant -- both passes of the repeated hour, cut at a
+//     skipped end unmoved.
+// The bar's value is its tf bar counted from the occurrence's first instant,
+// as before; a deviating occurrence opens at D'@start - post offset (D' the
+// start's date), and a bar it owns before that reads the window instance on
+// the post-transition offset that holds it.
+// What the tapes pin, and so all the rule covers: a script's own session
+// argument to time() / time_close() (a 24x7 UTC symbol, New York and London
+// switches). Other zones follow the same form untaped. The chart's own bar
+// close, which the Pine host reads through the SYMBOL's session
+// (symbol_session_time_close), keeps the plain wall-clock windows until a
+// tape pins a symbol session with an endpoint at its zone's switch hour.
+// ---------------------------------------------------------------------------
+
+namespace detail_clock {
+
+constexpr int64_t kMsPerMinute = 60000;
+constexpr int64_t kMsPerHour = 3600000;
+
+long offset_at(int64_t ms, const std::string& tz) {
+    struct tm at {};
+    decompose_ms_local(ms, tz, at);
+    return static_cast<long>(at.tm_gmtoff);
+}
+
+// The switch of local date `day` in `tz` (one at most a day: switches of a
+// zone are months apart), by the offsets read before and after every
+// instant of the date and the exact second bisected between them.
+DaySwitch find_day_switch(int64_t day, const std::string& tz) {
+    DaySwitch out;
+    const int64_t midnight = day * kMsPerDay;
+    const int64_t lo = midnight - 16 * kMsPerHour;              // offsets reach +14 h
+    const int64_t hi = midnight + kMsPerDay + 14 * kMsPerHour;  // and -12 h
+    const long before = offset_at(lo, tz);
+    if (offset_at(hi, tz) == before)
+        return out;
+    int64_t a = lo / 1000;
+    int64_t b = hi / 1000;
+    while (b - a > 1) {
+        const int64_t mid = a + (b - a) / 2;
+        if (offset_at(mid * 1000, tz) == before)
+            a = mid;
+        else
+            b = mid;
+    }
+    const int64_t wall = b * 1000 + static_cast<int64_t>(before) * 1000;
+    if (floor_div(wall, kMsPerDay) != day)
+        return out;
+    out.has = true;
+    out.at_ms = b * 1000;
+    out.pre_s = before;
+    out.post_s = offset_at(out.at_ms, tz);
+    out.pre_wall_minute = static_cast<int>((wall - midnight) / kMsPerMinute);
+    return out;
+}
+
+}  // namespace detail_clock
+
+const DaySwitch& arg_day_switch(ArgCache& cache, int64_t day) {
+    ArgCache::Day& slot = arg_cache_day(cache, day);
+    if (!slot.switch_done) {
+        slot.day_switch = detail_clock::find_day_switch(day, cache.tz);
+        slot.switch_done = true;
+    }
+    return slot.day_switch;
+}
+
+// The instant of wall-clock minute `minute` (days since 1970-01-01 * 1440 +
+// minutes) on the session clock: the one instant whose wall clock reads it,
+// the earlier of a repeated one (the later when `later`), and a skipped one
+// on the post-transition offset, unmoved; `skipped` reports the last.
+int64_t clock_wall_instant(ArgCache& cache, int64_t minute, bool later, bool* skipped) {
+    const int64_t naive = minute * detail_clock::kMsPerMinute;
+    const int64_t date = floor_div(minute, 24 * 60);
+    const DaySwitch& sw = arg_day_switch(cache, date);
+    long offsets[2] = {0, 0};
+    int count = 0;
+    if (sw.has) {
+        offsets[count++] = sw.pre_s;
+        offsets[count++] = sw.post_s;
+    } else {
+        const int64_t noon = date * kMsPerDay + 12 * detail_clock::kMsPerHour;
+        const long guess = detail_clock::offset_at(noon, cache.tz);
+        offsets[count++] =
+            detail_clock::offset_at(noon - static_cast<int64_t>(guess) * 1000, cache.tz);
+    }
+    bool found = false;
+    int64_t instant = 0;
+    for (int k = 0; k < count; ++k) {
+        const int64_t candidate = naive - static_cast<int64_t>(offsets[k]) * 1000;
+        if (detail_clock::offset_at(candidate, cache.tz) != offsets[k])
+            continue;
+        instant = candidate;
+        found = true;
+        if (!later)
+            break;
+    }
+    if (skipped != nullptr)
+        *skipped = !found;
+    if (found)
+        return instant;
+    return naive - static_cast<int64_t>(sw.has ? sw.post_s : offsets[0]) * 1000;
+}
+
+// Every window's occurrence on session day `day` of the cached session, in
+// the order of its windows.
+const std::vector<WallOccurrence>& arg_day_occurrences(ArgCache& cache, int64_t day) {
+    ArgCache::Day& slot = arg_cache_day(cache, day);
+    if (slot.occurrences_done)
+        return slot.occurrences;
+    const ArgSession& s = cache.parsed;
+    const int weekday = static_cast<int>(((day + 4) % 7 + 7) % 7) + 1;  // 1970-01-01: Thursday
+    const bool traded = s.days.empty() || s.days.count(weekday) != 0;
+    std::vector<WallOccurrence> out(s.windows.size());
+    for (std::size_t k = 0; k < s.windows.size(); ++k) {
+        const ArgWindow& w = s.windows[k];
+        WallOccurrence& o = out[k];
+        o.traded = traded;
+        const int64_t start = (day + w.day_offset) * 24 * 60 + w.start;
+        const int64_t end = start + w.length;
+        o.start_wall = start * detail_clock::kMsPerMinute;
+        o.end_wall = end * detail_clock::kMsPerMinute;
+        o.length_ms = static_cast<int64_t>(w.length) * detail_clock::kMsPerMinute;
+        o.clock = w.start >= 0 && w.start < 24 * 60 && w.length > 0 && w.length < 24 * 60;
+        if (!o.clock) {
+            o.open_ms = wall_minute_ms(start, cache.tz);
+            o.end_ms = wall_minute_ms(end, cache.tz);
+            continue;
+        }
+        // The window's date D is the session day: the day it opens, or the
+        // day it ends for one past midnight (read_arg_session's day_offset).
+        o.overnight = w.start + w.length > 24 * 60;
+        o.start_minute = w.start;
+        o.end_minute = o.overnight ? w.start + w.length - 24 * 60 : w.start + w.length;
+        const DaySwitch& sw = arg_day_switch(cache, day);
+        o.deviates = sw.has && (sw.pre_wall_minute == o.end_minute
+                                || sw.pre_wall_minute == o.start_minute);
+        if (o.deviates) {
+            o.post_s = sw.post_s;
+            o.open_ms = o.start_wall - static_cast<int64_t>(sw.post_s) * 1000;
+            o.end_ms = o.end_wall - static_cast<int64_t>(sw.post_s) * 1000;
+            continue;
+        }
+        o.end_ms = clock_wall_instant(cache, end, o.overnight, nullptr);
+        bool skipped = false;
+        o.open_ms = clock_wall_instant(cache, start, false, &skipped);
+        // An overnight window opens where the wall clock first reads its
+        // start: the switch itself for a start the switch skips.
+        if (o.overnight && skipped)
+            o.open_ms = arg_day_switch(cache, floor_div(start, 24 * 60)).at_ms;
+    }
+    ArgCache::Day& kept = arg_cache_day(cache, day);
+    kept.occurrences = std::move(out);
+    kept.occurrences_done = true;
+    return kept.occurrences;
+}
+
+// session_argument_intraday_bar on the session clock (the rule above): the
+// latest occurrence that holds `bar_ms` -- by session day, then by open, as
+// the plain reading picks -- cut into tf bars from its first instant.
+bool clock_intraday_bar(int64_t bar_ms, ArgCache& cache, int64_t tf_ms, int64_t& open_ms,
+                        int64_t& close_ms) {
+    struct tm local {};
+    decompose_ms_local(bar_ms, cache.tz, local);
+    const int64_t today = days_from_civil(local.tm_year + 1900, local.tm_mon + 1, local.tm_mday);
+    const int64_t wall = bar_ms + static_cast<int64_t>(local.tm_gmtoff) * 1000;
+    bool found = false;
+    int64_t best_day = 0;
+    int64_t best_start = 0;
+    int64_t best_end = 0;
+    for (std::size_t k = 0; k < cache.parsed.windows.size(); ++k) {
+        bool held = false;
+        int64_t day = 0;
+        int64_t start = 0;
+        int64_t end = 0;
+        if (!arg_day_occurrences(cache, today)[k].clock) {
+            // A window the clock does not read: its plain instances, as the
+            // plain reading scans them (one spelled past a day reaches back).
+            for (int64_t d = today + 1; d >= today - 5 && !held; --d) {
+                const WallOccurrence& o = arg_day_occurrences(cache, d)[k];
+                if (o.traded && o.end_ms > o.open_ms && o.open_ms <= bar_ms && bar_ms < o.end_ms) {
+                    held = true;
+                    day = d;
+                    start = o.open_ms;
+                    end = o.end_ms;
+                }
+            }
+        } else {
+            // Rule 2: a deviating occurrence owns (previous end, own end].
+            bool owned = false;
+            for (int64_t d = today - 1; d <= today + 2 && !owned; ++d) {
+                const WallOccurrence& o = arg_day_occurrences(cache, d)[k];
+                if (!o.traded || !o.deviates || bar_ms > o.end_ms)
+                    continue;
+                if (arg_day_occurrences(cache, d - 1)[k].end_ms >= bar_ms)
+                    continue;
+                owned = true;
+                const int64_t post_wall = bar_ms + static_cast<int64_t>(o.post_s) * 1000;
+                const int64_t post_day = floor_div(post_wall, kMsPerDay);
+                const int64_t of_day = post_wall - post_day * kMsPerDay;
+                const int64_t from = o.start_minute * detail_clock::kMsPerMinute;
+                const int64_t to = o.end_minute * detail_clock::kMsPerMinute;
+                const bool in = o.overnight ? (of_day >= from || of_day < to)
+                                            : (of_day >= from && of_day < to);
+                if (in) {
+                    const int64_t opened = o.overnight && of_day < from ? post_day - 1 : post_day;
+                    held = true;
+                    day = d;
+                    start = opened * kMsPerDay + from - static_cast<int64_t>(o.post_s) * 1000;
+                    end = start + o.length_ms;
+                }
+            }
+            // Rule 3: the other occurrences.
+            for (int64_t d = today + 2; d >= today - 2 && !owned && !held; --d) {
+                const WallOccurrence& o = arg_day_occurrences(cache, d)[k];
+                if (!o.traded || o.deviates)
+                    continue;
+                const bool in = o.overnight
+                    ? o.start_wall <= wall && wall < o.end_wall && bar_ms < o.end_ms
+                    : o.open_ms <= bar_ms && bar_ms < o.end_ms;
+                if (in) {
+                    held = true;
+                    day = d;
+                    start = o.open_ms;
+                    end = o.end_ms;
+                }
+            }
+        }
+        if (held && (!found || day > best_day || (day == best_day && start > best_start))) {
+            found = true;
+            best_day = day;
+            best_start = start;
+            best_end = end;
+        }
+    }
+    if (!found)
+        return false;
+    open_ms = best_start + (bar_ms - best_start) / tf_ms * tf_ms;
+    close_ms = std::min(open_ms + tf_ms, best_end);
+    return true;
+}
+
 // The session argument's intraday bar of `tf_ms` that holds `bar_ms`: the
 // latest window instance that holds it, cut into tf bars from its open, the
 // last one closing at the window's close. False (na) when no window holds it.
+// Outside UTC, TradingView's session clock reads a script's session argument
+// across a switch (clock_intraday_bar) unless a test turned
+// transition_wall_clock off; `transition_clock` false keeps the plain reading
+// (the symbol's own session: symbol_session_time_close).
 bool session_argument_intraday_bar(int64_t bar_ms, const std::string& session,
                                    const std::string& tz, int64_t tf_ms, int64_t& open_ms,
-                                   int64_t& close_ms) {
+                                   int64_t& close_ms, bool transition_clock) {
     ArgCache& cache = arg_cache(session, tz);
     if (tf_ms <= 0 || !cache.ok)
         return false;
+    if (transition_clock && detail::session_clock_switches().transition_wall_clock
+        && !utc_zone(tz))
+        return clock_intraday_bar(bar_ms, cache, tf_ms, open_ms, close_ms);
     struct tm local {};
     decompose_ms_local(bar_ms, tz, local);
     const int64_t today = days_from_civil(local.tm_year + 1900, local.tm_mon + 1, local.tm_mday);
@@ -1131,6 +1440,20 @@ bool session_argument_bar(int64_t bar_ms, const std::string& session, const std:
 }
 
 }  // anonymous namespace
+
+namespace detail {
+
+// TradingView's session clock across a switch (session_time.hpp).
+// Constant-initialized, process-wide; only tests change it.
+namespace {
+SessionClockSwitches g_session_clock_switches;
+}  // namespace
+
+SessionClockSwitches& session_clock_switches() noexcept {
+    return g_session_clock_switches;
+}
+
+}  // namespace detail
 
 // ---------------------------------------------------------------------------
 // Public session predicate helpers (exposed via session_time.hpp)
@@ -1410,7 +1733,8 @@ static void resolve_session_tz(const std::string& session,
 // an intraday tf), na when no bar holds `bar_ms`. False when `tf` is neither.
 static bool session_argument_time(int64_t bar_ms, const std::string& tf,
                                   const std::string& session, const std::string& session_tz,
-                                  const std::string& chart_tf, bool close, int64_t& out) {
+                                  const std::string& chart_tf, bool close, int64_t& out,
+                                  bool transition_clock = true) {
     int64_t open_ms = 0;
     int64_t close_ms = 0;
     bool held = false;
@@ -1423,7 +1747,8 @@ static bool session_argument_time(int64_t bar_ms, const std::string& tf,
         if (sec <= 0 || sec >= kSecPerDay)
             return false;
         held = session_argument_intraday_bar(bar_ms, session, session_tz,
-                                             static_cast<int64_t>(sec) * 1000, open_ms, close_ms);
+                                             static_cast<int64_t>(sec) * 1000, open_ms, close_ms,
+                                             transition_clock);
     }
     out = !held ? na<int64_t>() : close ? close_ms : open_ms;
     return true;
@@ -1451,12 +1776,13 @@ int64_t timeframe_time(int64_t bar_ms,
     return compute_tf_open_ms(bar_ms, tf, tf_tz, "UTC", "");
 }
 
-int64_t timeframe_time_close(int64_t bar_ms,
-                        const std::string& tf_in,
-                        const std::string& session,
-                        const std::string& tz_in,
-                        const std::string& chart_tf,
-                        const std::string& syminfo_tz) {
+static int64_t session_time_close_reading(int64_t bar_ms,
+                                         const std::string& tf_in,
+                                         const std::string& session,
+                                         const std::string& tz_in,
+                                         const std::string& chart_tf,
+                                         const std::string& syminfo_tz,
+                                         bool transition_clock) {
     std::string tf = tf_in.empty() ? chart_tf : tf_in;
     if (tf.empty())
         tf = "1";
@@ -1465,7 +1791,8 @@ int64_t timeframe_time_close(int64_t bar_ms,
     resolve_session_tz(session, tz_in, syminfo_tz, sess, session_tz, tf_tz);
 
     int64_t value = 0;
-    if (!sess.empty() && session_argument_time(bar_ms, tf, sess, session_tz, chart_tf, true, value))
+    if (!sess.empty() && session_argument_time(bar_ms, tf, sess, session_tz, chart_tf, true, value,
+                                               transition_clock))
         return value;
     if (!sess.empty() && !passes_session_filter(sess, session_tz, bar_ms))
         return na<int64_t>();
@@ -1473,6 +1800,25 @@ int64_t timeframe_time_close(int64_t bar_ms,
     int64_t t_open = compute_tf_open_ms(bar_ms, tf, tf_tz, "UTC", "");
     return compute_tf_close_ms(t_open, tf, tf_tz);
 }
+
+int64_t timeframe_time_close(int64_t bar_ms,
+                        const std::string& tf_in,
+                        const std::string& session,
+                        const std::string& tz_in,
+                        const std::string& chart_tf,
+                        const std::string& syminfo_tz) {
+    return session_time_close_reading(bar_ms, tf_in, session, tz_in, chart_tf, syminfo_tz, true);
+}
+
+namespace detail {
+
+int64_t symbol_session_time_close(int64_t bar_ms, const std::string& tf,
+                                  const std::string& session, const std::string& tz,
+                                  const std::string& chart_tf) {
+    return session_time_close_reading(bar_ms, tf, session, tz, chart_tf, std::string(), false);
+}
+
+}  // namespace detail
 
 // Symbol-clock forms. Without a session argument the D/W/M bar open is the
 // SYMBOL's bar (session-day keyed — 17:00 ET on OANDA forex, 09:30 ET RTH on
