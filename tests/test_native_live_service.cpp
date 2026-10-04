@@ -31,8 +31,13 @@ int main() {
             return parse_json(std::string(std::istreambuf_iterator<char>(file), {}));
         };
         const auto initial = read();
-        std::this_thread::sleep_for(std::chrono::milliseconds(40));
-        const auto periodic = read();
+        auto periodic = initial;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (periodic.at("written_at_ms").value == initial.at("written_at_ms").value &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            periodic = read();
+        }
         assert(periodic.at("written_at_ms").integer<std::uint64_t>() > initial.at("written_at_ms").integer<std::uint64_t>());
         assert(periodic.at("liveness").at("control_loop_heartbeat_ms").value == initial.at("liveness").at("control_loop_heartbeat_ms").value);
         writer.stop("storage_budget");
