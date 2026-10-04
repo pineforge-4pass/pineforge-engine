@@ -175,9 +175,10 @@ at every release, so the lot-grid handling (`mincontract`) lives in this file.
 ### Other symbols' bars (`PINEFORGE_SYMBOL_FEEDS`)
 
 A script that calls `request.security` on another symbol reads that symbol's
-own bars, never the chart's. Without them the run stops where the request's
-value is read (`request.security(...) at line N: no data is pinned for this
-request, and its value was read`, exit 4). `PINEFORGE_SYMBOL_FEEDS` (the
+own bars, never the chart's. Without them, or when the index below lacks the
+requested symbol string or timeframe, the run stops where the request's value
+is read (`request.security(...) at line N: no data is pinned for this request,
+and its value was read`, exit 4). `PINEFORGE_SYMBOL_FEEDS` (the
 harness's `--symbol-feeds`) names a JSON index of those bars, installed through
 the library's `strategy_set_symbol_facts` and `strategy_set_symbol_feed` (engine
 1.0.0 and later):
@@ -217,11 +218,13 @@ docker run --rm \
   chart's first bar are delivered as history on it; bars after its last are
   never read. A header-only feed installs the symbol without bars: its requests
   read na on every bar (a symbol with no bars in the window).
-- `syminfo` is the symbol's catalog object, flat or `{"syminfo": {...}}`:
-  `tickerid` (as the symbol's canonical id), `type`, `timezone`, `session`,
-  `currency` and `mintick` are set as its facts, which `syminfo.*` reads inside
-  the request; other keys are ignored. Without it, `syminfo.tickerid` inside the
-  request reads the key, `syminfo.mintick` NaN and the strings empty.
+- `syminfo` is the symbol's catalog object, flat or `{"syminfo": {...}}`. Its
+  `type`, `timezone`, `session`, `currency` and `mintick` are set as the
+  symbol's facts, which `syminfo.*` reads inside the request; `tickerid` is set
+  as its `canonical` fact, which no `syminfo.*` reads; other keys are ignored.
+  Inside the request `syminfo.tickerid` is always the key and `syminfo.ticker`
+  the key after its last `:`. Without `syminfo`, `syminfo.mintick` reads NaN
+  and those four strings read empty.
 - Merge rule (TradingView's): with `lookahead` off a chart bar reads the latest
   requested bar whose close is at or before the chart bar's close; with it on,
   the latest that opened at or before the chart bar's open. A missing requested
@@ -233,14 +236,15 @@ docker run --rm \
   is historical only. Each feed is a full pass of its request's expression over
   its bars. `request.security_lower_tf` on another symbol reads no feed.
 - A feed must be at the timeframe it serves. Nothing aggregates another
-  symbol's bars: the engine aggregates only the chart's own input, and the C ABI
-  has no call that aggregates bars. A `240` feed does not serve a `D` request,
-  and a `1` feed serves only a request at `1`, so give each requested timeframe
-  its own bars.
-- An index or feed the harness cannot install (not JSON, a bad timeframe
-  spelling, two feeds at one timeframe, a CSV without `close`, decreasing
-  timestamps, a close after the next bar's open, a non-positive `mintick`, more
-  than 256 feeds, a library without the setters, a feed the engine refuses)
+  symbol's bars: the engine looks a feed up by the exact symbol string and
+  timeframe, and `strategy_set_symbol_feed` installs the bars as given. A `240`
+  feed does not serve a `D` request, and a `1` feed serves only a request at
+  `1`, so give each requested timeframe its own bars.
+- An index or feed the harness cannot install (for example: not JSON, a bad
+  timeframe spelling, two feeds at one timeframe, a CSV without `close`,
+  timestamps that do not strictly increase, a close after the next bar's open,
+  a non-positive `mintick`, more than 256 feeds, a library without the setters,
+  a feed the engine refuses)
   fails the run before it starts: one line
   `{"engine":"pineforge","error":"--symbol-feeds: ..."}` on stdout, harness exit
   1, entrypoint exit 4.
