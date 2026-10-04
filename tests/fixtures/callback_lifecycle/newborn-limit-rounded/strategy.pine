@@ -1,0 +1,25 @@
+//@version=6
+strategy("N6 independent ki-long-rounded", overlay=true, initial_capital=10000000, calc_on_order_fills=true, process_orders_on_close=false, pyramiding=0, margin_long=100, margin_short=100, commission_value=0, slippage=0)
+var float remembered = na
+var int lastSubmitted = -1
+var int lastClosure = -1
+var int seenClosed = 0
+var int evaluation = 0
+evaluation += 1
+if strategy.closedtrades > seenClosed
+    seenClosed := strategy.closedtrades
+    lastClosure := bar_index
+if strategy.position_size == 0
+    remembered := na
+    if (time == timestamp("UTC", 2025,4,3,16,45)) and lastSubmitted != bar_index and lastClosure != bar_index
+        lastSubmitted := bar_index
+        bool buy = (strategy.long) == strategy.long
+        float trigger = math.round_to_mintick(close * (buy ? 1.0005 : 0.9995))
+        strategy.entry("ticket", strategy.long, qty=1, stop=trigger, comment="scheduled")
+if strategy.position_size != 0
+    if na(remembered)
+        remembered := (math.round_to_mintick(strategy.position_size > 0 ? high : low)) + 0.0
+    string sensor = "eval=" + str.tostring(evaluation) + " goal=" + str.tostring(remembered, "0.00000000") + " O=" + str.tostring(open, "0.00000000") + " H=" + str.tostring(high, "0.00000000") + " L=" + str.tostring(low, "0.00000000")
+    strategy.exit("take", "ticket", limit=remembered, comment=sensor)
+    if bar_index - strategy.opentrades.entry_bar_index(0) >= 2
+        strategy.close("ticket", comment="age")

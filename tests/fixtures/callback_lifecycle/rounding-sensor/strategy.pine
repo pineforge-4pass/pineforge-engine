@@ -1,0 +1,9 @@
+//@version=6
+strategy("N6 independent rounding-sensor", overlay=true, initial_capital=10000000, calc_on_order_fills=true, process_orders_on_close=false, pyramiding=0, margin_long=100, margin_short=100, commission_value=0, slippage=0)
+var int issued = -1
+if minute(time, "UTC") == 45 and hour(time, "UTC") >= 14 and issued != bar_index
+    issued := bar_index
+    strategy.entry("sensor", strategy.long, qty=1)
+if strategy.position_size > 0
+    string value = "rawH=" + str.tostring(high, "0.00000000") + " tickH=" + str.tostring(math.round_to_mintick(high), "0.00000000") + " rawL=" + str.tostring(low, "0.00000000") + " tickL=" + str.tostring(math.round_to_mintick(low), "0.00000000")
+    strategy.close_all(comment=value, immediately=true)

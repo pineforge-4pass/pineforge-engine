@@ -1,0 +1,67 @@
+{
+  "pin": "global/sibling exit reservation and entry-incarnation ownership",
+  "tape": "n5b-17-eth-fresh",
+  "channel": "ws-report-v1",
+  "exporter": "lab tv --no-note",
+  "symbol": "BINANCE:ETHUSDT.P",
+  "interval": "15",
+  "from": "2025-05-21",
+  "to": "2025-05-23",
+  "exports": 2,
+  "exportsByteIdentical": true,
+  "sourceSha256": "e7625bd4e288988e300fa65e9bb29b38792bda7a2be4cae6ccf306f605fcda3b",
+  "tvTradesCsvSha256": "92bdfc1477d221f3d1e6382bbe340e8b9c29d90b2a84880388b5d77fd6e4ebb0",
+  "bars": "bars/ethusdtp-2025-05-21-2025-05-23.csv",
+  "barsSha256": "d37cb541bc6042178c7c93fcd55090953c39aeaf0895f78ca673efe3f7d018d6",
+  "status": "asserted",
+  "parameters": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "from": "2025-05-21",
+    "to": "2025-05-23",
+    "tick": 0.01,
+    "step": 0.0001,
+    "family": "gid",
+    "costs": true,
+    "rule": "FIFO",
+    "pyramiding": 3,
+    "margin": 0,
+    "capital": 5000,
+    "commissionType": "percent",
+    "commissionValue": 0.04,
+    "pooc": true,
+    "slippage": 3,
+    "blocks": [
+      {
+        "type": "at",
+        "time": "2025-05-21T06:30:00Z",
+        "ops": [
+          {
+            "op": "entry",
+            "id": "S2",
+            "side": -1,
+            "qty": 1.9939,
+            "limit": 2608.87
+          },
+          {
+            "op": "exit",
+            "exitId": "xS2",
+            "from": "S2",
+            "stop": "2586.88*(1-0.0025)",
+            "limit": 2483.4
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-05-22T12:00:00Z",
+        "ops": [
+          {
+            "op": "close_all"
+          }
+        ]
+      }
+    ],
+    "name": "n5b-17-eth-fresh",
+    "pineSha256": "e7625bd4e288988e300fa65e9bb29b38792bda7a2be4cae6ccf306f605fcda3b"
+  }
+}

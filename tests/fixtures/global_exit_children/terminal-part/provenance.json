@@ -1,0 +1,79 @@
+{
+  "pin": "global/sibling exit reservation and entry-incarnation ownership",
+  "tape": "n5b-15-terminal-part",
+  "channel": "ws-report-v1",
+  "exporter": "lab tv --no-note",
+  "symbol": "OANDA:EURUSD",
+  "interval": "15",
+  "from": "2025-07-30",
+  "to": "2025-08-04",
+  "exports": 2,
+  "exportsByteIdentical": true,
+  "sourceSha256": "68c623ffd2c46c54baf325a05e7f3d42304ebf2c206b65d33ff9169d0dfa1f77",
+  "tvTradesCsvSha256": "1b6a4120cc07d6306b8a59d7de6e18cdf123c651188dc98c82ac5159ffea0bb6",
+  "bars": "bars/eurusd-2025-07-30-2025-08-04.csv",
+  "barsSha256": "347cd39cd2f69945830b26dbbc8c6b6595d9879bbedcd07f2357d934c8ee1e29",
+  "status": "known",
+  "parameters": {
+    "symbol": "OANDA:EURUSD",
+    "from": "2025-07-30",
+    "to": "2025-08-04",
+    "tick": 1e-05,
+    "step": 0.01,
+    "family": "gid",
+    "costs": true,
+    "rule": "FIFO",
+    "pyramiding": 20,
+    "margin": 0,
+    "capital": 500000,
+    "commissionType": "percent",
+    "commissionValue": 0.05,
+    "blocks": [
+      {
+        "type": "at",
+        "time": "2025-07-30T06:00:00Z",
+        "ops": [
+          {
+            "op": "entry",
+            "id": "Long",
+            "side": 1,
+            "qty": 2164.89
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-31T10:30:00Z",
+        "ops": [
+          {
+            "op": "entry",
+            "id": "Long_Add",
+            "side": 1,
+            "qty": 4374.3
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-08-01T12:30:00Z",
+        "ops": [
+          {
+            "op": "order",
+            "id": "Part",
+            "qty": 3000,
+            "side": -1
+          }
+        ]
+      }
+    ],
+    "name": "n5b-15-terminal-part",
+    "pineSha256": "68c623ffd2c46c54baf325a05e7f3d42304ebf2c206b65d33ff9169d0dfa1f77"
+  },
+  "missingRule": "rule 6: a range-end row reports the entry commission only",
+  "firstDeparture": {
+    "row": 1,
+    "field": "commission",
+    "expected": 2.498023273,
+    "actual": 2.4980232732
+  }
+}

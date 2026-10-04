@@ -1567,17 +1567,51 @@ constexpr Trade kBracketsMag_trades[] = {
 //   8464039108905730677ull -> 12064630322548111510ull [H-THIN]
 //   16757005045255032303ull -> 1478230385172911488ull [H-THIN]
 //   14459029476982242904ull -> 11603812731166869657ull [H-THIN]
+// expectation corrected (global exit children, kGroups_rows, 33 of 40 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_P4_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
+//   4759091960862828143ull -> 15986803836345379555ull
+//   9823824249826547972ull -> 194849727189763168ull
+//   3367974332034477750ull -> 11499983239545244962ull
+//   2753028355014566561ull -> 2415423625359598685ull
+//   10234103761436216838ull -> 2014053493974939754ull
+//   11596526912649217871ull -> 1023101308187140347ull
+//   11244016696670400502ull -> 17337345880330376898ull
+//   5498200097845717949ull -> 18072117585214201705ull
+//   1285712316434115110ull -> 16008342382767913597ull
+//   7752081048512699947ull -> 4713675362681950076ull
+//   14957227298605160858ull -> 699957985091383797ull
+//   2797786839839741211ull -> 10303941292708404100ull
+//   17524508282913119032ull -> 17062367653942002759ull
+//   258830461705510047ull -> 3518084317989491968ull
+//   5258299412396125479ull -> 6174152327906766296ull
+//   11391672083081477777ull -> 5567168590021465106ull
+//   11337637995714223416ull -> 5456609891224570673ull
+//   4145221672849159830ull -> 11904861669463511055ull
+//   18129308899206687414ull -> 13757396988289745907ull
+//   157724745191766488ull -> 17320733070045564125ull
+//   2858839548381076336ull -> 13139014375445360729ull
+//   3558242964956867075ull -> 5346861656492607729ull
+//   4785185599700229079ull -> 27917356546521749ull
+//   1725255261693593403ull -> 9555950502333804693ull
+//   5113959160023798689ull -> 7017784402727529427ull
+//   2130444047323073853ull -> 16637164076161391ull
+//   1066578971090051403ull -> 18070468290618701589ull
+//   2037921988155471324ull -> 1356655075529356522ull
+//   2100850305843993844ull -> 4579629440840878774ull
+//   5021911541248681164ull -> 8164448039273338242ull
+//   3312743446207326357ull -> 11605182429875977335ull
+//   3959249222693067018ull -> 5978625746294839748ull
+//   6790059673110986705ull -> 5687380306928373147ull
 constexpr std::uint64_t kGroups_rows[] = {
     16343339797501156050ull, 4412441122235541001ull, 8796315700613324416ull, 7395320384889894535ull,
-    14779897915981054858ull, 12902321761157770999ull, 13233007585699491660ull, 4759091960862828143ull,
-    9823824249826547972ull, 3367974332034477750ull, 2753028355014566561ull, 10234103761436216838ull,
-    11596526912649217871ull, 11244016696670400502ull, 5498200097845717949ull, 1285712316434115110ull,
-    7752081048512699947ull, 14957227298605160858ull, 2797786839839741211ull, 17524508282913119032ull,
-    258830461705510047ull, 5258299412396125479ull, 11391672083081477777ull, 11337637995714223416ull,
-    4145221672849159830ull, 18129308899206687414ull, 157724745191766488ull, 2858839548381076336ull,
-    3558242964956867075ull, 4785185599700229079ull, 1725255261693593403ull, 5113959160023798689ull,
-    2130444047323073853ull, 1066578971090051403ull, 2037921988155471324ull, 2100850305843993844ull,
-    5021911541248681164ull, 3312743446207326357ull, 3959249222693067018ull, 6790059673110986705ull,
+    14779897915981054858ull, 12902321761157770999ull, 13233007585699491660ull, 15986803836345379555ull,
+    194849727189763168ull, 11499983239545244962ull, 2415423625359598685ull, 2014053493974939754ull,
+    1023101308187140347ull, 17337345880330376898ull, 18072117585214201705ull, 16008342382767913597ull,
+    4713675362681950076ull, 699957985091383797ull, 10303941292708404100ull, 17062367653942002759ull,
+    3518084317989491968ull, 6174152327906766296ull, 5567168590021465106ull, 5456609891224570673ull,
+    11904861669463511055ull, 13757396988289745907ull, 17320733070045564125ull, 13139014375445360729ull,
+    5346861656492607729ull, 27917356546521749ull, 9555950502333804693ull, 7017784402727529427ull,
+    16637164076161391ull, 18070468290618701589ull, 1356655075529356522ull, 4579629440840878774ull,
+    8164448039273338242ull, 11605182429875977335ull, 5978625746294839748ull, 5687380306928373147ull,
 };
 constexpr std::uint64_t kGroups_at_bar[] = {
     4ull, 0ull, 9ull, 0ull,
@@ -1648,7 +1682,8 @@ constexpr std::uint64_t kGroups_folded[] = {
 // expectation corrected (v19-E): kGroups_final 2748401044783380800ull -> 10203291295434148760ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the receipt bars, folded counts and trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
 // expectation corrected (V19-FIX): kGroups_final 10203291295434148760ull -> 14459029476982242904ull, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the receipt bars, folded counts and trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree.
 // expectation corrected (INT26 v19 hash re-pin): kGroups_final 14459029476982242904ull -> 11603812731166869657ull [H-THIN], because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the receipt bars, folded counts and trades did not move.
-constexpr std::uint64_t kGroups_final = 6790059673110986705ull;
+// expectation corrected (global exit children): kGroups_final 6790059673110986705ull -> 5687380306928373147ull, because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_P4_HARVEST against main 700c5d24 (every old pin reproduced) and this tree
+constexpr std::uint64_t kGroups_final = 5687380306928373147ull;
 constexpr Trade kGroups_trades[] = {
     {1736121840000LL, 1736122020000LL, 102.25, 100.75, 1, 0},
     {1736122020000LL, 1736122500000LL, 100.25, 100.5, 2, 0},
@@ -1825,17 +1860,51 @@ constexpr Trade kGroups_trades[] = {
 //   5741952581690045810ull -> 2022458278016162571ull [H-THIN]
 //   1055864288829102030ull -> 13820365368293950247ull [H-THIN]
 //   16431710829567235323ull -> 7247005295497143736ull [H-THIN]
+// expectation corrected (global exit children, kGroupsMag_rows, 33 of 40 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_P4_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
+//   17153420186503897123ull -> 12518735982232070919ull
+//   11456037253658883689ull -> 1223152172506049125ull
+//   14077157578456809561ull -> 9845564494336972661ull
+//   1876187231412126066ull -> 11526870839216593854ull
+//   7584349632232999827ull -> 7958391602730822631ull
+//   12772103684118ull -> 2133862582598556578ull
+//   13157147373266460055ull -> 15572018873280438995ull
+//   6490629001336978734ull -> 1360631956313268626ull
+//   1176706407849522005ull -> 7235221608098829673ull
+//   5208174571215505949ull -> 2755460418256391217ull
+//   17071647794496085499ull -> 14651029891397856239ull
+//   2965608374461372368ull -> 8721929058696211101ull
+//   259229827137108988ull -> 7881448469987546197ull
+//   17260710127192181451ull -> 955137740828786878ull
+//   6549896198799679268ull -> 1874783133415739205ull
+//   5279834849193113775ull -> 9099199344924078830ull
+//   10588095508092492904ull -> 10364030466305026009ull
+//   4656739585812177996ull -> 15564618905768710145ull
+//   13276070941979300526ull -> 14632478270570704127ull
+//   4843070621691156340ull -> 558035531204599253ull
+//   14074819260325058502ull -> 11005524605381043327ull
+//   12751671947014392855ull -> 3437123898456226281ull
+//   15852405633363321893ull -> 3317846914917814067ull
+//   7053518707971088904ull -> 5951541785902752758ull
+//   9399723714235314627ull -> 5521920914612412049ull
+//   15921359042335171022ull -> 12806215140791639468ull
+//   13466328171483187858ull -> 11834057617877442392ull
+//   3230129781500106067ull -> 236321291498320537ull
+//   5531959223917165545ull -> 15396353240144791575ull
+//   10579750083708344055ull -> 8251373368095622237ull
+//   1415069705906409020ull -> 5125697900456140010ull
+//   213863451962614233ull -> 14649272716500212315ull
+//   8643042297986607011ull -> 8217882536285449369ull
 constexpr std::uint64_t kGroupsMag_rows[] = {
     2680312739779497464ull, 822058034361535600ull, 3962469670734696157ull, 17411473840245726690ull,
-    5739216726257722739ull, 4823834691276900811ull, 14557402943266793758ull, 17153420186503897123ull,
-    11456037253658883689ull, 14077157578456809561ull, 1876187231412126066ull, 7584349632232999827ull,
-    12772103684118ull, 13157147373266460055ull, 6490629001336978734ull, 1176706407849522005ull,
-    5208174571215505949ull, 17071647794496085499ull, 2965608374461372368ull, 259229827137108988ull,
-    17260710127192181451ull, 6549896198799679268ull, 5279834849193113775ull, 10588095508092492904ull,
-    4656739585812177996ull, 13276070941979300526ull, 4843070621691156340ull, 14074819260325058502ull,
-    12751671947014392855ull, 15852405633363321893ull, 7053518707971088904ull, 9399723714235314627ull,
-    15921359042335171022ull, 13466328171483187858ull, 3230129781500106067ull, 5531959223917165545ull,
-    10579750083708344055ull, 1415069705906409020ull, 213863451962614233ull, 8643042297986607011ull,
+    5739216726257722739ull, 4823834691276900811ull, 14557402943266793758ull, 12518735982232070919ull,
+    1223152172506049125ull, 9845564494336972661ull, 11526870839216593854ull, 7958391602730822631ull,
+    2133862582598556578ull, 15572018873280438995ull, 1360631956313268626ull, 7235221608098829673ull,
+    2755460418256391217ull, 14651029891397856239ull, 8721929058696211101ull, 7881448469987546197ull,
+    955137740828786878ull, 1874783133415739205ull, 9099199344924078830ull, 10364030466305026009ull,
+    15564618905768710145ull, 14632478270570704127ull, 558035531204599253ull, 11005524605381043327ull,
+    3437123898456226281ull, 3317846914917814067ull, 5951541785902752758ull, 5521920914612412049ull,
+    12806215140791639468ull, 11834057617877442392ull, 236321291498320537ull, 15396353240144791575ull,
+    8251373368095622237ull, 5125697900456140010ull, 14649272716500212315ull, 8217882536285449369ull,
 };
 constexpr std::uint64_t kGroupsMag_at_bar[] = {
     4ull, 0ull, 9ull, 0ull,
@@ -1906,7 +1975,8 @@ constexpr std::uint64_t kGroupsMag_folded[] = {
 // expectation corrected (v19-E): kGroupsMag_final 17786987883651578348ull -> 12557658352255323163ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the receipt bars, folded counts and trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
 // expectation corrected (V19-FIX): kGroupsMag_final 12557658352255323163ull -> 16431710829567235323ull, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the receipt bars, folded counts and trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree.
 // expectation corrected (INT26 v19 hash re-pin): kGroupsMag_final 16431710829567235323ull -> 7247005295497143736ull [H-THIN], because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the receipt bars, folded counts and trades did not move.
-constexpr std::uint64_t kGroupsMag_final = 8643042297986607011ull;
+// expectation corrected (global exit children): kGroupsMag_final 8643042297986607011ull -> 8217882536285449369ull, because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_P4_HARVEST against main 700c5d24 (every old pin reproduced) and this tree
+constexpr std::uint64_t kGroupsMag_final = 8217882536285449369ull;
 constexpr Trade kGroupsMag_trades[] = {
     {1736121840000LL, 1736122020000LL, 102.25, 100.75, 1, 0},
     {1736122020000LL, 1736122500000LL, 100.25, 100.5, 2, 0},
@@ -2083,17 +2153,50 @@ constexpr Trade kGroupsMag_trades[] = {
 //   2477382922949126500ull -> 17554715975906318531ull [H-THIN]
 //   9214756763675162553ull -> 542461356767618432ull [H-THIN]
 //   6336494971372918338ull -> 13852676117274540777ull [H-THIN]
+// expectation corrected (global exit children, kStopLimit_rows, 32 of 40 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_P4_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
+//   2913839783495075163ull -> 14595549084140170328ull
+//   17362053743420220567ull -> 1581395817893091580ull
+//   18277069102810285906ull -> 11410192425024999841ull
+//   6966128010082440393ull -> 11457876279152957222ull
+//   343766021385529931ull -> 12461986552251932532ull
+//   8737535290161095366ull -> 17777590018582666493ull
+//   3624930207816781150ull -> 8600220061662448849ull
+//   6133926189978579814ull -> 10711640196668875169ull
+//   13535889090349139748ull -> 16229592456134753539ull
+//   7154291922301271050ull -> 11034155503303306933ull
+//   13948611925394526661ull -> 10202696296980495238ull
+//   18113377713059116506ull -> 16390349085492016929ull
+//   6211630995163031141ull -> 9861292596892019874ull
+//   15698793793400314809ull -> 74310317872490614ull
+//   9224825516139358046ull -> 8801362110384387433ull
+//   3897555601472887486ull -> 17437362218938978541ull
+//   7742563012562507868ull -> 912814660021556687ull
+//   6030704080576753327ull -> 3347566321097334404ull
+//   1172792760249453492ull -> 9923860740155265915ull
+//   215530794059409427ull -> 4260146864731868972ull
+//   1515537412314014355ull -> 146852036750082796ull
+//   8864479424312686072ull -> 14223469951543664455ull
+//   7238089528421731329ull -> 7519157192684898030ull
+//   9745351952936386365ull -> 1279858048223236814ull
+//   14384312445426600067ull -> 11359532231799387244ull
+//   6198847811909310381ull -> 8061458163996660402ull
+//   11872127846069280170ull -> 1373787264800152645ull
+//   6744981219021824364ull -> 15240021524745322867ull
+//   6655913456858325688ull -> 15184230939220850023ull
+//   17554715975906318531ull -> 4250086723006442112ull
+//   542461356767618432ull -> 12112891167353665607ull
+//   13852676117274540777ull -> 16213077471779160114ull
 constexpr std::uint64_t kStopLimit_rows[] = {
     10950004051556324382ull, 14490347146816688448ull, 17137431077388642227ull, 16572291607211202616ull,
     14716844791625804409ull, 8954327035592863039ull, 7512665423720105326ull, 4187947268963235259ull,
-    2913839783495075163ull, 17362053743420220567ull, 18277069102810285906ull, 6966128010082440393ull,
-    343766021385529931ull, 8737535290161095366ull, 3624930207816781150ull, 6133926189978579814ull,
-    13535889090349139748ull, 7154291922301271050ull, 13948611925394526661ull, 18113377713059116506ull,
-    6211630995163031141ull, 15698793793400314809ull, 9224825516139358046ull, 3897555601472887486ull,
-    7742563012562507868ull, 6030704080576753327ull, 1172792760249453492ull, 215530794059409427ull,
-    1515537412314014355ull, 8864479424312686072ull, 7238089528421731329ull, 9745351952936386365ull,
-    14384312445426600067ull, 6198847811909310381ull, 11872127846069280170ull, 6744981219021824364ull,
-    6655913456858325688ull, 17554715975906318531ull, 542461356767618432ull, 13852676117274540777ull,
+    14595549084140170328ull, 1581395817893091580ull, 11410192425024999841ull, 11457876279152957222ull,
+    12461986552251932532ull, 17777590018582666493ull, 8600220061662448849ull, 10711640196668875169ull,
+    16229592456134753539ull, 11034155503303306933ull, 10202696296980495238ull, 16390349085492016929ull,
+    9861292596892019874ull, 74310317872490614ull, 8801362110384387433ull, 17437362218938978541ull,
+    912814660021556687ull, 3347566321097334404ull, 9923860740155265915ull, 4260146864731868972ull,
+    146852036750082796ull, 14223469951543664455ull, 7519157192684898030ull, 1279858048223236814ull,
+    11359532231799387244ull, 8061458163996660402ull, 1373787264800152645ull, 15240021524745322867ull,
+    15184230939220850023ull, 4250086723006442112ull, 12112891167353665607ull, 16213077471779160114ull,
 };
 constexpr std::uint64_t kStopLimit_at_bar[] = {
     4ull, 0ull, 13ull, 11ull,
@@ -2164,7 +2267,8 @@ constexpr std::uint64_t kStopLimit_folded[] = {
 // expectation corrected (v19-E): kStopLimit_final 3665904849405917965ull -> 13378853722070711842ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the receipt bars, folded counts and trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
 // expectation corrected (V19-FIX): kStopLimit_final 13378853722070711842ull -> 6336494971372918338ull, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the receipt bars, folded counts and trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree.
 // expectation corrected (INT26 v19 hash re-pin): kStopLimit_final 6336494971372918338ull -> 13852676117274540777ull [H-THIN], because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the receipt bars, folded counts and trades did not move.
-constexpr std::uint64_t kStopLimit_final = 13852676117274540777ull;
+// expectation corrected (global exit children): kStopLimit_final 13852676117274540777ull -> 16213077471779160114ull, because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_P4_HARVEST against main 700c5d24 (every old pin reproduced) and this tree
+constexpr std::uint64_t kStopLimit_final = 16213077471779160114ull;
 constexpr Trade kStopLimit_trades[] = {
     {1736121660000LL, 1736121780000LL, 100.5, 101.5, 1, 0},
     {1736121660000LL, 1736121900000LL, 100.5, 102, 1, 0},
@@ -2344,17 +2448,50 @@ constexpr Trade kStopLimit_trades[] = {
 //   17028258441606210396ull -> 13245700179032171137ull [H-THIN]
 //   8328930773731943340ull -> 14239530769682782007ull [H-THIN]
 //   9254963348917194152ull -> 4769056648897025171ull [H-THIN]
+// expectation corrected (global exit children, kStopLimitMag_rows, 32 of 40 values), because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_P4_HARVEST against main 700c5d24 (every old pin reproduced) and this tree:
+//   11976516818017786813ull -> 11682805079881776674ull
+//   8000889795845112059ull -> 16176217720681329052ull
+//   3812031270016354768ull -> 199708672735336619ull
+//   13171068499659342452ull -> 3460953804079498703ull
+//   2834570042813630280ull -> 8316411251410053203ull
+//   2836736203642368832ull -> 17940243266413628003ull
+//   13392066916564678809ull -> 13555082112051044438ull
+//   12868627571096102339ull -> 3668301806774385484ull
+//   13282802570212513971ull -> 13845765962847394948ull
+//   3990088271426726433ull -> 11425025422904119938ull
+//   2840451963065699294ull -> 5601207001734833357ull
+//   7535631320516411386ull -> 4963624586156771761ull
+//   5606595334476947895ull -> 11690440949989448060ull
+//   16715759077213701098ull -> 18331869359030931321ull
+//   17047719425359875908ull -> 9062725399179241703ull
+//   8426786106325009307ull -> 5605439200187066068ull
+//   15538761259524269350ull -> 7741847483059176545ull
+//   14720303962652891230ull -> 1615859668108756585ull
+//   6644795815053845919ull -> 10519401014267031272ull
+//   13567799877554087198ull -> 16422811404503903585ull
+//   303066552358707847ull -> 5076797268227214416ull
+//   7117207502541194771ull -> 12334306014404960188ull
+//   17215798505737563325ull -> 2972948639656542242ull
+//   13389121371815587728ull -> 12604189961734943427ull
+//   10590670751038194751ull -> 1633939950243093580ull
+//   16401520297421927605ull -> 14889364224483798014ull
+//   1764458890420715860ull -> 4959858699924302995ull
+//   15454338180826410585ull -> 14704747775010143022ull
+//   10945801551956678372ull -> 6491396245789878467ull
+//   13245700179032171137ull -> 16197131958124679066ull
+//   14239530769682782007ull -> 10096172313512920984ull
+//   4769056648897025171ull -> 11244693855505198624ull
 constexpr std::uint64_t kStopLimitMag_rows[] = {
     12049254652408164286ull, 7170364698800146161ull, 16063150345282688529ull, 3599858653149097876ull,
     8320568259305114859ull, 7325059507104947563ull, 4110843077158619028ull, 8512043085829177902ull,
-    11976516818017786813ull, 8000889795845112059ull, 3812031270016354768ull, 13171068499659342452ull,
-    2834570042813630280ull, 2836736203642368832ull, 13392066916564678809ull, 12868627571096102339ull,
-    13282802570212513971ull, 3990088271426726433ull, 2840451963065699294ull, 7535631320516411386ull,
-    5606595334476947895ull, 16715759077213701098ull, 17047719425359875908ull, 8426786106325009307ull,
-    15538761259524269350ull, 14720303962652891230ull, 6644795815053845919ull, 13567799877554087198ull,
-    303066552358707847ull, 7117207502541194771ull, 17215798505737563325ull, 13389121371815587728ull,
-    10590670751038194751ull, 16401520297421927605ull, 1764458890420715860ull, 15454338180826410585ull,
-    10945801551956678372ull, 13245700179032171137ull, 14239530769682782007ull, 4769056648897025171ull,
+    11682805079881776674ull, 16176217720681329052ull, 199708672735336619ull, 3460953804079498703ull,
+    8316411251410053203ull, 17940243266413628003ull, 13555082112051044438ull, 3668301806774385484ull,
+    13845765962847394948ull, 11425025422904119938ull, 5601207001734833357ull, 4963624586156771761ull,
+    11690440949989448060ull, 18331869359030931321ull, 9062725399179241703ull, 5605439200187066068ull,
+    7741847483059176545ull, 1615859668108756585ull, 10519401014267031272ull, 16422811404503903585ull,
+    5076797268227214416ull, 12334306014404960188ull, 2972948639656542242ull, 12604189961734943427ull,
+    1633939950243093580ull, 14889364224483798014ull, 4959858699924302995ull, 14704747775010143022ull,
+    6491396245789878467ull, 16197131958124679066ull, 10096172313512920984ull, 11244693855505198624ull,
 };
 constexpr std::uint64_t kStopLimitMag_at_bar[] = {
     4ull, 0ull, 13ull, 0ull,
@@ -2425,7 +2562,8 @@ constexpr std::uint64_t kStopLimitMag_folded[] = {
 // expectation corrected (v19-E): kStopLimitMag_final 15015254700001776595ull -> 12421926773651986280ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the receipt bars, folded counts and trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
 // expectation corrected (V19-FIX): kStopLimitMag_final 12421926773651986280ull -> 9254963348917194152ull, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the receipt bars, folded counts and trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree.
 // expectation corrected (INT26 v19 hash re-pin): kStopLimitMag_final 9254963348917194152ull -> 4769056648897025171ull [H-THIN], because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the receipt bars, folded counts and trades did not move.
-constexpr std::uint64_t kStopLimitMag_final = 4769056648897025171ull;
+// expectation corrected (global exit children): kStopLimitMag_final 4769056648897025171ull -> 11244693855505198624ull, because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_P4_HARVEST against main 700c5d24 (every old pin reproduced) and this tree
+constexpr std::uint64_t kStopLimitMag_final = 11244693855505198624ull;
 constexpr Trade kStopLimitMag_trades[] = {
     {1736121660000LL, 1736121780000LL, 100.25, 101.5, 1, 0},
     {1736121660000LL, 1736121900000LL, 100.25, 102, 1, 0},

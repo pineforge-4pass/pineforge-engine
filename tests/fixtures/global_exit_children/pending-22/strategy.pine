@@ -1,0 +1,12 @@
+//@version=6
+strategy("n5-22-pending",initial_capital=500000,pyramiding=10,margin_long=0,margin_short=0,close_entries_rule="FIFO",process_orders_on_close=true)
+if time == timestamp("UTC",2025,05,21,13,00,00)
+    strategy.entry("S1",strategy.short,qty=2.0266)
+if time == timestamp("UTC",2025,05,21,13,15,00)
+    strategy.exit("X1",from_entry="S1",limit=2400,stop=2800)
+if time == timestamp("UTC",2025,05,21,14,45,00)
+    strategy.close("S1")
+    strategy.entry("S2",strategy.short,qty=1.9939,limit=2608.87)
+    strategy.exit("X2",from_entry="S2",limit=2580.44,stop=2608.87)
+if time == timestamp("UTC",2025,05,22,12,00,00)
+    strategy.close_all()

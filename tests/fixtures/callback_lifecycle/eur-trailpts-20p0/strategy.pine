@@ -1,0 +1,8 @@
+//@version=6
+strategy("N6B eur-trailpts-20p0", overlay=true, initial_capital=10000000, calc_on_order_fills=false, process_orders_on_close=false, pyramiding=0, margin_long=100, margin_short=100, commission_value=0, slippage=0)
+if time == timestamp("UTC",2025,6,16,5,15)
+    strategy.entry("BUY", strategy.long, qty=1000)
+if strategy.position_size > 0
+    strategy.exit("RUNNER BUY", "BUY", trail_points=20.0, stop=1.14)
+if time >= timestamp("UTC",2025,6,16,6,30)
+    strategy.close_all(comment="cleanup")

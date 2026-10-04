@@ -1,0 +1,16 @@
+//@version=6
+strategy("N6B coof-dual-tagged", overlay=true, initial_capital=10000000, calc_on_order_fills=true, process_orders_on_close=false, pyramiding=0, margin_long=100, margin_short=100, commission_value=0, slippage=0)
+varip int k = 0
+k += 1
+var int v = 0
+v += 1
+string tag = "k" + str.tostring(k) + " v" + str.tostring(v) + " p" + str.tostring(strategy.position_size) + " n" + str.tostring(strategy.closedtrades)
+if time == timestamp("UTC",2026,2,13,20,0)
+    strategy.entry("Short", strategy.short, qty=3, comment="Short0 " + tag)
+if time == timestamp("UTC",2026,2,13,20,30) or time == timestamp("UTC",2026,2,13,20,45)
+    strategy.entry("Long", strategy.long, qty=3, comment="Long " + tag)
+    strategy.entry("Short", strategy.short, qty=3, comment="Short " + tag)
+if strategy.position_size < 0 and time >= timestamp("UTC",2026,2,13,20,45)
+    strategy.exit("Exit Short", "Short", stop=257.0, limit=250.0, comment="XS " + tag)
+if time >= timestamp("UTC",2026,2,17,15,0)
+    strategy.close_all(comment="cleanup " + tag)

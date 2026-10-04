@@ -1,0 +1,36 @@
+{
+  "synthetic": true,
+  "authored_for": "fix round 1: the R4 re-issue rule's general shape and the pair-hold barrier (independently authored; no population source was sent)",
+  "pin_family": "pair-hold-reissue",
+  "prediction": "prediction.json, written before the first export",
+  "export": {
+    "tool": "lab tv --no-note",
+    "channel": "ws-report-v1",
+    "exported_at": "2026-10-03T22:15:38.371Z",
+    "chart": {
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "from": "2025-05-13",
+      "to": "2025-05-16",
+      "timeoutMs": 120000
+    },
+    "exports_identical": 4,
+    "range_proof": "covered"
+  },
+  "strategy_pine_sha256": "60520915f75fc69a89ffa4de033a714064b5a97d7cab0c23ba41d9c6cfe9efa1",
+  "tv_trades_sha256": "48b3a46235e93161a4987f4fd9f67a976c65a60e4de1eb0e29f9a38cb8c86935",
+  "tv_trades_rows": 4,
+  "chart_feed": {
+    "symbol": "NYSE:F",
+    "timeframe": "15",
+    "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32",
+    "rows_from_ms": 1747094400000,
+    "rows_to_ms": 1747353600000
+  },
+  "generated_cpp": {
+    "codegen_commit": "d9b92c7",
+    "sha256": "3a53d264eec71bd4a9b903880e67af0a61eac4c109457030f0a310396e65bb39"
+  },
+  "timestamps": "tv_trades.csv is UTC+8; bars.csv is epoch milliseconds UTC",
+  "configuration_note": "no quantity grid, so the engine takes the entry/close pair-hold path; every quantity is whole (900 fixed, 1000 = 10640 / 10.64), as TradingView's"
+}

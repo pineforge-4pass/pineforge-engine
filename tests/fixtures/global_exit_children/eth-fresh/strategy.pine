@@ -1,0 +1,7 @@
+//@version=6
+strategy("n5b-17-eth-fresh",initial_capital=5000,pyramiding=3,margin_long=0,margin_short=0,close_entries_rule="FIFO",commission_type=strategy.commission.percent,commission_value=0.04,process_orders_on_close=true,slippage=3)
+if time == timestamp("UTC",2025,5,21,6,30,0)
+    strategy.entry("S2",strategy.short,qty=1.9939,limit=2608.87)
+    strategy.exit("xS2",from_entry="S2",stop=2586.88*(1-0.0025),limit=2483.4)
+if time == timestamp("UTC",2025,5,22,12,0,0)
+    strategy.close_all()

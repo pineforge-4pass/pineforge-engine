@@ -1,0 +1,17 @@
+{
+  "input_tf": "15",
+  "script_tf": "15",
+  "chart_timezone": "America/New_York",
+  "runtime_overrides": {
+    "timezone": "America/New_York",
+    "tickerid": "NYSE:F",
+    "ticker": "F",
+    "session": "0930-1600",
+    "mintick": 0.01,
+    "pointvalue": 1.0
+  },
+  "syminfo_metadata": {
+    "margin_long": 100,
+    "margin_short": 100
+  }
+}

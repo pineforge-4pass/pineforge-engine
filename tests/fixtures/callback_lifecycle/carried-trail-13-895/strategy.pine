@@ -1,0 +1,7 @@
+//@version=6
+strategy("N6 independent legal-trail-13-895", overlay=true, initial_capital=10000000, calc_on_order_fills=false, process_orders_on_close=false, pyramiding=0, margin_long=100, margin_short=100, commission_value=0.01, slippage=2)
+if time == timestamp("UTC",2025,5,21,17,15)
+    strategy.entry("ticket", strategy.short, qty=2272)
+    strategy.exit("bracket", "ticket", limit=9.65, trail_price=10.525, trail_offset=13.895)
+if time >= timestamp("UTC",2025,5,23,19,30)
+    strategy.close_all(comment="cleanup")

@@ -1,0 +1,163 @@
+{
+  "pin": "global/sibling exit reservation and entry-incarnation ownership",
+  "tape": "n5b-06-hist4",
+  "channel": "ws-report-v1",
+  "exporter": "lab tv --no-note",
+  "symbol": "OANDA:EURUSD",
+  "interval": "15",
+  "from": "2025-07-30",
+  "to": "2025-08-04",
+  "exports": 2,
+  "exportsByteIdentical": true,
+  "sourceSha256": "ad992169876cfc81eae1d5800518e2567a1764d25b821d40da8d3803fbd61aed",
+  "tvTradesCsvSha256": "308a25211cf79377b02a53d03c7ceeb96ab0327b27e646abb8999d56722ecee0",
+  "bars": "bars/eurusd-2025-07-30-2025-08-04.csv",
+  "barsSha256": "347cd39cd2f69945830b26dbbc8c6b6595d9879bbedcd07f2357d934c8ee1e29",
+  "status": "asserted",
+  "parameters": {
+    "symbol": "OANDA:EURUSD",
+    "from": "2025-07-30",
+    "to": "2025-08-04",
+    "tick": 1e-05,
+    "step": 0.01,
+    "family": "gid",
+    "costs": false,
+    "rule": "ANY",
+    "pyramiding": 20,
+    "margin": 0,
+    "capital": 500000,
+    "blocks": [
+      {
+        "type": "while",
+        "cond": "long",
+        "ops": [
+          {
+            "op": "exit",
+            "exitId": "Wick",
+            "from": null,
+            "stop": 0.9,
+            "limit": 1.3
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-30T06:00:00Z",
+        "ops": [
+          {
+            "op": "entry",
+            "id": "h01",
+            "side": 1,
+            "qty": 1
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-30T06:15:00Z",
+        "ops": [
+          {
+            "op": "close",
+            "id": "h01"
+          },
+          {
+            "op": "entry",
+            "id": "h02",
+            "side": 1,
+            "qty": 1
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-30T06:30:00Z",
+        "ops": [
+          {
+            "op": "close",
+            "id": "h02"
+          },
+          {
+            "op": "entry",
+            "id": "h03",
+            "side": 1,
+            "qty": 1
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-30T06:45:00Z",
+        "ops": [
+          {
+            "op": "close",
+            "id": "h03"
+          },
+          {
+            "op": "entry",
+            "id": "h04",
+            "side": 1,
+            "qty": 1
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-30T07:00:00Z",
+        "ops": [
+          {
+            "op": "close",
+            "id": "h04"
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-31T10:30:00Z",
+        "ops": [
+          {
+            "op": "entry",
+            "id": "B",
+            "side": 1,
+            "qty": 3
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-07-31T10:45:00Z",
+        "ops": [
+          {
+            "op": "entry",
+            "id": "Q",
+            "side": 1,
+            "qty": 7
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-08-01T12:30:00Z",
+        "ops": [
+          {
+            "op": "exit",
+            "exitId": "Wick",
+            "from": null,
+            "stop": 0.9,
+            "limit": 1.15439
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-08-01T16:00:00Z",
+        "ops": [
+          {
+            "op": "close_all"
+          }
+        ]
+      }
+    ],
+    "name": "n5b-06-hist4",
+    "pineSha256": "ad992169876cfc81eae1d5800518e2567a1764d25b821d40da8d3803fbd61aed"
+  }
+}

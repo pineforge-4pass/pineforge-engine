@@ -1,0 +1,8 @@
+//@version=6
+strategy("n5-95-reversal",initial_capital=500000,pyramiding=2,margin_long=100,margin_short=100,close_entries_rule="FIFO",commission_type=strategy.commission.cash_per_contract,commission_value=20)
+if time == timestamp("UTC",2025,07,07,06,15,00)
+    strategy.close("Long")
+    strategy.close("LongAdd")
+    strategy.entry("RevShort",strategy.short,qty=2)
+if time == timestamp("UTC",2025,07,08,12,00,00)
+    strategy.close_all()

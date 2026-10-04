@@ -1,0 +1,422 @@
+{
+ "carried-trail-14": {
+  "reason": "carried trailing stop reached on the tick-built waypoint with calc_on_order_fills off (H 10.485 prints 10.49); not implemented in this change",
+  "trade": 1,
+  "tv": [
+   "short",
+   2272.0,
+   1747848600000,
+   1747935900000,
+   10.5,
+   10.51
+  ],
+  "engine": [
+   "short",
+   2272.0,
+   1747848600000,
+   1747937700000,
+   10.5,
+   10.51
+  ]
+ },
+ "coof-dual-short-first": {
+  "reason": "calc_on_order_fills tick schedule and ownership queue (one calc per tick, immediate fills at the tick, buys dispatched first, entry sizes fixed at placement against the planned position): not implemented in this change",
+  "trade": 2,
+  "tv": [
+   "long",
+   3.0,
+   1771015500000,
+   1771015500000,
+   255.59,
+   255.59
+  ],
+  "engine": [
+   "long",
+   3.0,
+   1771015500000,
+   1771015500000,
+   255.59,
+   256.66
+  ]
+ },
+ "coof-dual-tagged": {
+  "reason": "calc_on_order_fills tick schedule and ownership queue (one calc per tick, immediate fills at the tick, buys dispatched first, entry sizes fixed at placement against the planned position): not implemented in this change",
+  "trade": 2,
+  "tv": [
+   "long",
+   3.0,
+   1771015500000,
+   1771015500000,
+   255.59,
+   255.59
+  ],
+  "engine": [
+   "long",
+   3.0,
+   1771015500000,
+   1771015500000,
+   255.59,
+   256.66
+  ]
+ },
+ "dual-entry-carried": {
+  "reason": "ownership queue without calc_on_order_fills (buy-first dispatch, placement-fixed signed quantities): not implemented in this change",
+  "trade": 2,
+  "tv": [
+   "long",
+   3.0,
+   1771015500000,
+   1771015500000,
+   255.86,
+   255.86
+  ],
+  "engine": [
+   "long",
+   3.0,
+   1771015500000,
+   1771338600000,
+   255.86,
+   257.91
+  ]
+ },
+ "dual-entry-coof": {
+  "reason": "calc_on_order_fills tick schedule and ownership queue (one calc per tick, immediate fills at the tick, buys dispatched first, entry sizes fixed at placement against the planned position): not implemented in this change",
+  "trade": 2,
+  "tv": [
+   "long",
+   3.0,
+   1771015500000,
+   1771015500000,
+   255.59,
+   255.59
+  ],
+  "engine": [
+   "long",
+   3.0,
+   1771015500000,
+   1771015500000,
+   255.59,
+   256.66
+  ]
+ },
+ "dual-entry-inert-stop": {
+  "reason": "ownership queue without calc_on_order_fills (buy-first dispatch, placement-fixed signed quantities): not implemented in this change",
+  "trade": 2,
+  "tv": [
+   "long",
+   3.0,
+   1771015500000,
+   1771015500000,
+   255.86,
+   255.86
+  ],
+  "engine": [
+   "long",
+   3.0,
+   1771015500000,
+   1771338600000,
+   255.86,
+   257.91
+  ]
+ },
+ "dual-entry-pyramid1": {
+  "reason": "ownership queue without calc_on_order_fills (buy-first dispatch, placement-fixed signed quantities): not implemented in this change",
+  "trade": 3,
+  "tv": [
+   "short",
+   3.0,
+   1771015500000,
+   1771338600000,
+   255.86,
+   257.91
+  ],
+  "engine": [
+   "long",
+   3.0,
+   1771338600000,
+   1771338600000,
+   257.91,
+   257.91
+  ]
+ },
+ "dual-entry-reordered": {
+  "reason": "ownership queue without calc_on_order_fills (buy-first dispatch, placement-fixed signed quantities): not implemented in this change",
+  "trade": 3,
+  "tv": [
+   "long",
+   3.0,
+   1771338600000,
+   1771338600000,
+   257.91,
+   257.91
+  ],
+  "engine": [
+   "short",
+   3.0,
+   1771338600000,
+   1771339500000,
+   257.91,
+   258.94
+  ]
+ },
+ "dual-entry-wrong-owner": {
+  "reason": "ownership queue without calc_on_order_fills (buy-first dispatch, placement-fixed signed quantities): not implemented in this change",
+  "trade": 2,
+  "tv": [
+   "long",
+   3.0,
+   1771015500000,
+   1771015500000,
+   255.86,
+   255.86
+  ],
+  "engine": [
+   "long",
+   3.0,
+   1771015500000,
+   1771338600000,
+   255.86,
+   257.91
+  ]
+ },
+ "long-high-rounded": {
+  "reason": "math.round_to_mintick(10.145) is 10.15 in TradingView, floor((p + mintick/2) / mintick) * mintick; the engine's math runtime returns 10.14, outside the source adapter",
+  "trade": 1,
+  "tv": [
+   "long",
+   1.0,
+   1743620400000,
+   1743623100000,
+   10.14,
+   10.12
+  ],
+  "engine": [
+   "long",
+   1.0,
+   1743620400000,
+   1743620400000,
+   10.14,
+   10.14
+  ]
+ },
+ "newborn-limit-cancel": {
+  "reason": "a calc_on_order_fills limit exit resting on the tick-built path: an on-grid 9.73 sell limit born in the opening fill's recalculation is reached by the bar's H of 9.725, which prints 9.73; the engine compares the raw bar under calc_on_order_fills. Not applied: the change moves frozen random-strategy witness digests on on-grid feeds",
+  "trade": 1,
+  "tv": [
+   "long",
+   1.0,
+   1743699600000,
+   1743699600000,
+   9.71,
+   9.73
+  ],
+  "engine": [
+   "long",
+   1.0,
+   1743699600000,
+   1743702300000,
+   9.71,
+   9.72
+  ]
+ },
+ "newborn-limit-owner-absent": {
+  "reason": "a calc_on_order_fills limit exit resting on the tick-built path: an on-grid 9.73 sell limit born in the opening fill's recalculation is reached by the bar's H of 9.725, which prints 9.73; the engine compares the raw bar under calc_on_order_fills. Not applied: the change moves frozen random-strategy witness digests on on-grid feeds",
+  "trade": 1,
+  "tv": [
+   "long",
+   1.0,
+   1743699600000,
+   1743699600000,
+   9.71,
+   9.73
+  ],
+  "engine": [
+   "long",
+   1.0,
+   1743699600000,
+   1743702300000,
+   9.71,
+   9.72
+  ]
+ },
+ "newborn-limit-replace": {
+  "reason": "a calc_on_order_fills limit exit resting on the tick-built path: an on-grid 9.73 sell limit born in the opening fill's recalculation is reached by the bar's H of 9.725, which prints 9.73; the engine compares the raw bar under calc_on_order_fills. Not applied: the change moves frozen random-strategy witness digests on on-grid feeds",
+  "trade": 1,
+  "tv": [
+   "long",
+   1.0,
+   1743699600000,
+   1743699600000,
+   9.71,
+   9.73
+  ],
+  "engine": [
+   "long",
+   1.0,
+   1743699600000,
+   1743702300000,
+   9.71,
+   9.72
+  ]
+ },
+ "newborn-limit-rounded": {
+  "reason": "a calc_on_order_fills limit exit resting on the tick-built path: an on-grid 9.73 sell limit born in the opening fill's recalculation is reached by the bar's H of 9.725, which prints 9.73; the engine compares the raw bar under calc_on_order_fills. Not applied: the change moves frozen random-strategy witness digests on on-grid feeds",
+  "trade": 1,
+  "tv": [
+   "long",
+   1.0,
+   1743699600000,
+   1743699600000,
+   9.71,
+   9.73
+  ],
+  "engine": [
+   "long",
+   1.0,
+   1743699600000,
+   1743702300000,
+   9.71,
+   9.72
+  ]
+ },
+ "repeated-raw": {
+  "reason": "later residual of the repeated newborn-limit sensor after the tick-built reach rule; first 13 trades equal; unattributed",
+  "trade": 14,
+  "tv": [
+   "long",
+   1.0,
+   1743706800000,
+   1743706800000,
+   9.69,
+   9.69
+  ],
+  "engine": [
+   "short",
+   1.0,
+   1743773400000,
+   1743773400000,
+   9.32,
+   9.21
+  ]
+ },
+ "repeated-rounded": {
+  "reason": "later residual of the repeated newborn-limit sensor after the tick-built reach rule (math.round_to_mintick levels); first 8 trades equal; unattributed",
+  "trade": 9,
+  "tv": [
+   "short",
+   1.0,
+   1743616800000,
+   1743616800000,
+   10.18,
+   10.16
+  ],
+  "engine": [
+   "short",
+   1.0,
+   1743616800000,
+   1743618600000,
+   10.18,
+   10.15
+  ]
+ },
+ "runner-cancel": {
+  "reason": "runner quantity: a reissued live remainder versus the reserved quantity under the lot step; not implemented in this change",
+  "trade": 2,
+  "tv": [
+   "short",
+   65.0,
+   1760466600000,
+   1760535000000,
+   11.72,
+   11.69
+  ],
+  "engine": [
+   "short",
+   65.0,
+   1760466600000,
+   1760471100000,
+   11.72,
+   11.63
+  ]
+ },
+ "runner-live": {
+  "reason": "runner quantity: a reissued live remainder versus the reserved quantity under the lot step; not implemented in this change",
+  "trade": 2,
+  "tv": [
+   "short",
+   32.0,
+   1760466600000,
+   1760535000000,
+   11.72,
+   11.69
+  ],
+  "engine": [
+   "short",
+   32.5,
+   1760466600000,
+   1760471100000,
+   11.72,
+   11.63
+  ]
+ },
+ "signed-coof": {
+  "reason": "calc_on_order_fills tick schedule and ownership queue (one calc per tick, immediate fills at the tick, buys dispatched first, entry sizes fixed at placement against the planned position): not implemented in this change; strategy.order signed transaction quantity",
+  "trade": 2,
+  "tv": [
+   "long",
+   3.0,
+   1771338600000,
+   1771341300000,
+   257.91,
+   259.79
+  ],
+  "engine": [
+   "long",
+   8.0,
+   1771338600000,
+   1771341300000,
+   257.91,
+   259.79
+  ]
+ },
+ "signed-long-label": {
+  "reason": "strategy.order signed transaction quantity (placement-fixed): not implemented in this change",
+  "trade": 2,
+  "tv": [
+   "long",
+   3.0,
+   1771338600000,
+   1771341300000,
+   257.91,
+   259.79
+  ],
+  "engine": [
+   "long",
+   8.0,
+   1771338600000,
+   1771341300000,
+   257.91,
+   259.79
+  ]
+ },
+ "signed-long-order": {
+  "reason": "strategy.order signed transaction quantity (placement-fixed): not implemented in this change",
+  "trade": 2,
+  "tv": [
+   "long",
+   3.0,
+   1771338600000,
+   1771341300000,
+   257.91,
+   259.79
+  ],
+  "engine": [
+   "long",
+   8.0,
+   1771338600000,
+   1771341300000,
+   257.91,
+   259.79
+  ]
+ }
+}

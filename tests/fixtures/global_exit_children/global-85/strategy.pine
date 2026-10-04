@@ -1,0 +1,12 @@
+//@version=6
+strategy("n5-85-global",initial_capital=5000,pyramiding=10,margin_long=1,margin_short=1,close_entries_rule="FIFO",commission_type=strategy.commission.percent,commission_value=0.05)
+if time == timestamp("UTC",2025,07,30,06,00,00)
+    strategy.entry("Long",strategy.long,qty=2164.89)
+if strategy.position_size > 0
+    strategy.exit("Wick_Exit_L",stop=0.9,limit=1.3)
+if time == timestamp("UTC",2025,07,31,10,30,00)
+    strategy.entry("Long_Add",strategy.long,qty=4374.3)
+if time == timestamp("UTC",2025,08,01,12,45,00)
+    strategy.exit("Wick_Exit_L",stop=1.15439,limit=1.3)
+if time == timestamp("UTC",2025,08,01,16,00,00)
+    strategy.close_all()

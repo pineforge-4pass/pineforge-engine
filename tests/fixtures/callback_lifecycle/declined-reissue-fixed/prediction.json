@@ -1,0 +1,17 @@
+{
+ "basis": "engine model (round 9 famXb): an unaffordable fixed-size reversal keeps its close leg and drops its open leg; no kill, R4 not engaged",
+ "trades": [
+  [
+   "long",
+   30.0,
+   "2025-05-28 17:15",
+   "2025-05-28 19:45",
+   2652.52,
+   2619.22
+  ]
+ ],
+ "alternative_if_whole_drop": "long 30 stays; TP BUY 15 @2681.5 at 23:30; cleanup 15 at 23:45 @2675.99",
+ "strategy_pine_sha256": "307bf4738909d1042eb7eaec2038c369b8d81a035c31672c9ec23055c460caa2",
+ "written_at": "2026-10-03T22:15:26.554969+00:00",
+ "timestamps": "UTC"
+}

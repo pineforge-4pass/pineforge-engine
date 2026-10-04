@@ -1,0 +1,130 @@
+{
+  "pin": "global/sibling exit reservation and entry-incarnation ownership",
+  "tape": "n5b-16-eth-member",
+  "channel": "ws-report-v1",
+  "exporter": "lab tv --no-note",
+  "symbol": "BINANCE:ETHUSDT.P",
+  "interval": "15",
+  "from": "2025-05-21",
+  "to": "2025-05-23",
+  "exports": 2,
+  "exportsByteIdentical": true,
+  "sourceSha256": "4dfc002ff3a7a765623d6a6d33b3ecf92e57db7aef611c1b07e593ed0a724a40",
+  "tvTradesCsvSha256": "6208d626cca74eca7fcbdc7b4fc4ddc96b9f3940b542246a110e9edcb4c1ce07",
+  "bars": "bars/ethusdtp-2025-05-21-2025-05-23.csv",
+  "barsSha256": "d37cb541bc6042178c7c93fcd55090953c39aeaf0895f78ca673efe3f7d018d6",
+  "status": "asserted",
+  "parameters": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "from": "2025-05-21",
+    "to": "2025-05-23",
+    "tick": 0.01,
+    "step": 0.0001,
+    "family": "gid",
+    "costs": true,
+    "rule": "FIFO",
+    "pyramiding": 3,
+    "margin": 0,
+    "capital": 5000,
+    "commissionType": "percent",
+    "commissionValue": 0.04,
+    "pooc": true,
+    "slippage": 3,
+    "blocks": [
+      {
+        "type": "at",
+        "time": "2025-05-21T05:00:00Z",
+        "ops": [
+          {
+            "op": "entry",
+            "id": "S1",
+            "side": -1,
+            "qty": 2.0266,
+            "limit": 2586.88
+          }
+        ]
+      },
+      {
+        "type": "at",
+        "time": "2025-05-21T06:30:00Z",
+        "ops": [
+          {
+            "op": "entry",
+            "id": "S2",
+            "side": -1,
+            "qty": 1.9939,
+            "limit": 2608.87
+          }
+        ]
+      },
+      {
+        "type": "while",
+        "cond": "short",
+        "ops": [
+          {
+            "op": "exit",
+            "exitId": "xS1",
+            "from": "S1",
+            "stop": "2586.88*1.02",
+            "limit": 2483.4
+          }
+        ],
+        "until": "2025-05-21T06:30:00Z"
+      },
+      {
+        "type": "while",
+        "cond": "short",
+        "ops": [
+          {
+            "op": "exit",
+            "exitId": "xS1",
+            "from": "S1",
+            "stop": "2608.87*1.02",
+            "limit": 2483.4
+          },
+          {
+            "op": "exit",
+            "exitId": "xS2",
+            "from": "S2",
+            "stop": "2608.87*1.02",
+            "limit": 2483.4
+          }
+        ],
+        "since": "2025-05-21T06:30:00Z",
+        "until": "2025-05-21T07:00:00Z"
+      },
+      {
+        "type": "while",
+        "cond": "short",
+        "ops": [
+          {
+            "op": "exit",
+            "exitId": "xS1",
+            "from": "S1",
+            "stop": "2586.88*(1-0.0025)",
+            "limit": 2483.4
+          },
+          {
+            "op": "exit",
+            "exitId": "xS2",
+            "from": "S2",
+            "stop": "2586.88*(1-0.0025)",
+            "limit": 2483.4
+          }
+        ],
+        "since": "2025-05-21T07:00:00Z"
+      },
+      {
+        "type": "at",
+        "time": "2025-05-22T12:00:00Z",
+        "ops": [
+          {
+            "op": "close_all"
+          }
+        ]
+      }
+    ],
+    "name": "n5b-16-eth-member",
+    "pineSha256": "4dfc002ff3a7a765623d6a6d33b3ecf92e57db7aef611c1b07e593ed0a724a40"
+  }
+}

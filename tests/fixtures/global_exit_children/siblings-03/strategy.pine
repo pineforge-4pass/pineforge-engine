@@ -1,0 +1,12 @@
+//@version=6
+strategy("n5-03-siblings",initial_capital=500000,pyramiding=10,margin_long=0,margin_short=0,close_entries_rule="FIFO")
+if time == timestamp("UTC",2025,05,20,13,30,00)
+    strategy.entry("Long",strategy.long,qty=2)
+    strategy.exit("T1",from_entry="Long",qty=1,limit=6000,stop=3000)
+    strategy.exit("T2",from_entry="Long",qty=1,limit=6000,stop=3000)
+if time == timestamp("UTC",2025,05,21,13,30,00)
+    strategy.entry("Long",strategy.long,qty=2)
+    strategy.exit("T1",from_entry="Long",qty=1,limit=3345.15,stop=3300.545 + 0 * syminfo.mintick)
+    strategy.exit("T2",from_entry="Long",qty=1,limit=3385.15,stop=3300.545 + 0 * syminfo.mintick)
+if time == timestamp("UTC",2025,05,22,12,00,00)
+    strategy.close_all()

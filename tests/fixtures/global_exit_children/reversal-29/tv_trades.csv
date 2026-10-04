@@ -1,0 +1,5 @@
+﻿Trade number,Type,Date and time,Signal,Price NONE,Size (qty),Size (value),Net PnL NONE,Return %,Commission NONE,Favorable excursion NONE,Favorable excursion %,Adverse excursion NONE,Adverse excursion %,Cumulative PnL NONE,Cumulative PnL %,Duration (bars)
+1,Exit short,2025-07-08 11:45,R1,25480.9,1,25439.05,-41.85,-0.16,0,23.2,0.09,-41.85,-0.16,-41.85,-0.01,14
+1,Entry short,2025-07-07 14:30,RevShort,25439.05,1,25439.05,-41.85,-0.16,0,23.2,0.09,-41.85,-0.16,-41.85,-0.01,14
+2,Exit short,2025-07-08 11:45,R2,25480.9,1,25439.05,-41.85,-0.16,0,23.2,0.09,-41.85,-0.16,-83.7,-0.02,14
+2,Entry short,2025-07-07 14:30,RevShort,25439.05,1,25439.05,-41.85,-0.16,0,23.2,0.09,-41.85,-0.16,-83.7,-0.02,14

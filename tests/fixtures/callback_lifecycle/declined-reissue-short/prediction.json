@@ -1,0 +1,34 @@
+{
+ "basis": "R4 mechanical: a re-issued exit is a new live order after a declined reversal, held short side (engine with the rule ON)",
+ "trades": [
+  [
+   "short",
+   16.0326,
+   "2025-05-28 17:15",
+   "2025-05-28 20:15",
+   2652.52,
+   2612.0
+  ],
+  [
+   "short",
+   16.0326,
+   "2025-05-28 17:15",
+   "2025-05-28 21:15",
+   2652.52,
+   2638.77
+  ]
+ ],
+ "engine_rule_off": [
+  [
+   "short",
+   32.0652,
+   "2025-05-28 17:15",
+   "2025-05-28 21:15",
+   2652.52,
+   2638.77
+  ]
+ ],
+ "strategy_pine_sha256": "37e0d9f4c0ae23a1f32743d5a321c7b8c2ed23ff3edbd48561fcbf9d5a9a754e",
+ "written_at": "2026-10-03T22:15:26.554503+00:00",
+ "timestamps": "UTC"
+}
