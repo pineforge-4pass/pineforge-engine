@@ -1742,10 +1742,12 @@ void source::PineStrategyHost::present_report(ReportC* out) const {
         && (!range_end_trades_.empty()
             || (position.signed_units == 0.0 && position.lot_count == 0
                 && last.open_profit != 0.0))) {
-        double range_end_pnl = 0.0;
-        for (const auto& row : range_end_trades_) range_end_pnl += row.pnl;
         last.open_profit = 0.0;
-        last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl;
+        if (!range_end_trades_.empty()) {
+            double range_end_pnl = 0.0;
+            for (const auto& row : range_end_trades_) range_end_pnl += row.pnl;
+            last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl;
+        }
     }
     if (!report_terminal_quote_eligible()) return;
     const double price = bar_fill_price(report_quote_close_);

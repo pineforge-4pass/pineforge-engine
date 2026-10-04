@@ -55,6 +55,12 @@ public:
         mark.equity = std::nextafter(initial_capital_ + net_profit_sum_, 0.0);
         return mark.equity;
     }
+    void seed_flat_mark(double open_profit) {
+        initial_capital_ = 1000000.0;
+        net_profit_sum_ = 4355.5400000000027;
+        equity_curve_.back().equity = 1004355.5399999999;
+        equity_curve_.back().open_profit = open_profit;
+    }
 private:
     bool close_;
 };
@@ -109,6 +115,11 @@ void terminal_reports() {
     std::vector<Bar> bars;
     for (int index = 0; index < 3; ++index) bars.push_back(input(index));
     for (const bool close : {false, true}) {
+        CloseReport batch(close);
+        batch.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+        CHECK(batch.last_error().empty());
+        ReportC expected{};
+        batch.fill_report(&expected);
         CloseReport strategy(close);
         CHECK(strategy.stream_begin(bars.data(), 1, "1", "1"));
         CHECK(strategy.stream_push_bar(bars[1]));
@@ -130,7 +141,7 @@ void terminal_reports() {
             CHECK(strategy.units() == 0.0);
             CHECK(stored != 0.0);
             CHECK(last.open_profit == 0.0);
-            CHECK(same(last.equity, 10000.0 + first.net_profit));
+            CHECK(same(last.equity, expected.equity_curve[expected.equity_curve_len - 1].equity));
         } else {
             CHECK(strategy.units() == 1.0);
             CHECK(stored != 0.0);
@@ -138,6 +149,7 @@ void terminal_reports() {
         }
         BacktestEngine::free_report(&first);
         BacktestEngine::free_report(&second);
+        BacktestEngine::free_report(&expected);
     }
 }
 
@@ -167,6 +179,40 @@ void already_flat_curve_marks() {
         CHECK(strategy.stream_state_hash() == before);
         BacktestEngine::free_report(&report);
     }
+}
+
+void stale_flat_curve_marks() {
+    std::vector<Bar> bars;
+    for (int index = 0; index < 3; ++index) bars.push_back(input(index));
+    CloseReport batch(true);
+    batch.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    CHECK(batch.last_error().empty());
+    batch.clear_provider();
+    batch.seed_flat_mark(0.0);
+    ReportC expected{};
+    batch.fill_report(&expected);
+    for (const int split : {1, 2}) {
+        CloseReport stream(true);
+        CHECK(stream.stream_begin(bars.data(), split, "1", "1"));
+        for (int index = split; index < static_cast<int>(bars.size()); ++index)
+            CHECK(stream.stream_push_bar(bars[index]));
+        CHECK(stream.stream_end(false));
+        CHECK(stream.units() == 0.0);
+        stream.clear_provider();
+        stream.seed_flat_mark(-9.1599999999998545);
+        const auto before = stream.stream_state_hash();
+        ReportC actual{};
+        stream.fill_report(&actual);
+        CHECK(actual.equity_curve_len == expected.equity_curve_len);
+        const auto& last = actual.equity_curve[actual.equity_curve_len - 1];
+        const auto& expected_last = expected.equity_curve[expected.equity_curve_len - 1];
+        CHECK(same(last.equity, expected_last.equity));
+        CHECK(same(last.open_profit, expected_last.open_profit));
+        CHECK(same(stream.stored_profit(), -9.1599999999998545));
+        CHECK(stream.stream_state_hash() == before);
+        BacktestEngine::free_report(&actual);
+    }
+    BacktestEngine::free_report(&expected);
 }
 
 void confirmed_input_window() {
@@ -291,6 +337,7 @@ int main() {
     confirmed_cap_prices();
     terminal_reports();
     already_flat_curve_marks();
+    stale_flat_curve_marks();
     std::printf("confirmed source state: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }
