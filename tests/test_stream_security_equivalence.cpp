@@ -20,8 +20,49 @@ bool same(double expected, double actual) {
     return expected_bits == actual_bits;
 }
 
+bool same_text(const char* expected, const char* actual) {
+    return expected && actual ? std::strcmp(expected, actual) == 0 : expected == actual;
+}
+
+std::uint64_t trade_fingerprint(const pf_report_t& report) {
+    std::uint64_t digest = 14695981039346656037ULL;
+    auto fold = [&](std::uint64_t value) {
+        digest ^= value;
+        digest *= 1099511628211ULL;
+    };
+    auto fold_double = [&](double value) {
+        std::uint64_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        fold(bits);
+    };
+    fold(static_cast<std::uint64_t>(report.trades_len));
+    fold_double(report.net_profit);
+    for (int index = 0; index < report.trades_len; ++index) {
+        const auto& trade = report.trades[index];
+        fold(static_cast<std::uint64_t>(trade.entry_time));
+        fold(static_cast<std::uint64_t>(trade.exit_time));
+        fold(trade.is_long);
+        fold(trade.open_at_end);
+        fold(static_cast<std::uint64_t>(trade.entry_bar_index));
+        fold(static_cast<std::uint64_t>(trade.exit_bar_index));
+        for (double value : {trade.entry_price, trade.exit_price, trade.qty, trade.pnl,
+                trade.pnl_pct, trade.commission, trade.max_runup, trade.max_drawdown})
+            fold_double(value);
+    }
+    return digest;
+}
+
 std::vector<pf_bar_t> make_bars() {
     std::vector<pf_bar_t> bars;
+    const std::string case_name = PINEFORGE_SECURITY_CASE;
+    if (case_name == "all_in_reversal" || case_name == "whole_all_in_reversal") {
+        for (int index = 0; index < 8; ++index) {
+            const double close = index == 3 ? 101.15 : 100.0;
+            bars.push_back({100.0, std::max(100.0, close), 100.0, close, 10.0,
+                1577836800000LL + static_cast<std::int64_t>(index) * 60000});
+        }
+        return bars;
+    }
     std::uint64_t seed = 12345;
     double price = 100.0;
     auto rounded = [](double value) { return std::round(value * 100.0) / 100.0; };
@@ -81,15 +122,27 @@ int main(int argc, char** argv) {
     pf_strategy_t batch = strategy_create(nullptr);
     pf_strategy_t stream = strategy_create(nullptr);
     if (!batch || !stream) return 2;
+    const std::string case_name = PINEFORGE_SECURITY_CASE;
+    const char* input_tf = "1";
+    const bool fractional_sizing = case_name == "pooc_slipped_short" || case_name == "all_in_reversal";
+    const bool whole_sizing = case_name == "whole_all_in_reversal";
+    for (pf_strategy_t strategy : {batch, stream}) {
+        if (fractional_sizing || whole_sizing) {
+            strategy_set_syminfo_mintick(strategy, 0.01);
+            strategy_set_syminfo_pointvalue(strategy, 1.0);
+            strategy_set_syminfo_metadata(strategy, "qty_step", whole_sizing ? 1.0
+                : (case_name == "all_in_reversal" ? 0.25 : 0.0001));
+        }
+    }
     pf_report_t expected{};
     pf_report_t actual{};
-    run_backtest_full(batch, bars.data(), static_cast<int>(bars.size()), "1", script_tf,
+    run_backtest_full(batch, bars.data(), static_cast<int>(bars.size()), input_tf, script_tf,
         0, 4, PF_MAGNIFIER_ENDPOINTS, &expected);
     if (strategy_get_last_error(batch)[0] != '\0') {
         std::printf("FAIL batch: %s\n", strategy_get_last_error(batch));
         return 1;
     }
-    if (strategy_stream_begin(stream, bars.data(), warmup, "1", script_tf) != 0) {
+    if (strategy_stream_begin(stream, bars.data(), warmup, input_tf, script_tf) != 0) {
         std::printf("FAIL stream begin: %s\n", strategy_get_last_error(stream));
         return 1;
     }
@@ -103,7 +156,11 @@ int main(int argc, char** argv) {
     strategy_stream_fill_report(stream, &actual);
     int first_trade = -1;
     for (int index = 0; index < std::min(expected.trades_len, actual.trades_len); ++index) {
-        if (!same_trade(expected.trades[index], actual.trades[index])) {
+        if (!same_trade(expected.trades[index], actual.trades[index])
+            || !same_text(strategy_closed_trade_entry_id(batch, index),
+                strategy_closed_trade_entry_id(stream, index))
+            || !same_text(strategy_closed_trade_exit_id(batch, index),
+                strategy_closed_trade_exit_id(stream, index))) {
             first_trade = index;
             break;
         }
@@ -114,15 +171,19 @@ int main(int argc, char** argv) {
         && expected.security_feeds_total == actual.security_feeds_total
         && expected.input_bars_processed == actual.input_bars_processed
         && expected.script_bars_processed == actual.script_bars_processed;
-    if (std::string(script_tf) == "1") {
+    if (std::string(script_tf) == "1" && expected_batch_trades() >= 0) {
         equal = equal && expected.trades_len == expected_batch_trades()
             && expected.security_feeds_total == 4000;
     }
-    std::printf("%s [%s input=1 script=%s warmup=%d] batch_trades=%d stream_trades=%d "
-        "security_feeds_total=%lld/%lld first_trade=%d net_profit=%.17g/%.17g\n",
-        equal ? "PASS" : "FAIL", PINEFORGE_SECURITY_CASE, script_tf, warmup,
+    if (expected_batch_trades() < 0) equal = equal && expected.trades_len > 0;
+    std::printf("%s [%s input=%s script=%s warmup=%d] batch_trades=%d stream_trades=%d "
+        "security_feeds_total=%lld/%lld first_trade=%d net_profit=%.17g/%.17g "
+        "trade_fingerprint=%016llx/%016llx\n",
+        equal ? "PASS" : "FAIL", PINEFORGE_SECURITY_CASE, input_tf, script_tf, warmup,
         expected.trades_len, actual.trades_len, static_cast<long long>(expected.security_feeds_total),
-        static_cast<long long>(actual.security_feeds_total), first_trade, expected.net_profit, actual.net_profit);
+        static_cast<long long>(actual.security_feeds_total), first_trade, expected.net_profit, actual.net_profit,
+        static_cast<unsigned long long>(trade_fingerprint(expected)),
+        static_cast<unsigned long long>(trade_fingerprint(actual)));
     if (first_trade >= 0) {
         print_trade("batch", expected, first_trade);
         print_trade("stream", actual, first_trade);

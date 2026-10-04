@@ -2178,7 +2178,8 @@ file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/test_native_market_vertical.cpp"
      PINEFORGE_NATIVE_MARKET_VERTICAL_SHA256)
 
 if(PINEFORGE_BUILD_SOURCE_LAYER)
-    foreach(security_case htf5_close htf15_sma_pooc htf60_close daily_close heikinashi5 htf60_ema_gaps period_previous)
+    foreach(security_case htf5_close htf15_sma_pooc htf60_close daily_close heikinashi5 htf60_ema_gaps period_previous
+            dual_stop pooc_dual_stop pooc_limit_reversal pooc_slipped_short all_in_reversal whole_all_in_reversal pooc_short_exit)
         add_executable(test_stream_security_${security_case}
             test_stream_security_equivalence.cpp
             fixtures/stream_security/${security_case}/generated.cpp)
@@ -2189,11 +2190,22 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
         if(PINEFORGE_ENABLE_COVERAGE)
             target_compile_options(test_stream_security_${security_case} PRIVATE ${_pf_cov_test_flags})
         endif()
-        add_test(NAME test_stream_security_${security_case}
-            COMMAND test_stream_security_${security_case} 1 500)
+        if(security_case STREQUAL "all_in_reversal" OR security_case STREQUAL "whole_all_in_reversal")
+            add_test(NAME test_stream_security_${security_case}
+                COMMAND test_stream_security_${security_case} 1 3)
+            add_test(NAME test_stream_security_${security_case}_early
+                COMMAND test_stream_security_${security_case} 1 1)
+        else()
+            add_test(NAME test_stream_security_${security_case}
+                COMMAND test_stream_security_${security_case} 1 500)
+            add_test(NAME test_stream_security_${security_case}_early
+                COMMAND test_stream_security_${security_case} 1 30)
+        endif()
     endforeach()
     add_test(NAME test_stream_security_control_tf5 COMMAND test_stream_security_htf5_close 5 500)
     add_test(NAME test_stream_security_control_tf15 COMMAND test_stream_security_htf60_close 15 500)
+    add_test(NAME test_stream_security_pooc_dual_stop_tf5 COMMAND test_stream_security_pooc_dual_stop 5 500)
+    add_test(NAME test_stream_security_daily_close_late COMMAND test_stream_security_daily_close 1 2000)
 
     add_library(checked_settings_fixture OBJECT fixtures/checked_settings/generated.cpp)
     target_link_libraries(checked_settings_fixture PRIVATE pineforge)
