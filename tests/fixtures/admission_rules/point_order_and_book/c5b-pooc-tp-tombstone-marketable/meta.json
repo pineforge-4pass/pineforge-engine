@@ -1,0 +1,16 @@
+{
+  "title": "n34-c5b-pooc-tp-tombstone-marketable",
+  "slug": "n34-c5b-pooc-tp-tombstone-marketable",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-04T01:16:03.483Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-06-10",
+    "to": "2025-06-12"
+  },
+  "pine_sha256": "e167f64d76af186155bbde966499fb01208845ab2449a3e7c1e60927afed7c5f",
+  "tv_trades_sha256": "70be44655568fd301e9335ab49ea472eff6bf0c8bd305bdd14a0091753177764",
+  "tv_trades_rows": 6
+}

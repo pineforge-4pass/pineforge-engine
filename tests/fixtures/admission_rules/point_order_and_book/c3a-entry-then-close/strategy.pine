@@ -1,0 +1,9 @@
+//@version=6
+strategy("n34-c3a-entry-then-close", initial_capital=102180, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100)
+if time == timestamp("UTC", 2025, 5, 12, 18, 30)
+    strategy.entry("Seed", strategy.short, qty=9694)
+if time == timestamp("UTC", 2025, 5, 12, 19, 45)
+    strategy.entry("Reverse", strategy.long)
+    strategy.close("Seed")
+if time == timestamp("UTC", 2025, 5, 13, 14, 0)
+    strategy.close_all()

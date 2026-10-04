@@ -1,0 +1,7 @@
+//@version=6
+strategy("n34-c4-xau-weekend-gapstop", initial_capital=102330, margin_long=100, margin_short=100)
+if time == timestamp("UTC", 2025, 7, 4, 14, 0)
+    strategy.entry("Sell", strategy.short, qty=30.71, stop=3331.65)
+    strategy.exit("Sell Exit", from_entry="Sell", stop=3340.0)
+if time == timestamp("UTC", 2025, 7, 7, 14, 0)
+    strategy.close_all()

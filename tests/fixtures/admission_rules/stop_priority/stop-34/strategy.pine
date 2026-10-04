@@ -1,0 +1,8 @@
+//@version=6
+strategy("px-pin-stop-34",initial_capital=100050,margin_long=100,margin_short=100)
+if time == timestamp("UTC",2025,5,12,18,30)
+    strategy.entry("Seed",strategy.short,qty=31)
+if time == timestamp("UTC",2025,5,12,18,30)
+    strategy.exit("Stop",from_entry="Seed",stop=3230.166,qty_percent=100)
+if time == timestamp("UTC",2025,5,13,14,0)
+    strategy.close_all()

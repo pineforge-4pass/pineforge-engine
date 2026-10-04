@@ -522,13 +522,17 @@ constexpr std::uint64_t kSubmit_rows[] = {
 //   15895840553361286509ull -> 10022661800093696072ull
 //   13475769493769981375ull -> 14054540774545879068ull
 //   10681991124354674742ull -> 17712540386472434171ull
+// expectation corrected (admission and book rules fold, kSubmit_reads, 3 of 6 values), because the source layer's fold (pineforge-source-adapter/v4) now folds the admission and book rules' new state -- the close-first fact, a refused reversal's mark, the pyramiding records and the exit tombstones, each only while set; every closed trade is unchanged in every Trade field against the engine before this change (the per-trade %.17g dump of every run-pass and the no-hash digests), as are the counts; harvested with this TU's own switch:
+//   908288806773219080ull -> 2034408309116732524ull
+//   10022661800093696072ull -> 5425212598938859462ull
+//   17712540386472434171ull -> 5372180744734514209ull
 constexpr std::uint64_t kSubmit_reads[] = {
     18234150623076098218ull,
     7528636846310271579ull,
-    908288806773219080ull,
-    10022661800093696072ull,
+    2034408309116732524ull,
+    5425212598938859462ull,
     14054540774545879068ull,
-    17712540386472434171ull,
+    5372180744734514209ull,
 };
 // expectation corrected: kSubmit_final 4550614867809308423ull -> 6186330499779649827ull, because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); the trades did not move.
 // expectation corrected (v19-E): kSubmit_final 6186330499779649827ull -> 8426887344131973464ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
@@ -1009,6 +1013,8 @@ constexpr std::uint64_t kCancel_rows[] = {
 //   6330997617635358220ull -> 9556582455608271345ull [H-THIN]
 //   7622013860668800144ull -> 4597279093679219283ull [H-THIN]
 //   7135414897549443327ull -> 12371316346718768834ull [H-THIN]
+// expectation corrected (admission and book rules fold, kCancel_reads, 1 of 19 values), because the source layer's fold (pineforge-source-adapter/v4) now folds the admission and book rules' new state -- the close-first fact, a refused reversal's mark, the pyramiding records and the exit tombstones, each only while set; every closed trade is unchanged in every Trade field against the engine before this change (the per-trade %.17g dump of every run-pass and the no-hash digests), as are the counts; harvested with this TU's own switch:
+//   12371316346718768834ull -> 9742762082741642158ull
 constexpr std::uint64_t kCancel_reads[] = {
     16017138806894645973ull,
     14395189169447138845ull,
@@ -1028,7 +1034,7 @@ constexpr std::uint64_t kCancel_reads[] = {
     3352239734550209384ull,
     9556582455608271345ull,
     4597279093679219283ull,
-    12371316346718768834ull,
+    9742762082741642158ull,
 };
 // expectation corrected: kCancel_final 547718020446064204ull -> 12693965216151243664ull, because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); the trades did not move.
 // expectation corrected (v19-E): kCancel_final 12693965216151243664ull -> 12078141763174815190ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
@@ -1257,19 +1263,23 @@ constexpr std::uint64_t kOca_rows[] = {
 //   3016108360062111013ull -> 8321492686618048122ull [H-THIN]
 //   14134368882450491401ull -> 12537836709650543420ull [H-THIN]
 //   12755516166577050941ull -> 5737128231549608782ull [H-THIN]
+// expectation corrected (admission and book rules fold, kOca_reads, 3 of 12 values), because the source layer's fold (pineforge-source-adapter/v4) now folds the admission and book rules' new state -- the close-first fact, a refused reversal's mark, the pyramiding records and the exit tombstones, each only while set; every closed trade is unchanged in every Trade field against the engine before this change (the per-trade %.17g dump of every run-pass and the no-hash digests), as are the counts; harvested with this TU's own switch:
+//   16889317257125145965ull -> 9873415387786869126ull
+//   10082918155625450592ull -> 16537836510935200438ull
+//   5595798093249349329ull -> 5301913186335997812ull
 constexpr std::uint64_t kOca_reads[] = {
     15189525287878030606ull,
     12039483643790541963ull,
-    16889317257125145965ull,
+    9873415387786869126ull,
     14061180146549677313ull,
     3457726981161275090ull,
     15838028967223682041ull,
     11019583341156392335ull,
     8561321185756650792ull,
-    10082918155625450592ull,
+    16537836510935200438ull,
     13731153404690471591ull,
     12194364484894581010ull,
-    5595798093249349329ull,
+    5301913186335997812ull,
 };
 // expectation corrected: kOca_final 13344165461917220241ull -> 14677771083385306600ull, because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); the trades did not move.
 // expectation corrected (v19-E): kOca_final 14677771083385306600ull -> 15465526605242472570ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).

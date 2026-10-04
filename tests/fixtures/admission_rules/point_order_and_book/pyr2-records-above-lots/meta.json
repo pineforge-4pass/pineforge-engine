@@ -1,0 +1,16 @@
+{
+  "title": "n34-pyr2-records-above-lots",
+  "slug": "n34-pyr2-records-above-lots",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-04T01:16:18.837Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-06-03",
+    "to": "2025-06-04"
+  },
+  "pine_sha256": "0958e82f6136443c23a05da33f42c219705e2d4e6c6dd2e2c5dc70257ef92d31",
+  "tv_trades_sha256": "54e55ce6fcad32d1acc9c2f546c1c27d23f72aeda0cbed9d0c5cbcf13318a4f8",
+  "tv_trades_rows": 8
+}

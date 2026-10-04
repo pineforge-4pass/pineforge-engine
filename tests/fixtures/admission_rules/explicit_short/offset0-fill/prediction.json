@@ -1,0 +1,16 @@
+{
+ "control": "pf-admission-taro-explicit-short",
+ "written_utc": "2026-10-04T02:51:18Z",
+ "chart": {
+  "symbol": "BINANCE:BTCUSDT",
+  "interval": "15",
+  "from": "2025-07-03",
+  "to": "2025-07-04"
+ },
+ "scenario": "explicit short qty 8.31589 from flat at the 2025-07-03 08:30 UTC bar (close 109533.95), capital 910872.3625532 (= the offset-0 equity of the default-order tape in tests/test_taro_price_gap_admission_l4d.cpp); next open 109533.96 (08:45)",
+ "money": "sig10(E) = 910872.3626; Q x fill = 910872.362624 (E below it by 7.1e-5); sig10(sig10(E)/Q) = 109533.96, not below exec 109533.96",
+ "hypothesis_price_scale_only_at_fill": "FILLED at 109533.96 on 08:45; then, as the default order's offset-0 tape, a one-unit Margin call at the fill (1 @109533.96, entry = exit = 08:45) and 7.31589 short closed by close_all at the 09:15 open 109632.11",
+ "hypothesis_money_check_at_fill": "DECLINED: no trade",
+ "predicted": "FILLED (at the fill the order is checked on the price scale only; there is no money check there for explicit orders)",
+ "wording_note": "free-text keys and the prediction line reworded on 2026-10-04 after the exports, without changing any prediction"
+}

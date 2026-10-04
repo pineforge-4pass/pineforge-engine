@@ -1,0 +1,5 @@
+﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)
+1,Exit short,2025-07-04 22:15,Margin call,3334.3,0.16,533.064,-0.424,-0.08,0,0.0224,0.00,-0.424,-0.08,-0.424,0.00,0
+1,Entry short,2025-07-04 22:15,Sell,3331.65,0.16,533.064,-0.424,-0.08,0,0.0224,0.00,-0.424,-0.08,-0.424,0.00,0
+2,Exit short,2025-07-07 06:00,Sell Exit,3341.57,30.55,101781.9075,-303.056,-0.30,0,23.829,0.02,-303.056,-0.30,-303.48,-0.30,11
+2,Entry short,2025-07-04 22:15,Sell,3331.65,30.55,101781.9075,-303.056,-0.30,0,23.829,0.02,-303.056,-0.30,-303.48,-0.30,11

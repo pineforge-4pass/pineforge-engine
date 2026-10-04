@@ -1,0 +1,7 @@
+﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)
+1,Exit short,2025-05-13 03:00,Margin call,10.56,20,210.8,-0.4,-0.19,0,0.2,0.09,-0.4,-0.19,-0.4,0.00,1
+1,Entry short,2025-05-13 02:45,Seed,10.54,20,210.8,-0.4,-0.19,0,0.2,0.09,-0.4,-0.19,-0.4,0.00,1
+2,Exit short,2025-05-13 21:30,Margin call,10.59,160,1686.4,-8,-0.47,0,6.4,0.38,-8,-0.47,-8.4,-0.01,5
+2,Entry short,2025-05-13 02:45,Seed,10.54,160,1686.4,-8,-0.47,0,6.4,0.38,-8,-0.47,-8.4,-0.01,5
+3,Exit short,2025-05-13 21:30,Stop,10.6,9514,100277.56,-570.84,-0.57,0,380.56,0.38,-570.84,-0.57,-579.24,-0.57,5
+3,Entry short,2025-05-13 02:45,Seed,10.54,9514,100277.56,-570.84,-0.57,0,380.56,0.38,-570.84,-0.57,-579.24,-0.57,5

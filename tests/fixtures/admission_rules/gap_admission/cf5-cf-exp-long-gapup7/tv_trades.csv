@@ -1,0 +1,7 @@
+﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)
+1,Exit short,2025-05-08 21:30,Close entry(s) order Seed,10.33,5000,50700,-950,-1.87,0,50,0.10,-950,-1.87,-950,-0.95,7
+1,Entry short,2025-05-08 02:15,Seed,10.14,5000,50700,-950,-1.87,0,50,0.10,-950,-1.87,-950,-0.95,7
+2,Exit long,2025-05-08 21:30,Margin call,10.33,280,2892.4,0,0.00,0,0,0.00,0,0.00,-950,-0.95,0
+2,Entry long,2025-05-08 21:30,E=99400;N=0;OP=-599.9999999999961;P=-5000;C=10.255;D=9688,10.33,280,2892.4,0,0.00,0,0,0.00,0,0.00,-950,-0.95,0
+3,Exit long,2025-05-08 23:15,SENSOR|E=99400;N=0;OP=-599.9999999999961;P=-5000;C=10.255;D=9688,10.32,9379,96885.07,-93.79,-0.10,0,1219.27,1.26,-562.74,-0.58,-1043.79,-1.04,7
+3,Entry long,2025-05-08 21:30,E=99400;N=0;OP=-599.9999999999961;P=-5000;C=10.255;D=9688,10.33,9379,96885.07,-93.79,-0.10,0,1219.27,1.26,-562.74,-0.58,-1043.79,-1.04,7

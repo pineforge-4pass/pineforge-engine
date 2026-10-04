@@ -1,0 +1,16 @@
+{
+  "title": "pf-n2gap-cf10-cf-exp-long-ulp-d0616",
+  "slug": "pf-n2gap-cf10-cf-exp-long-ulp-d0616",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-04T01:22:19.754Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-06-16",
+    "to": "2025-06-18"
+  },
+  "pine_sha256": "4a789093718b623f521137312e6d5fa4012b40840e1ce8dd7694e72500eadaec",
+  "tv_trades_sha256": "c370112163517b7d4ded16fd8c5d80a84d3f9132e1fc386f2b3e2cdd82213656",
+  "tv_trades_rows": 4
+}

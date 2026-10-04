@@ -1,0 +1,16 @@
+{
+  "title": "n34-c1-gapstop-fee-slip",
+  "slug": "n34-c1-gapstop-fee-slip",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-04T01:15:39.196Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-08",
+    "to": "2025-07-10"
+  },
+  "pine_sha256": "f5afe24dcfd36cd1f3827e5c6fa88c6117df643079562df28ea5b82e1c5424d7",
+  "tv_trades_sha256": "719a9beecde366b5be266935aa635131fbe036f00a06153aa9c7ebe423ad44ce",
+  "tv_trades_rows": 2
+}

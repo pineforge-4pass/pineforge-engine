@@ -192,6 +192,10 @@ private:
             CHECK(row.quantity_reservation_present == 0U);
         }
         CHECK(found);
+        // expectation corrected (admission and book rules fold, 3 of 3 literal hashes), because the source layer's fold (pineforge-source-adapter/v4) now folds the admission and book rules' new state -- the close-first fact, a refused reversal's mark, the pyramiding records and the exit tombstones, each only while set; every closed trade is unchanged in every Trade field against the engine before this change (the per-trade %.17g dump of every run-pass and the no-hash digests), as are the counts; harvested with this TU's own switch:
+        //   mode 13: 10477892404542602439ULL -> 12164798627788959197ULL
+        //   mode 14: 11961130350211294910ULL -> 9253216714455962836ULL
+        //   mode 15: 3195506365498973368ULL -> 10699282262976751978ULL
         // Pinned against the unchanged adapter request shape and hash at 227c2236.
         // expectation corrected (global exit children): UnrelatedSuffix 4142570753076958590ULL -> 10477892404542602439ULL, CancelledPredecessor 3470493253387916331ULL -> 11961130350211294910ULL, the third mode 10254752463860708201ULL -> 3195506365498973368ULL,
         // because the source adapter's state now folds TradingView's entry-id
@@ -199,8 +203,8 @@ private:
         // printed row is main 700c5d24's.
         const std::uint64_t hash = broker_state_hash_projection();
         const std::uint64_t expected = mode_ == Mode::UnrelatedSuffix
-            ? 10477892404542602439ULL : mode_ == Mode::CancelledPredecessor
-            ? 11961130350211294910ULL : 3195506365498973368ULL;
+            ? 12164798627788959197ULL : mode_ == Mode::CancelledPredecessor
+            ? 9253216714455962836ULL : 10699282262976751978ULL;
         CHECK(hash == expected);
         std::printf("literal-close mode=%d hash=%llu\n", static_cast<int>(mode_),
                     static_cast<unsigned long long>(hash));

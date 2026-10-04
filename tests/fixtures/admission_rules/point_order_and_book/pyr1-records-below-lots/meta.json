@@ -1,0 +1,16 @@
+{
+  "title": "n34-pyr1-records-below-lots",
+  "slug": "n34-pyr1-records-below-lots",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-04T01:16:14.838Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-06-03",
+    "to": "2025-06-04"
+  },
+  "pine_sha256": "ac0a3ce2601596725b13bc5b3eb7d1c3c2697ee5427a7949cab44d769ac03fea",
+  "tv_trades_sha256": "023f175acd133e8233bd6b3b4d28e30d75bdf3b098823c280945fd0729ed5d32",
+  "tv_trades_rows": 10
+}

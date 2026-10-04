@@ -104,6 +104,17 @@ void guards() {
                 t.exit_bar_index,t.entry_price,t.exit_price,t.qty,t.pnl);
         }
         std::puts("");
+        // On a 0.01 lot grid the admission's placement half judges this
+        // default long from flat: rule 2 drops it, E being under
+        // sig10(Q x c') by one ulp. TradingView's tape of that shape on a
+        // fractional grid books no trade (margin_ledger_rules
+        // eth-flat-m100-ulp-under, ETH's 0.0001 grid). The engine had filled
+        // it, one trade; it books none.
+        if(m==Mode::Fractional) {
+            CHECK(p.trade_count()==0);
+            CHECK(p.fills()==0);
+            CHECK(p.remaining()==0);
+        }
     }
 }
 } // namespace

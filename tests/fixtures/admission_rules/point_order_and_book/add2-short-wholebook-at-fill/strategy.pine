@@ -1,0 +1,8 @@
+//@version=6
+strategy("n34-add2-short-wholebook-at-fill", initial_capital=118370, pyramiding=2, margin_long=100, margin_short=100)
+if time == timestamp("UTC", 2026, 3, 23, 18, 45)
+    strategy.entry("A", strategy.short, qty=9000)
+if time == timestamp("UTC", 2026, 3, 23, 19, 0)
+    strategy.entry("B", strategy.short, qty=1000)
+if time == timestamp("UTC", 2026, 3, 23, 19, 15)
+    strategy.close_all()

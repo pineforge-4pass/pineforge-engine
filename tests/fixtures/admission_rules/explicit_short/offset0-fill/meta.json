@@ -1,0 +1,16 @@
+{
+  "title": "pf-admission-taro-explicit-short",
+  "slug": "pf-admission-taro-explicit-short",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-04T02:51:32.864Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-07-03",
+    "to": "2025-07-04"
+  },
+  "pine_sha256": "fdd2fa4989892373129f04a38e6d286bb7b69ae88a7858fb840087dc2cc92903",
+  "tv_trades_sha256": "ce44494cd5e4bb9e8b9b60c86adce68dc0a5b716a787698cdda0710ed97d7d1f",
+  "tv_trades_rows": 4
+}

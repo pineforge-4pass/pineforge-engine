@@ -24,12 +24,12 @@
  * itself (report_trade_count() / get_report_trade()).
  *
  * The tree ships every margin rule switch
- * (pineforge::source::detail::MarginRuleSwitches) on but fill_price_recheck,
- * which this test checks; the pass runs with the shipped switches.
- * kKnownDivergences names the tapes the engine is known not to reproduce
- * yet: every unlisted tape must match and every listed tape must still
- * differ, so the list shrinks as the engine learns a rule. The tapes listed
- * for the fill re-check must then match with every rule on.
+ * (pineforge::source::detail::MarginRuleSwitches) on, which this test
+ * checks; the pass runs with the shipped switches. kKnownDivergences names
+ * the tapes the engine is known not to reproduce yet: every unlisted tape
+ * must match and every listed tape must still differ, so the list shrinks as
+ * the engine learns a rule. The two admission halves are then turned off one
+ * at a time, and each must cost tapes.
  */
 
 #include <pineforge/bar.hpp>
@@ -40,6 +40,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <fstream>
 #include <limits>
@@ -82,7 +83,6 @@ constexpr std::size_t kTvRows = 43088;
 // Tapes the engine does not reproduce yet: fixture tape directory and its
 // reason. A listed tape that starts matching fails the test until its entry
 // is removed.
-const char kFillRecheckOff[] = "fill re-check off: gap regime unpinned";
 const char kHistoryResidual[] = "G+L residual call: history regime unpinned";
 const std::vector<std::pair<std::string, std::string>> kKnownDivergences = {
     // The residual call on a history: these proozac ledgers need the 1x long
@@ -96,113 +96,6 @@ const std::vector<std::pair<std::string, std::string>> kKnownDivergences = {
     {"proozac-history-k0-only-v2-ledger-witness/r4", kHistoryResidual},
     {"proozac-history-k0-only-v2/r1", kHistoryResidual},
     {"proozac-history-k0-only/r1", kHistoryResidual},
-    // The fill re-check ships off (MarginRuleSwitches::fill_price_recheck):
-    // with it the unified admission of default and reversing orders is off
-    // too. Every rule on, each of these tapes matches.
-    {"aapl-explicit-reverse-q356-above/r1", kFillRecheckOff},
-    {"aapl-explicit-reverse-q356-equal/r1", kFillRecheckOff},
-    {"aapl-history-k10-after-v2/r1", kFillRecheckOff},
-    {"aapl-history-k10-after/r1", kFillRecheckOff},
-    {"aapl-history-k10-only-v2-ledger-witness/r1", kFillRecheckOff},
-    {"aapl-history-k10-only-v2-ledger-witness/r2", kFillRecheckOff},
-    {"aapl-history-k10-only-v2-ledger-witness/r3", kFillRecheckOff},
-    {"aapl-history-k10-only-v2-ledger-witness/r4", kFillRecheckOff},
-    {"aapl-history-k10-only-v2/r1", kFillRecheckOff},
-    {"aapl-history-k10-only-v2/r2", kFillRecheckOff},
-    {"aapl-history-k10-only-v2/r3", kFillRecheckOff},
-    {"aapl-history-k10-only-v2/r4", kFillRecheckOff},
-    {"aapl-history-k10-only/r1", kFillRecheckOff},
-    {"aapl-history-k1126-after-chunked/r1", kFillRecheckOff},
-    {"aapl-history-k1126-after-chunked/r2", kFillRecheckOff},
-    {"aapl-history-k1126-after-chunked/r3", kFillRecheckOff},
-    {"aapl-history-k1126-after-chunked/r4", kFillRecheckOff},
-    {"aapl-history-k30-after-v2/r1", kFillRecheckOff},
-    {"aapl-history-k30-after/r1", kFillRecheckOff},
-    {"aapl-k0-above-after-v2/r1", kFillRecheckOff},
-    {"aapl-k0-above-after/r1", kFillRecheckOff},
-    {"aapl-k0-equal-after-v2/r1", kFillRecheckOff},
-    {"aapl-k0-equal-after/r1", kFillRecheckOff},
-    {"eth-flat-m100-ulp-under/r1", kFillRecheckOff},
-    {"eth-flat-m100-ulp-under/r2", kFillRecheckOff},
-    {"eth-flat-m100-ulp-under/r3", kFillRecheckOff},
-    {"eth-flat-m100-ulp-under/r4", kFillRecheckOff},
-    {"f-antoni-history-k30-after-v2/r1", kFillRecheckOff},
-    {"f-antoni-history-k30-after/r1", kFillRecheckOff},
-    {"f-antoni-history-k30-only-v2-ledger-witness/r1", kFillRecheckOff},
-    {"f-antoni-history-k30-only-v2-ledger-witness/r2", kFillRecheckOff},
-    {"f-antoni-history-k30-only-v2-ledger-witness/r3", kFillRecheckOff},
-    {"f-antoni-history-k30-only-v2-ledger-witness/r4", kFillRecheckOff},
-    {"f-antoni-history-k30-only-v2/r1", kFillRecheckOff},
-    {"f-antoni-history-k30-only-v2/r2", kFillRecheckOff},
-    {"f-antoni-history-k30-only-v2/r3", kFillRecheckOff},
-    {"f-antoni-history-k30-only-v2/r4", kFillRecheckOff},
-    {"f-antoni-history-k30-only/r1", kFillRecheckOff},
-    {"fe-aapl-above-above/r1", kFillRecheckOff},
-    {"fe-aapl-above-above/r2", kFillRecheckOff},
-    {"fe-aapl-above-above/r3", kFillRecheckOff},
-    {"fe-aapl-above-above/r4", kFillRecheckOff},
-    {"fe-aapl-above-equal/r1", kFillRecheckOff},
-    {"fe-aapl-above-equal/r2", kFillRecheckOff},
-    {"fe-aapl-above-equal/r3", kFillRecheckOff},
-    {"fe-aapl-above-equal/r4", kFillRecheckOff},
-    {"fe-aapl-above-under/r1", kFillRecheckOff},
-    {"fe-aapl-above-under/r2", kFillRecheckOff},
-    {"fe-aapl-above-under/r3", kFillRecheckOff},
-    {"fe-aapl-above-under/r4", kFillRecheckOff},
-    {"fe-aapl-below-under-1e6/r1", kFillRecheckOff},
-    {"fe-aapl-below-under-1e6/r2", kFillRecheckOff},
-    {"fe-aapl-below-under-1e6/r3", kFillRecheckOff},
-    {"fe-aapl-below-under-1e6/r4", kFillRecheckOff},
-    {"fe-aapl-s2l-fillhigh-equal/r1", kFillRecheckOff},
-    {"fe-aapl-s2l-fillhigh-equal/r2", kFillRecheckOff},
-    {"fe-aapl-s2l-fillhigh-equal/r3", kFillRecheckOff},
-    {"fe-aapl-s2l-fillhigh-equal/r4", kFillRecheckOff},
-    {"flat-aapl-above-equal/r1", kFillRecheckOff},
-    {"flat-aapl-above-equal/r2", kFillRecheckOff},
-    {"flat-aapl-above-equal/r3", kFillRecheckOff},
-    {"flat-aapl-above-equal/r4", kFillRecheckOff},
-    {"flat-aapl-above-under/r1", kFillRecheckOff},
-    {"flat-aapl-above-under/r2", kFillRecheckOff},
-    {"flat-aapl-above-under/r3", kFillRecheckOff},
-    {"flat-aapl-above-under/r4", kFillRecheckOff},
-    {"c1-b2-exp-long-above-T/r1", kFillRecheckOff},
-    {"c1-b2-exp-long-above-T/r2", kFillRecheckOff},
-    {"c1-b2-exp-long-above-T/r3", kFillRecheckOff},
-    {"c1-b2-exp-long-above-T/r4", kFillRecheckOff},
-    {"c1-r1-exp-l2s-reject/r1", kFillRecheckOff},
-    {"c1-r1-exp-l2s-reject/r2", kFillRecheckOff},
-    {"c1-r1-exp-l2s-reject/r3", kFillRecheckOff},
-    {"c1-r1-exp-l2s-reject/r4", kFillRecheckOff},
-    {"roi-history-k19-after/r1", kFillRecheckOff},
-    {"roi-history-k19-after/r2", kFillRecheckOff},
-    {"roi-history-k19-after/r3", kFillRecheckOff},
-    {"roi-history-k19-after/r4", kFillRecheckOff},
-    {"roi-history-k19-only/r1", kFillRecheckOff},
-    {"roi-history-k19-only/r2", kFillRecheckOff},
-    {"roi-history-k19-only/r3", kFillRecheckOff},
-    {"roi-history-k19-only/r4", kFillRecheckOff},
-    {"roi-k3-margin-after-v2/r1", kFillRecheckOff},
-    {"roi-k3-margin-after/r1", kFillRecheckOff},
-    {"roi-k3-margin-only-v2-ledger-witness/r1", kFillRecheckOff},
-    {"roi-k3-margin-only-v2-ledger-witness/r2", kFillRecheckOff},
-    {"roi-k3-margin-only-v2-ledger-witness/r3", kFillRecheckOff},
-    {"roi-k3-margin-only-v2-ledger-witness/r4", kFillRecheckOff},
-    {"roi-k3-margin-only-v2/r1", kFillRecheckOff},
-    {"roi-k3-margin-only-v2/r2", kFillRecheckOff},
-    {"roi-k3-margin-only-v2/r3", kFillRecheckOff},
-    {"roi-k3-margin-only-v2/r4", kFillRecheckOff},
-    {"roi-k3-margin-only/r1", kFillRecheckOff},
-    {"willow-history-k30-after-v2/r1", kFillRecheckOff},
-    {"willow-history-k30-after/r1", kFillRecheckOff},
-    {"willow-history-k30-only-v2-ledger-witness/r1", kFillRecheckOff},
-    {"willow-history-k30-only-v2-ledger-witness/r2", kFillRecheckOff},
-    {"willow-history-k30-only-v2-ledger-witness/r3", kFillRecheckOff},
-    {"willow-history-k30-only-v2-ledger-witness/r4", kFillRecheckOff},
-    {"willow-history-k30-only-v2/r1", kFillRecheckOff},
-    {"willow-history-k30-only-v2/r2", kFillRecheckOff},
-    {"willow-history-k30-only-v2/r3", kFillRecheckOff},
-    {"willow-history-k30-only-v2/r4", kFillRecheckOff},
-    {"willow-history-k30-only/r1", kFillRecheckOff},
 };
 
 std::string fixture(const std::string& relative) {
@@ -509,12 +402,14 @@ std::string first_difference(const std::vector<Row>& tv, const Outcome& engine) 
 // too rather than left at its tree default.
 pineforge::source::detail::MarginRuleSwitches all_rules_on() {
     using pineforge::source::detail::MarginRuleSwitches;
-    static_assert(sizeof(MarginRuleSwitches) == 10 * sizeof(bool),
+    static_assert(sizeof(MarginRuleSwitches) == 15 * sizeof(bool),
                   "MarginRuleSwitches changed: name its new field in all_rules_on() and main()");
     MarginRuleSwitches on;
     on.decimal_sizing = true;
     on.slipped_signal_admission = true;
+    on.unified_placement = true;
     on.fill_price_recheck = true;
+    on.close_first_admission = true;
     on.gain_loss_money = true;
     on.dust_unit_call = true;
     on.long_open_close_checks = true;
@@ -522,6 +417,9 @@ pineforge::source::detail::MarginRuleSwitches all_rules_on() {
     on.coof_next_point_close = true;
     on.close_point_reversal = true;
     on.pooc_fee_sizing = true;
+    on.point_fills_before_margin = true;
+    on.pyramiding_ledger_records = true;
+    on.exit_child_tombstones = true;
     return on;
 }
 
@@ -532,13 +430,16 @@ int main() {
     const std::vector<Case> cases = load_cases();
     CHECK(cases.size() == kTapes);
 
-    // The tree ships every rule on but the fill re-check; the pass runs with
-    // the shipped switches.
+    // The tree ships every rule on; the pass runs with the shipped switches.
     auto& switches = pineforge::source::detail::margin_rule_switches();
     const pineforge::source::detail::MarginRuleSwitches tree_defaults = switches;
+    {
+        const pineforge::source::detail::MarginRuleSwitches on = all_rules_on();
+        CHECK(std::memcmp(&tree_defaults, &on, sizeof(on)) == 0);
+    }
     CHECK(tree_defaults.decimal_sizing);
     CHECK(tree_defaults.slipped_signal_admission);
-    CHECK(!tree_defaults.fill_price_recheck);
+    CHECK(tree_defaults.fill_price_recheck);
     CHECK(tree_defaults.gain_loss_money);
     CHECK(tree_defaults.dust_unit_call);
     CHECK(tree_defaults.long_open_close_checks);
@@ -590,18 +491,28 @@ int main() {
     CHECK(tv_rows == kTvRows);
     std::printf("margin_ledger_rules: %zu/%zu tapes match, %zu TV rows\n", matched, cases.size(), tv_rows);
 
-    // The tapes listed for the fill re-check, every rule on: each matches.
-    switches = all_rules_on();
-    std::size_t fill_off = 0;
-    for (const Case& c : cases) {
-        const auto listed = known.find(c.path);
-        if (listed == known.end() || listed->second != kFillRecheckOff) continue;
-        ++fill_off;
-        const std::string difference = first_difference(tape_rows(c), replay(c, feeds.at(c.bars)));
-        if (!difference.empty()) std::printf("  fill re-check on, still DIFF %s %s\n", c.path.c_str(), difference.c_str());
-        CHECK(difference.empty());
+    // The admission halves, off one at a time: each costs tapes this pass
+    // matched (the 104 gap-regime ledgers the fill half was pinned on, and
+    // the reversal ledgers rule 2 keeps to their closing leg).
+    using S = pineforge::source::detail::MarginRuleSwitches;
+    const std::pair<const char*, bool S::*> halves[] = {
+        {"unified_placement", &S::unified_placement},
+        {"fill_price_recheck", &S::fill_price_recheck},
+    };
+    for (const auto& [name, flag] : halves) {
+        switches = tree_defaults;
+        switches.*flag = false;
+        std::size_t lost = 0;
+        std::map<std::string, Outcome> off_runs;
+        for (const Case& c : cases) {
+            if (known.count(c.path)) continue;
+            auto run = off_runs.find(c.name);
+            if (run == off_runs.end()) run = off_runs.emplace(c.name, replay(c, feeds.at(c.bars))).first;
+            if (!first_difference(tape_rows(c), run->second).empty()) ++lost;
+        }
+        std::printf("ablation %s off: %zu tapes lost\n", name, lost);
+        CHECK(lost > 0);
     }
-    std::printf("%s: %zu tapes, each matches with every rule on\n", kFillRecheckOff, fill_off);
     switches = tree_defaults;
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed ? 1 : 0;

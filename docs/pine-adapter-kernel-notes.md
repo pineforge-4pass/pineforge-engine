@@ -206,7 +206,7 @@ marked at `c′` before its exit is booked, and the new position is funded by th
 broker's cash after the outgoing fill and its exit fee. Non-POOC, stop, limit
 and explicit-quantity sizing are not covered (`pooc_fee_units`), nor is the
 commission-0 unit: `pooc_fee_units` takes a positive percentage commission
-only.
+only (§1.8).
 
 ### 1.3 Admission: at the signal and at the fill
 
@@ -245,28 +245,51 @@ reversal rejected at the fill keeps its old position: the closing leg is
 dropped with the entry, for explicit and default quantities alike. Both halves
 are pinned at point value 1 without an FX series.
 
-As implemented (`unified_admission_scope`, `unified_fill_admits`,
-`unified_tie_band`), the two halves decide one `strategy.entry` market or stop
-order, from flat or reversing, at a percent-of-equity 100 default or an
-explicit quantity, with no commission, pyramiding at most 1, nothing else
-resting but unpriced closes and no risk rule; a default order's placement half
-is also taken in `entry`, so a whole-dropped reversal leaves the script's own
-closes standing. Two narrowings keep the scraped population's orders on the
-earlier rules: an entry the script placed behind its own `strategy.close` of
-the same bar (an opening after that close, which TradingView fills at a worse
-open and margin-calls) is out of scope, and so is an order whose cost at the
-signal close and at its fill both sit more than `Q × tick × m × (1 + slip)`
-from `sig10(E)`. Outside that scope the engine's earlier admission rules run
-unchanged.
+**Close-first entries.** An entry the script calls on a bar after its own
+`strategy.close(<id of the open position>)` or `strategy.close_all()` of the
+position the entry opposes fills flat right behind that close, at the same
+point. It is never checked on the price scale: no placement rule 5 and no fill
+check. Rule 2 (money at the unslipped `c′`) still drops it at placement, and
+the close still executes. It fills with the quantity it was sized at, and the
+margin rules trim it there (a call at the fill's opening mark). An entry the
+script calls *before* its close of the held id is an ordinary reversal: the
+later close belongs to it, so a reversal the fill check drops keeps the old
+position and the close does not fill either; a reversal that rule 5 drops at
+placement leaves that close an ordinary close, which executes.
 
-The tree ships this unified admission off: `fill_price_recheck` (§1.6) gates
-it whole, its fill half and the placement half's reach to default orders and
-reversals. With it on, the scraped population lost orders TradingView fills
-at a gap and then margin-calls (§1.8). Off, `slipped_signal_admission` keeps
-the earlier scopes: an explicit quantity from flat at margin 100 (market, or a
-stop under process_orders_on_close) judged in `entry`, a percent-of-equity
-stop from flat under process_orders_on_close, and an explicit market long's
-money check at its next-bar fill on the unslipped quote.
+As implemented (`unified_admission_scope`, `unified_fill_admits`), the two
+halves decide one `strategy.entry` market or stop order, from flat or
+reversing, at a percent-of-equity 100 default or an explicit quantity, with no
+commission, pyramiding at most 1, nothing else resting but unpriced closes and
+no risk rule, on a lot-stepped instrument without calc_on_order_fills or the
+bar magnifier. Each half has its own switch (§1.6): `unified_placement` and
+`fill_price_recheck`. Both read the frozen signal values at the fill
+(`resolve_terms`, `validate_precommit`); only a reversal that rule 5 refuses
+is decided in `entry`, where it is marked (`signal_price_refused`) rather than
+withdrawn, so the script's later close of the held id stays an ordinary close
+and the reversal drops at its fill. The close-first fact is recorded once,
+when the script calls `strategy.close` or `strategy.close_all()` on a whole
+open position (`record_close_first`), stamped on the entry at its `entry()`
+call (`PlacementSnapshot::close_first_entry`) and read by both halves
+(`close_first_admission`). No tie band bounds either half.
+
+Where no tape decides, the scope keeps the engine's earlier rules: a
+continuous quantity (no lot grid), calc_on_order_fills, the bar magnifier, a
+stop that reverses (only stops from flat are pinned), a default-sized stop
+with slippage (the slipped stop of the tapes is an explicit quantity), and an
+entry that meets at its fill another side than the one it was placed against
+(a same-open pair's later leg: `tests/fixtures/same_open_reversal`). So does
+the earlier money check of an explicit market long's next-bar fill on the
+unslipped quote outside the scope (a commission, pyramiding above 1, another
+order resting, a risk rule); inside it the fill check replaces that check.
+The tests these narrowings keep green name the regime they pin:
+`test_tv_money_precision_l4b` and `test_l10ac_full_equity_single_lot`
+(continuous quantity), `test_taro_price_gap_admission_l4d` (calc_on_order_fills
+and magnifier scope controls), `test_m_admission_36_l4d` (a stop that
+reverses), `test_stop_entry_placement_open_qty_l4b` (a default stop with
+slippage), `test_default_flat_market_gross_admission_l4d`,
+`test_same_open_reversal_tapes` and `test_same_point_entries_tapes` (same-open
+pairs), `test_integer_opening_budget_l4d` (another order resting).
 
 ### 1.4 The G+L source money
 
@@ -374,7 +397,12 @@ The gated code is in `src/source/pine_adapter.cpp`.
 |---|---|---|---|---|
 | `decimal_sizing` | SIZING_DEC | on | the decimal lot floor (§1.2) | `default_sizing_lot_floor` |
 | `slipped_signal_admission` | ADMIT_V2, placement | on | the money check at `c′` and the price check at `c′ ± slip` (§1.3) | placement in `entry` |
-| `fill_price_recheck` | ADMIT_V2, fill | off | the unified admission (§1.3): the fill's price-scale check and its whole-drop, and the placement half for default orders and reversals | `unified_admission_scope`, `unified_fill_admits`, `unified_tie_band`, the default placement in `entry` |
+| `unified_placement` | ADMIT_V2, placement | on | rules 2 and 5 at the signal close for default orders and reversals (§1.3) | the placement in `entry`, the signal half in `resolve_terms` |
+| `fill_price_recheck` | ADMIT_V2, fill | on | the fill's price-scale check and its whole-drop (§1.3) | `unified_fill_admits` in `resolve_terms` and `validate_precommit` |
+| `close_first_admission` | ADMIT_V2, close-first | on | a close-first entry takes rule 2 alone and fills with its quantity (§1.3) | `record_close_first`, `entry`, `resolve_terms`, `validate_precommit` |
+| `point_fills_before_margin` | point order | on | at the open, a close placed ahead of its opposite entry and a protective stop or limit the open reaches fill before the opening margin check (§1.9) | the opening checkpoint in `on_bar_open` |
+| `pyramiding_ledger_records` | pyramiding records | on | under pyramiding above 1, the cap counts the open close-ledger records, one per entry fill not yet booked (§1.9) | `open_ledger_records` in `entry`, `submit_or_replace`, `validate_precommit` |
+| `exit_child_tombstones` | exit tombstones | on | a partial `strategy.exit` child that filled is never revived for the entry incarnation it filled under (§1.9) | `exit_tombstoned` in `exit` and `validate_precommit` |
 | `gain_loss_money` | G+L | on | the G+L source money (§1.4), inside the regime its tapes pin | the source money at each signal and the margin-call slices that book into it, not the residual call's cash; the state hash in `src/source/pine_state_hash.cpp` |
 | `dust_unit_call` | margin slices | on | a dust restore's one-unit call on the G + L money (§1.5) | `source_margin_units` |
 | `pooc_fee_sizing` | POOC_FEE_SIZING | on | the process_orders_on_close fee-grossed sizing unit (§1.2) | `pooc_fee_units` |
@@ -405,16 +433,28 @@ the reason.
 The single-position fixture also asserts 13 process_orders_on_close fee-sizing
 tapes, 3 commission-0 controls, the oracle control of §1.2 and 10 order
 controls replayed through handwritten hosts, and it records 67 tapes of the
-short-and-slippage gate (`short-cutoff-gate`) without asserting them. With the
-shipped switches the engine reproduces 170 of the 199 asserted single-position
-tapes and 269 of the 381 ledger tapes; with every switch on, 172 and 373.
-The tests list 3 single-position and 104 ledger tapes as `fill re-check off:
-gap regime unpinned`, each reproduced with every switch on; the
-single-position gap is 2, not 3, because `c1r3-fee0-a-pct-long-s1` matches
-only with the shipped switches. `test_margin_rules_forward_replay` replays a
-sample of both fixtures as a backtest and as a bar-by-bar stream, with every
-switch on, with every switch off and with the shipped switches, and requires
-the two modes to book the same trades.
+short-and-slippage gate (`short-cutoff-gate`) without asserting them. With every
+switch on, as shipped, the engine reproduces 173 of the 199 asserted
+single-position tapes and 373 of the 381 ledger tapes; turning the
+placement half off costs 108 ledger tapes, the fill half 32 ledger and
+3 single-position tapes. `test_margin_rules_forward_replay` replays a sample of both
+fixtures as a backtest and as a bar-by-bar stream, with every switch on, with
+every switch off and with the shipped switches, and requires the two modes to
+book the same trades.
+
+| Format | Tapes | Fixture | Test |
+|---|---:|---|---|
+| close-first, entry-then-close and flat entries at session-open gaps (19 sources, 3 exports each); point-order, close-first reversal, exit-tombstone, add and pyramiding controls (11 sources, 3 exports each); 39 stop-priority and 3 coupled close + reversal tapes; an explicit-short control (3 exports) | 73 | `tests/fixtures/admission_rules` | `test_admission_rules_tapes` |
+
+The engine reproduces all 73 (the 72 above and the explicit-short control
+`explicit_short/offset0-fill`); each of `unified_placement`,
+`fill_price_recheck`, `close_first_admission`, `point_fills_before_margin`,
+`pyramiding_ledger_records` and `exit_child_tombstones` costs tapes there when
+turned off, and 56 of the 59 NYSE:F tapes book the same trades as a backtest
+and as a stream (the test names the three it leaves out and why).
+`test_qty_step_lot_grid_case` replays the hosted lot-grid case
+(`tests/fixtures/qty_step_lot_grid`) with these rules on, with and without its
+1e-05 lot grid: 22 and 27 rows, every one exactly the recorded row.
 
 The admission split rests on a 13-source factorial: slippage 0, 1 or 2; a fill
 exact or one ulp high; `E` just under, at or over the cost; flat and reversal;
@@ -470,15 +510,66 @@ No tape discriminates four choices; the tree keeps the conservative one:
 No tape covers a default-quantity reversal with slippage (the event-ledger
 tapes carry no slippage), nor percent-of-equity sizing above 100 %.
 
-What the tree does not reproduce yet, each listed in its test:
+No tape covers a close-first entry with slippage, a commission, a margin
+below 100 or under process_orders_on_close, or a stop or limit close-first
+entry. The tree applies the close-first rule there as pinned.
 
-- The fill re-check, and with it the unified admission (§1.3), ships off. On
-  the scraped population it dropped reversals and openings that TradingView
-  fills at a gap of several ticks and then margin-calls at the fill (an NYSE:F
-  short-to-long reversal at 9.09 followed by a 180-unit call; an ETH daily
-  long-to-short reversal). The tapes pin the check only at a one-tick or
-  one-ulp margin, where TradingView whole-drops the order; the gap regime
-  between is unpinned.
+A partial close (a quantity, or a percentage under 100) or a `strategy.exit`
+placed before the opposite entry does not make that entry close-first: the
+tree judges it as an ordinary reversal, which the fill check can drop whole at
+a gap, keeping the rest of the position. No tape covers that shape. The
+control: a short, `strategy.close` of half of it, then a long entry on the
+same bar, at a session-open gap where the reversal fails the price-scale
+check.
+
+No tape decides whether the pyramiding records merge consecutive fills of one
+id; the tree keeps them unmerged, so same-id pyramiding counts every fill, as
+the physical lots did.
+
+Two edges of the pyramiding records that population tapes show and no
+committed tape pins:
+- How an exit books when the record and the physical lot belong to different
+  ids. On the population script thulashimohanr prev-day-week-levels-or-vwap
+  (OANDA:XAUUSD 15), the records count admits the 2025-09-10 15:00 add as
+  TradingView does. TradingView then closes all three units at 15:00, and the
+  engine keeps one of them open until 2025-09-12 13:45.
+- The order of a same-bar reversal and an add to the held side. The script
+  places the add first, then its reversal (close the held ids, then the
+  opposite entry). TradingView fills the reversal first, and the add then
+  closes the new position; the engine fills the add first (NSE:NIFTY 15,
+  2025-08-19 06:00 UTC). The records count admits that add as TradingView
+  does, and the row it books has the wrong side.
+- The control for both: a fixed-quantity script with pyramiding 2, a held
+  position of one id, then on one bar an add of a second id and a reversal of
+  the first, at a price where every order fills.
+
+Three rules stay out until a TradingView tape tells each from the engine's
+current behaviour; every committed tape and every replayed population script
+gives the same decision either way (decision counters at each call):
+- The commission-0 unit under process_orders_on_close: a percent-of-equity
+  default sized on the slipped `exec` itself, `SIZING_DEC(sig10(E), exec)`,
+  where the core floors `E / exec`. The control: commission 0, slippage 2, a
+  100 % default on a 1e-05 lot grid, with a capital that puts `sig10(E) / exec`
+  exactly on a lot and `E / exec` one ulp under it.
+- A same-side add under process_orders_on_close judged on its whole book at
+  the signal close's tick, not at the slipped fill. The control: slippage 3,
+  pyramiding 2, an add whose whole book costs at most the equity at the signal
+  close and more than it at the slipped fill.
+- The lagged margin follow-up on a whole-share grid. The control: a long of
+  two whole-share lots, margin-called for fewer shares than the first lot
+  holds while that lot costs less than the shortfall, so TradingView's
+  follow-up call (four times the lot-floored remaining shortfall) shows at the
+  same fill or not at all.
+
+Every rule of §1.3 and §1.9 is taken only on a lot grid that is a power of
+ten (`pinned_lot_grid`): every tape's
+and every population member's is (1, 0.01, 0.0001, 1e-05). On a continuous
+quantity or another grid no tape decides, and the synthetic fuzz batteries
+that run there book their trades as before: `test_publication_witness` (a
+0.25 lot or none) and `test_adapter_live_state_equivalence` (none), where the
+pyramiding record count had moved closed trades in 32 of 38 runs.
+
+What the tree does not reproduce yet, each listed in its test:
 - The residual call on the G + L cash after a trade history (the
   `proozac-history-k0` ledgers, `G+L residual call: history regime unpinned`).
 - The carried short's source-close and fresh-opening call schedule, a short's
@@ -496,6 +587,67 @@ The shipped rules also decide cases no tape covers: the decimal lot floor at
 percentages other than 100, for shorts and for stop orders; the fee-grossed
 unit at percentages and margins other than 100; the dust unit for shorts; and
 the calc_on_order_fills close after a bar's second extreme.
+
+### 1.9 Point order, exit tombstones and pyramiding records
+
+**Point order.** At a bar's open the queued orders execute first, then the
+exits the open reaches, and only then does the margin check run there, on what
+is left. Beside the unconditional whole market close the adapter already let
+fill first, it takes this for two shapes:
+- a protective `strategy.exit` stop or limit the opening print reaches, whose
+  entry holds units of the position: a whole one leaves no position to check;
+- a close of the held position the script placed before its opposite entry
+  (close-first, §1.3), which is unconditional.
+
+A close placed after its reversal entry stays conditional on that entry's
+admission. Evidence: the stop-priority and coupled close + reversal tapes and
+`c1`, `c2`, `c3b`, `c4` of `tests/fixtures/admission_rules/point_order_and_book`.
+
+Two shapes keep the earlier order, and `test_point_order_open_call` pins both
+with a control of each:
+- A process_orders_on_close short that its entry close leaves short of margin
+  carries a call sized at that close. While that call still covers the open's
+  own shortfall, the open does not re-size it (`close_margined_units`). Then it
+  is a queued order, and it executes at the open before any exit the open
+  reaches. TradingView's tape of a population script decides this
+  (axealgo-tp-sl-toolkit-axealgo, OANDA:XAUUSD 15, 2025-06-01 22:00: the call
+  of 1, then the gapped stop's 1.62). A call the open re-sizes, because the
+  open's shortfall is larger, is the open's own check, and it comes after the
+  exits; no tape decides that shape. Two committed controls are requested:
+  - an explicit short of 3 on the XAUUSD bars of `admission_rules`, fee 0.05 %,
+    slippage 2, a capital one dollar over the cost at the signal close, and a
+    stop the next open gaps through. The expected rows are a call of 1, then a
+    stop of 2;
+  - the same book with the stop's gap wide enough that the open's shortfall
+    exceeds the call sized at the close.
+- A partial stop fills first only when what it leaves is margined: no call at
+  the gapped open, as `stop_priority` stop-09 and stop-10 show. When the
+  remainder is still short, the call at the open comes first and the exit
+  after it, as the engine did before. No tape decides that case. The control:
+  `c2`'s book with a 2 % stop that the open gaps through, which leaves a
+  remainder short of margin.
+
+**Exit tombstones.** A partial `strategy.exit` child that filled is never
+revived for the entry incarnation it filled under (the newest opening of its
+`from_entry` then): not by a later call of the same exit, nor by an older leg
+of it that a later close reaches under process_orders_on_close
+(`c5b-pooc-tp-tombstone-marketable`, where the engine had re-bound TP1 for
+the position's unreserved two shares). An exit armed for a later opening of
+the id fills as before (`test_exit_bracket_pending_entry_leg`).
+
+**Pyramiding records.** The pyramiding cap counts the open records of the
+close ledger -- one per entry fill whose units are not all booked yet -- not
+the physical lots, which drain first in first out (`pyr1-records-below-lots`,
+`pyr2-records-above-lots`). `pyramiding_count`'s P8 tape shows the same rule,
+but its test runs without a lot grid and keeps the earlier count (§1.8).
+A record is booked as the ledger books: an exit leg armed for one opening of
+its id books that opening's record first (its `bracket_origin`;
+`test_exit_bracket_pending_entry_leg`'s capped entry, where the re-issued T1
+armed over the pending second entry books that entry, so two records stay open
+and the third entry is refused), then the named id's records oldest first,
+then every record in fill order. A same-side add under process_orders_on_close
+is still judged at its slipped fill, and the lagged margin follow-up still
+runs on fractional grids only (§1.8).
 
 ## 2. `strategy.close`: the per-entry-id ledger and same-bar batching
 

@@ -49,8 +49,8 @@
  * trades must move between switches off and on exactly when its batch trades
  * do, so the rules are live in the stream, not merely absent from both modes
  * (kRulesOffModeDivergences lists a tape whose modes differ with the rules off).
- * And the switch set the tree ships (MarginRuleSwitches' defaults, the fill
- * re-check off): the identity on the sample and on every hand-over point, and
+ * And the switch set the tree ships (MarginRuleSwitches' defaults, every rule
+ * on): the identity on the sample and on every hand-over point, and
  * batch == TradingView unless kShippedDiffersFromTv lists the tape.
  *
  * kStreamRefusals lists a configuration a stream refuses, with the refusal
@@ -145,12 +145,8 @@ const std::vector<std::pair<std::string, std::string>> kBatchDiffersFromTv = {
 };
 
 // Sampled tapes whose batch run differs from TradingView with the shipped
-// switch set (the fill re-check off): "fixture/path" and a one-line reason.
+// switch set (every rule on): "fixture/path" and a one-line reason.
 const std::vector<std::pair<std::string, std::string>> kShippedDiffersFromTv = {
-    {"margin_ledger_rules/c1-b2-exp-long-above-T/r1",
-     "fill re-check off: gap regime unpinned"},
-    {"margin_ledger_rules/c1-r1-exp-l2s-reject/r1",
-     "fill re-check off: gap regime unpinned"},
 };
 
 // Sampled tapes whose replays differ between the modes with every switch OFF
@@ -909,65 +905,34 @@ Snapshot forward_replay(const C& c, const std::vector<Bar>& bars, std::size_t wa
 
 using pineforge::source::detail::MarginRuleSwitches;
 
-// The event-ledger switches exist on trees that carry those rules.
-template <typename S, typename = void>
-struct HasFillPriceRecheck : std::false_type {};
-template <typename S>
-struct HasFillPriceRecheck<S, std::void_t<decltype(std::declval<S&>().fill_price_recheck)>>
-    : std::true_type {};
-template <typename S, typename = void>
-struct HasPoocFeeSizing : std::false_type {};
-template <typename S>
-struct HasPoocFeeSizing<S, std::void_t<decltype(std::declval<S&>().pooc_fee_sizing)>>
-    : std::true_type {};
-template <typename S, typename = void>
-struct HasDustUnitCall : std::false_type {};
-template <typename S>
-struct HasDustUnitCall<S, std::void_t<decltype(std::declval<S&>().dust_unit_call)>>
-    : std::true_type {};
-template <typename S, typename = void>
-struct HasGainLossMoney : std::false_type {};
-template <typename S>
-struct HasGainLossMoney<S, std::void_t<decltype(std::declval<S&>().gain_loss_money)>>
-    : std::true_type {};
-
 // Every switch set to `value`. A new MarginRuleSwitches field must be set here
 // too: the static_assert stops the build until it is.
 template <typename S>
 S every_rule(bool value) {
-    constexpr std::size_t known =
-        6 + std::size_t{HasFillPriceRecheck<S>::value} + std::size_t{HasGainLossMoney<S>::value}
-        + std::size_t{HasDustUnitCall<S>::value} + std::size_t{HasPoocFeeSizing<S>::value};
-    static_assert(sizeof(S) == known && alignof(S) == 1,
-                  "MarginRuleSwitches gained a field: set it in every_rule() and same_switches()");
+    static_assert(sizeof(S) == 15 && alignof(S) == 1,
+                  "MarginRuleSwitches gained a field: set it in every_rule()");
     S s;
     s.decimal_sizing = value;
     s.slipped_signal_admission = value;
+    s.unified_placement = value;
+    s.fill_price_recheck = value;
+    s.close_first_admission = value;
+    s.gain_loss_money = value;
+    s.dust_unit_call = value;
     s.long_open_close_checks = value;
     s.negative_free_cash_call = value;
     s.coof_next_point_close = value;
     s.close_point_reversal = value;
-    if constexpr (HasFillPriceRecheck<S>::value) s.fill_price_recheck = value;
-    if constexpr (HasGainLossMoney<S>::value) s.gain_loss_money = value;
-    if constexpr (HasDustUnitCall<S>::value) s.dust_unit_call = value;
-    if constexpr (HasPoocFeeSizing<S>::value) s.pooc_fee_sizing = value;
+    s.pooc_fee_sizing = value;
+    s.point_fills_before_margin = value;
+    s.pyramiding_ledger_records = value;
+    s.exit_child_tombstones = value;
     return s;
 }
 
 template <typename S>
 bool same_switches(const S& a, const S& b) {
-    bool same = a.decimal_sizing == b.decimal_sizing &&
-                a.slipped_signal_admission == b.slipped_signal_admission &&
-                a.long_open_close_checks == b.long_open_close_checks &&
-                a.negative_free_cash_call == b.negative_free_cash_call &&
-                a.coof_next_point_close == b.coof_next_point_close &&
-                a.close_point_reversal == b.close_point_reversal;
-    if constexpr (HasFillPriceRecheck<S>::value)
-        same = same && a.fill_price_recheck == b.fill_price_recheck;
-    if constexpr (HasGainLossMoney<S>::value) same = same && a.gain_loss_money == b.gain_loss_money;
-    if constexpr (HasDustUnitCall<S>::value) same = same && a.dust_unit_call == b.dust_unit_call;
-    if constexpr (HasPoocFeeSizing<S>::value) same = same && a.pooc_fee_sizing == b.pooc_fee_sizing;
-    return same;
+    return std::memcmp(&a, &b, sizeof(S)) == 0;
 }
 
 struct Tables {

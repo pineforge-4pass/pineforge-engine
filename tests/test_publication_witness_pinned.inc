@@ -620,6 +620,48 @@
 //   Storm20M: digest 0xa9eb81ea05cde681ull -> 0x50ef4cafe8ff7fbeull
 //   Storm23: digest 0xbd87d9c4ab528ce8ull -> 0x3830c2ff0e888bdfull
 //   Storm23M: digest 0xbaf875418c71afd6ull -> 0x7758f6756a947b75ull
+// expectation corrected (admission and book rules fold, 41 of 156 rows), because the source layer's fold (pineforge-source-adapter/v4) now folds the admission and book rules' new state -- the close-first fact, a refused reversal's mark, the pyramiding records and the exit tombstones, each only while set; every closed trade is unchanged in every Trade field against the engine before this change (the per-trade %.17g dump of every run-pass and the no-hash digests), as are the counts; harvested with this TU's own switch; the source folds, closed trades and recorded rows did not move:
+//   Config03: digest 0x08dc07e410fc80b9ull -> 0x293c86957411946bull
+//   ConfigFlags103: digest 0x3e57d9da83e37a90ull -> 0x8d55c22cdbe324aaull
+//   Config03M: digest 0x5a61078d2cbfcc29ull -> 0xb65d642e8c865af1ull
+//   ConfigFlags103M: digest 0x093009bb7400f9e6ull -> 0xc9cdec59ae965800ull
+//   ConfigFlags104: digest 0xd01d770f131d65b7ull -> 0x1477eaaef76fa4e5ull
+//   ConfigFlags104M: digest 0x43bc541d78c89e31ull -> 0x05a9ecb81182f743ull
+//   ConfigFlags105: digest 0x9ca36cf70fbe46dfull -> 0xcd5f5482e46a73d6ull
+//   ConfigFlags105M: digest 0x7be4baad25309c76ull -> 0xb782300d385d8f45ull
+//   Config09: digest 0x0e1130f27be90dc9ull -> 0x8f0bc5b686e23174ull
+//   Config09M: digest 0x8516eb5434e982c1ull -> 0x5d30ec2285a68178ull
+//   Config15: digest 0x50f4291e221846edull -> 0x5df2a2b3a84f7b76ull
+//   Config15M: digest 0x45c19d81b57dbc88ull -> 0xe2bbce408fa53fe5ull
+//   Config16: digest 0xa40dc13dfc6020daull -> 0xe5490ce2a1846d7dull
+//   Config16M: digest 0x77ab4693f93e9998ull -> 0x390d8334249099b5ull
+//   CloseAllThenEntry: digest 0xa62c30d5de652cf0ull -> 0x4b3d91ffa0f69c81ull
+//   CloseAllThenEntryM: digest 0xf1e300c1cbee3ebeull -> 0xba152a10f619600dull
+//   Reversals: digest 0x71094a9d0a55d56bull -> 0x85ab8d3ad30e7a80ull
+//   ReversalsM: digest 0x82cf4d57ffc988fbull -> 0xb3297d2c223a7179ull
+//   Storm02: digest 0x67a916d5e5654ac9ull -> 0x3aa47b814572802aull
+//   Storm02M: digest 0xb1c4092731c1aff0ull -> 0xb8ca64bd8507dbeeull
+//   Storm05: digest 0x2cbd035e654563adull -> 0x74b6c57e807db2f8ull
+//   Storm05M: digest 0x1d2d3cb30b645629ull -> 0x22d5a15ad4362603ull
+//   Storm08: digest 0xe494e6047d8d3c34ull -> 0x28ace028251119ddull
+//   Storm08M: digest 0x6de07fb9ae58e38eull -> 0x71f23b17dd0bf99bull
+//   Storm10: digest 0xcf25a075e8eef342ull -> 0xccc2c863e0d5d3e1ull
+//   Storm10M: digest 0xbb27a7d5326e7a78ull -> 0x7b27882019bddf5bull
+//   Storm11: digest 0x48b4c85e44eec7a5ull -> 0x7b30960aaa73e808ull
+//   Storm11M: digest 0x0f201229fac1e34dull -> 0xac63a88e56e6947dull
+//   Storm12: digest 0x23dba443bd54a21bull -> 0xfab876286a135eecull
+//   Storm12M: digest 0xb4a31c0afa9608a6ull -> 0xb0c798de0c745596ull
+//   Storm16: digest 0x77e2ccbbf316ed69ull -> 0xdc90bbae776ef766ull
+//   Storm16M: digest 0x149ce304657cb4beull -> 0x0c20a51b3bd998e8ull
+//   Storm17: digest 0x0282eee14a50a3b2ull -> 0xf73d191cf77a83ceull
+//   Storm18: digest 0x7f7d547d15124cbfull -> 0x762a1db564b521e7ull
+//   Storm18M: digest 0x2f28268b47beabafull -> 0xd7afb66d7f652f3aull
+//   Storm19: digest 0x31665db6fec7e215ull -> 0x5ea80be967b9e6c7ull
+//   Storm19M: digest 0xdb3d4be8a73d6a37ull -> 0xfee7c214933ef463ull
+//   Storm22: digest 0x8baa2f9d85197787ull -> 0xdc342ce7fdefeae9ull
+//   Storm22M: digest 0x568459b941271e50ull -> 0xbd352e905cc9d934ull
+//   Storm23: digest 0x3830c2ff0e888bdfull -> 0x1b528d1d603fa437ull
+//   Storm23M: digest 0x7758f6756a947b75ull -> 0x4f41a22916afa081ull
 constexpr Pinned kPinned[] = {
     {"Config01", 0xe752de2dd7010863ull, 144, 44, 144},
     {"ConfigFlags101", 0x19179db1a0eaed4dull, 145, 45, 144},
@@ -629,18 +671,18 @@ constexpr Pinned kPinned[] = {
     {"ConfigFlags102", 0x77c5d6a390151224ull, 144, 49, 144},
     {"Config02M", 0xe56da321d367a98cull, 48, 10, 48},
     {"ConfigFlags102M", 0x3ddbee2abb471b98ull, 144, 49, 144},
-    {"Config03", 0x08dc07e410fc80b9ull, 144, 55, 144},
-    {"ConfigFlags103", 0x3e57d9da83e37a90ull, 182, 62, 144},
-    {"Config03M", 0x5a61078d2cbfcc29ull, 144, 55, 144},
-    {"ConfigFlags103M", 0x093009bb7400f9e6ull, 182, 64, 144},
+    {"Config03", 0x293c86957411946bull, 144, 55, 144},
+    {"ConfigFlags103", 0x8d55c22cdbe324aaull, 182, 62, 144},
+    {"Config03M", 0xb65d642e8c865af1ull, 144, 55, 144},
+    {"ConfigFlags103M", 0xc9cdec59ae965800ull, 182, 64, 144},
     {"Config04", 0x8f2f44270196ded6ull, 144, 21, 144},
-    {"ConfigFlags104", 0xd01d770f131d65b7ull, 48, 14, 48},
+    {"ConfigFlags104", 0x1477eaaef76fa4e5ull, 48, 14, 48},
     {"Config04M", 0x3e8e13fda49449b8ull, 144, 21, 144},
-    {"ConfigFlags104M", 0x43bc541d78c89e31ull, 48, 14, 48},
+    {"ConfigFlags104M", 0x05a9ecb81182f743ull, 48, 14, 48},
     {"Config05", 0x9d89db71dda55713ull, 48, 12, 48},
-    {"ConfigFlags105", 0x9ca36cf70fbe46dfull, 48, 12, 48},
+    {"ConfigFlags105", 0xcd5f5482e46a73d6ull, 48, 12, 48},
     {"Config05M", 0xc6ab3f6b28bc38beull, 48, 12, 48},
-    {"ConfigFlags105M", 0x7be4baad25309c76ull, 48, 12, 48},
+    {"ConfigFlags105M", 0xb782300d385d8f45ull, 48, 12, 48},
     {"Config06", 0xc5c0924d42de3c09ull, 48, 5, 48},
     {"ConfigFlags106", 0x61fbb144d4a4d992ull, 48, 6, 48},
     {"Config06M", 0x2d43d3b138cf9301ull, 48, 5, 48},
@@ -653,9 +695,9 @@ constexpr Pinned kPinned[] = {
     {"ConfigFlags108", 0x69bc8df63a3dae4cull, 48, 15, 48},
     {"Config08M", 0xb0841837b9745ddbull, 48, 12, 48},
     {"ConfigFlags108M", 0x6e124ef876ee1eb7ull, 48, 15, 48},
-    {"Config09", 0x0e1130f27be90dc9ull, 144, 66, 144},
+    {"Config09", 0x8f0bc5b686e23174ull, 144, 66, 144},
     {"ConfigFlags109", 0x5b094cce771a463dull, 144, 45, 144},
-    {"Config09M", 0x8516eb5434e982c1ull, 144, 66, 144},
+    {"Config09M", 0x5d30ec2285a68178ull, 144, 66, 144},
     {"ConfigFlags109M", 0xf5fedf3fd08d2537ull, 144, 45, 144},
     {"Config10", 0x3935ef7337848b09ull, 48, 17, 48},
     {"ConfigFlags110", 0x5459b04e304fe3bcull, 48, 12, 48},
@@ -677,18 +719,18 @@ constexpr Pinned kPinned[] = {
     {"ConfigFlags114", 0x5ba816d3035e5910ull, 144, 66, 144},
     {"Config14M", 0xbe6ede6df7757dabull, 144, 40, 144},
     {"ConfigFlags114M", 0x26ae2e662c9d6e78ull, 144, 66, 144},
-    {"Config15", 0x50f4291e221846edull, 144, 48, 144},
+    {"Config15", 0x5df2a2b3a84f7b76ull, 144, 48, 144},
     {"ConfigFlags115", 0xef49d545aa0f75beull, 48, 6, 48},
-    {"Config15M", 0x45c19d81b57dbc88ull, 144, 48, 144},
+    {"Config15M", 0xe2bbce408fa53fe5ull, 144, 48, 144},
     {"ConfigFlags115M", 0x4f867143b7e68019ull, 48, 6, 48},
-    {"Config16", 0xa40dc13dfc6020daull, 144, 54, 144},
+    {"Config16", 0xe5490ce2a1846d7dull, 144, 54, 144},
     {"ConfigFlags116", 0xf062830378fc647dull, 48, 21, 48},
-    {"Config16M", 0x77ab4693f93e9998ull, 144, 54, 144},
+    {"Config16M", 0x390d8334249099b5ull, 144, 54, 144},
     {"ConfigFlags116M", 0x7d87a7333c612748ull, 48, 21, 48},
-    {"CloseAllThenEntry", 0xa62c30d5de652cf0ull, 40, 17, 40},
-    {"CloseAllThenEntryM", 0xf1e300c1cbee3ebeull, 40, 17, 40},
-    {"Reversals", 0x71094a9d0a55d56bull, 40, 16, 40},
-    {"ReversalsM", 0x82cf4d57ffc988fbull, 40, 16, 40},
+    {"CloseAllThenEntry", 0x4b3d91ffa0f69c81ull, 40, 17, 40},
+    {"CloseAllThenEntryM", 0xba152a10f619600dull, 40, 17, 40},
+    {"Reversals", 0x85ab8d3ad30e7a80ull, 40, 16, 40},
+    {"ReversalsM", 0xb3297d2c223a7179ull, 40, 16, 40},
     {"SameBarBatch", 0xf5d9032f4adc5537ull, 36, 25, 36},
     {"SameBarBatchM", 0xef2267ffe47d784aull, 36, 25, 36},
     {"CloseOrderAdds", 0x71edee52fb9f0463ull, 36, 22, 36},
@@ -697,50 +739,50 @@ constexpr Pinned kPinned[] = {
     {"DelayedStopsM", 0xa5372b833b3b72bbull, 66, 20, 40},
     {"Storm01", 0x3262e4227877873full, 43, 13, 43},
     {"Storm01M", 0x81394cb53836347full, 43, 13, 43},
-    {"Storm02", 0x67a916d5e5654ac9ull, 63, 12, 42},
-    {"Storm02M", 0xb1c4092731c1aff0ull, 63, 12, 42},
+    {"Storm02", 0x3aa47b814572802aull, 63, 12, 42},
+    {"Storm02M", 0xb8ca64bd8507dbeeull, 63, 12, 42},
     {"Storm03", 0x3882198431226d3bull, 41, 17, 41},
     {"Storm03M", 0xe924c116ac2f7071ull, 41, 17, 41},
     {"Storm04", 0x7fe213e69bacb416ull, 54, 24, 54},
     {"Storm04M", 0xcbf66004a097dd9aull, 54, 24, 54},
-    {"Storm05", 0x2cbd035e654563adull, 80, 17, 53},
-    {"Storm05M", 0x1d2d3cb30b645629ull, 82, 18, 53},
+    {"Storm05", 0x74b6c57e807db2f8ull, 80, 17, 53},
+    {"Storm05M", 0x22d5a15ad4362603ull, 82, 18, 53},
     {"Storm06", 0x46fca021365eabbdull, 40, 13, 40},
     {"Storm06M", 0xdab2e58f2a967d63ull, 40, 13, 40},
     {"Storm07", 0xed87ebd53e8541faull, 55, 13, 55},
     {"Storm07M", 0x256345301bd94835ull, 55, 13, 55},
-    {"Storm08", 0xe494e6047d8d3c34ull, 81, 14, 58},
-    {"Storm08M", 0x6de07fb9ae58e38eull, 81, 14, 58},
+    {"Storm08", 0x28ace028251119ddull, 81, 14, 58},
+    {"Storm08M", 0x71f23b17dd0bf99bull, 81, 14, 58},
     {"Storm09", 0x5fa1c071ad028a37ull, 48, 23, 48},
     {"Storm09M", 0x14a16ba1eb758cc5ull, 48, 22, 48},
-    {"Storm10", 0xcf25a075e8eef342ull, 63, 13, 57},
-    {"Storm10M", 0xbb27a7d5326e7a78ull, 64, 13, 57},
-    {"Storm11", 0x48b4c85e44eec7a5ull, 59, 23, 59},
-    {"Storm11M", 0x0f201229fac1e34dull, 59, 23, 59},
-    {"Storm12", 0x23dba443bd54a21bull, 85, 19, 56},
-    {"Storm12M", 0xb4a31c0afa9608a6ull, 85, 19, 56},
+    {"Storm10", 0xccc2c863e0d5d3e1ull, 63, 13, 57},
+    {"Storm10M", 0x7b27882019bddf5bull, 64, 13, 57},
+    {"Storm11", 0x7b30960aaa73e808ull, 59, 23, 59},
+    {"Storm11M", 0xac63a88e56e6947dull, 59, 23, 59},
+    {"Storm12", 0xfab876286a135eecull, 85, 19, 56},
+    {"Storm12M", 0xb0c798de0c745596ull, 85, 19, 56},
     {"Storm13", 0x696fd99ab074a767ull, 46, 25, 46},
     {"Storm13M", 0xc530a2795ae59349ull, 46, 25, 46},
     {"Storm14", 0x881d26217cfff80dull, 46, 17, 46},
     {"Storm14M", 0xcff489d957517339ull, 46, 17, 46},
     {"Storm15", 0xb328e1bd987feba1ull, 43, 13, 43},
     {"Storm15M", 0xf9c9756c338f6137ull, 43, 13, 43},
-    {"Storm16", 0x77e2ccbbf316ed69ull, 58, 18, 58},
-    {"Storm16M", 0x149ce304657cb4beull, 58, 18, 58},
-    {"Storm17", 0x0282eee14a50a3b2ull, 83, 21, 54},
+    {"Storm16", 0xdc90bbae776ef766ull, 58, 18, 58},
+    {"Storm16M", 0x0c20a51b3bd998e8ull, 58, 18, 58},
+    {"Storm17", 0xf73d191cf77a83ceull, 83, 21, 54},
     {"Storm17M", 0xf8a5f5ebc1d0bbdbull, 78, 17, 54},
-    {"Storm18", 0x7f7d547d15124cbfull, 79, 22, 49},
-    {"Storm18M", 0x2f28268b47beabafull, 79, 22, 49},
-    {"Storm19", 0x31665db6fec7e215ull, 81, 20, 49},
-    {"Storm19M", 0xdb3d4be8a73d6a37ull, 82, 21, 49},
+    {"Storm18", 0x762a1db564b521e7ull, 79, 22, 49},
+    {"Storm18M", 0xd7afb66d7f652f3aull, 79, 22, 49},
+    {"Storm19", 0x5ea80be967b9e6c7ull, 81, 20, 49},
+    {"Storm19M", 0xfee7c214933ef463ull, 82, 21, 49},
     {"Storm20", 0xc2e4766c4468e0d1ull, 44, 11, 42},
     {"Storm20M", 0x50ef4cafe8ff7fbeull, 43, 10, 42},
     {"Storm21", 0x11106ad7d0d2096bull, 47, 14, 47},
     {"Storm21M", 0xaea3f255e672f9baull, 47, 14, 47},
-    {"Storm22", 0x8baa2f9d85197787ull, 76, 19, 50},
-    {"Storm22M", 0x568459b941271e50ull, 76, 19, 50},
-    {"Storm23", 0x3830c2ff0e888bdfull, 87, 28, 54},
-    {"Storm23M", 0x7758f6756a947b75ull, 87, 28, 54},
+    {"Storm22", 0xdc342ce7fdefeae9ull, 76, 19, 50},
+    {"Storm22M", 0xbd352e905cc9d934ull, 76, 19, 50},
+    {"Storm23", 0x1b528d1d603fa437ull, 87, 28, 54},
+    {"Storm23M", 0x4f41a22916afa081ull, 87, 28, 54},
     {"Storm24", 0x556e0bf179e8561eull, 54, 25, 54},
     {"Storm24M", 0xffa4d19d7e07cca7ull, 54, 25, 54},
     {"Legs01", 0x2257c1f1b017aff6ull, 30, 6, 30},
