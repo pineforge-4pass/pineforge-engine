@@ -1,0 +1,6 @@
+when	call	args
+1749563100000	entry	L	long	9034.0	na	na
+1749664800000	close	L
+held_long	exit	TP1	L	10.58	10.0	35.0
+held_long	exit	TP2	L	10.7	10.0	35.0
+held_long	exit	TP3	L	11.5	10.0	30.0

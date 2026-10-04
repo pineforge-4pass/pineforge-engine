@@ -1076,6 +1076,13 @@ list(APPEND TEST_SOURCES test_margin_rules_forward_replay)
 # Margin, sizing and admission rules on 381 TradingView tapes of synthetic
 # event-ledger probes (tests/fixtures/margin_ledger_rules, README.md there).
 list(APPEND TEST_SOURCES test_margin_ledger_rules_tapes)
+# The admission's fill half, the close-first shape, the point order, the exit
+# tombstones and the pyramiding records on 73 TradingView tapes of synthetic
+# probes (tests/fixtures/admission_rules).
+list(APPEND TEST_SOURCES test_admission_rules_tapes)
+# The point order's margin call at a gapped open: a call sized at the previous
+# close before the stop, and a partial stop that leaves a short remainder.
+list(APPEND TEST_SOURCES test_point_order_open_call)
 # Lane INT28-FIX: a slipped all-in short's admission and its one-unit margin
 # calls (tests/fixtures/slipped_short), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_slipped_short_tapes)
@@ -3056,6 +3063,15 @@ endif()
 if(TARGET test_margin_ledger_rules_tapes)
     target_compile_definitions(test_margin_ledger_rules_tapes PRIVATE
         PINEFORGE_MARGIN_LEDGER_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_ledger_rules")
+endif()
+# The admission rules tapes are read from the fixture tree too; source-bound.
+if(TARGET test_admission_rules_tapes)
+    target_compile_definitions(test_admission_rules_tapes PRIVATE
+        PINEFORGE_ADMISSION_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/admission_rules")
+endif()
+if(TARGET test_point_order_open_call)
+    target_compile_definitions(test_point_order_open_call PRIVATE
+        PINEFORGE_ADMISSION_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/admission_rules")
 endif()
 
 # Lane INT28-FIX reads its TradingView tapes from the fixture tree;

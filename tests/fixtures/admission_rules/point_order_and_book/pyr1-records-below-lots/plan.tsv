@@ -1,0 +1,8 @@
+when	call	args
+1748959200000	entry	A	long	2.0	na	na
+1748960100000	entry	B	long	1.0	na	na
+1748961000000	entry	C	long	1.0	na	na
+1748961900000	close	C
+1748962800000	entry	D	long	1.0	na	na
+1748963700000	entry	E	long	1.0	na	na
+1748965500000	close_all

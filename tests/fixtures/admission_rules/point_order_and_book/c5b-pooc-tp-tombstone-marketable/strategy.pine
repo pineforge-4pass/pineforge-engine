@@ -1,0 +1,10 @@
+//@version=6
+strategy("n34-c5b-pooc-tp-tombstone-marketable", initial_capital=100000, commission_type=strategy.commission.percent, commission_value=0.05, slippage=1, process_orders_on_close=true, margin_long=100, margin_short=100)
+if time == timestamp("UTC", 2025, 6, 10, 13, 45)
+    strategy.entry("L", strategy.long, qty=9034)
+if time == timestamp("UTC", 2025, 6, 11, 18, 0)
+    strategy.close("L", comment="Risk-Off")
+if strategy.position_size > 0
+    strategy.exit("TP1", from_entry="L", stop=10.0, limit=10.575, qty_percent=35)
+    strategy.exit("TP2", from_entry="L", stop=10.0, limit=10.7, qty_percent=35)
+    strategy.exit("TP3", from_entry="L", stop=10.0, limit=11.5, qty_percent=30)

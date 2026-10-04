@@ -1,0 +1,16 @@
+{
+  "title": "pf-n2gap-cf8-flat-long-gapup7",
+  "slug": "pf-n2gap-cf8-flat-long-gapup7",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-04T01:06:52.310Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-05-06",
+    "to": "2025-05-09"
+  },
+  "pine_sha256": "a7b36920a3dd5edc7177cb686654d8385d0e43d8e33e5c84acdc8d62895e2752",
+  "tv_trades_sha256": "1944b0a225d47a030ded2d25dc2b4d0dbb9459a7fbff3a291efae9662a0b42c8",
+  "tv_trades_rows": 2
+}

@@ -96,6 +96,10 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.i(value.placement_sub_open_ms); f.i(value.projection_created_bar);
     f.b(value.projection_created_bar_pinned);
     f.i(value.projection_position_side); f.b(value.projection_after_close);
+    // Folded only when set, so a run without a close-first entry keeps its
+    // digest.
+    if (value.close_first_entry) f.u(0x636c6f7365666972ULL);
+    if (value.signal_price_refused) f.u(0x7369677265667573ULL);
     f.b(value.projection_over_pyramiding);
     f.b(value.projection_opposite_market_predecessor);
     f.u(value.projection_predecessor);
@@ -482,6 +486,25 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.u(close_ledger_records_.size());
         for (const auto& record : close_ledger_records_) { f.s(record.id); f.d(record.units); }
     }
+    // The pyramiding records, unmerged, kept only under pyramiding above one;
+    // folded only while there are any, so every other run keeps its digest.
+    if (!pyramiding_records_.empty()) {
+        f.s("pineforge-pyramiding-records/v1");
+        f.u(pyramiding_records_.size());
+        for (const auto& record : pyramiding_records_) {
+            f.s(record.id); f.u(record.incarnation); f.d(record.units);
+        }
+    }
+    // The exit tombstones, folded only while there are any.
+    if (!exit_tombstones_.empty()) {
+        std::vector<SourceId> keys;
+        keys.reserve(exit_tombstones_.size());
+        for (const auto& row : exit_tombstones_) keys.push_back(row.first);
+        std::sort(keys.begin(), keys.end());
+        f.s("pineforge-exit-tombstones/v1");
+        f.u(keys.size());
+        for (const auto& key : keys) { f.s(key); f.u(exit_tombstones_.at(key)); }
+    }
     // The retired reservation model's two maps and two per-site maps fold as
     // the empty maps they always were outside a multi-call close site.
     f.u(0); f.u(0); f.u(0); f.u(0);
@@ -547,6 +570,13 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     // W13-ENG-MARGIN-OPP), so every other run keeps its digest.
     if (close_margin_open_bar_ != std::numeric_limits<std::int64_t>::min())
         f.i(close_margin_open_bar_);
+    // The close-first fact (record_close_first); folded only once a whole
+    // close of an open position was recorded, so every other run keeps its
+    // digest.
+    if (close_first_script_bar_ != std::numeric_limits<std::int64_t>::min()) {
+        f.s("pineforge-close-first/v1");
+        f.i(close_first_script_bar_); f.i(close_first_side_);
+    }
     f.u(last_margin_call_event_ordinal_);
     f.u(last_margin_call_entry_incarnation_); f.i(last_margin_call_position_cycle_);
     f.b(last_margin_call_at_script_close_);

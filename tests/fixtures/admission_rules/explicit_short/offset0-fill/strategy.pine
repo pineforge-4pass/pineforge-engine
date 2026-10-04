@@ -1,0 +1,8 @@
+//@version=6
+strategy("pf-admission-taro-explicit-short", initial_capital=910872.3625532, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.0, slippage=0, process_orders_on_close=false, calc_on_order_fills=false, pyramiding=1)
+if time == timestamp("UTC", 2025, 7, 3, 8, 30)
+    strategy.entry("Next", strategy.short, qty=8.31589)
+if time == timestamp("UTC", 2025, 7, 3, 9, 0)
+    strategy.close_all()
+plot(strategy.equity, "equity")
+plot(strategy.position_size, "held")

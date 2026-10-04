@@ -211,9 +211,31 @@ void opposite_reversal() {
 }
 void scope_controls() {
     // These all miss the newly pinned scope and retain exact-cost decline.
+    // An explicit quantity takes the same fill check as the default order
+    // (no money check at the fill for explicit orders; the factorial cell
+    // "explicit long, E one ulp under sig10(Q x fill), exact fill" of
+    // tests/fixtures/margin_call_rules fills). Re-pinned on a TradingView
+    // control, its literal check kept: the old exact-cost decline of an
+    // explicit short from flat at the offset-0 equity was replaced by that
+    // rule, and TradingView fills it -- lab tv tape tests/fixtures/
+    // admission_rules/explicit_short/offset0-fill (three identical exports):
+    // a one-unit Margin call at the 109533.96 fill and 7.31589 carried, as the
+    // default order's offset-0 tape. Declined below at the -.00032 offset,
+    // where sig10(sig10(E) / Q) falls under the fill (the default order's
+    // -.00032 tape drops).
     Config explicit_qty;explicit_qty.explicit_qty=true;
+    explicit_qty.capital=910872.3622332;
     Probe explicit_order(explicit_qty);run(explicit_order,btc());
     CHECK(explicit_order.rows().empty());
+    Config explicit_boundary;explicit_boundary.explicit_qty=true;
+    Probe explicit_filled(explicit_boundary);run(explicit_filled,btc());
+    CHECK(explicit_filled.rows().size()==2);
+    if (explicit_filled.rows().size()==2) {
+        CHECK(explicit_filled.rows()[0].exit_comment=="Margin call");
+        CHECK(near(explicit_filled.rows()[0].qty,1));
+        CHECK(near(explicit_filled.rows()[0].exit_price,109533.96));
+        CHECK(near(explicit_filled.rows()[1].qty,7.31589));
+    }
     Config provider;provider.provider=true;
     Probe converted(provider);run(converted,btc());CHECK(converted.rows().empty());
     Config commissioned;commissioned.fee=.000001;

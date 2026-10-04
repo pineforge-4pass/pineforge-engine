@@ -1,0 +1,3 @@
+﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)
+1,Exit long,2025-05-08 21:30,Close entry(s) order Seed,10.33,1000,10140,190,1.87,0,190,1.87,-10,-0.10,190,0.19,7
+1,Entry long,2025-05-08 02:15,Seed,10.14,1000,10140,190,1.87,0,190,1.87,-10,-0.10,190,0.19,7

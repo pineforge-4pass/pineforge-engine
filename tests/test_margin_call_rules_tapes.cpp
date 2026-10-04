@@ -43,12 +43,10 @@
  *
  * Each margin rule the adapter implements sits behind its own switch
  * (pineforge::source::detail::MarginRuleSwitches). The tree ships every rule
- * on but fill_price_recheck, which this test checks; it replays the tapes
- * with the shipped switches against kKnownDivergences, then with every rule
- * on (where each tape listed for the fill re-check must match), turns each
- * rule off alone from there and requires it to cost at least one tape, and
- * turns all of them off to recover the tapes the engine matched before the
- * rules.
+ * on, which this test checks; it replays the tapes with the shipped switches
+ * against kKnownDivergences, turns each rule off alone from there and
+ * requires a load-bearing one to cost at least one tape, and turns all of
+ * them off to recover the tapes the engine matched before the rules.
  */
 
 #include <pineforge/bar.hpp>
@@ -60,6 +58,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -111,42 +110,43 @@ constexpr std::size_t kTapesBeforeRules = 133;
 
 using pineforge::source::detail::MarginRuleSwitches;
 
-// The pooc_fee_sizing switch (POOC default percent sizing on the slipped,
-// fee-grossed unit) is detected rather than named, so the test builds with and
-// without it.
-template <typename T, typename = void>
-struct HasPoocFeeSizing : std::false_type {};
-template <typename T>
-struct HasPoocFeeSizing<T, std::void_t<decltype(std::declval<T&>().pooc_fee_sizing)>>
-    : std::true_type {};
-constexpr bool kHasPoocFeeSizing = HasPoocFeeSizing<MarginRuleSwitches>::value;
-
-template <typename T>
-bool* pooc_fee_sizing_flag(T& switches) {
-    if constexpr (HasPoocFeeSizing<T>::value) {
-        return &switches.pooc_fee_sizing;
-    } else {
-        (void)switches;
-        return nullptr;
-    }
-}
-
 struct Ablation {
     const char* name;
     bool MarginRuleSwitches::*flag;
     bool load_bearing = true;
 };
 
-template <typename T>
-void add_pooc_fee_sizing_ablation(std::vector<Ablation>& rows) {
-    if constexpr (HasPoocFeeSizing<T>::value)
-        rows.push_back({"pooc_fee_sizing", &T::pooc_fee_sizing, true});
+// Every margin rule on. Every field of MarginRuleSwitches is named here and in
+// the ablation table: the static_assert stops the build when one is added.
+MarginRuleSwitches all_rules_on() {
+    static_assert(sizeof(MarginRuleSwitches) == 15 * sizeof(bool),
+                  "MarginRuleSwitches changed: name its new field here and in the ablation table");
+    MarginRuleSwitches on;
+    on.decimal_sizing = true;
+    on.slipped_signal_admission = true;
+    on.unified_placement = true;
+    on.fill_price_recheck = true;
+    on.close_first_admission = true;
+    on.gain_loss_money = true;
+    on.dust_unit_call = true;
+    on.long_open_close_checks = true;
+    on.negative_free_cash_call = true;
+    on.coof_next_point_close = true;
+    on.close_point_reversal = true;
+    on.pooc_fee_sizing = true;
+    on.point_fills_before_margin = true;
+    on.pyramiding_ledger_records = true;
+    on.exit_child_tombstones = true;
+    return on;
+}
+
+bool same_switches(const MarginRuleSwitches& a, const MarginRuleSwitches& b) {
+    return std::memcmp(&a, &b, sizeof(MarginRuleSwitches)) == 0;
 }
 
 // Tapes the engine does not reproduce yet: fixture path and a one-line reason.
 // A listed tape that starts matching fails the test until its entry is
 // removed.
-const char kFillRecheckOff[] = "fill re-check off: gap regime unpinned";
 const std::vector<std::pair<std::string, std::string>> kKnownDivergences = {
     {"coof/coof-low-call-s1",
      "a slipped long's one-unit call at the low (not implemented: test_pooc_open_money_event_l4b pins no call there)"},
@@ -200,12 +200,6 @@ const std::vector<std::pair<std::string, std::string>> kKnownDivergences = {
      "a multi-lot short's call at the high, split first in first out (not implemented)"},
     {"counter-controls/margin_batch_50",
      "a multi-lot long at margin 50 with a per-contract fee (not implemented)"},
-    // The fill re-check ships off (MarginRuleSwitches::fill_price_recheck):
-    // with it the unified admission of default and reversing orders is off
-    // too. Every rule on, each of these tapes matches.
-    {"factorial/c1-a3-exp-long-s1-gapup1", kFillRecheckOff},
-    {"factorial/c1r2-m50-high-long", kFillRecheckOff},
-    {"factorial/c1r2-m50-high-short", kFillRecheckOff},
 };
 
 std::string fixture(const std::string& relative) {
@@ -874,40 +868,11 @@ int main() {
     CHECK(asserted_tapes == kTapes);
     CHECK(cases.size() - asserted_tapes == kRecordedTapes);
 
-    // The tree ships every rule on but the fill re-check (MarginRuleSwitches);
-    // the tapes are replayed with the shipped switches, then with every rule
-    // on. Every field of the struct is named below:
-    // the static_assert stops the build when one is added, so it joins the
-    // checks and the ablation table.
-    static_assert(sizeof(MarginRuleSwitches) == (kHasPoocFeeSizing ? 10 : 9) * sizeof(bool),
-                  "MarginRuleSwitches changed: name its new field here and in the ablation table");
+    // The tree ships every rule on (MarginRuleSwitches).
     auto& switches = pineforge::source::detail::margin_rule_switches();
     const MarginRuleSwitches tree_defaults = switches;
-    CHECK(tree_defaults.decimal_sizing);
-    CHECK(tree_defaults.slipped_signal_admission);
-    CHECK(!tree_defaults.fill_price_recheck);
-    CHECK(tree_defaults.gain_loss_money);
-    CHECK(tree_defaults.dust_unit_call);
-    CHECK(tree_defaults.long_open_close_checks);
-    CHECK(tree_defaults.negative_free_cash_call);
-    CHECK(tree_defaults.coof_next_point_close);
-    CHECK(tree_defaults.close_point_reversal);
-    {
-        MarginRuleSwitches shipped = tree_defaults;
-        if (bool* flag = pooc_fee_sizing_flag(shipped)) CHECK(*flag);
-    }
-    MarginRuleSwitches all_on;
-    all_on.decimal_sizing = true;
-    all_on.slipped_signal_admission = true;
-    all_on.fill_price_recheck = true;
-    all_on.gain_loss_money = true;
-    all_on.dust_unit_call = true;
-    all_on.long_open_close_checks = true;
-    all_on.negative_free_cash_call = true;
-    all_on.coof_next_point_close = true;
-    all_on.close_point_reversal = true;
-    if (bool* flag = pooc_fee_sizing_flag(all_on)) *flag = true;
-    switches = tree_defaults;
+    const MarginRuleSwitches all_on = all_rules_on();
+    CHECK(same_switches(tree_defaults, all_on));
 
     std::map<std::string, std::string> known;
     for (const auto& [path, reason] : kKnownDivergences) {
@@ -1003,18 +968,9 @@ int main() {
     std::printf("short cut-off gate, unpinned: %zu/%zu match\n", recorded_matched,
                 recorded.size());
 
-    // Every rule on: each tape listed for the fill re-check matches.
     switches = all_on;
     const std::set<std::string> all_on_matched = matching_tapes(cases, feeds);
-    std::printf("every rule on: %zu/%zu tapes match\n", all_on_matched.size(), asserted_tapes);
-    std::size_t fill_off = 0;
-    for (const auto& [path, reason] : known) {
-        if (reason != kFillRecheckOff) continue;
-        ++fill_off;
-        if (all_on_matched.count(path) == 0) std::printf("  fill re-check on, still DIFF %s\n", path.c_str());
-        CHECK(all_on_matched.count(path) == 1);
-    }
-    std::printf("%s: %zu tapes, each matches with every rule on\n", kFillRecheckOff, fill_off);
+    CHECK(all_on_matched.size() == matched);
 
     // The recorded tapes with pooc_fee_sizing off and on (every other switch
     // as shipped): report the tapes whose engine rows move. Nothing is
@@ -1022,13 +978,9 @@ int main() {
     {
         MarginRuleSwitches with_off = tree_defaults;
         MarginRuleSwitches with_on = tree_defaults;
-        bool* off_flag = pooc_fee_sizing_flag(with_off);
-        bool* on_flag = pooc_fee_sizing_flag(with_on);
-        if (off_flag == nullptr || on_flag == nullptr) {
-            std::printf("GAP-TOGGLE skipped: MarginRuleSwitches has no pooc_fee_sizing\n");
-        } else {
-            *off_flag = false;
-            *on_flag = true;
+        with_off.pooc_fee_sizing = false;
+        with_on.pooc_fee_sizing = true;
+        {
             std::size_t moved = 0;
             for (const Case* c : recorded) {
                 const std::vector<Bar>& bars = feeds.at(c->bars);
@@ -1054,27 +1006,27 @@ int main() {
     // it and dust_unit_call each cost one) -- and with all of them off the
     // engine is back to the tapes it matched before the rules.
     const MarginRuleSwitches defaults = all_on;
-    const Ablation named_ablations[] = {
-        {"decimal_sizing", &pineforge::source::detail::MarginRuleSwitches::decimal_sizing},
-        {"slipped_signal_admission",
-         &pineforge::source::detail::MarginRuleSwitches::slipped_signal_admission},
-        {"fill_price_recheck", &pineforge::source::detail::MarginRuleSwitches::fill_price_recheck},
-        {"gain_loss_money", &pineforge::source::detail::MarginRuleSwitches::gain_loss_money},
-        {"dust_unit_call", &pineforge::source::detail::MarginRuleSwitches::dust_unit_call},
-        {"long_open_close_checks",
-         &pineforge::source::detail::MarginRuleSwitches::long_open_close_checks},
-        {"negative_free_cash_call",
-         &pineforge::source::detail::MarginRuleSwitches::negative_free_cash_call},
-        {"coof_next_point_close",
-         &pineforge::source::detail::MarginRuleSwitches::coof_next_point_close},
-        {"close_point_reversal",
-         &pineforge::source::detail::MarginRuleSwitches::close_point_reversal},
+    using S = pineforge::source::detail::MarginRuleSwitches;
+    // load_bearing false: the rule's tapes live in another fixture
+    // (margin_ledger_rules, admission_rules); off alone it may not cost one
+    // of these, and must not gain one.
+    const std::vector<Ablation> ablations = {
+        {"decimal_sizing", &S::decimal_sizing},
+        {"slipped_signal_admission", &S::slipped_signal_admission},
+        {"unified_placement", &S::unified_placement, false},
+        {"fill_price_recheck", &S::fill_price_recheck},
+        {"close_first_admission", &S::close_first_admission, false},
+        {"gain_loss_money", &S::gain_loss_money},
+        {"dust_unit_call", &S::dust_unit_call},
+        {"long_open_close_checks", &S::long_open_close_checks},
+        {"negative_free_cash_call", &S::negative_free_cash_call},
+        {"coof_next_point_close", &S::coof_next_point_close},
+        {"close_point_reversal", &S::close_point_reversal},
+        {"pooc_fee_sizing", &S::pooc_fee_sizing},
+        {"point_fills_before_margin", &S::point_fills_before_margin, false},
+        {"pyramiding_ledger_records", &S::pyramiding_ledger_records, false},
+        {"exit_child_tombstones", &S::exit_child_tombstones, false},
     };
-    static_assert(sizeof(named_ablations) / sizeof(named_ablations[0]) + (kHasPoocFeeSizing ? 1 : 0) ==
-                      sizeof(MarginRuleSwitches) / sizeof(bool),
-                  "every MarginRuleSwitches field has an ablation row");
-    std::vector<Ablation> ablations(std::begin(named_ablations), std::end(named_ablations));
-    add_pooc_fee_sizing_ablation<MarginRuleSwitches>(ablations);
     CHECK(ablations.size() == sizeof(MarginRuleSwitches) / sizeof(bool));
     for (const auto& ablation : ablations) {
         switches = defaults;

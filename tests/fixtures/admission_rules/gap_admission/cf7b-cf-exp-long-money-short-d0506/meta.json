@@ -1,0 +1,16 @@
+{
+  "title": "pf-n2gap-cf7b-cf-exp-long-money-short-d0506",
+  "slug": "pf-n2gap-cf7b-cf-exp-long-money-short-d0506",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-04T01:36:22.385Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-05-05",
+    "to": "2025-05-08"
+  },
+  "pine_sha256": "19855d2c29ccc97a2115f5b24f667bc8fe9a2693c211b9166bd23f7c5f9461bc",
+  "tv_trades_sha256": "9970f40e7f45eec25e8fcbe502a9c9e71d68c84f0e828c7a794c3268a2c10a0b",
+  "tv_trades_rows": 2
+}

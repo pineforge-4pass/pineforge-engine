@@ -1,0 +1,4 @@
+when	call	args
+1751637600000	entry	Sell	short	30.71	na	3331.65
+1751637600000	exit	Sell Exit	Sell	na	3340.0	100.0
+1751896800000	close_all

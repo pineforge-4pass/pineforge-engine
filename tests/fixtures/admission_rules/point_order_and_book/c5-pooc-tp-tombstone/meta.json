@@ -1,0 +1,16 @@
+{
+  "title": "n34-c5-pooc-tp-tombstone",
+  "slug": "n34-c5-pooc-tp-tombstone",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-04T01:15:58.742Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-06-10",
+    "to": "2025-06-12"
+  },
+  "pine_sha256": "d26703da78d49ae10d47a6a3b576585aba7ff6d47dde9cdc61ad8312aa467565",
+  "tv_trades_sha256": "70be44655568fd301e9335ab49ea472eff6bf0c8bd305bdd14a0091753177764",
+  "tv_trades_rows": 6
+}

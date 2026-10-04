@@ -1,0 +1,16 @@
+{
+  "title": "pf-n2gap-cf4-rev-exp-long-gapup7",
+  "slug": "pf-n2gap-cf4-rev-exp-long-gapup7",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-04T01:07:29.653Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-05-06",
+    "to": "2025-05-09"
+  },
+  "pine_sha256": "fcfc11a1b5d5bf2d0a5d193e585d2b4f7a1a5d07e7a6b5b992453ea01176d560",
+  "tv_trades_sha256": "4d4fb018c3871da84332f6a62aa3bf038ccf49a08eabdd9654106bbeda18f184",
+  "tv_trades_rows": 2
+}

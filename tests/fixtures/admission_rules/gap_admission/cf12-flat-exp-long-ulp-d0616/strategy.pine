@@ -1,0 +1,14 @@
+//@version=6
+strategy("pf-n2gap-cf12-flat-exp-long-ulp-d0616", initial_capital=42480.0, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.0, slippage=0, process_orders_on_close=false, calc_on_order_fills=false, pyramiding=1)
+var string witness = ""
+if time == timestamp("UTC", 2025, 6, 16, 19, 45)
+    witness := "E=" + str.tostring(strategy.equity, "#.################") + ";N=" + str.tostring(strategy.netprofit, "#.################") + ";OP=" + str.tostring(strategy.openprofit, "#.################") + ";P=" + str.tostring(strategy.position_size, "#.################") + ";C=" + str.tostring(close, "#.################") + ";D=" + str.tostring(strategy.default_entry_qty(math.round_to_mintick(close)), "#.################")
+    strategy.entry("Turn", strategy.long, qty=4000.0, comment=witness)
+if time == timestamp("UTC", 2025, 6, 17, 15, 0)
+    strategy.close_all(comment="SENSOR|" + witness)
+if time == timestamp("UTC", 2025, 6, 17, 16, 0)
+    strategy.entry("Anchor", strategy.long, qty=1)
+if time == timestamp("UTC", 2025, 6, 17, 17, 0)
+    strategy.close_all(comment="ANCHOR")
+plot(strategy.equity, "equity")
+plot(strategy.position_size, "held")

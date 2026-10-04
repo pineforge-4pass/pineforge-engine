@@ -267,6 +267,15 @@ struct PlacementSnapshot {
     bool projection_created_bar_pinned = false;
     std::int32_t projection_position_side = static_cast<std::int32_t>(PositionSide::FLAT);
     bool projection_after_close = false;
+    // A close-first entry (MarginRuleSwitches::close_first_admission): the
+    // script called strategy.close(<held id>) or strategy.close_all() of the
+    // position this entry opposes earlier on the entry's own script bar.
+    // Recorded once, at the entry() call; both admission halves read it.
+    bool close_first_entry = false;
+    // A reversal the placement half refused at its signal (rule 5);
+    // it stays placed so the script's later close of the held id is an
+    // ordinary close, and drops at its fill.
+    bool signal_price_refused = false;
     bool projection_over_pyramiding = false;
     bool projection_opposite_market_predecessor = false;
     std::uint64_t projection_predecessor = 0;
@@ -371,25 +380,26 @@ const std::vector<std::pair<std::uint64_t, const PlacementSnapshot*>>*
 placement_audit_tombstones(const PlacementTable* table);
 
 // The TradingView margin rules pinned on the tapes under
-// tests/fixtures/margin_call_rules and tests/fixtures/margin_ledger_rules, one
-// switch each so a regression bisects per rule; all on but the unified
-// admission (its gap regime is unpinned), only tests change one. Process-wide,
-// read by every adapter; not installed API and no strategy input reaches it.
+// tests/fixtures/margin_call_rules, tests/fixtures/margin_ledger_rules and
+// tests/fixtures/admission_rules, one switch each so a regression bisects per
+// rule; all on, only tests change one. Process-wide, read by every adapter;
+// not installed API and no strategy input reaches it.
 //
-// fill_price_recheck gates two rules, not one: the fill re-check (price scale
-// only, whole-drop) and the unified placement half (rules 2 and 5) for
-// default orders and reversals -- the block in entry() and
-// unified_admission_scope, which also carries the signal half inside
-// resolve_terms, both read it. Off, as shipped, default orders and reversals
-// keep the core's earlier admission, and explicit orders keep
-// slipped_signal_admission's earlier placement plus its next-bar money check
-// on the unslipped quote, which the margin_ledger_rules and margin_call_rules
-// tapes replace with the fill re-check. Splitting the two rules into two
-// switches is a precondition for ever turning this one on.
+// The admission at the signal and at the fill is two switches:
+// unified_placement is its placement half (rules 2 and 5 at the signal close
+// for default orders and reversals; the block in entry() and the signal half
+// inside resolve_terms) and fill_price_recheck its fill half (sig10(sig10(E) /
+// (Q m)) against the slipped tick-built fill quote, a whole drop).
+// close_first_admission exempts a close-first entry -- one the script placed
+// behind its own strategy.close(<held id>) or strategy.close_all() of the
+// position it opposes, on the same bar -- from rule 5 and from the fill half;
+// rule 2 still judges it.
 struct MarginRuleSwitches {
     bool decimal_sizing = true;           // shortest decimal of the quotient, floored
     bool slipped_signal_admission = true; // placement: money at c', price at c' +- slip
-    bool fill_price_recheck = false;      // the unified admission: placement half + fill re-check
+    bool unified_placement = true;        // placement half: rules 2 and 5 at the signal
+    bool fill_price_recheck = true;       // fill half: the price-scale re-check
+    bool close_first_admission = true;    // a close-first entry: rule 2 only
     bool gain_loss_money = true;          // realized money as the G + L sums
     bool dust_unit_call = true;           // a dust restore calls one unit
     bool long_open_close_checks = true;   // a long's one-unit call at open, low and close
@@ -397,6 +407,15 @@ struct MarginRuleSwitches {
     bool coof_next_point_close = true;    // COOF close after a call at the next point
     bool close_point_reversal = true;     // a close_all sized before a close-point call
     bool pooc_fee_sizing = true;          // POOC default sizing on the slipped, fee-grossed unit
+    // At the open, the orders the opening print executes fill before the
+    // margin check runs there.
+    bool point_fills_before_margin = true;
+    // The pyramiding cap counts open close-ledger records, one per entry
+    // fill not yet booked, not physical lots.
+    bool pyramiding_ledger_records = true;
+    // A partial strategy.exit child that filled is never revived for the
+    // entry incarnation it filled under.
+    bool exit_child_tombstones = true;
 };
 MarginRuleSwitches& margin_rule_switches() noexcept;
 
@@ -1815,6 +1834,8 @@ private:
     void set_exit_phase(std::size_t trade_index, std::uint8_t phase);
     std::vector<native_order::RequestHandle> openings_for(const SourceId&) const;
     double cohort_exposure_for(const SourceId&) const noexcept;
+    // The units an exit's from_entry holds; none when it names no entry.
+    std::optional<double> from_entry_units(const SourceId&) const noexcept;
     bool from_entry_filled_this_cycle(const SourceId&) const noexcept;
     double percent_commission_live_equity(double) const noexcept;
     // The same equity at an explicit account-currency rate: the rate an
@@ -1871,7 +1892,14 @@ private:
     bool unified_admission_scope(const PlacementSnapshot&, bool market_or_stop,
                                  double signed_units, double units) const;
     bool unified_fill_admits(const PlacementSnapshot&, double units, double quote) const;
-    bool unified_tie_band(const PlacementSnapshot&, double units, double quote) const;
+    void record_close_first(bool whole_position);
+    void credit_pyramiding_record(const SourceId& id, std::uint64_t incarnation, double units);
+    void book_pyramiding_records(const SourceId& id, std::uint64_t armed_for, double units);
+    std::optional<std::size_t> open_ledger_records() const;
+    std::uint64_t entry_incarnation_of(const SourceId& from_entry) const;
+    bool exit_tombstoned(const SourceId& exit_id, const SourceId& from_entry) const;
+    bool unified_placement_book_clear() const;
+    bool pinned_lot_grid() const;
     bool slipped_long_margin_scope() const;
     double slipped_long_margin_units(double quote) const;
     bool slipped_long_unit_shortfall(double quote) const;
@@ -2243,6 +2271,18 @@ private:
     // own units spills over oldest first.
     std::map<SourceId, double> close_logical_units_;
     std::vector<CloseLedgerRecord> close_ledger_records_;
+    // The pyramiding records: one per entry fill, unmerged, with the incarnation
+    // of the opening that filled it, booked as the close ledger books
+    // (book_pyramiding_records); kept only under pyramiding above one.
+    struct PyramidingRecord {
+        SourceId id{};
+        std::uint64_t incarnation = 0;
+        double units = 0.0;
+    };
+    std::vector<PyramidingRecord> pyramiding_records_;
+    // The partial strategy.exit children that filled, keyed
+    // exit_id "\x1f" from_entry, to the entry incarnation they filled under.
+    std::unordered_map<SourceId, std::uint64_t> exit_tombstones_;
     std::map<std::uint64_t, CloseCallsiteState> close_batch_callsites_;
     std::int32_t close_batch_bar_ = -1;
     std::uint64_t close_batch_queue_sequence_ = 0;
@@ -2282,6 +2322,11 @@ private:
     double pooc_open_basis_ = 0.0;
     std::int64_t pooc_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
     std::int64_t close_all_pending_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    // The script bar on which the script last called strategy.close(<held
+    // id>) or strategy.close_all() while a position was open, and that
+    // position's side (+1 long, -1 short): the close-first fact entry() reads.
+    std::int64_t close_first_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    std::int32_t close_first_side_ = 0;
     double last_fx_rate_ = std::numeric_limits<double>::quiet_NaN();
     std::int64_t position_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
     std::uint64_t position_open_epoch_ = 0;

@@ -1,0 +1,16 @@
+{
+  "title": "n34-add1-short-wholebook",
+  "slug": "n34-add1-short-wholebook",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-04T01:35:12.037Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2026-03-23",
+    "to": "2026-03-24"
+  },
+  "pine_sha256": "ac2e8b3ea9872be46888058209916bb9870d8aa40053d52cc98f597277daab4a",
+  "tv_trades_sha256": "0e38da822dc9de6b87125e4d3f7c49a03a0555cd22b89e030eefcbf050d33024",
+  "tv_trades_rows": 2
+}

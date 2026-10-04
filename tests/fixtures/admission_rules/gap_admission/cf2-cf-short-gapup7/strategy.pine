@@ -1,0 +1,13 @@
+//@version=6
+strategy("pf-n2gap-cf2-cf-short-gapup7", initial_capital=100000.0, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.0, slippage=0, process_orders_on_close=false, calc_on_order_fills=false, pyramiding=1)
+var string witness = ""
+if time == timestamp("UTC", 2025, 5, 7, 18, 0)
+    strategy.entry("Seed", strategy.long, qty=1000)
+if time == timestamp("UTC", 2025, 5, 7, 19, 45)
+    witness := "E=" + str.tostring(strategy.equity, "#.################") + ";N=" + str.tostring(strategy.netprofit, "#.################") + ";OP=" + str.tostring(strategy.openprofit, "#.################") + ";P=" + str.tostring(strategy.position_size, "#.################") + ";C=" + str.tostring(close, "#.################") + ";D=" + str.tostring(strategy.default_entry_qty(math.round_to_mintick(close)), "#.################")
+    strategy.close("Seed")
+    strategy.entry("Turn", strategy.short, comment=witness)
+if time == timestamp("UTC", 2025, 5, 8, 15, 0)
+    strategy.close_all(comment="SENSOR|" + witness)
+plot(strategy.equity, "equity")
+plot(strategy.position_size, "held")

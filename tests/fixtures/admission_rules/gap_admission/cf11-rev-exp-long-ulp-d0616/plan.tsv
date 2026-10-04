@@ -1,0 +1,5 @@
+when	call	args
+1750096800000	entry	Seed	short	1000.0	na	na
+1750103100000	entry	Turn	long	4000.0	na	na
+1750103100000	close	Seed
+1750172400000	close_all

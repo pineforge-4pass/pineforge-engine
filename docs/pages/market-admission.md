@@ -25,7 +25,7 @@ broker `OpeningReceipt` Check/Exempt decision, which belongs to a committed fill
 Three historical placement views are fixed when an order is placed and kept in
 the adapter's placement snapshot (`projection_after_close`,
 `projection_over_pyramiding`, `projection_opposite_market_predecessor`
-pine_adapter.hpp:269-271):
+pine_adapter.hpp:280-282):
 
 - The prior-close view compares the original accepted-close
   quantity with the existing quantity tolerance. This describes a source-time
