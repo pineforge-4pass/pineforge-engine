@@ -24,6 +24,12 @@ void PineScheduler::capture_begin(const NativeBeginArgs& args) {
     next.is_stream = args.is_stream; next.warmup_n = args.warmup_n;
     next.simple_run = args.simple_run;
     retained_ = std::move(next);
+    confirmed_input_bars_ = {};
+    confirmed_input_next_ = 0;
+    confirmed_input_count_ = 0;
+    confirmed_open_input_bars_ = {};
+    confirmed_open_input_next_ = 0;
+    confirmed_open_input_count_ = 0;
     reset_consumed_digests();
 }
 
@@ -60,6 +66,13 @@ void PineScheduler::reset_language() {
     input_script_completes_.clear();
     input_script_boundary_completes_.clear();
     uses_aux_security_feed_ = false;
+    input_is_observed_ticks_ = false;
+    confirmed_input_bars_ = {};
+    confirmed_input_next_ = 0;
+    confirmed_input_count_ = 0;
+    confirmed_open_input_bars_ = {};
+    confirmed_open_input_next_ = 0;
+    confirmed_open_input_count_ = 0;
     deferred_boundary_input_ = {};
     reset_consumed_digests();
 }
@@ -350,7 +363,9 @@ void PineScheduler::fixture_publish_source_series(const Bar& bar, bool new_histo
 }
 
 void PineScheduler::input(
-        const Bar& bar, const NativeInputContext& context, PineStrategyHost& host) {
+    const Bar& bar, const NativeInputContext& context, PineStrategyHost& host) {
+    input_is_observed_ticks_ = false;
+    retain_confirmed_input(bar, context.script_interval.open_ms);
     struct InputBarIndexScope {
         PineStrategyHost& host;
         int previous;
@@ -418,6 +433,9 @@ void PineScheduler::input(
             static_cast<std::size_t>(context.input_index)] != 0U;
         boundary = input_script_boundary_completes_[
             static_cast<std::size_t>(context.input_index)] != 0U;
+    } else if (retained_.is_stream && context.input_index >= 0) {
+        calling_bar_complete = confirmed_script_interval_complete(context);
+        boundary = false;
     }
     // The final sparse magnifier child is a partial requested bucket.  The
     // legacy lower-TF pump does not promote that tail to a completed
@@ -469,6 +487,7 @@ void PineScheduler::input(
 void PineScheduler::tick(const Bar& bar, const NativeTickContext& context,
                          PineStrategyHost& host) {
     if (!retained_.is_stream) return;
+    input_is_observed_ticks_ = true;
     const auto& interval = context.decision.input_interval;
     if (last_stream_input_open_ms_ == interval.open_ms) return;
     if (prior_input_script_open_ms_ != std::numeric_limits<std::int64_t>::min()
@@ -527,18 +546,16 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
         == context.script_bar_open_ms;
     Bar script_bar = value;
     script_bar.timestamp = context.script_bar_open_ms;
-    if (retained_.is_stream && !retained_.bars.empty()
-        && source_bar_count_ >= static_cast<int>(retained_.bars.size())) {
-        const int input_seconds = tf_to_seconds(retained_.input_tf);
-        const std::int64_t expected_open = retained_.bars.back().timestamp
-            + static_cast<std::int64_t>(std::max(input_seconds, 0)) * 1000;
-        if (input_seconds > 0 && script_bar.timestamp < expected_open) {
-            // ab9714be pine_stream.cpp:112-125 labels the first realtime
-            // source bar at last_warmup + input_duration.  A tolerant native
-            // calendar can report its aligned interval label instead; retain
-            // the source-visible raw stream label without changing matching.
-            script_bar.timestamp = expected_open;
-        }
+    if (retained_.is_stream && input_is_observed_ticks_
+        && !retained_.bars.empty() && calendar_period_for(retained_.script_tf) == CalendarPeriod::DAY
+        && tf_to_seconds(retained_.input_tf) == 86400
+        && host.syminfo_.session == "1800-1700"
+        && host.syminfo_.timezone == "America/New_York") {
+        const auto stamp = session_period_open_ms(script_bar.timestamp,
+            host.syminfo_.timezone, host.syminfo_.session, CalendarPeriod::DAY);
+        const auto next_stamp = session_period_open_ms(retained_.bars.back().timestamp + 86400000LL,
+            host.syminfo_.timezone, host.syminfo_.session, CalendarPeriod::DAY);
+        script_bar.timestamp = std::max(stamp, next_stamp);
     }
     current_script_bar_ = script_bar;
     current_script_bar_valid_ = true;

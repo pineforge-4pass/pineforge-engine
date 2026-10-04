@@ -115,6 +115,19 @@ accessor and a replace-options word) are not in this release.
   of another key refuses *excellent*. Trade matching and the thresholds are
   unchanged; the README's *Distinct-entry identity* section states the rule.
 
+- **Harness symbol feeds:** `docker/run_json.py --symbol-feeds` (`PINEFORGE_SYMBOL_FEEDS`)
+  installs other symbols' bars for `request.security` on another symbol: a JSON
+  index keyed by the exact symbol string the script passes and by timeframe, each
+  feed an OHLCV CSV plus the symbol's catalog `syminfo`, through
+  `strategy_set_symbol_facts` / `strategy_set_symbol_feed` (engine and codegen
+  1.0.0 and later). One feed per requested timeframe: nothing aggregates another
+  symbol's bars, so a `1` feed serves neither a `240` nor a `D` request. Unset
+  changes nothing; an index or feed it cannot install fails
+  the run (one `{"engine":"pineforge","error":...}` line, harness exit 1,
+  entrypoint exit 4). What was installed is recorded as
+  `applied_runtime.symbol_feeds`, so such a run has its own fingerprint digest.
+  The engine library is unchanged.
+
 - **Harness lot grid ([#322]).** `docker/run_json.py` applies `mincontract`
   from the `--syminfo` (`PINEFORGE_SYMINFO`) file as the engine's lot grid, the
   metadata key `qty_step` plus the `mincontract` key a script's
@@ -133,6 +146,17 @@ accessor and a replace-options word) are not in this release.
   its own fingerprint digest. The change is in the harness alone; the release
   hub copies `docker/run_json.py` from the engine tag, so `pineforge-release`
   1.1.0 carries it.
+
+- **Confirmed-bar streams compute what the batch computes:** a native stream fed
+  confirmed bars now applies the same TradingView-parity rules as a batch backtest over
+  the same bars. Rules that were switched off in any stream are now chosen by the input's
+  domain: historical semantics for batch and confirmed-bar input, observed-print semantics
+  only for genuine tick input. Fixes the v1.0.0/v1.0.1 known issue where same-chart
+  `request.security` stopped updating after the first realtime bar when the input and
+  script timeframes were equal, and two stream-only fill differences (both-sided stop
+  entries with default sizing; `process_orders_on_close` attribution). Batch results are
+  unchanged. The streaming guide gains a "Backtest vs live" section listing what a
+  backtest can see that a live run cannot.
 
 - **Native runner routing and delivery ([#320]).** Webhooks are optional;
   `--webhook-routes` adds first-match per-action targets and payload

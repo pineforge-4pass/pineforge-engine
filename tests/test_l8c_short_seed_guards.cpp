@@ -231,7 +231,8 @@ void run_qualification_case(QualificationCase which) {
         && which != QualificationCase::NonHundredMargins) {
         CHECK(host.baseline);
     }
-    const bool expected = which == QualificationCase::Baseline;
+    const bool expected = which == QualificationCase::Baseline
+        || which == QualificationCase::StreamPhase;
     CHECK(host.qualified == expected);
 }
 

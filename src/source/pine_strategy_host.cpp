@@ -727,10 +727,6 @@ void source::PineStrategyHost::set_strategy_override(const StrategyOverrides& ov
 }
 
 void source::PineStrategyHost::set_syminfo_session(const std::string& session) {
-    if (stream_warmup_mode_) {
-        (void)session;
-        return;
-    }
     BacktestEngine::set_syminfo_session(session);
 }
 
@@ -1735,17 +1731,23 @@ bool source::PineStrategyHost::report_terminal_quote_applied(const ReportC& repo
 }
 
 void source::PineStrategyHost::present_report(ReportC* out) const {
-    if (out->equity_curve_len == 0 || range_end_trades_.empty() || !native_bound()) return;
+    if (out->equity_curve_len == 0 || !native_bound()) return;
     const auto state = as_native_consumer(execution_consumer()).view();
     if (!state.spec
         || state.spec->report_policy != NativeReportPolicy::KernelRecordedAtHostMarks) return;
+    const auto position = as_native_consumer(execution_consumer()).position(*this);
     auto& last = out->equity_curve[out->equity_curve_len - 1];
-    if (stream_phase_ == StreamPhase::REALTIME
-        || state.completion == NativeCompletion::StreamEnded) {
-        double range_end_pnl = 0.0;
-        for (const auto& row : range_end_trades_) range_end_pnl += row.pnl;
+    if ((stream_phase_ == StreamPhase::REALTIME
+         || state.completion == NativeCompletion::StreamEnded)
+        && (!range_end_trades_.empty()
+            || (position.signed_units == 0.0 && position.lot_count == 0
+                && last.open_profit != 0.0))) {
         last.open_profit = 0.0;
-        last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl;
+        if (!range_end_trades_.empty()) {
+            double range_end_pnl = 0.0;
+            for (const auto& row : range_end_trades_) range_end_pnl += row.pnl;
+            last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl;
+        }
     }
     if (!report_terminal_quote_eligible()) return;
     const double price = bar_fill_price(report_quote_close_);
