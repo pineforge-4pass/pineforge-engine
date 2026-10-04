@@ -169,7 +169,7 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   **2** offline redelivery with selected failed/pending actions; **3** run
   stopped at its storage budget. `actions --follow` retains exit 130 on a
   signal. A supervisor's grace period must allow message computation/commit
-  plus the delivery drain; there is no claim that arbitrary strategy code is
+  (plus, after a fatal error or a storage-budget stop, the delivery drain); there is no claim that arbitrary strategy code is
   interruptible. Container liveness probes can detect a stalled control loop.
 - `--max-ledger-bytes N` budgets database + WAL + SHM bytes (0 disables it;
   default 0; integer 0..INT64_MAX). Crossing the budget removes readiness,
@@ -640,7 +640,7 @@ your own applications, never exchanges or fill-ingestion endpoints.
 - **Bounded transport retries.** A connection failure, a timeout before any response, or a reset is retried at most 2 times, after 1 s and then 2 s. The retries run beside newer actions and never delay them. An HTTP error response (any non-2xx, redirects included) is final, so it is shown and not retried.
 - **Nothing is lost.** Every action and every delivery result stays in the ledger. `pineforge-live redeliver --ledger L --deployment D --target T [--from N] [--failed-only]` re-sends selected actions in commit order, with the same `delivery_id`, and records each new attempt. N is the global action ordinal; deployment D must match `metadata.identity`. Offline redelivery refuses while the runner owns the ledger, counts selected/delivered/failed/pending, exits 2 for selected failed/pending actions, and reads only the selected target's secret. Add `--control-dir PATH` for [live submission](#live-redelivery-control-files). `pineforge-live actions --follow` streams every committed action, whatever happened to its delivery.
 - **Restart.** After the usual replay verification, an action that was committed but has no delivery result yet (the process died before sending, or mid-request) is sent once. An action whose delivery failed is not re-sent automatically; `redeliver` does that.
-- **Fatal exit:** delivery drains without retries for at most one `total_timeout_ms` in total, regardless of targets or action count. The final error reports actions with no delivery result and gives `pineforge-live redeliver --ledger L --deployment D --target T` guidance. SIGINT/SIGTERM use the same bounded drain, including EOF drain and redelivery, and exit 0 after a graceful stop; see [service operation](#service-operation).
+- **Fatal exit:** delivery drains without retries for at most one `total_timeout_ms` in total, regardless of targets or action count. The final error reports actions with no delivery result and gives `pineforge-live redeliver --ledger L --deployment D --target T` guidance. SIGINT/SIGTERM promptly cancel delivery, including EOF drain and redelivery, and exit 0; see [service operation](#service-operation).
 - **Status:** `pineforge-live status --ledger L [--deployment D]` prints a consistent read snapshot as JSON, per target: sent, failed, unsent (committed actions with no delivery result), last success, last error (redacted), last attempt. Use offline `redeliver` for failed or unsent actions; omit `--failed-only` to include unsent actions.
 - **Audit (closes audit finding F11):** every attempt is a new delivery-log row: target, delivery_id, attempt, start/end time, HTTP status or error class. Nothing is updated in place.
 

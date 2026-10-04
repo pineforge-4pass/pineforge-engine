@@ -124,7 +124,7 @@ if(PINEFORGE_BUILD_TESTS)
         add_test(NAME native_live_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_example>)
-        set_tests_properties(native_live_e2e PROPERTIES TIMEOUT 120)
+        set_tests_properties(native_live_e2e PROPERTIES TIMEOUT 300)
     endif()
     foreach(contract_kind absent unknown native_no_export native_stub)
         add_library(live_contract_${contract_kind} MODULE

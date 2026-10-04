@@ -71,7 +71,8 @@ version number follows semantic versioning over the surfaces the
   redelivery still refuses a running ledger. `--max-ledger-bytes N`
   (default 0/unlimited, 0..INT64_MAX) stops after a whole atomic message with
   all input/actions/reports intact. SIGTERM/SIGINT finish or roll back the
-  active message and bound delivery drain to one `total_timeout_ms`;
+  active message and cancel delivery promptly; fatal-error and storage-budget
+  drains stay bounded by one `total_timeout_ms`;
   run/offline-redelivery graceful signal exit changes from 130 to 0.
   Fatal errors remain exit 1, selected failed/pending offline redelivery 2,
   and storage-budget run stops use 3; `actions --follow` retains 130.
