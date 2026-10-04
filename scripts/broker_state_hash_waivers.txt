@@ -54,6 +54,7 @@ terminal_receipt_high_water_reader_ # Retired storage (R5 lane PERF-L4): nothing
 source_pending_view_cache_ # Read-only test projection cache rebuilt from adapter state and never consumed by execution.
 bar_magnifier_ # install-time fact mirrored from the scheduler (retained_.bar_magnifier is already folded); not evolving broker state (L8h A41(5))
 retired_row_scratch_ # Per-sweep working sets of erase_retired_rows (R5 lane V19-E), emptied at the start of every sweep, and one memo that survives sweeps (R5 lane V19-D: the high water each held leg was read through by the superseded test, emptied at every run begin), which answers exactly what reading every row answers; no value reaches a hash point.
+input_scheduler_ # Alias of the bound Pine host's scheduler, derived once at bind; reads the already-hashed input_is_observed_ticks_ provenance and owns no independent state.
 pine_view_host_ # The host the cached PineStrategyHost view was taken from (R5 lane V19-D, was a thread_local memo); a function of host_, reset at every bind and run begin.
 pine_view_ # The cached PineStrategyHost view of pine_view_host_ (dynamic_cast's answer); derived, never a decision input.
 precommit_held_units_ # Transient precommit cache; re-derived from the physical position at every precommit and cleared at the applied-fill boundary (a within-request cache, never a decision input past the applied boundary).

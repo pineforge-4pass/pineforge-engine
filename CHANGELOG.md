@@ -30,6 +30,9 @@ boundary that were scheduled for 1.1.0 (C-SURFACE-2: a non-mutating execution
 preview, the origin and label of an applied event, a closed-trade entry-comment
 accessor and a replace-options word) are not in this release.
 
+- **Per-bar performance.** Per-bar cost restored on the batch and stream paths
+  (no behaviour change).
+
 - **Checked strategy settings ([#317]).** The six functions are
   `strategy_settings_api_version`, `strategy_create_checked`,
   `strategy_set_input_checked`, `strategy_set_override_checked`,

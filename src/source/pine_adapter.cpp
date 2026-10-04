@@ -39,12 +39,11 @@
 
 namespace pineforge::source {
 bool PineExecutionAdapter::modeled_input() const {
-    const auto* pine_host = dynamic_cast<const PineStrategyHost*>(host_);
-    if (stream_mode_ && pine_host && pine_host->scheduler_.input_is_observed_ticks()) {
+    if (input_scheduler_ && input_scheduler_->input_is_observed_ticks()) {
         return false;
     }
     const auto* point = host_ ? detail::callback_point(*host_) : nullptr;
-    return modeled_pine_input(stream_mode_, point
+    return modeled_pine_input(point
         ? point->decision.coordinate.provenance : NativePriceProvenance::Calculation);
 }
 
@@ -782,6 +781,8 @@ PineExecutionAdapter::PineExecutionAdapter(NativeStrategyHost& host,
 void PineExecutionAdapter::bind(NativeStrategyHost& host) noexcept {
     host_ = &host;
     pine_view_host_ = nullptr;
+    const auto* pine_host = pine_view_of(host_);
+    input_scheduler_ = pine_host ? &pine_host->scheduler_ : nullptr;
 }
 
 // The bound host's PineStrategyHost view: dynamic_cast's answer, taken once

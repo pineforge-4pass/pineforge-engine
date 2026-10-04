@@ -4,8 +4,8 @@
 
 namespace pineforge::source {
 
-inline bool modeled_pine_input(bool is_stream, NativePriceProvenance provenance) noexcept {
-    return !is_stream || provenance != NativePriceProvenance::ObservedPrint;
+inline bool modeled_pine_input(NativePriceProvenance provenance) noexcept {
+    return provenance != NativePriceProvenance::ObservedPrint;
 }
 
 }
