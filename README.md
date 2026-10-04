@@ -6,9 +6,7 @@
 
 **An open-source C++17 engine for backtesting and forward execution, with PineScript support through code generation.**
 
-[![CI](https://img.shields.io/github/actions/workflow/status/pineforge-4pass/pineforge-engine/ci.yml?branch=main&label=ci&logo=github)](https://github.com/pineforge-4pass/pineforge-engine/actions)
-<!-- pf:scoreboard|parity-badge -->[![Parity](https://img.shields.io/badge/TradingView%20parity-7%2C989%20%2F%207%2C989%20excellent%20or%20strong-brightgreen)](#validation-scoreboard)<!-- /pf -->
-<!-- pf:inventory.tvTrades|trades-badge -->[![Trades](https://img.shields.io/badge/TradingView%20trades%20graded-4.78M-brightgreen)](#validation-scoreboard)<!-- /pf -->
+[![CI](https://img.shields.io/github/actions/workflow/status/pineforge-4pass/pineforge-engine/ci.yml?branch=main&label=ci&logo=github)](https://github.com/pineforge-4pass/pineforge-engine/actions) <!-- pf:scoreboard|parity-badge -->[![Parity](https://img.shields.io/badge/TradingView%20parity-7%2C989%20%2F%207%2C989%20excellent%20or%20strong-brightgreen)](#validation-scoreboard)<!-- /pf --> <!-- pf:inventory.tvTrades|trades-badge -->[![Trades](https://img.shields.io/badge/TradingView%20trades%20graded-4.78M-brightgreen)](#validation-scoreboard)<!-- /pf -->
 [![Speed](https://img.shields.io/badge/median%2036%C3%97%20vs%20PyneCore-success)](benchmarks/results/speed.md)<br>
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/C%2B%2B-17-00599C.svg?logo=cplusplus&logoColor=white)](#)
