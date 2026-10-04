@@ -49,13 +49,18 @@ class PineInputDomainGates(unittest.TestCase):
         self.assertTrue('    if (last_bar_dual_entry_script_open_ms_ != context.script_bar_open_ms) {\n'
                         '        last_bar_dual_entry_path_ = 0;' in source)
 
-    def test_batch_input_domain_does_not_exempt_observed_provenance(self):
+    def test_input_domain_depends_only_on_observed_provenance(self):
         header = (ROOT / 'include/pineforge/source/pine_input_domain.hpp').read_text()
-        self.assertIn('return !is_stream || provenance != NativePriceProvenance::ObservedPrint;', header)
+        self.assertIn('return provenance != NativePriceProvenance::ObservedPrint;', header)
+        self.assertNotIn('is_stream', header)
 
     def test_tick_derived_close_calculations_keep_the_observed_input_domain(self):
         source = (ROOT / 'src/source/pine_adapter.cpp').read_text()
-        self.assertIn('if (stream_mode_ && pine_host && pine_host->scheduler_.input_is_observed_ticks())', source)
+        self.assertIn('if (input_scheduler_ && input_scheduler_->input_is_observed_ticks())', source)
+        self.assertIn('input_scheduler_ = pine_host ? &pine_host->scheduler_ : nullptr;', source)
+        predicate = source.split('bool PineExecutionAdapter::modeled_input() const {', 1)[1].split('\n}', 1)[0]
+        self.assertNotIn('dynamic_cast', predicate)
+        self.assertNotIn('stream_mode_', predicate)
         scheduler = (ROOT / 'src/source/pine_scheduler_native.cpp').read_text()
         self.assertIn('input_is_observed_ticks_ = true;', scheduler)
         self.assertIn('input_is_observed_ticks_ = false;', scheduler)

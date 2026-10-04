@@ -2103,6 +2103,7 @@ private:
 
     // @source-state begin
     NativeStrategyHost* host_ = nullptr;
+    const PineScheduler* input_scheduler_ = nullptr;
     PineStrategyConfig config_{};
     StagedConfiguration staged_{};
     mutable std::uint64_t run_counter_ = 0;

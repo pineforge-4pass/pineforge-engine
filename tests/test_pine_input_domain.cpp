@@ -13,10 +13,9 @@ int main() {
         NativePriceProvenance::CurrentExecution}};
     int failures = 0;
     for (const auto provenance : provenances) {
-        if (!pineforge::source::modeled_pine_input(false, provenance)) ++failures;
-        if (pineforge::source::modeled_pine_input(true, provenance)
+        if (pineforge::source::modeled_pine_input(provenance)
             != (provenance != NativePriceProvenance::ObservedPrint)) ++failures;
     }
-    std::printf("input-domain: 18 checks, %d failures\n", failures);
+    std::printf("input-domain: 9 checks, %d failures\n", failures);
     return failures == 0 ? 0 : 1;
 }
