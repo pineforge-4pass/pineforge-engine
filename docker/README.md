@@ -208,8 +208,7 @@ docker run --rm \
 - One feed per timeframe the script requests, keyed in the engine's spelling:
   whole minutes as a bare integer (`"240"`, never `"4h"`), else `<n>D|W|M|S`;
   a bare `D`/`W`/`M`/`S` is folded to `1D`/`1W`/`1M`/`1S`. A request at
-  `timeframe.period` (or `""`) reads the feed at the chart's timeframe. Nothing is
-  aggregated: a `240` feed does not serve a `D` request.
+  `timeframe.period` (or `""`) reads the feed at the chart's timeframe.
 - A feed is a CSV like `ohlcv.csv` (`timestamp,open,high,low,close,volume`; an
   empty volume is a symbol that publishes none), paths relative to the index.
   Each bar's close is its open plus the timeframe (calendar months for `M`),
@@ -227,8 +226,17 @@ docker run --rm \
   requested bar whose close is at or before the chart bar's close; with it on,
   the latest that opened at or before the chart bar's open. A missing requested
   bar carries the last value forward (`gaps` off) or reads na (`gaps` on).
-- The chart must be its own input (`PINEFORGE_SCRIPT_TF` equal to the input
-  timeframe), and the run historical.
+- Limits: at most 256 symbols and 256 feeds in one index. The chart must be its
+  own input (`PINEFORGE_SCRIPT_TF` unset or equal to the input timeframe), else
+  the run fails with `request.security of another symbol needs the chart's own
+  bars as input; input '<i>' aggregated to chart '<s>' is not supported`. The run
+  is historical only. Each feed is a full pass of its request's expression over
+  its bars. `request.security_lower_tf` on another symbol reads no feed.
+- A feed must be at the timeframe it serves. Nothing aggregates another
+  symbol's bars: the engine aggregates only the chart's own input, and the C ABI
+  has no call that aggregates bars. A `240` feed does not serve a `D` request,
+  and a `1` feed serves only a request at `1`, so give each requested timeframe
+  its own bars.
 - An index or feed the harness cannot install (not JSON, a bad timeframe
   spelling, two feeds at one timeframe, a CSV without `close`, decreasing
   timestamps, a close after the next bar's open, a non-positive `mintick`, more

@@ -12,7 +12,9 @@ version number follows semantic versioning over the surfaces the
   index keyed by the exact symbol string the script passes and by timeframe, each
   feed an OHLCV CSV plus the symbol's catalog `syminfo`, through
   `strategy_set_symbol_facts` / `strategy_set_symbol_feed` (engine and codegen
-  1.0.0 and later). Unset changes nothing; an index or feed it cannot install fails
+  1.0.0 and later). One feed per requested timeframe: nothing aggregates another
+  symbol's bars, so a `1` feed serves neither a `240` nor a `D` request. Unset
+  changes nothing; an index or feed it cannot install fails
   the run (one `{"engine":"pineforge","error":...}` line, harness exit 1,
   entrypoint exit 4). What was installed is recorded as
   `applied_runtime.symbol_feeds`, so such a run has its own fingerprint digest.
