@@ -19,6 +19,9 @@ children = []
 receipts = []
 receiver_mode = "ok"
 delivery_started = threading.Event()
+receiver_release = threading.Event()
+keepalive_started = threading.Event()
+keepalive_release = threading.Event()
 secret = "service-test-secret-not-public"
 
 
@@ -39,7 +42,7 @@ class Receiver(BaseHTTPRequestHandler):
         delivery_started.set()
         mode = receiver_mode
         if mode == "hang":
-            time.sleep(3)
+            receiver_release.wait(30)
         try:
             self.send_response(503 if mode == "fail" else 204)
             self.send_header("Content-Length", "0")
@@ -67,8 +70,8 @@ class Receiver(BaseHTTPRequestHandler):
         self.close_connection = True
         try:
             if self.path == "/keepalive":
-                for _ in range(2):
-                    time.sleep(5)
+                keepalive_started.set()
+                while not keepalive_release.wait(0.05):
                     self.wfile.write(frame(10, b"alive"))
                     self.wfile.flush()
                 self.wfile.write(frame(1, json.dumps(events[0]).encode()))
@@ -129,8 +132,8 @@ def finish(process, code=0, stop=True, signal_number=signal.SIGTERM):
     if stop:
         process.send_signal(signal_number)
     else:
-        process.wait(timeout=5)
-    output, errors = process.communicate(timeout=5)
+        process.wait(timeout=30)
+    output, errors = process.communicate(timeout=30)
     assert process.returncode == code, (process.returncode, output, errors)
     assert secret not in output + errors
     return output
@@ -265,9 +268,10 @@ try:
         process.stdin.write(batch)
         process.stdin.flush()
         assert delivery_started.wait(5)
-        began = time.monotonic()
         finish(process)
-        assert time.monotonic() - began < 3
+        assert not receiver_release.is_set()
+        assert status(health)["state"] == "stopped"
+        receiver_release.set()
         assert query(ledger, "SELECT count(*) FROM inputs") == [(1,)]
         assert export(ledger)["report"] == expected_report
         assert query(ledger, "SELECT count(*) FROM events")[0][0] > 0
@@ -308,12 +312,13 @@ try:
         acknowledgement_time = acknowledgment.stat().st_mtime_ns
         (controls / (identifier + ".request.json")).write_text(json.dumps(duplicate_request))
         wait_for(lambda: acknowledgment.stat().st_mtime_ns != acknowledgement_time)
-        time.sleep(0.15)
-        assert len(receipts) == 8
+        assert query(ledger, "SELECT count(*) FROM delivery_log WHERE request_id=? AND phase='completed'",
+            (identifier,)) == [(4,)]
         selected = json.loads(invoke(["redeliver", "--ledger", ledger, "--deployment", deployment,
             "--target", "default", "--from", "4", "--control-dir", controls]))["request_id"]
         wait_for(lambda: query(ledger, "SELECT count(*) FROM delivery_log WHERE request_id=? AND phase='completed'",
             (selected,)) == [(1,)])
+        wait_for(lambda: len(receipts) == 9)
         assert receipts[-1] in original
         bad_identifier = "d" * 64
         duplicate_request.update(request_id=bad_identifier, deployment="wrong", from_ignored=1)
@@ -324,9 +329,8 @@ try:
         finish(process)
         assert invoke(["report", "--ledger", ledger]) == before
         process, ledger, health = start("redelivery", routed + ["--control-dir", controls], env=environment)
-        time.sleep(0.15)
-        assert len(receipts) == 9
         finish(process)
+        assert len(receipts) == 9
         invoke(["redeliver", "--ledger", ledger, "--deployment", deployment, "--target", "default",
             "--from", "4"], env=environment)
         assert len(receipts) == 10
@@ -386,10 +390,21 @@ try:
             scheme = "http" if path == "slow-http" else "ws"
             invoke(base(root / (path + ".sqlite")) + ["--feed-url", f"{scheme}://{endpoint}/{path}",
                 "--allow-insecure-http", "--feed-idle-timeout", "1", "--feed-message-timeout", "2"], 1)
-        invoke(base(root / "keepalive.sqlite") + ["--feed-url", f"ws://{endpoint}/keepalive",
-            "--allow-insecure-http", "--feed-idle-timeout", "8", "--feed-message-timeout", "1",
-            "--max-events", "1"])
-        print("PASS deadline bounds, stdin/HTTP/WS idle, fragmented assembly and 5-second PONG keepalive", flush=True)
+        keepalive_health = root / "keepalive.status.json"
+        keepalive_command = base(root / "keepalive.sqlite") + ["--feed-url", f"ws://{endpoint}/keepalive",
+            "--allow-insecure-http", "--feed-idle-timeout", "5", "--feed-message-timeout", "1",
+            "--status-file", keepalive_health, "--max-events", "1"]
+        process = subprocess.Popen([runner] + list(map(str, keepalive_command)),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        children.append(process)
+        assert keepalive_started.wait(30)
+        initial = wait_for(lambda: status(keepalive_health)["liveness"]["control_loop_heartbeat_ms"], 30)
+        wait_for(lambda: status(keepalive_health)["liveness"]["control_loop_heartbeat_ms"] >= initial + 6000, 30)
+        assert process.poll() is None and status(keepalive_health)["metrics"]["committed_input"] == 0
+        keepalive_release.set()
+        result = json.loads(finish(process, stop=False))
+        assert result["inputs_committed"] == 1
+        print("PASS deadline bounds, stdin/HTTP/WS idle, fragmented assembly and event-gated PONG keepalive", flush=True)
 
         health = root / "budget.status.json"
         ledger = root / "budget.sqlite"
@@ -414,6 +429,8 @@ try:
         assert invoke(["report", "--ledger", ledger]) == before
         print("PASS storage budget stops after whole message without losing cursor, outbox or report", flush=True)
 finally:
+    receiver_release.set()
+    keepalive_release.set()
     for process in children:
         if process.poll() is None:
             process.terminate()

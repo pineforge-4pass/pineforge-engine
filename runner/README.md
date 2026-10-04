@@ -38,13 +38,18 @@ pineforge-live report --ledger orders.sqlite3 --deployment DEPLOYMENT --at-input
 is a committed-message cursor (the number of messages, not the zero-based input
 index, action sequence or bar count); 0 denotes warmup. Omit it for the latest
 committed report. An unavailable cursor or mismatched optional deployment exits
-1. Reading is safe while a runner owns the ledger. `run --report-jsonl` mirrors
+1. Reading is safe while a runner owns the ledger. Export re-verifies the whole
+committed report-integrity chain in one read snapshot, including inputs, stored
+state hashes and immutable actions, even for an earlier requested cursor.
+A missing or mismatched digest refuses export. These SHA-256 digests detect
+ledger corruption, not edits by someone able to replace both data and digests;
+only `run` recomputes engine state by replay. `run --report-jsonl` mirrors
 each newly committed report to stdout, followed by the existing operational run
 summary; replayed source-prefix messages are not mirrored again. A closed
 stdout pipe fails clearly with exit 1, never SIGPIPE; the last input and report
 are already durable, and export remains available.
 
-The input, engine hash, actions and cumulative report commit in one SQLite
+The input, engine hash, actions, cumulative report and its integrity digest commit in one SQLite
 transaction. Append-only `pineforge-native-report-delta/v1` rows contain changed
 scalar fields and appended/replaced array suffixes, not historical full-report
 copies. Export folds these rows through the selected cursor into byte-identical
@@ -53,8 +58,15 @@ exact report delta before delivery. Existing full-report rows remain immutable
 and readable; recovery verifies them against the reconstructed full report, then
 new inputs use deltas. This avoids quadratic report storage without changing the
 export schema or engine computation.
+Array suffix replacement assumes at most one provisional trailing element for
+equity points and broker hashes. The runner never enables tracing and refuses
+nonempty `trace`: traces can contain several records per bucket, so enabling
+them would require replacing the entire provisional bucket's trace suffix,
+not just its last record. `trace_names` likewise has no active trace updates.
 Older ledgers acquire reports by deterministic replay; resume them with `run`
-before export. Reports are immutable and never change with webhook timing.
+before export. Ledgers written before integrity digests were added also require
+one verified replay to populate the digests; old full/delta rows stay unchanged.
+Reports are immutable and never change with webhook timing.
 The deployment already binds strategy-library bytes, warmup bytes, effective
 settings, symbol units, broker configuration and routing. Operational export
 flags do not change it.
@@ -144,9 +156,12 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   do not change webhook delivery timeouts or deployment identity.
 - SIGTERM/SIGINT stop intake. An already-started atomic message finishes or
   rolls back; incomplete transport messages are not committed. Cursor,
-  actions and report remain in the same transaction. Deliveries drain
-  without new retries for at most one configured `delivery.total_timeout_ms`
-  across all targets, then disconnect. An interrupted request may have been
+  actions and report remain in the same transaction. The delivery drain is
+  bounded by one configured `delivery.total_timeout_ms` across all targets,
+  without new retries. A signal cancels in-flight requests promptly rather than
+  recording a synthetic timeout/failure; unfinished attempts remain unsent for
+  restart. Storage/fatal-error drains may use the full bound, then disconnect.
+  An interrupted request may have been
   accepted by its receiver; restart uses the same delivery ID. Receiver
   idempotency remains mandatory. Signal during recovery stops before intake.
 - Run/offline-redelivery exits: **0** normal completion or graceful signal
@@ -179,8 +194,9 @@ pineforge-live redeliver --ledger orders.sqlite3 --deployment DEPLOYMENT \
 The command atomically creates a request, prints `queued: true` and its
 `request_id`, and exits 0; this is submission, not successful delivery. It
 requires an existing private directory and a running owner of the ledger;
-it never creates a missing submission directory. It needs no signing secrets
-and adds no network listener. The running delivery
+it never creates a missing submission directory and reports
+`control directory does not exist` for a missing path. It needs no signing
+secrets and adds no network listener. The running delivery
 worker polls at 100 ms while not draining, validates the deployment and target,
 pins the selected committed range/failure state, and writes
 `REQUEST_ID.ack.json` with `accepted`, `selected` and a sanitized `reason`.
@@ -196,9 +212,13 @@ characters. Canonical request fields are `schema_version:
 `from` (global action ordinal, default 1, 1..INT64_MAX) and `failed_only`
 (boolean). Unknown fields and wrong types/identity receive a sanitized rejection.
 Unreadable files, symlinks, nonregular entries, oversized (>16 KiB) or partial
-JSON files are skipped and left intact. Each bad entry or control-directory
-I/O error is remembered for this run, counted in status `control_errors` and
-logged once without file contents. These errors never kill the delivery worker
+JSON files are skipped and left intact. Each bad entry is remembered for this
+run, counted in status `control_errors` and logged once without file contents.
+Directory failures are counted and logged on each error transition, including
+a recurrence after recovery. A transient accept/storage failure receives
+`accepted: false, reason: "accept_failure"`; retry with a new ID after repairing
+the cause. An acknowledgement write failure leaves the request intact and is
+counted/logged. These errors never kill the delivery worker
 or computation; repair/remove the entry and use a new request ID. Always publish
 requests atomically, never by writing the final filename in place.
 The same accepted ID/selection is idempotent; conflicting reuse is rejected.

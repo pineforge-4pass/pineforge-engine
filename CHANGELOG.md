@@ -36,6 +36,20 @@ version number follows semantic versioning over the surfaces the
 
 ### Native cumulative reports
 
+- Compiled capability admission and legacy warnings run before control-directory,
+  health-file or ledger startup. Directory errors report every error transition,
+  including recurrence after recovery; transient control acceptance failures
+  receive a sanitized rejection acknowledgement rather than disappearing.
+  Missing submission paths report `control directory does not exist`.
+  Signals promptly cancel unfinished delivery attempts without recording false
+  receiver failures, preserving the bounded shutdown and same-ID restart contract.
+- Report export re-verifies an append-only SHA-256 integrity chain over all
+  committed inputs, stored state hashes, actions and report rows, including for
+  historical cursors. Older ledgers need one verified `run` replay to populate
+  digests. Output stays byte-identical. The one-provisional-element suffix
+  invariant is documented; tracing stays disabled and nonempty traces refuse
+  export generation rather than silently producing stale provisional records.
+
 - **Native runner service controls:** `run --status-file PATH` atomically
   publishes versioned health/readiness and sanitized metrics, coalesced to
   every `--status-interval S` seconds (default 1, 1..300) and immediately on
