@@ -25,7 +25,9 @@ def equal(expected, actual, path="report"):
         assert len(expected) == len(actual), (path, len(expected), len(actual))
         for index, (left, right) in enumerate(zip(expected, actual)):
             equal(left, right, f"{path}[{index}]")
-    elif isinstance(expected, (int, float)):
+    elif isinstance(expected, int):
+        assert type(expected) is type(actual) and expected == actual, (path, expected, actual)
+    elif isinstance(expected, float):
         assert struct.pack("!d", expected) == struct.pack("!d", actual), (path, expected, actual)
     else:
         assert expected == actual, (path, expected, actual)
@@ -47,6 +49,13 @@ def write_csv(path, bars):
 
 
 def main():
+    for expected, actual in (((1 << 64) - 1, (1 << 64) - 2), (1, True)):
+        try:
+            equal(expected, actual)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("report equality loses integer precision or type")
     runner, oracle, *libraries = sys.argv[1:]
     strategies = 0
     comparisons = 0
