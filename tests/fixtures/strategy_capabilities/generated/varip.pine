@@ -1,0 +1,8 @@
+//@version=6
+strategy("join")
+varip int count = 0
+count += 1
+if bar_index % 7 == 0
+    strategy.entry("long", strategy.long)
+if bar_index % 7 == 3
+    strategy.entry("short", strategy.short)

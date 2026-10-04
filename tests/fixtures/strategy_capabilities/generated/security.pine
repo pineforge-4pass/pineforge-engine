@@ -1,0 +1,5 @@
+//@version=6
+strategy("join")
+value = request.security(syminfo.tickerid, "5", close)
+if value > open
+    strategy.entry("entry", strategy.long)

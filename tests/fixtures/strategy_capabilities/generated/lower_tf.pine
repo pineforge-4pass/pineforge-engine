@@ -1,0 +1,5 @@
+//@version=6
+strategy("join")
+values = request.security_lower_tf("NASDAQ:MSFT", "1", close)
+if array.get(values, 0) > close
+    strategy.entry("entry", strategy.long)

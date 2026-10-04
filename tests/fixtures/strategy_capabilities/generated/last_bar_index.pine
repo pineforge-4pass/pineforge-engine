@@ -1,0 +1,4 @@
+//@version=6
+strategy("join")
+if bar_index == last_bar_index
+    strategy.entry("entry", strategy.long)

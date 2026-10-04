@@ -2232,6 +2232,11 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     target_link_libraries(test_checked_settings PRIVATE pineforge)
     target_compile_options(test_checked_settings PRIVATE -UNDEBUG -ffp-contract=off)
     add_test(NAME test_checked_settings COMMAND test_checked_settings)
+    add_executable(test_strategy_capabilities test_strategy_capabilities.cpp
+        fixtures/strategy_capabilities.cpp $<TARGET_OBJECTS:checked_settings_fixture>)
+    target_link_libraries(test_strategy_capabilities PRIVATE pineforge)
+    target_compile_options(test_strategy_capabilities PRIVATE -UNDEBUG -ffp-contract=off)
+    add_test(NAME test_strategy_capabilities COMMAND test_strategy_capabilities)
 endif()
 
 # TradingView's callback and lifecycle synthetic tapes

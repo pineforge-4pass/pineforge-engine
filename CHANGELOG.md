@@ -5,6 +5,35 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
+## Unreleased
+
+### Compiled execution capabilities and close-only admission
+
+- Add the optional, versioned generated-strategy C ABI extension
+  `PF_CAPABILITIES_API_VERSION`, `strategy_capabilities_api_version()` and
+  `strategy_capabilities_receipt()`. The immutable canonical JSON receipt records
+  compiled execution declarations and analyzed request/feed requirements, using
+  the checked-settings caller-buffer protocol. It proves declarations, not
+  general batch-versus-stream equivalence; the base C ABI version is unchanged.
+- Before binding its ledger, `pineforge-live` refuses receipt-carrying libraries
+  whose requirements its close-only stream cannot honor: intrabar calculation
+  (`calc_on_every_tick`, `calc_on_order_fills`, `calc_on_every_history_tick`),
+  `process_orders_on_close`, bar magnification, standard-OHLC fills, nonzero
+  limit-fill verification, declaration-owned timeframes, FX conversion,
+  auxiliary/native/recorded request feeds, historical probe overrides, `varip`,
+  and unresolved declarations. Every `request.*` site is refused whatever its
+  timeframe; admitting tested request or POOC shapes is a separate follow-up.
+  End-of-history/realtime builtins (`barstate.islast`,
+  `barstate.islastconfirmedhistory`, `last_bar_index`, `last_bar_time`,
+  `barstate.isrealtime`, `timenow`) are also refused, including display-only use,
+  because their endpoint or live-phase semantics are not certified batch-equivalent.
+- Refusals name the requirement instead of silently running a different strategy.
+  Accepted receipt bytes are bound into deployment identity and recovery. Legacy
+  libraries without the extension warn that eligibility cannot be proved and
+  continue, including their requests; the warning is not an eligibility proof.
+  Regenerate and relink with the paired next-release engine/codegen to obtain the
+  receipt. Default batch computation, matching and margin are unchanged.
+
 ## 1.1.0 — 2026-10-04
 
 A minor release: it adds to the C ABI. `<pineforge/pineforge.h>` declares six

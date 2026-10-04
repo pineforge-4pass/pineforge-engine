@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "json.hpp"
+#include "capabilities.hpp"
+#include "deployment_identity.hpp"
 #include "native_startup.hpp"
 #include "store.hpp"
 #include "transport.hpp"
@@ -265,6 +267,7 @@ class Strategy {
     decltype(&strategy_set_input_checked) set_input_checked_ = nullptr;
     decltype(&strategy_set_override_checked) set_override_checked_ = nullptr;
     decltype(&strategy_get_effective_settings) settings_receipt_ = nullptr;
+    decltype(&strategy_capabilities_receipt) capabilities_receipt_ = nullptr;
     template <class T> T symbol(const char *name) {
         auto p = dlsym(library_, name);
         if (!p)
@@ -329,6 +332,17 @@ class Strategy {
             clear = symbol<decltype(clear)>("strategy_stream_order_actions_clear");
             hash = symbol<decltype(hash)>("strategy_stream_state_hash");
             begin_ = symbol<decltype(&strategy_stream_begin)>("strategy_stream_begin");
+            auto capabilities_version = optional_symbol<decltype(&strategy_capabilities_api_version)>(
+                "strategy_capabilities_api_version");
+            if (capabilities_version) {
+                if (capabilities_version() != PF_CAPABILITIES_API_VERSION)
+                    throw std::runtime_error("capabilities extension version mismatch");
+                capabilities_receipt_ = symbol<decltype(capabilities_receipt_)>(
+                    "strategy_capabilities_receipt");
+            } else {
+                std::cerr << "pineforge-live: warning: compiled strategy lacks execution capabilities; "
+                             "close-only eligibility cannot be proved (legacy behavior retained)\n";
+            }
             auto settings_version = optional_symbol<decltype(&strategy_settings_api_version)>(
                 "strategy_settings_api_version");
             if (settings_version) {
@@ -379,6 +393,22 @@ class Strategy {
         std::string document(receipt.data());
         parse_json(document);
         return document;
+    }
+    std::string capabilities() const {
+        if (!capabilities_receipt_)
+            return {};
+        char message[512]{};
+        std::size_t required = 0;
+        if (capabilities_receipt_(state, nullptr, 0, &required, message, sizeof(message)) !=
+                PF_SETTINGS_BUFFER_TOO_SMALL || required == 0 || required > MAX_FRAME)
+            throw std::runtime_error(std::string("capabilities receipt refused: ") + message);
+        std::vector<char> receipt(required);
+        const auto capacity = receipt.size();
+        if (capabilities_receipt_(state, receipt.data(), capacity, &required, message,
+                                  sizeof(message)) != PF_SETTINGS_OK || required != capacity ||
+                receipt.back() != '\0' || std::strlen(receipt.data()) + 1 != capacity)
+            throw std::runtime_error(std::string("capabilities receipt refused: ") + message);
+        return std::string(receipt.data(), capacity - 1);
     }
     void require_contract(const Config &c) const {
         if (c.native.present) {
@@ -706,15 +736,18 @@ int run(Config c) {
     auto warmup = history(original, c.native.present);
     strategy.configure(c);
     const auto settings_receipt = strategy.effective_settings();
+    const auto capabilities_receipt = strategy.capabilities();
+    if (!capabilities_receipt.empty()) {
+        require_close_only_capabilities(capabilities_receipt);
+        for (const auto& [name, value] : c.overrides)
+            require_close_only_boolean(name, value == "true" || value == "1");
+    }
     std::string deployment =
         c.native.present
             ? native_identity(c.native, c.mode, c.name, c.webhook, original, library)
             : identity(legacy_fields(c), original, library);
-    if (!settings_receipt.empty())
-        deployment = sha256_hex(deployment + ":settings-v1:" + settings_receipt);
-    if (c.routing.routed)
-        deployment = sha256_hex(Json::object({{"deployment", Json::string(deployment)},
-            {"webhook_routes", Json::string(c.routing.file_identity)}}).dump());
+    deployment = bind_deployment_identity(deployment, settings_receipt, capabilities_receipt,
+                                          c.routing.routed, c.routing.file_identity);
     try {
         // A switched PineStrategyHost is native-bound but owns its run spec
         // through prepare_native_begin.  Let that provider admit the stream
@@ -901,6 +934,7 @@ int run(Config c) {
     std::cout << Json::object(
                      {{"deployment", Json::string(deployment)},
                       {"effective_settings", settings_receipt.empty() ? Json{} : parse_json(settings_receipt)},
+                      {"execution_capabilities", capabilities_receipt.empty() ? Json{} : parse_json(capabilities_receipt)},
                       {"inputs_committed", num(ledger.input_count())},
                       {"inputs_processed", num(processed)},
                       {"prefix_skipped", num(replayed_prefix)},

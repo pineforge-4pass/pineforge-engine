@@ -1,0 +1,4 @@
+//@version=6
+strategy("join")
+if barstate.islastconfirmedhistory
+    strategy.entry("entry", strategy.long)

@@ -1,0 +1,143 @@
+# Compiled strategy execution capabilities
+
+Availability: **since the next release**. This applies to both the capability
+extension and the runner's receipt-based admission policy.
+
+An additive generated-strategy C ABI extension proves compiled declarations
+only, not general batch-versus-stream equivalence. A consumer applies its
+execution-mode admission policy to those declarations. It changes neither
+`PF_ABI_VERSION` nor any kernel, default batch dispatch or computation. Regenerate
+and relink with the paired engine/codegen. Discover these per-strategy symbols
+with `dlsym`; they are not exports implemented in `src/c_abi.cpp`:
+
+```c
+#define PF_CAPABILITIES_API_VERSION 1u
+uint32_t strategy_capabilities_api_version(void);
+int strategy_capabilities_receipt(pf_strategy_t s, char* json, size_t capacity,
+                                  size_t* required, char* error, size_t error_capacity);
+```
+
+The version symbol returns 1. The receipt uses `pf_settings_status_t` and the
+[checked-settings buffer protocol](checked-settings.md): `s` and `required` are
+required, the size includes the NUL, NULL/0 queries and short buffers return
+`PF_SETTINGS_BUFFER_TOO_SMALL`, and short nonempty buffers contain an empty
+string, never partial JSON. Success clears the optional error buffer; failures
+return a NUL-terminated, possibly truncated message. C++ exceptions are contained.
+No execution state is retained. Bytes are immutable across fresh/reused handles,
+settings changes, batch runs and stream runs, including failed settings handles.
+
+## Version 1 schema
+
+Canonical JSON uses sorted object keys, compact separators and deterministic
+analysis order for request arrays. The defaults for a close-only script are:
+
+```json
+{
+  "version": 1,
+  "declarations": {
+    "calc_on_every_tick": false,
+    "calc_on_order_fills": false,
+    "process_orders_on_close": false,
+    "use_bar_magnifier": false,
+    "fill_orders_on_standard_ohlc": false,
+    "backtest_fill_limits_assumption": 0,
+    "currency": "currency.NONE",
+    "timeframe": "",
+    "timeframe_gaps": true,
+    "dynamic_requests": true,
+    "calc_on_every_history_tick": false
+  },
+  "requests": [],
+  "requirements": {
+    "auxiliary_security_feeds": false,
+    "native_security_feeds": false,
+    "fx_curve": false,
+    "recorded_series": false,
+    "historical_probe_overrides": false,
+    "intrabar_persistence": false
+  },
+  "unresolved": []
+}
+```
+
+Values come from `strategy()` and script analysis, never observations of a
+running strategy. Positional arguments are mapped in Pine signature order for
+the receipt only; named arguments use their declared parameter names. Every
+argument that cannot be resolved to a literal or enumeration is named in
+`unresolved`, including arguments outside the execution-declaration fields.
+A request entry has `function`, `symbol`, `timeframe`,
+`lookahead`, `gaps`, `heikinashi` and `feed` fields. Same-chart symbols are spelled
+`syminfo.tickerid`, `syminfo.ticker` or the empty chart-symbol spelling. Feed
+sources distinguish chart-derived, auxiliary-symbol, recorded and unpinned data. Function
+names distinguish `request.security`, `request.security_lower_tf` and recorded
+requests. Nonliteral declaration values are retained and named in `unresolved`;
+dynamic request clocks are likewise explicit, not guessed from input defaults.
+Runtime-lowered unpinned sites remain in both `requests` (`feed: "unpinned"`)
+and `unresolved`, including block-local or reassigned symbols, `str.format`,
+nested foreign requests and `request.footprint`. Unresolved expression fields
+may be null; they are never guessed to be chart data.
+`currency` conversion conservatively requires an FX curve; `varip` marks
+intrabar persistence. Native feeds and historical probe/tail data are not
+installed by generated scripts: those requirements default false, while
+separately staged runtime data is still validated at stream begin.
+
+## Close-only runner policy
+
+The runner reads and validates version 1 before execution begins or the ledger
+exists, independently of the settings receipt. It refuses true every-tick,
+order-fill, historical-tick, process-orders-on-close, magnifier and standard-OHLC-fill declarations; nonzero limit
+verification; non-default currency or declaration-owned timeframe; any true
+data/persistence requirement; and any unresolved execution declaration.
+It refuses every nonempty `requests` array, including same-chart security,
+lower-timeframe arrays, auxiliary symbols, recorded and unpinned requests.
+The error names the specific request kind and states: "the native stream does
+not yet reproduce the batch for requested series". This remains a conservative
+runner admission policy even after the confirmed-bar stream fixes: same-chart
+`request.security` at `timeframe.period` with `close[1]`, higher-timeframe
+close/SMA/EMA (including `gaps_on`), and higher-timeframe Heikin-Ashi chart-symbol
+requests now match batch in the generated stream equivalence tests. This does
+not prove arbitrary requests, foreign/auxiliary feeds, lower-timeframe arrays or
+historical look-ahead projections. Every request from a receipt-carrying library
+and `process_orders_on_close=true` remain refused; relaxing admission is a
+separate follow-up, not an automatic consequence of those runtime fixes.
+Use of `barstate.isrealtime` and `timenow` is conservatively refused by name:
+codegen currently emits historical-only `false` and the current bar timestamp,
+respectively, in both warmup and realtime, not Pine's live phase/wall clock.
+`barstate.islast`, `barstate.islastconfirmedhistory`, `last_bar_index` and
+`last_bar_time` are refused by name because a stream's delivered endpoint and
+last-bar flags differ from the completed batch's final bar.
+All six builtin uses are refused **including display-only use (plots, labels,
+tables)**: the receipt conservatively records their use and does not certify
+that display-only code cannot influence strategy execution.
+The error names the declaration; CLI overrides cannot hide it or enable a
+refused boolean setting on an otherwise eligible version-1 library.
+
+Close-only scripts without those requirements remain eligible. The generated
+plain market-order class, with no POOC or requests, has batch-versus-stream
+equivalence CTests at three warmup boundaries, including both values of the
+declaration-only clock/dynamic-request flags. No request shape or POOC order
+shape is admitted until a separate equivalence test proves it. Unknown receipt versions, missing
+fields, invalid types or unknown schema fields refuse instead of falling back.
+Only absence of the extension uses legacy behavior: the runner prints a warning
+that close-only eligibility cannot be proved and continues, like settings v1.
+That includes requests in legacy libraries. The larger-script-timeframe
+workaround in the [streaming known issue](pages/streaming.md#streaming_known_issues)
+therefore concerns direct stream-API hosts and legacy libraries without a receipt
+using the affected v1.0.0/v1.0.1 runtime, not receipt-carrying runner libraries.
+The issue is fixed on main for the tested request shapes described above.
+Do not mistake that compatibility warning for proof of safe eligibility.
+
+Accepted bytes are hashed as `SHA256(previous_identity + ":capabilities-v1:" +
+receipt)` after the settings receipt and before webhook-routing wrapping. The final runner summary records parsed
+JSON as `execution_capabilities`, or null for a legacy library. Thus recovery
+binds the exact compiled capability document as well as the library/settings.
+
+The confirmed-bar stream fixes close the earlier POOC priced-entry and
+default-sized both-sided-stop discrepancies (the historical audit measured
+batch 276 versus stream 277 trades), while the request tests establish the
+bounded shapes described above. This receipt still proves declarations only,
+not arbitrary order-shape equivalence, and keeps its conservative POOC/request
+refusals. See [Backtest vs live](pages/streaming.md#backtest_vs_live) for deliberate
+historical look-ahead differences and the remaining deferred calendar-boundary
+limitation. Capability checks do not change default batch computation, matching
+or margin.

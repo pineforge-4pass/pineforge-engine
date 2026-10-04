@@ -1,0 +1,6 @@
+//@version=6
+strategy("join", calc_on_every_tick=input.bool(false))
+if bar_index % 7 == 0
+    strategy.entry("long", strategy.long)
+if bar_index % 7 == 3
+    strategy.entry("short", strategy.short)

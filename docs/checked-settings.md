@@ -1,7 +1,8 @@
 # Checked generated-strategy settings
 
 This is an additive, opt-in extension to the generated strategy C ABI, not a
-kernel execution change or a native capability receipt. Regenerate and relink
+kernel execution change or a compiled capability receipt; the separate
+[execution-capabilities extension](strategy-capabilities.md) supplies that proof. Regenerate and relink
 the strategy with the paired codegen and engine to obtain it. The legacy
 factory, setters and batch calls keep their successful-call behavior and
 default computations; all generated C boundaries now contain C++ exceptions.
