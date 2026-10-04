@@ -564,6 +564,29 @@ std::optional<double> decimal_floor_lot(double units, double grid) noexcept {
     return std::strtod(text, nullptr);
 }
 
+// An explicit strategy.entry quantity on the lot grid. floor_quantity_grid's
+// 1e-6 tolerance lifts a quotient just under a grid point to that point, finds
+// it above the request and hands the raw, off-grid request back, which then
+// never fills. TradingView floors the shortest decimal instead and never
+// rounds up (a risk-sized (E/100)/0.3200000000000003 = 3124.9999999999973
+// trades 3124, 1562 + 1562 after a 50% leg; literal 3124.9999995 trades 3124,
+// 3125.0000000000005 trades 3125; tests/fixtures/explicit_qty_floor). Only that
+// snap changes: an on-grid request, a floor below the request and a non-decimal
+// grid keep the grid floor's result. No tape covers strategy.order's explicit
+// quantity (order()) or a lot that is not a power of ten (0.5, 0.25): both keep
+// the grid floor, snapped request included, as before.
+double explicit_entry_quantity_floor(double units, const std::optional<double>& grid) noexcept {
+    const double floored = floor_quantity_grid(units, grid);
+    if (!detail::script_rule_switches().explicit_qty_decimal_floor || floored != units
+        || !grid || !std::isfinite(*grid) || *grid <= 0.0 || !std::isfinite(units)
+        || units <= 0.0) {
+        return floored;
+    }
+    if (!(std::floor(units / *grid + 1e-6) > std::floor(units / *grid))) return floored;
+    const auto decimal = decimal_floor_lot(units, *grid);
+    return decimal && *decimal < units ? *decimal : floored;
+}
+
 double source_money_floor_lot(double units, const std::optional<double>& grid) noexcept {
     if (!grid || !std::isfinite(*grid) || *grid <= 0.0) return units;
     if (!std::isfinite(units) || units <= 0.0) return units;
@@ -685,6 +708,13 @@ QuietBarCounts& quiet_bar_counts() noexcept {
 }
 }  // namespace detail
 #endif
+
+namespace detail {
+ScriptRuleSwitches& script_rule_switches() noexcept {
+    static ScriptRuleSwitches switches;
+    return switches;
+}
+}  // namespace detail
 
 // R5 lane V19-E: the placement table's storage.
 void PlacementTable::place(std::uint64_t incarnation, std::unique_ptr<PlacementSnapshot> node) {
@@ -4670,7 +4700,8 @@ double PineExecutionAdapter::percent_commission_live_equity(
                 if (!std::isfinite(fee)) return std::numeric_limits<double>::quiet_NaN();
                 paid_open_commission += fee;
             }
-            const double open = fx ? pine->open_profit_at(mark, *fx) : pine->open_profit(mark);
+            const double open = fx ? pine->open_profit_at(mark, *fx)
+                                  : pine->BacktestEngine::open_profit(mark);
             return (pine->closed_trade_equity() + open) - paid_open_commission;
         }
     }
@@ -6680,7 +6711,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     const bool explicit_fixed = !default_sized
         && (qty_type < 0 || qty_type == static_cast<int>(QtyType::FIXED));
     const double normalized_qty = explicit_fixed
-        ? floor_quantity_grid(std::abs(qty), staged_.quantity_grid) : qty;
+        ? explicit_entry_quantity_floor(std::abs(qty), staged_.quantity_grid) : qty;
     const double signed_target = is_long ? normalized_qty : -normalized_qty;
     const double current = detail::run_position(require_host()).signed_units;
     const auto source_point = detail::callback_point(require_host());
@@ -8159,8 +8190,9 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         && !close_all_precedes) {
         auto unbatched_request = request;
         auto unbatched_snapshot = snapshot;
-        const double own_units = floor_quantity_grid(default_sized
-                ? config_.default_qty_value : std::abs(qty), staged_.quantity_grid);
+        const double own_units = default_sized
+            ? floor_quantity_grid(config_.default_qty_value, staged_.quantity_grid)
+            : explicit_entry_quantity_floor(std::abs(qty), staged_.quantity_grid);
         if (!finite_positive(own_units)) return;
         double projected_units = current;
         std::size_t projected_entries = current == 0.0 ? 0U
@@ -8216,8 +8248,9 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         // branch uses its explicit unit value.
         const double default_own = finite_positive(snapshot.sizing.frozen_units)
             ? snapshot.sizing.frozen_units : config_.default_qty_value;
-        const double own_units = floor_quantity_grid(default_sized
-                ? default_own : std::abs(qty), staged_.quantity_grid);
+        const double own_units = default_sized
+            ? floor_quantity_grid(default_own, staged_.quantity_grid)
+            : explicit_entry_quantity_floor(std::abs(qty), staged_.quantity_grid);
         bool opposite_market_pending = false;
         bool opposite_entry_pending = false;
         double opposite_pending_own = 0.0;
@@ -11801,7 +11834,44 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
         && config_.process_orders_on_close && !config_.calc_on_order_fills
         && !coof_recalc_active_ && point->decision.sub_count <= 1) {
         std::vector<std::pair<std::string, std::string>> book_keys;
+        // TradingView's close-time script sees the stop entry AND its bracket
+        // exit filled inside the bar whatever exit the book still holds for an
+        // entry that is neither open nor working -- a strategy.exit re-issued
+        // after its entry closed, or kept after the entry was cancelled
+        // ("Sell Exit" of a cancelled "Sell" re-arm on 2025-08-02;
+        // tests/fixtures/pooc_close_bar_fills, the two dormant-exit-history
+        // tapes on BINANCE:BTCUSDT 15m). Such an exit cannot fill before its
+        // entry does, so it is not part of the book this pair is ranked
+        // against (ScriptRuleSwitches).
+        const auto inert_exit = [&](const PlacementSnapshot& row) {
+            if (!detail::script_rule_switches().pooc_bracket_skips_inert_exits)
+                return false;
+            if ((row.family != PineOrderFamily::ExitLimit
+                    && row.family != PineOrderFamily::ExitStop
+                    && row.family != PineOrderFamily::ExitTrail)
+                || row.from_entry.empty() || cohort_exposure_for(row.from_entry) > 0.0)
+                return false;
+            const auto names_entry = [&](const PlacementSnapshot& other) {
+                return other.source_id == row.from_entry;
+            };
+            for (const auto& live : live_handles_) {
+                const auto other = placement_.find(live.incarnation);
+                if (other != placement_.end() && names_entry(other->second)) return false;
+            }
+            for (const auto& staged : queued)
+                if (names_entry(staged.snapshot)) return false;
+            for (const auto& entry : pending_entries_)
+                if (names_entry(entry.snapshot)) return false;
+            for (const auto& command : pending_same_bar_commands_)
+                if (names_entry(command.snapshot)) return false;
+            for (const auto& pending : pending_coof_requests_)
+                if (names_entry(pending.snapshot)) return false;
+            for (const auto& delayed : delayed_market_orders_)
+                if (names_entry(delayed.snapshot)) return false;
+            return true;
+        };
         const auto carry_key = [&](const PlacementSnapshot& row) {
+            if (inert_exit(row)) return;
             const auto key = std::make_pair(row.source_id, row.from_entry);
             if (std::find(book_keys.begin(), book_keys.end(), key)
                 == book_keys.end())
@@ -17121,7 +17191,8 @@ bool PineExecutionAdapter::submit_tv_money_long_margin_call(
         if (supported_guard_scope) {
             const double entry_value = quantity * pine->position_entry_price_ * point_value;
             const double money_scale = std::max({
-                std::abs(pine->closed_trade_equity()), std::abs(pine->open_profit(price)),
+                std::abs(pine->closed_trade_equity()),
+                std::abs(pine->BacktestEngine::open_profit(price)),
                 std::abs(entry_value), std::abs(exact_value), std::abs(equity),
                 std::abs(rounded_value)});
             const double evaluation_guard = 8.0

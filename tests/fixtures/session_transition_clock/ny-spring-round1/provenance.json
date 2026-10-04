@@ -1,0 +1,18 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "interval": "15",
+  "from": "2025-04-01",
+  "to": "2026-05-01",
+  "syminfoTimezone": "Etc/UTC",
+  "sourceSha256": "72df621121c857244fcd27cbccc658d5ca2ca46ddf8a7d4ee0d22f141b02e889",
+  "exportTapeSha256": "a7250e9b897e4c79de35351a370ed583f11041533300ecbda1cc1b350bab7b9d",
+  "entryRows": 384,
+  "repeats": 2,
+  "repeatsByteIdentical": true,
+  "exportedAt": ["2026-10-04T01:15:43.265Z", "2026-10-04T01:15:44.574Z"],
+  "channel": "ws-report-v1",
+  "exportCommand": "lab tv --no-note",
+  "originalControl": "n9-s2-springforward",
+  "exportPath": "exports/n9-s2-springforward/rep-{1,2}",
+  "predictorSha256": "a34016eb625c17ab6e4a8c61aed37882d1e2ff16c2cd2d2a7b723b76a8bcc527"
+}

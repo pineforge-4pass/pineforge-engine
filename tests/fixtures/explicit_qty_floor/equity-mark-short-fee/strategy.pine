@@ -1,0 +1,10 @@
+//@version=6
+strategy("px-n789 n7 n7-b3-short-fee", overlay = true, initial_capital = 100000, default_qty_type = strategy.fixed, default_qty_value = 1, commission_type = strategy.commission.percent, commission_value = 0.05, slippage = 1, calc_on_every_tick = false, margin_long = 100, margin_short = 100)
+fmt(x) => str.tostring(x, "#.##########")
+if time == timestamp("UTC", 2025, 4, 2, 17, 30)
+    strategy.entry("S", strategy.short, qty = 9110)
+if time == timestamp("UTC", 2025, 4, 4, 15, 0)
+    float e = strategy.equity
+    strategy.entry("L", strategy.long, qty = e * 0.01 / 0.29858127052438, comment = "E=" + fmt(e) + "|O=" + fmt(strategy.openprofit) + "|N=" + fmt(strategy.netprofit) + "|P=" + fmt(strategy.position_size))
+if time == timestamp("UTC", 2025, 4, 7, 13, 30)
+    strategy.close_all(comment = "X")

@@ -1,0 +1,26 @@
+{
+  "control": "n8-v11q-marginprior-guard",
+  "symbol": "BINANCE:BTCUSDT",
+  "interval": "15",
+  "chartRange": {
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "barsWindowUtc": {
+    "from": "2025-08-02 00:00",
+    "toExclusive": "2025-08-03 13:15",
+    "rows": 149
+  },
+  "sourceSha256": "4ad486379c9a3c5d64aaae67af06fc6fd08cd6d0c2cfdd33952c4f62824798df",
+  "exportTapeSha256": "e08402ced6eb0c14e8bc0892bb7297de992fd6dfa386b18add3e851dc5d35d11",
+  "barsSha256": "9c6a97147ff9848532419d2866c3832b354694bd0cf65913615f1a40db85ab2d",
+  "chartFeed": "btc-15-chart.csv",
+  "chartFeedSha256": "6b54c44ac6de8b7b588b3fcc6ddc29b09e5fe12ce9559d811dca7859217e6270",
+  "exportedAt": "2026-10-04T01:15:27.034Z",
+  "channel": "ws-report-v1",
+  "repeats": 2,
+  "repeatsByteIdentical": true,
+  "exportPath": "exports/n8-v11q-marginprior-guard/rep-{1,2}",
+  "exportCommand": "lab tv --pine <control>/strategy.pine --symbol BINANCE:BTCUSDT --interval 15 --from 2025-04-01 --to 2026-05-01 --no-note",
+  "predictorSha256": "a34016eb625c17ab6e4a8c61aed37882d1e2ff16c2cd2d2a7b723b76a8bcc527"
+}

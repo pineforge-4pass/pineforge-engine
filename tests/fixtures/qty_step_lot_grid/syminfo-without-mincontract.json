@@ -1,0 +1,22 @@
+{
+  "ticker": "BTCUSDT",
+  "tickerid": "BINANCE:BTCUSDT",
+  "prefix": "BINANCE",
+  "description": "BTC / USDT",
+  "type": "crypto",
+  "main_tickerid": "BINANCE:BTCUSDT",
+  "currency": "USDT",
+  "basecurrency": "BTC",
+  "country": null,
+  "mintick": 0.01,
+  "minmove": 1,
+  "pricescale": 100,
+  "pointvalue": 1.0,
+  "mincontract": null,
+  "volumetype": "base",
+  "session": "24x7",
+  "session_regular": "24x7",
+  "root": null,
+  "expiration_date": null,
+  "timezone": "UTC"
+}

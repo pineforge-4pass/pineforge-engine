@@ -1,0 +1,13 @@
+//@version=6
+strategy("px-n789 n8 v10q", overlay = true, process_orders_on_close = true, initial_capital = 92861.56, default_qty_type = strategy.percent_of_equity, default_qty_value = 100, pyramiding = 0, margin_long = 100, margin_short = 100)
+if time == timestamp("UTC", 2025, 8, 3, 10, 0)
+    if strategy.position_size == 0
+        strategy.cancel("Buy")
+        strategy.cancel("Sell")
+        strategy.entry("Buy", strategy.long, stop = 113771.47, comment = "flatAtClose" + "|pos=" + str.tostring(strategy.position_size) + "|ct=" + str.tostring(strategy.closedtrades) + "|ot=" + str.tostring(strategy.opentrades))
+        strategy.exit("Buy Exit", "Buy", stop = 113400.0, limit = 114004.53)
+    else
+        strategy.entry("Alt", strategy.long, stop = 113780.0, comment = "openAtClose" + "|pos=" + str.tostring(strategy.position_size) + "|ct=" + str.tostring(strategy.closedtrades) + "|ot=" + str.tostring(strategy.opentrades))
+        strategy.exit("Alt Exit", "Alt", stop = 113400.0, limit = 114004.53)
+if time == timestamp("UTC", 2025, 8, 3, 12, 0)
+    strategy.close_all(comment = "flat")

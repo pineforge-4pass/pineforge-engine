@@ -1,0 +1,10 @@
+//@version=6
+strategy("px-n789 n9 n9-s7-ny-round3", overlay = true, initial_capital = 10000000, margin_long = 0, margin_short = 0, process_orders_on_close = true, default_qty_type = strategy.fixed, default_qty_value = 1)
+k0 = time(timeframe.period, "2100-0200", "America/New_York")
+k1 = time(timeframe.period, "1800-0159", "America/New_York")
+k2 = time(timeframe.period, "0200-0300", "America/New_York")
+k3 = time(timeframe.period, "1730-0200", "America/New_York")
+if (time >= timestamp("UTC", 2025, 10, 31, 12, 0) and time < timestamp("UTC", 2025, 11, 3, 12, 0)) or (time >= timestamp("UTC", 2026, 3, 6, 12, 0) and time < timestamp("UTC", 2026, 3, 9, 12, 0))
+    string s = "K0=" + (na(k0) ? "0" : "1") + "|" + "K1=" + (na(k1) ? "0" : "1") + "|" + "K2=" + (na(k2) ? "0" : "1") + "|" + "K3=" + (na(k3) ? "0" : "1")
+    strategy.order("in", strategy.long, qty = 1, comment = s)
+    strategy.order("out", strategy.short, qty = 1, comment = s)

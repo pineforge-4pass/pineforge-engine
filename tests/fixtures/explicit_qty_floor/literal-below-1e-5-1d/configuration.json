@@ -1,0 +1,14 @@
+{
+  "input_tf": "1D",
+  "script_tf": "1D",
+  "runtime_overrides": {
+    "timezone": "America/New_York",
+    "tickerid": "NYSE:F",
+    "ticker": "F",
+    "session": "0930-1600",
+    "type": "stock",
+    "mintick": 0.01,
+    "pointvalue": 1.0,
+    "qty_step": 1.0
+  }
+}

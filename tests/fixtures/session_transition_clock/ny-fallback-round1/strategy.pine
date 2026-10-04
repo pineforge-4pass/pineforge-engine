@@ -1,0 +1,10 @@
+//@version=6
+strategy("px-n789 n9 n9-s1-fallback", overlay = true, initial_capital = 10000000, margin_long = 0, margin_short = 0, process_orders_on_close = true, default_qty_type = strategy.fixed, default_qty_value = 1)
+a = time(timeframe.period, "1800-0200", "America/New_York")
+l = time(timeframe.period, "0300-1200", "America/New_York")
+n = time(timeframe.period, "0800-1700", "America/New_York")
+x = time(timeframe.period, "0100-0400", "America/New_York")
+if time >= timestamp("UTC", 2025, 10, 31, 12, 0) and time < timestamp("UTC", 2025, 11, 4, 12, 0)
+    string s = "A=" + (na(a) ? "0" : "1") + "|L=" + (na(l) ? "0" : "1") + "|N=" + (na(n) ? "0" : "1") + "|X=" + (na(x) ? "0" : "1")
+    strategy.order("in", strategy.long, qty = 1, comment = s)
+    strategy.order("out", strategy.short, qty = 1, comment = s)

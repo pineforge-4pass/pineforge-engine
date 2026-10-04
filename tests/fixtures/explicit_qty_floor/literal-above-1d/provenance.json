@@ -1,0 +1,26 @@
+{
+  "control": "n7-d4-lit-above",
+  "symbol": "NYSE:F",
+  "interval": "1D",
+  "chartRange": {
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "barsWindowUtc": {
+    "from": "2025-04-01 00:00",
+    "toExclusive": "2025-11-01 00:00",
+    "rows": 149
+  },
+  "sourceSha256": "9dc62aa08299381be2574cf2cbb748091e3c7d69ae326ad750323d3658666416",
+  "exportTapeSha256": "de01998bd506c3c05cb6f8af706db10beba40c33f69212c79eb7e8afd2510d0f",
+  "barsSha256": "58cecc3e1c3497f0dd3f1fea0d2ea09477bf5917b636396ad08a679905efa751",
+  "chartFeed": "f-1d-chart.csv",
+  "chartFeedSha256": "e3dd3a88e85bde802b65c26e1ad35cb17b3dcf66ad56f70e30a2ff711f2297bb",
+  "exportedAt": "2026-10-04T01:14:49.496Z",
+  "channel": "ws-report-v1",
+  "repeats": 2,
+  "repeatsByteIdentical": true,
+  "exportPath": "exports/n7-d4-lit-above/rep-{1,2}",
+  "exportCommand": "lab tv --pine <control>/strategy.pine --symbol NYSE:F --interval 1D --from 2025-04-01 --to 2026-05-01 --no-note",
+  "predictorSha256": "a34016eb625c17ab6e4a8c61aed37882d1e2ff16c2cd2d2a7b723b76a8bcc527"
+}

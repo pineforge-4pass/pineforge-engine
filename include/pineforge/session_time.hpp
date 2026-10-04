@@ -290,4 +290,37 @@ inline bool pine_session_ispostmarket(const std::string& session, const std::str
     return session_in_postmarket(session, tz, bar_ms, chart_tf);
 }
 
+// ---------------------------------------------------------------------------
+// TradingView's session clock across a daylight-saving switch (TradingView
+// tapes of synthetic BINANCE:ETHUSDT.P 15 scripts,
+// tests/fixtures/session_transition_clock). With an intraday `tf`,
+// timeframe_time / timeframe_time_close read a session argument's occurrence
+// that starts or ends at the switch's pre-transition wall time on the
+// switch's date (New York 02:00 both ways, London 02:00 in autumn and 01:00
+// in spring) on the post-transition offset throughout, and every other
+// occurrence's repeated and skipped hour as TradingView does
+// (session_argument_intraday_bar in src/session_time.cpp). The tapes pin a
+// script's own session argument in New York and London; other zones follow
+// the same form untaped.
+// `transition_wall_clock` = false restores the plain wall-clock windows the
+// engine read before. Process-wide and on by default; no script, input or
+// public API reaches it: only tests change it.
+// ---------------------------------------------------------------------------
+namespace detail {
+struct SessionClockSwitches {
+    bool transition_wall_clock = true;
+};
+SessionClockSwitches& session_clock_switches() noexcept;
+
+// The close of the intraday `tf` bar holding `bar_ms` on the SYMBOL's own
+// session `session` in `tz`: the chart's time_close as the Pine host reads it
+// on an intraday chart (timeframe_time_close's six-argument reading, no
+// syminfo zone). It keeps the plain wall-clock windows: the session clock
+// above is pinned on script arguments only, and no tape has a symbol session
+// with an endpoint at its zone's switch hour yet.
+int64_t symbol_session_time_close(int64_t bar_ms, const std::string& tf,
+                                  const std::string& session, const std::string& tz,
+                                  const std::string& chart_tf);
+}  // namespace detail
+
 } // namespace pineforge

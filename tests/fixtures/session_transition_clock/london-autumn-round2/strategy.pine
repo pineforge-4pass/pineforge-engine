@@ -1,0 +1,9 @@
+//@version=6
+strategy("px-n789 n9 n9-s5-london-fallback", overlay = true, initial_capital = 10000000, margin_long = 0, margin_short = 0, process_orders_on_close = true, default_qty_type = strategy.fixed, default_qty_value = 1)
+k0 = time(timeframe.period, "2200-0200", "Europe/London")
+k1 = time(timeframe.period, "1900-0130", "Europe/London")
+k2 = time(timeframe.period, "0030-0300", "Europe/London")
+if time >= timestamp("UTC", 2025, 10, 24, 12, 0) and time < timestamp("UTC", 2025, 10, 27, 12, 0)
+    string s = "K0=" + (na(k0) ? "0" : "1") + "|" + "K1=" + (na(k1) ? "0" : "1") + "|" + "K2=" + (na(k2) ? "0" : "1")
+    strategy.order("in", strategy.long, qty = 1, comment = s)
+    strategy.order("out", strategy.short, qty = 1, comment = s)
