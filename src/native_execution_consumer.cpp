@@ -145,6 +145,10 @@ struct WordSink {
     }
     void b(bool v) noexcept { sink().word(v ? 1U : 0U); }
     void s(const std::string& v) noexcept { u(v.size()); bytes(v.data(), v.size()); }
+    void s(const char* value) noexcept {
+        const std::size_t size = std::strlen(value);
+        u(size); bytes(value, size);
+    }
 
 private:
     Sink& sink() noexcept { return static_cast<Sink&>(*this); }
