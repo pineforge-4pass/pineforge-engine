@@ -46,11 +46,14 @@ public:
     explicit ControlDirectory(std::string path, bool create = true, bool validate = true);
     void submit(const Json& request) const;
     void poll(const std::string& deployment, const std::function<std::uint64_t(const Json&)>& accept) const noexcept;
-    std::uint64_t errors() const { return ignored_.size(); }
+    std::uint64_t errors() const { return errors_; }
 private:
     void ignore(const std::string& identifier, const std::string& reason) const;
+    void directory_error(const std::string& reason) const;
     std::string path_;
     mutable std::set<std::string> ignored_;
+    mutable std::string directory_error_;
+    mutable std::uint64_t errors_ = 0;
 };
 
 }

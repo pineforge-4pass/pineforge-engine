@@ -78,8 +78,23 @@ int main() {
     assert(!called);
     bool missing_refused = false;
     try { ControlDirectory missing((root / "missing").string(), false); }
-    catch (const std::runtime_error&) { missing_refused = true; }
+    catch (const std::runtime_error& error) {
+        missing_refused = std::string(error.what()) == "control directory does not exist";
+    }
     assert(missing_refused && !fs::exists(root / "missing"));
+    const std::string transient(64, '9');
+    controls.submit(request(transient));
+    controls.poll("deployment", [](const Json&) -> std::uint64_t {
+        throw std::runtime_error("temporary storage failure with private details");
+    });
+    {
+        std::ifstream file(root / "control" / (transient + ".ack.json"));
+        const auto acknowledgement = parse_json(std::string(std::istreambuf_iterator<char>(file), {}));
+        assert(acknowledgement.at("accepted").value == "false");
+        assert(acknowledgement.at("reason").text() == "accept_failure");
+        assert(acknowledgement.at("selected").integer<std::uint64_t>() == 0);
+    }
+    assert(!fs::exists(root / "control" / (transient + ".request.json")));
     const auto directory = root / "control";
     fs::create_directory(directory / (std::string(64, '1') + ".request.json"));
     fs::create_symlink(root / "outside", directory / (std::string(64, '2') + ".request.json"));
@@ -111,6 +126,18 @@ int main() {
     fs::remove_all(directory);
     controls.poll("deployment", accept);
     assert(controls.errors() == 7);
+    controls.poll("deployment", accept);
+    assert(controls.errors() == 7);
+    fs::create_directory(directory);
+    chmod(directory.c_str(), 0755);
+    controls.poll("deployment", accept);
+    assert(controls.errors() == 8);
+    chmod(directory.c_str(), 0700);
+    controls.poll("deployment", accept);
+    assert(controls.errors() == 8);
+    fs::remove_all(directory);
+    controls.poll("deployment", accept);
+    assert(controls.errors() == 9);
     {
         Ledger ledger((root / "ledger.sqlite3").string(), "deployment");
         StoredEvent event;

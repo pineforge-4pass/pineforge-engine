@@ -19,6 +19,14 @@ bool request_id_valid(const std::string& identifier) {
         [](char value) { return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f'); });
 }
 
+void log_control_error(const std::string& identifier, const std::string& reason) {
+    const auto message = Json::object({{"event", Json::string("control_request_ignored")},
+        {"request_id", Json::string(request_id_valid(identifier) ? identifier : "")},
+        {"reason", Json::string(reason)}}).dump() + "\n";
+    const auto written = ::write(STDERR_FILENO, message.data(), message.size());
+    (void)written;
+}
+
 Json initial_status() {
     return Json::object({{"schema_version", Json::string("pineforge-live-status/v1")},
         {"state", Json::string("starting")}, {"ready", Json::boolean(false)},
@@ -177,7 +185,11 @@ ControlDirectory::ControlDirectory(std::string path, bool create, bool validate)
     struct stat metadata{};
     if (create && mkdir(path_.c_str(), 0700) != 0 && errno != EEXIST)
         throw std::runtime_error("cannot create control directory");
-    if (lstat(path_.c_str(), &metadata) != 0 || !S_ISDIR(metadata.st_mode) ||
+    if (lstat(path_.c_str(), &metadata) != 0) {
+        if (errno == ENOENT) throw std::runtime_error("control directory does not exist");
+        throw std::runtime_error("cannot inspect control directory");
+    }
+    if (!S_ISDIR(metadata.st_mode) ||
         metadata.st_uid != getuid() || (metadata.st_mode & 0077))
         throw std::runtime_error("control directory must be private and owned by this user");
 }
@@ -190,11 +202,15 @@ void ControlDirectory::submit(const Json& request) const {
 
 void ControlDirectory::ignore(const std::string& identifier, const std::string& reason) const {
     if (!ignored_.insert(identifier).second) return;
-    const auto message = Json::object({{"event", Json::string("control_request_ignored")},
-        {"request_id", Json::string(request_id_valid(identifier) ? identifier : "")},
-        {"reason", Json::string(reason)}}).dump() + "\n";
-    const auto written = ::write(STDERR_FILENO, message.data(), message.size());
-    (void)written;
+    ++errors_;
+    log_control_error(identifier, reason);
+}
+
+void ControlDirectory::directory_error(const std::string& reason) const {
+    if (directory_error_ == reason) return;
+    directory_error_ = reason;
+    ++errors_;
+    log_control_error("", reason);
 }
 
 void ControlDirectory::poll(const std::string& deployment,
@@ -202,13 +218,17 @@ void ControlDirectory::poll(const std::string& deployment,
     if (path_.empty()) return;
     try {
         struct stat directory_metadata{};
-        if (lstat(path_.c_str(), &directory_metadata) != 0 || !S_ISDIR(directory_metadata.st_mode) ||
-            directory_metadata.st_uid != getuid() || (directory_metadata.st_mode & 0077)) {
-            ignore("directory", "directory_failure");
+        if (lstat(path_.c_str(), &directory_metadata) != 0) {
+            directory_error(errno == ENOENT ? "directory_missing" : "directory_unreadable");
             return;
         }
-        if (!(directory_metadata.st_mode & S_IWUSR)) {
-            ignore("directory_permissions", "directory_permissions");
+        if (!S_ISDIR(directory_metadata.st_mode)) {
+            directory_error("directory_not_directory");
+            return;
+        }
+        if (directory_metadata.st_uid != getuid() || (directory_metadata.st_mode & 0077) ||
+            !(directory_metadata.st_mode & S_IWUSR)) {
+            directory_error("directory_permissions");
             return;
         }
         std::vector<fs::path> acknowledgements, requests;
@@ -225,11 +245,12 @@ void ControlDirectory::poll(const std::string& deployment,
         });
         while (acknowledgements.size() >= 256) {
             if (unlink(acknowledgements.front().c_str()) != 0) {
-                ignore("ack_retention", "ack_retention_failure");
+                directory_error("ack_retention_failure");
                 return;
             }
             acknowledgements.erase(acknowledgements.begin());
         }
+        directory_error_.clear();
         for (const auto& entry : requests) {
             const auto filename = entry.filename().string();
             if (filename.size() != 77 || filename.substr(64) != ".request.json" ||
@@ -269,7 +290,7 @@ void ControlDirectory::poll(const std::string& deployment,
             if (accepted) {
                 try { selected = accept(request); }
                 catch (const std::invalid_argument&) { accepted = false; }
-                catch (const std::exception&) { ignore(identifier, "accept_failure"); continue; }
+                catch (const std::exception&) { accepted = false; reason = "accept_failure"; }
             }
             const auto receipt = Json::object({{"schema_version", Json::string("pineforge-redelivery-ack/v1")},
                 {"deployment", Json::string(deployment)}, {"request_id", Json::string(identifier)},
@@ -282,7 +303,7 @@ void ControlDirectory::poll(const std::string& deployment,
             return;
         }
     } catch (...) {
-        try { ignore("directory", "directory_failure"); } catch (...) {}
+        try { directory_error("directory_io_failure"); } catch (...) {}
     }
 }
 
