@@ -21,15 +21,16 @@ layout moves; the frozen historical headers and archives are untouched. The
 script ABI epoch stays `engine_script_run_v19`, and the state hashes keep their
 domain tags, `pineforge-broker-state/v19` and `pineforge-source-adapter/v4`.
 Their values change in two ways. A run whose fills a Pine adapter change below
-alters hashes to new values. Three changes also fold more state, so a run can
-hash differently from 1.0.1 with byte-identical trades: [#315] folds a pending
-same-bar entry's original (unbatched) request and placement and no longer folds
-a stream report's terminal re-mark into the hashed extremes, re-pinning one
-witness row (`Stream/0/1`, whose recorded-row digest alone moves); [#316] folds
-an opening stop's next waypoint, re-pinning `Random44/0/0` and `Random44/0/1`;
-and [#319] folds tick-volume accumulator state only where it adds information,
-so every existing pin holds. The installed header `pineforge/live_parser.h` is
-removed with the runner's parser plugins ([#320]); no surface of the [public
+alters hashes to new values. Three changes also change what the hashes fold, so
+a run can hash differently from 1.0.1 with byte-identical trades: [#315] folds
+a pending same-bar entry's original (unbatched) request and placement and no
+longer folds a stream report's terminal re-mark into the hashed extremes (the
+witness row `Stream/0/1` is re-pinned with only its recorded-row digest
+moving); [#316] folds an opening stop's next waypoint, re-pinning
+`Random44/0/0` and `Random44/0/1`; and [#319] folds tick-volume accumulator
+state only where it adds information, so every existing pin holds. The
+installed header `pineforge/live_parser.h` is removed with the runner's parser
+plugins ([#320]); no surface of the [public
 contract](docs/pages/public-contract.md) covers it. The four rows of the 1.0 C
 boundary that were scheduled for 1.1.0 (C-SURFACE-2: a non-mutating execution
 preview, the origin and label of an applied event, a closed-trade entry-comment
