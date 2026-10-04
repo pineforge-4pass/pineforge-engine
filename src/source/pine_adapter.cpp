@@ -2453,8 +2453,49 @@ void PineExecutionAdapter::reset_for_run() {
     refresh_pending_view();
 }
 
-void PineExecutionAdapter::set_configuration(const PineStrategyConfig& config) noexcept { config_ = config; }
-void PineExecutionAdapter::set_staged_configuration(const StagedConfiguration& staged) { staged_ = staged; }
+// The configuration's conjuncts of the margin and admission scopes, formed
+// once per configuration rather than at every ask: each scope function
+// answers false whenever its flag is false, and reads the rest of its scope
+// as before. The process-wide switches stay read at every ask. The host sets
+// the configuration again after every script calculation, so this part is
+// plain reads of config_ against the staged facts set_staged_configuration
+// formed.
+// `config` is the configuration being set (read before it is copied in).
+[[gnu::always_inline]] inline void
+PineExecutionAdapter::refresh_configuration_scopes(const PineStrategyConfig& config) noexcept {
+    const bool commission_free = config.commission_value == 0.0;
+    const bool one_lot_cap = config.pyramiding >= 0 && config.pyramiding <= 1;
+    gain_loss_configured_ = commission_free && staged_scopes_.unit_money && lot_grid_pinned_;
+    slipped_long_configured_ = config.margin_long == 100.0 && commission_free
+        && config.slippage > 0 && staged_scopes_.unit_grid && one_lot_cap
+        && staged_scopes_.unit_money;
+    unified_configured_ = lot_grid_pinned_ && !config.calc_on_order_fills && commission_free
+        && one_lot_cap && staged_scopes_.unit_money && staged_scopes_.mintick;
+    ledger_records_configured_ = config.pyramiding > 1 && !config.close_entries_rule_any
+        && lot_grid_pinned_;
+    pooc_fee_configured_ = config.process_orders_on_close
+        && config.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        && config.commission_value > 0.0
+        && config.commission_type == static_cast<int>(CommissionType::PERCENT)
+        && staged_scopes_.positive_grid && staged_scopes_.unit_point_money;
+}
+
+void PineExecutionAdapter::set_configuration(const PineStrategyConfig& config) noexcept {
+    refresh_configuration_scopes(config);
+    config_ = config;
+}
+void PineExecutionAdapter::set_staged_configuration(const StagedConfiguration& staged) {
+    staged_ = staged;
+    const auto& grid = staged_.quantity_grid;
+    lot_grid_pinned_ = grid && *grid > 0.0 && decimal_grid_exponent(*grid).has_value();
+    staged_scopes_.positive_grid = grid && *grid > 0.0;
+    staged_scopes_.unit_grid = grid && *grid > 0.0 && *grid <= 1.0;
+    staged_scopes_.unit_point_money = staged_.syminfo.pointvalue == 1.0
+        && staged_.account_fx_effective_from_ms.empty();
+    staged_scopes_.unit_money = staged_scopes_.unit_point_money && staged_.account_fx == 1.0;
+    staged_scopes_.mintick = finite_positive(staged_.syminfo.mintick);
+    refresh_configuration_scopes(config_);
+}
 void PineExecutionAdapter::set_begin_mode(bool is_stream, bool bar_magnifier) noexcept {
     stream_mode_ = is_stream;
     bar_magnifier_ = bar_magnifier;
@@ -5320,6 +5361,13 @@ void PineExecutionAdapter::apply_fx_open_margin_slice(
 void PineExecutionAdapter::apply_fx_opening_margin_slice(
         const native_order::ExecutionAppliedEvent& event,
         const NativeDecisionContext& context) {
+    // A percentage-commission percent-of-equity configuration only: any other
+    // returns before the row is copied (every fill asks).
+    if (config_.default_qty_type != static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        || config_.commission_type != static_cast<int>(CommissionType::PERCENT)
+        || !(config_.commission_value > 0.0)) {
+        return;
+    }
     std::optional<PlacementSnapshot> opening_snapshot;
     if (const auto found = placement_.find(event.handle().incarnation);
         found != placement_.end()) {
@@ -5666,15 +5714,18 @@ void PineExecutionAdapter::cancel_bracket_origin(native_order::RequestHandle ori
 
 void PineExecutionAdapter::cancel_bracket_siblings(native_order::RequestHandle handle,
                                                    std::uint64_t executed_at) {
+    // Only an exit leg has siblings: any other row is answered before it is
+    // copied (every fill asks).
     std::optional<PlacementSnapshot> snapshot_copy;
     if (const auto source = placement_.find(handle.incarnation);
         source != placement_.end()) {
+        const auto family = source->second.family;
+        if (family != PineOrderFamily::ExitLimit && family != PineOrderFamily::ExitStop
+            && family != PineOrderFamily::ExitTrail) return;
         snapshot_copy = source->second;
     }
     if (!snapshot_copy) return;
     const PlacementSnapshot& snapshot = *snapshot_copy;
-    if (snapshot.family != PineOrderFamily::ExitLimit && snapshot.family != PineOrderFamily::ExitStop
-        && snapshot.family != PineOrderFamily::ExitTrail) return;
     std::vector<native_order::RequestHandle> matches;
     for (const auto& candidate : live_handles_) {
         if (candidate == handle) continue;
@@ -7918,7 +7969,9 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             || config_.default_qty_type == static_cast<int>(QtyType::CASH)) {
             snapshot.sizing.frozen_units = default_sizing_units(snapshot.sizing);
         }
-        if (!priced) {
+        // pooc_fee_units() answers nothing outside its configuration
+        // (pooc_fee_configured_), so only a run inside it asks.
+        if (!priced && pooc_fee_configured_) {
             if (const auto fee_units = pooc_fee_units(snapshot.sizing)) {
                 snapshot.sizing.frozen_units = *fee_units;
                 pooc_fee_sized = true;
@@ -9016,12 +9069,11 @@ void PineExecutionAdapter::book_close_ledger(const SourceId& id, double units) {
 // books that opening's record first, then the named id's records oldest
 // first, then every record in fill order. Only under pyramiding above one,
 // where it can decide.
+// Pyramiding above one, a close rule other than ANY and a pinned lot grid are
+// ledger_records_configured_, formed once per configuration.
 void PineExecutionAdapter::credit_pyramiding_record(const SourceId& id, std::uint64_t incarnation,
                                                     double units) {
-    if (!(units > 0.0) || config_.pyramiding <= 1 || config_.close_entries_rule_any
-        || !pinned_lot_grid()) {
-        return;
-    }
+    if (!ledger_records_configured_ || !(units > 0.0)) return;
     pyramiding_records_.push_back({id, incarnation, units});
 }
 
@@ -9053,11 +9105,16 @@ void PineExecutionAdapter::book_pyramiding_records(const SourceId& id, std::uint
 // The open close-ledger records the pyramiding cap counts, or nullopt where
 // the rule does not decide: its switch off, pyramiding of one or less, the
 // ANY close rule, or a ledger out of step with the physical book.
-std::optional<std::size_t> PineExecutionAdapter::open_ledger_records() const {
-    if (!detail::margin_rule_switches().pyramiding_ledger_records || config_.pyramiding <= 1
-        || config_.close_entries_rule_any || !pinned_lot_grid()) {
+[[gnu::always_inline]] inline std::optional<std::size_t>
+PineExecutionAdapter::open_ledger_records() const {
+    if (!ledger_records_configured_ || !detail::margin_rule_switches().pyramiding_ledger_records)
         return std::nullopt;
-    }
+    return held_ledger_records();
+}
+
+// The records against the physical book, inside the rule's configuration.
+[[gnu::noinline]]
+std::optional<std::size_t> PineExecutionAdapter::held_ledger_records() const {
     const double held = std::abs(detail::run_position(require_host()).signed_units);
     double units = 0.0;
     for (const auto& record : pyramiding_records_) units += record.units;
@@ -10008,13 +10065,16 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
 void PineExecutionAdapter::close_all() {
     if (intraday_loss_orders_blocked()) return;
     reroute_fixed_entries_before_request();
-    if (detail::run_position(require_host()).signed_units == 0.0) return;
-    if (const auto point = detail::callback_point(require_host());
-        point && cap_placement_denied(point->decision)) {
-        return;
-    }
-    record_close_first(true);
-    if (const auto point = detail::callback_point(require_host())) {
+    const double held = detail::run_position(require_host()).signed_units;
+    if (held == 0.0) return;
+    const auto* const point = detail::callback_point(require_host());
+    if (point && cap_placement_denied(point->decision)) return;
+    // The close-first fact (record_close_first: a whole close of the open
+    // position) and the bar of the pending close_all, from the point and the
+    // position read above; nothing between them moves either.
+    if (point) {
+        close_first_script_bar_ = point->decision.script_bar_open_ms;
+        close_first_side_ = held > 0.0 ? 1 : -1;
         close_all_pending_script_bar_ = point->decision.script_bar_open_ms;
     }
     if (config_.calc_on_order_fills) {
@@ -12740,8 +12800,20 @@ void PineExecutionAdapter::reroute_incomplete_fixed_batch(bool invalidate_batch)
 void PineExecutionAdapter::flush_pending_same_bar_commands(
         bool flat_pair_follows, bool invalidate_batch) {
     reroute_incomplete_fixed_batch(invalidate_batch);
-    auto queued = std::move(pending_same_bar_commands_);
-    pending_same_bar_commands_.clear();
+    std::vector<PendingSameBarCommand> queued;
+    queued.swap(pending_same_bar_commands_);
+    // The queue's storage goes back to the member when the flush ends (its
+    // commands, submitted, are destroyed as before), so the next bar's
+    // commands do not allocate it again -- unless a command was queued
+    // meanwhile.
+    struct KeepStorage {
+        std::vector<PendingSameBarCommand>& queued;
+        std::vector<PendingSameBarCommand>& member;
+        ~KeepStorage() {
+            queued.clear();
+            if (member.empty() && member.capacity() == 0) member.swap(queued);
+        }
+    } keep_storage{queued, pending_same_bar_commands_};
     pending_same_bar_close_qty_ = 0.0;
     if (queued.empty()) return;
 
@@ -12959,23 +13031,27 @@ void PineExecutionAdapter::flush_pending_same_bar_commands(
         && std::count_if(queued.begin(), queued.end(), [](const auto& command) {
             return command.snapshot.frozen_market_targeted_close;
         }) == 1;
-    std::stable_sort(queued.begin(), queued.end(), [&](const PendingSameBarCommand& left,
-                                                       const PendingSameBarCommand& right) {
-        const auto buy_rank = [](const PendingSameBarCommand& command) {
-            if (command.snapshot.frozen_market_targeted_close)
-                return command.snapshot.frozen_market_target_was_long ? 1 : 0;
-            return command.snapshot.is_long ? 0 : 1;
-        };
-        const int left_rank = buy_rank(left);
-        const int right_rank = buy_rank(right);
-        if (left_rank != right_rank) return left_rank < right_rank;
-        if (cap_close_continuation
-            && left.snapshot.frozen_market_targeted_close
-                != right.snapshot.frozen_market_targeted_close) {
-            return left.snapshot.frozen_market_targeted_close;
-        }
-        return false;
-    });
+    // A single command keeps its place; std::stable_sort would still take a
+    // temporary buffer and move the command through it and back.
+    if (queued.size() > 1) {
+        std::stable_sort(queued.begin(), queued.end(), [&](const PendingSameBarCommand& left,
+                                                           const PendingSameBarCommand& right) {
+            const auto buy_rank = [](const PendingSameBarCommand& command) {
+                if (command.snapshot.frozen_market_targeted_close)
+                    return command.snapshot.frozen_market_target_was_long ? 1 : 0;
+                return command.snapshot.is_long ? 0 : 1;
+            };
+            const int left_rank = buy_rank(left);
+            const int right_rank = buy_rank(right);
+            if (left_rank != right_rank) return left_rank < right_rank;
+            if (cap_close_continuation
+                && left.snapshot.frozen_market_targeted_close
+                    != right.snapshot.frozen_market_targeted_close) {
+                return left.snapshot.frozen_market_targeted_close;
+            }
+            return false;
+        });
+    }
 
     const bool single_entry = queued.size() == 1
         && !queued.front().snapshot.frozen_market_targeted_close;
@@ -14996,11 +15072,6 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         // behind the close it follows (close_first_admission).
         const bool market_or_stop = std::holds_alternative<native_order::Market>(trigger)
             || std::holds_alternative<native_order::Stop>(trigger);
-        const double unified_units = result.units && finite_positive(*result.units)
-            ? *result.units
-            : (std::isfinite(source.requested_qty)
-                ? floor_quantity_grid(std::abs(source.requested_qty), staged_.quantity_grid)
-                : kNaN);
         bool unified_admit = false;
         const auto& admission_rules = detail::margin_rule_switches();
         if (PF_RARE(source.signal_price_refused && admission_rules.unified_placement)) {
@@ -15008,51 +15079,14 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             result.shape = native_order::OpeningShape::Transact;
             return result;
         }
-        if (PF_RARE(!keep_mc_close_surplus
-            && (admission_rules.unified_placement || admission_rules.fill_price_recheck)
-            && unified_admission_scope(source, market_or_stop, facts.position.signed_units,
-                                       unified_units))) {
-            const double tick = staged_.syminfo.mintick;
-            const double units = unified_units;
-            const double side = source.is_long ? 1.0 : -1.0;
-            const double margin = (source.is_long ? config_.margin_long : config_.margin_short)
-                / 100.0;
-            const double equity = source.sizing.equity;
-            const double signal_ticks = std::floor(source.sizing.mark / tick + 0.5);
-            const double signal_close = signal_ticks * tick;
-            if (admission_rules.unified_placement
-                && equity < source_money_round(units * signal_close * margin)) {
-                result.units = opposite ? facts.opposite_book_units : 0.0;
-                result.shape = opposite ? native_order::OpeningShape::CloseOpposite
-                                        : native_order::OpeningShape::Transact;
-                return result;
-            }
-            // A close-first entry passed rule 2 and is never checked on the
-            // price scale: it fills flat behind its close with the quantity it
-            // was sized at, and the margin rules trim it there
-            // (tests/fixtures/admission_rules cf1, cf2, cf5, cf9, cf10; c3b).
-            if (!(source.close_first_entry && admission_rules.close_first_admission)) {
-                const double per_unit = margin == 1.0
-                    ? source_money_round(source_money_round(equity) / units)
-                    : source_money_round(source_money_round(equity) / (units * margin));
-                const bool placement_short = admission_rules.unified_placement
-                    && margin == 1.0
-                    && per_unit < (signal_ticks + side * config_.slippage) * tick;
-                const double quote = finite_positive(facts.raw_price) ? facts.raw_price
-                                                                      : result.resolved_price;
-                const bool fill_short = admission_rules.fill_price_recheck
-                    && !unified_fill_admits(source, units, quote);
-                if (placement_short || fill_short) {
-                    result.units = 0.0;
-                    result.shape = native_order::OpeningShape::Transact;
-                    return result;
-                }
-            }
-            result.units = units;
-            if (!opposite) return result;
-            // A reversal takes the ordinary reversal shape below, with no
-            // money check on the way.
-            unified_admit = true;
+        // The scope answers false outside its configuration
+        // (unified_configured_); the terms are formed out of line, inside it.
+        if (PF_RARE(unified_configured_ && !keep_mc_close_surplus
+                    && (admission_rules.unified_placement
+                        || admission_rules.fill_price_recheck))
+            && unified_admission_terms(source, facts, market_or_stop, opposite, result,
+                                       unified_admit)) {
+            return result;
         }
         // ab9714be pine_fills.cpp:6577-6598: a default MARKET request carries
         // frozen_default_qty into execute_market_entry as a prequantized
@@ -15612,7 +15646,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     // half). A close-first entry is never checked on the price scale.
     const bool close_first_admitted = source.close_first_entry
         && detail::margin_rule_switches().close_first_admission;
-    if (PF_RARE(view.definition
+    if (PF_RARE(unified_configured_ && view.definition
         && (detail::margin_rule_switches().fill_price_recheck || close_first_admitted)
         && unified_admission_scope(
             source,
@@ -16028,13 +16062,15 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     // close-ledger records reach pyramiding, whatever its quantity type; a
     // LIMIT entry the cap admitted at placement fills however many are open.
     const auto fill_records = open_ledger_records();
-    const double held_at_fill = detail::run_position(require_host()).signed_units;
     if (PF_RARE(fill_records && source.family == PineOrderFamily::Entry && source.opening
         && config_.pyramiding > 0 && view.inspected_closed_units == 0.0
-        && !pure_limit_entry(source) && held_at_fill != 0.0
-        && ((held_at_fill > 0.0) == source.is_long)
-        && *fill_records >= static_cast<std::size_t>(config_.pyramiding))) {
-        return NativePrecommitVerdict::Refuse;
+        && !pure_limit_entry(source))) {
+        // The position at the fill, read only where the cap can decide.
+        const double held_at_fill = detail::run_position(require_host()).signed_units;
+        if (held_at_fill != 0.0 && ((held_at_fill > 0.0) == source.is_long)
+            && *fill_records >= static_cast<std::size_t>(config_.pyramiding)) {
+            return NativePrecommitVerdict::Refuse;
+        }
     }
     // A LIMIT entry the cap admitted when it was placed fills however many
     // lots are open by then (lane W8A-SIGSTATE-1 R-B,
@@ -16961,17 +16997,28 @@ bool PineExecutionAdapter::submit_margin_call_units(
 // A long ledger of NYSE:F trades reaches 73331.99999999993 where the running
 // sum reaches 73332 and is dropped close-only at that cost (tests/fixtures/
 // margin_ledger_rules). Folded as trades book; the state hash carries both.
-void PineExecutionAdapter::fold_source_money() {
+// Most asks find nothing booked since the last fold: they stop at the count,
+// inline in the per-bar callers.
+[[gnu::always_inline]] inline void PineExecutionAdapter::fold_source_money() {
     const auto* pine = pine_view_of(host_);
     if (!pine) return;
     const std::uint64_t count = pine->closed_trade_count();
+    if (count == source_money_folded_) return;
+    fold_source_money_through(*pine, count);
+}
+
+// The fold itself, over the trades booked since the last one (`count`
+// trades in all).
+[[gnu::noinline]]
+void PineExecutionAdapter::fold_source_money_through(const PineStrategyHost& pine,
+                                                     std::uint64_t count) {
     if (count < source_money_folded_) {
         source_gains_ = 0.0;
         source_losses_ = 0.0;
         source_money_folded_ = 0;
     }
     for (; source_money_folded_ < count; ++source_money_folded_) {
-        const double profit = pine->closed_trade(source_money_folded_).pnl;
+        const double profit = pine.closed_trade(source_money_folded_).pnl;
         if (profit > 0.0) source_gains_ += profit;
         else source_losses_ += profit;
     }
@@ -16982,16 +17029,18 @@ void PineExecutionAdapter::fold_source_money() {
 // no fee at all (none configured, none in the run's fee model, none recorded
 // at an opening); point value 1; no FX series; a power-of-ten lot step
 // (every tape's); and at most one open lot (the ledger tapes hold one).
-bool PineExecutionAdapter::gain_loss_regime() const {
-    if (!detail::margin_rule_switches().gain_loss_money || config_.commission_value != 0.0
-        || staged_.syminfo.pointvalue != 1.0 || staged_.account_fx != 1.0
-        || !staged_.account_fx_effective_from_ms.empty()) {
-        return false;
-    }
-    // The lot step before the run's reads: every condition here is a plain
-    // read, so their order only decides how soon a continuous lot answers.
-    const auto grid = staged_.quantity_grid;
-    if (!grid || !(*grid > 0.0) || !decimal_grid_exponent(*grid)) return false;
+// The configuration (no commission, point value 1, no FX series, a
+// power-of-ten lot step) is gain_loss_configured_, formed once per
+// configuration; every condition here is a plain read, so their order only
+// decides how soon a run outside the regime answers.
+[[gnu::always_inline]] inline bool PineExecutionAdapter::gain_loss_regime() const {
+    return gain_loss_configured_ && detail::margin_rule_switches().gain_loss_money
+        && gain_loss_run_regime();
+}
+
+// The run's part of the regime: the fee model, the recorded fees, the book.
+[[gnu::noinline]]
+bool PineExecutionAdapter::gain_loss_run_regime() const {
     const auto* pine = pine_view_of(host_);
     if (pine == nullptr || host_ == nullptr) return false;
     const auto* spec = detail::run_spec(*host_);
@@ -17127,6 +17176,69 @@ bool PineExecutionAdapter::unified_admission_scope(
     return true;
 }
 
+// The unified admission at resolve_terms, out of line: true when the terms
+// are final (resolve_terms returns `result`), false when the order is outside
+// the scope or, a reversal admitted (`admitted`), takes the ordinary reversal
+// shape below with no money check on the way. Its rules: at its signal,
+// placement rule 2 on the money scale -- E < sig10(Q c' m) drops an opening
+// from flat and keeps only a reversal's closing leg -- and rule 5 on the price
+// scale at full margin; at its fill only the price scale (resolve_terms).
+[[gnu::noinline]]
+bool PineExecutionAdapter::unified_admission_terms(
+        const PlacementSnapshot& source, const NativeExecutionTermsFacts& facts,
+        bool market_or_stop, bool opposite, native_order::ExecutionTerms& result,
+        bool& admitted) const {
+    const auto& admission_rules = detail::margin_rule_switches();
+    const double unified_units = result.units && finite_positive(*result.units)
+        ? *result.units
+        : (std::isfinite(source.requested_qty)
+            ? floor_quantity_grid(std::abs(source.requested_qty), staged_.quantity_grid)
+            : kNaN);
+    if (!unified_admission_scope(source, market_or_stop, facts.position.signed_units,
+                                 unified_units)) {
+        return false;
+    }
+    const double tick = staged_.syminfo.mintick;
+    const double units = unified_units;
+    const double side = source.is_long ? 1.0 : -1.0;
+    const double margin = (source.is_long ? config_.margin_long : config_.margin_short) / 100.0;
+    const double equity = source.sizing.equity;
+    const double signal_ticks = std::floor(source.sizing.mark / tick + 0.5);
+    const double signal_close = signal_ticks * tick;
+    if (admission_rules.unified_placement
+        && equity < source_money_round(units * signal_close * margin)) {
+        result.units = opposite ? facts.opposite_book_units : 0.0;
+        result.shape = opposite ? native_order::OpeningShape::CloseOpposite
+                                : native_order::OpeningShape::Transact;
+        return true;
+    }
+    // A close-first entry passed rule 2 and is never checked on the price
+    // scale: it fills flat behind its close with the quantity it was sized at,
+    // and the margin rules trim it there (tests/fixtures/admission_rules cf1,
+    // cf2, cf5, cf9, cf10; c3b).
+    if (!(source.close_first_entry && admission_rules.close_first_admission)) {
+        const double per_unit = margin == 1.0
+            ? source_money_round(source_money_round(equity) / units)
+            : source_money_round(source_money_round(equity) / (units * margin));
+        const bool placement_short = admission_rules.unified_placement
+            && margin == 1.0
+            && per_unit < (signal_ticks + side * config_.slippage) * tick;
+        const double quote = finite_positive(facts.raw_price) ? facts.raw_price
+                                                              : result.resolved_price;
+        const bool fill_short = admission_rules.fill_price_recheck
+            && !unified_fill_admits(source, units, quote);
+        if (placement_short || fill_short) {
+            result.units = 0.0;
+            result.shape = native_order::OpeningShape::Transact;
+            return true;
+        }
+    }
+    result.units = units;
+    if (!opposite) return true;
+    admitted = true;
+    return false;
+}
+
 // The instruments these rules are pinned on: a lot grid that is a power
 // of ten (every tape's -- 1, 0.01, 0.0001, 1e-05 -- and every population
 // member's). A continuous quantity or another grid keeps the engine's earlier
@@ -17134,9 +17246,9 @@ bool PineExecutionAdapter::unified_admission_scope(
 // there (tests/test_publication_witness.cpp's 0.25 lot,
 // test_adapter_live_state_equivalence's continuous one) book their trades as
 // before.
-bool PineExecutionAdapter::pinned_lot_grid() const {
-    return staged_.quantity_grid && *staged_.quantity_grid > 0.0
-        && decimal_grid_exponent(*staged_.quantity_grid).has_value();
+// Formed once per staged configuration (set_staged_configuration).
+[[gnu::always_inline]] inline bool PineExecutionAdapter::pinned_lot_grid() const {
+    return lot_grid_pinned_;
 }
 
 // Whether nothing rests or waits beside an entry the script is placing now
@@ -17192,19 +17304,19 @@ bool PineExecutionAdapter::unified_fill_admits(const PlacementSnapshot& source, 
 // rule, and no order of the script resting beside it but the close_all of
 // the bar. Without slippage the residual checkpoint
 // (submit_tv_money_long_margin_call) owns the long.
-bool PineExecutionAdapter::slipped_long_margin_scope() const {
-    if (!detail::margin_rule_switches().long_open_close_checks || !source_margin_call_enabled_)
-        return false;
-    // The configuration before the book: plain reads, so their order only
-    // decides how soon an out-of-scope run answers (every bar open asks).
-    const auto grid = staged_.quantity_grid;
-    if (config_.margin_long != 100.0 || config_.commission_value != 0.0
-        || config_.slippage <= 0 || !grid || !(*grid > 0.0) || *grid > 1.0
-        || config_.pyramiding < 0 || config_.pyramiding > 1
-        || staged_.syminfo.pointvalue != 1.0 || staged_.account_fx != 1.0
-        || !staged_.account_fx_effective_from_ms.empty()) {
-        return false;
-    }
+// The configuration before the book: plain reads, so their order only decides
+// how soon an out-of-scope run answers (every bar open asks). Full margin, no
+// commission, slippage, a lot step of at most one, pyramiding at most one,
+// point value 1 and no FX series are slipped_long_configured_, formed once
+// per configuration.
+[[gnu::always_inline]] inline bool PineExecutionAdapter::slipped_long_margin_scope() const {
+    return slipped_long_configured_ && detail::margin_rule_switches().long_open_close_checks
+        && source_margin_call_enabled_ && slipped_long_book_scope();
+}
+
+// The book's part of the scope.
+[[gnu::noinline]]
+bool PineExecutionAdapter::slipped_long_book_scope() const {
     const auto position = detail::run_position(require_host());
     if (!(position.signed_units > 0.0) || position.lot_count != 1 || cap.active()
         || risk_.max_intraday_loss > 0.0 || risk_.max_drawdown > 0.0
@@ -20418,7 +20530,6 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         && !skip_quiet(QuietHook::OpenMarginCheckpoints, opening_position.signed_units == 0.0)) {
         const double held_at_open = std::abs(opening_position.signed_units);
         const bool held_long_at_open = opening_position.signed_units > 0.0;
-        const double open_print = nearest_tick(bar.open, staged_.syminfo.mintick);
         // The point order (switch point_fills_before_margin): at the open the
         // queued orders execute first, then the exits the open reaches, and
         // the margin check runs on what is left. A close the script placed
@@ -20428,6 +20539,10 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         // stop-priority tapes; c3b and the coupled close + reversal tapes).
         const bool point_order = detail::margin_rule_switches().point_fills_before_margin
             && pinned_lot_grid();
+        // The opening print, which only protective_exit reads, under the
+        // point order.
+        const double open_print = point_order ? nearest_tick(bar.open, staged_.syminfo.mintick)
+                                              : 0.0;
         bool opposite_entry_waits = false;
         bool whole_market_close_waits = false;
         // Read only by protective_exit, which the point order gates.
