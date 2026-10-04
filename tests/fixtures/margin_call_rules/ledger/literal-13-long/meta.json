@@ -1,0 +1,16 @@
+{
+  "title": "n2-ledger-member-13-literal-long",
+  "slug": "n2-ledger-member-13-literal-long",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T15:25:35.717Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-12",
+    "to": "2025-04-14"
+  },
+  "pine_sha256": "8cb22da025268902b75794ee750e4e5e3670b9d6518e364e3a1752afd1520b4c",
+  "tv_trades_sha256": "a3d6cb0329359e14e6b26f654d88f899ded618dd6ccbf3f9cf2e130c029b9141",
+  "tv_trades_rows": 12
+}

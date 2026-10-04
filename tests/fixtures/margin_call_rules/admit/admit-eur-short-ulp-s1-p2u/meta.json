@@ -1,0 +1,16 @@
+{
+  "title": "n2b-admit-eur-short-ulp-s1-p2u",
+  "slug": "n2b-admit-eur-short-ulp-s1-p2u",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T17:59:27.565Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2025-04-02",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "5de9de60a0ad14aad29a17d78cafc0b0e79278721cc2c139d9e90c773f35ad92",
+  "tv_trades_sha256": "63468d2ff4d3d1d594bfb6998f696a8b18484f5d1f53607d3268d31d7313e793",
+  "tv_trades_rows": 6
+}

@@ -1,0 +1,10 @@
+//@version=6
+strategy("n2b-r3-coof-low-call-s1", initial_capital=5430.026236, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.0, slippage=1, process_orders_on_close=true, calc_on_order_fills=true)
+if time == timestamp("UTC", 2025, 5, 23, 2, 0) and strategy.position_size == 0
+    strategy.entry("probe", strategy.long, qty=2.0099)
+if time == timestamp("UTC", 2025, 5, 23, 2, 15)
+    strategy.close_all()
+plot(strategy.equity, "equity")
+plot(strategy.position_size, "held")
+plot(strategy.netprofit, "netprofit")
+plot(strategy.openprofit, "openprofit")

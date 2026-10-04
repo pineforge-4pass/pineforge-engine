@@ -147,31 +147,45 @@
 //   stream/B: hash=17910290071998838724 -> hash=4502510350709822124
 //   interleaved/B: hash=17910290071998838724 -> hash=4502510350709822124
 //   round_robin/B: hash=17910290071998838724 -> hash=4502510350709822124
+// expectation corrected (G + L source money fold, 13 of 13 runs), because the source layer's fold (pineforge-source-adapter/v4) now folds the adapter's G + L source money (gains and losses, two realized-money accumulators) wherever their sum differs from the engine's running net profit; every closed trade is unchanged in every Trade field, as are the counts and net profits; harvested with this TU's own switch on the tree that adds the G + L money:
+//   batch/A: hash=14113207875665531755 -> hash=12629210294549389608
+//   batch/B: hash=15614000236465510904 -> hash=11624460762363654931
+//   stream/A: hash=10392177668692518367 -> hash=16383339362501048882
+//   stream/B: hash=4502510350709822124 -> hash=12101474821779718764
+//   interleaved/A: hash=10392177668692518367 -> hash=16383339362501048882
+//   interleaved/B: hash=4502510350709822124 -> hash=12101474821779718764
+//   round_robin/A1: hash=10392177668692518367 -> hash=16383339362501048882
+//   round_robin/B: hash=4502510350709822124 -> hash=12101474821779718764
+//   round_robin/A2: hash=10392177668692518367 -> hash=16383339362501048882
+//   rebuilt/0: hash=14113207875665531755 -> hash=12629210294549389608
+//   rebuilt/1: hash=15614000236465510904 -> hash=11624460762363654931
+//   rebuilt/2: hash=14113207875665531755 -> hash=12629210294549389608
+//   rebuilt/3: hash=15614000236465510904 -> hash=11624460762363654931
 constexpr Pinned kPinned[] = {
     {"batch/A",
-     "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=14113207875665531755 error=''"},
+     "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=12629210294549389608 error=''"},
     {"batch/B",
-     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=15614000236465510904 error=''"},
+     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=11624460762363654931 error=''"},
     {"stream/A",
-     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=10392177668692518367 error=''"},
+     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=16383339362501048882 error=''"},
     {"stream/B",
-     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=4502510350709822124 error=''"},
+     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=12101474821779718764 error=''"},
     {"interleaved/A",
-     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=10392177668692518367 error=''"},
+     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=16383339362501048882 error=''"},
     {"interleaved/B",
-     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=4502510350709822124 error=''"},
+     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=12101474821779718764 error=''"},
     {"round_robin/A1",
-     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=10392177668692518367 error=''"},
+     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=16383339362501048882 error=''"},
     {"round_robin/B",
-     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=4502510350709822124 error=''"},
+     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=12101474821779718764 error=''"},
     {"round_robin/A2",
-     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=10392177668692518367 error=''"},
+     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=16383339362501048882 error=''"},
     {"rebuilt/0",
-     "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=14113207875665531755 error=''"},
+     "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=12629210294549389608 error=''"},
     {"rebuilt/1",
-     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=15614000236465510904 error=''"},
+     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=11624460762363654931 error=''"},
     {"rebuilt/2",
-     "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=14113207875665531755 error=''"},
+     "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=12629210294549389608 error=''"},
     {"rebuilt/3",
-     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=15614000236465510904 error=''"},
+     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=11624460762363654931 error=''"},
 };

@@ -1,0 +1,12 @@
+//@version=6
+strategy("n2c-warmup-btc-range", initial_capital=99600.36216, margin_long=100, margin_short=100)
+fast = ta.sma(close, 21)
+middle = ta.sma(close, 84)
+slow = ta.sma(close, 252)
+upCount = (fast > fast[1] ? 1 : 0) + (middle > middle[1] ? 1 : 0) + (slow > slow[1] ? 1 : 0)
+if time == timestamp("UTC", 2025, 4, 2, 8, 0) and upCount >= 2
+    strategy.entry("probe", strategy.long, qty=1.17923, stop=84462.16)
+if time == timestamp("UTC", 2025, 4, 2, 8, 15)
+    strategy.cancel("probe")
+if time == timestamp("UTC", 2025, 4, 2, 9, 0)
+    strategy.close_all()

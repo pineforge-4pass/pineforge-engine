@@ -1,0 +1,41 @@
+{
+  "name": "roi-k0-under-after-v2",
+  "symbol": "NYSE:F",
+  "timeframe": "1D",
+  "capital": 86906.74999999999,
+  "events": [
+    {
+      "time": 1758288600000,
+      "op": "entry",
+      "id": "Seed",
+      "side": -1,
+      "qty": 5693
+    },
+    {
+      "time": 1759325400000,
+      "op": "entry",
+      "id": "Turn",
+      "side": 1,
+      "qty": null,
+      "boundary": true
+    },
+    {
+      "time": 1759498200000,
+      "op": "close_all"
+    }
+  ],
+  "boundary": 1759325400000,
+  "after_close": true,
+  "tick": 0.01,
+  "step": 1.0,
+  "margin_long": 100,
+  "margin_short": 100,
+  "from": "2025-09-19",
+  "to": "2025-10-07",
+  "metadata": {
+    "depth": 0,
+    "capital_ulp_shift": -1,
+    "fresh_book": true,
+    "telemetry_predecessor": "roi-k0-under-after"
+  }
+}

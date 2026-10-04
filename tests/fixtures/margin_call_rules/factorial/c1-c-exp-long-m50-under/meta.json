@@ -1,0 +1,17 @@
+{
+  "title": "n12-c1-c-exp-long-m50-under",
+  "slug": "n12-c1-c-exp-long-m50-under",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T20:02:36.245Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-05-21",
+    "to": "2025-05-22",
+    "timeoutMs": 120000
+  },
+  "pine_sha256": "266392e58e3944b424d34997d8920d1114f1c7b8a7262ca8294c22a10231a799",
+  "tv_trades_sha256": "f23de5d809d973672fe05104ed503682ae9c61e085a0f31f29cec69fb3dd5116",
+  "tv_trades_rows": 4
+}

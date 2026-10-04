@@ -1,0 +1,45 @@
+{
+  "name": "fe-aapl-s2l-fillexact-equal",
+  "symbol": "NASDAQ:AAPL",
+  "timeframe": "15",
+  "capital": 104224.71999999999,
+  "events": [
+    {
+      "time": 1767623400000,
+      "op": "entry",
+      "id": "Seed",
+      "side": -1,
+      "qty": 380.0
+    },
+    {
+      "time": 1767625200000,
+      "op": "entry",
+      "id": "Turn",
+      "side": 1,
+      "qty": null,
+      "boundary": true
+    },
+    {
+      "time": 1767627900000,
+      "op": "close_all"
+    }
+  ],
+  "boundary": 1767625200000,
+  "after_close": false,
+  "tick": 0.01,
+  "step": 1.0,
+  "margin_long": 100,
+  "margin_short": 100,
+  "from": "2026-01-05",
+  "to": "2026-01-06",
+  "metadata": {
+    "Q": 384,
+    "T_sig10_fill_cost": 103806.72,
+    "raw_product": 103806.72,
+    "fill_tick": 270.33,
+    "per_unit": 270.33,
+    "E_target": 103806.72,
+    "signal_close_tick": 270.32,
+    "purpose": "fill-stage price-scale rule on a short->long reversal (symmetry)"
+  }
+}

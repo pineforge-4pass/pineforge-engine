@@ -1,0 +1,16 @@
+{
+  "title": "n2c-order-38-unconditional",
+  "slug": "n2c-order-38-unconditional",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T20:00:14.209Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "7da05846ce7821668acc6c37ffc9ef09168edc4a8640f6c170ab6bcb8be563fd",
+  "tv_trades_sha256": "1f7346f93e33808e52029a8099b24a4242dd971d421bdeab2e1c97acad8c82c0",
+  "tv_trades_rows": 2
+}

@@ -1,0 +1,16 @@
+{
+  "title": "n2-size-p4u",
+  "slug": "n2-size-p4u",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T15:35:31.819Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-06-22",
+    "to": "2025-06-23"
+  },
+  "pine_sha256": "d445eef557e880e088df394f62b0d8d3916c43b30a0117e0cffd5d917782a667",
+  "tv_trades_sha256": "35476edb8acfcd157ccc64a1dc0df1c207f4d3a1a75a25c89247ba9fb31e9609",
+  "tv_trades_rows": 2
+}

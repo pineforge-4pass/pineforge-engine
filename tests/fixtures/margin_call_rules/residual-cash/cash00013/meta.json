@@ -1,0 +1,16 @@
+{
+  "title": "n2-famab-cash00013",
+  "slug": "n2-famab-cash00013",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T14:50:17.473Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-21",
+    "to": "2025-04-22"
+  },
+  "pine_sha256": "091825465a4d21dc130e724fc1890d478996d74cecc2c4ca2a754ad829493c8f",
+  "tv_trades_sha256": "c497d2f8f9e171502fd442d0ecf6e1ead0a51f819c1c62bfcbb963a18292d3dd",
+  "tv_trades_rows": 4
+}

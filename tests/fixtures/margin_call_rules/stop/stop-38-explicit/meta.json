@@ -1,0 +1,16 @@
+{
+  "title": "n2-stop-38-explicit",
+  "slug": "n2-stop-38-explicit",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T15:35:55.306Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2025-04-02",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "23e072a3f06c3dfe7eedca65379b35b77f1c329c5ab3aef042ad6f630e4fcf5a",
+  "tv_trades_sha256": "2655b81bb4f99a5ffdf99a2e4b433736ed1863bc60bc289cb7a71c05d52fb0c6",
+  "tv_trades_rows": 2
+}

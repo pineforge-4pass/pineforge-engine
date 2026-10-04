@@ -1,0 +1,21 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 39999.560604,
+  "direction": "long",
+  "qty": null,
+  "sizing": "percent",
+  "slippage": 0,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2025-04-08T01:30:00+00:00",
+  "close": "2025-04-08T01:45:00+00:00",
+  "from": "2025-04-08",
+  "to": "2025-04-09",
+  "name": "n2b-size-eth-p4u",
+  "note": "E0+4e-6: dec Q 25.2682 vs binary 25.2681"
+}

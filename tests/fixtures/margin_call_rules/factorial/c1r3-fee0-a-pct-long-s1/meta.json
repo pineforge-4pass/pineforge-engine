@@ -1,0 +1,17 @@
+{
+  "title": "n12-c1r3-fee0-a-pct-long-s1",
+  "slug": "n12-c1r3-fee0-a-pct-long-s1",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T21:17:51.583Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-06-01",
+    "to": "2025-06-02",
+    "timeoutMs": 120000
+  },
+  "pine_sha256": "bf87b2ad70c7831398c7089061dd3c5b5c51ecb05942f1ab65a1030c9ea66681",
+  "tv_trades_sha256": "8824d55b09136c3bd5908e8d7a71f331ab33abf6813f359af1e72a7f000d5be7",
+  "tv_trades_rows": 2
+}

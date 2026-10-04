@@ -1,0 +1,16 @@
+{
+  "title": "n2b-size-eur-p3u",
+  "slug": "n2b-size-eur-p3u",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T17:59:35.632Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2025-04-02",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "bd8584465d8cacfad8ab33cebdc3bc44700306e0c514580e9b7c79da65dad0ce",
+  "tv_trades_sha256": "87ae788f75174dae109b7ebdf57e1a8aac44babb20091b51b7c96f83648d1f7a",
+  "tv_trades_rows": 2
+}

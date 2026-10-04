@@ -1,0 +1,21 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 4057.275,
+  "direction": "long",
+  "qty": 1.5,
+  "sizing": "explicit",
+  "slippage": 2,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": false,
+  "coof": false,
+  "entry": "2025-05-23T02:45:00+00:00",
+  "close": "2025-05-23T03:15:00+00:00",
+  "from": "2025-05-23",
+  "to": "2025-05-24",
+  "name": "n2b-r3-admit-eth-nonpooc-s2-gapup",
+  "note": "c 2704.83 next open 2704.94: E=Q*(c+2t): rule5 at c+slip admits; a fill-price rule5 would drop"
+}

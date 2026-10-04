@@ -1,0 +1,16 @@
+{
+  "title": "n2b-delta-coof-off-m1n",
+  "slug": "n2b-delta-coof-off-m1n",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T17:59:10.494Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-12-15",
+    "to": "2025-12-16"
+  },
+  "pine_sha256": "9f36ca93289ac57c635a407c9ca123941f262b4a1dfc7e6db1792e3697fb288b",
+  "tv_trades_sha256": "2e5490a5a9db6a2ba500723f6c8410f0c61ae9c48f9fdc3958a4effa00018726",
+  "tv_trades_rows": 4
+}

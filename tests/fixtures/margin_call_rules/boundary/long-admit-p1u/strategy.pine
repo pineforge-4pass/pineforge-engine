@@ -1,0 +1,11 @@
+//@version=6
+strategy("n2-long-admit-p1u", initial_capital=27.360001, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0, slippage=2, process_orders_on_close=true, calc_on_order_fills=true)
+if time == timestamp("UTC", 2025, 12, 15, 20, 30) and strategy.position_size == 0
+    strategy.entry("probe", strategy.long, qty=2)
+if time == timestamp("UTC", 2025, 12, 15, 20, 45)
+    strategy.close_all()
+plot(strategy.equity, "equity")
+plot(strategy.position_size, "held")
+plot(strategy.netprofit, "netprofit")
+plot(strategy.openprofit, "openprofit")
+plot(math.floor(strategy.equity / close / 1) * 1, "source-size")

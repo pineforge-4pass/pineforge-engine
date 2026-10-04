@@ -1,0 +1,9 @@
+{
+  "name": "n2c-cooldown-closepoint-early-observer",
+  "symbol": "BINANCE:ETHUSDT.P",
+  "interval": "15",
+  "feed": "eth",
+  "from": "2026-01-08",
+  "to": "2026-01-10",
+  "purpose": "Independent timed-order/cooldown control; no population source is exported."
+}

@@ -1,0 +1,16 @@
+{
+  "title": "n2b-size-btc-p3u",
+  "slug": "n2b-size-btc-p3u",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T17:59:31.231Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-02",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "b3b6389426c60989544fb952a551b7e45f4ccdeb700ba4c2a8212796fd224736",
+  "tv_trades_sha256": "c659ded37e9e0d0b90ca2d70181afe8e1d354cbfc8a0baf5803189c900deff15",
+  "tv_trades_rows": 2
+}

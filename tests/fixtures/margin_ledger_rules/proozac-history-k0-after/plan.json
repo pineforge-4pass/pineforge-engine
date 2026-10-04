@@ -1,0 +1,57 @@
+{
+  "name": "proozac-history-k0-after",
+  "symbol": "BINANCE:ETHUSDT.P",
+  "timeframe": "15",
+  "capital": 8256.654169,
+  "events": [
+    {
+      "time": 1746497700000,
+      "op": "entry",
+      "id": "Seed",
+      "side": -1,
+      "qty": 4.5982
+    },
+    {
+      "time": 1746532800000,
+      "op": "entry",
+      "id": "Turn",
+      "side": 1,
+      "qty": null,
+      "boundary": true
+    },
+    {
+      "time": 1746534600000,
+      "op": "close_all"
+    }
+  ],
+  "boundary": 1746532800000,
+  "after_close": true,
+  "tick": 0.01,
+  "step": 0.0001,
+  "margin_long": 100,
+  "margin_short": 100,
+  "from": "2025-05-06",
+  "to": "2025-05-07",
+  "metadata": {
+    "depth": 0,
+    "closed_selected": 1,
+    "previous_profit_decimal": "-1743.345831",
+    "source_tape": "member-tapes/proozac-tv.csv",
+    "actual_live": [
+      {
+        "number": 154,
+        "exit_time": 1746533700000,
+        "exit_price": 1772.21,
+        "exit_signal": "Long",
+        "side": -1,
+        "qty": 4.5246,
+        "pnl": 105.78515,
+        "entry_time": 1746498600000,
+        "entry_price": 1795.59,
+        "entry_signal": "Short"
+      }
+    ],
+    "scheduled_parent_entries": 1,
+    "generated_from_trade_events_only": true
+  }
+}

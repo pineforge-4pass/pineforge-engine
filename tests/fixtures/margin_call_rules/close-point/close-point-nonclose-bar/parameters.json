@@ -1,0 +1,21 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 9951.927628,
+  "direction": "long",
+  "qty": 3.7083,
+  "sizing": "explicit",
+  "slippage": 0,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2025-05-23T04:30:00+00:00",
+  "close": "2025-05-23T05:00:00+00:00",
+  "from": "2025-05-23",
+  "to": "2025-05-24",
+  "name": "n2b-r3-close-point-nonclose-bar",
+  "note": "close-point residual > free on the bar BEFORE the close bar: every-bar scope calls there; closebar scope does not"
+}

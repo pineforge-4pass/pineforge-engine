@@ -1,0 +1,16 @@
+{
+  "title": "n2b-f-coof-on-close2",
+  "slug": "n2b-f-coof-on-close2",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T17:59:29.668Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-09-17",
+    "to": "2025-09-18"
+  },
+  "pine_sha256": "9f05ab40dcea1c58b547df3baef6314b46dbb3fac9609f65e9020e7fceaaaf30",
+  "tv_trades_sha256": "18049c069e7107886fe78c3e32b373f3c8d25daad41b0771451584350cbba675",
+  "tv_trades_rows": 4
+}

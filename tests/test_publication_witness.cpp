@@ -112,9 +112,12 @@
 // booking. tests/test_publication_witness_pinned.inc lists each. The same
 // harvest against main 962960b3 reproduces every old row.
 #include <pineforge/pineforge.h>
+#include <pineforge/source/pine_adapter.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
+#include <algorithm>
 #include <cinttypes>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -849,6 +852,156 @@ void every_run_matches_the_base_tree() {
                 "%zu recorded hash rows)\n", matched, pinned, folds, trades, rows);
     CHECK(trades > 1500);
 }
+
+// A scenario's closed trades, pass by pass, as observe() runs its passes.
+std::vector<std::vector<Trade>> trades_by_pass(const Scenario& s) {
+    std::vector<std::vector<Trade>> out;
+    PubHost h(s);
+    auto one = [&]() {
+        h.folds.clear();
+        h.restart();
+        if (s.magnifier) {
+            h.run(s.bars.data(), static_cast<int>(s.bars.size()), "1", "1", true, 4,
+                  MagnifierDistribution::ENDPOINTS);
+        } else {
+            h.run(s.bars.data(), static_cast<int>(s.bars.size()));
+        }
+        CHECK(h.last_error().empty());
+        std::vector<Trade> trades;
+        for (int i = 0; i < h.trade_count(); ++i) trades.push_back(h.get_trade(i));
+        out.push_back(std::move(trades));
+    };
+    one();
+    if (s.reruns > 0) {
+        auto next = s.config;
+        next.default_qty_value = s.config.default_qty_value + 1.0;
+        next.slippage = 1;
+        next.margin_short = 50.0;
+        h.configure_pine_strategy(next);
+        one();
+        source::StrategyOverrides overrides;
+        overrides.commission_value = 1.5;
+        overrides.pyramiding = 3;
+        overrides.close_entries_rule = 1;
+        h.set_strategy_override(overrides);
+        one();
+    }
+    return out;
+}
+
+bool same_bits(double a, double b) { return std::memcmp(&a, &b, sizeof a) == 0; }
+
+// Every field test_adapter_quiet_bar's fold_trade folds, which is every
+// field of Trade: two trades are the same only when all of them are.
+bool same_trade(const Trade& a, const Trade& b) {
+    return a.entry_time == b.entry_time && a.exit_time == b.exit_time
+        && same_bits(a.entry_price, b.entry_price) && same_bits(a.exit_price, b.exit_price)
+        && same_bits(a.qty, b.qty) && same_bits(a.pnl, b.pnl)
+        && same_bits(a.pnl_pct, b.pnl_pct) && a.is_long == b.is_long
+        && a.entry_bar_index == b.entry_bar_index && a.exit_bar_index == b.exit_bar_index
+        && a.entry_id == b.entry_id && a.entry_comment == b.entry_comment
+        && a.exit_comment == b.exit_comment && a.exit_id == b.exit_id
+        && a.exit_from_bracket == b.exit_from_bracket
+        && same_bits(a.max_runup, b.max_runup) && same_bits(a.max_drawdown, b.max_drawdown)
+        && same_bits(a.commission, b.commission) && a.entry_incarnation == b.entry_incarnation
+        && a.open_at_end == b.open_at_end && a.close_cause == b.close_cause;
+}
+
+// The nine run-passes where the G + L money once parted from the engine's
+// own equity (MarginRuleSwitches::gain_loss_money): a commission written
+// into a live configuration, cash fees recorded at an opening, a pyramided
+// book, a continuous or non-decimal lot. No TradingView tape pins a tie in
+// any of them, so the mirror must equal the engine's equity there: every
+// closed trade of the pass equals, field for field and bit for bit, the
+// same pass with gain_loss_money off.
+void the_mirror_holds_off_its_ties() {
+    struct RunPass {
+        const char* name;
+        std::size_t pass;
+    };
+    const RunPass cases[] = {
+        {"Config01", 3},         {"Config01M", 3},        {"ConfigFlags103", 1},
+        {"ConfigFlags103", 2},   {"ConfigFlags103M", 1},  {"ConfigFlags103M", 2},
+        {"ConfigFlags104", 1},   {"Storm09M", 1},         {"Storm17", 1},
+    };
+    const auto all = battery();
+    auto& switches = source::detail::margin_rule_switches();
+    const source::detail::MarginRuleSwitches shipped = switches;
+    source::detail::MarginRuleSwitches mirror_off = shipped;
+    mirror_off.gain_loss_money = false;
+    std::size_t held = 0;
+    std::size_t compared_trades = 0;
+    for (const RunPass& c : cases) {
+        const auto found = std::find_if(all.begin(), all.end(),
+                                        [&](const Scenario& s) { return s.name == c.name; });
+        CHECK(found != all.end());
+        if (found == all.end()) continue;
+        switches = shipped;
+        const auto with = trades_by_pass(*found);
+        switches = mirror_off;
+        const auto without = trades_by_pass(*found);
+        switches = shipped;
+        CHECK(with.size() >= c.pass && without.size() == with.size());
+        if (with.size() < c.pass || without.size() != with.size()) continue;
+        const auto& a = with[c.pass - 1];
+        const auto& b = without[c.pass - 1];
+        // Not vacuous: the pass books trades.
+        CHECK(!a.empty());
+        bool same = a.size() == b.size();
+        for (std::size_t i = 0; same && i < a.size(); ++i) same = same_trade(a[i], b[i]);
+        if (!same) {
+            std::fprintf(stderr, "  %s pass %zu: the G + L mirror moves its closed trades\n",
+                         c.name, c.pass);
+        } else {
+            ++held;
+        }
+        CHECK(same);
+        compared_trades += a.size();
+    }
+    std::printf("  the G + L mirror equals the engine's equity on %zu of 9 fuzz run-passes "
+                "(%zu closed trades compared)\n", held, compared_trades);
+}
+
+// No order quantity leaves the lot grid, with every switch as shipped, over
+// the whole battery and every pass: on a run with a quantity step every
+// closed trade's lots are a whole number of steps, exactly; and no run books
+// a quantity within 1e-9 of a whole unit without being on it (the leak an
+// unrounded money once produced: 4 -> 3.9999999999999432 on Storm09M).
+void no_quantity_leaves_the_lot_grid() {
+    std::size_t gridded = 0;
+    std::size_t trades = 0;
+    std::size_t off_grid = 0;
+    for (const Scenario& s : battery()) {
+        for (const auto& pass : trades_by_pass(s)) {
+            for (const Trade& t : pass) {
+                ++trades;
+                bool on = true;
+                if (s.qty_step > 0.0) {
+                    // On the grid: q / step within an ulp of a whole number
+                    // of steps, so the check holds for any step, not only for
+                    // a power of two such as the battery's 0.25.
+                    ++gridded;
+                    const double steps = t.qty / s.qty_step;
+                    const double whole_steps = std::round(steps);
+                    on = std::fabs(steps - whole_steps)
+                        <= std::numeric_limits<double>::epsilon() * std::max(1.0, whole_steps);
+                }
+                const double whole = std::round(t.qty);
+                if (whole != t.qty && std::fabs(t.qty - whole) < 1e-9 * std::max(1.0, whole))
+                    on = false;
+                if (!on) {
+                    ++off_grid;
+                    std::fprintf(stderr, "  %s: %s qty %.17g off the lot grid (step %g)\n",
+                                 s.name.c_str(), t.entry_id.c_str(), t.qty, s.qty_step);
+                }
+            }
+        }
+    }
+    std::printf("  %zu closed trades, %zu on a quantity step: %zu off the lot grid\n", trades,
+                gridded, off_grid);
+    CHECK(gridded > 0);
+    CHECK(off_grid == 0);
+}
 #endif
 
 }  // namespace
@@ -859,6 +1012,8 @@ int main() {
     return 0;
 #else
     every_run_matches_the_base_tree();
+    the_mirror_holds_off_its_ties();
+    no_quantity_leaves_the_lot_grid();
     if (failures == 0) {
         std::printf("test_publication_witness: ok (%d checks)\n", checks);
         return 0;

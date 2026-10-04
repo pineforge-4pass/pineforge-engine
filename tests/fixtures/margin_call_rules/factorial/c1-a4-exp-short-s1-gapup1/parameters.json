@@ -1,0 +1,21 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 3710.745001,
+  "direction": "short",
+  "qty": 1.5,
+  "sizing": "explicit",
+  "slippage": 1,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": false,
+  "coof": false,
+  "entry": "2025-05-20T16:45:00+00:00",
+  "close": "2025-05-20T17:15:00+00:00",
+  "from": "2025-05-20",
+  "to": "2025-05-21",
+  "name": "n12-c1-a4-exp-short-s1-gapup1",
+  "note": "c 2473.82 open 2473.83: control, fills under all hypotheses"
+}

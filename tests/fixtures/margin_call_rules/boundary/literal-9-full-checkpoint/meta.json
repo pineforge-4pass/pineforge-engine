@@ -1,0 +1,16 @@
+{
+  "title": "n2-member-9-full-checkpoint",
+  "slug": "n2-member-9-full-checkpoint",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T15:35:46.838Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-05-23",
+    "to": "2025-05-25"
+  },
+  "pine_sha256": "52656a503079af0fb1b0bacba81de08308b91c40ad77fefc5c0dcaa99bcfbaa6",
+  "tv_trades_sha256": "c3a0629ad7d24bb37a630e51308ef1667af917c9bec13d9ef2672bee4aa679f0",
+  "tv_trades_rows": 8
+}

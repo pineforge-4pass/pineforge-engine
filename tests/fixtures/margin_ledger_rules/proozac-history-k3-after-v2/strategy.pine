@@ -1,0 +1,15 @@
+//@version=6
+strategy("N1 proozac-history-k3-after-v2", initial_capital=8528.2182069999999, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100)
+var string witness = ""
+if time == timestamp("UTC", 2025, 5, 5, 20, 30)
+    strategy.entry("Ledger0", strategy.short, qty=4.7255000000000003)
+if time == timestamp("UTC", 2025, 5, 5, 22, 30)
+    strategy.entry("Ledger1", strategy.long, qty=4.5982000000000003)
+if time == timestamp("UTC", 2025, 5, 6, 2, 15)
+    strategy.entry("Seed", strategy.short, qty=4.5982000000000003)
+if time == timestamp("UTC", 2025, 5, 6, 12, 0)
+    witness := "E=" + str.tostring(strategy.equity, "#.################") + ";N=" + str.tostring(strategy.netprofit, "#.################") + ";OP=" + str.tostring(strategy.openprofit, "#.################") + ";P=" + str.tostring(strategy.position_size, "#.################") + ";C=" + str.tostring(close, "#.################") + ";T=" + str.tostring(math.round_to_mintick(close), "#.################")
+    strategy.entry("Turn", strategy.long, comment=witness)
+    strategy.close("Seed")
+if time == timestamp("UTC", 2025, 5, 6, 12, 30)
+    strategy.close_all(comment="SENSOR|" + witness)

@@ -1,0 +1,156 @@
+{
+  "name": "aapl-history-k30-after-v2",
+  "symbol": "NASDAQ:AAPL",
+  "timeframe": "15",
+  "capital": 96215.91,
+  "events": [
+    {
+      "time": 1774622700000,
+      "op": "entry",
+      "id": "Ledger0",
+      "side": 1,
+      "qty": 379.0
+    },
+    {
+      "time": 1774631700000,
+      "op": "entry",
+      "id": "Ledger1",
+      "side": -1,
+      "qty": 379.0
+    },
+    {
+      "time": 1774878300000,
+      "op": "entry",
+      "id": "Ledger2",
+      "side": 1,
+      "qty": 388.0
+    },
+    {
+      "time": 1774892700000,
+      "op": "entry",
+      "id": "Ledger3",
+      "side": -1,
+      "qty": 388.0
+    },
+    {
+      "time": 1775050200000,
+      "op": "entry",
+      "id": "Ledger4",
+      "side": 1,
+      "qty": 362.0
+    },
+    {
+      "time": 1775051100000,
+      "op": "entry",
+      "id": "Ledger5",
+      "side": -1,
+      "qty": 362.0
+    },
+    {
+      "time": 1775063700000,
+      "op": "entry",
+      "id": "Ledger6",
+      "side": 1,
+      "qty": 361.0
+    },
+    {
+      "time": 1775064600000,
+      "op": "entry",
+      "id": "Ledger7",
+      "side": -1,
+      "qty": 361.0
+    },
+    {
+      "time": 1775066400000,
+      "op": "entry",
+      "id": "Ledger8",
+      "side": 1,
+      "qty": 361.0
+    },
+    {
+      "time": 1775067300000,
+      "op": "entry",
+      "id": "Ledger9",
+      "side": -1,
+      "qty": 361.0
+    },
+    {
+      "time": 1775068200000,
+      "op": "entry",
+      "id": "Ledger10",
+      "side": 1,
+      "qty": 361.0
+    },
+    {
+      "time": 1775069100000,
+      "op": "entry",
+      "id": "Ledger11",
+      "side": -1,
+      "qty": 360.0
+    },
+    {
+      "time": 1775070000000,
+      "op": "entry",
+      "id": "Ledger12",
+      "side": 1,
+      "qty": 359.0
+    },
+    {
+      "time": 1775072700000,
+      "op": "entry",
+      "id": "Ledger13",
+      "side": -1,
+      "qty": 359.0
+    },
+    {
+      "time": 1775141100000,
+      "op": "entry",
+      "id": "Seed",
+      "side": 1,
+      "qty": 356.0
+    },
+    {
+      "time": 1775142000000,
+      "op": "entry",
+      "id": "Turn",
+      "side": -1,
+      "qty": null,
+      "boundary": true
+    },
+    {
+      "time": 1775143800000,
+      "op": "close_all"
+    }
+  ],
+  "boundary": 1775142000000,
+  "after_close": true,
+  "tick": 0.01,
+  "step": 1.0,
+  "margin_long": 100,
+  "margin_short": 100,
+  "from": "2026-03-27",
+  "to": "2026-04-03",
+  "metadata": {
+    "depth": 30,
+    "closed_selected": 30,
+    "previous_profit_decimal": "-3784.090",
+    "source_tape": "member-tapes/aapl-tv.csv",
+    "actual_live": [
+      {
+        "number": 1127,
+        "exit_time": 1775144700000,
+        "exit_price": 254.85,
+        "exit_signal": "Short",
+        "side": 1,
+        "qty": 355.0,
+        "pnl": -195.25,
+        "entry_time": 1775142000000,
+        "entry_price": 255.4,
+        "entry_signal": "Long"
+      }
+    ],
+    "scheduled_parent_entries": 15,
+    "generated_from_trade_events_only": true,
+    "telemetry_predecessor": "aapl-history-k30-after"
+  }
+}

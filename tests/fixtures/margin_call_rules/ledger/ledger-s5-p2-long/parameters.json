@@ -1,0 +1,29 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 10638.898695175501,
+  "direction": "short",
+  "qty": 6.7883,
+  "slippage": 5,
+  "fee": 0.05,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2025-04-08T13:45:00Z",
+  "close": "2025-04-08T14:30:00Z",
+  "from": "2025-04-08",
+  "to": "2025-04-09",
+  "name": "n2-ledger-s5-p2-long",
+  "prior": [
+    {
+      "entry": "2025-04-08T12:45:00.000Z",
+      "close": "2025-04-08T13:15:00.000Z",
+      "direction": "long",
+      "qty": 1
+    }
+  ],
+  "target_equity": 10647.4528701755,
+  "calculated_prior_profit": 8.554175000000109
+}

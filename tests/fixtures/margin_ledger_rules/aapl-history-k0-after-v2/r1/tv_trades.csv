@@ -1,0 +1,5 @@
+﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)
+1,Exit short,2026-04-02 23:15,Margin call,255.22,1,255,-0.22,-0.09,0,0,0.00,-0.22,-0.09,-0.22,0.00,0
+1,Entry short,2026-04-02 23:15,E=90921.98;N=0;OP=0;P=0;C=254.98;T=254.98,255,1,255,-0.22,-0.09,0,0,0.00,-0.22,-0.09,-0.22,0.00,0
+2,Exit short,2026-04-02 23:45,SENSOR|E=90921.98;N=0;OP=0;P=0;C=254.98;T=254.98,254.85,355,90525,53.25,0.06,0,209.45,0.23,-78.1,-0.09,53.03,0.06,2
+2,Entry short,2026-04-02 23:15,E=90921.98;N=0;OP=0;P=0;C=254.98;T=254.98,255,355,90525,53.25,0.06,0,209.45,0.23,-78.1,-0.09,53.03,0.06,2

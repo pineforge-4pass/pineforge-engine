@@ -1,0 +1,40 @@
+{
+  "validationEligible": true,
+  "strategy": "n2b-f-coof-on-close2",
+  "symbol": "NYSE:F",
+  "interval": "15",
+  "from": "2025-09-17",
+  "to": "2025-09-18",
+  "deepBacktesting": true,
+  "trades": 2,
+  "tvTradesCsv": "tv_trades.csv",
+  "tapeChannel": "ws-report-v1",
+  "sourceCanonicalization": "pine-facade-v1",
+  "sourceArtifactHash": "9f05ab40dcea1c58b547df3baef6314b46dbb3fac9609f65e9020e7fceaaaf30",
+  "tvTradesCsvHash": "18049c069e7107886fe78c3e32b373f3c8d25daad41b0771451584350cbba675",
+  "wsProvenance": {
+    "schemaVersion": 1,
+    "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+    "authUser": "luisleo52655",
+    "accountType": "pro_premium_expert",
+    "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+    "pineVersion": "0.92382",
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "requestedRange": {
+      "from": 1758067200000,
+      "to": 1758153600000
+    },
+    "returnedRange": {
+      "from": 1758115800000,
+      "to": 1758138300000
+    },
+    "rangeProof": "covered",
+    "rawFrameSha256": "0ad4117715b4a2df55bb3b6b5d29a83c8add954b20ea1a0dcef0cdd09f10c623",
+    "decodedReportSha256": "b97a4fef7a7b13cb64270b995467f6f92cef21190f5aeadb7b78f886a92ba38d",
+    "closedTrades": 2,
+    "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+    "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+  },
+  "backtestedAt": "2026-10-03T17:59:29.667Z"
+}

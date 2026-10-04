@@ -1,0 +1,22 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 3786.269999,
+  "direction": "long",
+  "qty": 1.5,
+  "sizing": "explicit",
+  "slippage": 1,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": false,
+  "coof": false,
+  "entry": "2025-05-20T08:00:00+00:00",
+  "close": "2025-05-20T08:45:00+00:00",
+  "from": "2025-05-20",
+  "to": "2025-05-21",
+  "name": "n12-c1-s1-exp-stop-long-s1",
+  "note": "c 2524.14 stop 2524.17: money at L passes; per-unit just below exec L+1t drops",
+  "stop": 2524.17
+}

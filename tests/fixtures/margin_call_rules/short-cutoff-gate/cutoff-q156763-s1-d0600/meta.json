@@ -1,0 +1,16 @@
+{
+  "title": "n2c-cutoff-q156763-s1-d0600",
+  "slug": "n2c-cutoff-q156763-s1-d0600",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T19:46:52.201Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2025-04-18",
+    "to": "2025-04-19"
+  },
+  "pine_sha256": "8232db4c86dbb60c0d207e3e76213ab66ef6cc2f1627c1f91de82c94c6f3f83f",
+  "tv_trades_sha256": "5dfb7046659df449293de9cdef4077c4146bfd9a4446dd04081a666e7cf958d5",
+  "tv_trades_rows": 8
+}

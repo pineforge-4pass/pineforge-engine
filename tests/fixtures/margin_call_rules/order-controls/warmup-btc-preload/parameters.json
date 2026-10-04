@@ -1,0 +1,8 @@
+{
+  "name": "n2c-warmup-btc-preload",
+  "symbol": "BINANCE:BTCUSDT",
+  "interval": "15",
+  "from": "2025-03-29",
+  "to": "2025-04-03",
+  "behavior": "SMA-readiness gate, timed stop, next-bar cancellation"
+}

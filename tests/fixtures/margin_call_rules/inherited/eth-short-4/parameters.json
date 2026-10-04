@@ -1,0 +1,19 @@
+{
+  "name": "f2b-eth-short-4",
+  "initial_capital": 10648.2,
+  "direction": "short",
+  "qty": 6.7883,
+  "sizing": "explicit",
+  "slippage": 2,
+  "fee": 0.05,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "tick": 0.01,
+  "step": 0.0001,
+  "feed": "eth",
+  "entry": "2025-04-08T13:45:00+00:00",
+  "close": "2025-04-08T14:30:00+00:00",
+  "from": "2025-04-08",
+  "to": "2025-04-09"
+}

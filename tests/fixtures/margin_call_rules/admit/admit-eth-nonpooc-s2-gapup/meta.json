@@ -1,0 +1,16 @@
+{
+  "title": "n2b-r3-admit-eth-nonpooc-s2-gapup",
+  "slug": "n2b-r3-admit-eth-nonpooc-s2-gapup",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T18:18:38.380Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-05-23",
+    "to": "2025-05-24"
+  },
+  "pine_sha256": "d89c37224f46023f22bb578dd5717f1f7746e15e4d14d242c11bf19a5a70c2be",
+  "tv_trades_sha256": "a44585e8dcb09098c7fccb8f29b30d822dda00e9a1b4e2b698ecb47b2827e693",
+  "tv_trades_rows": 0
+}

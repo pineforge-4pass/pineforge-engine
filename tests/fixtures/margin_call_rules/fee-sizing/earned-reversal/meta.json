@@ -1,0 +1,16 @@
+{
+  "title": "n2c-feesize-earned-reversal",
+  "slug": "n2c-feesize-earned-reversal",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T19:32:49.600Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-12",
+    "to": "2025-04-14"
+  },
+  "pine_sha256": "bd6a70cd906e2c06b672c9a42efced686be55ca7c814dc936962be226db0b40f",
+  "tv_trades_sha256": "1386ede96c1218a21d908e2565c4373831d67e155b2754914fe94786d18d1e93",
+  "tv_trades_rows": 12
+}

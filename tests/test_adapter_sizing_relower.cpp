@@ -33,6 +33,7 @@
  * neutrality witness for the reduction bases.
  */
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -1161,12 +1162,42 @@ void a_typed_quantity_is_the_kernel_quotient_under_the_source_floor() {
     // (e) The division and the reserve exist in the kernel alone: neither
     //     typed resolve_terms branch restates cash / (fill price * point value
     //     * fx) or the 1 + c / 100 divisor (the audit's M3 / A3-6 sites).
+    //     One explicit exception, decided for this guard on 2026-10-04:
+    //     TradingView's process_orders_on_close fee-grossed sizing
+    //     unit, sig10(exec x (1 + c / 100)), pinned by the fee-sizing tapes
+    //     under tests/fixtures/margin_call_rules, is not the kernel's reserve
+    //     divisor and is spelled in the adapter -- inside
+    //     PineExecutionAdapter::tv_pooc_fee_grossed_unit and nowhere else.
+    //     That function must exist once, its comment must cite its tapes, and
+    //     it is cut out of the text before the scan; everywhere else the
+    //     restatements stay forbidden.
     const std::string adapter = collapse_whitespace(read_file(PINEFORGE_R2_ADAPTER_FILE));
     REQUIRE(!adapter.empty());
+    const std::string allowed =
+        "double PineExecutionAdapter::tv_pooc_fee_grossed_unit(double price) const {";
+    const std::size_t allowed_at = adapter.find(allowed);
+    CHECK(allowed_at != std::string::npos);
+    std::string scanned = adapter;
+    if (allowed_at != std::string::npos) {
+        CHECK(adapter.find(allowed, allowed_at + 1) == std::string::npos);
+        // The body is one statement: it ends at the first closing brace.
+        const std::size_t body_end = adapter.find('}', allowed_at + allowed.size());
+        REQUIRE(body_end != std::string::npos);
+        const std::string body = adapter.substr(allowed_at, body_end + 1 - allowed_at);
+        CHECK(body.find("1.0 + config_.commission_value / 100.0") != std::string::npos);
+        // Its comment, in the text just before it, cites the tapes.
+        const std::size_t window = std::min<std::size_t>(allowed_at, 1200);
+        const std::string comment = adapter.substr(allowed_at - window, window);
+        const bool cites = comment.find("tests/fixtures/margin_call_rules") != std::string::npos
+            && comment.find("fee-sizing/") != std::string::npos;
+        if (!cites) std::printf("  tv_pooc_fee_grossed_unit no longer cites its tapes\n");
+        CHECK(cites);
+        scanned = adapter.substr(0, allowed_at) + adapter.substr(body_end + 1);
+    }
     for (const char* restated : {
              "1.0 + config_.commission_value / 100.0",
              "resolved_price * staged_.syminfo.pointvalue * facts.active_fx"}) {
-        const bool found = adapter.find(restated) != std::string::npos;
+        const bool found = scanned.find(restated) != std::string::npos;
         if (found) std::printf("  adapter still restates `%s`\n", restated);
         CHECK(!found);
     }

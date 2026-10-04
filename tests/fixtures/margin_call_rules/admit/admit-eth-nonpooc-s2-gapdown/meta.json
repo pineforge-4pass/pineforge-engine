@@ -1,0 +1,16 @@
+{
+  "title": "n2b-r2-admit-eth-nonpooc-s2-gapdown",
+  "slug": "n2b-r2-admit-eth-nonpooc-s2-gapdown",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T18:06:35.637Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-06-22",
+    "to": "2025-06-23"
+  },
+  "pine_sha256": "ec00ea619847207ab8ead0b24a54367a4d8533658f63365b25bd641e286e0092",
+  "tv_trades_sha256": "a44585e8dcb09098c7fccb8f29b30d822dda00e9a1b4e2b698ecb47b2827e693",
+  "tv_trades_rows": 0
+}

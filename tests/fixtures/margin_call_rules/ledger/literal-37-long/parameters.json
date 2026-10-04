@@ -1,0 +1,32 @@
+{
+  "symbol": "OANDA:EURUSD",
+  "feed": "eur",
+  "step": 0.01,
+  "tick": 0.00001,
+  "initial_capital": 89373.93849057386,
+  "direction": "short",
+  "qty": 78546.87,
+  "slippage": 1,
+  "fee": 0.05,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2025-04-18T13:00:00+00:00",
+  "close": "2025-04-18T13:30:00+00:00",
+  "from": "2025-04-18",
+  "to": "2025-04-19",
+  "name": "n2-ledger-member-37-literal-long",
+  "member": 37,
+  "from_": "2025-04-18",
+  "sizing": "explicit",
+  "prior": [
+    {
+      "entry": "2025-04-18T12:00:00.000Z",
+      "close": "2025-04-18T12:30:00.000Z",
+      "direction": "long",
+      "qty": 100
+    }
+  ],
+  "target_equity": 89373.82266657386,
+  "calculated_prior_profit": -0.11582399999999092
+}

@@ -1,0 +1,16 @@
+{
+  "title": "n2c-slipgate-s2-f05-d080",
+  "slug": "n2c-slipgate-s2-f05-d080",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T19:37:06.559Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2025-04-18",
+    "to": "2025-04-19"
+  },
+  "pine_sha256": "ecba305f03e75eb4cfe3df410a8e0b8d075531d64cf2053cae5f58cd5241cde1",
+  "tv_trades_sha256": "a0a471b3dc22c9c4e1af1e080c0fd0b09f839da3bb63562fcdf3ca4352bdba21",
+  "tv_trades_rows": 8
+}

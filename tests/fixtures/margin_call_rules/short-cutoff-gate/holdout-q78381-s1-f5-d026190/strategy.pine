@@ -1,0 +1,8 @@
+//@version=6
+strategy("n2c-holdout-q78381-s1-f5-d026190", initial_capital=89365.78059854725, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=1, process_orders_on_close=true)
+if time == timestamp("UTC", 2025, 4, 18, 13, 45)
+    strategy.entry("after", strategy.short, qty=78381.71)
+if time == timestamp("UTC", 2025, 4, 18, 14, 30)
+    strategy.close_all()
+plot(strategy.equity, "equity")
+plot(strategy.position_size, "position")

@@ -1,0 +1,16 @@
+{
+  "title": "sizing-decimal-floor-oracle-control",
+  "slug": "sizing-decimal-floor-oracle-control",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T22:13:56.721Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-06-02",
+    "to": "2025-06-03"
+  },
+  "pine_sha256": "96c29c4229cd9c11e9efd82eb8c76de819af4cc3266cf68628ee9d33df3dd175",
+  "tv_trades_sha256": "76fcc9be06ba6b50ce6d320d02b52c662a89938cb80977f459856ec0cef8b39f",
+  "tv_trades_rows": 2
+}

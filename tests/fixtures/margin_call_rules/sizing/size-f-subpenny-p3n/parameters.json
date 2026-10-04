@@ -1,0 +1,21 @@
+{
+  "symbol": "NYSE:F",
+  "feed": "f",
+  "step": 1.0,
+  "tick": 0.01,
+  "initial_capital": 9997.1600003,
+  "direction": "long",
+  "qty": null,
+  "sizing": "percent",
+  "slippage": 0,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2025-09-17T13:45:00+00:00",
+  "close": "2025-09-17T14:00:00+00:00",
+  "from": "2025-09-17",
+  "to": "2025-09-18",
+  "name": "n2b-size-f-subpenny-p3n",
+  "note": "tick-built c 11.72; dec Q 853 vs binary 852"
+}

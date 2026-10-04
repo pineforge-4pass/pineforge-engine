@@ -1,0 +1,10 @@
+//@version=6
+strategy("N1 aapl-history-k0-only", initial_capital=90921.979999999996, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100)
+var string witness = ""
+if time == timestamp("UTC", 2026, 4, 2, 14, 45)
+    strategy.entry("Seed", strategy.long, qty=356)
+if time == timestamp("UTC", 2026, 4, 2, 15, 0)
+    witness := "E=" + str.tostring(strategy.equity, "#.################") + ";N=" + str.tostring(strategy.netprofit, "#.################") + ";OP=" + str.tostring(strategy.openprofit, "#.################") + ";P=" + str.tostring(strategy.position_size, "#.################") + ";C=" + str.tostring(close, "#.################") + ";T=" + str.tostring(math.round_to_mintick(close), "#.################") + ";D=" + str.tostring(strategy.default_entry_qty(math.round_to_mintick(close)), "#.################")
+    strategy.entry("Turn", strategy.short, comment=witness)
+if time == timestamp("UTC", 2026, 4, 2, 15, 30)
+    strategy.close_all(comment="SENSOR|" + witness)

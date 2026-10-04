@@ -1,0 +1,16 @@
+{
+  "title": "n2b-admit-eth-half-s1-m1n",
+  "slug": "n2b-admit-eth-half-s1-m1n",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T17:59:20.621Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-08",
+    "to": "2025-04-09"
+  },
+  "pine_sha256": "17b7e8d551259d22a8ac6a26474c8b5897ec0b161259971df19431adf0eb896e",
+  "tv_trades_sha256": "859afdfe078a5b67f9c34b30965200e273bcdccff9456e9dcff556f086cd7ac4",
+  "tv_trades_rows": 2
+}

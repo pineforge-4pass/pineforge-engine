@@ -1,0 +1,16 @@
+{
+  "title": "n2-stopband-stop-p10u",
+  "slug": "n2-stopband-stop-p10u",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T15:53:33.051Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2026-02-17",
+    "to": "2026-02-18"
+  },
+  "pine_sha256": "9199dfc4faf3bcbd5b64d5d977fbf7cfb45f3a343c5250d35b66b6322c71c7b1",
+  "tv_trades_sha256": "86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c",
+  "tv_trades_rows": 0
+}

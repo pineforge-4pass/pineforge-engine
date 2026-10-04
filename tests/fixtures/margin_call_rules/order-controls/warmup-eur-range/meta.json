@@ -1,0 +1,16 @@
+{
+  "title": "n2c-warmup-eur-range",
+  "slug": "n2c-warmup-eur-range",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T20:00:19.156Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "12836de12f423e5f086c24a6b9eef94d251d7926e662f92a23763d7daab37799",
+  "tv_trades_sha256": "1f7346f93e33808e52029a8099b24a4242dd971d421bdeab2e1c97acad8c82c0",
+  "tv_trades_rows": 2
+}

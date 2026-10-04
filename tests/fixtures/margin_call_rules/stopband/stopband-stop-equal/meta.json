@@ -1,0 +1,16 @@
+{
+  "title": "n2-stopband-stop-equal",
+  "slug": "n2-stopband-stop-equal",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T15:53:27.725Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2026-02-17",
+    "to": "2026-02-18"
+  },
+  "pine_sha256": "6347d573ae4c0ae64ba712deea321587cd0fa35e52c80fafa0d1026113619e64",
+  "tv_trades_sha256": "86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c",
+  "tv_trades_rows": 0
+}

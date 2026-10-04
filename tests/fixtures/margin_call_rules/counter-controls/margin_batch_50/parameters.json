@@ -1,0 +1,27 @@
+{
+  "name": "margin_batch_50",
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "bars_file": "bars.csv",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 2735.0,
+  "direction": "long",
+  "qty": 3.0,
+  "lots": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "sizing": "explicit",
+  "slippage": 0,
+  "fee": 1.0,
+  "fee_type": "cash_per_contract",
+  "margin": 50,
+  "pooc": false,
+  "coof": false,
+  "entry": "2025-04-01T00:00:00+00:00",
+  "close": "2025-04-01T06:00:00+00:00",
+  "from": "2025-04-01",
+  "to": "2025-04-07"
+}

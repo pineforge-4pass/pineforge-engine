@@ -1,0 +1,21 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 2416.1849993,
+  "direction": "long",
+  "qty": 1.5,
+  "sizing": "explicit",
+  "slippage": 3,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2025-04-08T02:00:00+00:00",
+  "close": "2025-04-08T02:30:00+00:00",
+  "from": "2025-04-08",
+  "to": "2025-04-09",
+  "name": "n2b-admit-eth-s3-m07u",
+  "note": "E=Q*fill-7e-7: rule5 drop"
+}

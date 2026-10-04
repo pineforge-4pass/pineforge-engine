@@ -1,0 +1,16 @@
+{
+  "title": "n2-long-admit-m10n",
+  "slug": "n2-long-admit-m10n",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T15:35:37.607Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-12-15",
+    "to": "2025-12-16"
+  },
+  "pine_sha256": "985395b816bcca754151c7ff8c1ff77fffc704af2980965d23c21b451e7e7035",
+  "tv_trades_sha256": "fbd33d218b3ed5dcedd48c22a5127e9cc8c858a88f4964d42e4ba4a490e805ea",
+  "tv_trades_rows": 4
+}

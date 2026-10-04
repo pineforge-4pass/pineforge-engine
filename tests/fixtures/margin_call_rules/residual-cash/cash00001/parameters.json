@@ -1,0 +1,19 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 992399.54077,
+  "direction": "long",
+  "qty": 623.163,
+  "slippage": 0,
+  "fee": 0,
+  "margin": 100,
+  "pooc": false,
+  "coof": false,
+  "entry": "2025-04-21T00:00:00Z",
+  "close": "2025-04-21T00:30:00Z",
+  "from": "2025-04-21",
+  "to": "2025-04-22",
+  "name": "n2-famab-cash00001"
+}

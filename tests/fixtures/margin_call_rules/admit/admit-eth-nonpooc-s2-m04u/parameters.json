@@ -1,0 +1,21 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 2382.5849996,
+  "direction": "long",
+  "qty": 1.5,
+  "sizing": "explicit",
+  "slippage": 2,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": false,
+  "coof": false,
+  "entry": "2025-04-08T04:00:00+00:00",
+  "close": "2025-04-08T04:30:00+00:00",
+  "from": "2025-04-08",
+  "to": "2025-04-09",
+  "name": "n2b-admit-eth-nonpooc-s2-m04u",
+  "note": "next-open fill 1588.39; signal close 1588.36; call on fill bar at open or low?"
+}

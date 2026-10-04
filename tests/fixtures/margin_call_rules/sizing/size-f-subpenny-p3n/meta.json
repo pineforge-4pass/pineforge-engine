@@ -1,0 +1,16 @@
+{
+  "title": "n2b-size-f-subpenny-p3n",
+  "slug": "n2b-size-f-subpenny-p3n",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T17:59:38.571Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-09-17",
+    "to": "2025-09-18"
+  },
+  "pine_sha256": "e29d3a8c68ff72029f6037ddeb659389b81c2e8dd017d0c5204b3b832c2d6d4a",
+  "tv_trades_sha256": "b8cfb2a2ab1eebb440fca0227fdfe77443aab2d0085ca24e6288d722d1479732",
+  "tv_trades_rows": 2
+}

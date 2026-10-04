@@ -1,0 +1,22 @@
+{
+  "symbol": "OANDA:EURUSD",
+  "feed": "eur",
+  "interval": "15",
+  "from": "2025-04-18",
+  "to": "2025-04-19",
+  "direction": "short",
+  "qty": 12345.67,
+  "sizing": "explicit",
+  "slippage": 5,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "tick": 1e-05,
+  "step": 0.01,
+  "entry": "2025-04-18T13:45:00Z",
+  "close": "2025-04-18T14:30:00Z",
+  "name": "n2c-holdout-q12345-s5-f2-d021000",
+  "initial_capital": 14071.848641769939,
+  "fee": 0.02,
+  "target_deficit": 0.21
+}

@@ -1,0 +1,23 @@
+{
+  "symbol": "OANDA:EURUSD",
+  "feed": "eur",
+  "step": 0.01,
+  "tick": 0.00001,
+  "initial_capital": 98476.49572020028,
+  "direction": "short",
+  "qty": null,
+  "slippage": 0,
+  "fee": 0,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "entry": "2026-02-17T15:15:00Z",
+  "close": "2026-02-17T17:00:00Z",
+  "from": "2026-02-17",
+  "to": "2026-02-18",
+  "member": 40,
+  "stop": 1.18081,
+  "explicit": 83397.41,
+  "sizing": "percent",
+  "name": "n2-stop-40-percent"
+}

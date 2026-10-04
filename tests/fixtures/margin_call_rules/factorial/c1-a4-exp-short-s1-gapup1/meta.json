@@ -1,0 +1,17 @@
+{
+  "title": "n12-c1-a4-exp-short-s1-gapup1",
+  "slug": "n12-c1-a4-exp-short-s1-gapup1",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T20:02:31.523Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-05-20",
+    "to": "2025-05-21",
+    "timeoutMs": 120000
+  },
+  "pine_sha256": "60793493695ef84c7b06e1d4a25b11b0c8223834ae9e78890783d4caf893508d",
+  "tv_trades_sha256": "4899d2025bf245f94a51558e261913d65a6a914d05bc4424ab430db17caa505d",
+  "tv_trades_rows": 4
+}

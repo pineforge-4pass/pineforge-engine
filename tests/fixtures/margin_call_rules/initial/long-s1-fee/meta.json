@@ -1,0 +1,16 @@
+{
+  "title": "n2-long-s1-fee",
+  "slug": "n2-long-s1-fee",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T14:37:34.937Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-08",
+    "to": "2025-04-09"
+  },
+  "pine_sha256": "7c4434d950ae79c76b672a834b01b1d0dfde5ddda436affd0ee1f0d4c389b755",
+  "tv_trades_sha256": "0392935e2480f7693fc81ab9a7b005546cd572c3b4ca4b834ed8afb41c32e94c",
+  "tv_trades_rows": 2
+}

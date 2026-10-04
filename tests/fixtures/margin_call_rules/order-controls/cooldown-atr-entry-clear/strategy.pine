@@ -1,0 +1,26 @@
+//@version=6
+strategy("n2c-cooldown-atr-entry-clear", initial_capital=69001.53831500027, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100, process_orders_on_close=true)
+var int observedExit = na
+if time == timestamp("UTC", 2026, 1, 8, 19, 45)
+    strategy.entry("seed", strategy.short, qty=22.186)
+volatility = ta.atr(14)
+var float captured = na
+var float trough = na
+if time == timestamp("UTC", 2026, 1, 8, 19, 45)
+    captured := volatility
+    trough := low
+if strategy.position_size < 0
+    trough := na(trough) ? low : math.min(trough, low)
+    workingAtr = na(captured) ? volatility : captured
+    reference = strategy.position_avg_price
+    stopLevel = trough <= reference - 2.0 * workingAtr ? math.min(reference - 0.1 * workingAtr, trough + 3.2 * workingAtr) : reference + 2.2 * workingAtr
+    strategy.exit("dynamic", "seed", stop=stopLevel)
+if time == timestamp("UTC", 2026, 1, 8, 23, 30) and strategy.position_size >= 0 and (na(observedExit) or bar_index - observedExit > 4)
+    strategy.entry("candidate", strategy.short)
+if strategy.position_size[1] < 0 and strategy.position_size == 0
+    observedExit := bar_index
+if strategy.position_size == 0
+    captured := na
+    trough := na
+if time == timestamp("UTC", 2026, 1, 9, 1, 0)
+    strategy.close_all()

@@ -1,0 +1,21 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 1898.2725,
+  "direction": "long",
+  "qty": 1.5,
+  "sizing": "explicit",
+  "slippage": 0,
+  "fee": 0.0,
+  "margin": 50,
+  "pooc": false,
+  "coof": false,
+  "entry": "2025-05-21T12:00:00+00:00",
+  "close": "2025-05-21T12:15:00+00:00",
+  "from": "2025-05-21",
+  "to": "2025-05-22",
+  "name": "n12-c1-c-exp-long-m50-equal",
+  "note": "c 2531.02 open 2531.03: E vs sig10(Q*f*0.5)=1898.2725: fill money at m50?"
+}

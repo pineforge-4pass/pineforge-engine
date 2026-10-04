@@ -1,0 +1,16 @@
+{
+  "title": "n2-stop-11-percent",
+  "slug": "n2-stop-11-percent",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T15:35:49.656Z",
+  "chart": {
+    "symbol": "BINANCE:BTCUSDT",
+    "interval": "15",
+    "from": "2025-04-02",
+    "to": "2025-04-03"
+  },
+  "pine_sha256": "e03f246cc5ac74b610a2167b7d1493e78c93a778158e4c583dcb782d74b87d0c",
+  "tv_trades_sha256": "fc0bf3cb45014fec5506a9e9dcda0d1b9363c5ef97135270f1965bdfa16af07c",
+  "tv_trades_rows": 2
+}

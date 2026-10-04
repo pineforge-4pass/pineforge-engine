@@ -1,0 +1,16 @@
+{
+  "title": "n2c-gateedge-q156763-f0-d052800",
+  "slug": "n2c-gateedge-q156763-f0-d052800",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T20:19:13.892Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2025-04-18",
+    "to": "2025-04-19"
+  },
+  "pine_sha256": "95d9c58dc99f935fedcf99e3463b7b2937f06fcaa5fdd880f2687b7b95c55514",
+  "tv_trades_sha256": "72d734ea8ba0bff655c70ebaa306e43500ed3f06b0a0ff3d23748fc8efff37af",
+  "tv_trades_rows": 4
+}

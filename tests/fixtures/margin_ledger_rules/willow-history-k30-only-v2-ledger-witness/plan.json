@@ -1,0 +1,178 @@
+{
+  "name": "willow-history-k30-only-v2-ledger-witness",
+  "symbol": "NYSE:F",
+  "timeframe": "15",
+  "capital": 73537.19,
+  "events": [
+    {
+      "time": 1773410400000,
+      "op": "entry",
+      "id": "Ledger0",
+      "side": -1,
+      "qty": 6221.0
+    },
+    {
+      "time": 1773415800000,
+      "op": "entry",
+      "id": "Ledger1",
+      "side": 1,
+      "qty": 6262.0
+    },
+    {
+      "time": 1773423900000,
+      "op": "entry",
+      "id": "Ledger2",
+      "side": -1,
+      "qty": 6262.0
+    },
+    {
+      "time": 1773668700000,
+      "op": "entry",
+      "id": "Ledger3",
+      "side": 1,
+      "qty": 6208.0
+    },
+    {
+      "time": 1773669600000,
+      "op": "entry",
+      "id": "Ledger4",
+      "side": -1,
+      "qty": 6208.0
+    },
+    {
+      "time": 1773673200000,
+      "op": "entry",
+      "id": "Ledger5",
+      "side": 1,
+      "qty": 6293.0
+    },
+    {
+      "time": 1773675900000,
+      "op": "entry",
+      "id": "Ledger6",
+      "side": -1,
+      "qty": 6293.0
+    },
+    {
+      "time": 1773680400000,
+      "op": "entry",
+      "id": "Ledger7",
+      "side": 1,
+      "qty": 6271.0
+    },
+    {
+      "time": 1773684000000,
+      "op": "entry",
+      "id": "Ledger8",
+      "side": -1,
+      "qty": 6271.0
+    },
+    {
+      "time": 1773685800000,
+      "op": "entry",
+      "id": "Ledger9",
+      "side": 1,
+      "qty": 6250.0
+    },
+    {
+      "time": 1773757800000,
+      "op": "entry",
+      "id": "Ledger10",
+      "side": -1,
+      "qty": 6250.0
+    },
+    {
+      "time": 1773758700000,
+      "op": "entry",
+      "id": "Ledger11",
+      "side": 1,
+      "qty": 6229.0
+    },
+    {
+      "time": 1773762300000,
+      "op": "entry",
+      "id": "Ledger12",
+      "side": -1,
+      "qty": 6229.0
+    },
+    {
+      "time": 1773769500000,
+      "op": "entry",
+      "id": "Ledger13",
+      "side": 1,
+      "qty": 6260.0
+    },
+    {
+      "time": 1773770400000,
+      "op": "entry",
+      "id": "Ledger14",
+      "side": -1,
+      "qty": 6260.0
+    },
+    {
+      "time": 1773846900000,
+      "op": "entry",
+      "id": "Ledger15",
+      "side": 1,
+      "qty": 6237.0
+    },
+    {
+      "time": 1773852300000,
+      "op": "entry",
+      "id": "Ledger16",
+      "side": -1,
+      "qty": 6237.0
+    },
+    {
+      "time": 1773857700000,
+      "op": "entry",
+      "id": "Seed",
+      "side": 1,
+      "qty": 6299.0
+    },
+    {
+      "time": 1773937800000,
+      "op": "entry",
+      "id": "Turn",
+      "side": -1,
+      "qty": null,
+      "boundary": true
+    },
+    {
+      "time": 1773939600000,
+      "op": "close_all"
+    }
+  ],
+  "boundary": 1773937800000,
+  "after_close": false,
+  "tick": 0.01,
+  "step": 1.0,
+  "margin_long": 100,
+  "margin_short": 100,
+  "from": "2026-03-13",
+  "to": "2026-03-20",
+  "metadata": {
+    "depth": 30,
+    "closed_selected": 30,
+    "previous_profit_decimal": "-26462.810",
+    "source_tape": "member-tapes/willow-tv.csv",
+    "actual_live": [
+      {
+        "number": 1755,
+        "exit_time": 1773938700000,
+        "exit_price": 11.64,
+        "exit_signal": "Short",
+        "side": 1,
+        "qty": 6299.0,
+        "pnl": -1511.76,
+        "entry_time": 1773858600000,
+        "entry_price": 11.88,
+        "entry_signal": "Long"
+      }
+    ],
+    "scheduled_parent_entries": 18,
+    "generated_from_trade_events_only": true,
+    "telemetry_predecessor": "willow-history-k30-only",
+    "additional_telemetry": "closed-trade-native-profit-versus-price-arithmetic"
+  }
+}

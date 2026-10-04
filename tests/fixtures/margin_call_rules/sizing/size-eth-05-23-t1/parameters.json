@@ -1,0 +1,21 @@
+{
+  "symbol": "BINANCE:ETHUSDT.P",
+  "feed": "eth",
+  "step": 0.0001,
+  "tick": 0.01,
+  "initial_capital": 39931.793933,
+  "direction": "long",
+  "qty": null,
+  "sizing": "percent",
+  "slippage": 0,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": false,
+  "coof": false,
+  "entry": "2025-05-23T00:15:00+00:00",
+  "close": "2025-05-23T00:30:00+00:00",
+  "from": "2025-05-23",
+  "to": "2025-05-24",
+  "name": "n2b-r2-size-eth-05-23-t1",
+  "note": "T1: q=15.043 qdec 15.043 binary 15.042900000000001 mul_inv 15.043"
+}

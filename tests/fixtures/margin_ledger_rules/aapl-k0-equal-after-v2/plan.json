@@ -1,0 +1,41 @@
+{
+  "name": "aapl-k0-equal-after-v2",
+  "symbol": "NASDAQ:AAPL",
+  "timeframe": "15",
+  "capital": 90921.98,
+  "events": [
+    {
+      "time": 1775141100000,
+      "op": "entry",
+      "id": "Seed",
+      "side": 1,
+      "qty": 355
+    },
+    {
+      "time": 1775142000000,
+      "op": "entry",
+      "id": "Turn",
+      "side": -1,
+      "qty": null,
+      "boundary": true
+    },
+    {
+      "time": 1775143800000,
+      "op": "close_all"
+    }
+  ],
+  "boundary": 1775142000000,
+  "after_close": true,
+  "tick": 0.01,
+  "step": 1.0,
+  "margin_long": 100,
+  "margin_short": 100,
+  "from": "2026-04-02",
+  "to": "2026-04-03",
+  "metadata": {
+    "depth": 0,
+    "capital_ulp_shift": 0,
+    "fresh_book": true,
+    "telemetry_predecessor": "aapl-k0-equal-after"
+  }
+}

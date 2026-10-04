@@ -1,0 +1,16 @@
+{
+  "title": "n2-quantum-s5-m1",
+  "slug": "n2-quantum-s5-m1",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T14:49:54.840Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-08",
+    "to": "2025-04-09"
+  },
+  "pine_sha256": "50fb021c4495046f8400aad89b127299ab09a883fa6e7ce0ac2bf06b04d66113",
+  "tv_trades_sha256": "3bf4d247dd0ad956a367112fa84c6a9dc6792d3f9ec433cf7bcedfa1ff01aad2",
+  "tv_trades_rows": 6
+}

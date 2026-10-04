@@ -1,0 +1,11 @@
+//@version=6
+strategy("n2-source-floor-zero", initial_capital=38606.0873, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0, slippage=0, process_orders_on_close=false, calc_on_order_fills=false, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+if time == timestamp("UTC", 2025, 6, 22, 13, 45) and strategy.position_size == 0
+    strategy.entry("probe", strategy.long, qty=math.floor(strategy.equity / close / 0.0001) * 0.0001)
+if time == timestamp("UTC", 2025, 6, 22, 14, 30)
+    strategy.close_all()
+plot(strategy.equity, "equity")
+plot(strategy.position_size, "held")
+plot(strategy.netprofit, "netprofit")
+plot(strategy.openprofit, "openprofit")
+plot(math.floor(strategy.equity / close / 0.0001) * 0.0001, "source-size")

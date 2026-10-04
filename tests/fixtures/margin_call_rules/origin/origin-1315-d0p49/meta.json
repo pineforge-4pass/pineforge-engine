@@ -1,0 +1,16 @@
+{
+  "title": "n2-origin-1315-d0p49",
+  "slug": "n2-origin-1315-d0p49",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T15:47:39.004Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-08",
+    "to": "2025-04-09"
+  },
+  "pine_sha256": "c1fd27bfe0bb645be1ae901d4198575a78eb737aaa2d711cc8d63731d93e6526",
+  "tv_trades_sha256": "7849cf6239eaaa0a7645dd1ed230fac5563e76f53b3fbbe686f19a6a7c48b7cd",
+  "tv_trades_rows": 6
+}

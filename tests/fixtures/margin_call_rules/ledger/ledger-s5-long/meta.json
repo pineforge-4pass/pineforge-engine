@@ -1,0 +1,16 @@
+{
+  "title": "n2-ledger-s5-long",
+  "slug": "n2-ledger-s5-long",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T15:25:24.941Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-08",
+    "to": "2025-04-09"
+  },
+  "pine_sha256": "4f94245a602f2727a6e0894e1c1073674915fe1656c234fe87ab1b9b0d903809",
+  "tv_trades_sha256": "2cda56e0e514942f86b4fba2772303b0a0e1541289372fb7b769683e096612e6",
+  "tv_trades_rows": 8
+}

@@ -1,0 +1,21 @@
+{
+  "symbol": "OANDA:EURUSD",
+  "feed": "eur",
+  "step": 0.01,
+  "tick": 1e-05,
+  "initial_capital": 106575.300002,
+  "direction": "short",
+  "qty": 90000.0,
+  "sizing": "explicit",
+  "slippage": 1,
+  "fee": 0.0,
+  "margin": 100,
+  "pooc": false,
+  "coof": false,
+  "entry": "2026-02-17T03:45:00+00:00",
+  "close": "2026-02-17T04:15:00+00:00",
+  "from": "2026-02-17",
+  "to": "2026-02-18",
+  "name": "n2b-r2-admit-eur-short-nonpooc-s1-ulp",
+  "note": "c 1.1841700000000002 > 1.18417; next open 1.18416: placement check at c (drop) vs slipped placement/exec (admit)"
+}

@@ -1,0 +1,16 @@
+{
+  "title": "n2c-feesize-eth-long-s1-f5-2em05",
+  "slug": "n2c-feesize-eth-long-s1-f5-2em05",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T19:47:12.566Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2026-01-08",
+    "to": "2026-01-09"
+  },
+  "pine_sha256": "f72c78821fd4e1d912beccca3136e067f45ea8ef7e754b9d7b16c53a077b3955",
+  "tv_trades_sha256": "1996d9bf3ab1b1bd023ba9d7b1b4fd1f5a5bd27834c6f0c22243665aed337b14",
+  "tv_trades_rows": 2
+}

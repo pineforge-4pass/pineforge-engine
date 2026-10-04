@@ -1,0 +1,13 @@
+//@version=6
+strategy("n2c-cooldown-closepoint-late-observer", initial_capital=69001.53831500027, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100, process_orders_on_close=true)
+var int observedExit = na
+if time == timestamp("UTC", 2026, 1, 8, 19, 45)
+    strategy.entry("seed", strategy.short, qty=22.186)
+if time == timestamp("UTC", 2026, 1, 8, 23, 15)
+    strategy.exit("closepoint", "seed", stop=3109.0)
+if time == timestamp("UTC", 2026, 1, 8, 23, 30) and strategy.position_size >= 0 and (na(observedExit) or bar_index - observedExit > 4)
+    strategy.entry("candidate", strategy.short)
+if strategy.position_size[1] < 0 and strategy.position_size == 0
+    observedExit := bar_index
+if time == timestamp("UTC", 2026, 1, 9, 1, 0)
+    strategy.close_all()

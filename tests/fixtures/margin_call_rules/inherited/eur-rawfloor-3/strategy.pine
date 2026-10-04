@@ -1,0 +1,7 @@
+//@version=6
+strategy("px-f2b-eur-rawfloor-3", initial_capital=996097.5957, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100, commission_value=0)
+if time == timestamp("UTC", 2025, 4, 2, 19, 45)
+    strategy.entry("test", strategy.short)
+if time == timestamp("UTC", 2025, 4, 2, 20, 15)
+    strategy.close_all()
+plot(strategy.equity)

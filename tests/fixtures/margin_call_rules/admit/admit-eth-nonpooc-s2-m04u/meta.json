@@ -1,0 +1,16 @@
+{
+  "title": "n2b-admit-eth-nonpooc-s2-m04u",
+  "slug": "n2b-admit-eth-nonpooc-s2-m04u",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T17:59:19.754Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-08",
+    "to": "2025-04-09"
+  },
+  "pine_sha256": "2abd1f45db1cffa9d47b09bccb0e802c8511eaa037f77f1574a1a30703eb5b63",
+  "tv_trades_sha256": "5e15fdc0f87773c8ce306432a2de84774feca230f3cd2160ccb421eee9b33963",
+  "tv_trades_rows": 4
+}

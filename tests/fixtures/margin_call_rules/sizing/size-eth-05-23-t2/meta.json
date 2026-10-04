@@ -1,0 +1,16 @@
+{
+  "title": "n2b-r2-size-eth-05-23-t2",
+  "slug": "n2b-r2-size-eth-05-23-t2",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T18:06:40.810Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-05-23",
+    "to": "2025-05-24"
+  },
+  "pine_sha256": "dbd5b8099371357f701353bdf95d4934d036affb066e3582304b62787124c4d8",
+  "tv_trades_sha256": "b6b5fe196f6472413ec8c08d25f69aa78e2808afb7ab004784ef1c87e793e2b7",
+  "tv_trades_rows": 2
+}

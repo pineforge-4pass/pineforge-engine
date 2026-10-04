@@ -1,0 +1,16 @@
+{
+  "title": "n2-ledger-member-3-literal-short",
+  "slug": "n2-ledger-member-3-literal-short",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T15:25:34.433Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-06-22",
+    "to": "2025-06-23"
+  },
+  "pine_sha256": "c19b0abb36271df7bb811c0d98dae776b19b5508c402d51b5259e49aee28f708",
+  "tv_trades_sha256": "243c82ce176a4b39f1b151b83e6873363e6b738c217adff7ea5e8f53da44bf1d",
+  "tv_trades_rows": 4
+}

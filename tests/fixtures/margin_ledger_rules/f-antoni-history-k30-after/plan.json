@@ -1,0 +1,176 @@
+{
+  "name": "f-antoni-history-k30-after",
+  "symbol": "NYSE:F",
+  "timeframe": "15",
+  "capital": 105668.25,
+  "events": [
+    {
+      "time": 1753293600000,
+      "op": "entry",
+      "id": "Ledger0",
+      "side": -1,
+      "qty": 9301.0
+    },
+    {
+      "time": 1753294500000,
+      "op": "entry",
+      "id": "Ledger1",
+      "side": 1,
+      "qty": 9268.0
+    },
+    {
+      "time": 1753375500000,
+      "op": "entry",
+      "id": "Ledger2",
+      "side": -1,
+      "qty": 9268.0
+    },
+    {
+      "time": 1753378200000,
+      "op": "entry",
+      "id": "Ledger3",
+      "side": 1,
+      "qty": 9219.0
+    },
+    {
+      "time": 1753380000000,
+      "op": "entry",
+      "id": "Ledger4",
+      "side": -1,
+      "qty": 9219.0
+    },
+    {
+      "time": 1753383600000,
+      "op": "entry",
+      "id": "Ledger5",
+      "side": 1,
+      "qty": 9252.0
+    },
+    {
+      "time": 1753452000000,
+      "op": "entry",
+      "id": "Ledger6",
+      "side": -1,
+      "qty": 9252.0
+    },
+    {
+      "time": 1753454700000,
+      "op": "entry",
+      "id": "Ledger7",
+      "side": 1,
+      "qty": 9219.0
+    },
+    {
+      "time": 1753716600000,
+      "op": "entry",
+      "id": "Ledger8",
+      "side": -1,
+      "qty": 9219.0
+    },
+    {
+      "time": 1753985700000,
+      "op": "entry",
+      "id": "Ledger9",
+      "side": 1,
+      "qty": 9751.0
+    },
+    {
+      "time": 1753990200000,
+      "op": "entry",
+      "id": "Ledger10",
+      "side": -1,
+      "qty": 9751.0
+    },
+    {
+      "time": 1753991100000,
+      "op": "entry",
+      "id": "Ledger11",
+      "side": 1,
+      "qty": 9646.0
+    },
+    {
+      "time": 1754058600000,
+      "op": "entry",
+      "id": "Ledger12",
+      "side": -1,
+      "qty": 9910.0
+    },
+    {
+      "time": 1754059500000,
+      "op": "entry",
+      "id": "Ledger13",
+      "side": 1,
+      "qty": 9873.0
+    },
+    {
+      "time": 1754064900000,
+      "op": "entry",
+      "id": "Ledger14",
+      "side": -1,
+      "qty": 9873.0
+    },
+    {
+      "time": 1754331300000,
+      "op": "entry",
+      "id": "Ledger15",
+      "side": 1,
+      "qty": 9550.0
+    },
+    {
+      "time": 1754334000000,
+      "op": "entry",
+      "id": "Ledger16",
+      "side": -1,
+      "qty": 9550.0
+    },
+    {
+      "time": 1754400600000,
+      "op": "entry",
+      "id": "Seed",
+      "side": 1,
+      "qty": 9429.0
+    },
+    {
+      "time": 1754404200000,
+      "op": "entry",
+      "id": "Turn",
+      "side": -1,
+      "qty": null,
+      "boundary": true
+    },
+    {
+      "time": 1754406000000,
+      "op": "close_all"
+    }
+  ],
+  "boundary": 1754404200000,
+  "after_close": true,
+  "tick": 0.01,
+  "step": 1.0,
+  "margin_long": 100,
+  "margin_short": 100,
+  "from": "2025-07-23",
+  "to": "2025-08-06",
+  "metadata": {
+    "depth": 30,
+    "closed_selected": 30,
+    "previous_profit_decimal": "5668.250",
+    "source_tape": "member-tapes/f-antoni-tv.csv",
+    "actual_live": [
+      {
+        "number": 264,
+        "exit_time": 1754405100000,
+        "exit_price": 10.93,
+        "exit_signal": "Short",
+        "side": 1,
+        "qty": 9429.0,
+        "pnl": -942.9,
+        "entry_time": 1754401500000,
+        "entry_price": 11.03,
+        "entry_signal": "Long"
+      }
+    ],
+    "scheduled_parent_entries": 18,
+    "generated_from_trade_events_only": true
+  }
+}

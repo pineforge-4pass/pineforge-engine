@@ -1,0 +1,16 @@
+{
+  "title": "n2c-mincall-f00-d024",
+  "slug": "n2c-mincall-f00-d024",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T19:32:49.960Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "from": "2025-04-18",
+    "to": "2025-04-19"
+  },
+  "pine_sha256": "de29b7fd0ed6881f229e83129e8130779807f8b749d36741bdbba49acb122a9c",
+  "tv_trades_sha256": "aaf5faf7e3911da4cdbdd7b964dcdf43cd9daa4b2db57f8b01d054f9c9a6a4fb",
+  "tv_trades_rows": 4
+}

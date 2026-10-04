@@ -1,0 +1,1207 @@
+{
+  "name": "f-antoni-history-k263-only",
+  "symbol": "NYSE:F",
+  "timeframe": "15",
+  "capital": 100000.0,
+  "events": [
+    {
+      "time": 1743534900000,
+      "op": "entry",
+      "id": "Ledger0",
+      "side": 1,
+      "qty": 10111.0
+    },
+    {
+      "time": 1743620400000,
+      "op": "entry",
+      "id": "Ledger1",
+      "side": -1,
+      "qty": 10121.0
+    },
+    {
+      "time": 1743623100000,
+      "op": "entry",
+      "id": "Ledger2",
+      "side": 1,
+      "qty": 10061.0
+    },
+    {
+      "time": 1743688800000,
+      "op": "entry",
+      "id": "Ledger3",
+      "side": -1,
+      "qty": 10326.0
+    },
+    {
+      "time": 1743782400000,
+      "op": "entry",
+      "id": "Ledger4",
+      "side": 1,
+      "qty": 10791.0
+    },
+    {
+      "time": 1743783300000,
+      "op": "entry",
+      "id": "Ledger5",
+      "side": -1,
+      "qty": 10791.0
+    },
+    {
+      "time": 1743786900000,
+      "op": "entry",
+      "id": "Ledger6",
+      "side": 1,
+      "qty": 10812.0
+    },
+    {
+      "time": 1743791400000,
+      "op": "entry",
+      "id": "Ledger7",
+      "side": -1,
+      "qty": 10812.0
+    },
+    {
+      "time": 1743792300000,
+      "op": "entry",
+      "id": "Ledger8",
+      "side": 1,
+      "qty": 10698.0
+    },
+    {
+      "time": 1743795900000,
+      "op": "entry",
+      "id": "Ledger9",
+      "side": -1,
+      "qty": 10698.0
+    },
+    {
+      "time": 1744034400000,
+      "op": "entry",
+      "id": "Ledger10",
+      "side": 1,
+      "qty": 10058.0
+    },
+    {
+      "time": 1744035300000,
+      "op": "entry",
+      "id": "Ledger11",
+      "side": -1,
+      "qty": 10058.0
+    },
+    {
+      "time": 1744036200000,
+      "op": "entry",
+      "id": "Ledger12",
+      "side": 1,
+      "qty": 10007.0
+    },
+    {
+      "time": 1744038900000,
+      "op": "entry",
+      "id": "Ledger13",
+      "side": -1,
+      "qty": 10028.0
+    },
+    {
+      "time": 1744039800000,
+      "op": "entry",
+      "id": "Ledger14",
+      "side": 1,
+      "qty": 9597.0
+    },
+    {
+      "time": 1744040700000,
+      "op": "entry",
+      "id": "Ledger15",
+      "side": -1,
+      "qty": 9616.0
+    },
+    {
+      "time": 1744050600000,
+      "op": "entry",
+      "id": "Ledger16",
+      "side": 1,
+      "qty": 9511.0
+    },
+    {
+      "time": 1744051500000,
+      "op": "entry",
+      "id": "Ledger17",
+      "side": -1,
+      "qty": 9531.0
+    },
+    {
+      "time": 1744052400000,
+      "op": "entry",
+      "id": "Ledger18",
+      "side": 1,
+      "qty": 9467.0
+    },
+    {
+      "time": 1744125300000,
+      "op": "entry",
+      "id": "Ledger19",
+      "side": -1,
+      "qty": 9487.0
+    },
+    {
+      "time": 1744126200000,
+      "op": "entry",
+      "id": "Ledger20",
+      "side": 1,
+      "qty": 9236.0
+    },
+    {
+      "time": 1744128000000,
+      "op": "entry",
+      "id": "Ledger21",
+      "side": -1,
+      "qty": 9236.0
+    },
+    {
+      "time": 1744215300000,
+      "op": "entry",
+      "id": "Ledger22",
+      "side": 1,
+      "qty": 10215.0
+    },
+    {
+      "time": 1744301700000,
+      "op": "entry",
+      "id": "Ledger23",
+      "side": -1,
+      "qty": 10237.0
+    },
+    {
+      "time": 1744303500000,
+      "op": "entry",
+      "id": "Ledger24",
+      "side": 1,
+      "qty": 9964.0
+    },
+    {
+      "time": 1744304400000,
+      "op": "entry",
+      "id": "Ledger25",
+      "side": -1,
+      "qty": 9964.0
+    },
+    {
+      "time": 1744306200000,
+      "op": "entry",
+      "id": "Ledger26",
+      "side": 1,
+      "qty": 9662.0
+    },
+    {
+      "time": 1744395300000,
+      "op": "entry",
+      "id": "Ledger27",
+      "side": -1,
+      "qty": 9683.0
+    },
+    {
+      "time": 1744398900000,
+      "op": "entry",
+      "id": "Ledger28",
+      "side": 1,
+      "qty": 9579.0
+    },
+    {
+      "time": 1744659900000,
+      "op": "entry",
+      "id": "Ledger29",
+      "side": -1,
+      "qty": 9599.0
+    },
+    {
+      "time": 1744745400000,
+      "op": "entry",
+      "id": "Ledger30",
+      "side": 1,
+      "qty": 9858.0
+    },
+    {
+      "time": 1744919100000,
+      "op": "entry",
+      "id": "Ledger31",
+      "side": -1,
+      "qty": 9858.0
+    },
+    {
+      "time": 1745263800000,
+      "op": "entry",
+      "id": "Ledger32",
+      "side": 1,
+      "qty": 10144.0
+    },
+    {
+      "time": 1745343900000,
+      "op": "entry",
+      "id": "Ledger33",
+      "side": -1,
+      "qty": 10144.0
+    },
+    {
+      "time": 1745344800000,
+      "op": "entry",
+      "id": "Ledger34",
+      "side": 1,
+      "qty": 10018.0
+    },
+    {
+      "time": 1745349300000,
+      "op": "entry",
+      "id": "Ledger35",
+      "side": -1,
+      "qty": 10038.0
+    },
+    {
+      "time": 1745350200000,
+      "op": "entry",
+      "id": "Ledger36",
+      "side": 1,
+      "qty": 9934.0
+    },
+    {
+      "time": 1745428500000,
+      "op": "entry",
+      "id": "Ledger37",
+      "side": -1,
+      "qty": 9954.0
+    },
+    {
+      "time": 1745430300000,
+      "op": "entry",
+      "id": "Ledger38",
+      "side": 1,
+      "qty": 9914.0
+    },
+    {
+      "time": 1745433900000,
+      "op": "entry",
+      "id": "Ledger39",
+      "side": -1,
+      "qty": 9914.0
+    },
+    {
+      "time": 1745436600000,
+      "op": "entry",
+      "id": "Ledger40",
+      "side": 1,
+      "qty": 9994.0
+    },
+    {
+      "time": 1745523900000,
+      "op": "entry",
+      "id": "Ledger41",
+      "side": -1,
+      "qty": 9994.0
+    },
+    {
+      "time": 1745855100000,
+      "op": "entry",
+      "id": "Ledger42",
+      "side": 1,
+      "qty": 10010.0
+    },
+    {
+      "time": 1745856900000,
+      "op": "entry",
+      "id": "Ledger43",
+      "side": -1,
+      "qty": 10010.0
+    },
+    {
+      "time": 1745867700000,
+      "op": "entry",
+      "id": "Ledger44",
+      "side": 1,
+      "qty": 9990.0
+    },
+    {
+      "time": 1745868600000,
+      "op": "entry",
+      "id": "Ledger45",
+      "side": -1,
+      "qty": 9990.0
+    },
+    {
+      "time": 1745937900000,
+      "op": "entry",
+      "id": "Ledger46",
+      "side": 1,
+      "qty": 9833.0
+    },
+    {
+      "time": 1746019800000,
+      "op": "entry",
+      "id": "Ledger47",
+      "side": -1,
+      "qty": 9853.0
+    },
+    {
+      "time": 1746203400000,
+      "op": "entry",
+      "id": "Ledger48",
+      "side": 1,
+      "qty": 9088.0
+    },
+    {
+      "time": 1746211500000,
+      "op": "entry",
+      "id": "Ledger49",
+      "side": -1,
+      "qty": 9088.0
+    },
+    {
+      "time": 1746468000000,
+      "op": "entry",
+      "id": "Ledger50",
+      "side": 1,
+      "qty": 9301.0
+    },
+    {
+      "time": 1746468900000,
+      "op": "entry",
+      "id": "Ledger51",
+      "side": -1,
+      "qty": 9301.0
+    },
+    {
+      "time": 1746474300000,
+      "op": "entry",
+      "id": "Ledger52",
+      "side": 1,
+      "qty": 9228.0
+    },
+    {
+      "time": 1746555300000,
+      "op": "entry",
+      "id": "Ledger53",
+      "side": -1,
+      "qty": 9422.0
+    },
+    {
+      "time": 1746817200000,
+      "op": "entry",
+      "id": "Ledger54",
+      "side": 1,
+      "qty": 9440.0
+    },
+    {
+      "time": 1746818100000,
+      "op": "entry",
+      "id": "Ledger55",
+      "side": -1,
+      "qty": 9440.0
+    },
+    {
+      "time": 1747147500000,
+      "op": "entry",
+      "id": "Ledger56",
+      "side": 1,
+      "qty": 9191.0
+    },
+    {
+      "time": 1747165500000,
+      "op": "entry",
+      "id": "Ledger57",
+      "side": -1,
+      "qty": 9191.0
+    },
+    {
+      "time": 1747232100000,
+      "op": "entry",
+      "id": "Ledger58",
+      "side": 1,
+      "qty": 9071.0
+    },
+    {
+      "time": 1747248300000,
+      "op": "entry",
+      "id": "Ledger59",
+      "side": -1,
+      "qty": 9071.0
+    },
+    {
+      "time": 1747320300000,
+      "op": "entry",
+      "id": "Ledger60",
+      "side": 1,
+      "qty": 9003.0
+    },
+    {
+      "time": 1747422900000,
+      "op": "entry",
+      "id": "Ledger61",
+      "side": -1,
+      "qty": 9003.0
+    },
+    {
+      "time": 1747424700000,
+      "op": "entry",
+      "id": "Ledger62",
+      "side": 1,
+      "qty": 8953.0
+    },
+    {
+      "time": 1747677600000,
+      "op": "entry",
+      "id": "Ledger63",
+      "side": -1,
+      "qty": 9136.0
+    },
+    {
+      "time": 1747678500000,
+      "op": "entry",
+      "id": "Ledger64",
+      "side": 1,
+      "qty": 9119.0
+    },
+    {
+      "time": 1747681200000,
+      "op": "entry",
+      "id": "Ledger65",
+      "side": -1,
+      "qty": 9119.0
+    },
+    {
+      "time": 1747759500000,
+      "op": "entry",
+      "id": "Ledger66",
+      "side": 1,
+      "qty": 9034.0
+    },
+    {
+      "time": 1747835100000,
+      "op": "entry",
+      "id": "Ledger67",
+      "side": -1,
+      "qty": 9051.0
+    },
+    {
+      "time": 1747838700000,
+      "op": "entry",
+      "id": "Ledger68",
+      "side": 1,
+      "qty": 8983.0
+    },
+    {
+      "time": 1747846800000,
+      "op": "entry",
+      "id": "Ledger69",
+      "side": -1,
+      "qty": 9000.0
+    },
+    {
+      "time": 1747934100000,
+      "op": "entry",
+      "id": "Ledger70",
+      "side": 1,
+      "qty": 9257.0
+    },
+    {
+      "time": 1747938600000,
+      "op": "entry",
+      "id": "Ledger71",
+      "side": -1,
+      "qty": 9257.0
+    },
+    {
+      "time": 1747940400000,
+      "op": "entry",
+      "id": "Ledger72",
+      "side": 1,
+      "qty": 9222.0
+    },
+    {
+      "time": 1748446200000,
+      "op": "entry",
+      "id": "Ledger73",
+      "side": -1,
+      "qty": 9222.0
+    },
+    {
+      "time": 1748451600000,
+      "op": "entry",
+      "id": "Ledger74",
+      "side": 1,
+      "qty": 9079.0
+    },
+    {
+      "time": 1748452500000,
+      "op": "entry",
+      "id": "Ledger75",
+      "side": -1,
+      "qty": 9097.0
+    },
+    {
+      "time": 1748455200000,
+      "op": "entry",
+      "id": "Ledger76",
+      "side": 1,
+      "qty": 9061.0
+    },
+    {
+      "time": 1748456100000,
+      "op": "entry",
+      "id": "Ledger77",
+      "side": -1,
+      "qty": 9061.0
+    },
+    {
+      "time": 1748541600000,
+      "op": "entry",
+      "id": "Ledger78",
+      "side": 1,
+      "qty": 9096.0
+    },
+    {
+      "time": 1748611800000,
+      "op": "entry",
+      "id": "Ledger79",
+      "side": -1,
+      "qty": 9096.0
+    },
+    {
+      "time": 1748612700000,
+      "op": "entry",
+      "id": "Ledger80",
+      "side": 1,
+      "qty": 9006.0
+    },
+    {
+      "time": 1748633400000,
+      "op": "entry",
+      "id": "Ledger81",
+      "side": -1,
+      "qty": 9006.0
+    },
+    {
+      "time": 1748979900000,
+      "op": "entry",
+      "id": "Ledger82",
+      "side": 1,
+      "qty": 9427.0
+    },
+    {
+      "time": 1749045600000,
+      "op": "entry",
+      "id": "Ledger83",
+      "side": -1,
+      "qty": 9427.0
+    },
+    {
+      "time": 1749063600000,
+      "op": "entry",
+      "id": "Ledger84",
+      "side": 1,
+      "qty": 9477.0
+    },
+    {
+      "time": 1749066300000,
+      "op": "entry",
+      "id": "Ledger85",
+      "side": -1,
+      "qty": 9477.0
+    },
+    {
+      "time": 1749134700000,
+      "op": "entry",
+      "id": "Ledger86",
+      "side": 1,
+      "qty": 9477.0
+    },
+    {
+      "time": 1749141000000,
+      "op": "entry",
+      "id": "Ledger87",
+      "side": -1,
+      "qty": 9477.0
+    },
+    {
+      "time": 1749221100000,
+      "op": "entry",
+      "id": "Ledger88",
+      "side": 1,
+      "qty": 9366.0
+    },
+    {
+      "time": 1749493800000,
+      "op": "entry",
+      "id": "Ledger89",
+      "side": -1,
+      "qty": 9366.0
+    },
+    {
+      "time": 1749495600000,
+      "op": "entry",
+      "id": "Ledger90",
+      "side": 1,
+      "qty": 9366.0
+    },
+    {
+      "time": 1749496500000,
+      "op": "entry",
+      "id": "Ledger91",
+      "side": -1,
+      "qty": 9366.0
+    },
+    {
+      "time": 1749564000000,
+      "op": "entry",
+      "id": "Ledger92",
+      "side": 1,
+      "qty": 9101.0
+    },
+    {
+      "time": 1749582000000,
+      "op": "entry",
+      "id": "Ledger93",
+      "side": -1,
+      "qty": 9101.0
+    },
+    {
+      "time": 1749648600000,
+      "op": "entry",
+      "id": "Ledger94",
+      "side": 1,
+      "qty": 8949.0
+    },
+    {
+      "time": 1749663900000,
+      "op": "entry",
+      "id": "Ledger95",
+      "side": -1,
+      "qty": 8949.0
+    },
+    {
+      "time": 1749671100000,
+      "op": "entry",
+      "id": "Ledger96",
+      "side": 1,
+      "qty": 8983.0
+    },
+    {
+      "time": 1749735000000,
+      "op": "entry",
+      "id": "Ledger97",
+      "side": -1,
+      "qty": 9084.0
+    },
+    {
+      "time": 1749737700000,
+      "op": "entry",
+      "id": "Ledger98",
+      "side": 1,
+      "qty": 9102.0
+    },
+    {
+      "time": 1749739500000,
+      "op": "entry",
+      "id": "Ledger99",
+      "side": -1,
+      "qty": 9102.0
+    },
+    {
+      "time": 1749757500000,
+      "op": "entry",
+      "id": "Ledger100",
+      "side": 1,
+      "qty": 9067.0
+    },
+    {
+      "time": 1749838500000,
+      "op": "entry",
+      "id": "Ledger101",
+      "side": -1,
+      "qty": 9275.0
+    },
+    {
+      "time": 1750189500000,
+      "op": "entry",
+      "id": "Ledger102",
+      "side": 1,
+      "qty": 9288.0
+    },
+    {
+      "time": 1750258800000,
+      "op": "entry",
+      "id": "Ledger103",
+      "side": -1,
+      "qty": 9288.0
+    },
+    {
+      "time": 1750262400000,
+      "op": "entry",
+      "id": "Ledger104",
+      "side": 1,
+      "qty": 9288.0
+    },
+    {
+      "time": 1750263300000,
+      "op": "entry",
+      "id": "Ledger105",
+      "side": -1,
+      "qty": 9288.0
+    },
+    {
+      "time": 1750265100000,
+      "op": "entry",
+      "id": "Ledger106",
+      "side": 1,
+      "qty": 9306.0
+    },
+    {
+      "time": 1750266000000,
+      "op": "entry",
+      "id": "Ledger107",
+      "side": -1,
+      "qty": 9306.0
+    },
+    {
+      "time": 1750271400000,
+      "op": "entry",
+      "id": "Ledger108",
+      "side": 1,
+      "qty": 9253.0
+    },
+    {
+      "time": 1750272300000,
+      "op": "entry",
+      "id": "Ledger109",
+      "side": -1,
+      "qty": 9271.0
+    },
+    {
+      "time": 1750273200000,
+      "op": "entry",
+      "id": "Ledger110",
+      "side": 1,
+      "qty": 9235.0
+    },
+    {
+      "time": 1750274100000,
+      "op": "entry",
+      "id": "Ledger111",
+      "side": -1,
+      "qty": 9235.0
+    },
+    {
+      "time": 1750275000000,
+      "op": "entry",
+      "id": "Ledger112",
+      "side": 1,
+      "qty": 9182.0
+    },
+    {
+      "time": 1750704300000,
+      "op": "entry",
+      "id": "Ledger113",
+      "side": -1,
+      "qty": 9182.0
+    },
+    {
+      "time": 1750782600000,
+      "op": "entry",
+      "id": "Ledger114",
+      "side": 1,
+      "qty": 8979.0
+    },
+    {
+      "time": 1750783500000,
+      "op": "entry",
+      "id": "Ledger115",
+      "side": -1,
+      "qty": 8979.0
+    },
+    {
+      "time": 1750784400000,
+      "op": "entry",
+      "id": "Ledger116",
+      "side": 1,
+      "qty": 8962.0
+    },
+    {
+      "time": 1750785300000,
+      "op": "entry",
+      "id": "Ledger117",
+      "side": -1,
+      "qty": 8962.0
+    },
+    {
+      "time": 1750946400000,
+      "op": "entry",
+      "id": "Ledger118",
+      "side": 1,
+      "qty": 9385.0
+    },
+    {
+      "time": 1750966200000,
+      "op": "entry",
+      "id": "Ledger119",
+      "side": -1,
+      "qty": 9402.0
+    },
+    {
+      "time": 1751049000000,
+      "op": "entry",
+      "id": "Ledger120",
+      "side": 1,
+      "qty": 9175.0
+    },
+    {
+      "time": 1751049900000,
+      "op": "entry",
+      "id": "Ledger121",
+      "side": -1,
+      "qty": 9175.0
+    },
+    {
+      "time": 1751051700000,
+      "op": "entry",
+      "id": "Ledger122",
+      "side": 1,
+      "qty": 9124.0
+    },
+    {
+      "time": 1751561100000,
+      "op": "entry",
+      "id": "Ledger123",
+      "side": -1,
+      "qty": 9124.0
+    },
+    {
+      "time": 1752079500000,
+      "op": "entry",
+      "id": "Ledger124",
+      "side": 1,
+      "qty": 8762.0
+    },
+    {
+      "time": 1752084000000,
+      "op": "entry",
+      "id": "Ledger125",
+      "side": -1,
+      "qty": 8762.0
+    },
+    {
+      "time": 1752090300000,
+      "op": "entry",
+      "id": "Ledger126",
+      "side": 1,
+      "qty": 8777.0
+    },
+    {
+      "time": 1752172200000,
+      "op": "entry",
+      "id": "Ledger127",
+      "side": -1,
+      "qty": 8792.0
+    },
+    {
+      "time": 1752175800000,
+      "op": "entry",
+      "id": "Ledger128",
+      "side": 1,
+      "qty": 8762.0
+    },
+    {
+      "time": 1752176700000,
+      "op": "entry",
+      "id": "Ledger129",
+      "side": -1,
+      "qty": 8762.0
+    },
+    {
+      "time": 1752255000000,
+      "op": "entry",
+      "id": "Ledger130",
+      "side": 1,
+      "qty": 8822.0
+    },
+    {
+      "time": 1752593400000,
+      "op": "entry",
+      "id": "Ledger131",
+      "side": -1,
+      "qty": 8822.0
+    },
+    {
+      "time": 1752607800000,
+      "op": "entry",
+      "id": "Ledger132",
+      "side": 1,
+      "qty": 9017.0
+    },
+    {
+      "time": 1752672600000,
+      "op": "entry",
+      "id": "Ledger133",
+      "side": -1,
+      "qty": 9017.0
+    },
+    {
+      "time": 1752690600000,
+      "op": "entry",
+      "id": "Ledger134",
+      "side": 1,
+      "qty": 9113.0
+    },
+    {
+      "time": 1752694200000,
+      "op": "entry",
+      "id": "Ledger135",
+      "side": -1,
+      "qty": 9113.0
+    },
+    {
+      "time": 1752849900000,
+      "op": "entry",
+      "id": "Ledger136",
+      "side": 1,
+      "qty": 9270.0
+    },
+    {
+      "time": 1753110900000,
+      "op": "entry",
+      "id": "Ledger137",
+      "side": -1,
+      "qty": 9270.0
+    },
+    {
+      "time": 1753112700000,
+      "op": "entry",
+      "id": "Ledger138",
+      "side": 1,
+      "qty": 9238.0
+    },
+    {
+      "time": 1753114500000,
+      "op": "entry",
+      "id": "Ledger139",
+      "side": -1,
+      "qty": 9238.0
+    },
+    {
+      "time": 1753127100000,
+      "op": "entry",
+      "id": "Ledger140",
+      "side": 1,
+      "qty": 9303.0
+    },
+    {
+      "time": 1753191000000,
+      "op": "entry",
+      "id": "Ledger141",
+      "side": -1,
+      "qty": 9452.0
+    },
+    {
+      "time": 1753198200000,
+      "op": "entry",
+      "id": "Ledger142",
+      "side": 1,
+      "qty": 9318.0
+    },
+    {
+      "time": 1753200900000,
+      "op": "entry",
+      "id": "Ledger143",
+      "side": -1,
+      "qty": 9318.0
+    },
+    {
+      "time": 1753204500000,
+      "op": "entry",
+      "id": "Ledger144",
+      "side": 1,
+      "qty": 9318.0
+    },
+    {
+      "time": 1753207200000,
+      "op": "entry",
+      "id": "Ledger145",
+      "side": -1,
+      "qty": 9318.0
+    },
+    {
+      "time": 1753208100000,
+      "op": "entry",
+      "id": "Ledger146",
+      "side": 1,
+      "qty": 9301.0
+    },
+    {
+      "time": 1753293600000,
+      "op": "entry",
+      "id": "Ledger147",
+      "side": -1,
+      "qty": 9301.0
+    },
+    {
+      "time": 1753294500000,
+      "op": "entry",
+      "id": "Ledger148",
+      "side": 1,
+      "qty": 9268.0
+    },
+    {
+      "time": 1753375500000,
+      "op": "entry",
+      "id": "Ledger149",
+      "side": -1,
+      "qty": 9268.0
+    },
+    {
+      "time": 1753378200000,
+      "op": "entry",
+      "id": "Ledger150",
+      "side": 1,
+      "qty": 9219.0
+    },
+    {
+      "time": 1753380000000,
+      "op": "entry",
+      "id": "Ledger151",
+      "side": -1,
+      "qty": 9219.0
+    },
+    {
+      "time": 1753383600000,
+      "op": "entry",
+      "id": "Ledger152",
+      "side": 1,
+      "qty": 9252.0
+    },
+    {
+      "time": 1753452000000,
+      "op": "entry",
+      "id": "Ledger153",
+      "side": -1,
+      "qty": 9252.0
+    },
+    {
+      "time": 1753454700000,
+      "op": "entry",
+      "id": "Ledger154",
+      "side": 1,
+      "qty": 9219.0
+    },
+    {
+      "time": 1753716600000,
+      "op": "entry",
+      "id": "Ledger155",
+      "side": -1,
+      "qty": 9219.0
+    },
+    {
+      "time": 1753985700000,
+      "op": "entry",
+      "id": "Ledger156",
+      "side": 1,
+      "qty": 9751.0
+    },
+    {
+      "time": 1753990200000,
+      "op": "entry",
+      "id": "Ledger157",
+      "side": -1,
+      "qty": 9751.0
+    },
+    {
+      "time": 1753991100000,
+      "op": "entry",
+      "id": "Ledger158",
+      "side": 1,
+      "qty": 9646.0
+    },
+    {
+      "time": 1754058600000,
+      "op": "entry",
+      "id": "Ledger159",
+      "side": -1,
+      "qty": 9910.0
+    },
+    {
+      "time": 1754059500000,
+      "op": "entry",
+      "id": "Ledger160",
+      "side": 1,
+      "qty": 9873.0
+    },
+    {
+      "time": 1754064900000,
+      "op": "entry",
+      "id": "Ledger161",
+      "side": -1,
+      "qty": 9873.0
+    },
+    {
+      "time": 1754331300000,
+      "op": "entry",
+      "id": "Ledger162",
+      "side": 1,
+      "qty": 9550.0
+    },
+    {
+      "time": 1754334000000,
+      "op": "entry",
+      "id": "Ledger163",
+      "side": -1,
+      "qty": 9550.0
+    },
+    {
+      "time": 1754400600000,
+      "op": "entry",
+      "id": "Seed",
+      "side": 1,
+      "qty": 9429.0
+    },
+    {
+      "time": 1754404200000,
+      "op": "entry",
+      "id": "Turn",
+      "side": -1,
+      "qty": null,
+      "boundary": true
+    },
+    {
+      "time": 1754406000000,
+      "op": "close_all"
+    }
+  ],
+  "boundary": 1754404200000,
+  "after_close": false,
+  "tick": 0.01,
+  "step": 1.0,
+  "margin_long": 100,
+  "margin_short": 100,
+  "from": "2025-04-01",
+  "to": "2025-08-06",
+  "metadata": {
+    "depth": 263,
+    "closed_selected": 263,
+    "previous_profit_decimal": "0",
+    "source_tape": "member-tapes/f-antoni-tv.csv",
+    "actual_live": [
+      {
+        "number": 264,
+        "exit_time": 1754405100000,
+        "exit_price": 10.93,
+        "exit_signal": "Short",
+        "side": 1,
+        "qty": 9429.0,
+        "pnl": -942.9,
+        "entry_time": 1754401500000,
+        "entry_price": 11.03,
+        "entry_signal": "Long"
+      }
+    ],
+    "scheduled_parent_entries": 165,
+    "generated_from_trade_events_only": true,
+    "full_archived_ledger_attempt": true,
+    "qualification": "Trade-event ledger only; not population source or a modified copy."
+  }
+}

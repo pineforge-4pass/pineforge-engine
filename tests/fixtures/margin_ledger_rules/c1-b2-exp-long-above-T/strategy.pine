@@ -1,0 +1,8 @@
+//@version=6
+strategy("N12 n12-c1-b2-exp-long-above-T", initial_capital=104114.61, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100)
+var string witness = ""
+if time == timestamp("UTC", 2026, 1, 5, 15, 45)
+    witness := "E=" + str.tostring(strategy.equity, "#.################") + ";N=" + str.tostring(strategy.netprofit, "#.################") + ";OP=" + str.tostring(strategy.openprofit, "#.################") + ";P=" + str.tostring(strategy.position_size, "#.################") + ";C=" + str.tostring(close, "#.################")
+    strategy.entry("Turn", strategy.long, qty=387, comment=witness)
+if time == timestamp("UTC", 2026, 1, 5, 16, 30)
+    strategy.close_all(comment="SENSOR|" + witness)

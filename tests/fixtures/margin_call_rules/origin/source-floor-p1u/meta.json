@@ -1,0 +1,16 @@
+{
+  "title": "n2-source-floor-p1u",
+  "slug": "n2-source-floor-p1u",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-03T15:48:05.944Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-06-22",
+    "to": "2025-06-23"
+  },
+  "pine_sha256": "ef65b2a87b6e87465da95e551b401763c3b8566b5487bc8fe7d5de0a08b19ccd",
+  "tv_trades_sha256": "35476edb8acfcd157ccc64a1dc0df1c207f4d3a1a75a25c89247ba9fb31e9609",
+  "tv_trades_rows": 2
+}

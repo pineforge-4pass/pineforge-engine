@@ -1,0 +1,22 @@
+{
+  "symbol": "OANDA:EURUSD",
+  "feed": "eur",
+  "interval": "15",
+  "from": "2025-04-18",
+  "to": "2025-04-19",
+  "direction": "short",
+  "qty": 78381.71,
+  "sizing": "explicit",
+  "slippage": 3,
+  "margin": 100,
+  "pooc": true,
+  "coof": false,
+  "tick": 1e-05,
+  "step": 0.01,
+  "entry": "2025-04-18T13:45:00Z",
+  "close": "2025-04-18T14:30:00Z",
+  "name": "n2c-cutoff-q78381-s3-d0800",
+  "initial_capital": 89366.80934893014,
+  "fee": 0.05,
+  "target_deficit": 0.8
+}
