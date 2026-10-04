@@ -100,7 +100,7 @@ if(PINEFORGE_BUILD_TESTS)
         set_tests_properties(native_live_service_e2e PROPERTIES TIMEOUT 120)
         target_sources(native_live_example PRIVATE $<TARGET_OBJECTS:native_live_equivalence_observer>)
         set(_pf_report_strategies $<TARGET_FILE:native_live_example>)
-        foreach(probe ta-rsi14-cross-50-01 order-entry-implicit-reversal-exit-01 order-tranche-partial-market-close-01)
+        foreach(probe ta-rsi14-cross-50-01 order-entry-implicit-reversal-exit-01 order-tranche-partial-market-close-01 bracket-atr-trailing-stop-state-01)
             add_library(live_report_${probe} MODULE
                 ${PROJECT_SOURCE_DIR}/corpus/validation/${probe}/generated.cpp
                 $<TARGET_OBJECTS:native_live_equivalence_observer>)

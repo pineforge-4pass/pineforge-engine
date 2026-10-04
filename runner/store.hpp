@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -67,7 +68,8 @@ public:
     void commit_input(std::uint64_t index, const std::string& canonical_json,
                       std::uint64_t state_hash, const std::vector<Event>& events,
                       const std::string& report_json = {});
-    void verify_report(std::uint64_t cursor, const std::string& report_json);
+    void verify_report(std::uint64_t cursor, const std::string& report_json,
+                       const std::function<std::string()>& legacy_report = {});
 
 #ifdef PINEFORGE_LIVE_LEGACY_TEST_API
     std::optional<StoredEvent> pending_event() const;

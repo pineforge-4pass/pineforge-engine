@@ -1,7 +1,9 @@
 #pragma once
 
 #include "json.hpp"
+#include "report_delta.hpp"
 #include <pineforge/pineforge.h>
+#include <algorithm>
 #include <cmath>
 #include <iomanip>
 #include <locale>
@@ -82,8 +84,15 @@ inline Json report_array(const Value* values, std::int64_t count, Serialize seri
     return result;
 }
 
-inline Json native_report_json(const pf_report_t& report) {
+inline Json native_report_json(const pf_report_t& report,
+                              const std::map<std::string, std::size_t>& starts = {}) {
     Json result = Json::object({});
+    const auto array = [&](const std::string& name, const auto* values, std::int64_t count, auto serialize) {
+        if (count < 0 || (count && !values)) throw std::runtime_error("invalid native report array");
+        const auto found = starts.find(name);
+        const auto offset = found == starts.end() ? 0 : std::min<std::size_t>(found->second, count);
+        return report_array(values ? values + offset : nullptr, count - offset, serialize);
+    };
 #define PF_REPORT_FIELD(field) result.members[#field] = report_number(report.field)
     PF_REPORT_FIELD(total_trades); PF_REPORT_FIELD(trades_len); PF_REPORT_FIELD(net_profit);
     PF_REPORT_FIELD(input_bars_processed); PF_REPORT_FIELD(script_bars_processed);
@@ -95,28 +104,77 @@ inline Json native_report_json(const pf_report_t& report) {
     PF_REPORT_FIELD(security_diag_len); PF_REPORT_FIELD(trace_len); PF_REPORT_FIELD(trace_names_len);
     PF_REPORT_FIELD(equity_curve_len); PF_REPORT_FIELD(broker_state_hash_len);
 #undef PF_REPORT_FIELD
-    result.members["trades"] = report_array(report.trades, report.trades_len, report_trade);
-    result.members["equity_curve"] = report_array(report.equity_curve, report.equity_curve_len,
+    result.members["trades"] = array("trades", report.trades, report.trades_len, report_trade);
+    result.members["equity_curve"] = array("equity_curve", report.equity_curve, report.equity_curve_len,
         [](const pf_equity_point_t& point) { return Json::object({
             {"time_ms", report_number(point.time_ms)}, {"equity", report_number(point.equity)},
             {"open_profit", report_number(point.open_profit)}}); });
-    result.members["security_diag"] = report_array(report.security_diag, report.security_diag_len,
+    result.members["security_diag"] = array("security_diag", report.security_diag, report.security_diag_len,
         [](const pf_security_diag_t& diag) { return Json::object({
             {"sec_id", report_number(diag.sec_id)}, {"feed_count", report_number(diag.feed_count)},
             {"complete_count", report_number(diag.complete_count)},
             {"partial_count", report_number(diag.partial_count)}}); });
-    result.members["trace"] = report_array(report.trace, report.trace_len,
+    result.members["trace"] = array("trace", report.trace, report.trace_len,
         [](const pf_trace_entry_t& trace) { return Json::object({
             {"timestamp", report_number(trace.timestamp)}, {"bar_index", report_number(trace.bar_index)},
             {"name_id", report_number(trace.name_id)}, {"value", report_number(trace.value)}}); });
-    result.members["trace_names"] = report_array(report.trace_names, report.trace_names_len,
+    result.members["trace_names"] = array("trace_names", report.trace_names, report.trace_names_len,
         [](const char* name) { return Json::string(name ? name : ""); });
-    result.members["broker_state_hash"] = report_array(report.broker_state_hash, report.broker_state_hash_len,
+    result.members["broker_state_hash"] = array("broker_state_hash", report.broker_state_hash, report.broker_state_hash_len,
         [](std::uint64_t hash) { return report_number(hash); });
     result.members["metrics"] = Json::object({{"all", report_stats(report.metrics.all)},
         {"longs", report_stats(report.metrics.longs)}, {"shorts", report_stats(report.metrics.shorts)},
         {"equity", report_equity_stats(report.metrics.equity)}});
     return result;
 }
+
+class ReportDeltas {
+public:
+    std::string update(const pf_report_t& report, const std::string& deployment,
+                       std::uint64_t cursor, std::uint64_t state_hash) {
+        std::map<std::string, std::size_t> starts;
+        if (document_.members.count("report")) {
+            for (const auto* name : {"equity_curve", "trace", "trace_names", "broker_state_hash"}) {
+                const auto size = document_.at("report").at(name).items.size();
+                starts[name] = size ? size - 1 : 0;
+            }
+            const auto closed = document_.at("closed_trades").items.size();
+            starts["trades"] = closed ? closed - 1 : 0;
+        }
+        starts["security_diag"] = 0;
+        auto fields = native_report_json(report, starts);
+        Json arrays = Json::object({});
+        for (const auto* name : {"trades", "equity_curve", "security_diag", "trace", "trace_names", "broker_state_hash"}) {
+            auto values = std::move(fields.members[name]);
+            const auto offset = std::min<std::size_t>(starts[name], name == std::string("trades")
+                ? report.trades_len : document_.members.count("report")
+                    ? document_.at("report").at(name).items.size() : 0);
+            arrays.members[name] = Json::object({{"offset", report_number(offset)}, {"items", std::move(values)}});
+            fields.members.erase(name);
+        }
+        Json closed;
+        closed.kind = Json::Kind::Array;
+        std::size_t closed_count = 0;
+        for (std::int64_t index = 0; index < report.trades_len; ++index)
+            if (!report.trades[index].open_at_end && closed_count++ >= starts["trades"])
+                closed.items.push_back(report_trade(report.trades[index]));
+        arrays.members["closed_trades"] = Json::object({{"offset", report_number(std::min(starts["trades"], closed_count))},
+            {"items", std::move(closed)}});
+        const auto& curve = arrays.at("equity_curve").at("items").items;
+        auto next = Json::object({{"schema_version", Json::string("pineforge-native-report/v1")},
+            {"deployment", Json::string(deployment)}, {"input_cursor", report_number(cursor)},
+            {"state_hash", Json::string(std::to_string(state_hash))},
+            {"equity", curve.empty() ? Json{} : curve.back().at("equity")},
+            {"open_profit", curve.empty() ? Json{} : curve.back().at("open_profit")}, {"report", std::move(fields)}});
+        auto delta = Json::object({{"schema_version", Json::string("pineforge-native-report-delta/v1")},
+            {"fields", changed_report_fields(scalars_, next)}, {"arrays", std::move(arrays)}});
+        scalars_ = std::move(next);
+        apply_report_delta(document_, delta);
+        return delta.dump();
+    }
+    std::string json() const { return document_.dump(); }
+private:
+    Json document_ = Json::object({}), scalars_ = Json::object({});
+};
 
 }

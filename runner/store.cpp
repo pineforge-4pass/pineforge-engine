@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "store.hpp"
+#include "report_delta.hpp"
 #include "json.hpp"
 
 #include <sqlite3.h>
@@ -360,7 +361,8 @@ void Ledger::commit_input(std::uint64_t index, const std::string& canonical_json
     tx.commit();
 }
 
-void Ledger::verify_report(std::uint64_t cursor, const std::string& report_json) {
+void Ledger::verify_report(std::uint64_t cursor, const std::string& report_json,
+                           const std::function<std::string()>& legacy_report) {
     std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     if (report_json.empty() || cursor > input_count())
         throw std::runtime_error("invalid cumulative report cursor");
@@ -368,7 +370,12 @@ void Ledger::verify_report(std::uint64_t cursor, const std::string& report_json)
     Statement previous(impl_->db, "SELECT payload FROM report_snapshots WHERE input_cursor=?");
     previous.bind(1, cursor);
     if (previous.row()) {
-        if (previous.text(0) != report_json) throw std::runtime_error("native replay report mismatch");
+        if (previous.text(0) != report_json) {
+            const auto old = parse_json(previous.text(0));
+            if (!legacy_report || !old.members.count("schema_version") ||
+                old.at("schema_version").text() != "pineforge-native-report/v1" ||
+                previous.text(0) != legacy_report()) throw std::runtime_error("native replay report mismatch");
+        }
     } else {
         Statement insert(impl_->db, "INSERT INTO report_snapshots VALUES(?,?)");
         insert.bind(1, cursor); insert.bind(2, report_json); insert.done();
@@ -628,12 +635,26 @@ std::string LedgerView::report_json(std::optional<std::uint64_t> cursor) const {
     Statement available(impl_->db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='report_snapshots'");
     if (!available.row() || !available.integer(0))
         throw std::runtime_error("resume this ledger with run before exporting reports");
-    Statement report(impl_->db, cursor
-        ? "SELECT payload FROM report_snapshots WHERE input_cursor=?"
-        : "SELECT payload FROM report_snapshots ORDER BY input_cursor DESC LIMIT 1");
-    if (cursor) report.bind(1, *cursor);
-    if (!report.row()) throw std::runtime_error("no cumulative report at requested input cursor");
-    return report.text(0);
+    const auto target = cursor.value_or(scalar(impl_->db, "SELECT COALESCE(MAX(input_cursor),0) FROM report_snapshots"));
+    Statement report(impl_->db, "SELECT input_cursor,payload FROM report_snapshots WHERE input_cursor<=? ORDER BY input_cursor");
+    report.bind(1, target);
+    Json document;
+    bool found = false;
+    bool started = false;
+    std::uint64_t previous = 0;
+    while (report.row()) {
+        const auto index = report.integer(0);
+        auto payload = parse_json(report.text(1));
+        if (payload.members.count("schema_version") && payload.at("schema_version").text() == "pineforge-native-report-delta/v1") {
+            if (started && index != previous + 1) throw std::runtime_error("cumulative report delta hole");
+            apply_report_delta(document, payload);
+        } else document = std::move(payload);
+        found = index == target;
+        started = true;
+        previous = index;
+    }
+    if (!found) throw std::runtime_error("no cumulative report at requested input cursor");
+    return document.dump();
 }
 
 std::string LedgerView::status_json() const {

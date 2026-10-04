@@ -81,7 +81,8 @@ def main():
                            "--syminfo", "mintick=0.25", "--syminfo", "pointvalue=2.5",
                            "--syminfo", "qty_step=0.001", "--override", "commission_value=0.1",
                            "--override", "slippage=1", "--report-jsonl"]
-                mirror = [json.loads(line) for line in checked(command).splitlines()]
+                mirror_bytes = checked(command).splitlines()
+                mirror = [json.loads(line) for line in mirror_bytes]
                 assert len(mirror) == len(bars) - split + 1
                 for cursor in (5, 20, 75, 140):
                     snapshot = root / "snapshot.csv"
@@ -99,11 +100,23 @@ def main():
                         live = [json.loads(row[0]) for row in database.execute(
                             "SELECT payload FROM events WHERE input_index<? ORDER BY ordinal", (cursor,))]
                         stored = database.execute("SELECT payload FROM report_snapshots WHERE input_cursor=?", (cursor,)).fetchone()[0]
-                    assert exported == stored + "\n"
+                    assert json.loads(stored)["schema_version"] == "pineforge-native-report-delta/v1"
+                    assert exported == mirror_bytes[cursor - 1] + "\n"
                     expected = [json.loads(line) for line in batch_actions.read_text().splitlines()]
                     expected = [row for row in expected if row["origin_input_index"] >= split]
                     equal([action_key(row) for row in expected], [action_key(row) for row in live], "actions")
                     comparisons += 1
+                if "bracket-atr-trailing-stop-state-01" in library and timeframe == 5:
+                    write_csv(snapshot, bars[:split + 3])
+                    partial = json.loads(checked([oracle, library, str(snapshot), "5", str(batch_actions)]))
+                    live_partial = json.loads(checked([runner, "report", "--ledger", str(ledger), "--at-input", "3"]))["report"]
+                    assert len(partial["equity_curve"]) == len(live_partial["equity_curve"])
+                    equal(partial["equity_curve"][:-1], live_partial["equity_curve"][:-1], "confirmed bucket prefix")
+                    assert partial["equity_curve"][-1] != live_partial["equity_curve"][-1]
+                    equal({key: value for key, value in partial.items() if key not in ("equity_curve", "metrics")},
+                          {key: value for key, value in live_partial.items() if key not in ("equity_curve", "metrics")},
+                          "outside trailing equity and derived metrics")
+                    print("MID-BUCKET: batch replaces one trailing point and derived metrics; all other report fields identical", flush=True)
                 before = checked([runner, "report", "--ledger", str(ledger)])
                 checked(command)
                 assert checked([runner, "report", "--ledger", str(ledger)]) == before

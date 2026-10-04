@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "../runner/store.hpp"
 #include "../runner/transport.hpp"
+#include "../runner/report_delta.hpp"
 
 #include <sqlite3.h>
 
@@ -71,6 +72,39 @@ std::string scalar_text(const std::string& path, const char* sql) {
     sqlite3_finalize(stmt);
     sqlite3_close(db);
     return result;
+}
+
+void incremental_reports() {
+    TempDir temp;
+    const auto path = temp.file("incremental.sqlite");
+    std::uintmax_t first_size = 0;
+    for (unsigned phase = 0; phase < 2; ++phase) {
+        {
+            Ledger ledger(path, "incremental");
+            if (!phase) ledger.verify_report(0, Json::object({
+                {"schema_version", Json::string("pineforge-native-report-delta/v1")},
+                {"fields", Json::object({{"input_cursor", Json::number("0")}})},
+                {"arrays", Json::object({})}}).dump());
+            for (std::uint64_t index = phase * 1000; index < (phase + 1) * 1000; ++index) {
+                Json points;
+                points.kind = Json::Kind::Array;
+                points.items.push_back(Json::number(std::to_string(index)));
+                const auto delta = Json::object({{"schema_version", Json::string("pineforge-native-report-delta/v1")},
+                    {"fields", Json::object({{"input_cursor", Json::number(std::to_string(index + 1))}})},
+                    {"arrays", Json::object({{"equity_curve", Json::object({
+                        {"offset", Json::number(std::to_string(index))}, {"items", points}})}})}}).dump();
+                ledger.commit_input(index, "{}", index, {}, delta);
+                ledger.verify_report(index + 1, delta);
+                CHECK(throws([&] { ledger.verify_report(index + 1, delta + " "); }));
+            }
+        }
+        if (!phase) first_size = std::filesystem::file_size(path);
+    }
+    CHECK(std::filesystem::file_size(path) < first_size * 5 / 2);
+    const auto full = parse_json(LedgerView(path).report_json());
+    CHECK(full.at("input_cursor").integer<std::uint64_t>() == 2000);
+    CHECK(full.at("report").at("equity_curve").items.size() == 2000);
+    CHECK(parse_json(LedgerView(path).report_json(1000)).at("report").at("equity_curve").items.size() == 1000);
 }
 
 void cumulative_reports() {
@@ -376,6 +410,7 @@ int main(int argc, char** argv) {
     try {
         ledger_transactions();
         cumulative_reports();
+        incremental_reports();
         crash_recovery(argv[0]);
         native_http();
     } catch (const std::exception& e) {
