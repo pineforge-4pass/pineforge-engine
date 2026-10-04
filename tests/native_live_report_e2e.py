@@ -123,10 +123,19 @@ def main():
                     assert partial["trades"][-1]["exit_time"] == partial["equity_curve"][-1]["time_ms"]
                     print("MID-BUCKET: trailing equity, hypothetical trade, net_profit, total_trades, trades_len and derived metrics differ; confirmed prefixes and every other field identical", flush=True)
                 before = checked([runner, "report", "--ledger", str(ledger)])
+                with sqlite3.connect(ledger) as database:
+                    database.execute("DROP TABLE report_integrity")
+                checked([runner, "report", "--ledger", str(ledger)], 1)
                 checked(command)
                 assert checked([runner, "report", "--ledger", str(ledger)]) == before
                 checked([runner, "report", "--ledger", str(ledger), "--at-input", "9999"], 1)
                 checked([runner, "report", "--ledger", str(ledger), "--deployment", "wrong"], 1)
+            with sqlite3.connect(ledger) as database:
+                database.execute("DROP TRIGGER report_no_update")
+                database.execute("UPDATE report_snapshots SET payload=payload || ' ' WHERE input_cursor=140")
+            for export_cursor in (0, 140):
+                refused = checked([runner, "report", "--ledger", str(ledger), "--at-input", str(export_cursor)], 1)
+                assert not refused
             strategies += 1
             print(f"REPORT==BATCH {Path(library).name}: 2 timeframes x 4 cursors; restart exact", flush=True)
     print(f"REPORT==BATCH: {strategies}/{len(libraries)} strategies; {comparisons} cursor comparisons", flush=True)

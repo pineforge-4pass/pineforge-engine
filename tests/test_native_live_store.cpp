@@ -128,6 +128,25 @@ void cumulative_reports() {
     }
     Ledger resumed(path, "reports");
     resumed.verify_report(1, "{\"input_cursor\":1}");
+    CHECK(throws([&] { execute_sql(path, "UPDATE report_integrity SET digest='changed'"); }));
+    execute_sql(path, "DROP TRIGGER report_no_update; UPDATE report_snapshots SET payload='{\"input_cursor\":999}' WHERE input_cursor=1;");
+    CHECK(throws([&] { LedgerView(path).report_json(); }));
+    CHECK(throws([&] { LedgerView(path).report_json(0); }));
+    CHECK(throws([&] { resumed.verify_report(1, "{\"input_cursor\":1}"); }));
+    execute_sql(path, "UPDATE report_snapshots SET payload='{\"input_cursor\":1}' WHERE input_cursor=1;");
+    execute_sql(path, "UPDATE inputs SET state_hash='999' WHERE input_index=0;");
+    CHECK(throws([&] { LedgerView(path).report_json(); }));
+    execute_sql(path, "UPDATE inputs SET state_hash='1' WHERE input_index=0;");
+    execute_sql(path, "UPDATE events SET payload='{\"changed\":true}' WHERE event_id='report-action';");
+    CHECK(throws([&] { LedgerView(path).report_json(); }));
+    execute_sql(path, "UPDATE events SET payload='{}' WHERE event_id='report-action';");
+    CHECK(LedgerView(path).report_json() == "{\"input_cursor\":1}");
+    execute_sql(path, "DROP TABLE report_integrity;");
+    CHECK(throws([&] { LedgerView(path).report_json(); }));
+    execute_sql(path, "CREATE TABLE report_integrity (input_cursor INTEGER PRIMARY KEY,digest TEXT NOT NULL);");
+    resumed.verify_report(0, "{\"input_cursor\":0}");
+    resumed.verify_report(1, "{\"input_cursor\":1}");
+    CHECK(LedgerView(path).report_json() == "{\"input_cursor\":1}");
 }
 
 void ledger_transactions() {

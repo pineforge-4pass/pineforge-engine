@@ -132,6 +132,8 @@ class ReportDeltas {
 public:
     std::string update(const pf_report_t& report, const std::string& deployment,
                        std::uint64_t cursor, std::uint64_t state_hash) {
+        if (report.trace_len != 0)
+            throw std::runtime_error("cumulative report deltas require tracing to remain disabled");
         std::map<std::string, std::size_t> starts;
         if (document_.members.count("report")) {
             for (const auto* name : {"equity_curve", "trace", "trace_names", "broker_state_hash"}) {

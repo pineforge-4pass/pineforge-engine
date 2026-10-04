@@ -2,6 +2,7 @@
 #include "store.hpp"
 #include "report_delta.hpp"
 #include "json.hpp"
+#include "transport.hpp"
 
 #include <sqlite3.h>
 
@@ -102,6 +103,54 @@ bool has_column(sqlite3* database, const char* table, const char* column) {
     Statement query(database, (std::string("PRAGMA table_info(") + table + ")").c_str());
     while (query.row()) if (query.text(1) == column) return true;
     return false;
+}
+
+std::string report_integrity(sqlite3* database, std::uint64_t cursor,
+                             const std::string& payload, const std::string& previous_hash) {
+    Statement metadata(database, "SELECT identity FROM metadata WHERE singleton=1");
+    if (!metadata.row()) database_error();
+    auto material = Json::object({{"schema_version", Json::string("pineforge-ledger-report-integrity/v1")},
+        {"deployment", Json::string(metadata.text(0))}, {"cursor", Json::number(std::to_string(cursor))},
+        {"previous_hash", Json::string(previous_hash)}, {"report", Json::string(payload)}});
+    if (cursor) {
+        Statement input(database, "SELECT canonical_json,state_hash FROM inputs WHERE input_index=?");
+        input.bind(1, cursor - 1);
+        if (!input.row()) throw std::runtime_error("native ledger report integrity mismatch");
+        material.members["input"] = Json::string(input.text(0));
+        material.members["state_hash"] = Json::string(input.text(1));
+        Json actions;
+        actions.kind = Json::Kind::Array;
+        Statement events(database, "SELECT e.ordinal,e.input_position,e.event_id,e.payload,r.target_id,r.delivery_id "
+            "FROM events e LEFT JOIN event_routes r ON e.ordinal=r.ordinal WHERE e.input_index=? ORDER BY e.input_position");
+        events.bind(1, cursor - 1);
+        while (events.row()) {
+            actions.items.push_back(Json::object({{"ordinal", Json::number(std::to_string(events.integer(0)))},
+                {"position", Json::number(std::to_string(events.integer(1)))}, {"event_id", Json::string(events.text(2))},
+                {"payload", Json::string(events.text(3))},
+                {"target", events.is_null(4) ? Json{} : Json::string(events.text(4))},
+                {"delivery_id", Json::string(events.text(5))}}));
+        }
+        material.members["actions"] = std::move(actions);
+    }
+    return sha256_hex(material.dump());
+}
+
+void verify_report_integrity(sqlite3* database, std::uint64_t cursor, const std::string& payload) {
+    std::string previous_hash;
+    if (cursor) {
+        Statement previous(database, "SELECT digest FROM report_integrity WHERE input_cursor=?");
+        previous.bind(1, cursor - 1);
+        if (previous.row()) previous_hash = previous.text(0);
+    }
+    const auto digest = report_integrity(database, cursor, payload, previous_hash);
+    Statement stored(database, "SELECT digest FROM report_integrity WHERE input_cursor=?");
+    stored.bind(1, cursor);
+    if (stored.row()) {
+        if (stored.text(0) != digest) throw std::runtime_error("native ledger report integrity mismatch");
+    } else {
+        Statement insert(database, "INSERT INTO report_integrity VALUES(?,?)");
+        insert.bind(1, cursor); insert.bind(2, digest); insert.done();
+    }
 }
 
 std::uint64_t commit_time() {
@@ -213,7 +262,7 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity)
         Statement q(impl_->db, "INSERT INTO metadata VALUES(1,1,?)");
         q.bind(1, deployment_identity);
         q.done();
-    } else if (table_count != 3 && table_count != 6 && table_count != 7 && table_count != 8) {
+    } else if (table_count != 3 && table_count != 6 && table_count != 7 && table_count != 8 && table_count != 9) {
         throw std::runtime_error("native ledger is not an empty or supported ledger database");
     }
     {
@@ -226,6 +275,9 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity)
         "CREATE TABLE IF NOT EXISTS report_snapshots (input_cursor INTEGER PRIMARY KEY CHECK(input_cursor>=0),payload TEXT NOT NULL);"
         "CREATE TRIGGER IF NOT EXISTS report_no_update BEFORE UPDATE ON report_snapshots BEGIN SELECT RAISE(ABORT,'reports are immutable'); END;"
         "CREATE TRIGGER IF NOT EXISTS report_no_delete BEFORE DELETE ON report_snapshots BEGIN SELECT RAISE(ABORT,'reports are immutable'); END;"
+        "CREATE TABLE IF NOT EXISTS report_integrity (input_cursor INTEGER PRIMARY KEY REFERENCES report_snapshots(input_cursor),digest TEXT NOT NULL);"
+        "CREATE TRIGGER IF NOT EXISTS report_integrity_no_update BEFORE UPDATE ON report_integrity BEGIN SELECT RAISE(ABORT,'report integrity is immutable'); END;"
+        "CREATE TRIGGER IF NOT EXISTS report_integrity_no_delete BEFORE DELETE ON report_integrity BEGIN SELECT RAISE(ABORT,'report integrity is immutable'); END;"
         "CREATE TABLE IF NOT EXISTS routing_configuration (singleton INTEGER PRIMARY KEY CHECK(singleton=1),document TEXT NOT NULL);"
         "CREATE TABLE IF NOT EXISTS event_routes (ordinal INTEGER PRIMARY KEY REFERENCES events(ordinal),"
         "target_id TEXT,delivery_id TEXT NOT NULL);"
@@ -357,6 +409,7 @@ void Ledger::commit_input(std::uint64_t index, const std::string& canonical_json
     if (!report_json.empty()) {
         Statement report(impl_->db, "INSERT INTO report_snapshots VALUES(?,?)");
         report.bind(1, index + 1); report.bind(2, report_json); report.done();
+        verify_report_integrity(impl_->db, index + 1, report_json);
     }
     tx.commit();
 }
@@ -369,7 +422,9 @@ void Ledger::verify_report(std::uint64_t cursor, const std::string& report_json,
     Transaction transaction(impl_->db);
     Statement previous(impl_->db, "SELECT payload FROM report_snapshots WHERE input_cursor=?");
     previous.bind(1, cursor);
+    auto stored_payload = report_json;
     if (previous.row()) {
+        stored_payload = previous.text(0);
         if (previous.text(0) != report_json) {
             const auto old = parse_json(previous.text(0));
             if (!legacy_report || !old.members.count("schema_version") ||
@@ -380,6 +435,7 @@ void Ledger::verify_report(std::uint64_t cursor, const std::string& report_json,
         Statement insert(impl_->db, "INSERT INTO report_snapshots VALUES(?,?)");
         insert.bind(1, cursor); insert.bind(2, report_json); insert.done();
     }
+    verify_report_integrity(impl_->db, cursor, stored_payload);
     transaction.commit();
 }
 
@@ -632,27 +688,39 @@ std::vector<StoredEvent> LedgerView::redelivery_events(const std::string& target
 }
 
 std::string LedgerView::report_json(std::optional<std::uint64_t> cursor) const {
-    Statement available(impl_->db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='report_snapshots'");
-    if (!available.row() || !available.integer(0))
+    exec(impl_->db, "BEGIN");
+    struct ReadEnd {
+        sqlite3* database;
+        ~ReadEnd() { sqlite3_exec(database, "ROLLBACK", nullptr, nullptr, nullptr); }
+    } read_end{impl_->db};
+    Statement available(impl_->db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('report_snapshots','report_integrity')");
+    if (!available.row() || available.integer(0) != 2)
         throw std::runtime_error("resume this ledger with run before exporting reports");
-    const auto target = cursor.value_or(scalar(impl_->db, "SELECT COALESCE(MAX(input_cursor),0) FROM report_snapshots"));
-    Statement report(impl_->db, "SELECT input_cursor,payload FROM report_snapshots WHERE input_cursor<=? ORDER BY input_cursor");
-    report.bind(1, target);
+    const auto committed = scalar(impl_->db, "SELECT COUNT(*) FROM inputs");
+    const auto target = cursor.value_or(committed);
+    Statement report(impl_->db, "SELECT input_cursor,payload FROM report_snapshots ORDER BY input_cursor");
     Json document;
     bool found = false;
-    bool started = false;
-    std::uint64_t previous = 0;
+    std::uint64_t expected = 0;
+    std::string previous_hash;
     while (report.row()) {
         const auto index = report.integer(0);
-        auto payload = parse_json(report.text(1));
+        if (index != expected++) throw std::runtime_error("cumulative report delta hole");
+        const auto bytes = report.text(1);
+        Statement stored(impl_->db, "SELECT digest FROM report_integrity WHERE input_cursor=?");
+        stored.bind(1, index);
+        if (!stored.row()) throw std::runtime_error("resume this ledger with run before exporting reports");
+        const auto digest = report_integrity(impl_->db, index, bytes, previous_hash);
+        if (stored.text(0) != digest) throw std::runtime_error("native ledger report integrity mismatch");
+        previous_hash = digest;
+        if (index > target) continue;
+        auto payload = parse_json(bytes);
         if (payload.members.count("schema_version") && payload.at("schema_version").text() == "pineforge-native-report-delta/v1") {
-            if (started && index != previous + 1) throw std::runtime_error("cumulative report delta hole");
             apply_report_delta(document, payload);
         } else document = std::move(payload);
         found = index == target;
-        started = true;
-        previous = index;
     }
+    if (expected != committed + 1) throw std::runtime_error("cumulative report delta hole");
     if (!found) throw std::runtime_error("no cumulative report at requested input cursor");
     return document.dump();
 }
