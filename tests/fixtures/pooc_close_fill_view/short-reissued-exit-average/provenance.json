@@ -1,0 +1,43 @@
+{
+  "synthetic": true,
+  "authored_for": "POOC same-pass position view pin (own script; no population source was sent)",
+  "export": {
+    "tool": "lab tv --no-note",
+    "channel": "ws-report-v1",
+    "exported_at": "2026-10-05T19:22:07.788Z",
+    "chart": {
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "from": "2026-01-08",
+      "to": "2026-01-10"
+    },
+    "requested_range": {
+      "from": 1767830400000,
+      "to": 1768003200000
+    },
+    "returned_range": {
+      "from": 1767830400000,
+      "to": 1768003200000
+    },
+    "range_proof": "covered",
+    "raw_frame_sha256": "c009ddffc811178a13e67e53c2a5a52b3b46ce7bab4e8ceed622d60a29e31bf1",
+    "closed_trades": 2,
+    "repeat": {
+      "exported_at": "2026-10-05T19:22:09.823Z",
+      "range_proof": "covered",
+      "tv_trades_identical": true
+    }
+  },
+  "strategy_pine_sha256": "6b2e0ef2f031bbc3795e32ae2641b03e31922f7299b18398978c2dc8af614531",
+  "tv_trades_sha256": "4a569502197f7a0427434a765ec096d20e4130d7331d45f1b0ac058337b6e32a",
+  "tv_trades_rows": 4,
+  "chart_feed": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "timeframe": "15",
+    "bars": "bars/eth-15-2026-01-08-2026-01-10.csv",
+    "rows_from_ms": 1767830400000,
+    "rows_to_ms": 1768003200000
+  },
+  "generated_by": "c1df8a6 (pineforge-codegen-oss main)",
+  "prediction": "written before the export (P4 of the pin; TradingView rows equal the prediction)"
+}

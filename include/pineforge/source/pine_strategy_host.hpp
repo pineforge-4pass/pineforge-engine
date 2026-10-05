@@ -688,6 +688,14 @@ protected:
     double signed_position_size() const;
     void freeze_script_position_view();
     void clear_script_position_view();
+    // After a fill at the call flattened the book under a frozen position
+    // view (the current-close exit, PoocCloseFillViewSwitches), the generated
+    // strategy.position_avg_price read -- position_entry_price_ behind a
+    // non-zero signed_position_size() -- keeps the pre-fill `average` until
+    // the pass ends; release_script_average_price() then restores the flat
+    // book's 0. Transient: never held across a pass boundary.
+    void hold_script_average_price(double average);
+    void release_script_average_price() noexcept;
     const Series<double>& source_series(const std::string&) const;
     const Series<double>& source_input_series(const std::string& key,
                                               const Series<double>& fallback) const;
@@ -1225,6 +1233,10 @@ protected:
     // position_qty_); cleared after the applied notification.
     mutable double precommit_held_units_ =
         std::numeric_limits<double>::quiet_NaN();
+
+    // hold_script_average_price() wrote position_entry_price_ on the flat
+    // book this pass; release_script_average_price() clears it.
+    bool script_average_held_ = false;
 };
 
 using PineNativeHost = PineStrategyHost;

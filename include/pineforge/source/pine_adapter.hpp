@@ -490,6 +490,25 @@ struct ExitBindingRuleSwitches {
     bool global_exit_binds_held_position = true;
 };
 ExitBindingRuleSwitches& exit_binding_rule_switches() noexcept;
+
+// One switch per part of TradingView's same-pass position view under
+// process_orders_on_close, pinned on the tapes under
+// tests/fixtures/pooc_close_fill_view: an order that fills at the bar's close
+// stays invisible to the script pass that placed it. Both parts act only at
+// the re-issued exit that exit() fills at its call (its current-close path,
+// stop or limit leg); an ordinary close_all keeps its own size freeze
+// (KI-64). All on; only tests change one. Process-wide, read by every adapter;
+// not installed API, and no strategy input reaches it.
+struct PoocCloseFillViewSwitches {
+    // The rest of the pass reads the pre-fill strategy.position_size (and so
+    // strategy.position_size[1] < 0 and strategy.position_size == 0 stays
+    // false until the next bar).
+    bool current_exit_keeps_position_view = true;
+    // ... and the pre-fill strategy.position_avg_price, while the frozen
+    // view holds. Needs current_exit_keeps_position_view.
+    bool current_exit_keeps_average_price = true;
+};
+PoocCloseFillViewSwitches& pooc_close_fill_view_switches() noexcept;
 } // namespace detail
 
 #ifndef PINEFORGE_PLACEMENT_AUDIT

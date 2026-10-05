@@ -742,6 +742,10 @@ ExitBindingRuleSwitches& exit_binding_rule_switches() noexcept {
     static ExitBindingRuleSwitches switches;
     return switches;
 }
+PoocCloseFillViewSwitches& pooc_close_fill_view_switches() noexcept {
+    static PoocCloseFillViewSwitches switches;
+    return switches;
+}
 }  // namespace detail
 
 // R5 lane V19-E: the placement table's storage.
@@ -12156,8 +12160,21 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                             std::move(request), std::move(immediate), false,
                             "__pooc_current_exit__" + exit_id + "\x1f" + from_entry);
                         if (accepted) {
+                            // TradingView fills this exit at the close, after
+                            // the pass that placed it: the rest of the pass
+                            // keeps the pre-fill strategy.position_size and
+                            // strategy.position_avg_price, as an ordinary
+                            // close_all keeps the size (KI-64). lab tv
+                            // synthetics tests/fixtures/pooc_close_fill_view.
+                            const auto& view = detail::pooc_close_fill_view_switches();
+                            auto* pine_host = view.current_exit_keeps_position_view
+                                ? pine_view_of(&require_host()) : nullptr;
+                            const double pre_fill_average = require_host().position_avg_price();
+                            if (pine_host) pine_host->freeze_script_position_view();
                             (void)require_host().execute_current(
                                 {*accepted, NativeCurrentPriceRule::NearestTick});
+                            if (pine_host && view.current_exit_keeps_average_price)
+                                pine_host->hold_script_average_price(pre_fill_average);
                         }
                     }
                 }

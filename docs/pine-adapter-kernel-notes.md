@@ -1142,3 +1142,56 @@ fills there before the cap part judges it, as before the rule; and an add at
 the cap whose own bar's close frees the slot, which stays, as before (the cap
 part judges an add once, at the next opening; the pin's model rejects it at
 the call).
+
+## 7. The script's position view after a close fill under `process_orders_on_close`
+
+TradingView executes the orders a `process_orders_on_close` pass places at the
+bar's close, after the pass. An order that fills there stays invisible to the
+pass that placed it: the rest of the pass reads the pre-fill
+`strategy.position_size` and `strategy.position_avg_price`. The adapter fills
+two calls at the call itself. An ordinary `close_all` freezes the script's
+position view first (KI-64). The other is the re-issued exit that
+`PineExecutionAdapter::exit()` fills at its call when a one-lot short's stop
+or limit is already through the close (its current-close path). That exit now freezes the
+view as `close_all` does. Once the fill has left the book flat, a generated
+`strategy.position_avg_price` read keeps the pre-fill average until the pass
+ends. `PineStrategyHost::hold_script_average_price` writes it, and
+`release_script_average_price` restores the flat book's 0 right after
+`on_source_bar`, before the orders the pass placed settle.
+
+`PoocCloseFillViewSwitches` (`include/pineforge/source/pine_adapter.hpp`, read
+through `pooc_close_fill_view_switches()`) holds one switch per part, all on;
+only tests change one.
+
+| Switch | Gates | Where |
+|---|---|---|
+| `current_exit_keeps_position_view` | the re-issued exit filled at its call freezes the script's position view before it executes | the current-close block of `exit` |
+| `current_exit_keeps_average_price` | while that frozen view holds over the flat book, a generated `strategy.position_avg_price` read returns the pre-fill average | `hold_script_average_price`, `release_script_average_price` |
+
+The rule is pinned by the synthetic tapes of
+`tests/fixtures/pooc_close_fill_view` (`test_pooc_close_fill_view_tapes`),
+BINANCE:ETHUSDT.P 15m. They cover re-issued and first-issue exits,
+`strategy.close`, `strategy.close_all` and a long mirror, which all keep the
+pre-fill size. The re-issued exit, on its stop and on its limit leg, also
+keeps the pre-fill average. TradingView gave 0 counterexamples. The test
+clears each part, and exactly the re-issued short tapes depart. It also
+replays every tape as a stream with both parts on and off, and requires the
+per-bar broker-state hashes with the average part on and off to be equal
+wherever the trades are, so a held average that outlived its pass fails it.
+The scraped `job-2947` probe on BINANCE:ETHUSDT.P 15 lost its 2026-01-08
+23:30 UTC short and every later trade: a late exit observer behind a
+cooldown fired one bar early.
+
+Two tapes of the fixture are known divergences that TradingView pins and the
+rule leaves open:
+
+- `close_all`'s own `strategy.position_avg_price` read: TradingView keeps the
+  pre-fill average, but the freeze covers the size only
+  (`short-close-all-average`).
+- Script reads of `strategy.opentrades`, `strategy.closedtrades`,
+  `strategy.openprofit`, `strategy.netprofit` and `strategy.equity` after the
+  re-issued exit: they read the book after the fill, where TradingView keeps
+  the pre-fill values (`short-reissued-exit-reads`).
+
+A `strategy.close` that fills at the call under an active intraday cap freezes
+nothing, and no tape covers it.

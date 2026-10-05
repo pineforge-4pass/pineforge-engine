@@ -1,0 +1,19 @@
+//@version=6
+strategy("sig18-k12-short-closeall-avgprice-view", initial_capital=100000, pyramiding=0, process_orders_on_close=true)
+var float seenAvg = na
+var bool seenNa = false
+if time == timestamp("UTC", 2026, 1, 8, 19, 45)
+    strategy.entry("seed", strategy.short, qty=1)
+if time == timestamp("UTC", 2026, 1, 8, 23, 15)
+    strategy.close_all()
+    seenAvg := strategy.position_avg_price
+    seenNa := na(strategy.position_avg_price)
+if time == timestamp("UTC", 2026, 1, 8, 23, 30)
+    if seenNa
+        strategy.entry("AVGNA", strategy.short, qty=2)
+    else if math.abs(seenAvg - 3110.13) < 0.005
+        strategy.entry("AVGPRE", strategy.short, qty=1)
+    else
+        strategy.entry("AVGOTHER", strategy.short, qty=3)
+if time == timestamp("UTC", 2026, 1, 9, 1, 0)
+    strategy.close_all()

@@ -907,6 +907,22 @@ void source::PineStrategyHost::clear_script_position_view() {
     scheduler_.clear_script_position_view();
 }
 
+void source::PineStrategyHost::hold_script_average_price(double average) {
+    // Only a book the call left flat: any open lot keeps its own average.
+    if (position_side_ != PositionSide::FLAT || !std::isfinite(average) || !(average > 0.0))
+        return;
+    position_entry_price_ = average;
+    script_average_held_ = true;
+}
+
+void source::PineStrategyHost::release_script_average_price() noexcept {
+    if (!script_average_held_) return;
+    script_average_held_ = false;
+    // reset_position_state_to_flat's value; a fill since the hold that
+    // opened a position set its own average.
+    if (position_side_ == PositionSide::FLAT) position_entry_price_ = 0.0;
+}
+
 const Series<double>& source::PineStrategyHost::source_series(const std::string& key) const {
     return scheduler_.source_series(key);
 }
@@ -2234,6 +2250,9 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     position_entry_count_ = detail::run_position(*this).signed_units == 0.0
         ? 0 : adapter_.source_entry_slot_count();
     on_source_bar(bar);
+    // The pass is over: a pre-fill average it held for the script goes
+    // before the orders it placed settle (hold_script_average_price).
+    release_script_average_price();
     // Handwritten/source-generated callbacks historically read and could
     // update the live Pine configuration fields directly.  Keep the adapter's
     // source policy view synchronized at the callback boundary; the generic

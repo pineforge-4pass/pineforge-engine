@@ -1,0 +1,22 @@
+//@version=6
+strategy("sig18-k10-short-reissue-reads-view", initial_capital=100000, pyramiding=0, process_orders_on_close=true, commission_type=strategy.commission.percent, commission_value=0.1)
+var string code = "none"
+if time == timestamp("UTC", 2026, 1, 8, 19, 45)
+    strategy.entry("seed", strategy.short, qty=1)
+if strategy.position_size < 0 and time < timestamp("UTC", 2026, 1, 8, 23, 15)
+    strategy.exit("x", "seed", stop=3200.0)
+if time == timestamp("UTC", 2026, 1, 8, 23, 15)
+    strategy.exit("x", "seed", stop=3109.0)
+    ot = strategy.opentrades
+    ct = strategy.closedtrades
+    op = strategy.openprofit
+    eq = strategy.equity
+    np = strategy.netprofit
+    opc = math.abs(op + 6.84) < 0.005 ? "pre" : math.abs(op) < 0.005 ? "zero" : "x"
+    npc = math.abs(np + 3.11013) < 0.005 ? "pre" : math.abs(np + 13.0671) < 0.005 ? "post" : math.abs(np) < 0.005 ? "zero" : "x"
+    eqc = math.abs(eq - 99990.04987) < 0.005 ? "pre" : math.abs(eq - 99986.9329) < 0.005 ? "post" : math.abs(eq - 99993.16) < 0.005 ? "gross" : "x"
+    code := "O" + str.tostring(ot) + "C" + str.tostring(ct) + "P" + opc + "N" + npc + "E" + eqc
+if time == timestamp("UTC", 2026, 1, 8, 23, 30)
+    strategy.entry(code, strategy.short, qty=1)
+if time == timestamp("UTC", 2026, 1, 9, 1, 0)
+    strategy.close_all()

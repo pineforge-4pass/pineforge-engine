@@ -1,0 +1,11 @@
+short-reissued-exit-size
+long-reissued-exit-size
+short-close-size
+short-close-all-size
+short-first-exit-size
+short-reissued-exit-cooldown
+atr-exit-cooldown-pyramiding-0
+short-reissued-exit-average
+short-reissued-exit-reads
+short-reissued-limit-exit
+short-close-all-average
