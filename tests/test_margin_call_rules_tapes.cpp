@@ -121,7 +121,7 @@ struct Ablation {
 // Every margin rule on. Every field of MarginRuleSwitches is named here and in
 // the ablation table: the static_assert stops the build when one is added.
 MarginRuleSwitches all_rules_on() {
-    static_assert(sizeof(MarginRuleSwitches) == 16 * sizeof(bool),
+    static_assert(sizeof(MarginRuleSwitches) == 17 * sizeof(bool),
                   "MarginRuleSwitches changed: name its new field here and in the ablation table");
     MarginRuleSwitches on;
     on.decimal_sizing = true;
@@ -140,6 +140,7 @@ MarginRuleSwitches all_rules_on() {
     on.point_order_trailing_exits = true;
     on.pyramiding_ledger_records = true;
     on.exit_child_tombstones = true;
+    on.tie_reversal_beside_exits = true;
     return on;
 }
 
@@ -1021,6 +1022,7 @@ int main() {
         {"point_order_trailing_exits", &S::point_order_trailing_exits, false},
         {"pyramiding_ledger_records", &S::pyramiding_ledger_records, false},
         {"exit_child_tombstones", &S::exit_child_tombstones, false},
+        {"tie_reversal_beside_exits", &S::tie_reversal_beside_exits, false},
     };
     CHECK(ablations.size() == sizeof(MarginRuleSwitches) / sizeof(bool));
     for (const auto& ablation : ablations) {

@@ -1,0 +1,9 @@
+//@version=6
+strategy("rt-sl-stop-down", initial_capital=100038.09, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100)
+if time == timestamp("UTC", 2025, 4, 29, 14, 0)
+    strategy.entry("Short", strategy.short, qty=950)
+    strategy.exit("Exit Short", from_entry="Short", stop=11.0)
+if time == timestamp("UTC", 2025, 4, 29, 14, 45)
+    strategy.entry("Long", strategy.long)
+if time == timestamp("UTC", 2025, 4, 29, 15, 0)
+    strategy.close_all()

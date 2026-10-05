@@ -1,0 +1,38 @@
+{
+ "written_at_utc": "2026-10-05T12:23:14.306052+00:00",
+ "source_sha256": "dee28f3d1667d2b73eb9c0fbb1f2c8dd160df1c1f7512ee8b39cc7c9c5b649c6",
+ "rule": "rule 2 at the reversal's signal close on TradingView's money, whatever rests in the book: E = (IC + (G + L)) + side * (c' - AP) * Q_seed on binary64; Q = decimal floor of sig10(E) / c'; E < sig10(Q * c') keeps only the close leg (the opening leg is dropped). A resting strategy.exit of the reversed position (stop, or stop + trail_points) and the new entry's own strategy.exit change nothing. Off the tie (E = cost +- 0.01) the reversal fills in full.",
+ "chart": {
+  "symbol": "NYSE:F",
+  "interval": "15",
+  "from": "2025-04-29",
+  "to": "2025-04-30"
+ },
+ "initial_capital": "99962.06",
+ "seed_qty": 951,
+ "book": "none",
+ "tie": "below",
+ "side": "ls",
+ "process_orders_on_close": true,
+ "mirror": {
+  "c": "10.1",
+  "E": "100000.09999999999",
+  "Q": 9901.0,
+  "cost": "100000.1",
+  "E_minus_cost_ulps": -1.0,
+  "rule2_close_only": true
+ },
+ "predicted_rows_tape_time_utc8": [
+  {
+   "trade": 1,
+   "side": "long",
+   "qty": 951,
+   "entry": "2025-04-29 22:00",
+   "entry_price": 10.06,
+   "exit": "2025-04-29 22:45",
+   "exit_price": 10.1,
+   "exit_signal": "Short"
+  }
+ ],
+ "engine_main_c7149843": "= prediction"
+}

@@ -25,6 +25,14 @@
  *   tapes, one export each).
  * - explicit_short/ (one source, 3 exports): an explicit short from flat at
  *   the offset-0 equity, filled by TradingView (prediction.json).
+ * - reversal_tie/ (36 sources, 3 byte-identical exports each): an explicit
+ *   seed, then a default 100 % reversal whose rule-2 cost ties its equity
+ *   (9901 x 10.10 = 100000.10), long and short, with and without
+ *   process_orders_on_close, beside no exit, the seed's resting stop, or
+ *   the seed's stop + trail and the new entry's own exit. TradingView keeps
+ *   only the close leg wherever the binary64 equity is one ulp under the
+ *   cost (-below), whatever rests, and fills the reversal at the equal
+ *   tie and a cent off it (-equal, -up, -down).
  *
  * plan.tsv is each script's calls in statement order, keyed by the bar time
  * that fires them ("held_long" = while strategy.position_size > 0);
@@ -81,9 +89,9 @@ namespace {
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 constexpr std::int64_t kMinute = 60'000;
-constexpr std::size_t kSources = 75;
-constexpr std::size_t kTvRows = 156;
-constexpr std::size_t kForwardSampled = 58;
+constexpr std::size_t kSources = 111;
+constexpr std::size_t kTvRows = 216;
+constexpr std::size_t kForwardSampled = 94;
 
 using pineforge::source::detail::MarginRuleSwitches;
 
@@ -565,6 +573,7 @@ int main() {
         {"point_order_trailing_exits", &S::point_order_trailing_exits, true},
         {"pyramiding_ledger_records", &S::pyramiding_ledger_records, true},
         {"exit_child_tombstones", &S::exit_child_tombstones, true},
+        {"tie_reversal_beside_exits", &S::tie_reversal_beside_exits, true},
     };
     const std::set<std::string> on = matching(cases, feeds);
     for (const auto& [name, flag, load_bearing] : pinned) {

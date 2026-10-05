@@ -329,6 +329,366 @@
   "tv_trades_rows": 8,
   "tv_trades_sha256": "54e55ce6fcad32d1acc9c2f546c1c27d23f72aeda0cbed9d0c5cbcf13318a4f8"
  },
+ "reversal_tie/long-to-short-both-below": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "a8c78bcb1723fb225e000b4bff2fc6364cf3ef95d1f8dbdb2e41d3e65d7f92af",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 2,
+  "tv_trades_sha256": "ea88c64dc7bd0f0a798f6cdf1edf09dffb519fc872d46e3590d814e622813789"
+ },
+ "reversal_tie/long-to-short-both-below-pooc": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "e8bdc4bca277aff8ff8633756cabc97011d005c80a5563311da50bae4497a065",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 2,
+  "tv_trades_sha256": "909d757e28b23b9df64c6ed19651b4fad7ed3b6acc7308eb3b628c1ebad8b390"
+ },
+ "reversal_tie/long-to-short-both-equal": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "639452531916d1ff1438f431ae9554f8b864a6ee79e55fc71690d82f8616e12e",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "b799db229bdfbeff7bafd648037e5e7a8aadf902dfc216157b31ce72d5bac823"
+ },
+ "reversal_tie/long-to-short-both-equal-pooc": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "1bc1c0d76577f9f0107ff2a5658219232048f5014fea87c050c0795d4283fa38",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "e9b926f623a69a7310733f3ba1b4897dd02722609fc51b8eae2380ff5dff5cd2"
+ },
+ "reversal_tie/long-to-short-none-below": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "d055eb626f9eee5eab854fc77a5e3dd68439da0b2593612ec3f6efd83bafc476",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 2,
+  "tv_trades_sha256": "ea88c64dc7bd0f0a798f6cdf1edf09dffb519fc872d46e3590d814e622813789"
+ },
+ "reversal_tie/long-to-short-none-below-pooc": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "dee28f3d1667d2b73eb9c0fbb1f2c8dd160df1c1f7512ee8b39cc7c9c5b649c6",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 2,
+  "tv_trades_sha256": "909d757e28b23b9df64c6ed19651b4fad7ed3b6acc7308eb3b628c1ebad8b390"
+ },
+ "reversal_tie/long-to-short-none-equal": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "4d51befd1f2f6826772b9d1b5e2e48022ee64a1f2ef27ccc10d4f6fd43f3e941",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "b799db229bdfbeff7bafd648037e5e7a8aadf902dfc216157b31ce72d5bac823"
+ },
+ "reversal_tie/long-to-short-none-equal-pooc": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "16d9fa163c5d9b2d8afa59b3efca8ec5d9ce8f89e787309bbb84c402d544a363",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "e9b926f623a69a7310733f3ba1b4897dd02722609fc51b8eae2380ff5dff5cd2"
+ },
+ "reversal_tie/long-to-short-none-up": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "d358261d45237c5b20994126d8db9b1dc092369dc079b88466e9dff1293af525",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "b799db229bdfbeff7bafd648037e5e7a8aadf902dfc216157b31ce72d5bac823"
+ },
+ "reversal_tie/long-to-short-none-up-pooc": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "2d0e8c5ae8f44f8d8369cf32587f8d89cfcd8d2ce5bafb0801f3e2de9872c29b",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "e9b926f623a69a7310733f3ba1b4897dd02722609fc51b8eae2380ff5dff5cd2"
+ },
+ "reversal_tie/long-to-short-stop-below": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "760b79f54b3b0ad7a8c1d39d40181a7bc502e4cbcfc039d4f745bd2bcc5be7e8",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 2,
+  "tv_trades_sha256": "ea88c64dc7bd0f0a798f6cdf1edf09dffb519fc872d46e3590d814e622813789"
+ },
+ "reversal_tie/long-to-short-stop-below-pooc": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "b91754cf0230a99c8c77dce5ff443df193231090e831a0435eb51bf2a79df359",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 2,
+  "tv_trades_sha256": "909d757e28b23b9df64c6ed19651b4fad7ed3b6acc7308eb3b628c1ebad8b390"
+ },
+ "reversal_tie/long-to-short-stop-down": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "d16f01f258408c05153fec3528de30d3affc3d91284a40ebbb2249f1349bdc88",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "d7e91e2cb4a389eefc10800a29be2d4ede962a753706cdde1794a48d881b749d"
+ },
+ "reversal_tie/long-to-short-stop-down-pooc": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "e5dcc8e99f1517a354770c86e60c8b4b158e7dec67c259591ce1c42fedaabd5a",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "57e4bae064af80439a9f1d0a542d750b3fccca817c72c04cdf58af7a375d14d0"
+ },
+ "reversal_tie/long-to-short-stop-equal": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "ea15e5ba513f9df45e1b180c0262063791d50dffd1dfa43fbe967ab18f6f9221",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "b799db229bdfbeff7bafd648037e5e7a8aadf902dfc216157b31ce72d5bac823"
+ },
+ "reversal_tie/long-to-short-stop-equal-pooc": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "57219bb8da5f74237d6c29e71aa38d3fa217300ada23c60acd98b78fb1b7940d",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "e9b926f623a69a7310733f3ba1b4897dd02722609fc51b8eae2380ff5dff5cd2"
+ },
+ "reversal_tie/long-to-short-stop-up": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "7a92a2602d7fb9f8867be83304b7d14b07cf11e858365fcbef1c3b234b620772",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "b799db229bdfbeff7bafd648037e5e7a8aadf902dfc216157b31ce72d5bac823"
+ },
+ "reversal_tie/long-to-short-stop-up-pooc": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "e8b0aab0cac683186477f2277168cc770f2ecdc62f066ae9124a004823ef4643",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "e9b926f623a69a7310733f3ba1b4897dd02722609fc51b8eae2380ff5dff5cd2"
+ },
+ "reversal_tie/short-to-long-both-below": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "8847b8664691708a652347b3a4041956fb4fa0902c0ef0f84756b235716542a9",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 2,
+  "tv_trades_sha256": "57ed48ff40ba2bfe6fde1e74cd839cdc9d6318805527f9faf43b3e1bd6e801d6"
+ },
+ "reversal_tie/short-to-long-both-below-pooc": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "f891fbd364e41327839baa86a7ea2fb275226258e43f5dc9b8256904993a6593",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 2,
+  "tv_trades_sha256": "96fbe1c3f10d6045057c2ca8aec833d49abe53fe68fc06e7ef3820c0cd347a61"
+ },
+ "reversal_tie/short-to-long-both-equal": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "b9a0b619886fbaf8279d87dd371ebefbffcd52de587f61395eeb29d9743cbe8e",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "41924167911d4d4e7a092f49648a771d51b32a394e47adf7fc2d3b9c690693be"
+ },
+ "reversal_tie/short-to-long-both-equal-pooc": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "172b6d8f6a5dbf8441cd992837c13fa9afc8d46e05cf75ef0d59e413e5d51598",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "5f61fd973ec746f508bf4b767789a207c2056cb14e1183da4f8df4c0b08a7e28"
+ },
+ "reversal_tie/short-to-long-none-below": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "a7433442afb21d10c666cde828d32fa38eacd7da92cbea2123a91678d4692bca",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 2,
+  "tv_trades_sha256": "57ed48ff40ba2bfe6fde1e74cd839cdc9d6318805527f9faf43b3e1bd6e801d6"
+ },
+ "reversal_tie/short-to-long-none-below-pooc": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "fa090f6cd8f35e5e87ef6f82a537a0d6934d193786c3d18057065919c0bd958a",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 2,
+  "tv_trades_sha256": "96fbe1c3f10d6045057c2ca8aec833d49abe53fe68fc06e7ef3820c0cd347a61"
+ },
+ "reversal_tie/short-to-long-none-equal": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "cd6b34f13faaade5aa837742f04a85e68e930ec470682d08c55a2fef509873a0",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "41924167911d4d4e7a092f49648a771d51b32a394e47adf7fc2d3b9c690693be"
+ },
+ "reversal_tie/short-to-long-none-equal-pooc": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "b1338e7dce969de1c5fcc1c37a264422de30baa3cb4413edeb67e606ef31ce6a",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "5f61fd973ec746f508bf4b767789a207c2056cb14e1183da4f8df4c0b08a7e28"
+ },
+ "reversal_tie/short-to-long-none-up": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "a19bd400bb33c9bdca70c0aca93cfbd4e983467f367d9369a2d342a231f41e5c",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "41924167911d4d4e7a092f49648a771d51b32a394e47adf7fc2d3b9c690693be"
+ },
+ "reversal_tie/short-to-long-none-up-pooc": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "b8df4f709aa3bb8a9682b40197532e9b1e9c711fc354975e73047cf8bfbe43ba",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "5f61fd973ec746f508bf4b767789a207c2056cb14e1183da4f8df4c0b08a7e28"
+ },
+ "reversal_tie/short-to-long-stop-below": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "2ed6e64667bfe50ac278997d71d532599763bc30fb2aba2f89ea9395a66cf693",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 2,
+  "tv_trades_sha256": "57ed48ff40ba2bfe6fde1e74cd839cdc9d6318805527f9faf43b3e1bd6e801d6"
+ },
+ "reversal_tie/short-to-long-stop-below-pooc": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "54e9a57585928b80f13afcb5722d42b567a7406856009f6f4d9d0f63f5f4802e",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 2,
+  "tv_trades_sha256": "96fbe1c3f10d6045057c2ca8aec833d49abe53fe68fc06e7ef3820c0cd347a61"
+ },
+ "reversal_tie/short-to-long-stop-down": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "79c03219f3087ab6139b7f5aabf020e38012397ed5a7bbe738e9aebd70a2b140",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "59e06f6fe3c3cc7bfedd8e5ea292882da6c7af9c0782cf9027e7c86c2b068cac"
+ },
+ "reversal_tie/short-to-long-stop-down-pooc": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "6ba6060ae9b08d477cfcfc89a85f93cc30e8c8717cecbe8e2e87968eefb042a5",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "09caab0262d3fa64030a7287c2598a3cd3a2d4a62f1c241078fe35d6ac1d3b5e"
+ },
+ "reversal_tie/short-to-long-stop-equal": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "9313c94bc1022f7a967f586ff9790a1a68026d75c059ddf1cd70e0a167343b2c",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "41924167911d4d4e7a092f49648a771d51b32a394e47adf7fc2d3b9c690693be"
+ },
+ "reversal_tie/short-to-long-stop-equal-pooc": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "2897ff68a94cf697aa3c70e3ca6a847c6d4872970459e6ca508a4bb0232961ab",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "5f61fd973ec746f508bf4b767789a207c2056cb14e1183da4f8df4c0b08a7e28"
+ },
+ "reversal_tie/short-to-long-stop-up": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "543b53968cffd6276f32c0a0bf9c831cbcfd66b27068c8197f1f8f48919e4dec",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "41924167911d4d4e7a092f49648a771d51b32a394e47adf7fc2d3b9c690693be"
+ },
+ "reversal_tie/short-to-long-stop-up-pooc": {
+  "chart_from": "2025-04-29",
+  "chart_to": "2025-04-30",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "af3606a614ec79e033a59888ddd8f1124e4e543b1e9feb16ea9bc83e6d0bfba8",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "5f61fd973ec746f508bf4b767789a207c2056cb14e1183da4f8df4c0b08a7e28"
+ },
  "stop_priority/close-reversal-102180": {
   "chart_from": "2025-05-12",
   "chart_to": "2025-05-14",

@@ -1,0 +1,16 @@
+{
+  "title": "rt-sl-none-below-pooc",
+  "slug": "rt-sl-none-below-pooc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-05T12:24:25.918Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-29",
+    "to": "2025-04-30"
+  },
+  "pine_sha256": "fa090f6cd8f35e5e87ef6f82a537a0d6934d193786c3d18057065919c0bd958a",
+  "tv_trades_sha256": "96fbe1c3f10d6045057c2ca8aec833d49abe53fe68fc06e7ef3820c0cd347a61",
+  "tv_trades_rows": 2
+}

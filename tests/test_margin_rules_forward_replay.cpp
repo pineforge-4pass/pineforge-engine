@@ -915,7 +915,7 @@ using pineforge::source::detail::MarginRuleSwitches;
 // too: the static_assert stops the build until it is.
 template <typename S>
 S every_rule(bool value) {
-    static_assert(sizeof(S) == 16 && alignof(S) == 1,
+    static_assert(sizeof(S) == 17 && alignof(S) == 1,
                   "MarginRuleSwitches gained a field: set it in every_rule()");
     S s;
     s.decimal_sizing = value;
@@ -934,6 +934,7 @@ S every_rule(bool value) {
     s.point_order_trailing_exits = value;
     s.pyramiding_ledger_records = value;
     s.exit_child_tombstones = value;
+    s.tie_reversal_beside_exits = value;
     return s;
 }
 

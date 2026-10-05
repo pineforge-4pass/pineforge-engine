@@ -426,6 +426,8 @@ struct MarginRuleSwitches {
     // A partial strategy.exit child that filled is never revived for the
     // entry incarnation it filled under.
     bool exit_child_tombstones = true;
+    // Rule 2's exact tie judges a reversal beside resting exit stop/trail legs.
+    bool tie_reversal_beside_exits = true;
 };
 MarginRuleSwitches& margin_rule_switches() noexcept;
 
@@ -1958,7 +1960,8 @@ private:
     std::optional<double> pooc_fee_units(const PineSizingSnapshot&) const;
     double tv_pooc_fee_grossed_unit(double price) const;
     bool unified_admission_scope(const PlacementSnapshot&, bool market_or_stop,
-                                 double signed_units, double units) const;
+                                 double signed_units, double units,
+                                 bool beside_exits = false) const;
     bool unified_admission_terms(const PlacementSnapshot&, const NativeExecutionTermsFacts&,
                                  bool market_or_stop, bool opposite,
                                  native_order::ExecutionTerms& result, bool& admitted) const;

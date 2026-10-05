@@ -1,0 +1,16 @@
+{
+  "title": "rt-sl-stop-equal-pooc",
+  "slug": "rt-sl-stop-equal-pooc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-05T12:24:36.331Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-29",
+    "to": "2025-04-30"
+  },
+  "pine_sha256": "2897ff68a94cf697aa3c70e3ca6a847c6d4872970459e6ca508a4bb0232961ab",
+  "tv_trades_sha256": "5f61fd973ec746f508bf4b767789a207c2056cb14e1183da4f8df4c0b08a7e28",
+  "tv_trades_rows": 4
+}

@@ -273,6 +273,19 @@ open position (`record_close_first`), stamped on the entry at its `entry()`
 call (`PlacementSnapshot::close_first_entry`) and read by both halves
 (`close_first_admission`). No tie band bounds either half.
 
+Beside resting `strategy.exit` stop and trail legs (the reversed position's,
+the new entry's own) only rule 2's exact tie is judged
+(`tie_reversal_beside_exits`): a default 100 % reversal at margin 100 on a
+whole-unit lot whose binary64 `E` is under `sig10(Q × c′)` while `sig10(E)`
+reaches it keeps only its closing leg, as on a clear book. TradingView does
+so whatever of those rests (`tests/fixtures/admission_rules/reversal_tie`, 36
+controls on NYSE:F: long and short, with and without
+process_orders_on_close; the equal tie and a cent off it fill the
+reversal). Off that tie, beside a limit leg and on a fractional lot such a
+book keeps the engine's earlier rules: no tape decides rule 5, the fill
+check or those books there (`test_high_value_signal_cost` keeps a BTC
+reversal beside a take-profit and stop bracket on them).
+
 Where no tape decides, the scope keeps the engine's earlier rules: a
 continuous quantity (no lot grid), calc_on_order_fills, the bar magnifier, a
 stop that reverses (only stops from flat are pinned), a default-sized stop
@@ -404,6 +417,7 @@ The gated code is in `src/source/pine_adapter.cpp`.
 | `point_order_trailing_exits` | point order | on | the point order counts a stop or limit leg of an exit that also trails (`trail_points`, `trail_offset` or `trail_price`) like any other protective exit (§1.9) | the opening checkpoint in `on_bar_open` |
 | `pyramiding_ledger_records` | pyramiding records | on | under pyramiding above 1, the cap counts the open close-ledger records, one per entry fill not yet booked (§1.9) | `open_ledger_records` in `entry`, `submit_or_replace`, `validate_precommit` |
 | `exit_child_tombstones` | exit tombstones | on | a partial `strategy.exit` child that filled is never revived for the entry incarnation it filled under (§1.9) | `exit_tombstoned` in `exit` and `validate_precommit` |
+| `tie_reversal_beside_exits` | reversal tie | on | rule 2's exact tie also judges a default 100 % reversal on a whole-unit lot whose book holds `strategy.exit` stop or trail legs: a binary64 `E` under `sig10(Q c′)` whose ten-digit money reaches it (`E < cost <= sig10(E)`; one ulp under in the controls, 13 ulps under in the population case it fixes) keeps only the close leg; off the tie, beside a limit leg and on a fractional lot the earlier rules stand (§1.3) | `unified_admission_terms` in `resolve_terms` |
 | `gain_loss_money` | G+L | on | the G+L source money (§1.4), inside the regime its tapes pin | the source money at each signal and the margin-call slices that book into it, not the residual call's cash; the state hash in `src/source/pine_state_hash.cpp` |
 | `dust_unit_call` | margin slices | on | a dust restore's one-unit call on the G + L money (§1.5) | `source_margin_units` |
 | `pooc_fee_sizing` | POOC_FEE_SIZING | on | the process_orders_on_close fee-grossed sizing unit (§1.2) | `pooc_fee_units` |
@@ -483,14 +497,15 @@ book the same trades.
 
 | Format | Tapes | Fixture | Test |
 |---|---:|---|---|
-| close-first, entry-then-close and flat entries at session-open gaps (19 sources, 3 exports each); point-order, close-first reversal, exit-tombstone, add and pyramiding controls (13 sources, 3 exports each); 39 stop-priority and 3 coupled close + reversal tapes; an explicit-short control (3 exports) | 75 | `tests/fixtures/admission_rules` | `test_admission_rules_tapes` |
+| close-first, entry-then-close and flat entries at session-open gaps (19 sources, 3 exports each); point-order, close-first reversal, exit-tombstone, add and pyramiding controls (13 sources, 3 exports each); 39 stop-priority and 3 coupled close + reversal tapes; an explicit-short control (3 exports); reversals at an exact rule-2 tie beside no exit, a resting stop, or stop + trail exits (36 sources, 3 exports each) | 111 | `tests/fixtures/admission_rules` | `test_admission_rules_tapes` |
 
-The engine reproduces all 75 (the 74 above and the explicit-short control
-`explicit_short/offset0-fill`); each of `unified_placement`,
-`fill_price_recheck`, `close_first_admission`, `point_fills_before_margin`,
-`point_order_trailing_exits`, `pyramiding_ledger_records` and
-`exit_child_tombstones` costs tapes there when turned off, and 58 of the 61
-NYSE:F tapes book the same trades as a backtest and as a stream (the test
+The engine reproduces all 111 (the 74 above, the explicit-short control
+`explicit_short/offset0-fill` and the 36 `reversal_tie` controls); each of
+`unified_placement`, `fill_price_recheck`, `close_first_admission`,
+`point_fills_before_margin`, `point_order_trailing_exits`,
+`pyramiding_ledger_records`, `exit_child_tombstones` and
+`tie_reversal_beside_exits` costs tapes there when turned off, and 94 of the
+97 NYSE:F tapes book the same trades as a backtest and as a stream (the test
 names the three it leaves out and why).
 `test_qty_step_lot_grid_case` replays the hosted lot-grid case
 (`tests/fixtures/qty_step_lot_grid`) with these rules on, with and without its

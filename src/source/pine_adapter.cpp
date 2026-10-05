@@ -17559,7 +17559,7 @@ double PineExecutionAdapter::gain_loss_mirror_equity(double mark) const {
 // close-first entry (PlacementSnapshot::close_first_entry) takes rule 2 alone.
 bool PineExecutionAdapter::unified_admission_scope(
         const PlacementSnapshot& source, bool market_or_stop, double signed_units,
-        double units) const {
+        double units, bool beside_exits) const {
     // The tapes pin it on lot-stepped instruments, without
     // calc_on_order_fills and without the bar magnifier; a continuous
     // quantity (test_tv_money_precision_l4b, test_l10ac_full_equity_single_lot),
@@ -17623,7 +17623,14 @@ bool PineExecutionAdapter::unified_admission_scope(
             && !finite_positive(row.exit_levels.limit) && !finite_positive(row.exit_levels.stop)
             && !finite_positive(row.exit_levels.trail_points)
             && !finite_positive(row.exit_levels.trail_price);
-        if (!unpriced_close && row.family != PineOrderFamily::Margin) return false;
+        // `beside_exits`: strategy.exit stop and trail legs may rest too (the
+        // tie in unified_admission_terms); a limit leg is not pinned there.
+        const bool stop_or_trail_leg = row.family == PineOrderFamily::ExitStop
+            || row.family == PineOrderFamily::ExitTrail;
+        if (!unpriced_close && row.family != PineOrderFamily::Margin
+            && !(beside_exits && stop_or_trail_leg)) {
+            return false;
+        }
     }
     return true;
 }
@@ -17646,8 +17653,13 @@ bool PineExecutionAdapter::unified_admission_terms(
         : (std::isfinite(source.requested_qty)
             ? floor_quantity_grid(std::abs(source.requested_qty), staged_.quantity_grid)
             : kNaN);
-    if (!unified_admission_scope(source, market_or_stop, facts.position.signed_units,
-                                 unified_units)) {
+    const bool book_clear = unified_admission_scope(source, market_or_stop,
+                                                    facts.position.signed_units, unified_units);
+    if (!book_clear
+        && !(opposite && admission_rules.tie_reversal_beside_exits
+             && admission_rules.unified_placement
+             && unified_admission_scope(source, market_or_stop, facts.position.signed_units,
+                                        unified_units, /*beside_exits=*/true))) {
         return false;
     }
     const double tick = staged_.syminfo.mintick;
@@ -17657,6 +17669,27 @@ bool PineExecutionAdapter::unified_admission_terms(
     const double equity = source.sizing.equity;
     const double signal_ticks = std::floor(source.sizing.mark / tick + 0.5);
     const double signal_close = signal_ticks * tick;
+    // Beside resting strategy.exit stop and trail legs (the reversed
+    // position's, the new entry's own) only rule 2's exact tie is judged: a
+    // default 100 % reversal at full margin on a whole-unit lot whose
+    // binary64 E is under sig10(Q c') while sig10(E) reaches it keeps only
+    // its close leg, as on a clear book (tests/fixtures/admission_rules
+    // reversal_tie). Off that tie, beside a limit leg and on a fractional lot
+    // the engine's earlier rules stand: no tape decides there.
+    if (!book_clear) {
+        const double cost = source_money_round(units * signal_close * margin);
+        const bool default_all_in = !std::isfinite(source.requested_qty)
+            && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+            && config_.default_qty_value == 100.0;
+        const bool whole_units = staged_.quantity_grid && *staged_.quantity_grid == 1.0;
+        if (!(default_all_in && whole_units && margin == 1.0 && equity < cost
+              && !(source_money_round(equity) < cost))) {
+            return false;
+        }
+        result.units = facts.opposite_book_units;
+        result.shape = native_order::OpeningShape::CloseOpposite;
+        return true;
+    }
     if (admission_rules.unified_placement
         && equity < source_money_round(units * signal_close * margin)) {
         result.units = opposite ? facts.opposite_book_units : 0.0;
