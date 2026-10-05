@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
     try {
         bool confirmed = false, calendar_check = false;
         std::string input_tf = "1", stream_feed, aggregate_csv;
-        int distribution = PF_MAGNIFIER_UNIFORM;
+        int distribution = PF_MAGNIFIER_ENDPOINTS;
         Json config;
         for (int index = 5; index < argc; ++index) {
             const std::string option = argv[index];
