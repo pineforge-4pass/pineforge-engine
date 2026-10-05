@@ -192,6 +192,12 @@ struct PlacementSnapshot {
     // (withdraw_void_exits), and a re-issue made once the entry exists takes
     // a new place in the exit queue rather than this one's.
     bool void_issue = false;
+    // A strategy.exit called while the position was open and its from_entry
+    // held no lot but had an entry order working: TradingView binds it to the
+    // entry id, so it waits for that id's next fill through closes, the flat
+    // and a cancel and re-entry of the id. Cleared when the id fills, which
+    // binds the exit to that fill's lot (ExitBindingRuleSwitches).
+    bool pending_bound_exit = false;
     // Sized when it was placed and executed as a plain market transaction:
     // a margin call or close whose position shrank before it filled crosses
     // zero and opens the difference on the other side
@@ -410,6 +416,10 @@ struct MarginRuleSwitches {
     // At the open, the orders the opening print executes fill before the
     // margin check runs there.
     bool point_fills_before_margin = true;
+    // The point order counts a stop or limit leg of a strategy.exit that also
+    // trails (trail_points, trail_offset or trail_price) like any other
+    // protective exit: the trail leaves the reached leg's order unchanged.
+    bool point_order_trailing_exits = true;
     // The pyramiding cap counts open close-ledger records, one per entry
     // fill not yet booked, not physical lots.
     bool pyramiding_ledger_records = true;
@@ -440,6 +450,36 @@ struct ScriptRuleSwitches {
     bool pooc_bracket_skips_inert_exits = true;
 };
 ScriptRuleSwitches& script_rule_switches() noexcept;
+
+// One switch per part of TradingView's strategy.exit binding rule, pinned on
+// the tapes under tests/fixtures/exit_binding and the pending-* tapes of
+// tests/fixtures/global_exit_children, so a regression bisects per part. A
+// strategy.exit binds when it is called: to its entry's open lots, else to
+// the entry id while an order of it is working, else the call is ignored.
+// Every part acts only with margin requirements off (margin_long =
+// margin_short = 0), the setting of every tape. All on; only tests change
+// one. Process-wide, read by every adapter; not installed API, and no
+// strategy input reaches it.
+struct ExitBindingRuleSwitches {
+    // An exit called in position for an entry id with no lot but a limit or
+    // stop order working is bound to the id: a close or the flat does not
+    // remove it, a cancel of the id's order keeps it for the id's next order,
+    // and the id's next fill binds it (PlacementSnapshot::pending_bound_exit).
+    bool pending_bound_exit_survives_flat = true;
+    // A global exit called while the book is flat binds to the limit and
+    // stop entry orders working then: it waits for their fill instead of
+    // ending on the flat book.
+    bool global_exit_binds_working_entries = true;
+    // Under process_orders_on_close an entry order of the side a close
+    // flattens, resting from an earlier bar, survives that close when it is
+    // a stop, as a limit does.
+    bool resting_stop_entry_survives_close = true;
+    // Under process_orders_on_close a priced add of an id holding no lot,
+    // still at the pyramiding cap once its bar's closes are done, leaves the
+    // book at the next opening, judged at that opening only.
+    bool priced_add_at_cap_not_placed = true;
+};
+ExitBindingRuleSwitches& exit_binding_rule_switches() noexcept;
 } // namespace detail
 
 #ifndef PINEFORGE_PLACEMENT_AUDIT
@@ -1484,10 +1524,14 @@ public:
         double exact_required = 0.0;
         double required = 0.0;
         double equity = 0.0;
+        // One unit's margin per unit of price (point value x FX x margin
+        // fraction), and whether the book is short.
+        double scale = 0.0;
+        bool short_book = false;
     };
     SourceMarginMoney source_margin_money(double mark_price,
                                           std::int64_t sub_bar_open_ms) const;
-    double source_margin_units(const SourceMarginMoney&, bool opening_checkpoint) const;
+    double source_margin_units(const SourceMarginMoney&, bool opening_checkpoint, bool gated = true) const;
     double lagged_margin_follow_up_units(const std::vector<NativeOpenLot>& lots,
                                          const SourceMarginMoney& money, double called,
                                          double fill, std::int64_t sub_bar_open_ms) const;
@@ -1952,6 +1996,25 @@ private:
                                   std::int64_t sub_bar_open_ms) const;
     void follow_margin_call(double called_units, double fill, double current,
                             const NativeDecisionContext&);
+    bool short_call_vetoed(const SourceMarginMoney&, double units, bool opening_checkpoint) const;
+    bool lagged_short_scope() const noexcept;
+    double lagged_short_follow_up_units(const std::vector<std::pair<double, double>>& taken,
+                                        double equity_before, double held_before, double fill,
+                                        std::int64_t sub_bar_open_ms) const;
+    double call_short_with_lagged_follow_up(double mark, double units,
+                                            const NativeDecisionContext&);
+    bool short_path_points_scope(const NativeDecisionContext&) const;
+    void execute_owed_short_follow_up(int point, double price, const NativeDecisionContext&);
+    void walk_short_path_points(const Bar&, const NativeDecisionContext&);
+    void schedule_lagged_short_follow_up(const native_order::ExecutionAppliedEvent&,
+                                         const NativeDecisionContext&);
+    bool pending_veto_point_first(const Bar&, const NativeDecisionContext&, double opening_mark);
+    void record_close_call_after_script(double book_before, double called,
+                                        const NativeDecisionContext&);
+    void apply_frozen_reversal_close(const PlacementSnapshot&, const NativeExecutionTermsFacts&,
+                                     native_order::ExecutionTerms&) const;
+    native_order::ExecutionTerms resolve_source_terms(const NativeExecutionTermsFacts&) const;
+    double gain_loss_closed_equity() const;
     bool declined_reversal_at_open(const Bar&) const;
     bool schedule_margin_call_path(const Bar&, const NativeDecisionContext&);
     bool schedule_priced_opening_margin(const Bar&, const NativeDecisionContext&, double fill);
@@ -2197,6 +2260,10 @@ private:
     void defer_open_marketable_sells(const Bar& bar);
     void admit_deferred_open_marketable_sells();
     void rearm_throttled_reopens();
+    // A carried trailing stop reached on the bar's tick-built path: the
+    // trail's distance re-priced for one bar, then restored (pine_adapter.cpp).
+    void retune_carried_trails_for_tick_reach(const Bar&, const NativeDecisionContext&);
+    void restore_carried_trail_retunes();
     void flush_pooc_marketable_limit_entry_fills(const Bar&, const NativeDecisionContext&);
     // The close pass's fills at a close tick: its own pass, or (after_close)
     // the reversing stops a same-bar close's fill releases.
@@ -2227,11 +2294,23 @@ private:
     void observe_close_ledger(const native_order::ExecutionAppliedEvent&,
                               const PlacementSnapshot*);
     bool entry_order_pending(const SourceId&) const;
+    bool priced_entry_order_working(const SourceId* id) const;
+    bool margins_disabled() const noexcept;
+    bool whole_level_exit(double limit_price, double stop_price, double trail_points,
+                          double trail_price, double profit_ticks, double loss_ticks, double qty,
+                          double qty_percent) const noexcept;
     bool open_lot_of(const SourceId& id) const;
     bool standing_exit(const SourceId& exit_id, const SourceId& from_entry) const;
     void unvoid_exit(PlacementSnapshot& row);
     void execute_or_withdraw_close(native_order::RequestHandle close, bool void_issue);
     void withdraw_void_exits(const SourceId& entry_id);
+    void bind_pending_exits_to_fill(const SourceId& entry_id);
+    void withdraw_unplaced_cap_adds(const NativeDecisionContext& context);
+    void stash_id_bound_exits(const SourceId& entry_id);
+    void rearm_id_bound_exits(const SourceId& entry_id);
+    void place_entry(const SourceId& id, bool is_long, double limit_price, double stop_price,
+                     double qty, const std::string& comment, const std::string& oca_name,
+                     int oca_type, int qty_type);
     void credit_close_ledger(const SourceId&, double units);
     void book_close_ledger(const SourceId&, double units);
 
@@ -2290,6 +2369,21 @@ private:
     std::unordered_map<SourceId, std::int64_t> consumed_partial_exit_cycles_;
     std::unordered_set<std::uint64_t> bracket_shadowed_openings_;
     std::unordered_map<SourceId, NamedEntryCancelToken> named_entry_cancel_tokens_;
+    // An exit bound to its entry id whose working order a strategy.cancel of
+    // the id withdrew (PlacementSnapshot::pending_bound_exit): TradingView
+    // keeps the binding, so the id's next entry order re-arms the exit as
+    // called. The native request ends with its parent order, so the call is
+    // kept here, one per (exit id, entry id) pair.
+    struct IdBoundExit {
+        SourceId exit_id;
+        SourceId from_entry;
+        PineExitLevels levels;
+        double qty_percent = std::numeric_limits<double>::quiet_NaN();
+        double qty = std::numeric_limits<double>::quiet_NaN();
+        std::string comment;
+        std::string oca_name;
+    };
+    std::vector<IdBoundExit> id_bound_exits_;
     // The close ledger: per id, the units entered under it that no close has
     // booked yet (close_logical_units_), and the same units by opening fill
     // in fill order (close_ledger_records_), which a booking beyond its id's
@@ -2434,6 +2528,9 @@ private:
     bool policy_script_bar_valid_ = false;
     std::unordered_set<std::uint64_t> market_pyramid_adds_;
     std::unordered_map<std::uint64_t, NativeTrailState> trail_state_at_open_;
+    // The trails retune_carried_trails_for_tick_reach re-priced for the bar
+    // in flight, each with its own trailing distance; empty between bars.
+    std::vector<std::pair<native_order::RequestHandle, double>> carried_trail_retunes_;
     bool stream_mode_ = false;
     SourceDayLedger day_ledger_{};
     PineRiskState risk_{};
@@ -2469,6 +2566,21 @@ private:
     mutable std::size_t admission_events_folded_ = 0;
     mutable std::uint64_t admission_events_last_ = 0;
     mutable std::uint64_t admission_events_digest_ = 1469598103934665603ULL;
+    // A short's lagged follow-up (MarginScheduleSwitches::
+    // lagged_short_follow_up) owed at a point of a script bar's path, booked
+    // there ahead of that point's own check: the script bar, the point (0
+    // its open, 1 and 2 its extremes in path order, 3 its close) and the
+    // units. A process_orders_on_close close owes the next bar's open.
+    std::int64_t owed_follow_up_bar_ = std::numeric_limits<std::int64_t>::min();
+    std::int32_t owed_follow_up_point_ = -1;
+    double owed_follow_up_units_ = 0.0;
+    // A margin call booked at a close after the script (the close's own
+    // check or a follow-up owed there): the script bar, the book the script
+    // saw and the units called. A reversal the script placed there keeps the
+    // close quantity it saw (MarginScheduleSwitches::frozen_reversal_close).
+    std::int64_t close_call_after_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    double close_call_after_script_book_ = 0.0;
+    double close_call_after_script_units_ = 0.0;
     // @source-state end
     // Install-time magnifier fact from NativeBeginArgs. Scheduler already
     // folds retained_.bar_magnifier; this copy is the host-kind-free query
@@ -2574,5 +2686,49 @@ private:
     // Item 3: a flat market-and-priced pair at a process_orders_on_close close.
     bool fill_pooc_close_pair(double raw_close, const NativeDecisionContext& context);
 };
+
+namespace detail {
+// The TradingView margin-call schedule rules pinned on the tapes under
+// tests/fixtures/margin_call_rules (short-cutoff-gate) and
+// tests/fixtures/margin_schedule_rules, one switch each so a regression
+// bisects per rule; all on, only tests change one. Process-wide, read by every
+// adapter; not installed API and no strategy input reaches it.
+struct MarginScheduleSwitches {
+    // A short's call of X units found at mark p is taken only where it
+    // restores the book at its own slipped print p': X p' m > Q p' m - E(p).
+    bool short_call_gate = true;
+    // A carried process_orders_on_close short is checked at every point of
+    // its bar's path before the script: the open, both extremes, the close.
+    // Ablate it together with close_call_follow_up_at_open: each corrects its
+    // own bars, and with one off the other's equity error can flip a later
+    // one-lot boundary (NYSE:F 15 axealgo: 144 exact rows with this on and
+    // the follow-up off, 169 with both off, 177 with both on).
+    bool short_path_points = true;
+    // After a short's call TradingView checks the book again at the call's
+    // fill with the called units out of it but their P&L unbooked, lot by
+    // lot, first in first out, and calls the last still-short check's
+    // lot-floored restore four times at the bar's next path point.
+    bool lagged_short_follow_up = true;
+    // A deficit the open's check found and vetoed stays pending: the first
+    // path point whose segment touches a resting exit is checked before that
+    // exit, and after a call there the exit fills at that point.
+    bool pending_veto_first = true;
+    // A reversal or close the script placed at a close where a margin call
+    // is booked after it keeps the close quantity the script saw.
+    bool frozen_reversal_close = true;
+    // A same-side add at full margin is judged as the whole book at the
+    // tick-built signal close against the fee-charged equity there.
+    bool add_signal_close = true;
+    // A long's lagged follow-up on whole-share lot grids too.
+    bool whole_share_lagged_follow_up = true;
+    // The money of a commission-free long's one-unit call after a trade
+    // history: initial capital plus the G + L sums.
+    bool long_call_gain_loss = true;
+    // A process_orders_on_close short's call sized at the previous close and
+    // executed at the open is followed at that open, at the call's own fill.
+    bool close_call_follow_up_at_open = true;
+};
+MarginScheduleSwitches& margin_schedule_switches() noexcept;
+} // namespace detail
 
 } // namespace pineforge::source

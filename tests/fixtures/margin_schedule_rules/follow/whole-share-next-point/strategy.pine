@@ -1,0 +1,13 @@
+//@version=6
+strategy("n3x-fu-nonpooc",initial_capital=9458.32,pyramiding=10,margin_long=100,margin_short=100,close_entries_rule="FIFO",commission_type=strategy.commission.percent,commission_value=0.1,slippage=3,process_orders_on_close=false)
+if time == timestamp("UTC",2026,03,23,14,15,00)
+    strategy.entry("A",strategy.long,qty=7)
+if time == timestamp("UTC",2026,03,23,14,30,00)
+    strategy.entry("B1",strategy.long,qty=29)
+if time == timestamp("UTC",2026,03,23,15,00,00)
+    strategy.entry("B2",strategy.long,qty=700)
+if time == timestamp("UTC",2026,03,23,16,30,00)
+    strategy.entry("C1",strategy.long,qty=30)
+    strategy.entry("C2",strategy.long,qty=30)
+if time == timestamp("UTC",2026,03,23,17,15,00)
+    strategy.close_all()

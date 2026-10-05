@@ -13,7 +13,7 @@
   "tvTradesCsvSha256": "c2e294af09374f47c80b210ad9b2827c7d05189f6f2a5fc11a0c651d154b184d",
   "bars": "bars/ethusdtp-2025-05-21-2025-05-23.csv",
   "barsSha256": "d37cb541bc6042178c7c93fcd55090953c39aeaf0895f78ca673efe3f7d018d6",
-  "status": "known",
+  "status": "asserted",
   "parameters": {
     "symbol": "BINANCE:ETHUSDT.P",
     "from": "2025-05-21",
@@ -47,12 +47,5 @@
     "target": 2580.44,
     "name": "n5-26-pending",
     "pineSha256": "dcf06eb48791026bd086b5d9ca1c322f174952975725eacbf1eea2c177d0524f"
-  },
-  "missingRule": "pending entry: a named exit of a waiting entry survives a close of the position",
-  "firstDeparture": {
-    "row": 2,
-    "field": "exit_id",
-    "expected": "X2",
-    "actual": "Close position order"
   }
 }

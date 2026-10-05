@@ -401,6 +401,7 @@ The gated code is in `src/source/pine_adapter.cpp`.
 | `fill_price_recheck` | ADMIT_V2, fill | on | the fill's price-scale check and its whole-drop (§1.3) | `unified_fill_admits` in `resolve_terms` and `validate_precommit` |
 | `close_first_admission` | ADMIT_V2, close-first | on | a close-first entry takes rule 2 alone and fills with its quantity (§1.3) | `record_close_first`, `entry`, `resolve_terms`, `validate_precommit` |
 | `point_fills_before_margin` | point order | on | at the open, a close placed ahead of its opposite entry and a protective stop or limit the open reaches fill before the opening margin check (§1.9) | the opening checkpoint in `on_bar_open` |
+| `point_order_trailing_exits` | point order | on | the point order counts a stop or limit leg of an exit that also trails (`trail_points`, `trail_offset` or `trail_price`) like any other protective exit (§1.9) | the opening checkpoint in `on_bar_open` |
 | `pyramiding_ledger_records` | pyramiding records | on | under pyramiding above 1, the cap counts the open close-ledger records, one per entry fill not yet booked (§1.9) | `open_ledger_records` in `entry`, `submit_or_replace`, `validate_precommit` |
 | `exit_child_tombstones` | exit tombstones | on | a partial `strategy.exit` child that filled is never revived for the entry incarnation it filled under (§1.9) | `exit_tombstoned` in `exit` and `validate_precommit` |
 | `gain_loss_money` | G+L | on | the G+L source money (§1.4), inside the regime its tapes pin | the source money at each signal and the margin-call slices that book into it, not the residual call's cash; the state hash in `src/source/pine_state_hash.cpp` |
@@ -414,6 +415,23 @@ The gated code is in `src/source/pine_adapter.cpp`.
 Comments in the adapter that say "margin rule 1" to "margin rule 5" mean the
 pin names SIZING_DEC, ADMIT_V2, LONG_OPEN, COOF_CLOSE and CLOSE_POINT, in that
 order, not the consequences of the block above.
+
+`MarginScheduleSwitches` (same header and namespace, read through
+`margin_schedule_switches()`) holds the margin-call schedule rules the same
+way. Its tapes are `tests/fixtures/margin_schedule_rules` and the
+`short-cutoff-gate` tapes of `tests/fixtures/margin_call_rules`.
+
+| Switch | Default | Gates | Where |
+|---|---|---|---|
+| `short_call_gate` | on | a short's call of `X` units at mark `p` is taken only where `X p′ m > Q p′ m - E(p)`, `p′` its slipped print; an opening checkpoint at a fill keeps the earlier rules, and a repeat at an already-resolved price (the process_orders_on_close open call's repeat at its fill) is a follow-up the gate never reaches | `short_call_vetoed` in `source_margin_units`; `submit_margin_call_slice` passes `gated = false` for the repeat |
+| `short_path_points` | on | a carried process_orders_on_close short (commissioned or slipped, nothing resting) is checked at both extremes and the close before the script, not at its high alone; ablate it with `close_call_follow_up_at_open` (each corrects its own bars, and one alone can leave a later one-lot boundary on the other side of the equity) | `walk_short_path_points` in `on_bar_close_before_script` |
+| `lagged_short_follow_up` | on | after a short's call, the lot-by-lot check at its fill with the called units out and unbooked; the last still-short check's restore four times at the next path point, ungated; fractional lot grids, and outside process_orders_on_close (a call at the first extreme rested at the other one, a call at the second booked at the close after the script; controls `lag/outside-pooc-*`) only where `margin_follow_up_units` does not follow the call | `lagged_short_follow_up_units`, `walk_short_path_points`, `schedule_lagged_short_follow_up`, `close_point_margin_call` |
+| `pending_veto_first` | on | a deficit the open's check vetoed: the first path point whose segment touches a resting whole exit is checked before it, and after a call there the exit fills at that point's print; only where that exit (both its legs) is the book's one resting order | `pending_veto_point_first` in `on_bar_open` |
+| `frozen_reversal_close` | on | a reversal entry placed at a close where a margin call is booked after the script closes the quantity the script saw; the excess opens on the other side | `record_close_call_after_script`, `apply_frozen_reversal_close` in `resolve_terms` |
+| `add_signal_close` | on | a same-side add's whole-book requirement at the tick-built signal close, not the slipped fill, at margin 100 (no tape decides another margin) | `validate_precommit` |
+| `whole_share_lagged_follow_up` | on | a long's lagged follow-up on a whole-share lot grid too | `lagged_margin_follow_up_units` |
+| `long_call_gain_loss` | on | a commission-free long's one-unit call reads initial + (G + L), inside `gain_loss_regime()`; a fee-bearing book keeps the closed-trade equity | `gain_loss_closed_equity` in `slipped_long_margin_units`, `slipped_long_unit_shortfall`, `submit_tv_money_long_margin_call` |
+| `close_call_follow_up_at_open` | on | a process_orders_on_close short's call sized at the previous close and executed at the open is followed once at that open, at its own fill (one follow-up restores the book there) | the opening checkpoint in `on_bar_open` |
 
 ### 1.7 Evidence
 
@@ -431,11 +449,12 @@ the reason.
 | event ledger (a trade history ahead of the decision) | 381 | `tests/fixtures/margin_ledger_rules` | `test_margin_ledger_rules_tapes` |
 
 The single-position fixture also asserts 13 process_orders_on_close fee-sizing
-tapes, 3 commission-0 controls, the oracle control of §1.2 and 10 order
-controls replayed through handwritten hosts, and it records 67 tapes of the
-short-and-slippage gate (`short-cutoff-gate`) without asserting them. With every
-switch on, as shipped, the engine reproduces 173 of the 199 asserted
-single-position tapes and 373 of the 381 ledger tapes; turning the
+tapes, 3 commission-0 controls, the oracle control of §1.2, 10 order
+controls replayed through handwritten hosts and 67 tapes of the short call
+gate and schedule (`short-cutoff-gate`). With every switch on, as shipped,
+the engine reproduces 244 of its 266 tapes and 373 of the 381 ledger tapes,
+and 35 of the 39 `margin_schedule_rules` tapes (each of those also as a
+stream, trade for trade); turning the
 placement half off costs 108 ledger tapes, the fill half 32 ledger and
 3 single-position tapes. `test_margin_rules_forward_replay` replays a sample of both
 fixtures as a backtest and as a bar-by-bar stream, with every switch on, with
@@ -444,14 +463,15 @@ book the same trades.
 
 | Format | Tapes | Fixture | Test |
 |---|---:|---|---|
-| close-first, entry-then-close and flat entries at session-open gaps (19 sources, 3 exports each); point-order, close-first reversal, exit-tombstone, add and pyramiding controls (11 sources, 3 exports each); 39 stop-priority and 3 coupled close + reversal tapes; an explicit-short control (3 exports) | 73 | `tests/fixtures/admission_rules` | `test_admission_rules_tapes` |
+| close-first, entry-then-close and flat entries at session-open gaps (19 sources, 3 exports each); point-order, close-first reversal, exit-tombstone, add and pyramiding controls (13 sources, 3 exports each); 39 stop-priority and 3 coupled close + reversal tapes; an explicit-short control (3 exports) | 75 | `tests/fixtures/admission_rules` | `test_admission_rules_tapes` |
 
-The engine reproduces all 73 (the 72 above and the explicit-short control
+The engine reproduces all 75 (the 74 above and the explicit-short control
 `explicit_short/offset0-fill`); each of `unified_placement`,
 `fill_price_recheck`, `close_first_admission`, `point_fills_before_margin`,
-`pyramiding_ledger_records` and `exit_child_tombstones` costs tapes there when
-turned off, and 56 of the 59 NYSE:F tapes book the same trades as a backtest
-and as a stream (the test names the three it leaves out and why).
+`point_order_trailing_exits`, `pyramiding_ledger_records` and
+`exit_child_tombstones` costs tapes there when turned off, and 58 of the 61
+NYSE:F tapes book the same trades as a backtest and as a stream (the test
+names the three it leaves out and why).
 `test_qty_step_lot_grid_case` replays the hosted lot-grid case
 (`tests/fixtures/qty_step_lot_grid`) with these rules on, with and without its
 1e-05 lot grid: 22 and 27 rows, every one exactly the recorded row.
@@ -1025,3 +1045,52 @@ double reserve_percent_commission(double cash) const {
 > `default_sizing_cash` does so; the tapes are under
 > `tests/fixtures/cash_fee_sizing` and `docs/design/native-feature-parity.md`
 > §3.10 records the measurement.
+
+## 6. When a `strategy.exit` binds
+
+TradingView binds a `strategy.exit(id, from_entry = X)` when the script calls
+it. X holding open lots binds the exit to those lots, and it ends with them. X
+holding no lot but with an entry order working binds the exit to the id X: it
+survives `close_all`, a `strategy.close` of X or of a sibling, the flat and a
+`strategy.cancel(X)` with a later `strategy.entry(X)`, and binds to X's next
+fill. A call that finds neither is ignored. 36 synthetic controls (two
+byte-identical exports each) and the ten `pending-*` tapes of
+`tests/fixtures/global_exit_children` pin it; `tests/fixtures/exit_binding`
+holds the controls and states the rule.
+
+`ExitBindingRuleSwitches` (`include/pineforge/source/pine_adapter.hpp`, read
+through `exit_binding_rule_switches()`) holds one switch per part, all on;
+only tests change one. `test_exit_binding_tapes` turns each off and requires
+exactly its tapes to depart, and replays every control as a backtest and as a
+stream.
+
+| Switch | Gates | Where |
+|---|---|---|
+| `pending_bound_exit_survives_flat` | an exit called in position for an id with no lot but a limit or stop order working is bound to the id (`PlacementSnapshot::pending_bound_exit`, cleared by the id's fill); a close or the flat leaves it; a cancel of the id's order keeps its call for the id's next order | `exit`, `retire_in_position_exits_at_flat`, `cancel_exit_orders_for_full_close`, `stash_id_bound_exits`, `rearm_id_bound_exits` |
+| `global_exit_binds_working_entries` | a global exit called flat waits for the fill of the limit and stop entry orders working | `flush_pending_bracket_legs` |
+| `resting_stop_entry_survives_close` | under `process_orders_on_close`, an earlier bar's stop entry of the side a close flattens survives it, as a limit does | the stale-entry cancel in `on_applied` |
+| `priced_add_at_cap_not_placed` | under `process_orders_on_close`, a priced add of an id holding no lot, still at the pyramiding cap once its bar's closes are done, leaves the book at the next opening, judged at that opening only | `withdraw_unplaced_cap_adds` in `on_bar_open` |
+
+Every tape runs with margin requirements off (`margin_long = margin_short =
+0`) and without `calc_on_order_fills`, and every part acts only there
+(`margins_disabled`). The two exit parts act on a whole exit at absolute
+levels whose pending parent rests at a level (`whole_level_exit`); the stop
+entry and cap parts act under `process_orders_on_close` only. Other accounts,
+partial and relative exits, market parents and same-id adds keep their former
+course. Inside these gates the parts also change shapes no tape covers, as the
+pin's reference model predicts them: a parent on the other side of the open
+position, a `strategy.order` parent, a re-entry as a market order after the
+cancel (in position or after the flat), a cancel and re-entry on the exit's
+own bar, a short-side cap and a cap above 1.
+
+Open edges without a tape: exits with `qty`, `qty_percent` or a trail bound
+to a pending order; a pending-bound exit whose id fills while another lot of
+that id is open; a pending stop entry that fills against the opposite side; a
+stop-limit entry, which the stop part keeps as it keeps a plain stop; a global
+exit called flat without `process_orders_on_close`, which also waits, and its
+taking by the first fill of any entry, including an id with no order working
+at the call; an add at the cap that is marketable at its own close, which
+fills there before the cap part judges it, as before the rule; and an add at
+the cap whose own bar's close frees the slot, which stays, as before (the cap
+part judges an add once, at the next opening; the pin's model rejects it at
+the call).

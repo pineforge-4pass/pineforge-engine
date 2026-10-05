@@ -1,0 +1,805 @@
+{
+  "tapes": [
+    {
+      "path": "gate/vetoed-q60000-s2",
+      "origin": "controls/pf-n2r-ck-g1",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-04-18",
+      "chart_to": "2025-04-19",
+      "tv_trades_sha256": "b30ddb6774c21d21d9c960d5548c67f06d70f4e5b6ea61d30dc19b5a9d7ae279",
+      "repeat_tv_trades_sha256": "b30ddb6774c21d21d9c960d5548c67f06d70f4e5b6ea61d30dc19b5a9d7ae279",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "d73105f49b666c56d0e0385c5bcf01412fe752e767bbd4a4226a04de9131b826",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:10:54Z",
+        "2026-10-05T02:11:21Z"
+      ]
+    },
+    {
+      "path": "gate/passes-q60000-s2",
+      "origin": "controls/pf-n2r-ck-g2",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-04-18",
+      "chart_to": "2025-04-19",
+      "tv_trades_sha256": "c89e8c1482e56b6e24e6c6f38cabdef1d3a1b374cd62271e8d3bf93b32ad56f9",
+      "repeat_tv_trades_sha256": "c89e8c1482e56b6e24e6c6f38cabdef1d3a1b374cd62271e8d3bf93b32ad56f9",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "f82c84c055eefb649b5cfc2ec312e5a01a5d0f5ecadd644584e80df34bf18f51",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:10:54Z",
+        "2026-10-05T02:11:21Z"
+      ]
+    },
+    {
+      "path": "gate/vetoed-q100000-s1",
+      "origin": "controls/pf-n2r-ck-g3",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-04-18",
+      "chart_to": "2025-04-19",
+      "tv_trades_sha256": "aec009322b73eca77f2db270b0af6b1abc7f2ff17b03f024771eba978b33b4fa",
+      "repeat_tv_trades_sha256": "aec009322b73eca77f2db270b0af6b1abc7f2ff17b03f024771eba978b33b4fa",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "61412b19a04406159d243e3bc796a5a9d4ceb7fd57ee40f7872871ff1254668c",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:10:57Z",
+        "2026-10-05T02:11:24Z"
+      ]
+    },
+    {
+      "path": "gate/passes-q100000-s1",
+      "origin": "controls/pf-n2r-ck-g4",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-04-18",
+      "chart_to": "2025-04-19",
+      "tv_trades_sha256": "102f14b9786497d14b6ab88615ccb8eab314365d2c3b1f3d636a97f9752569d5",
+      "repeat_tv_trades_sha256": "102f14b9786497d14b6ab88615ccb8eab314365d2c3b1f3d636a97f9752569d5",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "fb17c2121b9acfe7dd831fe24c17abb1f84ec17ea73221457c705579676c72a9",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:10:59Z",
+        "2026-10-05T02:11:24Z"
+      ]
+    },
+    {
+      "path": "gate/vetoed-q25000-s3",
+      "origin": "controls/pf-n2r-ck-g5",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-04-18",
+      "chart_to": "2025-04-19",
+      "tv_trades_sha256": "46505ade632ed8a4b45ed5c7060e624915962c9525604fa67a272af764d414ac",
+      "repeat_tv_trades_sha256": "46505ade632ed8a4b45ed5c7060e624915962c9525604fa67a272af764d414ac",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "b4d40d19ee1ba34fba2c7f7bad0cb5d581bb38eb4a87e9836d3c6ece96759cb0",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:11:00Z",
+        "2026-10-05T02:11:25Z"
+      ]
+    },
+    {
+      "path": "gate/passes-q25000-s3",
+      "origin": "controls/pf-n2r-ck-g6",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-04-18",
+      "chart_to": "2025-04-19",
+      "tv_trades_sha256": "c249312d9a68c5bf17781fab756d5e43a22773dd127fa1ae81795f0d90feb1dc",
+      "repeat_tv_trades_sha256": "c249312d9a68c5bf17781fab756d5e43a22773dd127fa1ae81795f0d90feb1dc",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "f2a2fdee02f8a28b0e33ae73764ad465cd4d480f22c50a599e3106c48bf4bb71",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:11:00Z",
+        "2026-10-05T02:11:25Z"
+      ]
+    },
+    {
+      "path": "gate/high-first-follow-up-at-low",
+      "origin": "controls/pf-n2r-ck-g7",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-04-07",
+      "chart_to": "2025-04-08",
+      "tv_trades_sha256": "86f65c02ca7b91e07883c8781354b25a97227eaa5a139b44d2b490f00cf83545",
+      "repeat_tv_trades_sha256": "86f65c02ca7b91e07883c8781354b25a97227eaa5a139b44d2b490f00cf83545",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "f59ef2b79789f83c3db7b20ccd6a6385417827dde41c0e6aac8b2262411c2ed5",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:11:00Z",
+        "2026-10-05T02:11:27Z"
+      ]
+    },
+    {
+      "path": "gate/high-first-vetoed",
+      "origin": "controls/pf-n2r-ck-g8",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-04-07",
+      "chart_to": "2025-04-08",
+      "tv_trades_sha256": "ea23d052f83f7ac823b9474d7f7837fed7925c5b33e623d125e477dd210db041",
+      "repeat_tv_trades_sha256": "ea23d052f83f7ac823b9474d7f7837fed7925c5b33e623d125e477dd210db041",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "6fc325ba44121a74fe814dc2e1648f5aca0e422df05b112f86bbb95666d7efec",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:11:02Z",
+        "2026-10-05T02:11:27Z"
+      ]
+    },
+    {
+      "path": "lag/two-lots-follow-up",
+      "origin": "controls/pf-n2r-ck-l1",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-04-18",
+      "chart_to": "2025-04-19",
+      "tv_trades_sha256": "0f2efd5d866c2ba1e7589aab049517ab33563f209dd626e0b81b6e01083a01a8",
+      "repeat_tv_trades_sha256": "0f2efd5d866c2ba1e7589aab049517ab33563f209dd626e0b81b6e01083a01a8",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "bb73abcc77ae8d4beb54e9a2d0bca324ff58923fe5269c7e2c1f299accd3525e",
+      "tv_rows": 5,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:11:03Z",
+        "2026-10-05T02:11:28Z"
+      ]
+    },
+    {
+      "path": "lag/two-lots-no-follow-up",
+      "origin": "controls/pf-n2r-ck-l2",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-04-18",
+      "chart_to": "2025-04-19",
+      "tv_trades_sha256": "a6513f3c5a00a1fbd119a3152cd3ec1ec645bf1a85365e2fdd70e52f945d2947",
+      "repeat_tv_trades_sha256": "a6513f3c5a00a1fbd119a3152cd3ec1ec645bf1a85365e2fdd70e52f945d2947",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "b3d95b022f13b803684a8349f640f3ce9a05c51a52d76d546388315288154fe5",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:11:04Z",
+        "2026-10-05T02:11:28Z"
+      ]
+    },
+    {
+      "path": "veto/pending-call-before-stop",
+      "origin": "controls/pf-n2r-ck-s1",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2026-03-20",
+      "chart_to": "2026-03-21",
+      "tv_trades_sha256": "d08cb5edd0db3a42de5eb73c1fb9a18e67b4b2e35e1b5d330acf5f85bd5d33be",
+      "repeat_tv_trades_sha256": "d08cb5edd0db3a42de5eb73c1fb9a18e67b4b2e35e1b5d330acf5f85bd5d33be",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "4d99ccb327756a148fef68b83a86501e569db9a0cdb038e56945d7f2f97ae855",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:11:05Z",
+        "2026-10-05T02:11:29Z"
+      ]
+    },
+    {
+      "path": "veto/no-deficit",
+      "origin": "controls/pf-n2r-ck-s2",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2026-03-20",
+      "chart_to": "2026-03-21",
+      "tv_trades_sha256": "b39a97f41dacbd6c3ec329bcf7ec64e78ad8d91909cb10ab518bbd1ddacbff2c",
+      "repeat_tv_trades_sha256": "b39a97f41dacbd6c3ec329bcf7ec64e78ad8d91909cb10ab518bbd1ddacbff2c",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "09fe3e0a8c747412a1b586a77f2f1c776ec3794adfbb3f0607c85b90d87cb0e2",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:11:05Z",
+        "2026-10-05T02:11:30Z"
+      ]
+    },
+    {
+      "path": "veto/no-pending-veto",
+      "origin": "controls/pf-n2r-ck-s3",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2026-03-20",
+      "chart_to": "2026-03-21",
+      "tv_trades_sha256": "feba2c8564ad062f0e6c006741226a6979656a9b7e31ab871c1fc4d63e49ad28",
+      "repeat_tv_trades_sha256": "feba2c8564ad062f0e6c006741226a6979656a9b7e31ab871c1fc4d63e49ad28",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "103b40d33f25706664729fab7afdb64a4dd8e9e8550115b8992eca160879795e",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:11:07Z",
+        "2026-10-05T02:11:30Z"
+      ]
+    },
+    {
+      "path": "veto/vetoed-at-high",
+      "origin": "controls/pf-n2r-ck-s4",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2026-03-20",
+      "chart_to": "2026-03-21",
+      "tv_trades_sha256": "668c8cda16839da7d7f0dff784816fbdfeab8016c6223a133fb6f89207405e19",
+      "repeat_tv_trades_sha256": "668c8cda16839da7d7f0dff784816fbdfeab8016c6223a133fb6f89207405e19",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "483211acfcf9035eeb2f205b34c068724399dafb9b1539a5c0aad85878fb2668",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:11:08Z",
+        "2026-10-05T02:11:31Z"
+      ]
+    },
+    {
+      "path": "veto/no-deficit-before-high",
+      "origin": "controls-r2/pf-n2r-ck-s5",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2026-03-20",
+      "chart_to": "2026-03-21",
+      "tv_trades_sha256": "78daf1590aa891f38ef3b6d73c3625aeab03f7c2b16659d09239e860125e50e1",
+      "repeat_tv_trades_sha256": "78daf1590aa891f38ef3b6d73c3625aeab03f7c2b16659d09239e860125e50e1",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "891684a337202f20921c2b798cdbd3af88884b2a21c3c90e5a0978614b4dea08",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:14:15Z",
+        "2026-10-05T02:14:22Z"
+      ]
+    },
+    {
+      "path": "veto/pending-from-earlier-bar",
+      "origin": "controls-r2/pf-n2r-ck-s6",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2026-03-20",
+      "chart_to": "2026-03-21",
+      "tv_trades_sha256": "c595dc554835963a4f83dd6cebf941d3605ff76ebbf54fcc82a7c6b5a7486a95",
+      "repeat_tv_trades_sha256": "c595dc554835963a4f83dd6cebf941d3605ff76ebbf54fcc82a7c6b5a7486a95",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "afe97c7b5eb3b9246ab6e49fb33f8f98876e9f4c1ba52919e20817582f766e6b",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:14:15Z",
+        "2026-10-05T02:14:22Z"
+      ]
+    },
+    {
+      "path": "frozen/reversal-open-leg-dropped",
+      "origin": "controls/pf-n2r-mcr-m1",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-10-10",
+      "chart_to": "2025-10-14",
+      "tv_trades_sha256": "0b1b5b439b97a288f1ee578c093a12bf10a648ccc983e0f054d26fa4f2b9fd66",
+      "repeat_tv_trades_sha256": "0b1b5b439b97a288f1ee578c093a12bf10a648ccc983e0f054d26fa4f2b9fd66",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "35db3d1225112d5ad0f76ff191b176f0ee5dd8b97d42c814271387595341163d",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:11:08Z",
+        "2026-10-05T02:11:32Z"
+      ]
+    },
+    {
+      "path": "frozen/reversal-open-leg-kept",
+      "origin": "controls/pf-n2r-mcr-m2",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-10-10",
+      "chart_to": "2025-10-14",
+      "tv_trades_sha256": "ab2a7e22a0fa181d513370773b125bbcdd7a432a1ca4c978e2b921c6f1935d5e",
+      "repeat_tv_trades_sha256": "ab2a7e22a0fa181d513370773b125bbcdd7a432a1ca4c978e2b921c6f1935d5e",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "5a64e1732f60864ac5742bed2633fad02497a07af6ec8aa51e8ec9c84c59fd7c",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:11:09Z",
+        "2026-10-05T02:11:33Z"
+      ]
+    },
+    {
+      "path": "frozen/close-id",
+      "origin": "controls/pf-n2r-mcr-m3",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-10-10",
+      "chart_to": "2025-10-14",
+      "tv_trades_sha256": "780e549d15a46cb4157e072b78fa5ec747ad527d3431188ded22d7702b5a812d",
+      "repeat_tv_trades_sha256": "780e549d15a46cb4157e072b78fa5ec747ad527d3431188ded22d7702b5a812d",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "1457b5c43b76de433714405d7963c56ee1ea474d3196081798a57486e5b4523a",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:11:11Z",
+        "2026-10-05T02:11:33Z"
+      ]
+    },
+    {
+      "path": "frozen/no-call",
+      "origin": "controls/pf-n2r-mcr-m4",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-10-10",
+      "chart_to": "2025-10-14",
+      "tv_trades_sha256": "d66c11221a04413b91fa6019e5518fbadd1c4541f98acb23e03178d5009e93ce",
+      "repeat_tv_trades_sha256": "d66c11221a04413b91fa6019e5518fbadd1c4541f98acb23e03178d5009e93ce",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "43e67a4aaa1cbdcf7158401f54e8977dcebd1773ff40da67870153c7e4e8cdb0",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:11:11Z",
+        "2026-10-05T02:11:34Z"
+      ]
+    },
+    {
+      "path": "add-fee/add-at-open",
+      "origin": "controls/pf-n2r-ck-f1",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-04-18",
+      "chart_to": "2025-04-19",
+      "tv_trades_sha256": "b7cf2ff97437446120d410d344db81f8a0f165867497ba79756b91f06b9da7a9",
+      "repeat_tv_trades_sha256": "b7cf2ff97437446120d410d344db81f8a0f165867497ba79756b91f06b9da7a9",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "c95fb13905c971b6e16e18dd81de62781f5d4d0b6c00e2d86ea7aabc7009a721",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:10:54Z",
+        "2026-10-05T02:11:21Z"
+      ]
+    },
+    {
+      "path": "add-fee/add-at-open-large",
+      "origin": "controls/pf-n2r-ck-f2",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-04-18",
+      "chart_to": "2025-04-19",
+      "tv_trades_sha256": "e32015f3d098310f55f6db1b31fb9e46fb38bd4f596a1fc09d5e35b56e8c64ac",
+      "repeat_tv_trades_sha256": "e32015f3d098310f55f6db1b31fb9e46fb38bd4f596a1fc09d5e35b56e8c64ac",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "d04bf4757a7d7ad23333152842c5db9afe9e00b80feb898bac5bade1fcf6a0a3",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:10:54Z",
+        "2026-10-05T02:11:21Z"
+      ]
+    },
+    {
+      "path": "add-fee/add-at-open-bracket",
+      "origin": "controls-r2/pf-n2r-ck-f3",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-04-18",
+      "chart_to": "2025-04-19",
+      "tv_trades_sha256": "b7cf2ff97437446120d410d344db81f8a0f165867497ba79756b91f06b9da7a9",
+      "repeat_tv_trades_sha256": "b7cf2ff97437446120d410d344db81f8a0f165867497ba79756b91f06b9da7a9",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "95026a4ef537ba1c6af49a6ac020294f1315971953c9ca7c796c45915eff854d",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:14:15Z",
+        "2026-10-05T02:14:22Z"
+      ]
+    },
+    {
+      "path": "add-fee/add-at-open-pyramiding",
+      "origin": "controls-r2/pf-n2r-ck-f4",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-04-18",
+      "chart_to": "2025-04-19",
+      "tv_trades_sha256": "b7cf2ff97437446120d410d344db81f8a0f165867497ba79756b91f06b9da7a9",
+      "repeat_tv_trades_sha256": "b7cf2ff97437446120d410d344db81f8a0f165867497ba79756b91f06b9da7a9",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "84712b0a1bbc075c94157138f19f1a36cf5416a0b8c8ae1885948579b6bf0fc4",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:14:15Z",
+        "2026-10-05T02:14:22Z"
+      ]
+    },
+    {
+      "path": "lag/outside-pooc-close",
+      "origin": "controls-lag/margin-lag-close",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-04-18",
+      "chart_to": "2025-04-19",
+      "tv_trades_sha256": "13f8da17d787baf0416dca883ca54a3637e76b286eeccb7d236215fe1b9111ba",
+      "repeat_tv_trades_sha256": "13f8da17d787baf0416dca883ca54a3637e76b286eeccb7d236215fe1b9111ba",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "f3387c2058f0b19bf7be296402d6c6aeeae2d8f529b8df4ccbbaea772e97439d",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T05:33:06Z",
+        "2026-10-05T05:33:31Z"
+      ],
+      "note": "prediction preregistered before export (preregistered-20261005T053259Z.json)"
+    },
+    {
+      "path": "lag/outside-pooc-extreme",
+      "origin": "controls-lag/margin-lag-extreme",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-04-18",
+      "chart_to": "2025-04-19",
+      "tv_trades_sha256": "90ba6db98655880a46a23c218b776e5382839895184dd90d7f1f94a7d59024ca",
+      "repeat_tv_trades_sha256": "90ba6db98655880a46a23c218b776e5382839895184dd90d7f1f94a7d59024ca",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "8c0f24c4a01e17555ed0875fc213ec398a89f08a32f7a69b735b6e1908f3c525",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T05:33:27Z",
+        "2026-10-05T05:33:35Z"
+      ],
+      "note": "prediction preregistered before export (preregistered-20261005T053259Z.json)"
+    },
+    {
+      "path": "money/history-long",
+      "origin": "controls-lc/pf-n2r-lc-a",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-12-01",
+      "chart_to": "2025-12-16",
+      "tv_trades_sha256": "7be870cb85ab97494c6fa6bc4745441803052e0e4b1a67bb75ea3befaf141f34",
+      "repeat_tv_trades_sha256": "7be870cb85ab97494c6fa6bc4745441803052e0e4b1a67bb75ea3befaf141f34",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "90536692179f4312402c3b87c36c3b38fa19e3d52d206bea24f6c86760a6ed1b",
+      "tv_rows": 140,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:24:21Z",
+        "2026-10-05T02:24:31Z"
+      ],
+      "note": "the history is replayed from the tape: each earlier trade is an entry at its own entry bar (process_orders_on_close) and a close_all at its exit bar"
+    },
+    {
+      "path": "money/history-alternating",
+      "origin": "controls-lc/pf-n2r-lc-b",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-12-01",
+      "chart_to": "2025-12-16",
+      "tv_trades_sha256": "5c9abffe9511753d90b4099ec29c528d3653685f4362c510aea9f3d37f9315dd",
+      "repeat_tv_trades_sha256": "5c9abffe9511753d90b4099ec29c528d3653685f4362c510aea9f3d37f9315dd",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "eadd920f039d2cc02d81817375c5e2dc02249e35f2771bd1892b44ab2d52af29",
+      "tv_rows": 141,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:24:21Z",
+        "2026-10-05T02:24:31Z"
+      ],
+      "note": "the history is replayed from the tape: each earlier trade is an entry at its own entry bar (process_orders_on_close) and a close_all at its exit bar"
+    },
+    {
+      "path": "money/history-short",
+      "origin": "controls-lc/pf-n2r-lc-c",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-12-01",
+      "chart_to": "2025-12-16",
+      "tv_trades_sha256": "ac469ab438469e054f5d310802460404d913cd51aa61d3fb672e929decd25a97",
+      "repeat_tv_trades_sha256": "ac469ab438469e054f5d310802460404d913cd51aa61d3fb672e929decd25a97",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "723068998db2f1f542dadfd4e947ab6ef0e5441994d6cc5815c60b9aba13f9d7",
+      "tv_rows": 66,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:24:21Z",
+        "2026-10-05T02:24:31Z"
+      ],
+      "note": "the history is replayed from the tape: each earlier trade is an entry at its own entry bar (process_orders_on_close) and a close_all at its exit bar"
+    },
+    {
+      "path": "money/history-cut",
+      "origin": "controls-lc/pf-n2r-lc-d",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-12-03",
+      "chart_to": "2025-12-16",
+      "tv_trades_sha256": "6b7c960a3990d3a74df7b77dadcd9a24e7932b050cad22d729341ae52a4f6ed9",
+      "repeat_tv_trades_sha256": "6b7c960a3990d3a74df7b77dadcd9a24e7932b050cad22d729341ae52a4f6ed9",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "5bca884787f74f5a4f9226736915cd86b813b1be5d926c8c549a5dd43b102e63",
+      "tv_rows": 113,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:24:21Z",
+        "2026-10-05T02:24:31Z"
+      ],
+      "note": "the history is replayed from the tape: each earlier trade is an entry at its own entry bar (process_orders_on_close) and a close_all at its exit bar"
+    },
+    {
+      "path": "money/history-overnight",
+      "origin": "controls-lc2/pf-n2r-lc-d2",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-12-03",
+      "chart_to": "2025-12-16",
+      "tv_trades_sha256": "7999f6810ba8f631cee8f974026bd3e31c1b2f2873a2b99ee15aaba88d040f4a",
+      "repeat_tv_trades_sha256": "7999f6810ba8f631cee8f974026bd3e31c1b2f2873a2b99ee15aaba88d040f4a",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "35e8a5ed2e988c52ebb7a3a4254dcbacd797346d72436a701c310059bd699d49",
+      "tv_rows": 114,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:24:59Z",
+        "2026-10-05T02:25:04Z"
+      ],
+      "note": "the history is replayed from the tape: each earlier trade is an entry at its own entry bar (process_orders_on_close) and a close_all at its exit bar"
+    },
+    {
+      "path": "money/no-history-at-cost",
+      "origin": "controls-lc/pf-n2r-lc-z0",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-12-15",
+      "chart_to": "2025-12-16",
+      "tv_trades_sha256": "7fc4af71758ac57f56e5cab85fcd78e7421e747aedc85b848f341f6d6b5bad99",
+      "repeat_tv_trades_sha256": "7fc4af71758ac57f56e5cab85fcd78e7421e747aedc85b848f341f6d6b5bad99",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "c2a763559f4709093fb966ca061489debf9cb7b547b55d56d631980c1e03b530",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:24:25Z",
+        "2026-10-05T02:24:33Z"
+      ],
+      "note": "the history is replayed from the tape: each earlier trade is an entry at its own entry bar (process_orders_on_close) and a close_all at its exit bar"
+    },
+    {
+      "path": "money/no-history-under-cost",
+      "origin": "controls-lc/pf-n2r-lc-z1",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-12-15",
+      "chart_to": "2025-12-16",
+      "tv_trades_sha256": "fc888ae2d6a1a01fdd9078bd3ebddace488ef59a6d944673608b65420fc1940c",
+      "repeat_tv_trades_sha256": "fc888ae2d6a1a01fdd9078bd3ebddace488ef59a6d944673608b65420fc1940c",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "cedc791f516487b7c29e1caabbeea9ec45bfe658e9ef20493bd33954b20bf018",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:24:26Z",
+        "2026-10-05T02:24:34Z"
+      ],
+      "note": "the history is replayed from the tape: each earlier trade is an entry at its own entry bar (process_orders_on_close) and a close_all at its exit bar"
+    },
+    {
+      "path": "add/whole-book-refused-pooc",
+      "origin": "n3x/r1/n3x-add-bd-pooc",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2026-03-23",
+      "chart_to": "2026-03-24",
+      "tv_trades_sha256": "e247ad659b58b96b98f20a68ccb32d0212a948c102bf490fea5efb19b2c2310a",
+      "repeat_tv_trades_sha256": "e247ad659b58b96b98f20a68ccb32d0212a948c102bf490fea5efb19b2c2310a",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "de4c574f5d050a37ebee5bf02c1ffe26d5a7c0c335c655e3143077bb93ed8faa",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:14:50.138Z",
+        "2026-10-05T02:14:55.214Z"
+      ]
+    },
+    {
+      "path": "add/whole-book-refused",
+      "origin": "n3x/r1/n3x-add-bd-nonpooc",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2026-03-23",
+      "chart_to": "2026-03-24",
+      "tv_trades_sha256": "ceffc76e26f877e5ce494bfcc6856dbd336ffa8df234a55237216c869688f9ee",
+      "repeat_tv_trades_sha256": "ceffc76e26f877e5ce494bfcc6856dbd336ffa8df234a55237216c869688f9ee",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "eb6d7f2da8cb251e90d74876be60d23cb6488b62b12521bce40a27870e6e65b5",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:14:48.070Z",
+        "2026-10-05T02:14:56.269Z"
+      ]
+    },
+    {
+      "path": "add/signal-close-admitted-pooc",
+      "origin": "n3x/r1/n3x-add-sig-pooc",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2026-03-23",
+      "chart_to": "2026-03-24",
+      "tv_trades_sha256": "a62de9c82efa8eb3d106a4333395f5a241e7f432b946ded761abac7040d3959a",
+      "repeat_tv_trades_sha256": "a62de9c82efa8eb3d106a4333395f5a241e7f432b946ded761abac7040d3959a",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "0c58455bedb940ef1a03fa290b0567515d70f4ab3a9701c7a8781e1242c35167",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:14:49.116Z",
+        "2026-10-05T02:14:55.628Z"
+      ]
+    },
+    {
+      "path": "add/signal-close-admitted",
+      "origin": "n3x2/r1/n3x-add-sig-nonpooc",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2026-03-23",
+      "chart_to": "2026-03-24",
+      "tv_trades_sha256": "9455433cc212cfec9fcaa0af72aea08ced7c56cf67a8fea2f49e8fc4283fdeb0",
+      "repeat_tv_trades_sha256": "9455433cc212cfec9fcaa0af72aea08ced7c56cf67a8fea2f49e8fc4283fdeb0",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "46bd80535a5580a404e995a2830f2ca507eb96599e771a9210eadc0e2cb8f2a1",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:25:46.292Z",
+        "2026-10-05T02:25:49.129Z"
+      ]
+    },
+    {
+      "path": "follow/whole-share-same-fill-pooc",
+      "origin": "n3x/r1/n3x-fu-pooc",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2026-03-23",
+      "chart_to": "2026-03-24",
+      "tv_trades_sha256": "63e8be9bb09f05aa6f7135faf474ad40562676b035f237a558fdc9da81a953c4",
+      "repeat_tv_trades_sha256": "63e8be9bb09f05aa6f7135faf474ad40562676b035f237a558fdc9da81a953c4",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "14d8ce19be41b6e2ddc1c12ad872adfd5782e58426833576be18c1fb7c4ebd9f",
+      "tv_rows": 6,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:14:51.865Z",
+        "2026-10-05T02:14:58.830Z"
+      ]
+    },
+    {
+      "path": "follow/whole-share-next-point",
+      "origin": "n3x/r1/n3x-fu-nonpooc",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2026-03-23",
+      "chart_to": "2026-03-24",
+      "tv_trades_sha256": "38cf6a0847de8c9366312ff2a5bb4982d823b445f5583f4967a55d8283b79eb2",
+      "repeat_tv_trades_sha256": "38cf6a0847de8c9366312ff2a5bb4982d823b445f5583f4967a55d8283b79eb2",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "3c79ff0ca949b8e8070734440e50403f13247b4e358bbec3dbe37acccb55fb29",
+      "tv_rows": 6,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T02:14:51.510Z",
+        "2026-10-05T02:14:57.782Z"
+      ]
+    }
+  ],
+  "bars": {
+    "eur-2025-04-18-2025-04-19.csv": {
+      "sha256": "565f02d980241f0d13772ee8dc213efd4e0e68b15d9118fada207638e24341b8",
+      "rows": 84,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eur-2025-04-07-2025-04-08.csv": {
+      "sha256": "b5ed905ff63fb194b9d9965de9dd3bd1d809df21c398bd7aeb74472a5d81fb1b",
+      "rows": 97,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "f-2026-03-20-2026-03-21.csv": {
+      "sha256": "d557f90f1eafafd02db9f3a6177496b5a2cb37c6d448f12adaff80a58784fa2a",
+      "rows": 26,
+      "feed": "f-15.csv",
+      "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32"
+    },
+    "f-2025-10-10-2025-10-14.csv": {
+      "sha256": "f56f5a1bf1ea205b4a5cb18d1f286510c11e417483e0a093df7a34cf3dc7d05b",
+      "rows": 52,
+      "feed": "f-15.csv",
+      "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32"
+    },
+    "f-2025-12-01-2025-12-16.csv": {
+      "sha256": "ebdd641126ebca26423828634b1b4c65e1da0a5af5b969923a1aba08faf13f4d",
+      "rows": 286,
+      "feed": "f-15.csv",
+      "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32"
+    },
+    "f-2025-12-03-2025-12-16.csv": {
+      "sha256": "4d61c09ae1ae39fa5647c51af718d33059d788e1c53ad33e10e4e22f65a35689",
+      "rows": 234,
+      "feed": "f-15.csv",
+      "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32"
+    },
+    "f-2025-12-15-2025-12-16.csv": {
+      "sha256": "e5266e7e60108b88032acba6fe5b6b941eb8585eb075b11039a170522fef3d86",
+      "rows": 26,
+      "feed": "f-15.csv",
+      "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32"
+    },
+    "f-2026-03-23-2026-03-24.csv": {
+      "sha256": "4dfd5eafe46fafca118375863e0e682c33bb302b8f9d7631c71490f2c770ab9b",
+      "rows": 26,
+      "feed": "f-15.csv",
+      "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32"
+    }
+  },
+  "description": "TradingView strategy tapes of synthetic controls pinning the margin-call schedule rules (MarginScheduleSwitches): each control exported twice with lab tv --no-note, both exports byte-identical. origin is the export directory relative to the pinning scratch root; spec.txt is the replay the test drives."
+}

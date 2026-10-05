@@ -1,0 +1,4 @@
+config 113956.68 1e-05 0.01 1 0.0 100.0 1 1
+bars eur-2025-04-18-2025-04-19.csv
+ev 1744983900000 entry probe short 100000.0 any
+ev 1744986600000 close_all - - - any

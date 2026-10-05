@@ -1,0 +1,9 @@
+//@version=6
+strategy("pf-n2r-ck-s3", initial_capital=5987.868194999993, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.04, slippage=1)
+if time == timestamp("UTC", 2026, 3, 20, 19, 15)
+    strategy.entry("Short", strategy.short, qty=516)
+if time == timestamp("UTC", 2026, 3, 20, 19, 30) and strategy.position_size != 0
+    strategy.exit("SE", "Short", stop=11.49014940701492)
+if time == timestamp("UTC", 2026, 3, 20, 20, 0)
+    strategy.close_all()
+plot(strategy.equity, "equity")

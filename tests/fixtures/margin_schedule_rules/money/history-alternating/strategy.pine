@@ -1,0 +1,14 @@
+//@version=6
+strategy("pf-n2r-lc-b", initial_capital=146266.55999999997, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0, slippage=2, process_orders_on_close=true)
+inWin = time >= timestamp("UTC", 2025, 12, 1, 14, 30) and time < timestamp("UTC", 2025, 12, 15, 19, 0)
+var int k = 0
+if inWin and strategy.position_size == 0 and (minute(time) == 0 or minute(time) == 30)
+    strategy.entry("h", k % 2 == 0 ? strategy.long : strategy.short, qty=6000.0)
+    k += 1
+if inWin and strategy.position_size != 0 and (minute(time) == 15 or minute(time) == 45)
+    strategy.close_all()
+if time == timestamp("UTC", 2025, 12, 15, 20, 30)
+    strategy.entry("probe", strategy.long, qty=8192)
+if time == timestamp("UTC", 2025, 12, 15, 20, 45)
+    strategy.close_all()
+plot(strategy.equity, "equity")

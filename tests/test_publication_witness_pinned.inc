@@ -662,6 +662,17 @@
 //   Storm22M: digest 0x568459b941271e50ull -> 0xbd352e905cc9d934ull
 //   Storm23: digest 0x3830c2ff0e888bdfull -> 0x1b528d1d603fa437ull
 //   Storm23M: digest 0x7758f6756a947b75ull -> 0x4f41a22916afa081ull
+// The resting-limit tick reach re-harvested it the same way (2 of 156 runs move): a
+// calc_on_order_fills limit exit that closes the position held when it is placed, on
+// the chart path and not yet reached where it is placed, rests at its tick-built
+// threshold (RestingLimitTickReach, src/compat/pine/callback_lifecycle_rules.hpp),
+// so the request's trigger price folds a new value into the source-layer fold, the
+// recorded broker-state hash rows and the final hash. Every closed trade is unchanged
+// in every Trade field, pass by pass (a per-trade %.17g dump with the three hash inputs
+// taken out), as is every count; the same harvest against main 44eab7b1 reproduces
+// every old row.
+//   ConfigFlags103: digest 0x8d55c22cdbe324aaull -> 0x0d75274f1b2bf4edull
+//   Storm02: digest 0x3aa47b814572802aull -> 0x34262d89d687ddc4ull
 constexpr Pinned kPinned[] = {
     {"Config01", 0xe752de2dd7010863ull, 144, 44, 144},
     {"ConfigFlags101", 0x19179db1a0eaed4dull, 145, 45, 144},
@@ -672,7 +683,7 @@ constexpr Pinned kPinned[] = {
     {"Config02M", 0xe56da321d367a98cull, 48, 10, 48},
     {"ConfigFlags102M", 0x3ddbee2abb471b98ull, 144, 49, 144},
     {"Config03", 0x293c86957411946bull, 144, 55, 144},
-    {"ConfigFlags103", 0x8d55c22cdbe324aaull, 182, 62, 144},
+    {"ConfigFlags103", 0x0d75274f1b2bf4edull, 182, 62, 144},
     {"Config03M", 0xb65d642e8c865af1ull, 144, 55, 144},
     {"ConfigFlags103M", 0xc9cdec59ae965800ull, 182, 64, 144},
     {"Config04", 0x8f2f44270196ded6ull, 144, 21, 144},
@@ -739,7 +750,7 @@ constexpr Pinned kPinned[] = {
     {"DelayedStopsM", 0xa5372b833b3b72bbull, 66, 20, 40},
     {"Storm01", 0x3262e4227877873full, 43, 13, 43},
     {"Storm01M", 0x81394cb53836347full, 43, 13, 43},
-    {"Storm02", 0x3aa47b814572802aull, 63, 12, 42},
+    {"Storm02", 0x34262d89d687ddc4ull, 63, 12, 42},
     {"Storm02M", 0xb8ca64bd8507dbeeull, 63, 12, 42},
     {"Storm03", 0x3882198431226d3bull, 41, 17, 41},
     {"Storm03M", 0xe924c116ac2f7071ull, 41, 17, 41},

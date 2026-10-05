@@ -60,6 +60,9 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     // Folded only when set, so a run that never issues a void exit keeps
     // its digest (lane W3B-ENG-GRID).
     if (value.void_issue) f.b(true);
+    // Folded only when set, like void_issue: the exit is bound to its entry
+    // id, not to lots (ExitBindingRuleSwitches).
+    if (value.pending_bound_exit) f.u(0x70656e64ULL);
     // Folded only when set, like void_issue (lane W13-ENG-MARGIN-OPP).
     if (value.crosses_zero) f.u(0x7a65726fULL);
     if (!std::isnan(value.follow_up_fill)) f.d(value.follow_up_fill);
@@ -477,6 +480,19 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         const auto& token = named_entry_cancel_tokens_.at(key);
         f.s(key); f.u(token.entry_incarnation); f.u(token.surviving_exit_incarnation);
     }
+    // Folded only when an exit's id binding outlived a cancel of its order,
+    // so a run that never keeps one folds what it folded before.
+    if (!id_bound_exits_.empty()) {
+        f.u(0x69646278ULL);
+        f.u(id_bound_exits_.size());
+        for (const auto& row : id_bound_exits_) {
+            f.s(row.exit_id); f.s(row.from_entry);
+            f.d(row.levels.limit); f.d(row.levels.stop); f.d(row.levels.trail_points);
+            f.d(row.levels.trail_offset); f.d(row.levels.trail_price);
+            f.d(row.levels.profit_ticks); f.d(row.levels.loss_ticks);
+            f.d(row.qty_percent); f.d(row.qty); f.s(row.comment); f.s(row.oca_name);
+        }
+    }
     f.u(close_logical_units_.size());
     for (const auto& row : close_logical_units_) { f.s(row.first); f.d(row.second); }
     // The ledger's records fold only when there are two or more: a single
@@ -570,6 +586,19 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     // W13-ENG-MARGIN-OPP), so every other run keeps its digest.
     if (close_margin_open_bar_ != std::numeric_limits<std::int64_t>::min())
         f.i(close_margin_open_bar_);
+    // A short's lagged follow-up owed at a path point (a process_orders_on_close
+    // close owes the next open) and a close's after-script call the orders
+    // placed there read at the next open (MarginScheduleSwitches); folded only
+    // while set, so every other run keeps its digest.
+    if (owed_follow_up_bar_ != std::numeric_limits<std::int64_t>::min()) {
+        f.s("pineforge-owed-follow-up/v1");
+        f.i(owed_follow_up_bar_); f.i(owed_follow_up_point_); f.d(owed_follow_up_units_);
+    }
+    if (close_call_after_script_bar_ != std::numeric_limits<std::int64_t>::min()) {
+        f.s("pineforge-close-call-after-script/v1");
+        f.i(close_call_after_script_bar_); f.d(close_call_after_script_book_);
+        f.d(close_call_after_script_units_);
+    }
     // The close-first fact (record_close_first); folded only once a whole
     // close of an open position was recorded, so every other run keeps its
     // digest.
@@ -636,6 +665,15 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         const auto& state = trail_state_at_open_.at(key);
         f.u(key); f.b(state.activated); f.d(state.best_price);
         f.d(state.current_level); f.u(state.activation_ordinal);
+    }
+    // The trails re-priced for the bar in flight (carried trail tick reach),
+    // empty between bars; folded only while set, so every run without one
+    // keeps its digest.
+    if (!carried_trail_retunes_.empty()) {
+        f.u(carried_trail_retunes_.size());
+        for (const auto& [handle, distance] : carried_trail_retunes_) {
+            f.u(handle.incarnation); f.d(distance);
+        }
     }
     f.b(stream_mode_);
     f.i(day_ledger_.current_day); f.i(day_ledger_.last_loss_day); f.i(day_ledger_.consecutive_loss_days);

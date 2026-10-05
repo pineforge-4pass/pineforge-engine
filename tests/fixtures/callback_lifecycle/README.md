@@ -34,7 +34,8 @@ report rounds it through a 32-bit float.
 apply yet, each with its reason and the first row where the engine departs.
 The test requires exactly that departure, so any movement fails until the
 file is updated. Engine main 288f189c departs on 31 of the first 82 tapes;
-this change leaves 21 of 87.
+the callback-lifecycle change left 21 of 87, the resting limit rule 17,
+and the carried trail rule leaves 16.
 
 ## Rules the tapes pin and the engine applies
 
@@ -59,7 +60,33 @@ and every switch's off branch runs.
   `calc_on_order_fills` recalculation reaches its leg's end only on that
   waypoint's tick-built print, the level staying raw (`runner-target-r1`,
   `long-high-raw`, `short-low-raw`, `short-limit-plus-quarter`; off, those 4
-  and the later rows of `repeated-raw` and `repeated-rounded` depart).
+  and the later rows of `repeated-raw` depart).
+- Resting limit reach: an on-grid limit exit under `calc_on_order_fills`
+  that closes the position held when it is placed rests at its tick-built
+  threshold, so the 9.73 sell limit born in the opening fill's
+  recalculation fills on that bar, whose H of 9.725 prints 9.73
+  (`newborn-limit-cancel`, `-owner-absent`, `-replace`, `-rounded`; off,
+  those 4 and `repeated-rounded`'s exit bar depart). A leg placed for a
+  parent not held on its side, a leg its placement point already reaches
+  and a magnifier's intrabars keep the raw level; for a point that stands on
+  the raw level, the matcher books that level at the point. Residual: a
+  limit born in the recalculation of a fill booked at the print of a
+  half-tick-short open (9.485 prints 9.48) is judged reached there and
+  keeps its raw level, which the raw path never reaches; TradingView fills
+  it at once (`repeated-rounded`, TradingView trades 18-19). These tapes
+  are also replayed forward: a stream calculates on bar close only and
+  refuses every one of them (`calc_on_order_fills is unsupported`).
+- Carried trail reach: with `calc_on_order_fills` off, a trailing stop
+  carried from an earlier bar is reached at the first point where the bar's
+  tick-built print reaches it, when that comes before the raw print would;
+  the level stays the raw running best +/- the offset, as a static stop's
+  does (`carried-trail-14`: the 10.485 high prints 10.49 and reaches the
+  10.485 stop riding a 10.345 best; off, it departs). A raw reach whose
+  tick-built print falls back inside the stop is left as it was: no tape
+  decides it. `carried-trail-13-895` is its control (13 ticks: the raw high
+  reaches it too). `carried-trail-14` is also replayed as a bar-by-bar
+  stream (1 and 30 warm-up bars): it books the backtest's trades, and with
+  the switch off both depart from TradingView the same way.
 
 `pair-hold-reissue` runs without a quantity grid, so the engine takes the
 entry/close pair-hold path; every quantity in it is whole. TradingView judges
@@ -70,5 +97,6 @@ held behind the pair's barrier.
 
 `known_divergences.json` names the rest, among them the
 `calc_on_order_fills` tick schedule and ownership queue (`dual-entry-*`,
-`coof-dual-*`, `signed-*`) and the resting `calc_on_order_fills` limit on
-the tick-built path (`newborn-limit-*`).
+`coof-dual-*`, `signed-*`) and TradingView's `math.round_to_mintick` on a
+half-tick price (`long-high-rounded`, and `repeated-rounded`'s exit level;
+its trades 18-19 hold the resting limit rule's residual above).

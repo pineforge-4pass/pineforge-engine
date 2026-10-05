@@ -18,10 +18,10 @@
  * the pin's own synthetic scripts, each exported twice byte-identical with
  * `lab tv --no-note`; schedules.inc is the schedule each strategy.pine
  * renders, which the host below replays through the Pine adapter over the
- * tape's bars (shared per feed window under bars/). On each of the 93
+ * tape's bars (shared per feed window under bars/). On each of the 103
  * asserted tapes every row must be the engine's: ids, times, side, prices in
  * ticks, quantity, net profit at the report's precision and commission at
- * TradingView's ten significant digits. The 34 others are known divergences
+ * TradingView's ten significant digits. The 24 others are known divergences
  * (known_divergences.inc: the rule each needs and its first departure); they
  * run and report, and assert nothing.
  *
@@ -30,11 +30,14 @@
  * tie in a grown table, a waiting strategy.order, calc_on_order_fills -- at
  * the rows the engine booked before this change, bit for bit.
  *
- * Fail-before: on 700c5d24, 53 of the 93 asserted tapes fail (the change's
- * rules 2, 3 and 4); the pinned rows are 700c5d24's own.
+ * Fail-before: on 700c5d24, 53 of the first 93 asserted tapes fail (the
+ * change's rules 2, 3 and 4); the pinned rows are 700c5d24's own. The ten
+ * pending-* tapes past pending-21 and -23 depend on the exit-binding rule
+ * (test_exit_binding_tapes): before it, each departs at its pending exit.
  */
 
 #include <pineforge/bar.hpp>
+#include <pineforge/source/pine_adapter.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
 #include <cinttypes>
@@ -549,6 +552,40 @@ void harvest() {
 
 }  // namespace
 
+// The pending-* tapes need the exit-binding rule (test_exit_binding_tapes):
+// with its part off, each departs from TradingView again.
+void pending_tapes_need_the_binding() {
+    using source::detail::ExitBindingRuleSwitches;
+    auto& switches = source::detail::exit_binding_rule_switches();
+    const struct {
+        bool ExitBindingRuleSwitches::*part;
+        std::vector<const char*> tapes;
+    } needs[] = {
+        {&ExitBindingRuleSwitches::pending_bound_exit_survives_flat,
+         {"pending-22", "pending-24", "pending-25", "pending-26", "pending-27", "pending-28",
+          "pending-54", "pending-55", "pending-56"}},
+        {&ExitBindingRuleSwitches::global_exit_binds_working_entries, {"pending-89"}},
+    };
+    for (const auto& need : needs) {
+        switches = ExitBindingRuleSwitches{};
+        switches.*need.part = false;
+        for (const char* name : need.tapes) {
+            const Tape* tape = tape_named(name);
+            CHECK(tape != nullptr);
+            if (!tape) continue;
+            const std::vector<Row> want = tape_rows(tape->name);
+            const std::vector<Trade> got = run(*tape);
+            bool same = got.size() == want.size();
+            for (std::size_t i = 0; same && i < want.size(); ++i)
+                same = same_row(want[i], got[i], tape->tick);
+            std::printf("-- %s without its exit-binding part: %s\n", name,
+                        same ? "reproduces TradingView" : "departs");
+            CHECK(!same);
+        }
+    }
+    switches = ExitBindingRuleSwitches{};
+}
+
 int main() {
 #if defined(PINEFORGE_GLOBAL_EXIT_CHILDREN_HARVEST)
     harvest();
@@ -556,6 +593,7 @@ int main() {
 #else
     for (const Tape& tape : kTapes) replay(tape);
     unreached_keeps_its_rows();
+    pending_tapes_need_the_binding();
     std::printf("\n%d known divergences reported (%d now match TradingView)\n", known_reported,
                 known_now_matching);
     std::printf("%d passed, %d failed\n", tests_passed, tests_failed);

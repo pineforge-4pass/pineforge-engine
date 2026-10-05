@@ -1,0 +1,16 @@
+{
+  "title": "gapstop-percent-trail-points",
+  "slug": "gapstop-percent-trail-points",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-05T02:05:44.913Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-10-20",
+    "to": "2025-10-22"
+  },
+  "pine_sha256": "46a1e833396e0974cc11ca0240ef2734e9e8519654e48e63155584b35676fc20",
+  "tv_trades_sha256": "3b187ba7f588712a256f01f6ef6dae984d3ac6dd7aade3187d9767409fc3b5d6",
+  "tv_trades_rows": 4
+}

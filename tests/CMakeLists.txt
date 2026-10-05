@@ -992,6 +992,12 @@ list(APPEND TEST_SOURCES test_exit_fifo_cross_tapes)
 # limit entry's fill fills at that fill (tests/fixtures/global_exit_children),
 # on TradingView's tapes.
 list(APPEND TEST_SOURCES test_global_exit_children_tapes)
+# ... and a strategy.exit binds when it is called: to its entry's open lots,
+# else to the entry id while an order of it is working (surviving the flat,
+# a cancel and a re-entry), else the call is ignored; an earlier bar's stop
+# entry survives a close's flat and an add called at the pyramiding cap is
+# never placed (tests/fixtures/exit_binding), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_exit_binding_tapes)
 # ... and under calc_on_order_fills an exit limit the recalculation of an
 # entry's open fill places at or through the open print fills there at once
 # (tests/fixtures/coof_open_limit), on TradingView's tape.
@@ -1070,6 +1076,10 @@ list(APPEND TEST_SOURCES test_margin_residual_tapes)
 # Margin-call, admission and sizing rules on 172 TradingView tapes of synthetic
 # probes (tests/fixtures/margin_call_rules, README.md there).
 list(APPEND TEST_SOURCES test_margin_call_rules_tapes)
+# The margin-call schedule rules (MarginScheduleSwitches) on 39 TradingView
+# tapes of synthetic controls (tests/fixtures/margin_schedule_rules, README.md
+# there), in a backtest and in a forward (stream) run.
+list(APPEND TEST_SOURCES test_margin_schedule_rules_tapes)
 # One engine, two modes: the margin rules decide the same trades in a batch run
 # and in a forward (stream) run, on a sample of those tapes.
 list(APPEND TEST_SOURCES test_margin_rules_forward_replay)
@@ -1083,6 +1093,9 @@ list(APPEND TEST_SOURCES test_admission_rules_tapes)
 # The point order's margin call at a gapped open: a call sized at the previous
 # close before the stop, and a partial stop that leaves a short remainder.
 list(APPEND TEST_SOURCES test_point_order_open_call)
+# The carried-trail tick reach's copy of the kernel's trailing-stop level,
+# held to native_matching::checked_trail_stop bit for bit.
+list(APPEND TEST_SOURCES test_kernel_trail_stop_replica)
 # Lane INT28-FIX: a slipped all-in short's admission and its one-unit margin
 # calls (tests/fixtures/slipped_short), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_slipped_short_tapes)
@@ -2935,6 +2948,10 @@ if(TARGET test_global_exit_children_tapes)
     target_compile_definitions(test_global_exit_children_tapes PRIVATE
         PINEFORGE_GLOBAL_EXIT_CHILDREN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/global_exit_children")
 endif()
+if(TARGET test_exit_binding_tapes)
+    target_compile_definitions(test_exit_binding_tapes PRIVATE
+        PINEFORGE_EXIT_BINDING_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_binding")
+endif()
 if(TARGET test_session_transition_clock_tapes)
     target_compile_definitions(test_session_transition_clock_tapes PRIVATE
         PINEFORGE_SESSION_TRANSITION_CLOCK_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_transition_clock")
@@ -3064,6 +3081,11 @@ if(TARGET test_margin_call_rules_tapes)
     target_compile_definitions(test_margin_call_rules_tapes PRIVATE
         PINEFORGE_MARGIN_CALL_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_call_rules")
 endif()
+# The margin-call schedule rules tapes are read from the fixture tree too.
+if(TARGET test_margin_schedule_rules_tapes)
+    target_compile_definitions(test_margin_schedule_rules_tapes PRIVATE
+        PINEFORGE_MARGIN_SCHEDULE_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_schedule_rules")
+endif()
 # The forward replay reads its sampled tapes from the fixture tree; source-bound.
 if(TARGET test_margin_rules_forward_replay)
     target_compile_definitions(test_margin_rules_forward_replay PRIVATE
@@ -3079,6 +3101,10 @@ endif()
 if(TARGET test_admission_rules_tapes)
     target_compile_definitions(test_admission_rules_tapes PRIVATE
         PINEFORGE_ADMISSION_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/admission_rules")
+endif()
+if(TARGET test_kernel_trail_stop_replica)
+    target_compile_definitions(test_kernel_trail_stop_replica PRIVATE
+        PINEFORGE_CALLBACK_LIFECYCLE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/callback_lifecycle")
 endif()
 if(TARGET test_point_order_open_call)
     target_compile_definitions(test_point_order_open_call PRIVATE

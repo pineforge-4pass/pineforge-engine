@@ -26,6 +26,19 @@ clears each switch in turn and requires exactly the departures
 rule_off_departures.json records for it: the tapes that rule decides, and
 nothing else. That pins the rule-to-tape map and keeps every OFF branch run.
 
+The tapes the resting limit rule decides (rule_off_departures.json) are also
+replayed forward: strategy_stream_begin over their first bar, as a live run
+starts. Each is a calc_on_order_fills script, and a stream calculates on bar
+close only, so it must refuse with its documented reason: the rule has no
+forward half to depart from the backtest.
+
+STREAMED tapes are also replayed bar by bar, as a forward run would see
+them: strategy_stream_begin with a few bars of history, then
+strategy_stream_push_bar for each later bar, then strategy_stream_fill_report.
+The stream must book the backtest's trades field for field and TradingView's
+rows, with each warm-up in STREAM_WARMUPS; with the tape's own rule switched
+off, both must depart from TradingView the same way.
+
 pair-hold-reissue (no quantity grid, so the engine takes the entry/close
 pair-hold path) also has its book read after the pair's calculation: the
 long's stop, re-issued after strategy.close in that calculation, must still
@@ -49,7 +62,14 @@ RULES = (  # PineCallbackLifecycleRule values
     ("trail_points_mintick_tolerance", 0),
     ("declined_reversal_reissue_revives", 1),
     ("callback_limit_tick_reach", 2),
+    ("resting_limit_tick_reach", 3),
+    ("carried_trail_tick_reach", 4),
 )
+
+# Tapes replayed as a bar-by-bar stream too, each with the rule that decides
+# it (a RULES name), and the bars of history the stream begins with.
+STREAMED = (("carried-trail-14", "carried_trail_tick_reach"),)
+STREAM_WARMUPS = (1, 30)
 
 
 def tv_epoch_ms(text, utc_plus_8):
@@ -114,6 +134,85 @@ class TapeEntryPoints:
             return getattr(self._lib, name)
 
 
+class StreamEntryPoints(TapeEntryPoints):
+    """The same entry points with the backtest replaced by a stream of the same
+    bars: strategy_stream_begin with `warm` bars of history, one
+    strategy_stream_push_bar per later bar, then strategy_stream_fill_report
+    into the report the backtest would have filled."""
+
+    def __init__(self, lib, prefix, warm):
+        super().__init__(lib, prefix)
+        object.__setattr__(self, "_warm", warm)
+
+    def __getattr__(self, name):
+        if name != "run_backtest_full":
+            return super().__getattr__(name)
+        lib, warm = self._lib, self._warm
+
+        def stream(state, bars, n, input_tf, script_tf, _mag_on, _mag_samples, _mag_dist, report):
+            bar_type = bars._type_
+            size = ctypes.sizeof(bar_type)
+            base = ctypes.addressof(bars)
+
+            def at(index):
+                return ctypes.cast(ctypes.c_void_p(base + index * size), ctypes.POINTER(bar_type))
+
+            assert input_tf, "a stream needs the tape's input timeframe"
+            if lib.strategy_stream_begin(state, at(0), warm, input_tf, script_tf or input_tf) != 0:
+                raise AssertionError(f"stream begin refused: {lib.strategy_get_last_error(state)}")
+            for index in range(warm, n):
+                if lib.strategy_stream_push_bar(state, at(index)) != 0:
+                    raise AssertionError(
+                        f"stream push refused at bar {index}: {lib.strategy_get_last_error(state)}")
+                lib.strategy_stream_order_actions_clear(state)
+            lib.strategy_stream_fill_report(state, report)
+
+        return stream
+
+
+def full_trades(result):
+    """Every trade field the stream must reproduce, in the engine's order."""
+    return [(t["is_long"], t["qty"], t["entry_time"], t["exit_time"], t["entry_price"],
+             t["exit_price"], t["pnl"]) for t in result["trades"]]
+
+
+def stream_departures(fixtures, lib, batch_class, stream_class, inputs_run_kwargs, rule_index):
+    """Backtest against stream on every STREAMED tape with its rule on, then off."""
+    failures = []
+    for name, rule in STREAMED:
+        tape = fixtures / name
+        conf = json.loads((tape / "configuration.json").read_text())
+        prefix = "callback_lifecycle_" + re.sub(r"[^A-Za-z0-9_]", "_", name) + "__"
+        tv = tv_trades(tape / "tv_trades.csv")
+        for on in (True, False):
+            assert lib.callback_lifecycle_tapes_set_rule(rule_index[rule], 1 if on else 0) == (1 if on else 0)
+            try:
+                bars, kwargs = inputs_run_kwargs(conf, tape, tape / "bars.csv")
+                batch = batch_class(lib, prefix).run(bars, params=conf, **kwargs)
+                batch_rows = engine_trades(batch)
+                for warm in STREAM_WARMUPS:
+                    bars, kwargs = inputs_run_kwargs(conf, tape, tape / "bars.csv")
+                    streamed = stream_class(lib, prefix, warm).run(bars, params=conf, **kwargs)
+                    if streamed.get("error"):
+                        failures.append(f"{name} stream ({warm} warm-up bars): run error {streamed['error']}")
+                        continue
+                    if full_trades(streamed) != full_trades(batch):
+                        failures.append(f"{name} stream ({warm} warm-up bars, {rule} "
+                                        f"{'on' if on else 'off'}) books other trades than the backtest")
+                    elif on and first_departure(tv, engine_trades(streamed)) is not None:
+                        failures.append(f"{name} stream ({warm} warm-up bars) departs from TradingView "
+                                        f"at {first_departure(tv, engine_trades(streamed))}")
+                    elif not on and first_departure(tv, engine_trades(streamed)) is None:
+                        failures.append(f"{name} stream ({warm} warm-up bars) equals TradingView with "
+                                        f"{rule} off: the stream does not reach the rule")
+                print(f"  {name} stream == backtest with {rule} {'on' if on else 'off'} "
+                      f"({', '.join(str(w) for w in STREAM_WARMUPS)} warm-up bars): "
+                      f"{'equal to' if first_departure(tv, batch_rows) is None else 'departs from'} TradingView")
+            finally:
+                assert lib.callback_lifecycle_tapes_set_rule(rule_index[rule], 1) == 1
+    return failures
+
+
 def run_tapes(fixtures, names, lib, strategy_class, inputs_run_kwargs):
     outcomes = {}
     for name in names:
@@ -158,11 +257,40 @@ def pair_hold_barrier(fixtures, lib, strategy_class, inputs_run_kwargs):
     return None
 
 
+# The rule whose tapes are replayed forward, and the reason a stream refuses them.
+FORWARD_RULE = "resting_limit_tick_reach"
+FORWARD_REFUSAL = "calc_on_order_fills is unsupported"
+
+
+def forward_refusals(fixtures, names, lib, strategy_class, load_bars):
+    failures = []
+    for name in names:
+        tape = fixtures / name
+        if "calc_on_order_fills=true" not in (tape / "strategy.pine").read_text():
+            failures.append(f"{name}: forward replay expects a calc_on_order_fills script")
+            continue
+        conf = json.loads((tape / "configuration.json").read_text())
+        prefix = "callback_lifecycle_" + re.sub(r"[^A-Za-z0-9_]", "_", name) + "__"
+        api = strategy_class(lib, prefix).lib
+        bars, _, _ = load_bars(tape / "bars.csv")
+        state = api.strategy_create(json.dumps(conf).encode())
+        try:
+            begun = api.strategy_stream_begin(state, bars, 1, conf["input_tf"].encode(),
+                                              conf["script_tf"].encode())
+            error = (api.strategy_get_last_error(state) or b"").decode()
+        finally:
+            api.strategy_free(state)
+        if begun != -1 or FORWARD_REFUSAL not in error:
+            failures.append(f"{name}: forward replay began ({begun}, {error!r}); "
+                            f"expected the stream to refuse it ({FORWARD_REFUSAL})")
+    return failures
+
+
 def main():
     fixtures, module, scripts = (Path(a).resolve() for a in sys.argv[1:4])
     record = "--record" in sys.argv[4:]
     sys.path.insert(0, str(scripts))
-    from run_strategy import Strategy, _check_abi, inputs_run_kwargs  # noqa: E402
+    from run_strategy import Strategy, _check_abi, _load_bars, inputs_run_kwargs  # noqa: E402
 
     class TapeStrategy(Strategy):
         def __init__(self, lib, prefix):  # noqa: super().__init__ loads a path
@@ -170,9 +298,18 @@ def main():
             _check_abi(self.lib)
             self._setup_signatures()
 
+    class StreamStrategy(Strategy):
+        def __init__(self, lib, prefix, warm):  # noqa: super().__init__ loads a path
+            self.lib = StreamEntryPoints(lib, prefix, warm)
+            _check_abi(self.lib)
+            self._setup_signatures()
+
     lib = ctypes.CDLL(str(module))
     lib.callback_lifecycle_tapes_set_rule.argtypes = [ctypes.c_int, ctypes.c_int]
     lib.callback_lifecycle_tapes_set_rule.restype = ctypes.c_int
+    lib.strategy_stream_push_bar.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.strategy_stream_push_bar.restype = ctypes.c_int
+    lib.strategy_stream_order_actions_clear.argtypes = [ctypes.c_void_p]
     assert lib.callback_lifecycle_tapes_rule_count() == len(RULES), "the module and the test name the same rules"
 
     names = (fixtures / "tapes.txt").read_text().split()
@@ -202,6 +339,18 @@ def main():
         failures.append(barrier)
     else:
         print("  pair-hold-reissue: the re-issued stop stays behind the pair's barrier")
+    failures.extend(stream_departures(fixtures, lib, TapeStrategy, StreamStrategy, inputs_run_kwargs,
+                                      dict(RULES)))
+
+    forward = sorted(json.loads((fixtures / "rule_off_departures.json").read_text())
+                     .get(FORWARD_RULE, {}))
+    refused = forward_refusals(fixtures, forward, lib, TapeStrategy, _load_bars)
+    failures += refused
+    if forward and not refused:
+        print(f"  {FORWARD_RULE}: {len(forward)} tapes replayed forward, each refused by the "
+              f"stream ({FORWARD_REFUSAL})")
+    elif not forward:
+        failures.append(f"{FORWARD_RULE}: no tape to replay forward")
 
     recorded_path = fixtures / "rule_off_departures.json"
     recorded = {} if record else json.loads(recorded_path.read_text())

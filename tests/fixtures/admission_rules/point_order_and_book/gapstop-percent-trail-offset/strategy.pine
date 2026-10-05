@@ -1,0 +1,7 @@
+//@version=6
+strategy("gapstop-percent-trail-offset", initial_capital=106282, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100)
+if time == timestamp("UTC", 2025, 10, 20, 18, 45)
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Exit Short", from_entry="Short", stop=12.115, trail_points=23.99, trail_offset=5)
+if time == timestamp("UTC", 2025, 10, 21, 14, 0)
+    strategy.close_all()

@@ -6,7 +6,9 @@
 // source layer; the kernel's own trail is TrailTicks (native_order.hpp),
 // which needs none of it (R5 lane N14: moved verbatim from
 // src/engine_internal.hpp, where no kernel translation unit used it).
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace pineforge::compat::pine {
 
@@ -90,6 +92,45 @@ inline double snap_trail_level_to_tick_grid(double price, double mintick) {
         return k / inv_int;
     }
     return k * mintick;
+}
+
+// The level the kernel's generic native_order::Trail rests at for a running
+// best and a trailing distance, as the source layer's carried-trail tick
+// reach reads it (PineExecutionAdapter::retune_carried_trails_for_tick_reach,
+// which walks a bar through bests the kernel has not reported yet): best +/-
+// distance, except that a distance of whole ticks from a best on the run's
+// price ladder IS that ladder point, spelled on the reachable side
+// (native_matching::checked_trail_stop and ladder_trail_stop, with the run's
+// price tick, which the adapter declares as the symbol's mintick).
+// tests/test_kernel_trail_stop_replica.cpp holds it to the kernel's
+// arithmetic bit for bit.
+inline double kernel_trail_stop_level(double best, double distance, bool is_buy,
+                                      double tick) noexcept {
+    const double raw = is_buy ? best + distance : best - distance;
+    if (distance == 0.0 || !(tick > 0.0) || !std::isfinite(tick)) return raw;
+    const auto ladder_index = [&](double price) {
+        const double k = std::round(price / tick);
+        if (k * tick == price) return k;
+        const double inverse = 1.0 / tick;
+        const double n = std::round(inverse);
+        if (n > 0.0 && std::abs(inverse - n) <= 1e-6 * n && k / n == price) return k;
+        return std::numeric_limits<double>::quiet_NaN();
+    };
+    const double best_index = ladder_index(best);
+    const double distance_index = ladder_index(distance);
+    if (std::isnan(best_index) || std::isnan(distance_index) || !(distance_index >= 1.0))
+        return raw;
+    const double index = is_buy ? best_index + distance_index : best_index - distance_index;
+    const double product = index * tick;
+    const double inverse = 1.0 / tick;
+    const double n = std::round(inverse);
+    if (!std::isfinite(product) || !(n > 0.0) || std::abs(inverse - n) > 1e-6 * n)
+        return product;
+    const double quotient = index / n;
+    if (!std::isfinite(quotient)) return product;
+    // A buy trail's region is price >= level: the lower spelling; a sell
+    // trail's is price <= level: the higher.
+    return is_buy ? std::min(product, quotient) : std::max(product, quotient);
 }
 
 }  // namespace pineforge::compat::pine

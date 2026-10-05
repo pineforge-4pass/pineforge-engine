@@ -1,0 +1,7 @@
+//@version=6
+strategy("xk30-exit-after-market-nonpooc",initial_capital=100000,pyramiding=3,margin_long=0,margin_short=0,close_entries_rule="FIFO",process_orders_on_close=false)
+if time == timestamp("UTC",2025,10,31,17,15,00)
+    strategy.entry("A",strategy.long,qty=1)
+    strategy.exit("xA",from_entry="A",limit=3830)
+if time == timestamp("UTC",2025,10,31,20,00,00)
+    strategy.close_all()

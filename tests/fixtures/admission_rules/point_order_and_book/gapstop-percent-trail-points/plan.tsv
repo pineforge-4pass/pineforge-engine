@@ -1,0 +1,4 @@
+when	call	args
+1760985900000	entry	Short	short	na	na	na
+1760985900000	exit	Exit Short	Short	na	12.115	100.0	23.99	na
+1761055200000	close_all

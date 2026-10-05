@@ -1,0 +1,12 @@
+//@version=6
+strategy("xk32-short-member-shape",initial_capital=100000,pyramiding=3,margin_long=0,margin_short=0,close_entries_rule="FIFO",process_orders_on_close=true)
+if time == timestamp("UTC",2025,10,31,21,00,00)
+    strategy.entry("S1",strategy.short,qty=1.5217)
+if time == timestamp("UTC",2025,10,31,22,00,00)
+    strategy.entry("S2",strategy.short,qty=1.5213,limit=3910)
+    strategy.exit("xS2",from_entry="S2",stop=3950,limit=3880)
+if time == timestamp("UTC",2025,10,31,23,00,00)
+    strategy.exit("xS2",from_entry="S2",stop=3950,limit=3880)
+    strategy.close_all()
+if time == timestamp("UTC",2025,11,03,20,00,00)
+    strategy.close_all()

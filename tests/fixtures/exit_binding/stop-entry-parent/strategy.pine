@@ -1,0 +1,11 @@
+//@version=6
+strategy("xk33-stop-entry-parent",initial_capital=100000,pyramiding=3,margin_long=0,margin_short=0,close_entries_rule="FIFO",process_orders_on_close=true)
+if time == timestamp("UTC",2025,10,31,00,45,00)
+    strategy.entry("L1",strategy.long,qty=1.5217)
+if time == timestamp("UTC",2025,10,31,17,15,00)
+    strategy.entry("L2",strategy.long,qty=1.5213,stop=3910)
+    strategy.exit("xL2",from_entry="L2",stop=3870,limit=3990.44)
+if time == timestamp("UTC",2025,10,31,20,00,00)
+    strategy.close_all()
+if time == timestamp("UTC",2025,11,03,20,00,00)
+    strategy.close_all()
