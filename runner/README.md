@@ -468,7 +468,7 @@ Before beginning execution or binding the ledger, the runner refuses compiled
 It also refuses declaration-owned clocks, account-currency conversion/FX curves,
 auxiliary/native security feeds, recorded request series, historical probe/tail
 overrides and unresolved execution requirements. A new optional confirmed-bar
-receipt admits only the [proven shape table](../docs/strategy-capabilities.md#confirmed-bar-extension)
+receipt (unreleased; after 1.2.0) admits only the [proven shape table](../docs/strategy-capabilities.md#confirmed-bar-extension)
 for confirmed one-minute input, UTC/24x7 source settings: same-chart security
 close at 5/60/D, SMA(4) at 15, EMA(3) with gaps at 60, previous close at
 `timeframe.period`, and Heikin-Ashi close at 5; and standalone close-only `varip`. Only the

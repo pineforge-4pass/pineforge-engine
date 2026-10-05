@@ -1,7 +1,7 @@
 # Compiled strategy execution capabilities
 
-Availability: **since 1.2.0**. This applies to both the capability
-extension and the runner's receipt-based admission policy.
+Availability: **since 1.2.0** for the capability extension and the runner's
+receipt-based refusals; the confirmed-bar extension below is unreleased (after 1.2.0).
 
 An additive generated-strategy C ABI extension proves compiled declarations
 only, not general batch-versus-stream equivalence. A consumer applies its
@@ -83,7 +83,7 @@ separately staged runtime data is still validated at stream begin.
 
 ## Confirmed-bar extension
 
-New generated libraries additionally export `strategy_confirmed_bar_api_version`
+Unreleased (after 1.2.0): new generated libraries additionally export `strategy_confirmed_bar_api_version`
 (returning 1) and `strategy_confirmed_bar_receipt`, with the same signature and
 buffer/error protocol as the original receipt. The original version-1 schema
 and exports remain available, without new keys: older runners ignore the new
