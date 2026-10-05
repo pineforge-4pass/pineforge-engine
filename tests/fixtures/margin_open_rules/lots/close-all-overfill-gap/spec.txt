@@ -1,0 +1,6 @@
+config 712821.2957 1e-05 0.01 2 0.05 100.0 1 0
+bars eur-2025-09-15-2025-09-17.csv
+ev 1758054600000 entry S short 600000.0 any
+ev 1758055500000 close_all - - - any
+ev 1758055500000 entry L long 599786.03 any
+ev 1758056400000 close_all - - - any

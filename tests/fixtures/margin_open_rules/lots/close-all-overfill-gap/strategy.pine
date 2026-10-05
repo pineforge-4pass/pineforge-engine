@@ -1,0 +1,10 @@
+//@version=6
+strategy("pf-12b-a3-gap-closeall", initial_capital=712821.2957, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=2, process_orders_on_close=true, pyramiding=0)
+if time == timestamp("UTC", 2025, 9, 16, 20, 30)
+    strategy.entry("S", strategy.short, qty=600000.0)
+if time == timestamp("UTC", 2025, 9, 16, 20, 45)
+    strategy.close_all()
+    strategy.entry("L", strategy.long, qty=599786.03)
+if time == timestamp("UTC", 2025, 9, 16, 21, 0)
+    strategy.close_all()
+plot(strategy.equity, "equity")

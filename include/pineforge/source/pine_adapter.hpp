@@ -2035,7 +2035,7 @@ private:
     // The opening-call schedule after a process_orders_on_close close fill
     // (MarginOpeningSwitches): its scope, the call sized at the close and the
     // calls the open takes after it.
-    bool close_sized_open_call_scope(bool short_book) const;
+    bool close_sized_open_call_scope(bool short_book, bool several_lots = false) const;
     double close_sized_open_units(double close_mark, double print,
                                   std::int64_t sub_bar_open_ms) const;
     bool run_close_sized_open_calls(double units, double opening_mark,
@@ -2043,6 +2043,9 @@ private:
     double open_print_follow_up_units(double held_before, double equity_before, double entry,
                                       double called, double fill, bool short_book,
                                       std::int64_t sub_bar_open_ms) const;
+    double open_print_lot_follow_up_units(const std::vector<std::pair<double, double>>& taken,
+                                          double equity_before, double held_before, double fill,
+                                          bool short_book, std::int64_t sub_bar_open_ms) const;
     bool lagged_short_scope() const noexcept;
     double lagged_short_follow_up_units(const std::vector<std::pair<double, double>>& taken,
                                         double equity_before, double held_before, double fill,
@@ -2056,6 +2059,8 @@ private:
     bool open_call_owing_follow_up(double opening_mark, const NativeDecisionContext&);
     bool short_path_points_scope(const NativeDecisionContext&) const;
     void execute_owed_short_follow_up(int point, double price, const NativeDecisionContext&);
+    void hold_owed_close_follow_up(double close, const NativeDecisionContext&);
+    void book_owed_close_follow_up(const Bar&, const NativeDecisionContext&);
     void walk_short_path_points(const Bar&, const NativeDecisionContext&);
     void schedule_lagged_short_follow_up(const native_order::ExecutionAppliedEvent&,
                                          const NativeDecisionContext&);
@@ -2788,6 +2793,12 @@ struct MarginScheduleSwitches {
     // A process_orders_on_close short's call sized at the previous close and
     // executed at the open is followed at that open, at the call's own fill.
     bool close_call_follow_up_at_open = true;
+    // A process_orders_on_close short's lagged follow-up owed to its bar's
+    // close is booked after the script, ahead of the fills of the orders the
+    // script placed there, which keep the sizes they were placed with: a
+    // strategy.close(id) or close_all() opens the excess on the other side as
+    // its own lot, a reversal entry's excess joins the entry's lot.
+    bool close_follow_up_after_script = true;
 };
 MarginScheduleSwitches& margin_schedule_switches() noexcept;
 
@@ -2826,6 +2837,10 @@ struct MarginOpeningSwitches {
     // In the opening-call scope the open's own call, and a short's booked
     // re-check, owe their follow-up to the bar's first extreme.
     bool short_point_drops_owed = true;
+    // The schedule on a book of several lots the close's fills opened: the
+    // call sized at the close on the whole book, taken first in first out,
+    // and its follow-up checked lot by lot over the lots it took.
+    bool lot_by_lot_open_follow_up = true;
 };
 MarginOpeningSwitches& margin_opening_switches() noexcept;
 } // namespace detail

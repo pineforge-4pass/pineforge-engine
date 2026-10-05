@@ -9,6 +9,16 @@ lag/owed-dropped-whole-share
 lag/short-point-own-check
 lag/whole-share-chain
 lag/whole-share-follow-up
+lots/close-all-overfill-gap
+lots/close-id-overfill-0409
+lots/close-id-overfill-gap
+lots/close-id-overfill-weekend
+lots/overfill-default-then-close-entry
+lots/overfill-then-close-entry
+lots/reversal-entry-joins-lot
+lots/three-longs-last-short
+lots/two-longs-one-close
+lots/two-shorts-one-close
 po/long-divisor-down
 po/long-divisor-up
 po/long-residue-call

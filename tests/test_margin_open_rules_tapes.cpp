@@ -4,7 +4,7 @@
  * and the refined lagged follow-up on TradingView's own tapes, in a backtest
  * and in a forward (stream) run.
  *
- * tests/fixtures/margin_open_rules holds 43 `lab tv` tapes of synthetic
+ * tests/fixtures/margin_open_rules holds 53 `lab tv` tapes of synthetic
  * controls (README.md there names the groups), each exported twice, both
  * exports byte-identical, every prediction written before its export: a
  * full-margin process_orders_on_close position's call at the open after the
@@ -12,18 +12,26 @@
  * gate priced at the open's print, the booked book checked again at the
  * open's mark and the follow-up at the print (po/, replica/), an explicit
  * quantity dropped at its slipped open fill (admission/), a margin-1 % book's
- * open check after an add filled there (add-open/) and the lagged follow-up
- * on whole shares, chained and dropped at a point short itself (lag/). Each
+ * open check after an add filled there (add-open/), the lagged follow-up
+ * on whole shares, chained and dropped at a point short itself (lag/), and a
+ * close's follow-up booked after the script with the script's close orders
+ * keeping their sizes, then the open's calls on the book of several lots
+ * that leaves, checked lot by lot, and a close of the entry beside the
+ * over-fill lot after them (lots/). Each
  * tape directory holds the script TradingView ran (strategy.pine), its trade
  * list (tv_trades.csv), its export summary (metrics.json) and spec.txt, the
  * replay this test drives:
  *
  *   config <capital> <mintick> <qty_step> <slippage> <commission %> <margin %>
- *          <process_orders_on_close 0/1> <pyramiding>
+ *          <process_orders_on_close 0/1> <pyramiding> [<default % of equity>]
  *   bars <file under bars/>
  *   session <time zone> <session>   (NYSE:F: the exchange's zone and regular session)
- *   ev <utc ms> entry <id> <long|short> <qty> <any|flat|notflat>
+ *   ev <utc ms> entry <id> <long|short> <qty|nan> <any|flat|notflat>
  *   ev <utc ms> close_all - - - <cond>
+ *   ev <utc ms> close <id> - - <cond>
+ *
+ * A `nan` quantity is a default-sized entry, sized by the default percent of
+ * equity the config line names.
  *
  * An event fires on the bar whose open time it names, in file order, when its
  * condition holds on the book the script sees -- the script's
@@ -34,7 +42,8 @@
  * kKnownDivergences names the tapes the engine does not reproduce yet; each
  * must still differ. Every switch of MarginOpeningSwitches ships on, which
  * this test checks; turned off alone, a switch pinned here costs at least one
- * tape. And every tape is replayed forward too -- stream_begin() over its
+ * tape, and so does MarginScheduleSwitches::close_follow_up_after_script,
+ * which the lots/ tapes pin. And every tape is replayed forward too -- stream_begin() over its
  * first bar, stream_push_bar() for every later one -- whose closed trades
  * must be the backtest's, every field bit for bit.
  */
@@ -80,8 +89,8 @@ static int tests_failed = 0;
 namespace {
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-constexpr std::size_t kTapes = 43;
-constexpr std::size_t kTvRows = 129;
+constexpr std::size_t kTapes = 53;
+constexpr std::size_t kTvRows = 191;
 
 using pineforge::source::detail::MarginOpeningSwitches;
 
@@ -102,6 +111,7 @@ struct Event {
 struct Spec {
     std::string path;
     double capital = 0.0, tick = 0.0, step = 0.0, fee = 0.0, margin = 100.0;
+    double default_percent = 0.0;
     int slippage = 0, pyramiding = 1;
     bool pooc = false;
     std::string bars;
@@ -122,6 +132,7 @@ Spec parse_spec(const std::string& path, std::istream& in) {
             words >> spec.capital >> spec.tick >> spec.step >> spec.slippage >> spec.fee
                 >> spec.margin >> pooc >> spec.pyramiding;
             spec.pooc = pooc != 0;
+            if (!(words >> spec.default_percent)) spec.default_percent = 0.0;
         } else if (word == "bars") {
             words >> spec.bars;
         } else if (word == "session") {
@@ -246,6 +257,10 @@ public:
         configuration.commission_value = spec.fee;
         configuration.slippage = spec.slippage;
         configuration.process_orders_on_close = spec.pooc;
+        if (spec.default_percent > 0.0) {
+            configuration.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
+            configuration.default_qty_value = spec.default_percent;
+        }
         configure_pine_strategy(configuration);
         set_syminfo_mintick(spec.tick);
         set_syminfo_metadata("qty_step", spec.step);
@@ -365,7 +380,7 @@ std::string first_difference(const std::vector<Row>& tv, const Outcome& engine) 
 }
 
 MarginOpeningSwitches all_on() {
-    static_assert(sizeof(MarginOpeningSwitches) == 9 * sizeof(bool),
+    static_assert(sizeof(MarginOpeningSwitches) == 10 * sizeof(bool),
                   "MarginOpeningSwitches changed: name its new field here and in the ablation table");
     MarginOpeningSwitches on;
     on.close_sized_long_call = true;
@@ -377,6 +392,7 @@ MarginOpeningSwitches all_on() {
     on.whole_share_lagged_short = true;
     on.chained_follow_up = true;
     on.short_point_drops_owed = true;
+    on.lot_by_lot_open_follow_up = true;
     return on;
 }
 
@@ -483,6 +499,7 @@ int main() {
         {"whole_share_lagged_short", &M::whole_share_lagged_short},
         {"chained_follow_up", &M::chained_follow_up},
         {"short_point_drops_owed", &M::short_point_drops_owed},
+        {"lot_by_lot_open_follow_up", &M::lot_by_lot_open_follow_up},
     };
     CHECK(ablations.size() == sizeof(MarginOpeningSwitches) / sizeof(bool));
     for (const Ablation& ablation : ablations) {
@@ -500,6 +517,27 @@ int main() {
         else CHECK(off.size() <= all_matched.size());
     }
     switches = shipped;
+    // The schedule switch the lots/ tapes pin, off alone: the follow-up owed
+    // to a process_orders_on_close short's close booked before the script
+    // leaves no over-fill lot and no frozen reversal, and costs them.
+    {
+        using S = pineforge::source::detail::MarginScheduleSwitches;
+        auto& schedule = pineforge::source::detail::margin_schedule_switches();
+        const S schedule_shipped = schedule;
+        schedule.close_follow_up_after_script = false;
+        const std::set<std::string> off = matching();
+        std::size_t lost = 0;
+        for (const std::string& path : all_matched) lost += off.count(path) == 0;
+        for (const std::string& path : off)
+            if (!all_matched.count(path))
+                std::printf("  ablation close_follow_up_after_script off gains %s\n", path.c_str());
+        std::printf("ablation close_follow_up_after_script off: %zu/%zu tapes match (%zu lost)\n",
+                    off.size(), specs.size(), lost);
+        CHECK(lost > 0);
+        schedule = schedule_shipped;
+        static_assert(sizeof(S) == 10 * sizeof(bool),
+                      "MarginScheduleSwitches changed: check which of its fields these tapes pin");
+    }
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed ? 1 : 0;
 }

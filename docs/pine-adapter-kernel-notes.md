@@ -446,11 +446,13 @@ way. Its tapes are `tests/fixtures/margin_schedule_rules` and the
 | `whole_share_lagged_follow_up` | on | a long's lagged follow-up on a whole-share lot grid too | `lagged_margin_follow_up_units` |
 | `long_call_gain_loss` | on | a commission-free long's one-unit call reads initial + (G + L), inside `gain_loss_regime()`; a fee-bearing book keeps the closed-trade equity | `gain_loss_closed_equity` in `slipped_long_margin_units`, `slipped_long_unit_shortfall`, `submit_tv_money_long_margin_call` |
 | `close_call_follow_up_at_open` | on | a process_orders_on_close short's call sized at the previous close and executed at the open is followed once at that open, at its own fill (one follow-up restores the book there); inside the opening-call schedule's shape below, `booked_open_recheck` and `open_print_follow_up` replace it | the opening checkpoint in `on_bar_open` |
+| `close_follow_up_after_script` | on | a carried process_orders_on_close short's lagged follow-up owed to its bar's close is held through the close's own check (rule 7 still drops it where the close is short) and booked after the script, ahead of the close's fills, at the same print; a `strategy.close(id)` of the whole one-lot book or a `close_all()` placed there keeps the size the script saw and opens the excess as a lot of its own, credited to the close ledger and the pyramiding records under the close order's label; beside that lot only a market entry filling at its placement close skips the pyramiding-0 refusal (and, default-sized, the fill-time affordability check) | `hold_owed_close_follow_up`, `book_owed_close_follow_up` in `on_bar_close`, `flush_pending_closes`, `close_all`, `on_applied`, `validate_precommit` |
 
 `MarginOpeningSwitches` (same header and namespace, read through
 `margin_opening_switches()`) holds the opening-call rules: the call a
-full-margin, one-lot process_orders_on_close position (percent commission,
-slippage, a lot grid of at most one) takes at the open after the close fill
+full-margin process_orders_on_close position (percent commission, slippage,
+a lot grid of at most one; several lots only on a fractional grid) takes at
+the open after the close fill
 that opened it, the open's check after an add filled there, the fill-time
 admission of an explicit quantity at the open and the refined lagged
 follow-up. Its tapes are `tests/fixtures/margin_open_rules`.
@@ -466,6 +468,7 @@ follow-up. Its tapes are `tests/fixtures/margin_open_rules`.
 | `whole_share_lagged_short` | on | a short's lagged follow-up on whole-share books in the path walk, with the one-unit fallback | `whole_share_lag_units`, `call_short_with_lagged_follow_up` |
 | `chained_follow_up` | on | on those books an owed follow-up that books leaves its own follow-up for the next point | `call_short_with_lagged_follow_up` (`owed`) |
 | `short_point_drops_owed` | on | an owed follow-up is dropped at a point whose own check finds the book short; the open's own call of a carried short in the walk's scope and the opening-call scope (`close_sized_open_call_scope`) owes its follow-up to the first extreme instead of repeating it at its print, and so does a booked re-check of a short in the walk's scope (`run_close_sized_open_calls`): booked at that point's print, or dropped where the point is short itself | `execute_owed_short_follow_up`, `open_call_owing_follow_up`, `run_close_sized_open_calls` |
+| `lot_by_lot_open_follow_up` | on | on a fractional lot grid the schedule also takes a book of several lots the close's fills opened: the call sized at the close on the whole book, taken first in first out, and its follow-up checked lot by lot over the lots it took, the last still-short check deciding; a short's booked re-check on such a book is followed by nothing; one-lot books keep `open_print_follow_up_units`, whole-share books of several lots the previous rules | `close_sized_open_call_scope`, `open_print_lot_follow_up_units`, `run_close_sized_open_calls` |
 
 ### 1.7 Evidence
 
@@ -487,7 +490,7 @@ tapes, 3 commission-0 controls, the oracle control of §1.2, 10 order
 controls replayed through handwritten hosts and 67 tapes of the short call
 gate and schedule (`short-cutoff-gate`). With every switch on, as shipped,
 the engine reproduces 258 of its 266 tapes and 373 of the 381 ledger tapes,
-38 of the 39 `margin_schedule_rules` tapes and all 43 `margin_open_rules`
+38 of the 39 `margin_schedule_rules` tapes and all 53 `margin_open_rules`
 tapes (each of those also as a stream, trade for trade); turning the
 placement half off costs 108 ledger tapes, the fill half 32 ledger and
 3 single-position tapes. `test_margin_rules_forward_replay` replays a sample of both

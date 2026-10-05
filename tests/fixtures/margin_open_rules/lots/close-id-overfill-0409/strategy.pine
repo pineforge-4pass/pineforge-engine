@@ -1,0 +1,10 @@
+//@version=6
+strategy("pf-12b-r0-pop-replica", initial_capital=21801.6902, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=1, process_orders_on_close=true, pyramiding=0)
+if time == timestamp("UTC", 2026, 4, 9, 1, 0)
+    strategy.entry("S", strategy.short, qty=18667.93)
+if time == timestamp("UTC", 2026, 4, 9, 1, 45)
+    strategy.close("S")
+    strategy.entry("L", strategy.long, qty=18659.4)
+if time == timestamp("UTC", 2026, 4, 9, 2, 0)
+    strategy.close_all()
+plot(strategy.equity, "equity")

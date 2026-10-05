@@ -874,6 +874,216 @@
       ],
       "note": "prediction written before export: controls/rc3/preregistered-rc3-20261005T164055Z.json; NYSE:F, process_orders_on_close short of 5000 at the 10.34 close, capital 51696.55: 5000 x 10.34 exceeds it by 3.45 though 5000 x the 10.32 slipped fill does not; TradingView books no trade (every model of the preregistration predicted the fill: the predictor prices the slipped fill)",
       "scratch": "px-pin-recheck"
+    },
+    {
+      "path": "lots/close-id-overfill-weekend",
+      "origin": "controls/r1/pf-12b-a1-wkgap-closeid",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-06-19",
+      "chart_to": "2025-06-23",
+      "tv_trades_sha256": "018bce208cc5302c206037c1d1d0a679b5ecce332ba57c357768a048a9458fd1",
+      "repeat_tv_trades_sha256": "018bce208cc5302c206037c1d1d0a679b5ecce332ba57c357768a048a9458fd1",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "32d89e24c3073ab9206c0bcbac29ae66ec53d861a596d6c653c4d1f40dc157ae",
+      "tv_rows": 7,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:22:45Z",
+        "2026-10-05T19:22:52Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T192230Z.json; POOC short 600000 Fri 2025-06-20 20:30; the 20:45 high calls 13.92 and owes 41.52 to the close, booked after the script: strategy.close(\"S\") keeps the 599986.08 it saw (41.52 over-fill lot, its own entry) + L 599716.27; Sunday open -652 ticks: X_c 41.52 + 1069.84 FIFO, follow-up 950.68 lot by lot",
+      "scratch": "px-pin-12b"
+    },
+    {
+      "path": "lots/close-id-overfill-gap",
+      "origin": "controls/r1/pf-12b-a2-gap-closeid",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-09-15",
+      "chart_to": "2025-09-17",
+      "tv_trades_sha256": "4d03f11b636abf8260c0f2cc34e9bc09e838c14d53ead22496e963ddf4a9649a",
+      "repeat_tv_trades_sha256": "4d03f11b636abf8260c0f2cc34e9bc09e838c14d53ead22496e963ddf4a9649a",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "70079b6b0287d35f4f891911b83f074350ab49e0679dc3cb3d3a8529f61c30dd",
+      "tv_rows": 7,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:22:45Z",
+        "2026-10-05T19:22:52Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T192230Z.json; a1's shape 2025-09-16 20:45, daily gap -62 ticks: over-fill 34.4, X_c 34.4 + 934.4, follow-up 831.64",
+      "scratch": "px-pin-12b"
+    },
+    {
+      "path": "lots/close-all-overfill-gap",
+      "origin": "controls/r1/pf-12b-a3-gap-closeall",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-09-15",
+      "chart_to": "2025-09-17",
+      "tv_trades_sha256": "9fd562a79547d92fe09e572356f14bdcd8926e847673d74f283f7e844c1ce270",
+      "repeat_tv_trades_sha256": "9fd562a79547d92fe09e572356f14bdcd8926e847673d74f283f7e844c1ce270",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "f1c4e0db082df5811d2a23559c72189f277c1198112a0b8133ad7914bda6f2c9",
+      "tv_rows": 7,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:22:45Z",
+        "2026-10-05T19:22:52Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T192230Z.json; a2 with strategy.close_all(): over-fill lot 'Close position order' 34.4, then the same open calls",
+      "scratch": "px-pin-12b"
+    },
+    {
+      "path": "lots/close-id-overfill-0409",
+      "origin": "controls/r1/pf-12b-r0-pop-replica",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2026-04-08",
+      "chart_to": "2026-04-10",
+      "tv_trades_sha256": "af65f67d6d6591039d1d9b3a58e94594ed2a6b6f06402dd9452c2e18451bd418",
+      "repeat_tv_trades_sha256": "af65f67d6d6591039d1d9b3a58e94594ed2a6b6f06402dd9452c2e18451bd418",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "1054ac6451c4765fec1e4f54f845e421525d6798df328fca567327527bc21f99",
+      "tv_rows": 7,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:22:49Z",
+        "2026-10-05T19:22:56Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T192230Z.json; the population's bars 2026-04-09 01:00-02:15, short 18667.93: 0.24 at the high, 0.56 owed to the close booked after the script; over-fill 0.56; next open X_c 0.56 + 20.68, follow-up 19.0",
+      "scratch": "px-pin-12b"
+    },
+    {
+      "path": "lots/two-longs-one-close",
+      "origin": "controls/r1/pf-12b-c1-two-entries",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-09-15",
+      "chart_to": "2025-09-17",
+      "tv_trades_sha256": "02d017ef73413b568f8b54566f991b6bc82e2bce92bc37dc8adce4d42a7db517",
+      "repeat_tv_trades_sha256": "02d017ef73413b568f8b54566f991b6bc82e2bce92bc37dc8adce4d42a7db517",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "2a0eaf090c37ed214880247c257277666299760ee3038d93c3db0491d15d97e2",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:22:48Z",
+        "2026-10-05T19:22:54Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T192230Z.json; longs A 20 + B 599000.37 at one close (pyramiding 2), no over-fill: X_c 20 + 338.96, follow-up 279.12",
+      "scratch": "px-pin-12b"
+    },
+    {
+      "path": "lots/reversal-entry-joins-lot",
+      "origin": "controls/r1/pf-12b-e1-entry-only",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-09-15",
+      "chart_to": "2025-09-17",
+      "tv_trades_sha256": "02419198dfaee0fe61734ab0b0c1e09713351f8f6e420d6de32c0483967d990c",
+      "repeat_tv_trades_sha256": "02419198dfaee0fe61734ab0b0c1e09713351f8f6e420d6de32c0483967d990c",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "dc402c69790ad88355b8b0d6710535b78680bf799448fa7a5eaf847c4ea644d0",
+      "tv_rows": 5,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:22:48Z",
+        "2026-10-05T19:22:56Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T192230Z.json; a reversal strategy.entry only: the 1.4 owed to the close joins the entry's own lot (599852.43); next open 1107.88",
+      "scratch": "px-pin-12b"
+    },
+    {
+      "path": "lots/two-shorts-one-close",
+      "origin": "controls/r2/pf-12b-c2-two-shorts",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2026-04-08",
+      "chart_to": "2026-04-10",
+      "tv_trades_sha256": "e831e17b2a6240bee1c2a62044776cb75215c5fbb90aa28a23d29ff06cb9f3b0",
+      "repeat_tv_trades_sha256": "e831e17b2a6240bee1c2a62044776cb75215c5fbb90aa28a23d29ff06cb9f3b0",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "cb73fac9d81341425bab301faeb5f7dc6f0eff490654ec5a7097e2761898395b",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:26:24Z",
+        "2026-10-05T19:26:29Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T192623Z.json; shorts A 20 + B 600000.37 at 2026-04-09 01:45: X_c 20 + 186.64, follow-up 167.8 at the open",
+      "scratch": "px-pin-12b"
+    },
+    {
+      "path": "lots/three-longs-last-short",
+      "origin": "controls/r2/pf-12b-c3-three-entries",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-09-15",
+      "chart_to": "2025-09-17",
+      "tv_trades_sha256": "b4b1dba37ad75dfe4e952ae7658b6b3bfbe951045c628b2735f26f64394c89fe",
+      "repeat_tv_trades_sha256": "b4b1dba37ad75dfe4e952ae7658b6b3bfbe951045c628b2735f26f64394c89fe",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "73c1db7df3064d8e3465f8af0b295afa6a5f9de6285fac5c7b75c7c3e36953bb",
+      "tv_rows": 5,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:26:24Z",
+        "2026-10-05T19:26:29Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T192623Z.json; longs 12 + 18 + 599000.37: X_c 12 + 18 + 309.08, follow-up 219.24 from the last still-short check",
+      "scratch": "px-pin-12b"
+    },
+    {
+      "path": "lots/overfill-then-close-entry",
+      "origin": "controls/r3/pf-12bf-k1-overfill-closeid-explicit",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2026-04-08",
+      "chart_to": "2026-04-10",
+      "tv_trades_sha256": "4638c18e6242d50330b43c028ec55bf39dd18bf747358a0645e36ef67afb6660",
+      "repeat_tv_trades_sha256": "4638c18e6242d50330b43c028ec55bf39dd18bf747358a0645e36ef67afb6660",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "4a66597c98e0501205c0c1fb50c978526a25b7ff26a5b871eafac5b6e6f7bbee",
+      "tv_rows": 8,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T21:52:19Z",
+        "2026-10-05T21:52:42Z"
+      ],
+      "note": "prediction written before export: controls/r3/preregistered-r3-20261005T215203Z.json; close-id-overfill-0409's shape, then at the next bar's close strategy.close(\"L\") and a short S2 of 18000: after the open's calls (0.56 from the over-fill lot, 20.68 + 19 from L) the close takes all of L's 18619.72 and S2 opens 18000 (the over-fill lot is a lot of its own in the close ledger)",
+      "scratch": "px-12b-impl"
+    },
+    {
+      "path": "lots/overfill-default-then-close-entry",
+      "origin": "controls/r3/pf-12bf-k2-overfill-closeid-default",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2026-04-08",
+      "chart_to": "2026-04-10",
+      "tv_trades_sha256": "38a69463256e39ec701eda77d35f6e60d290b89b6412bdc9cc41f0d8f56f9ee5",
+      "repeat_tv_trades_sha256": "38a69463256e39ec701eda77d35f6e60d290b89b6412bdc9cc41f0d8f56f9ee5",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "4530612a3a2432160e5be15e6848a75b16476c5dd0205d213f995f376c385026",
+      "tv_rows": 8,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T21:52:19Z",
+        "2026-10-05T21:52:42Z"
+      ],
+      "note": "prediction written before export: controls/r3/preregistered-r3-20261005T215203Z.json; the same with L default-sized (100 % of equity): L opens 18664.13 beside the 0.56 over-fill lot at the close it was placed at, the open calls 0.56 + 39.6 then 37.92, and strategy.close(\"L\") takes 18586.61",
+      "scratch": "px-12b-impl"
     }
   ],
   "bars": {
@@ -1098,6 +1308,24 @@
       "rows": 52,
       "feed": "f-15.csv",
       "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32"
+    },
+    "eur-2025-06-19-2025-06-23.csv": {
+      "sha256": "60172d003699d8eb8f04d77a4a347b541d27a2d96191cd2b58703d22dfa42d8f",
+      "rows": 193,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eur-2025-09-15-2025-09-17.csv": {
+      "sha256": "668f5d2782792221a45b2e70b922f4ddecd752687615c765716b51351ff5ffba",
+      "rows": 193,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eur-2026-04-08-2026-04-10.csv": {
+      "sha256": "cc8780cf8702f992ec3fa967bec563fff0ddc2e1d2efb51424a61cd1ed5e2f78",
+      "rows": 193,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
     }
   },
   "description": "TradingView strategy tapes of synthetic controls pinning the opening-call schedule, the open check after an add's fill, the fill-time admission of an explicit quantity and the refined lagged follow-up (MarginOpeningSwitches): each control exported twice with lab tv --no-note, both exports byte-identical, range proof covered. origin is the export directory relative to the pinning lane's scratch root (px-pin-n2s, or the one named by scratch); spec.txt is the replay the test drives."

@@ -1,0 +1,40 @@
+{
+  "validationEligible": true,
+  "strategy": "pf-12bf-k2-overfill-closeid-default",
+  "symbol": "OANDA:EURUSD",
+  "interval": "15",
+  "from": "2026-04-08",
+  "to": "2026-04-10",
+  "deepBacktesting": true,
+  "trades": 8,
+  "tvTradesCsv": "tv_trades.csv",
+  "tapeChannel": "ws-report-v1",
+  "sourceCanonicalization": "pine-facade-v1",
+  "sourceArtifactHash": "4530612a3a2432160e5be15e6848a75b16476c5dd0205d213f995f376c385026",
+  "tvTradesCsvHash": "38a69463256e39ec701eda77d35f6e60d290b89b6412bdc9cc41f0d8f56f9ee5",
+  "wsProvenance": {
+    "schemaVersion": 1,
+    "wsEndpoint": "wss://history-data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart&auth=sessionid",
+    "authUser": "luisleo52655",
+    "accountType": "pro_premium_expert",
+    "pineId": "USER;3c3ee73838da415d9f6fb36ccd7cbe97",
+    "pineVersion": "0.93653",
+    "symbol": "OANDA:EURUSD",
+    "interval": "15",
+    "requestedRange": {
+      "from": 1775606400000,
+      "to": 1775779200000
+    },
+    "returnedRange": {
+      "from": 1775606400000,
+      "to": 1775779200000
+    },
+    "rangeProof": "covered",
+    "rawFrameSha256": "162353a893312943846c1ab26431bff9f05d3011e1e75388275d04a94c0685fa",
+    "decodedReportSha256": "fb1d775288ea550cc437b04ca8842d1b0a0614c5a202eaa8d1c69abf0f92788d",
+    "closedTrades": 8,
+    "proves": "which compile bytecode and which from/to window were sent to TradingView, and the exact trades TradingView returned for it (re-derivable from rawFrameSha256)",
+    "doesNotProve": "chart activation or the displayed applied range (browser-only); CSV byte identity and priceExact are lab renderings, screen-only until a parity study"
+  },
+  "backtestedAt": "2026-10-05T21:52:42.087Z"
+}

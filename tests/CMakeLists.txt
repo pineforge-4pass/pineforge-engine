@@ -1080,7 +1080,7 @@ list(APPEND TEST_SOURCES test_margin_call_rules_tapes)
 # tapes of synthetic controls (tests/fixtures/margin_schedule_rules, README.md
 # there), in a backtest and in a forward (stream) run.
 list(APPEND TEST_SOURCES test_margin_schedule_rules_tapes)
-# The opening-call rules (MarginOpeningSwitches) on 43 TradingView tapes of
+# The opening-call rules (MarginOpeningSwitches) on 53 TradingView tapes of
 # synthetic controls (tests/fixtures/margin_open_rules, README.md there), in a
 # backtest and in a forward (stream) run.
 list(APPEND TEST_SOURCES test_margin_open_rules_tapes)

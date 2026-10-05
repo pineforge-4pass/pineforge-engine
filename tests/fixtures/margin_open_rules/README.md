@@ -1,7 +1,7 @@
 # margin_open_rules
 
 TradingView strategy tapes of synthetic controls that pin the opening-call
-rules behind `pineforge::source::detail::MarginOpeningSwitches`: 43 tapes (129
+rules behind `pineforge::source::detail::MarginOpeningSwitches`: 53 tapes (191
 trades), each exported twice with `lab tv --no-note` over the ws-report-v1
 channel, both exports byte-identical, every export's range proof `covered`.
 Every prediction was written before its export (`provenance.json` names the
@@ -63,6 +63,30 @@ margin 100 % but `add-open/` (1 %), slippage 1 or 2 but `add-open/` (0).
 - `add-open/` (1, EURUSD, margin 1 %, slippage 0): a short add filling at an
   open is in the book, with its entry fee, when that open is checked: 3069.72
   at the open, then 51027.16 at the high (`open_check_after_add_fill`).
+- `lots/` (10, OANDA:EURUSD 15, process_orders_on_close): a
+  carried short's lagged follow-up owed to its bar's close is booked after the
+  script, ahead of the close's fills (`MarginScheduleSwitches::
+  close_follow_up_after_script`), and the script's orders keep the sizes they
+  were placed with: `strategy.close("S")` (`close-id-overfill-*`) or
+  `close_all()` (`close-all-overfill-gap`) buys the units the script saw and
+  opens the excess long as its own lot (41.52, 34.4, 0.56), the reversal entry
+  "L" opening its own leg beside it; a reversal entry alone takes the excess
+  into its own lot (`reversal-entry-joins-lot`, 1.4). At the next open the
+  call sized at the close takes the whole book first in first out, and its
+  follow-up is checked lot by lot, the last still-short check deciding
+  (`lot_by_lot_open_follow_up`): 41.52 + 1069.84 then 950.68 across a weekend
+  gap; on books two or three entries of one close opened, 20 + 338.96 then
+  279.12 (`two-longs-one-close`), 12 + 18 + 309.08 then 219.24
+  (`three-longs-last-short`), shorts 20 + 186.64 then 167.8
+  (`two-shorts-one-close`). `close-id-overfill-0409` is OANDA:EURUSD
+  2026-04-09 01:00-02:15's own bars at a lane-chosen capital. The over-fill
+  lot is a lot of its own in the close ledger: after the open's calls took it
+  first, `strategy.close("L")` closes all of L (18619.72) and a short S2 opens
+  its 18000 (`overfill-then-close-entry`); with L default-sized at 100 % of
+  equity it opens 18664.13 beside the lot at the close it was placed at, and
+  the close takes 18586.61 (`overfill-default-then-close-entry`; the config
+  line's ninth field is the default percent of equity, a `nan` quantity a
+  default-sized entry).
 - `lag/` (5, NYSE:F and EURUSD, process_orders_on_close): the lagged follow-up
   of a short's call on whole-share books with the one-unit fallback
   (`whole_share_lagged_short`), a follow-up that books leaving its own for the
