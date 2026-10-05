@@ -1,0 +1,16 @@
+{
+  "title": "rt-ls-stop-up",
+  "slug": "rt-ls-stop-up",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-05T12:24:20.378Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-29",
+    "to": "2025-04-30"
+  },
+  "pine_sha256": "7a92a2602d7fb9f8867be83304b7d14b07cf11e858365fcbef1c3b234b620772",
+  "tv_trades_sha256": "b799db229bdfbeff7bafd648037e5e7a8aadf902dfc216157b31ce72d5bac823",
+  "tv_trades_rows": 4
+}

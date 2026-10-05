@@ -1,0 +1,7 @@
+//@version=6
+strategy("pf-recheck-c2-not-short-l-s1g1", initial_capital=93678.0077, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=1, process_orders_on_close=true)
+if time == timestamp("UTC", 2025, 7, 9, 3, 45)
+    strategy.entry("S", strategy.short, qty=80000.0)
+if time == timestamp("UTC", 2025, 7, 9, 4, 0)
+    strategy.close_all()
+plot(strategy.equity, "equity")

@@ -356,13 +356,14 @@ using source::detail::exit_binding_rule_switches;
 // Every part's switch set to `on`. A new ExitBindingRuleSwitches field must be
 // set here too: the static_assert stops the build until it is.
 ExitBindingRuleSwitches every_part(bool on) {
-    static_assert(sizeof(ExitBindingRuleSwitches) == 4,
+    static_assert(sizeof(ExitBindingRuleSwitches) == 5,
                   "ExitBindingRuleSwitches gained a field: set it in every_part()");
     ExitBindingRuleSwitches switches;
     switches.pending_bound_exit_survives_flat = on;
     switches.global_exit_binds_working_entries = on;
     switches.resting_stop_entry_survives_close = on;
     switches.priced_add_at_cap_not_placed = on;
+    switches.global_exit_binds_held_position = on;
     return switches;
 }
 
@@ -390,6 +391,10 @@ const std::vector<Part>& parts() {
          &ExitBindingRuleSwitches::resting_stop_entry_survives_close, {"stop-entry-parent"}},
         {"priced_add_at_cap_not_placed", &ExitBindingRuleSwitches::priced_add_at_cap_not_placed,
          {"pyr1", "pyr1-close-sibling"}},
+        // Pinned by tests/fixtures/cross_side_exit (test_cross_side_exit_tapes);
+        // no tape here has a global exit beside an entry order of the other side.
+        {"global_exit_binds_held_position",
+         &ExitBindingRuleSwitches::global_exit_binds_held_position, {}},
     };
     return list;
 }

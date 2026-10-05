@@ -1,0 +1,4 @@
+config 94316.7733 1e-05 0.01 1 0.05 100.0 1 1
+bars eur-2025-07-01-2025-07-03.csv
+ev 1751380200000 entry S short 80000.0 any
+ev 1751381100000 close_all - - - any

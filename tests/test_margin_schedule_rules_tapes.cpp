@@ -11,7 +11,8 @@
  * margin call is booked after the script (frozen/), a long's one-unit call
  * after a trade history (money/), a same-side add judged at the signal close
  * (add/), a long's follow-up on whole shares (follow/) and four adds at an
- * open on a margin-1 % book (add-fee/). Each tape directory holds the script
+ * open on a margin-1 % book, whose call at that open is taken after the add's
+ * fill (add-fee/; MarginOpeningSwitches::open_check_after_add_fill). Each tape directory holds the script
  * TradingView ran (strategy.pine), its trade list (tv_trades.csv), its export
  * summary (metrics.json) and spec.txt, the replay this test drives:
  *
@@ -96,12 +97,6 @@ using pineforge::source::detail::MarginScheduleSwitches;
 // Tapes the engine does not reproduce yet: path and a one-line reason. A
 // listed tape that starts matching fails the test until it is removed.
 const std::vector<std::pair<std::string, std::string>> kKnownDivergences = {
-    {"add-fee/add-at-open",
-     "a margin-1 % book's call at the open an add filled at (not implemented)"},
-    {"add-fee/add-at-open-bracket",
-     "a margin-1 % book's call at the open an add filled at (not implemented)"},
-    {"add-fee/add-at-open-pyramiding",
-     "a margin-1 % book's call at the open an add filled at (not implemented)"},
     {"frozen/close-id",
      "a strategy.close(id) placed before an after-script margin call keeps its size "
      "(not implemented: the close waits as a same-bar command there)"},

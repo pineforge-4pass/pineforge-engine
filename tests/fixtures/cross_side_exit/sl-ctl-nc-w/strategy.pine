@@ -1,0 +1,13 @@
+//@version=6
+strategy("pxside-sl-ctl-nc-w", overlay=true, initial_capital=1000000, default_qty_type=strategy.fixed, default_qty_value=1, calc_on_order_fills=false, process_orders_on_close=false)
+hh = ta.highest(high, 10)
+ll = ta.lowest(low, 10)
+var float lvl = na
+if strategy.position_size == 0
+    lvl := na
+    if time >= timestamp("UTC", 2025, 4, 2, 13, 30)
+        strategy.entry("H", strategy.short, qty=1)
+else if strategy.position_size < 0
+    if na(lvl)
+        lvl := math.round_to_mintick(ll)
+    strategy.exit("X", limit=lvl)

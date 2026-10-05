@@ -1,0 +1,4 @@
+config 8443.24 0.01 0.0001 2 0.05 100.0 0 1
+bars eth-2025-08-20-2025-08-22.csv
+ev 1755681300000 entry S short 2.0 any
+ev 1755684000000 close_all - - - any

@@ -1,0 +1,16 @@
+{
+  "title": "rt-sl-none-up",
+  "slug": "rt-sl-none-up",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-05T12:24:32.431Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-29",
+    "to": "2025-04-30"
+  },
+  "pine_sha256": "a19bd400bb33c9bdca70c0aca93cfbd4e983467f367d9369a2d342a231f41e5c",
+  "tv_trades_sha256": "41924167911d4d4e7a092f49648a771d51b32a394e47adf7fc2d3b9c690693be",
+  "tv_trades_rows": 4
+}

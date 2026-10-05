@@ -1,0 +1,7 @@
+//@version=6
+strategy("pf-n2s-f3-chain-path", initial_capital=6487.987500000001, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=2, process_orders_on_close=true)
+if time == timestamp("UTC", 2025, 11, 5, 15, 0)
+    strategy.entry("S", strategy.short, qty=500.0)
+if time == timestamp("UTC", 2025, 11, 5, 15, 45)
+    strategy.close_all()
+plot(strategy.equity, "equity")

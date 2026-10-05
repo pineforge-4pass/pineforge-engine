@@ -1,0 +1,10 @@
+//@version=6
+strategy("rt-ls-both-below", initial_capital=99962.06, default_qty_type=strategy.percent_of_equity, default_qty_value=100, margin_long=100, margin_short=100)
+if time == timestamp("UTC", 2025, 4, 29, 14, 0)
+    strategy.entry("Long", strategy.long, qty=951)
+    strategy.exit("Exit Long", from_entry="Long", stop=9.0, trail_points=300)
+if time == timestamp("UTC", 2025, 4, 29, 14, 45)
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Exit Short", from_entry="Short", stop=11.0, trail_points=300)
+if time == timestamp("UTC", 2025, 4, 29, 15, 0)
+    strategy.close_all()

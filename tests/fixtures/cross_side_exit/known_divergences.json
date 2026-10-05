@@ -1,0 +1,82 @@
+{
+ "ls-ctl-nc-w": {
+  "engine": [
+   "long",
+   1.0,
+   1743701400000,
+   1743703200000,
+   9.66,
+   9.65
+  ],
+  "reason": "math.round_to_mintick of the half-cent 10-bar low 9.655 (2025-04-03 17:15 UTC): TradingView rounds it to 9.66, the engine to 9.65, so the stop / limit level of trade 6 differs by a tick; the same row departs in the control and the opp tape, with the rule on and off (not this rule)",
+  "trade": 6,
+  "tv": [
+   "long",
+   1.0,
+   1743701400000,
+   1743703200000,
+   9.66,
+   9.66
+  ]
+ },
+ "ls-opp-nc-w": {
+  "engine": [
+   "long",
+   1.0,
+   1743701400000,
+   1743703200000,
+   9.66,
+   9.65
+  ],
+  "reason": "math.round_to_mintick of the half-cent 10-bar low 9.655 (2025-04-03 17:15 UTC): TradingView rounds it to 9.66, the engine to 9.65, so the stop / limit level of trade 6 differs by a tick; the same row departs in the control and the opp tape, with the rule on and off (not this rule)",
+  "trade": 6,
+  "tv": [
+   "long",
+   1.0,
+   1743701400000,
+   1743703200000,
+   9.66,
+   9.66
+  ]
+ },
+ "sl-ctl-nc-w": {
+  "engine": [
+   "short",
+   1.0,
+   1743701400000,
+   1743703200000,
+   9.66,
+   9.65
+  ],
+  "reason": "math.round_to_mintick of the half-cent 10-bar low 9.655 (2025-04-03 17:15 UTC): TradingView rounds it to 9.66, the engine to 9.65, so the stop / limit level of trade 6 differs by a tick; the same row departs in the control and the opp tape, with the rule on and off (not this rule)",
+  "trade": 6,
+  "tv": [
+   "short",
+   1.0,
+   1743701400000,
+   1743703200000,
+   9.66,
+   9.66
+  ]
+ },
+ "sl-opp-nc-w": {
+  "engine": [
+   "short",
+   1.0,
+   1743701400000,
+   1743703200000,
+   9.66,
+   9.65
+  ],
+  "reason": "math.round_to_mintick of the half-cent 10-bar low 9.655 (2025-04-03 17:15 UTC): TradingView rounds it to 9.66, the engine to 9.65, so the stop / limit level of trade 6 differs by a tick; the same row departs in the control and the opp tape, with the rule on and off (not this rule)",
+  "trade": 6,
+  "tv": [
+   "short",
+   1.0,
+   1743701400000,
+   1743703200000,
+   9.66,
+   9.66
+  ]
+ }
+}

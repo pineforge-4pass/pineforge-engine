@@ -1,0 +1,9 @@
+//@version=6
+strategy("pf-n2s-g1-add-open-call", initial_capital=7622.140499999993, margin_long=1, margin_short=1, pyramiding=2, commission_type=strategy.commission.percent, commission_value=0.05, slippage=0, process_orders_on_close=false)
+if time == timestamp("UTC", 2025, 8, 13, 9, 0)
+    strategy.entry("A", strategy.short, qty=300000.0)
+if time == timestamp("UTC", 2025, 8, 13, 9, 30)
+    strategy.entry("B", strategy.short, qty=300000.0)
+if time == timestamp("UTC", 2025, 8, 13, 10, 15)
+    strategy.close_all()
+plot(strategy.equity, "equity")

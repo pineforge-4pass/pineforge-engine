@@ -1,0 +1,7 @@
+//@version=6
+strategy("pf-recheck-w1b-whole-recheck-vetoed-s2g3", initial_capital=58979.2, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=2, process_orders_on_close=true)
+if time == timestamp("UTC", 2025, 8, 25, 19, 45)
+    strategy.entry("S", strategy.short, qty=5000.0)
+if time == timestamp("UTC", 2025, 8, 26, 13, 30)
+    strategy.close_all()
+plot(strategy.equity, "equity")

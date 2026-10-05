@@ -46,8 +46,10 @@ written before its export.
   give up 8 more -- at the same fill under process_orders_on_close, at the
   next path point without it (`whole_share_lagged_follow_up`).
 - `add-fee/` (4, EURUSD, margin 1 %): an add filled at an open on a book of
-  500000; the book's call at that open is not implemented (three are in the
-  test's known-divergence list).
+  500000; the book's call at that open is taken after the add's fill, on the
+  book holding it and its entry fee
+  (`MarginOpeningSwitches::open_check_after_add_fill`; px-pin-n2s's probe 14,
+  tests/fixtures/margin_open_rules `add-open/`).
 
 ## Layout
 

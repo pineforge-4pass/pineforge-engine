@@ -273,6 +273,19 @@ open position (`record_close_first`), stamped on the entry at its `entry()`
 call (`PlacementSnapshot::close_first_entry`) and read by both halves
 (`close_first_admission`). No tie band bounds either half.
 
+Beside resting `strategy.exit` stop and trail legs (the reversed position's,
+the new entry's own) only rule 2's exact tie is judged
+(`tie_reversal_beside_exits`): a default 100 % reversal at margin 100 on a
+whole-unit lot whose binary64 `E` is under `sig10(Q × c′)` while `sig10(E)`
+reaches it keeps only its closing leg, as on a clear book. TradingView does
+so whatever of those rests (`tests/fixtures/admission_rules/reversal_tie`, 36
+controls on NYSE:F: long and short, with and without
+process_orders_on_close; the equal tie and a cent off it fill the
+reversal). Off that tie, beside a limit leg and on a fractional lot such a
+book keeps the engine's earlier rules: no tape decides rule 5, the fill
+check or those books there (`test_high_value_signal_cost` keeps a BTC
+reversal beside a take-profit and stop bracket on them).
+
 Where no tape decides, the scope keeps the engine's earlier rules: a
 continuous quantity (no lot grid), calc_on_order_fills, the bar magnifier, a
 stop that reverses (only stops from flat are pinned), a default-sized stop
@@ -404,6 +417,7 @@ The gated code is in `src/source/pine_adapter.cpp`.
 | `point_order_trailing_exits` | point order | on | the point order counts a stop or limit leg of an exit that also trails (`trail_points`, `trail_offset` or `trail_price`) like any other protective exit (§1.9) | the opening checkpoint in `on_bar_open` |
 | `pyramiding_ledger_records` | pyramiding records | on | under pyramiding above 1, the cap counts the open close-ledger records, one per entry fill not yet booked (§1.9) | `open_ledger_records` in `entry`, `submit_or_replace`, `validate_precommit` |
 | `exit_child_tombstones` | exit tombstones | on | a partial `strategy.exit` child that filled is never revived for the entry incarnation it filled under (§1.9) | `exit_tombstoned` in `exit` and `validate_precommit` |
+| `tie_reversal_beside_exits` | reversal tie | on | rule 2's exact tie also judges a default 100 % reversal on a whole-unit lot whose book holds `strategy.exit` stop or trail legs: a binary64 `E` under `sig10(Q c′)` whose ten-digit money reaches it (`E < cost <= sig10(E)`; one ulp under in the controls, 13 ulps under in the population case it fixes) keeps only the close leg; off the tie, beside a limit leg and on a fractional lot the earlier rules stand (§1.3) | `unified_admission_terms` in `resolve_terms` |
 | `gain_loss_money` | G+L | on | the G+L source money (§1.4), inside the regime its tapes pin | the source money at each signal and the margin-call slices that book into it, not the residual call's cash; the state hash in `src/source/pine_state_hash.cpp` |
 | `dust_unit_call` | margin slices | on | a dust restore's one-unit call on the G + L money (§1.5) | `source_margin_units` |
 | `pooc_fee_sizing` | POOC_FEE_SIZING | on | the process_orders_on_close fee-grossed sizing unit (§1.2) | `pooc_fee_units` |
@@ -431,7 +445,27 @@ way. Its tapes are `tests/fixtures/margin_schedule_rules` and the
 | `add_signal_close` | on | a same-side add's whole-book requirement at the tick-built signal close, not the slipped fill, at margin 100 (no tape decides another margin) | `validate_precommit` |
 | `whole_share_lagged_follow_up` | on | a long's lagged follow-up on a whole-share lot grid too | `lagged_margin_follow_up_units` |
 | `long_call_gain_loss` | on | a commission-free long's one-unit call reads initial + (G + L), inside `gain_loss_regime()`; a fee-bearing book keeps the closed-trade equity | `gain_loss_closed_equity` in `slipped_long_margin_units`, `slipped_long_unit_shortfall`, `submit_tv_money_long_margin_call` |
-| `close_call_follow_up_at_open` | on | a process_orders_on_close short's call sized at the previous close and executed at the open is followed once at that open, at its own fill (one follow-up restores the book there) | the opening checkpoint in `on_bar_open` |
+| `close_call_follow_up_at_open` | on | a process_orders_on_close short's call sized at the previous close and executed at the open is followed once at that open, at its own fill (one follow-up restores the book there); inside the opening-call schedule's shape below, `booked_open_recheck` and `open_print_follow_up` replace it | the opening checkpoint in `on_bar_open` |
+
+`MarginOpeningSwitches` (same header and namespace, read through
+`margin_opening_switches()`) holds the opening-call rules: the call a
+full-margin, one-lot process_orders_on_close position (percent commission,
+slippage, a lot grid of at most one) takes at the open after the close fill
+that opened it, the open's check after an add filled there, the fill-time
+admission of an explicit quantity at the open and the refined lagged
+follow-up. Its tapes are `tests/fixtures/margin_open_rules`.
+
+| Switch | Default | Gates | Where |
+|---|---|---|---|
+| `close_sized_long_call` | on | a long's call at that open is sized at the source close c′ (money and unit margin at c′), as a short's is | `close_sized_open_units` in the full-margin long block of `on_bar_open` |
+| `close_call_gate_at_print` | on | that call's one-unit band and the short gate are priced at its own print (the open's tick moved by the slippage), and it stands unless they veto it; a vetoed one leaves the open's own check | `close_sized_open_units`, the `print` argument of `source_margin_units` and `short_call_vetoed` |
+| `booked_open_recheck` | on | after it the open checks the booked book at its own mark, its call passing the short gate at the same print; where that check finds the book short and books nothing, the sequence ends there and no follow-up is booked | `run_close_sized_open_calls` |
+| `open_print_follow_up` | on | then the lagged follow-up of the last call at that print, with the one-unit fallback (a short's re-check that booked owes it to the first extreme instead, under `short_point_drops_owed`); the calls of this sequence are not repeated at one price (`recheck_at_fill`) | `open_print_follow_up_units`, `run_close_sized_open_calls`, `unrepeated_margin_calls_` in `on_applied` |
+| `open_check_after_add_fill` | on | a leveraged book's open check runs after a market add filling at that open, on the book holding it and its entry fee (slippage 0, a percent commission) | the leveraged opening branch of `on_applied` |
+| `open_fill_admission` | on | an explicit-quantity market long from flat filling at the next open is dropped where sig10(sig10(E) / Q) is below the slipped open tick | `validate_precommit` |
+| `whole_share_lagged_short` | on | a short's lagged follow-up on whole-share books in the path walk, with the one-unit fallback | `whole_share_lag_units`, `call_short_with_lagged_follow_up` |
+| `chained_follow_up` | on | on those books an owed follow-up that books leaves its own follow-up for the next point | `call_short_with_lagged_follow_up` (`owed`) |
+| `short_point_drops_owed` | on | an owed follow-up is dropped at a point whose own check finds the book short; the open's own call of a carried short in the walk's scope and the opening-call scope (`close_sized_open_call_scope`) owes its follow-up to the first extreme instead of repeating it at its print, and so does a booked re-check of a short in the walk's scope (`run_close_sized_open_calls`): booked at that point's print, or dropped where the point is short itself | `execute_owed_short_follow_up`, `open_call_owing_follow_up`, `run_close_sized_open_calls` |
 
 ### 1.7 Evidence
 
@@ -452,9 +486,9 @@ The single-position fixture also asserts 13 process_orders_on_close fee-sizing
 tapes, 3 commission-0 controls, the oracle control of §1.2, 10 order
 controls replayed through handwritten hosts and 67 tapes of the short call
 gate and schedule (`short-cutoff-gate`). With every switch on, as shipped,
-the engine reproduces 244 of its 266 tapes and 373 of the 381 ledger tapes,
-and 35 of the 39 `margin_schedule_rules` tapes (each of those also as a
-stream, trade for trade); turning the
+the engine reproduces 258 of its 266 tapes and 373 of the 381 ledger tapes,
+38 of the 39 `margin_schedule_rules` tapes and all 43 `margin_open_rules`
+tapes (each of those also as a stream, trade for trade); turning the
 placement half off costs 108 ledger tapes, the fill half 32 ledger and
 3 single-position tapes. `test_margin_rules_forward_replay` replays a sample of both
 fixtures as a backtest and as a bar-by-bar stream, with every switch on, with
@@ -463,14 +497,15 @@ book the same trades.
 
 | Format | Tapes | Fixture | Test |
 |---|---:|---|---|
-| close-first, entry-then-close and flat entries at session-open gaps (19 sources, 3 exports each); point-order, close-first reversal, exit-tombstone, add and pyramiding controls (13 sources, 3 exports each); 39 stop-priority and 3 coupled close + reversal tapes; an explicit-short control (3 exports) | 75 | `tests/fixtures/admission_rules` | `test_admission_rules_tapes` |
+| close-first, entry-then-close and flat entries at session-open gaps (19 sources, 3 exports each); point-order, close-first reversal, exit-tombstone, add and pyramiding controls (13 sources, 3 exports each); 39 stop-priority and 3 coupled close + reversal tapes; an explicit-short control (3 exports); reversals at an exact rule-2 tie beside no exit, a resting stop, or stop + trail exits (36 sources, 3 exports each) | 111 | `tests/fixtures/admission_rules` | `test_admission_rules_tapes` |
 
-The engine reproduces all 75 (the 74 above and the explicit-short control
-`explicit_short/offset0-fill`); each of `unified_placement`,
-`fill_price_recheck`, `close_first_admission`, `point_fills_before_margin`,
-`point_order_trailing_exits`, `pyramiding_ledger_records` and
-`exit_child_tombstones` costs tapes there when turned off, and 58 of the 61
-NYSE:F tapes book the same trades as a backtest and as a stream (the test
+The engine reproduces all 111 (the 74 above, the explicit-short control
+`explicit_short/offset0-fill` and the 36 `reversal_tie` controls); each of
+`unified_placement`, `fill_price_recheck`, `close_first_admission`,
+`point_fills_before_margin`, `point_order_trailing_exits`,
+`pyramiding_ledger_records`, `exit_child_tombstones` and
+`tie_reversal_beside_exits` costs tapes there when turned off, and 94 of the
+97 NYSE:F tapes book the same trades as a backtest and as a stream (the test
 names the three it leaves out and why).
 `test_qty_step_lot_grid_case` replays the hosted lot-grid case
 (`tests/fixtures/qty_step_lot_grid`) with these rules on, with and without its
@@ -1070,13 +1105,26 @@ stream.
 | `global_exit_binds_working_entries` | a global exit called flat waits for the fill of the limit and stop entry orders working | `flush_pending_bracket_legs` |
 | `resting_stop_entry_survives_close` | under `process_orders_on_close`, an earlier bar's stop entry of the side a close flattens survives it, as a limit does | the stale-entry cancel in `on_applied` |
 | `priced_add_at_cap_not_placed` | under `process_orders_on_close`, a priced add of an id holding no lot, still at the pyramiding cap once its bar's closes are done, leaves the book at the next opening, judged at that opening only | `withdraw_unplaced_cap_adds` in `on_bar_open` |
+| `global_exit_binds_held_position` | a global exit called while a position is held takes that position as its parent: an entry order of the other side working beside it (resting, or placed earlier in the calculation) lends it neither its side nor its price basis, so its limit and stop rest on the held side and a profit or loss leg resolves against the held position | `observe_staged_parent` in `exit` |
 
-Every tape runs with margin requirements off (`margin_long = margin_short =
-0`) and without `calc_on_order_fills`, and every part acts only there
-(`margins_disabled`). The two exit parts act on a whole exit at absolute
-levels whose pending parent rests at a level (`whole_level_exit`); the stop
-entry and cap parts act under `process_orders_on_close` only. Other accounts,
-partial and relative exits, market parents and same-id adds keep their former
+The first four parts' tapes run with margin requirements off (`margin_long =
+margin_short = 0`) and without `calc_on_order_fills`, and those parts act only
+there (`margins_disabled`). `global_exit_binds_held_position` is pinned by the
+15 synthetic tapes of `tests/fixtures/cross_side_exit`
+(`test_cross_side_exit_tapes`), NYSE:F 15m, with and without
+`calc_on_order_fills`: TradingView books each script that rests an opposite
+entry beside its global exit exactly as the same script without that entry,
+with the default margin requirement and without one, so the part acts whatever
+the margin setting. It moved fills in three random witnesses of
+`test_adapter_quiet_bar`, an approved re-pin (the fixture's README, "Scope
+and the witness re-pin"). TradingView's margin-0 exports are byte-identical
+to the default-margin ones (the pin's evidence); the committed tape test runs
+the default margin.
+
+The first two parts act on a whole exit at absolute levels whose pending
+parent rests at a level (`whole_level_exit`); the stop entry and cap parts act
+under `process_orders_on_close` only. For these four, other accounts, partial
+and relative exits, market parents and same-id adds keep their former
 course. Inside these gates the parts also change shapes no tape covers, as the
 pin's reference model predicts them: a parent on the other side of the open
 position, a `strategy.order` parent, a re-entry as a market order after the

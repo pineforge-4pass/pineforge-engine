@@ -1,0 +1,5 @@
+config 51696.55 0.01 1.0 2 0.05 100.0 1 1
+bars f-2025-06-09-2025-06-11.csv
+session America/New_York 0930-1600:23456
+ev 1749498300000 entry S short 5000.0 any
+ev 1749562200000 close_all - - - any

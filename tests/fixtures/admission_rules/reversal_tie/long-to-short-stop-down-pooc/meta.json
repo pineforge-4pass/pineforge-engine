@@ -1,0 +1,16 @@
+{
+  "title": "rt-ls-stop-down-pooc",
+  "slug": "rt-ls-stop-down-pooc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-05T12:24:14.316Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-29",
+    "to": "2025-04-30"
+  },
+  "pine_sha256": "e5dcc8e99f1517a354770c86e60c8b4b158e7dec67c259591ce1c42fedaabd5a",
+  "tv_trades_sha256": "57e4bae064af80439a9f1d0a542d750b3fccca817c72c04cdf58af7a375d14d0",
+  "tv_trades_rows": 4
+}

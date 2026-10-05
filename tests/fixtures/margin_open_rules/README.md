@@ -1,0 +1,102 @@
+# margin_open_rules
+
+TradingView strategy tapes of synthetic controls that pin the opening-call
+rules behind `pineforge::source::detail::MarginOpeningSwitches`: 43 tapes (129
+trades), each exported twice with `lab tv --no-note` over the ws-report-v1
+channel, both exports byte-identical, every export's range proof `covered`.
+Every prediction was written before its export (`provenance.json` names the
+preregistration file of each round). All are commission 0.05 % (percent),
+margin 100 % but `add-open/` (1 %), slippage 1 or 2 but `add-open/` (0).
+
+## Groups
+
+- `po/` (24, OANDA:EURUSD, BINANCE:ETHUSDT.P and NYSE:F 15,
+  process_orders_on_close): a full-margin position one market entry opened
+  at a close is called at the
+  next open sized at that close c' -- money and unit margin at c' -- long or
+  short (`close_sized_long_call`): `long-divisor-up` / `-down` put the open
+  14 ticks above and 8 below c', so the divisor decides 100.00 against 99.96;
+  `long-residue-call` / `-open-call` put the ten-digit residue of the
+  requirement on either side of zero at c' and at the open. The call's
+  one-unit band and the short gate are priced at its own print, the open's
+  tick moved by the slippage (`close_call_gate_at_print`; `short-vetoed-at-print`:
+  the close-sized call vetoed there leaves the open's own call). After it the
+  booked book is checked again at the open's mark, at the same print
+  (`booked_open_recheck`; `short-booked-recheck`: 3.52 + 1.68,
+  `short-weekend-gap`: 14.08 + 12.76 across a weekend), and then the lagged
+  follow-up of the last call at that print, with the one-unit fallback
+  (`open_print_follow_up`; `short-follow-up-one-unit`: 0.0004 + 1 ETH).
+  That re-check is a check like any other (`short-recheck-*`, an open 1 to 5
+  ticks above the close; EURUSD, but the `-eth` one and the NYSE:F `-whole`
+  ones, whose open is the session's): its call passes the short gate at the
+  print, and where it finds the book short but books nothing -- its units
+  vetoed there (`short-recheck-vetoed`: 0.48 against the gate at slippage 1,
+  `-slip2`: 1.0 at slippage 2, `-whole`: 4 shares) or under one restore step
+  and outside the one-unit band (`short-recheck-rounds-to-zero`, 150000 units)
+  -- the sequence ends: the close-sized call's follow-up is neither booked at
+  the open nor owed to the next point (`-low-first`: a low the book is not
+  short at books nothing), and the next call is the path's own. Where the
+  re-check books, its own follow-up is owed to the bar's next point instead of
+  the open's print: booked at that point's print where the book is not short
+  there (`short-recheck-owes-low`: 1.16 at the low; `-slip2`: 2.56; `-eth`:
+  0.0032 ETH; `short-recheck-owes-high-whole`: 20 shares at the high), dropped
+  where the point is short itself (`short-recheck-owed-dropped-high`: the
+  high's own 89.84). A re-check that owes nothing books alone
+  (`short-recheck-no-follow-up`: 4.24 + 3.68), and where the booked book is
+  not short at the open the close-sized call's follow-up books at its print
+  (`short-open-not-short-follow-up`: 2.72 + 2.8).
+- `replica/` (8): population members' bars, quantities and TradingView-derived
+  cash on the same rules (NYSE:F 2026-02-09 and 02-27, ETH 2025-05-24, 06-02 and
+  08-08, EURUSD 2025-04-29, 06-18 and 10-17). EURUSD 04-29 and 10-17 book no
+  trade: TradingView refuses the explicit quantity at the slipped close, as the
+  engine does. `eur-short-recheck-vetoed-0618` is the caldera cohort of
+  `short-recheck-vetoed`: 5.52 at the open, the re-check's 0.16 vetoed (0.18
+  against 0.84), then the high's 522.36.
+- `admission/` (5, BINANCE:ETHUSDT.P 15, slippage 2, and one NYSE:F): an
+  explicit-quantity market entry from flat filling at the next open is dropped
+  where sig10(sig10(E) / Q) is below the slipped open tick
+  (`open_fill_admission`; `long-dropped-at-open-0502`: 4.9204 on 9083.616855
+  at 1846.12; 0.05 more cash admits it). `short-refused-at-close` (NYSE:F,
+  process_orders_on_close, slippage 2): a short of 5000 at the 10.34 close on
+  51696.55 books no trade -- 5000 x 10.34 is above the capital, 5000 x the
+  10.32 slipped fill is not.
+- `add-open/` (1, EURUSD, margin 1 %, slippage 0): a short add filling at an
+  open is in the book, with its entry fee, when that open is checked: 3069.72
+  at the open, then 51027.16 at the high (`open_check_after_add_fill`).
+- `lag/` (5, NYSE:F and EURUSD, process_orders_on_close): the lagged follow-up
+  of a short's call on whole-share books with the one-unit fallback
+  (`whole_share_lagged_short`), a follow-up that books leaving its own for the
+  next point (`chained_follow_up`; `whole-share-chain`: 1 at the open, 1 at the
+  high, 1 at the low), and an owed follow-up dropped at a point whose own check
+  finds the book short, the open's own call owing its follow-up to the first
+  extreme in the opening-call scope (`short_point_drops_owed`; `owed-dropped-fractional`: 41.52 at the
+  high, not 0.64 at the open and 38.96).
+
+## Layout
+
+- `<group>/<name>/`: `strategy.pine` (the script TradingView ran),
+  `tv_trades.csv` (its trade list, byte-identical to the export),
+  `metrics.json` (the export's summary) and `spec.txt`, the replay
+  `tests/test_margin_open_rules_tapes.cpp` drives (format in that file's
+  header: the strategy settings, the bars window, the exchange session for
+  NYSE:F and for the two EURUSD windows spanning a weekend, and the script's
+  `strategy.*` calls at the bars they name).
+- `bars/`: 15-minute OHLCV windows (`timestamp,open,high,low,close,volume`,
+  UTC milliseconds), every bar from the chart's `from` 00:00 UTC through its
+  `to` 00:00 UTC inclusive, cut from the lane feeds named in
+  `provenance.json` (`feed_sha256`).
+- `provenance.json`: per tape the fixture path, the export directory it was
+  taken from (`origin`, relative to the pinning lane's scratch root), the chart
+  window, the sha256 of both exports' `tv_trades.csv` and of `strategy.pine`,
+  the export start times, tool, channel and the preregistration; per bars file
+  its sha256, row count and source feed.
+- `tapes.txt`: the tapes the test replays.
+
+## What the test asserts
+
+Every tape's TradingView rows -- each Exit row paired with the Entry row of
+its trade number -- against the engine's report rows at the same index:
+side, quantity in lots, entry and exit price in ticks, entry and exit time,
+and the row count. Each switch, off alone, costs at least one tape. And every
+tape is replayed forward -- a stream over its first bar, then every later bar
+pushed -- whose closed trades must equal the backtest's, field for field.

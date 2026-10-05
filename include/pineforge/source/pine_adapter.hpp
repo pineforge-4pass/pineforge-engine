@@ -426,6 +426,8 @@ struct MarginRuleSwitches {
     // A partial strategy.exit child that filled is never revived for the
     // entry incarnation it filled under.
     bool exit_child_tombstones = true;
+    // Rule 2's exact tie judges a reversal beside resting exit stop/trail legs.
+    bool tie_reversal_beside_exits = true;
 };
 MarginRuleSwitches& margin_rule_switches() noexcept;
 
@@ -452,14 +454,15 @@ struct ScriptRuleSwitches {
 ScriptRuleSwitches& script_rule_switches() noexcept;
 
 // One switch per part of TradingView's strategy.exit binding rule, pinned on
-// the tapes under tests/fixtures/exit_binding and the pending-* tapes of
-// tests/fixtures/global_exit_children, so a regression bisects per part. A
-// strategy.exit binds when it is called: to its entry's open lots, else to
-// the entry id while an order of it is working, else the call is ignored.
-// Every part acts only with margin requirements off (margin_long =
-// margin_short = 0), the setting of every tape. All on; only tests change
-// one. Process-wide, read by every adapter; not installed API, and no
-// strategy input reaches it.
+// the tapes under tests/fixtures/exit_binding, the pending-* tapes of
+// tests/fixtures/global_exit_children and tests/fixtures/cross_side_exit, so
+// a regression bisects per part. A strategy.exit binds when it is called: to
+// its entry's open lots, else to the entry id while an order of it is
+// working, else the call is ignored. Every part but
+// global_exit_binds_held_position acts only with margin requirements off
+// (margin_long = margin_short = 0), the setting of their tapes. All on; only
+// tests change one. Process-wide, read by every adapter; not installed API,
+// and no strategy input reaches it.
 struct ExitBindingRuleSwitches {
     // An exit called in position for an entry id with no lot but a limit or
     // stop order working is bound to the id: a close or the flat does not
@@ -478,6 +481,13 @@ struct ExitBindingRuleSwitches {
     // still at the pyramiding cap once its bar's closes are done, leaves the
     // book at the next opening, judged at that opening only.
     bool priced_add_at_cap_not_placed = true;
+    // A global exit called while a position is held binds to that position,
+    // whatever the margin setting: an entry order of the other side working
+    // beside it (resting, or placed earlier in the same calculation) lends it
+    // neither its side nor its price basis. Its limit and stop rest on the
+    // held side and a profit or loss leg resolves against the held position
+    // (PineExecutionAdapter::exit()).
+    bool global_exit_binds_held_position = true;
 };
 ExitBindingRuleSwitches& exit_binding_rule_switches() noexcept;
 } // namespace detail
@@ -1531,7 +1541,11 @@ public:
     };
     SourceMarginMoney source_margin_money(double mark_price,
                                           std::int64_t sub_bar_open_ms) const;
-    double source_margin_units(const SourceMarginMoney&, bool opening_checkpoint, bool gated = true) const;
+    // `print`, when finite, is the price the call executes at: its one-unit
+    // band and the short gate are priced there instead of at the mark moved
+    // by the exit side's slippage.
+    double source_margin_units(const SourceMarginMoney&, bool opening_checkpoint, bool gated = true,
+                               double print = std::numeric_limits<double>::quiet_NaN()) const;
     double lagged_margin_follow_up_units(const std::vector<NativeOpenLot>& lots,
                                          const SourceMarginMoney& money, double called,
                                          double fill, std::int64_t sub_bar_open_ms) const;
@@ -1954,7 +1968,8 @@ private:
     std::optional<double> pooc_fee_units(const PineSizingSnapshot&) const;
     double tv_pooc_fee_grossed_unit(double price) const;
     bool unified_admission_scope(const PlacementSnapshot&, bool market_or_stop,
-                                 double signed_units, double units) const;
+                                 double signed_units, double units,
+                                 bool beside_exits = false) const;
     bool unified_admission_terms(const PlacementSnapshot&, const NativeExecutionTermsFacts&,
                                  bool market_or_stop, bool opposite,
                                  native_order::ExecutionTerms& result, bool& admitted) const;
@@ -1996,13 +2011,30 @@ private:
                                   std::int64_t sub_bar_open_ms) const;
     void follow_margin_call(double called_units, double fill, double current,
                             const NativeDecisionContext&);
-    bool short_call_vetoed(const SourceMarginMoney&, double units, bool opening_checkpoint) const;
+    bool short_call_vetoed(const SourceMarginMoney&, double units, bool opening_checkpoint,
+                           double print = std::numeric_limits<double>::quiet_NaN()) const;
+    // The opening-call schedule after a process_orders_on_close close fill
+    // (MarginOpeningSwitches): its scope, the call sized at the close and the
+    // calls the open takes after it.
+    bool close_sized_open_call_scope(bool short_book) const;
+    double close_sized_open_units(double close_mark, double print,
+                                  std::int64_t sub_bar_open_ms) const;
+    bool run_close_sized_open_calls(double units, double opening_mark,
+                                    const NativeDecisionContext&);
+    double open_print_follow_up_units(double held_before, double equity_before, double entry,
+                                      double called, double fill, bool short_book,
+                                      std::int64_t sub_bar_open_ms) const;
     bool lagged_short_scope() const noexcept;
     double lagged_short_follow_up_units(const std::vector<std::pair<double, double>>& taken,
                                         double equity_before, double held_before, double fill,
                                         std::int64_t sub_bar_open_ms) const;
     double call_short_with_lagged_follow_up(double mark, double units,
-                                            const NativeDecisionContext&);
+                                            const NativeDecisionContext&, bool owed = false);
+    bool whole_share_lag_scope() const noexcept;
+    double whole_share_lag_units(const std::vector<std::pair<double, double>>& taken,
+                                 double equity_before, double held_before, double fill,
+                                 std::int64_t sub_bar_open_ms) const;
+    bool open_call_owing_follow_up(double opening_mark, const NativeDecisionContext&);
     bool short_path_points_scope(const NativeDecisionContext&) const;
     void execute_owed_short_follow_up(int point, double price, const NativeDecisionContext&);
     void walk_short_path_points(const Bar&, const NativeDecisionContext&);
@@ -2582,6 +2614,16 @@ private:
     double close_call_after_script_book_ = 0.0;
     double close_call_after_script_units_ = 0.0;
     // @source-state end
+    // Set while an open's calls that TradingView does not repeat at one
+    // price book (run_close_sized_open_calls, open_call_owing_follow_up); the
+    // requests submitted meanwhile are listed in unrepeated_margin_calls_
+    // until their on_applied, dispatched after the open's hook returns, reads
+    // them there (recheck_at_fill). Not state: the flag is set and cleared
+    // within one call, and the list lives within one driver point -- every
+    // listed request is applied at the open that placed it, and each
+    // on_bar_open empties it.
+    bool open_call_sequence_ = false;
+    std::vector<std::uint64_t> unrepeated_margin_calls_;
     // Install-time magnifier fact from NativeBeginArgs. Scheduler already
     // folds retained_.bar_magnifier; this copy is the host-kind-free query
     // for qualify_short_seed_plan.
@@ -2729,6 +2771,44 @@ struct MarginScheduleSwitches {
     bool close_call_follow_up_at_open = true;
 };
 MarginScheduleSwitches& margin_schedule_switches() noexcept;
+
+// The opening-call rules pinned on the tapes under
+// tests/fixtures/margin_open_rules: the call a full-margin
+// process_orders_on_close position takes at the open after the close fill
+// that opened it, the open's check after an add filled there, the fill-time
+// admission of an explicit quantity at the open and the refined lagged
+// follow-up. One switch each so a regression bisects per rule; all on, only
+// tests change one. Process-wide; not installed API and no strategy input
+// reaches it.
+struct MarginOpeningSwitches {
+    // The call is sized at the source close c': money and unit margin at c',
+    // a long's as a short's.
+    bool close_sized_long_call = true;
+    // Its one-unit band and the short gate are priced at the call's own
+    // print, the open's tick moved by the exit side's slippage.
+    bool close_call_gate_at_print = true;
+    // After it the open checks the booked book at its own mark, gated at the
+    // same print; short there with nothing booked, the sequence ends.
+    bool booked_open_recheck = true;
+    // Then the lagged follow-up of the last call, at that print; a short's
+    // booked re-check owes it to the first extreme instead.
+    bool open_print_follow_up = true;
+    // A leveraged book's open check runs after the market adds filling at
+    // that open, on the book holding them and their entry fees.
+    bool open_check_after_add_fill = true;
+    // An explicit-quantity market entry from flat filling at the open is
+    // dropped where sig10(sig10(E) / Q m) is below the slipped open tick.
+    bool open_fill_admission = true;
+    // The lagged follow-up, with its one-unit fallback, on whole-share books.
+    bool whole_share_lagged_short = true;
+    // A follow-up that books leaves its own follow-up for the next point.
+    bool chained_follow_up = true;
+    // An owed follow-up is dropped at a point whose own check is short.
+    // In the opening-call scope the open's own call, and a short's booked
+    // re-check, owe their follow-up to the bar's first extreme.
+    bool short_point_drops_owed = true;
+};
+MarginOpeningSwitches& margin_opening_switches() noexcept;
 } // namespace detail
 
 } // namespace pineforge::source
