@@ -95,7 +95,9 @@ the lowered `expression`), `orders` (sorted distinct classified order shapes),
 and `intrabar_persistence`. Feed/Heikin-Ashi flags and static clocks come from
 the emitter's registration decisions, not symbol-text inference. Inputs or
 mutable clocks remain unresolved. The runner checks agreement between both
-receipts and fails closed on unknown versions, malformed fields or missing proofs.
+receipts and fails closed on malformed fields or missing proofs. An unknown optional
+confirmed-bar version is ignored: ordinary strategies retain their original
+eligibility, while requests, POOC and varip still require a recognized proof.
 
 New admission requires confirmed one-minute bars, UTC/24x7 source settings,
 no external native configuration, and the following exact proof population:
@@ -115,16 +117,32 @@ single-literal-call helper resolve to these same clocks. A Heikin-Ashi alias
 keeps the registration's transformation flag. Symbol `""` currently lowers
 through a foreign feed and is therefore refused, not mislabeled as chart data.
 
-POOC admits market, stop and limit entries, market closes and short stop/limit
-brackets on script clock `1` only. The five-minute both-sided-stop report is
+POOC admits only these sorted order-family sets on script clock `1`:
+`[entry:market]`, `[entry:stop]`, `[entry:limit]`,
+`[entry:market, exit:short_bracket]`, and `[close:market, entry:market]`.
+Market closes have long and short close-all and entry-bound proofs. The five-minute both-sided-stop report is
 batch-equivalent, but its physical action timestamps are not; that clock stays refused.
 Stop-limit/OCA entries, trailing/relative/partial exits, long brackets,
-`strategy.order`, cancellation and immediate closes remain refused by name.
+`strategy.order`, risk rules, cancellation, immediate closes and any call or
+argument outside the modeled allowlist remain refused by name. Explicit entry
+quantities, alert/comment arguments and exit OCA names are not modeled.
+POOC settings are limited to the default sizing/slippage/account profile, plus
+the separately proven market-only 100%-equity/15-tick-slippage profile. Other
+settings and order-affecting runtime overrides are refused.
+Two requests together, request-plus-varip and POOC-plus-varip are refused.
+The sole request-plus-POOC proof is SMA(close,4) at `15` with market entries;
+other cross-category compositions are refused rather than inferred.
 Close-only `varip` is admitted on script clock `1`, never observed ticks.
 Every admitted source has a generated C++ batch/stream equivalence row and a
 runner E2E comparing physical actions and every ABI report field bitwise on a
-tape, at two warmup splits and after replay. The original #325 numerical pins
+tape, at warmup splits 30, 33 and 500 and after replay. Daily requests also
+exercise split 1500 after the first daily boundary. The original #325 numerical pins
 remain unchanged. See `tests/fixtures/confirmed_capabilities/README.md`.
+
+Upgrading an original-receipt runner to one that recognizes the confirmed-bar
+extension changes the deployment identity of every dual-receipt library,
+including ordinary strategies. Its old ledger cannot silently resume: keep the
+original runner/library for that ledger, or create a new deployment and ledger.
 
 | Runner | Library | Admission |
 | --- | --- | --- |

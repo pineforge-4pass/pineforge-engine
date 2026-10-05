@@ -1,0 +1,4 @@
+//@version=6
+strategy("unproven closing", process_orders_on_close=true)
+h = request.security(syminfo.tickerid, "15", ta.sma(close, 4))
+strategy.entry("L", strategy.long, stop=h)

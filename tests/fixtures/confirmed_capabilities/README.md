@@ -16,7 +16,8 @@ immediate). The active five-minute request control crosses the requested close
 with its moving average; the frozen close-versus-itself control has no trades
 when its script and request clocks coincide. Every admitted source has a C++ batch/stream
 equivalence row and a runner tape E2E that compares all ABI report fields and
-physically ordered actions, bitwise for binary64, at two warmup boundaries and
+physically ordered actions, bitwise for binary64, at warmup boundaries 30, 33,
+500 (and 1500 for daily requests) and
 after replay. The script-clock controls repeat the proven 5 and 15 minute cases.
 POOC on a five-minute script clock stays refused because equal reports do not
 establish equal physical action timestamps.
@@ -27,7 +28,16 @@ long or mixed-direction brackets, trailing exits, strategy.order, cancellation a
 closes. Their runner tests assert refusal by name before ledger, control and
 health files exist. Newly admitted shapes are also refused for observed ticks.
 
-The original F08 snapshots in `../strategy_capabilities/generated/` deliberately
+The original capability snapshots in `../strategy_capabilities/generated/` deliberately
 retain only the old receipt: their unchanged E2E proves that a new runner still
 refuses old-library requests, POOC and varip, and still warns/runs a library
 without any capability receipt.
+
+Admission matches exactly five order-family sets, not arbitrary combinations.
+Refusal fixtures also cover all six risk rules, unmodeled call arguments,
+pending priced-entry brackets, mixed priced entries, priced closes, unproven
+sizing/slippage/account settings and cross-category compositions. Closing a
+short has both close-all and entry-bound positive fixtures. Calendar refusal
+contexts cover source timezone, chart timezone and session; script-five varip
+and order-affecting POOC overrides stay refused. Optional receipt-version
+fixtures pin ordinary fallback and fail-closed request/POOC/missing-version paths.

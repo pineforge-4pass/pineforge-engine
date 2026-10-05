@@ -387,10 +387,9 @@ class Strategy {
                 auto confirmed_version = optional_symbol<decltype(&strategy_capabilities_api_version)>(
                     "strategy_confirmed_bar_api_version");
                 if (confirmed_version) {
-                    if (confirmed_version() != 1u)
-                        throw std::runtime_error("confirmed-bar capabilities extension version mismatch");
-                    confirmed_bar_receipt_ = symbol<decltype(confirmed_bar_receipt_)>(
-                        "strategy_confirmed_bar_receipt");
+                    if (confirmed_version() == 1u)
+                        confirmed_bar_receipt_ = symbol<decltype(confirmed_bar_receipt_)>(
+                            "strategy_confirmed_bar_receipt");
                 } else if (optional_symbol<decltype(confirmed_bar_receipt_)>("strategy_confirmed_bar_receipt")) {
                     throw std::runtime_error("confirmed-bar capabilities extension lacks version");
                 }
@@ -813,6 +812,11 @@ int run(Config c) {
                                        c.timezone == "UTC" && c.chart_timezone == "UTC");
         for (const auto& [name, value] : c.overrides)
             require_close_only_boolean(name, value == "true" || value == "1");
+        if (parse_json(capabilities_receipt).at("declarations").at("process_orders_on_close").value == "true") {
+            for (const auto& [name, value] : c.overrides) {
+                throw std::runtime_error("close-only stream cannot honour compiled declaration: process_orders_on_close override " + name);
+            }
+        }
     }
     std::string deployment =
         c.native.present

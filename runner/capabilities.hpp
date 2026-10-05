@@ -27,24 +27,27 @@ inline void require_close_only_boolean(const std::string& name, bool enabled) {
 }
 
 inline void require_close_only_capabilities(const std::string& receipt,
-                                            const std::string& confirmed_receipt = {},
-                                            const std::string& mode = "bars",
-                                            const std::string& input_tf = "1",
-                                            const std::string& script_tf = "1",
-                                            bool proven_calendar = true) {
+                                            const std::string& confirmed_receipt,
+                                            const std::string& mode,
+                                            const std::string& input_tf,
+                                            const std::string& script_tf,
+                                            bool proven_calendar) {
     const auto document = parse_json(receipt);
     only_fields(document, {"version", "declarations", "requests", "requirements", "unresolved"});
     const auto refuse = [](const std::string& name) {
         throw std::runtime_error("close-only stream cannot honour compiled declaration: " + name);
     };
     Json confirmed;
-    const bool has_confirmed = !confirmed_receipt.empty();
+    bool has_confirmed = !confirmed_receipt.empty();
     if (has_confirmed) {
         confirmed = parse_json(confirmed_receipt);
-        only_fields(confirmed, {"version", "requests", "orders", "intrabar_persistence"});
         const auto& proof_version = confirmed.at("version");
-        if (proof_version.kind != Json::Kind::Number || proof_version.value != "1")
+        if (proof_version.kind != Json::Kind::Number)
             refuse("confirmed-bar capabilities version");
+        has_confirmed = proof_version.value == "1";
+    }
+    if (has_confirmed) {
+        only_fields(confirmed, {"version", "requests", "orders", "intrabar_persistence"});
         if (confirmed.at("requests").kind != Json::Kind::Array ||
             confirmed.at("orders").kind != Json::Kind::Array ||
             confirmed.at("intrabar_persistence").kind != Json::Kind::Bool)
@@ -107,6 +110,12 @@ inline void require_close_only_capabilities(const std::string& receipt,
     }
     if (has_confirmed && request_index != confirmed.at("requests").items.size())
         refuse("request.security (receipt count disagreement)");
+    const bool pooc = declarations.at("process_orders_on_close").value == "true";
+    const bool intrabar = document.at("requirements").at("intrabar_persistence").value == "true";
+    if (requests.items.size() > 1 || (!requests.items.empty() && intrabar))
+        refuse(pooc ? "process_orders_on_close (unproven composition)" : "request.security (unproven composition)");
+    if (pooc && intrabar)
+        refuse("process_orders_on_close + intrabar_persistence (unproven composition)");
     const auto& unresolved = document.at("unresolved");
     if (unresolved.kind != Json::Kind::Array)
         refuse("unresolved execution requirements");
@@ -131,6 +140,17 @@ inline void require_close_only_capabilities(const std::string& receipt,
                     refuse("process_orders_on_close: " + order.value);
                 if (script_tf != "1")
                     refuse("process_orders_on_close (unproven chart clock)");
+            }
+            const auto orders = confirmed.at("orders").dump();
+            if (orders != R"(["entry:market"])" && orders != R"(["entry:stop"])" &&
+                orders != R"(["entry:limit"])" && orders != R"(["entry:market","exit:short_bracket"])" &&
+                orders != R"(["close:market","entry:market"])")
+                refuse("process_orders_on_close (unproven order-family set: " + orders + ")");
+            if (!requests.items.empty()) {
+                const auto& request = confirmed.at("requests").items.front();
+                if (orders != R"(["entry:market"])" || request.at("timeframe").value != "15" ||
+                    request.at("expression").value != "ta.sma(close,4)")
+                    refuse("process_orders_on_close + request.security (unproven composition)");
             }
         } else {
             require_close_only_boolean(policy.name, value.value == "true");
@@ -159,6 +179,10 @@ inline void require_close_only_capabilities(const std::string& receipt,
         if (value.kind != Json::Kind::Bool || value.value != "false")
             refuse(name);
     }
+}
+
+inline void require_close_only_capabilities(const std::string& receipt) {
+    require_close_only_capabilities(receipt, {}, "unproven", {}, {}, false);
 }
 
 }

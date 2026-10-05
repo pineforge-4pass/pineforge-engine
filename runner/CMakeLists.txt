@@ -262,11 +262,15 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
         add_test(NAME confirmed_capabilities_policy COMMAND test_confirmed_capabilities)
         set(_pf_confirmed_cases htf5_close htf5_close_active htf15_sma_pooc htf60_close daily_close heikinashi5
             htf60_ema_gaps period_previous pooc_dual_stop pooc_limit_reversal pooc_slipped_short
-            pooc_short_exit constant_daily helper5 heikinashi_alias5 varip pooc_market pooc_close pooc_close_entry)
-        set(_pf_confirmed_refusals refused_clock_W refused_clock_5D refused_clock_30S refused_clock_M
-            refused_clock_7 refused_foreign refused_empty_symbol refused_lookahead refused_expression
-            refused_gaps refused_dynamic refused_pooc_stop_limit refused_pooc_oca refused_pooc_long_bracket
-            refused_pooc_mixed_bracket refused_pooc_trail refused_pooc_order refused_pooc_cancel refused_pooc_immediate)
+            pooc_short_exit constant_daily helper5 heikinashi_alias5 varip pooc_market pooc_close pooc_close_entry
+            pooc_close_short pooc_close_short_entry)
+        file(GLOB _pf_confirmed_refusal_sources CONFIGURE_DEPENDS
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/confirmed_capabilities/generated/refused_*.cpp")
+        set(_pf_confirmed_refusals)
+        foreach(refusal_source IN LISTS _pf_confirmed_refusal_sources)
+            get_filename_component(refusal_case "${refusal_source}" NAME_WE)
+            list(APPEND _pf_confirmed_refusals "${refusal_case}")
+        endforeach()
         set(_pf_confirmed_libraries)
         foreach(confirmed_case IN LISTS _pf_confirmed_cases _pf_confirmed_refusals)
             add_library(confirmed_${confirmed_case} MODULE
@@ -286,6 +290,22 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
             ${PROJECT_SOURCE_DIR}/tests/confirmed_capabilities_refusals.py $<TARGET_FILE:pineforge-live>
             ${_pf_confirmed_libraries})
         set_tests_properties(confirmed_capabilities_refusals PROPERTIES TIMEOUT 180)
+        foreach(receipt_variant ordinary request pooc missing)
+            add_library(confirmed_receipt_${receipt_variant} MODULE
+                ${PROJECT_SOURCE_DIR}/tests/fixtures/confirmed_capabilities/receipt_versions.cpp)
+            target_link_libraries(confirmed_receipt_${receipt_variant} PRIVATE PineForge::pineforge)
+            target_compile_definitions(confirmed_receipt_${receipt_variant} PRIVATE PF_RECEIPT_${receipt_variant}=1)
+            if(APPLE)
+                target_link_options(confirmed_receipt_${receipt_variant} PRIVATE "LINKER:-u,_pf_abi_version")
+            else()
+                target_link_options(confirmed_receipt_${receipt_variant} PRIVATE "LINKER:-u,pf_abi_version")
+            endif()
+            set_target_properties(confirmed_receipt_${receipt_variant} PROPERTIES PREFIX "")
+        endforeach()
+        add_test(NAME confirmed_capabilities_receipt_versions COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/tests/confirmed_receipt_versions.py $<TARGET_FILE:pineforge-live>
+            $<TARGET_FILE:confirmed_receipt_ordinary> $<TARGET_FILE:confirmed_receipt_request>
+            $<TARGET_FILE:confirmed_receipt_pooc> $<TARGET_FILE:confirmed_receipt_missing>)
         foreach(confirmed_case IN LISTS _pf_confirmed_cases)
             add_test(NAME confirmed_capabilities_${confirmed_case}_e2e COMMAND ${Python3_EXECUTABLE}
                 ${PROJECT_SOURCE_DIR}/tests/confirmed_capabilities_e2e.py $<TARGET_FILE:pineforge-live>

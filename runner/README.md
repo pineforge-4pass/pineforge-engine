@@ -512,7 +512,7 @@ wrapping, and emitted as
 
 Confirmed-bar stream fixes also close the earlier default-sized both-sided stop
 discrepancy (the historical audit measured batch 276 versus stream 277 trades).
-POOC and all request shapes remain refused by this receipt policy; the runtime's
+POOC and all request shapes remain refused by the original-only receipt policy; the runtime's
 new equivalence tests do not automatically widen runner admission. See
 [Backtest vs live](../docs/pages/streaming.md#backtest_vs_live) for deliberate
 historical look-ahead differences and the remaining deferred calendar-boundary

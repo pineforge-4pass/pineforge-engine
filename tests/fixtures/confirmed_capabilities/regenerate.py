@@ -40,6 +40,9 @@ def sources():
                             'if bar_index % 7 == 3\n    strategy.close_all()\n')
     result["pooc_close_entry"] = result["pooc_close"].replace(
         'strategy.close_all()', 'strategy.close("long", immediately=false)')
+    result["pooc_close_short"] = result["pooc_close"].replace('strategy.long', 'strategy.short')
+    result["pooc_close_short_entry"] = result["pooc_close_short"].replace(
+        'strategy.close_all()', 'strategy.close("long", immediately=false)')
     for clock in ("W", "5D", "30S", "M", "7"):
         result["refused_clock_" + clock] = result["htf5_close"].replace('"5", close', f'"{clock}", close')
     result["refused_foreign"] = result["htf5_close"].replace('syminfo.tickerid', '"NASDAQ:MSFT"')
@@ -57,9 +60,44 @@ def sources():
         "order": 'strategy.order("L", strategy.long)',
         "cancel": 'strategy.entry("L", strategy.long, stop=high)\nstrategy.cancel("L")',
         "immediate": 'strategy.entry("L", strategy.long)\nstrategy.close("L", immediately=true)',
+        "risk_filled": 'strategy.risk.max_intraday_filled_orders(2)\nstrategy.entry("L", strategy.long)',
+        "risk_drawdown": 'strategy.risk.max_drawdown(5, strategy.percent_of_equity)\nstrategy.entry("L", strategy.long)',
+        "risk_direction": 'strategy.risk.allow_entry_in(strategy.direction.long)\nstrategy.entry("L", strategy.long)\nstrategy.entry("S", strategy.short)',
+        "risk_loss": 'strategy.risk.max_intraday_loss(5, strategy.percent_of_equity)\nstrategy.entry("L", strategy.long)',
+        "risk_size": 'strategy.risk.max_position_size(2)\nstrategy.entry("L", strategy.long)',
+        "risk_days": 'strategy.risk.max_cons_loss_days(2)\nstrategy.entry("L", strategy.long)',
+        "exit_oca": 'strategy.entry("S", strategy.short)\nstrategy.exit("X", "S", stop=high, limit=low, oca_name="g")',
+        "entry_qty": 'strategy.entry("S", strategy.short, qty=1)',
+        "entry_comment": 'strategy.entry("S", strategy.short, comment="unmodeled")',
+        "entry_alert": 'strategy.entry("S", strategy.short, alert_message="unmodeled")',
+        "entry_disable_alert": 'strategy.entry("S", strategy.short, disable_alert=true)',
+        "exit_comment": 'strategy.entry("S", strategy.short)\nstrategy.exit("X", "S", stop=high, limit=low, comment="unmodeled")',
+        "exit_alert": 'strategy.entry("S", strategy.short)\nstrategy.exit("X", "S", stop=high, limit=low, alert_profit="unmodeled")',
+        "close_comment": 'strategy.entry("S", strategy.short)\nstrategy.close("S", comment="unmodeled")',
+        "close_alert": 'strategy.entry("S", strategy.short)\nstrategy.close_all(alert_message="unmodeled")',
+        "cancel_all": 'strategy.entry("L", strategy.long)\nstrategy.cancel_all()',
+        "pending_bracket": 'strategy.entry("S", strategy.short, stop=low)\nstrategy.exit("X", "S", stop=high, limit=low)',
+        "mixed_entries": 'strategy.entry("L", strategy.long, stop=high)\nstrategy.entry("S", strategy.short, limit=high)',
+        "priced_close": 'strategy.entry("L", strategy.long, stop=high)\nstrategy.close("L")',
+        "all_categories": 'varip int count = 0\ncount += 1\nh = request.security(syminfo.tickerid, "D", close)\nstrategy.entry("S", strategy.short, stop=h)\nstrategy.exit("X", "S", stop=high, limit=low)',
+        "daily_market": 'h = request.security(syminfo.tickerid, "D", close)\nstrategy.entry("L", strategy.long)',
+        "varip": 'varip int count = 0\ncount += 1\nstrategy.entry("L", strategy.long)',
+        "request_priced": 'h = request.security(syminfo.tickerid, "15", ta.sma(close, 4))\nstrategy.entry("L", strategy.long, stop=h)',
     }
     for name, body in rejected_orders.items():
         result["refused_pooc_" + name] = '//@version=6\nstrategy("unproven closing", process_orders_on_close=true)\n' + body + '\n'
+    result["refused_two_requests"] = result["htf5_close"].replace(
+        'if ta.crossover', 'daily = request.security(syminfo.tickerid, "D", close)\nif ta.crossover')
+    for name, settings in {
+        "priced_sizing": 'default_qty_type=strategy.percent_of_equity, default_qty_value=100',
+        "priced_slippage": 'slippage=15', "pyramiding": 'pyramiding=2', "margin": 'margin_short=50',
+        "commission": 'commission_value=1', "capital": 'initial_capital=5000', "close_rule": 'close_entries_rule="ANY"',
+    }.items():
+        result["refused_pooc_" + name] = result["pooc_dual_stop"].replace(
+            'process_orders_on_close=true)', f'process_orders_on_close=true, {settings})')
+    result["refused_pooc_slipped_request"] = result["htf15_sma_pooc"].replace(
+        'process_orders_on_close=true)', 'process_orders_on_close=true, slippage=15, '
+        'default_qty_type=strategy.percent_of_equity, default_qty_value=100)')
     return result
 
 

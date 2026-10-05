@@ -1,0 +1,6 @@
+//@version=6
+strategy("Both-sided closing stops", process_orders_on_close=true, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+hh = ta.highest(high, 10)[1]
+ll = ta.lowest(low, 10)[1]
+strategy.entry("L", strategy.long, stop=hh)
+strategy.entry("S", strategy.short, stop=ll)

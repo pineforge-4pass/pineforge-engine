@@ -1,0 +1,5 @@
+//@version=6
+strategy("unproven closing", process_orders_on_close=true)
+varip int count = 0
+count += 1
+strategy.entry("L", strategy.long)

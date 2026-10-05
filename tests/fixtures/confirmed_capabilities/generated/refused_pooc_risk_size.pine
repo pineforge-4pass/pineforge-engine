@@ -1,0 +1,4 @@
+//@version=6
+strategy("unproven closing", process_orders_on_close=true)
+strategy.risk.max_position_size(2)
+strategy.entry("L", strategy.long)

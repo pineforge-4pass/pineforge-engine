@@ -49,7 +49,8 @@ def main():
         batch = checked([oracle, library, str(full), timeframe, str(batch_actions), "--confirmed"])
         expected = [json.loads(line) for line in batch_actions.read_text().splitlines()]
         assert batch["trades_len"] > 0, (name, "no batch trades")
-        for split in (30, 500):
+        splits = (30, 33, 500, 1500) if name in ("daily_close", "constant_daily") else (30, 33, 500)
+        for split in splits:
             warmup = root / "warmup.csv"
             write_csv(warmup, tape[:split])
             feed = root / "feed.jsonl"
