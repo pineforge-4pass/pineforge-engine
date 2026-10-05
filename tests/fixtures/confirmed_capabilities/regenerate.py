@@ -56,6 +56,7 @@ def sources():
         "oca": 'strategy.entry("L", strategy.long, stop=high, oca_name="group", oca_type=strategy.oca.cancel)',
         "long_bracket": 'strategy.entry("L", strategy.long)\nstrategy.exit("X", "L", stop=high, limit=low)',
         "mixed_bracket": 'strategy.entry("S", strategy.short)\nstrategy.entry(id="S", direction=strategy.long)\nstrategy.exit("X", "S", stop=high, limit=low)',
+        "mixed_market_bracket": 'strategy.entry("S", strategy.short)\nstrategy.entry("L", strategy.long)\nstrategy.exit("X", "S", stop=high, limit=low)',
         "trail": 'strategy.entry("S", strategy.short)\nstrategy.exit("X", "S", trail_points=2, trail_offset=1)',
         "order": 'strategy.order("L", strategy.long)',
         "cancel": 'strategy.entry("L", strategy.long, stop=high)\nstrategy.cancel("L")',
