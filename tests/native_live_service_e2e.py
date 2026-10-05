@@ -42,7 +42,7 @@ class Receiver(BaseHTTPRequestHandler):
         delivery_started.set()
         mode = receiver_mode
         if mode == "hang":
-            receiver_release.wait(30)
+            receiver_release.wait()
         try:
             self.send_response(503 if mode == "fail" else 204)
             self.send_header("Content-Length", "0")
@@ -126,6 +126,13 @@ def query(ledger, sql, arguments=()):
 
 def status(path):
     return json.loads(path.read_text())
+
+
+def publish_request(controls, document):
+    path = controls / (document["request_id"] + ".request.json")
+    staging = path.with_suffix(".tmp")
+    staging.write_text(json.dumps(document))
+    staging.replace(path)
 
 
 def finish(process, code=0, stop=True, signal_number=signal.SIGTERM):
@@ -268,7 +275,10 @@ try:
         process.stdin.write(batch)
         process.stdin.flush()
         assert delivery_started.wait(5)
+        started = time.monotonic()
         finish(process)
+        elapsed = time.monotonic() - started
+        assert elapsed < 10, elapsed
         assert not receiver_release.is_set()
         assert status(health)["state"] == "stopped"
         receiver_release.set()
@@ -276,7 +286,7 @@ try:
         assert export(ledger)["report"] == expected_report
         assert query(ledger, "SELECT count(*) FROM events")[0][0] > 0
         assert secret not in health.read_text() and endpoint not in health.read_text()
-        print("PASS SIGTERM mid-delivery with bounded unresponsive receiver and durable outbox", flush=True)
+        print("PASS SIGTERM mid-delivery within 10 s while receiver remains blocked, with durable outbox", flush=True)
 
         receiver_mode = "fail"
         receipts.clear()
@@ -310,7 +320,7 @@ try:
         duplicate_request = {"schema_version": "pineforge-redelivery-request/v1", "deployment": deployment,
             "request_id": identifier, "target": "default", "from": 1, "failed_only": True}
         acknowledgement_time = acknowledgment.stat().st_mtime_ns
-        (controls / (identifier + ".request.json")).write_text(json.dumps(duplicate_request))
+        publish_request(controls, duplicate_request)
         wait_for(lambda: acknowledgment.stat().st_mtime_ns != acknowledgement_time)
         assert query(ledger, "SELECT count(*) FROM delivery_log WHERE request_id=? AND phase='completed'",
             (identifier,)) == [(4,)]
@@ -322,13 +332,23 @@ try:
         assert receipts[-1] in original
         bad_identifier = "d" * 64
         duplicate_request.update(request_id=bad_identifier, deployment="wrong", from_ignored=1)
-        (controls / (bad_identifier + ".request.json")).write_text(json.dumps(duplicate_request))
+        publish_request(controls, duplicate_request)
         wait_for(lambda: (controls / (bad_identifier + ".ack.json")).exists())
         assert not json.loads((controls / (bad_identifier + ".ack.json")).read_text())["accepted"]
         before = invoke(["report", "--ledger", ledger])
         finish(process)
         assert invoke(["report", "--ledger", ledger]) == before
+        delivery_rows = query(ledger, "SELECT * FROM delivery_log ORDER BY log_id")
         process, ledger, health = start("redelivery", routed + ["--control-dir", controls], env=environment)
+        for noop_identifier in ("e" * 64, "f" * 64):
+            publish_request(controls, {"schema_version": "pineforge-redelivery-request/v1",
+                "deployment": deployment, "request_id": noop_identifier, "target": "default",
+                "from": 1000000, "failed_only": True})
+            noop_acknowledgment = controls / (noop_identifier + ".ack.json")
+            wait_for(noop_acknowledgment.exists)
+            assert json.loads(noop_acknowledgment.read_text())["accepted"]
+            assert json.loads(noop_acknowledgment.read_text())["selected"] == 0
+        assert query(ledger, "SELECT * FROM delivery_log ORDER BY log_id") == delivery_rows
         finish(process)
         assert len(receipts) == 9
         invoke(["redeliver", "--ledger", ledger, "--deployment", deployment, "--target", "default",

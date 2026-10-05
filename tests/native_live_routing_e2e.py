@@ -47,8 +47,10 @@ class Receiver:
                     assert self.headers['X-PineForge-Signature'] == signature
                     assert self.headers['X-PineForge-Event-Id'] == action['event_id']
                     assert self.headers['Idempotency-Key'] == action.get('delivery_id', action['event_id'])
+                    self.request_count = getattr(self, 'request_count', 0) + 1
                     with owner.lock:
-                        owner.rows.append({'body': body, 'action': action, 'key': self.headers['Idempotency-Key']})
+                        owner.rows.append({'body': body, 'action': action, 'key': self.headers['Idempotency-Key'],
+                                           'connection_request': self.request_count})
                         mode = owner.mode
                         initial_barrier = owner.initial_barrier
                         release = owner.release
@@ -72,8 +74,10 @@ class Receiver:
                     if mode == 'retry-hold' and action['sequence'] == 1 and sequence_receipts > 1:
                         if not newer_actions_arrived.wait(timeout=20):
                             raise AssertionError('newer actions were parked behind a retry')
-                    if (mode == 'reset' or (mode == 'reset-first' and action['sequence'] == 1) or
-                            (mode == 'retry-hold' and action['sequence'] == 1 and sequence_receipts == 1)):
+                    if (mode == 'reset' or (mode == 'keepalive-replay' and self.request_count > 1) or
+                            (mode == 'reset-first' and action['sequence'] == 1) or
+                            (mode in ('retry-hold', 'retry-backoff') and action['sequence'] == 1
+                             and sequence_receipts == 1)):
                         self.close_connection = True
                         self.connection.shutdown(socket.SHUT_RDWR)
                         return
@@ -82,9 +86,10 @@ class Receiver:
                     status = 500 if mode == 'fail' or (mode == 'fail-first' and action['sequence'] == 2) else 204
                     self.send_response(status)
                     self.send_header('Content-Length', '0')
-                    self.send_header('Connection', 'close')
+                    if mode != 'keepalive-replay':
+                        self.send_header('Connection', 'close')
                     self.end_headers()
-                    self.close_connection = True
+                    self.close_connection = mode != 'keepalive-replay'
                 except (BrokenPipeError, ConnectionResetError):
                     pass
                 except Exception as error:
@@ -394,6 +399,28 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
 
         stdin_base = list(base)
         stdin_base[stdin_base.index('--feed') + 1] = '-'
+        keepalive_document = copy.deepcopy(isolation_document)
+        keepalive_document['targets'] = {'main': document['targets']['main']}
+        keepalive_document['rules'] = []
+        keepalive_document['delivery'].update(max_in_flight=1, transport_retries=0)
+        keepalive_routes = save_routes('keepalive-replay', keepalive_document)
+        main_receiver.clear(); main_receiver.mode = 'keepalive-replay'
+        keepalive_ledger = root / 'keepalive-replay.sqlite'
+        result = json.loads(run(keepalive_ledger, keepalive_routes).stdout)
+        assert not main_receiver.errors, main_receiver.errors
+        assert result['webhooks_delivered'] == 4
+        assert any(row['connection_request'] > 1 for row in main_receiver.rows), main_receiver.rows
+        assert len(main_receiver.rows) > 4, main_receiver.rows
+        unique_receipts = {}
+        for row in main_receiver.rows:
+            previous = unique_receipts.setdefault(row['key'], row['body'])
+            assert row['body'] == previous, row
+        assert len(unique_receipts) == 4
+        for sequence in range(1, 5):
+            delivery_attempts(keepalive_ledger, sequence, [(1, 204, '')])
+        assert query(keepalive_ledger, "SELECT count(*) FROM delivery_log WHERE phase='completed'") == [(4,)]
+        print('PASS reused keep-alive POST replay has stable deduplication keys and one completion per ledger attempt', flush=True)
+
         retry_document = copy.deepcopy(isolation_document)
         retry_document['targets'] = {'main': document['targets']['main']}
         retry_document['rules'] = []
@@ -418,20 +445,48 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
                     return False
 
             wait_for(first_attempt_failed)
+            wait_for(lambda: sum(row['action']['sequence'] == 1 for row in main_receiver.rows) == 2)
             retry_process.stdin.write(''.join(feed_lines[prefix_count:])); retry_process.stdin.flush()
             stdout, stderr = retry_process.communicate(timeout=90)
             assert retry_process.returncode == 0, stderr
-            assert json.loads(stdout)['webhooks_delivered'] == 4
             assert not main_receiver.errors, main_receiver.errors
+            assert json.loads(stdout)['webhooks_delivered'] == 4, stdout
             older = delivery_attempts(retry_ledger, 1, [(0, 0, 'network_error'), (1, 204, '')], [100])
             for sequence in (2, 3, 4):
                 newer = delivery_attempts(retry_ledger, sequence, [(1, 204, '')])
-                assert older[1][0] < newer[0][0] < older[-1][0], (older, newer)
+                assert older[2][0] < newer[0][0] < older[3][0], (older, newer)
             assert query(retry_ledger, 'SELECT count(*) FROM inputs')[0][0] == len(events)
         finally:
             if retry_process.poll() is None:
                 retry_process.kill(); retry_process.communicate(timeout=30)
-        print('PASS newer actions start after a transport failure and before its held retry completes; pure backoff-delay case untested', flush=True)
+        print('PASS newer actions start after a transport failure and after its retry starts, before that held retry completes', flush=True)
+
+        backoff_document = copy.deepcopy(retry_document)
+        backoff_document['delivery'].update(transport_retries=1, retry_backoff_ms=[10000])
+        backoff_routes = save_routes('sleeping-backoff', backoff_document)
+        main_receiver.clear(); main_receiver.mode = 'retry-backoff'
+        backoff_ledger = root / 'sleeping-backoff.sqlite'
+        backoff_process = subprocess.Popen([runner] + stdin_base + ['--ledger', str(backoff_ledger),
+                                           '--webhook-routes', str(backoff_routes)], stdin=subprocess.PIPE,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=environment)
+        try:
+            backoff_process.stdin.write(''.join(feed_lines[:prefix_count])); backoff_process.stdin.flush()
+            wait_for(lambda: bool(main_receiver.rows))
+            wait_for(lambda: bool(query(backoff_ledger, "SELECT log_id FROM delivery_log WHERE phase='completed' "
+                                        "AND attempt=1 AND success=0")))
+            backoff_process.stdin.write(''.join(feed_lines[prefix_count:])); backoff_process.stdin.flush()
+            stdout, stderr = backoff_process.communicate(timeout=90)
+            assert backoff_process.returncode == 0, stderr
+            assert not main_receiver.errors, main_receiver.errors
+            assert json.loads(stdout)['webhooks_delivered'] == 4, stdout
+            older = delivery_attempts(backoff_ledger, 1, [(0, 0, 'network_error'), (1, 204, '')], [10000])
+            for sequence in (2, 3, 4):
+                newer = delivery_attempts(backoff_ledger, sequence, [(1, 204, '')])
+                assert older[1][0] < newer[0][0] < older[2][0], (older, newer)
+        finally:
+            if backoff_process.poll() is None:
+                backoff_process.kill(); backoff_process.communicate(timeout=30)
+        print('PASS newer actions start during a configured 10 s retry backoff, before its retry starts', flush=True)
 
         timeout_document = copy.deepcopy(isolation_document)
         timeout_document['delivery'].update(connect_timeout_ms=5000, total_timeout_ms=5000)
@@ -566,6 +621,8 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
                 status = json.loads(invoke(['status', '--ledger', str(fatal_ledger)]).stdout)['targets']
                 pending = sum(target['unsent'] for target in status.values())
                 completed = query(fatal_ledger, "SELECT count(DISTINCT event_id) FROM delivery_log WHERE phase='completed'")[0][0]
+                if mode == 'hang':
+                    assert completed <= 1, (completed, stderr)
                 assert completed + pending == 4
                 assert f'{pending} actions not sent' in stderr.splitlines()[-1]
                 if pending:
@@ -576,7 +633,7 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
             finally:
                 if fatal.poll() is None:
                     fatal.kill(); fatal.communicate(timeout=30)
-        print('PASS fatal feed drains four same-target actions below a 3x global-timeout guard without retries and reports every unsent action', flush=True)
+        print('PASS fatal feed has at most one hung completion within a 3x global-timeout guard, without retries, and reports every unsent action', flush=True)
 
         entries.mode = exits.mode = 'ok'
         main_receiver.clear(); main_receiver.mode = 'hang'

@@ -1,19 +1,104 @@
+#define WebhookMulti StopPollWebhookMulti
+#define DeliveryWorker StopPollDeliveryWorker
+#include "../runner/delivery.cpp"
+#undef DeliveryWorker
+#undef WebhookMulti
+
 #include "service.hpp"
 #include "store.hpp"
 #include <cassert>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <thread>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <sqlite3.h>
+
+namespace pineforge::live {
+std::atomic<bool> stop_on_completed_poll{false};
+bool discard_completed_poll = false;
+std::size_t returned_completions = 0;
+std::vector<std::pair<std::string, std::string>> polled_receipts;
+
+struct StopPollWebhookMulti::Impl {
+    std::vector<std::uint64_t> keys;
+};
+
+StopPollWebhookMulti::StopPollWebhookMulti() : impl_(std::make_unique<Impl>()) {}
+StopPollWebhookMulti::~StopPollWebhookMulti() = default;
+
+void StopPollWebhookMulti::add(std::uint64_t key, const HttpOptions&, const StoredEvent& event) {
+    impl_->keys.push_back(key);
+    polled_receipts.emplace_back(event.delivery_id, event.payload);
+}
+
+std::vector<CompletedWebhook> StopPollWebhookMulti::poll(int) {
+    std::vector<CompletedWebhook> completed;
+    for (const auto key : impl_->keys) completed.push_back({key, {204, true, false, ""}});
+    impl_->keys.clear();
+    returned_completions += completed.size();
+    if (discard_completed_poll && !completed.empty()) stop_on_completed_poll = true;
+    return completed;
+}
+}
 
 using namespace pineforge::live;
 namespace fs = std::filesystem;
 
+void completed_poll_stop(const fs::path& root) {
+    const auto path = (root / "completed-poll.sqlite").string();
+    Ledger ledger(path, "deployment");
+    ledger.commit_input(0, "{}", 123, {{"first", "{\"sequence\":1}", "main", "delivery-first"},
+        {"second", "{\"sequence\":2}", "main", "delivery-second"},
+        {"third", "{\"sequence\":3}", "main", "delivery-third"},
+        {"fourth", "{\"sequence\":4}", "main", "delivery-fourth"}});
+    const auto count = [&](const char* sql) {
+        sqlite3* database = nullptr;
+        assert(sqlite3_open(path.c_str(), &database) == SQLITE_OK);
+        sqlite3_stmt* statement = nullptr;
+        assert(sqlite3_prepare_v2(database, sql, -1, &statement, nullptr) == SQLITE_OK);
+        assert(sqlite3_step(statement) == SQLITE_ROW);
+        const auto result = sqlite3_column_int64(statement, 0);
+        sqlite3_finalize(statement);
+        sqlite3_close(database);
+        return result;
+    };
+    DeliveryOptions settings;
+    settings.max_in_flight = 4;
+    discard_completed_poll = true;
+    {
+        StopPollDeliveryWorker worker(ledger, settings, {{"main", HttpOptions{}}}, std::nullopt,
+            [] { return stop_on_completed_poll.load(); });
+        worker.finish();
+        assert(returned_completions == 4 && stop_on_completed_poll);
+        assert(worker.delivered() == 0 && worker.failed() == 0);
+    }
+    assert(ledger.unsent_count() == 4);
+    assert(count("SELECT count(*) FROM delivery_log WHERE phase='started'") == 4);
+    assert(count("SELECT count(*) FROM delivery_log WHERE phase='completed'") == 0);
+    assert(count("SELECT count(*) FROM events WHERE attempts=1") == 4);
+    const auto original = polled_receipts;
+    stop_on_completed_poll = false;
+    discard_completed_poll = false;
+    {
+        StopPollDeliveryWorker worker(ledger, settings, {{"main", HttpOptions{}}});
+        worker.finish();
+        assert(worker.delivered() == 4 && worker.failed() == 0);
+    }
+    assert(ledger.unsent_count() == 0);
+    assert(count("SELECT count(*) FROM delivery_log WHERE phase='completed' AND attempt=1") == 0);
+    assert(count("SELECT count(*) FROM delivery_log WHERE phase='completed' AND attempt=2 AND success=1") == 4);
+    assert(polled_receipts.size() == 8);
+    assert(std::equal(original.begin(), original.end(), polled_receipts.begin() + 4));
+    std::puts("PASS stop discards an already-returned completion batch; restart reuses keys and records one completion per attempt");
+}
+
 int main() {
     const auto root = fs::temp_directory_path() / ("pineforge-service-" + std::to_string(getpid()));
     fs::create_directory(root);
+    completed_poll_stop(root);
     const auto status = (root / "status.json").string();
     auto healthy = Json::object({{"schema_version", Json::string("pineforge-live-status/v1")},
         {"ready", Json::boolean(true)}, {"liveness", Json::object({{"alive", Json::boolean(true)},

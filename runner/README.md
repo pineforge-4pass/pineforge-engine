@@ -132,7 +132,7 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
 - Metrics are `committed_input`, `last_seq` (tick sequence, null for bars),
   `source_timestamp_ms`, `source_lag_ms` (wall-clock lag from the latest
   committed source time), `queue_bytes`, `ledger_bytes`, `report_cursor`,
-  `control_errors` (distinct ignored control entries/errors this run) and
+  `control_errors` (ignored control entries and directory-error transitions this run) and
   per-target `pending_count` / `oldest_age_ms`. Queue bytes cover the buffered
   stdin/WebSocket fragment and bounded delivery queue; engine state and finite feed
   snapshots are not queue bytes. Pending includes failed and never-completed
@@ -140,6 +140,12 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   no known creation/attempt time. No secrets, URLs or receiver response text
   are written to this status file. Storage/delivery metrics are sampled at the
   status interval, not on every control-loop heartbeat.
+  Each ignored request is counted once per run. A directory failure is counted
+  again if it recurs after a successful poll; removing an acknowledgement during
+  directory enumeration can cause a transient `directory_io_failure` that heals
+  on the next poll. A request rejected with `accept_failure` is visible in its
+  acknowledgement, but is not logged or included in `control_errors`; submitters
+  must inspect the acknowledgement rather than rely on the health counter alone.
 - `probe --status-file PATH --max-age S [--ready]` exits 0 only for a valid,
   alive control-loop heartbeat no older than S seconds (integer 1..86400).
   Add `--ready` to also require readiness. Missing, malformed, future-dated,
@@ -164,6 +170,12 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   An interrupted request may have been
   accepted by its receiver; restart uses the same delivery ID. Receiver
   idempotency remains mandatory. Signal during recovery stops before intake.
+  Cancellation also discards completions already returned by the last transport
+  poll if the worker observes the stop before recording them. Even an HTTP 2xx
+  received in that poll can therefore leave an unfinished ledger attempt. The
+  next run sends that action again with the same `Idempotency-Key`; the receiver
+  must deduplicate it. The ledger never records a synthetic completion for the
+  abandoned attempt.
 - Run/offline-redelivery exits: **0** normal completion or graceful signal
   stop; **1** fatal initialization, input, storage-I/O or internal failure;
   **2** offline redelivery with selected failed/pending actions; **3** run
@@ -649,7 +661,7 @@ your own applications, never exchanges or fill-ingestion endpoints.
 ### 6. Idempotency and security
 - `delivery_id` = SHA-256 of `{"event_id","target_id"}`, sent as `Idempotency-Key`; the original `event_id` goes in `X-PineForge-Event-Id`. Both are stable across retries and restarts.
 - Receivers must deduplicate on `delivery_id` and answer 2xx only after accepting the action.
-- A receiver can get the same request more than once: a transport retry or libcurl replay of a POST on a reused connection can repeat a request, so receivers must deduplicate its stable `Idempotency-Key`.
+- A receiver can get the same request more than once: a transport retry, a restart after a mid-request stop, `redeliver`, or libcurl replay of a POST on a reused connection can repeat a request, so receivers must deduplicate on its stable `Idempotency-Key`. Retries are finite, and a failed action is not re-sent automatically; this is not a never-lost delivery guarantee.
 - Each target signs with its own `X-PineForge-Signature: sha256=<HMAC-SHA256 of the exact body>`.
 
 #### Validation and ledger compatibility
