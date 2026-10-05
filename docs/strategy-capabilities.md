@@ -126,8 +126,11 @@ Stop-limit/OCA entries, trailing/relative/partial exits, long brackets,
 `strategy.order`, risk rules, cancellation, immediate closes and any call or
 argument outside the modeled allowlist remain refused by name. Explicit entry
 quantities, alert/comment arguments and exit OCA names are not modeled.
-POOC settings are limited to the default sizing/slippage/account profile, plus
-the separately proven market-only 100%-equity/15-tick-slippage profile. Other
+POOC settings match literal proof profiles, without inferring Pine defaults:
+market, stop, limit and market-close sets require omitted account/sizing/slippage
+settings. Short brackets require exactly fixed quantity 1 and explicit percent
+commission 0. The separate market-only profile requires exactly explicit
+100%-equity sizing and 15-tick slippage. Partial profiles, extra otherwise-default
 settings and order-affecting runtime overrides are refused.
 Two requests together, request-plus-varip and POOC-plus-varip are refused.
 The sole request-plus-POOC proof is SMA(close,4) at `15` with market entries;

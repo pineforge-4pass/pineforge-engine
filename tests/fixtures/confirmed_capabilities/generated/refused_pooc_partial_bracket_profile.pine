@@ -1,0 +1,6 @@
+//@version=6
+strategy("Closing short brackets", process_orders_on_close=true, default_qty_type=strategy.fixed, default_qty_value=1)
+if strategy.position_size == 0
+    strategy.entry("S", strategy.short)
+if strategy.position_size < 0
+    strategy.exit("X", "S", stop=high, limit=low)

@@ -102,6 +102,16 @@ def sources():
     result["refused_pooc_slipped_request"] = result["htf15_sma_pooc"].replace(
         'process_orders_on_close=true)', 'process_orders_on_close=true, slippage=15, '
         'default_qty_type=strategy.percent_of_equity, default_qty_value=100)')
+    for name, control in {"fixed_market": "pooc_market", "fixed_stop": "pooc_dual_stop",
+                          "fixed_limit": "pooc_limit_reversal", "fixed_close": "pooc_close"}.items():
+        result["refused_pooc_" + name] = result[control].replace(
+            'process_orders_on_close=true)', 'process_orders_on_close=true, '
+            'default_qty_type=strategy.fixed, default_qty_value=1)')
+    result["refused_pooc_default_bracket"] = result["pooc_short_exit"].replace(
+        ', default_qty_type=strategy.fixed, default_qty_value=1, '
+        'commission_type=strategy.commission.percent, commission_value=0', '')
+    result["refused_pooc_partial_bracket_profile"] = result["pooc_short_exit"].replace(
+        ', commission_type=strategy.commission.percent, commission_value=0', '')
     return result
 
 
