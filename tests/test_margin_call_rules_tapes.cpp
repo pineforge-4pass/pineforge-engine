@@ -1101,6 +1101,7 @@ int main() {
         {"chained_follow_up", &O::chained_follow_up},
         {"short_point_drops_owed", &O::short_point_drops_owed},
         {"lot_by_lot_open_follow_up", &O::lot_by_lot_open_follow_up},
+        {"open_marketable_exit_first", &O::open_marketable_exit_first},
     };
     CHECK(opening_ablations.size() == sizeof(O) / sizeof(bool));
     schedule = schedule_on;

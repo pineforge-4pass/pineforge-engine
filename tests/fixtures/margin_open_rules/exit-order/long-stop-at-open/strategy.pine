@@ -1,0 +1,8 @@
+//@version=6
+strategy("pf-16b-l16-gap", initial_capital=7233.18819, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=2, process_orders_on_close=false)
+if time == timestamp("UTC", 2026, 2, 26, 0, 15)
+    strategy.entry("E", strategy.long, qty=3.5)
+    strategy.exit("X", "E", stop=2066.34, limit=2383.81)
+if time == timestamp("UTC", 2026, 2, 26, 1, 0)
+    strategy.close_all()
+plot(strategy.equity, "equity")

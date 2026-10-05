@@ -2040,6 +2040,16 @@ private:
                                   std::int64_t sub_bar_open_ms) const;
     bool run_close_sized_open_calls(double units, double opening_mark,
                                     const NativeDecisionContext&);
+    // The opening checkpoint at the fill that opened or grew a full-margin
+    // book (on_applied): the exit legs that fill ahead of it, and its call.
+    bool opening_released_leg(const PlacementSnapshot& row, std::uint64_t leg,
+                              std::uint64_t opening, const SourceId& id, bool short_book,
+                              const NativeDecisionContext&) const;
+    bool priced_exit_precedes_opening(bool short_book, std::uint64_t opening,
+                                      const SourceId& opening_id, const NativeDecisionContext&,
+                                      const PlacementSnapshot* filled, bool* at_open) const;
+    void run_opening_checkpoint(double fill, bool market, bool sibling_book,
+                                bool adds_book_last, const NativeDecisionContext&);
     double open_print_follow_up_units(double held_before, double equity_before, double entry,
                                       double called, double fill, bool short_book,
                                       std::int64_t sub_bar_open_ms) const;
@@ -2637,6 +2647,15 @@ private:
     std::int64_t close_call_after_script_bar_ = std::numeric_limits<std::int64_t>::min();
     double close_call_after_script_book_ = 0.0;
     double close_call_after_script_units_ = 0.0;
+    // The opening checkpoint a market entry opening the book at an open owes
+    // once the exit legs it released, marketable at that open, have filled
+    // there, on the book they leave (MarginOpeningSwitches::
+    // open_marketable_exit_first): the script bar, the entry's request and id
+    // and its fill.
+    std::int64_t open_exit_first_bar_ = std::numeric_limits<std::int64_t>::min();
+    std::uint64_t open_exit_first_origin_ = 0;
+    SourceId open_exit_first_id_{};
+    double open_exit_first_fill_ = 0.0;
     // @source-state end
     // Set while an open's calls that TradingView does not repeat at one
     // price book (run_close_sized_open_calls, open_call_owing_follow_up); the
@@ -2841,6 +2860,15 @@ struct MarginOpeningSwitches {
     // call sized at the close on the whole book, taken first in first out,
     // and its follow-up checked lot by lot over the lots it took.
     bool lot_by_lot_open_follow_up = true;
+    // A market entry opening the book from flat at a bar's open (one entry,
+    // neither process_orders_on_close nor calc_on_order_fills) is checked
+    // there after the exit legs it released -- its own, and a strategy.exit
+    // without from_entry placed while flat after the entry -- already
+    // marketable at that open, have filled, on the book they leave, a long's
+    // as a short's; a leg the bar reaches only after the open fills after the
+    // check's call. Off, and for every other fill or leg: a short's check
+    // gives way to any leg the bar touches.
+    bool open_marketable_exit_first = true;
 };
 MarginOpeningSwitches& margin_opening_switches() noexcept;
 } // namespace detail

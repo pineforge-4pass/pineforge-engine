@@ -1,0 +1,5 @@
+config 10389.93902 0.01 0.0001 2 0.05 100 0 1
+bars eth-2025-12-31-2026-01-02.csv
+ev 1767140100000 entry E short 3.5 any
+ev 1767140100000 bracket X E -/3414.03/2968.14 any
+ev 1767142800000 close_all - - - any

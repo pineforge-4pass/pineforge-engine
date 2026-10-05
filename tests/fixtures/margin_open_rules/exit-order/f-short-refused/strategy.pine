@@ -1,0 +1,8 @@
+//@version=6
+strategy("pf-16b-f-stop", initial_capital=5556.095, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=2, process_orders_on_close=false)
+if time == timestamp("UTC", 2025, 8, 11, 15, 30)
+    strategy.entry("E", strategy.short, qty=500)
+    strategy.exit("X", "E", stop=11.15, limit=9.44)
+if time == timestamp("UTC", 2025, 8, 11, 16, 15)
+    strategy.close_all()
+plot(strategy.equity, "equity")

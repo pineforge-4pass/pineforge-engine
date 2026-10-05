@@ -454,8 +454,10 @@ full-margin process_orders_on_close position (percent commission, slippage,
 a lot grid of at most one; several lots only on a fractional grid) takes at
 the open after the close fill
 that opened it, the open's check after an add filled there, the fill-time
-admission of an explicit quantity at the open and the refined lagged
-follow-up. Its tapes are `tests/fixtures/margin_open_rules`.
+admission of an explicit quantity at the open, the refined lagged
+follow-up and the order of a market entry's opening check at its open fill
+against the exit legs it released. Its tapes are
+`tests/fixtures/margin_open_rules`.
 
 | Switch | Default | Gates | Where |
 |---|---|---|---|
@@ -469,6 +471,7 @@ follow-up. Its tapes are `tests/fixtures/margin_open_rules`.
 | `chained_follow_up` | on | on those books an owed follow-up that books leaves its own follow-up for the next point | `call_short_with_lagged_follow_up` (`owed`) |
 | `short_point_drops_owed` | on | an owed follow-up is dropped at a point whose own check finds the book short; the open's own call of a carried short in the walk's scope and the opening-call scope (`close_sized_open_call_scope`) owes its follow-up to the first extreme instead of repeating it at its print, and so does a booked re-check of a short in the walk's scope (`run_close_sized_open_calls`): booked at that point's print, or dropped where the point is short itself | `execute_owed_short_follow_up`, `open_call_owing_follow_up`, `run_close_sized_open_calls` |
 | `lot_by_lot_open_follow_up` | on | on a fractional lot grid the schedule also takes a book of several lots the close's fills opened: the call sized at the close on the whole book, taken first in first out, and its follow-up checked lot by lot over the lots it took, the last still-short check deciding; a short's booked re-check on such a book is followed by nothing; one-lot books keep `open_print_follow_up_units`, whole-share books of several lots the previous rules | `close_sized_open_call_scope`, `open_print_lot_follow_up_units`, `run_close_sized_open_calls` |
+| `open_marketable_exit_first` | on | a market entry opening the book from flat at a bar's open (one entry, neither process_orders_on_close nor calc_on_order_fills) is checked there after the strategy.exit legs it released -- its own, and a strategy.exit without from_entry placed while flat after the entry -- already marketable at that open have filled (a short's stop at or below the open's tick or its limit at or above it, a long's mirror), on the book they leave; a leg the bar reaches only after the open fills after the check's call at the fill. Off, and for every other fill or leg: a short's check gives way to any leg its bar touches (ab9714be); TradingView refutes that for a short reversal and a short stop entry gapped at the open too (two known divergences in the fixture) | `priced_exit_precedes_opening`, `opening_released_leg`, `run_opening_checkpoint`, `open_exit_first_bar_` in `on_applied` |
 
 ### 1.7 Evidence
 
@@ -490,7 +493,7 @@ tapes, 3 commission-0 controls, the oracle control of §1.2, 10 order
 controls replayed through handwritten hosts and 67 tapes of the short call
 gate and schedule (`short-cutoff-gate`). With every switch on, as shipped,
 the engine reproduces 258 of its 266 tapes and 373 of the 381 ledger tapes,
-38 of the 39 `margin_schedule_rules` tapes and all 53 `margin_open_rules`
+38 of the 39 `margin_schedule_rules` tapes and 82 of the 84 `margin_open_rules`
 tapes (each of those also as a stream, trade for trade); turning the
 placement half off costs 108 ledger tapes, the fill half 32 ledger and
 3 single-position tapes. `test_margin_rules_forward_replay` replays a sample of both

@@ -321,10 +321,10 @@
     },
     "test_margin_call_1x_long_entry_fill": {
       "baseAssertions": 62,
-      "reason": "F's process_orders_on_close opening-budget trim follows the R5 lane W5-ENG-MARGIN-V6 TradingView tapes (tests/fixtures/margin_v6 w5-c2-pooc-flat-explicit-long): a commissioned process_orders_on_close opening is called at the next open, never at its close fill, so the 0.1996 @100 trim lands on bar 1",
+      "reason": "F's process_orders_on_close opening-budget trim follows the R5 lane W5-ENG-MARGIN-V6 TradingView tapes (tests/fixtures/margin_v6 w5-c2-pooc-flat-explicit-long): a commissioned process_orders_on_close opening is called at the next open, never at its close fill, so the 0.1996 @100 trim lands on bar 1. E's short mirror follows the lane PX-PIN-16B TradingView tapes (tests/fixtures/margin_open_rules exit-order/short-fee-stop-on-path and -open-at-low, E's settings and bar shape): a short is trimmed at its open fill before a stop the bar reaches later on its path, so E books 0.1996 @100 then the stop's 99.7504 @105, as long case B does",
       "twin": "test_margin_call_1x_long_entry_fill_l4a.cpp",
-      "twinAssertionSha256": "eb87c55121b2368e727136aee1df26af82c8c1bfd4c8b3836747e9cfd5d38e4e",
-      "twinAssertions": 62
+      "twinAssertionSha256": "bba0a03d3b7f383cf0ef9e292812fe32e76d33b4aa11ae10db398ea2d7248df7",
+      "twinAssertions": 67
     },
     "test_order_birth_provenance": {
       "baseAssertions": 60,

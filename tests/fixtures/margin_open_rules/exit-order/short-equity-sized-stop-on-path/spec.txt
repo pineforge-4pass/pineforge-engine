@@ -1,0 +1,6 @@
+config 10000.0 0.01 0.0001 2 0.05 100 0 1
+bars eth-2025-04-02-2025-04-04.csv
+sizing percent_of_equity 100.0
+ev 1743552900000 entry E short - any
+ev 1743552900000 bracket X E -/1898.49/1607.07 any
+ev 1743555600000 close_all - - - any

@@ -4,7 +4,7 @@
  * and the refined lagged follow-up on TradingView's own tapes, in a backtest
  * and in a forward (stream) run.
  *
- * tests/fixtures/margin_open_rules holds 53 `lab tv` tapes of synthetic
+ * tests/fixtures/margin_open_rules holds 84 `lab tv` tapes of synthetic
  * controls (README.md there names the groups), each exported twice, both
  * exports byte-identical, every prediction written before its export: a
  * full-margin process_orders_on_close position's call at the open after the
@@ -13,25 +13,30 @@
  * open's mark and the follow-up at the print (po/, replica/), an explicit
  * quantity dropped at its slipped open fill (admission/), a margin-1 % book's
  * open check after an add filled there (add-open/), the lagged follow-up
- * on whole shares, chained and dropped at a point short itself (lag/), and a
+ * on whole shares, chained and dropped at a point short itself (lag/), a
  * close's follow-up booked after the script with the script's close orders
  * keeping their sizes, then the open's calls on the book of several lots
  * that leaves, checked lot by lot, and a close of the entry beside the
- * over-fill lot after them (lots/). Each
- * tape directory holds the script TradingView ran (strategy.pine), its trade
- * list (tv_trades.csv), its export summary (metrics.json) and spec.txt, the
- * replay this test drives:
+ * over-fill lot after them (lots/), and a market entry's opening check at
+ * its open fill against the strategy.exit legs it released, its own or a
+ * global exit's: after the legs already marketable at that open, on the book
+ * they leave, and ahead of a leg the bar reaches only later (exit-order/).
+ * Each tape directory holds the script TradingView ran (strategy.pine), its
+ * trade list (tv_trades.csv), its export summary (metrics.json) and
+ * spec.txt, the replay this test drives:
  *
  *   config <capital> <mintick> <qty_step> <slippage> <commission %> <margin %>
  *          <process_orders_on_close 0/1> <pyramiding> [<default % of equity>]
  *   bars <file under bars/>
  *   session <time zone> <session>   (NYSE:F: the exchange's zone and regular session)
- *   ev <utc ms> entry <id> <long|short> <qty|nan> <any|flat|notflat>
+ *   sizing percent_of_equity <value>   (the default quantity, as the config line's last field; else fixed 1)
+ *   ev <utc ms> entry <id> <long|short> <qty, nan or - for the default> <any|flat|notflat>
+ *   ev <utc ms> bracket <id> <from_entry, - for none> <qty>/<stop>/<limit> <cond>   (- for none)
  *   ev <utc ms> close_all - - - <cond>
  *   ev <utc ms> close <id> - - <cond>
  *
- * A `nan` quantity is a default-sized entry, sized by the default percent of
- * equity the config line names.
+ * A `nan` or `-` quantity is a default-sized entry, sized by the default
+ * percent of equity the config or sizing line names.
  *
  * An event fires on the bar whose open time it names, in file order, when its
  * condition holds on the book the script sees -- the script's
@@ -89,14 +94,22 @@ static int tests_failed = 0;
 namespace {
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-constexpr std::size_t kTapes = 53;
-constexpr std::size_t kTvRows = 191;
+constexpr std::size_t kTapes = 84;
+constexpr std::size_t kTvRows = 244;
 
 using pineforge::source::detail::MarginOpeningSwitches;
 
 // Tapes the engine does not reproduce yet: path and a one-line reason. A
 // listed tape that starts matching fails the test until it is removed.
 const std::vector<std::pair<std::string, std::string>> kKnownDivergences = {
+    {"exit-order/reversal-short-stop-on-path",
+     "TradingView calls a short reversal's opening check at its open fill before the stop "
+     "reached on the path (0.0048, then 3.4952); the engine keeps ab9714be's rule for a "
+     "reversal and books the stop 3.5 with no call"},
+    {"exit-order/stop-entry-short-stop-on-path",
+     "TradingView calls a short stop entry gapped at the open before the stop reached on the "
+     "path, as a market entry (0.0048, then 3.4952); the engine keeps ab9714be's rule for a "
+     "stop entry and books the stop 3.5 with no call"},
 };
 
 std::string fixture(const std::string& relative) {
@@ -114,6 +127,7 @@ struct Spec {
     double default_percent = 0.0;
     int slippage = 0, pyramiding = 1;
     bool pooc = false;
+    double percent_of_equity = kNaN;
     std::string bars;
     std::string timezone, session;
     std::vector<Event> events;
@@ -137,11 +151,15 @@ Spec parse_spec(const std::string& path, std::istream& in) {
             words >> spec.bars;
         } else if (word == "session") {
             words >> spec.timezone >> spec.session;
+        } else if (word == "sizing") {
+            std::string type;
+            words >> type >> spec.percent_of_equity;
+            CHECK(type == "percent_of_equity" && spec.percent_of_equity > 0.0);
         } else if (word == "ev") {
             Event e;
             words >> e.ms >> e.kind >> e.a >> e.b >> e.c >> e.cond;
             CHECK(e.kind == "entry" || e.kind == "close_all" || e.kind == "close"
-                  || e.kind == "exit" || e.kind == "stopentry");
+                  || e.kind == "exit" || e.kind == "stopentry" || e.kind == "bracket");
             spec.events.push_back(e);
         } else if (!word.empty()) {
             CHECK(!"unknown spec line");
@@ -261,6 +279,10 @@ public:
             configuration.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
             configuration.default_qty_value = spec.default_percent;
         }
+        if (spec.percent_of_equity > 0.0) {
+            configuration.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
+            configuration.default_qty_value = spec.percent_of_equity;
+        }
         configure_pine_strategy(configuration);
         set_syminfo_mintick(spec.tick);
         set_syminfo_metadata("qty_step", spec.step);
@@ -277,8 +299,15 @@ public:
             if (e.cond == "flat" && position != 0.0) continue;
             if (e.cond == "notflat" && position == 0.0) continue;
             if (e.kind == "entry")
-                strategy_entry(e.a, e.b == "long", kNaN, kNaN, std::strtod(e.c.c_str(), nullptr));
-            else if (e.kind == "close_all")
+                strategy_entry(e.a, e.b == "long", kNaN, kNaN, number(e.c));
+            else if (e.kind == "bracket") {
+                // <qty>/<stop>/<limit>: strategy.exit's legs on from_entry.
+                const auto first = e.c.find('/');
+                const auto second = e.c.find('/', first + 1);
+                strategy_exit(e.a, e.b == "-" ? std::string() : e.b, number(e.c.substr(second + 1)),
+                              number(e.c.substr(first + 1, second - first - 1)), kNaN, kNaN, kNaN,
+                              100.0, {}, number(e.c.substr(0, first)));
+            } else if (e.kind == "close_all")
                 strategy_close_all();
             else if (e.kind == "close")
                 strategy_close(e.a);
@@ -295,6 +324,10 @@ public:
     }
 
 private:
+    static double number(const std::string& text) {
+        return text == "-" ? kNaN : std::strtod(text.c_str(), nullptr);
+    }
+
     Spec spec_;
 };
 
@@ -380,7 +413,7 @@ std::string first_difference(const std::vector<Row>& tv, const Outcome& engine) 
 }
 
 MarginOpeningSwitches all_on() {
-    static_assert(sizeof(MarginOpeningSwitches) == 10 * sizeof(bool),
+    static_assert(sizeof(MarginOpeningSwitches) == 11 * sizeof(bool),
                   "MarginOpeningSwitches changed: name its new field here and in the ablation table");
     MarginOpeningSwitches on;
     on.close_sized_long_call = true;
@@ -393,6 +426,7 @@ MarginOpeningSwitches all_on() {
     on.chained_follow_up = true;
     on.short_point_drops_owed = true;
     on.lot_by_lot_open_follow_up = true;
+    on.open_marketable_exit_first = true;
     return on;
 }
 
@@ -500,6 +534,7 @@ int main() {
         {"chained_follow_up", &M::chained_follow_up},
         {"short_point_drops_owed", &M::short_point_drops_owed},
         {"lot_by_lot_open_follow_up", &M::lot_by_lot_open_follow_up},
+        {"open_marketable_exit_first", &M::open_marketable_exit_first},
     };
     CHECK(ablations.size() == sizeof(MarginOpeningSwitches) / sizeof(bool));
     for (const Ablation& ablation : ablations) {

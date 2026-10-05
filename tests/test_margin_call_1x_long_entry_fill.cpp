@@ -36,8 +36,12 @@
  *   C. Zero-tick reversal fill (O == C): no deficit -> no Margin-call row.
  *   D. Reversal, stop never touched -> the event keeps its established
  *      END-OF-BAR placement (identical rows pre/post fix), survivor held.
- *   E. Commissioned SHORT mirror is untouched (LONG-only extension): the
- *      stop still closes the full position, no Margin-call row.
+ *   E. Commissioned SHORT mirror: the same 0.1996 @100 trim at the fill
+ *      before the stop above the open, which closes 99.7504 @105.
+ *      TradingView trims a short there too (lab tv tapes
+ *      tests/fixtures/margin_open_rules exit-order/short-fee-stop-on-path
+ *      and -open-at-low: E's settings and bar shape, 0.008 ETH called at
+ *      the open before the stop closes 3.492; lane PX-PIN-16B).
  *   F. POOC: the opening check waits for the next open (lane
  *      W5-ENG-MARGIN-V6, C2).
  *   G. Emulator off -> nothing fires (full stop close).
@@ -271,13 +275,17 @@ static void test_no_same_bar_exit_keeps_end_of_bar_event() {
     CHECK(near(eng.position_size(), 2.3389));      // survivor held
 }
 
-// ---- E: the commissioned SHORT mirror is untouched (LONG-only) -------------
+// ---- E: the commissioned SHORT mirror trims at the fill too ----------------
 
-static void test_short_one_x_mirror_untouched() {
-    std::printf("test_short_one_x_mirror_untouched\n");
-    // Same fee-created opening deficit on the short side; the stop above the
-    // open still fills the FULL position first (the established behavior on
-    // the short side) and no Margin-call row appears.
+static void test_short_one_x_mirror_trims_before_stop() {
+    std::printf("test_short_one_x_mirror_trims_before_stop\n");
+    // Same fee-created opening deficit on the short side. The stop above the
+    // open is reached only on the bar's path, so the opening check at the
+    // fill comes first: 0.1996 @100, then the stop closes the remainder
+    // (lab tv tapes tests/fixtures/margin_open_rules
+    // exit-order/short-fee-stop-on-path and -open-at-low). Before lane
+    // PX-16B-IMPL the engine let the stop close the full 99.95 @105 first,
+    // ab9714be's short-side rule that no TradingView tape bears out.
     CommissionedProbe eng(/*is_long=*/false, /*stop=*/105.0);
     std::vector<Bar> bars = {
         mk_bar(1000, 100, 100, 100, 100),          // 0: signal
@@ -286,10 +294,15 @@ static void test_short_one_x_mirror_untouched() {
     };
     eng.run(bars.data(), (int)bars.size());
 
-    CHECK(eng.trade_count() == 1);
-    CHECK(margin_call_rows(eng) == 0);
-    CHECK(near(eng.trade_size(0), 99.95));
-    CHECK(near(eng.exit_price(0), 105.0));
+    CHECK(eng.trade_count() == 2);
+    CHECK(margin_call_rows(eng) == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.trade_size(0), 0.1996));
+    CHECK(near(eng.exit_price(0), 100.0));
+    CHECK(eng.exit_bar(0) == 1);
+    CHECK(eng.exit_id(1) == std::string("X"));
+    CHECK(near(eng.trade_size(1), 99.7504));
+    CHECK(near(eng.exit_price(1), 105.0));
     CHECK(near(eng.position_size(), 0.0));
 }
 
@@ -360,7 +373,7 @@ int main() {
     test_four_x_nibble_slice_before_same_bar_stop();
     test_zero_tick_fill_stays_quiet();
     test_no_same_bar_exit_keeps_end_of_bar_event();
-    test_short_one_x_mirror_untouched();
+    test_short_one_x_mirror_trims_before_stop();
     test_pooc_keeps_end_of_bar_event();
     test_disabled_emulator_stays_quiet();
     test_rerun_reproduces_slice();
