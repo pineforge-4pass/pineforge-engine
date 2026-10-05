@@ -3835,6 +3835,16 @@ endif()
 if(PINEFORGE_BUILD_SOURCE_LAYER AND TARGET test_adapter_live_state_equivalence)
     add_test(NAME test_adapter_margin_revival_erasure
              COMMAND test_adapter_live_state_equivalence --margin-revival)
+    set(_pf_retirement_fragments "${CMAKE_CURRENT_BINARY_DIR}/retirement_cursor_fragments.hpp")
+    add_custom_command(OUTPUT "${_pf_retirement_fragments}"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/retirement_cursor_fragments.py"
+            "${PROJECT_SOURCE_DIR}/src/source/pine_adapter.cpp" "${_pf_retirement_fragments}"
+        DEPENDS retirement_cursor_fragments.py "${PROJECT_SOURCE_DIR}/src/source/pine_adapter.cpp"
+        VERBATIM)
+    target_sources(test_adapter_live_state_equivalence PRIVATE "${_pf_retirement_fragments}")
+    target_include_directories(test_adapter_live_state_equivalence PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+    add_test(NAME test_adapter_retirement_cursors
+        COMMAND test_adapter_live_state_equivalence --retirement-cursors)
 endif()
 
 # PR CI-LITE timing selection: INT23 sanitizer job 107895095058 and INT24
