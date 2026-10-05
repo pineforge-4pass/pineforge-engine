@@ -947,6 +947,9 @@ struct ArgCache {
     std::string session;
     std::string tz;
     bool ok = false;
+    // utc_zone(tz), once asked (arg_cache_utc).
+    bool utc_known = false;
+    bool utc = false;
     ArgSession parsed;
     Day days[kDays];
     uint64_t used_at = 0;
@@ -1247,6 +1250,27 @@ const std::vector<WallOccurrence>& arg_day_occurrences(ArgCache& cache, int64_t 
     return kept.occurrences;
 }
 
+// The occurrences of session day `day` when its ring slot already holds them
+// (arg_day_occurrences then returns them and changes nothing), else null.
+const std::vector<WallOccurrence>* resolved_occurrences(const ArgCache& cache, int64_t day) {
+    const ArgCache::Day& slot =
+        cache.days[static_cast<std::size_t>(((day % ArgCache::kDays) + ArgCache::kDays)
+                                            % ArgCache::kDays)];
+    return slot.used && slot.day == day && slot.occurrences_done ? &slot.occurrences : nullptr;
+}
+
+// utc_zone(cache.tz), asked once per entry: the answer depends on the zone's
+// spelling alone, as every memo slot holding a spelling records
+// normalize_timezone_for_posix's reading of it. Asked where the reading
+// first needs it, so a spelling that throws still throws there.
+bool arg_cache_utc(ArgCache& cache) {
+    if (!cache.utc_known) {
+        cache.utc = utc_zone(cache.tz);
+        cache.utc_known = true;
+    }
+    return cache.utc;
+}
+
 // session_argument_intraday_bar on the session clock (the rule above): the
 // latest occurrence that holds `bar_ms` -- by session day, then by open, as
 // the plain reading picks -- cut into tf bars from its first instant.
@@ -1256,6 +1280,20 @@ bool clock_intraday_bar(int64_t bar_ms, ArgCache& cache, int64_t tf_ms, int64_t&
     decompose_ms_local(bar_ms, cache.tz, local);
     const int64_t today = days_from_civil(local.tm_year + 1900, local.tm_mon + 1, local.tm_mday);
     const int64_t wall = bar_ms + static_cast<int64_t>(local.tm_gmtoff) * 1000;
+    // The scans below read days today - 5 .. today + 2. Each day's occurrences
+    // are asked of the cache at its first read, in the order the scans reach
+    // it; a later read is the same vector, since resolving a day touches only
+    // the days next to it and no two days within ten share a ring slot.
+    const std::vector<WallOccurrence>* asked[8] = {};
+    const auto occurrences = [&](int64_t d) -> const std::vector<WallOccurrence>& {
+        const std::vector<WallOccurrence>*& entry = asked[d - (today - 5)];
+        if (entry == nullptr) {
+            entry = resolved_occurrences(cache, d);
+            if (entry == nullptr)
+                entry = &arg_day_occurrences(cache, d);
+        }
+        return *entry;
+    };
     bool found = false;
     int64_t best_day = 0;
     int64_t best_start = 0;
@@ -1265,11 +1303,11 @@ bool clock_intraday_bar(int64_t bar_ms, ArgCache& cache, int64_t tf_ms, int64_t&
         int64_t day = 0;
         int64_t start = 0;
         int64_t end = 0;
-        if (!arg_day_occurrences(cache, today)[k].clock) {
+        if (!occurrences(today)[k].clock) {
             // A window the clock does not read: its plain instances, as the
             // plain reading scans them (one spelled past a day reaches back).
             for (int64_t d = today + 1; d >= today - 5 && !held; --d) {
-                const WallOccurrence& o = arg_day_occurrences(cache, d)[k];
+                const WallOccurrence& o = occurrences(d)[k];
                 if (o.traded && o.end_ms > o.open_ms && o.open_ms <= bar_ms && bar_ms < o.end_ms) {
                     held = true;
                     day = d;
@@ -1281,10 +1319,10 @@ bool clock_intraday_bar(int64_t bar_ms, ArgCache& cache, int64_t tf_ms, int64_t&
             // Rule 2: a deviating occurrence owns (previous end, own end].
             bool owned = false;
             for (int64_t d = today - 1; d <= today + 2 && !owned; ++d) {
-                const WallOccurrence& o = arg_day_occurrences(cache, d)[k];
+                const WallOccurrence& o = occurrences(d)[k];
                 if (!o.traded || !o.deviates || bar_ms > o.end_ms)
                     continue;
-                if (arg_day_occurrences(cache, d - 1)[k].end_ms >= bar_ms)
+                if (occurrences(d - 1)[k].end_ms >= bar_ms)
                     continue;
                 owned = true;
                 const int64_t post_wall = bar_ms + static_cast<int64_t>(o.post_s) * 1000;
@@ -1304,7 +1342,7 @@ bool clock_intraday_bar(int64_t bar_ms, ArgCache& cache, int64_t tf_ms, int64_t&
             }
             // Rule 3: the other occurrences.
             for (int64_t d = today + 2; d >= today - 2 && !owned && !held; --d) {
-                const WallOccurrence& o = arg_day_occurrences(cache, d)[k];
+                const WallOccurrence& o = occurrences(d)[k];
                 if (!o.traded || o.deviates)
                     continue;
                 const bool in = o.overnight
@@ -1346,7 +1384,7 @@ bool session_argument_intraday_bar(int64_t bar_ms, const std::string& session,
     if (tf_ms <= 0 || !cache.ok)
         return false;
     if (transition_clock && detail::session_clock_switches().transition_wall_clock
-        && !utc_zone(tz))
+        && !arg_cache_utc(cache))
         return clock_intraday_bar(bar_ms, cache, tf_ms, open_ms, close_ms);
     struct tm local {};
     decompose_ms_local(bar_ms, tz, local);
@@ -1688,7 +1726,7 @@ static bool session_arg_is_timezone(const std::string& s) {
 //
 // Two distinct timezones come out of this:
 //
-//   session_tz_out — the zone the SESSION window ("0930-1600") is read in.
+//   session_tz — the zone the SESSION window ("0930-1600") is read in.
 //     Pine: "To interpret the time zone of the specified session, time() and
 //     time_close() use the time zone of the exchange by default, unless a
 //     timezone argument is specified" (i.e. the default is syminfo.timezone).
@@ -1696,10 +1734,10 @@ static bool session_arg_is_timezone(const std::string& s) {
 //     syminfo_tz (codegen passes ``syminfo_.timezone``); otherwise UTC (the
 //     historical engine default, still what an unknown/empty syminfo yields).
 //
-//   tf_tz_out — the zone the five-argument forms' D/W/M calendar floor is
+//   tf_tz — the zone the five-argument forms' D/W/M calendar floor is
 //     computed in when there is no session argument: explicit tz argument,
 //     else UTC. A valid session argument's D/W/M period is the session's own
-//     bar, in session_tz_out (session_argument_bar); intraday timeframes sit
+//     bar, in session_tz (session_argument_bar); intraday timeframes sit
 //     on the symbol's own HTF grid (the seven-argument forms) or the epoch
 //     grid (these) and never depend on tz.
 //
@@ -1708,24 +1746,31 @@ static bool session_arg_is_timezone(const std::string& s) {
 // session (no filter) but leave tz at the chart/UTC default — do NOT adopt the
 // string as the timezone. The daily boundary then rolls at the chart/exchange
 // (UTC) timezone, matching TradingView.
-static void resolve_session_tz(const std::string& session,
-                               const std::string& tz_in,
-                               const std::string& syminfo_tz,
-                               std::string& sess_out,
-                               std::string& session_tz_out,
-                               std::string& tf_tz_out) {
-    sess_out = session;
-    tf_tz_out = tz_in;
-    if (tf_tz_out.empty() && session_arg_is_timezone(sess_out)) {
-        sess_out.clear();
-    }
-    if (tf_tz_out.empty())
-        tf_tz_out = "UTC";
-    session_tz_out = tz_in;
-    if (session_tz_out.empty())
-        session_tz_out = syminfo_tz;
-    if (session_tz_out.empty())
-        session_tz_out = "UTC";
+//
+// Each of the three is one of the call's own strings or a constant, named by
+// reference, so a call (once per bar per site) copies none.
+struct SessionTzTriple {
+    const std::string& session;
+    const std::string& session_tz;
+    const std::string& tf_tz;
+};
+
+static SessionTzTriple resolve_session_tz(const std::string& session,
+                                          const std::string& tz_in,
+                                          const std::string& syminfo_tz) {
+    static const std::string kNoSession;
+    static const std::string kUtc = "UTC";
+    const bool explicit_tz = !tz_in.empty();
+    return {!explicit_tz && session_arg_is_timezone(session) ? kNoSession : session,
+            explicit_tz ? tz_in : !syminfo_tz.empty() ? syminfo_tz : kUtc,
+            explicit_tz ? tz_in : kUtc};
+}
+
+// The timeframe a time()/time_close() call reads: its own, else the chart's,
+// else "1".
+static const std::string& call_timeframe(const std::string& tf_in, const std::string& chart_tf) {
+    static const std::string kOneMinute = "1";
+    return !tf_in.empty() ? tf_in : !chart_tf.empty() ? chart_tf : kOneMinute;
 }
 
 // time() / time_close() of a valid session argument: the session's own bar of
@@ -1760,12 +1805,12 @@ int64_t timeframe_time(int64_t bar_ms,
                   const std::string& tz_in,
                   const std::string& chart_tf,
                   const std::string& syminfo_tz) {
-    std::string tf = tf_in.empty() ? chart_tf : tf_in;
-    if (tf.empty())
-        tf = "1";
+    const std::string& tf = call_timeframe(tf_in, chart_tf);
 
-    std::string sess, session_tz, tf_tz;
-    resolve_session_tz(session, tz_in, syminfo_tz, sess, session_tz, tf_tz);
+    const SessionTzTriple resolved = resolve_session_tz(session, tz_in, syminfo_tz);
+    const std::string& sess = resolved.session;
+    const std::string& session_tz = resolved.session_tz;
+    const std::string& tf_tz = resolved.tf_tz;
 
     int64_t value = 0;
     if (!sess.empty() && session_argument_time(bar_ms, tf, sess, session_tz, chart_tf, false, value))
@@ -1783,12 +1828,12 @@ static int64_t session_time_close_reading(int64_t bar_ms,
                                          const std::string& chart_tf,
                                          const std::string& syminfo_tz,
                                          bool transition_clock) {
-    std::string tf = tf_in.empty() ? chart_tf : tf_in;
-    if (tf.empty())
-        tf = "1";
+    const std::string& tf = call_timeframe(tf_in, chart_tf);
 
-    std::string sess, session_tz, tf_tz;
-    resolve_session_tz(session, tz_in, syminfo_tz, sess, session_tz, tf_tz);
+    const SessionTzTriple resolved = resolve_session_tz(session, tz_in, syminfo_tz);
+    const std::string& sess = resolved.session;
+    const std::string& session_tz = resolved.session_tz;
+    const std::string& tf_tz = resolved.tf_tz;
 
     int64_t value = 0;
     if (!sess.empty() && session_argument_time(bar_ms, tf, sess, session_tz, chart_tf, true, value,
@@ -2003,16 +2048,16 @@ int64_t timeframe_time(int64_t bar_ms,
                   const std::string& chart_tf,
                   const std::string& sym_tz,
                   const std::string& sym_session) {
-    std::string tf = tf_in.empty() ? chart_tf : tf_in;
-    if (tf.empty())
-        tf = "1";
+    const std::string& tf = call_timeframe(tf_in, chart_tf);
 
     // Composition with the syminfo session-tz default: the session window
     // is read in the explicit tz, else syminfo.timezone (sym_tz), else UTC;
     // a VALID session under a D/W/M tf is the session's own bar in that
     // zone, while no valid session takes the symbol's own D/W/M bar.
-    std::string sess, session_tz, tf_tz;
-    resolve_session_tz(session, tz_in, sym_tz, sess, session_tz, tf_tz);
+    const SessionTzTriple resolved = resolve_session_tz(session, tz_in, sym_tz);
+    const std::string& sess = resolved.session;
+    const std::string& session_tz = resolved.session_tz;
+    const std::string& tf_tz = resolved.tf_tz;
 
     int64_t value = 0;
     if (!sess.empty() && session_argument_time(bar_ms, tf, sess, session_tz, chart_tf, false, value))
@@ -2046,12 +2091,12 @@ int64_t timeframe_time_close(int64_t bar_ms,
                         const std::string& chart_tf,
                         const std::string& sym_tz,
                         const std::string& sym_session) {
-    std::string tf = tf_in.empty() ? chart_tf : tf_in;
-    if (tf.empty())
-        tf = "1";
+    const std::string& tf = call_timeframe(tf_in, chart_tf);
 
-    std::string sess, session_tz, tf_tz;
-    resolve_session_tz(session, tz_in, sym_tz, sess, session_tz, tf_tz);
+    const SessionTzTriple resolved = resolve_session_tz(session, tz_in, sym_tz);
+    const std::string& sess = resolved.session;
+    const std::string& session_tz = resolved.session_tz;
+    const std::string& tf_tz = resolved.tf_tz;
 
     int64_t value = 0;
     if (!sess.empty() && session_argument_time(bar_ms, tf, sess, session_tz, chart_tf, true, value))
