@@ -455,14 +455,15 @@ ScriptRuleSwitches& script_rule_switches() noexcept;
 
 // One switch per part of TradingView's strategy.exit binding rule, pinned on
 // the tapes under tests/fixtures/exit_binding, the pending-* tapes of
-// tests/fixtures/global_exit_children and tests/fixtures/cross_side_exit, so
-// a regression bisects per part. A strategy.exit binds when it is called: to
-// its entry's open lots, else to the entry id while an order of it is
-// working, else the call is ignored. Every part but
-// global_exit_binds_held_position acts only with margin requirements off
-// (margin_long = margin_short = 0), the setting of their tapes. All on; only
-// tests change one. Process-wide, read by every adapter; not installed API,
-// and no strategy input reaches it.
+// tests/fixtures/global_exit_children, tests/fixtures/cross_side_exit and
+// tests/fixtures/same_side_exit, so a regression bisects per part. A
+// strategy.exit binds when it is called: to its entry's open lots, else to
+// the entry id while an order of it is working, else the call is ignored.
+// Every part but global_exit_binds_held_position and
+// held_exit_bracket_ignores_same_side_entries acts only with margin
+// requirements off (margin_long = margin_short = 0), the setting of their
+// tapes. All on; only tests change one. Process-wide, read by every adapter;
+// not installed API, and no strategy input reaches it.
 struct ExitBindingRuleSwitches {
     // An exit called in position for an entry id with no lot but a limit or
     // stop order working is bound to the id: a close or the flat does not
@@ -482,12 +483,20 @@ struct ExitBindingRuleSwitches {
     // book at the next opening, judged at that opening only.
     bool priced_add_at_cap_not_placed = true;
     // A global exit called while a position is held binds to that position,
-    // whatever the margin setting: an entry order of the other side working
-    // beside it (resting, or placed earlier in the same calculation) lends it
-    // neither its side nor its price basis. Its limit and stop rest on the
-    // held side and a profit or loss leg resolves against the held position
-    // (PineExecutionAdapter::exit()).
+    // whatever the margin setting: an entry order of either side working
+    // beside it (resting, placed earlier in the same calculation, or queued
+    // by a fill recalculation) lends it neither its side nor its price
+    // basis, nor a wait for its fill. Its limit and stop rest on the held
+    // side and a profit, loss or trail leg resolves against the held
+    // position (PineExecutionAdapter::exit()).
     bool global_exit_binds_held_position = true;
+    // With calc_on_order_fills, an entry order of the held side working
+    // beside such a held global exit does not compete with the bracket the
+    // exit stages in a fill recalculation either: the book census that takes
+    // a chart-tick reach from a competing leg leaves it out, so the bracket
+    // acts for the rest of the fill bar as it does with no such order
+    // (PineExecutionAdapter::flush_pending_bracket_legs()).
+    bool held_exit_bracket_ignores_same_side_entries = true;
 };
 ExitBindingRuleSwitches& exit_binding_rule_switches() noexcept;
 

@@ -10747,16 +10747,18 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             return;
         }
         // A global exit called while a position is held binds to that
-        // position, so an entry order of the other side working beside it is
-        // not its parent: taking that order's side put the limit and stop
-        // thresholds on the wrong side of the leg that closes the position
-        // (settled outside its trigger, MatchRejected InvalidTerms) and
-        // deferred a profit or loss leg to a fill that never came. lab tv
-        // synthetics tests/fixtures/cross_side_exit, NYSE:F 15m: each exit
-        // with the resting opposite entry is the exit without it, row for row,
-        // with and without a margin requirement.
+        // position, so an entry order of either side working beside it is
+        // not its parent. Taking an order of the other side put the limit and
+        // stop thresholds on the wrong side of the leg that closes the
+        // position (settled outside its trigger, MatchRejected InvalidTerms);
+        // taking a same-side add made its resting price the basis of a profit
+        // or trail leg; and either deferred a leg to a fill that never came.
+        // lab tv synthetics, NYSE:F 15m: each exit with the resting entry is
+        // the exit without it, row for row (tests/fixtures/cross_side_exit:
+        // the other side, with and without a margin requirement;
+        // tests/fixtures/same_side_exit: a same-side limit, stop or capped
+        // market add).
         if (from_entry.empty() && physical.signed_units != 0.0
-            && (physical.signed_units > 0.0) != parent.is_long
             && detail::exit_binding_rule_switches().global_exit_binds_held_position) {
             return;
         }
@@ -12537,32 +12539,57 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
         }
         queued = std::move(resting);
     }
-    std::unordered_set<std::uint64_t> source_pending_orders;
-    for (const auto& handle : live_handles_) {
-        const auto live = placement_.find(handle.incarnation);
-        if (live != placement_.end())
-            source_pending_orders.insert(key_for(
-                live->second.source_id, live->second.from_entry));
+    // The source book's distinct (id, from_entry) keys, less the rows `skip`
+    // names.
+    const auto source_book_population = [&](const auto& skip) {
+        std::unordered_set<std::uint64_t> source_pending_orders;
+        const auto note = [&](const PlacementSnapshot& row) {
+            if (!skip(row))
+                source_pending_orders.insert(key_for(row.source_id, row.from_entry));
+        };
+        for (const auto& handle : live_handles_) {
+            const auto live = placement_.find(handle.incarnation);
+            if (live != placement_.end()) note(live->second);
+        }
+        for (const auto& leg : queued) note(leg.snapshot);
+        for (const auto& entry : pending_entries_) note(entry.snapshot);
+        for (const auto& command : pending_same_bar_commands_) note(command.snapshot);
+        for (const auto& pending : pending_coof_requests_) note(pending.snapshot);
+        for (const auto& delayed : delayed_market_orders_) note(delayed.snapshot);
+        for (const auto& shadow : source_shadow_pending_) note(shadow.snapshot);
+        return source_pending_orders.size();
+    };
+    const std::size_t source_pending_population
+        = source_book_population([](const PlacementSnapshot&) { return false; });
+    // A global exit called while a position is held binds to that position
+    // (global_exit_binds_held_position), and an entry order of the held side
+    // working beside it does not compete with the bracket that exit stages
+    // in a fill recalculation either: the census of such a leg leaves that
+    // order out, so the leg keeps the reach it has with no such order and
+    // acts for the rest of the fill bar. lab tv synthetics
+    // tests/fixtures/same_side_exit, calc_on_order_fills: a profit and loss
+    // bracket beside a resting same-side limit or stop add books every trade
+    // of the bracket without the add (ExitBindingRuleSwitches::
+    // held_exit_bracket_ignores_same_side_entries).
+    std::size_t held_exit_population = source_pending_population;
+    auto held_side = static_cast<std::int32_t>(PositionSide::FLAT);
+    if (source_pending_population != 1U
+        && detail::exit_binding_rule_switches().held_exit_bracket_ignores_same_side_entries
+        && std::any_of(queued.begin(), queued.end(), [](const PendingBracketLeg& leg) {
+               return leg.snapshot.projection_created_during_coof
+                   && leg.snapshot.from_entry.empty();
+           })) {
+        const double held_units = detail::run_position(require_host()).signed_units;
+        if (held_units != 0.0) {
+            const bool held_long = held_units > 0.0;
+            held_side = static_cast<std::int32_t>(
+                held_long ? PositionSide::LONG : PositionSide::SHORT);
+            held_exit_population = source_book_population([&](const PlacementSnapshot& row) {
+                return row.opening && row.family == PineOrderFamily::Entry
+                    && row.is_long == held_long;
+            });
+        }
     }
-    for (const auto& leg : queued)
-        source_pending_orders.insert(key_for(
-            leg.snapshot.source_id, leg.snapshot.from_entry));
-    for (const auto& entry : pending_entries_)
-        source_pending_orders.insert(key_for(
-            entry.snapshot.source_id, entry.snapshot.from_entry));
-    for (const auto& command : pending_same_bar_commands_)
-        source_pending_orders.insert(key_for(
-            command.snapshot.source_id, command.snapshot.from_entry));
-    for (const auto& pending : pending_coof_requests_)
-        source_pending_orders.insert(key_for(
-            pending.snapshot.source_id, pending.snapshot.from_entry));
-    for (const auto& delayed : delayed_market_orders_)
-        source_pending_orders.insert(key_for(
-            delayed.snapshot.source_id, delayed.snapshot.from_entry));
-    for (const auto& shadow : source_shadow_pending_)
-        source_pending_orders.insert(key_for(
-            shadow.snapshot.source_id, shadow.snapshot.from_entry));
-    const std::size_t source_pending_population = source_pending_orders.size();
     // Re-issued explicit brackets are one leg family per entry instance.
     // The legacy book walked instances first (T1/T2 for opening A, then
     // T1/T2 for opening B), not every T1 across all openings before T2.
@@ -12575,7 +12602,11 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
         return left_origin < right_origin;
     });
     for (auto& leg : queued) {
-        const bool competing_chart_tick = source_pending_population != 1U
+        const bool held_global_exit = leg.snapshot.from_entry.empty()
+            && held_side != static_cast<std::int32_t>(PositionSide::FLAT)
+            && leg.snapshot.projection_position_side == held_side;
+        const bool competing_chart_tick
+            = (held_global_exit ? held_exit_population : source_pending_population) != 1U
             && leg.snapshot.projection_created_during_coof
             && (leg.snapshot.family == PineOrderFamily::ExitStop
                 || leg.snapshot.family == PineOrderFamily::ExitLimit);

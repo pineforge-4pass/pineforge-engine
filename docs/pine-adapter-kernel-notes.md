@@ -1111,7 +1111,8 @@ stream.
 | `global_exit_binds_working_entries` | a global exit called flat waits for the fill of the limit and stop entry orders working | `flush_pending_bracket_legs` |
 | `resting_stop_entry_survives_close` | under `process_orders_on_close`, an earlier bar's stop entry of the side a close flattens survives it, as a limit does | the stale-entry cancel in `on_applied` |
 | `priced_add_at_cap_not_placed` | under `process_orders_on_close`, a priced add of an id holding no lot, still at the pyramiding cap once its bar's closes are done, leaves the book at the next opening, judged at that opening only | `withdraw_unplaced_cap_adds` in `on_bar_open` |
-| `global_exit_binds_held_position` | a global exit called while a position is held takes that position as its parent: an entry order of the other side working beside it (resting, or placed earlier in the calculation) lends it neither its side nor its price basis, so its limit and stop rest on the held side and a profit or loss leg resolves against the held position | `observe_staged_parent` in `exit` |
+| `global_exit_binds_held_position` | a global exit called while a position is held takes that position as its parent: an entry order of either side working beside it (resting, placed earlier in the calculation, or queued by a fill recalculation) lends it neither its side nor its price basis, nor a wait for its fill, so its limit and stop rest on the held side and a profit, loss or trail leg resolves against the held position | `observe_staged_parent` in `exit` |
+| `held_exit_bracket_ignores_same_side_entries` | under `calc_on_order_fills`, an entry order of the held side working beside such a held global exit is left out of the book census of the bracket the exit stages in a fill recalculation, so the bracket keeps the reach it has without that order and acts for the rest of the fill bar | `flush_pending_bracket_legs` |
 
 The first four parts' tapes run with margin requirements off (`margin_long =
 margin_short = 0`) and without `calc_on_order_fills`, and those parts act only
@@ -1126,6 +1127,24 @@ the margin setting. It moved fills in three random witnesses of
 and the witness re-pin"). TradingView's margin-0 exports are byte-identical
 to the default-margin ones (the pin's evidence); the committed tape test runs
 the default margin.
+
+The same part is pinned for an entry order of the held side by the 56
+synthetic tapes of `tests/fixtures/same_side_exit`
+(`test_same_side_exit_tapes`), NYSE:F 15m, with and without
+`calc_on_order_fills`: TradingView books each of the 36 scripts that rest a
+same-side limit or stop add beside their global exit (profit, loss, both, or
+trail), or call a market add at the pyramiding cap, exactly as the same
+script without the add, byte for byte. The engine books 38 of the 56 tapes
+row for row; the other 18 depart at one row, the same in a control and its
+add tapes (the trailing leg and `calc_on_order_fills` re-entries, another
+rule's). Under `calc_on_order_fills` the resting add also counted as a
+competing order of the book for the profit-and-loss bracket the exit stages
+in the entry's fill recalculation, which took the bracket's chart-tick reach,
+so it acted one bar late: `held_exit_bracket_ignores_same_side_entries`
+leaves the add out of that census. A global exit over pyramided lots (an add
+that fills while the exit works) is a separate rule, not modelled:
+TradingView gives each entry its own exit levels and books FIFO, the engine
+one exit at the average price.
 
 The first two parts act on a whole exit at absolute levels whose pending
 parent rests at a level (`whole_level_exit`); the stop entry and cap parts act

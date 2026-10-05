@@ -1,0 +1,362 @@
+{
+ "l-l-ctl-cf": {
+  "engine": [
+   "long",
+   1.0,
+   1744205400000,
+   1746042300000,
+   8.45,
+   9.99
+  ],
+  "reason": "calc_on_order_fills on the 2025-04-09 13:30 UTC bar (open 8.50, low 8.445, high 8.715): TradingView re-enters at 8.72 and the loss leg closes it at 8.60 on the 13:45 bar; the engine re-enters at 8.45 and its loss leg never fills, so the trade runs to the range end (the fill recalculation's re-entry point); the control departs at this row with either rule part on or off and on the engine before this rule, and its add tapes at the same row with the rule on (not this rule)",
+  "trade": 21,
+  "tv": [
+   "long",
+   1.0,
+   1744205400000,
+   1744206300000,
+   8.72,
+   8.6
+  ]
+ },
+ "l-l-lim-cf": {
+  "engine": [
+   "long",
+   1.0,
+   1744205400000,
+   1746042300000,
+   8.45,
+   9.99
+  ],
+  "reason": "calc_on_order_fills on the 2025-04-09 13:30 UTC bar (open 8.50, low 8.445, high 8.715): TradingView re-enters at 8.72 and the loss leg closes it at 8.60 on the 13:45 bar; the engine re-enters at 8.45 and its loss leg never fills, so the trade runs to the range end (the fill recalculation's re-entry point); the control departs at this row with either rule part on or off and on the engine before this rule, and its add tapes at the same row with the rule on (not this rule)",
+  "trade": 21,
+  "tv": [
+   "long",
+   1.0,
+   1744205400000,
+   1744206300000,
+   8.72,
+   8.6
+  ]
+ },
+ "l-l-stp-cf": {
+  "engine": [
+   "long",
+   1.0,
+   1744205400000,
+   1746042300000,
+   8.45,
+   9.99
+  ],
+  "reason": "calc_on_order_fills on the 2025-04-09 13:30 UTC bar (open 8.50, low 8.445, high 8.715): TradingView re-enters at 8.72 and the loss leg closes it at 8.60 on the 13:45 bar; the engine re-enters at 8.45 and its loss leg never fills, so the trade runs to the range end (the fill recalculation's re-entry point); the control departs at this row with either rule part on or off and on the engine before this rule, and its add tapes at the same row with the rule on (not this rule)",
+  "trade": 21,
+  "tv": [
+   "long",
+   1.0,
+   1744205400000,
+   1744206300000,
+   8.72,
+   8.6
+  ]
+ },
+ "l-pl-ctl-cf": {
+  "engine": [
+   "long",
+   1.0,
+   1744205400000,
+   1744205400000,
+   8.45,
+   8.72
+  ],
+  "reason": "calc_on_order_fills on the 2025-04-09 13:30 UTC bar (open 8.50, low 8.445, high 8.715): TradingView re-enters at the open 8.50 and the bracket's stop closes it at 8.45; the engine re-enters at 8.45 and the bracket's limit closes it at 8.72, both in that bar (the fill recalculation's re-entry point); the control departs at this row with either rule part on or off and on the engine before this rule, and its add tapes at the same row with the rule on (not this rule)",
+  "trade": 152,
+  "tv": [
+   "long",
+   1.0,
+   1744205400000,
+   1744205400000,
+   8.5,
+   8.45
+  ]
+ },
+ "l-pl-lim-cf": {
+  "engine": [
+   "long",
+   1.0,
+   1744205400000,
+   1744205400000,
+   8.45,
+   8.72
+  ],
+  "reason": "calc_on_order_fills on the 2025-04-09 13:30 UTC bar (open 8.50, low 8.445, high 8.715): TradingView re-enters at the open 8.50 and the bracket's stop closes it at 8.45; the engine re-enters at 8.45 and the bracket's limit closes it at 8.72, both in that bar (the fill recalculation's re-entry point); the control departs at this row with either rule part on or off and on the engine before this rule, and its add tapes at the same row with the rule on (not this rule)",
+  "trade": 152,
+  "tv": [
+   "long",
+   1.0,
+   1744205400000,
+   1744205400000,
+   8.5,
+   8.45
+  ]
+ },
+ "l-pl-stp-cf": {
+  "engine": [
+   "long",
+   1.0,
+   1744205400000,
+   1744205400000,
+   8.45,
+   8.72
+  ],
+  "reason": "calc_on_order_fills on the 2025-04-09 13:30 UTC bar (open 8.50, low 8.445, high 8.715): TradingView re-enters at the open 8.50 and the bracket's stop closes it at 8.45; the engine re-enters at 8.45 and the bracket's limit closes it at 8.72, both in that bar (the fill recalculation's re-entry point); the control departs at this row with either rule part on or off and on the engine before this rule, and its add tapes at the same row with the rule on (not this rule)",
+  "trade": 152,
+  "tv": [
+   "long",
+   1.0,
+   1744205400000,
+   1744205400000,
+   8.5,
+   8.45
+  ]
+ },
+ "l-t-ctl-nc": {
+  "engine": [
+   "long",
+   1.0,
+   1751378400000,
+   1751380200000,
+   10.86,
+   10.92
+  ],
+  "reason": "trail_points = 5, trail_offset = 2: the long entered 2025-07-01 14:00 UTC at 10.86 trails out at 10.92 on the engine's 14:30 bar; TradingView keeps it to 11.18 on the 15:30 bar (the trailing model); the control departs at this row with either rule part on or off and on the engine before this rule, and its add tapes at the same row with the rule on (not this rule)",
+  "trade": 16,
+  "tv": [
+   "long",
+   1.0,
+   1751378400000,
+   1751383800000,
+   10.86,
+   11.18
+  ]
+ },
+ "l-t-lim-nc": {
+  "engine": [
+   "long",
+   1.0,
+   1751378400000,
+   1751380200000,
+   10.86,
+   10.92
+  ],
+  "reason": "trail_points = 5, trail_offset = 2: the long entered 2025-07-01 14:00 UTC at 10.86 trails out at 10.92 on the engine's 14:30 bar; TradingView keeps it to 11.18 on the 15:30 bar (the trailing model); the control departs at this row with either rule part on or off and on the engine before this rule, and its add tapes at the same row with the rule on (not this rule)",
+  "trade": 16,
+  "tv": [
+   "long",
+   1.0,
+   1751378400000,
+   1751383800000,
+   10.86,
+   11.18
+  ]
+ },
+ "l-t-stp-nc": {
+  "engine": [
+   "long",
+   1.0,
+   1751378400000,
+   1751380200000,
+   10.86,
+   10.92
+  ],
+  "reason": "trail_points = 5, trail_offset = 2: the long entered 2025-07-01 14:00 UTC at 10.86 trails out at 10.92 on the engine's 14:30 bar; TradingView keeps it to 11.18 on the 15:30 bar (the trailing model); the control departs at this row with either rule part on or off and on the engine before this rule, and its add tapes at the same row with the rule on (not this rule)",
+  "trade": 16,
+  "tv": [
+   "long",
+   1.0,
+   1751378400000,
+   1751383800000,
+   10.86,
+   11.18
+  ]
+ },
+ "s-pl-ctl-cf": {
+  "engine": [
+   "short",
+   1.0,
+   1743622200000,
+   1743687000000,
+   10.13,
+   10.01
+  ],
+  "reason": "calc_on_order_fills: the short re-entry after the bracket fill on the 2025-04-02 19:30 UTC bar books at 10.13 on that bar in the engine and at 10.12 on the 19:45 bar on TradingView (the fill recalculation's re-entry point); the control departs at this row with either rule part on or off and on the engine before this rule, and its add tapes at the same row with the rule on (not this rule)",
+  "trade": 28,
+  "tv": [
+   "short",
+   1.0,
+   1743623100000,
+   1743687000000,
+   10.12,
+   10.01
+  ]
+ },
+ "s-pl-lim-cf": {
+  "engine": [
+   "short",
+   1.0,
+   1743622200000,
+   1743687000000,
+   10.13,
+   10.01
+  ],
+  "reason": "calc_on_order_fills: the short re-entry after the bracket fill on the 2025-04-02 19:30 UTC bar books at 10.13 on that bar in the engine and at 10.12 on the 19:45 bar on TradingView (the fill recalculation's re-entry point); the control departs at this row with either rule part on or off and on the engine before this rule, and its add tapes at the same row with the rule on (not this rule)",
+  "trade": 28,
+  "tv": [
+   "short",
+   1.0,
+   1743623100000,
+   1743687000000,
+   10.12,
+   10.01
+  ]
+ },
+ "s-pl-stp-cf": {
+  "engine": [
+   "short",
+   1.0,
+   1743622200000,
+   1743687000000,
+   10.13,
+   10.01
+  ],
+  "reason": "calc_on_order_fills: the short re-entry after the bracket fill on the 2025-04-02 19:30 UTC bar books at 10.13 on that bar in the engine and at 10.12 on the 19:45 bar on TradingView (the fill recalculation's re-entry point); the control departs at this row with either rule part on or off and on the engine before this rule, and its add tapes at the same row with the rule on (not this rule)",
+  "trade": 28,
+  "tv": [
+   "short",
+   1.0,
+   1743623100000,
+   1743687000000,
+   10.12,
+   10.01
+  ]
+ },
+ "s-t-ctl-cf": {
+  "engine": [
+   "short",
+   1.0,
+   1743695100000,
+   1743700500000,
+   9.73,
+   9.7
+  ],
+  "reason": "calc_on_order_fills, trail_points = 5, trail_offset = 2: the short entered 2025-04-03 15:45 UTC at 9.73 trails out at 9.70 on TradingView's 17:00 bar and on the engine's 17:15 bar, at the same price (the trailing model); the control departs at this row with either rule part on or off and on the engine before this rule, and its add tapes at the same row with the rule on (not this rule)",
+  "trade": 9,
+  "tv": [
+   "short",
+   1.0,
+   1743695100000,
+   1743699600000,
+   9.73,
+   9.7
+  ]
+ },
+ "s-t-ctl-nc": {
+  "engine": [
+   "short",
+   1.0,
+   1743695100000,
+   1743700500000,
+   9.73,
+   9.7
+  ],
+  "reason": "trail_points = 5, trail_offset = 2: the short entered 2025-04-03 15:45 UTC at 9.73 trails out at 9.70 on TradingView's 17:00 bar and on the engine's 17:15 bar, at the same price (the trailing model); the control departs at this row with either rule part on or off and on the engine before this rule, and its add tapes at the same row with the rule on (not this rule)",
+  "trade": 6,
+  "tv": [
+   "short",
+   1.0,
+   1743695100000,
+   1743699600000,
+   9.73,
+   9.7
+  ]
+ },
+ "s-t-lim-cf": {
+  "engine": [
+   "short",
+   1.0,
+   1743695100000,
+   1743700500000,
+   9.73,
+   9.7
+  ],
+  "reason": "calc_on_order_fills, trail_points = 5, trail_offset = 2: the short entered 2025-04-03 15:45 UTC at 9.73 trails out at 9.70 on TradingView's 17:00 bar and on the engine's 17:15 bar, at the same price (the trailing model); the control departs at this row with either rule part on or off and on the engine before this rule, and its add tapes at the same row with the rule on (not this rule)",
+  "trade": 9,
+  "tv": [
+   "short",
+   1.0,
+   1743695100000,
+   1743699600000,
+   9.73,
+   9.7
+  ]
+ },
+ "s-t-lim-nc": {
+  "engine": [
+   "short",
+   1.0,
+   1743695100000,
+   1743700500000,
+   9.73,
+   9.7
+  ],
+  "reason": "trail_points = 5, trail_offset = 2: the short entered 2025-04-03 15:45 UTC at 9.73 trails out at 9.70 on TradingView's 17:00 bar and on the engine's 17:15 bar, at the same price (the trailing model); the control departs at this row with either rule part on or off and on the engine before this rule, and its add tapes at the same row with the rule on (not this rule)",
+  "trade": 6,
+  "tv": [
+   "short",
+   1.0,
+   1743695100000,
+   1743699600000,
+   9.73,
+   9.7
+  ]
+ },
+ "s-t-stp-cf": {
+  "engine": [
+   "short",
+   1.0,
+   1743695100000,
+   1743700500000,
+   9.73,
+   9.7
+  ],
+  "reason": "calc_on_order_fills, trail_points = 5, trail_offset = 2: the short entered 2025-04-03 15:45 UTC at 9.73 trails out at 9.70 on TradingView's 17:00 bar and on the engine's 17:15 bar, at the same price (the trailing model); the control departs at this row with either rule part on or off and on the engine before this rule, and its add tapes at the same row with the rule on (not this rule)",
+  "trade": 9,
+  "tv": [
+   "short",
+   1.0,
+   1743695100000,
+   1743699600000,
+   9.73,
+   9.7
+  ]
+ },
+ "s-t-stp-nc": {
+  "engine": [
+   "short",
+   1.0,
+   1743695100000,
+   1743700500000,
+   9.73,
+   9.7
+  ],
+  "reason": "trail_points = 5, trail_offset = 2: the short entered 2025-04-03 15:45 UTC at 9.73 trails out at 9.70 on TradingView's 17:00 bar and on the engine's 17:15 bar, at the same price (the trailing model); the control departs at this row with either rule part on or off and on the engine before this rule, and its add tapes at the same row with the rule on (not this rule)",
+  "trade": 6,
+  "tv": [
+   "short",
+   1.0,
+   1743695100000,
+   1743699600000,
+   9.73,
+   9.7
+  ]
+ }
+}
