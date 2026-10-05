@@ -642,7 +642,7 @@ search then sees only the unconsumed suffix (`born_on_remaining_path`,
 segment, and discrete points, keep the ordinary birth gate above.
 
 `on_native_bar_open` fires at the modeled opening, before that point's matching
-pass (`native_execution_consumer.cpp:7247-7249`). **Lookahead warning:** the
+pass (`native_execution_consumer.cpp:7251-7253`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
 `engine.current_bar_ = open_view` (`native_execution_consumer.cpp:7221`), the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
@@ -2112,7 +2112,7 @@ default, set while no run is active — because each row is a full
 the live state, not the run's length: the closed rows enter through a running
 digest). With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:8129`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:8133`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
@@ -3086,7 +3086,7 @@ Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator
 aggregates with, and the one the kernel's `script_bucket_completions` query
 feeds when the Pine scheduler asks how its input span buckets
-(`TimeframeAggregator` `native_execution_consumer.cpp:8211`). What it does
+(`TimeframeAggregator` `native_execution_consumer.cpp:8215`). What it does
 **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
