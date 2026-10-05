@@ -4055,4 +4055,26 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND PINEFORGE_BUILD_LIVE_RUNNER)
         ${CMAKE_CURRENT_SOURCE_DIR}/same_calc_bracket_e2e.py $<TARGET_FILE:pineforge-live>
         $<TARGET_FILE:native_live_report_oracle> $<TARGET_FILE:same_calc_bracket_strategy>)
     set_tests_properties(confirmed_capabilities_same_calc_bracket_e2e PROPERTIES TIMEOUT 300)
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_executable(test_lv_d8_tick_stop_activation test_lv_d8_tick_stop_activation.cpp)
+    target_link_libraries(test_lv_d8_tick_stop_activation PRIVATE pineforge)
+    target_compile_options(test_lv_d8_tick_stop_activation PRIVATE -UNDEBUG -ffp-contract=off)
+    add_test(NAME test_lv_d8_tick_stop_activation COMMAND test_lv_d8_tick_stop_activation)
+    if(PINEFORGE_BUILD_LIVE_RUNNER)
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        add_library(lv_d8_stop_strategy SHARED fixtures/lv_d8_stop_activation/generated.cpp
+            lv_d8_candidate_observer.cpp $<TARGET_OBJECTS:native_live_equivalence_observer>)
+        target_link_libraries(lv_d8_stop_strategy PRIVATE pineforge)
+        target_compile_options(lv_d8_stop_strategy PRIVATE -ffp-contract=off)
+        if(APPLE)
+            target_link_options(lv_d8_stop_strategy PRIVATE "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+        elseif(UNIX)
+            target_link_options(lv_d8_stop_strategy PRIVATE
+                "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+        endif()
+        add_test(NAME test_lv_d8_tick_stop_equivalence COMMAND ${Python3_EXECUTABLE} -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/lv_d8_tick_stop_equivalence.py
+            --library $<TARGET_FILE:lv_d8_stop_strategy> --runner $<TARGET_FILE:pineforge-live>)
+        set_tests_properties(test_lv_d8_tick_stop_equivalence PROPERTIES TIMEOUT 120)
+    endif()
 endif()
