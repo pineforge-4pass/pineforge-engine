@@ -1,0 +1,1104 @@
+{
+  "tapes": [
+    {
+      "path": "po/long-divisor-up",
+      "origin": "controls/r2fix/pf-n2s-a1-long-div-up",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-09-11",
+      "chart_to": "2025-09-13",
+      "tv_trades_sha256": "a940e45c143d40452d9b8658b150d9f9961c30fe0dff576a99eb13244be2f35c",
+      "repeat_tv_trades_sha256": "a940e45c143d40452d9b8658b150d9f9961c30fe0dff576a99eb13244be2f35c",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "020b7d9333a5d247e4afd552de14400249a935c111dfa42e41f73cc8f09b956f",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:50:27Z",
+        "2026-10-05T12:50:31Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T124116Z.json; POOC long, D/c' and D/o straddle a lot boundary (c' 1.16823, o 1.16837)"
+    },
+    {
+      "path": "po/long-divisor-down",
+      "origin": "controls/r2fix/pf-n2s-a1b-long-div-down",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-07-24",
+      "chart_to": "2025-07-26",
+      "tv_trades_sha256": "6b7c0522edc66b5e45a2f3cb4244c3d6139077fe584bb4808af2fcbdd5a3986d",
+      "repeat_tv_trades_sha256": "6b7c0522edc66b5e45a2f3cb4244c3d6139077fe584bb4808af2fcbdd5a3986d",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "eecc678624fbacf543feac6301cdd35998a31acce31f0c57e756a40040519d16",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:50:27Z",
+        "2026-10-05T12:50:31Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T124116Z.json; POOC long, D/c' and D/o straddle a lot boundary (c' 1.17634, o 1.17626)"
+    },
+    {
+      "path": "po/short-booked-recheck",
+      "origin": "controls/r2fix/pf-n2s-a3-short-nongap",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-07-03",
+      "chart_to": "2025-07-05",
+      "tv_trades_sha256": "29452ecb198ad923fae9e29ce866cf5784d33b0dbcfa4852c7ff09658b4beb1f",
+      "repeat_tv_trades_sha256": "29452ecb198ad923fae9e29ce866cf5784d33b0dbcfa4852c7ff09658b4beb1f",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "8dca726b4ea321a9fa1c77e59ed3e10c172cfb187016296635981e8f591ccbc2",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:50:27Z",
+        "2026-10-05T12:50:31Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T124116Z.json; POOC short, next open 3 ticks adverse, close-sized call passes its gate, open shortfall above it, booked re-check >= one lot (Dc 1.0360)"
+    },
+    {
+      "path": "po/short-weekend-gap",
+      "origin": "controls/r2/pf-n2s-a4-short-gap",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-05-30",
+      "chart_to": "2025-06-03",
+      "tv_trades_sha256": "9bf33d6825a75dc39f8c859a50692cd2c6c46fee3b6a5a135a2fc0d890a3110e",
+      "repeat_tv_trades_sha256": "9bf33d6825a75dc39f8c859a50692cd2c6c46fee3b6a5a135a2fc0d890a3110e",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "b16340fc2f8cf21347b38f7a9c9fc1b92f698ee78d335ff7854867077752b156",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:41:18Z",
+        "2026-10-05T12:41:40Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T124116Z.json; POOC short Friday 20:45, Sunday open 13 ticks up: close-sized then booked open re-check (Dc 3.9967)"
+    },
+    {
+      "path": "po/long-residue-call",
+      "origin": "controls/r2/pf-n2s-e1-long-resid-call",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-07-27",
+      "chart_to": "2025-07-30",
+      "tv_trades_sha256": "aca09532665293b510a3b61cdb4c3d4fdaeaf479ba2d36bb9c1d1bf6b232ba68",
+      "repeat_tv_trades_sha256": "aca09532665293b510a3b61cdb4c3d4fdaeaf479ba2d36bb9c1d1bf6b232ba68",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "9807bf3cace28d4dbcd360760471ffe564f1aff103b96b62ddc2b870b975d847",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:41:22Z",
+        "2026-10-05T12:41:43Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T124116Z.json; ETH POOC long, D(c')=2.7e-05 D(o)=-2.7e-05"
+    },
+    {
+      "path": "po/long-residue-open-call",
+      "origin": "controls/r2/pf-n2s-e2-long-resid-nocall",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-07-27",
+      "chart_to": "2025-07-30",
+      "tv_trades_sha256": "46c4882acb604233fc26201a4bec3359805c01c583d0c8700489577a2aee4e08",
+      "repeat_tv_trades_sha256": "46c4882acb604233fc26201a4bec3359805c01c583d0c8700489577a2aee4e08",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "774be68095790d8beed52376118a390a45be07630065e477a411181ae99dc872",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:41:22Z",
+        "2026-10-05T12:41:43Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T124116Z.json; ETH POOC long, D(c')=-4.35e-05 D(o)=4.35e-05"
+    },
+    {
+      "path": "po/short-booked-recheck-sublot",
+      "origin": "controls/r2/pf-n2s-e3-short-nongap",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-08-15",
+      "chart_to": "2025-08-18",
+      "tv_trades_sha256": "57b5e5448ff9545df0bb68ca28f4dc18b8c85b38af24427f158cf1f5ce8a3f89",
+      "repeat_tv_trades_sha256": "57b5e5448ff9545df0bb68ca28f4dc18b8c85b38af24427f158cf1f5ce8a3f89",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "feed09af452288d5d5f1226482d1e520b2b63d659b927803c67696ef4a83be1d",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:41:23Z",
+        "2026-10-05T12:41:43Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T124116Z.json; ETH POOC short, next open 6 ticks adverse, close-sized call passes, booked re-check >= one lot (Dc 0.8850)"
+    },
+    {
+      "path": "po/short-booked-one-unit",
+      "origin": "controls/r3/pf-n2s-e6-short-sublot-resize",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-08-08",
+      "chart_to": "2025-08-10",
+      "tv_trades_sha256": "45164a3b0e087c69497fc81a485d62e08e7e9c2f3fb1704d2289c56e72cf0da5",
+      "repeat_tv_trades_sha256": "45164a3b0e087c69497fc81a485d62e08e7e9c2f3fb1704d2289c56e72cf0da5",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "e3e32a16559fc81e5f71d32826c90d853620fd6617133de86b90225773567da8",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:49:15Z",
+        "2026-10-05T12:49:19Z"
+      ],
+      "note": "prediction written before export: controls/r3/preregistered-r3-20261005T124914Z.json; ETH POOC short, next open 1 tick adverse, booked re-check short by less than one lot (Dc 0.4120)"
+    },
+    {
+      "path": "po/short-booked-one-unit-edge",
+      "origin": "controls/r4/pf-n2s-e7-short-resize-h2",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-10-10",
+      "chart_to": "2025-10-12",
+      "tv_trades_sha256": "89a3288692f52abc3cb08cac94a49c0a3913102de9125914d4fcc1d352cd83b2",
+      "repeat_tv_trades_sha256": "89a3288692f52abc3cb08cac94a49c0a3913102de9125914d4fcc1d352cd83b2",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "6ce158f11ebb522b4d5a3687fad7177889ecd3afe071038400d20e2bb99f7e93",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:51:49Z",
+        "2026-10-05T12:51:54Z"
+      ],
+      "note": "prediction written before export: controls/r4/preregistered-r4-20261005T125145Z.json; H2 branch test (Dc 0.6280, Q 45.0)"
+    },
+    {
+      "path": "po/short-follow-up-one-unit",
+      "origin": "controls/r4/pf-n2s-e8-short-oneunit-h2",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-10-05",
+      "chart_to": "2025-10-07",
+      "tv_trades_sha256": "2aa660b31c7e8bac75381a8e4ca1850ebe836220e82f7b85adb5d4b0fc287c33",
+      "repeat_tv_trades_sha256": "2aa660b31c7e8bac75381a8e4ca1850ebe836220e82f7b85adb5d4b0fc287c33",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "4a37f85e69219400098053e6235a7b44ae487f28a192458859cf2f9ee0d8b97c",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:51:49Z",
+        "2026-10-05T12:51:54Z"
+      ],
+      "note": "prediction written before export: controls/r4/preregistered-r4-20261005T125145Z.json; H2 branch test (Dc 0.5960, Q 30.0)"
+    },
+    {
+      "path": "po/short-vetoed-at-print",
+      "origin": "controls/r5/pf-n2s-e9-short-resize-mid",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-10-10",
+      "chart_to": "2025-10-12",
+      "tv_trades_sha256": "0df74fdac3f0873ef50005544011e88e937a81fa363f00b9622cc53c310fe215",
+      "repeat_tv_trades_sha256": "0df74fdac3f0873ef50005544011e88e937a81fa363f00b9622cc53c310fe215",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "f89e09d1bfc6ea9741eeeee6828cfabcbdcae9bd35d7964b620d223bc42bbf95",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:52:55Z",
+        "2026-10-05T12:52:59Z"
+      ],
+      "note": "prediction written before export: controls/r5/<control>/prediction.json (12:52:53Z, export 12:52:55Z); H2 re-size branch, D_c mid-window (0.7)"
+    },
+    {
+      "path": "replica/f-path-follow-up-0209",
+      "origin": "controls/r1/pf-n2s-r05-0209",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2026-02-06",
+      "chart_to": "2026-02-11",
+      "tv_trades_sha256": "d4b26e588c2c333138de83003b117795221315c2e2cf4b600685488e7c97aa2f",
+      "repeat_tv_trades_sha256": "d4b26e588c2c333138de83003b117795221315c2e2cf4b600685488e7c97aa2f",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "9b59c0abe3eef4b572d97eba3a02c4e5079dcd3683de0c73daf75d66c3b83995",
+      "tv_rows": 5,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:34:41Z",
+        "2026-10-05T12:34:57Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T123440Z.json; 05 cohort 02-09: 4 at the open, 1 at the high, L follow-up 1 at the close (whole shares), 4 at 17:30"
+    },
+    {
+      "path": "replica/f-open-follow-up-0227",
+      "origin": "controls/r1/pf-n2s-r05-0227",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2026-02-26",
+      "chart_to": "2026-03-03",
+      "tv_trades_sha256": "ac7f0798b9f63c47b38227406583c0ff5d1a2e6acc3bb098bffbdc18ec03173a",
+      "repeat_tv_trades_sha256": "ac7f0798b9f63c47b38227406583c0ff5d1a2e6acc3bb098bffbdc18ec03173a",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "fa0020bf4047dafec28fa49a6c16b1106ec8439b47d7200eb574e07f074d49ac",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:34:41Z",
+        "2026-10-05T12:34:57Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T123440Z.json; 05 cohort 02-27: close-sized one unit (OU at the open print) + L follow-up 1 at the same print"
+    },
+    {
+      "path": "replica/eur-short-gap-1017",
+      "origin": "controls/r1/pf-n2s-r12-gap-1017",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-10-17",
+      "chart_to": "2025-10-21",
+      "tv_trades_sha256": "86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c",
+      "repeat_tv_trades_sha256": "86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "9b0a5dee41cfc58e8ba7f614087021683db2799c7322a9c834719970d6731564",
+      "tv_rows": 0,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:34:41Z",
+        "2026-10-05T12:34:57Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T123440Z.json; 12 weekend gap: close-sized 80.84 then booked open re-check 177.16 (engine 500.36)"
+    },
+    {
+      "path": "replica/eur-long-0429",
+      "origin": "controls/r1/pf-n2s-r12-long-0429",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-04-29",
+      "chart_to": "2025-05-01",
+      "tv_trades_sha256": "86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c",
+      "repeat_tv_trades_sha256": "86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "a59c640a7477a45b84e4c9eb443c107ba9056b34df3086b7b84146b0c95b64ae",
+      "tv_rows": 0,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:34:41Z",
+        "2026-10-05T12:34:57Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T123440Z.json; 12 first divergence: long POOC opening call sized at the close (TV 150.88 vs engine 150.84)"
+    },
+    {
+      "path": "replica/eth-short-follow-up-0524",
+      "origin": "controls/r1/pf-n2s-r19-keepL-0524",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-05-24",
+      "chart_to": "2025-05-27",
+      "tv_trades_sha256": "9ffe4c3c69058a04a46063c73c52e042e920320b008c9b627f34c3b072e3e02f",
+      "repeat_tv_trades_sha256": "9ffe4c3c69058a04a46063c73c52e042e920320b008c9b627f34c3b072e3e02f",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "f32881e4ab70db04cd7e423761b6c80ba48e0f8a0804c69fae130f914e005189",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:34:46Z",
+        "2026-10-05T12:35:01Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T123440Z.json; 19 caldera keep: 0.0004 close-sized + 0.0008 follow-up at the same print"
+    },
+    {
+      "path": "replica/eth-long-residue-0808",
+      "origin": "controls/r1/pf-n2s-r19-long-0808",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-08-08",
+      "chart_to": "2025-08-10",
+      "tv_trades_sha256": "cbb29df1c781297587b934a1ec6a47d067a42f236a7865f86ac9b9c6606418cc",
+      "repeat_tv_trades_sha256": "cbb29df1c781297587b934a1ec6a47d067a42f236a7865f86ac9b9c6606418cc",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "8bc359e118f44a8b81b2741db7f291248bcab7986681f909e69f3bef8c45edff",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:34:47Z",
+        "2026-10-05T12:35:01Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T123440Z.json; 19 witness: long POOC D(c')>0>D(o): TV 1.0 @3936.08, engine none"
+    },
+    {
+      "path": "replica/eth-short-vetoed-0602",
+      "origin": "controls/r1/pf-n2s-r19-resize-0602",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-06-01",
+      "chart_to": "2025-06-04",
+      "tv_trades_sha256": "568949f7db9dd9f254b922b27c07641f3088d0c9b7b9fdcf7c119ef9447714a4",
+      "repeat_tv_trades_sha256": "568949f7db9dd9f254b922b27c07641f3088d0c9b7b9fdcf7c119ef9447714a4",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "f4e260771bdb702d140ad4587ac2c2f38b2554acdbf458f4f01eca66028b75c1",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:34:47Z",
+        "2026-10-05T12:35:03Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T123440Z.json; 19 caldera re-size: TV one call 0.0016 at the open"
+    },
+    {
+      "path": "admission/long-dropped-at-open-0502",
+      "origin": "controls/r1/pf-n2s-r16-adm-0502",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-05-01",
+      "chart_to": "2025-05-04",
+      "tv_trades_sha256": "a44585e8dcb09098c7fccb8f29b30d822dda00e9a1b4e2b698ecb47b2827e693",
+      "repeat_tv_trades_sha256": "a44585e8dcb09098c7fccb8f29b30d822dda00e9a1b4e2b698ecb47b2827e693",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "be430eaf293133b8ab71d2a840529337257dda9ba39e8ffc33e26cfd5e6fd669",
+      "tv_rows": 0,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:34:44Z",
+        "2026-10-05T12:34:59Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T123440Z.json; 16 first divergence: Q*fill(open+2 ticks) exceeds equity by 0.032 -> TV drops the entry"
+    },
+    {
+      "path": "admission/long-admitted-at-open-0502",
+      "origin": "controls/r1/pf-n2s-r16-adm-0502-ok",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-05-01",
+      "chart_to": "2025-05-04",
+      "tv_trades_sha256": "34b6807b0c35a2b846e71b55457130a2adfa5139a28c309b1c46a406761e3fc1",
+      "repeat_tv_trades_sha256": "34b6807b0c35a2b846e71b55457130a2adfa5139a28c309b1c46a406761e3fc1",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "516aa85d292b83b186ad47cc3b110cf70f0490130c9298031ee834fcc14c4ea3",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:34:45Z",
+        "2026-10-05T12:35:00Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T123440Z.json; 16 control: capital +0.05 covers Q*fill -> filled, opening call at the open"
+    },
+    {
+      "path": "admission/short-admitted",
+      "origin": "controls/r2/pf-n2s-e4-adm-short-ok",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-08-20",
+      "chart_to": "2025-08-22",
+      "tv_trades_sha256": "20dd43e06ec7609a7aa044892428e25b8c7877b0b26ae5009bb6c1429a1e9a77",
+      "repeat_tv_trades_sha256": "20dd43e06ec7609a7aa044892428e25b8c7877b0b26ae5009bb6c1429a1e9a77",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "58a15940bcece7dc6b05fc9a1e6909f0ea8c9e1a5b5aee57533a282298080168",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:41:23Z",
+        "2026-10-05T12:41:45Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T124116Z.json; non-POOC short: capital between Q*fill (8443.2200) and Q*open (8443.2600) -> admitted"
+    },
+    {
+      "path": "admission/long-dropped",
+      "origin": "controls/r2/pf-n2s-e5-adm-long-drop",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-08-20",
+      "chart_to": "2025-08-22",
+      "tv_trades_sha256": "a44585e8dcb09098c7fccb8f29b30d822dda00e9a1b4e2b698ecb47b2827e693",
+      "repeat_tv_trades_sha256": "a44585e8dcb09098c7fccb8f29b30d822dda00e9a1b4e2b698ecb47b2827e693",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "2bc61909f1d79363d1f158020be699c16e7901dda485c2f632ec2bfdb7512da7",
+      "tv_rows": 0,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:41:25Z",
+        "2026-10-05T12:41:46Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T124116Z.json; non-POOC long: capital between Q*open (8443.2600) and Q*fill (8443.3000) -> dropped"
+    },
+    {
+      "path": "add-open/call-after-add-fill",
+      "origin": "controls/r3/pf-n2s-g1-add-open-call",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-08-12",
+      "chart_to": "2025-08-15",
+      "tv_trades_sha256": "425a85ace441aa336412de888deaef964e1d49ebbec92f0c7fa3dea4f66e76c6",
+      "repeat_tv_trades_sha256": "425a85ace441aa336412de888deaef964e1d49ebbec92f0c7fa3dea4f66e76c6",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "dc81819e07d1b6fa154be45295f15b7b23463e883cd3b2f8030d3db1bb9623e0",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:49:15Z",
+        "2026-10-05T12:49:19Z"
+      ],
+      "note": "prediction written before export: controls/r3/preregistered-r3-20261005T124914Z.json; margin 1 %: add B fills at the 2025-08-13 09:45 open; book short of margin there only with B and its fee"
+    },
+    {
+      "path": "lag/whole-share-follow-up",
+      "origin": "controls/r6/pf-n2s-f1-whole-share-L",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-10-01",
+      "chart_to": "2025-10-03",
+      "tv_trades_sha256": "ed492f0d98ed787ada2efb8b83e6e1f42c2ef39ab2a453c4be300443bf2c8eea",
+      "repeat_tv_trades_sha256": "ed492f0d98ed787ada2efb8b83e6e1f42c2ef39ab2a453c4be300443bf2c8eea",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "2b76de69e8d9f75ba064cdbc3effad95be9e35aa6fb85ab209b4045b3ac5459d",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:59:29Z",
+        "2026-10-05T12:59:34Z"
+      ],
+      "note": "prediction written before export: controls/r6/preregistered-r6-20261005T125925Z.json; whole-share L follow-up at the next waypoint (Dc 10.25)"
+    },
+    {
+      "path": "lag/whole-share-chain",
+      "origin": "controls/r6fix/pf-n2s-f2-whole-share-L",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-10-02",
+      "chart_to": "2025-10-03",
+      "tv_trades_sha256": "be284121835eba5e22810fa20ad9e16c3efeda2ca8d96ba908af496dc3cfdfe5",
+      "repeat_tv_trades_sha256": "be284121835eba5e22810fa20ad9e16c3efeda2ca8d96ba908af496dc3cfdfe5",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "282290196ba88f18cd824397f3c59611f527ed4ac456926800ab264cb22985b3",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T12:59:56Z",
+        "2026-10-05T12:59:59Z"
+      ],
+      "note": "prediction written before export: controls/r6/preregistered-r6-20261005T125925Z.json; whole-share L follow-up at the next waypoint (Dc 10.25)"
+    },
+    {
+      "path": "lag/short-point-own-check",
+      "origin": "controls/r7/pf-n2s-f3-chain-path",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-11-05",
+      "chart_to": "2025-11-06",
+      "tv_trades_sha256": "4c815090554abbbeb335c1a47f0ae2c50fd3fe84858810b5f2d7968a82d45578",
+      "repeat_tv_trades_sha256": "4c815090554abbbeb335c1a47f0ae2c50fd3fe84858810b5f2d7968a82d45578",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "60ece14703351554a99bec218147335cccb122c0bb3eaa4679642f8f630863bc",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T13:03:11Z",
+        "2026-10-05T13:03:15Z"
+      ],
+      "note": "prediction written before export: controls/r7/preregistered-r7-20261005T130310Z.json; chained whole-share L (Dc 10.25, Q 500.0)"
+    },
+    {
+      "path": "lag/owed-dropped-whole-share",
+      "origin": "controls/r8/pf-n2s-f5-owed-dropped-F",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-12-09",
+      "chart_to": "2025-12-10",
+      "tv_trades_sha256": "1c6711bdf059d6a0ad3689deaa6293702cc07b88d82176f504957b5c38067433",
+      "repeat_tv_trades_sha256": "1c6711bdf059d6a0ad3689deaa6293702cc07b88d82176f504957b5c38067433",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "38c7f8b899ffa9eaa17fefb4b27ba5d71966c4a0d8ce891992e093a9fdd1c2b6",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T13:07:57Z",
+        "2026-10-05T13:08:03Z"
+      ],
+      "note": "prediction written before export: controls/r8/preregistered-r8-20261005T130753Z.json; owed follow-up vs a point short itself (Dc 10.25, Q 500.0)"
+    },
+    {
+      "path": "lag/owed-dropped-fractional",
+      "origin": "controls/r8/pf-n2s-a5-owed-dropped-eur",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-10-01",
+      "chart_to": "2025-10-02",
+      "tv_trades_sha256": "83879040cc2f65f55478ede0ca612cba45c4c4c036f769abca874a3933322f29",
+      "repeat_tv_trades_sha256": "83879040cc2f65f55478ede0ca612cba45c4c4c036f769abca874a3933322f29",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "dc6fc15f7f30f6d75cccc420e3cd489726b63b540b506759eff95661aa3e2bda",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T13:07:57Z",
+        "2026-10-05T13:08:03Z"
+      ],
+      "note": "prediction written before export: controls/r8/preregistered-r8-20261005T130753Z.json; owed follow-up vs a point short itself (Dc 2.3000000000000003, Q 60000.0)"
+    },
+    {
+      "path": "po/short-recheck-vetoed",
+      "origin": "controls/rc1/pf-recheck-a1-gate-veto-s1g3",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-07-01",
+      "chart_to": "2025-07-03",
+      "tv_trades_sha256": "1c0af9bc2e6e6da09d43392364a4395575123a4961b9141c89ac4a51e9937723",
+      "repeat_tv_trades_sha256": "1c0af9bc2e6e6da09d43392364a4395575123a4961b9141c89ac4a51e9937723",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "9997793280c8f8c369b884f5b7755a53f22d4bad3740ab5abb34e958bb3e2e6f",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T16:21:25Z",
+        "2026-10-05T16:22:00Z"
+      ],
+      "note": "prediction written before export: controls/rc1/preregistered-rc1-20261005T162050Z.json; open 3 ticks above the close, slippage 1: the booked re-check 0.142664 short, its 0.48 vetoed by the short gate at the print; no re-check fill, no follow-up; next call the high's 244.76",
+      "scratch": "px-pin-recheck"
+    },
+    {
+      "path": "po/short-recheck-vetoed-slip2",
+      "origin": "controls/rc1/pf-recheck-a2-gate-veto-s2g5",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-07-02",
+      "chart_to": "2025-07-04",
+      "tv_trades_sha256": "fb148388ebb29d4567cdb509dfcf9069f767c2496a4d56eed1893817ecb08891",
+      "repeat_tv_trades_sha256": "fb148388ebb29d4567cdb509dfcf9069f767c2496a4d56eed1893817ecb08891",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "92befd3235350c1b46c5cbf71790796e05926512adeb2b06af1ceb7f5b5f0342",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T16:21:25Z",
+        "2026-10-05T16:22:00Z"
+      ],
+      "note": "prediction written before export: controls/rc1/preregistered-rc1-20261005T162050Z.json; open 5 ticks above the close, slippage 2: the booked re-check 0.2992 short, its 1.0 vetoed at the print; no follow-up; next call the high's 136.52",
+      "scratch": "px-pin-recheck"
+    },
+    {
+      "path": "po/short-recheck-rounds-to-zero",
+      "origin": "controls/rc1/pf-recheck-a3-zero-recheck-s1g4",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-09-22",
+      "chart_to": "2025-09-24",
+      "tv_trades_sha256": "fddfac711eb2548300b7d30d5c64e06572ceae16a5f6e838acb52c1b10ab586f",
+      "repeat_tv_trades_sha256": "fddfac711eb2548300b7d30d5c64e06572ceae16a5f6e838acb52c1b10ab586f",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "fe8af408fe159df02a0f992e162714bd5d6d007e75d8b9225f9dccd99010f67e",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T16:21:25Z",
+        "2026-10-05T16:22:00Z"
+      ],
+      "note": "prediction written before export: controls/rc1/preregistered-rc1-20261005T162050Z.json; Q 150000, open 4 ticks above the close: the booked re-check 0.004693 short, under one restore step and outside the one-unit band (books nothing); no follow-up; next call the high's 427.84",
+      "scratch": "px-pin-recheck"
+    },
+    {
+      "path": "po/short-recheck-vetoed-low-first",
+      "origin": "controls/rc2/pf-recheck-a4-gate-veto-low-s1g3",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-07-10",
+      "chart_to": "2025-07-12",
+      "tv_trades_sha256": "29309cbd9f499b40376ea13b6e2e8c7650e530ca799819f6116714c7596f7b44",
+      "repeat_tv_trades_sha256": "29309cbd9f499b40376ea13b6e2e8c7650e530ca799819f6116714c7596f7b44",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "53bccf5d52aa97bdd3d2f40c3aa7961c23daaa64d6a869e4ac479597df2b8749",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T16:24:46Z",
+        "2026-10-05T16:24:51Z"
+      ],
+      "note": "prediction written before export: controls/rc2/preregistered-rc2-20261005T162435Z.json; as short-recheck-vetoed with the low first and not short: the close-sized call's follow-up is dropped at the open, not owed to the low (V5 refuted); next call the high's 153.2",
+      "scratch": "px-pin-recheck"
+    },
+    {
+      "path": "po/short-recheck-rounds-to-zero-low-first",
+      "origin": "controls/rc2/pf-recheck-a5-zero-recheck-low-s1g4",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2026-02-17",
+      "chart_to": "2026-02-19",
+      "tv_trades_sha256": "86081802e137c5a4ff0e96a670e7c1cb7de66eef9ad2fd97b0ec936b9aa0e74c",
+      "repeat_tv_trades_sha256": "86081802e137c5a4ff0e96a670e7c1cb7de66eef9ad2fd97b0ec936b9aa0e74c",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "9c1dbeb75c69c7dad08686bc3fe1503e1c0d465c35922a639e5fb7d47ed4596c",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T16:24:46Z",
+        "2026-10-05T16:24:51Z"
+      ],
+      "note": "prediction written before export: controls/rc2/preregistered-rc2-20261005T162435Z.json; as short-recheck-rounds-to-zero with the low first and not short: no follow-up at the low; next call the high's 324.2",
+      "scratch": "px-pin-recheck"
+    },
+    {
+      "path": "po/short-recheck-owes-low",
+      "origin": "controls/rc1/pf-recheck-b1-recheck-owes-s1g3",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-07-07",
+      "chart_to": "2025-07-09",
+      "tv_trades_sha256": "82e16d2a0f2dbbe732a1dddcaf37bb3d3decd78ca23d49308dc8c276ec795d69",
+      "repeat_tv_trades_sha256": "82e16d2a0f2dbbe732a1dddcaf37bb3d3decd78ca23d49308dc8c276ec795d69",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "229155200de90bf5c081852b30ad7254d064f187435261c1838013b3db6e13eb",
+      "tv_rows": 5,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T16:21:25Z",
+        "2026-10-05T16:22:00Z"
+      ],
+      "note": "prediction written before export: controls/rc1/preregistered-rc1-20261005T162050Z.json; the booked re-check books 1.44 at the open print; its own follow-up 1.16 is owed to the next point and books at the low's print 1.16926, not at the open (F1 and the head: 1.16 at 1.16944)",
+      "scratch": "px-pin-recheck"
+    },
+    {
+      "path": "po/short-recheck-owed-dropped-high",
+      "origin": "controls/rc1/pf-recheck-b2-recheck-owes-s2g4",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-07-03",
+      "chart_to": "2025-07-05",
+      "tv_trades_sha256": "ceff3ebe525186a8ae087b16eeb3a191a36316e298c50d11295c1b9252cf2ad5",
+      "repeat_tv_trades_sha256": "ceff3ebe525186a8ae087b16eeb3a191a36316e298c50d11295c1b9252cf2ad5",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "8255fceb00f132455537164306115e006d4a8794b6895c54e7dfbe8e3d141023",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T16:21:47Z",
+        "2026-10-05T16:22:03Z"
+      ],
+      "note": "prediction written before export: controls/rc1/preregistered-rc1-20261005T162050Z.json; slippage 2: the booked re-check books 2.72; its follow-up 2.72 is owed to the high, which is short itself, so it is dropped and the high books its own 89.84 (F1 and the head: 2.72 at the open, 79.0)",
+      "scratch": "px-pin-recheck"
+    },
+    {
+      "path": "po/short-recheck-owes-low-slip2",
+      "origin": "controls/rc2/pf-recheck-b3-recheck-owes-low-s2g4",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-07-31",
+      "chart_to": "2025-08-02",
+      "tv_trades_sha256": "a985ad324414188b0d46578741ad2c1dc24990db27d093b851f65c0290dfde34",
+      "repeat_tv_trades_sha256": "a985ad324414188b0d46578741ad2c1dc24990db27d093b851f65c0290dfde34",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "5b6c3ebf4bc72edde2bf610fc0ffc2ab90a47655b791a897ba55800997fdf906",
+      "tv_rows": 5,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T16:24:46Z",
+        "2026-10-05T16:24:51Z"
+      ],
+      "note": "prediction written before export: controls/rc2/preregistered-rc2-20261005T162435Z.json; slippage 2: the booked re-check books 2.88; its follow-up 2.56 books at the low's print 1.14207 (F1 and the head: at the open print 1.1424)",
+      "scratch": "px-pin-recheck"
+    },
+    {
+      "path": "po/short-recheck-no-follow-up",
+      "origin": "controls/rc1/pf-recheck-c1-recheck-no-l-s1g3",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-07-08",
+      "chart_to": "2025-07-10",
+      "tv_trades_sha256": "aa1fd9ee7dd2760f1003f74c48e371c75dd4bc8086aad3dd1417c29b004a591d",
+      "repeat_tv_trades_sha256": "aa1fd9ee7dd2760f1003f74c48e371c75dd4bc8086aad3dd1417c29b004a591d",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "252660116260ffaebf2ad54548f9264e334237b45e75bfcf40bf0593f55a53b5",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T16:21:48Z",
+        "2026-10-05T16:22:03Z"
+      ],
+      "note": "prediction written before export: controls/rc1/preregistered-rc1-20261005T162050Z.json; anchor: the booked re-check books 3.68 at the open print and owes nothing (every model agrees)",
+      "scratch": "px-pin-recheck"
+    },
+    {
+      "path": "po/short-open-not-short-follow-up",
+      "origin": "controls/rc1/pf-recheck-c2-not-short-l-s1g1",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-07-09",
+      "chart_to": "2025-07-11",
+      "tv_trades_sha256": "39056b2f1a78119415e6363bf403429369f6c37ead2ea1362d37fbc2f9e5ea36",
+      "repeat_tv_trades_sha256": "39056b2f1a78119415e6363bf403429369f6c37ead2ea1362d37fbc2f9e5ea36",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "06047e016b8438ac26d471a3ffa7aeddf126c9c2fcc044ac09650609ab377da4",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T16:21:49Z",
+        "2026-10-05T16:22:04Z"
+      ],
+      "note": "prediction written before export: controls/rc1/preregistered-rc1-20261005T162050Z.json; anchor: open 1 tick above the close, the booked book not short at the open; the close-sized call's follow-up 2.8 books at the open print (every model agrees)",
+      "scratch": "px-pin-recheck"
+    },
+    {
+      "path": "replica/eur-short-recheck-vetoed-0618",
+      "origin": "controls/rc1/pf-recheck-r0-cohort-0618",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-06-18",
+      "chart_to": "2025-06-20",
+      "tv_trades_sha256": "e9d88c6d6b9abca24d96aac4f878bffb16911c02e69bfdffb77cea20c7d2ed4b",
+      "repeat_tv_trades_sha256": "e9d88c6d6b9abca24d96aac4f878bffb16911c02e69bfdffb77cea20c7d2ed4b",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "1f922b7f7bcf2a09f4e3e2770050973063d85dcd1dd8c83c4a5e491cd59dfcc0",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T16:21:50Z",
+        "2026-10-05T16:22:05Z"
+      ],
+      "note": "prediction written before export: controls/rc1/preregistered-rc1-20261005T162050Z.json; the EURUSD caldera cohort 2025-06-18 18:45 (short 79764.22, cash 91576.806101 rebuilt from TradingView's rows): 5.52 at the open print, the re-check's 0.16 vetoed (0.18 against 0.84), next call the high's 522.36",
+      "scratch": "px-pin-recheck"
+    },
+    {
+      "path": "po/short-recheck-owes-low-eth",
+      "origin": "controls/rc3/pf-recheck-e1-eth-recheck-owes-s1g3",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-06-17",
+      "chart_to": "2025-06-19",
+      "tv_trades_sha256": "3a0f427d74252829dad65f5d4b1a66efd280b91f1c426f577999b2332b9b7908",
+      "repeat_tv_trades_sha256": "3a0f427d74252829dad65f5d4b1a66efd280b91f1c426f577999b2332b9b7908",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "83d15acf78aa674dfa230f9370011a575e319ffd0cf5d1b54a4204bc83420f90",
+      "tv_rows": 5,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T16:41:09Z",
+        "2026-10-05T16:41:32Z"
+      ],
+      "note": "prediction written before export: controls/rc3/preregistered-rc3-20261005T164055Z.json; BINANCE:ETHUSDT.P, 300 ETH, open 3 ticks above the close: the booked re-check books 0.002; its follow-up 0.0032 books at the low's print 2547.43, not at the open's 2548.77",
+      "scratch": "px-pin-recheck"
+    },
+    {
+      "path": "po/short-recheck-owes-high-whole",
+      "origin": "controls/rc3/pf-recheck-w2-whole-recheck-owes-s2",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-09-16",
+      "chart_to": "2025-09-18",
+      "tv_trades_sha256": "a9eb5961765f3743c08246ac80e0b0ffaa445cf366417a9542cf348c82ac1785",
+      "repeat_tv_trades_sha256": "a9eb5961765f3743c08246ac80e0b0ffaa445cf366417a9542cf348c82ac1785",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "8518aa32182d1854c2a5f39900429737fdd941746ad0a51c2afab2bcb0bc412c",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T16:41:09Z",
+        "2026-10-05T16:41:32Z"
+      ],
+      "note": "prediction written before export: controls/rc3/preregistered-rc3-20261005T164055Z.json; NYSE:F whole shares, 5000 shares, slippage 2, the session open 4 ticks above the close: the re-check books 16; its follow-up 20 books at the high's print 11.68 (the high is not short), not at the open's 11.67",
+      "scratch": "px-pin-recheck"
+    },
+    {
+      "path": "po/short-recheck-vetoed-whole",
+      "origin": "controls/rc3b/pf-recheck-w1b-whole-recheck-vetoed-s2g3",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-08-25",
+      "chart_to": "2025-08-27",
+      "tv_trades_sha256": "50bcadd3b21f8bb5ea0b92be35f084a0eb7e585d534fbb008e6f555c1ff24a99",
+      "repeat_tv_trades_sha256": "50bcadd3b21f8bb5ea0b92be35f084a0eb7e585d534fbb008e6f555c1ff24a99",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "47f110cdadbf3bd9ee6a4bfb737b6085391d66df00ad963f3187bfce9e8fbef0",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T16:43:00Z",
+        "2026-10-05T16:43:03Z"
+      ],
+      "note": "prediction written before export: controls/rc3b/preregistered-rc3b-20261005T164251Z.json; NYSE:F whole shares, slippage 2, the session open 3 ticks above the close: the booked re-check 22.81 short, its 4 vetoed at the print; no follow-up; next call the high's 108",
+      "scratch": "px-pin-recheck"
+    },
+    {
+      "path": "admission/short-refused-at-close",
+      "origin": "controls/rc3/pf-recheck-w1-whole-recheck-vetoed-s2",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-06-09",
+      "chart_to": "2025-06-11",
+      "tv_trades_sha256": "86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c",
+      "repeat_tv_trades_sha256": "86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "5ea7ee63a2a76d503c6adf1bc19902b182ab4a4ad12df0722848e95830fe713c",
+      "tv_rows": 0,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T16:41:09Z",
+        "2026-10-05T16:41:32Z"
+      ],
+      "note": "prediction written before export: controls/rc3/preregistered-rc3-20261005T164055Z.json; NYSE:F, process_orders_on_close short of 5000 at the 10.34 close, capital 51696.55: 5000 x 10.34 exceeds it by 3.45 though 5000 x the 10.32 slipped fill does not; TradingView books no trade (every model of the preregistration predicted the fill: the predictor prices the slipped fill)",
+      "scratch": "px-pin-recheck"
+    }
+  ],
+  "bars": {
+    "eur-2025-09-11-2025-09-13.csv": {
+      "sha256": "3ccf51b00a33fb74d1d14648d44443cbb1336c8aeb7f22031a9726a235d93f80",
+      "rows": 180,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eur-2025-07-24-2025-07-26.csv": {
+      "sha256": "3186cd834b7ae9d0721bbbc59ba0264aecefa70bfe486beb80745b13edb7bd82",
+      "rows": 180,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eur-2025-07-03-2025-07-05.csv": {
+      "sha256": "54cef2dc8145005fde6401bb11a594c0bee894ae579093e4278bc6ff4b7d358e",
+      "rows": 180,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eur-2025-05-30-2025-06-03.csv": {
+      "sha256": "93df33e06eba2b26e92d3d65d1c8173534fd2b572c2725fd3d3fad4a2753c772",
+      "rows": 193,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eth-2025-07-27-2025-07-30.csv": {
+      "sha256": "182db0e5385a4ec13ea64eb18ce1f9f1851a0db2beda1feaabde934a5279993e",
+      "rows": 289,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-08-15-2025-08-18.csv": {
+      "sha256": "7d9a15410685e66b24e046382fbbc543f9364fbc6aec7bdfab354eec9253412e",
+      "rows": 289,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-08-08-2025-08-10.csv": {
+      "sha256": "429e77ded71767cb81c1f6861df1b20b2d2feb9e319b7fe2d8a3614a8c666059",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-10-10-2025-10-12.csv": {
+      "sha256": "af42b6a9c1dc544dba3bb3f61a879b67ad2305957f4cf28169e8ea2f0a0cd671",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-10-05-2025-10-07.csv": {
+      "sha256": "0fa758fe094dec7b813966836f1655c2a9d36c3735ef6c43b57f57489b1d371d",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "f-2026-02-06-2026-02-11.csv": {
+      "sha256": "29138c9e223e9f830cb93575c52ddd712de49fef52cebbb0577d9a89d0be2690",
+      "rows": 78,
+      "feed": "f-15.csv",
+      "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32"
+    },
+    "f-2026-02-26-2026-03-03.csv": {
+      "sha256": "d26d0c121fb9e8e4de25fb02843a3d89503e9269f89a15254b4e9a9159a0511a",
+      "rows": 78,
+      "feed": "f-15.csv",
+      "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32"
+    },
+    "eur-2025-10-17-2025-10-21.csv": {
+      "sha256": "8951bf5d2156a634697d395da272dd240e300a363ae56551eb0d08065c326a76",
+      "rows": 193,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eur-2025-04-29-2025-05-01.csv": {
+      "sha256": "848bbcb115bc2ff2437301eeb3861040c52766e5531090eac8e4b9c14fe1f414",
+      "rows": 193,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eth-2025-05-24-2025-05-27.csv": {
+      "sha256": "9b81c7e9ce983c98c6de709e2473390239bb1692749727b947dccc8d2c3ae694",
+      "rows": 289,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-06-01-2025-06-04.csv": {
+      "sha256": "3b056c6b9ab2ba9eec864a9bba4b4dcd7586f57ea8f1cae11584ea6a22af0151",
+      "rows": 289,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-05-01-2025-05-04.csv": {
+      "sha256": "5316385e6d54c707e114e660c2722437327a5e169c60e0d9d5b0cec76ff8aa9a",
+      "rows": 289,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-08-20-2025-08-22.csv": {
+      "sha256": "7ac203784710c7a707266f678a05242d822745c942f40047262204cc73de9e98",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eur-2025-08-12-2025-08-15.csv": {
+      "sha256": "1d3deed827029bd61cb23b3777f948acd839b5ad5e0bcf2016a7043d0c4c4f8c",
+      "rows": 289,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "f-2025-10-01-2025-10-03.csv": {
+      "sha256": "8d8139b8394af87cc5dd1c021f1f6ca802ac880a7905e08945e16c15b56af557",
+      "rows": 52,
+      "feed": "f-15.csv",
+      "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32"
+    },
+    "f-2025-10-02-2025-10-03.csv": {
+      "sha256": "a7fe3def59f5fccca49af986437f160ab790e8250741674d5eeb480a5b0f90f0",
+      "rows": 26,
+      "feed": "f-15.csv",
+      "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32"
+    },
+    "f-2025-11-05-2025-11-06.csv": {
+      "sha256": "865abda963bde98fa306b3c3b531bd25eb4a39d94d291f47a5deee85124fe403",
+      "rows": 26,
+      "feed": "f-15.csv",
+      "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32"
+    },
+    "f-2025-12-09-2025-12-10.csv": {
+      "sha256": "f7f344402f4abff17e9ad1cd8404d8065ad57c16d8869b4364ff080c47431e88",
+      "rows": 26,
+      "feed": "f-15.csv",
+      "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32"
+    },
+    "eur-2025-10-01-2025-10-02.csv": {
+      "sha256": "d9a0f8553e9ff6d01b2bfb83cde240d41623aab0d169bad6e419acced44076fc",
+      "rows": 97,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eur-2025-07-01-2025-07-03.csv": {
+      "sha256": "51fda674b3b654e94edc868414c5ed8aa06dfb0be73cbc65de552e264c793369",
+      "rows": 193,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eur-2025-07-02-2025-07-04.csv": {
+      "sha256": "3ab9853de2f0a0c3263c522d23b8afc992f2671d37ec6848fa9d7b98491c8e2e",
+      "rows": 193,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eur-2025-09-22-2025-09-24.csv": {
+      "sha256": "c7405ea77903e982b283ed3a7927b8043f4aac62318dca26303bfbd064c1178a",
+      "rows": 193,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eur-2025-07-10-2025-07-12.csv": {
+      "sha256": "8d8b9ab77d8616ff34836650e25f3d01551699acc4b88cb7b0792a0dd476eaaf",
+      "rows": 180,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eur-2026-02-17-2026-02-19.csv": {
+      "sha256": "987780b3a9d7a0aaa47351a832087b17477d12584b642c24e647d2cfa69d621f",
+      "rows": 193,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eur-2025-07-07-2025-07-09.csv": {
+      "sha256": "44406c6d2a7df6f912014f35a7d1271f571cadd2a4a8daaa833c848bd841c1f7",
+      "rows": 193,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eur-2025-07-31-2025-08-02.csv": {
+      "sha256": "1934f04ea58e28bfb82d912f881ee718ea2659978cc9322948680f39ef42599e",
+      "rows": 180,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eur-2025-07-08-2025-07-10.csv": {
+      "sha256": "7f6c1a16322e242d6aacd4a02daf3c380c31fbe906c1a8bc08a57ca4da68eccb",
+      "rows": 193,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eur-2025-07-09-2025-07-11.csv": {
+      "sha256": "785d15af199fe5cded02907d79c84058e53a8730ca820165724167694dfcf56a",
+      "rows": 193,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eur-2025-06-18-2025-06-20.csv": {
+      "sha256": "f2a758123181a775e5b96dadd73b481bf1fb5f287af5a36e0fdd7a2333e0bd22",
+      "rows": 193,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eth-2025-06-17-2025-06-19.csv": {
+      "sha256": "8ff0fa4feffbb24747200925cc8ad5072a6eb697d544d9a996fccbd92c89f77c",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "f-2025-09-16-2025-09-18.csv": {
+      "sha256": "857d67c079b9f917266ceb2967b3b92bee2947a3a3c21fd8ad44e5ccd71defc2",
+      "rows": 52,
+      "feed": "f-15.csv",
+      "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32"
+    },
+    "f-2025-08-25-2025-08-27.csv": {
+      "sha256": "ab00eadc9399046d9ed7b9a30ce2d4f1a6002bbad57b288b7d91473f996dbc01",
+      "rows": 52,
+      "feed": "f-15.csv",
+      "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32"
+    },
+    "f-2025-06-09-2025-06-11.csv": {
+      "sha256": "72464dc10cb5a3b64c8f5b322c7509f5504477f1a03b567055235d657b30c475",
+      "rows": 52,
+      "feed": "f-15.csv",
+      "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32"
+    }
+  },
+  "description": "TradingView strategy tapes of synthetic controls pinning the opening-call schedule, the open check after an add's fill, the fill-time admission of an explicit quantity and the refined lagged follow-up (MarginOpeningSwitches): each control exported twice with lab tv --no-note, both exports byte-identical, range proof covered. origin is the export directory relative to the pinning lane's scratch root (px-pin-n2s, or the one named by scratch); spec.txt is the replay the test drives."
+}

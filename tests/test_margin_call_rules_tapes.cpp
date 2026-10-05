@@ -41,7 +41,8 @@
  * must still differ, so the list shrinks as the engine learns a rule.
  *
  * Each margin rule the adapter implements sits behind its own switch
- * (pineforge::source::detail::MarginRuleSwitches and MarginScheduleSwitches).
+ * (pineforge::source::detail::MarginRuleSwitches, MarginScheduleSwitches and
+ * MarginOpeningSwitches).
  * The tree ships every rule on, which this test checks; it replays the tapes
  * with the shipped switches against kKnownDivergences, turns each rule off
  * alone from there and requires a load-bearing one to cost at least one tape,
@@ -175,37 +176,9 @@ struct ScheduleAblation {
 const std::vector<std::pair<std::string, std::string>> kKnownDivergences = {
     {"coof/coof-low-call-s1",
      "a slipped long's one-unit call at the low (not implemented: test_pooc_open_money_event_l4b pins no call there)"},
-    {"inherited/eth-slip-5",
-     "a carried short's source-close / fresh-opening call schedule (not implemented)"},
-    {"initial/short-s5",
-     "a carried short's source-close / fresh-opening call schedule (not implemented)"},
-    {"initial/short-s5-plus02",
-     "a carried short's source-close / fresh-opening call schedule (not implemented)"},
-    {"ledger/ledger-s5-long",
-     "a carried short's source-close / fresh-opening call schedule (not implemented)"},
-    {"ledger/ledger-s5-p2-long",
-     "a carried short's source-close / fresh-opening call schedule (not implemented)"},
-    {"ledger/ledger-s5-p2-short",
-     "a carried short's source-close / fresh-opening call schedule (not implemented)"},
-    {"ledger/ledger-s5-short",
-     "a carried short's source-close / fresh-opening call schedule (not implemented)"},
-    {"quantum/quantum-s5-p0",
-     "a carried short's source-close / fresh-opening call schedule (not implemented)"},
-    {"quantum/quantum-s5-p2",
-     "a carried short's source-close / fresh-opening call schedule (not implemented)"},
-    {"repeat/repeat-s5-1",
-     "a carried short's source-close / fresh-opening call schedule (not implemented)"},
-    {"repeat/repeat-s5-2",
-     "a carried short's source-close / fresh-opening call schedule (not implemented)"},
-    {"repeat/repeat-s5-3",
-     "a carried short's source-close / fresh-opening call schedule (not implemented)"},
-    {"repeat/repeat-s5-4",
-     "a carried short's source-close / fresh-opening call schedule (not implemented)"},
     {"schedule/fresh-p2-coof",
      "a carried short's source-close / fresh-opening call schedule (not implemented)"},
     {"schedule/fresh-plus02-coof",
-     "a carried short's source-close / fresh-opening call schedule (not implemented)"},
-    {"schedule/schedule-q9p1305-s4",
      "a carried short's source-close / fresh-opening call schedule (not implemented)"},
     {"quantum/short-m50-s0",
      "a short's call quantum at margin 50 (not implemented)"},
@@ -1081,7 +1054,10 @@ int main() {
         {"add_signal_close", &M::add_signal_close, false},
         {"whole_share_lagged_follow_up", &M::whole_share_lagged_follow_up, false},
         {"long_call_gain_loss", &M::long_call_gain_loss, false},
-        {"close_call_follow_up_at_open", &M::close_call_follow_up_at_open},
+        // Inside the opening-call schedule's shape (MarginOpeningSwitches)
+        // the open's calls after the close-sized one replace it: literal-21
+        // is pinned by booked_open_recheck and open_print_follow_up now.
+        {"close_call_follow_up_at_open", &M::close_call_follow_up_at_open, false},
     };
     CHECK(schedule_ablations.size() == sizeof(MarginScheduleSwitches) / sizeof(bool));
     switches = defaults;
@@ -1102,16 +1078,50 @@ int main() {
             CHECK(off <= all_on_matched.size());
         }
     }
+    // The opening-call rules, off alone from every rule on: pinned by
+    // tests/fixtures/margin_open_rules; here each may only cost tapes (the
+    // fourteen source-close tapes of the short-s5 family, inherited/eth-slip-5
+    // and schedule-q9p1305-s4 match with them on).
+    using O = pineforge::source::detail::MarginOpeningSwitches;
+    auto& opening = pineforge::source::detail::margin_opening_switches();
+    const O opening_defaults = opening;
+    const std::vector<std::pair<const char*, bool O::*>> opening_ablations = {
+        {"close_sized_long_call", &O::close_sized_long_call},
+        {"close_call_gate_at_print", &O::close_call_gate_at_print},
+        {"booked_open_recheck", &O::booked_open_recheck},
+        {"open_print_follow_up", &O::open_print_follow_up},
+        {"open_check_after_add_fill", &O::open_check_after_add_fill},
+        {"open_fill_admission", &O::open_fill_admission},
+        {"whole_share_lagged_short", &O::whole_share_lagged_short},
+        {"chained_follow_up", &O::chained_follow_up},
+        {"short_point_drops_owed", &O::short_point_drops_owed},
+    };
+    CHECK(opening_ablations.size() == sizeof(O) / sizeof(bool));
+    schedule = schedule_on;
+    switches = defaults;
+    for (const auto& [name, flag] : opening_ablations) {
+        opening = opening_defaults;
+        opening.*flag = false;
+        const std::set<std::string> matched_off = matching_tapes(cases, feeds);
+        std::size_t lost = 0;
+        for (const std::string& path : all_on_matched) lost += matched_off.count(path) == 0;
+        std::printf("ablation %s off: %zu/%zu tapes match (%zu lost)\n", name, matched_off.size(),
+                    asserted_tapes, lost);
+        CHECK(matched_off.size() <= all_on_matched.size());
+    }
+    opening = opening_defaults;
     schedule = schedule_on;
     switches = defaults;
     for (const auto& ablation : ablations) switches.*(ablation.flag) = false;
     for (const auto& ablation : schedule_ablations) schedule.*(ablation.flag) = false;
+    for (const auto& ablation : opening_ablations) opening.*(ablation.second) = false;
     const std::size_t all_off = matching_tapes(cases, feeds).size();
     std::printf("ablation all off: %zu/%zu tapes match\n", all_off, asserted_tapes);
     CHECK(all_off == kTapesBeforeRules);
 
     switches = tree_defaults;
     schedule = schedule_defaults;
+    opening = opening_defaults;
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed ? 1 : 0;
 }

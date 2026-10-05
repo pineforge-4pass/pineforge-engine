@@ -1,0 +1,7 @@
+//@version=6
+strategy("pf-n2s-a1-long-div-up", initial_capital=70100.23969999999, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=1, process_orders_on_close=true)
+if time == timestamp("UTC", 2025, 9, 11, 12, 15)
+    strategy.entry("L", strategy.long, qty=60000.0)
+if time == timestamp("UTC", 2025, 9, 11, 12, 30)
+    strategy.close_all()
+plot(strategy.equity, "equity")

@@ -1,0 +1,7 @@
+//@version=6
+strategy("pf-n2s-e8-short-oneunit-h2", initial_capital=134524.83280000003, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=1, process_orders_on_close=true)
+if time == timestamp("UTC", 2025, 10, 5, 0, 0)
+    strategy.entry("S", strategy.short, qty=30.0)
+if time == timestamp("UTC", 2025, 10, 5, 0, 15)
+    strategy.close_all()
+plot(strategy.equity, "equity")

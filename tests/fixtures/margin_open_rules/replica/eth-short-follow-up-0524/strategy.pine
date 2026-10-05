@@ -1,0 +1,7 @@
+//@version=6
+strategy("pf-n2s-r19-keepL-0524", initial_capital=73465.72164965353, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=1, process_orders_on_close=true)
+if time == timestamp("UTC", 2025, 5, 24, 22, 45)
+    strategy.entry("S", strategy.short, qty=29.089)
+if time == timestamp("UTC", 2025, 5, 25, 0, 15)
+    strategy.close_all()
+plot(strategy.equity, "equity")

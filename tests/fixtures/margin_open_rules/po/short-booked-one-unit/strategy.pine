@@ -1,0 +1,7 @@
+//@version=6
+strategy("pf-n2s-e6-short-sublot-resize", initial_capital=242030.94259999995, margin_long=100, margin_short=100, pyramiding=1, commission_type=strategy.commission.percent, commission_value=0.05, slippage=1, process_orders_on_close=true)
+if time == timestamp("UTC", 2025, 8, 8, 17, 45)
+    strategy.entry("S", strategy.short, qty=60.0)
+if time == timestamp("UTC", 2025, 8, 8, 18, 0)
+    strategy.close_all()
+plot(strategy.equity, "equity")

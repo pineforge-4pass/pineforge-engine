@@ -431,7 +431,27 @@ way. Its tapes are `tests/fixtures/margin_schedule_rules` and the
 | `add_signal_close` | on | a same-side add's whole-book requirement at the tick-built signal close, not the slipped fill, at margin 100 (no tape decides another margin) | `validate_precommit` |
 | `whole_share_lagged_follow_up` | on | a long's lagged follow-up on a whole-share lot grid too | `lagged_margin_follow_up_units` |
 | `long_call_gain_loss` | on | a commission-free long's one-unit call reads initial + (G + L), inside `gain_loss_regime()`; a fee-bearing book keeps the closed-trade equity | `gain_loss_closed_equity` in `slipped_long_margin_units`, `slipped_long_unit_shortfall`, `submit_tv_money_long_margin_call` |
-| `close_call_follow_up_at_open` | on | a process_orders_on_close short's call sized at the previous close and executed at the open is followed once at that open, at its own fill (one follow-up restores the book there) | the opening checkpoint in `on_bar_open` |
+| `close_call_follow_up_at_open` | on | a process_orders_on_close short's call sized at the previous close and executed at the open is followed once at that open, at its own fill (one follow-up restores the book there); inside the opening-call schedule's shape below, `booked_open_recheck` and `open_print_follow_up` replace it | the opening checkpoint in `on_bar_open` |
+
+`MarginOpeningSwitches` (same header and namespace, read through
+`margin_opening_switches()`) holds the opening-call rules: the call a
+full-margin, one-lot process_orders_on_close position (percent commission,
+slippage, a lot grid of at most one) takes at the open after the close fill
+that opened it, the open's check after an add filled there, the fill-time
+admission of an explicit quantity at the open and the refined lagged
+follow-up. Its tapes are `tests/fixtures/margin_open_rules`.
+
+| Switch | Default | Gates | Where |
+|---|---|---|---|
+| `close_sized_long_call` | on | a long's call at that open is sized at the source close c′ (money and unit margin at c′), as a short's is | `close_sized_open_units` in the full-margin long block of `on_bar_open` |
+| `close_call_gate_at_print` | on | that call's one-unit band and the short gate are priced at its own print (the open's tick moved by the slippage), and it stands unless they veto it; a vetoed one leaves the open's own check | `close_sized_open_units`, the `print` argument of `source_margin_units` and `short_call_vetoed` |
+| `booked_open_recheck` | on | after it the open checks the booked book at its own mark, its call passing the short gate at the same print; where that check finds the book short and books nothing, the sequence ends there and no follow-up is booked | `run_close_sized_open_calls` |
+| `open_print_follow_up` | on | then the lagged follow-up of the last call at that print, with the one-unit fallback (a short's re-check that booked owes it to the first extreme instead, under `short_point_drops_owed`); the calls of this sequence are not repeated at one price (`recheck_at_fill`) | `open_print_follow_up_units`, `run_close_sized_open_calls`, `unrepeated_margin_calls_` in `on_applied` |
+| `open_check_after_add_fill` | on | a leveraged book's open check runs after a market add filling at that open, on the book holding it and its entry fee (slippage 0, a percent commission) | the leveraged opening branch of `on_applied` |
+| `open_fill_admission` | on | an explicit-quantity market long from flat filling at the next open is dropped where sig10(sig10(E) / Q) is below the slipped open tick | `validate_precommit` |
+| `whole_share_lagged_short` | on | a short's lagged follow-up on whole-share books in the path walk, with the one-unit fallback | `whole_share_lag_units`, `call_short_with_lagged_follow_up` |
+| `chained_follow_up` | on | on those books an owed follow-up that books leaves its own follow-up for the next point | `call_short_with_lagged_follow_up` (`owed`) |
+| `short_point_drops_owed` | on | an owed follow-up is dropped at a point whose own check finds the book short; the open's own call of a carried short in the walk's scope and the opening-call scope (`close_sized_open_call_scope`) owes its follow-up to the first extreme instead of repeating it at its print, and so does a booked re-check of a short in the walk's scope (`run_close_sized_open_calls`): booked at that point's print, or dropped where the point is short itself | `execute_owed_short_follow_up`, `open_call_owing_follow_up`, `run_close_sized_open_calls` |
 
 ### 1.7 Evidence
 
@@ -452,9 +472,9 @@ The single-position fixture also asserts 13 process_orders_on_close fee-sizing
 tapes, 3 commission-0 controls, the oracle control of §1.2, 10 order
 controls replayed through handwritten hosts and 67 tapes of the short call
 gate and schedule (`short-cutoff-gate`). With every switch on, as shipped,
-the engine reproduces 244 of its 266 tapes and 373 of the 381 ledger tapes,
-and 35 of the 39 `margin_schedule_rules` tapes (each of those also as a
-stream, trade for trade); turning the
+the engine reproduces 258 of its 266 tapes and 373 of the 381 ledger tapes,
+38 of the 39 `margin_schedule_rules` tapes and all 43 `margin_open_rules`
+tapes (each of those also as a stream, trade for trade); turning the
 placement half off costs 108 ledger tapes, the fill half 32 ledger and
 3 single-position tapes. `test_margin_rules_forward_replay` replays a sample of both
 fixtures as a backtest and as a bar-by-bar stream, with every switch on, with
