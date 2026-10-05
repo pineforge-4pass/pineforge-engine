@@ -1,6 +1,6 @@
 # Compiled strategy execution capabilities
 
-Availability: **since the next release**. This applies to both the capability
+Availability: **since 1.2.0**. This applies to both the capability
 extension and the runner's receipt-based admission policy.
 
 An additive generated-strategy C ABI extension proves compiled declarations
@@ -124,7 +124,7 @@ That includes requests in legacy libraries. The larger-script-timeframe
 workaround in the [streaming known issue](pages/streaming.md#streaming_known_issues)
 therefore concerns direct stream-API hosts and legacy libraries without a receipt
 using the affected v1.0.0/v1.0.1 runtime, not receipt-carrying runner libraries.
-The issue is fixed on main for the tested request shapes described above.
+The issue is fixed in 1.1.0 (#325) for the tested request shapes described above.
 Do not mistake that compatibility warning for proof of safe eligibility.
 
 Accepted bytes are hashed as `SHA256(previous_identity + ":capabilities-v1:" +

@@ -460,7 +460,7 @@ execution requires strategies that calculate only on bar close. Do not use
 strategies that require intrabar calculation. Regenerated libraries expose the
 versioned [compiled execution-capabilities receipt](../docs/strategy-capabilities.md).
 The capability extension and receipt-based runner admission are available
-**since the next release**.
+**since 1.2.0**.
 Before beginning execution or binding the ledger, the runner refuses compiled
 `calc_on_every_tick=true`, `calc_on_order_fills=true`, `calc_on_every_history_tick=true`,
 `process_orders_on_close=true` (including CLI overrides on version-1 libraries), `use_bar_magnifier=true`,
@@ -478,7 +478,7 @@ warns and runs, including its requests; that compatibility path does not prove
 eligibility. The larger-script-timeframe workaround in the
 [streaming known issue](../docs/pages/streaming.md#streaming_known_issues) matters
 only for direct stream-API hosts and legacy libraries without a receipt running
-the affected v1.0.0/v1.0.1 runtime. The issue is fixed on main: confirmed-bar
+the affected v1.0.0/v1.0.1 runtime. The issue is fixed in 1.1.0 (#325): confirmed-bar
 streams now match batch for the tested same-chart `request.security` shapes,
 including `timeframe.period` with `close[1]`, higher-timeframe close/SMA/EMA,
 `gaps_on`, and higher-timeframe Heikin-Ashi chart-symbol requests. This does not
@@ -490,7 +490,7 @@ An override cannot erase an unsupported compiled declaration.
 
 The receipt proves declarations only, not arbitrary batch-versus-stream
 equivalence. The conservative POOC refusal remains even though confirmed-bar
-priced-entry fill attribution is now fixed on main. Plain market-order strategies with no POOC or requests have
+priced-entry fill attribution is fixed since 1.1.0 (#325). Plain market-order strategies with no POOC or requests have
 generated-library batch-versus-stream equivalence CTests. No request or POOC
 shape is admitted until a separate equivalence test proves it. Uses of
 `barstate.isrealtime` and `timenow` are conservatively refused by name: generated
