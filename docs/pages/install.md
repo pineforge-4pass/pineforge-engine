@@ -52,24 +52,24 @@ ${prefix}/
 ## Prebuilt tarballs
 
 A release attaches the library prebuilt to its GitHub release. For
-[v1.1.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.1.0)
-they are `pineforge-v1.1.0-linux-x86_64.tar.gz`,
-`pineforge-v1.1.0-linux-aarch64.tar.gz` and
-`pineforge-v1.1.0-macos-universal.tar.gz` (one archive for arm64 and x86_64),
+[v1.2.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.2.0)
+they are `pineforge-v1.2.0-linux-x86_64.tar.gz`,
+`pineforge-v1.2.0-linux-aarch64.tar.gz` and
+`pineforge-v1.2.0-macos-universal.tar.gz` (one archive for arm64 and x86_64),
 each with a `.sha256`. A tarball unpacks to one directory,
-`pineforge-v1.1.0-<platform>/`, laid out as the install above (both archives,
+`pineforge-v1.2.0-<platform>/`, laid out as the install above (both archives,
 `include/pineforge/`, `lib/cmake/PineForge/`), with `LICENSE`, `NOTICE` and
 `VERSION` beside them:
 
 ```bash
-curl -LO https://github.com/pineforge-4pass/pineforge-engine/releases/download/v1.1.0/pineforge-v1.1.0-linux-x86_64.tar.gz
-curl -LO https://github.com/pineforge-4pass/pineforge-engine/releases/download/v1.1.0/pineforge-v1.1.0-linux-x86_64.tar.gz.sha256
-sha256sum -c pineforge-v1.1.0-linux-x86_64.tar.gz.sha256   # macOS: shasum -a 256 -c
-tar -xzf pineforge-v1.1.0-linux-x86_64.tar.gz
+curl -LO https://github.com/pineforge-4pass/pineforge-engine/releases/download/v1.2.0/pineforge-v1.2.0-linux-x86_64.tar.gz
+curl -LO https://github.com/pineforge-4pass/pineforge-engine/releases/download/v1.2.0/pineforge-v1.2.0-linux-x86_64.tar.gz.sha256
+sha256sum -c pineforge-v1.2.0-linux-x86_64.tar.gz.sha256   # macOS: shasum -a 256 -c
+tar -xzf pineforge-v1.2.0-linux-x86_64.tar.gz
 ```
 
 A CMake consumer finds it with
-`-DCMAKE_PREFIX_PATH=$PWD/pineforge-v1.1.0-linux-x86_64` (@ref integration_cmake).
+`-DCMAKE_PREFIX_PATH=$PWD/pineforge-v1.2.0-linux-x86_64` (@ref integration_cmake).
 The package config asks for Eigen 3.3 or later (`find_dependency(Eigen3 3.3)`):
 install it on Linux (`libeigen3-dev` on Debian and Ubuntu); the macOS tarball
 carries Eigen 3.4.0's headers and CMake package, which the same prefix finds.
@@ -89,7 +89,7 @@ with the hub's own version (`X.Y.Z`, `X.Y`, and `latest` for the newest stable
 one), with `engine<E>-codegen<C>` naming the pair it carries, and with
 `sha-<short>`; a release candidate gets no `latest`. Pin the
 `engine<E>-codegen<C>` tag of the engine release you build against: for
-v1.1.0, `engine1.1.0-codegen1.1.0`, the image the hub also tags `1.1.0`.
+v1.2.0, `engine1.2.0-codegen1.2.0`, the image the hub also tags `1.2.0`.
 
 ```bash
 docker pull ghcr.io/pineforge-4pass/pineforge-release:latest
