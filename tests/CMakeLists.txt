@@ -4038,3 +4038,21 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     endif()
     add_test(NAME test_run_failure_codes COMMAND test_run_failure_codes)
 endif()
+
+if(PINEFORGE_BUILD_SOURCE_LAYER AND PINEFORGE_BUILD_LIVE_RUNNER)
+    add_library(same_calc_bracket_strategy MODULE
+        fixtures/same_calc_bracket/generated.cpp
+        $<TARGET_OBJECTS:native_live_equivalence_observer>)
+    target_link_libraries(same_calc_bracket_strategy PRIVATE pineforge)
+    target_compile_options(same_calc_bracket_strategy PRIVATE -ffp-contract=off)
+    if(APPLE)
+        target_link_options(same_calc_bracket_strategy PRIVATE "LINKER:-u,_pf_abi_version")
+    else()
+        target_link_options(same_calc_bracket_strategy PRIVATE "LINKER:-u,pf_abi_version")
+    endif()
+    set_target_properties(same_calc_bracket_strategy PROPERTIES PREFIX "")
+    add_test(NAME confirmed_capabilities_same_calc_bracket_e2e COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/same_calc_bracket_e2e.py $<TARGET_FILE:pineforge-live>
+        $<TARGET_FILE:native_live_report_oracle> $<TARGET_FILE:same_calc_bracket_strategy>)
+    set_tests_properties(confirmed_capabilities_same_calc_bracket_e2e PROPERTIES TIMEOUT 300)
+endif()
