@@ -32,12 +32,13 @@
  * -- from the first bar TradingView computed, with TradingView's lot as the
  * `qty_step`, and requires every trade the tape closes before the row's end
  * to be the engine's: entry and exit time, side, price in ticks and quantity
- * in lots. The NYSE:F Q2 row ends at 2025-04-07 15:30 UTC, whose short
- * TradingView calls at the bar's high alone, 180 at 9.33, not at the 9.105
- * open 1.83 units short there (the lane report's open item); the EURUSD row
- * ends at 2025-04-28 14:00 UTC, where TradingView takes no call at a high
- * whose shortfall, 0.043, is under one lot of margin by the equity's last
- * cents.
+ * in lots. Every row now runs to its window's last bar. Two calls the lane
+ * left open are the short call gate's vetoes
+ * (MarginScheduleSwitches::short_call_gate): the NYSE:F Q2 short of
+ * 2025-04-07 15:30 UTC, 1.83 units short at the 9.105 open, is called at the
+ * bar's high alone, 180 at 9.33, and the EURUSD short of 2025-04-28 14:00 UTC
+ * takes no call at a high whose shortfall, 0.043, its slipped call would not
+ * cover.
  */
 
 #include <pineforge/bar.hpp>
@@ -215,15 +216,15 @@ void show(const char* tag, const std::vector<Row>& rows) {
 
 int main() {
     const Case cases[] = {
-        // NYSE:F 15, 2025-04-01 .. : the trades closed before 2025-04-07 15:30 UTC.
+        // NYSE:F 15, 2025-04-01 .. 2025-06-30: every trade closed before the last bar.
         {"taili-mop-f", kF15Q2, sizeof(kF15Q2) / sizeof(kF15Q2[0]), 0.01, 1.0,
-         1744039800000LL, 36, 25},
+         1751312700000LL, 443, 278},
         // NYSE:F 15, 2025-07-01 .. 2025-10-01: every trade closed before the last bar.
         {"taili-mop-f3", kF15Q3, sizeof(kF15Q3) / sizeof(kF15Q3[0]), 0.01, 1.0,
          1759261500000LL, 445, 278},
-        // OANDA:EURUSD 15, 2025-04-01 .. : the trades closed before 2025-04-28 14:00 UTC.
+        // OANDA:EURUSD 15, 2025-04-01 .. 2025-04-29: every trade closed before the last bar.
         {"taili-mop-eur", kEurUsd15, sizeof(kEurUsd15) / sizeof(kEurUsd15[0]), 0.00001, 0.01,
-         1745848800000LL, 625, 408},
+         1745970300000LL, 667, 436},
     };
     for (const Case& c : cases) {
         std::printf("-- %s\n", c.tape);

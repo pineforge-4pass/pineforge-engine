@@ -1,0 +1,6 @@
+config 10710.0 0.01 1.0 3 0.1 100.0 0 10
+bars f-2026-03-23-2026-03-24.csv
+session America/New_York 0930-1600:23456
+ev 1774283400000 entry A long 800 any
+ev 1774284300000 entry B long 100 any
+ev 1774286100000 close_all - - - any

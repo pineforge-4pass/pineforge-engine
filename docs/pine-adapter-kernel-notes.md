@@ -416,6 +416,23 @@ Comments in the adapter that say "margin rule 1" to "margin rule 5" mean the
 pin names SIZING_DEC, ADMIT_V2, LONG_OPEN, COOF_CLOSE and CLOSE_POINT, in that
 order, not the consequences of the block above.
 
+`MarginScheduleSwitches` (same header and namespace, read through
+`margin_schedule_switches()`) holds the margin-call schedule rules the same
+way. Its tapes are `tests/fixtures/margin_schedule_rules` and the
+`short-cutoff-gate` tapes of `tests/fixtures/margin_call_rules`.
+
+| Switch | Default | Gates | Where |
+|---|---|---|---|
+| `short_call_gate` | on | a short's call of `X` units at mark `p` is taken only where `X p′ m > Q p′ m - E(p)`, `p′` its slipped print; an opening checkpoint at a fill keeps the earlier rules, and a repeat at an already-resolved price (the process_orders_on_close open call's repeat at its fill) is a follow-up the gate never reaches | `short_call_vetoed` in `source_margin_units`; `submit_margin_call_slice` passes `gated = false` for the repeat |
+| `short_path_points` | on | a carried process_orders_on_close short (commissioned or slipped, nothing resting) is checked at both extremes and the close before the script, not at its high alone; ablate it with `close_call_follow_up_at_open` (each corrects its own bars, and one alone can leave a later one-lot boundary on the other side of the equity) | `walk_short_path_points` in `on_bar_close_before_script` |
+| `lagged_short_follow_up` | on | after a short's call, the lot-by-lot check at its fill with the called units out and unbooked; the last still-short check's restore four times at the next path point, ungated; fractional lot grids, and outside process_orders_on_close (a call at the first extreme rested at the other one, a call at the second booked at the close after the script; controls `lag/outside-pooc-*`) only where `margin_follow_up_units` does not follow the call | `lagged_short_follow_up_units`, `walk_short_path_points`, `schedule_lagged_short_follow_up`, `close_point_margin_call` |
+| `pending_veto_first` | on | a deficit the open's check vetoed: the first path point whose segment touches a resting whole exit is checked before it, and after a call there the exit fills at that point's print; only where that exit (both its legs) is the book's one resting order | `pending_veto_point_first` in `on_bar_open` |
+| `frozen_reversal_close` | on | a reversal entry placed at a close where a margin call is booked after the script closes the quantity the script saw; the excess opens on the other side | `record_close_call_after_script`, `apply_frozen_reversal_close` in `resolve_terms` |
+| `add_signal_close` | on | a same-side add's whole-book requirement at the tick-built signal close, not the slipped fill, at margin 100 (no tape decides another margin) | `validate_precommit` |
+| `whole_share_lagged_follow_up` | on | a long's lagged follow-up on a whole-share lot grid too | `lagged_margin_follow_up_units` |
+| `long_call_gain_loss` | on | a commission-free long's one-unit call reads initial + (G + L), inside `gain_loss_regime()`; a fee-bearing book keeps the closed-trade equity | `gain_loss_closed_equity` in `slipped_long_margin_units`, `slipped_long_unit_shortfall`, `submit_tv_money_long_margin_call` |
+| `close_call_follow_up_at_open` | on | a process_orders_on_close short's call sized at the previous close and executed at the open is followed once at that open, at its own fill (one follow-up restores the book there) | the opening checkpoint in `on_bar_open` |
+
 ### 1.7 Evidence
 
 One reference model of these rules reproduces all 563 tapes row for row, with
@@ -432,11 +449,12 @@ the reason.
 | event ledger (a trade history ahead of the decision) | 381 | `tests/fixtures/margin_ledger_rules` | `test_margin_ledger_rules_tapes` |
 
 The single-position fixture also asserts 13 process_orders_on_close fee-sizing
-tapes, 3 commission-0 controls, the oracle control of §1.2 and 10 order
-controls replayed through handwritten hosts, and it records 67 tapes of the
-short-and-slippage gate (`short-cutoff-gate`) without asserting them. With every
-switch on, as shipped, the engine reproduces 173 of the 199 asserted
-single-position tapes and 373 of the 381 ledger tapes; turning the
+tapes, 3 commission-0 controls, the oracle control of §1.2, 10 order
+controls replayed through handwritten hosts and 67 tapes of the short call
+gate and schedule (`short-cutoff-gate`). With every switch on, as shipped,
+the engine reproduces 244 of its 266 tapes and 373 of the 381 ledger tapes,
+and 35 of the 39 `margin_schedule_rules` tapes (each of those also as a
+stream, trade for trade); turning the
 placement half off costs 108 ledger tapes, the fill half 32 ledger and
 3 single-position tapes. `test_margin_rules_forward_replay` replays a sample of both
 fixtures as a backtest and as a bar-by-bar stream, with every switch on, with

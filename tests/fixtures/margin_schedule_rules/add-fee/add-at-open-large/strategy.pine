@@ -1,0 +1,9 @@
+//@version=6
+strategy("pf-n2r-ck-f2", initial_capital=12063.552500000027, pyramiding=2, margin_long=1, margin_short=1, commission_type=strategy.commission.percent, commission_value=0.05, slippage=0)
+if time == timestamp("UTC", 2025, 4, 18, 13, 0)
+    strategy.entry("A", strategy.short, qty=500000.0)
+if time == timestamp("UTC", 2025, 4, 18, 13, 45)
+    strategy.entry("B", strategy.short, qty=500000.0)
+if time == timestamp("UTC", 2025, 4, 18, 14, 30)
+    strategy.close_all()
+plot(strategy.equity, "equity")

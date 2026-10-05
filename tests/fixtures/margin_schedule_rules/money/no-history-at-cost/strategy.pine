@@ -1,0 +1,7 @@
+//@version=6
+strategy("pf-n2r-lc-z0", initial_capital=112066.56, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0, slippage=2, process_orders_on_close=true)
+if time == timestamp("UTC", 2025, 12, 15, 20, 30)
+    strategy.entry("probe", strategy.long, qty=8192)
+if time == timestamp("UTC", 2025, 12, 15, 20, 45)
+    strategy.close_all()
+plot(strategy.equity, "equity")

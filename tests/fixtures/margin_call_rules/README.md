@@ -1,9 +1,8 @@
 # margin_call_rules
 
 TradingView strategy tapes of synthetic probes that pin margin-call, admission
-and sizing rules: 266 tapes in `cases.tsv` -- 199 asserted (399 paired trade
-rows) and 67 recorded only (`short-cutoff-gate`, 203 rows) -- plus 10 order
-controls (21 rows). Each probe opens one market position (optionally behind a
+and sizing rules: 266 tapes in `cases.tsv`, all asserted (602 paired trade
+rows), plus 10 order controls (21 rows). Each probe opens one market position (optionally behind a
 stop level, behind a ledger of earlier closed trades, or reversing an explicit
 prior long), or a same-bar batch of entries `A`, `B`, `C` for the two
 counter controls, at a fixed 15-minute bar and closes it with
@@ -30,8 +29,11 @@ with `lab tv --no-note` over the ws-report-v1 channel.
   commission is positive; `earned-reversal` reverses an explicit prior long.
   The `factorial/c1r3-fee0-*` tapes are the same sizing at commission 0.
 - `short-cutoff-gate` (67 tapes, `cutoff`, `gateedge`, `holdout`, `mincall`,
-  `slipgate`): a short's margin-call cut-off and slippage gate. The rule is not
-  pinned, so these are recorded, not asserted (`asserted` = 0).
+  `slipgate`): a carried process_orders_on_close short's margin-call schedule
+  -- the call gate at the call's slipped print, the checks at every point of
+  the bar's path and the lagged follow-up at the next point
+  (`MarginScheduleSwitches`; `tests/fixtures/margin_schedule_rules` holds
+  their controls).
 - `order-controls` (10 order controls): timed stop entries,
   `strategy.cancel`, an SMA-readiness gate, a dynamic `strategy.exit` stop and
   a re-entry cooldown. The test replays each with a handwritten host that makes

@@ -586,6 +586,19 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     // W13-ENG-MARGIN-OPP), so every other run keeps its digest.
     if (close_margin_open_bar_ != std::numeric_limits<std::int64_t>::min())
         f.i(close_margin_open_bar_);
+    // A short's lagged follow-up owed at a path point (a process_orders_on_close
+    // close owes the next open) and a close's after-script call the orders
+    // placed there read at the next open (MarginScheduleSwitches); folded only
+    // while set, so every other run keeps its digest.
+    if (owed_follow_up_bar_ != std::numeric_limits<std::int64_t>::min()) {
+        f.s("pineforge-owed-follow-up/v1");
+        f.i(owed_follow_up_bar_); f.i(owed_follow_up_point_); f.d(owed_follow_up_units_);
+    }
+    if (close_call_after_script_bar_ != std::numeric_limits<std::int64_t>::min()) {
+        f.s("pineforge-close-call-after-script/v1");
+        f.i(close_call_after_script_bar_); f.d(close_call_after_script_book_);
+        f.d(close_call_after_script_units_);
+    }
     // The close-first fact (record_close_first); folded only once a whole
     // close of an open position was recorded, so every other run keeps its
     // digest.

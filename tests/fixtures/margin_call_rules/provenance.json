@@ -1,5 +1,5 @@
 {
-  "description": "TradingView strategy tapes of synthetic probes pinning margin-call, admission and sizing rules. One entry per tape: fixture path, original export path, sha256 of the exported trade list and of the Pine source, export time, export tool and channel. Tapes with repeat_tv_trades_sha256 were exported twice; both exports were byte-identical. Tapes with \"asserted\": false (short-cutoff-gate) are recorded, not asserted; \"feed_set\": \"own-feed\" tapes read the feeds exported with them; the factorial, fee-sizing and order-control tapes were exported two to four times, all byte-identical. order_controls lists the order controls the test replays with handwritten hosts, each with its bars/ window.",
+  "description": "TradingView strategy tapes of synthetic probes pinning margin-call, admission and sizing rules. One entry per tape: fixture path, original export path, sha256 of the exported trade list and of the Pine source, export time, export tool and channel. Tapes with repeat_tv_trades_sha256 were exported twice; both exports were byte-identical. \"feed_set\": \"own-feed\" tapes read the feeds exported with them; the factorial, fee-sizing and order-control tapes were exported two to four times, all byte-identical. order_controls lists the order controls the test replays with handwritten hosts, each with its bars/ window.",
   "tapes_total": 266,
   "tv_rows_total": 602,
   "bars": {
@@ -1186,7 +1186,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "067a8f69b1d274f101e5d857f0852fe7cd106c37ad4111bcc2a369bd764eaf79",
       "repeat_identical": true
     },
@@ -1201,7 +1200,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "3ffc224476dfe42cd4e3709ef31c7e8d14d816a35c28a89ec6b4b8c4c3efe5c4",
       "repeat_identical": true
     },
@@ -1216,7 +1214,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "4742aa067148badd42b7cb3e67bdc5e841a36af257f44cf89389ce3cc7c83f53",
       "repeat_identical": true
     },
@@ -1231,7 +1228,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "5dfb7046659df449293de9cdef4077c4146bfd9a4446dd04081a666e7cf958d5",
       "repeat_identical": true
     },
@@ -1246,7 +1242,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "88678bc9a22293719f72db3de480c105fe3a312bcb850e21db7f0390c7579cf1",
       "repeat_identical": true
     },
@@ -1261,7 +1256,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "a890a582ab092fd08de6cf7414b1e4214c5c4e95e8045bbd6ae9e70eef46ff9e",
       "repeat_identical": true
     },
@@ -1276,7 +1270,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "0854f178129b0efda85f87a9297d42676396cd4479e7ee39efe867cb3f201247",
       "repeat_identical": true
     },
@@ -1291,7 +1284,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "7341c98cd1fe9e9ca765dfa8849f4cae4422718f319afa461a9ef61b2600921d",
       "repeat_identical": true
     },
@@ -1306,7 +1298,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "97d657edf93adf1be0053af0540987aa9402647922fde19db8b40ef58998fbc8",
       "repeat_identical": true
     },
@@ -1321,7 +1312,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "e0cfd642f0bab36926a081369bb76347f539ffceb659c781f841d502fd9505ba",
       "repeat_identical": true
     },
@@ -1336,7 +1326,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "e0cfd642f0bab36926a081369bb76347f539ffceb659c781f841d502fd9505ba",
       "repeat_identical": true
     },
@@ -1351,7 +1340,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "8d66956c4a486d9d5b8577a9393f0fcf2d71b312ad7ff925a61961f60f6e5f63",
       "repeat_identical": true
     },
@@ -1366,7 +1354,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "48c4672575ae591d2ccfc70d7b48518e96b8437bb692d5343feef32f81c4003e",
       "repeat_identical": true
     },
@@ -1381,7 +1368,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "76f39ddda0d4b2f1f0cb55aec930e41c6c737ceb5fd5ac0531c3e3b9179c2d1e",
       "repeat_identical": true
     },
@@ -1396,7 +1382,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "e88fc773a1dfa943874faac4f6f8ed332a4e956cb4f5973888c5aeefc926ea0e",
       "repeat_identical": true
     },
@@ -1411,7 +1396,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "4ca0677164eeedfe3d998d82e338cdfc59c028873185b5a947ae1ac1b00cd728",
       "repeat_identical": true
     },
@@ -1426,7 +1410,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "27775495f3a28e1fcae9a91706bd24eda9bdb4534b2298f1e08f69b55c29c44b",
       "repeat_identical": true
     },
@@ -1441,7 +1424,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "8fe71278a208d770e5917aaf4b819869fc8c4e314d4e629cd097d394a3e5d5e8",
       "repeat_identical": true
     },
@@ -1456,7 +1438,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "94071b4463c1352ec0949ca6aaf3878bac3387cecd66985371d4a5770e74ed48",
       "repeat_identical": true
     },
@@ -1471,7 +1452,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "40ae65a10112824307a4fbf6db8c866d611d360152335cd80b315e573de660e4",
       "repeat_identical": true
     },
@@ -1486,7 +1466,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "72d734ea8ba0bff655c70ebaa306e43500ed3f06b0a0ff3d23748fc8efff37af",
       "repeat_identical": true
     },
@@ -1501,7 +1480,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "72d734ea8ba0bff655c70ebaa306e43500ed3f06b0a0ff3d23748fc8efff37af",
       "repeat_identical": true
     },
@@ -1516,7 +1494,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "72d734ea8ba0bff655c70ebaa306e43500ed3f06b0a0ff3d23748fc8efff37af",
       "repeat_identical": true
     },
@@ -1531,7 +1508,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "72d734ea8ba0bff655c70ebaa306e43500ed3f06b0a0ff3d23748fc8efff37af",
       "repeat_identical": true
     },
@@ -1546,7 +1522,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "0349a0ea2934ca61a447534d3e2c1f4add30633c913a01f23553f489e8df3814",
       "repeat_identical": true
     },
@@ -1561,7 +1536,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "0349a0ea2934ca61a447534d3e2c1f4add30633c913a01f23553f489e8df3814",
       "repeat_identical": true
     },
@@ -1576,7 +1550,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "0349a0ea2934ca61a447534d3e2c1f4add30633c913a01f23553f489e8df3814",
       "repeat_identical": true
     },
@@ -1591,7 +1564,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "0349a0ea2934ca61a447534d3e2c1f4add30633c913a01f23553f489e8df3814",
       "repeat_identical": true
     },
@@ -1606,7 +1578,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "bfda9819c4b8e03a276d811a69514637dc1a6fae3d28147d253cf126b57d3935",
       "repeat_identical": true
     },
@@ -1621,7 +1592,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "bfda9819c4b8e03a276d811a69514637dc1a6fae3d28147d253cf126b57d3935",
       "repeat_identical": true
     },
@@ -1636,7 +1606,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "97d657edf93adf1be0053af0540987aa9402647922fde19db8b40ef58998fbc8",
       "repeat_identical": true
     },
@@ -1651,7 +1620,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "03d2a7556a8fa889ac1ba4476dc4cc7b14b471710c25bf577ee5fd9bfa2ee695",
       "repeat_identical": true
     },
@@ -1666,7 +1634,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "004ed8ba0e96bcbf6e5c0f405cc96d57396859a176fa8d4ac748db8d44c0c899",
       "repeat_identical": true
     },
@@ -1681,7 +1648,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "04dd4a6431213ea6eac8dea8aebc32696b776280f6cc6995c9a796edac4a6722",
       "repeat_identical": true
     },
@@ -1696,7 +1662,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "a8d20ca9173370f940274834b5572766a5a0be2d43f539f9869fc51e91c4c242",
       "repeat_identical": true
     },
@@ -1711,7 +1676,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "0349a0ea2934ca61a447534d3e2c1f4add30633c913a01f23553f489e8df3814",
       "repeat_identical": true
     },
@@ -1726,7 +1690,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "f83cc04c881e40136e805589dd946a94ec65fd0762441805577661dc1d140db1",
       "repeat_identical": true
     },
@@ -1741,7 +1704,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "4c586ab5ef87a11e64e237e8d9ad70b2451ef8540d0a4261220be750e62dbd86",
       "repeat_identical": true
     },
@@ -1756,7 +1718,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "fc8080f3a5fbbcb0bc409a96f2e84a8f66d8a3bbdb3b3f94c16ef25cd5908366",
       "repeat_identical": true
     },
@@ -1771,7 +1732,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "af091bf9fab793ade0525d1e823666f417e55736e22a08d597e4577b90e6f95c",
       "repeat_identical": true
     },
@@ -1786,7 +1746,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "317eee9ee8324fcf3dd7836da88c460e0fe588d0a9ae3b46185a3d24c18c0d1f",
       "repeat_identical": true
     },
@@ -1801,7 +1760,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "689c6c9fafcb2afd265348218e2bc2d3110eb5f0cf5a9c3ce577eca1cb48f2ec",
       "repeat_identical": true
     },
@@ -1816,7 +1774,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "ba86fa3ba46e01557b7eeb4d9f83e787d19cc6122af2bd48e7d374d640c00d0a",
       "repeat_identical": true
     },
@@ -1831,7 +1788,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "274053c4e0fc9c356086f20c8239fbfb0dd82a6207f61af7b1f9ec63f60a373a",
       "repeat_identical": true
     },
@@ -1846,7 +1802,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "4f3f0934d1f86b151e785365ae9b46aee3aed4463692e64ad9c9a423dee2ea4a",
       "repeat_identical": true
     },
@@ -1861,7 +1816,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "aaf5faf7e3911da4cdbdd7b964dcdf43cd9daa4b2db57f8b01d054f9c9a6a4fb",
       "repeat_identical": true
     },
@@ -1876,7 +1830,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "5eb89cad24514109698a6057b2db059ad4d85e43f3e7797fb78d7db3827486f2",
       "repeat_identical": true
     },
@@ -1891,7 +1844,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "c9a85be02ddeafa4f718559051de2baf94b23abb5f1c5dcd38761006c02c244a",
       "repeat_identical": true
     },
@@ -1906,7 +1858,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "f1bfc076c6223e877b73998a1c61d089fb78180011b0499f81173be8038cbdab",
       "repeat_identical": true
     },
@@ -1921,7 +1872,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "07dcf06d309e5225f4919f0101cce7d3fcdb99e56eb34603af7494d83f173aa1",
       "repeat_identical": true
     },
@@ -1936,7 +1886,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "317eee9ee8324fcf3dd7836da88c460e0fe588d0a9ae3b46185a3d24c18c0d1f",
       "repeat_identical": true
     },
@@ -1951,7 +1900,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "436f6e73a95b641ee2a38eedbeba0665a9962b52406591bb7fbc2da0f12ceb63",
       "repeat_identical": true
     },
@@ -1966,7 +1914,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "0d34f5ee7de6145026b18f654a6397774581b17301b3695bcde37b4501b62857",
       "repeat_identical": true
     },
@@ -1981,7 +1928,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "ada0e438ff2d32cfae687790bbc34cd08750c3e1efef7da602a664f99e4fae86",
       "repeat_identical": true
     },
@@ -1996,7 +1942,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "6ce870247560417bcddda5700906c5610b9fc55713880f8d2751222657ff9422",
       "repeat_identical": true
     },
@@ -2011,7 +1956,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "a2f90af08cad2360339443e039a5c2d5eced860ec22332e3fb96f6481c95d0ef",
       "repeat_identical": true
     },
@@ -2026,7 +1970,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "91f471a29f2d894306955b68b73abdc3916def348e1127052cddf3934bd5dd52",
       "repeat_identical": true
     },
@@ -2041,7 +1984,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "3f9e06859b65aa34ee3e6ad646e2d8ce2d4a80cac02bece220f35aaf4290f3cf",
       "repeat_identical": true
     },
@@ -2056,7 +1998,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "19085db2c7423e7df4be623e42412509b5b920ddbfe937547ca09dd4d3ba1afb",
       "repeat_identical": true
     },
@@ -2071,7 +2012,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "6ebed35af96277ab35e9897b1edfb4f5838a30310162fc1d7b9f78f30cd9f1e7",
       "repeat_identical": true
     },
@@ -2086,7 +2026,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "84a5ef74c7e32298470fa81cf15e72a772759799834bee551b81f11c21e4c159",
       "repeat_identical": true
     },
@@ -2101,7 +2040,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "dc6f5bb047352e21828cf5baaf46c93991b93492708465fa9a4f60fd1f1f8223",
       "repeat_identical": true
     },
@@ -2116,7 +2054,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "ea7dd2a2c0eab8f8ff6ccbba1c9027db2c51f4fe1459d36d2d9193a9733f5b61",
       "repeat_identical": true
     },
@@ -2131,7 +2068,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "bc35f736800cc675ba00c014b59550fda0c6c614c3e8a762491d185417607dbe",
       "repeat_identical": true
     },
@@ -2146,7 +2082,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "32b42dcc7bb784bc95fcd0ac8d007dee4d1c59266b6d5fb7f0680ed7023d5396",
       "repeat_identical": true
     },
@@ -2161,7 +2096,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "a0a471b3dc22c9c4e1af1e080c0fd0b09f839da3bb63562fcdf3ca4352bdba21",
       "repeat_identical": true
     },
@@ -2176,7 +2110,6 @@
       "tool": "lab tv --no-note",
       "channel": "ws-report-v1",
       "feed_set": "own-feed",
-      "asserted": false,
       "repeat_tv_trades_sha256": "eddc21ad08a40f190901f634ffc63e214c24eaa13289f2d0978a4a4be97c4337",
       "repeat_identical": true
     },
@@ -3472,9 +3405,9 @@
       "prediction": "recorded before export: 6.279 under the decimal lot floor, 6.2789 under the binary floor"
     }
   ],
-  "tapes_asserted": 199,
-  "tapes_recorded": 67,
-  "tv_rows_asserted": 399,
+  "tapes_asserted": 266,
+  "tapes_recorded": 0,
+  "tv_rows_asserted": 602,
   "order_controls": [
     {
       "path": "order-controls/cooldown-atr-entry-clear",

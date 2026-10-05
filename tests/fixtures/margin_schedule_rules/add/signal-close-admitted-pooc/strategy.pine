@@ -1,0 +1,8 @@
+//@version=6
+strategy("n3x-add-sig-pooc",initial_capital=10705,pyramiding=10,margin_long=100,margin_short=100,close_entries_rule="FIFO",commission_type=strategy.commission.percent,commission_value=0.1,slippage=3,process_orders_on_close=true)
+if time == timestamp("UTC",2026,03,23,16,30,00)
+    strategy.entry("A",strategy.long,qty=800)
+if time == timestamp("UTC",2026,03,23,16,45,00)
+    strategy.entry("B",strategy.long,qty=100)
+if time == timestamp("UTC",2026,03,23,17,45,00)
+    strategy.close_all()

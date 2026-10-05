@@ -14,12 +14,11 @@
  * one per row. A chart range that ends before the scheduled close_all leaves
  * the position open at the range end.
  *
- * 199 tapes are asserted (asserted=1). The 67 short-cutoff-gate tapes (a short's
- * margin-call cut-off and slippage gate, rule not pinned yet) are recorded
- * only (asserted=0): each is replayed and printed as GAP-MATCH or GAP-DIFF,
- * then replayed with the pooc_fee_sizing switch off and on, and a tape whose
- * engine rows move between the two is printed as GAP-TOGGLE-MOVES. Nothing
- * about them is checked but the fixture's own counts.
+ * Every one of the 266 tapes is asserted (asserted=1), the 67
+ * short-cutoff-gate tapes (a short's margin-call cut-off and slippage gate,
+ * MarginScheduleSwitches) included. A tape the fixture marks asserted=0 would
+ * be replayed and printed as GAP-MATCH or GAP-DIFF, then replayed with the
+ * pooc_fee_sizing switch off and on, its rows checked by nothing; none is.
  *
  * The ten order-controls/ tapes (timed stop entries, strategy.cancel, an
  * SMA-readiness gate, a dynamic strategy.exit stop, a re-entry cooldown) are
@@ -42,11 +41,12 @@
  * must still differ, so the list shrinks as the engine learns a rule.
  *
  * Each margin rule the adapter implements sits behind its own switch
- * (pineforge::source::detail::MarginRuleSwitches). The tree ships every rule
- * on, which this test checks; it replays the tapes with the shipped switches
- * against kKnownDivergences, turns each rule off alone from there and
- * requires a load-bearing one to cost at least one tape, and turns all of
- * them off to recover the tapes the engine matched before the rules.
+ * (pineforge::source::detail::MarginRuleSwitches and MarginScheduleSwitches).
+ * The tree ships every rule on, which this test checks; it replays the tapes
+ * with the shipped switches against kKnownDivergences, turns each rule off
+ * alone from there and requires a load-bearing one to cost at least one tape,
+ * and turns all of them off to recover the tapes the engine matched before
+ * the rules.
  */
 
 #include <pineforge/bar.hpp>
@@ -100,15 +100,16 @@ constexpr double kPercentQty = -1.0;
 constexpr double kSourceRawQty = -2.0;
 // Asserted tapes and their TradingView rows; the recorded-only short-cutoff-gate
 // tapes and their rows.
-constexpr std::size_t kTapes = 199;
-constexpr std::size_t kTvRows = 399;
-constexpr std::size_t kRecordedTapes = 67;
-constexpr std::size_t kRecordedTvRows = 203;
+constexpr std::size_t kTapes = 266;
+constexpr std::size_t kTvRows = 602;
+constexpr std::size_t kRecordedTapes = 0;
+constexpr std::size_t kRecordedTvRows = 0;
 // The asserted tapes the engine matches with every margin rule off (before
 // the rules).
-constexpr std::size_t kTapesBeforeRules = 133;
+constexpr std::size_t kTapesBeforeRules = 140;
 
 using pineforge::source::detail::MarginRuleSwitches;
+using pineforge::source::detail::MarginScheduleSwitches;
 
 struct Ablation {
     const char* name;
@@ -145,6 +146,29 @@ bool same_switches(const MarginRuleSwitches& a, const MarginRuleSwitches& b) {
     return std::memcmp(&a, &b, sizeof(MarginRuleSwitches)) == 0;
 }
 
+// Every schedule rule on; every field is named here and in the ablation table.
+MarginScheduleSwitches all_schedule_rules_on() {
+    static_assert(sizeof(MarginScheduleSwitches) == 9 * sizeof(bool),
+                  "MarginScheduleSwitches changed: name its new field here and in the ablation table");
+    MarginScheduleSwitches on;
+    on.short_call_gate = true;
+    on.short_path_points = true;
+    on.lagged_short_follow_up = true;
+    on.pending_veto_first = true;
+    on.frozen_reversal_close = true;
+    on.add_signal_close = true;
+    on.whole_share_lagged_follow_up = true;
+    on.long_call_gain_loss = true;
+    on.close_call_follow_up_at_open = true;
+    return on;
+}
+
+struct ScheduleAblation {
+    const char* name;
+    bool MarginScheduleSwitches::*flag;
+    bool load_bearing = true;
+};
+
 // Tapes the engine does not reproduce yet: fixture path and a one-line reason.
 // A listed tape that starts matching fails the test until its entry is
 // removed.
@@ -155,8 +179,6 @@ const std::vector<std::pair<std::string, std::string>> kKnownDivergences = {
      "a carried short's source-close / fresh-opening call schedule (not implemented)"},
     {"initial/short-s5",
      "a carried short's source-close / fresh-opening call schedule (not implemented)"},
-    {"initial/short-s5-minus01",
-     "a carried short's source-close / fresh-opening call schedule (not implemented)"},
     {"initial/short-s5-plus02",
      "a carried short's source-close / fresh-opening call schedule (not implemented)"},
     {"ledger/ledger-s5-long",
@@ -166,8 +188,6 @@ const std::vector<std::pair<std::string, std::string>> kKnownDivergences = {
     {"ledger/ledger-s5-p2-short",
      "a carried short's source-close / fresh-opening call schedule (not implemented)"},
     {"ledger/ledger-s5-short",
-     "a carried short's source-close / fresh-opening call schedule (not implemented)"},
-    {"literals/literal-21",
      "a carried short's source-close / fresh-opening call schedule (not implemented)"},
     {"quantum/quantum-s5-p0",
      "a carried short's source-close / fresh-opening call schedule (not implemented)"},
@@ -186,10 +206,6 @@ const std::vector<std::pair<std::string, std::string>> kKnownDivergences = {
     {"schedule/fresh-plus02-coof",
      "a carried short's source-close / fresh-opening call schedule (not implemented)"},
     {"schedule/schedule-q9p1305-s4",
-     "a carried short's source-close / fresh-opening call schedule (not implemented)"},
-    {"schedule/schedule-q9p1305-s5",
-     "a carried short's source-close / fresh-opening call schedule (not implemented)"},
-    {"schedule/schedule-q9p1305-s6",
      "a carried short's source-close / fresh-opening call schedule (not implemented)"},
     {"quantum/short-m50-s0",
      "a short's call quantum at margin 50 (not implemented)"},
@@ -874,6 +890,10 @@ int main() {
     const MarginRuleSwitches tree_defaults = switches;
     const MarginRuleSwitches all_on = all_rules_on();
     CHECK(same_switches(tree_defaults, all_on));
+    auto& schedule = pineforge::source::detail::margin_schedule_switches();
+    const MarginScheduleSwitches schedule_defaults = schedule;
+    const MarginScheduleSwitches schedule_on = all_schedule_rules_on();
+    CHECK(std::memcmp(&schedule_defaults, &schedule_on, sizeof(MarginScheduleSwitches)) == 0);
 
     std::map<std::string, std::string> known;
     for (const auto& [path, reason] : kKnownDivergences) {
@@ -1047,13 +1067,51 @@ int main() {
             CHECK(off <= all_on_matched.size());
         }
     }
+    // The schedule rules, off alone from every rule on: the gate, the path
+    // points and the lagged follow-up are pinned by the short-cutoff-gate
+    // tapes here, the close call's follow-up at the open by literal-21; the
+    // others by tests/fixtures/margin_schedule_rules.
+    using M = pineforge::source::detail::MarginScheduleSwitches;
+    const std::vector<ScheduleAblation> schedule_ablations = {
+        {"short_call_gate", &M::short_call_gate},
+        {"short_path_points", &M::short_path_points},
+        {"lagged_short_follow_up", &M::lagged_short_follow_up},
+        {"pending_veto_first", &M::pending_veto_first, false},
+        {"frozen_reversal_close", &M::frozen_reversal_close, false},
+        {"add_signal_close", &M::add_signal_close, false},
+        {"whole_share_lagged_follow_up", &M::whole_share_lagged_follow_up, false},
+        {"long_call_gain_loss", &M::long_call_gain_loss, false},
+        {"close_call_follow_up_at_open", &M::close_call_follow_up_at_open},
+    };
+    CHECK(schedule_ablations.size() == sizeof(MarginScheduleSwitches) / sizeof(bool));
+    switches = defaults;
+    for (const auto& ablation : schedule_ablations) {
+        schedule = schedule_on;
+        schedule.*(ablation.flag) = false;
+        const std::set<std::string> matched_off = matching_tapes(cases, feeds);
+        const std::size_t off = matched_off.size();
+        std::printf("ablation %s off: %zu/%zu tapes match\n", ablation.name, off, asserted_tapes);
+        std::size_t lost = 0;
+        for (const std::string& path : all_on_matched) lost += matched_off.count(path) == 0;
+        for (const std::string& path : matched_off)
+            if (all_on_matched.count(path) == 0)
+                std::printf("  ablation %s off gains %s\n", ablation.name, path.c_str());
+        if (ablation.load_bearing) {
+            CHECK(lost > 0);
+        } else {
+            CHECK(off <= all_on_matched.size());
+        }
+    }
+    schedule = schedule_on;
     switches = defaults;
     for (const auto& ablation : ablations) switches.*(ablation.flag) = false;
+    for (const auto& ablation : schedule_ablations) schedule.*(ablation.flag) = false;
     const std::size_t all_off = matching_tapes(cases, feeds).size();
     std::printf("ablation all off: %zu/%zu tapes match\n", all_off, asserted_tapes);
     CHECK(all_off == kTapesBeforeRules);
 
     switches = tree_defaults;
+    schedule = schedule_defaults;
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed ? 1 : 0;
 }

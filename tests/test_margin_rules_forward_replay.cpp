@@ -130,6 +130,12 @@ const std::vector<Sample> kSamples = {
     {"margin_call_rules", "sizing/size-eth-06-22-t1", "close-point sizing"},
     {"margin_call_rules", "quantum/quantum-s5-m4", "short margin call"},
     {"margin_call_rules", "stopband/stopband-stop-p10u", "stop entry"},
+    {"margin_call_rules", "short-cutoff-gate/cutoff-q78381-s1-d0280",
+     "short call at the high, lagged follow-up at the close"},
+    {"margin_call_rules", "short-cutoff-gate/gateedge-q78381-f5-d027200", "short call gate"},
+    {"margin_call_rules", "short-cutoff-gate/holdout-q12345-s5-f2-d023000",
+     "short call gate, slippage 5"},
+    {"margin_call_rules", "literals/literal-21", "close call's follow-up at the open"},
     // Event-ledger tapes (LedgerHost, test_margin_ledger_rules_tapes' probe).
     {"margin_ledger_rules", "c1-r1-exp-l2s-reject/r1", "rejected reversal"},
     {"margin_ledger_rules", "c1-b1-exp-long-below-Tm1ulp/r1", "fill re-check"},

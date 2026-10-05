@@ -1,0 +1,3 @@
+﻿Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),Net PnL USD,Return %,Commission USD,Favorable excursion USD,Favorable excursion %,Adverse excursion USD,Adverse excursion %,Cumulative PnL USD,Cumulative PnL %,Duration (bars)
+1,Exit short,2026-03-21 03:45,SE,11.51,516,5882.4,-61.488625,-1.04,4.728624,7.96704,0.14,-59.11296,-1.00,-61.488625,-1.03,1
+1,Entry short,2026-03-21 03:30,Short,11.4,516,5882.4,-61.488625,-1.04,4.728624,7.96704,0.14,-59.11296,-1.00,-61.488625,-1.03,1

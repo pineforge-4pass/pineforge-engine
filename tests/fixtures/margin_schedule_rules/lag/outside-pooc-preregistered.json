@@ -1,0 +1,93 @@
+{
+ "written_before_export": true,
+ "predictor": "the engine with these rules (spec replay), cross-checked with an independent reference model of the rules; both agreed row for row before the export",
+ "controls": {
+  "margin-lag-close": {
+   "bar": "2025-04-18 14:00 UTC, low-first (O 1.13796 L 1.13788 H 1.13876 C 1.13864)",
+   "rules": [
+    [
+     "04-18 14:00",
+     1.13876,
+     0.5
+    ],
+    [
+     "04-18 14:00",
+     1.13876,
+     11.1
+    ],
+    [
+     "04-18 14:00",
+     1.13864,
+     9.6
+    ],
+    [
+     "04-18 14:45",
+     1.13868,
+     59979.3
+    ]
+   ],
+   "no-lag (main)": [
+    [
+     "04-18 14:00",
+     1.13876,
+     0.5
+    ],
+    [
+     "04-18 14:00",
+     1.13876,
+     11.1
+    ],
+    [
+     "04-18 14:45",
+     1.13868,
+     59988.9
+    ]
+   ],
+   "decides": "outside process_orders_on_close, the lagged follow-up of a call at the second extreme is booked at the close (9.6 @1.13864)"
+  },
+  "margin-lag-extreme": {
+   "bar": "2025-04-18 14:15 UTC, high-first (O 1.13865 H 1.13882 L 1.13846 C 1.1386)",
+   "rules": [
+    [
+     "04-18 14:15",
+     1.13882,
+     0.5
+    ],
+    [
+     "04-18 14:15",
+     1.13882,
+     11.82
+    ],
+    [
+     "04-18 14:15",
+     1.13846,
+     10.32
+    ],
+    [
+     "04-18 14:45",
+     1.13868,
+     59977.86
+    ]
+   ],
+   "no-lag (main)": [
+    [
+     "04-18 14:15",
+     1.13882,
+     0.5
+    ],
+    [
+     "04-18 14:15",
+     1.13882,
+     11.82
+    ],
+    [
+     "04-18 14:45",
+     1.13868,
+     59988.18
+    ]
+   ],
+   "decides": "outside process_orders_on_close, the lagged follow-up of a call at the first extreme rests at the other extreme (10.32 @1.13846)"
+  }
+ },
+ "written_at": "2026-10-05T05:32:59Z"
+}

@@ -1,0 +1,5 @@
+config 112066.55999999998 0.01 1.0 2 0.0 100.0 1 1
+bars f-2025-12-15-2025-12-16.csv
+session America/New_York 0930-1600:23456
+ev 1765830600000 entry probe long 8192 any
+ev 1765831500000 close_all - - - notflat
