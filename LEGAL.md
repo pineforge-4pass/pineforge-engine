@@ -14,7 +14,7 @@ The `corpus/` and `benchmarks/assets/` git submodules are **public** companion r
 
 ## The transpiler is a separate, source-available repository
 
-The PineScript → C++ transpiler ships as **[`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss)**, **source-available** under the **PolyForm Noncommercial License 1.0.0** (free for personal trading; commercial license for funds, products, and hosted/embedded use). It is **not** part of this Apache-2.0 runtime and is **not required** to reproduce the parity figure — `generated.cpp` ships in the `corpus/` tree, so the engine + corpus + a C++17 compiler are sufficient end-to-end.
+The PineScript → C++ transpiler ships as **[`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss)**, **source-available** under the **PineForge Source License 1.1** from its release 1.2.0 (releases up to and including 1.1.0 keep the PolyForm Noncommercial License 1.0.0 terms they shipped with): free for noncommercial use and personal trading; investment management and other commercial use need a commercial license, as its [`LICENSE`](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) states. It is **not** part of this Apache-2.0 runtime and is **not required** to reproduce the parity figure — `generated.cpp` ships in the `corpus/` tree, so the engine + corpus + a C++17 compiler are sufficient end-to-end.
 
 ## Third-party components linked into `libpineforge`
 

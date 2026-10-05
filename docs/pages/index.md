@@ -274,6 +274,6 @@ Build the generated strategy module with the repository recipe (or
 - License: Apache-2.0
 
 @note PineForge ships as a **static library** (`libpineforge.a`). The
-PineScript-to-C++ **transpiler** is a separate, source-available product (PolyForm Noncommercial);
+PineScript-to-C++ **transpiler** is a separate, source-available product (the PineForge Source License 1.1 from its release 1.2.0);
 this runtime is what every compiled strategy `.so` links against, and it also
 runs hosts written directly against the kernel with no transpiler in sight.

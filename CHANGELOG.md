@@ -184,15 +184,17 @@ release either.
   that reaches one of the cases above can get different fills, sizes or trade
   counts than under 1.1.0, following TradingView's trade lists in the cases
   its tapes pin. Where a rule has an internal switch it ships on; the switches
-  are process-wide test hooks, not API, inputs or strategy settings. The main
-  scoreboard at engine 6b77f061 with codegen 285ac035, which carries the
-  four, grades 7,970 excellent / 19 strong of 7,989 probes; release 1.1.0
-  grades 7,951 / 38 ([#337]).
+  are process-wide test hooks, not API, inputs or strategy settings. Release
+  1.2.0 is graded on registry baseline
+  `pineforge-parity-baseline-20261005-engine-52292db9` (engine 52292db9, the
+  merge of [#339], which v1.2.0 equals in behaviour, with codegen 48e7a13b):
+  7,970 excellent / 19 strong of 7,989 probes, none below strong. Release
+  1.1.0 grades 7,951 / 38.
 
-- **Per-bar cost ([#336], [#338], [#VCP]).** #336 removes per-bar work that
+- **Per-bar cost ([#336], [#338], [#339]).** #336 removes per-bar work that
   the margin, sizing and admission rules above added. #338 removes temporary
   strings and repeated lookups on the native stream's confirmed-bar path.
-  #VCP reads each day's session occurrences once per call of the session
+  #339 reads each day's session occurrences once per call of the session
   clock behind `time()` and `time_close()` and stops copying their string
   arguments. None of them changes a trade, a report or a state-hash value.
 
@@ -276,7 +278,7 @@ rows, the status file (`pineforge-live-status/v1`) and the redelivery request
 [#336]: https://github.com/pineforge-4pass/pineforge-engine/pull/336
 [#337]: https://github.com/pineforge-4pass/pineforge-engine/pull/337
 [#338]: https://github.com/pineforge-4pass/pineforge-engine/pull/338
-[#VCP]: https://github.com/pineforge-4pass/pineforge-engine/pull/VCP
+[#339]: https://github.com/pineforge-4pass/pineforge-engine/pull/339
 
 ## 1.1.0 — 2026-10-04
 
