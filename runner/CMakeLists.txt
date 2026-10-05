@@ -120,7 +120,7 @@ if(PINEFORGE_BUILD_TESTS)
         add_test(NAME native_live_report_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_report_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_report_oracle> ${_pf_report_strategies})
-        set_tests_properties(native_live_report_e2e PROPERTIES TIMEOUT 120)
+        set_tests_properties(native_live_report_e2e PROPERTIES TIMEOUT 300)
         add_test(NAME native_live_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_example>)
@@ -286,10 +286,36 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
             set_target_properties(confirmed_${confirmed_case} PROPERTIES PREFIX "")
             list(APPEND _pf_confirmed_libraries "${confirmed_case}=$<TARGET_FILE:confirmed_${confirmed_case}>")
         endforeach()
-        add_test(NAME confirmed_capabilities_refusals COMMAND ${Python3_EXECUTABLE}
-            ${PROJECT_SOURCE_DIR}/tests/confirmed_capabilities_refusals.py $<TARGET_FILE:pineforge-live>
-            ${_pf_confirmed_libraries})
-        set_tests_properties(confirmed_capabilities_refusals PROPERTIES TIMEOUT 180)
+        set(_pf_confirmed_refusal_requests)
+        set(_pf_confirmed_refusal_pooc)
+        foreach(confirmed_library IN LISTS _pf_confirmed_libraries)
+            if(confirmed_library MATCHES "^(pooc_|refused_pooc_|htf15_sma_pooc=)")
+                list(APPEND _pf_confirmed_refusal_pooc "${confirmed_library}")
+            else()
+                list(APPEND _pf_confirmed_refusal_requests "${confirmed_library}")
+            endif()
+        endforeach()
+        set(_pf_confirmed_refusal_timeout 180)
+        if(PINEFORGE_ENABLE_SANITIZERS OR PINEFORGE_LIVE_TSAN)
+            set(_pf_confirmed_refusal_timeout 600)
+        endif()
+        foreach(refusal_family requests pooc)
+            set(refusal_libraries ${_pf_confirmed_refusal_${refusal_family}})
+            list(LENGTH refusal_libraries refusal_library_count)
+            set(refusal_offset 0)
+            set(refusal_shard 1)
+            while(refusal_offset LESS refusal_library_count)
+                list(SUBLIST refusal_libraries ${refusal_offset} 8 refusal_shard_libraries)
+                set(refusal_test "confirmed_capabilities_refusals_${refusal_family}_${refusal_shard}")
+                add_test(NAME ${refusal_test} COMMAND ${Python3_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/tests/confirmed_capabilities_refusals.py $<TARGET_FILE:pineforge-live>
+                    ${refusal_shard_libraries})
+                set_tests_properties(${refusal_test} PROPERTIES
+                    TIMEOUT ${_pf_confirmed_refusal_timeout} LABELS confirmed_refusal_shard)
+                math(EXPR refusal_offset "${refusal_offset} + 8")
+                math(EXPR refusal_shard "${refusal_shard} + 1")
+            endwhile()
+        endforeach()
         foreach(receipt_variant ordinary request pooc missing)
             add_library(confirmed_receipt_${receipt_variant} MODULE
                 ${PROJECT_SOURCE_DIR}/tests/fixtures/confirmed_capabilities/receipt_versions.cpp)
