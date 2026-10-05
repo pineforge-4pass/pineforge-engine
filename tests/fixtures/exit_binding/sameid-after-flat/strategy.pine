@@ -1,0 +1,12 @@
+//@version=6
+strategy("xk11-sameid-after-flat",initial_capital=100000,pyramiding=3,margin_long=0,margin_short=0,close_entries_rule="FIFO",process_orders_on_close=true)
+if time == timestamp("UTC",2025,10,31,00,45,00)
+    strategy.entry("L1",strategy.long,qty=1.5217)
+if time == timestamp("UTC",2025,10,31,17,15,00)
+    strategy.exit("xL1",from_entry="L1",stop=3750,limit=3990.44)
+if time == timestamp("UTC",2025,10,31,20,00,00)
+    strategy.close_all()
+if time == timestamp("UTC",2025,10,31,22,00,00)
+    strategy.entry("L1",strategy.long,qty=1.5213,limit=3804.3448485)
+if time == timestamp("UTC",2025,11,03,20,00,00)
+    strategy.close_all()

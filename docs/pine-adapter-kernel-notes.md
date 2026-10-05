@@ -1025,3 +1025,52 @@ double reserve_percent_commission(double cash) const {
 > `default_sizing_cash` does so; the tapes are under
 > `tests/fixtures/cash_fee_sizing` and `docs/design/native-feature-parity.md`
 > §3.10 records the measurement.
+
+## 6. When a `strategy.exit` binds
+
+TradingView binds a `strategy.exit(id, from_entry = X)` when the script calls
+it. X holding open lots binds the exit to those lots, and it ends with them. X
+holding no lot but with an entry order working binds the exit to the id X: it
+survives `close_all`, a `strategy.close` of X or of a sibling, the flat and a
+`strategy.cancel(X)` with a later `strategy.entry(X)`, and binds to X's next
+fill. A call that finds neither is ignored. 36 synthetic controls (two
+byte-identical exports each) and the ten `pending-*` tapes of
+`tests/fixtures/global_exit_children` pin it; `tests/fixtures/exit_binding`
+holds the controls and states the rule.
+
+`ExitBindingRuleSwitches` (`include/pineforge/source/pine_adapter.hpp`, read
+through `exit_binding_rule_switches()`) holds one switch per part, all on;
+only tests change one. `test_exit_binding_tapes` turns each off and requires
+exactly its tapes to depart, and replays every control as a backtest and as a
+stream.
+
+| Switch | Gates | Where |
+|---|---|---|
+| `pending_bound_exit_survives_flat` | an exit called in position for an id with no lot but a limit or stop order working is bound to the id (`PlacementSnapshot::pending_bound_exit`, cleared by the id's fill); a close or the flat leaves it; a cancel of the id's order keeps its call for the id's next order | `exit`, `retire_in_position_exits_at_flat`, `cancel_exit_orders_for_full_close`, `stash_id_bound_exits`, `rearm_id_bound_exits` |
+| `global_exit_binds_working_entries` | a global exit called flat waits for the fill of the limit and stop entry orders working | `flush_pending_bracket_legs` |
+| `resting_stop_entry_survives_close` | under `process_orders_on_close`, an earlier bar's stop entry of the side a close flattens survives it, as a limit does | the stale-entry cancel in `on_applied` |
+| `priced_add_at_cap_not_placed` | under `process_orders_on_close`, a priced add of an id holding no lot, still at the pyramiding cap once its bar's closes are done, leaves the book at the next opening, judged at that opening only | `withdraw_unplaced_cap_adds` in `on_bar_open` |
+
+Every tape runs with margin requirements off (`margin_long = margin_short =
+0`) and without `calc_on_order_fills`, and every part acts only there
+(`margins_disabled`). The two exit parts act on a whole exit at absolute
+levels whose pending parent rests at a level (`whole_level_exit`); the stop
+entry and cap parts act under `process_orders_on_close` only. Other accounts,
+partial and relative exits, market parents and same-id adds keep their former
+course. Inside these gates the parts also change shapes no tape covers, as the
+pin's reference model predicts them: a parent on the other side of the open
+position, a `strategy.order` parent, a re-entry as a market order after the
+cancel (in position or after the flat), a cancel and re-entry on the exit's
+own bar, a short-side cap and a cap above 1.
+
+Open edges without a tape: exits with `qty`, `qty_percent` or a trail bound
+to a pending order; a pending-bound exit whose id fills while another lot of
+that id is open; a pending stop entry that fills against the opposite side; a
+stop-limit entry, which the stop part keeps as it keeps a plain stop; a global
+exit called flat without `process_orders_on_close`, which also waits, and its
+taking by the first fill of any entry, including an id with no order working
+at the call; an add at the cap that is marketable at its own close, which
+fills there before the cap part judges it, as before the rule; and an add at
+the cap whose own bar's close frees the slot, which stays, as before (the cap
+part judges an add once, at the next opening; the pin's model rejects it at
+the call).

@@ -100,7 +100,7 @@ const Tape kTapes[] = {
     {"pending-21", "ethusdtp-2025-05-21-2025-05-23", true, 0.01, 0.0001, 10, 500000.0, 0.0, false, true, 0, kPercent, 0.0, {
         {1747838700000LL, 0, kNoTime, kNoTime, {{Kind::Entry, "S2", "", false, 1.9939, kNaN, 2608.87, kNaN, 0ULL}, {Kind::Exit, "X2", "S2", true, kNaN, kNaN, 2580.44, 2608.87, 0ULL}}},
         {1747915200000LL, 0, kNoTime, kNoTime, {{Kind::CloseAll, "", "", true, kNaN, kNaN, kNaN, kNaN, 0ULL}}}}},
-    {"pending-22", "ethusdtp-2025-05-21-2025-05-23", false, 0.01, 0.0001, 10, 500000.0, 0.0, false, true, 0, kPercent, 0.0, {
+    {"pending-22", "ethusdtp-2025-05-21-2025-05-23", true, 0.01, 0.0001, 10, 500000.0, 0.0, false, true, 0, kPercent, 0.0, {
         {1747832400000LL, 0, kNoTime, kNoTime, {{Kind::Entry, "S1", "", false, 2.0266, kNaN, kNaN, kNaN, 0ULL}}},
         {1747833300000LL, 0, kNoTime, kNoTime, {{Kind::Exit, "X1", "S1", true, kNaN, kNaN, 2400.0, 2800.0, 0ULL}}},
         {1747838700000LL, 0, kNoTime, kNoTime, {{Kind::Close, "S1", "", true, kNaN, kNaN, kNaN, kNaN, 34359738387ULL}, {Kind::Entry, "S2", "", false, 1.9939, kNaN, 2608.87, kNaN, 0ULL}, {Kind::Exit, "X2", "S2", true, kNaN, kNaN, 2580.44, 2608.87, 0ULL}}},
@@ -110,27 +110,27 @@ const Tape kTapes[] = {
         {1747833300000LL, 0, kNoTime, kNoTime, {{Kind::Exit, "X1", "S1", true, kNaN, kNaN, 2400.0, 2800.0, 0ULL}}},
         {1747838700000LL, 0, kNoTime, kNoTime, {{Kind::Close, "S1", "", true, kNaN, kNaN, kNaN, kNaN, 34359738387ULL}, {Kind::Entry, "S2", "", false, 1.9939, kNaN, 2608.87, kNaN, 0ULL}, {Kind::Exit, "X2", "", true, kNaN, kNaN, 2580.44, 2608.87, 0ULL}}},
         {1747915200000LL, 0, kNoTime, kNoTime, {{Kind::CloseAll, "", "", true, kNaN, kNaN, kNaN, kNaN, 0ULL}}}}},
-    {"pending-24", "ethusdtp-2025-05-21-2025-05-23", false, 0.01, 0.0001, 10, 500000.0, 0.0, false, true, 3, kPercent, 0.04, {
+    {"pending-24", "ethusdtp-2025-05-21-2025-05-23", true, 0.01, 0.0001, 10, 500000.0, 0.0, false, true, 3, kPercent, 0.04, {
         {1747832400000LL, 0, kNoTime, kNoTime, {{Kind::Entry, "S1", "", false, 2.0266, kNaN, kNaN, kNaN, 0ULL}}},
         {1747833300000LL, 0, kNoTime, kNoTime, {{Kind::Exit, "X1", "S1", true, kNaN, kNaN, 2400.0, 2800.0, 0ULL}}},
         {1747838700000LL, 0, kNoTime, kNoTime, {{Kind::Close, "S1", "", true, kNaN, kNaN, kNaN, kNaN, 34359738387ULL}, {Kind::Entry, "S2", "", false, 1.9939, kNaN, 2608.87, kNaN, 0ULL}, {Kind::Exit, "X2", "S2", true, kNaN, kNaN, 2580.44, 2608.87, 0ULL}}},
         {1747915200000LL, 0, kNoTime, kNoTime, {{Kind::CloseAll, "", "", true, kNaN, kNaN, kNaN, kNaN, 0ULL}}}}},
-    {"pending-25", "ethusdtp-2025-05-21-2025-05-23", false, 0.01, 0.0001, 10, 500000.0, 0.0, false, true, 0, kPercent, 0.0, {
+    {"pending-25", "ethusdtp-2025-05-21-2025-05-23", true, 0.01, 0.0001, 10, 500000.0, 0.0, false, true, 0, kPercent, 0.0, {
         {1747832400000LL, 0, kNoTime, kNoTime, {{Kind::Entry, "S1", "", false, 2.0266, kNaN, kNaN, kNaN, 0ULL}}},
         {1747833300000LL, 0, kNoTime, kNoTime, {{Kind::Exit, "X1", "S1", true, kNaN, kNaN, 2400.0, 2800.0, 0ULL}}},
         {1747838700000LL, 0, kNoTime, kNoTime, {{Kind::Close, "S1", "", true, kNaN, kNaN, kNaN, kNaN, 34359738387ULL}, {Kind::Entry, "S2", "", false, 1.9939, kNaN, 2608.87, kNaN, 0ULL}, {Kind::Exit, "X2", "S2", true, kNaN, kNaN, 2580.44, 2608.88, 0ULL}}},
         {1747915200000LL, 0, kNoTime, kNoTime, {{Kind::CloseAll, "", "", true, kNaN, kNaN, kNaN, kNaN, 0ULL}}}}},
-    {"pending-26", "ethusdtp-2025-05-21-2025-05-23", false, 0.01, 0.0001, 10, 500000.0, 0.0, false, true, 0, kPercent, 0.0, {
+    {"pending-26", "ethusdtp-2025-05-21-2025-05-23", true, 0.01, 0.0001, 10, 500000.0, 0.0, false, true, 0, kPercent, 0.0, {
         {1747832400000LL, 0, kNoTime, kNoTime, {{Kind::Entry, "S1", "", false, 2.0266, kNaN, kNaN, kNaN, 0ULL}}},
         {1747833300000LL, 0, kNoTime, kNoTime, {{Kind::Exit, "X1", "S1", true, kNaN, kNaN, 2400.0, 2800.0, 0ULL}}},
         {1747838700000LL, 0, kNoTime, kNoTime, {{Kind::Close, "S1", "", true, kNaN, kNaN, kNaN, kNaN, 34359738387ULL}, {Kind::Entry, "S2", "", false, 1.9939, kNaN, 2608.87, kNaN, 0ULL}, {Kind::Exit, "X2", "S2", true, kNaN, kNaN, 2580.44, 2608.86, 0ULL}}},
         {1747915200000LL, 0, kNoTime, kNoTime, {{Kind::CloseAll, "", "", true, kNaN, kNaN, kNaN, kNaN, 0ULL}}}}},
-    {"pending-27", "ethusdtp-2025-05-21-2025-05-23", false, 0.01, 0.0001, 10, 500000.0, 0.0, false, true, 0, kPercent, 0.0, {
+    {"pending-27", "ethusdtp-2025-05-21-2025-05-23", true, 0.01, 0.0001, 10, 500000.0, 0.0, false, true, 0, kPercent, 0.0, {
         {1747832400000LL, 0, kNoTime, kNoTime, {{Kind::Entry, "S1", "", false, 2.0266, kNaN, kNaN, kNaN, 0ULL}}},
         {1747833300000LL, 0, kNoTime, kNoTime, {{Kind::Exit, "X1", "S1", true, kNaN, kNaN, 2400.0, 2800.0, 0ULL}}},
         {1747838700000LL, 0, kNoTime, kNoTime, {{Kind::Close, "S1", "", true, kNaN, kNaN, kNaN, kNaN, 34359738387ULL}, {Kind::Entry, "S2", "", false, 1.9939, kNaN, 2608.87, kNaN, 0ULL}, {Kind::Exit, "X2", "S2", true, kNaN, kNaN, 2580.44, 2700.0, 0ULL}}},
         {1747915200000LL, 0, kNoTime, kNoTime, {{Kind::CloseAll, "", "", true, kNaN, kNaN, kNaN, kNaN, 0ULL}}}}},
-    {"pending-28", "ethusdtp-2025-05-21-2025-05-23", false, 0.01, 0.0001, 10, 500000.0, 0.0, false, true, 0, kPercent, 0.0, {
+    {"pending-28", "ethusdtp-2025-05-21-2025-05-23", true, 0.01, 0.0001, 10, 500000.0, 0.0, false, true, 0, kPercent, 0.0, {
         {1747832400000LL, 0, kNoTime, kNoTime, {{Kind::Entry, "S1", "", false, 2.0266, kNaN, kNaN, kNaN, 0ULL}}},
         {1747833300000LL, 0, kNoTime, kNoTime, {{Kind::Exit, "X1", "S1", true, kNaN, kNaN, 2400.0, 2800.0, 0ULL}}},
         {1747838700000LL, 0, kNoTime, kNoTime, {{Kind::CancelAll, "", "", true, kNaN, kNaN, kNaN, kNaN, 0ULL}, {Kind::Close, "S1", "", true, kNaN, kNaN, kNaN, kNaN, 38654705683ULL}, {Kind::Entry, "S2", "", false, 1.9939, kNaN, 2608.87, kNaN, 0ULL}, {Kind::Exit, "X2", "S2", true, kNaN, kNaN, 2580.44, 2608.87, 0ULL}}},
@@ -273,17 +273,17 @@ const Tape kTapes[] = {
     {"reversal-53", "nifty-2025-07-04-2025-07-09", true, 0.05, 1, 2, 500000.0, 100.0, false, false, 0, kCashPerContract, 20.0, {
         {1751868900000LL, 0, kNoTime, kNoTime, {{Kind::Close, "Long", "", true, kNaN, kNaN, kNaN, kNaN, 17179869203ULL}, {Kind::Close, "LongAdd", "", true, kNaN, kNaN, kNaN, kNaN, 21474836499ULL}, {Kind::Entry, "RevShort", "", false, 2.0, kNaN, kNaN, kNaN, 0ULL}, {Kind::Exit, "R1", "RevShort", true, 1.0, kNaN, 25399.0, 25480.9, 0ULL}, {Kind::Exit, "R2", "RevShort", true, 1.0, kNaN, 25359.0, 25480.9, 0ULL}}},
         {1751976000000LL, 0, kNoTime, kNoTime, {{Kind::CloseAll, "", "", true, kNaN, kNaN, kNaN, kNaN, 0ULL}}}}},
-    {"pending-54", "ethusdtp-2025-05-21-2025-05-23", false, 0.01, 0.0001, 3, 5000.0, 0.0, false, true, 3, kPercent, 0.04, {
+    {"pending-54", "ethusdtp-2025-05-21-2025-05-23", true, 0.01, 0.0001, 3, 5000.0, 0.0, false, true, 3, kPercent, 0.04, {
         {1747832400000LL, 0, kNoTime, kNoTime, {{Kind::Entry, "S1", "", false, 2.0266, kNaN, kNaN, kNaN, 0ULL}}},
         {1747833300000LL, 0, kNoTime, kNoTime, {{Kind::Exit, "X1", "S1", true, kNaN, kNaN, 2400.0, 2800.0, 0ULL}}},
         {1747838700000LL, 0, kNoTime, kNoTime, {{Kind::Close, "S1", "", true, kNaN, kNaN, kNaN, kNaN, 34359738387ULL}, {Kind::Entry, "S2", "", false, 1.9939, kNaN, 2608.87, kNaN, 0ULL}, {Kind::Exit, "X2", "S2", true, kNaN, kNaN, 2580.44, 2608.87, 0ULL}}},
         {1747915200000LL, 0, kNoTime, kNoTime, {{Kind::CloseAll, "", "", true, kNaN, kNaN, kNaN, kNaN, 0ULL}}}}},
-    {"pending-55", "ethusdtp-2025-05-21-2025-05-23", false, 0.01, 0.0001, 10, 500000.0, 0.0, false, true, 3, kPercent, 0.04, {
+    {"pending-55", "ethusdtp-2025-05-21-2025-05-23", true, 0.01, 0.0001, 10, 500000.0, 0.0, false, true, 3, kPercent, 0.04, {
         {1747832400000LL, 0, kNoTime, kNoTime, {{Kind::Entry, "S1", "", false, 2.0266, kNaN, kNaN, kNaN, 0ULL}}},
         {1747833300000LL, 0, kNoTime, kNoTime, {{Kind::Exit, "X1", "S1", true, kNaN, kNaN, 2400.0, 2800.0, 0ULL}}},
         {1747838700000LL, 0, kNoTime, kNoTime, {{Kind::Close, "S1", "", true, kNaN, kNaN, kNaN, kNaN, 34359738387ULL}, {Kind::Entry, "S2", "", false, 1.9939, kNaN, 2608.870001, kNaN, 0ULL}, {Kind::Exit, "X2", "S2", true, kNaN, kNaN, 2580.44, 2608.870001, 0ULL}}},
         {1747915200000LL, 0, kNoTime, kNoTime, {{Kind::CloseAll, "", "", true, kNaN, kNaN, kNaN, kNaN, 0ULL}}}}},
-    {"pending-56", "ethusdtp-2025-05-21-2025-05-23", false, 0.01, 0.0001, 10, 500000.0, 0.0, false, true, 3, kPercent, 0.04, {
+    {"pending-56", "ethusdtp-2025-05-21-2025-05-23", true, 0.01, 0.0001, 10, 500000.0, 0.0, false, true, 3, kPercent, 0.04, {
         {1747832400000LL, 0, kNoTime, kNoTime, {{Kind::Entry, "S1", "", false, 2.0266, kNaN, kNaN, kNaN, 0ULL}}},
         {1747833300000LL, 0, kNoTime, kNoTime, {{Kind::Exit, "X1", "S1", true, kNaN, kNaN, 2400.0, 2800.0, 0ULL}}},
         {1747838700000LL, 0, kNoTime, kNoTime, {{Kind::Close, "S1", "", true, kNaN, kNaN, kNaN, kNaN, 34359738387ULL}, {Kind::Entry, "S2", "", false, 1.9939, kNaN, 2608.869999, kNaN, 0ULL}, {Kind::Exit, "X2", "S2", true, kNaN, kNaN, 2580.44, 2608.869999, 0ULL}}},
@@ -481,7 +481,7 @@ const Tape kTapes[] = {
         {1753957800000LL, 0, kNoTime, kNoTime, {{Kind::Entry, "ZZ", "", true, 7.0, kNaN, kNaN, kNaN, 0ULL}}},
         {1754051400000LL, 0, kNoTime, kNoTime, {{Kind::Exit, "Different", "", true, kNaN, kNaN, 1.15439, 0.9, 0ULL}}},
         {1754064000000LL, 0, kNoTime, kNoTime, {{Kind::CloseAll, "", "", true, kNaN, kNaN, kNaN, kNaN, 0ULL}}}}},
-    {"pending-89", "ethusdtp-2025-05-21-2025-05-23", false, 0.01, 0.0001, 10, 500000.0, 0.0, false, true, 0, kPercent, 0.0, {
+    {"pending-89", "ethusdtp-2025-05-21-2025-05-23", true, 0.01, 0.0001, 10, 500000.0, 0.0, false, true, 0, kPercent, 0.0, {
         {1747838700000LL, 0, kNoTime, kNoTime, {{Kind::Entry, "S2", "", false, 1.9939, kNaN, 2608.87, kNaN, 0ULL}, {Kind::Exit, "X2", "", true, kNaN, kNaN, 2580.44, 2608.87, 0ULL}}},
         {1747915200000LL, 0, kNoTime, kNoTime, {{Kind::CloseAll, "", "", true, kNaN, kNaN, kNaN, kNaN, 0ULL}}}}},
     {"reversal-90", "nifty-2025-07-04-2025-07-09", false, 0.05, 1, 2, 500000.0, 100.0, false, false, 0, kCashPerContract, 20.0, {

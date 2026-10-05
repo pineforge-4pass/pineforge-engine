@@ -728,6 +728,10 @@ ScriptRuleSwitches& script_rule_switches() noexcept {
     static ScriptRuleSwitches switches;
     return switches;
 }
+ExitBindingRuleSwitches& exit_binding_rule_switches() noexcept {
+    static ExitBindingRuleSwitches switches;
+    return switches;
+}
 }  // namespace detail
 
 // R5 lane V19-E: the placement table's storage.
@@ -2356,6 +2360,7 @@ void PineExecutionAdapter::reset_for_run() {
     consumed_partial_exit_cycles_.clear();
     bracket_shadowed_openings_.clear();
     named_entry_cancel_tokens_.clear();
+    id_bound_exits_.clear();
     close_logical_units_.clear();
     close_ledger_records_.clear();
     pyramiding_records_.clear();
@@ -5787,12 +5792,18 @@ void PineExecutionAdapter::cancel_bracket_siblings(native_order::RequestHandle h
 
 void PineExecutionAdapter::cancel_exit_orders_for_full_close(
         const SourceId& from_entry) {
+    // An exit bound to the id while it held no lot waits for the id's next
+    // fill: a close of the id, or of the position, has nothing of it to close
+    // (tests/fixtures/exit_binding close-pending-id, cancel-flat-replace).
+    const bool keep_pending_bound =
+        detail::exit_binding_rule_switches().pending_bound_exit_survives_flat;
     const auto matches = [&](const PlacementSnapshot& snapshot) {
         const bool exit = snapshot.family == PineOrderFamily::ExitLimit
             || snapshot.family == PineOrderFamily::ExitStop
             || snapshot.family == PineOrderFamily::ExitTrail;
-        return exit && (from_entry.empty() ? snapshot.from_entry.empty()
-                                           : snapshot.from_entry == from_entry);
+        return exit && !(keep_pending_bound && snapshot.pending_bound_exit)
+            && (from_entry.empty() ? snapshot.from_entry.empty()
+                                   : snapshot.from_entry == from_entry);
     };
     pending_bracket_legs_.erase(
         std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
@@ -5906,6 +5917,12 @@ void PineExecutionAdapter::retire_in_position_exits_at_flat(
                     && admits(entry.snapshot);
             });
     };
+    // An exit bound to its entry id while that id's order worked is not an
+    // exit of the position the flat ends: TradingView keeps it for the id's
+    // next fill, whatever bar it was called on and whether an order of the id
+    // still works now (tests/fixtures/exit_binding).
+    const bool keep_pending_bound =
+        detail::exit_binding_rule_switches().pending_bound_exit_survives_flat;
     const auto matches = [&](const PlacementSnapshot& snapshot) {
         const bool exit = snapshot.family == PineOrderFamily::ExitLimit
             || snapshot.family == PineOrderFamily::ExitStop
@@ -5913,6 +5930,7 @@ void PineExecutionAdapter::retire_in_position_exits_at_flat(
         return exit
             && static_cast<PositionSide>(snapshot.projection_position_side)
                    != PositionSide::FLAT
+            && !(keep_pending_bound && snapshot.pending_bound_exit)
             && !pending_parent(snapshot);
     };
     if (!dormant_rows_only) {
@@ -6805,6 +6823,13 @@ bool PineExecutionAdapter::opposite_entry_opening_pending(bool is_long) const {
 void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_price,
                                  double stop_price, double qty, const std::string& comment,
                                  const std::string& oca_name, int oca_type, int qty_type) {
+    place_entry(id, is_long, limit_price, stop_price, qty, comment, oca_name, oca_type, qty_type);
+    if (PF_RARE(!id_bound_exits_.empty())) rearm_id_bound_exits(id);
+}
+
+void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double limit_price,
+                                       double stop_price, double qty, const std::string& comment,
+                                       const std::string& oca_name, int oca_type, int qty_type) {
     native_order::Request request;
     // An infinite quantity trades the default quantity, as na does (lab tv
     // tailc-a-qty-nonfinite2: +-Infinity and na legs all enter at the
@@ -10200,6 +10225,49 @@ void PineExecutionAdapter::close_all() {
     }
 }
 
+// The account the binding rule's tapes run on: margin requirements off
+// (margin_long = margin_short = 0, Pine v5's default), so no margin call ever
+// acts on the exits the rule keeps. Every tape and its reference model run
+// there; with a margin requirement the rule is unpinned and the adapter
+// keeps its former course.
+bool PineExecutionAdapter::margins_disabled() const noexcept {
+    return config_.margin_long == 0.0 && config_.margin_short == 0.0;
+}
+
+// The exits the binding rule's tapes cover: the whole position at absolute
+// levels -- no quantity, no partial percent, no trail, no tick offsets --
+// without calc_on_order_fills.
+bool PineExecutionAdapter::whole_level_exit(double limit_price, double stop_price,
+                                            double trail_points, double trail_price,
+                                            double profit_ticks, double loss_ticks, double qty,
+                                            double qty_percent) const noexcept {
+    return !config_.calc_on_order_fills && std::isnan(qty)
+        && (std::isnan(qty_percent) || qty_percent >= 100.0)
+        && std::isnan(trail_points) && std::isnan(trail_price)
+        && std::isnan(profit_ticks) && std::isnan(loss_ticks)
+        && (finite_positive(limit_price) || finite_positive(stop_price));
+}
+
+// Whether a limit or stop entry order works -- of `id`, or of any id when
+// `id` is null: a live opening request or one the adapter still holds.
+bool PineExecutionAdapter::priced_entry_order_working(const SourceId* id) const {
+    const auto entry_of = [&](const PlacementSnapshot& row) {
+        return row.opening
+            && (row.family == PineOrderFamily::Entry || row.family == PineOrderFamily::Order)
+            && (id == nullptr || row.source_id == *id)
+            && (finite_positive(row.exit_levels.limit) || finite_positive(row.exit_levels.stop));
+    };
+    for (const auto& pending : pending_entries_)
+        if (entry_of(pending.snapshot)) return true;
+    for (const auto& pending : pending_same_bar_commands_)
+        if (entry_of(pending.snapshot)) return true;
+    for (const auto& handle : live_handles_) {
+        const auto row = placement_.find(handle.incarnation);
+        if (row != placement_.end() && entry_of(row->second)) return true;
+    }
+    return false;
+}
+
 bool PineExecutionAdapter::entry_order_pending(const SourceId& id) const {
     const auto entry_of = [&](const PlacementSnapshot& row) {
         return row.opening && row.source_id == id
@@ -10320,6 +10388,130 @@ void PineExecutionAdapter::withdraw_void_exits(const SourceId& entry_id) {
     refresh_pending_view();
 }
 
+// Under process_orders_on_close TradingView never fills a priced add called
+// while the position holds `pyramiding` entries, even once the position
+// shrinks or goes flat (tests/fixtures/exit_binding pyr1, pyr1-close-sibling).
+// The adapter places it at the call, over the cap (projection_over_pyramiding),
+// as a later close of the bar may free a slot. At the next opening, that bar's
+// closes done, an add the position still holds `pyramiding` entries against
+// leaves the book; each add is judged at that one opening. The tapes pin an
+// add of an id that holds no lot, without calc_on_order_fills; a same-id add
+// keeps its course. Where a close of the add's bar frees the slot TradingView
+// is not pinned (the pin's model rejects the add at the call); the add stays.
+void PineExecutionAdapter::withdraw_unplaced_cap_adds(const NativeDecisionContext& context) {
+    const auto physical = detail::run_position(require_host());
+    if (physical.signed_units == 0.0) return;
+    const auto records = open_ledger_records();
+    if ((records ? *records : physical.lot_count)
+        < static_cast<std::size_t>(config_.pyramiding)) {
+        return;
+    }
+    std::vector<native_order::RequestHandle> unplaced;
+    for (const auto& handle : live_handles_) {
+        const auto row = placement_.find(handle.incarnation);
+        if (row == placement_.end()) continue;
+        const auto& entry = row->second;
+        if (!entry.opening || entry.family != PineOrderFamily::Entry
+            || !entry.projection_over_pyramiding
+            || entry.is_long != (physical.signed_units > 0.0)
+            || !(finite_positive(entry.exit_levels.limit)
+                 || finite_positive(entry.exit_levels.stop))
+            || entry.placement_script_open_ms >= context.script_bar_open_ms
+            || entry.placement_script_open_ms != last_broker_open_ms_
+            || cohort_exposure_for(entry.source_id) > 0.0 || open_lot_of(entry.source_id)) {
+            continue;
+        }
+        unplaced.push_back(handle);
+    }
+    for (const auto& handle : unplaced) {
+        const auto result = require_host().cancel(handle);
+        if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
+    }
+}
+
+// The fill of `entry_id` ends the binding of its exits to the id
+// (PlacementSnapshot::pending_bound_exit): from now on they are exits of the
+// lot this fill opens, and end with it.
+void PineExecutionAdapter::bind_pending_exits_to_fill(const SourceId& entry_id) {
+    const auto bind = [&](PlacementSnapshot& row) {
+        if (row.pending_bound_exit && row.from_entry == entry_id) row.pending_bound_exit = false;
+    };
+    for (auto& pending : pending_bracket_legs_) bind(pending.snapshot);
+    for (auto& pending : pending_coof_requests_) bind(pending.snapshot);
+    for (auto& delayed : delayed_market_orders_) bind(delayed.snapshot);
+    for (auto& shadow : source_shadow_pending_) bind(shadow.snapshot);
+    for (const auto& handle : live_handles_) {
+        const auto row = placement_.find(handle.incarnation);
+        if (row != placement_.end()) bind(row->second);
+    }
+}
+
+// A strategy.cancel of `entry_id` withdraws its working entry order, and the
+// native requests of the exits bound to the id end with it. TradingView keeps
+// those exits bound to the id (tests/fixtures/exit_binding cancel-replace,
+// cancel-flat-replace): their calls are kept and the id's next entry order
+// re-arms them (rearm_id_bound_exits).
+void PineExecutionAdapter::stash_id_bound_exits(const SourceId& entry_id) {
+    if (!detail::exit_binding_rule_switches().pending_bound_exit_survives_flat
+        || entry_id.empty() || !entry_order_pending(entry_id)) {
+        return;
+    }
+    std::vector<native_order::RequestHandle> handles;
+    for (const auto& handle : live_handles_) {
+        const auto row = placement_.find(handle.incarnation);
+        if (row == placement_.end()) continue;
+        const auto& snapshot = row->second;
+        const bool exit = snapshot.family == PineOrderFamily::ExitLimit
+            || snapshot.family == PineOrderFamily::ExitStop
+            || snapshot.family == PineOrderFamily::ExitTrail;
+        if (!exit || !snapshot.pending_bound_exit || snapshot.from_entry != entry_id) continue;
+        handles.push_back(handle);
+        const bool kept = std::any_of(id_bound_exits_.begin(), id_bound_exits_.end(),
+            [&](const IdBoundExit& stashed) {
+                return stashed.exit_id == snapshot.source_id
+                    && stashed.from_entry == snapshot.from_entry;
+            });
+        if (!kept) {
+            id_bound_exits_.push_back({snapshot.source_id, snapshot.from_entry,
+                                       snapshot.exit_levels, snapshot.qty_percent,
+                                       snapshot.requested_qty, snapshot.comment,
+                                       snapshot.oca_name});
+        }
+    }
+    if (handles.empty()) return;
+    for (const auto& handle : handles) {
+        const auto result = require_host().cancel(handle);
+        if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
+    }
+    for (auto family = bracket_families_.begin(); family != bracket_families_.end();) {
+        family->second.remove_all(handles);
+        if (family->second.empty()) family = bracket_families_.erase(family);
+        else ++family;
+    }
+    refresh_pending_view();
+}
+
+// The entry order just placed for `entry_id` takes the exits its id kept
+// bound through a cancel, each called again as it was called.
+void PineExecutionAdapter::rearm_id_bound_exits(const SourceId& entry_id) {
+    if (!entry_order_pending(entry_id)) return;
+    std::vector<IdBoundExit> rearm;
+    for (auto row = id_bound_exits_.begin(); row != id_bound_exits_.end();) {
+        if (row->from_entry == entry_id) {
+            rearm.push_back(std::move(*row));
+            row = id_bound_exits_.erase(row);
+        } else {
+            ++row;
+        }
+    }
+    for (const auto& row : rearm) {
+        exit(row.exit_id, row.from_entry, row.levels.limit, row.levels.stop,
+             row.levels.trail_points, row.levels.trail_offset, row.levels.trail_price,
+             row.qty_percent, row.comment, row.qty, row.oca_name, row.levels.profit_ticks,
+             row.levels.loss_ticks);
+    }
+}
+
 void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_entry,
                                 double limit_price, double stop_price, double trail_points,
                                 double trail_offset, double trail_price, double qty_percent,
@@ -10388,6 +10580,22 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
              && fixture_close_logical_units(from_entry) > 0.0)
         && !entry_order_pending(from_entry) && !open_lot_of(from_entry)
         && !standing_exit(exit_id, from_entry);
+    // A call made in position for an entry that holds no lot but has a limit
+    // or stop order working binds the exit to the entry id: it waits for that
+    // id's next fill through closes and the flat (PlacementSnapshot::
+    // pending_bound_exit; tests/fixtures/exit_binding). The tapes pin a whole
+    // exit at absolute levels for a parent resting at a level, without
+    // calc_on_order_fills and with margins off (whole_level_exit,
+    // margins_disabled); other exits keep their course.
+    const bool pending_bound_exit = !from_entry.empty() && !void_issue
+        && detail::exit_binding_rule_switches().pending_bound_exit_survives_flat
+        && margins_disabled()
+        && whole_level_exit(limit_price, stop_price, trail_points, trail_price, profit_ticks,
+                            loss_ticks, qty, requested_qty_percent)
+        && detail::run_position(require_host()).signed_units != 0.0
+        && !(cohort_exposure_for(from_entry) > 0.0)
+        && !(!config_.close_entries_rule_any && fixture_close_logical_units(from_entry) > 0.0)
+        && priced_entry_order_working(&from_entry) && !open_lot_of(from_entry);
     // A pending variable short-context entry is only tentatively held for the
     // three-object ShortSeed command book.  A bracket call proves it belongs
     // to an ordinary entry family, so materialize that entry before binding
@@ -11150,6 +11358,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             snapshot.reservation_deferred_to_pending_entry =
                 binds_pending_reversal_entry;
             snapshot.void_issue = void_issue;
+            snapshot.pending_bound_exit = pending_bound_exit;
             snapshot.is_long = false;
             snapshot.command_sequence = command_sequence;
             snapshot.bracket_origin = std::move(bracket_origin);
@@ -12285,6 +12494,26 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
                 leg.request.trigger = native_order::Stop{threshold};
             else
                 leg.request.trigger = native_order::Limit{threshold};
+        }
+        // A global exit called while the book is flat is bound to the limit
+        // and stop entry orders working then and waits for their fill
+        // (materialized by the opening, materialize_pending_bracket_legs):
+        // submitted to a flat book it would end at once (tests/fixtures/
+        // global_exit_children pending-89). One beside a market entry keeps
+        // its course (tests/fixtures/exit_queue w3f05-s11).
+        if (leg.snapshot.from_entry.empty() && leg.snapshot.bracket_origin.incarnation == 0
+            && detail::exit_binding_rule_switches().global_exit_binds_working_entries
+            && margins_disabled()
+            && whole_level_exit(leg.snapshot.exit_levels.limit, leg.snapshot.exit_levels.stop,
+                                leg.snapshot.exit_levels.trail_points,
+                                leg.snapshot.exit_levels.trail_price,
+                                leg.snapshot.exit_levels.profit_ticks,
+                                leg.snapshot.exit_levels.loss_ticks,
+                                leg.snapshot.requested_qty, leg.snapshot.qty_percent)
+            && detail::run_position(require_host()).signed_units == 0.0
+            && priced_entry_order_working(nullptr)) {
+            pending_bracket_legs_.push_back(std::move(leg));
+            continue;
         }
         if (leg.snapshot.reservation_deferred_to_pending_entry
             && !(cohort_exposure_for(leg.snapshot.from_entry) > 0.0)) {
@@ -13723,6 +13952,11 @@ void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
 
 void PineExecutionAdapter::cancel(const SourceId& id) {
     reroute_fixed_entries_before_request();
+    stash_id_bound_exits(id);
+    if (PF_RARE(!id_bound_exits_.empty())) {
+        id_bound_exits_.erase(std::remove_if(id_bound_exits_.begin(), id_bound_exits_.end(),
+            [&](const IdBoundExit& row) { return row.exit_id == id; }), id_bound_exits_.end());
+    }
     NamedEntryCancelToken token;
     for (const auto& handle : live_handles_) {
         const auto snapshot = placement_.find(handle.incarnation);
@@ -13788,6 +14022,7 @@ void PineExecutionAdapter::cancel(const SourceId& id) {
 
 void PineExecutionAdapter::cancel_all() {
     reroute_fixed_entries_before_request();
+    id_bound_exits_.clear();
     // The margin call a breach at this bar's close owes is an order the
     // script's cancel_all() withdraws too (close_point_margin_call).
     if (const auto point = detail::callback_point(require_host()))
@@ -20303,6 +20538,11 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     // prior script bar, so a same-batch cap transfer remains available to its
     // designated sibling.
     source_batch_end();
+    if (config_.process_orders_on_close && !config_.calc_on_order_fills
+        && config_.pyramiding > 0 && margins_disabled()
+        && detail::exit_binding_rule_switches().priced_add_at_cap_not_placed) {
+        withdraw_unplaced_cap_adds(context);
+    }
     if (context.coordinate.interval_index != entry_openings_interval_index_) {
         entry_openings_interval_index_ = context.coordinate.interval_index;
         entry_openings_this_interval_ = 0;
@@ -21511,6 +21751,16 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 pending.projection_created_bar < projection_bar_index(context)
                 && finite_positive(pending.exit_levels.limit)
                 && !finite_positive(pending.exit_levels.stop);
+            // Under process_orders_on_close a stop entry resting from an
+            // earlier bar survives the flat as a limit does: TradingView
+            // fills it later and binds its exit (tests/fixtures/exit_binding
+            // stop-entry-parent).
+            const bool resting_stop =
+                detail::exit_binding_rule_switches().resting_stop_entry_survives_close
+                && config_.process_orders_on_close && !config_.calc_on_order_fills
+                && margins_disabled()
+                && pending.projection_created_bar < projection_bar_index(context)
+                && finite_positive(pending.exit_levels.stop);
             const bool coqueued_within_cap =
                 pending.projection_created_bar
                     == placement_snapshot->projection_created_bar
@@ -21525,7 +21775,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                     == placement_snapshot->projection_created_bar;
             const bool frozen_over_cap_transaction = pending.frozen_market_instruction
                 && pending.projection_over_pyramiding;
-            if (!resting_limit && !coqueued_within_cap && !preserved_stop
+            if (!resting_limit && !resting_stop && !coqueued_within_cap && !preserved_stop
                 && !frozen_over_cap_transaction) {
                 stale_entries.push_back(handle);
             }
@@ -21839,6 +22089,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     if (placement_snapshot && placement_snapshot->opening
         && std::abs(event.opened_units) > 0.0) {
         withdraw_void_exits(placement_snapshot->source_id);
+        bind_pending_exits_to_fill(placement_snapshot->source_id);
         // Explicit brackets armed while their same-id parent was still flat
         // use origin zero as a temporary source binding. Once that parent
         // applies, bind those live legs to its actual incarnation and move

@@ -1,0 +1,5 @@
+﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)
+1,Exit long,2025-11-01 04:00,EOD flatten,3886.83,1.5217,5827.95883,81.933365,1.41,4.697019216,111.79632,1.92,-43.812725,-0.75,81.933365,1.64,77
+1,Entry long,2025-10-31 08:45,L1,3829.9,1.5217,5827.95883,81.933365,1.41,4.697019216,111.79632,1.92,-43.812725,-0.75,81.933365,1.64,77
+2,Exit long,2025-11-03 10:30,xL2,3804.31,1.5213,5787.542442,-4.675655,-0.08,4.630015698,0,0.00,-2.360656,-0.04,77.257706,1.55,0
+2,Entry long,2025-11-03 10:30,L2,3804.34,1.5213,5787.542442,-4.675655,-0.08,4.630015698,0,0.00,-2.360656,-0.04,77.257706,1.55,0

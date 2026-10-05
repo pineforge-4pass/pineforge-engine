@@ -992,6 +992,12 @@ list(APPEND TEST_SOURCES test_exit_fifo_cross_tapes)
 # limit entry's fill fills at that fill (tests/fixtures/global_exit_children),
 # on TradingView's tapes.
 list(APPEND TEST_SOURCES test_global_exit_children_tapes)
+# ... and a strategy.exit binds when it is called: to its entry's open lots,
+# else to the entry id while an order of it is working (surviving the flat,
+# a cancel and a re-entry), else the call is ignored; an earlier bar's stop
+# entry survives a close's flat and an add called at the pyramiding cap is
+# never placed (tests/fixtures/exit_binding), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_exit_binding_tapes)
 # ... and under calc_on_order_fills an exit limit the recalculation of an
 # entry's open fill places at or through the open print fills there at once
 # (tests/fixtures/coof_open_limit), on TradingView's tape.
@@ -2934,6 +2940,10 @@ endif()
 if(TARGET test_global_exit_children_tapes)
     target_compile_definitions(test_global_exit_children_tapes PRIVATE
         PINEFORGE_GLOBAL_EXIT_CHILDREN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/global_exit_children")
+endif()
+if(TARGET test_exit_binding_tapes)
+    target_compile_definitions(test_exit_binding_tapes PRIVATE
+        PINEFORGE_EXIT_BINDING_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_binding")
 endif()
 if(TARGET test_session_transition_clock_tapes)
     target_compile_definitions(test_session_transition_clock_tapes PRIVATE

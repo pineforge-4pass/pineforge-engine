@@ -45,9 +45,13 @@ by hand. `tests/test_global_exit_children_tapes.cpp` replays every tape through 
 
 **Asserted tapes.** Each row must be the engine's: ids, times, side, prices in ticks, quantity, net
 profit at the report's precision, and commission at ten significant digits.
-- 91 of these reproduce all ten of the pin validator's exact fields.
-- `eth-member` and `eth-fresh` differ only in the commission's eleventh significant digit, a
-  separate rounding this pin does not cover (rule 8).
+- 97 of these reproduce all ten of the pin validator's exact fields.
+- `eth-member`, `eth-fresh`, `pending-24`, `pending-54`, `pending-55` and `pending-56` differ only
+  in the commission's eleventh significant digit, a separate rounding this pin does not cover
+  (rule 8).
+- The ten `pending-*` tapes past `pending-21` and `pending-23` were known divergences until the
+  exit-binding rule (tests/fixtures/exit_binding): an exit called for an entry that holds no lot
+  but has an order working is bound to that entry id and survives a close of the position.
 
 **Known divergences.** These run and report where the engine still departs from TradingView. They
 assert nothing.
@@ -63,7 +67,7 @@ for bit (`pinned_rows.inc`, harvested with `-DPINEFORGE_GLOBAL_EXIT_CHILDREN_HAR
 - a waiting `strategy.order` market order at 13 keys;
 - the newborn stop under `calc_on_order_fills`.
 
-## Asserted tapes (93)
+## Asserted tapes (103)
 
 | fixture | pin tape | trades | bars |
 |---|---|---:|---|
@@ -145,7 +149,17 @@ for bit (`pinned_rows.inc`, harvested with `-DPINEFORGE_GLOBAL_EXIT_CHILDREN_HAR
 | `named-xz` | `n5b-11-named-xz` | 3 | `eurusd-2025-07-30-2025-08-04` |
 | `named-zx` | `n5b-10-named-zx` | 2 | `eurusd-2025-07-30-2025-08-04` |
 | `pending-21` | `n5-21-pending` | 1 | `ethusdtp-2025-05-21-2025-05-23` |
+| `pending-22` | `n5-22-pending` | 2 | `ethusdtp-2025-05-21-2025-05-23` |
 | `pending-23` | `n5-23-pending` | 2 | `ethusdtp-2025-05-21-2025-05-23` |
+| `pending-24` | `n5-24-pending` | 2 | `ethusdtp-2025-05-21-2025-05-23` |
+| `pending-25` | `n5-25-pending` | 2 | `ethusdtp-2025-05-21-2025-05-23` |
+| `pending-26` | `n5-26-pending` | 2 | `ethusdtp-2025-05-21-2025-05-23` |
+| `pending-27` | `n5-27-pending` | 2 | `ethusdtp-2025-05-21-2025-05-23` |
+| `pending-28` | `n5-28-pending` | 2 | `ethusdtp-2025-05-21-2025-05-23` |
+| `pending-54` | `n5-54-pending` | 2 | `ethusdtp-2025-05-21-2025-05-23` |
+| `pending-55` | `n5-55-pending` | 2 | `ethusdtp-2025-05-21-2025-05-23` |
+| `pending-56` | `n5-56-pending` | 2 | `ethusdtp-2025-05-21-2025-05-23` |
+| `pending-89` | `n5-89-pending` | 1 | `ethusdtp-2025-05-21-2025-05-23` |
 | `reversal-29` | `n5-29-reversal` | 2 | `nifty-2025-07-04-2025-07-09` |
 | `reversal-53` | `n5-53-reversal` | 2 | `nifty-2025-07-04-2025-07-09` |
 | `shrink13` | `n5b-07-shrink13` | 13 | `eurusd-2025-07-30-2025-08-04` |
@@ -161,7 +175,7 @@ for bit (`pinned_rows.inc`, harvested with `-DPINEFORGE_GLOBAL_EXIT_CHILDREN_HAR
 | `tie-aq` | `n5b-01-tie-aq` | 2 | `eurusd-2025-07-30-2025-08-04` |
 | `tie-qa` | `n5b-02-tie-qa` | 2 | `eurusd-2025-07-30-2025-08-04` |
 
-## Known divergences (34)
+## Known divergences (24)
 
 Recorded, not asserted. `known_divergences.inc` gives each one's row counts and first departing
 field at the change's head; the test reports whether each still departs.
@@ -169,16 +183,6 @@ field at the change's head; the test reports whether each still departs.
 | fixture | pin tape | trades | the rule it needs |
 |---|---|---:|---|
 | `hist13-same` | `n5b-23-hist13-same` | 15 | rule 7: a same-bar close(id) and entry(id) run the entry first |
-| `pending-22` | `n5-22-pending` | 2 | pending entry: a named exit of a waiting entry survives a close of the position |
-| `pending-24` | `n5-24-pending` | 2 | pending entry: a named exit of a waiting entry survives a close of the position |
-| `pending-25` | `n5-25-pending` | 2 | pending entry: a named exit of a waiting entry survives a close of the position |
-| `pending-26` | `n5-26-pending` | 2 | pending entry: a named exit of a waiting entry survives a close of the position |
-| `pending-27` | `n5-27-pending` | 2 | pending entry: a named exit of a waiting entry survives a close of the position |
-| `pending-28` | `n5-28-pending` | 2 | pending entry: a named exit of a waiting entry survives a close of the position |
-| `pending-54` | `n5-54-pending` | 2 | pending entry: a named exit of a waiting entry survives a close of the position |
-| `pending-55` | `n5-55-pending` | 2 | pending entry: a named exit of a waiting entry survives a close of the position |
-| `pending-56` | `n5-56-pending` | 2 | pending entry: a named exit of a waiting entry survives a close of the position |
-| `pending-89` | `n5-89-pending` | 1 | pending entry: a global exit placed for a waiting entry survives to its fill |
 | `reversal-30` | `n5-30-reversal` | 4 | reversal: a close before a reversal leaves the requested opening leg |
 | `reversal-31` | `n5-31-reversal` | 5 | reversal: a close before a reversal leaves the requested opening leg |
 | `reversal-32` | `n5-32-reversal` | 5 | reversal: a close before a reversal leaves the requested opening leg |

@@ -192,6 +192,12 @@ struct PlacementSnapshot {
     // (withdraw_void_exits), and a re-issue made once the entry exists takes
     // a new place in the exit queue rather than this one's.
     bool void_issue = false;
+    // A strategy.exit called while the position was open and its from_entry
+    // held no lot but had an entry order working: TradingView binds it to the
+    // entry id, so it waits for that id's next fill through closes, the flat
+    // and a cancel and re-entry of the id. Cleared when the id fills, which
+    // binds the exit to that fill's lot (ExitBindingRuleSwitches).
+    bool pending_bound_exit = false;
     // Sized when it was placed and executed as a plain market transaction:
     // a margin call or close whose position shrank before it filled crosses
     // zero and opens the difference on the other side
@@ -440,6 +446,36 @@ struct ScriptRuleSwitches {
     bool pooc_bracket_skips_inert_exits = true;
 };
 ScriptRuleSwitches& script_rule_switches() noexcept;
+
+// One switch per part of TradingView's strategy.exit binding rule, pinned on
+// the tapes under tests/fixtures/exit_binding and the pending-* tapes of
+// tests/fixtures/global_exit_children, so a regression bisects per part. A
+// strategy.exit binds when it is called: to its entry's open lots, else to
+// the entry id while an order of it is working, else the call is ignored.
+// Every part acts only with margin requirements off (margin_long =
+// margin_short = 0), the setting of every tape. All on; only tests change
+// one. Process-wide, read by every adapter; not installed API, and no
+// strategy input reaches it.
+struct ExitBindingRuleSwitches {
+    // An exit called in position for an entry id with no lot but a limit or
+    // stop order working is bound to the id: a close or the flat does not
+    // remove it, a cancel of the id's order keeps it for the id's next order,
+    // and the id's next fill binds it (PlacementSnapshot::pending_bound_exit).
+    bool pending_bound_exit_survives_flat = true;
+    // A global exit called while the book is flat binds to the limit and
+    // stop entry orders working then: it waits for their fill instead of
+    // ending on the flat book.
+    bool global_exit_binds_working_entries = true;
+    // Under process_orders_on_close an entry order of the side a close
+    // flattens, resting from an earlier bar, survives that close when it is
+    // a stop, as a limit does.
+    bool resting_stop_entry_survives_close = true;
+    // Under process_orders_on_close a priced add of an id holding no lot,
+    // still at the pyramiding cap once its bar's closes are done, leaves the
+    // book at the next opening, judged at that opening only.
+    bool priced_add_at_cap_not_placed = true;
+};
+ExitBindingRuleSwitches& exit_binding_rule_switches() noexcept;
 } // namespace detail
 
 #ifndef PINEFORGE_PLACEMENT_AUDIT
@@ -2227,11 +2263,23 @@ private:
     void observe_close_ledger(const native_order::ExecutionAppliedEvent&,
                               const PlacementSnapshot*);
     bool entry_order_pending(const SourceId&) const;
+    bool priced_entry_order_working(const SourceId* id) const;
+    bool margins_disabled() const noexcept;
+    bool whole_level_exit(double limit_price, double stop_price, double trail_points,
+                          double trail_price, double profit_ticks, double loss_ticks, double qty,
+                          double qty_percent) const noexcept;
     bool open_lot_of(const SourceId& id) const;
     bool standing_exit(const SourceId& exit_id, const SourceId& from_entry) const;
     void unvoid_exit(PlacementSnapshot& row);
     void execute_or_withdraw_close(native_order::RequestHandle close, bool void_issue);
     void withdraw_void_exits(const SourceId& entry_id);
+    void bind_pending_exits_to_fill(const SourceId& entry_id);
+    void withdraw_unplaced_cap_adds(const NativeDecisionContext& context);
+    void stash_id_bound_exits(const SourceId& entry_id);
+    void rearm_id_bound_exits(const SourceId& entry_id);
+    void place_entry(const SourceId& id, bool is_long, double limit_price, double stop_price,
+                     double qty, const std::string& comment, const std::string& oca_name,
+                     int oca_type, int qty_type);
     void credit_close_ledger(const SourceId&, double units);
     void book_close_ledger(const SourceId&, double units);
 
@@ -2290,6 +2338,21 @@ private:
     std::unordered_map<SourceId, std::int64_t> consumed_partial_exit_cycles_;
     std::unordered_set<std::uint64_t> bracket_shadowed_openings_;
     std::unordered_map<SourceId, NamedEntryCancelToken> named_entry_cancel_tokens_;
+    // An exit bound to its entry id whose working order a strategy.cancel of
+    // the id withdrew (PlacementSnapshot::pending_bound_exit): TradingView
+    // keeps the binding, so the id's next entry order re-arms the exit as
+    // called. The native request ends with its parent order, so the call is
+    // kept here, one per (exit id, entry id) pair.
+    struct IdBoundExit {
+        SourceId exit_id;
+        SourceId from_entry;
+        PineExitLevels levels;
+        double qty_percent = std::numeric_limits<double>::quiet_NaN();
+        double qty = std::numeric_limits<double>::quiet_NaN();
+        std::string comment;
+        std::string oca_name;
+    };
+    std::vector<IdBoundExit> id_bound_exits_;
     // The close ledger: per id, the units entered under it that no close has
     // booked yet (close_logical_units_), and the same units by opening fill
     // in fill order (close_ledger_records_), which a booking beyond its id's

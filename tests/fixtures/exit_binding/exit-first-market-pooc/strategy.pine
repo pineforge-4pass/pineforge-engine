@@ -1,0 +1,7 @@
+//@version=6
+strategy("xk27-exit-first-market-pooc",initial_capital=100000,pyramiding=3,margin_long=0,margin_short=0,close_entries_rule="FIFO",process_orders_on_close=true)
+if time == timestamp("UTC",2025,10,31,17,15,00)
+    strategy.exit("xA",from_entry="A",limit=3830)
+    strategy.entry("A",strategy.long,qty=1)
+if time == timestamp("UTC",2025,10,31,20,00,00)
+    strategy.close_all()

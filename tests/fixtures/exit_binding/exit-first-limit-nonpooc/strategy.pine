@@ -1,0 +1,7 @@
+//@version=6
+strategy("xk31-exit-first-limit-nonpooc",initial_capital=100000,pyramiding=3,margin_long=0,margin_short=0,close_entries_rule="FIFO",process_orders_on_close=false)
+if time == timestamp("UTC",2025,10,31,17,15,00)
+    strategy.exit("xL2",from_entry="L2",stop=3750,limit=3990.44)
+    strategy.entry("L2",strategy.long,qty=1.5213,limit=3804.3448485)
+if time == timestamp("UTC",2025,11,03,20,00,00)
+    strategy.close_all()

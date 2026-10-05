@@ -60,6 +60,9 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     // Folded only when set, so a run that never issues a void exit keeps
     // its digest (lane W3B-ENG-GRID).
     if (value.void_issue) f.b(true);
+    // Folded only when set, like void_issue: the exit is bound to its entry
+    // id, not to lots (ExitBindingRuleSwitches).
+    if (value.pending_bound_exit) f.u(0x70656e64ULL);
     // Folded only when set, like void_issue (lane W13-ENG-MARGIN-OPP).
     if (value.crosses_zero) f.u(0x7a65726fULL);
     if (!std::isnan(value.follow_up_fill)) f.d(value.follow_up_fill);
@@ -476,6 +479,19 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     for (const auto& key : named_cancel_keys) {
         const auto& token = named_entry_cancel_tokens_.at(key);
         f.s(key); f.u(token.entry_incarnation); f.u(token.surviving_exit_incarnation);
+    }
+    // Folded only when an exit's id binding outlived a cancel of its order,
+    // so a run that never keeps one folds what it folded before.
+    if (!id_bound_exits_.empty()) {
+        f.u(0x69646278ULL);
+        f.u(id_bound_exits_.size());
+        for (const auto& row : id_bound_exits_) {
+            f.s(row.exit_id); f.s(row.from_entry);
+            f.d(row.levels.limit); f.d(row.levels.stop); f.d(row.levels.trail_points);
+            f.d(row.levels.trail_offset); f.d(row.levels.trail_price);
+            f.d(row.levels.profit_ticks); f.d(row.levels.loss_ticks);
+            f.d(row.qty_percent); f.d(row.qty); f.s(row.comment); f.s(row.oca_name);
+        }
     }
     f.u(close_logical_units_.size());
     for (const auto& row : close_logical_units_) { f.s(row.first); f.d(row.second); }

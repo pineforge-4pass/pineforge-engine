@@ -1,0 +1,19 @@
+{
+  "pin": "strategy.exit binding at the call (lots, a working entry order of the id, or ignored)",
+  "tape": "xk07-pyr1",
+  "channel": "ws-report-v1",
+  "exporter": "lab tv --no-note",
+  "symbol": "BINANCE:ETHUSDT.P",
+  "interval": "15",
+  "from": "2025-10-30",
+  "to": "2025-11-05",
+  "exports": 2,
+  "exportsByteIdentical": true,
+  "firstExport": "2026-10-05T01:55:49.939Z",
+  "secondExport": "2026-10-05T01:56:10.729Z",
+  "sourceSha256": "8310e134a859967c1ed7b233575b17322e4f9caac4becd80d22a64d5b725434b",
+  "tvTradesCsvSha256": "7b594885eab9d1d4d2974859673eb5e0100d23250f620e9eef191b5d4b6b654d",
+  "bars": "bars/ethusdtp-2025-10-30-2025-11-05.csv",
+  "barsSha256": "76e772ba5cc99f1e23fe43e527b51a06ac6b7e3f06805a49ab0a784ca0a0c4c7",
+  "status": "asserted"
+}
