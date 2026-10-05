@@ -401,6 +401,7 @@ The gated code is in `src/source/pine_adapter.cpp`.
 | `fill_price_recheck` | ADMIT_V2, fill | on | the fill's price-scale check and its whole-drop (§1.3) | `unified_fill_admits` in `resolve_terms` and `validate_precommit` |
 | `close_first_admission` | ADMIT_V2, close-first | on | a close-first entry takes rule 2 alone and fills with its quantity (§1.3) | `record_close_first`, `entry`, `resolve_terms`, `validate_precommit` |
 | `point_fills_before_margin` | point order | on | at the open, a close placed ahead of its opposite entry and a protective stop or limit the open reaches fill before the opening margin check (§1.9) | the opening checkpoint in `on_bar_open` |
+| `point_order_trailing_exits` | point order | on | the point order counts a stop or limit leg of an exit that also trails (`trail_points`, `trail_offset` or `trail_price`) like any other protective exit (§1.9) | the opening checkpoint in `on_bar_open` |
 | `pyramiding_ledger_records` | pyramiding records | on | under pyramiding above 1, the cap counts the open close-ledger records, one per entry fill not yet booked (§1.9) | `open_ledger_records` in `entry`, `submit_or_replace`, `validate_precommit` |
 | `exit_child_tombstones` | exit tombstones | on | a partial `strategy.exit` child that filled is never revived for the entry incarnation it filled under (§1.9) | `exit_tombstoned` in `exit` and `validate_precommit` |
 | `gain_loss_money` | G+L | on | the G+L source money (§1.4), inside the regime its tapes pin | the source money at each signal and the margin-call slices that book into it, not the residual call's cash; the state hash in `src/source/pine_state_hash.cpp` |
@@ -444,14 +445,15 @@ book the same trades.
 
 | Format | Tapes | Fixture | Test |
 |---|---:|---|---|
-| close-first, entry-then-close and flat entries at session-open gaps (19 sources, 3 exports each); point-order, close-first reversal, exit-tombstone, add and pyramiding controls (11 sources, 3 exports each); 39 stop-priority and 3 coupled close + reversal tapes; an explicit-short control (3 exports) | 73 | `tests/fixtures/admission_rules` | `test_admission_rules_tapes` |
+| close-first, entry-then-close and flat entries at session-open gaps (19 sources, 3 exports each); point-order, close-first reversal, exit-tombstone, add and pyramiding controls (13 sources, 3 exports each); 39 stop-priority and 3 coupled close + reversal tapes; an explicit-short control (3 exports) | 75 | `tests/fixtures/admission_rules` | `test_admission_rules_tapes` |
 
-The engine reproduces all 73 (the 72 above and the explicit-short control
+The engine reproduces all 75 (the 74 above and the explicit-short control
 `explicit_short/offset0-fill`); each of `unified_placement`,
 `fill_price_recheck`, `close_first_admission`, `point_fills_before_margin`,
-`pyramiding_ledger_records` and `exit_child_tombstones` costs tapes there when
-turned off, and 56 of the 59 NYSE:F tapes book the same trades as a backtest
-and as a stream (the test names the three it leaves out and why).
+`point_order_trailing_exits`, `pyramiding_ledger_records` and
+`exit_child_tombstones` costs tapes there when turned off, and 58 of the 61
+NYSE:F tapes book the same trades as a backtest and as a stream (the test
+names the three it leaves out and why).
 `test_qty_step_lot_grid_case` replays the hosted lot-grid case
 (`tests/fixtures/qty_step_lot_grid`) with these rules on, with and without its
 1e-05 lot grid: 22 and 27 rows, every one exactly the recorded row.

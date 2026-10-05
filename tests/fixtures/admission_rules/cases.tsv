@@ -22,6 +22,8 @@ point_order_and_book/add1-short-wholebook	f-2026-03-23-2026-03-24.csv	0.01	1.0	1
 point_order_and_book/add2-short-wholebook-at-fill	f-2026-03-23-2026-03-24.csv	0.01	1.0	118370.0	fixed	1.0	100.0	100.0	percent	0.0	0	0	0	2	1774224000000	1774310400000
 point_order_and_book/c1-gapstop-fee-slip	f-2025-07-08-2025-07-10.csv	0.01	1.0	7745.0	fixed	1.0	100.0	100.0	percent	0.04	1	0	0	1	1751932800000	1752105600000
 point_order_and_book/c2-gapstop-percent	f-2025-10-20-2025-10-22.csv	0.01	1.0	106282.0	percent	100.0	100.0	100.0	percent	0.0	0	0	0	1	1760918400000	1761091200000
+point_order_and_book/gapstop-percent-trail-points	f-2025-10-20-2025-10-22.csv	0.01	1.0	106282.0	percent	100.0	100.0	100.0	percent	0.0	0	0	0	1	1760918400000	1761091200000
+point_order_and_book/gapstop-percent-trail-offset	f-2025-10-20-2025-10-22.csv	0.01	1.0	106282.0	percent	100.0	100.0	100.0	percent	0.0	0	0	0	1	1760918400000	1761091200000
 point_order_and_book/c3a-entry-then-close	f-2025-05-12-2025-05-14.csv	0.01	1.0	102180.0	percent	100.0	100.0	100.0	percent	0.0	0	0	0	1	1747008000000	1747180800000
 point_order_and_book/c3b-closeall-first	f-2025-05-12-2025-05-14.csv	0.01	1.0	102180.0	percent	100.0	100.0	100.0	percent	0.0	0	0	0	1	1747008000000	1747180800000
 point_order_and_book/c4-xau-weekend-gapstop	xau-2025-07-03-2025-07-08.csv	0.001	0.01	102330.0	fixed	1.0	100.0	100.0	percent	0.0	0	0	0	1	1751500800000	1751932800000

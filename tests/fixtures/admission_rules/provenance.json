@@ -289,6 +289,26 @@
   "tv_trades_rows": 6,
   "tv_trades_sha256": "70be44655568fd301e9335ab49ea472eff6bf0c8bd305bdd14a0091753177764"
  },
+ "point_order_and_book/gapstop-percent-trail-offset": {
+  "chart_from": "2025-10-20",
+  "chart_to": "2025-10-22",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "039fbdeea0643145170a8b416ea065477d4758728166c55e5eed33e55e176fa3",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "3b187ba7f588712a256f01f6ef6dae984d3ac6dd7aade3187d9767409fc3b5d6"
+ },
+ "point_order_and_book/gapstop-percent-trail-points": {
+  "chart_from": "2025-10-20",
+  "chart_to": "2025-10-22",
+  "exports": 3,
+  "interval": "15",
+  "strategy_sha256": "46a1e833396e0974cc11ca0240ef2734e9e8519654e48e63155584b35676fc20",
+  "symbol": "NYSE:F",
+  "tv_trades_rows": 4,
+  "tv_trades_sha256": "3b187ba7f588712a256f01f6ef6dae984d3ac6dd7aade3187d9767409fc3b5d6"
+ },
  "point_order_and_book/pyr1-records-below-lots": {
   "chart_from": "2025-06-03",
   "chart_to": "2025-06-04",

@@ -13,9 +13,11 @@
  *   TradingView fills every close-first entry flat at the gapped open and
  *   checks it only on the money scale (rule 2, cf7 / cf7b / cf7c), and drops
  *   every other entry whose sig10(sig10(E) / Q) is under the fill.
- * - point_order_and_book/ (11 sources, 3 exports each): the point order -- a
+ * - point_order_and_book/ (13 sources, 3 exports each): the point order -- a
  *   protective stop the open gaps through fills before the margin check (c1,
- *   c2, c4), a close the script placed before its reversal is unconditional
+ *   c2, c4; gapstop-percent-trail-points and -trail-offset are c2 with
+ *   trail_points, and with a trail_offset as well, on the same exit, and book
+ *   c2's rows), a close the script placed before its reversal is unconditional
  *   (c3b; c3a, the entry first, is the control) -- and the exit tombstones
  *   under process_orders_on_close (c5, c5b); the pyramiding cap on open
  *   close-ledger records (pyr1, pyr2) and the whole-book add (add1, add2).
@@ -79,9 +81,9 @@ namespace {
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 constexpr std::int64_t kMinute = 60'000;
-constexpr std::size_t kSources = 73;
-constexpr std::size_t kTvRows = 152;
-constexpr std::size_t kForwardSampled = 56;
+constexpr std::size_t kSources = 75;
+constexpr std::size_t kTvRows = 156;
+constexpr std::size_t kForwardSampled = 58;
 
 using pineforge::source::detail::MarginRuleSwitches;
 
@@ -170,7 +172,8 @@ std::vector<Call> load_plan(const std::string& path) {
         call.args.assign(cell.begin() + 2, cell.end());
         const std::size_t want = call.op == "entry" ? 5 : call.op == "close" ? 1
                                : call.op == "close_all" ? 0 : call.op == "exit" ? 5 : 99;
-        CHECK(call.args.size() == want);
+        // An exit may name trail_points and trail_offset after its five.
+        CHECK(call.args.size() == want || (call.op == "exit" && call.args.size() == 7));
         plan.push_back(std::move(call));
     }
     return plan;
@@ -336,8 +339,10 @@ public:
             } else if (call.op == "close_all") {
                 strategy_close_all();
             } else if (call.op == "exit") {
-                strategy_exit(a[0], a[1], number_or_nan(a[2]), number_or_nan(a[3]), kNaN, kNaN,
-                              kNaN, number_or_nan(a[4]));
+                const bool trails = a.size() == 7;
+                strategy_exit(a[0], a[1], number_or_nan(a[2]), number_or_nan(a[3]),
+                              trails ? number_or_nan(a[5]) : kNaN,
+                              trails ? number_or_nan(a[6]) : kNaN, kNaN, number_or_nan(a[4]));
             }
         }
     }
@@ -557,6 +562,7 @@ int main() {
         {"fill_price_recheck", &S::fill_price_recheck, false},
         {"close_first_admission", &S::close_first_admission, true},
         {"point_fills_before_margin", &S::point_fills_before_margin, true},
+        {"point_order_trailing_exits", &S::point_order_trailing_exits, true},
         {"pyramiding_ledger_records", &S::pyramiding_ledger_records, true},
         {"exit_child_tombstones", &S::exit_child_tombstones, true},
     };

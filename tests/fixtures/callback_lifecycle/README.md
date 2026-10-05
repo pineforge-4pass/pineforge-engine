@@ -34,8 +34,8 @@ report rounds it through a 32-bit float.
 apply yet, each with its reason and the first row where the engine departs.
 The test requires exactly that departure, so any movement fails until the
 file is updated. Engine main 288f189c departs on 31 of the first 82 tapes;
-the callback-lifecycle change left 21 of 87, and the resting limit rule
-leaves 17.
+the callback-lifecycle change left 21 of 87, the resting limit rule 17,
+and the carried trail rule leaves 16.
 
 ## Rules the tapes pin and the engine applies
 
@@ -76,6 +76,17 @@ and every switch's off branch runs.
   it at once (`repeated-rounded`, TradingView trades 18-19). These tapes
   are also replayed forward: a stream calculates on bar close only and
   refuses every one of them (`calc_on_order_fills is unsupported`).
+- Carried trail reach: with `calc_on_order_fills` off, a trailing stop
+  carried from an earlier bar is reached at the first point where the bar's
+  tick-built print reaches it, when that comes before the raw print would;
+  the level stays the raw running best +/- the offset, as a static stop's
+  does (`carried-trail-14`: the 10.485 high prints 10.49 and reaches the
+  10.485 stop riding a 10.345 best; off, it departs). A raw reach whose
+  tick-built print falls back inside the stop is left as it was: no tape
+  decides it. `carried-trail-13-895` is its control (13 ticks: the raw high
+  reaches it too). `carried-trail-14` is also replayed as a bar-by-bar
+  stream (1 and 30 warm-up bars): it books the backtest's trades, and with
+  the switch off both depart from TradingView the same way.
 
 `pair-hold-reissue` runs without a quantity grid, so the engine takes the
 entry/close pair-hold path; every quantity in it is whole. TradingView judges

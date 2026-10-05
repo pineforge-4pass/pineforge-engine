@@ -32,9 +32,14 @@ enum class PineCallbackLifecycleRule : int {
     // fills a 9.73 sell limit). Without the switch every on-grid level stays
     // raw under calc_on_order_fills (exit_limit_trigger).
     RestingLimitTickReach = 3,
+    // A carried trailing stop (calc_on_order_fills off) is reached at the
+    // first point where the bar's tick-built print reaches it, when that comes
+    // before the raw print would; the level stays the raw running best +/- the
+    // offset (retune_carried_trails_for_tick_reach).
+    CarriedTrailTickReach = 4,
 };
 
-inline constexpr int kPineCallbackLifecycleRuleCount = 4;
+inline constexpr int kPineCallbackLifecycleRuleCount = 5;
 
 void set_pine_callback_lifecycle_rule(PineCallbackLifecycleRule rule, bool on) noexcept;
 bool pine_callback_lifecycle_rule(PineCallbackLifecycleRule rule) noexcept;

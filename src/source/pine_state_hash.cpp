@@ -653,6 +653,15 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.u(key); f.b(state.activated); f.d(state.best_price);
         f.d(state.current_level); f.u(state.activation_ordinal);
     }
+    // The trails re-priced for the bar in flight (carried trail tick reach),
+    // empty between bars; folded only while set, so every run without one
+    // keeps its digest.
+    if (!carried_trail_retunes_.empty()) {
+        f.u(carried_trail_retunes_.size());
+        for (const auto& [handle, distance] : carried_trail_retunes_) {
+            f.u(handle.incarnation); f.d(distance);
+        }
+    }
     f.b(stream_mode_);
     f.i(day_ledger_.current_day); f.i(day_ledger_.last_loss_day); f.i(day_ledger_.consecutive_loss_days);
     f.i(day_ledger_.intraday_loss_day); f.d(day_ledger_.intraday_start_equity);

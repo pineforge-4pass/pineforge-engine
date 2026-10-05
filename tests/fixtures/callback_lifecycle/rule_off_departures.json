@@ -96,6 +96,27 @@
    ]
   }
  },
+ "carried_trail_tick_reach": {
+  "carried-trail-14": {
+   "engine": [
+    "short",
+    2272.0,
+    1747848600000,
+    1747937700000,
+    10.5,
+    10.51
+   ],
+   "trade": 1,
+   "tv": [
+    "short",
+    2272.0,
+    1747848600000,
+    1747935900000,
+    10.5,
+    10.51
+   ]
+  }
+ },
  "declined_reversal_reissue_revives": {
   "declined-reissue-short": {
    "engine": [

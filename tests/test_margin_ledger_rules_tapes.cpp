@@ -402,7 +402,7 @@ std::string first_difference(const std::vector<Row>& tv, const Outcome& engine) 
 // too rather than left at its tree default.
 pineforge::source::detail::MarginRuleSwitches all_rules_on() {
     using pineforge::source::detail::MarginRuleSwitches;
-    static_assert(sizeof(MarginRuleSwitches) == 15 * sizeof(bool),
+    static_assert(sizeof(MarginRuleSwitches) == 16 * sizeof(bool),
                   "MarginRuleSwitches changed: name its new field in all_rules_on() and main()");
     MarginRuleSwitches on;
     on.decimal_sizing = true;
@@ -418,6 +418,7 @@ pineforge::source::detail::MarginRuleSwitches all_rules_on() {
     on.close_point_reversal = true;
     on.pooc_fee_sizing = true;
     on.point_fills_before_margin = true;
+    on.point_order_trailing_exits = true;
     on.pyramiding_ledger_records = true;
     on.exit_child_tombstones = true;
     return on;

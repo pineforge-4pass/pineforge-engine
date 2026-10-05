@@ -1,24 +1,4 @@
 {
- "carried-trail-14": {
-  "reason": "carried trailing stop reached on the tick-built waypoint with calc_on_order_fills off (H 10.485 prints 10.49); not implemented in this change",
-  "trade": 1,
-  "tv": [
-   "short",
-   2272.0,
-   1747848600000,
-   1747935900000,
-   10.5,
-   10.51
-  ],
-  "engine": [
-   "short",
-   2272.0,
-   1747848600000,
-   1747937700000,
-   10.5,
-   10.51
-  ]
- },
  "coof-dual-short-first": {
   "reason": "calc_on_order_fills tick schedule and ownership queue (one calc per tick, immediate fills at the tick, buys dispatched first, entry sizes fixed at placement against the planned position): not implemented in this change",
   "trade": 2,

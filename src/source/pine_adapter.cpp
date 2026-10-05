@@ -685,7 +685,7 @@ bool any_live_row(const std::vector<native_order::RequestHandle>& live,
 namespace detail {
 namespace {
 // The callback-lifecycle switches: process-wide like carry_bindings, and for the same reason.
-std::atomic<bool> callback_lifecycle_rules[kPineCallbackLifecycleRuleCount] = {true, true, true, true};
+std::atomic<bool> callback_lifecycle_rules[kPineCallbackLifecycleRuleCount] = {true, true, true, true, true};
 } // namespace
 void set_pine_callback_lifecycle_rule(PineCallbackLifecycleRule rule, bool on) noexcept {
     const int index = static_cast<int>(rule);
@@ -2439,6 +2439,7 @@ void PineExecutionAdapter::reset_for_run() {
     policy_script_bar_valid_ = false;
     market_pyramid_adds_.clear();
     trail_state_at_open_.clear();
+    carried_trail_retunes_.clear();
     stream_mode_ = false;
     bar_magnifier_ = false;
     short_seed_ = {};
@@ -20497,6 +20498,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     observe_terminal_receipts();
     erase_retired_rows(context);
     release_closed_cohort_origins();
+    restore_carried_trail_retunes();
     trail_state_at_open_.clear();
     bool rested_entry_stop = false;
     for (const auto& handle : live_handles_) {
@@ -20647,6 +20649,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
                 {definition.handle, NativeCurrentPriceRule::NearestTick});
         }
     }
+    retune_carried_trails_for_tick_reach(bar, context);
     // The C observer snapshots the ordinary flat two-stop arbitration at the
     // bar boundary, before either native request can fill or be declined.
     // COOF has its own callback scheduling and deliberately leaves this
@@ -20830,7 +20833,11 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         // ahead of its opposite entry (close-first) is unconditional, and a
         // protective strategy.exit stop or limit the opening print reaches
         // fills there (tests/fixtures/admission_rules c1, c2, c4 and the
-        // stop-priority tapes; c3b and the coupled close + reversal tapes).
+        // stop-priority tapes; c3b and the coupled close + reversal tapes),
+        // a leg of an exit that also trails included (switch
+        // point_order_trailing_exits; gapstop-percent-trail-points and
+        // -trail-offset: c2 with trail_points, and with a trail_offset too,
+        // book c2's rows).
         const bool point_order = detail::margin_rule_switches().point_fills_before_margin
             && pinned_lot_grid();
         // The opening print, which only protective_exit reads, under the
@@ -20874,9 +20881,10 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
                     || pending.family == PineOrderFamily::ExitLimit)
                 && !pending.legs.dormant() && !pending.void_issue
                 && pending.projection_created_bar < projection_bar_index(context)
-                && !finite_positive(pending.exit_levels.trail_offset)
-                && !finite_positive(pending.exit_levels.trail_points)
-                && !finite_positive(pending.exit_levels.trail_price)
+                && (detail::margin_rule_switches().point_order_trailing_exits
+                    || (!finite_positive(pending.exit_levels.trail_offset)
+                        && !finite_positive(pending.exit_levels.trail_points)
+                        && !finite_positive(pending.exit_levels.trail_price)))
                 && finite_positive(open_print)
                 && ((pending.family == PineOrderFamily::ExitStop
                      && finite_positive(pending.exit_levels.stop)
@@ -21494,8 +21502,157 @@ void PineExecutionAdapter::fill_pooc_close_exits(
     }
 }
 
+// A carried trailing stop is reached where the bar's tick-built print reaches
+// it, the level itself staying the raw running best +/- the offset: the
+// static stop's rule (source_trigger_threshold), now for the stop a trail
+// rides. TradingView, lab tv tape tests/fixtures/callback_lifecycle
+// carried-trail-14 (NYSE:F 15m, calc_on_order_fills off): a short trailing
+// 14 ticks behind a best of 10.345 rests at 10.485, and the 2025-05-22 17:45
+// high, the decimal 10.485 whose binary64 value lies two ULPs under that
+// level, prints 10.49 and exits there; the raw compare waited for 18:15.
+// The kernel's generic Trail compares the raw path with the raw level, so
+// for one bar the adapter walks the bar's path as the kernel will (the best
+// is tested on each leg and then moved by its end), finds the point the
+// tick-built path first reaches the stop, and, only where that point comes
+// before the one the raw compare would reach, re-prices the trail's distance
+// for that bar so the kernel's own compare fires there. That is the direction
+// the tape shows; a raw reach the tick-built path would not make (a print
+// whose tick falls back inside the stop) is left to the kernel, as no tape
+// decides it. The ride (retain_trigger_state) and the handle are kept; the
+// source fill still books the level from the carried best and the source
+// offset (resolve_terms). The opening print is the block above's;
+// calc_on_order_fills and an intrabar path are left out, as no tape covers
+// them.
+void PineExecutionAdapter::retune_carried_trails_for_tick_reach(
+        const Bar& bar, const NativeDecisionContext& context) {
+    if (!detail::pine_callback_lifecycle_rule(detail::PineCallbackLifecycleRule::CarriedTrailTickReach)
+        || trail_state_at_open_.empty() || !modeled_input() || config_.calc_on_order_fills
+        || context.driver_statistics.intrabar_path_enabled) {
+        return;
+    }
+    const double tick = staged_.syminfo.mintick;
+    if (!finite_positive(tick) || !finite_positive(bar.open) || !finite_positive(bar.high)
+        || !finite_positive(bar.low) || !finite_positive(bar.close)) {
+        return;
+    }
+    const double held_units = detail::run_position(require_host()).signed_units;
+    if (held_units == 0.0) return;
+    const bool is_buy = held_units < 0.0;
+    const bool high_first = source_path_uses_high_first(bar);
+    const double path[3] = {high_first ? bar.high : bar.low,
+                            high_first ? bar.low : bar.high, bar.close};
+    const auto improves = [&](double best, double price) {
+        return is_buy ? price < best : price > best;
+    };
+    for (const auto& working : require_host().native_working_requests()) {
+        const auto& definition = *working.definition;
+        const auto* trail = std::get_if<native_order::Trail>(&definition.request.trigger);
+        const auto carried = trail_state_at_open_.find(definition.handle.incarnation);
+        const auto found = placement_.find(definition.handle.incarnation);
+        if (!trail || carried == trail_state_at_open_.end() || !carried->second.activated
+            || found == placement_.end() || found->second.family != PineOrderFamily::ExitTrail
+            || !(found->second.exit_levels.trail_offset >= 1.0)
+            || !std::isfinite(found->second.retained_trail_best)
+            || !std::holds_alternative<native_order::TrailTrack>(working.trigger_state)) {
+            continue;
+        }
+        const double offset = trail->offset;
+        double best = carried->second.best_price;
+        // The replica must name the kernel's own level for the carried best,
+        // or the walk below is not the kernel's.
+        if (!(compat::pine::kernel_trail_stop_level(best, offset, is_buy, tick)
+              == carried->second.current_level)) {
+            continue;
+        }
+        const auto reached = [&](double price, double level, bool on_tick) {
+            const double threshold = on_tick
+                ? source_trigger_threshold(level, tick, is_buy, false) : level;
+            return is_buy ? price >= threshold : price <= threshold;
+        };
+        // The opening print: reached on its tick, the block above took it;
+        // reached raw, the kernel fills it there. Either way not this walk's.
+        const double carried_level = compat::pine::kernel_trail_stop_level(best, offset, is_buy, tick);
+        if (reached(bar.open, carried_level, true) || reached(bar.open, carried_level, false))
+            continue;
+        if (improves(best, bar.open)) best = bar.open;
+        double bests[3] = {kNaN, kNaN, kNaN};
+        int raw_point = -1;
+        int tick_point = -1;
+        for (int i = 0; i < 3; ++i) {
+            bests[i] = best;
+            const double level = compat::pine::kernel_trail_stop_level(best, offset, is_buy, tick);
+            if (raw_point < 0 && reached(path[i], level, false)) raw_point = i;
+            if (tick_point < 0 && reached(path[i], level, true)) tick_point = i;
+            if (improves(best, path[i])) best = path[i];
+        }
+        // Only the tick-built point coming first is re-priced: none reached, or
+        // the raw compare reaching at that point or before it, stays the kernel's.
+        if (tick_point < 0 || (raw_point >= 0 && raw_point <= tick_point)) continue;
+        // The kernel's compare at point i under a trailing distance d.
+        const auto hits = [&](double distance, int i) {
+            return reached(path[i], compat::pine::kernel_trail_stop_level(bests[i], distance, is_buy, tick), false);
+        };
+        const auto fires_first_at = [&](double distance) {
+            for (int i = 0; i < 3; ++i)
+                if (hits(distance, i)) return i;
+            return -1;
+        };
+        // The widest distance the tick-built point still reaches.
+        double retuned = is_buy ? path[tick_point] - bests[tick_point]
+                                : bests[tick_point] - path[tick_point];
+        for (int step = 0; step < 64 && retuned > 0.0 && !hits(retuned, tick_point); ++step)
+            retuned = std::nextafter(retuned, 0.0);
+        for (int step = 0; step < 64; ++step) {
+            const double wider = std::nextafter(retuned, std::numeric_limits<double>::infinity());
+            if (!hits(wider, tick_point)) break;
+            retuned = wider;
+        }
+        if (!(retuned > 0.0) || fires_first_at(retuned) != tick_point) continue;
+        native_order::Request request = definition.request;
+        auto retuned_trail = *trail;
+        retuned_trail.offset = retuned;
+        retuned_trail.ticks.reset();
+        request.trigger = retuned_trail;
+        native_order::ReplaceOptions keep;
+        keep.retain_trigger_state = true;
+        keep.keep_handle = true;
+        keep.keep_binding = detail::carry_reissue_bindings();
+        const auto replaced = require_host().replace(definition.handle, request, keep);
+        if (replaced.status != native_order::ReplaceStatus::Replaced) continue;
+        carried_trail_retunes_.push_back({definition.handle, offset});
+    }
+}
+
+// The bar is over: a trail the walk re-priced and that is still live rides
+// its own distance again from the next bar on (retune_carried_trails_for_tick_reach).
+void PineExecutionAdapter::restore_carried_trail_retunes() {
+    if (carried_trail_retunes_.empty()) return;
+    auto retunes = std::move(carried_trail_retunes_);
+    carried_trail_retunes_.clear();
+    for (const auto& [handle, offset] : retunes) {
+        for (const auto& working : require_host().native_working_requests()) {
+            const auto& definition = *working.definition;
+            if (!(definition.handle == handle)) continue;
+            const auto* trail = std::get_if<native_order::Trail>(&definition.request.trigger);
+            if (!trail || trail->offset == offset) break;
+            native_order::Request request = definition.request;
+            auto restored = *trail;
+            restored.offset = offset;
+            restored.ticks.reset();
+            request.trigger = restored;
+            native_order::ReplaceOptions keep;
+            keep.retain_trigger_state = true;
+            keep.keep_handle = true;
+            keep.keep_binding = detail::carry_reissue_bindings();
+            (void)require_host().replace(definition.handle, request, keep);
+            break;
+        }
+    }
+}
+
 void PineExecutionAdapter::on_bar_close_before_script(
         const Bar& bar, const NativeDecisionContext& context) {
+    restore_carried_trail_retunes();
     // TradingView calls a short carried under process_orders_on_close at the
     // bar's high before the script runs at its close: the script reads the
     // called book, and its own close fills meet what the call left (lab tv

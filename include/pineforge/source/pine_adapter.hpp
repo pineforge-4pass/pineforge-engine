@@ -416,6 +416,10 @@ struct MarginRuleSwitches {
     // At the open, the orders the opening print executes fill before the
     // margin check runs there.
     bool point_fills_before_margin = true;
+    // The point order counts a stop or limit leg of a strategy.exit that also
+    // trails (trail_points, trail_offset or trail_price) like any other
+    // protective exit: the trail leaves the reached leg's order unchanged.
+    bool point_order_trailing_exits = true;
     // The pyramiding cap counts open close-ledger records, one per entry
     // fill not yet booked, not physical lots.
     bool pyramiding_ledger_records = true;
@@ -2233,6 +2237,10 @@ private:
     void defer_open_marketable_sells(const Bar& bar);
     void admit_deferred_open_marketable_sells();
     void rearm_throttled_reopens();
+    // A carried trailing stop reached on the bar's tick-built path: the
+    // trail's distance re-priced for one bar, then restored (pine_adapter.cpp).
+    void retune_carried_trails_for_tick_reach(const Bar&, const NativeDecisionContext&);
+    void restore_carried_trail_retunes();
     void flush_pooc_marketable_limit_entry_fills(const Bar&, const NativeDecisionContext&);
     // The close pass's fills at a close tick: its own pass, or (after_close)
     // the reversing stops a same-bar close's fill releases.
@@ -2497,6 +2505,9 @@ private:
     bool policy_script_bar_valid_ = false;
     std::unordered_set<std::uint64_t> market_pyramid_adds_;
     std::unordered_map<std::uint64_t, NativeTrailState> trail_state_at_open_;
+    // The trails retune_carried_trails_for_tick_reach re-priced for the bar
+    // in flight, each with its own trailing distance; empty between bars.
+    std::vector<std::pair<native_order::RequestHandle, double>> carried_trail_retunes_;
     bool stream_mode_ = false;
     SourceDayLedger day_ledger_{};
     PineRiskState risk_{};

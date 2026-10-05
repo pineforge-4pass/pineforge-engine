@@ -1089,6 +1089,9 @@ list(APPEND TEST_SOURCES test_admission_rules_tapes)
 # The point order's margin call at a gapped open: a call sized at the previous
 # close before the stop, and a partial stop that leaves a short remainder.
 list(APPEND TEST_SOURCES test_point_order_open_call)
+# The carried-trail tick reach's copy of the kernel's trailing-stop level,
+# held to native_matching::checked_trail_stop bit for bit.
+list(APPEND TEST_SOURCES test_kernel_trail_stop_replica)
 # Lane INT28-FIX: a slipped all-in short's admission and its one-unit margin
 # calls (tests/fixtures/slipped_short), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_slipped_short_tapes)
@@ -3089,6 +3092,10 @@ endif()
 if(TARGET test_admission_rules_tapes)
     target_compile_definitions(test_admission_rules_tapes PRIVATE
         PINEFORGE_ADMISSION_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/admission_rules")
+endif()
+if(TARGET test_kernel_trail_stop_replica)
+    target_compile_definitions(test_kernel_trail_stop_replica PRIVATE
+        PINEFORGE_CALLBACK_LIFECYCLE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/callback_lifecycle")
 endif()
 if(TARGET test_point_order_open_call)
     target_compile_definitions(test_point_order_open_call PRIVATE

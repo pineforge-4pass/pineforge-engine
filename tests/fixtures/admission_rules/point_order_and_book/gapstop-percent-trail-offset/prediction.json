@@ -1,0 +1,34 @@
+{
+ "written_at_utc": "2026-10-05T02:05:36.715447+00:00",
+ "source_sha256": "039fbdeea0643145170a8b416ea065477d4758728166c55e5eed33e55e176fa3",
+ "rule": "point order: a protective strategy.exit stop gapped at the open fills before the opening margin check; the exit also carrying trail_points (and trail_offset) does not change that (its trail never activates in this window)",
+ "chart": {
+  "symbol": "NYSE:F",
+  "interval": "15",
+  "from": "2025-10-20",
+  "to": "2025-10-22"
+ },
+ "predicted_rows_utc": [
+  {
+   "trade": 1,
+   "side": "short",
+   "qty": 112,
+   "entry": "2025-10-20 19:00",
+   "entry_price": 12.0,
+   "exit": "2025-10-20 19:45",
+   "exit_price": 12.02,
+   "exit_signal": "Margin call"
+  },
+  {
+   "trade": 2,
+   "side": "short",
+   "qty": 8744,
+   "entry": "2025-10-20 19:00",
+   "entry_price": 12.0,
+   "exit": "2025-10-21 13:30",
+   "exit_price": 12.26,
+   "exit_signal": "Exit Short"
+  }
+ ],
+ "engine_main_bfcf50a9_expected": "112 margin; 1040 margin + 7704 Exit Short at 12.26 (trail-bearing exits are not protective at the open)"
+}

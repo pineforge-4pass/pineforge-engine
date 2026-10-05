@@ -1,0 +1,16 @@
+{
+  "title": "gapstop-percent-trail-offset",
+  "slug": "gapstop-percent-trail-offset",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-05T02:05:52.508Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-10-20",
+    "to": "2025-10-22"
+  },
+  "pine_sha256": "039fbdeea0643145170a8b416ea065477d4758728166c55e5eed33e55e176fa3",
+  "tv_trades_sha256": "3b187ba7f588712a256f01f6ef6dae984d3ac6dd7aade3187d9767409fc3b5d6",
+  "tv_trades_rows": 4
+}
