@@ -27,6 +27,214 @@ exchange or ingests venue fills. The consumer owns venue execution,
 reconciliation and risk. The outbound webhook is alert-style delivery of
 computed order actions, not an exchange connection.
 
+## Cumulative reports
+
+```sh
+pineforge-live report --ledger orders.sqlite3
+pineforge-live report --ledger orders.sqlite3 --deployment DEPLOYMENT --at-input 20
+```
+
+`report` exports canonical `pineforge-native-report/v1` JSON. `--at-input N`
+is a committed-message cursor (the number of messages, not the zero-based input
+index, action sequence or bar count); 0 denotes warmup. Omit it for the latest
+committed report. An unavailable cursor or mismatched optional deployment exits
+1. Reading is safe while a runner owns the ledger. Export re-verifies the whole
+committed report-integrity chain in one read snapshot, including inputs, stored
+state hashes and immutable actions, even for an earlier requested cursor.
+A missing or mismatched digest refuses export. These SHA-256 digests detect
+ledger corruption, not edits by someone able to replace both data and digests;
+only `run` recomputes engine state by replay. `run --report-jsonl` mirrors
+each newly committed report to stdout, followed by the existing operational run
+summary; replayed source-prefix messages are not mirrored again. A closed
+stdout pipe fails clearly with exit 1, never SIGPIPE; the last input and report
+are already durable, and export remains available.
+
+The input, engine hash, actions, cumulative report and its integrity digest commit in one SQLite
+transaction. Append-only `pineforge-native-report-delta/v1` rows contain changed
+scalar fields and appended/replaced array suffixes, not historical full-report
+copies. Export folds these rows through the selected cursor into byte-identical
+canonical report JSON. Recovery verifies each input's engine hash, actions and
+exact report delta before delivery. Existing full-report rows remain immutable
+and readable; recovery verifies them against the reconstructed full report, then
+new inputs use deltas. This avoids quadratic report storage without changing the
+export schema or engine computation.
+Array suffix replacement assumes at most one provisional trailing element for
+equity points and broker hashes. The runner never enables tracing and refuses
+nonempty `trace`: traces can contain several records per bucket, so enabling
+them would require replacing the entire provisional bucket's trace suffix,
+not just its last record. `trace_names` likewise has no active trace updates.
+Older ledgers acquire reports by deterministic replay; resume them with `run`
+before export. Ledgers written before integrity digests were added also require
+one verified replay to populate the digests; old full/delta rows stay unchanged.
+Reports are immutable and never change with webhook timing.
+The deployment already binds strategy-library bytes, warmup bytes, effective
+settings, symbol units, broker configuration and routing. Operational export
+flags do not change it.
+
+Every scalar and array of `pf_report_t` is exported under `report`, including
+metrics, diagnostics, traces, equity points and broker hashes. Finite binary64
+numbers use 17 significant digits; undefined values are the strings `NaN`,
+`Infinity` or `-Infinity`, not omitted fields. `equity` and `open_profit` are
+the last cumulative equity point (null only when there are no points).
+`closed_trades` contains actual closed rows; `report.trades` also includes the
+engine's hypothetical range-end rows (`open_at_end=1`). Those rows and their
+range-end fees match a batch report at the same cursor; they never enqueue
+order actions or close the running position.
+
+Confirmed-bar qualification compares every report field and physical action
+against `run_backtest_full` with identical warmup, complete script buckets,
+settings and symbol units. Tick tapes need the same ticks for replay equality;
+tick-versus-OHLC fill paths are not interchangeable. An incomplete aggregated
+script bucket is still provisional live, whereas a finite batch seals its
+trailing partial bucket; compare at confirmed script-bucket boundaries. This
+boundary can replace the last equity point rather than append an additional
+point; earlier confirmed equity points and closed trades are identical. In the
+trailing-stop fixture, sealing also appends one hypothetical `open_at_end=1`
+trade, changing `report.trades`, `trades_len`, `total_trades`, `net_profit`,
+`metrics.all` and `metrics.longs`; `equity` and `open_profit` reflect the changed
+trailing point. These are explicitly tested mode-boundary differences, not
+excluded fields at confirmed cursors. Every other report field is identical.
+The generated trailing-stop E2E exercises this boundary explicitly. The
+existing [stream security limitation](../docs/pages/streaming.md) still applies;
+no report field is silently excluded from the confirmed-bar E2E comparison.
+
+## Service operation
+
+```sh
+pineforge-live run --strategy strategy.so --warmup history.csv --script-tf 3 \
+  --symbol EXCHANGE:SYMBOL --mode bars --feed - --ledger orders.sqlite3 \
+  --status-file status.json --status-interval 1 --control-dir control \
+  --feed-idle-timeout 15 --feed-message-timeout 15 --max-ledger-bytes 1073741824
+pineforge-live probe --status-file status.json --max-age 3
+pineforge-live probe --status-file status.json --max-age 3 --ready
+```
+
+- `--status-file PATH` enables private atomic JSON replacement, coalesced to at
+  most once per `--status-interval S` seconds (default 1, integer 1..300),
+  with immediate publication on lifecycle/readiness changes and exit. Commits
+  update the next interval's metrics; neither the file nor its directory is
+  fsynced. The ledger remains the durable authority. Its schema is
+  `pineforge-live-status/v1`. Use a distinct path in an existing writable
+  directory; it cannot alias the ledger, lock, WAL/SHM or an input artifact.
+  Publication starts after strategy/warmup validation and ledger ownership.
+  A status publication I/O failure is fatal with a clear message and exit 1;
+  the active committed input remains durable. Continuing with a stale health
+  file would mislead a supervisor, so publication failure does not degrade
+  silently to readiness-only failure.
+- `liveness.control_loop_heartbeat_ms` advances only when the control loop
+  progresses; a periodic writer updates `written_at_ms` but cannot conceal a
+  stalled computation or commit. `liveness.alive` becomes false on exit.
+  `ready` requires validated strategy/warmup, recovered ledger, verified source
+  prefix, no unhealed input gap and storage below budget. A prefix conflict,
+  source gap or fatal input error fails closed; no gap healing is invented.
+  `no_unhealed_input_gap` becomes false only for an actual input sequence gap,
+  not for unrelated malformed input, delivery or timeout failures.
+- Metrics are `committed_input`, `last_seq` (tick sequence, null for bars),
+  `source_timestamp_ms`, `source_lag_ms` (wall-clock lag from the latest
+  committed source time), `queue_bytes`, `ledger_bytes`, `report_cursor`,
+  `control_errors` (distinct ignored control entries/errors this run) and
+  per-target `pending_count` / `oldest_age_ms`. Queue bytes cover the buffered
+  stdin/WebSocket fragment and bounded delivery queue; engine state and finite feed
+  snapshots are not queue bytes. Pending includes failed and never-completed
+  routed actions, not journal-only actions; age is null for legacy rows with
+  no known creation/attempt time. No secrets, URLs or receiver response text
+  are written to this status file. Storage/delivery metrics are sampled at the
+  status interval, not on every control-loop heartbeat.
+- `probe --status-file PATH --max-age S [--ready]` exits 0 only for a valid,
+  alive control-loop heartbeat no older than S seconds (integer 1..86400).
+  Add `--ready` to also require readiness. Missing, malformed, future-dated,
+  stale, stopped or unready status exits 1. It opens no listener.
+- `--feed-idle-timeout S` and `--feed-message-timeout S` are independent,
+  integer 1..300 seconds, default 15 each. Stdin idle measures time without
+  bytes, and assembly runs from the first byte to the complete JSONL line.
+  WebSocket idle resets on text or PING/PONG; assembly runs from the first
+  text fragment through the final fragment and control frames never extend
+  it. A feed server's unsolicited PONG every 5 seconds is compatible with
+  the default idle deadline. HTTP idle limits lack of response-body progress;
+  its message timeout bounds the entire finite snapshot request, including
+  connection. Local files are finite and have no idle deadline. These flags
+  do not change webhook delivery timeouts or deployment identity.
+- SIGTERM/SIGINT stop intake. An already-started atomic message finishes or
+  rolls back; incomplete transport messages are not committed. Cursor,
+  actions and report remain in the same transaction. The delivery drain is
+  bounded by one configured `delivery.total_timeout_ms` across all targets,
+  without new retries. A signal cancels in-flight requests promptly rather than
+  recording a synthetic timeout/failure; unfinished attempts remain unsent for
+  restart. Storage/fatal-error drains may use the full bound, then disconnect.
+  An interrupted request may have been
+  accepted by its receiver; restart uses the same delivery ID. Receiver
+  idempotency remains mandatory. Signal during recovery stops before intake.
+- Run/offline-redelivery exits: **0** normal completion or graceful signal
+  stop; **1** fatal initialization, input, storage-I/O or internal failure;
+  **2** offline redelivery with selected failed/pending actions; **3** run
+  stopped at its storage budget. `actions --follow` retains exit 130 on a
+  signal. A supervisor's grace period must allow message computation/commit
+  (plus, after a fatal error or a storage-budget stop, the delivery drain); there is no claim that arbitrary strategy code is
+  interruptible. Container liveness probes can detect a stalled control loop.
+- `--max-ledger-bytes N` budgets database + WAL + SHM bytes (0 disables it;
+  default 0; integer 0..INT64_MAX). Crossing the budget removes readiness,
+  stops intake after the current whole message and exits 3 without deleting
+  inputs, actions or reports. Recovery still verifies the ledger before
+  deciding to stop. It is a stop threshold, not a quota: one atomic message
+  and the bounded delivery drain can exceed it. Reserve free space for both;
+  an actual I/O failure exits 1. No automatic pruning or report retention
+  policy is applied.
+
+### Live redelivery control files
+
+Run with `--control-dir PATH`, a directory created with mode 0700 or already
+private and owned by the runner user. Use one directory per deployment.
+Then submit without stopping the runner:
+
+```sh
+pineforge-live redeliver --ledger orders.sqlite3 --deployment DEPLOYMENT \
+  --target default --failed-only --control-dir control
+```
+
+The command atomically creates a request, prints `queued: true` and its
+`request_id`, and exits 0; this is submission, not successful delivery. It
+requires an existing private directory and a running owner of the ledger;
+it never creates a missing submission directory and reports
+`control directory does not exist` for a missing path. It needs no signing
+secrets and adds no network listener. The running delivery
+worker polls at 100 ms while not draining, validates the deployment and target,
+pins the selected committed range/failure state, and writes
+`REQUEST_ID.ack.json` with `accepted`, `selected` and a sanitized `reason`.
+The accepted request and
+every attempt's `request_id` are durable append-only audit rows. Check delivery
+results with `status` or the ledger, not the acknowledgment. Computation does
+not wait for receiver HTTP responses; the in-memory delivery queue is capped
+at 256 actions / 8 MiB across targets, with excess kept in SQLite.
+
+Requests are `REQUEST_ID.request.json`, where the ID is 64 lowercase hex
+characters. Canonical request fields are `schema_version:
+"pineforge-redelivery-request/v1"`, `deployment`, `request_id`, `target`,
+`from` (global action ordinal, default 1, 1..INT64_MAX) and `failed_only`
+(boolean). Unknown fields and wrong types/identity receive a sanitized rejection.
+Unreadable files, symlinks, nonregular entries, oversized (>16 KiB) or partial
+JSON files are skipped and left intact. Each bad entry is remembered for this
+run, counted in status `control_errors` and logged once without file contents.
+Directory failures are counted and logged on each error transition, including
+a recurrence after recovery. A transient accept/storage failure receives
+`accepted: false, reason: "accept_failure"`; retry with a new ID after repairing
+the cause. An acknowledgement write failure leaves the request intact and is
+counted/logged. These errors never kill the delivery worker
+or computation; repair/remove the entry and use a new request ID. Always publish
+requests atomically, never by writing the final filename in place.
+The same accepted ID/selection is idempotent; conflicting reuse is rejected.
+On restart accepted requests resume only unfinished attempts, always with the
+same immutable `delivery_id`; completed attempts, including failures, require
+a new request to resend again. At most 256 owned regular acknowledgments are
+retained; the oldest are removed during polling. Durable audit stays in SQLite,
+not the acknowledgment files. The control directory is outside the
+ledger budget. Without `--control-dir`, `redeliver` remains offline, reads only
+the selected target's secret and refuses while the runner holds the lock.
+
+The additive ledger tables/columns are migrated while holding its writer lock.
+This is a one-way runner upgrade: back up the ledger before upgrading; earlier
+runner versions cannot open the migrated database. Strategy/deployment identity
+and historical action payload bytes remain unchanged.
+
 ## Build
 
 ```sh
@@ -182,7 +390,8 @@ text subscription/authentication message. Feed requests never receive webhook
 HMAC or idempotency headers. WebSocket close, malformed/binary frames or an
 idle/message timeout stop the runner. Reconnection and gap healing are not
 guessed: reconnect using your feed service's resume mechanism and a verified
-input prefix/tail. The default native transport timeout is 15 seconds.
+input prefix/tail. Both feed deadlines default to 15 seconds; see
+[service operation](#service-operation) for independent idle/assembly controls.
 
 HTTP and WebSocket URLs identify **your own normalized feed service**, never
 an exchange. All sources use the same event shapes below. A JSON array of
@@ -410,7 +619,7 @@ your own applications, never exchanges or fill-ingestion endpoints.
 - `"target": null`, in a rule or as `default_target`, means journal-only: the action is recorded but sent nowhere.
 - A runner with no webhook configured runs fully journal-only.
 - Programs that do not want HTTP read the actions from the ledger with `pineforge-live actions --ledger L --after <n> [--follow]`, which prints one JSON action per line. This serves the hosted app and self-hosted scripts.
-- `actions` and `status` accept optional `--deployment <id>` and compare it with the ledger's deployment identity. `redeliver` requires `--deployment <id>` and is an offline operation: stop the runner first; it resumes from its ledger. Live redelivery is planned for the runner-service follow-up.
+- `actions`, `status` and `report` accept optional `--deployment <id>` and compare it with the ledger's deployment identity. `redeliver` requires `--deployment <id>`; without `--control-dir` it is offline and requires stopping the runner. With that flag it submits to the running worker's [control directory](#live-redelivery-control-files).
 
 ### 4. Payload `pineforge-native-order-action/v2`
 - It keeps all of v1's fields: event, event_id, deployment, strategy, symbol, timeframe, sequence, timestamp, bar_index, order id/comment, buy/sell, leg, contracts, price, reduce_only, entry_incarnation.
@@ -429,9 +638,9 @@ your own applications, never exchanges or fill-ingestion endpoints.
   - writes one structured log line;
   - and goes on with the next actions. A failed action never parks newer actions behind its retries.
 - **Bounded transport retries.** A connection failure, a timeout before any response, or a reset is retried at most 2 times, after 1 s and then 2 s. The retries run beside newer actions and never delay them. An HTTP error response (any non-2xx, redirects included) is final, so it is shown and not retried.
-- **Nothing is lost.** Every action and every delivery result stays in the ledger. `pineforge-live redeliver --ledger L --deployment D --target T [--from <seq>] [--failed-only]` re-sends selected actions in commit order, with the same `delivery_id`, and records each new attempt. Deployment D must match the ledger's `metadata.identity`. Redelivery is offline: while the runner owns the ledger it says exactly "the runner is running: stop it first; it resumes from its ledger". Live redelivery is a runner-service follow-up. Redelivery counts selected, delivered, failed and pending actions, exits 2 if any selected action failed or is pending, and reads only the selected target's secret. `pineforge-live actions --follow` streams every committed action, whatever happened to its delivery.
+- **Nothing is lost.** Every action and every delivery result stays in the ledger. `pineforge-live redeliver --ledger L --deployment D --target T [--from N] [--failed-only]` re-sends selected actions in commit order, with the same `delivery_id`, and records each new attempt. N is the global action ordinal; deployment D must match `metadata.identity`. Offline redelivery refuses while the runner owns the ledger, counts selected/delivered/failed/pending, exits 2 for selected failed/pending actions, and reads only the selected target's secret. Add `--control-dir PATH` for [live submission](#live-redelivery-control-files). `pineforge-live actions --follow` streams every committed action, whatever happened to its delivery.
 - **Restart.** After the usual replay verification, an action that was committed but has no delivery result yet (the process died before sending, or mid-request) is sent once. An action whose delivery failed is not re-sent automatically; `redeliver` does that.
-- **Fatal exit:** delivery drains without retries for at most one `total_timeout_ms` in total, regardless of targets or action count. The final error reports actions with no delivery result and gives `pineforge-live redeliver --ledger L --deployment D --target T` guidance. SIGINT/SIGTERM promptly cancel delivery, including EOF drain and redelivery, and exit 130.
+- **Fatal exit:** delivery drains without retries for at most one `total_timeout_ms` in total, regardless of targets or action count. The final error reports actions with no delivery result and gives `pineforge-live redeliver --ledger L --deployment D --target T` guidance. SIGINT/SIGTERM promptly cancel delivery, including EOF drain and redelivery, and exit 0; see [service operation](#service-operation).
 - **Status:** `pineforge-live status --ledger L [--deployment D]` prints a consistent read snapshot as JSON, per target: sent, failed, unsent (committed actions with no delivery result), last success, last error (redacted), last attempt. Use offline `redeliver` for failed or unsent actions; omit `--failed-only` to include unsent actions.
 - **Audit (closes audit finding F11):** every attempt is a new delivery-log row: target, delivery_id, attempt, start/end time, HTTP status or error class. Nothing is updated in place.
 

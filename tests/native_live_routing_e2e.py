@@ -590,7 +590,7 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
             started = time.monotonic()
             active.send_signal(signal.SIGTERM)
             active.communicate(timeout=30)
-            assert active.returncode == 130 and time.monotonic() - started < 10
+            assert active.returncode == 0 and time.monotonic() - started < 10
             assert query(signal_ledger, "SELECT count(*) FROM delivery_log WHERE phase='completed'")[0][0] == 0
             status = json.loads(invoke(['status', '--ledger', str(signal_ledger)]).stdout)['targets']
             assert status['main']['unsent'] == 4
@@ -606,7 +606,7 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
             started = time.monotonic()
             redelivery.send_signal(signal.SIGTERM)
             stdout, stderr = redelivery.communicate(timeout=30)
-            assert redelivery.returncode == 130 and time.monotonic() - started < 10
+            assert redelivery.returncode == 0 and time.monotonic() - started < 10
             assert json.loads(stdout)['pending'] == 4
         finally:
             if redelivery.poll() is None:

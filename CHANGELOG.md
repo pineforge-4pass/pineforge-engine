@@ -34,6 +34,65 @@ version number follows semantic versioning over the surfaces the
   Regenerate and relink with the paired next-release engine/codegen to obtain the
   receipt. Default batch computation, matching and margin are unchanged.
 
+### Native cumulative reports
+
+- Compiled capability admission and legacy warnings run before control-directory,
+  health-file or ledger startup. Directory errors report every error transition,
+  including recurrence after recovery; transient control acceptance failures
+  receive a sanitized rejection acknowledgement rather than disappearing.
+  Missing submission paths report `control directory does not exist`.
+  Signals promptly cancel unfinished delivery attempts without recording false
+  receiver failures, preserving the bounded shutdown and same-ID restart contract.
+- Report export re-verifies an append-only SHA-256 integrity chain over all
+  committed inputs, stored state hashes, actions and report rows, including for
+  historical cursors. Older ledgers need one verified `run` replay to populate
+  digests. Output stays byte-identical. The one-provisional-element suffix
+  invariant is documented; tracing stays disabled and nonempty traces refuse
+  export generation rather than silently producing stale provisional records.
+
+- **Native runner service controls:** `run --status-file PATH` atomically
+  publishes versioned health/readiness and sanitized metrics, coalesced to
+  every `--status-interval S` seconds (default 1, 1..300) and immediately on
+  lifecycle/readiness changes and exit. Atomic rename without per-message
+  fsync keeps the ledger authoritative; status-publication I/O failure exits
+  1 clearly after preserving committed input. `no_unhealed_input_gap` tracks
+  actual sequence gaps only. `probe --status-file PATH --max-age S [--ready]` gives container
+  exec probes exit 0/1 (S is 1..86400). `--feed-idle-timeout S` and
+  `--feed-message-timeout S` independently bound intake (default 15 seconds
+  each, 1..300); WebSocket PONG keepalive cannot extend partial-message
+  assembly. `run --control-dir PATH` enables private atomic control files;
+  `redeliver --ledger L --deployment D --target T [--from N] [--failed-only]
+  --control-dir PATH` submits safe live redelivery with unchanged delivery
+  IDs, durable deduplication and append-only attempt audit. Submission requires
+  an existing private directory and running ledger owner. Invalid/unreadable
+  control entries are retained, remembered, counted as `control_errors` and
+  logged once, never fatal to computation. Acknowledgments include sanitized
+  reasons and are capped at 256, with durable audit retained in the ledger. Offline
+  redelivery still refuses a running ledger. `--max-ledger-bytes N`
+  (default 0/unlimited, 0..INT64_MAX) stops after a whole atomic message with
+  all input/actions/reports intact. SIGTERM/SIGINT finish or roll back the
+  active message and cancel delivery promptly; fatal-error and storage-budget
+  drains stay bounded by one `total_timeout_ms`;
+  run/offline-redelivery graceful signal exit changes from 130 to 0.
+  Fatal errors remain exit 1, selected failed/pending offline redelivery 2,
+  and storage-budget run stops use 3; `actions --follow` retains 130.
+  [Service operation](runner/README.md#service-operation) documents schemas,
+  bounds, restart semantics and supervisor grace periods. The runner never
+  opens an inbound network listener or ingests venue fills.
+
+- **Native cumulative reports:** `pineforge-live report --ledger L
+  [--deployment D] [--at-input N]` exports immutable, versioned cumulative
+  engine reports. Append-only `pineforge-native-report-delta/v1` rows replace
+  quadratic full-report copies; export reconstructs byte-identical canonical
+  JSON at any committed cursor. Existing full rows remain readable and
+  replay-verified. `run --report-jsonl` mirrors new commits to stdout; a closed
+  pipe gives clear fatal exit 1 rather than SIGPIPE, without losing input. Input,
+  actions, state hash and report are committed atomically and replay-verified;
+  reports include every ABI report field, equity, open profit and closed trades.
+  The engine library and batch behavior are unchanged. A generated trailing-stop
+  test proves the documented mid-bucket boundary: batch seals a provisional
+  trailing bucket while live preserves earlier confirmed equity points.
+
 ## 1.1.0 — 2026-10-04
 
 A minor release: it adds to the C ABI. `<pineforge/pineforge.h>` declares six

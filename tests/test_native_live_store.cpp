@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "../runner/store.hpp"
 #include "../runner/transport.hpp"
+#include "../runner/report_delta.hpp"
 
 #include <sqlite3.h>
 
@@ -71,6 +72,81 @@ std::string scalar_text(const std::string& path, const char* sql) {
     sqlite3_finalize(stmt);
     sqlite3_close(db);
     return result;
+}
+
+void incremental_reports() {
+    TempDir temp;
+    const auto path = temp.file("incremental.sqlite");
+    std::uintmax_t first_size = 0;
+    for (unsigned phase = 0; phase < 2; ++phase) {
+        {
+            Ledger ledger(path, "incremental");
+            if (!phase) ledger.verify_report(0, Json::object({
+                {"schema_version", Json::string("pineforge-native-report-delta/v1")},
+                {"fields", Json::object({{"input_cursor", Json::number("0")}})},
+                {"arrays", Json::object({})}}).dump());
+            for (std::uint64_t index = phase * 1000; index < (phase + 1) * 1000; ++index) {
+                Json points;
+                points.kind = Json::Kind::Array;
+                points.items.push_back(Json::number(std::to_string(index)));
+                const auto delta = Json::object({{"schema_version", Json::string("pineforge-native-report-delta/v1")},
+                    {"fields", Json::object({{"input_cursor", Json::number(std::to_string(index + 1))}})},
+                    {"arrays", Json::object({{"equity_curve", Json::object({
+                        {"offset", Json::number(std::to_string(index))}, {"items", points}})}})}}).dump();
+                ledger.commit_input(index, "{}", index, {}, delta);
+                ledger.verify_report(index + 1, delta);
+                CHECK(throws([&] { ledger.verify_report(index + 1, delta + " "); }));
+            }
+        }
+        if (!phase) first_size = std::filesystem::file_size(path);
+    }
+    CHECK(std::filesystem::file_size(path) < first_size * 5 / 2);
+    const auto full = parse_json(LedgerView(path).report_json());
+    CHECK(full.at("input_cursor").integer<std::uint64_t>() == 2000);
+    CHECK(full.at("report").at("equity_curve").items.size() == 2000);
+    CHECK(parse_json(LedgerView(path).report_json(1000)).at("report").at("equity_curve").items.size() == 1000);
+}
+
+void cumulative_reports() {
+    TempDir temp;
+    const auto path = temp.file("report.sqlite");
+    {
+        Ledger ledger(path, "reports");
+        ledger.verify_report(0, "{\"input_cursor\":0}");
+        ledger.commit_input(0, "{}", 1, {{"report-action", "{}"}}, "{\"input_cursor\":1}");
+        CHECK(ledger.input(0)->report_json == "{\"input_cursor\":1}");
+        CHECK(throws([&] { ledger.verify_report(1, "wrong"); }));
+        CHECK(throws([&] { ledger.commit_input(0, "{}", 1, {{"report-action", "{}"}}, "wrong"); }));
+        execute_sql(path, "CREATE TRIGGER reject_report BEFORE INSERT ON report_snapshots WHEN NEW.input_cursor=2 BEGIN SELECT RAISE(ABORT,'test'); END;");
+        CHECK(throws([&] { ledger.commit_input(1, "{}", 2, {{"rolled-back", "{}"}}, "report"); }));
+        CHECK(ledger.input_count() == 1);
+        CHECK(!ledger.input(1));
+        LedgerView view(path);
+        CHECK(view.report_json() == "{\"input_cursor\":1}");
+        CHECK(view.report_json(0) == "{\"input_cursor\":0}");
+        CHECK(view.actions_after(0).size() == 1);
+    }
+    Ledger resumed(path, "reports");
+    resumed.verify_report(1, "{\"input_cursor\":1}");
+    CHECK(throws([&] { execute_sql(path, "UPDATE report_integrity SET digest='changed'"); }));
+    execute_sql(path, "DROP TRIGGER report_no_update; UPDATE report_snapshots SET payload='{\"input_cursor\":999}' WHERE input_cursor=1;");
+    CHECK(throws([&] { LedgerView(path).report_json(); }));
+    CHECK(throws([&] { LedgerView(path).report_json(0); }));
+    CHECK(throws([&] { resumed.verify_report(1, "{\"input_cursor\":1}"); }));
+    execute_sql(path, "UPDATE report_snapshots SET payload='{\"input_cursor\":1}' WHERE input_cursor=1;");
+    execute_sql(path, "UPDATE inputs SET state_hash='999' WHERE input_index=0;");
+    CHECK(throws([&] { LedgerView(path).report_json(); }));
+    execute_sql(path, "UPDATE inputs SET state_hash='1' WHERE input_index=0;");
+    execute_sql(path, "UPDATE events SET payload='{\"changed\":true}' WHERE event_id='report-action';");
+    CHECK(throws([&] { LedgerView(path).report_json(); }));
+    execute_sql(path, "UPDATE events SET payload='{}' WHERE event_id='report-action';");
+    CHECK(LedgerView(path).report_json() == "{\"input_cursor\":1}");
+    execute_sql(path, "DROP TABLE report_integrity;");
+    CHECK(throws([&] { LedgerView(path).report_json(); }));
+    execute_sql(path, "CREATE TABLE report_integrity (input_cursor INTEGER PRIMARY KEY,digest TEXT NOT NULL);");
+    resumed.verify_report(0, "{\"input_cursor\":0}");
+    resumed.verify_report(1, "{\"input_cursor\":1}");
+    CHECK(LedgerView(path).report_json() == "{\"input_cursor\":1}");
 }
 
 void ledger_transactions() {
@@ -352,6 +428,8 @@ int main(int argc, char** argv) {
         crash_writer(argv[2]);
     try {
         ledger_transactions();
+        cumulative_reports();
+        incremental_reports();
         crash_recovery(argv[0]);
         native_http();
     } catch (const std::exception& e) {

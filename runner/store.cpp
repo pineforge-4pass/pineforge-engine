@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "store.hpp"
+#include "report_delta.hpp"
 #include "json.hpp"
+#include "transport.hpp"
 
 #include <sqlite3.h>
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <filesystem>
 #include <limits>
 #include <mutex>
@@ -94,6 +97,65 @@ std::uint64_t scalar(sqlite3* db, const char* sql) {
     Statement q(db, sql);
     if (!q.row()) database_error();
     return q.integer(0);
+}
+
+bool has_column(sqlite3* database, const char* table, const char* column) {
+    Statement query(database, (std::string("PRAGMA table_info(") + table + ")").c_str());
+    while (query.row()) if (query.text(1) == column) return true;
+    return false;
+}
+
+std::string report_integrity(sqlite3* database, std::uint64_t cursor,
+                             const std::string& payload, const std::string& previous_hash) {
+    Statement metadata(database, "SELECT identity FROM metadata WHERE singleton=1");
+    if (!metadata.row()) database_error();
+    auto material = Json::object({{"schema_version", Json::string("pineforge-ledger-report-integrity/v1")},
+        {"deployment", Json::string(metadata.text(0))}, {"cursor", Json::number(std::to_string(cursor))},
+        {"previous_hash", Json::string(previous_hash)}, {"report", Json::string(payload)}});
+    if (cursor) {
+        Statement input(database, "SELECT canonical_json,state_hash FROM inputs WHERE input_index=?");
+        input.bind(1, cursor - 1);
+        if (!input.row()) throw std::runtime_error("native ledger report integrity mismatch");
+        material.members["input"] = Json::string(input.text(0));
+        material.members["state_hash"] = Json::string(input.text(1));
+        Json actions;
+        actions.kind = Json::Kind::Array;
+        Statement events(database, "SELECT e.ordinal,e.input_position,e.event_id,e.payload,r.target_id,r.delivery_id "
+            "FROM events e LEFT JOIN event_routes r ON e.ordinal=r.ordinal WHERE e.input_index=? ORDER BY e.input_position");
+        events.bind(1, cursor - 1);
+        while (events.row()) {
+            actions.items.push_back(Json::object({{"ordinal", Json::number(std::to_string(events.integer(0)))},
+                {"position", Json::number(std::to_string(events.integer(1)))}, {"event_id", Json::string(events.text(2))},
+                {"payload", Json::string(events.text(3))},
+                {"target", events.is_null(4) ? Json{} : Json::string(events.text(4))},
+                {"delivery_id", Json::string(events.text(5))}}));
+        }
+        material.members["actions"] = std::move(actions);
+    }
+    return sha256_hex(material.dump());
+}
+
+void verify_report_integrity(sqlite3* database, std::uint64_t cursor, const std::string& payload) {
+    std::string previous_hash;
+    if (cursor) {
+        Statement previous(database, "SELECT digest FROM report_integrity WHERE input_cursor=?");
+        previous.bind(1, cursor - 1);
+        if (previous.row()) previous_hash = previous.text(0);
+    }
+    const auto digest = report_integrity(database, cursor, payload, previous_hash);
+    Statement stored(database, "SELECT digest FROM report_integrity WHERE input_cursor=?");
+    stored.bind(1, cursor);
+    if (stored.row()) {
+        if (stored.text(0) != digest) throw std::runtime_error("native ledger report integrity mismatch");
+    } else {
+        Statement insert(database, "INSERT INTO report_integrity VALUES(?,?)");
+        insert.bind(1, cursor); insert.bind(2, digest); insert.done();
+    }
+}
+
+std::uint64_t commit_time() {
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
 }
 
 void validate_bytes(const std::string& bytes, const char* label) {
@@ -200,7 +262,7 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity)
         Statement q(impl_->db, "INSERT INTO metadata VALUES(1,1,?)");
         q.bind(1, deployment_identity);
         q.done();
-    } else if (table_count != 3 && table_count != 6) {
+    } else if (table_count != 3 && table_count != 6 && table_count != 7 && table_count != 8 && table_count != 9) {
         throw std::runtime_error("native ledger is not an empty or supported ledger database");
     }
     {
@@ -210,6 +272,12 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity)
         if (q.row() || scalar(impl_->db, "SELECT COUNT(*) FROM metadata") != 1) database_error();
     }
     exec(impl_->db,
+        "CREATE TABLE IF NOT EXISTS report_snapshots (input_cursor INTEGER PRIMARY KEY CHECK(input_cursor>=0),payload TEXT NOT NULL);"
+        "CREATE TRIGGER IF NOT EXISTS report_no_update BEFORE UPDATE ON report_snapshots BEGIN SELECT RAISE(ABORT,'reports are immutable'); END;"
+        "CREATE TRIGGER IF NOT EXISTS report_no_delete BEFORE DELETE ON report_snapshots BEGIN SELECT RAISE(ABORT,'reports are immutable'); END;"
+        "CREATE TABLE IF NOT EXISTS report_integrity (input_cursor INTEGER PRIMARY KEY REFERENCES report_snapshots(input_cursor),digest TEXT NOT NULL);"
+        "CREATE TRIGGER IF NOT EXISTS report_integrity_no_update BEFORE UPDATE ON report_integrity BEGIN SELECT RAISE(ABORT,'report integrity is immutable'); END;"
+        "CREATE TRIGGER IF NOT EXISTS report_integrity_no_delete BEFORE DELETE ON report_integrity BEGIN SELECT RAISE(ABORT,'report integrity is immutable'); END;"
         "CREATE TABLE IF NOT EXISTS routing_configuration (singleton INTEGER PRIMARY KEY CHECK(singleton=1),document TEXT NOT NULL);"
         "CREATE TABLE IF NOT EXISTS event_routes (ordinal INTEGER PRIMARY KEY REFERENCES events(ordinal),"
         "target_id TEXT,delivery_id TEXT NOT NULL);"
@@ -223,6 +291,18 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity)
         "CREATE TRIGGER IF NOT EXISTS delivery_log_no_delete BEFORE DELETE ON delivery_log BEGIN SELECT RAISE(ABORT,'delivery log is append-only'); END;"
         "INSERT INTO event_routes(ordinal,target_id,delivery_id) SELECT ordinal,'default',event_id FROM events "
         "WHERE ordinal NOT IN (SELECT ordinal FROM event_routes);");
+    if (!has_column(impl_->db, "events", "created_at_ms"))
+        exec(impl_->db, "ALTER TABLE events ADD COLUMN created_at_ms INTEGER NOT NULL DEFAULT 0");
+    if (!has_column(impl_->db, "delivery_log", "request_id"))
+        exec(impl_->db, "ALTER TABLE delivery_log ADD COLUMN request_id TEXT NOT NULL DEFAULT ''");
+    exec(impl_->db,
+        "CREATE TABLE IF NOT EXISTS redelivery_requests (request_order INTEGER PRIMARY KEY,request_id TEXT NOT NULL UNIQUE,"
+        "target_id TEXT NOT NULL,from_ordinal INTEGER NOT NULL,through_ordinal INTEGER NOT NULL,"
+        "failed_only INTEGER NOT NULL CHECK(failed_only IN (0,1)),snapshot_log INTEGER NOT NULL,"
+        "selected INTEGER NOT NULL,accepted_at INTEGER NOT NULL);"
+        "CREATE TRIGGER IF NOT EXISTS redelivery_no_update BEFORE UPDATE ON redelivery_requests BEGIN SELECT RAISE(ABORT,'requests are immutable'); END;"
+        "CREATE TRIGGER IF NOT EXISTS redelivery_no_delete BEFORE DELETE ON redelivery_requests BEGIN SELECT RAISE(ABORT,'requests are immutable'); END;"
+        "CREATE INDEX IF NOT EXISTS delivery_request_results ON delivery_log(request_id,event_id,phase);");
     // Refuse holes/corruption before any delivery can occur. All source rows
     // and immutable event bytes are also compared by the runner during replay.
     const auto count = scalar(impl_->db, "SELECT COUNT(*) FROM inputs");
@@ -261,6 +341,11 @@ std::uint64_t Ledger::input_count() const {
     return scalar(impl_->db, "SELECT COALESCE(MAX(input_index)+1,0) FROM inputs");
 }
 
+std::uint64_t Ledger::report_cursor() const {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
+    return scalar(impl_->db, "SELECT COALESCE(MAX(input_cursor),0) FROM report_snapshots");
+}
+
 std::optional<RecordedInput> Ledger::input(std::uint64_t index) const {
     std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     Statement q(impl_->db, "SELECT canonical_json,state_hash FROM inputs WHERE input_index=?");
@@ -270,6 +355,9 @@ std::optional<RecordedInput> Ledger::input(std::uint64_t index) const {
     result.index = index;
     result.canonical_json = q.text(0);
     result.state_hash = q.text(1);
+    Statement report(impl_->db, "SELECT payload FROM report_snapshots WHERE input_cursor=?");
+    report.bind(1, index + 1);
+    if (report.row()) result.report_json = report.text(0);
     Statement e(impl_->db, "SELECT e.ordinal,e.event_id,e.payload,e.attempts,r.target_id,r.delivery_id FROM events e "
                            "JOIN event_routes r ON r.ordinal=e.ordinal WHERE input_index=? ORDER BY input_position");
     e.bind(1, index);
@@ -278,7 +366,8 @@ std::optional<RecordedInput> Ledger::input(std::uint64_t index) const {
 }
 
 void Ledger::commit_input(std::uint64_t index, const std::string& canonical_json,
-                          std::uint64_t state_hash, const std::vector<Event>& events) {
+                          std::uint64_t state_hash, const std::vector<Event>& events,
+                          const std::string& report_json) {
     std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     validate_bytes(canonical_json, "input");
     for (const auto& e : events) {
@@ -294,7 +383,8 @@ void Ledger::commit_input(std::uint64_t index, const std::string& canonical_json
             same = old->events[i].id == events[i].id && old->events[i].payload == events[i].payload &&
                    old->events[i].target_id == events[i].target_id && old->events[i].delivery_id ==
                    (events[i].delivery_id.empty() ? events[i].id : events[i].delivery_id);
-        if (!same) throw std::runtime_error("native ledger replay differs from committed input, state or events");
+        if (!same || old->report_json != report_json)
+            throw std::runtime_error("native ledger replay differs from committed input, state, events or report");
         tx.commit();
         return;
     }
@@ -305,10 +395,10 @@ void Ledger::commit_input(std::uint64_t index, const std::string& canonical_json
     }
     auto ordinal = scalar(impl_->db, "SELECT COALESCE(MAX(ordinal),0) FROM events");
     for (std::size_t i = 0; i < events.size(); ++i) {
-        Statement q(impl_->db, "INSERT INTO events(ordinal,input_index,input_position,event_id,payload) "
-                               "VALUES(?,?,?,?,?)");
+        Statement q(impl_->db, "INSERT INTO events(ordinal,input_index,input_position,event_id,payload,created_at_ms) "
+                               "VALUES(?,?,?,?,?,?)");
         q.bind(1, ++ordinal); q.bind(2, index); q.bind(3, static_cast<std::uint64_t>(i));
-        q.bind(4, events[i].id); q.bind(5, events[i].payload); q.done();
+        q.bind(4, events[i].id); q.bind(5, events[i].payload); q.bind(6, commit_time()); q.done();
         Statement route(impl_->db, "INSERT INTO event_routes(ordinal,target_id,delivery_id) VALUES(?,?,?)");
         route.bind(1, ordinal);
         if (events[i].target_id) route.bind(2, *events[i].target_id);
@@ -316,7 +406,37 @@ void Ledger::commit_input(std::uint64_t index, const std::string& canonical_json
         route.bind(3, events[i].delivery_id.empty() ? events[i].id : events[i].delivery_id);
         route.done();
     }
+    if (!report_json.empty()) {
+        Statement report(impl_->db, "INSERT INTO report_snapshots VALUES(?,?)");
+        report.bind(1, index + 1); report.bind(2, report_json); report.done();
+        verify_report_integrity(impl_->db, index + 1, report_json);
+    }
     tx.commit();
+}
+
+void Ledger::verify_report(std::uint64_t cursor, const std::string& report_json,
+                           const std::function<std::string()>& legacy_report) {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
+    if (report_json.empty() || cursor > input_count())
+        throw std::runtime_error("invalid cumulative report cursor");
+    Transaction transaction(impl_->db);
+    Statement previous(impl_->db, "SELECT payload FROM report_snapshots WHERE input_cursor=?");
+    previous.bind(1, cursor);
+    auto stored_payload = report_json;
+    if (previous.row()) {
+        stored_payload = previous.text(0);
+        if (previous.text(0) != report_json) {
+            const auto old = parse_json(previous.text(0));
+            if (!legacy_report || !old.members.count("schema_version") ||
+                old.at("schema_version").text() != "pineforge-native-report/v1" ||
+                previous.text(0) != legacy_report()) throw std::runtime_error("native replay report mismatch");
+        }
+    } else {
+        Statement insert(impl_->db, "INSERT INTO report_snapshots VALUES(?,?)");
+        insert.bind(1, cursor); insert.bind(2, report_json); insert.done();
+    }
+    verify_report_integrity(impl_->db, cursor, stored_payload);
+    transaction.commit();
 }
 
 #ifdef PINEFORGE_LIVE_LEGACY_TEST_API
@@ -404,7 +524,8 @@ std::optional<DeliveryScan> Ledger::next_delivery_event(std::uint64_t after,
     return DeliveryScan{read_routed_event(query), query.integer(6) != 0};
 }
 
-DeliveryAttempt Ledger::start_attempt(const StoredEvent& event, std::uint64_t started_at) {
+DeliveryAttempt Ledger::start_attempt(const StoredEvent& event, std::uint64_t started_at,
+                                      const std::string& request_id) {
     std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     if (!event.target_id) throw std::runtime_error("journal-only action cannot be delivered");
     Transaction transaction(impl_->db);
@@ -412,17 +533,17 @@ DeliveryAttempt Ledger::start_attempt(const StoredEvent& event, std::uint64_t st
                                "FROM events e JOIN event_routes r ON r.ordinal=e.ordinal WHERE e.event_id=?");
     query.bind(1, event.id);
     if (!query.row()) database_error();
-    DeliveryAttempt result{read_routed_event(query), 0, started_at};
+    DeliveryAttempt result{read_routed_event(query), 0, started_at, request_id};
     if (result.event.target_id != event.target_id || result.event.delivery_id != event.delivery_id ||
         result.event.payload != event.payload || result.event.attempts == UINT32_MAX)
         throw std::runtime_error("native ledger delivery identity mismatch or attempt counter exhausted");
     result.attempt = result.event.attempts + 1;
     Statement update(impl_->db, "UPDATE events SET attempts=attempts+1 WHERE event_id=?");
     update.bind(1, event.id); update.done();
-    Statement log(impl_->db, "INSERT INTO delivery_log(event_id,target_id,delivery_id,attempt,phase,started_at) "
-                             "VALUES(?,?,?,?,'started',?)");
+    Statement log(impl_->db, "INSERT INTO delivery_log(event_id,target_id,delivery_id,attempt,phase,started_at,request_id) "
+                             "VALUES(?,?,?,?,'started',?,?)");
     log.bind(1, event.id); log.bind(2, *event.target_id); log.bind(3, event.delivery_id);
-    log.bind(4, result.attempt); log.bind(5, started_at); log.done();
+    log.bind(4, result.attempt); log.bind(5, started_at); log.bind(6, request_id); log.done();
     transaction.commit();
     return result;
 }
@@ -432,16 +553,81 @@ void Ledger::finish_attempt(const DeliveryAttempt& attempt, std::uint64_t ended_
     std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     Transaction transaction(impl_->db);
     const auto& event = attempt.event;
-    Statement log(impl_->db, "INSERT INTO delivery_log(event_id,target_id,delivery_id,attempt,phase,started_at,ended_at,http_status,error_category,success) "
-                             "VALUES(?,?,?,?,'completed',?,?,?,?,?)");
+    Statement log(impl_->db, "INSERT INTO delivery_log(event_id,target_id,delivery_id,attempt,phase,started_at,ended_at,http_status,error_category,success,request_id) "
+                             "VALUES(?,?,?,?,'completed',?,?,?,?,?,?)");
     log.bind(1, event.id); log.bind(2, *event.target_id); log.bind(3, event.delivery_id);
     log.bind(4, attempt.attempt); log.bind(5, attempt.started_at); log.bind(6, ended_at);
     log.bind(7, static_cast<std::uint64_t>(http_status));
-    log.bind(8, success ? "" : safe_category(error)); log.bind(9, static_cast<std::uint64_t>(success)); log.done();
+    log.bind(8, success ? "" : safe_category(error)); log.bind(9, static_cast<std::uint64_t>(success));
+    log.bind(10, attempt.request_id); log.done();
     Statement update(impl_->db, "UPDATE events SET acknowledged=?,last_error=? WHERE event_id=?");
     update.bind(1, static_cast<std::uint64_t>(success));
     update.bind(2, success ? "" : safe_category(error)); update.bind(3, event.id); update.done();
     transaction.commit();
+}
+
+std::string Ledger::delivery_metrics_json(std::uint64_t now) const {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
+    Statement query(impl_->db, "SELECT r.target_id,COUNT(*),MIN(CASE WHEN e.created_at_ms>0 THEN e.created_at_ms "
+        "ELSE (SELECT MIN(started_at) FROM delivery_log d WHERE d.event_id=e.event_id) END) "
+        "FROM events e JOIN event_routes r ON r.ordinal=e.ordinal "
+        "WHERE e.acknowledged=0 AND r.target_id IS NOT NULL GROUP BY r.target_id");
+    Json result = Json::object({});
+    while (query.row()) {
+        Json age;
+        if (!query.is_null(2)) age = Json::number(std::to_string(now > query.integer(2) ? now - query.integer(2) : 0));
+        result.members[query.text(0)] = Json::object({{"pending_count", Json::number(std::to_string(query.integer(1)))},
+            {"oldest_age_ms", std::move(age)}});
+    }
+    return result.dump();
+}
+
+std::uint64_t Ledger::request_redelivery(const std::string& request_id, const std::string& target,
+                                        std::uint64_t from, bool failed_only) {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
+    Transaction transaction(impl_->db);
+    Statement previous(impl_->db, "SELECT target_id,from_ordinal,failed_only,selected FROM redelivery_requests WHERE request_id=?");
+    previous.bind(1, request_id);
+    if (previous.row()) {
+        if (previous.text(0) != target || previous.integer(1) != from || previous.integer(2) != static_cast<unsigned>(failed_only))
+            throw std::invalid_argument("control request id conflicts with an accepted request");
+        const auto selected = previous.integer(3);
+        transaction.commit();
+        return selected;
+    }
+    const auto through = scalar(impl_->db, "SELECT COALESCE(MAX(ordinal),0) FROM events");
+    const auto snapshot_log = scalar(impl_->db, "SELECT COALESCE(MAX(log_id),0) FROM delivery_log");
+    Statement count(impl_->db, "SELECT COUNT(*) FROM events e JOIN event_routes r ON r.ordinal=e.ordinal "
+        "WHERE r.target_id=? AND e.ordinal>=? AND e.ordinal<=? AND (?=0 OR "
+        "(SELECT success FROM delivery_log d WHERE d.event_id=e.event_id AND d.phase='completed' AND d.log_id<=? "
+        "ORDER BY d.log_id DESC LIMIT 1)=0)");
+    count.bind(1, target); count.bind(2, from); count.bind(3, through);
+    count.bind(4, static_cast<unsigned>(failed_only)); count.bind(5, snapshot_log);
+    if (!count.row()) database_error();
+    const auto selected = count.integer(0);
+    Statement insert(impl_->db, "INSERT INTO redelivery_requests(request_id,target_id,from_ordinal,through_ordinal,"
+        "failed_only,snapshot_log,selected,accepted_at) VALUES(?,?,?,?,?,?,?,?)");
+    insert.bind(1, request_id); insert.bind(2, target); insert.bind(3, from); insert.bind(4, through);
+    insert.bind(5, static_cast<unsigned>(failed_only)); insert.bind(6, snapshot_log);
+    insert.bind(7, selected); insert.bind(8, commit_time()); insert.done();
+    transaction.commit();
+    return selected;
+}
+
+std::optional<RequestedDelivery> Ledger::next_redelivery_event(std::uint64_t request_order,
+                                                             std::uint64_t after) const {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
+    Statement query(impl_->db, "SELECT e.ordinal,e.event_id,e.payload,e.attempts,r.target_id,r.delivery_id,"
+        "q.request_order,q.request_id FROM redelivery_requests q JOIN event_routes r ON r.target_id=q.target_id "
+        "JOIN events e ON e.ordinal=r.ordinal WHERE e.ordinal>=q.from_ordinal AND e.ordinal<=q.through_ordinal "
+        "AND (q.request_order>? OR (q.request_order=? AND e.ordinal>?)) "
+        "AND (q.failed_only=0 OR (SELECT success FROM delivery_log d WHERE d.event_id=e.event_id "
+        "AND d.phase='completed' AND d.log_id<=q.snapshot_log ORDER BY d.log_id DESC LIMIT 1)=0) "
+        "AND NOT EXISTS(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id "
+        "AND d.request_id=q.request_id AND d.phase='completed') ORDER BY q.request_order,e.ordinal LIMIT 1");
+    query.bind(1, request_order); query.bind(2, request_order); query.bind(3, after);
+    if (!query.row()) return std::nullopt;
+    return RequestedDelivery{read_routed_event(query), query.integer(6), query.text(7)};
 }
 
 struct LedgerView::Impl {
@@ -499,6 +685,44 @@ std::vector<StoredEvent> LedgerView::redelivery_events(const std::string& target
     std::vector<StoredEvent> result;
     while (query.row()) result.push_back(read_routed_event(query));
     return result;
+}
+
+std::string LedgerView::report_json(std::optional<std::uint64_t> cursor) const {
+    exec(impl_->db, "BEGIN");
+    struct ReadEnd {
+        sqlite3* database;
+        ~ReadEnd() { sqlite3_exec(database, "ROLLBACK", nullptr, nullptr, nullptr); }
+    } read_end{impl_->db};
+    Statement available(impl_->db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('report_snapshots','report_integrity')");
+    if (!available.row() || available.integer(0) != 2)
+        throw std::runtime_error("resume this ledger with run before exporting reports");
+    const auto committed = scalar(impl_->db, "SELECT COUNT(*) FROM inputs");
+    const auto target = cursor.value_or(committed);
+    Statement report(impl_->db, "SELECT input_cursor,payload FROM report_snapshots ORDER BY input_cursor");
+    Json document;
+    bool found = false;
+    std::uint64_t expected = 0;
+    std::string previous_hash;
+    while (report.row()) {
+        const auto index = report.integer(0);
+        if (index != expected++) throw std::runtime_error("cumulative report delta hole");
+        const auto bytes = report.text(1);
+        Statement stored(impl_->db, "SELECT digest FROM report_integrity WHERE input_cursor=?");
+        stored.bind(1, index);
+        if (!stored.row()) throw std::runtime_error("resume this ledger with run before exporting reports");
+        const auto digest = report_integrity(impl_->db, index, bytes, previous_hash);
+        if (stored.text(0) != digest) throw std::runtime_error("native ledger report integrity mismatch");
+        previous_hash = digest;
+        if (index > target) continue;
+        auto payload = parse_json(bytes);
+        if (payload.members.count("schema_version") && payload.at("schema_version").text() == "pineforge-native-report-delta/v1") {
+            apply_report_delta(document, payload);
+        } else document = std::move(payload);
+        found = index == target;
+    }
+    if (expected != committed + 1) throw std::runtime_error("cumulative report delta hole");
+    if (!found) throw std::runtime_error("no cumulative report at requested input cursor");
+    return document.dump();
 }
 
 std::string LedgerView::status_json() const {

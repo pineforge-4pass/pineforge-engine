@@ -53,7 +53,10 @@ try:
         for index, (kind, declaration) in enumerate(declarations.items()):
             library = libraries[kind]
             ledger = root / f'refused-{index}.sqlite'
-            command = base + ['--strategy', library, '--ledger', str(ledger)]
+            controls = root / f'refused-{index}.control'
+            health = root / f'refused-{index}.status.json'
+            command = base + ['--strategy', library, '--ledger', str(ledger),
+                              '--control-dir', str(controls), '--status-file', str(health)]
             if declaration == 'calc_on_order_fills':
                 command += ['--override', 'calc_on_order_fills=false']
             result = subprocess.run(command, capture_output=True, text=True, timeout=20)
@@ -64,6 +67,7 @@ try:
             if declaration.startswith('request.'):
                 assert 'the native stream does not yet reproduce the batch for requested series' in result.stderr
             assert not ledger.exists() and not list(root.glob(ledger.name + '*')), result.stderr
+            assert not controls.exists() and not health.exists(), result.stderr
             assert not requests
         for value in ('true', '1'):
             ledger = root / f'override-pooc-{value}.sqlite'
