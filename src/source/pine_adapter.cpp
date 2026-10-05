@@ -10685,6 +10685,20 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         if (!from_entry.empty() && parent.source_id != from_entry) {
             return;
         }
+        // A global exit called while a position is held binds to that
+        // position, so an entry order of the other side working beside it is
+        // not its parent: taking that order's side put the limit and stop
+        // thresholds on the wrong side of the leg that closes the position
+        // (settled outside its trigger, MatchRejected InvalidTerms) and
+        // deferred a profit or loss leg to a fill that never came. lab tv
+        // synthetics tests/fixtures/cross_side_exit, NYSE:F 15m: each exit
+        // with the resting opposite entry is the exit without it, row for row,
+        // with and without a margin requirement.
+        if (from_entry.empty() && physical.signed_units != 0.0
+            && (physical.signed_units > 0.0) != parent.is_long
+            && detail::exit_binding_rule_switches().global_exit_binds_held_position) {
+            return;
+        }
         // A pending same-bar parent is the level basis only while its cohort
         // has no live exposure.  With a lot of that id still open the exit
         // resolves against the LIVE position: ab9714be

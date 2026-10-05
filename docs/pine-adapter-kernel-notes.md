@@ -1105,13 +1105,26 @@ stream.
 | `global_exit_binds_working_entries` | a global exit called flat waits for the fill of the limit and stop entry orders working | `flush_pending_bracket_legs` |
 | `resting_stop_entry_survives_close` | under `process_orders_on_close`, an earlier bar's stop entry of the side a close flattens survives it, as a limit does | the stale-entry cancel in `on_applied` |
 | `priced_add_at_cap_not_placed` | under `process_orders_on_close`, a priced add of an id holding no lot, still at the pyramiding cap once its bar's closes are done, leaves the book at the next opening, judged at that opening only | `withdraw_unplaced_cap_adds` in `on_bar_open` |
+| `global_exit_binds_held_position` | a global exit called while a position is held takes that position as its parent: an entry order of the other side working beside it (resting, or placed earlier in the calculation) lends it neither its side nor its price basis, so its limit and stop rest on the held side and a profit or loss leg resolves against the held position | `observe_staged_parent` in `exit` |
 
-Every tape runs with margin requirements off (`margin_long = margin_short =
-0`) and without `calc_on_order_fills`, and every part acts only there
-(`margins_disabled`). The two exit parts act on a whole exit at absolute
-levels whose pending parent rests at a level (`whole_level_exit`); the stop
-entry and cap parts act under `process_orders_on_close` only. Other accounts,
-partial and relative exits, market parents and same-id adds keep their former
+The first four parts' tapes run with margin requirements off (`margin_long =
+margin_short = 0`) and without `calc_on_order_fills`, and those parts act only
+there (`margins_disabled`). `global_exit_binds_held_position` is pinned by the
+15 synthetic tapes of `tests/fixtures/cross_side_exit`
+(`test_cross_side_exit_tapes`), NYSE:F 15m, with and without
+`calc_on_order_fills`: TradingView books each script that rests an opposite
+entry beside its global exit exactly as the same script without that entry,
+with the default margin requirement and without one, so the part acts whatever
+the margin setting. It moved fills in three random witnesses of
+`test_adapter_quiet_bar`, an approved re-pin (the fixture's README, "Scope
+and the witness re-pin"). TradingView's margin-0 exports are byte-identical
+to the default-margin ones (the pin's evidence); the committed tape test runs
+the default margin.
+
+The first two parts act on a whole exit at absolute levels whose pending
+parent rests at a level (`whole_level_exit`); the stop entry and cap parts act
+under `process_orders_on_close` only. For these four, other accounts, partial
+and relative exits, market parents and same-id adds keep their former
 course. Inside these gates the parts also change shapes no tape covers, as the
 pin's reference model predicts them: a parent on the other side of the open
 position, a `strategy.order` parent, a re-entry as a market order after the

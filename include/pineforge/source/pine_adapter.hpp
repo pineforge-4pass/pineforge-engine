@@ -454,14 +454,15 @@ struct ScriptRuleSwitches {
 ScriptRuleSwitches& script_rule_switches() noexcept;
 
 // One switch per part of TradingView's strategy.exit binding rule, pinned on
-// the tapes under tests/fixtures/exit_binding and the pending-* tapes of
-// tests/fixtures/global_exit_children, so a regression bisects per part. A
-// strategy.exit binds when it is called: to its entry's open lots, else to
-// the entry id while an order of it is working, else the call is ignored.
-// Every part acts only with margin requirements off (margin_long =
-// margin_short = 0), the setting of every tape. All on; only tests change
-// one. Process-wide, read by every adapter; not installed API, and no
-// strategy input reaches it.
+// the tapes under tests/fixtures/exit_binding, the pending-* tapes of
+// tests/fixtures/global_exit_children and tests/fixtures/cross_side_exit, so
+// a regression bisects per part. A strategy.exit binds when it is called: to
+// its entry's open lots, else to the entry id while an order of it is
+// working, else the call is ignored. Every part but
+// global_exit_binds_held_position acts only with margin requirements off
+// (margin_long = margin_short = 0), the setting of their tapes. All on; only
+// tests change one. Process-wide, read by every adapter; not installed API,
+// and no strategy input reaches it.
 struct ExitBindingRuleSwitches {
     // An exit called in position for an entry id with no lot but a limit or
     // stop order working is bound to the id: a close or the flat does not
@@ -480,6 +481,13 @@ struct ExitBindingRuleSwitches {
     // still at the pyramiding cap once its bar's closes are done, leaves the
     // book at the next opening, judged at that opening only.
     bool priced_add_at_cap_not_placed = true;
+    // A global exit called while a position is held binds to that position,
+    // whatever the margin setting: an entry order of the other side working
+    // beside it (resting, or placed earlier in the same calculation) lends it
+    // neither its side nor its price basis. Its limit and stop rest on the
+    // held side and a profit or loss leg resolves against the held position
+    // (PineExecutionAdapter::exit()).
+    bool global_exit_binds_held_position = true;
 };
 ExitBindingRuleSwitches& exit_binding_rule_switches() noexcept;
 } // namespace detail

@@ -2256,6 +2256,19 @@
 //   Random40/0/0: boundary 0xdc43658be7d34abfull -> 0xe779b6dee0e07501ull
 //   Random45/0/1: boundary 0xbf7d21e38106b05dull -> 0x5e7de0663f133e9eull
 //   Random45/0/0: boundary 0xbf7d21e38106b05dull -> 0x5e7de0663f133e9eull
+// expectation corrected (cross-side exit binding, 12 of 276 rows; approved re-pin of 2026-10-05), because a global strategy.exit called while a position is held now binds to that position: an entry order of the other side working beside it no longer lends the exit its side or price basis (ExitBindingRuleSwitches::global_exit_binds_held_position, tests/fixtures/cross_side_exit). Fills move in three random runs. Random27 trade 18 (17 under the magnifier), Random31 trade 5 and Random12 trade 2 fill at the exit's own stop or limit, which the bar touches exactly on the held side, while the resting opposite entry is not reached on that bar (the pinned mechanism); Random31 trade 6 follows from trade 5 (the opposite limit fills from flat at its placement size, which TradingView does on the exit's own bar; on this later bar that is an inference). Random12 trades 4-6 (magnifier off) are a known divergence, recorded by decision: the rule's skip at that call (bar 14) is caused by the short limit A at 96.25, the short stop S at the exit's own stop is placed after the exit, and no tape has this exit-first call order (tests/fixtures/cross_side_exit/README.md, "Known divergences"). Harvested with this TU's own switch:
+//   Random12/0/1: boundary 0xc9b1cbbfa70ad0a3ull -> 0xc2535a393a8937a1ull; rows 0x375237f7cb52e5dfull -> 0x71519a2abd2ee28full; trades 0xe801e0d8eaffcc6bull -> 0x6715f7cc0284d4bfull; final 0x70c9cc50965fe672ull -> 0x3f10e8f5e124af9bull; boundary_count 92 -> 93
+//   Random12/0/0: boundary 0xc9b1cbbfa70ad0a3ull -> 0xc2535a393a8937a1ull; trades 0xe801e0d8eaffcc6bull -> 0x6715f7cc0284d4bfull; final 0x70c9cc50965fe672ull -> 0x3f10e8f5e124af9bull; boundary_count 92 -> 93
+//   Random12/1/1: boundary 0xb5036003166df176ull -> 0x5e8b8ec8c5021d3cull; rows 0x15c9d5c766ba819cull -> 0x4ee908debc94002bull; trades 0x16fca020c807a384ull -> 0x0ee91af28863839dull; final 0x9eda6cdd6ea9c8c7ull -> 0x019b4ab5e79cc70cull
+//   Random12/1/0: boundary 0xb5036003166df176ull -> 0x5e8b8ec8c5021d3cull; trades 0x16fca020c807a384ull -> 0x0ee91af28863839dull; final 0x9eda6cdd6ea9c8c7ull -> 0x019b4ab5e79cc70cull
+//   Random27/0/1: boundary 0x922525ed0e0ac261ull -> 0xcc4ed07d3d8c6b8full; rows 0xbb91aa8b02f75e5dull -> 0xff04f7b878b566ffull; trades 0xbfe2f70bda5f466dull -> 0x52ab6af8447acd3bull; final 0x44b2b289f46ef934ull -> 0x5692870f1c62d435ull
+//   Random27/0/0: boundary 0x922525ed0e0ac261ull -> 0xcc4ed07d3d8c6b8full; trades 0xbfe2f70bda5f466dull -> 0x52ab6af8447acd3bull; final 0x44b2b289f46ef934ull -> 0x5692870f1c62d435ull
+//   Random27/1/1: boundary 0x05e1e2c7849e1a23ull -> 0x7bf306d7fc9978c6ull; rows 0x609c20acd1c81b42ull -> 0x61a010c40cb1b244ull; trades 0x0bb88d26b3dc8cc1ull -> 0x4207e62ad16dcaceull; final 0x47be5c4fe4e9f14bull -> 0x88ff49f11243b63cull
+//   Random27/1/0: boundary 0x05e1e2c7849e1a23ull -> 0x7bf306d7fc9978c6ull; trades 0x0bb88d26b3dc8cc1ull -> 0x4207e62ad16dcaceull; final 0x47be5c4fe4e9f14bull -> 0x88ff49f11243b63cull
+//   Random31/0/1: boundary 0x1003f1ca9d62740full -> 0xa66add0a9d8d457aull; rows 0x5c48e4c1bfa57985ull -> 0x47b181c4149b3c24ull; trades 0x101e40b9d91b7277ull -> 0xd7de13694b99692cull; final 0xc1eb7c94186e233bull -> 0x4bf8237d26e3471aull
+//   Random31/0/0: boundary 0x1003f1ca9d62740full -> 0xa66add0a9d8d457aull; trades 0x101e40b9d91b7277ull -> 0xd7de13694b99692cull; final 0xc1eb7c94186e233bull -> 0x4bf8237d26e3471aull
+//   Random31/1/1: boundary 0xe52214dfd2bcc0ccull -> 0x865ffa038adef631ull; rows 0xbe7a3e7d201789eeull -> 0x6170e48ffd9971a8ull; trades 0x2a8f80e16d64b4eeull -> 0x3e69808e7cbdfee8ull; final 0xa1ff686cd364bf6aull -> 0x82c196a406716d37ull
+//   Random31/1/0: boundary 0xe52214dfd2bcc0ccull -> 0x865ffa038adef631ull; trades 0x2a8f80e16d64b4eeull -> 0x3e69808e7cbdfee8ull; final 0xa1ff686cd364bf6aull -> 0x82c196a406716d37ull
 constexpr Pinned kPinned[] = {
     {"Quiet", 0, 1, 0xcd8d3ecb4d2c740aull, 0xe6da4342a82c460cull, 0x47fe0d7eaf8e51e3ull, 0x458f1ecf00ef1d5cull, 40, 40, 0},
     {"Quiet", 0, 0, 0xcd8d3ecb4d2c740aull, 0x14650fb0739d0383ull, 0x47fe0d7eaf8e51e3ull, 0x458f1ecf00ef1d5cull, 40, 0, 0},
@@ -2385,10 +2398,10 @@ constexpr Pinned kPinned[] = {
     {"Random11", 0, 0, 0xd329adc42a76a850ull, 0x14650fb0739d0383ull, 0x2f92b1af8d2cfafcull, 0x65c76d0ec8c574fbull, 60, 0, 3},
     {"Random11", 1, 1, 0x8e46e1ef7751abeeull, 0x7edce871e6834062ull, 0xad6d6d2577cca5c9ull, 0xfc8d53a8d4020ceeull, 60, 60, 8},
     {"Random11", 1, 0, 0x8e46e1ef7751abeeull, 0x14650fb0739d0383ull, 0xad6d6d2577cca5c9ull, 0xfc8d53a8d4020ceeull, 60, 0, 8},
-    {"Random12", 0, 1, 0xc9b1cbbfa70ad0a3ull, 0x375237f7cb52e5dfull, 0xe801e0d8eaffcc6bull, 0x70c9cc50965fe672ull, 92, 62, 22},
-    {"Random12", 0, 0, 0xc9b1cbbfa70ad0a3ull, 0x14650fb0739d0383ull, 0xe801e0d8eaffcc6bull, 0x70c9cc50965fe672ull, 92, 0, 22},
-    {"Random12", 1, 1, 0xb5036003166df176ull, 0x15c9d5c766ba819cull, 0x16fca020c807a384ull, 0x9eda6cdd6ea9c8c7ull, 93, 62, 22},
-    {"Random12", 1, 0, 0xb5036003166df176ull, 0x14650fb0739d0383ull, 0x16fca020c807a384ull, 0x9eda6cdd6ea9c8c7ull, 93, 0, 22},
+    {"Random12", 0, 1, 0xc2535a393a8937a1ull, 0x71519a2abd2ee28full, 0x6715f7cc0284d4bfull, 0x3f10e8f5e124af9bull, 93, 62, 22},
+    {"Random12", 0, 0, 0xc2535a393a8937a1ull, 0x14650fb0739d0383ull, 0x6715f7cc0284d4bfull, 0x3f10e8f5e124af9bull, 93, 0, 22},
+    {"Random12", 1, 1, 0x5e8b8ec8c5021d3cull, 0x4ee908debc94002bull, 0x0ee91af28863839dull, 0x019b4ab5e79cc70cull, 93, 62, 22},
+    {"Random12", 1, 0, 0x5e8b8ec8c5021d3cull, 0x14650fb0739d0383ull, 0x0ee91af28863839dull, 0x019b4ab5e79cc70cull, 93, 0, 22},
     {"Random13", 0, 1, 0xb66e2e84b38eb678ull, 0x5f65b3d7b36ea29full, 0xcdf7b5ce1f4314d9ull, 0xbeb50a875a54f142ull, 60, 60, 16},
     {"Random13", 0, 0, 0xb66e2e84b38eb678ull, 0x14650fb0739d0383ull, 0xcdf7b5ce1f4314d9ull, 0xbeb50a875a54f142ull, 60, 0, 16},
     {"Random13", 1, 1, 0xb09d4fd7dceabe48ull, 0xd8164625abea467aull, 0xb3e3251fdef3358cull, 0x6c24feeadc377b01ull, 60, 60, 16},
@@ -2445,10 +2458,10 @@ constexpr Pinned kPinned[] = {
     {"Random26", 0, 0, 0xe59742c6d53a59e9ull, 0x14650fb0739d0383ull, 0x5a3b59068266bdaeull, 0x980627b1675b1efcull, 42, 0, 10},
     {"Random26", 1, 1, 0xd3eba03324d377beull, 0xd428da4ca60dbc80ull, 0xe765763e4be6d1b7ull, 0xa41a189bbd93190bull, 42, 42, 11},
     {"Random26", 1, 0, 0xd3eba03324d377beull, 0x14650fb0739d0383ull, 0xe765763e4be6d1b7ull, 0xa41a189bbd93190bull, 42, 0, 11},
-    {"Random27", 0, 1, 0x922525ed0e0ac261ull, 0xbb91aa8b02f75e5dull, 0xbfe2f70bda5f466dull, 0x44b2b289f46ef934ull, 50, 50, 22},
-    {"Random27", 0, 0, 0x922525ed0e0ac261ull, 0x14650fb0739d0383ull, 0xbfe2f70bda5f466dull, 0x44b2b289f46ef934ull, 50, 0, 22},
-    {"Random27", 1, 1, 0x05e1e2c7849e1a23ull, 0x609c20acd1c81b42ull, 0x0bb88d26b3dc8cc1ull, 0x47be5c4fe4e9f14bull, 50, 50, 21},
-    {"Random27", 1, 0, 0x05e1e2c7849e1a23ull, 0x14650fb0739d0383ull, 0x0bb88d26b3dc8cc1ull, 0x47be5c4fe4e9f14bull, 50, 0, 21},
+    {"Random27", 0, 1, 0xcc4ed07d3d8c6b8full, 0xff04f7b878b566ffull, 0x52ab6af8447acd3bull, 0x5692870f1c62d435ull, 50, 50, 22},
+    {"Random27", 0, 0, 0xcc4ed07d3d8c6b8full, 0x14650fb0739d0383ull, 0x52ab6af8447acd3bull, 0x5692870f1c62d435ull, 50, 0, 22},
+    {"Random27", 1, 1, 0x7bf306d7fc9978c6ull, 0x61a010c40cb1b244ull, 0x4207e62ad16dcaceull, 0x88ff49f11243b63cull, 50, 50, 21},
+    {"Random27", 1, 0, 0x7bf306d7fc9978c6ull, 0x14650fb0739d0383ull, 0x4207e62ad16dcaceull, 0x88ff49f11243b63cull, 50, 0, 21},
     {"Random28", 0, 1, 0xbb9929fd869d83ecull, 0xaf3b8ed5ced5375bull, 0xb315918107aeb676ull, 0xfa5b17cc77508cf0ull, 54, 54, 19},
     {"Random28", 0, 0, 0xbb9929fd869d83ecull, 0x14650fb0739d0383ull, 0xb315918107aeb676ull, 0xfa5b17cc77508cf0ull, 54, 0, 19},
     {"Random28", 1, 1, 0xf8578fbbeaa81481ull, 0x3e0acad585be86d9ull, 0xe8632e16032f1923ull, 0x3c7b82504f9168b5ull, 54, 54, 19},
@@ -2461,10 +2474,10 @@ constexpr Pinned kPinned[] = {
     {"Random30", 0, 0, 0xd66f88389fcd9547ull, 0x14650fb0739d0383ull, 0x260809f2d3657490ull, 0x5aeb07c47b63d013ull, 61, 0, 1},
     {"Random30", 1, 1, 0xe4fa3a6344099aa9ull, 0xd45bcd6f2d572ec8ull, 0x260809f2d3657490ull, 0x8efe1379de796a86ull, 61, 61, 1},
     {"Random30", 1, 0, 0xe4fa3a6344099aa9ull, 0x14650fb0739d0383ull, 0x260809f2d3657490ull, 0x8efe1379de796a86ull, 61, 0, 1},
-    {"Random31", 0, 1, 0x1003f1ca9d62740full, 0x5c48e4c1bfa57985ull, 0x101e40b9d91b7277ull, 0xc1eb7c94186e233bull, 49, 49, 7},
-    {"Random31", 0, 0, 0x1003f1ca9d62740full, 0x14650fb0739d0383ull, 0x101e40b9d91b7277ull, 0xc1eb7c94186e233bull, 49, 0, 7},
-    {"Random31", 1, 1, 0xe52214dfd2bcc0ccull, 0xbe7a3e7d201789eeull, 0x2a8f80e16d64b4eeull, 0xa1ff686cd364bf6aull, 49, 49, 7},
-    {"Random31", 1, 0, 0xe52214dfd2bcc0ccull, 0x14650fb0739d0383ull, 0x2a8f80e16d64b4eeull, 0xa1ff686cd364bf6aull, 49, 0, 7},
+    {"Random31", 0, 1, 0xa66add0a9d8d457aull, 0x47b181c4149b3c24ull, 0xd7de13694b99692cull, 0x4bf8237d26e3471aull, 49, 49, 7},
+    {"Random31", 0, 0, 0xa66add0a9d8d457aull, 0x14650fb0739d0383ull, 0xd7de13694b99692cull, 0x4bf8237d26e3471aull, 49, 0, 7},
+    {"Random31", 1, 1, 0x865ffa038adef631ull, 0x6170e48ffd9971a8ull, 0x3e69808e7cbdfee8ull, 0x82c196a406716d37ull, 49, 49, 7},
+    {"Random31", 1, 0, 0x865ffa038adef631ull, 0x14650fb0739d0383ull, 0x3e69808e7cbdfee8ull, 0x82c196a406716d37ull, 49, 0, 7},
     {"Random32", 0, 1, 0xb60b6c948bed15c6ull, 0xb9418d6c8a8019adull, 0x28c568aab096b3f4ull, 0x755402423c549e1full, 62, 62, 17},
     {"Random32", 0, 0, 0xb60b6c948bed15c6ull, 0x14650fb0739d0383ull, 0x28c568aab096b3f4ull, 0x755402423c549e1full, 62, 0, 17},
     {"Random32", 1, 1, 0x2bfd687e5d081a07ull, 0xb78e2496d66141b5ull, 0x31ca7f6e9e28a233ull, 0x5a042649fd309da3ull, 62, 62, 17},

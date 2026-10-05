@@ -1,0 +1,25 @@
+{
+  "synthetic": true,
+  "authored_for": "px-xside cross-side threshold pin (own script; no population source was sent)",
+  "export": {
+    "tool": "lab tv --no-note",
+    "channel": "ws-report-v1",
+    "chart": {
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "from": "2025-04-01",
+      "to": "2026-05-01"
+    },
+    "returned_range": {
+      "from": 1743514200000,
+      "to": 1777578300000
+    },
+    "range_proof": "covered",
+    "raw_frame_sha256": "37317253f8b01cc836e61c13a5361c22b247a2051cd6a815269dba85603d63ef",
+    "closed_trades": 18
+  },
+  "strategy_pine_sha256": "d2ee29831df620f70641bc38838c34188b3a8854ebeaaa712d3f630c0f6f8328",
+  "tv_trades_sha256": "7e5cc51bf837a751429792b86077f69dc0ff8b1fb73cbd8a4956bf6a242b0cf5",
+  "generated_by": "39545379 (pineforge-codegen-oss px-gate-main, v1.2.0)",
+  "prediction": "pred/pxside-rsp-stp-ctl-nc.pred.csv of the px-xside pin (written before the export)"
+}
