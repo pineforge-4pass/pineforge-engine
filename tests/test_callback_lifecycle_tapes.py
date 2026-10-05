@@ -26,6 +26,12 @@ clears each switch in turn and requires exactly the departures
 rule_off_departures.json records for it: the tapes that rule decides, and
 nothing else. That pins the rule-to-tape map and keeps every OFF branch run.
 
+The tapes the resting limit rule decides (rule_off_departures.json) are also
+replayed forward: strategy_stream_begin over their first bar, as a live run
+starts. Each is a calc_on_order_fills script, and a stream calculates on bar
+close only, so it must refuse with its documented reason: the rule has no
+forward half to depart from the backtest.
+
 pair-hold-reissue (no quantity grid, so the engine takes the entry/close
 pair-hold path) also has its book read after the pair's calculation: the
 long's stop, re-issued after strategy.close in that calculation, must still
@@ -49,6 +55,7 @@ RULES = (  # PineCallbackLifecycleRule values
     ("trail_points_mintick_tolerance", 0),
     ("declined_reversal_reissue_revives", 1),
     ("callback_limit_tick_reach", 2),
+    ("resting_limit_tick_reach", 3),
 )
 
 
@@ -158,11 +165,40 @@ def pair_hold_barrier(fixtures, lib, strategy_class, inputs_run_kwargs):
     return None
 
 
+# The rule whose tapes are replayed forward, and the reason a stream refuses them.
+FORWARD_RULE = "resting_limit_tick_reach"
+FORWARD_REFUSAL = "calc_on_order_fills is unsupported"
+
+
+def forward_refusals(fixtures, names, lib, strategy_class, load_bars):
+    failures = []
+    for name in names:
+        tape = fixtures / name
+        if "calc_on_order_fills=true" not in (tape / "strategy.pine").read_text():
+            failures.append(f"{name}: forward replay expects a calc_on_order_fills script")
+            continue
+        conf = json.loads((tape / "configuration.json").read_text())
+        prefix = "callback_lifecycle_" + re.sub(r"[^A-Za-z0-9_]", "_", name) + "__"
+        api = strategy_class(lib, prefix).lib
+        bars, _, _ = load_bars(tape / "bars.csv")
+        state = api.strategy_create(json.dumps(conf).encode())
+        try:
+            begun = api.strategy_stream_begin(state, bars, 1, conf["input_tf"].encode(),
+                                              conf["script_tf"].encode())
+            error = (api.strategy_get_last_error(state) or b"").decode()
+        finally:
+            api.strategy_free(state)
+        if begun != -1 or FORWARD_REFUSAL not in error:
+            failures.append(f"{name}: forward replay began ({begun}, {error!r}); "
+                            f"expected the stream to refuse it ({FORWARD_REFUSAL})")
+    return failures
+
+
 def main():
     fixtures, module, scripts = (Path(a).resolve() for a in sys.argv[1:4])
     record = "--record" in sys.argv[4:]
     sys.path.insert(0, str(scripts))
-    from run_strategy import Strategy, _check_abi, inputs_run_kwargs  # noqa: E402
+    from run_strategy import Strategy, _check_abi, _load_bars, inputs_run_kwargs  # noqa: E402
 
     class TapeStrategy(Strategy):
         def __init__(self, lib, prefix):  # noqa: super().__init__ loads a path
@@ -202,6 +238,16 @@ def main():
         failures.append(barrier)
     else:
         print("  pair-hold-reissue: the re-issued stop stays behind the pair's barrier")
+
+    forward = sorted(json.loads((fixtures / "rule_off_departures.json").read_text())
+                     .get(FORWARD_RULE, {}))
+    refused = forward_refusals(fixtures, forward, lib, TapeStrategy, _load_bars)
+    failures += refused
+    if forward and not refused:
+        print(f"  {FORWARD_RULE}: {len(forward)} tapes replayed forward, each refused by the "
+              f"stream ({FORWARD_REFUSAL})")
+    elif not forward:
+        failures.append(f"{FORWARD_RULE}: no tape to replay forward")
 
     recorded_path = fixtures / "rule_off_departures.json"
     recorded = {} if record else json.loads(recorded_path.read_text())

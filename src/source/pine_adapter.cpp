@@ -685,7 +685,7 @@ bool any_live_row(const std::vector<native_order::RequestHandle>& live,
 namespace detail {
 namespace {
 // The callback-lifecycle switches: process-wide like carry_bindings, and for the same reason.
-std::atomic<bool> callback_lifecycle_rules[kPineCallbackLifecycleRuleCount] = {true, true, true};
+std::atomic<bool> callback_lifecycle_rules[kPineCallbackLifecycleRuleCount] = {true, true, true, true};
 } // namespace
 void set_pine_callback_lifecycle_rule(PineCallbackLifecycleRule rule, bool on) noexcept {
     const int index = static_cast<int>(rule);
@@ -13542,19 +13542,62 @@ bool PineExecutionAdapter::armed_relative_legs_adoptable(
     return armed == expected && armed != 0;
 }
 
+namespace {
+// resting_limit_tick_reach's scope (exit_limit_trigger): an on-grid limit
+// under calc_on_order_fills rests at its tick-built threshold only here.
+bool resting_limit_tick_reach(const NativeStrategyHost* host, double threshold,
+                              bool exit_is_buy) noexcept {
+    if (!host || !detail::pine_callback_lifecycle_rule(
+                     detail::PineCallbackLifecycleRule::RestingLimitTickReach)) {
+        return false;
+    }
+    // The threshold sits half a tick toward the side the leg closes, so it
+    // holds only for the position held now: a leg placed for a parent not held
+    // on that side keeps the raw level, which reads the same from either side.
+    // Held the other way, the threshold would take the pending parent's side.
+    // Placed flat, the leg is re-armed at its parent's opening, where this is
+    // decided again with the side known.
+    const double held = detail::run_position(*host).signed_units;
+    if (held == 0.0 || (held < 0.0) != exit_is_buy) return false;
+    // Pinned on the chart path, as the in-flight reach is (exit()); a
+    // magnifier's intrabars keep the raw level.
+    const auto native = detail::run_state(*host);
+    if (native.spec && !native.spec->intrabar.is_none()) return false;
+    // A limit the point it is placed at already reaches is decided there by
+    // the raw level, as before. For a point that stands on the raw level the
+    // matcher books the level at that point, while a threshold the point has
+    // passed would wait for the next one. A point that is a fill booked at the
+    // print of a half-tick-short open is not on the raw path, which then never
+    // reaches the level; TradingView fills such a limit at once
+    // (callback_lifecycle repeated-rounded, its trades 18-19, recorded).
+    const auto* point = detail::callback_point(*host);
+    if (point && finite_positive(point->price)
+        && (exit_is_buy ? point->price <= threshold : point->price >= threshold)) {
+        return false;
+    }
+    return true;
+}
+} // namespace
+
 double PineExecutionAdapter::exit_limit_trigger(double limit_price, double tick,
                                                 bool exit_is_buy) const noexcept {
     // ab9714be pine_policy_members.cpp:11-17 + engine.hpp:1374-1381: an
     // exit limit is tested against the tick-quantized bar, so an ON-grid
     // level is reached by a raw extreme half a tick short of it (NYSE:F
-    // high 10.175 -> 10.18 fills a 10.18 sell limit).  Only the
-    // calc_on_order_fills scheduler compares the raw bar; there an
-    // on-grid level stays raw.
-    if (!finite_positive(tick)
-        || (config_.calc_on_order_fills && nearest_tick(limit_price, tick) == limit_price)) {
+    // high 10.175 -> 10.18 fills a 10.18 sell limit).  Under
+    // calc_on_order_fills an on-grid level stays raw, except for a limit
+    // left resting on the chart path that closes the position held when it
+    // is placed (resting_limit_tick_reach): a 9.73 sell limit born in the
+    // opening fill's recalculation fills on that bar, whose H of 9.725
+    // prints 9.73 (`lab tv` synthetics tests/fixtures/callback_lifecycle
+    // newborn-limit-*, NYSE:F 15m, 4 identical exports each).
+    if (!finite_positive(tick)) return limit_price;
+    const double threshold = source_trigger_threshold(limit_price, tick, exit_is_buy, true);
+    if (config_.calc_on_order_fills && nearest_tick(limit_price, tick) == limit_price
+        && !resting_limit_tick_reach(host_, threshold, exit_is_buy)) {
         return limit_price;
     }
-    return source_trigger_threshold(limit_price, tick, exit_is_buy, true);
+    return threshold;
 }
 
 double PineExecutionAdapter::one_shot_trail_trigger(double activation, double source_trail_offset,

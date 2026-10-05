@@ -561,14 +561,17 @@ constexpr std::uint64_t k_aggregated_magnifier[] = {
 //   5915100548425272856ull -> 13587797996549852114ull [W3B void exit]
 //   11981249830754474578ull -> 1889838128525352839ull [W3B void exit]
 //   5915100548425272856ull -> 13587797996549852114ull [W3B void exit]
+// expectation corrected (resting-limit tick reach, k_coof, 2 of 10 values), because a calc_on_order_fills limit exit that closes the position held when it is placed, on the chart path and not yet reached where it is placed, rests at its tick-built threshold (RestingLimitTickReach, src/compat/pine/callback_lifecycle_rules.hpp): the scenario's long exit limit rests at its threshold, a live request's trigger price the continuation folds; the run's trades are unchanged in every field; harvested with PINEFORGE_P1_HARVEST against main 44eab7b1 (every old pin reproduced) and this tree:
+//   17472516310728554491ull -> 15280150896568494531ull
+//   18115634141272427811ull -> 11950837235660036444ull
 constexpr std::uint64_t k_coof[] = {
     16820608513549156800ull,
     9462991605602344175ull,
     12220673217690837314ull,
     1326999487335470744ull,
     240263086577443158ull,
-    17472516310728554491ull,
-    18115634141272427811ull,
+    15280150896568494531ull,
+    11950837235660036444ull,
     13587797996549852114ull,
     1889838128525352839ull,
     13587797996549852114ull,

@@ -25,9 +25,16 @@ enum class PineCallbackLifecycleRule : int {
     // end of its in-flight leg only when that waypoint's tick-built print
     // does; the level itself stays raw (exit()'s in-flight remainder).
     CallbackLimitTickReach = 2,
+    // A limit exit under calc_on_order_fills that closes the position held
+    // when it is placed, on the chart path, and that its placement point does
+    // not already reach, rests at its half-tick threshold: a print half a
+    // tick short of an on-grid level reaches it (H 9.725 prints 9.73 and
+    // fills a 9.73 sell limit). Without the switch every on-grid level stays
+    // raw under calc_on_order_fills (exit_limit_trigger).
+    RestingLimitTickReach = 3,
 };
 
-inline constexpr int kPineCallbackLifecycleRuleCount = 3;
+inline constexpr int kPineCallbackLifecycleRuleCount = 4;
 
 void set_pine_callback_lifecycle_rule(PineCallbackLifecycleRule rule, bool on) noexcept;
 bool pine_callback_lifecycle_rule(PineCallbackLifecycleRule rule) noexcept;

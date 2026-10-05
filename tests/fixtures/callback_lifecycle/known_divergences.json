@@ -199,86 +199,6 @@
    10.14
   ]
  },
- "newborn-limit-cancel": {
-  "reason": "a calc_on_order_fills limit exit resting on the tick-built path: an on-grid 9.73 sell limit born in the opening fill's recalculation is reached by the bar's H of 9.725, which prints 9.73; the engine compares the raw bar under calc_on_order_fills. Not applied: the change moves frozen random-strategy witness digests on on-grid feeds",
-  "trade": 1,
-  "tv": [
-   "long",
-   1.0,
-   1743699600000,
-   1743699600000,
-   9.71,
-   9.73
-  ],
-  "engine": [
-   "long",
-   1.0,
-   1743699600000,
-   1743702300000,
-   9.71,
-   9.72
-  ]
- },
- "newborn-limit-owner-absent": {
-  "reason": "a calc_on_order_fills limit exit resting on the tick-built path: an on-grid 9.73 sell limit born in the opening fill's recalculation is reached by the bar's H of 9.725, which prints 9.73; the engine compares the raw bar under calc_on_order_fills. Not applied: the change moves frozen random-strategy witness digests on on-grid feeds",
-  "trade": 1,
-  "tv": [
-   "long",
-   1.0,
-   1743699600000,
-   1743699600000,
-   9.71,
-   9.73
-  ],
-  "engine": [
-   "long",
-   1.0,
-   1743699600000,
-   1743702300000,
-   9.71,
-   9.72
-  ]
- },
- "newborn-limit-replace": {
-  "reason": "a calc_on_order_fills limit exit resting on the tick-built path: an on-grid 9.73 sell limit born in the opening fill's recalculation is reached by the bar's H of 9.725, which prints 9.73; the engine compares the raw bar under calc_on_order_fills. Not applied: the change moves frozen random-strategy witness digests on on-grid feeds",
-  "trade": 1,
-  "tv": [
-   "long",
-   1.0,
-   1743699600000,
-   1743699600000,
-   9.71,
-   9.73
-  ],
-  "engine": [
-   "long",
-   1.0,
-   1743699600000,
-   1743702300000,
-   9.71,
-   9.72
-  ]
- },
- "newborn-limit-rounded": {
-  "reason": "a calc_on_order_fills limit exit resting on the tick-built path: an on-grid 9.73 sell limit born in the opening fill's recalculation is reached by the bar's H of 9.725, which prints 9.73; the engine compares the raw bar under calc_on_order_fills. Not applied: the change moves frozen random-strategy witness digests on on-grid feeds",
-  "trade": 1,
-  "tv": [
-   "long",
-   1.0,
-   1743699600000,
-   1743699600000,
-   9.71,
-   9.73
-  ],
-  "engine": [
-   "long",
-   1.0,
-   1743699600000,
-   1743702300000,
-   9.71,
-   9.72
-  ]
- },
  "repeated-raw": {
   "reason": "later residual of the repeated newborn-limit sensor after the tick-built reach rule; first 13 trades equal; unattributed",
   "trade": 14,
@@ -300,7 +220,7 @@
   ]
  },
  "repeated-rounded": {
-  "reason": "later residual of the repeated newborn-limit sensor after the tick-built reach rule (math.round_to_mintick levels); first 8 trades equal; unattributed",
+  "reason": "math.round_to_mintick(10.155) is 10.16 in TradingView (the sensor's goal); the engine's math runtime returns 10.15, as in long-high-rounded, so the short's exit limit rests a tick lower and fills at 10.15 on TradingView's exit bar; first 8 trades equal; outside the source adapter; later, TradingView trades 18-19: a short's exit limit born in the recalculation of its fill booked at the print of a half-tick-short open (9.485 prints 9.48) fills at once at 9.48 in TradingView, while the engine judges that print already reaching the limit, keeps its raw level, and the raw path never reaches it (the resting limit rule's placement-point term)",
   "trade": 9,
   "tv": [
    "short",
@@ -314,7 +234,7 @@
    "short",
    1.0,
    1743616800000,
-   1743618600000,
+   1743616800000,
    10.18,
    10.15
   ]
