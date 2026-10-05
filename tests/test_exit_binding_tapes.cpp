@@ -37,6 +37,11 @@
  * bar, stream_push_bar() for every later bar) and must close the same trades
  * as the backtest, bit for bit, with every switch on and with every switch
  * off.
+ *
+ * One mechanism case pins the engine's own rows (not TradingView's) on the
+ * tapes' bars, for a branch no tape reaches: the cap part judges an add once,
+ * at the opening after its call. An add kept there beside a close of its bar
+ * still rests when a later entry refills the cap, and fills.
  */
 
 #include <pineforge/bar.hpp>
@@ -307,11 +312,11 @@ bool same_row(const Row& w, const Trade& g) {
             <= 1e-9 * std::max(1e-9, std::abs(w.commission));
 }
 
-// Every row of the engine's report against the tape: the first departing
-// row (1-based), or 0 when the engine reproduces the tape.
-std::size_t first_departure(const Tape& tape, bool print) {
-    const std::vector<Row> want = tape_rows(tape.name);
-    const std::vector<Trade> got = run(tape);
+// Every row of the engine's report against the rows wanted (`label` says
+// whose rows they are): the first departing row (1-based), or 0 when the
+// engine books exactly those rows.
+std::size_t first_departure(const std::vector<Row>& want, const char* label,
+                            const std::vector<Trade>& got, bool print) {
     CHECK(!want.empty());
     std::size_t departs = 0;
     for (std::size_t i = 0; i < want.size() || i < got.size(); ++i) {
@@ -320,8 +325,8 @@ std::size_t first_departure(const Tape& tape, bool print) {
         if (print) {
             if (i < want.size()) {
                 const Row& w = want[i];
-                std::printf("    row %zu tape   %s->%s %" PRId64 "->%" PRId64 " %.10g->%.10g "
-                            "q=%.10g pnl=%.10g c=%.10g\n", i + 1, w.entry_id.c_str(),
+                std::printf("    row %zu %-6s %s->%s %" PRId64 "->%" PRId64 " %.10g->%.10g "
+                            "q=%.10g pnl=%.10g c=%.10g\n", i + 1, label, w.entry_id.c_str(),
                             w.exit_id.c_str(), w.entry_time, w.exit_time, w.entry_price,
                             w.exit_price, w.qty, w.pnl, w.commission);
             }
@@ -336,6 +341,13 @@ std::size_t first_departure(const Tape& tape, bool print) {
         break;
     }
     return departs;
+}
+
+// Every row of the engine's report against the tape: the first departing
+// row (1-based), or 0 when the engine reproduces the tape.
+std::size_t first_departure(const Tape& tape, bool print) {
+    const std::vector<Row> want = tape_rows(tape.name);
+    return first_departure(want, "tape", run(tape), print);
 }
 
 using source::detail::ExitBindingRuleSwitches;
@@ -461,28 +473,67 @@ Replay forward(const Tape& tape) {
     return out;
 }
 
-// One engine, two modes: the backtest and the forward stream close the same
-// trades, bit for bit, and leave the same position.
+// One engine, two modes: the backtest and the forward stream of `tape` close
+// the same trades, bit for bit, and leave the same position.
+bool forward_matches(const Tape& tape) {
+    const Replay a = backtest(tape);
+    const Replay b = forward(tape);
+    bool same = a.error.empty() && b.error.empty() && a.closed.size() == b.closed.size()
+        && same_bits(a.position, b.position);
+    for (std::size_t i = 0; same && i < a.closed.size(); ++i)
+        same = same_trade(a.closed[i], b.closed[i]);
+    if (!same) {
+        std::printf("    %s: backtest %zu trades%s, forward %zu trades%s\n", tape.name,
+                    a.closed.size(), a.error.empty() ? "" : (" " + a.error).c_str(),
+                    b.closed.size(), b.error.empty() ? "" : (" " + b.error).c_str());
+    }
+    return same;
+}
+
 void backtest_equals_forward(const char* label) {
     int identical = 0;
     for (const Tape& tape : kTapes) {
-        const Replay a = backtest(tape);
-        const Replay b = forward(tape);
-        bool same = a.error.empty() && b.error.empty() && a.closed.size() == b.closed.size()
-            && same_bits(a.position, b.position);
-        for (std::size_t i = 0; same && i < a.closed.size(); ++i)
-            same = same_trade(a.closed[i], b.closed[i]);
+        const bool same = forward_matches(tape);
         CHECK(same);
-        if (same) {
-            ++identical;
-        } else {
-            std::printf("    %s: backtest %zu trades%s, forward %zu trades%s\n", tape.name,
-                        a.closed.size(), a.error.empty() ? "" : (" " + a.error).c_str(),
-                        b.closed.size(), b.error.empty() ? "" : (" " + b.error).c_str());
-        }
+        if (same) ++identical;
     }
     std::printf("-- forward == backtest, %s: %d of %zu tapes\n", label, identical,
                 sizeof(kTapes) / sizeof(kTapes[0]));
+}
+
+// Mechanism case: engine rows, not TradingView's, on the tapes' bars, for a
+// branch no tape reaches. At pyramiding 1, with L1 held, the add L2 is called
+// at the cap and then L1 is closed, on the 17:15 bar. At the next opening the
+// position is flat, so the cap part keeps L2. A market L3 refills the cap at
+// 18:00; the cap part judges an add once, at the opening after its call, so
+// L2 still rests and fills at its limit on 2025-11-03 02:30 UTC. With the cap
+// part off the engine books the same rows.
+const Tape kCapAddJudgedOnce = {
+    "cap-add-judged-once", 100000.0, 1, 0.0, true, 0, 0.0, {
+        {1761871500000LL, {{Kind::Entry, "L1", "", true, 1.5217, kNaN, kNaN, "", 0ULL}}},
+        {1761930900000LL, {{Kind::Entry, "L2", "", true, 1.5213, 3804.3448485, kNaN, "", 0ULL},
+                           {Kind::Close, "L1", "", true, kNaN, kNaN, kNaN, "", 38654705683ULL}}},
+        {1761933600000LL, {{Kind::Entry, "L3", "", true, 1.0, kNaN, kNaN, "", 0ULL}}},
+        {1761940800000LL, {{Kind::CloseAll, "", "", true, kNaN, kNaN, kNaN, "", 0ULL}}},
+        {1762200000000LL, {{Kind::CloseAll, "", "", true, kNaN, kNaN, kNaN, "", 0ULL}}}}};
+
+const std::vector<Row> kCapAddJudgedOnceRows = {
+    {"L1", "Close entry(s) order L1", 1761871500000LL, 1761930900000LL, true, 3829.9, 3820.74,
+     1.5217, -13.938772, 0.0},
+    {"L3", "Close position order", 1761933600000LL, 1761940800000LL, true, 3827.08, 3886.86, 1.0,
+     59.78, 0.0},
+    {"L2", "Close position order", 1762137000000LL, 1762200000000LL, true, 3804.34, 3607.58,
+     1.5213, -299.330988, 0.0},
+};
+
+// The mechanism case under the switches set now: the engine books its rows,
+// and the forward stream closes the backtest's trades.
+void expect_cap_add_judged_once(const char* label) {
+    const std::vector<Trade> got = run(kCapAddJudgedOnce);
+    std::printf("-- %s, %s: %zu rows (engine rows, not a tape)\n", kCapAddJudgedOnce.name, label,
+                got.size());
+    CHECK(first_departure(kCapAddJudgedOnceRows, "pinned", got, true) == 0);
+    CHECK(forward_matches(kCapAddJudgedOnce));
 }
 
 }  // namespace
@@ -505,6 +556,12 @@ int main() {
     switches = every_part(false);
     expect_departing("every part off", kBeforeTheRules);
     backtest_equals_forward("every part off");
+
+    // The cap part judges an add once: with it on, and with it off.
+    switches = every_part(true);
+    expect_cap_add_judged_once("every part on");
+    switches.priced_add_at_cap_not_placed = false;
+    expect_cap_add_judged_once("cap part off");
     switches = ExitBindingRuleSwitches{};
 
     std::printf("%d passed, %d failed\n", tests_passed, tests_failed);

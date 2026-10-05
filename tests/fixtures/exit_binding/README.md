@@ -61,7 +61,9 @@ bar; a short-side cap, and a cap above 1. Open edges, which no tape decides:
 - an add at the cap that is marketable at its own close fills there before the cap part judges it,
   as it did before this rule (the pin's model never places it);
 - an add at the cap whose own bar's close frees the slot stays, as before: the cap part judges an add
-  once, at the next opening, and the pin's model rejects it at the call.
+  once, at the next opening, and the pin's model rejects it at the call. The test's mechanism case
+  `cap-add-judged-once` (engine rows on these bars, not a tape) pins that such an add still rests
+  and fills after a later entry refills the cap.
 
 ## Layout
 
