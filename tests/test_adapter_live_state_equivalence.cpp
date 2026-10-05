@@ -94,6 +94,52 @@ int checks = 0;
 constexpr double kNa = std::numeric_limits<double>::quiet_NaN();
 constexpr std::int64_t T0 = 1736121600000LL;
 
+void placement_visit_checks() {
+    source::PlacementTable table;
+    const auto compare = [&] {
+        std::vector<std::pair<std::uint64_t, const source::PlacementSnapshot*>> expected;
+        const source::PlacementTable& rows = table;
+        for (const auto& row : rows) expected.emplace_back(row.first, &row.second);
+        std::vector<std::pair<std::uint64_t, const source::PlacementSnapshot*>> visited;
+        rows.visit_rows([&](std::uint64_t incarnation, const auto& snapshot) {
+            static_assert(std::is_const_v<std::remove_reference_t<decltype(snapshot)>>);
+            CHECK(snapshot.command_sequence == incarnation);
+            visited.emplace_back(incarnation, &snapshot);
+            return false;
+        });
+        CHECK(visited == expected);
+        for (std::size_t limit = 1; limit <= expected.size(); ++limit) {
+            visited.clear();
+            rows.visit_rows([&](std::uint64_t incarnation, const auto& snapshot) {
+                visited.emplace_back(incarnation, &snapshot);
+                return visited.size() == limit;
+            });
+            CHECK(visited.size() == limit);
+            CHECK(std::equal(visited.begin(), visited.end(), expected.begin()));
+        }
+    };
+    compare();
+    for (std::uint64_t incarnation = 1; incarnation <= 128; ++incarnation) {
+        source::PlacementSnapshot snapshot;
+        snapshot.command_sequence = incarnation;
+        table.try_emplace(incarnation, std::move(snapshot));
+    }
+    compare();
+    for (std::uint64_t incarnation = 1; incarnation <= 128; ++incarnation) {
+        if (incarnation != 1 && incarnation != 17 && incarnation != 65
+            && incarnation != 89 && incarnation != 128) table.erase(incarnation);
+    }
+    compare();
+    table.compact();
+    compare();
+    table.erase(17);
+    table.erase(65);
+    table.compact();
+    compare();
+    table.clear();
+    compare();
+}
+
 struct Rng {
     std::uint64_t state;
     explicit Rng(std::uint64_t seed)
@@ -1153,6 +1199,7 @@ int main(int argc, char** argv) {
     std::printf("};\n");
     return 0;
 #else
+    placement_visit_checks();
     CHECK(std::size(kTranscriptDigests) == battery.size());
     long commands = 0;
     long trades = 0;
