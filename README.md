@@ -222,6 +222,10 @@ the [native runner guide](runner/README.md) for feed modes, symbol metadata,
 feed format, recovery and execution limitations. The existing validation
 scoreboard below describes batch backtests; it does not certify new native
 live behavior or real broker fills.
+Receipt-based confirmed-bar admission is limited to the
+[proven same-chart requests and standalone close-only varip](docs/strategy-capabilities.md#confirmed-bar-extension).
+`process_orders_on_close=true` remains refused for every order shape and
+composition, before any ledger exists.
 Known issue (v1.0.0, v1.0.1): a stream whose input and script timeframes are
 equal serves stale `request.security` values after the first realtime bar.
 Fixed in 1.1.0 (#325). See

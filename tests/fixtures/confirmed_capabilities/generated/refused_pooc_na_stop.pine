@@ -1,0 +1,4 @@
+//@version=6
+strategy("nullable closing entries", process_orders_on_close=true)
+strategy.entry("L", strategy.long, stop=na)
+strategy.entry("S", strategy.short, stop=low)

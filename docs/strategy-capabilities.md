@@ -97,7 +97,8 @@ the emitter's registration decisions, not symbol-text inference. Inputs or
 mutable clocks remain unresolved. The runner checks agreement between both
 receipts and fails closed on malformed fields or missing proofs. An unknown optional
 confirmed-bar version is ignored: ordinary strategies retain their original
-eligibility, while requests, POOC and varip still require a recognized proof.
+eligibility, while requests and varip still require a recognized proof.
+POOC remains refused regardless of the optional receipt.
 
 New admission requires confirmed one-minute bars, UTC/24x7 source settings,
 no external native configuration, and the following exact proof population:
@@ -117,24 +118,17 @@ single-literal-call helper resolve to these same clocks. A Heikin-Ashi alias
 keeps the registration's transformation flag. Symbol `""` currently lowers
 through a foreign feed and is therefore refused, not mislabeled as chart data.
 
-POOC admits only these sorted order-family sets on script clock `1`:
-`[entry:market]`, `[entry:stop]`, `[entry:limit]`,
-`[entry:market, exit:short_bracket]`, and `[close:market, entry:market]`.
-Market closes have long and short close-all and entry-bound proofs. The five-minute both-sided-stop report is
-batch-equivalent, but its physical action timestamps are not; that clock stays refused.
-Stop-limit/OCA entries, trailing/relative/partial exits, long brackets,
-`strategy.order`, risk rules, cancellation, immediate closes and any call or
-argument outside the modeled allowlist remain refused by name. Explicit entry
-quantities, alert/comment arguments and exit OCA names are not modeled.
-POOC settings match literal proof profiles, without inferring Pine defaults:
-market, stop, limit and market-close sets require omitted account/sizing/slippage
-settings. Short brackets require exactly fixed quantity 1 and explicit percent
-commission 0. The separate market-only profile requires exactly explicit
-100%-equity sizing and 15-tick slippage. Partial profiles, extra otherwise-default
-settings and order-affecting runtime overrides are refused.
-Two requests together, request-plus-varip and POOC-plus-varip are refused.
-The sole request-plus-POOC proof is SMA(close,4) at `15` with market entries;
-other cross-category compositions are refused rather than inferred.
+`process_orders_on_close=true` remains refused by name for every order shape,
+including market-only entries, priced entries, short brackets, market closes
+and request-plus-POOC compositions. CLI overrides cannot erase that compiled
+declaration. Nullable price legs, brackets issued with their entry, and empty
+entry identifiers need a systematic proof before any POOC admission.
+The exact order-family-set matcher and POOC batch/stream rows remain in-tree
+as evidence for future admission, not admitted shapes. Their runner E2Es
+assert refusal before any ledger, control directory or status file exists.
+The receipt's modeled call/argument allowlist remains metadata, not a runtime
+certificate for nullable prices or pending/global exits.
+Two requests together and request-plus-varip are also refused.
 Close-only `varip` is admitted on script clock `1`, never observed ticks.
 Every admitted source has a generated C++ batch/stream equivalence row and a
 runner E2E comparing physical actions and every ABI report field bitwise on a
@@ -151,7 +145,7 @@ original runner/library for that ledger, or create a new deployment and ledger.
 | --- | --- | --- |
 | Old | Original receipt or new dual receipts | Original policy; extra symbols ignored |
 | New | Original receipt only | Original request/POOC/varip refusals preserved |
-| New | Both version-1 receipts | Only the proven table and order shapes admitted |
+| New | Both version-1 receipts | Only the proven request table and standalone close-only varip admitted; POOC refused |
 | Either | No capability receipt | Existing warning and legacy behavior retained |
 
 The additional receipt is hashed as `SHA256(previous_identity +

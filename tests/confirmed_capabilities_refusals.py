@@ -15,14 +15,18 @@ def main():
         feed.write_text("")
         for index, argument in enumerate(libraries):
             name, library = argument.split("=", 1)
-            declaration = "process_orders_on_close" if name.startswith("refused_pooc_") else "request.security"
-            contexts = [("bars", "1", [])] if name.startswith("refused_") else [("ticks", "1", [])]
+            pooc = name.startswith(("pooc_", "refused_pooc_")) or name == "htf15_sma_pooc"
+            declaration = "process_orders_on_close" if pooc else "request.security"
+            contexts = [("bars", "1", [])] if name.startswith("refused_") or pooc else [("ticks", "1", [])]
             if not name.startswith("refused_"):
+                if pooc:
+                    contexts.append(("ticks", "1", []))
                 contexts.extend(("bars", "1", options) for options in (
                     ["--timezone", "Asia/Taipei"], ["--chart-timezone", "America/New_York"],
                     ["--session", "0930-1600"]))
-            if name.startswith("pooc_"):
-                contexts.append(("bars", "1", ["--override", "slippage=1"]))
+            if pooc:
+                contexts.extend(("bars", "1", ["--override", setting]) for setting in (
+                    "slippage=1", "process_orders_on_close=false", "process_orders_on_close=true"))
             if name == "pooc_dual_stop":
                 contexts.append(("bars", "5", []))
             if name == "varip":
@@ -31,7 +35,7 @@ def main():
                 if name == "varip":
                     declaration = "intrabar_persistence"
                 elif not name.startswith("refused_"):
-                    declaration = "process_orders_on_close" if name.startswith("pooc_") else "request.security"
+                    declaration = "process_orders_on_close" if pooc else "request.security"
                 ledger = root / f"{index}-{context_index}.sqlite"
                 controls = root / f"{index}-{context_index}.control"
                 health = root / f"{index}-{context_index}.status"

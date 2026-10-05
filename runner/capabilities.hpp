@@ -26,6 +26,15 @@ inline void require_close_only_boolean(const std::string& name, bool enabled) {
                                      name + policy.reason);
 }
 
+inline bool matches_pooc_evidence_set(const Json& orders) {
+    if (orders.kind != Json::Kind::Array)
+        return false;
+    const auto serialized = orders.dump();
+    return serialized == R"(["entry:market"])" || serialized == R"(["entry:stop"])" ||
+           serialized == R"(["entry:limit"])" || serialized == R"(["entry:market","exit:short_bracket"])" ||
+           serialized == R"(["close:market","entry:market"])";
+}
+
 inline void require_close_only_capabilities(const std::string& receipt,
                                             const std::string& confirmed_receipt,
                                             const std::string& mode,
@@ -61,6 +70,10 @@ inline void require_close_only_capabilities(const std::string& receipt,
                               "use_bar_magnifier", "fill_orders_on_standard_ohlc",
                               "backtest_fill_limits_assumption", "currency", "timeframe",
                               "timeframe_gaps", "dynamic_requests", "calc_on_every_history_tick"});
+    const auto& pooc_declaration = declarations.at("process_orders_on_close");
+    if (pooc_declaration.kind != Json::Kind::Bool)
+        refuse("process_orders_on_close");
+    require_close_only_boolean("process_orders_on_close", pooc_declaration.value == "true");
     const auto& requests = document.at("requests");
     if (requests.kind != Json::Kind::Array)
         refuse("request.security metadata");
@@ -110,12 +123,9 @@ inline void require_close_only_capabilities(const std::string& receipt,
     }
     if (has_confirmed && request_index != confirmed.at("requests").items.size())
         refuse("request.security (receipt count disagreement)");
-    const bool pooc = declarations.at("process_orders_on_close").value == "true";
     const bool intrabar = document.at("requirements").at("intrabar_persistence").value == "true";
     if (requests.items.size() > 1 || (!requests.items.empty() && intrabar))
-        refuse(pooc ? "process_orders_on_close (unproven composition)" : "request.security (unproven composition)");
-    if (pooc && intrabar)
-        refuse("process_orders_on_close + intrabar_persistence (unproven composition)");
+        refuse("request.security (unproven composition)");
     const auto& unresolved = document.at("unresolved");
     if (unresolved.kind != Json::Kind::Array)
         refuse("unresolved execution requirements");
@@ -128,33 +138,7 @@ inline void require_close_only_capabilities(const std::string& receipt,
         const auto& value = declarations.at(policy.name);
         if (value.kind != Json::Kind::Bool)
             refuse(policy.name);
-        if (std::string(policy.name) == "process_orders_on_close" && value.value == "true" && has_confirmed) {
-            if (mode != "bars" || input_tf != "1" || !proven_calendar)
-                refuse("process_orders_on_close (confirmed one-minute bars required)");
-            if (confirmed.at("orders").items.empty())
-                refuse("process_orders_on_close (no proven order shape)");
-            for (const auto& order : confirmed.at("orders").items) {
-                if (order.kind != Json::Kind::String ||
-                    (order.value != "entry:market" && order.value != "entry:stop" &&
-                     order.value != "entry:limit" && order.value != "exit:short_bracket" && order.value != "close:market"))
-                    refuse("process_orders_on_close: " + order.value);
-                if (script_tf != "1")
-                    refuse("process_orders_on_close (unproven chart clock)");
-            }
-            const auto orders = confirmed.at("orders").dump();
-            if (orders != R"(["entry:market"])" && orders != R"(["entry:stop"])" &&
-                orders != R"(["entry:limit"])" && orders != R"(["entry:market","exit:short_bracket"])" &&
-                orders != R"(["close:market","entry:market"])")
-                refuse("process_orders_on_close (unproven order-family set: " + orders + ")");
-            if (!requests.items.empty()) {
-                const auto& request = confirmed.at("requests").items.front();
-                if (orders != R"(["entry:market"])" || request.at("timeframe").value != "15" ||
-                    request.at("expression").value != "ta.sma(close,4)")
-                    refuse("process_orders_on_close + request.security (unproven composition)");
-            }
-        } else {
-            require_close_only_boolean(policy.name, value.value == "true");
-        }
+        require_close_only_boolean(policy.name, value.value == "true");
     }
     const auto& assumption = declarations.at("backtest_fill_limits_assumption");
     if (assumption.kind != Json::Kind::Number || assumption.value != "0")

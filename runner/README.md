@@ -471,13 +471,15 @@ overrides and unresolved execution requirements. A new optional confirmed-bar
 receipt admits only the [proven shape table](../docs/strategy-capabilities.md#confirmed-bar-extension)
 for confirmed one-minute input, UTC/24x7 source settings: same-chart security
 close at 5/60/D, SMA(4) at 15, EMA(3) with gaps at 60, previous close at
-`timeframe.period`, and Heikin-Ashi close at 5; proven market/stop/limit POOC
-entries, short brackets and market closes; and close-only `varip`. Only the
+`timeframe.period`, and Heikin-Ashi close at 5; and standalone close-only `varip`. Only the
 explicitly tested script-clock controls are admitted. Constant timeframes,
 a single-literal-call helper and a Heikin-Ashi alias use the actual lowering
 metadata. Observed ticks, other clocks/expressions/merge policies, foreign feeds
 (including symbol `""`), lower-timeframe arrays and unpinned requests remain
-refused by name before any ledger exists. CLI overrides cannot enable POOC.
+refused by name before any ledger exists. `process_orders_on_close=true` is
+refused for every order shape, including request-plus-POOC compositions.
+Retained POOC equivalence rows are evidence for future admission, not admitted
+shapes. CLI overrides cannot enable POOC or erase its compiled declaration.
 Libraries with only the original receipt keep their previous request, POOC and
 varip refusals. A library without any receipt still warns and runs; that
 compatibility path does not prove eligibility.

@@ -260,7 +260,7 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
         target_compile_features(test_confirmed_capabilities PRIVATE cxx_std_17)
         target_compile_options(test_confirmed_capabilities PRIVATE -UNDEBUG)
         add_test(NAME confirmed_capabilities_policy COMMAND test_confirmed_capabilities)
-        set(_pf_confirmed_cases htf5_close htf5_close_active htf15_sma_pooc htf60_close daily_close heikinashi5
+        set(_pf_confirmed_cases htf5_close htf5_close_active htf15_sma htf15_sma_pooc htf60_close daily_close heikinashi5
             htf60_ema_gaps period_previous pooc_dual_stop pooc_limit_reversal pooc_slipped_short
             pooc_short_exit constant_daily helper5 heikinashi_alias5 varip pooc_market pooc_close pooc_close_entry
             pooc_close_short pooc_close_short_entry)
@@ -307,10 +307,17 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
             $<TARGET_FILE:confirmed_receipt_ordinary> $<TARGET_FILE:confirmed_receipt_request>
             $<TARGET_FILE:confirmed_receipt_pooc> $<TARGET_FILE:confirmed_receipt_missing>)
         foreach(confirmed_case IN LISTS _pf_confirmed_cases)
-            add_test(NAME confirmed_capabilities_${confirmed_case}_e2e COMMAND ${Python3_EXECUTABLE}
-                ${PROJECT_SOURCE_DIR}/tests/confirmed_capabilities_e2e.py $<TARGET_FILE:pineforge-live>
-                $<TARGET_FILE:native_live_report_oracle> ${confirmed_case} $<TARGET_FILE:confirmed_${confirmed_case}>)
-            set_tests_properties(confirmed_capabilities_${confirmed_case}_e2e PROPERTIES TIMEOUT 900)
+            if(confirmed_case MATCHES "^pooc_" OR confirmed_case STREQUAL "htf15_sma_pooc")
+                add_test(NAME confirmed_capabilities_${confirmed_case}_refusal_e2e COMMAND ${Python3_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/tests/confirmed_capabilities_refusals.py $<TARGET_FILE:pineforge-live>
+                    "${confirmed_case}=$<TARGET_FILE:confirmed_${confirmed_case}>")
+                set_tests_properties(confirmed_capabilities_${confirmed_case}_refusal_e2e PROPERTIES TIMEOUT 180)
+            else()
+                add_test(NAME confirmed_capabilities_${confirmed_case}_e2e COMMAND ${Python3_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/tests/confirmed_capabilities_e2e.py $<TARGET_FILE:pineforge-live>
+                    $<TARGET_FILE:native_live_report_oracle> ${confirmed_case} $<TARGET_FILE:confirmed_${confirmed_case}>)
+                set_tests_properties(confirmed_capabilities_${confirmed_case}_e2e PROPERTIES TIMEOUT 900)
+            endif()
             add_executable(test_confirmed_equivalence_${confirmed_case}
                 ${PROJECT_SOURCE_DIR}/tests/test_stream_security_equivalence.cpp
                 ${PROJECT_SOURCE_DIR}/tests/fixtures/confirmed_capabilities/generated/${confirmed_case}.cpp)
@@ -318,6 +325,9 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
             target_compile_options(test_confirmed_equivalence_${confirmed_case} PRIVATE -UNDEBUG -ffp-contract=off)
             target_compile_definitions(test_confirmed_equivalence_${confirmed_case} PRIVATE PINEFORGE_SECURITY_CASE="${confirmed_case}")
             add_test(NAME confirmed_capabilities_${confirmed_case}_equivalence COMMAND test_confirmed_equivalence_${confirmed_case} 1 500)
+            if(confirmed_case MATCHES "^pooc_" OR confirmed_case STREQUAL "htf15_sma_pooc")
+                set_tests_properties(confirmed_capabilities_${confirmed_case}_equivalence PROPERTIES LABELS "future_admission")
+            endif()
         endforeach()
         foreach(confirmed_control htf5_close_active htf60_close)
             if(confirmed_control STREQUAL "htf60_close")

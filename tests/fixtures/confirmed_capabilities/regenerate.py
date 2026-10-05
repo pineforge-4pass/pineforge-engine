@@ -19,6 +19,8 @@ def sources():
     fixtures = Path(__file__).resolve().parent.parent
     result = {name: (fixtures / "stream_security" / name / "strategy.pine").read_text()
               for name in PROVEN}
+    result["htf15_sma"] = result["htf15_sma_pooc"].replace(
+        ", process_orders_on_close=true", "")
     result["htf5_close_active"] = result["htf5_close"].replace(
         "ta.crossover(close, h)", "ta.crossover(h, ta.sma(h, 3))").replace(
         "ta.crossunder(close, h)", "ta.crossunder(h, ta.sma(h, 3))")
@@ -112,6 +114,28 @@ def sources():
         'commission_type=strategy.commission.percent, commission_value=0', '')
     result["refused_pooc_partial_bracket_profile"] = result["pooc_short_exit"].replace(
         ', commission_type=strategy.commission.percent, commission_value=0', '')
+    pooc_header = '//@version=6\nstrategy("nullable closing entries", process_orders_on_close=true)\n'
+    result["refused_pooc_na_stop"] = (pooc_header +
+        'strategy.entry("L", strategy.long, stop=na)\n'
+        'strategy.entry("S", strategy.short, stop=low)\n')
+    result["refused_pooc_na_limit"] = (pooc_header +
+        'strategy.entry("L", strategy.long, limit=na)\n'
+        'strategy.entry("S", strategy.short, limit=high)\n')
+    result["refused_pooc_na_stop_series"] = (pooc_header +
+        'var float price = na\nif bar_index > 40\n    price := high\n'
+        'strategy.entry("L", strategy.long, stop=price)\n')
+    bracket_header = ('//@version=6\nstrategy("closing bracket boundaries", process_orders_on_close=true, '
+        'default_qty_type=strategy.fixed, default_qty_value=1, '
+        'commission_type=strategy.commission.percent, commission_value=0)\n')
+    result["refused_pooc_na_bracket"] = (bracket_header +
+        'strategy.entry("S", strategy.short)\n'
+        'strategy.exit("X", "S", stop=bar_index % 3 == 0 ? na : high, '
+        'limit=bar_index % 3 == 1 ? low : na)\n')
+    result["refused_pooc_pending_market_bracket"] = (bracket_header +
+        'strategy.entry("S", strategy.short)\nstrategy.exit("X", "S", stop=high, limit=low)\n')
+    result["refused_pooc_empty_entry_id"] = (bracket_header +
+        'strategy.entry("", strategy.short)\nstrategy.entry("S2", strategy.short)\n'
+        'strategy.exit("X", "", stop=high, limit=low)\n')
     return result
 
 

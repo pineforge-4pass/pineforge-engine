@@ -73,6 +73,25 @@ int main() {
     ha_base.members["requests"].items[0].members["heikinashi"] = Json::boolean(true);
     ha_proof.members["requests"].items[0].members["heikinashi"] = Json::boolean(true);
     refused(ha_base, ha_proof, "request.security", "bars", "1", "5");
+    for (const auto& clock : {"15", "60", "D", "timeframe.period"}) {
+        ha_base.members["requests"].items[0].members["timeframe"] = Json::string(clock);
+        ha_proof.members["requests"].items[0].members["timeframe"] = Json::string(clock);
+        ha_proof.members["requests"].items[0].members["expression"] = Json::string(
+            std::string(clock) == "15" ? "ta.sma(close,4)" :
+            std::string(clock) == "timeframe.period" ? "close[1]" : "close");
+        refused(ha_base, ha_proof, "request.security");
+    }
+    ha_base.members["requests"].items[0].members["timeframe"] = Json::string("60");
+    ha_proof.members["requests"].items[0].members["timeframe"] = Json::string("60");
+    ha_base.members["requests"].items[0].members["gaps"] = Json::string("barmerge.gaps_on");
+    ha_proof.members["requests"].items[0].members["gaps"] = Json::string("barmerge.gaps_on");
+    ha_proof.members["requests"].items[0].members["expression"] = Json::string("ta.ema(close,3)");
+    refused(ha_base, ha_proof, "request.security");
+    auto persistent_request_base = legacy;
+    auto persistent_request_proof = confirmed;
+    persistent_request_base.members["requirements"].members["intrabar_persistence"] = Json::boolean(true);
+    persistent_request_proof.members["intrabar_persistence"] = Json::boolean(true);
+    refused(persistent_request_base, persistent_request_proof, "unproven composition");
     auto multiple_base = legacy;
     auto multiple_proof = confirmed;
     multiple_base.members["requests"].items.push_back(multiple_base.at("requests").items.front());
@@ -93,8 +112,8 @@ int main() {
         for (std::size_t index = 0; index < families.size(); ++index)
             if (mask & (1u << index)) confirmed.members["orders"].items.push_back(Json::string(families[index]));
         const bool proven = mask == 2 || mask == 4 || mask == 8 || mask == 5 || mask == 20;
-        if (proven) admitted(legacy, confirmed);
-        else refused(legacy, confirmed, "unproven order-family set");
+        assert(matches_pooc_evidence_set(confirmed.at("orders")) == proven);
+        refused(legacy, confirmed, "process_orders_on_close");
     }
     confirmed.members["orders"].items = {Json::string("entry:market")};
     refused(legacy, confirmed, "process_orders_on_close", "bars", "1", "1", false);
@@ -106,7 +125,7 @@ int main() {
     confirmed.members["orders"].items.clear();
     refused(legacy, confirmed, "process_orders_on_close");
     confirmed.members["orders"].items = {Json::string("strategy.entry (unproven order shape)")};
-    refused(legacy, confirmed, "strategy.entry");
+    refused(legacy, confirmed, "process_orders_on_close");
     legacy.members["declarations"].members["process_orders_on_close"] = Json::boolean(false);
     legacy.members["requirements"].members["intrabar_persistence"] = Json::boolean(true);
     confirmed.members["intrabar_persistence"] = Json::boolean(true);
@@ -116,6 +135,6 @@ int main() {
     refused(legacy, confirmed, "intrabar_persistence", "bars", "1", "5");
     refused(legacy, confirmed, "intrabar_persistence", "bars", "1", "1", false);
     legacy.members["declarations"].members["process_orders_on_close"] = Json::boolean(true);
-    refused(legacy, confirmed, "unproven composition");
-    std::cout << "confirmed capability policy: exact five sets, mixed request matrix, calendar and composition refusals=" << refusals << " PASS\n";
+    refused(legacy, confirmed, "process_orders_on_close");
+    std::cout << "confirmed capability policy: blanket POOC refusal, five retained evidence sets, mixed request matrix, calendar and composition refusals=" << refusals << " PASS\n";
 }

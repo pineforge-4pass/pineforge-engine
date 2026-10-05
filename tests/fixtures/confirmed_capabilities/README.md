@@ -19,8 +19,12 @@ equivalence row and a runner tape E2E that compares all ABI report fields and
 physically ordered actions, bitwise for binary64, at warmup boundaries 30, 33,
 500 (and 1500 for daily requests) and
 after replay. The script-clock controls repeat the proven 5 and 15 minute cases.
-POOC on a five-minute script clock stays refused because equal reports do not
-establish equal physical action timestamps.
+The non-POOC `htf15_sma` fixture independently proves the admitted 15-minute
+SMA request. Every POOC runner E2E is a refusal test: POOC remains refused on
+every script clock, regardless of its order set or request composition.
+POOC engine-level equivalence rows carry the `future_admission` CTest label:
+evidence for future admission, not admitted shapes. They do not establish
+general parity for nullable price legs, same-calculation brackets or global exits.
 
 Refusal snapshots cover unproven clocks, foreign and empty-symbol feeds,
 lookahead, gaps, expressions, runtime timeframes, stop-limit/OCA-style orders,
@@ -33,11 +37,13 @@ retain only the old receipt: their unchanged E2E proves that a new runner still
 refuses old-library requests, POOC and varip, and still warns/runs a library
 without any capability receipt.
 
-Admission matches exactly five order-family sets, not arbitrary combinations.
+The exact five-order-set matcher remains tested without authorizing POOC.
 Refusal fixtures also cover all six risk rules, unmodeled call arguments,
 pending priced-entry brackets, mixed priced entries, priced closes, unproven
 sizing/slippage/account settings and cross-category compositions. Closing a
-short has both close-all and entry-bound positive fixtures. Calendar refusal
+short has both close-all and entry-bound future-evidence fixtures. Refusal
+fixtures also pin literal and series `na` entry prices, nullable bracket legs,
+same-calculation market brackets and empty entry identifiers. Calendar refusal
 contexts cover source timezone, chart timezone and session; script-five varip
 and order-affecting POOC overrides stay refused. Optional receipt-version
 fixtures pin ordinary fallback and fail-closed request/POOC/missing-version paths.

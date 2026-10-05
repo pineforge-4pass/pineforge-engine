@@ -1,0 +1,6 @@
+//@version=6
+strategy("nullable closing entries", process_orders_on_close=true)
+var float price = na
+if bar_index > 40
+    price := high
+strategy.entry("L", strategy.long, stop=price)
