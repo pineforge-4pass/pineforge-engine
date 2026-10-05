@@ -463,36 +463,38 @@ The capability extension and receipt-based runner admission are available
 **since 1.2.0**.
 Before beginning execution or binding the ledger, the runner refuses compiled
 `calc_on_every_tick=true`, `calc_on_order_fills=true`, `calc_on_every_history_tick=true`,
-`process_orders_on_close=true` (including CLI overrides on version-1 libraries), `use_bar_magnifier=true`,
+`use_bar_magnifier=true`,
 `fill_orders_on_standard_ohlc=true`, and nonzero `backtest_fill_limits_assumption`.
 It also refuses declaration-owned clocks, account-currency conversion/FX curves,
 auxiliary/native security feeds, recorded request series, historical probe/tail
-overrides, `varip` intrabar persistence and unresolved execution requirements.
-Every nonempty `requests` array is refused, including same-chart
-`request.security`, `request.security_lower_tf`, recorded requests and sites
-lowered to unpinned runtime errors. The error names the request kind and says
-"the native stream does not yet reproduce the batch for requested series".
-For receipt-carrying libraries, `pineforge-live` refuses every request whatever
-the input and script timeframes. A legacy library without a capabilities receipt
-warns and runs, including its requests; that compatibility path does not prove
-eligibility. The larger-script-timeframe workaround in the
-[streaming known issue](../docs/pages/streaming.md#streaming_known_issues) matters
-only for direct stream-API hosts and legacy libraries without a receipt running
-the affected v1.0.0/v1.0.1 runtime. The issue is fixed in 1.1.0 (#325): confirmed-bar
-streams now match batch for the tested same-chart `request.security` shapes,
-including `timeframe.period` with `close[1]`, higher-timeframe close/SMA/EMA,
-`gaps_on`, and higher-timeframe Heikin-Ashi chart-symbol requests. This does not
-claim parity for foreign/auxiliary requests, lower-timeframe arrays or future
-look-ahead information. Receipt-carrying libraries still refuse every request;
-relaxing that admission policy is a separate follow-up.
+overrides and unresolved execution requirements. A new optional confirmed-bar
+receipt (unreleased; after 1.2.0) admits only the [proven shape table](../docs/strategy-capabilities.md#confirmed-bar-extension)
+for confirmed one-minute input, UTC/24x7 source settings: same-chart security
+close at 5/60/D, SMA(4) at 15, EMA(3) with gaps at 60, previous close at
+`timeframe.period`, and Heikin-Ashi close at 5; and standalone close-only `varip`. Only the
+explicitly tested script-clock controls are admitted. Constant timeframes,
+a single-literal-call helper and a Heikin-Ashi alias use the actual lowering
+metadata. Observed ticks, other clocks/expressions/merge policies, foreign feeds
+(including symbol `""`), lower-timeframe arrays and unpinned requests remain
+refused by name before any ledger exists. `process_orders_on_close=true` is
+refused for every order shape, including request-plus-POOC compositions.
+Retained POOC equivalence rows are evidence for future admission, not admitted
+shapes. CLI overrides cannot enable POOC or erase its compiled declaration.
+Libraries with only the original receipt keep their previous request, POOC and
+varip refusals. A library without any receipt still warns and runs; that
+compatibility path does not prove eligibility.
+The larger-script-timeframe workaround in the
+[streaming known issue](../docs/pages/streaming.md#streaming_known_issues) applies
+only to direct stream-API hosts and legacy libraries without a receipt running
+the affected v1.0.0/v1.0.1 runtime. The issue is fixed in 1.1.0 (#325); its tested
+same-chart confirmed-bar shapes underpin the proven table, not a parity claim
+for foreign/auxiliary requests, lower-timeframe arrays or future look-ahead data.
 The error otherwise names the declaration or requirement.
 An override cannot erase an unsupported compiled declaration.
 
-The receipt proves declarations only, not arbitrary batch-versus-stream
-equivalence. The conservative POOC refusal remains even though confirmed-bar
-priced-entry fill attribution is fixed since 1.1.0 (#325). Plain market-order strategies with no POOC or requests have
-generated-library batch-versus-stream equivalence CTests. No request or POOC
-shape is admitted until a separate equivalence test proves it. Uses of
+The receipt does not prove arbitrary batch-versus-stream equivalence. Each
+admitted shape has a generated-library batch/stream row and a runner tape E2E
+comparing actions and every cumulative report field, including recovery. Uses of
 `barstate.isrealtime` and `timenow` are conservatively refused by name: generated
 code reads `false` and the current bar timestamp, respectively, in both warmup
 and realtime, not Pine's live phase or wall clock. `barstate.islast`,
@@ -512,7 +514,7 @@ wrapping, and emitted as
 
 Confirmed-bar stream fixes also close the earlier default-sized both-sided stop
 discrepancy (the historical audit measured batch 276 versus stream 277 trades).
-POOC and all request shapes remain refused by this receipt policy; the runtime's
+POOC and all request shapes remain refused by the original-only receipt policy; the runtime's
 new equivalence tests do not automatically widen runner admission. See
 [Backtest vs live](../docs/pages/streaming.md#backtest_vs_live) for deliberate
 historical look-ahead differences and the remaining deferred calendar-boundary

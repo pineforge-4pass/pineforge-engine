@@ -1,0 +1,6 @@
+//@version=6
+strategy("closing close", process_orders_on_close=true, default_qty_type=strategy.fixed, default_qty_value=1)
+if bar_index % 7 == 0
+    strategy.entry("long", strategy.long)
+if bar_index % 7 == 3
+    strategy.close_all()

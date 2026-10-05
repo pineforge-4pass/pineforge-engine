@@ -1,0 +1,4 @@
+//@version=6
+strategy("unproven closing", process_orders_on_close=true)
+strategy.risk.max_intraday_loss(5, strategy.percent_of_equity)
+strategy.entry("L", strategy.long)

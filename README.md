@@ -222,6 +222,10 @@ the [native runner guide](runner/README.md) for feed modes, symbol metadata,
 feed format, recovery and execution limitations. The existing validation
 scoreboard below describes batch backtests; it does not certify new native
 live behavior or real broker fills.
+Receipt-based confirmed-bar admission (unreleased; after 1.2.0) is limited to the
+[proven same-chart requests and standalone close-only varip](docs/strategy-capabilities.md#confirmed-bar-extension).
+`process_orders_on_close=true` remains refused for every order shape and
+composition, before any ledger exists.
 Known issue (v1.0.0, v1.0.1): a stream whose input and script timeframes are
 equal serves stale `request.security` values after the first realtime bar.
 Fixed in 1.1.0 (#325). See
@@ -497,6 +501,7 @@ inventories are pinned by `scripts/check_c_abi_runtime.py`:
 |---|---|
 | `strategy_create` / `strategy_free` | Allocate / release a strategy instance |
 | `strategy_capabilities_api_version` / `strategy_capabilities_receipt` | Optional immutable compiled execution requirements for stream admission |
+| `strategy_confirmed_bar_api_version` / `strategy_confirmed_bar_receipt` | Optional versioned metadata for proven confirmed-bar admission (after 1.2.0); legacy capability exports remain unchanged |
 | `run_backtest` / `run_backtest_full` | Run with auto-detected timeframe / with timeframe + magnifier configuration |
 | `report_free` | Free arrays inside a filled `pf_report_t` |
 | `strategy_closed_trade_entry_incarnation` | Per-run physical entry provenance of a closed trade |

@@ -14,7 +14,7 @@ template<class Function> Function require_symbol(void* library, const char* name
 }
 
 int main(int argc, char** argv) {
-    if (argc != 5) return 1;
+    if (argc != 5 && argc != 6) return 1;
     try {
         void* library = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
         if (!library) throw std::runtime_error("cannot load oracle strategy");
@@ -32,13 +32,20 @@ int main(int argc, char** argv) {
         auto error = require_symbol<decltype(&strategy_get_last_error)>(library, "strategy_get_last_error");
         auto state = create(nullptr);
         if (!state) throw std::runtime_error("oracle creation failed");
-        set_string(state, "tickerid", "TEST:EXAMPLE");
-        set_string(state, "ticker", "EXAMPLE");
-        set_tick(state, 0.25);
-        set_point(state, 2.5);
+        const bool confirmed = argc == 6 && std::string(argv[5]) == "--confirmed";
+        set_string(state, "tickerid", confirmed ? "BINANCE:ETHUSDT.P" : "TEST:EXAMPLE");
+        set_string(state, "ticker", confirmed ? "ETHUSDT.P" : "EXAMPLE");
+        set_tick(state, confirmed ? 0.01 : 0.25);
+        set_point(state, confirmed ? 1.0 : 2.5);
         set_metadata(state, "qty_step", 0.001);
-        set_override(state, "commission_value", "0.1");
-        set_override(state, "slippage", "1");
+        if (confirmed) {
+            set_string(state, "type", "crypto");
+            set_string(state, "currency", "USDT");
+            set_string(state, "basecurrency", "ETH");
+        } else {
+            set_override(state, "commission_value", "0.1");
+            set_override(state, "slippage", "1");
+        }
         if (retain(state)) throw std::runtime_error("oracle event retention failed");
         std::ifstream csv(argv[2]);
         auto bars = history(std::string(std::istreambuf_iterator<char>(csv), {}));

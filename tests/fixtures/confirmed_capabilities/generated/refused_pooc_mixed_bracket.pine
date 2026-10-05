@@ -1,0 +1,5 @@
+//@version=6
+strategy("unproven closing", process_orders_on_close=true)
+strategy.entry("S", strategy.short)
+strategy.entry(id="S", direction=strategy.long)
+strategy.exit("X", "S", stop=high, limit=low)

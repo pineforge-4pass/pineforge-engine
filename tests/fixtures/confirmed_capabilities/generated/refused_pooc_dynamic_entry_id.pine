@@ -1,0 +1,4 @@
+//@version=6
+strategy("unproven closing", process_orders_on_close=true)
+order_id = input.string("S")
+strategy.entry(order_id, strategy.short)

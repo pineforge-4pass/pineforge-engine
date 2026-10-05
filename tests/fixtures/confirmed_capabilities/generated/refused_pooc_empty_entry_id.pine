@@ -1,0 +1,5 @@
+//@version=6
+strategy("closing bracket boundaries", process_orders_on_close=true, default_qty_type=strategy.fixed, default_qty_value=1, commission_type=strategy.commission.percent, commission_value=0)
+strategy.entry("", strategy.short)
+strategy.entry("S2", strategy.short)
+strategy.exit("X", "", stop=high, limit=low)

@@ -1,0 +1,8 @@
+//@version=6
+strategy("confirmed varip")
+varip int count = 0
+count += 1
+if count % 7 == 1
+    strategy.entry("long", strategy.long)
+if count % 7 == 4
+    strategy.entry("short", strategy.short)

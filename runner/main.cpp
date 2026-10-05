@@ -306,6 +306,7 @@ class Strategy {
     decltype(&strategy_set_override_checked) set_override_checked_ = nullptr;
     decltype(&strategy_get_effective_settings) settings_receipt_ = nullptr;
     decltype(&strategy_capabilities_receipt) capabilities_receipt_ = nullptr;
+    decltype(&strategy_capabilities_receipt) confirmed_bar_receipt_ = nullptr;
     template <class T> T symbol(const char *name) {
         auto p = dlsym(library_, name);
         if (!p)
@@ -383,6 +384,15 @@ class Strategy {
                     throw std::runtime_error("capabilities extension version mismatch");
                 capabilities_receipt_ = symbol<decltype(capabilities_receipt_)>(
                     "strategy_capabilities_receipt");
+                auto confirmed_version = optional_symbol<decltype(&strategy_capabilities_api_version)>(
+                    "strategy_confirmed_bar_api_version");
+                if (confirmed_version) {
+                    if (confirmed_version() == 1u)
+                        confirmed_bar_receipt_ = symbol<decltype(confirmed_bar_receipt_)>(
+                            "strategy_confirmed_bar_receipt");
+                } else if (optional_symbol<decltype(confirmed_bar_receipt_)>("strategy_confirmed_bar_receipt")) {
+                    throw std::runtime_error("confirmed-bar capabilities extension lacks version");
+                }
             } else {
                 std::cerr << "pineforge-live: warning: compiled strategy lacks execution capabilities; "
                              "close-only eligibility cannot be proved (legacy behavior retained)\n";
@@ -438,17 +448,18 @@ class Strategy {
         parse_json(document);
         return document;
     }
-    std::string capabilities() const {
-        if (!capabilities_receipt_)
+    std::string capabilities(bool confirmed = false) const {
+        auto receipt_function = confirmed ? confirmed_bar_receipt_ : capabilities_receipt_;
+        if (!receipt_function)
             return {};
         char message[512]{};
         std::size_t required = 0;
-        if (capabilities_receipt_(state, nullptr, 0, &required, message, sizeof(message)) !=
+        if (receipt_function(state, nullptr, 0, &required, message, sizeof(message)) !=
                 PF_SETTINGS_BUFFER_TOO_SMALL || required == 0 || required > MAX_FRAME)
             throw std::runtime_error(std::string("capabilities receipt refused: ") + message);
         std::vector<char> receipt(required);
         const auto capacity = receipt.size();
-        if (capabilities_receipt_(state, receipt.data(), capacity, &required, message,
+        if (receipt_function(state, receipt.data(), capacity, &required, message,
                                   sizeof(message)) != PF_SETTINGS_OK || required != capacity ||
                 receipt.back() != '\0' || std::strlen(receipt.data()) + 1 != capacity)
             throw std::runtime_error(std::string("capabilities receipt refused: ") + message);
@@ -793,17 +804,26 @@ int run(Config c) {
     strategy.configure(c);
     const auto settings_receipt = strategy.effective_settings();
     const auto capabilities_receipt = strategy.capabilities();
+    const auto confirmed_bar_receipt = strategy.capabilities(true);
     if (!capabilities_receipt.empty()) {
-        require_close_only_capabilities(capabilities_receipt);
+        require_close_only_capabilities(capabilities_receipt, confirmed_bar_receipt,
+                                       c.mode, c.input_tf, c.script_tf,
+                                       !c.native.present && c.session == "24x7" &&
+                                       c.timezone == "UTC" && c.chart_timezone == "UTC");
         for (const auto& [name, value] : c.overrides)
             require_close_only_boolean(name, value == "true" || value == "1");
+        if (parse_json(capabilities_receipt).at("declarations").at("process_orders_on_close").value == "true") {
+            for (const auto& [name, value] : c.overrides) {
+                throw std::runtime_error("close-only stream cannot honour compiled declaration: process_orders_on_close override " + name);
+            }
+        }
     }
     std::string deployment =
         c.native.present
             ? native_identity(c.native, c.mode, c.name, c.webhook, original, library)
             : identity(legacy_fields(c), original, library);
     deployment = bind_deployment_identity(deployment, settings_receipt, capabilities_receipt,
-                                          c.routing.routed, c.routing.file_identity);
+                                          c.routing.routed, c.routing.file_identity, confirmed_bar_receipt);
     try {
         // A switched PineStrategyHost is native-bound but owns its run spec
         // through prepare_native_begin.  Let that provider admit the stream
@@ -1102,6 +1122,7 @@ int run(Config c) {
                      {{"deployment", Json::string(deployment)},
                       {"effective_settings", settings_receipt.empty() ? Json{} : parse_json(settings_receipt)},
                       {"execution_capabilities", capabilities_receipt.empty() ? Json{} : parse_json(capabilities_receipt)},
+                      {"confirmed_bar_capabilities", confirmed_bar_receipt.empty() ? Json{} : parse_json(confirmed_bar_receipt)},
                       {"inputs_committed", num(ledger.input_count())},
                       {"inputs_processed", num(processed)},
                       {"prefix_skipped", num(replayed_prefix)},

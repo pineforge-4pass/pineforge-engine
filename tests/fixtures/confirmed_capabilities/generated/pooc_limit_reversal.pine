@@ -1,0 +1,6 @@
+//@version=6
+strategy("Closing limit reversals", process_orders_on_close=true)
+if close < open
+    strategy.entry("L", strategy.long, limit=low)
+if close > open
+    strategy.entry("S", strategy.short, limit=high)

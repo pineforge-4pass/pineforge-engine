@@ -1,0 +1,7 @@
+//@version=6
+strategy("G")
+h = request.security(syminfo.tickerid, "15", ta.sma(close, 4))
+if ta.crossover(close, h)
+    strategy.entry("L", strategy.long)
+if ta.crossunder(close, h)
+    strategy.entry("S", strategy.short)
