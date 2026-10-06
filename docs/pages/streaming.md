@@ -162,19 +162,26 @@ For `pineforge-live`, Pine warmup and confirmed-bar feeds use the script
 timeframe in both modes; omitted input defaults to that chart clock.
 Explicit one-minute input with a coarser script is refused before ledger
 creation, and old ledgers for that deployment must be replaced by a new
-chart-input deployment. In bars mode, an intraday period must divide every
-gap between consecutive session trading-day origins. Startup checks at least
-three years from warmup start, including future clock changes, before creating
+chart-input deployment. Feeds must contain actual chart bars labelled at
+session-aware opening times. In bars mode, a chart period must fit each
+trading day and session-break reopen. Startup checks the whole warmup and at least
+three years after its last bar, including future clock changes, before creating
 a ledger. For 24x7 UTC, 240 minutes works but 7 minutes does not; for New York
 24x7, 17:00-cutoff and regular-hours calendars, 60 minutes works across daylight
-saving but 45, 120 and 240 minutes do not. Other calendars use their actual
-origin gaps, not a timezone-name allowlist. Unsupported bars refuse by name
+saving but 45, 120 and 240 minutes do not. On `0930-1130,1300-1500`,
+60-minute bars are refused while 30-minute bars cross the lunch reopen.
+Other calendars use their actual session openings, not a timezone-name allowlist. Unsupported bars refuse by name
 and explain which chart clock to use. Passing intraday ticks-mode paths remain
-admitted. The bars-mode restriction lifts with calendar-aware label-grid support;
-daily/weekly chart delivery requires no daylight-saving transitions from
-warmup onward. UTC daily and weekly charts are supported. Unsupported
+admitted. These restrictions lift when the engine supports the corresponding
+session-aware chart-bar delivery. Daily/weekly chart delivery is refused in
+both bars and ticks modes on daylight-saving calendars from warmup onward;
+standard-offset changes can also make a chart unsupported. UTC daily and weekly charts are supported. Unsupported
 daily/weekly calendars are refused by name. This runner policy does not
 change the direct engine API's independently configured input clock.
+Keep the configured session/timezone when choosing a supported chart.
+See [Upgrading from 1-minute input](../../runner/README.md#upgrading-from-1-minute-input)
+for old-ledger delivery and external-position reconciliation. Script/input
+`1` retains its contiguous minute warmup, including closed-session minutes.
 
 - Warmup bars must be strictly increasing, confirmed, and aligned to the
   input timeframe and session calendar. The first normalized trade belongs

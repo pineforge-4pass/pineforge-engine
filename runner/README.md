@@ -84,17 +84,9 @@ order actions or close the running position.
 Confirmed-bar qualification compares every report field and physical action
 against `run_backtest_full` with identical warmup, complete script buckets,
 settings and symbol units. Tick tapes need the same ticks for replay equality;
-tick-versus-OHLC fill paths are not interchangeable. An incomplete aggregated
-script bucket is still provisional live, whereas a finite batch seals its
-trailing partial bucket; compare at confirmed script-bucket boundaries. This
-boundary can replace the last equity point rather than append an additional
-point; earlier confirmed equity points and closed trades are identical. In the
-trailing-stop fixture, sealing also appends one hypothetical `open_at_end=1`
-trade, changing `report.trades`, `trades_len`, `total_trades`, `net_profit`,
-`metrics.all` and `metrics.longs`; `equity` and `open_profit` reflect the changed
-trailing point. These are explicitly tested mode-boundary differences, not
-excluded fields at confirmed cursors. Every other report field is identical.
-The generated trailing-stop E2E exercises this boundary explicitly. The
+tick-versus-OHLC fill paths are not interchangeable. Pine confirmed-bar input
+is already at the script timeframe, so every committed bar completes a script
+bar; there is no partial aggregated script bucket at those cursors. The
 existing [stream security limitation](../docs/pages/streaming.md) still applies;
 no report field is silently excluded from the confirmed-bar E2E comparison.
 
@@ -127,7 +119,8 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   `ready` requires validated strategy/warmup, recovered ledger, verified source
   prefix, no unhealed input gap and storage below budget. A prefix conflict,
   source gap or fatal input error fails closed; no gap healing is invented.
-  `no_unhealed_input_gap` becomes false only for an actual input sequence gap,
+  `no_unhealed_input_gap` becomes false for an input sequence gap or an
+  off-cadence confirmed bar,
   not for unrelated malformed input, delivery or timeout failures.
 - Metrics are `committed_input`, `last_seq` (tick sequence, null for bars),
   `source_timestamp_ms`, `source_lag_ms` (wall-clock lag from the latest
@@ -332,7 +325,7 @@ Warmup is a user-provided CSV with exactly these columns:
 ```csv
 timestamp,open,high,low,close,volume
 0,100,102,99,101,4
-60000,101,103,100,102,4
+900000,101,103,100,102,4
 ```
 
 Pine strategies use **chart-timeframe input**: input and script timeframes
@@ -340,25 +333,32 @@ must match in both bars and ticks modes, including warmup. Omit `--input-tf`
 to use `--script-tf`, or specify that same clock explicitly. For example,
 `--input-tf 1 --script-tf 15` is refused before a ledger exists; supply
 15-minute warmup/feed bars and omit `--input-tf` instead. Script/input `1`
-is unchanged. Warmup timestamps are nonnegative Unix milliseconds, aligned
+is unchanged: warmup remains contiguous at 60-second intervals, including
+closed-session minutes, and the engine guards live and replayed minute input.
+Other chart warmup timestamps are nonnegative Unix milliseconds, aligned
 and contiguous at the input clock on the configured session calendar;
 prices are positive finite values and volume is nonnegative. Provide at
-least one complete chart bar. In bars mode, intraday chart periods must
-divide every gap between consecutive trading-day origins on the configured
-session calendar. Startup checks at least three years from warmup start,
-including future daylight-saving transitions, before creating a ledger.
+least one complete chart bar. Confirmed feeds must deliver actual chart OHLCV
+bars labelled at their session-aware opening times; relabelling one-minute
+prices is not aggregation. `tools/aggregate_feed.cpp` is a UTC/24x7 corpus tool,
+not a session-aware live feed adapter. In bars mode, chart periods must fit
+the configured trading days, including each reopen after a session break.
+For `0930-1130,1300-1500`, 60-minute bars are refused while 30-minute bars
+cross the lunch reopen correctly. Startup checks the whole warmup and at
+least three years after its last bar, including future clock changes,
+before creating a ledger.
 For 24x7 UTC, use a period that divides 1440 minutes (240 works; 7 does not).
 For New York calendars, use a period that divides 60 minutes (60 works;
 45, 120 and 240 do not), including 17:00-cutoff and regular-hours sessions.
 Other zones with non-hour clock changes are checked against their actual
-session-day origins. Unsupported bars refuse by name with guidance to use
-a chart timeframe that tiles the calendar's trading days. The corresponding
+session opening times. Unsupported bars refuse by name with guidance to use
+a supported chart timeframe without changing the session or timezone. The corresponding
 intraday ticks-mode paths remain admitted where they pass the engine's
-calendar aggregation; they do not use the confirmed-bar label restriction.
-This bars-mode restriction lifts when calendar-aware label-grid support
-ships in the engine. Daily/weekly chart delivery
-requires a timezone without daylight-saving transitions from warmup onward;
-otherwise startup refuses with "daily/weekly chart delivery on a
+calendar aggregation. These restrictions lift when the engine supports
+the corresponding session-aware chart-bar delivery. Daily/weekly chart delivery
+is refused in **both bars and ticks modes** on calendars with daylight-saving
+transitions from warmup onward; standard-offset changes can also make a chart unsupported.
+The daylight-saving refusal says "daily/weekly chart delivery on a
 daylight-saving calendar is not supported yet". UTC daily/weekly charts
 are supported; monthly stream input remains unsupported. The configured
 warmup never produces webhook actions, but it can establish a modeled
@@ -384,12 +384,23 @@ must equal the file; omitted CLI clock values take the file. Monthly stream
 input and any `input_tf` other than `"1"` are refused before the ledger is
 bound. This handwritten-strategy path retains its one-minute input rule;
 the chart-input default applies to Pine libraries without `--native-config`.
-One-minute Pine deployments keep their identity bytes. An existing ledger
-created with input `1` and a coarser script clock cannot resume under chart
-delivery: redeploy with chart-timeframe warmup/feed and a **new ledger**.
-There is no silent migration. The native examples are
+The native examples are
 `native-market-example` and `native-selected-example`; the latter demonstrates
 host-sized terms, exact reversal, and a selected current-point close.
+
+### Upgrading from 1-minute input
+
+One-minute Pine deployments retain their deployment identity and existing
+session-close handling. Existing input-1/coarser-script ledgers are refused
+instead of silently migrated. Stop the old deployment, inspect its delivery
+status, and resolve or deliberately redeliver failed/unsent actions using
+the old ledger and deployment identity. Keep that ledger for audit.
+Reconcile open positions with the receiver or broker before enabling a
+replacement deployment: the runner does not close, migrate or reconcile
+external positions. A fresh ledger transfers neither old unsent actions nor
+open positions. Prepare chart-spaced warmup and feeds, then redeploy with a
+**new ledger** and input equal to script. Do not restore the obsolete input-1
+configuration or change the session/timezone to bypass calendar admission.
 
 Keep symbol metadata consistent with the corresponding backtest. `--syminfo`
 supports `type`, `currency`, `basecurrency`, `description`, `volumetype`,
@@ -480,7 +491,7 @@ index-aligned identical prefix, including identical message framing.
 ### Confirmed OHLCV mode
 
 ```json
-{"type":"bar","bar":{"ts_open":120000,"o":102,"h":104,"l":101,"c":103,"v":4}}
+{"type":"bar","bar":{"ts_open":1800000,"o":102,"h":104,"l":101,"c":103,"v":4}}
 ```
 
 Use `--mode bars`. Each Pine event is a confirmed chart-timeframe bar.
@@ -680,6 +691,7 @@ your own applications, never exchanges or fill-ingestion endpoints.
 - **Bounded transport retries.** A connection failure, a timeout before any response, or a reset is retried at most 2 times, after 1 s and then 2 s. The retries run beside newer actions and never delay them. An HTTP error response (any non-2xx, redirects included) is final, so it is shown and not retried.
 - **Nothing is lost.** Every action and every delivery result stays in the ledger. `pineforge-live redeliver --ledger L --deployment D --target T [--from N] [--failed-only]` re-sends selected actions in commit order, with the same `delivery_id`, and records each new attempt. N is the global action ordinal; deployment D must match `metadata.identity`. Offline redelivery refuses while the runner owns the ledger, counts selected/delivered/failed/pending, exits 2 for selected failed/pending actions, and reads only the selected target's secret. Add `--control-dir PATH` for [live submission](#live-redelivery-control-files). `pineforge-live actions --follow` streams every committed action, whatever happened to its delivery.
 - **Restart.** After the usual replay verification, an action that was committed but has no delivery result yet (the process died before sending, or mid-request) is sent once. An action whose delivery failed is not re-sent automatically; `redeliver` does that.
+- **Acceptance order after redelivery.** A later action can be accepted before an earlier action whose first attempt failed finally and which is explicitly redelivered later. Each redelivery selection is sent in commit order; global first-acceptance order is not guaranteed across these selections. Receivers still deduplicate by `delivery_id` and use action `sequence` for logical ordering.
 - **Fatal exit:** delivery drains without retries for at most one `total_timeout_ms` in total, regardless of targets or action count. The final error reports actions with no delivery result and gives `pineforge-live redeliver --ledger L --deployment D --target T` guidance. SIGINT/SIGTERM promptly cancel delivery, including EOF drain and redelivery, and exit 0; see [service operation](#service-operation).
 - **Status:** `pineforge-live status --ledger L [--deployment D]` prints a consistent read snapshot as JSON, per target: sent, failed, unsent (committed actions with no delivery result), last success, last error (redacted), last attempt. Use offline `redeliver` for failed or unsent actions; omit `--failed-only` to include unsent actions.
 - **Audit (closes audit finding F11):** every attempt is a new delivery-log row: target, delivery_id, attempt, start/end time, HTTP status or error class. Nothing is updated in place.
