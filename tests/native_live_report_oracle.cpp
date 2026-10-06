@@ -1,8 +1,10 @@
 #include "native_startup.hpp"
 #include "report.hpp"
+#include <pineforge/native_calendar.hpp>
 #include <dlfcn.h>
 #include <fstream>
 #include <iostream>
+#include <iomanip>
 #include <iterator>
 #include <sstream>
 
@@ -24,7 +26,7 @@ int main(int argc, char** argv) {
     if (argc < 5) return 1;
     try {
         bool confirmed = false, calendar_check = false;
-        std::string input_tf = "1", stream_feed;
+        std::string input_tf = "1", stream_feed, aggregate_csv;
         int distribution = PF_MAGNIFIER_UNIFORM;
         Json config;
         for (int index = 5; index < argc; ++index) {
@@ -36,6 +38,7 @@ int main(int argc, char** argv) {
             else if (option == "--distribution") distribution = parse_json(argv[index]).integer<int>();
             else if (option == "--config") config = parse_json(read_text(argv[index]));
             else if (option == "--stream-feed") stream_feed = argv[index];
+            else if (option == "--aggregate") aggregate_csv = argv[index];
             else throw std::runtime_error("unknown oracle option: " + option);
         }
         if (distribution < 0 || distribution > 3) throw std::runtime_error("invalid oracle distribution");
@@ -98,7 +101,38 @@ int main(int argc, char** argv) {
             }
         }
         if (retain(state)) throw std::runtime_error("oracle event retention failed");
-        auto bars = history(read_text(argv[2]), input_tf != "1" || calendar_check);
+        auto bars = history(read_text(argv[2]), input_tf != "1" || calendar_check || !aggregate_csv.empty());
+        if (!aggregate_csv.empty()) {
+            const auto calendar = pineforge::native_calendar::parse_session(config.at("session").text(), config.at("timezone").text());
+            const auto clock = pineforge::native_calendar::parse_timeframe(argv[3]);
+            if (!calendar || !clock) throw std::runtime_error("invalid aggregation calendar");
+            std::vector<pf_bar_t> grouped;
+            for (const auto& bar : bars) {
+                if (!pineforge::native_calendar::in_session(*calendar, bar.timestamp)) continue;
+                const auto interval = pineforge::native_calendar::interval_containing(*calendar, *clock, bar.timestamp);
+                if (!interval) throw std::runtime_error("aggregation interval cannot be resolved");
+                if (grouped.empty() || grouped.back().timestamp != interval->eligible_open_ms) {
+                    grouped.push_back(bar);
+                    grouped.back().timestamp = interval->eligible_open_ms;
+                } else {
+                    auto& current = grouped.back();
+                    current.high = std::max(current.high, bar.high);
+                    current.low = std::min(current.low, bar.low);
+                    current.close = bar.close;
+                    current.volume += bar.volume;
+                }
+            }
+            if (grouped.empty()) throw std::runtime_error("aggregation has no session bars");
+            std::ofstream output(aggregate_csv);
+            output << "timestamp,open,high,low,close,volume\n" << std::setprecision(17);
+            for (const auto& bar : grouped)
+                output << bar.timestamp << ',' << bar.open << ',' << bar.high << ',' << bar.low << ',' << bar.close << ',' << bar.volume << '\n';
+            if (!output) throw std::runtime_error("cannot write aggregation output");
+            destroy(state);
+            dlclose(library);
+            std::cout << "{\"chart_bars\":" << grouped.size() << "}\n";
+            return 0;
+        }
         if (calendar_check) {
             NativeConfigValues clock;
             clock.input_tf = input_tf;

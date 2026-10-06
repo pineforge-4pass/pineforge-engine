@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sqlite3
 import subprocess
+import shutil
 
 from native_live_chart_input_e2e import config_args, oracle_command
 from native_live_report_e2e import action_key, equal, write_csv
@@ -71,6 +72,29 @@ def run_case(args, case):
         verdict = dict(case=case.name, bars="REFUSED D/W daylight-saving calendar", ticks="REFUSED", timezone=config["timezone"])
         (target / "verdict.json").write_text(json.dumps(verdict, indent=2))
         print(json.dumps(verdict), flush=True)
+        if args.utc_d4:
+            variant = args.output / "utc-fixture" / (case.name + "-utc")
+            variant.mkdir(parents=True, exist_ok=True)
+            config["timezone"] = "UTC"
+            config["session"] = "2200-2100:23456"
+            (variant / "config.json").write_text(json.dumps(config))
+            raw = rows(case / "warmup-1m.csv") + rows(case / "bars-1m.csv")
+            raw_path, grouped_path = variant / "raw-1m.csv", variant / "full-chart.csv"
+            write_csv(raw_path, raw)
+            checked([args.oracle, library, raw_path, timeframe, variant / "unused-actions.jsonl", "--input-tf", "1",
+                     "--distribution", "3", "--config", variant / "config.json", "--aggregate", grouped_path],
+                    variant / "aggregation.json")
+            boundary = rows(case / "bars-1m.csv")[0]["ts_open"]
+            grouped = rows(grouped_path)
+            write_csv(variant / "warmup-chart.csv", [bar for bar in grouped if bar["ts_open"] < boundary])
+            write_csv(variant / "bars-chart.csv", [bar for bar in grouped if bar["ts_open"] >= boundary])
+            target_library = args.libraries / variant.name
+            target_library.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(library, target_library / "strategy.so")
+            variant_args = argparse.Namespace(**vars(args))
+            variant_args.before_runner = None
+            variant_args.bars_only = True
+            run_case(variant_args, variant)
         return
     warm = rows(warmup)
     live = rows(case / "bars-chart.csv")
@@ -144,6 +168,7 @@ def main():
     parser.add_argument("--before-runner", type=Path)
     parser.add_argument("--bars-only", action="store_true")
     parser.add_argument("--case")
+    parser.add_argument("--utc-d4", action="store_true")
     args = parser.parse_args()
     for case in sorted(args.cases.iterdir()):
         if case.is_dir() and (case / "bars-chart.csv").exists() and (not args.case or args.case == case.name):
