@@ -400,6 +400,20 @@
 //   chains seed 314189: 4910930847136591687 -> 18266502754563434276
 //   chains seed 1780395: 1070411562087501788 -> 4910402023661469991
 //   chains seed 3246601: 13884755031629811470 -> 13715974753572872612
+//
+// Dropping the calc_on_order_fills competing chart-tick shift re-harvested 2 values the
+// same way, on its tree: a stop or limit leg of a strategy.exit staged in a fill
+// recalculation beside another key of the book keeps the trigger exit() installed
+// instead of one moved half a tick outward (TradingView has no such exclusion:
+// tests/fixtures/coof_competing_tick). Both configurations run calc_on_order_fills, and
+// a working request's trigger price is part of the transcript: the only folded values
+// that move are 10 (brackets, legs X_B) and 34 (chains, legs rel) trigger prices of exit
+// request definitions, and the per-bar digests they feed. Every fill, every other fact
+// of every command event, every pending order row, the position, the equity and every
+// closed trade are the same in every field, as are the trades, commands and rows placed
+// in each label (the same harvest against main 7a1f01c0 reproduces every old value):
+//   brackets seed 314188: 5626204446991468979 -> 13444318351679181243
+//   chains seed 314189: 18266502754563434276 -> 300926759266208037
 constexpr std::uint64_t kTranscriptDigests[] = {
     1790576907302357908ull,  // reversals seed 104729, 124 trades, 397 commands, 444 rows placed
     10024640008279748788ull,  // reversals seed 209458, 124 trades, 379 commands, 418 rows placed
@@ -439,7 +453,7 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     5669930245333977489ull,  // reversals seed 3770244, 34 trades, 321 commands, 226 rows placed
     7562978076140294353ull,  // brackets seed 104730, 84 trades, 472 commands, 586 rows placed
     918119817585072101ull,  // brackets seed 209459, 79 trades, 588 commands, 642 rows placed
-    5626204446991468979ull,  // brackets seed 314188, 120 trades, 788 commands, 950 rows placed
+    13444318351679181243ull,  // brackets seed 314188, 120 trades, 788 commands, 950 rows placed
     345551147133871958ull,  // brackets seed 418917, 94 trades, 524 commands, 629 rows placed
     3598556121825612327ull,  // brackets seed 523646, 73 trades, 524 commands, 523 rows placed
     10787524866046025632ull,  // brackets seed 628375, 92 trades, 580 commands, 741 rows placed
@@ -475,7 +489,7 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     11684879077355395000ull,  // brackets seed 3770245, 79 trades, 510 commands, 573 rows placed
     4961901654803425155ull,  // chains seed 104731, 67 trades, 318 commands, 348 rows placed
     11415452759840164455ull,  // chains seed 209460, 71 trades, 379 commands, 424 rows placed
-    18266502754563434276ull,  // chains seed 314189, 79 trades, 477 commands, 480 rows placed
+    300926759266208037ull,  // chains seed 314189, 79 trades, 477 commands, 480 rows placed
     4820568811517812619ull,  // chains seed 418918, 44 trades, 293 commands, 349 rows placed
     146053814318818740ull,  // chains seed 523647, 47 trades, 314 commands, 327 rows placed
     17614793864897068161ull,  // chains seed 628376, 73 trades, 342 commands, 350 rows placed

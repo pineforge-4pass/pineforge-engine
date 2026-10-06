@@ -455,8 +455,9 @@ a lot grid of at most one; several lots only on a fractional grid) takes at
 the open after the close fill
 that opened it, the open's check after an add filled there, the fill-time
 admission of an explicit quantity at the open, the refined lagged
-follow-up and the order of a market entry's opening check at its open fill
-against the exit legs it released. Its tapes are
+follow-up, the order of a market entry's opening check at its open fill
+against the exit legs it released, and the void strategy.exit without
+from_entry called before the entry. Its tapes are
 `tests/fixtures/margin_open_rules`.
 
 | Switch | Default | Gates | Where |
@@ -472,6 +473,7 @@ against the exit legs it released. Its tapes are
 | `short_point_drops_owed` | on | an owed follow-up is dropped at a point whose own check finds the book short; the open's own call of a carried short in the walk's scope and the opening-call scope (`close_sized_open_call_scope`) owes its follow-up to the first extreme instead of repeating it at its print, and so does a booked re-check of a short in the walk's scope (`run_close_sized_open_calls`): booked at that point's print, or dropped where the point is short itself | `execute_owed_short_follow_up`, `open_call_owing_follow_up`, `run_close_sized_open_calls` |
 | `lot_by_lot_open_follow_up` | on | on a fractional lot grid the schedule also takes a book of several lots the close's fills opened: the call sized at the close on the whole book, taken first in first out, and its follow-up checked lot by lot over the lots it took, the last still-short check deciding; a short's booked re-check on such a book is followed by nothing; one-lot books keep `open_print_follow_up_units`, whole-share books of several lots the previous rules | `close_sized_open_call_scope`, `open_print_lot_follow_up_units`, `run_close_sized_open_calls` |
 | `open_marketable_exit_first` | on | a market entry opening the book from flat at a bar's open (one entry, neither process_orders_on_close nor calc_on_order_fills) is checked there after the strategy.exit legs it released -- its own, and a strategy.exit without from_entry placed while flat after the entry -- already marketable at that open have filled (a short's stop at or below the open's tick or its limit at or above it, a long's mirror), on the book they leave; a leg the bar reaches only after the open fills after the check's call at the fill. Off, and for every other fill or leg: a short's check gives way to any leg its bar touches (ab9714be); TradingView refutes that for a short reversal and a short stop entry gapped at the open too (two known divergences in the fixture) | `priced_exit_precedes_opening`, `opening_released_leg`, `run_opening_checkpoint`, `open_exit_first_bar_` in `on_applied` |
+| `void_flat_global_exit` | on | a strategy.exit without from_entry called while no position is held and no entry order of any id is working (not calc_on_order_fills) is void, as TradingView voids it: its request still waits in the book, so every later request keeps its incarnation, the opening check of the market entry placed after it never gives way to its legs, released or touched, and that entry's fill withdraws the ones still working; the entry is checked as with no exit, process_orders_on_close included, and the exit never fills. An entry order working at the call binds the exit, and the first fill takes it. Where a stop or limit entry fills first (no tape) the flag is cleared and the legs keep their former course | `exit` (`void_global_issue`), `priced_exit_precedes_opening`, `settle_void_global_exits` in `on_applied` |
 
 ### 1.7 Evidence
 
@@ -493,7 +495,7 @@ tapes, 3 commission-0 controls, the oracle control of §1.2, 10 order
 controls replayed through handwritten hosts and 67 tapes of the short call
 gate and schedule (`short-cutoff-gate`). With every switch on, as shipped,
 the engine reproduces 258 of its 266 tapes and 373 of the 381 ledger tapes,
-38 of the 39 `margin_schedule_rules` tapes and 82 of the 84 `margin_open_rules`
+38 of the 39 `margin_schedule_rules` tapes and 97 of the 99 `margin_open_rules`
 tapes (each of those also as a stream, trade for trade); turning the
 placement half off costs 108 ledger tapes, the fill half 32 ledger and
 3 single-position tapes. `test_margin_rules_forward_replay` replays a sample of both
@@ -1112,7 +1114,7 @@ stream.
 | `resting_stop_entry_survives_close` | under `process_orders_on_close`, an earlier bar's stop entry of the side a close flattens survives it, as a limit does | the stale-entry cancel in `on_applied` |
 | `priced_add_at_cap_not_placed` | under `process_orders_on_close`, a priced add of an id holding no lot, still at the pyramiding cap once its bar's closes are done, leaves the book at the next opening, judged at that opening only | `withdraw_unplaced_cap_adds` in `on_bar_open` |
 | `global_exit_binds_held_position` | a global exit called while a position is held takes that position as its parent: an entry order of either side working beside it (resting, placed earlier in the calculation, or queued by a fill recalculation) lends it neither its side nor its price basis, nor a wait for its fill, so its limit and stop rest on the held side and a profit, loss or trail leg resolves against the held position | `observe_staged_parent` in `exit` |
-| `held_exit_bracket_ignores_same_side_entries` | under `calc_on_order_fills`, an entry order of the held side working beside such a held global exit is left out of the book census of the bracket the exit stages in a fill recalculation, so the bracket keeps the reach it has without that order and acts for the rest of the fill bar | `flush_pending_bracket_legs` |
+| `global_exit_per_entry_levels` | such a held global exit with relative legs covers the position entry by entry once it holds two entries: each entry's bracket at levels from its own fill, a later entry's placed at its fill, each filling once and closing the oldest trade, the brackets left ending on a flat book; at one point stop and market orders fill before limits, buys before sells | `per_entry_exit_call` in `exit`, `per_entry_exits_at_entry_fill` and `per_entry_exits_after_fill` in `on_applied`, `order_per_entry_point_ties` in `on_bar_close`, the units in `resolve_source_terms` |
 
 The first four parts' tapes run with margin requirements off (`margin_long =
 margin_short = 0`) and without `calc_on_order_fills`, and those parts act only
@@ -1140,11 +1142,38 @@ add tapes (the trailing leg and `calc_on_order_fills` re-entries, another
 rule's). Under `calc_on_order_fills` the resting add also counted as a
 competing order of the book for the profit-and-loss bracket the exit stages
 in the entry's fill recalculation, which took the bracket's chart-tick reach,
-so it acted one bar late: `held_exit_bracket_ignores_same_side_entries`
-leaves the add out of that census. A global exit over pyramided lots (an add
-that fills while the exit works) is a separate rule, not modelled:
-TradingView gives each entry its own exit levels and books FIFO, the engine
-one exit at the average price.
+so it acted one bar late. TradingView has no such competing exclusion,
+beside an add or any other order (`tests/fixtures/coof_competing_tick`,
+below), and the engine has none now.
+
+When the add fills while such an exit works, TradingView covers the
+position entry by entry (`global_exit_per_entry_levels`, the 66 synthetic
+tapes of `tests/fixtures/per_entry_exit`, `test_per_entry_exit_tapes`, NYSE:F
+15m): each entry has its own bracket at levels from its own fill price, the
+add's bracket is placed at its fill and acts in the rest of that bar, each
+bracket fills once (a re-issued exit gives a consumed entry no new one), every
+exit fill closes the oldest open trade, and a flat book ends the brackets
+left, so an entry filling later in that bar waits for the next call. At one
+point of the path stop and market orders fill before limit orders, and among
+them buys before sells. The engine kept one exit over the whole position,
+re-priced at the average price: all 60 tapes without `calc_on_order_fills`
+departed, and now book TradingView's trades row for row (79,480 trades); a
+stream of each run of the feed books the backtest's. One entry keeps its one
+exit, which is that entry's bracket; the second entry's fill turns its legs
+into the first entry's bracket and places the new entry's at the fill. The
+kernel breaks a tie at one point by queue order, so after the script the add
+and the exit's legs are re-priced in place into TradingView's order, the
+technique of `order_open_marketable_limit_entries`. This re-price moves the
+selected requests behind every other working request at that point. It also
+moves entry incarnations and the broker state hash of runs in this shape;
+entry incarnation is an ABI provenance field, run-scoped rather than a
+stable cross-run identifier. No fill, price, quantity, money or time field
+moves in the unreached-add controls. The tapes pin the rule without
+`calc_on_order_fills` (its six `-cf` tapes are exported but not modelled: the
+engine books them as before) or `process_orders_on_close`, on the chart's own
+bars, under the FIFO close rule, for lots opened by `strategy.entry` and an
+exit with only profit and loss legs; every other configuration keeps the one
+exit at the average price.
 
 The first two parts act on a whole exit at absolute levels whose pending
 parent rests at a level (`whole_level_exit`); the stop entry and cap parts act
@@ -1167,6 +1196,25 @@ fills there before the cap part judges it, as before the rule; and an add at
 the cap whose own bar's close frees the slot, which stays, as before (the cap
 part judges an add once, at the next opening; the pin's model rejects it at
 the call).
+
+Under `calc_on_order_fills` a stop or limit leg of a `strategy.exit` created
+in a fill recalculation acts on the rest of the fill bar as it does with no
+other order in the book, whatever the book holds beside it (an entry order of
+either side, a `strategy.order`, a global exit, a second exit of the same
+entry): TradingView has no "competing chart tick" exclusion. A level the
+bar's tick-quantized extreme reaches books on that bar: an on-grid level
+touched or crossed, in either binary spelling of its ladder point (`k / 100`
+or `k * syminfo.mintick`), absolute or relative, and an off-grid level the
+extreme reaches, including one between a sub-tick raw extreme and its chart
+tick. The 68 synthetic tapes of `tests/fixtures/coof_competing_tick`
+(`test_coof_competing_tick_tapes`), NYSE:F 15m over two years, pin it: on
+TradingView every single-unit tape with a competing order is byte-identical
+to its one-exit control, and the engine books all 68 row for row. The engine
+used to move such a leg's trigger half a tick outward when the book held
+another key and the level read off the grid, a port of the legacy single-order
+scope gate that no tape backed; a cent level whose `k * 0.01` differs from
+`k / 100` (about one in seven) read off the grid there too, so the leg filled
+a bar late or at its re-issue.
 
 ## 7. The script's position view after a close fill under `process_orders_on_close`
 

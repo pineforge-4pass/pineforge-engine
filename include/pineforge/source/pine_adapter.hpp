@@ -202,12 +202,26 @@ struct PlacementSnapshot {
     // (withdraw_void_exits), and a re-issue made once the entry exists takes
     // a new place in the exit queue rather than this one's.
     bool void_issue = false;
+    // A strategy.exit without from_entry called while no position was held
+    // and no entry order of any id was working, which TradingView voids too
+    // (MarginOpeningSwitches::void_flat_global_exit). Its request waits in
+    // the book as a void call's does; a market entry's opening check never
+    // gives way to it and its fill withdraws it, a stop or limit entry's
+    // fill clears the flag (settle_void_global_exits).
+    bool void_global_issue = false;
     // A strategy.exit called while the position was open and its from_entry
     // held no lot but had an entry order working: TradingView binds it to the
     // entry id, so it waits for that id's next fill through closes, the flat
     // and a cancel and re-entry of the id. Cleared when the id fills, which
     // binds the exit to that fill's lot (ExitBindingRuleSwitches).
     bool pending_bound_exit = false;
+    // A leg of one entry's bracket of a from_entry "" exit that covers the
+    // position entry by entry (ExitBindingRuleSwitches::
+    // global_exit_per_entry_levels): the incarnation of the entry order whose
+    // fill price set its level, and that entry's quantity, which is all the
+    // leg closes. Zero for every other row.
+    std::uint64_t per_entry_origin = 0;
+    double per_entry_units = std::numeric_limits<double>::quiet_NaN();
     // Sized when it was placed and executed as a plain market transaction:
     // a margin call or close whose position shrank before it filled crosses
     // zero and opens the difference on the other side
@@ -466,14 +480,15 @@ ScriptRuleSwitches& script_rule_switches() noexcept;
 // One switch per part of TradingView's strategy.exit binding rule, pinned on
 // the tapes under tests/fixtures/exit_binding, the pending-* tapes of
 // tests/fixtures/global_exit_children, tests/fixtures/cross_side_exit and
-// tests/fixtures/same_side_exit, so a regression bisects per part. A
-// strategy.exit binds when it is called: to its entry's open lots, else to
-// the entry id while an order of it is working, else the call is ignored.
-// Every part but global_exit_binds_held_position and
-// held_exit_bracket_ignores_same_side_entries acts only with margin
-// requirements off (margin_long = margin_short = 0), the setting of their
-// tapes. All on; only tests change one. Process-wide, read by every adapter;
-// not installed API, and no strategy input reaches it.
+// tests/fixtures/same_side_exit and tests/fixtures/per_entry_exit, so a
+// regression bisects per part. A strategy.exit binds when it is called: to
+// its entry's open lots, else to the entry id while an order of it is
+// working, else the call is ignored. Every part but
+// global_exit_binds_held_position and global_exit_per_entry_levels acts only
+// with margin requirements off (margin_long = margin_short = 0), the
+// setting of their tapes. All on; only
+// tests change one. Process-wide, read by every adapter; not installed API,
+// and no strategy input reaches it.
 struct ExitBindingRuleSwitches {
     // An exit called in position for an entry id with no lot but a limit or
     // stop order working is bound to the id: a close or the flat does not
@@ -500,13 +515,16 @@ struct ExitBindingRuleSwitches {
     // side and a profit, loss or trail leg resolves against the held
     // position (PineExecutionAdapter::exit()).
     bool global_exit_binds_held_position = true;
-    // With calc_on_order_fills, an entry order of the held side working
-    // beside such a held global exit does not compete with the bracket the
-    // exit stages in a fill recalculation either: the book census that takes
-    // a chart-tick reach from a competing leg leaves it out, so the bracket
-    // acts for the rest of the fill bar as it does with no such order
-    // (PineExecutionAdapter::flush_pending_bracket_legs()).
-    bool held_exit_bracket_ignores_same_side_entries = true;
+    // Such a held global exit with relative legs (profit, loss) covers the
+    // position entry by entry once it holds two entries: each entry has its
+    // own bracket at levels from its own fill price, an entry filling after
+    // the call gets its bracket at its fill (live for the rest of that bar),
+    // each bracket fills once and closes the oldest open trade, and a book
+    // that goes flat ends the brackets left (tests/fixtures/per_entry_exit;
+    // PineExecutionAdapter::per_entry_exit_call()). Pinned without
+    // calc_on_order_fills or process_orders_on_close, on the chart's own bars,
+    // under the FIFO close rule.
+    bool global_exit_per_entry_levels = true;
 };
 ExitBindingRuleSwitches& exit_binding_rule_switches() noexcept;
 
@@ -1889,6 +1907,29 @@ private:
         double installed_level = std::numeric_limits<double>::quiet_NaN();
     };
 
+    // A from_entry "" exit with relative legs that covers the position entry
+    // by entry (ExitBindingRuleSwitches::global_exit_per_entry_levels): kept
+    // from the moment the position it stands on holds a second entry until the
+    // book goes flat. `children` are the entries in fill order, each with the
+    // fill price its bracket's levels come from and the quantity it closes;
+    // `consumed` once a leg of its bracket filled (TradingView never gives that
+    // entry another one).
+    struct PerEntryExitChild {
+        std::uint64_t origin = 0;
+        double fill_price = std::numeric_limits<double>::quiet_NaN();
+        double units = 0.0;
+        bool consumed = false;
+    };
+    struct PerEntryExit {
+        SourceId exit_id;
+        std::int64_t cycle = 0;
+        bool long_side = true;
+        double profit_ticks = std::numeric_limits<double>::quiet_NaN();
+        double loss_ticks = std::numeric_limits<double>::quiet_NaN();
+        std::string comment;
+        std::vector<PerEntryExitChild> children;
+    };
+
     struct PendingCoofRequest {
         native_order::Request request;
         PlacementSnapshot snapshot;
@@ -2367,6 +2408,26 @@ private:
     // A from_entry "" exit without a quantity that is the book's only exit:
     // it closes its percentage of the position it fills against.
     bool fill_time_global_exit(const PlacementSnapshot&) const;
+    // A held global exit with relative legs, entry by entry
+    // (ExitBindingRuleSwitches::global_exit_per_entry_levels).
+    bool per_entry_exit_scope() const;
+    std::vector<PerEntryExitChild> per_entry_open_entries(bool long_side) const;
+    std::vector<native_order::RequestHandle> per_entry_child_legs(
+        const SourceId& exit_id, std::uint64_t origin) const;
+    bool per_entry_exit_call(const SourceId& exit_id, const SourceId& from_entry, double limit,
+                             double stop, double trail_points, double trail_offset,
+                             double trail_price, double qty_percent, const std::string& comment,
+                             double qty, const std::string& oca_name, double profit_ticks,
+                             double loss_ticks, std::uint64_t command_sequence);
+    void submit_per_entry_child(const PerEntryExit& exit, const PerEntryExitChild& child,
+                                std::uint64_t command_sequence);
+    void per_entry_exits_at_entry_fill(const PlacementSnapshot& opening,
+                                       const native_order::ExecutionAppliedEvent& event);
+    void per_entry_exits_after_fill(const std::optional<PlacementSnapshot>& placement,
+                                    const native_order::ExecutionAppliedEvent& event);
+    void end_per_entry_exit(std::size_t index);
+    void cancel_working_legs(const std::vector<native_order::RequestHandle>& legs);
+    void order_per_entry_point_ties();
     void record_market_review(admission::Checkpoint, int,
                               const std::vector<native_order::RequestHandle>&);
     void refresh_pending_sizing_after_margin(
@@ -2382,6 +2443,7 @@ private:
     void observe_close_ledger(const native_order::ExecutionAppliedEvent&,
                               const PlacementSnapshot*);
     bool entry_order_pending(const SourceId&) const;
+    bool entry_order_working(const SourceId* id) const;
     bool priced_entry_order_working(const SourceId* id) const;
     bool margins_disabled() const noexcept;
     bool whole_level_exit(double limit_price, double stop_price, double trail_points,
@@ -2392,6 +2454,7 @@ private:
     void unvoid_exit(PlacementSnapshot& row);
     void execute_or_withdraw_close(native_order::RequestHandle close, bool void_issue);
     void withdraw_void_exits(const SourceId& entry_id);
+    void settle_void_global_exits(bool market_entry);
     void bind_pending_exits_to_fill(const SourceId& entry_id);
     void withdraw_unplaced_cap_adds(const NativeDecisionContext& context);
     void stash_id_bound_exits(const SourceId& entry_id);
@@ -2438,6 +2501,7 @@ private:
     mutable std::vector<AnchoredRelativeLeg> anchored_relative_legs_;
     AnchoredRelativeStats anchored_relative_stats_{};
     std::int64_t anchored_cohort_sequence_ = 0;
+    std::vector<PerEntryExit> per_entry_exits_;
     std::vector<PendingCoofRequest> pending_coof_requests_;
     std::vector<PendingMarginRevival> pending_margin_revivals_;
     std::vector<native_order::RequestHandle> live_handles_;
@@ -2891,6 +2955,12 @@ struct MarginOpeningSwitches {
     // check's call. Off, and for every other fill or leg: a short's check
     // gives way to any leg the bar touches.
     bool open_marketable_exit_first = true;
+    // A strategy.exit without from_entry called while flat with no entry
+    // order of any id working (not calc_on_order_fills) is void: the opening
+    // check of the market entry placed after it is taken as with no exit,
+    // and that entry's fill withdraws its legs, which never fill. Where a
+    // stop or limit entry fills first the legs keep their former course.
+    bool void_flat_global_exit = true;
 };
 MarginOpeningSwitches& margin_opening_switches() noexcept;
 } // namespace detail

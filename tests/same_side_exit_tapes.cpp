@@ -10,10 +10,10 @@
 // generated files include are included here first; their #pragma once makes
 // the includes inside the namespaces no-ops.
 //
-// The module also exports the switches of the two rule parts the tapes pin
-// (ExitBindingRuleSwitches::global_exit_binds_held_position and
-// held_exit_bracket_ignores_same_side_entries) of its own library copy, so the
-// test can clear either. Test code only: nothing here is part of the library.
+// The module also exports the switch of the rule part the tapes pin
+// (ExitBindingRuleSwitches::global_exit_binds_held_position) of its own
+// library copy, so the test can clear it. Test code only: nothing here is
+// part of the library.
 
 #include <pineforge/source/pine_adapter.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -49,12 +49,11 @@
 extern "C" {
 
 // Sets one rule part's switch -- 0: ExitBindingRuleSwitches::
-// global_exit_binds_held_position, 1: held_exit_bracket_ignores_same_side_entries
-// -- and returns its new state, or -1 for another part.
+// global_exit_binds_held_position -- and returns its new state, or -1 for
+// another part.
 int same_side_exit_tapes_set_switch(int part, int on) {
     auto& switches = pineforge::source::detail::exit_binding_rule_switches();
-    bool* flag = part == 0 ? &switches.global_exit_binds_held_position
-        : part == 1 ? &switches.held_exit_bracket_ignores_same_side_entries : nullptr;
+    bool* flag = part == 0 ? &switches.global_exit_binds_held_position : nullptr;
     if (flag == nullptr) return -1;
     *flag = on != 0;
     return *flag ? 1 : 0;

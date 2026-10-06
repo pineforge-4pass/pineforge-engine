@@ -60,9 +60,17 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     // Folded only when set, so a run that never issues a void exit keeps
     // its digest (lane W3B-ENG-GRID).
     if (value.void_issue) f.b(true);
+    // Folded only when set, like void_issue (MarginOpeningSwitches::
+    // void_flat_global_exit).
+    if (value.void_global_issue) f.u(0x766f6964676cULL);
     // Folded only when set, like void_issue: the exit is bound to its entry
     // id, not to lots (ExitBindingRuleSwitches).
     if (value.pending_bound_exit) f.u(0x70656e64ULL);
+    // Folded only when set, like void_issue: one entry's bracket of a global
+    // exit that covers its position entry by entry (ExitBindingRuleSwitches).
+    if (value.per_entry_origin != 0) {
+        f.u(0x70657265ULL); f.u(value.per_entry_origin); f.d(value.per_entry_units);
+    }
     // Folded only when set, like void_issue (lane W13-ENG-MARGIN-OPP).
     if (value.crosses_zero) f.u(0x7a65726fULL);
     if (!std::isnan(value.follow_up_fill)) f.d(value.follow_up_fill);
@@ -411,6 +419,21 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
                 f.u(static_cast<std::uint64_t>(anchor->rounding));
             }
             f.b(leg.armed); f.d(leg.installed_level);
+        }
+    }
+    // Folded only while a global exit covers its position entry by entry
+    // (ExitBindingRuleSwitches::global_exit_per_entry_levels), so every other
+    // run keeps its established hash.
+    if (!per_entry_exits_.empty()) {
+        f.s("pineforge-source-per-entry-exits/v1");
+        f.u(per_entry_exits_.size());
+        for (const auto& exit : per_entry_exits_) {
+            f.s(exit.exit_id); f.i(exit.cycle); f.b(exit.long_side);
+            f.d(exit.profit_ticks); f.d(exit.loss_ticks); f.s(exit.comment);
+            f.u(exit.children.size());
+            for (const auto& child : exit.children) {
+                f.u(child.origin); f.d(child.fill_price); f.d(child.units); f.b(child.consumed);
+            }
         }
     }
     f.u(pending_coof_requests_.size());

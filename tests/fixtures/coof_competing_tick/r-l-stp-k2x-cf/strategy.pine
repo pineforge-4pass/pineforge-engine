@@ -1,0 +1,15 @@
+//@version=6
+strategy("pxgrid-R-L-stp-K2x-cf", overlay=true, initial_capital=1000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1, calc_on_order_fills=true, process_orders_on_close=false)
+var T = array.from(1743514200000.0, 1743602400000.0, 1743790500000.0, 1744206300000.0, 1744817400000.0, 1744827300000.0, 1745952300000.0, 1747403100000.0, 1747847700000.0, 1749475800000.0, 1751048100000.0, 1751298300000.0, 1753191900000.0, 1753197300000.0, 1754919900000.0, 1755180000000.0, 1755884700000.0, 1758202200000.0)
+var N = array.from(14, 2, 8, 10, 5, 6, 2, 2, 2, 3, 3, 2, 3, 4, 11, 2, 2, 2)
+sig = array.indexof(T, float(time))
+ev = array.indexof(T, float(time[1]))
+if strategy.position_size == 0 and sig >= 0
+    strategy.entry("L", strategy.long)
+else if strategy.position_size > 0 and ev >= 0
+    strategy.exit("X", "L", loss=array.get(N, ev))
+    strategy.exit("X2", "L", profit=500)
+else if strategy.position_size > 0
+    strategy.cancel("X")
+    strategy.cancel("X2")
+    strategy.close_all(comment="late")

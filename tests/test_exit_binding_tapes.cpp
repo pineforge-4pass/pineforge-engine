@@ -364,7 +364,7 @@ ExitBindingRuleSwitches every_part(bool on) {
     switches.resting_stop_entry_survives_close = on;
     switches.priced_add_at_cap_not_placed = on;
     switches.global_exit_binds_held_position = on;
-    switches.held_exit_bracket_ignores_same_side_entries = on;
+    switches.global_exit_per_entry_levels = on;
     return switches;
 }
 
@@ -397,10 +397,11 @@ const std::vector<Part>& parts() {
         // tape here has a global exit called in position beside an entry order.
         {"global_exit_binds_held_position",
          &ExitBindingRuleSwitches::global_exit_binds_held_position, {}},
-        // Pinned by tests/fixtures/same_side_exit (test_same_side_exit_tapes);
-        // no tape here calculates on order fills.
-        {"held_exit_bracket_ignores_same_side_entries",
-         &ExitBindingRuleSwitches::held_exit_bracket_ignores_same_side_entries, {}},
+        // Pinned by tests/fixtures/per_entry_exit (test_per_entry_exit_tapes);
+        // no tape here holds two entries under a global exit with a relative
+        // leg.
+        {"global_exit_per_entry_levels",
+         &ExitBindingRuleSwitches::global_exit_per_entry_levels, {}},
     };
     return list;
 }

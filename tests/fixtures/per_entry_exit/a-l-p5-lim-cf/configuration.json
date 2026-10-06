@@ -1,0 +1,15 @@
+{
+  "input_tf": "15",
+  "script_tf": "15",
+  "chart_timezone": "America/New_York",
+  "runtime_overrides": {
+    "timezone": "America/New_York",
+    "tickerid": "NYSE:F",
+    "ticker": "F",
+    "session": "0930-1600",
+    "mintick": 0.01,
+    "pointvalue": 1.0,
+    "qty_step": 1.0
+  },
+  "bars": "bars/nyse-f-15-2025-04-01-2025-04-30.csv"
+}

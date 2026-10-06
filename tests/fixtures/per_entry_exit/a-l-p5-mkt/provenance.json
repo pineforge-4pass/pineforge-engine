@@ -1,0 +1,36 @@
+{
+  "synthetic": true,
+  "authored_for": "per-entry global exit pin, px-pin-xsame sets R, R2, R3 and R4 (own script; no population source was sent)",
+  "pin_script": "pxsame-L-p-rmkt-nc",
+  "parameters": {
+    "side": "long",
+    "add": "market",
+    "add_offset_ticks": null,
+    "profit_ticks": 5,
+    "loss_ticks": null,
+    "calc_on_order_fills": false
+  },
+  "export": {
+    "tool": "lab tv --no-note",
+    "channel": "ws-report-v1",
+    "exported_at": "2026-10-05T18:56:51.939Z",
+    "chart": {
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "from": "2025-04-01",
+      "to": "2026-05-01"
+    },
+    "returned_range": {
+      "from": 1743514200000,
+      "to": 1777578300000
+    },
+    "range_proof": "covered",
+    "raw_frame_sha256": "b48d1e8c8873d00ae9d1aa72ff2215155f3a2a9dd980e5da8ab52b9c6edc6171",
+    "closed_trades": 86
+  },
+  "strategy_pine_sha256": "4fc04c488552201f233d56159527b2b2a518d39ea1d3db2446a15fc008635b8b",
+  "tv_trades_sha256": "44190915bef873d888cec5545edf517c35487f2ff1dcb43c6b9ccab2ae4c21ca",
+  "generated_by": "d1220bb (pineforge-codegen-oss main)",
+  "prediction": "set R: the rules were read off these tapes (fitted, not predicted)",
+  "predictor_sha256": "1db5eb7b4102878899100b822505ec9a9e66d0e0672b5189a766da13dff6cea4"
+}

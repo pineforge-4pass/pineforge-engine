@@ -1,0 +1,14 @@
+//@version=6
+strategy("pxgrid-H-L-lim-K2r-cf", overlay=true, initial_capital=1000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1, calc_on_order_fills=true, process_orders_on_close=false)
+var T = array.from(1743518700000.0, 1743688800000.0, 1744132500000.0, 1744206300000.0, 1744291800000.0, 1744822800000.0, 1744896600000.0, 1745503200000.0, 1746021600000.0, 1746110700000.0, 1747836000000.0, 1748013300000.0, 1748440800000.0, 1748887200000.0, 1749571200000.0, 1749746700000.0, 1751378400000.0, 1751984100000.0, 1752501600000.0, 1752587100000.0, 1753802100000.0, 1753888500000.0, 1755091800000.0, 1755181800000.0, 1756839600000.0, 1756994400000.0, 1758551400000.0, 1759851900000.0, 1761067800000.0, 1762180200000.0, 1763046900000.0, 1763994600000.0)
+var V = array.from(9.967, 9.87, 8.95, 8.797, 9.2, 9.607, 9.55, 10.04, 10.0, 10.317, 10.61, 10.387, 10.29, 9.95, 10.6, 10.527, 10.95, 11.78, 11.757, 11.79, 11.16, 10.987, 11.33, 11.313, 11.69, 11.653, 11.633, 11.843, 12.583, 13.003, 13.493, 12.913)
+sig = array.indexof(T, float(time))
+ev = array.indexof(T, float(time[1]))
+strategy.order("Z", strategy.short, qty=1, stop=1.0)
+if strategy.position_size == 0 and sig >= 0
+    strategy.entry("L", strategy.long)
+else if strategy.position_size > 0 and ev >= 0
+    strategy.exit("X", "L", limit=array.get(V, ev))
+else if strategy.position_size > 0
+    strategy.cancel("X")
+    strategy.close_all(comment="late")

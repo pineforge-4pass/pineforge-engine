@@ -1,0 +1,36 @@
+{
+  "synthetic": true,
+  "authored_for": "per-entry global exit pin, px-pin-xsame sets R, R2, R3 and R4 (own script; no population source was sent)",
+  "pin_script": "pxsame2-L-pl-rstp-nc",
+  "parameters": {
+    "side": "long",
+    "add": "stop",
+    "add_offset_ticks": 3,
+    "profit_ticks": 4,
+    "loss_ticks": 6,
+    "calc_on_order_fills": false
+  },
+  "export": {
+    "tool": "lab tv --no-note",
+    "channel": "ws-report-v1",
+    "exported_at": "2026-10-05T19:15:10.581Z",
+    "chart": {
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "from": "2025-04-01",
+      "to": "2026-05-01"
+    },
+    "returned_range": {
+      "from": 1743514200000,
+      "to": 1777578300000
+    },
+    "range_proof": "covered",
+    "raw_frame_sha256": "f58e5b46af14ac517ff375c93b0ec3e465056329a2ab879d291acf2fad9a1a74",
+    "closed_trades": 2421
+  },
+  "strategy_pine_sha256": "e8f3f808df001eb2615b785558c0753be7be7a1277ed7ee027fa66a3c416cf5c",
+  "tv_trades_sha256": "24189cbedf2f7d2b34bc4907c2d4625b9a6952ff755287085856ab7b18bc6b18",
+  "generated_by": "d1220bb (pineforge-codegen-oss main)",
+  "prediction": "set R2: predicted before the export by fifo_pred v2 (pin2/PREDICTIONS.md, 03:14:51), v4 reproduces it",
+  "predictor_sha256": "1db5eb7b4102878899100b822505ec9a9e66d0e0672b5189a766da13dff6cea4"
+}
