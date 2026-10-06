@@ -56,7 +56,8 @@ int main() {
              pineforge::MagnifierDistribution::ENDPOINTS);
     assert(host.last_error().empty());
     std::vector<const orders::ExecutionAppliedEvent*> receipts;
-    for (const auto& event : host.native_events(0)) {
+    const auto events = host.native_events(0);
+    for (const auto& event : events) {
         if (!event.command) continue;
         if (const auto* applied = std::get_if<orders::ExecutionAppliedEvent>(&*event.command)) {
             if (applied->closed_trade_count) receipts.push_back(applied);

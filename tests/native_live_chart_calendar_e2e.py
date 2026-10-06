@@ -9,7 +9,7 @@ import tempfile
 from zoneinfo import ZoneInfo
 
 from native_live_chart_input_e2e import (
-    actions, checked, config_args, config_for, oracle_command, write_events,
+    actions, checked, config_args, config_for, oracle_command, require_refusal, write_events,
 )
 from native_live_report_e2e import action_key, equal, write_csv
 
@@ -121,8 +121,8 @@ def prove(root, runner, oracle, library, cell, probe):
         if probe:
             continue
         if not admitted and mode == "bars":
-            assert result.returncode == 1 and result.stderr.startswith(
-                f"pineforge-live: chart delivery for a {timeframe} chart on this session calendar is not supported yet:"), receipt
+            require_refusal(result,
+                f"pineforge-live: chart delivery for a {timeframe} chart on this session calendar is not supported yet:")
             assert "its bars do not tile the calendar's trading days" in result.stderr, receipt
             assert not ledger.exists() and not Path(str(ledger) + ".lock").exists(), receipt
             continue

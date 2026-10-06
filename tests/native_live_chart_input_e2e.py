@@ -20,6 +20,12 @@ def checked(command):
     return json.loads(result.stdout)
 
 
+def require_refusal(result, prefix):
+    errors = [line for line in result.stderr.splitlines()
+              if line.startswith("pineforge-live: ") and not line.startswith("pineforge-live: warning: ")]
+    assert result.returncode == 1 and len(errors) == 1 and errors[0].startswith(prefix), result.stderr
+
+
 def chart_rows(timeframe, session=False, timezone="UTC"):
     starts = []
     zone = ZoneInfo("America/New_York" if session else timezone)
@@ -171,8 +177,7 @@ def refusals(root, runner, library):
         ledger = root / f"refused-{mode}.sqlite"
         command = base[:-1] + [mode, "--input-tf", "1", "--ledger", ledger]
         result = subprocess.run(list(map(str, command)), text=True, capture_output=True, timeout=30)
-        assert result.returncode == 1 and result.stderr.startswith(
-            "pineforge-live: chart delivery refuses --input-tf 1 with --script-tf 15;"), result.stderr
+        require_refusal(result, "pineforge-live: chart delivery refuses --input-tf 1 with --script-tf 15;")
         assert not ledger.exists() and not Path(str(ledger) + ".lock").exists()
     for timeframe in ("D", "W"):
         write_csv(warmup, chart_rows(timeframe, timezone="America/New_York")[:24])
@@ -184,7 +189,7 @@ def refusals(root, runner, library):
                            "--script-tf", timeframe, "--symbol", "TEST:EXAMPLE", "--timezone", timezone]
                 result = subprocess.run(list(map(str, command)), text=True, capture_output=True, timeout=30)
                 assert result.returncode == 1, (command, result.stdout, result.stderr)
-                assert result.stderr.startswith("pineforge-live: daily/weekly chart delivery on a daylight-saving calendar is not supported yet;"), result.stderr
+                require_refusal(result, "pineforge-live: daily/weekly chart delivery on a daylight-saving calendar is not supported yet;")
                 assert not ledger.exists() and not Path(str(ledger) + ".lock").exists()
     for name, rows in (("1m", chart_rows("1")[:24]), ("gap", chart_rows("15")[:24:2]),
                        ("unaligned", [{**bar, "ts_open": bar["ts_open"] + 60000} for bar in chart_rows("15")[:24]])):
@@ -193,7 +198,7 @@ def refusals(root, runner, library):
         result = subprocess.run(list(map(str, base + ["--ledger", ledger])), text=True, capture_output=True, timeout=30)
         prefix = ("native warmup has an in-session gap" if name == "gap" else
                   "native warmup bar is not aligned to the configured calendar;")
-        assert result.returncode == 1 and result.stderr.startswith("pineforge-live: " + prefix), result.stderr
+        require_refusal(result, "pineforge-live: " + prefix)
         assert not ledger.exists()
     write_csv(warmup, chart_rows("15")[:24])
     for offset in (60000, 1800000):
@@ -201,8 +206,7 @@ def refusals(root, runner, library):
                                                          "ts_open": chart_rows("15")[23]["ts_open"] + offset})) + "\n")
         ledger = root / f"bad-feed-{offset}.sqlite"
         result = subprocess.run(list(map(str, base + ["--ledger", ledger])), text=True, capture_output=True, timeout=30)
-        assert result.returncode == 1 and result.stderr.startswith(
-            "pineforge-live: input bar cadence must follow the configured input timeframe and session calendar"), result.stderr
+        require_refusal(result, "pineforge-live: input bar cadence must follow the configured input timeframe and session calendar")
         with sqlite3.connect(ledger) as database:
             assert database.execute("SELECT COUNT(*) FROM inputs").fetchone()[0] == 0
     feed.write_text("")
@@ -223,8 +227,7 @@ def refusals(root, runner, library):
         original = ledger.read_bytes()
         result = subprocess.run(list(map(str, base[:-1] + [mode, "--ledger", ledger])),
                                 text=True, capture_output=True, timeout=30)
-        assert result.returncode == 1 and result.stderr.startswith(
-            "pineforge-live: legacy input-tf 1 < script-tf ledger cannot resume with chart delivery; redeploy"), result.stderr
+        require_refusal(result, "pineforge-live: legacy input-tf 1 < script-tf ledger cannot resume with chart delivery; redeploy")
         assert ledger.read_bytes() == original and not Path(str(ledger) + ".lock").exists()
     if os.name == "posix" and os.uname().sysname == "Linux":
         tzdir = root / "malformed-zoneinfo"
@@ -237,8 +240,7 @@ def refusals(root, runner, library):
                    "--timezone", "Bad/Zone", "--ledger", ledger]
         result = subprocess.run(list(map(str, command)), text=True, capture_output=True, timeout=30,
                                 env={**os.environ, "TZDIR": str(tzdir)})
-        assert result.returncode == 1 and result.stderr.startswith(
-            "pineforge-live: chart timezone rules cannot be inspected"), result.stderr
+        require_refusal(result, "pineforge-live: chart timezone rules cannot be inspected")
         assert not ledger.exists() and not Path(str(ledger) + ".lock").exists()
 
 
