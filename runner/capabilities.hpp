@@ -83,7 +83,7 @@ inline void require_close_only_capabilities(const std::string& receipt,
         const auto name = function.kind == Json::Kind::String ? function.value : "request.*";
         if (!has_confirmed)
             refuse(name + ": the native stream does not yet reproduce the batch for requested series");
-        if (mode != "bars" || input_tf != "1" || !proven_calendar ||
+        if (mode != "bars" || input_tf != script_tf || !proven_calendar ||
             name != "request.security" || request_index >= confirmed.at("requests").items.size())
             refuse(name + " (no confirmed-bar equivalence proof)");
         const auto& proof = confirmed.at("requests").items[request_index++];

@@ -195,6 +195,25 @@ constexpr const char* unsent_predicate =
 
 } // namespace
 
+void refuse_legacy_ledger(const std::string& path, const std::string& legacy_identity) {
+    if (!std::filesystem::exists(path))
+        return;
+    sqlite3* database = nullptr;
+    const auto opened = sqlite3_open_v2(path.c_str(), &database, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nullptr);
+    struct CloseDatabase {
+        sqlite3* database;
+        ~CloseDatabase() { if (database) sqlite3_close_v2(database); }
+    } close_database{database};
+    if (opened != SQLITE_OK)
+        throw std::runtime_error("existing ledger cannot be inspected");
+    Statement tables(database, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='metadata'");
+    if (!tables.row() || tables.integer(0) != 1)
+        return;
+    Statement identity(database, "SELECT identity FROM metadata WHERE singleton=1");
+    if (identity.row() && identity.text(0) == legacy_identity)
+        throw std::runtime_error("legacy input-tf 1 < script-tf ledger cannot resume with chart delivery; redeploy with chart-timeframe warmup/feed and a new ledger");
+}
+
 struct Ledger::Impl {
     sqlite3* db = nullptr;
     int lock_fd = -1;

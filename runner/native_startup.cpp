@@ -137,6 +137,88 @@ std::optional<std::string> read_resource_bytes(const std::string& path) {
     return bytes;
 }
 
+bool posix_has_dst(std::string_view definition) {
+    std::size_t position = 0;
+    if (!definition.empty() && definition.front() == '<') {
+        position = definition.find('>');
+        if (position == std::string_view::npos)
+            throw std::runtime_error("chart timezone rules cannot be inspected");
+        ++position;
+    } else {
+        while (position < definition.size() &&
+               ((definition[position] >= 'A' && definition[position] <= 'Z') ||
+                (definition[position] >= 'a' && definition[position] <= 'z')))
+            ++position;
+    }
+    while (position < definition.size() &&
+           (definition[position] == '+' || definition[position] == '-' || definition[position] == ':' ||
+            (definition[position] >= '0' && definition[position] <= '9')))
+        ++position;
+    return position < definition.size();
+}
+
+bool tzfile_has_dst(const std::string& bytes, std::int64_t first_timestamp) {
+    const auto unsigned_value = [&](std::size_t offset, std::size_t width) {
+        if (offset > bytes.size() || width > bytes.size() - offset)
+            throw std::runtime_error("chart timezone rules cannot be inspected");
+        std::uint64_t value = 0;
+        for (std::size_t index = 0; index < width; ++index)
+            value = (value << 8) | static_cast<unsigned char>(bytes[offset + index]);
+        return value;
+    };
+    const auto block_size = [&](std::size_t header, std::size_t width) {
+        if (header > bytes.size() || bytes.size() - header < 44 || bytes.compare(header, 4, "TZif"))
+            throw std::runtime_error("chart timezone rules cannot be inspected");
+        return unsigned_value(header + 36, 4) * 6 + unsigned_value(header + 40, 4) +
+            unsigned_value(header + 32, 4) * (width + 1) +
+            unsigned_value(header + 28, 4) * (width + 4) +
+            unsigned_value(header + 24, 4) + unsigned_value(header + 20, 4);
+    };
+    std::size_t header = 0, width = 4;
+    auto length = block_size(header, width);
+    if (length > bytes.size() - 44)
+        throw std::runtime_error("chart timezone rules cannot be inspected");
+    if (bytes[4] != '\0') {
+        if (bytes[4] != '2' && bytes[4] != '3' && bytes[4] != '4')
+            throw std::runtime_error("chart timezone rules cannot be inspected");
+        header = 44 + static_cast<std::size_t>(length);
+        width = 8;
+        length = block_size(header, width);
+    }
+    if (length > bytes.size() - header - 44)
+        throw std::runtime_error("chart timezone rules cannot be inspected");
+    const auto count = unsigned_value(header + 32, 4);
+    const auto types = unsigned_value(header + 36, 4);
+    const auto data = header + 44;
+    const auto type_data = data + count * (width + 1);
+    if (!types || types > 256)
+        throw std::runtime_error("chart timezone rules cannot be inspected");
+    const auto daylight = [&](std::uint64_t index) {
+        if (index >= types)
+            throw std::runtime_error("chart timezone rules cannot be inspected");
+        return unsigned_value(type_data + index * 6 + 4, 1) != 0;
+    };
+    bool previous = daylight(0);
+    for (std::uint64_t index = 0; index < count; ++index) {
+        auto raw = unsigned_value(data + index * width, width);
+        if (width == 4 && (raw & 0x80000000ULL)) raw |= 0xffffffff00000000ULL;
+        const auto timestamp = raw <= static_cast<std::uint64_t>(INT64_MAX)
+            ? static_cast<std::int64_t>(raw) : -static_cast<std::int64_t>(~raw) - 1;
+        const bool next = daylight(unsigned_value(data + count * width + index, 1));
+        if (timestamp >= first_timestamp / 1000 && previous != next)
+            return true;
+        previous = next;
+    }
+    const auto footer = data + static_cast<std::size_t>(length);
+    if (width == 8 && footer < bytes.size() && bytes[footer] == '\n') {
+        const auto end = bytes.find('\n', footer + 1);
+        if (end == std::string::npos)
+            throw std::runtime_error("chart timezone rules cannot be inspected");
+        return posix_has_dst(std::string_view(bytes).substr(footer + 1, end - footer - 1));
+    }
+    return false;
+}
+
 const char* timezone_kind_name(pineforge::native_calendar::TimezoneSourceKind kind) {
     using Kind = pineforge::native_calendar::TimezoneSourceKind;
     switch (kind) {
@@ -475,6 +557,31 @@ void require_native_warmup(const NativeConfigValues& spec, const std::vector<pf_
     default:
         throw std::runtime_error("native warmup preflight refused");
     }
+}
+
+void require_chart_calendar(const std::string& script_tf, const std::string& timezone,
+                            std::int64_t first_timestamp) {
+    const auto clock = pineforge::native_calendar::parse_timeframe(script_tf);
+    if (!clock)
+        throw std::runtime_error("chart timeframe is invalid");
+    using Unit = pineforge::native_calendar::TimeframeUnit;
+    if (clock->unit() != Unit::Day && clock->unit() != Unit::Week)
+        return;
+    const auto facts = pineforge::native_calendar::timezone_identity_descriptor(timezone);
+    if (!facts || !facts->valid())
+        throw std::runtime_error("chart timezone rules cannot be inspected");
+    using Kind = pineforge::native_calendar::TimezoneSourceKind;
+    bool daylight = facts->kind == Kind::PosixDefaultDst;
+    if (facts->kind == Kind::PosixExplicit)
+        daylight = posix_has_dst(facts->effective_definition);
+    for (const auto& resource : facts->resource_paths) {
+        const auto bytes = read_resource_bytes(resource);
+        if (!bytes)
+            throw std::runtime_error("chart timezone rules cannot be inspected");
+        daylight = daylight || tzfile_has_dst(*bytes, first_timestamp);
+    }
+    if (daylight)
+        throw std::runtime_error("daily/weekly chart delivery on a daylight-saving calendar is not supported yet; use an intraday chart or a non-daylight-saving timezone");
 }
 
 Json timezone_rule_identity(std::string_view timezone, bool required) {
