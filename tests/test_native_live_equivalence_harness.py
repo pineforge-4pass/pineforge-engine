@@ -15,6 +15,7 @@ from native_live_tick_tape import (
     message_groups, message_hashes, parse_cost, run_genuine_tape,
 )
 from native_live_tick_oracle import classify_first_divergence, first_fill, modeled_points, script_bars
+from native_live_genuine_retry_e2e import check_invocation_order
 
 
 class HarnessContract(unittest.TestCase):
@@ -61,6 +62,56 @@ class HarnessContract(unittest.TestCase):
     def redelivery_fixture(self, event_ids, effects_before=0):
         return {"event_ids": event_ids, "attempts_before": 3, "effects_before": effects_before,
                 "invocations": [{"attempts_before": 3, "effects_before": effects_before}]}
+
+    def genuine_invocation_fixture(self):
+        attempts, effects = self.delivery_fixture((2, 1, 3))
+        attempts[1]["status"] = 200
+        attempts = attempts[:4] + attempts[5:]
+        invocations = [
+            {"command": ["runner", "run"], "attempts_before": 0, "effects_before": 0},
+            {"command": ["runner", "run"], "attempts_before": 1, "effects_before": 0},
+            {"command": ["runner", "redeliver"], "attempts_before": 3, "effects_before": 1},
+        ]
+        return attempts, effects, invocations
+
+    def test_genuine_invocations_allow_logical_order_across_explicit_redelivery(self):
+        attempts, effects, invocations = self.genuine_invocation_fixture()
+        redelivery = self.redelivery_fixture(["1", "3"], effects_before=1)
+        self.assertEqual([effect["sequence"] for effect in ordered_delivery_effects(
+            attempts, effects, redelivery)], [1, 2, 3])
+        check_invocation_order(attempts, effects, invocations)
+
+    def test_genuine_invocations_refuse_missing_overlapping_and_misattributed_boundaries(self):
+        for index, key, value, diagnostic in (
+                (0, "attempts_before", 1, "initial invocation"),
+                (1, "attempts_before", 4, "invocation boundary"),
+                (1, "effects_before", 1, "no successful attempt")):
+            with self.subTest(index=index, key=key, value=value):
+                attempts, effects, invocations = self.genuine_invocation_fixture()
+                invocations[index][key] = value
+                with self.assertRaisesRegex(AssertionError, diagnostic):
+                    check_invocation_order(attempts, effects, invocations)
+
+    def test_genuine_invocations_refuse_redelivery_attempt_and_effect_reordering(self):
+        for reorder_effects in (False, True):
+            with self.subTest(reorder_effects=reorder_effects):
+                attempts, effects, invocations = self.genuine_invocation_fixture()
+                if reorder_effects:
+                    effects[1], effects[2] = effects[2], effects[1]
+                else:
+                    attempts[3], attempts[4] = attempts[4], attempts[3]
+                with self.assertRaisesRegex(AssertionError, "reordered"):
+                    check_invocation_order(attempts, effects, invocations)
+
+    def test_genuine_invocations_keep_first_pass_order_strict_across_restart(self):
+        attempts, effects = self.delivery_fixture((2, 1, 3))
+        attempts = [attempts[4], attempts[3], attempts[5]]
+        invocations = [
+            {"command": ["runner", "run"], "attempts_before": 0, "effects_before": 0},
+            {"command": ["runner", "run"], "attempts_before": 1, "effects_before": 1},
+        ]
+        with self.assertRaisesRegex(AssertionError, "first-pass effects"):
+            check_invocation_order(attempts, effects, invocations)
 
     def test_explicit_redelivery_allows_an_earlier_failed_effect_after_later_effects(self):
         attempts, effects = self.delivery_fixture((2, 1, 3))

@@ -10,7 +10,9 @@ import json
 from pathlib import Path
 import sys
 
-from native_live_equivalence_e2e import Strategy, action_key, chart_bar_array, write_json
+from native_live_equivalence_e2e import (
+    Strategy, action_key, chart_bar_array, first_difference, ordered_delivery_effects, write_json,
+)
 from native_live_tick_tape import (
     TIMESTAMP_CONTRACT, direct_tape, file_digest, genuine_case, message_groups, message_hashes,
 )
@@ -34,6 +36,32 @@ def synthetic_fixture():
     return warmup, packets, bars
 
 
+def check_invocation_order(attempts, effects, invocations):
+    limits = {"attempts_before": len(attempts), "effects_before": len(effects)}
+    assert invocations and all(invocations[0][key] == 0 for key in limits), (
+        "initial invocation must precede every attempt/effect", invocations)
+    first_pass = []
+    for index, (invocation, following) in enumerate(zip(invocations, invocations[1:] + [limits])):
+        assert all(0 <= invocation[key] <= following[key] <= limit
+                   for key, limit in limits.items()), (
+            "invalid invocation boundary", index, invocation, following, limits)
+        phase_attempts = attempts[invocation["attempts_before"]:following["attempts_before"]]
+        phase_effects = effects[invocation["effects_before"]:following["effects_before"]]
+        sequences = [effect["sequence"] for effect in phase_effects]
+        assert sequences == sorted(sequences), (
+            "invocation effects are reordered", index, invocation["command"], sequences)
+        successful = {attempt["event_id"] for attempt in phase_attempts if attempt["status"] == 200}
+        assert all(effect["event_id"] in successful for effect in phase_effects), (
+            "invocation effect has no successful attempt in its phase", index, sequences, successful)
+        if invocation["command"][1] == "redeliver":
+            attempt_sequences = [json.loads(attempt["body"])["sequence"] for attempt in phase_attempts]
+            assert attempt_sequences == sorted(attempt_sequences), (
+                "redelivery invocation attempts are reordered", index, attempt_sequences)
+        else:
+            first_pass.extend(sequences)
+    assert first_pass == sorted(first_pass), ("first-pass effects are reordered", first_pass)
+
+
 def check_case(result, directory, reference, total_inputs):
     assert result["status"] == "PASS", result
     assert result["expected_actions"] == len(reference["actions"]) > 0, result
@@ -41,13 +69,23 @@ def check_case(result, directory, reference, total_inputs):
     assert result["action_difference"] is None and result["hash_difference"] is None, result
     assert result["pending_events"] == 0 and result["committed_inputs"] == total_inputs, result
     effects = json.loads((directory / "effects.json").read_text())
-    assert [action_key(effect) for effect in effects] == [action_key(action) for action in reference["actions"]]
+    attempts = json.loads((directory / "attempts.json").read_text())
+    redelivery = json.loads((directory / "redelivery.json").read_text()) if result["fail_first"] else None
+    try:
+        logical_effects = ordered_delivery_effects(attempts, effects, redelivery)
+    except RuntimeError as error:
+        raise AssertionError(f"{result['scenario']}: delivery invariants failed: {error}") from error
+    difference = first_difference([action_key(action) for action in reference["actions"]],
+        [action_key(effect) for effect in logical_effects])
+    assert difference is None, {"scenario": result["scenario"], "logical_action_difference": difference,
+        "arrival_sequences": [effect["sequence"] for effect in effects]}
     invocations = json.loads((directory / "invocations.json").read_text())
     expected_commands = ["run"] * (2 if result["restart"] else 1)
     if result["fail_first"]:
         expected_commands.append("redeliver")
     assert [entry["command"][1] for entry in invocations] == expected_commands, invocations
     assert all(entry["command"][0] != "/usr/bin/time" for entry in invocations), invocations
+    check_invocation_order(attempts, effects, invocations)
     costs = json.loads((directory / "commands.json").read_text())
     assert len(costs) == len(invocations), (costs, invocations)
     assert all(command[:2] == ["/usr/bin/time", "-v"] for command in costs), costs
@@ -56,10 +94,8 @@ def check_case(result, directory, reference, total_inputs):
         assert 0 < result["sigkill"]["committed_before_kill"] < total_inputs, result
         assert 0 < result["resume_from_input"] < total_inputs, result
     if result["fail_first"]:
-        attempts = json.loads((directory / "attempts.json").read_text())
         rejected = Counter(attempt["event_id"] for attempt in attempts if attempt["status"] == 503)
         assert rejected == Counter(effect["event_id"] for effect in effects), rejected
-        redelivery = json.loads((directory / "redelivery.json").read_text())
         assert len(redelivery["invocations"]) == 1, redelivery
         assert redelivery["invocations"][0] == invocations[-1], (redelivery, invocations)
         assert result["redelivery_returncode"] == 0, result
