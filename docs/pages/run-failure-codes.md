@@ -13,7 +13,8 @@ so copying another failure's English never claims that failure's class.
 
 The vocabulary is `docker/run_failure_codes.json` (schema
 `pineforge-run-failure-catalog/v1`). Every release attaches it, and its
-changes since the previous release, as release assets
+changes since the release its notes start at (for a final release, the
+previous final release), as release assets
 ([below](#run_failure_codes_release)).
 
 ## Reading a failure {#run_failure_codes_getters}
@@ -44,6 +45,10 @@ if (code != NULL && code[0] != '\0') {
   failure.
 - Both pointers live as long as #strategy_get_last_error's: until the next run
   or setter on the handle.
+- Run each request on a fresh handle. A handle whose run failed, a script
+  stop included and an aborted run excepted, refuses its next run with `Pine
+  native adapter failed to configure projected run spec` (`engine_invariant`),
+  as it did before the codes.
 - `PINEFORGE_HAS_RUN_FAILURE_CODES_V1` (defined by `<pineforge/pineforge.h>`
   and `<pineforge/run_failure.hpp>`) is the compile-time probe. At run time a
   harness looks the two symbols up (`dlsym`, Python's `hasattr`): a strategy
@@ -98,8 +103,8 @@ The tables below list the catalog at this tree.
 | `resource` | Machine memory; retryable, capped. |
 | `strategy` | The script or its own declaration; terminal. |
 | `strategy_limit` | A TradingView or PineForge resource cap the script reached; terminal. |
-| `symbol_feeds` | Other symbols' bars the service installed; terminal. |
-| `symbol_metadata` | The symbol's catalog metadata; retryable after a resync. |
+| `symbol_feeds` | Other symbols' bars installed through the symbol-feed setters; terminal. |
+| `symbol_metadata` | The symbol's metadata the caller supplied; retryable once the caller refreshes it. |
 | `unsupported` | A construct or option PineForge does not support for this run; terminal. |
 
 ### Codes
@@ -137,7 +142,7 @@ The tables below list the catalog at this tree.
 | `setting_rejected` | `input` | no | `entrypoint` (vocab, 4 values, optional), `input` (pine_source, optional), `reason` (vocab, 21 values, optional) | A run setting (an input or a strategy() override) was refused. |
 | `setting_unsupported` | `unsupported` | no | none | A setting this compiled strategy cannot honour. |
 | `strategy_create_failed` | `engine_fault` | no | none | The compiled strategy could not be created. |
-| `strategy_library_incompatible` | `engine_fault` | no | `abi` (integer, optional), `missing` (vocab, 13 values, optional), `reason` (vocab, 5 values) | The compiled strategy library does not match the harness. |
+| `strategy_library_incompatible` | `engine_fault` | no | `abi` (integer, optional), `missing` (vocab, 13 values, optional), `reason` (vocab, 6 values) | The compiled strategy library does not match the harness. |
 | `strategy_runtime_error` | `strategy` | no | none | The script stopped itself with runtime.error(); the message, possibly empty, is the text. |
 | `strategy_settings_rejected` | `strategy` | no | `field` (vocab, 30 values) | A strategy() declaration setting (or its override) is not a value the engine accepts. |
 | `stream_input_rejected` | `input` | no | none | A streaming input (bar, tick or auxiliary bar) was refused. |
@@ -163,8 +168,17 @@ The tables below list the catalog at this tree.
 A code's closed value lists and its English templates are the catalog's own
 `values` and `english` arrays. A `vocab` argument takes exactly one of its
 values. `retryable` says whether the same request can succeed when it is run
-again: after memory frees up, after the symbol's metadata is resynchronized,
-or after an aborted run.
+again: after memory frees up, once the caller refreshes the symbol's
+metadata, or after an aborted run.
+
+The English templates describe the texts a code is raised with; they are not
+a grammar. A `{name}` marks a part that varies and need not be an argument of
+that name, and one text can sit under more than one code: a frame that fails
+after an inner failure was recorded (`native current execution failed`, the
+configure refusal above) keeps its own text and carries that failure's code:
+`run_aborted` after an abort whose report was cleared, `engine_invariant` when
+nothing was recorded. A consumer reads the code and its arguments, never the
+English.
 
 ## The catalog {#run_failure_codes_catalog}
 
@@ -196,7 +210,7 @@ diagnostics-catalog diff:
 ```json
 {
   "schema": "pineforge-run-failure-catalog-diff/v1",
-  "from": {"version": "1.2.0", "tag": "v1.2.0", "catalogSha256": null},
+  "from": {"version": "1.3.0", "tag": "v1.3.0", "catalogSha256": null},
   "to": {"version": null, "unreleased": true, "catalogSha256": "<sha256>"},
   "catalogSchema": {"before": null, "after": "pineforge-run-failure-catalog/v1"},
   "metadataChanges": [],
@@ -230,28 +244,47 @@ diagnostics-catalog diff:
 `source-guard-run-failure-diff` stage of `ci_preflight` and of every
 `ci_verify` profile, recomputes it byte for byte (`--check`). The check also
 fails when `to` is not this tree's catalog, `from.tag` is not the newest
-release tag reachable from `HEAD`, or a code was removed. A clone without tags
-cannot name that tag: while `from.catalogSha256` is `null` the check still
-recomputes the whole diff and says so; once it is not, the check fails until
-the tags are fetched.
+release tag reachable from `HEAD`, a code was removed, or a code it adds names
+in `since` a release that is not after `from`. A clone without tags cannot
+name that tag. Where the tags are required (`PINEFORGE_REQUIRE_RELEASE_TAGS`
+set to any value but `0` or empty; every workflow that runs the guards sets
+it to `1`) the check then fails until they are fetched. Elsewhere, `from.tag`
+must be the release `VERSION` names (the release workflow writes both in one
+commit), so a diff kept from before a later release fails; a `null`
+`from.catalogSha256` is taken only for a release older than 1.4.0, the first
+that published a catalog; otherwise the check runs the diff backwards over
+this tree's catalog (every change put back to its `before`, the added codes
+dropped, the removed ones restored), requires the canonical bytes it gets to
+hash to `from.catalogSha256`, and recomputes the whole diff from them. It says
+so: without the tags neither `from.tag` nor `from.catalogSha256` is checked
+against git, only the rebuilt catalog against the sha the diff states, and
+every run with the tags checks both.
 
-Each release attaches two assets beside its tarballs:
+Each release attaches two or three assets beside its tarballs:
 
 | Asset | What it is |
 | --- | --- |
 | `run_failure_codes-<tag>.json` | The catalog of that release, byte for byte. |
-| `run_failure_codes_diff-<tag>.json` | The checked-in diff, stamped: `to.version` is the release's version and `to.catalogSha256` hashes the catalog asset. |
+| `run_failure_codes_diff-<tag>.json` | The changes since the release the release notes start at -- for a final release, the previous final release -- stamped: `to.version` is the release's version and `to.catalogSha256` hashes the catalog asset. |
+| `run_failure_codes_diff-<tag>-from-<candidate>.json` | Only on a final release that follows its candidates: the changes since the last candidate, the step in the chain of diffs (the checked-in diff, stamped). |
 
-The release workflow stamps the diff with `--stamp`, which fails the release
+The release workflow stamps the diffs with `--stamp`, which fails the release
 before anything is committed when the catalog changed after the diff was
-written, the diff does not start at the previous release tag, a code was
-removed, or a code this release adds names another release in `since` (a
+written, the diff does not start at the release the notes start at or at a
+release candidate after it, a code was removed, the release adds or changes
+codes but is not a minor or major release (it says, in one line, to bump
+minor), or a code this release adds names another release in `since` (a
 release candidate `X.Y.Z-rc.N` ships the codes of `X.Y.Z`). It then commits
 the diff reset to the new tag (`--reset`: from this release, nothing added)
-with the version bump, so the next diff starts there. The diffs chain through
-every release, release candidates included: a consumer that skips releases
-follows the chain of `from.tag` values from its own release, or compares the
-two catalog assets.
+with the version bump, and pushes that commit and the tag atomically, so the
+next diff starts there. The diffs chain through every release, release
+candidates included: a consumer that skips releases follows the chain of
+`from.tag` values from its own release, a final release's `-from-` asset being
+its step, or compares the two catalog assets. A consumer of final releases
+alone reads each one's `run_failure_codes_diff-<tag>.json`, which starts at the
+previous final release. Should a release fail after its tag is pushed,
+`--stamp --to-tag <tag> --previous-tag <start>` rebuilds each of its diffs from
+git alone, byte for byte.
 
 ## Versioning {#run_failure_codes_versioning}
 
@@ -261,13 +294,19 @@ two catalog assets.
 - **A code keeps its meaning.** Its `class`, its `retryable` flag and each
   argument's `kind` do not change, a closed list never loses a value, and an
   optional argument never becomes required, unless the code is deprecated.
+  Its `since` never changes.
 - **Additions are additive.** A new code, a new value in a closed list, a new
   optional argument and a new English template ship in a MINOR release, the
   rule the [public contract](@ref public_contract) gives the C ABI. `since`
   names the release that first shipped a code.
 
 `scripts/check_run_failure_codes.py` holds these rules against the catalog of
-the newest release tag reachable from `HEAD`.
+the newest release tag reachable from `HEAD` (in a clone without tags, the
+catalog the checked-in diff rebuilds, as above). The diff's own checks hold
+the rest: a code added since a release names a later one in `since`, and the
+release workflow's `--stamp` refuses a release that adds or changes codes
+unless it is a minor or major release over the release its diff starts at
+(after a candidate of its own version, unless that version is an `X.Y.0`).
 
 ## Generated code {#run_failure_codes_codegen}
 
@@ -284,7 +323,7 @@ reads.
 | `pine_no_data_stop(function, call, line, english)` | `no_data_request` |
 | `pine_other_symbol_stop(function, symbol_literal_or_null, call, line, english)` | `other_symbol_request` |
 | `pine_array_stop(reason, method_or_null, english)` | `pine_array_error` |
-| `pine_collection_stop(collection, reason, english)` | `pine_array_error` (`historical_modified`) or `pine_na_reference` (`na_reference`) |
+| `pine_collection_stop(collection, reason, english)` | `pine_array_error` (`historical_modified`) or `pine_na_reference` (`na_reference`); `collection` is `array` or `matrix` |
 | `pine_na_stop(object, english)` | `pine_na_reference` |
 | `pine_limit_stop(limit, max, english)` | `pine_runtime_limit` |
 | `pine_unsupported_stop(reason, line, english)` | `request_unsupported` |
@@ -296,3 +335,14 @@ The generated wrapper records an exception that escapes the strategy with
 `"<entrypoint>: <what()>"`, and the code is the exception's own.
 `note_run_failure_unknown(engine, entrypoint)` records a non-standard
 exception as `engine_unclassified_error`.
+
+A legacy setter the strategy latched is recorded with
+`note_run_failure(engine, text, code, args)` or, with the value it already
+holds, `note_run_failure(engine, text, value)`. Its exception type derives
+from `checked_settings::LatchedSettingsFailure` and from `RunFailureInfo`,
+which it also holds as a copy-assignable member, built with the
+`RunFailureInfo(code, args)` constructor and read with `run_failure()`. Those
+names, `RunFailureValue`, and the codes `RunFailureCode::none`,
+`setting_rejected` and `out_of_memory` are part of the contract too. Where the
+script is prepared, an exception that already carries a code keeps it; a
+latched failure without one reads `setting_rejected`.
