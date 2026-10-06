@@ -1038,7 +1038,7 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
     if hasattr(lib, "strategy_get_last_error"):
         lib.strategy_get_last_error.argtypes = [ctypes.c_void_p]
         lib.strategy_get_last_error.restype  = ctypes.c_char_p
-    # The failure's code and arguments (engine 1.3.0+), and whether the last
+    # The failure's code and arguments (engine 1.4.0+), and whether the last
     # run completed (ABI v4). hasattr-guarded: an older library has none.
     for _n in ("strategy_get_last_error_code", "strategy_get_last_error_args"):
         if hasattr(lib, _n):

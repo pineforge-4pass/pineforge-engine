@@ -2725,6 +2725,14 @@ bool NativeExecutionConsumer::preflight_bars(BacktestEngine& engine, const Bar* 
                 indexed("low", " must not exceed open or close", "low_above_body");
             } else if (bar.high < std::max(bar.open, bar.close)) {
                 indexed("high", " must not be below open or close", "high_below_body");
+            } else if (std::isnan(bar.volume)
+                       || (std::isfinite(bar.volume) && bar.volume >= 0.0)) {
+                // A valid volume: the spec refused something else (a
+                // non-positive price); the text keeps its volume wording.
+                std::string message = "bar[" + std::to_string(result.index)
+                    + "].volume must be non-negative finite or NaN (unavailable)";
+                refuse(message.c_str(), RunFailureCode::chart_bars_rejected,
+                       {{"index", result.index}, {"reason", "structural"}});
             } else {
                 indexed("volume", " must be non-negative finite or NaN (unavailable)",
                         "volume_invalid");
@@ -5733,7 +5741,8 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         render_exception(engine, e);
     } catch (...) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Settlement, P});
-        render_unclassified(engine, "native settlement exception");
+        if (engine.last_error_.empty())
+            render_unclassified(engine, "native settlement exception");
     }
     return std::nullopt;
 }
@@ -7002,7 +7011,8 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
     } catch (...) {
         consuming_request_ = false;
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Settlement});
-        render_unclassified(engine, "native current execution exception");
+        if (engine.last_error_.empty())
+            render_unclassified(engine, "native current execution exception");
         throw;
     }
 }
@@ -7132,7 +7142,8 @@ void NativeExecutionConsumer::invoke_recalculation(
         current_frame_.reset();
         if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
             NativeFailureOperation::Callback, ordinal});
-        render_unclassified(engine, "native recalculation callback exception");
+        if (engine.last_error_.empty())
+            render_unclassified(engine, "native recalculation callback exception");
         return;
     }
     finish_callback(engine, ordinal);
@@ -7184,7 +7195,8 @@ void NativeExecutionConsumer::invoke_sub_bar_callback(
         current_frame_.reset();
         if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
             NativeFailureOperation::Callback, ordinal});
-        render_unclassified(engine, "native sub-bar callback exception");
+        if (engine.last_error_.empty())
+            render_unclassified(engine, "native sub-bar callback exception");
         return;
     }
     finish_callback(engine, ordinal);
@@ -7272,7 +7284,8 @@ void NativeExecutionConsumer::invoke_applied_callback(
         current_frame_.reset();
         if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
             NativeFailureOperation::Callback, notification.ordinal});
-        render_unclassified(engine, "native applied callback exception");
+        if (engine.last_error_.empty())
+            render_unclassified(engine, "native applied callback exception");
     }
 }
 

@@ -136,7 +136,7 @@ def check_abi(lib: ctypes.CDLL) -> None:
             f"{EXPECTED_PF_ABI}; rebuild.")
 
 
-# A failure's stable code and arguments (engine 1.3.0+; an older .so has neither).
+# A failure's stable code and arguments (engine 1.4.0+; an older .so has neither).
 def declare_error_code(lib: ctypes.CDLL) -> None:
     for name in ("strategy_get_last_error_code", "strategy_get_last_error_args"):
         if hasattr(lib, name):

@@ -61,10 +61,15 @@ version number follows semantic versioning over the surfaces the
   `pine_collection_stop`, `pine_na_stop`, `pine_limit_stop`,
   `pine_unsupported_stop`, `pine_string_stop`, `pine_engine_invariant`), each
   with the English it prints today, and `pine_runtime_error` now throws a
-  coded `std::runtime_error`. The Pine library's own refusals (array, matrix,
-  map, string, drawing and argument checks) carry their codes too, so a
-  script's out-of-range `matrix.get` reads `pine_matrix_error`, not an engine
-  fault, whatever C++ type is thrown.
+  coded `std::runtime_error`. Until a codegen that calls them pairs with
+  this engine, a generated array, string or request stop still reads
+  `strategy_runtime_error` (or, for a C++ library refusal such as an
+  out-of-range `str.substring`, the type's safety net). The runtime library's
+  own refusals carry their codes already: the checks of `matrix<int>`,
+  `matrix<string>` and `matrix<bool>`, maps, drawings and built-in arguments,
+  so a script's `matrix.add_col` on an empty `matrix<int>` reads
+  `pine_matrix_error`, not an engine fault, whatever C++ type is thrown
+  (`matrix<float>` still checks no index).
 - **A failed run no longer reads as a success.** A script stopped by
   `runtime.error()` with an empty message left an empty
   `strategy_get_last_error()`, and `docker/run_json.py`, which tested the text

@@ -401,6 +401,15 @@ def strip_comments(text: str) -> str:
             j = n if j < 0 else j + 2
             blank(i, j)
             i = j
+        elif text[i] == "'" and digit_separator(text, i):
+            i += 1  # C++14 digit separator (50'000), not a character literal
+        elif text.startswith('R"', i) and (i == 0 or not (text[i - 1].isalnum()
+                                                          or text[i - 1] == "_")):
+            open_paren = text.find("(", i + 2)
+            close = text.find(")" + text[i + 2:open_paren] + '"', open_paren + 1)
+            end = n if open_paren < 0 or close < 0 else close + len(text[i + 2:open_paren]) + 2
+            blank(i + 2, min(end, n))
+            i = end
         elif text[i] in "\"'":
             quote, j = text[i], i + 1
             while j < n and text[j] != quote:
@@ -410,6 +419,17 @@ def strip_comments(text: str) -> str:
         else:
             i += 1
     return "".join(out)
+
+
+def digit_separator(text: str, at: int) -> bool:
+    """Whether the apostrophe at `at` sits inside a numeric literal: the token
+    it continues starts with a digit and a digit or letter follows it."""
+    if at + 1 >= len(text) or not text[at + 1].isalnum():
+        return False
+    start = at
+    while start > 0 and (text[start - 1].isalnum() or text[start - 1] in "_.'"):
+        start -= 1
+    return start < at and text[start].isdigit()
 
 
 def throw_statements(text: str) -> list[tuple[int, str]]:
@@ -579,14 +599,19 @@ def self_test() -> int:
             "  throw std::runtime_error(\"uncoded\");\n"
             "  throw std::logic_error(\"allowed invariant\");\n"
             "  const char* s = \"throw inside a string\";\n"
+            "  int cap = 50'000;\n"
+            "  throw std::out_of_range(\"after a digit separator\");\n"
+            "  // the scan's apostrophe\n"
+            "  const char* r = R\"x(throw in a raw string)x\";\n"
             "}\n")
         (root / ALLOWLIST).write_text(
             "# comment\n"
             "src/source/a.cpp | allowed invariant | an invariant\n"
             "src/source/a.cpp | gone | stale row\n")
         findings = uncoded_throws(root)
-        if (len(findings) != 2 or "uncoded" not in findings[0]
-                or "stale row" not in findings[1]):
+        if (len(findings) != 3 or "\"uncoded\"" not in findings[0]
+                or "after a digit separator" not in findings[1]
+                or "stale row" not in findings[2]):
             failures.append("the throw scan is wrong: " + repr(findings))
     for failure in failures:
         print("check_run_failure_codes: self-test: " + failure, file=sys.stderr)

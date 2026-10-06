@@ -1947,7 +1947,7 @@ def probe_requests_provenance(requests: dict) -> dict:
 
 def _with_run_failure_code(error: Exception, lib, state) -> Exception:
     """error, carrying the engine's run-failure code when the library reports
-    one (strategy_get_last_error_code / _args, engine 1.3.0+):
+    one (strategy_get_last_error_code / _args, engine 1.4.0+):
     ``run_failure_code`` (str) and ``run_failure_args`` (the canonical JSON
     object text). The message and type are unchanged; the command line prints
     the code to stderr (see the __main__ block)."""

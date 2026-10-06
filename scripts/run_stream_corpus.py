@@ -379,7 +379,7 @@ def main() -> int:
             item["status"] = "error"
             item["error"] = str(exc)
             if getattr(exc, "run_failure_code", None):
-                # The engine's code beside its text (engine 1.3.0+).
+                # The engine's code beside its text (engine 1.4.0+).
                 item["error_code"] = exc.run_failure_code
                 try:
                     item["error_args"] = json.loads(exc.run_failure_args)
