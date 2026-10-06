@@ -162,7 +162,15 @@ For `pineforge-live`, Pine warmup and confirmed-bar feeds use the script
 timeframe in both modes; omitted input defaults to that chart clock.
 Explicit one-minute input with a coarser script is refused before ledger
 creation, and old ledgers for that deployment must be replaced by a new
-chart-input deployment. Intraday session calendars support daylight saving;
+chart-input deployment. In bars mode, an intraday period must divide every
+gap between consecutive session trading-day origins. Startup checks at least
+three years from warmup start, including future clock changes, before creating
+a ledger. For 24x7 UTC, 240 minutes works but 7 minutes does not; for New York
+24x7, 17:00-cutoff and regular-hours calendars, 60 minutes works across daylight
+saving but 45, 120 and 240 minutes do not. Other calendars use their actual
+origin gaps, not a timezone-name allowlist. Unsupported bars refuse by name
+and explain which chart clock to use. Passing intraday ticks-mode paths remain
+admitted. The bars-mode restriction lifts with calendar-aware label-grid support;
 daily/weekly chart delivery requires no daylight-saving transitions from
 warmup onward. UTC daily and weekly charts are supported. Unsupported
 daily/weekly calendars are refused by name. This runner policy does not

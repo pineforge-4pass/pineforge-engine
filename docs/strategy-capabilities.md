@@ -140,8 +140,14 @@ remain unchanged. See `tests/fixtures/confirmed_capabilities/README.md`.
 The runner defaults input to the script clock. Explicit one-minute input
 with a coarser script clock is refused before creating a ledger. Existing
 deployments with that identity must redeploy with chart-timeframe warmup/feed
-and a new ledger; they cannot silently migrate. Intraday clocks allow
-daylight-saving calendars. Daily/weekly chart delivery is supported only
+and a new ledger; they cannot silently migrate. In bars mode, intraday periods
+must divide every gap between consecutive trading-day origins: 240 minutes
+works on 24x7 UTC, while 7 minutes does not; 60 minutes works on New York
+session calendars across daylight-saving transitions, while 45, 120 and 240
+minutes do not. Startup checks at least three years from warmup start and
+refuses unsupported shapes by name before a ledger exists. Passing intraday
+tick paths remain admitted. The bars-mode restriction lifts when the engine
+supports calendar-aware label grids. Daily/weekly chart delivery is supported only
 without daylight-saving transitions from warmup onward, such as UTC;
 unsupported calendars are refused by name before a ledger exists.
 

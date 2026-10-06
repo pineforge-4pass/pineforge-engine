@@ -343,8 +343,20 @@ to use `--script-tf`, or specify that same clock explicitly. For example,
 is unchanged. Warmup timestamps are nonnegative Unix milliseconds, aligned
 and contiguous at the input clock on the configured session calendar;
 prices are positive finite values and volume is nonnegative. Provide at
-least one complete chart bar. Intraday minute/hour clocks support session
-calendars across daylight-saving transitions. Daily/weekly chart delivery
+least one complete chart bar. In bars mode, intraday chart periods must
+divide every gap between consecutive trading-day origins on the configured
+session calendar. Startup checks at least three years from warmup start,
+including future daylight-saving transitions, before creating a ledger.
+For 24x7 UTC, use a period that divides 1440 minutes (240 works; 7 does not).
+For New York calendars, use a period that divides 60 minutes (60 works;
+45, 120 and 240 do not), including 17:00-cutoff and regular-hours sessions.
+Other zones with non-hour clock changes are checked against their actual
+session-day origins. Unsupported bars refuse by name with guidance to use
+a chart timeframe that tiles the calendar's trading days. The corresponding
+intraday ticks-mode paths remain admitted where they pass the engine's
+calendar aggregation; they do not use the confirmed-bar label restriction.
+This bars-mode restriction lifts when calendar-aware label-grid support
+ships in the engine. Daily/weekly chart delivery
 requires a timezone without daylight-saving transitions from warmup onward;
 otherwise startup refuses with "daily/weekly chart delivery on a
 daylight-saving calendar is not supported yet". UTC daily/weekly charts
