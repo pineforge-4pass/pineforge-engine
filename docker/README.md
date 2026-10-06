@@ -84,9 +84,11 @@ Optional env vars apply parameter overrides before the backtest runs:
 | `PINEFORGE_OVERRIDES`  | `strategy_set_override(k, v)` | `'{"default_qty_value": "5", "commission_value": "0.04"}'` |
 
 `PINEFORGE_INPUTS` / `PINEFORGE_OVERRIDES` are JSON objects of
-`{string: string}` (numeric values must be quoted strings; the runtime
-parses on its side). Empty / unset → defaults from the original
-`strategy(...)` and `input.*()` calls.
+`{string: string}` (quote numeric values too; the runtime parses on its side).
+A JSON number is still accepted and passed as Python spells it (`5` as `"5"`,
+`1e3` as `"1000.0"`); a boolean, `null`, an array or an object is refused before
+the run (`run_request_invalid`), so spell a boolean `"true"` / `"false"`.
+Empty / unset → defaults from the original `strategy(...)` and `input.*()` calls.
 
 ### `PINEFORGE_OVERRIDES` keys
 
@@ -101,7 +103,7 @@ provide; everything else stays at the strategy's compiled-in default.
 | `slippage`                | integer              | `>= 0`                                                              | Per-fill slippage in ticks (mintick units).                     |
 | `commission_value`        | number               | `>= 0`                                                              | Commission magnitude. Units depend on `commission_type`.        |
 | `commission_type`         | enum                 | `percent`, `cash_per_order`, `cash_per_contract`                    | Selects how `commission_value` is interpreted.                  |
-| `default_qty_value`       | number               | any                                                                 | Default order size, interpreted per `default_qty_type`.         |
+| `default_qty_value`       | number               | `>= 0` (the checked settings API refuses a negative value)          | Default order size, interpreted per `default_qty_type`.         |
 | `default_qty_type`        | enum                 | `fixed`, `percent_of_equity`, `cash`                                | Default sizing mode for `strategy.entry/order` calls.           |
 | `process_orders_on_close` | boolean              | `true` / `false` (or `1` / `0`)                                     | When true, market orders fill at bar close instead of next open.|
 | `close_entries_rule`      | enum                 | `ANY`, `FIFO`                                                       | How `strategy.close(id)` selects entries (FIFO is the default). |
@@ -268,7 +270,9 @@ maps any harness failure to 4) instead of crashing.
 
 Every failure of `docker/run_json.py` prints exactly one line on stdout and no
 report, whatever failed: the run, the request, a file, the strategy library or
-the harness itself.
+the harness itself. The one exception is a report stdout cannot take whole (a
+closed pipe, a full disk): exit status 1, the reason on stderr, and no line
+after the part written.
 
 ```json
 {"engine":"pineforge","error":"<English text>","code":"<code>","args":{...}}
@@ -284,19 +288,24 @@ the harness itself.
   `runtime.error("<any text>")` is always `strategy_runtime_error`.
 - The run's own failure takes its code from `strategy_get_last_error_code` and its
   arguments from `strategy_get_last_error_args` (re-parsed; anything but a JSON
-  object of scalars becomes `{}`). A strategy library without those getters
-  (built before them) prints no `code` and no `args`: the line is the earlier
-  `{"engine":"pineforge","error":"<text>"}`, byte for byte.
+  object of scalars becomes `{}`). A strategy library without the code getter
+  (built before it) prints no `code` and no `args`: a run error with a text is
+  the earlier `{"engine":"pineforge","error":"<text>"}` line, byte for byte, and
+  a run status of 1 without a text is that line with the text `the run did not
+  complete and the engine reported no error`.
 - A run fails when the engine reports a text, a code, or a run status of 1
   (`strategy_last_run_status`). `runtime.error()` with an empty message therefore
   fails (`"error":""`, code `strategy_runtime_error`) instead of reporting the
-  bars it reached as a result. A status of 1 with neither a text nor a code is
-  `engine_unclassified_error`, text `the run did not complete and the engine
-  reported no error`.
+  bars it reached as a result. With the code getter, a status of 1 with neither a
+  text nor a code is `engine_unclassified_error`, text `the run did not complete
+  and the engine reported no error`.
 - Caps keep the line inside the first 64 KiB a reader takes: `error` is cut at
   16 KiB and each string argument at 1 KiB of UTF-8, on a character boundary; a
   line still over 60 KiB (text JSON escapes heavily, such as control characters)
-  has its text cut further.
+  has its text cut further, after its arguments are dropped if they alone are
+  over (the code stays). A non-UTF-8 byte Python kept from the command line or a
+  path (a lone surrogate) is printed as U+FFFD, never as an escape a strict JSON
+  parser rejects.
 - Exit status 1, or 2 for a command line argparse refuses (its usage still goes
   to stderr); the entrypoint maps both to 4.
 
@@ -304,13 +313,13 @@ The harness's own failures and their codes:
 
 | Failure | `code` | `args` |
 | --- | --- | --- |
-| `--inputs` / `--overrides` not a JSON object, `--magnifier-dist` unknown, a command line argparse refuses (exit 2) | `run_request_invalid` | `option`: the flag (`inputs`, `magnifier_samples`, ...) or `arguments` |
-| `--ohlcv` unreadable, a missing column, a value that is not a number, no bars | `chart_bars_unreadable` | `reason`: `io`, `columns`, `value`, `empty` |
+| `--inputs` / `--overrides` not a JSON object or holding a boolean, `null`, array or object value, `--magnifier-dist` unknown, `--input-tf` / `--script-tf` / `--chart-tz` not UTF-8, a command line argparse refuses (exit 2) | `run_request_invalid` | `option`: the flag (`inputs`, `magnifier_samples`, ...) or `arguments` |
+| `--ohlcv` unreadable, a missing column, a value that is not a number, a first or last timestamp outside the calendar (years 1 to 9999), no bars | `chart_bars_unreadable` | `reason`: `io`, `columns`, `value`, `empty` |
 | `--syminfo` unreadable or unusable (above) | `syminfo_unreadable` | `reason`: `io`, `not_json`, `not_object`, `value_type` |
 | `syminfo.mincontract` not a positive finite number | `lot_grid_rejected` | |
 | `--symbol-feeds` index or feed refused (one reason per refusal) | `symbol_feeds_refused` | `reason`: `timeframe_invalid`, `feed_not_increasing`, ... |
 | a feed the engine refuses | the engine's code when it reports one, else `symbol_feeds_refused` | the engine's, else `reason`: `engine_refused` |
-| the strategy library cannot be loaded, has another ABI, lacks an export or a setter | `strategy_library_incompatible` | `reason`: `load_failed`, `abi_missing`, `abi_mismatch`, `symbol_missing`, `setter_missing`; `missing`; `abi` |
+| the strategy library cannot be loaded, has another ABI, lacks an export or a setter, exports part of the checked settings API or another version of it | `strategy_library_incompatible` | `reason`: `load_failed`, `abi_missing`, `abi_mismatch`, `symbol_missing`, `setter_missing`, `settings_api_mismatch`; `missing`; `abi` |
 | `strategy_create` returns no strategy (checked before any setter) | `strategy_create_failed` | |
 | a setting the strategy refuses (below) | `setting_rejected` | `entrypoint`, `reason`, and `input` (the input's title) when the key is a title the strategy declares |
 | a declared input the compiled strategy cannot honour | `setting_unsupported` | |
@@ -324,8 +333,31 @@ override key, an enum or option outside its list, a value that does not parse or
 is out of range) fails the run before it starts, with the text
 `strategy_set_input: <message>` or `strategy_set_override: <message>` and code
 `setting_rejected`, `args.reason` naming the message (`unknown_key`,
-`invalid_input_option`, `expected_integer`, ...). A library without that API
-keeps the legacy setters, which ignore such settings silently.
+`invalid_input_option`, `expected_integer`, ...). A library exporting only part
+of that API (`strategy_settings_api_version`, `strategy_create_checked`,
+`strategy_set_input_checked`, `strategy_set_override_checked`) or another version
+of it is refused before any setter (`strategy_library_incompatible`, `reason`
+`settings_api_mismatch`). A library with none of it keeps the legacy setters,
+which ignore such settings silently.
+
+The checked setters also refuse requests the legacy setters ran, so send values
+the strategy declares:
+
+- a number outside the input's declared `minval` / `maxval`, or an override
+  outside its range (a negative `initial_capital`): `setting_rejected`, `reason`
+  `value_below_minimum` or `value_above_maximum` (the legacy setters ran with
+  the value);
+- an input this compiled strategy cannot honour (a default the transpiler could
+  not resolve): `setting_unsupported` (the legacy getter took the value);
+- a title two inputs share: `setting_rejected`, `reason` `ambiguous_key` (the
+  legacy setter set both).
+
+A value the checked setter cannot parse reads its own message, such as
+`strategy_set_override: expected a finite decimal number`, where a legacy setter
+that threw left `strategy_set_override: stod`. Whatever the library, a boolean,
+`null`, array or object value in `--inputs` / `--overrides` is refused before any
+setter (`run_request_invalid`, above) instead of reaching it as Python spells it
+(`True`, `None`).
 
 Mount a `strategy.pine` and the bundled `pineforge-codegen`
 ([source-available](https://github.com/pineforge-4pass/pineforge-codegen-oss),

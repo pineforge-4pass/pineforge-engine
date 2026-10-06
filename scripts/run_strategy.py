@@ -1962,6 +1962,32 @@ def _with_run_failure_code(error: Exception, lib, state) -> Exception:
     return error
 
 
+# The text of a failed run that reported neither a text nor a code
+# (strategy_last_run_status 1 alone), as docker/run_json.py spells it.
+RUN_STATUS_FAILED_TEXT = "the run did not complete and the engine reported no error"
+
+
+def _run_failure_text(lib, state) -> str | None:
+    """The error text of the run just made on state, or None when it succeeded.
+    A run failed when the engine reports a text (strategy_get_last_error), a
+    code (strategy_get_last_error_code, engine 1.4.0+) or a run status of 1
+    (strategy_last_run_status), docker/run_json.py's rule: a script stopped by
+    runtime.error("") fails instead of reading as a result. The text is "" for
+    a coded failure without one, RUN_STATUS_FAILED_TEXT for a status alone.
+    Each export is looked up with hasattr: an older library lacks them."""
+    text = ""
+    if hasattr(lib, "strategy_get_last_error"):
+        raw = lib.strategy_get_last_error(state)
+        text = raw.decode("utf-8", "replace") if raw else ""
+    code = (lib.strategy_get_last_error_code(state)
+            if hasattr(lib, "strategy_get_last_error_code") else None)
+    status = (lib.strategy_last_run_status(state)
+              if hasattr(lib, "strategy_last_run_status") else 0)
+    if not (text or code or status == 1):
+        return None
+    return text if (text or code) else RUN_STATUS_FAILED_TEXT
+
+
 class Strategy:
     """Thin ctypes wrapper around one strategy.so."""
 
@@ -2009,6 +2035,9 @@ class Strategy:
             if hasattr(L, name):
                 getattr(L, name).argtypes = [ctypes.c_void_p]
                 getattr(L, name).restype = ctypes.c_char_p
+        if hasattr(L, "strategy_last_run_status"):  # read by _run_failure_text
+            L.strategy_last_run_status.argtypes = [ctypes.c_void_p]
+            L.strategy_last_run_status.restype = ctypes.c_int
         if hasattr(L, "strategy_stream_begin"):
             L.strategy_stream_begin.argtypes = [
                 ctypes.c_void_p, ctypes.POINTER(BarC), ctypes.c_int,
@@ -2039,8 +2068,6 @@ class Strategy:
         if hasattr(L, "strategy_request_abort"):
             L.strategy_request_abort.argtypes = [ctypes.c_void_p]
             L.strategy_request_abort.restype = None
-            L.strategy_last_run_status.argtypes = [ctypes.c_void_p]
-            L.strategy_last_run_status.restype = ctypes.c_int
         if hasattr(L, "strategy_set_realtime_tail"):
             L.strategy_set_realtime_tail.argtypes = [
                 ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
@@ -2707,14 +2734,11 @@ class Strategy:
                 mag_on, mag_samples_int, mag_dist_int,
                 ctypes.byref(report),
             )
-            if hasattr(self.lib, "strategy_get_last_error"):
-                err_ptr = self.lib.strategy_get_last_error(state)
-                if err_ptr:
-                    err_msg = err_ptr.decode("utf-8", "replace")
-                    if err_msg:
-                        raise _with_run_failure_code(RuntimeError(
-                            "pineforge engine rejected run: " + err_msg
-                        ), self.lib, state)
+            failure = _run_failure_text(self.lib, state)
+            if failure is not None:
+                raise _with_run_failure_code(RuntimeError(
+                    "pineforge engine rejected run" + (f": {failure}" if failure else "")
+                ), self.lib, state)
             if on_report is not None:
                 on_report(report)
             result = _report_to_dict(report)
@@ -4110,9 +4134,14 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
     if run_kwargs.get("syminfo_pointvalue") is not None:
         syminfo["pointvalue"] = run_kwargs["syminfo_pointvalue"]
 
+    # Overrides as Strategy.run passes them (str), the strings run_json.py takes
+    # as given; it refuses a JSON boolean or null it would otherwise receive.
+    overrides_for_image = {
+        str(k): str(v) for k, v in (run_kwargs.get("strategy_overrides") or {}).items()
+    }
     kw = dict(
         inputs=inputs_for_image,
-        overrides=run_kwargs.get("strategy_overrides") or {},
+        overrides=overrides_for_image,
         input_tf=run_kwargs.get("input_tf") or "",
         script_tf=run_kwargs.get("script_tf") or "",
         bar_magnifier=bool(run_kwargs.get("bar_magnifier")),

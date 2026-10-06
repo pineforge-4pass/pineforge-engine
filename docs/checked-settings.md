@@ -33,8 +33,13 @@ retained verbatim within the handle. Legacy batch catch paths zero the report.
 Discover `strategy_settings_api_version()` with `dlsym`; version 1 is
 `PF_SETTINGS_API_VERSION`. This does not increment `PF_ABI_VERSION`. An older
 strategy without the symbol still works with the legacy host interface.
-The runner refuses a present settings API version other than 1; it only warns
-and falls back when the capability symbol is absent.
+The live runner refuses a present settings API version other than 1; it only warns
+and falls back when the capability symbol is absent. `docker/run_json.py` refuses
+that version mismatch too, and a library exporting only some of
+`strategy_settings_api_version`, `strategy_create_checked`,
+`strategy_set_input_checked` and `strategy_set_override_checked`
+(`strategy_library_incompatible`, reason `settings_api_mismatch`); it keeps the
+legacy setters only when none of them is exported.
 
 The declarations and status codes are in `pineforge/pineforge.h`:
 

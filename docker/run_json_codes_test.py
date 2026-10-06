@@ -9,6 +9,8 @@ import contextlib
 import ctypes
 import io
 import json
+import os
+import re
 import sys
 from pathlib import Path
 
@@ -244,15 +246,58 @@ def test_a_lone_surrogate_survives_the_cut():
     assert run_json._cut_utf8(text, 12) == "a" * 10
 
 
+def test_arguments_that_alone_overflow_the_line_are_dropped_before_the_text():
+    args = {f"a{i}": "\x01" * 1024 for i in range(11)}  # 6 KiB each once escaped
+    out = run_json.failure_line("the real reason", "pine_invalid_argument", args)
+    assert json.loads(out) == {"engine": "pineforge", "error": "the real reason",
+                               "code": "pine_invalid_argument", "args": {}}
+
+
+def test_arguments_that_fit_alone_are_kept_and_the_text_is_cut():
+    args = {f"a{i}": "\x01" * 1024 for i in range(9)}  # 54 KiB once escaped
+    text = "x" * 16384
+    out = run_json.failure_line(text, "pine_invalid_argument", args)
+    doc = json.loads(out)
+    assert len(out) <= run_json.ERROR_LINE_MAX + 1
+    assert doc["args"] == args
+    assert doc["error"] and text.startswith(doc["error"]) and len(doc["error"]) < len(text)
+
+
+# A \ud800-\udfff escape: what json.dump writes for a lone surrogate, and what a
+# strict JSON parser rejects (this line holds no character outside the BMP).
+SURROGATE_ESCAPE = re.compile(r"\\ud[89a-f][0-9a-f]{2}")
+
+
+def test_a_lone_surrogate_is_printed_as_u_fffd():
+    out = run_json.failure_line("x\udcffy", "setting_rejected",
+                                {"entrypoint": "strategy_set_input", "input": "a\ud800b"})
+    assert not SURROGATE_ESCAPE.search(out)
+    doc = json.loads(out)
+    assert (doc["error"], doc["args"]["input"]) == ("x\ufffdy", "a\ufffdb")
+    assert run_json.failure_line("p\udc80") == '{"engine":"pineforge","error":"p\\ufffd"}\n'
+
+
+def test_a_path_with_a_non_utf8_byte_is_printed_with_u_fffd(harness, tmp_path):
+    lib = fake_lib()
+    status, out = harness(lib, ohlcv=tmp_path / "bars\udcff.csv")
+    doc = line_of(out)
+    assert status == 1
+    assert (doc["code"], doc["args"]) == ("chart_bars_unreadable", {"reason": "io"})
+    assert not SURROGATE_ESCAPE.search(out)
+    assert doc["error"].startswith(f"--ohlcv: {tmp_path}/bars\ufffd.csv: ")
+
+
 # --- the run's status ----------------------------------------------------------
 
-def test_status_1_with_no_text_and_no_code_fails(harness):
+def test_status_1_with_no_text_from_a_library_without_the_code_getter_has_no_code(harness):
+    # A library built before the getters: the line of its era, with a fixed text.
     lib = fake_lib("strategy_get_last_error", "strategy_last_run_status",
                    returns={"strategy_get_last_error": b"", "strategy_last_run_status": 1})
     status, out = harness(lib)
     assert status == 1
-    assert line_of(out) == {"engine": "pineforge", "error": run_json.RUN_STATUS_FAILED_TEXT,
-                            "code": "engine_unclassified_error", "args": {}}
+    assert out == ('{"engine":"pineforge","error":"the run did not complete and the engine '
+                   'reported no error"}\n')
+    assert line_of(out) == {"engine": "pineforge", "error": run_json.RUN_STATUS_FAILED_TEXT}
 
 
 def test_status_1_with_a_code_getter_that_names_nothing_fails(harness):
@@ -263,7 +308,10 @@ def test_status_1_with_a_code_getter_that_names_nothing_fails(harness):
                             "strategy_get_last_error_args": b""})
     status, out = harness(lib)
     assert status == 1
-    assert line_of(out)["code"] == "engine_unclassified_error"
+    assert line_of(out) == {
+        "engine": "pineforge",
+        "error": "the run did not complete and the engine reported no error",
+        "code": "engine_unclassified_error", "args": {}}
 
 
 def test_a_code_with_an_empty_text_fails(harness):
@@ -300,6 +348,80 @@ def test_a_clean_run_is_a_report(harness):
     assert (status, plain_status) == (0, 0)
     assert report_of(out) == report_of(plain)
     assert "error" not in report_of(out)
+
+
+class FailingStdout(io.StringIO):
+    """A stdout that takes the first 100 characters of the report, then fails."""
+
+    def __init__(self, error):
+        super().__init__()
+        self.error = error
+
+    def write(self, text):
+        if self.error is None:
+            return super().write(text)
+        error, self.error = self.error, None
+        super().write(text[:100])
+        raise error
+
+
+@pytest.mark.parametrize("error", [BrokenPipeError(32, "Broken pipe"),
+                                   OSError(28, "No space left on device")],
+                         ids=["broken-pipe", "disk-full"])
+def test_a_report_write_error_adds_no_failure_line(tmp_path, monkeypatch, error):
+    tape = tmp_path / "tape.csv"
+    tape.write_text(TAPE)
+    lib = fake_lib()
+    monkeypatch.setattr(ctypes, "CDLL", lambda path: lib)
+    out, err = FailingStdout(error), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        status = run_json.main(["--so", "fake.so", "--ohlcv", str(tape)])
+    assert status == 1
+    assert out.getvalue().startswith('{"engine":"pineforge","input":')
+    assert len(out.getvalue()) == 100  # the part written, and nothing after it
+    assert err.getvalue() == f"run_json: the report could not be written: {error}\n"
+    assert lib.names().count("strategy_create") == lib.names().count("strategy_free") == 1
+
+
+def test_a_closed_pipe_leaves_nothing_for_the_flush_at_exit(tmp_path, monkeypatch):
+    tape = tmp_path / "tape.csv"
+    tape.write_text(TAPE)
+    monkeypatch.setattr(ctypes, "CDLL", lambda path: fake_lib())
+    read_end, write_end = os.pipe()
+    os.close(read_end)  # the reader is gone: every write is EPIPE
+    stdout, err = open(write_end, "w", encoding="ascii"), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(err):
+            status = run_json.main(["--so", "fake.so", "--ohlcv", str(tape)])
+        assert status == 1
+        assert err.getvalue().startswith("run_json: the report could not be written: [Errno 32]")
+        stdout.flush()  # what the interpreter does at exit: /dev/null takes the rest
+    finally:
+        stdout.close()
+
+
+def test_load_strategy_declares_the_failure_getters_and_the_checked_api(monkeypatch):
+    lib = checked_lib("strategy_get_last_error", "strategy_get_last_error_code",
+                      "strategy_get_last_error_args", "strategy_last_run_status")
+    monkeypatch.setattr(ctypes, "CDLL", lambda path: lib)
+    run_json.load_strategy(Path("fake.so"))
+    for name in ("strategy_get_last_error", "strategy_get_last_error_code",
+                 "strategy_get_last_error_args"):
+        assert getattr(lib, name).argtypes == [ctypes.c_void_p], name
+        assert getattr(lib, name).restype is ctypes.c_char_p, name
+    assert lib.strategy_last_run_status.argtypes == [ctypes.c_void_p]
+    assert lib.strategy_last_run_status.restype is ctypes.c_int
+    assert lib.strategy_settings_api_version.argtypes == []
+    assert lib.strategy_settings_api_version.restype is ctypes.c_uint32
+    assert lib.strategy_create_checked.argtypes == [
+        ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p, ctypes.c_size_t]
+    assert lib.strategy_create_checked.restype is ctypes.c_int
+    for name in ("strategy_set_input_checked", "strategy_set_override_checked"):
+        assert getattr(lib, name).argtypes == [ctypes.c_void_p, ctypes.c_char_p,
+                                               ctypes.c_char_p, ctypes.c_char_p,
+                                               ctypes.c_size_t], name
+        assert getattr(lib, name).restype is ctypes.c_int, name
+    assert lib.strategy_get_effective_settings.restype is ctypes.c_int
 
 
 # --- the strategy handle -----------------------------------------------------
@@ -351,6 +473,123 @@ def test_bad_request_options_are_run_request_invalid(harness, extra, text, optio
     assert doc["error"].startswith(text)
     assert (doc["code"], doc["args"]) == ("run_request_invalid", {"option": option})
     assert lib.calls == []
+
+
+@pytest.fixture
+def int_digit_limit():
+    """Python's default cap on an int's decimal digits (3.11+), whatever the
+    environment set: json.loads raises a plain ValueError past it."""
+    old = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(4300)
+    yield
+    sys.set_int_max_str_digits(old)
+
+
+@pytest.mark.parametrize("label", ["inputs", "overrides"])
+def test_an_integer_past_the_digit_cap_is_run_request_invalid(harness, int_digit_limit, label):
+    lib = fake_lib()
+    status, out = harness(lib, f"--{label}", '{"Length": 1' + "0" * 5000 + "}")
+    doc = line_of(out)
+    assert status == 1
+    assert doc["error"].startswith(f"error: --{label} is not valid JSON: Exceeds the limit (4300")
+    assert (doc["code"], doc["args"]) == ("run_request_invalid", {"option": label})
+    assert lib.calls == []
+
+
+@pytest.mark.parametrize("value,kind", [(True, "true"), (False, "false"), (None, "null"),
+                                        ([1], "an array"), ({"a": 1}, "an object")],
+                         ids=["true", "false", "null", "array", "object"])
+@pytest.mark.parametrize("label", ["inputs", "overrides"])
+@pytest.mark.parametrize("checked", [False, True], ids=["legacy", "checked"])
+def test_a_value_neither_string_nor_number_is_run_request_invalid(harness, checked, label,
+                                                                   value, kind):
+    lib = checked_lib() if checked else fake_lib()
+    status, out = harness(lib, f"--{label}", json.dumps({"A": "1", "Use Filter": value}))
+    assert status == 1
+    assert line_of(out) == {
+        "engine": "pineforge",
+        "error": f'error: --{label}: "Use Filter" must be a string or a number, got {kind}',
+        "code": "run_request_invalid", "args": {"option": label}}
+    assert lib.calls == []  # before the library is even loaded
+
+
+def test_numbers_are_passed_as_str_spells_them_as_before(harness):
+    raw = '{"Length": 5, "Mult": 0.5, "Big": 1e3, "Neg": -2, "Text": "7"}'
+    sent = {"Length": "5", "Mult": "0.5", "Big": "1000.0", "Neg": "-2", "Text": "7"}
+    lib = fake_lib()
+    status, out = harness(lib, "--inputs", raw, "--overrides", '{"pyramiding": 2}')
+    assert status == 0
+    assert report_of(out)["applied_inputs"] == sent
+    assert report_of(out)["applied_overrides"] == {"pyramiding": "2"}
+    assert [c[2:] for c in lib.calls if c[0] == "strategy_set_input"] == [
+        (k.encode(), v.encode()) for k, v in sent.items()]
+    assert ("strategy_set_override", ST, b"pyramiding", b"2") in lib.calls
+    lib = checked_lib()
+    status, _ = harness(lib, "--inputs", raw)
+    assert status == 0
+    assert [c[2:4] for c in lib.calls if c[0] == "strategy_set_input_checked"] == [
+        (k.encode(), v.encode()) for k, v in sent.items()]
+
+
+@pytest.mark.parametrize("flag,value,option", [
+    ("--input-tf", "15\udcff", "input_tf"),
+    ("--script-tf", "\udcff60", "script_tf"),
+    ("--chart-tz", "Europe/\udcff", "chart_tz"),
+], ids=["input-tf", "script-tf", "chart-tz"])
+def test_a_non_utf8_option_is_run_request_invalid(harness, flag, value, option):
+    lib = fake_lib("strategy_set_chart_timezone")
+    status, out = harness(lib, flag, value)
+    assert status == 1
+    assert line_of(out) == {"engine": "pineforge", "error": f"error: {flag} must hold UTF-8 text",
+                            "code": "run_request_invalid", "args": {"option": option}}
+    assert lib.calls == []
+
+
+@pytest.mark.parametrize("rows,stamp", [
+    (f"1,2,0.5,1.5,10,{2**62}\n", 2**62),
+    (f"1,2,0.5,1.5,10,1000\n1,2,0.5,1.5,10,{-2**62}\n", -2**62),
+    ("1,2,0.5,1.5,10,253402300800000\n", 253402300800000),
+], ids=["first", "last", "year-10000"])
+def test_a_tape_timestamp_outside_the_calendar_is_chart_bars_unreadable(harness, tmp_path,
+                                                                         rows, stamp):
+    path = tmp_path / "bars.csv"
+    path.write_text("open,high,low,close,volume,timestamp\n" + rows)
+    lib = fake_lib()
+    status, out = harness(lib, ohlcv=path)
+    assert status == 1
+    assert line_of(out) == {
+        "engine": "pineforge",
+        "error": f"--ohlcv: {path}: timestamp {stamp} is out of the calendar's range",
+        "code": "chart_bars_unreadable", "args": {"reason": "value"}}
+    # Refused once the run is over, when the report would spell the dates.
+    assert "run_backtest_full" in lib.names()
+
+
+def test_the_engine_refusal_of_a_tape_outside_the_calendar_keeps_its_line(harness, tmp_path):
+    # Base printed the engine's own refusal for this tape; the calendar check
+    # never pre-empts it.
+    path = tmp_path / "bars.csv"
+    path.write_text(f"open,high,low,close,volume,timestamp\n1,2,0.5,1.5,10,1000\n"
+                    f"1,2,0.5,1.5,10,{-2**62}\n")
+    lib = fake_lib("strategy_get_last_error", "strategy_last_run_status",
+                   returns={"strategy_get_last_error": b"bar[1].timestamp must be strictly increasing",
+                            "strategy_last_run_status": 0})
+    status, out = harness(lib, ohlcv=path)
+    assert status == 1
+    assert line_of(out) == {"engine": "pineforge",
+                            "error": "bar[1].timestamp must be strictly increasing"}
+
+
+def test_the_calendar_bounds_themselves_still_run(harness, tmp_path):
+    path = tmp_path / "bars.csv"
+    path.write_text("open,high,low,close,volume,timestamp\n"
+                    "1,2,0.5,1.5,10,-62135596800000\n1,2,0.5,1.5,10,253402300799999\n")
+    status, out = harness(fake_lib(), ohlcv=path)
+    assert status == 0
+    # The C library pads year 1 to four digits or not (macOS: 0001, glibc: 1).
+    first, last = report_of(out)["input"]["first_time"], report_of(out)["input"]["last_time"]
+    assert first in ("0001-01-01 00:00 UTC", "1-01-01 00:00 UTC")
+    assert last == "9999-12-31 23:59 UTC"
 
 
 @pytest.mark.parametrize("argv,option", [
@@ -555,6 +794,8 @@ FEED_CASES = [
      "too_many_feeds"),
     ({"E": {"feeds": {"D": "f.csv", "1D": "f.csv"}}}, {"f.csv": GOOD}, "duplicate_timeframe"),
     ({"E": {"feeds": {"60": ""}}}, {}, "feed_path_invalid"),
+    ({"E": {"feeds": {"60": "f.csv\x00.txt"}}}, {"f.csv": GOOD}, "feed_path_invalid"),
+    ({"E": {"feeds": {"60": "\ud800.csv"}}}, {}, "feed_path_invalid"),
 ]
 
 
@@ -647,9 +888,10 @@ RECEIPT = {"version": 1,
 
 
 def checked_lib(*extra, version=1, create=(PF_OK, b""), inputs=None, overrides=None,
-                receipt=RECEIPT, returns=None):
-    """A library exporting the checked settings API. inputs / overrides map a key
-    to the (status, message) its checked setter returns; any other key is OK."""
+                receipt=RECEIPT, returns=None, drop=()):
+    """A library exporting the checked settings API, without the exports named in
+    drop. inputs / overrides map a key to the (status, message) its checked
+    setter returns; any other key is OK."""
     def create_checked(params, out, error, capacity):
         status, message = create
         if status == PF_OK:
@@ -672,13 +914,16 @@ def checked_lib(*extra, version=1, create=(PF_OK, b""), inputs=None, overrides=N
         json_buffer.value = doc
         return PF_OK
 
-    return fake_lib(*extra, returns=returns, impl={
+    lib = fake_lib(*extra, returns=returns, impl={
         "strategy_settings_api_version": lambda: version,
         "strategy_create_checked": create_checked,
         "strategy_set_input_checked": setter(inputs),
         "strategy_set_override_checked": setter(overrides),
         "strategy_get_effective_settings": effective,
     })
+    for name in drop:
+        delattr(lib, name)
+    return lib
 
 
 def settings_args(**kw):
@@ -702,13 +947,39 @@ def test_valid_settings_go_through_the_checked_api(harness):
     assert names.index("strategy_set_override_checked") < names.index("run_backtest_full")
 
 
-@pytest.mark.parametrize("version,exports", [(2, True), (1, False)], ids=["version-2", "absent"])
-def test_without_checked_api_v1_the_legacy_setters_run(harness, version, exports):
-    lib = checked_lib(version=version) if exports else fake_lib()
+def test_a_library_with_none_of_the_checked_api_keeps_the_legacy_setters(harness):
+    lib = fake_lib()
     status, _ = harness(lib, *settings_args(inputs={"Length": "5"}))
     assert status == 0
     assert ("strategy_set_input", ST, b"Length", b"5") in lib.calls
     assert "strategy_set_input_checked" not in lib.names()
+
+
+CHECKED_EXPORTS = ("strategy_settings_api_version", "strategy_create_checked",
+                   "strategy_set_input_checked", "strategy_set_override_checked")
+
+
+@pytest.mark.parametrize("version,drop", [
+    (2, ()), (0, ()),
+    *[(1, (name,)) for name in CHECKED_EXPORTS],
+    (1, CHECKED_EXPORTS[1:]),
+    (2, CHECKED_EXPORTS[1:]),
+], ids=["version-2", "version-0", "no-version", "no-create", "no-set-input", "no-set-override",
+        "version-only", "version-2-only"])
+def test_another_checked_api_version_or_a_partial_set_is_refused(harness, version, drop):
+    lib = checked_lib(version=version, drop=drop)
+    status, out = harness(lib, *settings_args(inputs={"Length": "5"},
+                                              overrides={"pyramiding": "2"}))
+    assert status == 1
+    assert line_of(out) == {
+        "engine": "pineforge",
+        "error": "checked settings API mismatch: the strategy library must export "
+                 "strategy_settings_api_version() == 1, strategy_create_checked, "
+                 "strategy_set_input_checked and strategy_set_override_checked, or none of "
+                 "them; rebuild.",
+        "code": "strategy_library_incompatible", "args": {"reason": "settings_api_mismatch"}}
+    assert [n for n in lib.names() if n not in ("pf_abi_version",
+                                                "strategy_settings_api_version")] == []
 
 
 # The checked setters' messages (checked_settings.hpp, the generated setters) and
@@ -862,6 +1133,8 @@ def test_every_own_code_is_catalogued():
     for name in run_json._REQUIRED_EXPORTS:
         assert catalogued("strategy_library_incompatible",
                           {"reason": "symbol_missing", "missing": name})
+    assert catalogued("strategy_library_incompatible", {"reason": "settings_api_mismatch"})
+    assert catalogued("chart_bars_unreadable", {"reason": "value"})
     for code in ("strategy_create_failed", "setting_unsupported", "engine_invariant",
                  "engine_unclassified_error", "harness_internal_error", "lot_grid_rejected"):
         assert catalogued(code, {})

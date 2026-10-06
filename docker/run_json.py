@@ -96,9 +96,12 @@ setting the strategy refuses, or any other failure of the harness (see
 failure_line and main). "code" is a stable code of the closed vocabulary
 docker/run_failure_codes.json and "args" its typed arguments. The engine's code
 is read only from strategy_get_last_error_code and its args from
-strategy_get_last_error_args; for a run error from a library without those
-getters the line has no "code" and no "args" and is byte-identical to the
-earlier {"engine":"pineforge","error":"<text>"} line.
+strategy_get_last_error_args. A run failure from a library without the code
+getter prints a line without "code" and "args": the earlier
+{"engine":"pineforge","error":"<text>"} line byte for byte, or, for a run status
+of 1 with no text, that line with the text "the run did not complete and the
+engine reported no error". A report that cannot be written whole (a closed
+pipe, a full disk) ends with exit status 1 and no line after it (see _main).
 
 NaN convention: any metric with an empty/zero denominator is null (JSON has no
 NaN); a real computed 0 stays 0. See the report-schema + metrics reference docs
@@ -115,6 +118,7 @@ import hashlib
 import io
 import json
 import math
+import os
 import re
 import struct
 import sys
@@ -625,22 +629,28 @@ def build_fingerprint(provenance: dict) -> dict:
 # wherever one existed before codes. "code" is a code of the closed vocabulary
 # docker/run_failure_codes.json and "args" its typed arguments. The code is the
 # engine's (strategy_get_last_error_code / _args), or run_json's own for a
-# failure it finds itself (RunFailure): never read from any text. A run error
+# failure it finds itself (RunFailure): never read from any text. A run failure
 # from a library without the code getter prints neither key, so that line is
-# the earlier one byte for byte (the app keeps its text rules for it).
+# the earlier one byte for byte (a consumer keeps its text rules for it).
 #
-# Caps keep the line well inside the 64 KiB the app reads: the text is cut at
+# Caps keep the line well inside the 64 KiB a consumer reads: the text is cut at
 # 16 KiB and each string argument at 1 KiB of UTF-8, on a character boundary;
 # a line still over 60 KiB (only text that JSON escapes heavily, control
-# characters are six bytes each) has its text cut further until it fits.
+# characters are six bytes each) has its text cut further until it fits, once
+# the arguments are dropped when they alone overflow it. A lone surrogate (a
+# non-UTF-8 byte Python kept from the command line or a path) is printed as
+# U+FFFD, never as an escape such as \udcff that a strict JSON parser rejects.
 
 ERROR_TEXT_MAX = 16 * 1024
 ERROR_ARG_TEXT_MAX = 1024
 ERROR_LINE_MAX = 60 * 1024
 _CODE_RE = re.compile(r"[a-z][a-z0-9_]{2,47}")
+_LONE_SURROGATE_RE = re.compile("[\ud800-\udfff]")
 
 # A failed run that reported neither a text nor a code (strategy_last_run_status
-# 1 and nothing else): run_json's own engine_unclassified_error.
+# 1 and nothing else): the line's text, with run_json's own
+# engine_unclassified_error when the library has the code getter, without a code
+# when it has none.
 RUN_STATUS_FAILED_TEXT = "the run did not complete and the engine reported no error"
 
 
@@ -676,6 +686,12 @@ def _cut_utf8(text: str, limit: int) -> str:
     return raw[:limit].decode("utf-8", "surrogatepass")
 
 
+def _no_surrogates(text: str) -> str:
+    """text with every lone surrogate replaced by U+FFFD (three UTF-8 bytes, as
+    the surrogate counted), so json.dump never writes an escape such as \\udcff."""
+    return _LONE_SURROGATE_RE.sub("\ufffd", text)
+
+
 def _dump_line(doc: dict) -> str:
     # The writer the failure line has always used: json.dump with these
     # separators and json's default ensure_ascii, so the line is ASCII.
@@ -687,16 +703,22 @@ def _dump_line(doc: dict) -> str:
 def failure_line(text, code=None, code_args=None) -> str:
     """The one failure line, newline included. Without a code (a run error from
     a library without strategy_get_last_error_code) it is exactly the earlier
-    {"engine":"pineforge","error":"<text>"} line."""
-    full = str(text)
+    {"engine":"pineforge","error":"<text>"} line. When the line is over
+    ERROR_LINE_MAX, arguments that overflow it on their own are dropped first
+    (the code stays), then the text is cut to the longest prefix that fits."""
+    full = _no_surrogates(str(text))
     doc = {"engine": "pineforge", "error": _cut_utf8(full, ERROR_TEXT_MAX)}
     if code is not None:
         doc["code"] = code
-        doc["args"] = {name: _cut_utf8(value, ERROR_ARG_TEXT_MAX)
-                       if isinstance(value, str) else value
-                       for name, value in (code_args or {}).items()}
+        doc["args"] = {
+            (_no_surrogates(name) if isinstance(name, str) else name):
+            (_cut_utf8(_no_surrogates(value), ERROR_ARG_TEXT_MAX)
+             if isinstance(value, str) else value)
+            for name, value in (code_args or {}).items()}
     line = _dump_line(doc)
     if len(line) > ERROR_LINE_MAX:
+        if code is not None and len(_dump_line({**doc, "error": ""})) > ERROR_LINE_MAX:
+            doc["args"] = {}  # arguments no registry could hold: the code stays
         low, high = 0, len(doc["error"].encode("utf-8", "surrogatepass"))
         while low < high:  # the longest cut whose line fits
             mid = (low + high + 1) // 2
@@ -706,8 +728,6 @@ def failure_line(text, code=None, code_args=None) -> str:
             else:
                 high = mid - 1
         doc["error"] = _cut_utf8(full, low)
-        if code is not None and len(_dump_line(doc)) > ERROR_LINE_MAX:
-            doc["args"] = {}  # arguments no registry could hold: the code stays
         line = _dump_line(doc)
     return line + "\n"
 
@@ -1122,7 +1142,10 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
 # == 1, docs/checked-settings.md) is created and configured through it, so a
 # setting the strategy cannot honour fails the run before it starts: an unknown
 # input or override key, an invalid enum, an unparseable value, which the
-# legacy setters drop silently. A library without it keeps the legacy setters.
+# legacy setters drop silently. A library exporting only part of it, or another
+# version of it, is refused before any strategy exists
+# (strategy_library_incompatible{reason: settings_api_mismatch}); a library
+# exporting none of it keeps the legacy setters.
 
 PF_SETTINGS_OK = 0
 PF_SETTINGS_INVALID_ARGUMENT = 1
@@ -1168,11 +1191,29 @@ SETTING_INVARIANT_MESSAGES = frozenset({
 })
 
 
+# A library exporting part of the checked settings API, or another version of
+# it: strategy_library_incompatible{reason: settings_api_mismatch}.
+SETTINGS_API_MISMATCH_TEXT = (
+    "checked settings API mismatch: the strategy library must export "
+    "strategy_settings_api_version() == 1, strategy_create_checked, "
+    "strategy_set_input_checked and strategy_set_override_checked, or none of them; "
+    "rebuild.")
+
+
 def uses_checked_settings(lib) -> bool:
-    """True when lib exports the checked settings API at version 1."""
-    if not all(hasattr(lib, name) for name in _CHECKED_SETTINGS_EXPORTS):
+    """True when lib exports the checked settings API at version 1, False when it
+    exports none of _CHECKED_SETTINGS_EXPORTS (the legacy setters run). Some but
+    not all of them, or a strategy_settings_api_version() other than 1, is a
+    StrategyLibraryError settings_api_mismatch: falling back to the legacy setters
+    would drop silently the settings the checked API exists to refuse."""
+    present = [name for name in _CHECKED_SETTINGS_EXPORTS if hasattr(lib, name)]
+    if not present:
         return False
-    return lib.strategy_settings_api_version() == 1
+    if (len(present) != len(_CHECKED_SETTINGS_EXPORTS)
+            or lib.strategy_settings_api_version() != 1):
+        raise StrategyLibraryError(SETTINGS_API_MISMATCH_TEXT,
+                                   {"reason": "settings_api_mismatch"})
+    return True
 
 
 def create_strategy(lib, checked: bool):
@@ -1400,6 +1441,19 @@ def _shown(value) -> str:
     return json.dumps(value)[:80]
 
 
+def _file_name_ok(name: str) -> bool:
+    """name can name a file: it holds no NUL and the file system encoding takes
+    it (a lone surrogate from a JSON escape may not), so opening it raises no
+    ValueError."""
+    if "\x00" in name:
+        return False
+    try:
+        os.fsencode(name)
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def _symbol_text(value, what: str) -> str:
     try:
         if isinstance(value, str):
@@ -1604,7 +1658,7 @@ def load_symbol_feeds(index_path: Path) -> list:
                 raise SymbolFeedsError(
                     f"--symbol-feeds: {symbol}: two feeds at timeframe {canonical}",
                     "duplicate_timeframe")
-            if not isinstance(file, str) or not file:
+            if not isinstance(file, str) or not file or not _file_name_ok(file):
                 raise SymbolFeedsError(
                     f"--symbol-feeds: {symbol}@{canonical}: the feed must name a CSV file",
                     "feed_path_invalid")
@@ -1810,21 +1864,46 @@ def _request_invalid(text: str, option: str, exit_status: int = 1) -> RunFailure
                       exit_status=exit_status)
 
 
+def _utf8_option(text: str, label: str) -> bytes:
+    """A command-line option's text as UTF-8 bytes. A non-UTF-8 byte in it (which
+    Python keeps from argv as a lone surrogate) is run_request_invalid{option}."""
+    try:
+        return text.encode("utf-8")
+    except UnicodeEncodeError:
+        raise _request_invalid(f"error: {label} must hold UTF-8 text",
+                               label.lstrip("-").replace("-", "_")) from None
+
+
+def _json_kind(value) -> str:
+    """A JSON value that is neither a string nor a number, as a refusal names it."""
+    if value is None or isinstance(value, bool):
+        return json.dumps(value)
+    return "an array" if isinstance(value, list) else "an object"
+
+
 def parse_kv_json(s: str | None, label: str) -> dict[str, str]:
     """Parse a JSON object of {key: value} into a {str: str} map.
     Empty / None / "{}" → {}. Non-object payloads abort with a clear
     error so junk env vars don't silently noop: run_request_invalid{option}
-    (the label without its dashes)."""
+    (the label without its dashes). A value is a string or a number; a number
+    is passed as str() spells it, as it always was ("5", "0.5", "1000.0" for
+    1e3). A boolean, null, array or object is refused before any setter runs,
+    rather than passed as Python spells it ("True", "None")."""
     if not s or s.strip() in ("", "{}"):
         return {}
     option = label.lstrip("-").replace("-", "_")
     try:
         obj = json.loads(s)
-    except (json.JSONDecodeError, RecursionError) as e:
+    except (ValueError, RecursionError) as e:  # ValueError: also an int over 4300 digits
         raise _request_invalid(f"error: {label} is not valid JSON: {e}", option) from None
     if not isinstance(obj, dict):
         raise _request_invalid(
             f"error: {label} must be a JSON object, got {type(obj).__name__}", option)
+    for key, value in obj.items():
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            raise _request_invalid(
+                f"error: {label}: {_shown(key)} must be a string or a number, "
+                f"got {_json_kind(value)}", option)
     out = {str(k): str(v) for k, v in obj.items()}
     for text in (*out, *out.values()):
         try:
@@ -1932,10 +2011,11 @@ def run_failure(lib, strat):
     """(text, code, args) of the failure line for the run just made on strat, or
     None when it succeeded. A run failed when the engine reports a text, a code
     or a run status of 1 (strategy_last_run_status), so runtime.error() with an
-    empty message fails: text "", code strategy_runtime_error. With a library
-    without strategy_get_last_error_code a failure with a text keeps the earlier
-    line (no code); a failure reported with no code at all (status 1 alone, or a
-    text the code getter does not name) is run_json's engine_unclassified_error."""
+    empty message fails: text "", code strategy_runtime_error. A library without
+    strategy_get_last_error_code gets a line without a code: the earlier line of
+    its text, or RUN_STATUS_FAILED_TEXT for a status of 1 without one. With the
+    getter, a failure reported with no code (status 1 alone, or a text the getter
+    does not name) is run_json's engine_unclassified_error."""
     text = ""
     if hasattr(lib, "strategy_get_last_error"):
         text = _c_text(lib.strategy_get_last_error(strat))
@@ -1945,8 +2025,8 @@ def run_failure(lib, strat):
     code, args = engine if engine is not None else (None, None)
     if not (text or code or status == 1):
         return None
-    if engine is None and text:
-        return text, None, None
+    if engine is None:
+        return text or RUN_STATUS_FAILED_TEXT, None, None
     if code:
         return text, code, args
     return text or RUN_STATUS_FAILED_TEXT, "engine_unclassified_error", {}
@@ -1956,7 +2036,9 @@ def main(argv=None) -> int:
     """Run the harness. Every failure ends as the one failure line on stdout:
     run_json's own (RunFailure) with its code, and anything unexpected as
     harness_internal_error (its traceback on stderr). Exit status 1, or 2 for a
-    command line argparse refuses."""
+    command line argparse refuses. The one exception is a success report stdout
+    cannot take whole (_main): exit 1 with the reason on stderr and no line after
+    the part written."""
     try:
         return _main(argv)
     except RunFailure as failure:
@@ -2028,8 +2110,9 @@ def _main(argv=None) -> int:
 
     inputs    = parse_kv_json(args.inputs,    "--inputs")
     overrides = parse_kv_json(args.overrides, "--overrides")
-    input_tf  = args.input_tf.strip().encode()
-    script_tf = args.script_tf.strip().encode()
+    input_tf  = _utf8_option(args.input_tf.strip(), "--input-tf")
+    script_tf = _utf8_option(args.script_tf.strip(), "--script-tf")
+    _utf8_option(args.chart_tz, "--chart-tz")  # the setter takes it as UTF-8
     bar_magnifier = 1 if parse_bool(args.bar_magnifier) else 0
     magnifier_samples = max(2, int(args.magnifier_samples))
     magnifier_dist = parse_magnifier_dist(args.magnifier_dist)
@@ -2135,6 +2218,16 @@ def _main(argv=None) -> int:
         if failure is not None:
             write_failure(*failure)
             return 1
+        # The report spells the first and last bar as UTC dates (fmt_utc).
+        # Checked after the run, so the engine's own refusal of the same tape
+        # keeps its line.
+        for ts in (first_ts, last_ts):
+            try:
+                fmt_utc(ts)
+            except (ValueError, OverflowError, OSError):
+                raise _bars_unreadable(
+                    f"--ohlcv: {args.ohlcv}: timestamp {ts} is out of the calendar's range",
+                    "value") from None
         applied_runtime = {
             "input_tf":           input_tf.decode() if input_tf else "",
             "script_tf":          script_tf.decode() if script_tf else "",
@@ -2189,8 +2282,32 @@ def _main(argv=None) -> int:
     finally:
         lib.report_free(ctypes.byref(report))
         lib.strategy_free(state)
-    sys.stdout.write(buffer.getvalue())
+    try:
+        sys.stdout.write(buffer.getvalue())
+        sys.stdout.flush()
+    except (OSError, ValueError) as error:
+        # A closed pipe or a full disk while the report is written: a failure
+        # line now would follow part of a report, so none is written. The reason
+        # goes to stderr and stdout to /dev/null, so the interpreter's own flush
+        # at exit cannot fail again.
+        _discard_stdout()
+        print(f"run_json: the report could not be written: {error}", file=sys.stderr)
+        return 1
     return 0
+
+
+def _discard_stdout() -> None:
+    """Point stdout's file descriptor at /dev/null after a failed report write,
+    so what stdout still buffers is dropped instead of written again at exit."""
+    try:
+        fd = sys.stdout.fileno()
+    except (AttributeError, OSError, ValueError):  # not a file: nothing to drop
+        return
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, fd)
+    finally:
+        os.close(devnull)
 
 
 if __name__ == "__main__":

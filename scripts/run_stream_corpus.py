@@ -32,7 +32,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from run_strategy import (  # noqa: E402
     BarC, ReportC, Strategy, TradeTickC, _report_to_dict,
-    _VALIDATION_META_KEYS, _with_run_failure_code,
+    _VALIDATION_META_KEYS, _run_failure_text, _with_run_failure_code,
 )
 
 DEFAULT_DATA_ROOT = Path("/Volumes/PineforgeData/binance_ethusdtp_1y")
@@ -201,12 +201,12 @@ def run_batch(strategy: Strategy, bars, n: int, config: dict) -> dict:
             state, bars, n,
             config["input_tf"].encode(), config["script_tf"].encode(),
             0, 4, 3, ctypes.byref(report))
-        raw = lib.strategy_get_last_error(state)
-        if raw:
-            message = raw.decode("utf-8", "replace")
-            if message:
-                raise _with_run_failure_code(RuntimeError("batch run: " + message),
-                                             lib, state)
+        # A text, a code or a run status of 1 fails the run (run_strategy's rule,
+        # docker/run_json.py's): runtime.error("") is not a result.
+        failure = _run_failure_text(lib, state)
+        if failure is not None:
+            raise _with_run_failure_code(
+                RuntimeError("batch run" + (f": {failure}" if failure else "")), lib, state)
         return _report_to_dict(report)
     finally:
         lib.report_free(ctypes.byref(report))
