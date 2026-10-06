@@ -140,6 +140,8 @@ ENUM_TWINS: dict[str, tuple[str, str, dict[str, str]]] = {
     "pf_native_failure_code_e": ("native_host.hpp", "NativeFailureCode", {}),
     "pf_native_failure_operation_e": ("native_host.hpp", "NativeFailureOperation", {}),
     "pf_native_run_phase_e": ("native_host.hpp", "NativeRunPhase", {}),
+    # The phase of a recorded event (pineforge.h, group pf_outputs).
+    "pf_output_phase_e": ("native_host.hpp", "NativeRunPhase", {}),
     "pf_native_completion_e": ("native_host.hpp", "NativeCompletion", {}),
     "pf_native_spec_error_e": ("native_run_spec.hpp", "NativeRunSpecError", {}),
     "pf_native_spec_field_e": ("native_run_spec.hpp", "NativeRunSpecField", {}),
