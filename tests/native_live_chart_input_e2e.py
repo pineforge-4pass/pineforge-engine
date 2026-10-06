@@ -83,7 +83,11 @@ def tick_events(rows, timeframe, minute_boundaries):
 
 
 def write_events(path, events):
-    path.write_text("".join(json.dumps(event) + "\n" for event in events))
+    frames = events
+    if len(events) > 512 and any(event["type"] != "bar" for event in events):
+        frames = [dict(type="batch", events=events[offset:offset + 256])
+                  for offset in range(0, len(events), 256)]
+    path.write_text("".join(json.dumps(frame) + "\n" for frame in frames))
 
 
 def actions(path):
