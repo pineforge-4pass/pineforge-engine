@@ -113,7 +113,7 @@ if(PINEFORGE_BUILD_TESTS)
         add_test(NAME native_live_genuine_retry_e2e COMMAND ${Python3_EXECUTABLE} -B
             ${PROJECT_SOURCE_DIR}/tests/native_live_genuine_retry_e2e.py
             --runner $<TARGET_FILE:pineforge-live> --library $<TARGET_FILE:native_live_example>
-            --output ${CMAKE_CURRENT_BINARY_DIR}/native_live_genuine_retry_e2e --isolate-output
+            --output ${CMAKE_CURRENT_BINARY_DIR}/native_live_genuine_retry_e2e
             ${_pf_genuine_retry_sanitizer_args})
         set_tests_properties(native_live_genuine_retry_e2e PROPERTIES TIMEOUT 300)
         if(_pf_genuine_retry_sanitizer)
@@ -136,9 +136,17 @@ if(PINEFORGE_BUILD_TESTS)
                 set(_pf_genuine_retry_environment "LD_PRELOAD=${_pf_genuine_retry_runtime}")
             endif()
             if(PINEFORGE_ENABLE_SANITIZERS)
+                # Match ci_verify: Apple's runtime has no LeakSanitizer.
+                set(_pf_genuine_retry_detect_leaks 1)
+                if(APPLE)
+                    set(_pf_genuine_retry_detect_leaks 0)
+                endif()
                 list(APPEND _pf_genuine_retry_environment
-                    "ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:abort_on_error=1"
-                    "UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1")
+                    "ASAN_OPTIONS=detect_leaks=${_pf_genuine_retry_detect_leaks}:halt_on_error=1:abort_on_error=1"
+                    "UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1"
+                    # Expose Python allocations to the allocator the preloaded
+                    # sanitizer intercepts, including the explicit LSan check.
+                    "PYTHONMALLOC=malloc")
             else()
                 list(APPEND _pf_genuine_retry_environment "TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1")
             endif()

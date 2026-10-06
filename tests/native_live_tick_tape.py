@@ -15,7 +15,7 @@ from decimal import Decimal
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
-import os
+import math
 from pathlib import Path
 import re
 import signal
@@ -32,6 +32,7 @@ from native_live_equivalence_e2e import (
     first_difference, ordered_delivery_effects, read_rows, write_json,
 )
 from native_live_tick_oracle import classify_first_divergence
+from native_live_test_process import TimedProcess
 
 
 SCENARIOS = (
@@ -140,8 +141,20 @@ def message_groups(packets, batch_size):
 
 
 def parse_cost(path):
+    text = path.read_text()
+    if text.lstrip().startswith("{"):
+        values = json.loads(text)
+        for key in ("user_seconds", "system_seconds", "cpu_seconds", "wall_seconds", "max_rss_kib"):
+            if not math.isfinite(values[key]) or values[key] < 0:
+                raise ValueError("invalid wait4 timing receipt: " + key)
+        if (values["backend"] != "wait4" or values["pid"] <= 0
+                or values["cpu_seconds"] != values["user_seconds"] + values["system_seconds"]):
+            raise ValueError("invalid wait4 timing receipt")
+        return values
+    # Retain the reader for archived GNU-time receipts. New invocations always
+    # write per-child wait4 JSON and never launch an external timing tool.
     values = {}
-    for line in path.read_text().splitlines():
+    for line in text.splitlines():
         text = line.strip()
         for label, key in (("User time (seconds):", "user_seconds"),
                            ("System time (seconds):", "system_seconds"),
@@ -323,12 +336,11 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
             command = base + ["--feed", "-" if transport == "stdin" else str(feed_path)]
         with (output / "runner.log").open("w") as log:
             for launch in range(2 if restart else 1):
-                cost_path = output / f"time-{launch}.txt"
-                timed = ["/usr/bin/time", "-v", "-o", str(cost_path)] + command
-                commands.append(timed)
+                cost_path = output / f"time-{launch}.json"
+                commands.append(command)
                 with feed_path.open("rb") as source:
                     receiver.begin_invocation(command)
-                    process = subprocess.Popen(timed, stdin=source if transport == "stdin" else subprocess.DEVNULL,
+                    process = TimedProcess(command, cost_path, stdin=source if transport == "stdin" else subprocess.DEVNULL,
                         stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
                     if restart and launch == 0:
                         deadline = time.monotonic() + 600
@@ -340,17 +352,15 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
                             except sqlite3.Error:
                                 pass
                             if len(messages) // 2 <= recorded < len(messages):
-                                children = Path(f"/proc/{process.pid}/task/{process.pid}/children").read_text().split()
-                                if len(children) != 1:
-                                    raise RuntimeError("timed runner child is not uniquely identified")
-                                os.kill(int(children[0]), signal.SIGKILL)
-                                result["sigkill"] = {"signal": 9, "committed_before_kill": recorded}
+                                process.kill()
+                                result["sigkill"] = {"signal": signal.SIGKILL, "pid": process.pid,
+                                    "committed_before_kill": recorded}
                                 break
                             time.sleep(0.01)
                         killed = process.wait(timeout=20)
-                        if "sigkill" not in result or killed != 137:
+                        if "sigkill" not in result or killed != -signal.SIGKILL:
                             raise RuntimeError(f"mid-tape SIGKILL not proven: {killed}")
-                        result["sigkill"]["time_returncode"] = killed
+                        result["sigkill"]["returncode"] = killed
                         with sqlite3.connect(output / "orders.sqlite3") as ledger:
                             resumed = ledger.execute("SELECT COUNT(*) FROM inputs").fetchone()[0]
                         feed_path = output / "resume.jsonl"
@@ -361,15 +371,14 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
                         result["runner_returncode"] = process.wait(timeout=1800)
                 costs.append(parse_cost(cost_path))
             if fail_first:
-                cost_path = output / "time-redelivery.txt"
+                cost_path = output / "time-redelivery.json"
                 command = receiver.redelivery_command(runner, output / "orders.sqlite3")
-                timed = ["/usr/bin/time", "-v", "-o", str(cost_path)] + command
-                commands.append(timed)
+                commands.append(command)
                 receiver.begin_invocation(command)
-                completed = subprocess.run(timed, stdout=log, stderr=subprocess.STDOUT,
-                    env=receiver.environment, timeout=1800)
-                result["redelivery_returncode"] = completed.returncode
-                if completed.returncode != 0:
+                process = TimedProcess(command, cost_path, stdout=log, stderr=subprocess.STDOUT,
+                    env=receiver.environment)
+                result["redelivery_returncode"] = process.wait(timeout=1800)
+                if result["redelivery_returncode"] != 0:
                     raise RuntimeError("explicit HTTP-failure redelivery did not complete")
                 costs.append(parse_cost(cost_path))
         redelivery = receiver.redelivery
@@ -399,9 +408,7 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
         (output / "exception.log").write_text(traceback.format_exc())
     finally:
         if process is not None and process.poll() is None:
-            children = Path(f"/proc/{process.pid}/task/{process.pid}/children").read_text().split()
-            for child in children:
-                os.kill(int(child), signal.SIGKILL)
+            process.kill()
             process.wait(timeout=20)
         if receiver is not None:
             receiver.finish(output)

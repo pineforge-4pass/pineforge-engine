@@ -7,10 +7,8 @@ Build the runner and an observer-linked example library before invoking it.
 import argparse
 from collections import Counter
 import json
-import os
 from pathlib import Path
 import sys
-import tempfile
 
 from native_live_equivalence_e2e import (
     Strategy, action_key, chart_bar_array, first_difference, ordered_delivery_effects, write_json,
@@ -18,6 +16,8 @@ from native_live_equivalence_e2e import (
 from native_live_tick_tape import (
     TIMESTAMP_CONTRACT, direct_tape, file_digest, genuine_case, message_groups, message_hashes,
 )
+from native_live_test_process import isolated_output
+from native_live_sanitizer import prepare_sanitizer
 
 
 def synthetic_fixture():
@@ -90,9 +90,16 @@ def check_case(result, directory, reference, total_inputs):
     check_invocation_order(attempts, effects, invocations)
     costs = json.loads((directory / "commands.json").read_text())
     assert len(costs) == len(invocations), (costs, invocations)
-    assert all(command[:2] == ["/usr/bin/time", "-v"] for command in costs), costs
+    assert costs == [entry["command"] for entry in invocations], (costs, invocations)
+    receipts = result["cost"]["invocations"]
+    assert len(receipts) == len(invocations), (receipts, invocations)
+    assert all(receipt["backend"] == "wait4" and receipt["command"] == command
+               and receipt["pid"] > 0 and receipt["max_rss_kib"] > 0
+               and receipt["wall_seconds"] > 0
+               for receipt, command in zip(receipts, costs)), receipts
     if result["restart"]:
-        assert result["sigkill"]["signal"] == 9 and result["sigkill"]["time_returncode"] == 137, result
+        assert result["sigkill"]["signal"] == 9 and result["sigkill"]["returncode"] == -9, result
+        assert receipts[0]["pid"] == result["sigkill"]["pid"] and receipts[0]["returncode"] == -9, result
         assert 0 < result["sigkill"]["committed_before_kill"] < total_inputs, result
         assert 0 < result["resume_from_input"] < total_inputs, result
     if result["fail_first"]:
@@ -148,29 +155,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runner", type=Path, required=True)
     parser.add_argument("--library", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--isolate-output", action="store_true")
+    parser.add_argument("--output", type=Path, required=True,
+        help="parent directory for a fresh, retained run-* witness directory")
     parser.add_argument("--sanitizer", choices=("asan", "tsan"))
     parser.add_argument("--scenarios", nargs="+", default=[
         "file-batch", "restart-batch", "retry-batch", "combined-batch"])
     arguments = parser.parse_args()
-    if arguments.sanitizer:
-        os.environ.pop("LD_PRELOAD", None)
-        os.environ.pop("DYLD_INSERT_LIBRARIES", None)
-        if arguments.sanitizer == "asan":
-            leaks = "0" if sys.platform == "darwin" else "1"
-            os.environ["ASAN_OPTIONS"] = f"detect_leaks={leaks}:halt_on_error=1:abort_on_error=1"
+    sanitizer_receipt = prepare_sanitizer(arguments.sanitizer)
     root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(root / "scripts"))
     from run_strategy import BarC, ReportC
 
-    output = arguments.output.resolve()
-    if arguments.isolate_output:
-        output.mkdir(parents=True, exist_ok=True)
-        output = Path(tempfile.mkdtemp(prefix="run-", dir=output))
-        print(f"Witness output: {output}", flush=True)
-    else:
-        output.mkdir(parents=True)
+    output = isolated_output(arguments.output)
+    print(f"Witness output: {output}", flush=True)
+    write_json(output / "sanitizer-launch.json", sanitizer_receipt)
     strategy = Strategy(arguments.library, BarC, ReportC)
     warmup, packets, bars = synthetic_fixture()
     write_json(output / "fixture.json", {"kind": "synthetic normalized ticks; no genuine-market-data claim",
