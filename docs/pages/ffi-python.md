@@ -248,6 +248,13 @@ lib.strategy_stream_fill_report.restype = ctypes.c_int
 lib.strategy_get_last_error.argtypes = [ctypes.c_void_p]
 lib.strategy_get_last_error.restype = ctypes.c_char_p
 
+# The failure's stable code and its arguments (canonical JSON); a runtime that
+# predates run-failure codes lacks both symbols.
+if hasattr(lib, "strategy_get_last_error_code"):
+    for name in ("strategy_get_last_error_code", "strategy_get_last_error_args"):
+        getattr(lib, name).argtypes = [ctypes.c_void_p]
+        getattr(lib, name).restype = ctypes.c_char_p
+
 lib.report_free.argtypes      = [ctypes.POINTER(pf_report_t)]
 lib.report_free.restype       = None
 
@@ -292,6 +299,13 @@ The complete runnable version is
 [`tutorial/run_stream.py`](https://github.com/pineforge-4pass/pineforge-engine/blob/main/tutorial/run_stream.py).
 See [Historical to realtime streaming](@ref streaming) for validation,
 clock advancement, and partial-bar rules.
+
+To act on a failure rather than print it, read its code:
+`lib.strategy_get_last_error_code(state)` is `b""` exactly when the most recent
+call recorded no failure, and `json.loads(lib.strategy_get_last_error_args(state))`
+gives its arguments when the code is not empty. Decide that a run failed from
+the code, not from the message, which a script's `runtime.error()` may leave
+empty. [Run-failure codes](@ref run_failure_codes) lists every code.
 
 ## End-to-end run
 

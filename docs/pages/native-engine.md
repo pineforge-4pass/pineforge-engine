@@ -3967,7 +3967,7 @@ hands the runtime a callback table and gets the same kernel back.
 43 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
 `CCallbackHost`, a `final NativeStrategyHost` that forwards each existing
 virtual to the table. No new virtual, no epoch bump, and nothing about the
-established C ABI moves: the 62 compiled-strategy runtime symbols and their
+established C ABI moves: the 64 compiled-strategy runtime symbols and their
 counts are untouched, and `scripts/check_c_abi_runtime.py` pins the new set as
 a second, disjoint inventory.
 

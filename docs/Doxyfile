@@ -128,6 +128,7 @@ INPUT                  = groups.dox \
                          pages/streaming.md \
                          pages/live-surface.md \
                          pages/report-schema.md \
+                         pages/run-failure-codes.md \
                          pages/metrics.md \
                          pages/configuration.md \
                          pages/magnifier.md \
