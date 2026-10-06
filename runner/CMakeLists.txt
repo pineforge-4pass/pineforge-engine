@@ -99,6 +99,11 @@ if(PINEFORGE_BUILD_TESTS)
             $<TARGET_FILE:native_live_example> $<TARGET_FILE:native_live_service_example>)
         set_tests_properties(native_live_service_e2e PROPERTIES TIMEOUT 300)
         target_sources(native_live_example PRIVATE $<TARGET_OBJECTS:native_live_equivalence_observer>)
+        add_test(NAME native_live_genuine_retry_e2e COMMAND ${Python3_EXECUTABLE} -B
+            ${PROJECT_SOURCE_DIR}/tests/native_live_genuine_retry_e2e.py
+            --runner $<TARGET_FILE:pineforge-live> --library $<TARGET_FILE:native_live_example>
+            --output ${CMAKE_CURRENT_BINARY_DIR}/native_live_genuine_retry_e2e)
+        set_tests_properties(native_live_genuine_retry_e2e PROPERTIES TIMEOUT 300)
         set(_pf_report_strategies $<TARGET_FILE:native_live_example>)
         foreach(probe ta-rsi14-cross-50-01 order-entry-implicit-reversal-exit-01 order-tranche-partial-market-close-01 bracket-atr-trailing-stop-state-01)
             add_library(live_report_${probe} MODULE
