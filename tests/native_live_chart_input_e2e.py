@@ -1,6 +1,7 @@
 """Chart-clock warmup, confirmed bars and minute/chart tick-boundary proofs."""
 import argparse
 from datetime import datetime, timedelta
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -183,6 +184,35 @@ def refusals(root, runner, library):
         result = subprocess.run(list(map(str, base + ["--ledger", ledger])), text=True, capture_output=True, timeout=30)
         assert result.returncode == 1 and ("warmup" in result.stderr or "input" in result.stderr), result.stderr
         assert not ledger.exists()
+    write_csv(warmup, chart_rows("15")[:24])
+    for offset in (60000, 1800000):
+        feed.write_text(json.dumps(dict(type="bar", bar={**chart_rows("15")[24],
+                                                         "ts_open": chart_rows("15")[23]["ts_open"] + offset})) + "\n")
+        ledger = root / f"bad-feed-{offset}.sqlite"
+        result = subprocess.run(list(map(str, base + ["--ledger", ledger])), text=True, capture_output=True, timeout=30)
+        assert result.returncode == 1 and "input" in result.stderr, result.stderr
+        with sqlite3.connect(ledger) as database:
+            assert database.execute("SELECT COUNT(*) FROM inputs").fetchone()[0] == 0
+    feed.write_text("")
+    write_csv(warmup, chart_rows("1")[:24])
+    for mode in ("bars", "ticks"):
+        ledger = root / f"legacy-{mode}.sqlite"
+        document = dict(schema="pineforge-native-ledger/v1",
+                        library=hashlib.sha256(Path(library).read_bytes()).hexdigest(),
+                        warmup=hashlib.sha256(warmup.read_bytes()).hexdigest(),
+                        mode=mode, input_tf="1", script_tf="15", session="24x7", timezone="UTC",
+                        chart_timezone="UTC", symbol="TEST:EXAMPLE", name="strategy", webhook="",
+                        parser=hashlib.sha256(b"").hexdigest(), parser_config=hashlib.sha256(b"{}").hexdigest(),
+                        syminfo={}, inputs=[], overrides=[])
+        digest = hashlib.sha256(json.dumps(document, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        with sqlite3.connect(ledger) as database:
+            database.execute("CREATE TABLE metadata(singleton INTEGER, schema_version INTEGER, identity TEXT)")
+            database.execute("INSERT INTO metadata VALUES(1,1,?)", (digest,))
+        original = ledger.read_bytes()
+        result = subprocess.run(list(map(str, base[:-1] + [mode, "--ledger", ledger])),
+                                text=True, capture_output=True, timeout=30)
+        assert result.returncode == 1 and "redeploy" in result.stderr and "input" in result.stderr, result.stderr
+        assert ledger.read_bytes() == original and not Path(str(ledger) + ".lock").exists()
 
 
 def main():
