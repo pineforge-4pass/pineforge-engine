@@ -25,10 +25,20 @@ def rows(path):
                 for row in csv.DictReader(source)]
 
 
+def flat_events(events):
+    for event in events:
+        if isinstance(event, list):
+            yield from flat_events(event)
+        elif event["type"] == "batch":
+            yield from flat_events(event["events"])
+        else:
+            yield event
+
+
 def batched(destination, events):
     pending = []
     with destination.open("w") as output:
-        for event in events:
+        for event in flat_events(events):
             pending.append(event)
             if len(pending) == 256:
                 output.write(json.dumps(dict(type="batch", events=pending), separators=(",", ":")) + "\n")
@@ -170,10 +180,12 @@ def main():
     parser.add_argument("--case")
     parser.add_argument("--utc-d4", action="store_true")
     args = parser.parse_args()
-    for case in sorted(args.cases.iterdir()):
-        if case.is_dir() and (case / "bars-chart.csv").exists() and (not args.case or args.case == case.name):
-            run_case(args, case)
-    print("D7 chart-delivery fixture contract PASS", flush=True)
+    selected = [case for case in sorted(args.cases.iterdir())
+                if case.is_dir() and (case / "bars-chart.csv").exists() and (not args.case or args.case == case.name)]
+    assert selected, "no chart-delivery fixtures selected"
+    for case in selected:
+        run_case(args, case)
+    print(f"D7 chart-delivery fixture contract PASS fixtures={len(selected)}", flush=True)
 
 
 if __name__ == "__main__":
