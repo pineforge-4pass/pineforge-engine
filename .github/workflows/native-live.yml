@@ -24,6 +24,11 @@ env:
   CCACHE_COMPILERCHECK: content
   CCACHE_COMPRESS: "1"
   CCACHE_MAXSIZE: 500M
+  # The run-failure source guards in every ci_verify profile read the newest
+  # release tag, which this checkout fetches (fetch-depth: 0): a missing tag
+  # fails them rather than taking their tag-less offline path. A called
+  # workflow does not inherit CI's env, so it says so itself.
+  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
 
 # The organization's 16-core larger runner for a push, the schedule, a
 # dispatch and a pull request from a branch of this repository; every other

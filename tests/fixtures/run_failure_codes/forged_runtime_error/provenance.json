@@ -1,0 +1,90 @@
+{
+  "synthetic": true,
+  "authored_for": "tests/test_run_failure_codes.cpp (stable run-failure codes, R5)",
+  "drives": "A runtime.error whose message copies the English of every forgeable class (and an empty message) must read strategy_runtime_error, args {}",
+  "run": "60 one-minute bars, run_backtest_full input_tf \"1\" script_tf \"1\", input Case 1..6 (Case 0 runs clean)",
+  "strategy_pine_sha256": "8960f5757118a00dd368cea0baa7927adb0d1a4a2651dee8bddc26cad8948657",
+  "generated_cpp": {
+    "repository": "pineforge-codegen-oss",
+    "commit": "cb5eb9402dc96eea1bcfa84fd245dea3c1807688",
+    "version_file": "1.2.0",
+    "call": "pineforge_codegen.transpile(<strategy.pine text>, filename=\"strategy.pine\")",
+    "sha256": "25b56fd3e1f2292283954a69caa7ac73e802f3f41ef83008ac8698b1d5275e56",
+    "hand_edited": false
+  },
+  "base_engine": {
+    "commit": "7a1f01c0",
+    "rows": [
+      {
+        "row": "forged_native_prefix",
+        "case_input": "1",
+        "strategy_get_last_error": "native x",
+        "strategy_last_run_status": 1,
+        "report_total_trades": 1
+      },
+      {
+        "row": "forged_bad_alloc",
+        "case_input": "2",
+        "strategy_get_last_error": "std::bad_alloc",
+        "strategy_last_run_status": 1,
+        "report_total_trades": 1
+      },
+      {
+        "row": "forged_no_data_stop",
+        "case_input": "3",
+        "strategy_get_last_error": "request.security(\"BINANCE:ETHUSDT\", \"60\", ...) at line 3: no data is pinned for this request, and its value was read",
+        "strategy_last_run_status": 1,
+        "report_total_trades": 1
+      },
+      {
+        "row": "forged_symbol_feeds",
+        "case_input": "4",
+        "strategy_get_last_error": "--symbol-feeds: x",
+        "strategy_last_run_status": 1,
+        "report_total_trades": 1
+      },
+      {
+        "row": "forged_spec_field_13",
+        "case_input": "5",
+        "strategy_get_last_error": "Pine adapter produced invalid native run spec field 13",
+        "strategy_last_run_status": 1,
+        "report_total_trades": 1
+      },
+      {
+        "row": "forged_empty_message",
+        "case_input": "6",
+        "strategy_get_last_error": "",
+        "strategy_last_run_status": 1,
+        "report_total_trades": 1
+      },
+      {
+        "row": "spec_field_13_unparseable_session (syminfo session \"bogus\")",
+        "case_input": "0",
+        "strategy_get_last_error": "Pine adapter produced invalid native run spec field 13",
+        "strategy_last_run_status": 0,
+        "report_total_trades": 0
+      },
+      {
+        "row": "duplicate_chart_timestamp (bars[5].timestamp == bars[4].timestamp)",
+        "case_input": "0",
+        "strategy_get_last_error": "bar[5].timestamp must be strictly increasing",
+        "strategy_last_run_status": 0,
+        "report_total_trades": 0
+      },
+      {
+        "row": "success_after_coded_failure (same handle, valid bars)",
+        "case_input": "0",
+        "strategy_get_last_error": "",
+        "strategy_last_run_status": 0,
+        "report_total_trades": 30
+      },
+      {
+        "row": "reuse_failed_handle_refused (Case 1 run, then Case 0 on the same handle)",
+        "case_input": "0",
+        "strategy_get_last_error": "Pine native adapter failed to configure projected run spec",
+        "strategy_last_run_status": 1,
+        "report_total_trades": 1
+      }
+    ]
+  }
+}

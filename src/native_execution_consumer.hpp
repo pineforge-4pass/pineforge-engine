@@ -2,6 +2,7 @@
 
 #include <pineforge/execution_consumer.hpp>
 #include <pineforge/native_host.hpp>
+#include <pineforge/run_failure.hpp>
 
 #include "native_calendar_memo.hpp"
 #include "runtime_ambient.hpp"
@@ -253,6 +254,18 @@ public:
         }
         return static_cast<NativeExecutionConsumer&>(*consumer);
     }
+    // The run-failure record (include/pineforge/run_failure.hpp) for writers
+    // outside the consumer: the text goes to last_error_ and the code, its
+    // canonical arguments and that same text to the record, in one call. The
+    // getters answer the stored code while its text is last_error_; a
+    // non-empty last_error_ no coded writer wrote reads
+    // engine_unclassified_error; no failure reads "". Error paths only.
+    static void note_failure_record(BacktestEngine& engine, std::string text,
+                                    RunFailureValue value);
+    static void clear_failure_record(BacktestEngine& engine) noexcept;
+    static const char* failure_code_of(const BacktestEngine& engine) noexcept;
+    static const char* failure_args_of(const BacktestEngine& engine) noexcept;
+    static RunFailureValue failure_value_of(const BacktestEngine& engine) noexcept;
     std::vector<NativeMarketEvent> events_after(uint64_t after_ordinal) const;
     // The command rows of events_after(after_ordinal), read in place (R5 lane
     // PERF-P4). The history is in ordinal order, so those rows are exactly
@@ -899,7 +912,25 @@ private:
     bool recoverable_abort() const noexcept;
     void latch_failure(NativeFailure failure) noexcept;
     void fail(BacktestEngine& engine, NativeFailure failure) noexcept;
-    void render(BacktestEngine& engine, const char* text) const;
+    // Every failure text is written with its code (run_failure.hpp): a literal
+    // refusal names its code at the call (engine_invariant unless said
+    // otherwise), an exception is classified, a catch (...) is
+    // engine_unclassified_error, and clearing the text clears the code.
+    void render(BacktestEngine& engine, const char* text,
+                RunFailureCode code = RunFailureCode::engine_invariant,
+                const RunFailureArgs& args = {}) const;
+    void render_exception(BacktestEngine& engine, const std::exception& error) const;
+    void render_unclassified(BacktestEngine& engine, const char* text) const;
+    void clear_rendered(BacktestEngine& engine) const noexcept;
+    // The code, canonical arguments and text last rendered: presentation
+    // state beside last_error_, never hashed and never read by a decision.
+    struct RunFailureRecord {
+        RunFailureCode code = RunFailureCode::none;
+        std::shared_ptr<const std::string> args;
+        std::string text;
+    };
+    mutable RunFailureRecord run_failure_;
+    void store_rendered(BacktestEngine& engine, const char* text, RunFailureValue value) const;
     // The running spec while the run runs (cache_running_policy), else the
     // lifecycle probe: inline, so the per-point reads of the spec below cost
     // a load, not a call.
@@ -1487,7 +1518,9 @@ private:
         bool prior_;
     };
     bool projection_deferred_ = false;
-    void present_refusal(BacktestEngine& engine, const char* text);
+    void present_refusal(BacktestEngine& engine, const char* text,
+                         RunFailureCode code = RunFailureCode::engine_invariant,
+                         const RunFailureArgs& args = {});
     bool finalize_elapsed_slots(BacktestEngine& engine, int64_t exclusive_end_ms);
     bool emit_quiet_carried_open(BacktestEngine& engine,
                                  const native_calendar::NativeInterval& interval);

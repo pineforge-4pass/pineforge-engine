@@ -4,6 +4,7 @@
 #include <pineforge/timeframe.hpp>
 
 #include "pine_host_reads.hpp"
+#include <pineforge/run_failure.hpp>
 
 #include <algorithm>
 #include <limits>
@@ -353,7 +354,8 @@ const Series<double>& PineScheduler::source_series(const std::string& key) const
     if (key == "hlc3") return language_._src_hlc3_;
     if (key == "ohlc4") return language_._src_ohlc4_;
     if (key == "hlcc4") return language_._src_hlcc4_;
-    throw std::invalid_argument("unknown source series");
+    throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                       "unknown source series");
 }
 
 void PineScheduler::fixture_publish_source_series(const Bar& bar, bool new_history_slot) {
@@ -787,8 +789,10 @@ void PineScheduler::recalculate(const native_order::ExecutionAppliedEvent& event
         auto newborns = host.adapter_.take_first_open_newborns();
         if (newborns.empty()) break;
         for (const auto& handle : newborns) {
-            if (budget == 0 || executed == kFirstOpenLoopGuard)
-                throw std::overflow_error("Pine COOF first-open loop guard exhausted");
+            if (budget == 0 || executed == kFirstOpenLoopGuard) {
+                throw coded<std::overflow_error>(RunFailureCode::recalc_cap, {},
+                                                 "Pine COOF first-open loop guard exhausted");
+            }
             --budget;
             ++executed;
             (void)host.execute_current({handle, NativeCurrentPriceRule::NearestTick});

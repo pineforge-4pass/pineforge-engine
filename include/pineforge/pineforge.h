@@ -1513,6 +1513,35 @@ PF_API int strategy_set_recorded_series(pf_strategy_t s, const char* key,
  *  registered. */
 PF_API const char* strategy_get_last_error(pf_strategy_t s);
 
+/** Compile-time probe for the two run-failure code getters below (and the
+ *  generated-code helpers of `<pineforge/run_failure.hpp>`). A runtime library
+ *  without them lacks the symbols: look them up with `dlsym`. */
+#define PINEFORGE_HAS_RUN_FAILURE_CODES_V1 1
+
+/** Stable code of the most recent failure on @p s: lower snake_case ASCII
+ *  matching `^[a-z][a-z0-9_]{2,47}$`, from the closed vocabulary published as
+ *  `run_failure_codes.json` (schema `pineforge-run-failure-catalog/v1`); a
+ *  code is never reused for another meaning.
+ *
+ *  Returns `""` exactly when the most recent run (or setter) on @p s recorded
+ *  no failure, and `NULL` only when @p s is `NULL`. It is not keyed on the
+ *  text: a script that stops with an empty `runtime.error()` message fails
+ *  with #strategy_get_last_error `""` and the code `strategy_runtime_error`,
+ *  and a non-empty error that no coded site wrote reads
+ *  `engine_unclassified_error`, never `""`. A text a script writes never
+ *  selects a code. The pointer has the lifetime of #strategy_get_last_error's
+ *  (until the next run or setter on @p s). */
+PF_API const char* strategy_get_last_error_code(pf_strategy_t s);
+
+/** The typed arguments of the failure #strategy_get_last_error_code names, as
+ *  one canonical JSON object: UTF-8, keys sorted, no whitespace; an integer
+ *  is a JSON integer, a number the shortest round-trip double, every other
+ *  kind a JSON string. `"{}"` when the code has no arguments, `""` when there
+ *  is no failure, `NULL` only when @p s is `NULL`. An argument is never a
+ *  value the script computed while it ran. Same lifetime as
+ *  #strategy_get_last_error_code. */
+PF_API const char* strategy_get_last_error_args(pf_strategy_t s);
+
 /** @} */ /* end of pf_config */
 
 /** @defgroup pf_version Version query

@@ -1,4 +1,5 @@
 #include <pineforge/str_utils.hpp>
+#include <pineforge/run_failure.hpp>
 #include "timezone.hpp"
 #include <charconv>
 #include <cmath>
@@ -54,7 +55,8 @@ std::string decimal_text(double value, int min_fraction, int max_fraction,
     char buffer[128];
     const auto converted = std::to_chars(buffer, buffer + sizeof buffer, value);
     if (converted.ec != std::errc{})
-        throw std::runtime_error("shortest-decimal conversion failed");
+        throw coded<std::runtime_error>(RunFailureCode::engine_invariant, {},
+                                        "shortest-decimal conversion failed");
     std::string spelling(buffer, converted.ptr);
     const bool negative = !spelling.empty() && spelling[0] == '-';
     if (negative) spelling.erase(0, 1);

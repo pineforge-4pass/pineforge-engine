@@ -1,0 +1,19 @@
+# pytest for the run-json-harness-tests stage of scripts/ci_preflight.py, which
+# runs docker/run_json_*_test.py. CI's preflight job installs it with
+#
+#   python3 -m pip install --require-hashes --only-binary :all: -r scripts/requirements-preflight.txt
+#
+# pytest 9.1.1 is the remote verifier's (conda-forge), and so are the versions of
+# its dependencies on Linux with Python 3.12 (colorama is Windows-only;
+# exceptiongroup and tomli are for Python below 3.11). Each hash is the sha256 of
+# the py3-none-any wheel on PyPI, as pinned for actionlint in .github/workflows/ci.yml.
+iniconfig==2.3.0 \
+    --hash=sha256:f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12
+packaging==26.3 \
+    --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+pluggy==1.6.0 \
+    --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746
+pygments==2.21.0 \
+    --hash=sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9
+pytest==9.1.1 \
+    --hash=sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c

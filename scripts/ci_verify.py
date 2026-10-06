@@ -608,8 +608,13 @@ RELEASE_MIN_TESTS = 792
 # spellings for 1.0 (sharpe_tv, sortino_tv, Coof, MagnifierCoof): their names
 # and their six deprecation and static_assert texts left the headers, the
 # archive and the ADR's residual table together (INT26 pick of 38e8ad1e).
-ADR_RULED_IDENTIFIERS_MIN = 170
-ADR_RULED_TEXTS_MIN = 40
+# 193 identifiers and 59 texts with the run-failure codes' three rows: 23
+# identifiers (7 code names, 6 argument values, the 9 generated-code helpers
+# and the `pine_source` kind) and 19 texts (18 dotted argument values and the
+# `line.get_price` function literal), the public run-failure wire vocabulary
+# the catalog docker/run_failure_codes.json publishes.
+ADR_RULED_IDENTIFIERS_MIN = 193
+ADR_RULED_TEXTS_MIN = 59
 # PR-only registration floors: the complete CTest populations of the three
 # excluded profiles at INT25, counted with ctest -N on the integrated tree --
 # 653/653/662 at 91d65ad6 (INT24) plus wave G's six rows (C-SURFACE-1 +1,
@@ -684,6 +689,12 @@ SOURCE_GUARD_SCRIPTS = (
     ('source-guard-aggregate-versions', ['scripts/check_aggregate_cpp_versions.py']),
     ('source-guard-adapter-spec-shadowing', ['scripts/check_adapter_spec_shadowing.py']),
     ('source-guard-dangling-comment-names', ['scripts/check_dangling_comment_names.py']),
+    # R5 run-failure codes: the catalog against its generated enum and registry,
+    # the published catalog of the newest release tag and the uncoded throws;
+    # then the catalog's per-release diff, recomputed byte for byte. Both read
+    # the newest release tag, so every checkout that runs them fetches history.
+    ('source-guard-run-failure-codes', ['scripts/check_run_failure_codes.py']),
+    ('source-guard-run-failure-diff', ['scripts/gen_run_failure_catalog_diff.py', '--check']),
 )
 NATIVE_INCLUDE_INDEPENDENCE_PROFILES = frozenset(('release', 'native', 'kernel'))
 # The kernel-only archive must name no TradingView vocabulary outside ADR-0001's

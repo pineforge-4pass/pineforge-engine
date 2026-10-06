@@ -1,0 +1,60 @@
+{
+  "synthetic": true,
+  "authored_for": "tests/test_run_failure_codes.cpp (stable run-failure codes, R5)",
+  "drives": "The generated no-data and other-symbol stops through the run-failure helpers (hand edit below) -> no_data_request / other_symbol_request with call, function, line (and symbol only for a literal); a helper given a function outside its closed list -> engine_invariant",
+  "run": "60 one-minute bars, input_tf \"1\" script_tf \"1\", no symbol feed or recorded series installed, input Case 1..4 (Case 0 runs clean)",
+  "strategy_pine_sha256": "3e2ab611c53bb9f32f429d79b51a4714989a6b9d9628540cd458588771d00093",
+  "generated_cpp": {
+    "repository": "pineforge-codegen-oss",
+    "commit": "cb5eb9402dc96eea1bcfa84fd245dea3c1807688",
+    "version_file": "1.2.0",
+    "call": "pineforge_codegen.transpile(<strategy.pine text>, filename=\"strategy.pine\")",
+    "sha256": "9efad7631c0f271ab177655a754d09518c982e2e8f6072457285f1354cafa4ef",
+    "hand_edited": true,
+    "hand_edit": {
+      "codegen_output_sha256": "585ea7f514c532c3f3a3b8313160e7710815fc8db05ec969de5cb30f9006124a",
+      "what": [
+        "after `using namespace pineforge;`: PF_NO_DATA_STOP / PF_OTHER_SYMBOL_STOP macros, calling pineforge::pine_no_data_stop / pine_other_symbol_stop under #ifdef PINEFORGE_HAS_RUN_FAILURE_CODES_V1 and pine_runtime_error(std::string(english)) (the stop exactly as emitted) otherwise; #undef of both at the end of the file",
+        "line 4 stop: PF_NO_DATA_STOP(\"request.financial\", <call>, 4, <english>)",
+        "line 5 stop: PF_OTHER_SYMBOL_STOP(\"request.security\", \"BINANCE:ETHUSDT\", <call>, 5, <english>)",
+        "line 6 stop (computed symbol): PF_OTHER_SYMBOL_STOP(\"request.security\", nullptr, <call>, 6, <english>)",
+        "line 7 stop: PF_NO_DATA_STOP(\"request.fundamentals\", <call>, 7, <english>) -- a function outside the helper's closed list on purpose"
+      ],
+      "call_and_english": "<call> is the stop's English up to \" at line N\" (spell_call's output), <english> the stop's English unchanged",
+      "reproduce": "transpile strategy.pine with the codegen commit above (its sha256 is codegen_output_sha256), apply the edits listed, each replaced stop occurring exactly once: the result's sha256 is generated_cpp.sha256"
+    }
+  },
+  "base_engine": {
+    "commit": "7a1f01c0",
+    "rows": [
+      {
+        "row": "helper_no_data_request",
+        "case_input": "1",
+        "strategy_get_last_error": "request.financial(\"NASDAQ:AAPL\", \"TOTAL_REVENUE\", ...) at line 4: no data is pinned for this request, and its value was read",
+        "strategy_last_run_status": 1,
+        "report_total_trades": 1
+      },
+      {
+        "row": "helper_other_symbol_literal",
+        "case_input": "2",
+        "strategy_get_last_error": "request.security(\"BINANCE:ETHUSDT\", \"60\", ...) at line 5: no data is pinned for this request, and its value was read",
+        "strategy_last_run_status": 1,
+        "report_total_trades": 1
+      },
+      {
+        "row": "helper_other_symbol_computed",
+        "case_input": "3",
+        "strategy_get_last_error": "request.security(input.symbol(\"BINANCE:SOLUSDT\", \"Other\") at line 6, \"60\", ...) at line 6: no data is pinned for this request, and its value was read",
+        "strategy_last_run_status": 1,
+        "report_total_trades": 1
+      },
+      {
+        "row": "helper_function_outside_list",
+        "case_input": "4",
+        "strategy_get_last_error": "request.financial(\"NASDAQ:MSFT\", \"TOTAL_REVENUE\", ...) at line 7: no data is pinned for this request, and its value was read",
+        "strategy_last_run_status": 1,
+        "report_total_trades": 1
+      }
+    ]
+  }
+}

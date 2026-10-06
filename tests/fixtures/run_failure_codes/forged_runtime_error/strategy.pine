@@ -1,0 +1,20 @@
+//@version=6
+strategy("R5 forged runtime.error texts", overlay = true)
+forgedCase = input.int(0, "Case")
+if bar_index == 2
+    if forgedCase == 1
+        runtime.error("native x")
+    else if forgedCase == 2
+        runtime.error("std::bad_alloc")
+    else if forgedCase == 3
+        runtime.error('request.security("BINANCE:ETHUSDT", "60", ...) at line 3: no data is pinned for this request, and its value was read')
+    else if forgedCase == 4
+        runtime.error("--symbol-feeds: x")
+    else if forgedCase == 5
+        runtime.error("Pine adapter produced invalid native run spec field 13")
+    else if forgedCase == 6
+        runtime.error("")
+if bar_index % 2 == 0
+    strategy.entry("L", strategy.long)
+else
+    strategy.close("L")

@@ -1257,18 +1257,99 @@ void NativeExecutionConsumer::fail(BacktestEngine& engine, NativeFailure failure
     engine.last_run_status_ = 1;
 }
 
-void NativeExecutionConsumer::render(BacktestEngine& engine, const char* text) const {
+void NativeExecutionConsumer::store_rendered(BacktestEngine& engine, const char* text,
+                                             RunFailureValue value) const {
     engine.last_error_ = text ? text : "";
+    run_failure_.code = value.code;
+    run_failure_.args = std::move(value.args);
+    run_failure_.text = engine.last_error_;
 }
 
-void NativeExecutionConsumer::present_refusal(BacktestEngine& engine, const char* text) {
-    render(engine, text);
+void NativeExecutionConsumer::render(BacktestEngine& engine, const char* text,
+                                     RunFailureCode code, const RunFailureArgs& args) const {
+    store_rendered(engine, text, make_run_failure(code, args));
+}
+
+void NativeExecutionConsumer::render_exception(BacktestEngine& engine,
+                                               const std::exception& error) const {
+    store_rendered(engine, error.what(), classify_run_failure(error));
+}
+
+void NativeExecutionConsumer::render_unclassified(BacktestEngine& engine,
+                                                  const char* text) const {
+    store_rendered(engine, text,
+                   RunFailureValue{RunFailureCode::engine_unclassified_error, nullptr});
+}
+
+void NativeExecutionConsumer::clear_rendered(BacktestEngine& engine) const noexcept {
+    engine.last_error_.clear();
+    run_failure_.code = RunFailureCode::none;
+    run_failure_.args.reset();
+    run_failure_.text.clear();
+}
+
+void NativeExecutionConsumer::note_failure_record(BacktestEngine& engine, std::string text,
+                                                  RunFailureValue value) {
+    NativeExecutionConsumer& consumer = bound(engine);
+    engine.last_error_ = std::move(text);
+    consumer.run_failure_.code = value.code;
+    consumer.run_failure_.args = std::move(value.args);
+    consumer.run_failure_.text = engine.last_error_;
+}
+
+void NativeExecutionConsumer::clear_failure_record(BacktestEngine& engine) noexcept {
+    engine.last_error_.clear();
+    if (auto* consumer = engine.execution_consumer_slot_.ptr.get()) {
+        static_cast<NativeExecutionConsumer*>(consumer)->clear_rendered(engine);
+    }
+}
+
+const char* NativeExecutionConsumer::failure_code_of(const BacktestEngine& engine) noexcept {
+    if (const auto* consumer = engine.execution_consumer_slot_.ptr.get()) {
+        const RunFailureRecord& record =
+            static_cast<const NativeExecutionConsumer*>(consumer)->run_failure_;
+        if (record.code != RunFailureCode::none && record.text == engine.last_error_) {
+            return run_failure_code_name(record.code);
+        }
+    }
+    return engine.last_error_.empty()
+        ? "" : run_failure_code_name(RunFailureCode::engine_unclassified_error);
+}
+
+const char* NativeExecutionConsumer::failure_args_of(const BacktestEngine& engine) noexcept {
+    if (const auto* consumer = engine.execution_consumer_slot_.ptr.get()) {
+        const RunFailureRecord& record =
+            static_cast<const NativeExecutionConsumer*>(consumer)->run_failure_;
+        if (record.code != RunFailureCode::none && record.text == engine.last_error_) {
+            return record.args ? record.args->c_str() : "{}";
+        }
+    }
+    return engine.last_error_.empty() ? "" : "{}";
+}
+
+RunFailureValue NativeExecutionConsumer::failure_value_of(const BacktestEngine& engine) noexcept {
+    if (const auto* consumer = engine.execution_consumer_slot_.ptr.get()) {
+        const RunFailureRecord& record =
+            static_cast<const NativeExecutionConsumer*>(consumer)->run_failure_;
+        if (record.code != RunFailureCode::none && record.text == engine.last_error_) {
+            return RunFailureValue{record.code, record.args};
+        }
+    }
+    if (engine.last_error_.empty()) return RunFailureValue{};
+    return RunFailureValue{RunFailureCode::engine_unclassified_error, nullptr};
+}
+
+void NativeExecutionConsumer::present_refusal(BacktestEngine& engine, const char* text,
+                                              RunFailureCode code,
+                                              const RunFailureArgs& args) {
+    render(engine, text, code, args);
     engine.last_run_status_ = 1;
 }
 
 bool NativeExecutionConsumer::refuse_mixed_input_mode(BacktestEngine& engine, InputMode requested) {
     if (input_mode_ != InputMode::Unselected && input_mode_ != requested) {
-        present_refusal(engine, "native stream cannot mix confirmed bars and ticks");
+        present_refusal(engine, "native stream cannot mix confirmed bars and ticks",
+                        RunFailureCode::stream_input_rejected);
         return true;
     }
     return false;
@@ -1354,11 +1435,11 @@ bool NativeExecutionConsumer::prepare_public_begin(
         // has not started a native run or consumed an identity, so preserve a
         // reusable Unconfigured/Completed host just as other begin refusals
         // do. Callback exceptions after begin_ready remain terminal.
-        render(engine, e.what());
+        render_exception(engine, e);
         return false;
     } catch (...) {
         preparing_begin_ = false;
-        render(engine, "native pre-begin provider exception");
+        render_unclassified(engine, "native pre-begin provider exception");
         return false;
     }
     preparing_begin_ = false;
@@ -1390,9 +1471,9 @@ void NativeExecutionConsumer::latch_abort(BacktestEngine& engine,
     fail(engine, NativeFailure{NativeFailureCode::Aborted, operation, ordinal});
     const auto* spec = spec_ptr();
     if (!spec || spec->abort_reporting == NativeAbortReporting::Error) {
-        render(engine, "native run aborted");
+        render(engine, "native run aborted", RunFailureCode::run_aborted);
     } else {
-        engine.last_error_.clear();
+        clear_rendered(engine);
     }
 }
 
@@ -2052,15 +2133,18 @@ bool NativeExecutionConsumer::validate_undetected_begin(
         BacktestEngine& engine, const NativeBeginArgs& args) {
     if (!has_undetected_timeframe()) return true;
     if (!args.input_tf.empty() || !args.script_tf.empty()) {
-        present_refusal(engine, "native undetected timeframe requires empty timeframe arguments");
+        present_refusal(engine, "native undetected timeframe requires empty timeframe arguments",
+                        RunFailureCode::run_options_rejected, {{"option", "timeframes"}});
         return false;
     }
     if (args.n >= 2) {
-        present_refusal(engine, "native undetected timeframe requires fewer than two bars");
+        present_refusal(engine, "native undetected timeframe requires fewer than two bars",
+                        RunFailureCode::run_options_rejected, {{"option", "timeframes"}});
         return false;
     }
     if (args.is_stream) {
-        present_refusal(engine, "native stream requires a detected timeframe");
+        present_refusal(engine, "native stream requires a detected timeframe",
+                        RunFailureCode::run_options_rejected, {{"option", "timeframes"}});
         return false;
     }
     return true;
@@ -2284,7 +2368,8 @@ NativeSetupResult NativeExecutionConsumer::configure_spec(BacktestEngine& engine
     auto parsed_session = native_calendar::parse_session(candidate.session, candidate.timezone);
     if (!parsed_session) {
         fail(engine, NativeFailure{NativeFailureCode::Calendar, NativeFailureOperation::Configure});
-        render(engine, "native calendar parse failed at configure");
+        render(engine, "native calendar parse failed at configure",
+               RunFailureCode::symbol_metadata_rejected, {{"field", "session"}});
         return result;
     }
     if (!candidate.timeframe_undetected) {
@@ -2292,7 +2377,8 @@ NativeSetupResult NativeExecutionConsumer::configure_spec(BacktestEngine& engine
         auto parsed_script = native_calendar::parse_timeframe(candidate.script_tf);
         if (!parsed_input || !parsed_script) {
             fail(engine, NativeFailure{NativeFailureCode::Calendar, NativeFailureOperation::Configure});
-            render(engine, "native calendar parse failed at configure");
+            render(engine, "native calendar parse failed at configure",
+                   RunFailureCode::run_options_rejected, {{"option", "timeframes"}});
             return result;
         }
         input_tf_ = std::move(*parsed_input);
@@ -2306,7 +2392,8 @@ NativeSetupResult NativeExecutionConsumer::configure_spec(BacktestEngine& engine
         auto parsed_intrabar = native_calendar::parse_timeframe(lower->tf);
         if (!parsed_intrabar) {
             fail(engine, NativeFailure{NativeFailureCode::Calendar, NativeFailureOperation::Configure});
-            render(engine, "native intrabar timeframe parse failed at configure");
+            render(engine, "native intrabar timeframe parse failed at configure",
+                   RunFailureCode::run_options_rejected, {{"option", "intrabar_timeframe"}});
             return result;
         }
         intrabar_tf_ = std::move(*parsed_intrabar);
@@ -2323,7 +2410,7 @@ NativeSetupResult NativeExecutionConsumer::configure_spec(BacktestEngine& engine
     leave_running();
     state_ = NativeReady{std::move(candidate)};
     result.status = NativeSetupStatus::Applied;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     return result;
 }
 
@@ -2389,7 +2476,8 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // that a run over different zone data would share.
     if (!tz_identity_) {
         fail(engine, NativeFailure{NativeFailureCode::Calendar, NativeFailureOperation::Begin});
-        render(engine, "native timezone identity cannot be derived from its zone data");
+        render(engine, "native timezone identity cannot be derived from its zone data",
+               RunFailureCode::symbol_metadata_rejected, {{"field", "timezone"}});
         return false;
     }
     engine.reset_run_state();
@@ -2538,14 +2626,14 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
             in_run_begin_ = false;
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                        NativeFailureOperation::Callback});
-            render(engine, e.what());
+            render_exception(engine, e);
             return false;
         } catch (...) {
             in_callback_ = false;
             in_run_begin_ = false;
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                        NativeFailureOperation::Callback});
-            render(engine, "native callback exception");
+            render_unclassified(engine, "native callback exception");
             return false;
         }
         in_callback_ = false;
@@ -2585,17 +2673,23 @@ bool NativeExecutionConsumer::preflight_bars(BacktestEngine& engine, const Bar* 
         stream ? NativeInputPolicy::StreamWarmup : NativeInputPolicy::Batch);
     if (result) return true;
     const int status_before = engine.last_run_status_;
-    const auto refuse = [&](const char* text) {
-        present_refusal(engine, text);
+    const auto refuse = [&](const char* text,
+                            RunFailureCode code = RunFailureCode::engine_invariant,
+                            const RunFailureArgs& args = {}) {
+        present_refusal(engine, text, code, args);
         if (preserve_status) engine.last_run_status_ = status_before;
     };
-    const auto indexed = [&](const char* field, const char* detail) {
+    // A refused bar is chart_bars_rejected: its row in the caller's array
+    // (the request's own bars), the field the text names and the closed
+    // reason its detail states.
+    const auto indexed = [&](const char* field, const char* detail, const char* reason) {
         std::string message = "bar[" + std::to_string(result.index) + "]." + field;
         if (detail) message += detail;
-        refuse(message.c_str());
+        refuse(message.c_str(), RunFailureCode::chart_bars_rejected,
+               {{"index", result.index}, {"field", field}, {"reason", reason}});
     };
-    const auto timestamped = [&](const char* detail) {
-        indexed("timestamp", detail);
+    const auto timestamped = [&](const char* detail, const char* reason) {
+        indexed("timestamp", detail, reason);
     };
     switch (result.error) {
     case NativeInputPreflightError::NullArray:
@@ -2612,57 +2706,70 @@ bool NativeExecutionConsumer::preflight_bars(BacktestEngine& engine, const Bar* 
         if (bars != nullptr && result.index >= 0 && result.index < n) {
             const Bar& bar = bars[result.index];
             if (!std::isfinite(bar.open)) {
-                indexed("open", " must be finite");
+                indexed("open", " must be finite", "not_finite");
             } else if (!std::isfinite(bar.high)) {
-                indexed("high", " must be finite");
+                indexed("high", " must be finite", "not_finite");
             } else if (!std::isfinite(bar.low)) {
-                indexed("low", " must be finite");
+                indexed("low", " must be finite", "not_finite");
             } else if (!std::isfinite(bar.close)) {
-                indexed("close", " must be finite");
+                indexed("close", " must be finite", "not_finite");
             } else if (bar.open < 0.0 && stream) {
-                indexed("open", " must be non-negative");
+                indexed("open", " must be non-negative", "negative");
             } else if (bar.high < 0.0 && stream) {
-                indexed("high", " must be non-negative");
+                indexed("high", " must be non-negative", "negative");
             } else if (bar.low < 0.0 && stream) {
-                indexed("low", " must be non-negative");
+                indexed("low", " must be non-negative", "negative");
             } else if (bar.close < 0.0 && stream) {
-                indexed("close", " must be non-negative");
+                indexed("close", " must be non-negative", "negative");
             } else if (bar.low > std::min(bar.open, bar.close)) {
-                indexed("low", " must not exceed open or close");
+                indexed("low", " must not exceed open or close", "low_above_body");
             } else if (bar.high < std::max(bar.open, bar.close)) {
-                indexed("high", " must not be below open or close");
+                indexed("high", " must not be below open or close", "high_below_body");
+            } else if (std::isnan(bar.volume)
+                       || (std::isfinite(bar.volume) && bar.volume >= 0.0)) {
+                // A valid volume: the spec refused something else (a
+                // non-positive price); the text keeps its volume wording.
+                std::string message = "bar[" + std::to_string(result.index)
+                    + "].volume must be non-negative finite or NaN (unavailable)";
+                refuse(message.c_str(), RunFailureCode::chart_bars_rejected,
+                       {{"index", result.index}, {"reason", "structural"}});
             } else {
-                indexed("volume", " must be non-negative finite or NaN (unavailable)");
+                indexed("volume", " must be non-negative finite or NaN (unavailable)",
+                        "volume_invalid");
             }
         } else {
-            refuse("native bar failed structural validation");
+            refuse("native bar failed structural validation",
+                   RunFailureCode::chart_bars_rejected, {{"reason", "structural"}});
         }
         break;
     case NativeInputPreflightError::Unaligned:
-        timestamped(" is not aligned to the configured calendar");
+        timestamped(" is not aligned to the configured calendar", "not_aligned");
         break;
     case NativeInputPreflightError::OffGridLabel:
         if (spec->slot_label_policy == NativeSlotLabelPolicy::Canonical) {
             refuse(
-                "native confirmed bar timestamp is not a canonical slot label");
+                "native confirmed bar timestamp is not a canonical slot label",
+                RunFailureCode::chart_bars_rejected,
+                {{"index", result.index}, {"field", "timestamp"},
+                 {"reason", "not_canonical_slot"}});
         } else {
-            timestamped(" is not a canonical slot label");
+            timestamped(" is not a canonical slot label", "not_canonical_slot");
         }
         break;
     case NativeInputPreflightError::NotStrictlyIncreasing:
-        timestamped(" must be strictly increasing");
+        timestamped(" must be strictly increasing", "not_increasing");
         break;
     case NativeInputPreflightError::OverlappingSlot:
-        timestamped(" overlaps the previous input slot");
+        timestamped(" overlaps the previous input slot", "overlaps_previous_slot");
         break;
     case NativeInputPreflightError::InSessionGap:
-        timestamped(" follows an in-session gap");
+        timestamped(" follows an in-session gap", "in_session_gap");
         break;
     case NativeInputPreflightError::CalendarFailure:
         refuse("native calendar parse failed during input preflight");
         break;
     case NativeInputPreflightError::TimestampDeltaOverflow:
-        timestamped(" delta exceeds int64 range");
+        timestamped(" delta exceeds int64 range", "delta_overflow");
         break;
     case NativeInputPreflightError::None:
         break;
@@ -2675,7 +2782,8 @@ bool NativeExecutionConsumer::preflight_intrabar_path(BacktestEngine& engine) {
     if (!spec || spec->intrabar.is_none() || spec->intrabar.synthesized_path()) return true;
     const auto& lower = *spec->intrabar.lower();
     if (!intrabar_tf_ || lower.bars.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-        present_refusal(engine, "native intrabar path timeframe or bar count is invalid");
+        present_refusal(engine, "native intrabar path timeframe or bar count is invalid",
+                        RunFailureCode::run_options_rejected, {{"option", "intrabar_path"}});
         return false;
     }
     // preflight_native_inputs reads the calendar and tolerance facts alone, so
@@ -2698,12 +2806,15 @@ bool NativeExecutionConsumer::preflight_intrabar_path(BacktestEngine& engine) {
         path_spec, lower.bars.empty() ? nullptr : lower.bars.data(),
         static_cast<int>(lower.bars.size()), NativeInputPolicy::Batch);
     if (result) return true;
-    present_refusal(engine, "native intrabar path failed validation");
+    present_refusal(engine, "native intrabar path failed validation",
+                    RunFailureCode::run_options_rejected, {{"option", "intrabar_path"}});
     return false;
 }
 
 void NativeExecutionConsumer::exhaust_ordinals() {
-    throw std::overflow_error("native timeline ordinal exhausted");
+    // An exhausted counter is an engine invariant (run-failure codes).
+    throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                     "native timeline ordinal exhausted");
 }
 
 void NativeExecutionConsumer::raise_floor(int64_t t) {
@@ -3555,7 +3666,7 @@ bool NativeExecutionConsumer::kernel_submit_liquidation(
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                    NativeFailureOperation::Settlement});
-        render(engine, e.what());
+        render_exception(engine, e);
         return false;
     }
     if (!direct_mutation_) {
@@ -3649,14 +3760,14 @@ void NativeExecutionConsumer::maintain_margin_at(
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                        NativeFailureOperation::Settlement,
                                        cursor.point.ordinal});
-            render(engine, e.what());
+            render_exception(engine, e);
         }
     } catch (...) {
         if (!failed()) {
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                        NativeFailureOperation::Settlement,
                                        cursor.point.ordinal});
-            render(engine, "native margin maintenance callback exception");
+            render_unclassified(engine, "native margin maintenance callback exception");
         }
     }
 }
@@ -3683,7 +3794,7 @@ void NativeExecutionConsumer::calculation_margin_check_at(
         if (!failed()) {
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                        NativeFailureOperation::Settlement, calc.ordinal});
-            render(engine, e.what());
+            render_exception(engine, e);
         }
         return;
     }
@@ -4161,7 +4272,7 @@ void NativeExecutionConsumer::drain_dependency_queue(
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation, operation,
                                    seeds.empty() ? 0 : seeds.front().first.ordinal});
-        render(engine, e.what());
+        render_exception(engine, e);
     }
 }
 
@@ -4178,7 +4289,7 @@ void NativeExecutionConsumer::drain_parent_terminal(
         seeds.push_back({cause, parent});
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation, operation, cause.ordinal});
-        render(engine, e.what());
+        render_exception(engine, e);
         return;
     }
     drain_dependency_queue(engine, seeds, operation);
@@ -4267,12 +4378,12 @@ void NativeExecutionConsumer::drain_after_applied(
                     fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                                NativeFailureOperation::Settlement,
                                                applied.ordinal});
-                    render(engine, e.what());
+                    render_exception(engine, e);
                 } catch (...) {
                     fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                                NativeFailureOperation::Settlement,
                                                applied.ordinal});
-                    render(engine, "native anchored level callback exception");
+                    render_unclassified(engine, "native anchored level callback exception");
                 }
                 return std::nullopt;
             };
@@ -4346,7 +4457,7 @@ void NativeExecutionConsumer::drain_after_applied(
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                    NativeFailureOperation::Settlement, applied.ordinal});
-        render(engine, e.what());
+        render_exception(engine, e);
     }
 }
 
@@ -4404,7 +4515,7 @@ void NativeExecutionConsumer::observe_trails(
         } catch (const std::exception& e) {
             fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                        NativeFailureOperation::Settlement, cursor.point.ordinal});
-            render(engine, e.what());
+            render_exception(engine, e);
             return;
         }
         if (const auto* err = std::get_if<native_order::PreparationError>(&step)) {
@@ -5139,12 +5250,12 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         } catch (const std::exception& e) {
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                        NativeFailureOperation::Settlement, P});
-            render(engine, e.what());
+            render_exception(engine, e);
             return std::nullopt;
         } catch (...) {
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                        NativeFailureOperation::Settlement, P});
-            render(engine, "native terms callback exception");
+            render_unclassified(engine, "native terms callback exception");
             return std::nullopt;
         }
         // A virtual can invoke a guarded public entry point and latch the run,
@@ -5502,12 +5613,12 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             } catch (const std::exception& e) {
                 fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                            NativeFailureOperation::Settlement, P});
-                render(engine, e.what());
+                render_exception(engine, e);
                 return std::nullopt;
             } catch (...) {
                 fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                            NativeFailureOperation::Settlement, P});
-                render(engine, "native precommit callback exception");
+                render_unclassified(engine, "native precommit callback exception");
                 return std::nullopt;
             }
             if (!check_abort_or_projection(engine, NativeFailureOperation::Settlement, P)) {
@@ -5626,12 +5737,14 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         return outcome;
     } catch (const std::bad_alloc& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Settlement, P});
-        render(engine, e.what());
+        render_exception(engine, e);
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::SettlementFailure, NativeFailureOperation::Settlement, P});
-        render(engine, e.what());
+        render_exception(engine, e);
     } catch (...) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Settlement, P});
+        if (!recoverable_abort() && failure_value_of(engine).code == RunFailureCode::none)
+            render_unclassified(engine, "native settlement exception");
     }
     return std::nullopt;
 }
@@ -6337,7 +6450,7 @@ void NativeExecutionConsumer::match_path(
             } catch (const std::exception& e) {
                 fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                            NativeFailureOperation::Settlement, P});
-                render(engine, e.what());
+                render_exception(engine, e);
                 return;
             }
             CoreStep step;
@@ -6355,7 +6468,7 @@ void NativeExecutionConsumer::match_path(
             } catch (const std::exception& e) {
                 fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                            NativeFailureOperation::Settlement, P});
-                render(engine, e.what());
+                render_exception(engine, e);
                 return;
             }
             if (const auto* err = std::get_if<native_order::PreparationError>(&step)) {
@@ -6378,7 +6491,7 @@ void NativeExecutionConsumer::match_path(
                 } catch (const std::exception& e) {
                     fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                                NativeFailureOperation::Settlement, P});
-                    render(engine, e.what());
+                    render_exception(engine, e);
                     return;
                 }
             }
@@ -6408,7 +6521,7 @@ void NativeExecutionConsumer::match_path(
             } catch (const std::exception& e) {
                 fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                            NativeFailureOperation::Settlement, P});
-                render(engine, e.what());
+                render_exception(engine, e);
                 return;
             }
             if (const auto* err = std::get_if<native_order::PreparationError>(&step)) {
@@ -6816,15 +6929,31 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
     // temporarily modified fee, FX, price tick, calendar or admission setting.
     // It is the execution's own precondition, not a callback boundary, so a
     // pump does not defer it (V19-C).
+    // A failure this frame raises after an inner site recorded its cause
+    // carries that cause's code under the frame's own text (run_aborted after
+    // an abort whose report was cleared).
+    const auto recorded_cause = [this, &engine]() {
+        RunFailureValue cause = run_failure_value_of(engine);
+        if (cause.code == RunFailureCode::none) {
+            cause = RunFailureValue{recoverable_abort() ? RunFailureCode::run_aborted
+                                                        : RunFailureCode::engine_invariant,
+                                    nullptr};
+        }
+        return cause;
+    };
     if (!check_abort(engine, NativeFailureOperation::Command)
         || !check_projection(engine, NativeFailureOperation::Command))
-        throw std::runtime_error("native current execution projection/abort failure");
+        throw coded<std::runtime_error>(recorded_cause(),
+                                        "native current execution projection/abort failure");
     try {
         if (auto refusal = validate_current_execution(engine, command)) return *refusal;
         consuming_request_ = true;
         NativeDriverPoint point;
         const auto ordinal = take_ordinal(engine);
-        if (failed()) throw std::runtime_error("native current point allocation failed");
+        if (failed()) {
+            throw coded<std::runtime_error>(RunFailureCode::out_of_memory, {},
+                                            "native current point allocation failed");
+        }
         point.coordinate = current_execution_coordinate(ordinal);
         point.raw_price = current_frame_->point.price;
         point.matching = true;
@@ -6844,12 +6973,13 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
                                                      next_timeline_ordinal_));
         if (const auto* error = std::get_if<native_order::PreparationError>(&step)) {
             fail_preparation(engine, *error, NativeFailureOperation::Settlement);
-            throw std::runtime_error("native current evaluation failed");
+            throw coded<std::runtime_error>(recorded_cause(), "native current evaluation failed");
         }
         if (!std::holds_alternative<native_order::NoChange>(step)) {
             if (!settle_step(engine, std::move(step), NativeFailureOperation::Settlement,
                              point.coordinate.ordinal))
-                throw std::runtime_error("native current evaluation install failed");
+                throw coded<std::runtime_error>(recorded_cause(),
+                                                "native current evaluation install failed");
         }
         live = requests_.find_live(command.target);
         if (live && !same_allowance_bits(
@@ -6866,7 +6996,10 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
             NativeCurrentExecutionResult outcome{*no_effect};
             const native_order::EventId cause{command.target.run, no_effect->ordinal};
             drain_parent_terminal(engine, cause, command.target, NativeFailureOperation::Settlement);
-            if (failed()) throw std::runtime_error("native current terminal drain failed");
+            if (failed()) {
+                throw coded<std::runtime_error>(recorded_cause(),
+                                                "native current terminal drain failed");
+            }
             consuming_request_ = false;
             return outcome;
         }
@@ -6880,23 +7013,27 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
         auto outcome = consume_matched_request(engine, command.target, evaluation,
             anchor.price, resolved, anchor,
             native_order::NativeCandidatePriceKind::CurrentQuote, command.price_rule);
-        if (failed() || !outcome) throw std::runtime_error("native current execution failed");
+        if (failed() || !outcome) {
+            throw coded<std::runtime_error>(recorded_cause(), "native current execution failed");
+        }
         consuming_request_ = false;
         return std::move(*outcome);
     } catch (const std::bad_alloc& e) {
         consuming_request_ = false;
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Settlement});
-        render(engine, e.what());
+        render_exception(engine, e);
         throw;
     } catch (const std::exception& e) {
         consuming_request_ = false;
         if (!failed()) fail(engine, NativeFailure{NativeFailureCode::SettlementFailure,
                                                 NativeFailureOperation::Settlement});
-        render(engine, e.what());
+        render_exception(engine, e);
         throw;
     } catch (...) {
         consuming_request_ = false;
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Settlement});
+        if (!recoverable_abort() && failure_value_of(engine).code == RunFailureCode::none)
+            render_unclassified(engine, "native current execution exception");
         throw;
     }
 }
@@ -7010,7 +7147,7 @@ void NativeExecutionConsumer::invoke_recalculation(
         current_frame_.reset();
         fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                    NativeFailureOperation::Callback, ordinal});
-        render(engine, e.what());
+        render_exception(engine, e);
         return;
     } catch (const std::exception& e) {
         in_callback_ = false;
@@ -7018,7 +7155,7 @@ void NativeExecutionConsumer::invoke_recalculation(
         current_frame_.reset();
         if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
             NativeFailureOperation::Callback, ordinal});
-        render(engine, e.what());
+        render_exception(engine, e);
         return;
     } catch (...) {
         in_callback_ = false;
@@ -7026,6 +7163,8 @@ void NativeExecutionConsumer::invoke_recalculation(
         current_frame_.reset();
         if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
             NativeFailureOperation::Callback, ordinal});
+        if (!recoverable_abort() && failure_value_of(engine).code == RunFailureCode::none)
+            render_unclassified(engine, "native recalculation callback exception");
         return;
     }
     finish_callback(engine, ordinal);
@@ -7061,7 +7200,7 @@ void NativeExecutionConsumer::invoke_sub_bar_callback(
         current_frame_.reset();
         fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                    NativeFailureOperation::Callback, ordinal});
-        render(engine, e.what());
+        render_exception(engine, e);
         return;
     } catch (const std::exception& e) {
         in_callback_ = false;
@@ -7069,7 +7208,7 @@ void NativeExecutionConsumer::invoke_sub_bar_callback(
         current_frame_.reset();
         if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
             NativeFailureOperation::Callback, ordinal});
-        render(engine, e.what());
+        render_exception(engine, e);
         return;
     } catch (...) {
         in_callback_ = false;
@@ -7077,6 +7216,8 @@ void NativeExecutionConsumer::invoke_sub_bar_callback(
         current_frame_.reset();
         if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
             NativeFailureOperation::Callback, ordinal});
+        if (!recoverable_abort() && failure_value_of(engine).code == RunFailureCode::none)
+            render_unclassified(engine, "native sub-bar callback exception");
         return;
     }
     finish_callback(engine, ordinal);
@@ -7150,20 +7291,22 @@ void NativeExecutionConsumer::invoke_applied_callback(
         current_frame_.reset();
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Callback,
                                    notification.ordinal});
-        render(engine, e.what());
+        render_exception(engine, e);
     } catch (const std::exception& e) {
         in_callback_ = false;
         callback_phase_ = CallbackPhase::None;
         current_frame_.reset();
         if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
             NativeFailureOperation::Callback, notification.ordinal});
-        render(engine, e.what());
+        render_exception(engine, e);
     } catch (...) {
         in_callback_ = false;
         callback_phase_ = CallbackPhase::None;
         current_frame_.reset();
         if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
             NativeFailureOperation::Callback, notification.ordinal});
+        if (!recoverable_abort() && failure_value_of(engine).code == RunFailureCode::none)
+            render_unclassified(engine, "native applied callback exception");
     }
 }
 
@@ -7283,7 +7426,7 @@ void NativeExecutionConsumer::invoke_bar_open_callback(
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                        NativeFailureOperation::Callback,
                                        point.coordinate.ordinal});
-            render(engine, e.what());
+            render_exception(engine, e);
         }
         return;
     } catch (...) {
@@ -7294,7 +7437,7 @@ void NativeExecutionConsumer::invoke_bar_open_callback(
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                        NativeFailureOperation::Callback,
                                        point.coordinate.ordinal});
-            render(engine, "native bar-open callback exception");
+            render_unclassified(engine, "native bar-open callback exception");
         }
         return;
     }
@@ -7322,7 +7465,7 @@ bool NativeExecutionConsumer::invoke_input_callback(
         if (!failed()) {
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                        NativeFailureOperation::Input});
-            render(engine, e.what());
+            render_exception(engine, e);
         }
         return false;
     } catch (...) {
@@ -7332,7 +7475,7 @@ bool NativeExecutionConsumer::invoke_input_callback(
         if (!failed()) {
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                        NativeFailureOperation::Input});
-            render(engine, "native input callback exception");
+            render_unclassified(engine, "native input callback exception");
         }
         return false;
     }
@@ -7365,7 +7508,7 @@ bool NativeExecutionConsumer::invoke_tick_callback(
         tick_callback_bar_.reset();
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Input,
                                    context.decision.coordinate.ordinal});
-        render(engine, e.what());
+        render_exception(engine, e);
         return false;
     } catch (const std::exception& e) {
         in_callback_ = false;
@@ -7377,7 +7520,7 @@ bool NativeExecutionConsumer::invoke_tick_callback(
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                        NativeFailureOperation::Input,
                                        context.decision.coordinate.ordinal});
-            render(engine, e.what());
+            render_exception(engine, e);
         }
         return false;
     } catch (...) {
@@ -7390,7 +7533,7 @@ bool NativeExecutionConsumer::invoke_tick_callback(
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                        NativeFailureOperation::Input,
                                        context.decision.coordinate.ordinal});
-            render(engine, "native tick callback exception");
+            render_unclassified(engine, "native tick callback exception");
         }
         return false;
     }
@@ -7435,7 +7578,7 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                        NativeFailureOperation::Callback,
                                        coordinate.ordinal});
-            render(engine, e.what());
+            render_exception(engine, e);
         }
         return;
     } catch (...) {
@@ -7446,7 +7589,7 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                        NativeFailureOperation::Callback,
                                        coordinate.ordinal});
-            render(engine, "native callback exception");
+            render_unclassified(engine, "native callback exception");
         }
         return;
     }
@@ -8650,12 +8793,17 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
             if (!engine.set_native_security_feed(
                     declared.tf, declared.authoritative_bars.data(),
                     static_cast<int>(declared.authoritative_bars.size()))) {
-                const std::string reason = engine.last_error_.empty()
+                const std::string reason = engine.last_error().empty()
                     ? std::string("native timeframe subscription feed was refused")
-                    : engine.last_error_;
+                    : engine.last_error();
+                // The setter's own refusal keeps the code it recorded beside
+                // its text; the fallback text is an engine invariant.
+                RunFailureValue refused = engine.last_error().empty()
+                    ? RunFailureValue{RunFailureCode::engine_invariant, nullptr}
+                    : run_failure_value_of(engine);
                 fail(engine, NativeFailure{NativeFailureCode::Contract,
                                            NativeFailureOperation::Begin});
-                render(engine, reason.c_str());
+                store_rendered(engine, reason.c_str(), std::move(refused));
                 return false;
             }
             // Remembered so the next begin removes this consumer's own feeds
@@ -8683,17 +8831,18 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
     } catch (const std::bad_alloc&) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                    NativeFailureOperation::Begin});
-        render(engine, "native timeframe subscription allocation failed");
+        render(engine, "native timeframe subscription allocation failed",
+               RunFailureCode::out_of_memory);
         return false;
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected,
                                    NativeFailureOperation::Begin});
-        render(engine, e.what());
+        render_exception(engine, e);
         return false;
     } catch (...) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected,
                                    NativeFailureOperation::Begin});
-        render(engine, "native timeframe subscription preparation failed");
+        render_unclassified(engine, "native timeframe subscription preparation failed");
         return false;
     }
     return true;
@@ -8779,42 +8928,48 @@ NativeAuxiliaryAppendResult NativeExecutionConsumer::append_auxiliary_bars(
         return refused(entered_failed ? NativeAuxiliaryAppendError::HostFailed
                                       : NativeAuxiliaryAppendError::Reentrant);
     }
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     const auto* running = std::get_if<NativeRunning>(&state_);
     if (!running || running->phase != NativeRunPhase::Realtime) {
-        present_refusal(engine, "native append_auxiliary_bars requires realtime");
+        present_refusal(engine, "native append_auxiliary_bars requires realtime",
+                        RunFailureCode::stream_input_rejected);
         return refused(NativeAuxiliaryAppendError::NotRealtime);
     }
     if (!auxiliary_tf_ || !running->spec.auxiliary_feed) {
-        present_refusal(engine, "native append_auxiliary_bars requires a declared auxiliary feed");
+        present_refusal(engine, "native append_auxiliary_bars requires a declared auxiliary feed",
+                        RunFailureCode::stream_input_rejected);
         return refused(NativeAuxiliaryAppendError::NoAuxiliaryFeed);
     }
     NativeAuxiliaryAppendResult applied;
     applied.status = NativeSetupStatus::Applied;
     if (n == 0) return applied;
     if (bars == nullptr) {
-        present_refusal(engine, "native auxiliary bar array is invalid");
+        present_refusal(engine, "native auxiliary bar array is invalid",
+                        RunFailureCode::stream_input_rejected);
         return refused(NativeAuxiliaryAppendError::InvalidBarArray);
     }
     const std::size_t held = auxiliary_bar_count();
     for (std::size_t i = 0; i < n; ++i) {
         if (!native_bar_structurally_valid(bars[i])) {
-            present_refusal(engine, "native auxiliary bar has invalid OHLCV");
+            present_refusal(engine, "native auxiliary bar has invalid OHLCV",
+                            RunFailureCode::stream_input_rejected);
             return refused(NativeAuxiliaryAppendError::InvalidBar, i);
         }
         const bool ordered = i > 0 ? bars[i].timestamp > bars[i - 1].timestamp
                                    : held == 0
                                        || bars[i].timestamp > auxiliary_bar(held - 1).timestamp;
         if (!ordered) {
-            present_refusal(engine, "native auxiliary bars must be strictly increasing");
+            present_refusal(engine, "native auxiliary bars must be strictly increasing",
+                            RunFailureCode::stream_input_rejected);
             return refused(NativeAuxiliaryAppendError::UnorderedBars, i);
         }
     }
     if (last_accepted_input_
         && bars[0].timestamp < last_accepted_input_->next_period_open_ms) {
         present_refusal(engine,
-            "native auxiliary bar opened inside an input period that was already accepted");
+            "native auxiliary bar opened inside an input period that was already accepted",
+            RunFailureCode::stream_input_rejected);
         return refused(NativeAuxiliaryAppendError::InputPeriodAlreadyAccepted);
     }
     try {
@@ -8822,7 +8977,7 @@ NativeAuxiliaryAppendResult NativeExecutionConsumer::append_auxiliary_bars(
     } catch (const std::bad_alloc&) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                    NativeFailureOperation::Input});
-        render(engine, "native auxiliary feed allocation failed");
+        render(engine, "native auxiliary feed allocation failed", RunFailureCode::out_of_memory);
         return refused(NativeAuxiliaryAppendError::AllocationFailure);
     }
     for (std::size_t i = 0; i < n; ++i) {
@@ -9096,7 +9251,8 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
 bool NativeExecutionConsumer::refuse_subscription_tick_input(BacktestEngine& engine) {
     if (subscriptions_.empty()) return false;
     present_refusal(engine,
-        "native timeframe subscriptions require confirmed-bar stream input");
+        "native timeframe subscriptions require confirmed-bar stream input",
+        RunFailureCode::stream_input_rejected);
     return true;
 }
 
@@ -9112,7 +9268,8 @@ bool NativeExecutionConsumer::refuse_subscription_tick_input(BacktestEngine& eng
 bool NativeExecutionConsumer::refuse_fx_curve_tick_input(BacktestEngine& engine) {
     if (!staged_fx_curve_) return false;
     present_refusal(engine,
-        "a declared native FX curve requires confirmed-bar stream input");
+        "a declared native FX curve requires confirmed-bar stream input",
+        RunFailureCode::run_mode_unsupported, {{"feature", "stream_fx_curve_input"}});
     return true;
 }
 
@@ -9151,7 +9308,7 @@ bool NativeExecutionConsumer::invoke_timeframe_callback(
         if (!failed()) {
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                        NativeFailureOperation::Input});
-            render(engine, e.what());
+            render_exception(engine, e);
         }
         return false;
     } catch (...) {
@@ -9159,7 +9316,7 @@ bool NativeExecutionConsumer::invoke_timeframe_callback(
         if (!failed()) {
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                        NativeFailureOperation::Input});
-            render(engine, "native timeframe callback exception");
+            render_unclassified(engine, "native timeframe callback exception");
         }
         return false;
     }
@@ -9257,7 +9414,8 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
         if (!(unit_ms > 0) || !(count > 0)
             || count > std::numeric_limits<std::int64_t>::max() / unit_ms) {
             processing_input_ = false;
-            present_refusal(engine, "native confirmed bar timeframe is not a fixed grid");
+            present_refusal(engine, "native confirmed bar timeframe is not a fixed grid",
+                            RunFailureCode::stream_input_rejected);
             return false;
         }
         const std::int64_t step = count * unit_ms;
@@ -9265,25 +9423,29 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
         if (previous > std::numeric_limits<std::int64_t>::max() - step
             || bar.timestamp > std::numeric_limits<std::int64_t>::max() - step) {
             processing_input_ = false;
-            present_refusal(engine, "native confirmed bar timestamp overflows the input grid");
+            present_refusal(engine, "native confirmed bar timestamp overflows the input grid",
+                            RunFailureCode::stream_input_rejected);
             return false;
         }
         const std::int64_t expected = previous + step;
         if (bar.timestamp < expected || (bar.timestamp - expected) % step != 0) {
             processing_input_ = false;
             present_refusal(engine,
-                "native confirmed bar timestamp is out of order or off the input grid");
+                "native confirmed bar timestamp is out of order or off the input grid",
+                RunFailureCode::stream_input_rejected);
             return false;
         }
         for (std::int64_t missing = expected; missing < bar.timestamp;) {
             if (native_calendar::in_session(calendar_, missing, calendar_memo_)) {
                 processing_input_ = false;
-                present_refusal(engine, "native stream has an in-session gap");
+                present_refusal(engine, "native stream has an in-session gap",
+                                RunFailureCode::stream_input_rejected);
                 return false;
             }
             if (missing > std::numeric_limits<std::int64_t>::max() - step) {
                 processing_input_ = false;
-                present_refusal(engine, "native confirmed bar timestamp overflows the input grid");
+                present_refusal(engine, "native confirmed bar timestamp overflows the input grid",
+                                RunFailureCode::stream_input_rejected);
                 return false;
             }
             missing += step;
@@ -9292,7 +9454,8 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
     auto interval = input_interval_at(bar.timestamp);
     if (!interval) {
         processing_input_ = false;
-        present_refusal(engine, "native input is not aligned");
+        present_refusal(engine, "native input is not aligned",
+                        RunFailureCode::stream_input_rejected);
         return false;
     }
     const bool realtime_labels = running
@@ -9302,14 +9465,17 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
     if (canonical_labels
         && !native_confirmed_bar_label_admitted(*interval, bar.timestamp)) {
         processing_input_ = false;
-        present_refusal(engine, "native confirmed bar timestamp is not a canonical slot label");
+        present_refusal(engine, "native confirmed bar timestamp is not a canonical slot label",
+                        RunFailureCode::chart_bars_rejected,
+                        {{"field", "timestamp"}, {"reason", "not_canonical_slot"}});
         return false;
     }
     if (last_accepted_input_) {
         if (canonical_labels
             && interval->open_ms <= last_accepted_input_->open_ms) {
             processing_input_ = false;
-            present_refusal(engine, "native duplicate overlapping input slot");
+            present_refusal(engine, "native duplicate overlapping input slot",
+                            RunFailureCode::stream_input_rejected);
             return false;
         }
         if (canonical_labels && realtime_labels) {
@@ -9331,7 +9497,8 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
                     || last_accepted_input_->open_ms
                         > std::numeric_limits<int64_t>::max() - unit_ms * count) {
                     processing_input_ = false;
-                    present_refusal(engine, "native confirmed bar timestamp overflows");
+                    present_refusal(engine, "native confirmed bar timestamp overflows",
+                                    RunFailureCode::stream_input_rejected);
                     return false;
                 }
                 const int64_t step = unit_ms * count;
@@ -9345,7 +9512,8 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
                        && !native_calendar::in_session(calendar_, expected_label, calendar_memo_)) {
                     if (expected_label > std::numeric_limits<int64_t>::max() - step) {
                         processing_input_ = false;
-                        present_refusal(engine, "native confirmed bar timestamp overflows");
+                        present_refusal(engine, "native confirmed bar timestamp overflows",
+                                        RunFailureCode::stream_input_rejected);
                         return false;
                     }
                     expected_label += step;
@@ -9353,7 +9521,8 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
             }
             if (bar.timestamp != expected_label) {
                 processing_input_ = false;
-                present_refusal(engine, "native stream has an in-session gap");
+                present_refusal(engine, "native stream has an in-session gap",
+                                RunFailureCode::stream_input_rejected);
                 return false;
             }
         }
@@ -9552,7 +9721,7 @@ void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars
     args.simple_run = true;
     if (!prepare_public_begin(engine, args)) return;
     if (!admit_public_begin(engine, "native run requires configure_native")) return;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     engine.abort_requested_.store(false, std::memory_order_relaxed);
     try {
@@ -9571,7 +9740,7 @@ void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars
         verify_closed_rows(engine);
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
-        render(engine, e.what());
+        render_exception(engine, e);
     }
 }
 
@@ -9585,19 +9754,21 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
         magnifier_samples, magnifier_dist, engine.magnifier_volume_weighted_, 2};
     if (!prepare_public_begin(engine, args)) return;
     if (!admit_public_begin(engine, "native run requires configure_native")) return;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     engine.abort_requested_.store(false, std::memory_order_relaxed);
     try {
         if (!timeframe_args_ok(input_tf, script_tf)) {
-            present_refusal(engine, "native timeframe arguments must be empty or match the spec");
+            present_refusal(engine, "native timeframe arguments must be empty or match the spec",
+                            RunFailureCode::run_options_rejected, {{"option", "timeframes"}});
             return;
         }
         const auto* configured = spec_ptr();
         if ((bar_magnifier || magnifier_samples != 4
              || magnifier_dist != MagnifierDistribution::ENDPOINTS)
             && (!configured || configured->intrabar.is_none())) {
-            present_refusal(engine, "native magnifier arguments require an intrabar path");
+            present_refusal(engine, "native magnifier arguments require an intrabar path",
+                            RunFailureCode::run_options_rejected, {{"option", "magnifier"}});
             return;
         }
         if (!preflight_bars(engine, input_bars, n_input, false)
@@ -9616,7 +9787,7 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
         verify_closed_rows(engine);
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
-        render(engine, e.what());
+        render_exception(engine, e);
     }
 }
 
@@ -9635,12 +9806,13 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
     args.overrides_opaque = overrides;
     if (!prepare_public_begin(engine, args)) return;
     if (!admit_public_begin(engine, "native run requires configure_native")) return;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     engine.abort_requested_.store(false, std::memory_order_relaxed);
     try {
         if (!timeframe_args_ok(input_tf, script_tf)) {
-            present_refusal(engine, "native timeframe arguments must be empty or match the spec");
+            present_refusal(engine, "native timeframe arguments must be empty or match the spec",
+                            RunFailureCode::run_options_rejected, {{"option", "timeframes"}});
             return;
         }
         if (!preflight_bars(engine, input_bars, n_input, false)
@@ -9659,7 +9831,7 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
         verify_closed_rows(engine);
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
-        render(engine, e.what());
+        render_exception(engine, e);
     }
 }
 
@@ -9696,12 +9868,13 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
     args.warmup_n = n_warmup;
     if (!prepare_public_begin(engine, args)) return false;
     if (!admit_public_begin(engine, "native stream_begin requires Ready")) return false;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     engine.abort_requested_.store(false, std::memory_order_relaxed);
     try {
         if (!timeframe_args_ok(input_tf, script_tf)) {
-            present_refusal(engine, "native timeframe arguments must be empty or match the spec");
+            present_refusal(engine, "native timeframe arguments must be empty or match the spec",
+                            RunFailureCode::run_options_rejected, {{"option", "timeframes"}});
             return false;
         }
         // FP6: a curve the run itself declared (configure_fx_curve) is the
@@ -9712,7 +9885,8 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
         // broker clock of its own, which has no realtime route.
         if (staged_fx_curve_ && staged_ingress_fx_) {
             present_refusal(engine,
-                "timestamped account-currency FX is not supported by streaming");
+                "timestamped account-currency FX is not supported by streaming",
+                RunFailureCode::run_mode_unsupported, {{"feature", "stream_account_currency_fx"}});
             return false;
         }
         const auto* spec = spec_ptr();
@@ -9720,7 +9894,9 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
         // ingress, so a live input would read a feed that stopped at the
         // warmup: historical runs only.
         if (spec != nullptr && !spec->instrument_feeds.empty()) {
-            present_refusal(engine, "native instrument feeds are not supported by streaming");
+            present_refusal(engine, "native instrument feeds are not supported by streaming",
+                            RunFailureCode::run_mode_unsupported,
+                            {{"feature", "stream_instrument_feeds"}});
             return false;
         }
         auto parsed = native_calendar::parse_timeframe(spec->input_tf);
@@ -9731,11 +9907,14 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
         }
         const auto stream_pair = native_calendar::stream_compatibility(*parsed, *script);
         if (stream_pair.pairing == native_calendar::TimeframePairing::StreamMonthlyInputRefused) {
-            present_refusal(engine, "native stream refuses monthly input");
+            present_refusal(engine, "native stream refuses monthly input",
+                            RunFailureCode::run_mode_unsupported,
+                            {{"feature", "stream_monthly_input"}});
             return false;
         }
         if (n_warmup <= 0 || warmup_bars == nullptr) {
-            present_refusal(engine, "native stream warmup requires at least one bar");
+            present_refusal(engine, "native stream warmup requires at least one bar",
+                            RunFailureCode::stream_input_rejected);
             return false;
         }
         if (!preflight_bars(engine, warmup_bars, n_warmup, true)
@@ -9747,7 +9926,8 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
             && native_feed_tolerance_enabled(
                 preflight_spec->legacy_tolerance,
                 NativeFeedTolerance::WarmupNonNegativeOHLC)) {
-            present_refusal(engine, "stream warmup final close must be finite and positive");
+            present_refusal(engine, "stream warmup final close must be finite and positive",
+                            RunFailureCode::stream_input_rejected);
             return false;
         }
         if (!begin_ready(engine, NativeRunPhase::Warmup, warmup_bars[0].timestamp)) return false;
@@ -9767,24 +9947,26 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
         return true;
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Stream});
-        render(engine, e.what());
+        render_exception(engine, e);
         return false;
     }
 }
 
 bool NativeExecutionConsumer::stream_push_bar(BacktestEngine& engine, const Bar& bar) {
     if (!admit_public_stream_input(engine, NativeFailureOperation::Input)) return false;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     try {
         const auto* running = std::get_if<NativeRunning>(&state_);
         if (!running || running->phase != NativeRunPhase::Realtime) {
-            present_refusal(engine, "native stream_push_bar requires realtime");
+            present_refusal(engine, "native stream_push_bar requires realtime",
+                            RunFailureCode::stream_input_rejected);
             return false;
         }
         if (refuse_mixed_input_mode(engine, InputMode::ConfirmedBars)) return false;
         if (!native_bar_structurally_valid(bar)) {
-            present_refusal(engine, "native confirmed bar has invalid OHLCV");
+            present_refusal(engine, "native confirmed bar has invalid OHLCV",
+                            RunFailureCode::stream_input_rejected);
             return false;
         }
         if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return false;
@@ -9798,7 +9980,7 @@ bool NativeExecutionConsumer::stream_push_bar(BacktestEngine& engine, const Bar&
         return !failed();
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
-        render(engine, e.what());
+        render_exception(engine, e);
         return false;
     }
 }
@@ -9877,12 +10059,14 @@ double NativeExecutionConsumer::TickVolume::value() const noexcept {
 
 bool NativeExecutionConsumer::preflight_ticks(BacktestEngine& engine, const TradeTick* ticks, int n) {
     if (n < 0 || (n > 0 && ticks == nullptr)) {
-        present_refusal(engine, "native tick array is invalid");
+        present_refusal(engine, "native tick array is invalid",
+                        RunFailureCode::stream_input_rejected);
         return false;
     }
     const auto* running = std::get_if<NativeRunning>(&state_);
     if (!running || running->phase != NativeRunPhase::Realtime) {
-        present_refusal(engine, "native stream_push_tick requires realtime");
+        present_refusal(engine, "native stream_push_tick requires realtime",
+                        RunFailureCode::stream_input_rejected);
         return false;
     }
     if (refuse_mixed_input_mode(engine, InputMode::ObservedTicks)) return false;
@@ -9907,26 +10091,31 @@ bool NativeExecutionConsumer::preflight_ticks(BacktestEngine& engine, const Trad
     for (int i = 0; i < n; ++i) {
         const TradeTick& tick = ticks[i];
         if (!std::isfinite(tick.price) || tick.price <= 0.0) {
-            present_refusal(engine, "native tick price must be finite and positive");
+            present_refusal(engine, "native tick price must be finite and positive",
+                            RunFailureCode::stream_input_rejected);
             return false;
         }
         if (!std::isfinite(tick.quantity) || tick.quantity < 0.0) {
-            present_refusal(engine, "native tick quantity must be finite and non-negative");
+            present_refusal(engine, "native tick quantity must be finite and non-negative",
+                            RunFailureCode::stream_input_rejected);
             return false;
         }
         if (has_floor_ && tick.timestamp < decision_floor_ms_) {
-            present_refusal(engine, "native tick timestamp is backwards or regresses the decision floor");
+            present_refusal(engine, "native tick timestamp is backwards or regresses the decision floor",
+                            RunFailureCode::stream_input_rejected);
             return false;
         }
         if (has_array_prev && tick.timestamp < prev_array_ts) {
-            present_refusal(engine, "native tick timestamp is backwards or out of order");
+            present_refusal(engine, "native tick timestamp is backwards or out of order",
+                            RunFailureCode::stream_input_rejected);
             return false;
         }
         prev_array_ts = tick.timestamp;
         has_array_prev = true;
         if (tick.sequence != 0) {
             if (prev_has_sequence && tick.sequence <= prev_sequence) {
-                present_refusal(engine, "native tick sequence must increase");
+                present_refusal(engine, "native tick sequence must increase",
+                                RunFailureCode::stream_input_rejected);
                 return false;
             }
             prev_sequence = tick.sequence;
@@ -9934,13 +10123,15 @@ bool NativeExecutionConsumer::preflight_ticks(BacktestEngine& engine, const Trad
         }
         auto interval = native_calendar::interval_containing(calendar_, input_tf_, tick.timestamp, calendar_memo_);
         if (!interval) {
-            present_refusal(engine, "native tick is not aligned");
+            present_refusal(engine, "native tick is not aligned",
+                            RunFailureCode::stream_input_rejected);
             return false;
         }
         const bool in_forming = has_forming_ && forming_.timestamp == interval->open_ms;
         if (last_finalized_input_ && interval->open_ms <= last_finalized_input_->open_ms
             && !in_forming) {
-            present_refusal(engine, "native tick would reopen a closed input slot");
+            present_refusal(engine, "native tick would reopen a closed input slot",
+                            RunFailureCode::stream_input_rejected);
             return false;
         }
         if (!volume_slot || *volume_slot != interval->open_ms) {
@@ -9956,7 +10147,8 @@ bool NativeExecutionConsumer::preflight_ticks(BacktestEngine& engine, const Trad
         }
         partial_volume.add(tick.quantity);
         if (!std::isfinite(volume.value()) || !std::isfinite(partial_volume.value())) {
-            present_refusal(engine, "native tick volume overflow");
+            present_refusal(engine, "native tick volume overflow",
+                            RunFailureCode::stream_input_rejected);
             return false;
         }
         if (ordinals == 0 || ordinals == std::numeric_limits<uint64_t>::max()) {
@@ -10094,7 +10286,8 @@ bool NativeExecutionConsumer::deliver_tick(BacktestEngine& engine, const TradeTi
         calendar_, input_tf_, day_label_origin(tick.timestamp), calendar_memo_);
     if (!interval) {
         processing_input_ = false;
-        present_refusal(engine, "native tick is not aligned");
+        present_refusal(engine, "native tick is not aligned",
+                        RunFailureCode::stream_input_rejected);
         return false;
     }
     if (!finalize_elapsed_slots(engine, interval->open_ms)) {
@@ -10180,7 +10373,7 @@ bool NativeExecutionConsumer::deliver_tick(BacktestEngine& engine, const TradeTi
 
 bool NativeExecutionConsumer::stream_push_tick(BacktestEngine& engine, const TradeTick& tick) {
     if (!admit_public_stream_input(engine, NativeFailureOperation::Input)) return false;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     try {
         if (!preflight_ticks(engine, &tick, 1)) return false;
@@ -10193,14 +10386,14 @@ bool NativeExecutionConsumer::stream_push_tick(BacktestEngine& engine, const Tra
     } catch (const std::exception& e) {
         processing_input_ = false;
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
-        render(engine, e.what());
+        render_exception(engine, e);
         return false;
     }
 }
 
 bool NativeExecutionConsumer::stream_push_ticks(BacktestEngine& engine, const TradeTick* ticks, int n) {
     if (!admit_public_stream_input(engine, NativeFailureOperation::Input)) return false;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     try {
         if (!preflight_ticks(engine, ticks, n)) return false;
@@ -10217,14 +10410,14 @@ bool NativeExecutionConsumer::stream_push_ticks(BacktestEngine& engine, const Tr
     } catch (const std::exception& e) {
         processing_input_ = false;
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
-        render(engine, e.what());
+        render_exception(engine, e);
         return false;
     }
 }
 
 bool NativeExecutionConsumer::stream_advance_time(BacktestEngine& engine, int64_t timestamp_ms) {
     if (!admit_public_stream_input(engine, NativeFailureOperation::Stream)) return false;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     try {
         const auto* running = std::get_if<NativeRunning>(&state_);
@@ -10263,14 +10456,14 @@ bool NativeExecutionConsumer::stream_advance_time(BacktestEngine& engine, int64_
         return !failed();
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Stream});
-        render(engine, e.what());
+        render_exception(engine, e);
         return false;
     }
 }
 
 bool NativeExecutionConsumer::stream_end(BacktestEngine& engine, bool finalize_partial_input_bar) {
     if (!admit_public_stream_input(engine, NativeFailureOperation::Stream)) return false;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     try {
         if (!std::holds_alternative<NativeRunning>(state_)) {
@@ -10314,7 +10507,7 @@ bool NativeExecutionConsumer::stream_end(BacktestEngine& engine, bool finalize_p
         return !failed();
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Stream});
-        render(engine, e.what());
+        render_exception(engine, e);
         return false;
     }
 }
@@ -10339,7 +10532,7 @@ native_order::SubmitResult NativeExecutionConsumer::submit_with_surface(
         }
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
-        render(engine, e.what());
+        render_exception(engine, e);
         throw;
     }
     if (!direct_mutation_) {
@@ -10389,7 +10582,7 @@ native_order::ReplaceResult NativeExecutionConsumer::replace_with_surface(
         }
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
-        render(engine, e.what());
+        render_exception(engine, e);
         throw;
     }
     native_order::EventId predicted;
@@ -10457,7 +10650,7 @@ native_order::ReplaceResult NativeExecutionConsumer::replace_with_surface(
             } catch (const std::exception& e) {
                 fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                            NativeFailureOperation::Command, predicted.ordinal});
-                render(engine, e.what());
+                render_exception(engine, e);
                 throw;
             }
             if (failed()) {
@@ -10509,7 +10702,7 @@ native_order::CancelResult NativeExecutionConsumer::cancel(
         }
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
-        render(engine, e.what());
+        render_exception(engine, e);
         throw;
     }
     native_order::EventId predicted;
@@ -10540,7 +10733,7 @@ native_order::CancelResult NativeExecutionConsumer::cancel(
         } catch (const std::exception& e) {
             fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                        NativeFailureOperation::Command, predicted.ordinal});
-            render(engine, e.what());
+            render_exception(engine, e);
             throw;
         }
         if (failed()) {
@@ -10631,7 +10824,7 @@ native_order::CohortHandle NativeExecutionConsumer::cohort_open(BacktestEngine& 
         return cohort;
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
-        render(engine, e.what());
+        render_exception(engine, e);
         throw;
     }
 }
@@ -10650,7 +10843,7 @@ void NativeExecutionConsumer::cohort_add(
         // The core may have appended the receipt before it refused.
         note_cohort_receipts();
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
-        render(engine, e.what());
+        render_exception(engine, e);
         throw;
     }
 }
@@ -10669,7 +10862,7 @@ void NativeExecutionConsumer::cohort_remove(
         // The core may have appended the receipt before it refused.
         note_cohort_receipts();
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
-        render(engine, e.what());
+        render_exception(engine, e);
         throw;
     }
 }
@@ -10956,7 +11149,7 @@ void NativeExecutionConsumer::reject_inherited_on_bar(BacktestEngine& engine) {
     try {
         refuse_source_mutation("on_bar");
     } catch (const std::exception& e) {
-        render(engine, e.what());
+        render_exception(engine, e);
     }
 }
 

@@ -92,6 +92,35 @@ structs and enumerations, and the `PF_*` constants.
   `src/c_abi.cpp`'s `static_assert`s pin the `pf_magnifier_distribution_t`
   values. No checker compares a value with the previous release.
 
+## Run-failure codes
+
+The run-failure vocabulary is `docker/run_failure_codes.json`: the codes
+#strategy_get_last_error_code answers, their classes and retryable flags, and
+the arguments #strategy_get_last_error_args answers (@ref run_failure_codes).
+
+- **A code is never removed, renamed or reused.** A code that is no longer
+  raised stays in the catalog, marked `deprecated` with the codes that replace
+  it. A code keeps its class, its retryable flag, its `since` and each
+  argument's kind; a closed list of values keeps every value, and an optional
+  argument stays optional. A new code, value, optional argument or English template is an
+  addition. `scripts/check_run_failure_codes.py` (the
+  `source-guard-run-failure-codes` stage of `ci_preflight` and of every
+  `ci_verify` profile) holds the catalog against the catalog of the newest
+  release tag reachable from `HEAD`, and the generated `RunFailureCode` enum
+  and registry against the catalog.
+- **Every release publishes the catalog and what changed in it.**
+  `run_failure_codes-<tag>.json` and `run_failure_codes_diff-<tag>.json` are
+  release assets. `release.yml` stamps the diff with
+  `scripts/gen_run_failure_catalog_diff.py --stamp`, which refuses a removed
+  code, a diff that does not start where the release notes do (or at a
+  release candidate after it), a release that adds or changes codes but is
+  not a minor or major release, and a code whose `since` is not the release;
+  the `source-guard-run-failure-diff` stage holds the checked-in diff to the
+  catalog byte for byte.
+- No checker holds which failure raises which code across releases: the
+  catalog fixes the names and their meanings, and the run-failure tests pin
+  the raise sites they exercise.
+
 ## The C++ native API
 
 The native C++ API is the kernel's host surface: `<pineforge/native_host.hpp>`,

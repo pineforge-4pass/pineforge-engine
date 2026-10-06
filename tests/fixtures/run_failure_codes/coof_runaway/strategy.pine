@@ -1,0 +1,6 @@
+//@version=6
+strategy("R5 calc_on_order_fills runaway", overlay = true, calc_on_order_fills = true)
+if strategy.position_size <= 0
+    strategy.entry("L", strategy.long, qty = 1)
+else
+    strategy.entry("S", strategy.short, qty = 1)

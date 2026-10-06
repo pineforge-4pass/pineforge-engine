@@ -1,0 +1,1407 @@
+{
+ "classes": {
+  "engine_fault": "A PineForge bug; terminal.",
+  "input": "The run request's own data or options; terminal.",
+  "no_data": "PineForge lacks data the script reads; terminal.",
+  "resource": "Machine memory; retryable, capped.",
+  "strategy": "The script or its own declaration; terminal.",
+  "strategy_limit": "A TradingView or PineForge resource cap the script reached; terminal.",
+  "symbol_feeds": "Other symbols' bars installed through the symbol-feed setters; terminal.",
+  "symbol_metadata": "The symbol's metadata the caller supplied; retryable once the caller refreshes it.",
+  "unsupported": "A construct or option PineForge does not support for this run; terminal."
+ },
+ "codes": {
+  "chart_bars_rejected": {
+   "args": {
+    "field": {
+     "kind": "vocab",
+     "optional": true,
+     "values": [
+      "open",
+      "high",
+      "low",
+      "close",
+      "volume",
+      "timestamp"
+     ]
+    },
+    "index": {
+     "kind": "integer",
+     "optional": true
+    },
+    "reason": {
+     "kind": "vocab",
+     "values": [
+      "not_finite",
+      "negative",
+      "low_above_body",
+      "high_below_body",
+      "volume_invalid",
+      "not_increasing",
+      "delta_overflow",
+      "not_aligned",
+      "not_canonical_slot",
+      "overlaps_previous_slot",
+      "in_session_gap",
+      "structural"
+     ]
+    }
+   },
+   "class": "input",
+   "description": "The run's chart bars (the request's OHLCV) were refused.",
+   "english": [
+    "bar[{index}].{field}{detail}",
+    "native bar failed structural validation",
+    "native confirmed bar timestamp is not a canonical slot label"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "chart_bars_unreadable": {
+   "args": {
+    "reason": {
+     "kind": "vocab",
+     "values": [
+      "io",
+      "columns",
+      "value",
+      "empty"
+     ]
+    }
+   },
+   "class": "input",
+   "description": "The harness could not read the run's OHLCV file.",
+   "english": [
+    "--ohlcv: {path} line {line}: not a number",
+    "--ohlcv: {path}: no bars",
+    "--ohlcv: {path}: no column {column}",
+    "--ohlcv: {path}: not a UTF-8 CSV ({error})",
+    "--ohlcv: {path}: timestamp {timestamp} is out of the calendar's range",
+    "--ohlcv: {path}: {strerror}"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "engine_invariant": {
+   "args": {},
+   "class": "engine_fault",
+   "description": "An engine invariant failed: a PineForge bug.",
+   "english": [
+    "Pine OCA member sequence exhausted",
+    "Pine adapter produced invalid native run spec field {field}",
+    "Pine anchored OCA member sequence exhausted",
+    "Pine execution adapter is not bound to a native host",
+    "Pine native adapter failed to configure projected run spec",
+    "Pine native run counter exhausted",
+    "Pine source command sequence exhausted",
+    "Pine source sequence exhausted",
+    "UDT arena requires undo coordinator",
+    "UDT checkpoint generation exhausted",
+    "UDT coordinator checkpoint is not active",
+    "admission event has no outstanding allocation",
+    "admission event sequence exhausted",
+    "admission receipt requires its exact earlier command",
+    "auxiliary request.security bar does not map to a native chart bar",
+    "auxiliary request.security chart routing is not initialized",
+    "auxiliary request.security routing requires a calling chart bar",
+    "bad_function_call",
+    "bar count must be non-negative",
+    "bars must be non-null for a nonempty array",
+    "cannot copy admission journal with active captures",
+    "cannot move admission journal with active captures",
+    "cannot replace admission journal with active captures",
+    "cannot reset admission journal with unfinished events",
+    "closed trade counter exhausted",
+    "command capture requires its allocated event",
+    "command event requires an observation",
+    "configure refused while ready; use a fresh host",
+    "configure refused while running",
+    "core-sized quantity without the core's quotient",
+    "current execution points require a guarded target",
+    "definition identity mismatch",
+    "deque::_M_range_check: __n (which is {n})>= this->size() (which is {size})",
+    "draft does not belong to this admission review",
+    "empty prepared cancel",
+    "empty prepared replace",
+    "empty prepared submit",
+    "execution effect capacity exhausted",
+    "exit lifecycle already attached",
+    "first admission review cannot be replaced",
+    "input was not installed",
+    "invalid Pine exit placement evidence",
+    "invalid UDT checkpoint token",
+    "invalid UDT coordinator checkpoint token",
+    "invalid UDT undo generation",
+    "invalid batch arguments",
+    "invalid exit lifecycle fork",
+    "invalid exit-leg activation bounds",
+    "invalid or repeated reservation expansion capture",
+    "invalid order-birth dispatch cursor",
+    "invalid order-birth fill evaluation",
+    "map key index invariant violation",
+    "map restore from invalid snapshot",
+    "map.size: result exceeds int range",
+    "market draft requires one original command observation",
+    "matrix restore from invalid snapshot",
+    "native aborted host has no reusable run spec",
+    "native active trail has no representable trigger",
+    "native auxiliary feed parse failed at begin",
+    "native auxiliary feed projection found an unaligned input",
+    "native bar count is invalid",
+    "native bars require a non-null array",
+    "native begin is forbidden while running",
+    "native begin requires Ready",
+    "native bound terms have no remaining quantity",
+    "native calendar apply failed",
+    "native calendar parse failed during input preflight",
+    "native cancel install failed",
+    "native cancel produced no preparation",
+    "native cohort allocation refused",
+    "native cohort scope identity mismatch",
+    "native cohort selection is empty",
+    "native cohort selection is flat",
+    "native current evaluated allowance mismatch",
+    "native current evaluation failed",
+    "native current evaluation has no terminal outcome",
+    "native current evaluation install failed",
+    "native current evaluation lost target without outcome",
+    "native current execution failed",
+    "native current execution projection/abort failure",
+    "native current terminal drain failed",
+    "native driver-log capacity exhausted",
+    "native execution install failed after settlement",
+    "native execution install missing preparation",
+    "native execution receipt mismatch",
+    "native host already failed",
+    "native host-sized arithmetic probe did not fail",
+    "native host-sized candidate silently skipped after binding",
+    "native host-sized opening has no side",
+    "native host-sized opening shape is unknown",
+    "native instrument series lost its feed",
+    "native intrabar path produced no samples",
+    "native journal position is not retained",
+    "native limit state has no limit trigger",
+    "native liquidation submit install failed",
+    "native liquidation submit produced no preparation",
+    "native liquidation withdrawal install failed",
+    "native liquidation withdrawal produced no preparation",
+    "native mutation install failed",
+    "native mutation install missing preparation",
+    "native nonfillable state reached matched coordinator",
+    "native nonfillable state reached terms coordinator",
+    "native notification identity mismatch",
+    "native notification requires native host",
+    "native observation capacity exhausted",
+    "native opening scope identity mismatch",
+    "native order incarnation and timeline counters must be distinct",
+    "native order incarnation must be nonzero",
+    "native order incarnation reused or regressed",
+    "native precommit requires a native host",
+    "native preflight requires a staged spec",
+    "native prepare_native_begin cannot reenter",
+    "native projection mismatch",
+    "native public input cannot reenter an active callback or input",
+    "native replace install failed",
+    "native replace produced no preparation",
+    "native reversal plan reached an action-only settlement",
+    "native run identity requires a nonempty session key and positive run number",
+    "native run number does not exceed high-water",
+    "native run number must exceed consumed high-water",
+    "native run requires configure_native",
+    "native run spec rejected",
+    "native script interval lookup failed",
+    "native selected scope identity mismatch",
+    "native session key already bound",
+    "native session key cannot change on a reused host",
+    "native settlement commit failed",
+    "native settlement inspection failed",
+    "native staged account-currency FX was rejected",
+    "native stop state has no stop trigger",
+    "native stream timeframe parse failed",
+    "native stream_advance_time requires realtime",
+    "native stream_begin requires Ready",
+    "native stream_end lost running state",
+    "native stream_end requires a running host",
+    "native submit install failed",
+    "native submit produced no preparation",
+    "native terminal history is empty",
+    "native terminal outcome missing",
+    "native terms preparation did not produce a mutation",
+    "native terms require a native host",
+    "native terms roster units are not finite",
+    "native time advance regresses the decision floor",
+    "native timeframe subscription feed was refused",
+    "native timeframe subscription names an undeclared auxiliary feed",
+    "native timeframe subscription names an undeclared instrument feed",
+    "native timeframe subscription parse failed at begin",
+    "native timeframe subscription registration is inconsistent",
+    "native timeframe subscriptions require a native strategy host",
+    "native timeline ordinal exhausted",
+    "native timeline ordinal must be nonzero",
+    "native timeline ordinal reused or regressed",
+    "native trailing offset is not representable",
+    "native unresolved execution authority",
+    "native unresolved execution quantity",
+    "native warmup bar count is invalid",
+    "native warmup bars require a non-null array",
+    "native working-request capacity exhausted",
+    "native working-request preparation failed",
+    "null admission history event",
+    "null strategy",
+    "null strategy, key or value",
+    "params_json is reserved; use checked setters",
+    "quantity fraction requires a positive finite denominator",
+    "quantity grid requires a finite positive step",
+    "quantity reservation requires an original request",
+    "receipt buffer too small",
+    "request data: the run spec holds other symbol feeds",
+    "request data: the run spec no longer holds the symbol feeds",
+    "request.security_lower_tf auxiliary routing is not initialized",
+    "request.security_lower_tf could not synthesize auxiliary sub-bars",
+    "request.security_lower_tf: internal error - passed integer-ratio check but emulation support returned false (requested '{requested}', input '{input}')",
+    "required byte count pointer is null",
+    "reservation closure requires an admitted incarnation",
+    "reservation source requires distinct live incarnations",
+    "review capture requires an allocated batch checkpoint",
+    "review requires a known checkpoint",
+    "settings are frozen after execution begins",
+    "shortest-decimal conversion failed",
+    "sizing revision cannot rewrite or precede its latest cause",
+    "sizing revision requires committed cause",
+    "source broker fill sequence exhausted",
+    "source delayed market epoch exhausted",
+    "source placement handle is absent",
+    "source placement incarnation is out of range",
+    "std::get: wrong index for variant",
+    "strategy output pointer is null",
+    "stream is already realtime",
+    "unknown source series",
+    "vector::_M_range_check: __n (which is {n}) >= this->size() (which is {size})",
+    "{any}",
+    "{entrypoint}: {message}"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "engine_unclassified_error": {
+   "args": {},
+   "class": "engine_fault",
+   "description": "An error no coded site reported: a PineForge bug.",
+   "english": [
+    "closed trade counter exhausted",
+    "exit definition revision exhausted",
+    "invalid resolved bound-close settlement: heterogeneous opening",
+    "invalid resolved bound-close settlement: unowned opening",
+    "native C callback refused in {hook}",
+    "native anchored level callback exception",
+    "native applied callback exception",
+    "native bar-open callback exception",
+    "native callback exception",
+    "native cancel dependency cleanup failed",
+    "native cancel install failed",
+    "native cancel produced no preparation",
+    "native cancel refused outside allowed phase",
+    "native cohort handle exhausted",
+    "native cohort_add refused outside allowed phase",
+    "native cohort_open refused outside allowed phase",
+    "native cohort_remove refused outside allowed phase",
+    "native current execution exception",
+    "native current price is not finite",
+    "native host refuses source mutation",
+    "native host refuses source mutation: {operation}",
+    "native host-sized deduction is not representable",
+    "native input callback exception",
+    "native margin maintenance callback exception",
+    "native module C batch failed",
+    "native order incarnation exhausted",
+    "native pre-begin provider exception",
+    "native precommit callback exception",
+    "native recalculation callback exception",
+    "native replace dependency cleanup failed",
+    "native replace install failed",
+    "native replace produced no preparation",
+    "native replace refused outside allowed phase",
+    "native settlement exception",
+    "native sub-bar callback exception",
+    "native submit install failed",
+    "native submit produced no preparation",
+    "native submit refused outside allowed phase",
+    "native terms callback exception",
+    "native tick callback exception",
+    "native timeframe callback exception",
+    "native timeframe subscription preparation failed",
+    "native timeline ordinal exhausted",
+    "native working-request epoch exhausted",
+    "position cycle sequence exhausted",
+    "position entry counter exhausted",
+    "stream action sequence overflow",
+    "the run did not complete and the engine reported no error",
+    "unknown C++ exception",
+    "unknown error during Pine script preparation",
+    "{entrypoint}: unknown C++ exception",
+    "{entrypoint}: {what}",
+    "{last_error}"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "harness_internal_error": {
+   "args": {},
+   "class": "engine_fault",
+   "description": "The run harness failed: a PineForge bug.",
+   "english": [
+    "harness internal error: {exception_type}: {exception}"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "lot_grid_rejected": {
+   "args": {},
+   "class": "symbol_metadata",
+   "description": "The symbol's lot size (syminfo.mincontract, the quantity grid) is not a value the engine accepts.",
+   "english": [
+    "Pine adapter produced invalid native run spec field {field}",
+    "syminfo.mincontract must be a positive finite number, got {json_value_cut_80}"
+   ],
+   "retryable": true,
+   "since": "1.4.0"
+  },
+  "no_data_request": {
+   "args": {
+    "call": {
+     "kind": "pine_source"
+    },
+    "function": {
+     "kind": "vocab",
+     "values": [
+      "request.financial",
+      "request.earnings",
+      "request.dividends",
+      "request.splits",
+      "request.footprint",
+      "request.economic",
+      "request.quandl",
+      "request.seed",
+      "request.currency_rate"
+     ]
+    },
+    "line": {
+     "kind": "integer"
+    }
+   },
+   "class": "no_data",
+   "description": "The script read a request whose data PineForge does not pin for this run.",
+   "english": [
+    "{call} at line {line}: no data is pinned for this request, and its value was read"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "other_symbol_feed_missing": {
+   "args": {
+    "timeframe": {
+     "kind": "timeframe",
+     "optional": true
+    }
+   },
+   "class": "no_data",
+   "description": "No feed is installed for another symbol's request at its timeframe.",
+   "english": [
+    "request.security: no feed is installed for symbol '{symbol}' at timeframe '{timeframe}'"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "other_symbol_request": {
+   "args": {
+    "call": {
+     "kind": "pine_source"
+    },
+    "function": {
+     "kind": "vocab",
+     "values": [
+      "request.security",
+      "request.security_lower_tf"
+     ]
+    },
+    "line": {
+     "kind": "integer"
+    },
+    "symbol": {
+     "kind": "symbol",
+     "optional": true
+    }
+   },
+   "class": "no_data",
+   "description": "The script read another symbol's request and no bars of that symbol were installed.",
+   "english": [
+    "{call} at line {line}: no data is pinned for this request, and its value was read"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "out_of_memory": {
+   "args": {},
+   "class": "resource",
+   "description": "The run ran out of memory.",
+   "english": [
+    "native auxiliary feed allocation failed",
+    "native current point allocation failed",
+    "native timeframe subscription allocation failed",
+    "std::bad_alloc"
+   ],
+   "retryable": true,
+   "since": "1.4.0"
+  },
+  "pine_array_error": {
+   "args": {
+    "collection": {
+     "kind": "vocab",
+     "optional": true,
+     "values": [
+      "array",
+      "matrix"
+     ]
+    },
+    "method": {
+     "kind": "vocab",
+     "optional": true,
+     "values": [
+      "new",
+      "get",
+      "set",
+      "insert",
+      "remove",
+      "percentrank",
+      "fill",
+      "slice",
+      "first",
+      "last",
+      "pop",
+      "shift"
+     ]
+    },
+    "reason": {
+     "kind": "vocab",
+     "values": [
+      "index_out_of_bounds",
+      "slice_range_inverted",
+      "empty_array_access",
+      "size_invalid",
+      "historical_modified"
+     ]
+    }
+   },
+   "class": "strategy",
+   "description": "An array call failed: an index out of bounds, an inverted slice, an empty array, an invalid size, or a modified historical collection.",
+   "english": [
+    "Cannot modify the elements of a historical array or any slices of that array. Instead of modifying an array referenced by an ID retrieved with the `[]` operator, create a shallow copy of the array with `array.copy()`, then modify the copy or a slice of that copy.",
+    "Cannot use {method}() if array is empty.",
+    "Index 'from' should be less than index 'to'.",
+    "Index {index} is out of bounds. Array size is {size}",
+    "cannot create std::vector larger than max_size()"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "pine_invalid_argument": {
+   "args": {
+    "argument": {
+     "kind": "identifier",
+     "optional": true
+    },
+    "function": {
+     "kind": "identifier",
+     "optional": true
+    },
+    "rule": {
+     "kind": "vocab",
+     "values": [
+      "must_be_positive",
+      "must_not_be_na",
+      "unknown_option",
+      "unsupported_combination",
+      "requires_xloc_bar_index",
+      "unparseable"
+     ]
+    }
+   },
+   "class": "strategy",
+   "description": "A built-in refused the value of one of its arguments.",
+   "english": [
+    "line.get_price requires xloc.bar_index",
+    "pivot point levels: the Woodie type has no developing levels (a Woodie period's levels need the open of the period after it)",
+    "pivot point levels: unknown type '{name}'",
+    "stoi",
+    "{bar_prefix}Invalid value of the 'factor' argument ({factor}) in the 'supertrend' function. It must be > 0.",
+    "{bar_prefix}Invalid value of the '{argument}' argument ({value}) in the '{function}' function. It must be > 0.",
+    "{bar_prefix}Invalid value of the '{argument}' argument in the '{function}' function. It must not be na"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "pine_matrix_error": {
+   "args": {
+    "function": {
+     "kind": "vocab",
+     "values": [
+      "matrix.new",
+      "matrix.get",
+      "matrix.set",
+      "matrix.row",
+      "matrix.col",
+      "matrix.add_row",
+      "matrix.add_col",
+      "matrix.remove_row",
+      "matrix.remove_col",
+      "matrix.swap_rows",
+      "matrix.swap_columns",
+      "matrix.submatrix",
+      "matrix.concat",
+      "matrix.reshape",
+      "matrix.restore"
+     ]
+    },
+    "reason": {
+     "kind": "vocab",
+     "values": [
+      "row_index_out_of_range",
+      "column_index_out_of_range",
+      "negative_dimensions",
+      "values_size_mismatch",
+      "empty_matrix",
+      "from_row_after_to_row",
+      "from_col_after_to_col",
+      "row_count_mismatch",
+      "column_count_mismatch",
+      "element_count_mismatch"
+     ]
+    }
+   },
+   "class": "strategy",
+   "description": "A matrix built-in refused its arguments (an index, a dimension, a size or an empty matrix).",
+   "english": [
+    "GenericMatrix::reshape: negative dimension",
+    "add_col: values size mismatch",
+    "add_row: values size mismatch",
+    "matrix.add_col on empty matrix: use add_row first",
+    "matrix.add_col: column index out of range",
+    "matrix.add_col: values size must equal rows()",
+    "matrix.add_row: row index out of range",
+    "matrix.add_row: values size must equal columns()",
+    "matrix.col: column index out of range",
+    "matrix.concat: column count mismatch",
+    "matrix.concat: row count mismatch",
+    "matrix.get: column index out of range",
+    "matrix.get: row index out of range",
+    "matrix.new: negative dimensions",
+    "matrix.remove_col: column index out of range",
+    "matrix.remove_row: row index out of range",
+    "matrix.row: row index out of range",
+    "matrix.row_ref: row index out of range",
+    "matrix.set: column index out of range",
+    "matrix.set: row index out of range",
+    "matrix.submatrix: column index out of range",
+    "matrix.submatrix: from_col must be <= to_col",
+    "matrix.submatrix: from_row must be <= to_row",
+    "matrix.submatrix: row index out of range",
+    "matrix.swap_columns: column index out of range",
+    "matrix.swap_rows: row index out of range",
+    "reshape: total element count must match"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "pine_na_reference": {
+   "args": {
+    "object": {
+     "kind": "vocab",
+     "values": [
+      "array",
+      "matrix",
+      "map",
+      "line",
+      "box",
+      "label",
+      "linefill",
+      "polyline",
+      "table",
+      "udt_object"
+     ]
+    }
+   },
+   "class": "strategy",
+   "description": "The script called a method on an na reference (an array, matrix, map, drawing or object id).",
+   "english": [
+    "Cannot call array methods when id of array is na.",
+    "Cannot call matrix methods when id of matrix is na.",
+    "UDT access on na or invalid object ID",
+    "drawing access on na handle",
+    "map operation on na ID",
+    "matrix operation on na ID"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "pine_runtime_limit": {
+   "args": {
+    "limit": {
+     "kind": "vocab",
+     "values": [
+      "map_pairs",
+      "max_bars_back",
+      "matrix_elements",
+      "udt_objects"
+     ]
+    },
+    "max": {
+     "kind": "integer",
+     "optional": true
+    }
+   },
+   "class": "strategy_limit",
+   "description": "The script reached a TradingView or PineForge resource limit.",
+   "english": [
+    "UDT object-ID capacity exceeded",
+    "map cannot contain more than 50000 key-value pairs",
+    "matrix.elements_count: total exceeds int range",
+    "matrix.reshape: dimension overflow",
+    "{bar_prefix}The script attempts to reference historical data that is too far from the current bar ({bars_back} bars back). The historical buffer's limit is {limit} bars."
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "pine_string_error": {
+   "args": {
+    "reason": {
+     "kind": "vocab",
+     "values": [
+      "substring_out_of_range",
+      "format_index_overflow"
+     ]
+    }
+   },
+   "class": "strategy",
+   "description": "A string built-in refused its arguments.",
+   "english": [
+    "basic_string::substr: __pos (which is {pos}) > this->size() (which is {size})",
+    "stoul"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "recalc_cap": {
+   "args": {},
+   "class": "strategy_limit",
+   "description": "The script's calc_on_order_fills recalculation loop reached its cap.",
+   "english": [
+    "Pine COOF first-open loop guard exhausted"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "recorded_request_missing": {
+   "args": {},
+   "class": "no_data",
+   "description": "No recorded series is installed for a request the script reads.",
+   "english": [
+    "request data: no recorded series is installed for key '{key}'"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "recorded_request_refused": {
+   "args": {
+    "reason": {
+     "kind": "vocab",
+     "values": [
+      "run_in_progress",
+      "empty_key",
+      "invalid_arrays",
+      "times_not_increasing",
+      "restore_failed"
+     ]
+    }
+   },
+   "class": "input",
+   "description": "A recorded request series was refused.",
+   "english": [
+    "strategy_set_recorded_series: {explanation}"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "request_symbol_invalid": {
+   "args": {},
+   "class": "strategy",
+   "description": "A request.security symbol is not a valid symbol.",
+   "english": [
+    "request.security: symbol '{symbol}' is invalid"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "request_timeframe_invalid": {
+   "args": {
+    "api": {
+     "kind": "vocab",
+     "values": [
+      "request.security",
+      "request.security_lower_tf"
+     ]
+    }
+   },
+   "class": "strategy",
+   "description": "A request timeframe literal does not parse.",
+   "english": [
+    "{api}: invalid timeframe literal '{timeframe}'"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "request_timeframe_unsupported": {
+   "args": {
+    "input_tf": {
+     "kind": "timeframe",
+     "optional": true
+    },
+    "reason": {
+     "kind": "vocab",
+     "values": [
+      "finer_than_input",
+      "lower_tf_not_divisor_of_input",
+      "lower_tf_script_unknown",
+      "lower_tf_not_finer_than_script",
+      "lower_tf_not_divisor_of_script",
+      "lower_tf_not_multiple_of_input",
+      "lower_tf_synthesis_failed"
+     ]
+    },
+    "script_tf": {
+     "kind": "timeframe",
+     "optional": true
+    }
+   },
+   "class": "unsupported",
+   "description": "A request timeframe cannot be served for this run's chart timeframe.",
+   "english": [
+    "request.security lower TF emulation could not synthesize bars for requested {requested} from input timeframe {input}",
+    "request.security: requested timeframe '{requested}' is finer than input '{input}'. Use request.security_lower_tf for sub-input timeframes.",
+    "request.security_lower_tf: requested timeframe '{requested}' is not an integer divisor of input '{input}' (ratio {ratio} is non-integer; chart bars cannot be evenly subdivided)",
+    "request.security_lower_tf: requested timeframe '{requested}' is not an integer multiple of input '{input}' (cannot aggregate raw input bars to requested TF)",
+    "request.security_lower_tf: requested timeframe '{requested}' must be finer than script timeframe '{script}'. Lower-TF API requires a strictly finer timeframe.",
+    "request.security_lower_tf: requested timeframe '{requested}' must evenly divide script timeframe '{script}' (script_tf must be an integer multiple of requested TF)",
+    "request.security_lower_tf: script timeframe is unknown — cannot validate '{requested}' against script TF"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "request_unsupported": {
+   "args": {
+    "line": {
+     "kind": "integer",
+     "optional": true
+    },
+    "reason": {
+     "kind": "vocab",
+     "values": [
+      "lower_tf_lookahead_or_gaps",
+      "nested_heikinashi_request"
+     ]
+    }
+   },
+   "class": "unsupported",
+   "description": "A request shape PineForge does not support.",
+   "english": [
+    "request.security lower TF emulation only supports lookahead=barmerge.lookahead_off and gaps=barmerge.gaps_off",
+    "request.security: a Heikin-Ashi request inside another request's expression reads that request's Heikin-Ashi bars, which PineForge does not build"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "run_aborted": {
+   "args": {},
+   "class": "engine_fault",
+   "description": "The run was aborted on request.",
+   "english": [
+    "native run aborted"
+   ],
+   "retryable": true,
+   "since": "1.4.0"
+  },
+  "run_mode_unsupported": {
+   "args": {
+    "feature": {
+     "kind": "vocab",
+     "values": [
+      "stream_native_security_feed",
+      "stream_symbol_feeds",
+      "stream_calc_on_order_fills",
+      "stream_probe_overrides",
+      "stream_account_currency_fx",
+      "stream_instrument_feeds",
+      "stream_monthly_input",
+      "stream_fx_curve_input",
+      "fx_series_calc_on_order_fills",
+      "fx_series_bar_magnifier"
+     ]
+    }
+   },
+   "class": "unsupported",
+   "description": "A feature the requested run mode does not support.",
+   "english": [
+    "a declared native FX curve requires confirmed-bar stream input",
+    "native instrument feeds are not supported by streaming",
+    "native request.security feed supports historical runs only",
+    "native stream cannot use historical probe/tail overrides",
+    "native stream refuses monthly input",
+    "native stream requires close-only calculation; calc_on_order_fills is unsupported",
+    "request.security symbol feeds and recorded request series support historical runs only",
+    "timestamped account-currency FX does not support calc_on_order_fills",
+    "timestamped account-currency FX is not supported by streaming",
+    "timestamped account-currency FX is not supported with bar magnifier"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "run_options_rejected": {
+   "args": {
+    "input_tf": {
+     "kind": "timeframe",
+     "optional": true
+    },
+    "option": {
+     "kind": "vocab",
+     "values": [
+      "input_timeframe",
+      "script_timeframe",
+      "timeframes",
+      "intrabar_timeframe",
+      "intrabar_samples",
+      "intrabar_distribution",
+      "intrabar_volume_samples",
+      "intrabar_sample_eligibility",
+      "intrabar_path",
+      "magnifier",
+      "path_order"
+     ]
+    },
+    "script_tf": {
+     "kind": "timeframe",
+     "optional": true
+    }
+   },
+   "class": "input",
+   "description": "The run's own options (timeframes, intrabar path, magnifier, path order) were refused.",
+   "english": [
+    "Pine adapter produced invalid native run spec field {field}",
+    "native calendar parse failed at configure",
+    "native intrabar path failed validation",
+    "native intrabar path timeframe or bar count is invalid",
+    "native intrabar timeframe parse failed at configure",
+    "native magnifier arguments require an intrabar path",
+    "native module refuses unsupported magnifier arguments",
+    "native stream requires a detected timeframe",
+    "native timeframe arguments must be empty or match the spec",
+    "native undetected timeframe requires empty timeframe arguments",
+    "native undetected timeframe requires fewer than two bars",
+    "request.security cannot infer input timeframe from available input bars; pass input_tf explicitly",
+    "script timeframe must be coarser than or equal to input timeframe: requested script_tf {script_tf} from input timeframe {input_tf}"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "run_request_invalid": {
+   "args": {
+    "option": {
+     "kind": "vocab",
+     "values": [
+      "inputs",
+      "overrides",
+      "magnifier_dist",
+      "magnifier_samples",
+      "so",
+      "ohlcv",
+      "syminfo",
+      "symbol_feeds",
+      "trade_start_ms",
+      "warmup",
+      "repeats",
+      "arguments",
+      "input_tf",
+      "script_tf",
+      "bar_magnifier",
+      "generated_cpp",
+      "transpiled",
+      "chart_tz",
+      "magnifier_volume_weighted",
+      "bench"
+     ]
+    }
+   },
+   "class": "input",
+   "description": "The harness command line or one of its JSON options is invalid.",
+   "english": [
+    "error: --magnifier-dist must be one of ['back_loaded', 'cosine', 'endpoints', 'front_loaded', 'triangle', 'uniform'] or 0-5, got {value!r}",
+    "error: {label} is not valid JSON: {error}",
+    "error: {label} must be a JSON object, got {type}",
+    "error: {label} must hold UTF-8 text",
+    "error: {label}: {json_key_cut_80} must be a string or a number, got {json_kind}",
+    "{prog}: error: {argparse message}"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "security_feed_refused": {
+   "args": {
+    "reason": {
+     "kind": "vocab",
+     "values": [
+      "aux_feed_shape",
+      "aux_feed_timeframe",
+      "aux_feed_order",
+      "aux_feed_no_chart",
+      "aux_feed_not_finer",
+      "aux_feed_not_divisor",
+      "aux_chart_order",
+      "aux_chart_period_identity",
+      "native_feed_timeframe",
+      "native_feed_shape",
+      "native_feed_order"
+     ]
+    }
+   },
+   "class": "input",
+   "description": "An auxiliary or native request.security feed was refused.",
+   "english": [
+    "auxiliary request.security feed input_tf must be fixed and strictly finer than the native chart timeframe",
+    "auxiliary request.security feed input_tf must evenly divide the native chart timeframe",
+    "auxiliary request.security feed requires a fixed positive input_tf",
+    "auxiliary request.security feed requires at least one native chart bar",
+    "auxiliary request.security feed requires bars, a positive count, and input_tf",
+    "auxiliary request.security feed timestamps must be strictly increasing",
+    "native chart feed timestamps must be strictly increasing with an auxiliary security feed",
+    "native chart feed trading-period identities must be unique and strictly increasing with an auxiliary security feed",
+    "native request.security feed requires a parseable timeframe",
+    "native request.security feed requires bars and a positive count",
+    "native request.security feed timestamps must be strictly increasing"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "setting_rejected": {
+   "args": {
+    "entrypoint": {
+     "kind": "vocab",
+     "optional": true,
+     "values": [
+      "strategy_set_input",
+      "strategy_set_override",
+      "strategy_set_magnifier_volume_weighted",
+      "strategy_create"
+     ]
+    },
+    "input": {
+     "kind": "pine_source",
+     "optional": true
+    },
+    "reason": {
+     "kind": "vocab",
+     "optional": true,
+     "values": [
+      "expected_integer",
+      "invalid_integer_exponent",
+      "invalid_integer_or_trailing_bytes",
+      "expected_integral_value",
+      "integer_out_of_range",
+      "invalid_integer_sign",
+      "expected_finite_decimal",
+      "invalid_numeric_exponent",
+      "invalid_number_or_trailing_bytes",
+      "number_out_of_finite_range",
+      "number_underflows_to_zero",
+      "number_not_consumable",
+      "invalid_boolean",
+      "invalid_enum_option",
+      "value_below_minimum",
+      "value_above_maximum",
+      "invalid_input_option",
+      "unknown_key",
+      "ambiguous_key",
+      "frozen",
+      "unparseable_value"
+     ]
+    }
+   },
+   "class": "input",
+   "description": "A run setting (an input or a strategy() override) was refused.",
+   "english": [
+    "ambiguous input key",
+    "expected a finite decimal number",
+    "expected an integer",
+    "expected an integral value",
+    "integer out of range",
+    "invalid boolean",
+    "invalid enum option",
+    "invalid input option",
+    "invalid integer exponent",
+    "invalid integer or trailing bytes",
+    "invalid integer sign",
+    "invalid number or trailing bytes",
+    "invalid numeric exponent",
+    "legacy strategy setter failed",
+    "number cannot be consumed by the strategy getter",
+    "number out of finite range",
+    "number underflows to zero",
+    "unknown input key",
+    "unknown override key",
+    "value above maximum",
+    "value below minimum",
+    "{entrypoint}: {message}"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "setting_unsupported": {
+   "args": {},
+   "class": "unsupported",
+   "description": "A setting this compiled strategy cannot honour.",
+   "english": [
+    "input cannot be honoured by this compiled strategy",
+    "{entrypoint}: {message}"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "strategy_create_failed": {
+   "args": {},
+   "class": "engine_fault",
+   "description": "The compiled strategy could not be created.",
+   "english": [
+    "strategy_create failed",
+    "strategy_create failed: {message}"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "strategy_library_incompatible": {
+   "args": {
+    "abi": {
+     "kind": "integer",
+     "optional": true
+    },
+    "missing": {
+     "kind": "vocab",
+     "optional": true,
+     "values": [
+      "strategy_set_syminfo_metadata",
+      "strategy_set_symbol_facts",
+      "strategy_set_symbol_feed",
+      "strategy_create",
+      "strategy_set_input",
+      "strategy_set_override",
+      "run_backtest_full",
+      "strategy_free",
+      "report_free",
+      "strategy_set_syminfo_mintick",
+      "strategy_set_syminfo_pointvalue",
+      "strategy_set_syminfo_timezone",
+      "strategy_set_syminfo_session"
+     ]
+    },
+    "reason": {
+     "kind": "vocab",
+     "values": [
+      "load_failed",
+      "abi_missing",
+      "abi_mismatch",
+      "symbol_missing",
+      "setter_missing",
+      "settings_api_mismatch"
+     ]
+    }
+   },
+   "class": "engine_fault",
+   "description": "The compiled strategy library does not match the harness.",
+   "english": [
+    "cannot load the strategy library: {error}",
+    "checked settings API mismatch: the strategy library must export strategy_settings_api_version() == 1, strategy_create_checked, strategy_set_input_checked and strategy_set_override_checked, or none of them; rebuild.",
+    "pineforge ABI mismatch: .so reports {abi}, harness expects 4; rebuild.",
+    "strategy .so predates pf_abi_version (ABI v1); rebuild it against the current pineforge runtime (pf_report_t grew).",
+    "the strategy library has no strategy_set_syminfo_metadata, so syminfo.mincontract cannot be applied",
+    "the strategy library has no {export}",
+    "the strategy library has no {setter}, so syminfo.{key} cannot be applied"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "strategy_runtime_error": {
+   "args": {},
+   "class": "strategy",
+   "description": "The script stopped itself with runtime.error(); the message, possibly empty, is the text.",
+   "english": [
+    "{message}"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "strategy_settings_rejected": {
+   "args": {
+    "field": {
+     "kind": "vocab",
+     "values": [
+      "initial_capital",
+      "slippage_ticks",
+      "fee_kind",
+      "fee_value",
+      "close_execution",
+      "max_abs_units",
+      "max_open_lots",
+      "allowed_open_directions",
+      "initial_margin_fraction",
+      "price_grid",
+      "grid_rounding",
+      "margin_model",
+      "margin_initial",
+      "margin_maintenance",
+      "margin_sizing",
+      "margin_shortfall_multiple",
+      "margin_min_units",
+      "margin_check",
+      "margin_equity_basis",
+      "margin_level_base",
+      "calculation",
+      "open_bar_view",
+      "risk_limits",
+      "risk_drawdown",
+      "risk_intraday_loss",
+      "risk_loss_days",
+      "risk_fills_per_day",
+      "risk_day_basis",
+      "risk_action",
+      "quantity_tolerance"
+     ]
+    }
+   },
+   "class": "strategy",
+   "description": "A strategy() declaration setting (or its override) is not a value the engine accepts.",
+   "english": [
+    "Pine adapter produced invalid native run spec field {field}"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "stream_input_rejected": {
+   "args": {},
+   "class": "input",
+   "description": "A streaming input (bar, tick or auxiliary bar) was refused.",
+   "english": [
+    "native append_auxiliary_bars requires a declared auxiliary feed",
+    "native append_auxiliary_bars requires realtime",
+    "native auxiliary bar array is invalid",
+    "native auxiliary bar has invalid OHLCV",
+    "native auxiliary bar opened inside an input period that was already accepted",
+    "native auxiliary bars must be strictly increasing",
+    "native confirmed bar has invalid OHLCV",
+    "native confirmed bar timeframe is not a fixed grid",
+    "native confirmed bar timestamp is out of order or off the input grid",
+    "native confirmed bar timestamp overflows",
+    "native confirmed bar timestamp overflows the input grid",
+    "native duplicate overlapping input slot",
+    "native input is not aligned",
+    "native stream cannot mix confirmed bars and ticks",
+    "native stream has an in-session gap",
+    "native stream warmup requires at least one bar",
+    "native stream_push_bar requires realtime",
+    "native stream_push_tick requires realtime",
+    "native tick array is invalid",
+    "native tick is not aligned",
+    "native tick price must be finite and positive",
+    "native tick quantity must be finite and non-negative",
+    "native tick sequence must increase",
+    "native tick timestamp is backwards or out of order",
+    "native tick timestamp is backwards or regresses the decision floor",
+    "native tick volume overflow",
+    "native tick would reopen a closed input slot",
+    "native timeframe subscriptions require confirmed-bar stream input",
+    "stream warmup final close must be finite and positive"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "symbol_feeds_refused": {
+   "args": {
+    "field": {
+     "kind": "vocab",
+     "optional": true,
+     "values": [
+      "instrument_feed_instrument",
+      "instrument_feed_timeframe",
+      "instrument_feed_bars",
+      "instrument_feed_close",
+      "instrument_feed_columns",
+      "subscription_instrument"
+     ]
+    },
+    "input_tf": {
+     "kind": "timeframe",
+     "optional": true
+    },
+    "reason": {
+     "kind": "vocab",
+     "values": [
+      "symbol_text_invalid",
+      "timeframe_invalid",
+      "feed_columns_missing",
+      "feed_value_not_number",
+      "feed_value_invalid",
+      "feed_time_out_of_range",
+      "feed_unreadable",
+      "feed_not_utf8_csv",
+      "feed_not_increasing",
+      "feed_close_time_invalid",
+      "syminfo_not_object",
+      "syminfo_mintick_invalid",
+      "index_duplicate_key",
+      "index_unreadable",
+      "index_not_json",
+      "index_shape",
+      "too_many_symbols",
+      "entry_shape",
+      "feeds_not_object",
+      "too_many_feeds",
+      "duplicate_timeframe",
+      "feed_path_invalid",
+      "library_without_symbol_feeds",
+      "engine_refused",
+      "chart_input_aggregated",
+      "kernel_refused_series",
+      "run_in_progress",
+      "empty_key",
+      "timeframe_unparsable",
+      "invalid_bars",
+      "kernel_refused",
+      "no_feed",
+      "empty_column",
+      "column_length",
+      "column_refused",
+      "valid_not_boolean",
+      "mintick_invalid",
+      "unknown_field",
+      "invalid_arrays",
+      "times_not_increasing",
+      "restore_failed"
+     ]
+    },
+    "script_tf": {
+     "kind": "timeframe",
+     "optional": true
+    }
+   },
+   "class": "symbol_feeds",
+   "description": "Other symbols' bars installed for request.security were refused.",
+   "english": [
+    "--symbol-feeds: a timeframe is whole minutes (\"15\", \"240\") or <n>D|W|M|S (\"1D\", \"1W\"), got {json_value_cut_80}",
+    "--symbol-feeds: duplicate key {json_value_cut_80}",
+    "--symbol-feeds: feed {symbol}@{tf} ({path}) line {line}: a time must be unix milliseconds within +-9007199254740991",
+    "--symbol-feeds: feed {symbol}@{tf} ({path}) line {line}: its close {close} is not after its open {open} and at or before the next bar's open (is the timeframe right?)",
+    "--symbol-feeds: feed {symbol}@{tf} ({path}) line {line}: not a number",
+    "--symbol-feeds: feed {symbol}@{tf} ({path}) line {line}: prices must be finite and volume nonnegative or empty",
+    "--symbol-feeds: feed {symbol}@{tf} ({path}) line {line}: timestamps must increase",
+    "--symbol-feeds: feed {symbol}@{tf} ({path}): no column {columns}",
+    "--symbol-feeds: feed {symbol}@{tf} ({path}): not a UTF-8 CSV ({error})",
+    "--symbol-feeds: feed {symbol}@{tf} ({path}): {strerror}",
+    "--symbol-feeds: more than 256 feeds",
+    "--symbol-feeds: more than 256 symbols",
+    "--symbol-feeds: the engine refused {what}[: {engine_last_error}]",
+    "--symbol-feeds: the index must be {\"symbols\": {...}}",
+    "--symbol-feeds: the strategy library has no {missing}, so other symbols' bars cannot be installed (engine 1.0.0 or later)",
+    "--symbol-feeds: {index_path} is not JSON: {error}",
+    "--symbol-feeds: {index_path}: {strerror}",
+    "--symbol-feeds: {symbol}: an entry is {\"feeds\": {...}, \"syminfo\": {...}}",
+    "--symbol-feeds: {symbol}: feeds must be an object",
+    "--symbol-feeds: {symbol}: syminfo must be an object",
+    "--symbol-feeds: {symbol}: syminfo.mintick must be a positive finite number, got {json_value_cut_80}",
+    "--symbol-feeds: {symbol}: two feeds at timeframe {tf}",
+    "--symbol-feeds: {symbol}@{tf}: the feed must name a CSV file",
+    "--symbol-feeds: {what} must be a non-empty string of at most 256 characters without control characters, got {json_value_cut_80}",
+    "request.security of another symbol needs the chart's own bars as input; input '{input_tf}' aggregated to chart '{script_tf}' is not supported",
+    "request.security: the kernel refused the symbol feed series (NativeRunSpecError {error}, field {field})",
+    "strategy_set_symbol_facts: {explanation}",
+    "strategy_set_symbol_feed: {explanation}",
+    "strategy_set_symbol_feed_column: {explanation}"
+   ],
+   "retryable": false,
+   "since": "1.4.0"
+  },
+  "symbol_metadata_rejected": {
+   "args": {
+    "field": {
+     "kind": "vocab",
+     "values": [
+      "ticker",
+      "ticker_id",
+      "type",
+      "currency",
+      "base_currency",
+      "description",
+      "volume_type",
+      "timezone",
+      "session",
+      "chart_timezone",
+      "point_value",
+      "account_fx",
+      "price_tick",
+      "session_calendar"
+     ]
+    }
+   },
+   "class": "symbol_metadata",
+   "description": "The symbol's catalog metadata (syminfo) is not a value the engine accepts.",
+   "english": [
+    "Pine adapter produced invalid native run spec field {field}",
+    "native calendar parse failed at configure",
+    "native timezone identity cannot be derived from its zone data",
+    "symbol calendar: session day {i} of {count} is missing",
+    "symbol calendar: session days out of order"
+   ],
+   "retryable": true,
+   "since": "1.4.0"
+  },
+  "syminfo_unreadable": {
+   "args": {
+    "reason": {
+     "kind": "vocab",
+     "values": [
+      "io",
+      "not_json",
+      "not_object",
+      "value_type"
+     ]
+    }
+   },
+   "class": "symbol_metadata",
+   "description": "The harness could not read the run's syminfo file.",
+   "english": [
+    "--syminfo: {path} is not JSON: {error}",
+    "--syminfo: {path}: the syminfo is not a JSON object",
+    "--syminfo: {path}: {strerror}",
+    "syminfo.{key} must be UTF-8 text, got {json_value_cut_80}",
+    "syminfo.{key} must be a number, got {json_value_cut_80}"
+   ],
+   "retryable": true,
+   "since": "1.4.0"
+  }
+ },
+ "kinds": {
+  "identifier": "A name the compiled strategy spells as a literal (a built-in, an argument).",
+  "integer": "A JSON integer.",
+  "keyword": "A fixed keyword.",
+  "number": "A JSON number (shortest round-trip double).",
+  "pine_source": "Source text the transpiler emitted as a literal (a call's spelling, an input title).",
+  "symbol": "A symbol the script wrote as a literal.",
+  "timeframe": "A timeframe the run request supplied.",
+  "vocab": "One value of the arg's closed `values` list."
+ },
+ "schema": "pineforge-run-failure-catalog/v1"
+}

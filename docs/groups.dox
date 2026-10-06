@@ -60,6 +60,8 @@
 /** @file bar.hpp            @ingroup kernel */
 /** @file metrics.hpp        @ingroup kernel */
 /** @file quantity_intent.hpp @ingroup kernel */
+/** @file run_failure.hpp    @ingroup kernel */
+/** @file run_failure_codes.hpp @ingroup kernel */
 
 /** @file source/pine_adapter.hpp      @ingroup pine_adapter */
 /** @file source/pine_native_host.hpp  @ingroup pine_adapter */

@@ -5,6 +5,7 @@
 
 #include "engine_internal.hpp"
 
+#include <pineforge/run_failure.hpp>
 #include <pineforge/ta.hpp>
 
 #include <algorithm>
@@ -87,8 +88,9 @@ bool BacktestEngine::set_native_security_feed(const std::string& timeframe,
         seconds = 0;
     }
     if (timeframe.empty() || seconds == 0) {
-        last_error_ =
-            "native request.security feed requires a parseable timeframe";
+        note_run_failure(*this,
+            "native request.security feed requires a parseable timeframe",
+            RunFailureCode::security_feed_refused, {{"reason", "native_feed_timeframe"}});
         return false;
     }
     auto existing = native_security_feeds_.begin();
@@ -100,18 +102,20 @@ bool BacktestEngine::set_native_security_feed(const std::string& timeframe,
         if (existing != native_security_feeds_.end()) {
             native_security_feeds_.erase(existing);
         }
-        last_error_.clear();
+        clear_run_failure(*this);
         return true;
     }
     if (n < 0 || bars == nullptr) {
-        last_error_ =
-            "native request.security feed requires bars and a positive count";
+        note_run_failure(*this,
+            "native request.security feed requires bars and a positive count",
+            RunFailureCode::security_feed_refused, {{"reason", "native_feed_shape"}});
         return false;
     }
     for (int i = 1; i < n; ++i) {
         if (bars[i].timestamp <= bars[i - 1].timestamp) {
-            last_error_ =
-                "native request.security feed timestamps must be strictly increasing";
+            note_run_failure(*this,
+                "native request.security feed timestamps must be strictly increasing",
+                RunFailureCode::security_feed_refused, {{"reason", "native_feed_order"}});
             return false;
         }
     }
@@ -124,7 +128,7 @@ bool BacktestEngine::set_native_security_feed(const std::string& timeframe,
     } else {
         native_security_feeds_.push_back(std::move(feed));
     }
-    last_error_.clear();
+    clear_run_failure(*this);
     return true;
 }
 

@@ -9,6 +9,7 @@
 #include "../native_execution_consumer.hpp"
 #include "pine_host_reads.hpp"
 #include "pine_quiet_bar.hpp"
+#include "pine_run_failure.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -28,8 +29,11 @@ using namespace source;
 
 namespace {
 
-[[noreturn]] void reject_begin_bar(int index, const char* field, const char* detail) {
-    throw std::invalid_argument(
+[[noreturn]] void reject_begin_bar(int index, const char* field, const char* detail,
+                                   const char* reason) {
+    throw coded<std::invalid_argument>(
+        RunFailureCode::chart_bars_rejected,
+        {{"index", index}, {"field", field}, {"reason", reason}},
         "bar[" + std::to_string(index) + "]." + field + (detail ? detail : ""));
 }
 
@@ -38,46 +42,53 @@ namespace {
 // legacy chart/stream shape checks and deliberately does not impose native
 // calendar or slot-label policy; those remain the generic preflight's job.
 void validate_source_begin_bars(const NativeBeginArgs& args) {
-    if (args.n < 0) throw std::invalid_argument("bar count must be non-negative");
-    if (args.n > 0 && args.bars == nullptr)
-        throw std::invalid_argument("bars must be non-null for a nonempty array");
+    if (args.n < 0) {
+        throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                           "bar count must be non-negative");
+    }
+    if (args.n > 0 && args.bars == nullptr) {
+        throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                           "bars must be non-null for a nonempty array");
+    }
     for (int i = 0; i < args.n; ++i) {
         const Bar& bar = args.bars[i];
-        if (!std::isfinite(bar.open)) reject_begin_bar(i, "open", " must be finite");
-        if (!std::isfinite(bar.high)) reject_begin_bar(i, "high", " must be finite");
-        if (!std::isfinite(bar.low)) reject_begin_bar(i, "low", " must be finite");
-        if (!std::isfinite(bar.close)) reject_begin_bar(i, "close", " must be finite");
+        if (!std::isfinite(bar.open)) reject_begin_bar(i, "open", " must be finite", "not_finite");
+        if (!std::isfinite(bar.high)) reject_begin_bar(i, "high", " must be finite", "not_finite");
+        if (!std::isfinite(bar.low)) reject_begin_bar(i, "low", " must be finite", "not_finite");
+        if (!std::isfinite(bar.close)) reject_begin_bar(i, "close", " must be finite", "not_finite");
         if (args.is_stream) {
             if (bar.timestamp < 0)
-                reject_begin_bar(i, "timestamp", " must be non-negative");
-            if (bar.open < 0.0) reject_begin_bar(i, "open", " must be non-negative");
-            if (bar.high < 0.0) reject_begin_bar(i, "high", " must be non-negative");
-            if (bar.low < 0.0) reject_begin_bar(i, "low", " must be non-negative");
-            if (bar.close < 0.0) reject_begin_bar(i, "close", " must be non-negative");
+                reject_begin_bar(i, "timestamp", " must be non-negative", "negative");
+            if (bar.open < 0.0) reject_begin_bar(i, "open", " must be non-negative", "negative");
+            if (bar.high < 0.0) reject_begin_bar(i, "high", " must be non-negative", "negative");
+            if (bar.low < 0.0) reject_begin_bar(i, "low", " must be non-negative", "negative");
+            if (bar.close < 0.0) reject_begin_bar(i, "close", " must be non-negative", "negative");
             if (!std::isfinite(bar.volume) || bar.volume < 0.0)
-                reject_begin_bar(i, "volume", " must be non-negative finite");
+                reject_begin_bar(i, "volume", " must be non-negative finite", "volume_invalid");
         } else if (!std::isnan(bar.volume)
                    && (!std::isfinite(bar.volume) || bar.volume < 0.0)) {
-            reject_begin_bar(i, "volume", " must be non-negative finite or NaN (unavailable)");
+            reject_begin_bar(i, "volume", " must be non-negative finite or NaN (unavailable)",
+                             "volume_invalid");
         }
         if (bar.low > std::min(bar.open, bar.close))
-            reject_begin_bar(i, "low", " must not exceed open or close");
+            reject_begin_bar(i, "low", " must not exceed open or close", "low_above_body");
         if (bar.high < std::max(bar.open, bar.close))
-            reject_begin_bar(i, "high", " must not be below open or close");
+            reject_begin_bar(i, "high", " must not be below open or close", "high_below_body");
         if (i > 0) {
             const std::int64_t previous = args.bars[i - 1].timestamp;
             if (bar.timestamp <= previous)
-                reject_begin_bar(i, "timestamp", " must be strictly increasing");
+                reject_begin_bar(i, "timestamp", " must be strictly increasing", "not_increasing");
             if (previous < 0
                 && bar.timestamp > std::numeric_limits<std::int64_t>::max() + previous) {
-                reject_begin_bar(i, "timestamp", " delta exceeds int64 range");
+                reject_begin_bar(i, "timestamp", " delta exceeds int64 range", "delta_overflow");
             }
         }
     }
     if (args.is_stream && args.n > 0
         && (!std::isfinite(args.bars[args.n - 1].close)
             || args.bars[args.n - 1].close <= 0.0)) {
-        throw std::invalid_argument("stream warmup final close must be finite and positive");
+        throw coded<std::invalid_argument>(RunFailureCode::stream_input_rejected, {},
+                                           "stream warmup final close must be finite and positive");
     }
 }
 
@@ -112,6 +123,15 @@ void return_feed_bytes(std::vector<NativeInstrumentFeed>& store,
         for (std::size_t c = 0; c < store[i].columns.size() && c < lent[i].columns.size(); ++c)
             store[i].columns[c].values.swap(lent[i].columns[c].values);
     }
+}
+
+// A legacy setter the generated strategy latched (a request's input or
+// override it could not take) surfaces at the run's begin: the same type and
+// text, coded setting_rejected unless it already carries a code.
+[[noreturn]] void rethrow_latched_setting(const checked_settings::LatchedSettingsFailure& error) {
+    if (dynamic_cast<const RunFailureInfo*>(&error) != nullptr) throw;
+    throw coded<checked_settings::LatchedSettingsFailure>(RunFailureCode::setting_rejected, {},
+                                                          error.what());
 }
 
 }  // namespace
@@ -219,14 +239,16 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     if (args.inputs) inputs_ = *args.inputs;
 
     if (args.is_stream && native_security_feed_enabled()) {
-        throw std::runtime_error(
+        throw coded<std::runtime_error>(
+            RunFailureCode::run_mode_unsupported, {{"feature", "stream_native_security_feed"}},
             "native request.security feed supports historical runs only");
     }
     // Lane XSYM-D: another symbol's feeds and the recorded request series are
     // installed whole before a run and have no realtime ingress, exactly as
     // the native feed above.
     if (args.is_stream && (!symbol_feeds_.empty() || !recorded_series_.empty())) {
-        throw std::runtime_error(
+        throw coded<std::runtime_error>(
+            RunFailureCode::run_mode_unsupported, {{"feature", "stream_symbol_feeds"}},
             "request.security symbol feeds and recorded request series support historical "
             "runs only");
     }
@@ -240,7 +262,10 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
         try {
             if (!effective_input.empty() && !effective_script.empty()
                 && tf_ratio(effective_input, effective_script) == -2) {
-                throw std::runtime_error(
+                throw coded<std::runtime_error>(
+                    RunFailureCode::run_options_rejected,
+                    {{"option", "script_timeframe"}, {"script_tf", effective_script},
+                     {"input_tf", effective_input}},
                     "script timeframe must be coarser than or equal to input timeframe: requested script_tf "
                     + effective_script + " from input timeframe " + effective_input);
             }
@@ -252,11 +277,14 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     }
 
     if (args.is_stream && config_.calc_on_order_fills) {
-        throw std::runtime_error(
+        throw coded<std::runtime_error>(
+            RunFailureCode::run_mode_unsupported, {{"feature", "stream_calc_on_order_fills"}},
             "native stream requires close-only calculation; calc_on_order_fills is unsupported");
     }
     if (args.is_stream && (realtime_tail_ || probe_suppress_tail_logic_)) {
-        throw std::runtime_error("native stream cannot use historical probe/tail overrides");
+        throw coded<std::runtime_error>(
+            RunFailureCode::run_mode_unsupported, {{"feature", "stream_probe_overrides"}},
+            "native stream cannot use historical probe/tail overrides");
     }
     PineStrategyConfig effective = config_;
     if (args.overrides_opaque) {
@@ -265,10 +293,12 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     }
     const StagedConfiguration staged = staged_configuration();
     if (!staged.account_fx_effective_from_ms.empty() && effective.calc_on_order_fills)
-        throw std::logic_error(
+        throw coded<std::logic_error>(
+            RunFailureCode::run_mode_unsupported, {{"feature", "fx_series_calc_on_order_fills"}},
             "timestamped account-currency FX does not support calc_on_order_fills");
     if (!staged.account_fx_effective_from_ms.empty() && args.bar_magnifier)
-        throw std::logic_error(
+        throw coded<std::logic_error>(
+            RunFailureCode::run_mode_unsupported, {{"feature", "fx_series_bar_magnifier"}},
             "timestamped account-currency FX is not supported with bar magnifier");
 
     adapter_.reset_for_run();
@@ -320,12 +350,20 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
         return_feed_bytes(symbol_feeds_, spec.instrument_feeds);
     }
     if (setup.status != NativeSetupStatus::Applied) {
+        // configure() recorded the cause (its own text and code): the refusal
+        // below keeps its text and carries that code.
+        RunFailureValue cause = run_failure_value_of(*this);
+        if (cause.code == RunFailureCode::none)
+            cause = RunFailureValue{RunFailureCode::engine_invariant, nullptr};
         if (failed_before) {
             try { prepare_script_run(nullptr, 0, false); }
-            catch (const checked_settings::LatchedSettingsFailure&) { throw; }
+            catch (const checked_settings::LatchedSettingsFailure& error) {
+                rethrow_latched_setting(error);
+            }
             catch (...) {}
         }
-        throw std::logic_error("Pine native adapter failed to configure projected run spec");
+        throw coded<std::logic_error>(std::move(cause),
+                                      "Pine native adapter failed to configure projected run spec");
     }
     config_ = effective;
     source_configuration_captured_ = true;
@@ -357,17 +395,19 @@ void source::PineStrategyHost::on_native_run_begin() {
     try {
         install_symbol_calendar_metadata();
         scheduler_.run_begin(*this);
-    } catch (const checked_settings::LatchedSettingsFailure&) {
-        throw;
+    } catch (const checked_settings::LatchedSettingsFailure& error) {
+        rethrow_latched_setting(error);
     } catch (const std::exception& error) {
         if (adapter_.stream_mode_) throw;
         source_prepare_failed_ = true;
-        last_error_ = error.what();
+        note_run_failure(*this, std::string(error.what()), classify_run_failure(error));
     } catch (...) {
         if (adapter_.stream_mode_)
-            throw std::runtime_error("unknown error during Pine script preparation");
+            throw coded<std::runtime_error>(RunFailureCode::engine_unclassified_error, {},
+                                            "unknown error during Pine script preparation");
         source_prepare_failed_ = true;
-        last_error_ = "unknown error during Pine script preparation";
+        note_run_failure(*this, "unknown error during Pine script preparation",
+                         RunFailureCode::engine_unclassified_error);
     }
 }
 
@@ -412,13 +452,18 @@ void source::PineStrategyHost::install_symbol_calendar_metadata() {
         const auto close = closes.find(i);
         if (open == opens.end() || close == closes.end()
             || !std::isfinite(open->second) || !std::isfinite(close->second)) {
-            throw std::runtime_error("symbol calendar: session day " + std::to_string(i) + " of "
-                                     + std::to_string(count) + " is missing");
+            throw coded<std::runtime_error>(
+                RunFailureCode::symbol_metadata_rejected, {{"field", "session_calendar"}},
+                "symbol calendar: session day " + std::to_string(i) + " of "
+                    + std::to_string(count) + " is missing");
         }
         sessions.emplace_back(std::llround(open->second), std::llround(close->second));
     }
-    if (!set_symbol_calendar(std::move(sessions)))
-        throw std::runtime_error("symbol calendar: session days out of order");
+    if (!set_symbol_calendar(std::move(sessions))) {
+        throw coded<std::runtime_error>(RunFailureCode::symbol_metadata_rejected,
+                                        {{"field", "session_calendar"}},
+                                        "symbol calendar: session days out of order");
+    }
 }
 
 bool source::PineStrategyHost::set_symbol_calendar(
@@ -648,8 +693,10 @@ void source::PineStrategyHost::on_native_applied(
     // broker fill sequence is consumed per applied broker instruction, not
     // per closed trade row. Native ordinals remain the execution authority;
     // this is the generated/source-visible diagnostic projection.
-    if (broker_fill_event_seq_ == std::numeric_limits<std::uint64_t>::max())
-        throw std::overflow_error("source broker fill sequence exhausted");
+    if (broker_fill_event_seq_ == std::numeric_limits<std::uint64_t>::max()) {
+        throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                         "source broker fill sequence exhausted");
+    }
     ++broker_fill_event_seq_;
     if (position_side_ != PositionSide::FLAT) {
         // ab9714be engine_orders.cpp:531-541: settle_position_after_partial_exit resets to flat when position_qty_ <= kQtyEpsilon or empty
@@ -1637,7 +1684,11 @@ bool source::PineStrategyHost::declare_security_sites_to_kernel() {
             result = declare_timeframe_subscriptions_result(declared);
         }
         if (result.status != NativeSetupStatus::Applied) {
-            throw std::runtime_error(
+            RunFailureArgs refused{{"reason", "kernel_refused_series"}};
+            if (const char* field = instrument_feed_field_name(result.validation.field))
+                refused.emplace_back("field", field);
+            throw coded<std::runtime_error>(
+                RunFailureCode::symbol_feeds_refused, refused,
                 "request.security: the kernel refused the symbol feed series (NativeRunSpecError "
                 + std::to_string(static_cast<int>(result.validation.error)) + ", field "
                 + std::to_string(static_cast<int>(result.validation.field)) + ")");

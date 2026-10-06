@@ -1,4 +1,5 @@
 #include <pineforge/compat/pine/exit_activation.hpp>
+#include <pineforge/run_failure.hpp>
 
 #include <cmath>
 #include <stdexcept>
@@ -11,7 +12,8 @@ ExitActivationPolicy::ExitActivationPolicy(ExitPlacementEvidence evidence)
     if (value.position_cycle <= 0 || value.entry_bar < 0
         || (value.direction != 1 && value.direction != -1)
         || !std::isfinite(value.cursor_price)) {
-        throw std::invalid_argument("invalid Pine exit placement evidence");
+        throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                           "invalid Pine exit placement evidence");
     }
 }
 

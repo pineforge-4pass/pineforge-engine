@@ -1,6 +1,7 @@
 #include <pineforge/timeframe.hpp>
 #include <pineforge/session_time.hpp>
 #include <pineforge/native_calendar.hpp>
+#include <pineforge/run_failure.hpp>
 #include "runtime_ambient.hpp"
 #include <cctype>
 #include <ctime>
@@ -10,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <stdexcept>
 
 namespace pineforge {
 
@@ -70,6 +72,27 @@ std::string detect_timeframe(const Bar* bars, int n, int max_samples) {
 
 // ─── TF string parsing ────────────────────────────────────────────────────────
 
+namespace {
+
+// std::stoi of a timeframe's count. A timeframe the script builds at run time
+// can fail it: the same exception type and text as ever, coded
+// pine_invalid_argument. Valid input takes exactly the path it always took.
+int timeframe_count(const std::string& text) {
+    try {
+        return std::stoi(text);
+    } catch (const std::invalid_argument& error) {
+        throw coded<std::invalid_argument>(
+            RunFailureCode::pine_invalid_argument,
+            {{"argument", "timeframe"}, {"rule", "unparseable"}}, error.what());
+    } catch (const std::out_of_range& error) {
+        throw coded<std::out_of_range>(
+            RunFailureCode::pine_invalid_argument,
+            {{"argument", "timeframe"}, {"rule", "unparseable"}}, error.what());
+    }
+}
+
+}  // namespace
+
 int tf_to_seconds(const std::string& tf) {
     if (tf.empty()) return 0;
 
@@ -83,14 +106,14 @@ int tf_to_seconds(const std::string& tf) {
     if (last == 'D') {
         // "D" or "1D" or "2D" etc.
         if (tf.size() == 1) return 86400;
-        int n = std::stoi(tf.substr(0, tf.size() - 1));
+        int n = timeframe_count(tf.substr(0, tf.size() - 1));
         return n * 86400;
     }
 
     if (last == 'W') {
         // "W" or "1W" etc.
         if (tf.size() == 1) return 604800;
-        int n = std::stoi(tf.substr(0, tf.size() - 1));
+        int n = timeframe_count(tf.substr(0, tf.size() - 1));
         return n * 604800;
     }
 
@@ -99,12 +122,12 @@ int tf_to_seconds(const std::string& tf) {
         // canonical meaning in Pine; reject by returning 0 so callers
         // treat it as a parse failure.
         if (tf.size() == 1) return 0;
-        int n = std::stoi(tf.substr(0, tf.size() - 1));
+        int n = timeframe_count(tf.substr(0, tf.size() - 1));
         return n;
     }
 
     // All-numeric: minutes
-    int minutes = std::stoi(tf);
+    int minutes = timeframe_count(tf);
     return minutes * 60;
 }
 

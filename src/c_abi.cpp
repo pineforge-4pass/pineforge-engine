@@ -9,6 +9,7 @@
  *     BEFORE shipping a .so that consumers depend on.
  *   - The runtime-library-side `extern "C"` symbols (the closed-trade
  *     incarnation accessor, setters, strategy_get_last_error,
+ *     strategy_get_last_error_code, strategy_get_last_error_args,
  *     the security-feed and symbol-data setters, the strategy_stream_* lifecycle,
  *     native stream bar input/action polling/fingerprint/API-version exports,
  *     the live-runtime surface (strategy_request_abort,
@@ -42,6 +43,7 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
 #include <pineforge/native_host.hpp>
+#include <pineforge/run_failure.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/magnifier.hpp>
 #include <cstddef>
@@ -68,11 +70,39 @@ void pf_cabi_void(Fn&& fn) noexcept {
     }
 }
 
+/* A refusal that escaped an int entry point as an exception: its what() and
+ * its run-failure code (run_failure.hpp) beside the handle, so a -1 reads
+ * back the reason through strategy_get_last_error / _code. A NULL handle has
+ * nowhere to keep it, and a handle whose run already failed keeps that run's
+ * own text and code. Never throws: it runs on the C boundary. */
+void note_cabi_refusal(pf_strategy_t s, const std::exception* error) noexcept {
+    if (!s) return;
+    try {
+        auto& engine = *static_cast<pineforge::BacktestEngine*>(s);
+        if (engine.last_run_status() != 0
+            && pineforge::run_failure_value_of(engine).code != pineforge::RunFailureCode::none) {
+            return;
+        }
+        if (error) {
+            pineforge::note_run_failure(engine, std::string(error->what()),
+                                        pineforge::classify_run_failure(*error));
+        } else {
+            pineforge::note_run_failure(engine, "unknown C++ exception",
+                                        pineforge::RunFailureCode::engine_unclassified_error);
+        }
+    } catch (...) {
+    }
+}
+
 template <typename Fn>
-int pf_cabi_int(Fn&& fn) noexcept {
+int pf_cabi_int(pf_strategy_t s, Fn&& fn) noexcept {
     try {
         return std::forward<Fn>(fn)();
+    } catch (const std::exception& error) {
+        note_cabi_refusal(s, &error);
+        return -1;
     } catch (...) {
+        note_cabi_refusal(s, nullptr);
         return -1;
     }
 }
@@ -106,7 +136,7 @@ pf_native_fx_curve_error_t fx_curve_error_word(
 int configure_native_fx_curve_cabi(
         pf_strategy_t s, const pf_native_fx_curve_v1* curve,
         pf_native_fx_curve_error_t* error, std::uint64_t* index) noexcept {
-    return pf_cabi_int([&] {
+    return pf_cabi_int(s, [&] {
         if (!s) return -1;
         auto* engine = static_cast<pineforge::BacktestEngine*>(s);
         if (!engine->native_bound()) return -1;
@@ -415,6 +445,21 @@ PF_API const char* strategy_get_last_error(pf_strategy_t s) {
     return static_cast<pineforge::BacktestEngine*>(s)->last_error().c_str();
 }
 
+/* The stable code of the failure strategy_get_last_error reports, and its
+ * arguments as canonical JSON (include/pineforge/run_failure.hpp): "" when the
+ * most recent run or setter recorded no failure, NULL only for a NULL handle.
+ * Static names and the record's own string: valid until the next run or
+ * setter, like the text. */
+PF_API const char* strategy_get_last_error_code(pf_strategy_t s) {
+    if (!s) return nullptr;
+    return pineforge::run_failure_code_of(*static_cast<pineforge::BacktestEngine*>(s));
+}
+
+PF_API const char* strategy_get_last_error_args(pf_strategy_t s) {
+    if (!s) return nullptr;
+    return pineforge::run_failure_args_of(*static_cast<pineforge::BacktestEngine*>(s));
+}
+
 PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms) {
     pf_cabi_void([&] {
         if (!s) return;
@@ -615,7 +660,7 @@ PF_API int strategy_stream_begin(pf_strategy_t s,
                                  int n_warmup,
                                  const char* input_tf,
                                  const char* script_tf) {
-    return pf_cabi_int([&] {
+    return pf_cabi_int(s, [&] {
         if (!s) return -1;
         auto* engine = static_cast<pineforge::BacktestEngine*>(s);
         if (n_warmup < 0 || (n_warmup > 0 && !warmup_bars)) {
@@ -641,7 +686,7 @@ PF_API int strategy_stream_begin(pf_strategy_t s,
 PF_API int strategy_stream_api_version(void) { return 1; }
 
 PF_API int strategy_stream_push_bar(pf_strategy_t s, const pf_bar_t* bar) {
-    return pf_cabi_int([&] {
+    return pf_cabi_int(s, [&] {
         if (!s || !bar) return -1;
         const pineforge::Bar native{bar->open, bar->high, bar->low,
                                      bar->close, bar->volume, bar->timestamp};
@@ -677,7 +722,7 @@ PF_API uint64_t strategy_stream_state_hash(pf_strategy_t s) {
 
 PF_API int strategy_stream_push_tick(pf_strategy_t s,
                                      const pf_trade_tick_t* tick) {
-    return pf_cabi_int([&] {
+    return pf_cabi_int(s, [&] {
         if (!s || !tick) return -1;
         const pineforge::TradeTick native{tick->timestamp, tick->sequence,
                                            tick->price, tick->quantity};
@@ -690,7 +735,7 @@ PF_API int strategy_stream_push_tick(pf_strategy_t s,
 PF_API int strategy_stream_push_ticks(pf_strategy_t s,
                                       const pf_trade_tick_t* ticks,
                                       int n) {
-    return pf_cabi_int([&] {
+    return pf_cabi_int(s, [&] {
         if (!s || n < 0 || (n > 0 && !ticks)) return -1;
         auto* engine = static_cast<pineforge::BacktestEngine*>(s);
         std::vector<pineforge::TradeTick> native;
@@ -704,7 +749,7 @@ PF_API int strategy_stream_push_ticks(pf_strategy_t s,
 }
 
 PF_API int strategy_stream_advance_time(pf_strategy_t s, int64_t timestamp_ms) {
-    return pf_cabi_int([&] {
+    return pf_cabi_int(s, [&] {
         if (!s) return -1;
         return static_cast<pineforge::BacktestEngine*>(s)
             ->stream_advance_time(timestamp_ms) ? 0 : -1;
@@ -712,7 +757,7 @@ PF_API int strategy_stream_advance_time(pf_strategy_t s, int64_t timestamp_ms) {
 }
 
 PF_API int strategy_stream_end(pf_strategy_t s, int finalize_partial_input_bar) {
-    return pf_cabi_int([&] {
+    return pf_cabi_int(s, [&] {
         if (!s) return -1;
         return static_cast<pineforge::BacktestEngine*>(s)
             ->stream_end(finalize_partial_input_bar != 0) ? 0 : -1;
@@ -720,7 +765,7 @@ PF_API int strategy_stream_end(pf_strategy_t s, int finalize_partial_input_bar) 
 }
 
 PF_API int strategy_stream_fill_report(pf_strategy_t s, pf_report_t* out) {
-    return pf_cabi_int([&] {
+    return pf_cabi_int(s, [&] {
         if (!s || !out) return -1;
         static_cast<pineforge::BacktestEngine*>(s)->fill_report(
             reinterpret_cast<pineforge::ReportC*>(out));
@@ -769,7 +814,7 @@ PF_API void strategy_set_syminfo_type(pf_strategy_t s, const char* type) {
  * for a NULL handle, unknown key or empty value. */
 PF_API int strategy_set_syminfo_string(pf_strategy_t s, const char* key,
                                        const char* value) {
-    return pf_cabi_int([&] {
+    return pf_cabi_int(s, [&] {
         if (!s || !key || !value) return -1;
         return static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_string(
                    std::string(key), std::string(value)) ? 0 : -1;
@@ -812,7 +857,7 @@ PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
 PF_API int strategy_set_account_currency_fx_series(
         pf_strategy_t s, const int64_t* effective_from_ms,
         const double* account_per_quote, int n) {
-    return pf_cabi_int([&] {
+    return pf_cabi_int(s, [&] {
         if (!s) return -1;
         return static_cast<pineforge::BacktestEngine*>(s)
                        ->set_account_currency_fx_series(
@@ -826,7 +871,7 @@ PF_API int strategy_set_aux_security_feed(pf_strategy_t s,
                                           const pf_bar_t* bars,
                                           int n,
                                           const char* input_tf) {
-    return pf_cabi_int([&] {
+    return pf_cabi_int(s, [&] {
         if (!s || n < 0 || (n > 0 && (!bars || !input_tf))) return -1;
         const auto* native = reinterpret_cast<const pineforge::Bar*>(bars);
         return static_cast<pineforge::BacktestEngine*>(s)
@@ -843,7 +888,7 @@ PF_API int strategy_set_native_security_feed(pf_strategy_t s,
                                              const char* timeframe,
                                              const pf_bar_t* bars,
                                              int n) {
-    return pf_cabi_int([&] {
+    return pf_cabi_int(s, [&] {
         if (!s || !timeframe || n < 0 || (n > 0 && !bars)) return -1;
         const auto* native = reinterpret_cast<const pineforge::Bar*>(bars);
         return static_cast<pineforge::BacktestEngine*>(s)
@@ -970,7 +1015,7 @@ PF_API int strategy_configure_native_fx_curve_ext_v1(
 #ifdef PINEFORGE_HAS_SYMBOL_FEED_V1
 PF_API int strategy_set_symbol_feed(pf_strategy_t s, const char* key, const char* timeframe,
                                     const pf_bar_t* bars, const int64_t* close_ms, int n) {
-    return pf_cabi_int([&] {
+    return pf_cabi_int(s, [&] {
         if (!s || !key || !timeframe || n < 0 || (n > 0 && (!bars || !close_ms))) return -1;
         const auto* native = reinterpret_cast<const pineforge::Bar*>(bars);
         return static_cast<pineforge::BacktestEngine*>(s)
@@ -985,7 +1030,7 @@ PF_API int strategy_set_symbol_feed(pf_strategy_t s, const char* key, const char
 PF_API int strategy_set_symbol_feed_column(pf_strategy_t s, const char* key,
                                            const char* timeframe, const char* name,
                                            const double* values, int n) {
-    return pf_cabi_int([&] {
+    return pf_cabi_int(s, [&] {
         if (!s || !key || !timeframe || !name || n < 0 || (n > 0 && !values)) return -1;
         return static_cast<pineforge::BacktestEngine*>(s)
                        ->set_symbol_feed_column(std::string(key), std::string(timeframe),
@@ -998,7 +1043,7 @@ PF_API int strategy_set_symbol_feed_column(pf_strategy_t s, const char* key,
 #ifdef PINEFORGE_HAS_SYMBOL_FACTS_V1
 PF_API int strategy_set_symbol_facts(pf_strategy_t s, const char* key, const char* field,
                                      const char* value) {
-    return pf_cabi_int([&] {
+    return pf_cabi_int(s, [&] {
         if (!s || !key || !field || !value) return -1;
         return static_cast<pineforge::BacktestEngine*>(s)
                        ->set_symbol_facts(std::string(key), std::string(field),
@@ -1012,7 +1057,7 @@ PF_API int strategy_set_symbol_facts(pf_strategy_t s, const char* key, const cha
 PF_API int strategy_set_recorded_series(pf_strategy_t s, const char* key,
                                         const int64_t* chart_open_ms, const double* values,
                                         int n) {
-    return pf_cabi_int([&] {
+    return pf_cabi_int(s, [&] {
         if (!s || !key || n < 0 || (n > 0 && (!chart_open_ms || !values))) return -1;
         return static_cast<pineforge::BacktestEngine*>(s)
                        ->set_recorded_series(std::string(key), chart_open_ms, values, n)

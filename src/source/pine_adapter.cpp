@@ -17,6 +17,7 @@
 #include "pine_quiet_bar.hpp"
 #include "../compat/pine/callback_lifecycle_rules.hpp"
 #include "pine_reissue_binding.hpp"
+#include "pine_run_failure.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -1003,7 +1004,8 @@ int PineExecutionAdapter::projection_bar_index(
 
 namespace {
 [[noreturn]] void refuse_unbound_adapter() {
-    throw std::logic_error("Pine execution adapter is not bound to a native host");
+    throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                  "Pine execution adapter is not bound to a native host");
 }
 }  // namespace
 
@@ -2535,6 +2537,127 @@ void PineExecutionAdapter::set_begin_mode(bool is_stream, bool bar_magnifier) no
     bar_magnifier_ = bar_magnifier;
 }
 
+const char* instrument_feed_field_name(NativeRunSpecField field) noexcept {
+    switch (field) {
+    case NativeRunSpecField::InstrumentFeedInstrument: return "instrument_feed_instrument";
+    case NativeRunSpecField::InstrumentFeedTimeframe: return "instrument_feed_timeframe";
+    case NativeRunSpecField::InstrumentFeedBars: return "instrument_feed_bars";
+    case NativeRunSpecField::InstrumentFeedClose: return "instrument_feed_close";
+    case NativeRunSpecField::InstrumentFeedColumns: return "instrument_feed_columns";
+    case NativeRunSpecField::SubscriptionInstrument: return "subscription_instrument";
+    default: return nullptr;
+    }
+}
+
+RunFailureValue run_spec_field_failure(NativeRunSpecField field) noexcept {
+    using F = NativeRunSpecField;
+    const char* symbol = nullptr;
+    const char* setting = nullptr;
+    const char* option = nullptr;
+    const char* feed = instrument_feed_field_name(field);
+    switch (field) {
+    case F::Ticker: symbol = "ticker"; break;
+    case F::TickerId: symbol = "ticker_id"; break;
+    case F::Type: symbol = "type"; break;
+    case F::Currency: symbol = "currency"; break;
+    case F::BaseCurrency: symbol = "base_currency"; break;
+    case F::Description: symbol = "description"; break;
+    case F::VolumeType: symbol = "volume_type"; break;
+    case F::Timezone: symbol = "timezone"; break;
+    case F::Session: symbol = "session"; break;
+    case F::ChartTimezone: symbol = "chart_timezone"; break;
+    case F::PointValue: symbol = "point_value"; break;
+    case F::AccountFx: symbol = "account_fx"; break;
+    case F::PriceTick: symbol = "price_tick"; break;
+    case F::QuantityGrid:
+        return make_run_failure(RunFailureCode::lot_grid_rejected, {});
+    case F::InitialCapital: setting = "initial_capital"; break;
+    case F::SlippageTicks: setting = "slippage_ticks"; break;
+    case F::FeeKind: setting = "fee_kind"; break;
+    case F::FeeValue: setting = "fee_value"; break;
+    case F::CloseExecution: setting = "close_execution"; break;
+    case F::MaxAbsUnits: setting = "max_abs_units"; break;
+    case F::MaxOpenLots: setting = "max_open_lots"; break;
+    case F::AllowedOpenDirections: setting = "allowed_open_directions"; break;
+    case F::InitialMarginFraction: setting = "initial_margin_fraction"; break;
+    case F::PriceGrid: setting = "price_grid"; break;
+    case F::GridRounding: setting = "grid_rounding"; break;
+    case F::MarginModel: setting = "margin_model"; break;
+    case F::MarginInitial: setting = "margin_initial"; break;
+    case F::MarginMaintenance: setting = "margin_maintenance"; break;
+    case F::MarginSizing: setting = "margin_sizing"; break;
+    case F::MarginShortfallMultiple: setting = "margin_shortfall_multiple"; break;
+    case F::MarginMinUnits: setting = "margin_min_units"; break;
+    case F::MarginCheck: setting = "margin_check"; break;
+    case F::MarginEquityBasis: setting = "margin_equity_basis"; break;
+    case F::MarginLevelBase: setting = "margin_level_base"; break;
+    case F::Calculation: setting = "calculation"; break;
+    case F::OpenBarView: setting = "open_bar_view"; break;
+    case F::RiskLimits: setting = "risk_limits"; break;
+    case F::RiskDrawdown: setting = "risk_drawdown"; break;
+    case F::RiskIntradayLoss: setting = "risk_intraday_loss"; break;
+    case F::RiskLossDays: setting = "risk_loss_days"; break;
+    case F::RiskFillsPerDay: setting = "risk_fills_per_day"; break;
+    case F::RiskDayBasis: setting = "risk_day_basis"; break;
+    case F::RiskAction: setting = "risk_action"; break;
+    case F::QuantityTolerance: setting = "quantity_tolerance"; break;
+    case F::InputTimeframe: option = "input_timeframe"; break;
+    case F::ScriptTimeframe: option = "script_timeframe"; break;
+    case F::IntrabarTimeframe: option = "intrabar_timeframe"; break;
+    case F::IntrabarSamples: option = "intrabar_samples"; break;
+    case F::IntrabarDistribution: option = "intrabar_distribution"; break;
+    case F::IntrabarVolumeSamples: option = "intrabar_volume_samples"; break;
+    case F::IntrabarSampleEligibility: option = "intrabar_sample_eligibility"; break;
+    case F::PathOrder: option = "path_order"; break;
+    // The other symbols' feeds the harness installed (strategy_set_symbol_feed):
+    // symbol_feeds_refused, named by instrument_feed_field_name above.
+    case F::InstrumentFeedInstrument:
+    case F::InstrumentFeedTimeframe:
+    case F::InstrumentFeedBars:
+    case F::InstrumentFeedClose:
+    case F::InstrumentFeedColumns:
+    case F::SubscriptionInstrument:
+        break;
+    // The fields the adapter builds itself: a refusal there is our bug.
+    case F::None:
+    case F::SessionKey:
+    case F::RunNumber:
+    case F::AbortReporting:
+    case F::TimeframeUndetected:
+    case F::SlotLabelPolicy:
+    case F::LegacyTolerance:
+    case F::ReportPolicy:
+    case F::SubscriptionTimeframe:
+    case F::SubscriptionBars:
+    case F::AuxiliaryFeedTimeframe:
+    case F::AuxiliaryFeedBars:
+    case F::SubscriptionSource:
+    case F::EventRetention:
+        break;
+    }
+    try {
+        if (symbol) {
+            return make_run_failure(RunFailureCode::symbol_metadata_rejected,
+                                    {{"field", symbol}});
+        }
+        if (setting) {
+            return make_run_failure(RunFailureCode::strategy_settings_rejected,
+                                    {{"field", setting}});
+        }
+        if (option) {
+            return make_run_failure(RunFailureCode::run_options_rejected,
+                                    {{"option", option}});
+        }
+        if (feed) {
+            return make_run_failure(RunFailureCode::symbol_feeds_refused,
+                                    {{"reason", "kernel_refused_series"}, {"field", feed}});
+        }
+    } catch (const std::bad_alloc&) {
+        return RunFailureValue{RunFailureCode::out_of_memory, nullptr};
+    }
+    return make_run_failure(RunFailureCode::engine_invariant, {});
+}
+
 NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
                                              const StagedConfiguration& staged,
                                              const NativeBeginArgs& args,
@@ -2542,7 +2665,8 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
                                              std::vector<NativeInstrumentFeed>* instrument_feeds) const {
     NativeRunSpec spec;
     if (run_counter_ == std::numeric_limits<std::uint64_t>::max()) {
-        throw std::overflow_error("Pine native run counter exhausted");
+        throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                         "Pine native run counter exhausted");
     }
     const std::string timezone = staged.syminfo.timezone.empty() ? "UTC" : staged.syminfo.timezone;
     const std::string session = staged.syminfo.session.empty() ? "24x7" : staged.syminfo.session;
@@ -2806,8 +2930,9 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     spec.event_retention = NativeEventRetention::Window;
     const auto validation = validate_native_run_spec(spec);
     if (!validation) {
-        throw std::logic_error("Pine adapter produced invalid native run spec field "
-                               + std::to_string(static_cast<unsigned>(validation.field)));
+        throw coded<std::logic_error>(run_spec_field_failure(validation.field),
+                                      "Pine adapter produced invalid native run spec field "
+                                      + std::to_string(static_cast<unsigned>(validation.field)));
     }
     return spec;
 }
@@ -2821,7 +2946,10 @@ native_order::CohortHandle PineExecutionAdapter::cohort_for(const SourceId& id) 
     if (found != cohorts_by_id_.end()) return found->second.handle;
     CohortFacts facts;
     facts.handle = require_host().cohort_open();
-    if (facts.handle.value == 0) throw std::logic_error("native cohort allocation refused");
+    if (facts.handle.value == 0) {
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "native cohort allocation refused");
+    }
     const auto result = facts.handle;
     cohorts_by_id_.emplace(id, std::move(facts));
     cohort_order_.push_back(id);
@@ -4275,7 +4403,8 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
     if (snapshot.command_ordinal == 0) snapshot.command_ordinal = ++command_ordinal_;
     if (snapshot.command_sequence == 0) {
         if (source_command_sequence_ == std::numeric_limits<std::uint64_t>::max()) {
-            throw std::overflow_error("Pine source command sequence exhausted");
+            throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                             "Pine source command sequence exhausted");
         }
         snapshot.command_sequence = ++source_command_sequence_;
     }
@@ -4349,7 +4478,8 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
     }
     if (auto* member = std::get_if<native_order::Member>(&request.group)) {
         if (source_sequence_ >= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
-            throw std::overflow_error("Pine OCA member sequence exhausted");
+            throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                             "Pine OCA member sequence exhausted");
         }
         // The generic group member's cohort distinguishes siblings. A source
         // OCA name identifies the group; every accepted source instruction is
@@ -4616,7 +4746,8 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
     }
     if (auto* member = std::get_if<native_order::Member>(&request.group)) {
         if (source_sequence_ >= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
-            throw std::overflow_error("Pine OCA member sequence exhausted");
+            throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                             "Pine OCA member sequence exhausted");
         }
         // The generic group member's cohort distinguishes siblings. A source
         // OCA name identifies the group; every accepted source instruction is
@@ -7713,7 +7844,8 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
             normalized_qty + flat_pending_opposite_market_units;
     }
     if (source_command_sequence_ == std::numeric_limits<std::uint64_t>::max()) {
-        throw std::overflow_error("Pine source command sequence exhausted");
+        throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                         "Pine source command sequence exhausted");
     }
     snapshot.command_sequence = ++source_command_sequence_;
     // Reuse the durable level tuple for the parent trigger facts.  A deferred
@@ -10432,7 +10564,8 @@ bool PineExecutionAdapter::standing_exit(const SourceId& exit_id,
 // be: no longer void, and queued from this call (exit_queue_rank).
 void PineExecutionAdapter::unvoid_exit(PlacementSnapshot& row) {
     if (source_sequence_ == std::numeric_limits<std::uint64_t>::max())
-        throw std::overflow_error("Pine source sequence exhausted");
+        throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                         "Pine source sequence exhausted");
     row.void_issue = false;
     row.chain_origin_sequence = ++source_sequence_;
 }
@@ -10782,7 +10915,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         flush_pending_same_bar_commands();
     }
     if (source_command_sequence_ == std::numeric_limits<std::uint64_t>::max()) {
-        throw std::overflow_error("Pine source command sequence exhausted");
+        throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                         "Pine source command sequence exhausted");
     }
     const std::uint64_t command_sequence = ++source_command_sequence_;
     // Trail point and offset operands are source tick counts, whereas the
@@ -11707,7 +11841,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             }
             if (defer_marketable_coof_stop) {
                 if (broker_open_epoch_ == std::numeric_limits<std::uint64_t>::max())
-                    throw std::overflow_error("source delayed market epoch exhausted");
+                    throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                                     "source delayed market epoch exhausted");
                 if (const auto point = detail::callback_point(require_host())) {
                     snapshot.projection_created_bar =
                         projection_bar_index(point->decision);
@@ -13882,7 +14017,8 @@ void PineExecutionAdapter::anchor_relative_exits() {
                     // counts down from minus one.
                     if (anchored_cohort_sequence_
                         == std::numeric_limits<std::int64_t>::max()) {
-                        throw std::overflow_error("Pine anchored OCA member sequence exhausted");
+                        throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                            "Pine anchored OCA member sequence exhausted");
                     }
                     member->cohort = -(++anchored_cohort_sequence_);
                 }
@@ -14405,7 +14541,8 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
     snapshot.forced_execution_price = finite_positive(risk_coof_forced_price)
         ? risk_coof_forced_price : coof_market_fill;
     if (source_command_sequence_ == std::numeric_limits<std::uint64_t>::max()) {
-        throw std::overflow_error("Pine source command sequence exhausted");
+        throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                         "Pine source command sequence exhausted");
     }
     snapshot.command_sequence = ++source_command_sequence_;
     snapshot.sizing = sizing_snapshot();
@@ -14417,7 +14554,8 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
     }
     if (delay_after_default_pair) {
         if (broker_open_epoch_ == std::numeric_limits<std::uint64_t>::max())
-            throw std::overflow_error("source delayed market epoch exhausted");
+            throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                             "source delayed market epoch exhausted");
         if (const auto point = detail::callback_point(require_host())) {
             snapshot.projection_created_bar = projection_bar_index(point->decision);
             snapshot.placement_script_open_ms = point->decision.script_bar_open_ms;
@@ -15492,7 +15630,10 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         // default_sizing_intent emits Sized only where that acceptance is
         // resolvable, so a missing quotient is a broken invariant (R5 N11).
         const auto* published = std::get_if<native_order::RemainingUnits>(&facts.remaining);
-        if (!published) throw std::logic_error("core-sized quantity without the core's quotient");
+        if (!published) {
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                          "core-sized quantity without the core's quotient");
+        }
         result.units = default_sizing_lot_floor(published->q);
         // A margin call that filled after the command, on its calculation's
         // bar, revised the source sizing to the equity after it
@@ -25297,7 +25438,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                     day_ledger_.last_loss_day = day;
                     if (day_ledger_.consecutive_loss_days
                         == std::numeric_limits<int>::max()) {
-                        throw std::overflow_error("closed trade counter exhausted");
+                        throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                                         "closed trade counter exhausted");
                     }
                     ++day_ledger_.consecutive_loss_days;
                 } else if (pnl > 0.0) {

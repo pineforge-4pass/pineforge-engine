@@ -136,6 +136,49 @@ def check_abi(lib: ctypes.CDLL) -> None:
             f"{EXPECTED_PF_ABI}; rebuild.")
 
 
+# A failure's stable code and arguments (engine 1.4.0+; an older .so has neither),
+# and whether the last run completed (strategy_last_run_status, ABI v4).
+def declare_error_code(lib: ctypes.CDLL) -> None:
+    for name in ("strategy_get_last_error_code", "strategy_get_last_error_args"):
+        if hasattr(lib, name):
+            getattr(lib, name).argtypes = [ctypes.c_void_p]
+            getattr(lib, name).restype = ctypes.c_char_p
+    if hasattr(lib, "strategy_last_run_status"):
+        lib.strategy_last_run_status.argtypes = [ctypes.c_void_p]
+        lib.strategy_last_run_status.restype = ctypes.c_int
+
+
+def error_code(lib: ctypes.CDLL, state) -> str:
+    """'<code> <args JSON>' of the last failure on state, or '' without one."""
+    if not hasattr(lib, "strategy_get_last_error_code"):
+        return ""
+    code = lib.strategy_get_last_error_code(state)
+    if not code:
+        return ""
+    args = (lib.strategy_get_last_error_args(state)
+            if hasattr(lib, "strategy_get_last_error_args") else None)
+    return f"{code.decode()} {args.decode() if args else '{}'}"
+
+
+def run_error(lib: ctypes.CDLL, state) -> str | None:
+    """'<text> (<code> <args JSON>)' when the run just made on state failed, else
+    None. A run failed when the engine reports a text, a code or a run status of 1
+    (strategy_last_run_status), as docker/run_json.py decides, so a script stopped
+    by runtime.error("") fails instead of printing a result."""
+    text = ""
+    if hasattr(lib, "strategy_get_last_error"):
+        raw = lib.strategy_get_last_error(state)
+        text = raw.decode("utf-8", "replace") if raw else ""
+    code = error_code(lib, state)
+    status = (lib.strategy_last_run_status(state)
+              if hasattr(lib, "strategy_last_run_status") else 0)
+    if not (text or code or status == 1):
+        return None
+    if not (text or code):
+        text = "the run did not complete and the engine reported no error"
+    return " ".join(part for part in (text, f"({code})" if code else "") if part)
+
+
 def main() -> int:
     if not SO.exists():
         sys.exit(f"strategy.so missing — run `bash tutorial/run.sh` first")
@@ -162,20 +205,18 @@ def main() -> int:
     if hasattr(lib, "strategy_get_last_error"):
         lib.strategy_get_last_error.argtypes = [ctypes.c_void_p]
         lib.strategy_get_last_error.restype  = ctypes.c_char_p
+    declare_error_code(lib)
 
     state, report = lib.strategy_create(b"{}"), ReportC()
     t0 = time.time()
     lib.run_backtest_full(state, bars, n, b"", b"", 0, 4, 3, ctypes.byref(report))
     elapsed = time.time() - t0
-    if hasattr(lib, "strategy_get_last_error"):
-        err_ptr = lib.strategy_get_last_error(state)
-        if err_ptr:
-            err_msg = err_ptr.decode("utf-8", "replace")
-            if err_msg:
-                lib.report_free(ctypes.byref(report))
-                lib.strategy_free(state)
-                print(f"engine error: {err_msg}", file=sys.stderr)
-                return 1
+    failure = run_error(lib, state)
+    if failure is not None:
+        lib.report_free(ctypes.byref(report))
+        lib.strategy_free(state)
+        print(f"engine error: {failure}", file=sys.stderr)
+        return 1
 
     pnls = [report.trades[i].pnl for i in range(report.trades_len)]
     wins, losses = sum(p > 0 for p in pnls), sum(p < 0 for p in pnls)

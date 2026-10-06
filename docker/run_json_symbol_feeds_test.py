@@ -47,7 +47,8 @@ class FakeLib:
 
 
 def fake_lib(setters=FEED_SETTERS, returns=None):
-    rets = {"pf_abi_version": run_json.EXPECTED_PF_ABI,
+    # strategy_create returns a handle: run_json refuses a NULL one before any setter.
+    rets = {"pf_abi_version": run_json.EXPECTED_PF_ABI, "strategy_create": ST,
             **{name: 0 for name in FEED_SETTERS}, **(returns or {})}
     return FakeLib(CORE + tuple(setters), rets)
 
@@ -335,7 +336,9 @@ def test_main_refuses_a_bad_index_with_one_structured_line_before_any_state(harn
     assert out.endswith("\n") and out.count("\n") == 1
     assert json.loads(out) == {"engine": "pineforge", "error":
                                '--symbol-feeds: a timeframe is whole minutes ("15", "240") '
-                               'or <n>D|W|M|S ("1D", "1W"), got "4h"'}
+                               'or <n>D|W|M|S ("1D", "1W"), got "4h"',
+                               "code": "symbol_feeds_refused",
+                               "args": {"reason": "timeframe_invalid"}}
     assert count(lib, "strategy_create") == count(lib, "run_backtest_full") == 0
 
 
@@ -345,6 +348,8 @@ def test_main_without_the_setters_fails_and_frees_the_state(harness, tmp_path):
     assert status == 1
     assert json.loads(out)["error"].startswith("--symbol-feeds: the strategy library has no "
                                                "strategy_set_symbol_facts, strategy_set_symbol_feed")
+    assert (json.loads(out)["code"], json.loads(out)["args"]) == (
+        "symbol_feeds_refused", {"reason": "library_without_symbol_feeds"})
     assert count(lib, "strategy_create") == count(lib, "strategy_free") == 1
     assert count(lib, "run_backtest_full") == 0
 

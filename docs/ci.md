@@ -1,11 +1,19 @@
 # Local verification and CI
 
-Start with the preflight used by GitHub Actions. Install actionlint 1.7.12
-and ShellCheck, then run:
+Start with the preflight used by GitHub Actions. Install actionlint 1.7.12,
+ShellCheck and pytest, then run:
 
 ```sh
+python3 -m venv .venv && . .venv/bin/activate
+python3 -m pip install --require-hashes --only-binary :all: -r scripts/requirements-preflight.txt
 python3 scripts/ci_preflight.py
 ```
+
+The pip line installs the pytest CI pins, with its dependencies, each by
+version and wheel hash, into a virtual environment: Homebrew's and Debian's
+Python refuse a system-wide install (PEP 668), and `.venv/` is ignored. The
+`run-json-harness-tests` stage runs every `docker/run_json_*_test.py` under it
+and fails, never skips, without it.
 
 This checks the CI/native workflow syntax, expressions and shell commands,
 source ABI/hash/schema guards, and the verifier's failure-handling tests. A
@@ -47,6 +55,16 @@ The two source-only benchmark CTest rows run the 25 harness unit tests and
 `933fe583`), so every checkout in `.github/workflows/ci.yml` but the `changes`
 job's fetches full Git history. A depth-1 checkout fails the provenance row
 even when the current benchmark files are correct.
+
+The run-failure source guards (`source-guard-run-failure-codes` and
+`source-guard-run-failure-diff`) read the newest release tag as well.
+`ci.yml`, `native-live.yml` and `release.yml` set
+`PINEFORGE_REQUIRE_RELEASE_TAGS=1` (any value but `0` or empty requires the
+tags), so in their jobs a checkout without that tag fails both guards. Without
+the variable -- a local clone without tags, a remote verifier's checkout --
+they hold the diff's `from` to the release `VERSION` names and rebuild the
+catalog that release published from the checked-in diff and its SHA-256
+instead ([Run-failure codes](pages/run-failure-codes.md)).
 
 ## Profiles
 

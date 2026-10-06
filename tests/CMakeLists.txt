@@ -4015,3 +4015,24 @@ foreach(_pf_slow_test IN LISTS PINEFORGE_PR_SLOW_TESTS)
         set_property(TEST ${_pf_slow_test} APPEND PROPERTY LABELS slow)
     endif()
 endforeach()
+
+# Stable run-failure codes (include/pineforge/run_failure.hpp) through real
+# generated strategies and the C ABI. tests/fixtures/run_failure_codes holds
+# each case's Pine source, its frozen codegen output and its provenance;
+# tests/run_failure_codes_strategies.hpp compiles every case into this one
+# translation unit, each in a namespace of its own with its C entry points
+# prefixed. The test also reads the published catalog
+# (docker/run_failure_codes.json) and holds the library's registry to it.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_executable(test_run_failure_codes test_run_failure_codes.cpp)
+    target_link_libraries(test_run_failure_codes PRIVATE pineforge)
+    target_compile_options(test_run_failure_codes PRIVATE -UNDEBUG -ffp-contract=off
+        -Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-parameter
+        -Wno-unused-function -Wno-sign-compare)
+    target_compile_definitions(test_run_failure_codes PRIVATE
+        PINEFORGE_RUN_FAILURE_CATALOG="${PROJECT_SOURCE_DIR}/docker/run_failure_codes.json")
+    if(PINEFORGE_ENABLE_COVERAGE)
+        target_compile_options(test_run_failure_codes PRIVATE ${_pf_cov_test_flags})
+    endif()
+    add_test(NAME test_run_failure_codes COMMAND test_run_failure_codes)
+endif()

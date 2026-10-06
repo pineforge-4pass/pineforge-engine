@@ -60,11 +60,11 @@ Three layers:
 
 ## Symbol inventory
 
-A built strategy `.so` exposes 70 compiled-strategy `PF_API` declarations
-(62 runtime implementations plus eight generated exports) plus 43 native-host
-declarations: 113 `PF_API` exports in total; a script that declares
+A built strategy `.so` exposes 80 compiled-strategy `PF_API` declarations
+(64 runtime implementations plus sixteen generated exports) plus 43 native-host
+declarations: 123 `PF_API` exports in total; a script that declares
 `use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, the
-71st declaration of `pineforge.h`. `nm -gU` also reports libc++'s
+81st declaration of `pineforge.h`. `nm -gU` also reports libc++'s
 `std::piecewise_construct`; no project-internal C++ symbol is exported. The grouped table below is a guide,
 not the complete inventory:
 
@@ -96,12 +96,14 @@ not the complete inventory:
 | `strategy_set_account_currency_fx_series` | @ref pf_config |
 | `strategy_configure_native_fx_curve_v1` | @ref pf_lifecycle |
 | `strategy_get_last_error` | Diagnostics |
+| `strategy_get_last_error_code` | Diagnostics (@ref run_failure_codes) |
+| `strategy_get_last_error_args` | Diagnostics (@ref run_failure_codes) |
 | `pf_version_get` | @ref pf_version |
 | `pf_abi_version` | @ref pf_version |
 | `pf_version_string` | @ref pf_version |
 
-Eight per-strategy exports include the five create/run/free lifecycle
-functions. The remaining 62 runtime implementations, including the
+Sixteen per-strategy exports include the five create/run/free lifecycle
+functions. The remaining 64 runtime implementations, including the
 closed-trade incarnation accessor, are force-linked into each strategy library,
 so consumers resolve the same complete ABI from the strategy `.so`. All
 additions remain covered by the minor-version append-only guarantee.

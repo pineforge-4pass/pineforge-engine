@@ -32,7 +32,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from run_strategy import (  # noqa: E402
     BarC, ReportC, Strategy, TradeTickC, _report_to_dict,
-    _VALIDATION_META_KEYS,
+    _VALIDATION_META_KEYS, _run_failure_text, _with_run_failure_code,
 )
 
 DEFAULT_DATA_ROOT = Path("/Volumes/PineforgeData/binance_ethusdtp_1y")
@@ -187,7 +187,8 @@ def configure_state(strategy: Strategy, state, config: dict) -> None:
 def engine_error(strategy: Strategy, state, operation: str) -> RuntimeError:
     raw = strategy.lib.strategy_get_last_error(state)
     message = raw.decode("utf-8", "replace") if raw else "unknown engine error"
-    return RuntimeError(f"{operation}: {message}")
+    return _with_run_failure_code(RuntimeError(f"{operation}: {message}"),
+                                  strategy.lib, state)
 
 
 def run_batch(strategy: Strategy, bars, n: int, config: dict) -> dict:
@@ -200,11 +201,12 @@ def run_batch(strategy: Strategy, bars, n: int, config: dict) -> dict:
             state, bars, n,
             config["input_tf"].encode(), config["script_tf"].encode(),
             0, 4, 3, ctypes.byref(report))
-        raw = lib.strategy_get_last_error(state)
-        if raw:
-            message = raw.decode("utf-8", "replace")
-            if message:
-                raise RuntimeError("batch run: " + message)
+        # A text, a code or a run status of 1 fails the run (run_strategy's rule,
+        # docker/run_json.py's): runtime.error("") is not a result.
+        failure = _run_failure_text(lib, state)
+        if failure is not None:
+            raise _with_run_failure_code(
+                RuntimeError("batch run" + (f": {failure}" if failure else "")), lib, state)
         return _report_to_dict(report)
     finally:
         lib.report_free(ctypes.byref(report))
@@ -376,6 +378,13 @@ def main() -> int:
         except Exception as exc:  # corpus sweep records failures and continues
             item["status"] = "error"
             item["error"] = str(exc)
+            if getattr(exc, "run_failure_code", None):
+                # The engine's code beside its text (engine 1.4.0+).
+                item["error_code"] = exc.run_failure_code
+                try:
+                    item["error_args"] = json.loads(exc.run_failure_args)
+                except ValueError:
+                    item["error_args"] = {}
         results.append(item)
         if index % 20 == 0 or index == len(cases):
             print(f"[{index}/{len(cases)}]", flush=True)

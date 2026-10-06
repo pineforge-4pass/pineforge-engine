@@ -13,7 +13,7 @@ import ctypes
 import sys
 from datetime import datetime, timezone
 
-from run import BarC, OHLCV, ReportC, SO, check_abi
+from run import BarC, OHLCV, ReportC, SO, check_abi, declare_error_code, error_code
 
 LIVE_BARS = 32
 INPUT_TF_MS = 15 * 60 * 1000
@@ -32,7 +32,9 @@ class TradeTickC(ctypes.Structure):
 
 def error_message(lib: ctypes.CDLL, state: int) -> str:
     raw = lib.strategy_get_last_error(state)
-    return raw.decode("utf-8", "replace") if raw else "unknown engine error"
+    code = error_code(lib, state)
+    return ((raw.decode("utf-8", "replace") if raw else "unknown engine error")
+            + (f" ({code})" if code else ""))
 
 
 def check_call(lib: ctypes.CDLL, state: int, status: int, operation: str) -> None:
@@ -85,6 +87,7 @@ def main() -> int:
     lib.report_free.argtypes = [ctypes.POINTER(ReportC)]
     lib.strategy_get_last_error.argtypes = [ctypes.c_void_p]
     lib.strategy_get_last_error.restype = ctypes.c_char_p
+    declare_error_code(lib)
     lib.strategy_stream_begin.argtypes = [
         ctypes.c_void_p, ctypes.POINTER(BarC), ctypes.c_int,
         ctypes.c_char_p, ctypes.c_char_p]

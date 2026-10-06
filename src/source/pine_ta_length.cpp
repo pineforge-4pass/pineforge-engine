@@ -7,6 +7,7 @@
 
 #include <pineforge/source/pine_ta_length.hpp>
 #include <pineforge/na.hpp>
+#include <pineforge/run_failure.hpp>
 
 #include <algorithm>
 #include <climits>
@@ -30,15 +31,21 @@ std::string bar_prefix() {
 
 [[noreturn]] void length_not_positive(long long value, const char* function,
                                       const char* argument) {
-    throw std::runtime_error(bar_prefix() + "Invalid value of the '" + argument +
-                             "' argument (" + std::to_string(value) + ") in the '" +
-                             function + "' function. It must be > 0.");
+    throw coded<std::runtime_error>(
+        RunFailureCode::pine_invalid_argument,
+        {{"function", function}, {"argument", argument}, {"rule", "must_be_positive"}},
+        bar_prefix() + "Invalid value of the '" + argument +
+            "' argument (" + std::to_string(value) + ") in the '" +
+            function + "' function. It must be > 0.");
 }
 
 [[noreturn]] void length_na(const char* function, const char* argument) {
-    throw std::runtime_error(bar_prefix() + "Invalid value of the '" + argument +
-                             "' argument in the '" + function +
-                             "' function. It must not be na");
+    throw coded<std::runtime_error>(
+        RunFailureCode::pine_invalid_argument,
+        {{"function", function}, {"argument", argument}, {"rule", "must_not_be_na"}},
+        bar_prefix() + "Invalid value of the '" + argument +
+            "' argument in the '" + function +
+            "' function. It must not be na");
 }
 
 // A Pine int length carried as a double: na stays na, anything else
@@ -59,8 +66,11 @@ bool length_value(double value, long long& out) {
     } else {
         std::snprintf(text, sizeof text, "%.15g", factor);
     }
-    throw std::runtime_error(bar_prefix() + "Invalid value of the 'factor' argument (" + text +
-                             ") in the 'supertrend' function. It must be > 0.");
+    throw coded<std::runtime_error>(
+        RunFailureCode::pine_invalid_argument,
+        {{"function", "supertrend"}, {"argument", "factor"}, {"rule", "must_be_positive"}},
+        bar_prefix() + "Invalid value of the 'factor' argument (" + text +
+            ") in the 'supertrend' function. It must be > 0.");
 }
 
 }  // namespace
@@ -166,7 +176,9 @@ SeriesWindowExtreme::Result SeriesWindowExtreme::update(double src, long long le
 
     if (length <= 0) length_not_positive(length, function, "length");
     if (length - 1 > kMaxBarsBack) {
-        throw std::runtime_error(
+        throw coded<std::runtime_error>(
+            RunFailureCode::pine_runtime_limit,
+            {{"limit", "max_bars_back"}, {"max", kMaxBarsBack}},
             bar_prefix() +
             "The script attempts to reference historical data that is too far from "
             "the current bar (" + std::to_string(length - 1) +

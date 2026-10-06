@@ -1,0 +1,7 @@
+//@version=6
+strategy("R5 request.security finer than the input", overlay = true)
+fine = request.security(syminfo.tickerid, "1", close)
+if close > nz(fine)
+    strategy.entry("L", strategy.long)
+else
+    strategy.close("L")

@@ -1,0 +1,20 @@
+//@version=6
+strategy("R5 generated stops through the run-failure helpers", overlay = true)
+stopCase = input.int(0, "Case")
+revenue = request.financial("NASDAQ:AAPL", "TOTAL_REVENUE", "FQ")
+eth = request.security("BINANCE:ETHUSDT", "60", close)
+other = request.security(input.symbol("BINANCE:SOLUSDT", "Other"), "60", close)
+sales = request.financial("NASDAQ:MSFT", "TOTAL_REVENUE", "FY")
+if bar_index == 2
+    if stopCase == 1 and revenue > 0
+        strategy.entry("A", strategy.long)
+    if stopCase == 2 and eth > 0
+        strategy.entry("B", strategy.long)
+    if stopCase == 3 and other > 0
+        strategy.entry("C", strategy.long)
+    if stopCase == 4 and sales > 0
+        strategy.entry("D", strategy.long)
+if bar_index % 2 == 0
+    strategy.entry("L", strategy.long)
+else
+    strategy.close("L")

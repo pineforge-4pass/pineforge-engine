@@ -1,0 +1,26 @@
+{
+  "synthetic": true,
+  "authored_for": "tests/test_run_failure_codes.cpp (stable run-failure codes, R5)",
+  "drives": "A request.security of another symbol (its feed installed, empty) on a chart aggregated from finer input -> symbol_feeds_refused {reason: chart_input_aggregated, input_tf, script_tf}, refused while the script is prepared (lifecycle completes, status 0)",
+  "run": "strategy_set_symbol_feed(\"BINANCE:ETHUSDT\", \"60\", NULL, NULL, 0); 60 one-minute bars, input_tf \"1\" script_tf \"5\"",
+  "strategy_pine_sha256": "058e0a6ad1d1c0edd957b1a4aa7bd42aecdcf708eca8fdd97248e0ec43483de4",
+  "generated_cpp": {
+    "repository": "pineforge-codegen-oss",
+    "commit": "cb5eb9402dc96eea1bcfa84fd245dea3c1807688",
+    "version_file": "1.2.0",
+    "call": "pineforge_codegen.transpile(<strategy.pine text>, filename=\"strategy.pine\")",
+    "sha256": "faf789b5de2b733489c85f218c6419873a70bd98ee9e7bbe838c23344371b7a9",
+    "hand_edited": false
+  },
+  "base_engine": {
+    "commit": "7a1f01c0",
+    "rows": [
+      {
+        "row": "foreign_chart_input_aggregated",
+        "strategy_get_last_error": "request.security of another symbol needs the chart's own bars as input; input '1' aggregated to chart '5' is not supported",
+        "strategy_last_run_status": 0,
+        "report_total_trades": 0
+      }
+    ]
+  }
+}

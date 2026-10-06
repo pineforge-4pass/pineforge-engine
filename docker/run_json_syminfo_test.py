@@ -67,7 +67,9 @@ def write(tmp_path, doc, name="syminfo.json"):
 
 
 def fake_lib(setters=SETTERS):
-    return FakeLib(CORE + tuple(setters), {"pf_abi_version": run_json.EXPECTED_PF_ABI})
+    # strategy_create returns a handle: run_json refuses a NULL one before any setter.
+    return FakeLib(CORE + tuple(setters), {"pf_abi_version": run_json.EXPECTED_PF_ABI,
+                                           "strategy_create": ST})
 
 
 @pytest.mark.parametrize("doc,lot", [
@@ -216,7 +218,8 @@ def test_main_rejects_a_bad_mincontract_with_one_structured_line(harness, extra)
     lib = fake_lib()
     status, out = harness(lib, *extra, syminfo=dict(FOUR, mincontract=-1))
     assert status == 1
-    assert out == '{"engine":"pineforge","error":"' + BAD_LOT + '-1"}\n'
+    assert out == ('{"engine":"pineforge","error":"' + BAD_LOT + '-1",'
+                   '"code":"lot_grid_rejected","args":{}}\n')
     assert count(lib, "run_backtest_full") == 0
     assert count(lib, "strategy_create") == count(lib, "strategy_free") == 1
 
@@ -226,6 +229,9 @@ def test_main_with_a_grid_and_no_metadata_setter_fails(harness):
     assert status == 1
     assert json.loads(out)["error"].startswith(
         "the strategy library has no strategy_set_syminfo_metadata")
+    assert json.loads(out)["code"] == "strategy_library_incompatible"
+    assert json.loads(out)["args"] == {"reason": "setter_missing",
+                                       "missing": "strategy_set_syminfo_metadata"}
 
 
 @pytest.mark.parametrize("value", [None, True], ids=["None", "True"])

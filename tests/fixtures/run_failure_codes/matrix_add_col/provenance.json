@@ -1,0 +1,26 @@
+{
+  "synthetic": true,
+  "authored_for": "tests/test_run_failure_codes.cpp (stable run-failure codes, R5)",
+  "drives": "matrix.add_col on an empty matrix<int> (a std::logic_error, which the type fallback would read as engine_invariant) -> pine_matrix_error {function: matrix.add_col, reason: empty_matrix}",
+  "run": "60 one-minute bars, input_tf \"1\" script_tf \"1\"",
+  "strategy_pine_sha256": "96d032b35768ca82797789eeef4af01351dca89d248d6a3e07a3723b92a45638",
+  "generated_cpp": {
+    "repository": "pineforge-codegen-oss",
+    "commit": "cb5eb9402dc96eea1bcfa84fd245dea3c1807688",
+    "version_file": "1.2.0",
+    "call": "pineforge_codegen.transpile(<strategy.pine text>, filename=\"strategy.pine\")",
+    "sha256": "f4440b35bf6bc620cddc9a0260a96d06344c445787a1d86c002e2107d4365653",
+    "hand_edited": false
+  },
+  "base_engine": {
+    "commit": "7a1f01c0",
+    "rows": [
+      {
+        "row": "matrix_add_col_empty",
+        "strategy_get_last_error": "matrix.add_col on empty matrix: use add_row first",
+        "strategy_last_run_status": 1,
+        "report_total_trades": 1
+      }
+    ]
+  }
+}

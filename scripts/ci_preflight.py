@@ -476,6 +476,20 @@ def docs_workflow_self_test(workflow: str) -> int:
     return 0
 
 
+RUN_JSON_TESTS = 'run_json_*_test.py'
+
+
+def run_json_harness_command(source: Path) -> list[str]:
+    """pytest over every docker/run_json_*_test.py, found when the plan is built
+    (a new one is never forgotten); -B and no cacheprovider leave the checkout
+    clean. A missing pytest is an import error, so the stage fails, never
+    skips. With no file found the argv names the pattern itself, which pytest
+    refuses (file not found), instead of collecting the whole tree."""
+    tests = sorted(str(path) for path in (source / 'docker').glob(RUN_JSON_TESTS))
+    return [sys.executable, '-B', '-m', 'pytest', '-q', '-p', 'no:cacheprovider',
+            '--rootdir', str(source), *(tests or [str(source / 'docker' / RUN_JSON_TESTS)])]
+
+
 def check_commands(source: Path) -> list[tuple]:
     return [
         ('shellcheck-version', ['shellcheck', '--version']),
@@ -523,6 +537,17 @@ def check_commands(source: Path) -> list[tuple]:
          [sys.executable, str(source / 'scripts/test_report_schema_keys.py')]),
         ('release-version-tests',
          [sys.executable, str(source / 'scripts/test_release_version.py')]),
+        # R5 run-failure codes: the catalog diff release.yml stamps is a tested
+        # script, and the code tables of docs/pages/run-failure-codes.md are
+        # generated from the catalog it diffs.
+        ('run-failure-diff-tests',
+         [sys.executable, str(source / 'scripts/test_gen_run_failure_catalog_diff.py')]),
+        # R5 run-failure codes: docker/run_json.py's failure line, its own codes
+        # held to docker/run_failure_codes.json, and the syminfo, symbol-feed
+        # and diagnostics harness paths. The tests need pytest: CI installs
+        # scripts/requirements-preflight.txt (pytest 9.1.1, the remote
+        # verifier's), and without it the stage fails.
+        ('run-json-harness-tests', run_json_harness_command(source)),
         # Lane pf-ci-docs: ci.yml skips its proof jobs on a documentation-only
         # change, and scripts/ci_docs_only.py's rule decides which that is.
         ('docs-only-tests',

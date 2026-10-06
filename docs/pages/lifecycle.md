@@ -183,6 +183,15 @@ The one-shot `run_backtest*` calls return through
 success and `-1` on failure. In both cases, read
 #strategy_get_last_error for the detailed message.
 
+Beside the message, #strategy_get_last_error_code names the failure with a
+stable code from a closed vocabulary, `""` exactly when the most recent run or
+setter recorded none, and #strategy_get_last_error_args gives its typed
+arguments as canonical JSON. Decide that a run failed from the code, not from
+the message: a script stopped by `runtime.error()` with an empty message fails
+with the message `""` and the code `strategy_runtime_error`. Both have the
+message's lifetime. [Run-failure codes](@ref run_failure_codes) lists every
+code and its rules.
+
 - **Allocation failure** in `strategy_create` returns `NULL`. Always check.
 - **Empty bar feed** (`n == 0`) is valid — the report is filled with zero
   counts and an empty trade list.

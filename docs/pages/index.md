@@ -135,9 +135,9 @@ directly, so a Pine-layer symbol reaching one is a link error.
 
 ## API at a glance
 
-The public C surface is **122 `PF_API` declarations** across two headers:
+The public C surface is **124 `PF_API` declarations** across two headers:
 
-- `<pineforge/pineforge.h>` — **79**: 62 runtime implementations plus seventeen
+- `<pineforge/pineforge.h>` — **81**: 64 runtime implementations plus seventeen
   per-strategy generated exports (`strategy_declares_bar_magnifier` only in a
   script that declares `use_bar_magnifier = true`). This is what a compiled
   strategy `.so` exports and what a harness calls. Older modules lack the six
@@ -148,7 +148,7 @@ The public C surface is **122 `PF_API` declarations** across two headers:
   execute, read the book, read the lots. Additive: no symbol, struct or
   behaviour of the first set changes.
 
-`scripts/check_c_abi_runtime.py` pins both symbol inventories (79 and 43);
+`scripts/check_c_abi_runtime.py` pins both symbol inventories (81 and 43);
 `scripts/check_native_c_api_surface.py` separately pins the host COVERAGE block.
 
 | Group | Symbols | Reference |
@@ -157,14 +157,14 @@ The public C surface is **122 `PF_API` declarations** across two headers:
 | Streaming | `strategy_stream_begin`, `strategy_stream_push_tick`, `strategy_stream_push_ticks`, `strategy_stream_advance_time`, `strategy_stream_end`, `strategy_stream_fill_report` | @ref pf_streaming |
 | Live runtime (ABI v4) | `strategy_request_abort`, `strategy_set_realtime_tail`, `strategy_set_probe_suppress_tail_logic`, `strategy_set_path_order`, the broker-state hash, the pending-order mirror, closed-trade id/comment/close-cause, position and equity accessors — 24 default-off exports | @ref pf_live |
 | Configuration | Inputs, strategy overrides, tracing, trade start, chart / symbol timezone, session, tick size, point value, numeric metadata, and timestamped account-currency FX | @ref pf_config |
-| Diagnostics | `strategy_get_last_error` | #strategy_get_last_error |
+| Diagnostics | `strategy_get_last_error`, `strategy_get_last_error_code`, `strategy_get_last_error_args` | @ref run_failure_codes |
 | Version | `pf_version_get`, `pf_abi_version`, `pf_version_string` | @ref pf_version |
 | Types | `pf_bar_t`, `pf_trade_tick_t`, `pf_trade_t`, `pf_report_t`, metrics, diagnostics, trace, equity, version, and `pf_magnifier_distribution_t` | @ref pf_types |
 | Native kernel host (C) | `strategy_native_host_create_v1`, `strategy_native_run_v1`, the submit / replace / cancel family, the position, working-book, open-lot, event and state reads, the cohort and subscription calls, and `strategy_configure_native_ext_v1` / `_result_v1` | `native_c_api.h` |
 
-A newly generated PineForge strategy `.so` exports 119 `PF_API` symbols (76 compiled-strategy
+A newly generated PineForge strategy `.so` exports 123 `PF_API` symbols (80 compiled-strategy
 declarations plus 41 `strategy_native_*` declarations and two
-`strategy_configure_native_ext_*` declarations; 120 with
+`strategy_configure_native_ext_*` declarations; 124 with
 `strategy_declares_bar_magnifier` in a script that declares the magnifier) and the toolchain
 `std::piecewise_construct` symbol; no project-internal C++ symbol is exported — see
 **[ABI stability](@ref abi_stability)** for the full guarantee.
@@ -225,6 +225,7 @@ Build the generated strategy module with the repository recipe (or
 | [Strategy lifecycle](@ref lifecycle) | Handle ownership, run reuse and report freeing. |
 | [Configuration](@ref configuration) | Inputs, `strategy()` overrides, the bar magnifier, trace recording and the trade-start gate. |
 | [Report schema](@ref report_schema) | `pf_report_t` field by field, including the equity curve. |
+| [Run-failure codes](@ref run_failure_codes) | The stable code and typed arguments beside a failed run's text: the getters, the rules, every code, and the catalog and per-release diff each release publishes. |
 | [Trading metrics reference](@ref metrics) | Every `pf_metrics_t` field: units, NaN rules, validation status. |
 | [ABI stability](@ref abi_stability) | The append-only guarantee, and the internal C++ epochs behind it. |
 | [Public contract for 1.0](@ref public_contract) | What the version number promises from 1.0.0: the C ABI, the native C++ API, the script ABI epoch, the C-surface boundary, and the pairing with codegen. |

@@ -34,10 +34,12 @@
 
 #include <pineforge/native_host.hpp>
 #include <pineforge/pineforge.h>
+#include <pineforge/run_failure.hpp>
 
 #include <cstddef>
 #include <cstring>
 #include <exception>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -81,21 +83,27 @@ static_assert(offsetof(pf_report_t, broker_state_hash) == offsetof(ReportC, brok
               "pf_report_t::broker_state_hash offset mismatch");
 
 /// The one class the macro instantiates: the host plus the module boundary.
-/// Deriving is deliberate — `last_error_` is protected engine state, and only
-/// a derived class may write it.
+/// Deriving is deliberate — `last_error_` is protected engine state, written
+/// here only through note_run_failure (run_failure.hpp), with its code.
 template <typename Host>
 class Module final : public Host {
     static_assert(std::is_base_of<NativeStrategyHost, Host>::value,
                   "PINEFORGE_EXPORT_NATIVE_STRATEGY requires a NativeStrategyHost subclass");
 
 public:
-    /// Presentation text for `strategy_get_last_error`. Never throws: it runs
-    /// on the C boundary, often from a catch handler.
-    void note_error(const char* text) noexcept {
+    /// Presentation text for `strategy_get_last_error`, written with its run
+    /// failure code (`strategy_get_last_error_code`) so the two never
+    /// disagree. Never throws: it runs on the C boundary, often from a catch
+    /// handler.
+    void note_error(const char* text, const RunFailureValue& value) noexcept {
         try {
-            this->last_error_ = text ? text : "";
+            note_run_failure(*this, std::string(text ? text : ""), value);
         } catch (...) {
         }
+    }
+    /// The text alone, as before run-failure codes: engine_unclassified_error.
+    void note_error(const char* text) noexcept {
+        note_error(text, RunFailureValue{RunFailureCode::engine_unclassified_error, nullptr});
     }
 };
 
@@ -109,21 +117,34 @@ Module<Host>* as_module(pf_strategy_t strategy) {
 }
 
 template <typename Host>
-void note_error(pf_strategy_t strategy, const char* text) {
-    if (auto* module = as_module<Host>(strategy)) module->note_error(text);
+void note_error(pf_strategy_t strategy, const char* text, const RunFailureValue& value) {
+    if (auto* module = as_module<Host>(strategy)) module->note_error(text, value);
 }
 
-/// Runs `fn` and converts any escaping exception into presentation text. C
-/// callers have no exception channel, so nothing may propagate past here.
+/// The code of an exception no coded site raised: engine_unclassified_error.
+inline RunFailureValue unclassified_failure() noexcept {
+    return RunFailureValue{RunFailureCode::engine_unclassified_error, nullptr};
+}
+
+/// The text alone, as before run-failure codes: engine_unclassified_error.
+template <typename Host>
+void note_error(pf_strategy_t strategy, const char* text) {
+    note_error<Host>(strategy, text, unclassified_failure());
+}
+
+/// Runs `fn` and converts any escaping exception into presentation text and
+/// its code. C callers have no exception channel, so nothing may propagate
+/// past here.
 template <typename Host, typename Fn>
 void guarded(pf_strategy_t strategy, Fn&& fn) {
     if (!strategy) return;
     try {
         fn();
     } catch (const std::exception& error) {
-        note_error<Host>(strategy, error.what());
+        note_error<Host>(strategy, error.what(), classify_run_failure(error));
     } catch (...) {
-        note_error<Host>(strategy, "native host refuses source mutation");
+        note_error<Host>(strategy, "native host refuses source mutation",
+                         unclassified_failure());
     }
 }
 
@@ -228,9 +249,9 @@ void run_batch(pf_strategy_t strategy, pf_bar_t* bars, int count,
         }
         publish_report(engine, out);
     } catch (const std::exception& error) {
-        note_error<Host>(strategy, error.what());
+        note_error<Host>(strategy, error.what(), classify_run_failure(error));
     } catch (...) {
-        note_error<Host>(strategy, "native module C batch failed");
+        note_error<Host>(strategy, "native module C batch failed", unclassified_failure());
     }
 }
 
@@ -249,7 +270,12 @@ void run_backtest_full(pf_strategy_t strategy, pf_bar_t* bars, int count,
     if (magnifier_unsupported(bar_magnifier, magnifier_samples, magnifier_distribution)) {
         // Wrapper preflight only: the output report is left untouched and the
         // host stays Ready, so the caller may retry with supported arguments.
-        note_error<Host>(strategy, "native module refuses unsupported magnifier arguments");
+        try {
+            note_error<Host>(strategy, "native module refuses unsupported magnifier arguments",
+                             make_run_failure(RunFailureCode::run_options_rejected,
+                                              {{"option", "magnifier"}}));
+        } catch (...) {
+        }
         return;
     }
     run_batch<Host>(strategy, bars, count, input_tf, script_tf, true, out);
