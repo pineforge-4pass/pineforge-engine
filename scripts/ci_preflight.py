@@ -62,6 +62,34 @@ BUILD_STRATEGY = ('    strategy:\n'
                   '          - os: macos-26\n'
                   '            larger_runner: macos-26-xlarge\n')
 BUILD_NAME = 'build (${{ matrix.os }}, ${{ matrix.build_type }})'
+NATIVE_STRATEGY = '''    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: native
+            build_dir: build-live
+            job_minutes: 75
+            verify_minutes: 65
+            test_timeout: 2100
+            ctest_timeout: 2400
+          - profile: live-sanitizers
+            build_dir: build-live-sanitizers
+            job_minutes: 45
+            verify_minutes: 35
+            test_timeout: 900
+            ctest_timeout: 1200
+          - profile: live-tsan
+            build_dir: build-live-tsan
+            job_minutes: 45
+            verify_minutes: 35
+            test_timeout: 900
+            ctest_timeout: 1200
+'''
+NATIVE_EXCLUSION = "${{ matrix.profile == 'native' && inputs.exclude_slow && '--exclude-label slow' || '' }}"
+NATIVE_CACHE_SAVE = ("${{ !cancelled() && !inputs.cold_cache && steps.verify.outcome != 'skipped' "
+                     "&& steps.ccache-restore.outputs.cache-hit != 'true' }}")
+CURL_CACHE_SAVE = ("${{ inputs.cold-cache != 'true' && steps.curl-build.outcome == 'success' "
+                   "&& steps.curl-cache.outputs.cache-hit != 'true' }}")
 # Build and CTest parallelism is the core count of whichever runner took the job.
 CORES = '"$(getconf _NPROCESSORS_ONLN)"'
 VERIFY, PARITY = 'ci_verify.py', 'check_corpus_parity.sh'
@@ -76,7 +104,8 @@ JOB_RUNNERS = {
                'sanitizers': (LINUX_RUNNER, 120, VERIFY),
                'kernel-only': (LINUX_RUNNER, 60, VERIFY),
                'build-gate': ('ubuntu-24.04', 5, None)},
-    'native-live.yml': {'native-live': (LINUX_RUNNER, 60, VERIFY)},
+    'native-live.yml': {'native-live': (LINUX_RUNNER, '${{ matrix.job_minutes }}', VERIFY),
+                         'native-live-gate': ('ubuntu-24.04', 5, None)},
     'corpus-parity.yml': {'corpus-parity': (LINUX_RUNNER, 120, PARITY),
                           'corpus-parity-subset': (LINUX_RUNNER, 30, PARITY)},
 }
@@ -319,8 +348,133 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
     return findings
 
 
+def _steps(text: str, depth: int = 6) -> list[str]:
+    """Step blocks at one known depth; never match a nested shell/YAML value."""
+    lines = text.splitlines()
+    result = []
+    for index, line in enumerate(lines):
+        if not line.startswith(' ' * depth + '- '):
+            continue
+        block = [line]
+        for follow in lines[index + 1:]:
+            if follow.strip() and _indent(follow) <= depth:
+                break
+            block.append(follow)
+        result.append('\n'.join(block))
+    return result
+
+
+def _step_named(steps: list[str], marker: str) -> str:
+    matches = [step for step in steps if marker in _code(step)]
+    # Duplicate ids/names cannot satisfy a contract by hiding a second step.
+    return matches[0] if len(matches) == 1 else ''
+
+
+def _step_values(step: str, key: str) -> list[str]:
+    return _job_values('\n'.join(step.splitlines()[1:]), key)
+
+
+def native_workflow_findings(native: str, curl_action: str | None = None) -> list[str]:
+    findings = []
+    jobs = _jobs(native)
+    job, gate = jobs.get('native-live', ''), jobs.get('native-live-gate', '')
+    if (_job_block(job, 'strategy') != _code(NATIVE_STRATEGY)
+            or _job_values(job, 'needs') or _job_values(job, 'if')
+            or _job_values(job, 'name') != ['native-live (${{ matrix.profile }})']):
+        findings.append('native-live must run all three independent profiles with pinned budgets and fail-fast false')
+    if (set(jobs) != {'native-live', 'native-live-gate'}
+            or _job_values(gate, 'needs') != ['native-live']
+            or _job_values(gate, 'if') != ['always()']
+            or '          PROFILES_RESULT: ${{ needs.native-live.result }}' not in _code(gate)
+            or '          test "$PROFILES_RESULT" = success' not in _code(gate)):
+        findings.append('native-live-gate must fail unless every profile succeeds')
+    for event in ('workflow_call', 'workflow_dispatch'):
+        block = native.split(f'  {event}:\n', 1)[-1]
+        block = re.split(r'(?m)^  [a-z_]+:|^\S', block, maxsplit=1)[0]
+        cold = re.search(r'(?m)^      cold_cache:\n(.*?)(?=^      \w|\Z)', block, re.DOTALL)
+        if (not cold or '        type: boolean' not in _code(cold[1])
+                or '        default: false' not in _code(cold[1])):
+            findings.append(f'native-live {event} must default cold_cache to false')
+    exclusion_input = re.search(r'(?m)^      exclude_slow:\n(.*?)(?=^      \w|^  \w|\Z)',
+                                native, re.DOTALL)
+    if (not exclusion_input or '        type: boolean' not in _code(exclusion_input[1])
+            or '        default: false' not in _code(exclusion_input[1])):
+        findings.append('native-live exclude_slow must default to the full row set')
+    if ('permissions:\n  contents: read\n' not in native
+            or '  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"' not in _code(native)):
+        findings.append('native-live must retain read-only permissions and required release tags')
+    steps = _steps(job)
+    restore = _step_named(steps, '        id: ccache-restore')
+    verify = _step_named(steps, '        id: verify')
+    curl = _step_named(steps, '        id: curl-deps')
+    save = _step_named(steps, '      - name: Save ccache after verification')
+    collect = _step_named(steps, '      - name: Stage and summarize diagnostics')
+    upload = _step_named(steps, '      - name: Retain CI diagnostics')
+    cache_key = 'ccache-${{ runner.os }}-${{ runner.arch }}-live-v2-${{ matrix.profile }}-'
+    if (_step_values(restore, 'if') != ['${{ !inputs.cold_cache }}']
+            or _step_values(restore, 'uses') != ['actions/cache/restore@v4']
+            or f'          key: {cache_key}${{{{ github.sha }}}}' not in _code(restore)
+            or f'            {cache_key}' not in _code(restore)
+            or '      CCACHE_DIR: ${{ github.workspace }}/.ccache/${{ matrix.profile }}' not in _code(job)
+            or '          ccache --zero-stats' not in _code(job)):
+        findings.append('native-live compiler restore must be profile-isolated, cold-bypassable and reset statistics')
+    if (_step_values(curl, 'uses') != ['./.github/actions/setup-live-curl']
+            or '          cache-namespace: ${{ matrix.profile }}' not in _code(curl)
+            or '          cold-cache: ${{ inputs.cold_cache }}' not in _code(curl)):
+        findings.append('every native profile must use pinned curl with its namespace and cold-cache input')
+    command = _step_values(verify, 'run')
+    expected = ('python3 scripts/ci_verify.py ${{ matrix.profile }} '
+                '--build-dir ${{ matrix.build_dir }} ' + f'--jobs {CORES} '
+                '--generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" '
+                '--ccache --test-timeout ${{ matrix.test_timeout }} '
+                '--ctest-timeout ${{ matrix.ctest_timeout }} '
+                "${{ matrix.profile == 'native' && '--require-websocket' || '' }} " + NATIVE_EXCLUSION)
+    if (len(command) != 1 or command[0].replace('--jobs=', '--jobs ') != expected
+            or _step_values(verify, 'if')
+            or _step_values(verify, 'timeout-minutes') != ['${{ matrix.verify_minutes }}']
+            or job.count('--exclude-label') != 1 or job.count('scripts/ci_verify.py ') != 1):
+        findings.append('native-live must verify each full profile with bounded CTest and native-only PR exclusion')
+    if (_step_values(save, 'if') != [NATIVE_CACHE_SAVE]
+            or _step_values(save, 'uses') != ['actions/cache/save@v4']
+            or '          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}' not in _code(save)
+            or '          path: ${{ env.CCACHE_DIR }}' not in _code(save)
+            or (save and upload and job.index(save) < job.index(upload))):
+        findings.append('native-live must explicitly save compatible compiler objects after diagnostics on normal test failure')
+    if (_step_values(collect, 'if') != ['always()']
+            or _step_values(upload, 'if') != ['always()']
+            or '--build-dir ${{ matrix.build_dir }} --profile ${{ matrix.profile }}' not in collect
+            or '          name: ci-diagnostics-native-live-${{ matrix.profile }}' not in _code(upload)
+            or '          COLD_CACHE: ${{ inputs.cold_cache }}' not in _code(collect)
+            or '          fetch-depth: 0' not in _code(job)
+            or '          persist-credentials: false' not in _code(job)):
+        findings.append('native-live must retain per-profile diagnostics on failure and preserve safe full checkout')
+    if curl_action is not None:
+        action_steps = _steps(curl_action, 4)
+        restored = _step_named(action_steps, '      id: curl-cache')
+        built = _step_named(action_steps, '      id: curl-build')
+        saved = _step_named(action_steps, '    - name: Save pinned WebSocket-enabled libcurl')
+        if (_step_values(restored, 'if') != ["${{ inputs.cold-cache != 'true' }}"]
+                or _step_values(restored, 'uses') != ['actions/cache/restore@v4']
+                or 'key: curl-${{ inputs.cache-namespace }}-' not in restored
+                or 'restore-keys:' in restored
+                or any(token not in restored for token in (
+                    'steps.dependencies.outputs.version', 'steps.dependencies.outputs.sha256',
+                    'steps.dependencies.outputs.identity', "hashFiles('.github/actions/setup-live-curl/action.yml', 'scripts/build_live_curl.sh')"))
+                or '  cold-cache:\n' not in curl_action or "    default: 'false'" not in curl_action):
+            findings.append('pinned curl restore must include dependency identity and bypass every cold-cache restore')
+        if (_step_values(saved, 'if') != [CURL_CACHE_SAVE]
+                or _step_values(saved, 'uses') != ['actions/cache/save@v4']
+                or _step_values(built, 'run') != ['bash scripts/build_live_curl.sh build-native-deps 4']
+                or '        key: ${{ steps.curl-cache.outputs.cache-primary-key }}' not in _code(saved)
+                or not built or not saved or curl_action.index(saved) < curl_action.index(built)
+                or 'uses: actions/cache@v4' in curl_action):
+            findings.append('pinned curl must save immediately after its successful build, independently of later tests')
+    return findings
+
+
 def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
-                         parity: str, docs: str, others: dict[str, str] | None = None) -> list[str]:
+                         parity: str, docs: str, others: dict[str, str] | None = None,
+                         *, curl_action: str | None = None) -> list[str]:
     """Pin the PR-light/full-event split, the docs-only skip, parallel start, merge statuses,
     row home and runners.
 
@@ -329,6 +483,7 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     findings = runner_findings({'ci.yml': ci, 'native-live.yml': native,
                                 'corpus-parity.yml': parity, 'docs.yml': docs,
                                 'promote-baseline.yml': promote, **(others or {})})
+    findings += native_workflow_findings(native, curl_action)
     events = ci.split('\non:\n', 1)
     events = events[1].split('\npermissions:', 1)[0] if len(events) == 2 else ''
     for trigger in ('push:\n    branches: [main]',
@@ -381,15 +536,20 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
         findings.append('only PR Debug matrix jobs may exclude slow rows')
     if pr_flag not in jobs.get('sanitizers', '') or jobs.get('sanitizers', '').count('--exclude-label slow') != 1:
         findings.append('only PR sanitizers may exclude slow rows')
-    if 'exclude_slow: ${{ github.event_name == \'pull_request\' }}' not in jobs.get('native-live', ''):
+    if ('exclude_slow: ${{ github.event_name == \'pull_request\' }}' not in jobs.get('native-live', '')
+            or _job_values(jobs.get('native-live', ''), 'uses') != ['./.github/workflows/native-live.yml']):
         findings.append('native-live must receive the PR-only exclusion input')
+    if ('cold_cache: ${{ inputs.cold_native_cache || false }}' not in jobs.get('native-live', '')
+            or '      cold_native_cache:\n' not in events
+            or '        type: boolean\n        default: false' not in events):
+        findings.append('CI manual native cold-cache proof must be explicit and default off')
     for job in ('kernel-only', 'corpus-parity-subset'):
         if '--exclude-label' in jobs.get(job, ''):
             findings.append(f'{job} must keep its full population')
     if ('  workflow_call:\n    inputs:\n      exclude_slow:' not in native
             or '        type: boolean\n        default: false' not in native
             or '  workflow_dispatch:' not in native
-            or "${{ inputs.exclude_slow && '--exclude-label slow' || '' }}" not in native):
+            or NATIVE_EXCLUSION not in native):
         findings.append('native-live must default to full rows for dispatch and push')
     # Baseline promotion is pineforge-workflow's campaign/ci/promote-baseline.yml,
     # installed unchanged. Main's own copy runs on the closed PR
@@ -670,7 +830,8 @@ def main() -> int:
             (workflows / 'corpus-parity.yml').read_text(),
             (workflows / 'docs.yml').read_text(),
             {path.name: path.read_text() for path in sorted(workflows.iterdir())
-             if path.suffix in ('.yml', '.yaml') and path.name not in named})
+             if path.suffix in ('.yml', '.yaml') and path.name not in named},
+            curl_action=(ROOT / '.github/actions/setup-live-curl/action.yml').read_text())
         for finding in findings:
             print(finding)
         if not findings:
