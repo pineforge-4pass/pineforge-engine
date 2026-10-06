@@ -229,7 +229,7 @@ def main():
         root = args.output_dir or Path(temporary)
         root.mkdir(parents=True, exist_ok=True)
         clocks = ((args.timeframe, False),) if args.timeframe else (
-            ("1", False), ("5", False), ("7", False), ("15", False), ("60", False), ("120", False),
+            ("1", False), ("5", False), ("15", False), ("60", False), ("120", False),
             ("15", True), ("D", False), ("W", False))
         for timeframe, session in clocks:
             target = root / f"{timeframe}-{session}"
