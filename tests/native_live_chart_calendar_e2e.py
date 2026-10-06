@@ -25,6 +25,14 @@ def calendar_rows(timeframe, timezone, session, first_day):
         if session == "0930-1600:23456":
             opening = trading_day.replace(hour=9, minute=30)
             closing = trading_day.replace(hour=16)
+        elif session == "0930-1130,1300-1500:23456":
+            period = int(timeframe) * 60000
+            for hour, minute, end_hour, end_minute in ((9, 30, 11, 30), (13, 0, 15, 0)):
+                start = int(trading_day.replace(hour=hour, minute=minute).timestamp() * 1000)
+                end = int(trading_day.replace(hour=end_hour, minute=end_minute).timestamp() * 1000)
+                intervals.extend((stamp, min(stamp + period, end))
+                                 for stamp in range(start, end, period))
+            continue
         elif session == "1700-1700:23456":
             opening = (trading_day - timedelta(days=1)).replace(hour=17)
             closing = trading_day.replace(hour=17)
@@ -64,6 +72,8 @@ def prints(rows, intervals):
 
 def cells():
     yield "7", "UTC", "24x7", "2025-01-01", False
+    yield "60", "UTC", "0930-1130,1300-1500:23456", "2025-01-06", False
+    yield "30", "UTC", "0930-1130,1300-1500:23456", "2025-01-06", True
     for first_day in ("2025-03-06", "2025-10-30"):
         for timeframe in ("240", "45", "120"):
             yield timeframe, "America/New_York", "24x7", first_day, False
@@ -111,7 +121,8 @@ def prove(root, runner, oracle, library, cell, probe):
         if probe:
             continue
         if not admitted and mode == "bars":
-            assert result.returncode == 1 and f"chart delivery for a {timeframe} chart" in result.stderr, receipt
+            assert result.returncode == 1 and result.stderr.startswith(
+                f"pineforge-live: chart delivery for a {timeframe} chart on this session calendar is not supported yet:"), receipt
             assert "its bars do not tile the calendar's trading days" in result.stderr, receipt
             assert not ledger.exists() and not Path(str(ledger) + ".lock").exists(), receipt
             continue

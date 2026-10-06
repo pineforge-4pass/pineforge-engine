@@ -321,6 +321,15 @@ void chart_calendar_admission() {
                             "its bars do not tile the calendar's trading days"));
     CHECK(throws_containing([&] { require_chart_calendar("D", "Invalid/Timezone", start); }, "timezone"));
     CHECK(throws_containing([&] { require_chart_calendar("D", "America/New_York", 2208988800000); }, "daylight-saving"));
+    CHECK(throws_containing([&] { require_chart_calendar("60", "UTC", start, "0930-1130,1300-1500:23456"); },
+                           "its bars do not tile the calendar's trading days"));
+    require_chart_calendar("30", "UTC", start, "0930-1130,1300-1500:23456");
+    for (const auto* timeframe : {"2D", "3D"}) {
+        CHECK(throws_containing([&] { require_chart_calendar(timeframe, "UTC", start, "24x7:23456"); },
+                               "its bars do not tile the calendar's trading days"));
+    }
+    CHECK(throws_containing([&] { require_chart_calendar("D", "Asia/Almaty", 1709078400000); },
+                           "its bars do not tile the calendar's trading days"));
 }
 
 }  // namespace

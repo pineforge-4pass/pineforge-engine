@@ -102,6 +102,14 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
     cfg = root / 'native.json'
     native_config(cfg)
 
+    daily_cfg = root / 'native-daily-dst.json'
+    native_config(daily_cfg, script_tf='D', timezone='America/New_York')
+    daily_warmup = root / 'native-daily.csv'
+    warmup_csv(daily_warmup, [1735707600000, 1735707660000, 1735707720000])
+    daily_ledger = root / 'native-daily-dst.sqlite3'
+    invoke(base_cmd(native_example, daily_warmup, daily_ledger, daily_cfg))
+    assert ledger_bound(daily_ledger)
+
     # Bad JSON never binds a ledger.
     bad_cfg = root / 'bad.json'
     bad_cfg.write_text('{')
