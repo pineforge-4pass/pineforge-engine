@@ -138,6 +138,9 @@ RunFailureValue invariant() noexcept {
 
 }  // namespace
 
+RunFailureArg::RunFailureArg(const char* arg_name, const char* value)
+    : name(arg_name), text(value ? value : "") {}
+
 RunFailureValue make_run_failure(RunFailureCode code, const RunFailureArgs& args) noexcept {
     try {
         const RegistryCode* row = registry_row(code);
@@ -269,6 +272,12 @@ RunFailureInfo::~RunFailureInfo() = default;
 void note_run_failure(BacktestEngine& engine, std::string text, RunFailureCode code,
                       const RunFailureArgs& args) {
     NativeExecutionConsumer::note_failure_record(engine, std::move(text),
+                                                 make_run_failure(code, args));
+}
+
+void note_run_failure(BacktestEngine& engine, const char* text, RunFailureCode code,
+                      const RunFailureArgs& args) {
+    NativeExecutionConsumer::note_failure_record(engine, std::string(text ? text : ""),
                                                  make_run_failure(code, args));
 }
 

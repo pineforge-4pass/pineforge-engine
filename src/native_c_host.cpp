@@ -30,6 +30,7 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
 #include <pineforge/native_host.hpp>
+#include <pineforge/run_failure.hpp>
 #include <pineforge/bar.hpp>
 
 #include <cmath>
@@ -1394,11 +1395,14 @@ constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 /* A C callback said "stop". The consumer's existing callback guard turns any
  * std::exception into NativeFailureCode::CallbackException, so this is how a
  * non-zero C return reaches the documented failure without the C frame ever
- * unwinding. */
-class CallbackFailure : public std::runtime_error {
+ * unwinding. It is still exactly a std::runtime_error, and carries its run
+ * failure code (engine_unclassified_error) beside the same text. */
+class CallbackFailure : public pineforge::coded<std::runtime_error> {
 public:
     explicit CallbackFailure(const char* hook)
-        : std::runtime_error(std::string("native C callback refused in ") + hook) {}
+        : pineforge::coded<std::runtime_error>(
+              pineforge::RunFailureCode::engine_unclassified_error, {},
+              std::string("native C callback refused in ") + hook) {}
 };
 
 const pf_bar_t* as_c_bar(const Bar& bar) {
@@ -1482,9 +1486,10 @@ public:
     const pf_native_callbacks_v1& table() const noexcept { return table_; }
 
     /* A C validation refusal is a status, not a new kernel diagnostic. Keep
-     * presentation text from a previous operation from masquerading as its
-     * reason; the durable native failure record is left untouched. */
-    void clear_c_refusal_error() noexcept { last_error_.clear(); }
+     * presentation text from a previous operation (and its run failure code)
+     * from masquerading as its reason; the durable native failure record is
+     * left untouched. */
+    void clear_c_refusal_error() noexcept { pineforge::clear_run_failure(*this); }
     bool in_postrun_hook_frame() const noexcept { return in_hash_extension_; }
 
     bool timeframe_interval(pf_native_timeframe_interval_v1& out) const noexcept {

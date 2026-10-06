@@ -46,6 +46,7 @@ CATALOG = Path("docker/run_failure_codes.json")
 CODES_HEADER = Path("include/pineforge/run_failure_codes.hpp")
 REGISTRY_INC = Path("src/run_failure_registry.inc")
 ALLOWLIST = Path("scripts/run_failure_throw_allowlist.txt")
+DIFF = Path("docker/run_failure_codes_diff.json")
 SCHEMA = "pineforge-run-failure-catalog/v1"
 CLASSES = ("strategy", "strategy_limit", "no_data", "symbol_metadata", "symbol_feeds",
            "input", "unsupported", "resource", "engine_fault")
@@ -313,6 +314,29 @@ def catalog_at(root: Path, tag: str) -> str | None:
     return result.stdout.decode("utf-8")
 
 
+def published_catalog(root: Path) -> tuple[str | None, str]:
+    """The newest release's catalog bytes (None: that release has none).
+
+    The newest `v*` tag reachable from HEAD decides. A clone without tags (a
+    remote verifier's ref-less checkout) falls back to the release the
+    checked-in diff names as its `from`: when that release published no
+    catalog (`catalogSha256` null) there is nothing to compare; otherwise its
+    catalog must be readable, or the check fails closed.
+    """
+    tag = newest_release_tag(root)
+    if tag is not None:
+        return catalog_at(root, tag), tag
+    try:
+        diff = json.loads((root / DIFF).read_text(encoding="utf-8"))
+        origin = diff["from"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise InputError("no release tag v* reachable from HEAD and no readable "
+                         f"{DIFF} to name the published release ({error})") from error
+    if origin.get("catalogSha256") is None:
+        return None, str(origin.get("tag"))
+    return catalog_at(root, str(origin.get("tag"))), str(origin.get("tag"))
+
+
 def compatibility(old: dict, new: dict) -> list[str]:
     """Breaking changes from `old` (published) to `new` (this tree)."""
     errors = []
@@ -472,12 +496,9 @@ def run_checks(root: Path, *, history: bool = True) -> list[str]:
         return errors
     errors += check_generated(root, catalog)
     if history:
-        tag = newest_release_tag(root)
-        if tag is None:
-            raise InputError("no release tag v* reachable from HEAD (fetch tags)")
-        published = catalog_at(root, tag)
+        published, label = published_catalog(root)
         if published is not None:
-            errors += [f"against {tag}: {e}" for e in compatibility(json.loads(published), catalog)]
+            errors += [f"against {label}: {e}" for e in compatibility(json.loads(published), catalog)]
     errors += uncoded_throws(root)
     return errors
 

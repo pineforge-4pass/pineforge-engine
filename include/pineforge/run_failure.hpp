@@ -158,8 +158,9 @@ struct RunFailureArg {
     std::int64_t integer = 0;
     double number = 0.0;
 
-    RunFailureArg(const char* arg_name, const char* value)
-        : name(arg_name), text(value ? value : "") {}
+    // Out of line (src/run_failure.cpp): a literal value is handed over by
+    // address, so it stays one contiguous string wherever it is compiled.
+    RunFailureArg(const char* arg_name, const char* value);
     RunFailureArg(const char* arg_name, std::string value)
         : name(arg_name), text(std::move(value)) {}
     template <typename Integer,
@@ -235,6 +236,9 @@ public:
 // code together, so they never disagree. Defined with the execution consumer
 // that stores the record (src/run_failure.cpp).
 void note_run_failure(BacktestEngine& engine, std::string text, RunFailureCode code,
+                      const RunFailureArgs& args = {});
+// The same for a literal text (preferred for one): taken by address.
+void note_run_failure(BacktestEngine& engine, const char* text, RunFailureCode code,
                       const RunFailureArgs& args = {});
 void note_run_failure(BacktestEngine& engine, std::string text, const RunFailureValue& value);
 void note_run_failure(BacktestEngine& engine, const char* entrypoint,
