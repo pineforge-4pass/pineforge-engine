@@ -308,6 +308,15 @@ void chart_calendar_admission() {
     for (const auto* timeframe : {"240", "120", "45"})
         CHECK(throws_containing([&] { require_chart_calendar(timeframe, "America/New_York", start); },
                                 "its bars do not tile the calendar's trading days"));
+    for (const auto* session : {"24x7", "1700-1700:23456", "0930-1600:23456"}) {
+        require_chart_calendar("60", "America/New_York", start, session);
+        require_chart_calendar("240", "America/New_York", start, session, false);
+        CHECK(throws_containing([&] { require_chart_calendar("240", "America/New_York", start, session); },
+                                "its bars do not tile the calendar's trading days"));
+    }
+    require_chart_calendar("7", "UTC", start, "24x7", false);
+    CHECK(throws_containing([&] { require_chart_calendar("D", "America/New_York", start, "24x7", false); },
+                            "daily/weekly chart delivery on a daylight-saving calendar is not supported yet"));
     CHECK(throws_containing([&] { require_chart_calendar("60", "Australia/Lord_Howe", start); },
                             "its bars do not tile the calendar's trading days"));
     CHECK(throws_containing([&] { require_chart_calendar("D", "Invalid/Timezone", start); }, "timezone"));

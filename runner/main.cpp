@@ -835,7 +835,8 @@ int run(Config c) {
         refuse_legacy_ledger(c.ledger, bind_deployment_identity(identity(legacy, original, library),
             settings_receipt, capabilities_receipt, c.routing.routed, c.routing.file_identity, confirmed_bar_receipt));
     }
-    require_chart_calendar(c.script_tf, c.timezone, warmup.front().timestamp);
+    require_chart_calendar(c.script_tf, c.timezone, warmup.front().timestamp, c.session,
+                           c.mode == "bars" && c.input_tf == c.script_tf);
     NativeConfigValues clock = c.native;
     clock.input_tf = c.input_tf;
     clock.script_tf = c.script_tf;

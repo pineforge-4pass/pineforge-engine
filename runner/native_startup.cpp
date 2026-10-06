@@ -560,28 +560,55 @@ void require_native_warmup(const NativeConfigValues& spec, const std::vector<pf_
 }
 
 void require_chart_calendar(const std::string& script_tf, const std::string& timezone,
-                            std::int64_t first_timestamp) {
+                            std::int64_t first_timestamp, const std::string& session,
+                            bool confirmed_chart_bars) {
     const auto clock = pineforge::native_calendar::parse_timeframe(script_tf);
     if (!clock)
         throw std::runtime_error("chart timeframe is invalid");
     using Unit = pineforge::native_calendar::TimeframeUnit;
-    if (clock->unit() != Unit::Day && clock->unit() != Unit::Week)
-        return;
-    const auto facts = pineforge::native_calendar::timezone_identity_descriptor(timezone);
-    if (!facts || !facts->valid())
-        throw std::runtime_error("chart timezone rules cannot be inspected");
-    using Kind = pineforge::native_calendar::TimezoneSourceKind;
-    bool daylight = facts->kind == Kind::PosixDefaultDst;
-    if (facts->kind == Kind::PosixExplicit)
-        daylight = posix_has_dst(facts->effective_definition);
-    for (const auto& resource : facts->resource_paths) {
-        const auto bytes = read_resource_bytes(resource);
-        if (!bytes)
+    if (clock->unit() == Unit::Day || clock->unit() == Unit::Week) {
+        const auto facts = pineforge::native_calendar::timezone_identity_descriptor(timezone);
+        if (!facts || !facts->valid())
             throw std::runtime_error("chart timezone rules cannot be inspected");
-        daylight = daylight || tzfile_has_dst(*bytes, first_timestamp);
+        using Kind = pineforge::native_calendar::TimezoneSourceKind;
+        bool daylight = facts->kind == Kind::PosixDefaultDst;
+        if (facts->kind == Kind::PosixExplicit)
+            daylight = posix_has_dst(facts->effective_definition);
+        for (const auto& resource : facts->resource_paths) {
+            const auto bytes = read_resource_bytes(resource);
+            if (!bytes)
+                throw std::runtime_error("chart timezone rules cannot be inspected");
+            daylight = daylight || tzfile_has_dst(*bytes, first_timestamp);
+        }
+        if (daylight)
+            throw std::runtime_error("daily/weekly chart delivery on a daylight-saving calendar is not supported yet; use an intraday chart or a non-daylight-saving timezone");
+        return;
     }
-    if (daylight)
-        throw std::runtime_error("daily/weekly chart delivery on a daylight-saving calendar is not supported yet; use an intraday chart or a non-daylight-saving timezone");
+    if (!confirmed_chart_bars || !clock->is_fixed())
+        return;
+    const auto calendar = pineforge::native_calendar::parse_session(session, timezone);
+    if (!calendar)
+        throw std::runtime_error("chart session calendar is invalid");
+    constexpr std::int64_t horizon = 1098LL * 86400000;
+    if (first_timestamp > std::numeric_limits<std::int64_t>::max() - horizon)
+        throw std::runtime_error("chart calendar admission horizon is out of range");
+    const auto last_timestamp = first_timestamp + horizon;
+    const auto period = static_cast<std::int64_t>(clock->count()) *
+                        (clock->unit() == Unit::Second ? 1000 : 60000);
+    std::optional<std::int64_t> previous_origin;
+    auto cursor = first_timestamp;
+    while (cursor <= last_timestamp) {
+        const auto day = pineforge::native_calendar::session_day_at(*calendar, cursor);
+        if (!day || day->next_origin_ms <= cursor)
+            throw std::runtime_error("chart session-day origins cannot be inspected");
+        if (!day->spans.empty()) {
+            if (previous_origin && (day->origin_ms - *previous_origin) % period != 0)
+                throw std::runtime_error("chart delivery for a " + script_tf +
+                    " chart on this session calendar is not supported yet: its bars do not tile the calendar's trading days. Use a chart timeframe that divides the trading day (on a daylight-saving calendar, one that divides 60 minutes).");
+            previous_origin = day->origin_ms;
+        }
+        cursor = day->next_origin_ms;
+    }
 }
 
 Json timezone_rule_identity(std::string_view timezone, bool required) {
