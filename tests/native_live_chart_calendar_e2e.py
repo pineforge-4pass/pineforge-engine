@@ -1,5 +1,6 @@
 """Startup calendar-grid admission and realtime boundary regressions."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import json
 import math
@@ -153,8 +154,11 @@ def main():
         root = args.output_dir or Path(temporary)
         root.mkdir(parents=True, exist_ok=True)
         receipts = []
-        for cell in cells():
-            receipts.extend(prove(root, args.runner, args.oracle, args.library, cell, args.probe))
+        def verify_cell(cell):
+            return prove(root, args.runner, args.oracle, args.library, cell, args.probe)
+        with ThreadPoolExecutor(max_workers=4) as workers:
+            for result in workers.map(verify_cell, cells()):
+                receipts.extend(result)
         (root / "matrix.json").write_text(json.dumps(receipts, indent=2))
     print("chart-calendar boundary probe complete" if args.probe else "chart-calendar contract PASS", flush=True)
 
