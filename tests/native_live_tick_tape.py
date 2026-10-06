@@ -3,6 +3,8 @@
 The historical batch API is not a tick reference. Array and single-print
 continuations use the same public realtime ingress. Hashes are compared at
 provider-message boundaries, exactly as the runner's atomic ledger does.
+Runner and tick references use chart input and chart warmup; the separate
+one-minute reconstruction control retains its original input clock.
 """
 
 import base64
@@ -26,7 +28,7 @@ import time
 import traceback
 
 from native_live_equivalence_e2e import (
-    MockReceiver, Strategy, TradeTick, action_key, compile_library,
+    MockReceiver, Strategy, TradeTick, action_key, chart_bar_array, chart_rows, compile_library,
     first_difference, read_rows, write_json,
 )
 from native_live_tick_oracle import classify_first_divergence
@@ -230,7 +232,8 @@ def direct_tape(strategy, warmup, packets, array_size, output, hashes=False,
     try:
         if retain:
             strategy.check(strategy.library.equivalence_retain_events(handle))
-        strategy.check(strategy.library.strategy_stream_begin(handle, warmup, len(warmup), b"1", str(timeframe).encode()))
+        strategy.check(strategy.library.strategy_stream_begin(handle, warmup, len(warmup),
+            str(timeframe).encode(), str(timeframe).encode()))
         position = 0
         while position < len(packets):
             packet = packets[position]
@@ -271,8 +274,9 @@ def message_hashes(event_hashes, total, batch_size):
 
 def runner_command(strategy, output, runner, receiver, mode):
     return [str(runner), "run", "--strategy", str(strategy.path), "--warmup", str(output / "warmup.csv"),
-        "--input-tf", "1", "--script-tf", "15", "--session", "24x7", "--timezone", "UTC",
+        "--input-tf", "15", "--script-tf", "15", "--session", "24x7", "--timezone", "UTC",
         "--chart-timezone", "UTC", "--mode", mode, "--ledger", str(output / "orders.sqlite3"),
+        "--poll-ms", "100",
         "--symbol", "BINANCE:ETHUSDT.P", "--name", strategy.path.stem,
         "--syminfo", "type=crypto", "--syminfo", "currency=USDT", "--syminfo", "basecurrency=ETH",
         "--syminfo", "mintick=0.01", "--syminfo", "pointvalue=1", "--syminfo", "qty_step=0.001",
@@ -463,11 +467,9 @@ def run_genuine_tape(arguments):
     warmup_rows = [row for row in corpus_rows if int(row["timestamp"]) < manifest["start_ms"]]
     if not warmup_rows or any(int(row["timestamp"]) != start + index * 60000 for index, row in enumerate(warmup_rows)):
         raise RuntimeError("warmup must be nonempty and contiguous before the genuine tape")
-    def bar_array(rows):
-        return (BarC * len(rows))(*[BarC(*[float(row[field]) for field in ("open", "high", "low", "close", "volume")],
-            int(row["timestamp"])) for row in rows])
-    warmup = bar_array(warmup_rows)
-    combined = bar_array(warmup_rows + aggregate_rows)
+    minute_warmup_rows = warmup_rows
+    warmup_rows = chart_rows(minute_warmup_rows, 15)
+    chart_live_rows = chart_rows(aggregate_rows, 15)
     venue = read_venue(arguments.venue_klines) if arguments.venue_klines else None
     corpus = {int(row["timestamp"]): row for row in corpus_rows}
     results = []
@@ -485,6 +487,8 @@ def run_genuine_tape(arguments):
         if not arguments.reuse_libraries:
             library = compile_library(root, build, arguments.libraries_dir.resolve(), probe)
         strategy = Strategy(library, BarC, ReportC)
+        warmup = chart_bar_array(strategy, warmup_rows)
+        combined = chart_bar_array(strategy, warmup_rows + chart_live_rows)
         print(f'START genuine probe={probe} prints={manifest["count"]}', flush=True)
         whole = direct_tape(strategy, warmup, packets, 1024, directory, hashes=True, retain=True)
         write_json(directory / "whole-tape.json", whole)
@@ -507,7 +511,7 @@ def run_genuine_tape(arguments):
         references.append(reference)
         print(f'{reference["status"]} R-A-reference probe={probe} array=1024 '
               f'comparison={"not-run" if arguments.tick_rb_only else "batch-boundaries" if arguments.tick_batch_only else "singleton"}', flush=True)
-        batch = strategy.batch(combined, 15, directory / "batch")
+        batch = strategy.batch(combined, 15, directory / "batch", input_tf=15, distribution=3)
         forward_actions = [action for action in batch["actions"] if action["origin_input_index"] >= len(warmup)]
         batch_checks = {"actions": first_difference(mapped_actions(forward_actions), mapped_actions(whole["actions"])),
             "report": first_difference(mapped_report(batch["state"]), mapped_report(whole["state"]))}
@@ -529,7 +533,8 @@ def run_genuine_tape(arguments):
               f'actions={len(whole["actions"])} classification={oracle["status"]} '
               f'difference={json.dumps(batch_checks["actions"], separators=(",", ":"))}', flush=True)
         if probe == arguments.probes[0]:
-            rebuilt = direct_tape(strategy, warmup, packets, 1024, directory, observe_bars=True, timeframe=1)["source_bars"]
+            rebuilt = direct_tape(strategy, chart_bar_array(strategy, minute_warmup_rows), packets,
+                1024, directory, observe_bars=True, timeframe=1)["source_bars"]
             write_json(output / "tick-built-bars.json", rebuilt)
             engine_bars = {row["timestamp"]: row for row in rebuilt}
             bar_checks = {"engine_vs_decimal": bar_differences(aggregate_rows, engine_bars),
@@ -549,8 +554,8 @@ def run_genuine_tape(arguments):
                 write_json(output / "results.json", results)
             bar_packets = [{"type": "bar", "bar": {"ts_open": int(row["timestamp"]),
                 **{short: float(row[field]) for short, field in (("o", "open"), ("h", "high"),
-                   ("l", "low"), ("c", "close"), ("v", "volume"))}}} for row in aggregate_rows]
-            bar_reference = strategy.stream(combined, len(warmup), 15)
+                   ("l", "low"), ("c", "close"), ("v", "volume"))}}} for row in chart_live_rows]
+            bar_reference = strategy.stream(combined, len(warmup), 15, input_tf=15)
             bar_reference["hashes"] = [{"hash": digest} for digest in bar_reference["hashes"]]
             cost = genuine_case(strategy, bar_reference, warmup_rows, bar_packets, directory / "bar-cost",
                 build / "bin/pineforge-live", "file-single", mode="bars")

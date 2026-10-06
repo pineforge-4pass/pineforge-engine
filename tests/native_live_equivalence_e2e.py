@@ -15,6 +15,9 @@ shipped 1m corpus, not historical observed trades. They prove same-print replay
 determinism across restart and exact 1m OHLCV reconstruction, not tick/batch fills.
 Configure with CMAKE_EXPORT_COMPILE_COMMANDS=ON and build all targets first;
 the observer is a CMake OBJECT target, not a standalone test executable.
+Runner scenarios aggregate prices to chart input and round minute splits down
+to the preceding complete chart bar. One-minute source reconstruction remains
+an independent direct-engine control.
 """
 
 import argparse
@@ -66,6 +69,32 @@ class TradeTick(ctypes.Structure):
 def live_action(origin, timeframe, split):
     # A script bucket not sealed in warmup is replayed in realtime.
     return origin - origin % timeframe + timeframe - 1 >= split
+
+
+def chart_rows(rows, timeframe):
+    if not rows or len(rows) % timeframe:
+        raise ValueError("chart delivery requires complete input bars")
+    start = int(rows[0]["timestamp"])
+    if start % (timeframe * 60000) or any(int(row["timestamp"]) != start + index * 60000
+                                         for index, row in enumerate(rows)):
+        raise ValueError("chart delivery requires aligned, contiguous UTC minute prices")
+    grouped = []
+    for offset in range(0, len(rows), timeframe):
+        children = rows[offset:offset + timeframe]
+        volume = float(children[0]["volume"])
+        for row in children[1:]:
+            volume += float(row["volume"])
+        grouped.append({"timestamp": int(children[0]["timestamp"]),
+            "open": float(children[0]["open"]), "high": max(float(row["high"]) for row in children),
+            "low": min(float(row["low"]) for row in children), "close": float(children[-1]["close"]),
+            "volume": volume})
+    return grouped
+
+
+def chart_bar_array(strategy, rows):
+    return (strategy.bar_type * len(rows))(*[strategy.bar_type(
+        *[float(row[field]) for field in ("open", "high", "low", "close", "volume")],
+        int(row["timestamp"])) for row in rows])
 
 
 def write_json(path, value):
@@ -217,14 +246,14 @@ class Strategy:
                                  for index in range(report.equity_curve_len)],
                 "metrics": scalar(report.metrics)}
 
-    def batch(self, bars, timeframe, output):
+    def batch(self, bars, timeframe, output, input_tf=1, distribution=0):
         output.mkdir(parents=True)
         handle = self.create()
         report = self.report_type()
         try:
             self.check(self.library.equivalence_retain_events(handle))
-            self.library.run_backtest_full(handle, bars, len(bars), b"1", str(timeframe).encode(),
-                0, 4, 0, ctypes.byref(report))
+            self.library.run_backtest_full(handle, bars, len(bars), str(input_tf).encode(), str(timeframe).encode(),
+                0, 4, distribution, ctypes.byref(report))
             error = self.library.strategy_get_last_error(handle)
             if error:
                 raise RuntimeError(error.decode())
@@ -239,7 +268,7 @@ class Strategy:
             self.library.report_free(ctypes.byref(report))
             self.library.strategy_free(handle)
 
-    def stream(self, bars, split, timeframe, sample=False, observer_output=None, observe_bars=False):
+    def stream(self, bars, split, timeframe, sample=False, observer_output=None, observe_bars=False, input_tf=1):
         handle = self.create()
         report = self.report_type()
         actions = []
@@ -251,7 +280,7 @@ class Strategy:
             if observer_output is not None:
                 observer_output.mkdir(parents=True)
                 self.check(self.library.equivalence_retain_events(handle))
-            self.check(self.library.strategy_stream_begin(handle, bars, split, b"1", str(timeframe).encode()))
+            self.check(self.library.strategy_stream_begin(handle, bars, split, str(input_tf).encode(), str(timeframe).encode()))
             for index in range(split, len(bars)):
                 self.check(self.library.strategy_stream_push_bar(handle, ctypes.byref(bars[index])))
                 if observe_bars:
@@ -328,7 +357,7 @@ class Strategy:
         finally:
             self.library.report_free(ctypes.byref(report))
 
-    def tick_stream(self, bars, split, timeframe, packets, restart_at=0, observe_bars=False):
+    def tick_stream(self, bars, split, timeframe, packets, restart_at=0, observe_bars=False, input_tf=1):
         handle = self.create()
         actions = []
         hashes = []
@@ -336,7 +365,7 @@ class Strategy:
         restart_receipt = None
 
         def begin(current):
-            self.check(self.library.strategy_stream_begin(current, bars, split, b"1", str(timeframe).encode()))
+            self.check(self.library.strategy_stream_begin(current, bars, split, str(input_tf).encode(), str(timeframe).encode()))
 
         def push(current, packet):
             if packet["type"] == "tick":
@@ -490,11 +519,23 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
     process = None
     receiver = None
     try:
-        if modeled is None:
-            modeled = strategy.stream(bars, split, timeframe)
+        rows = chart_rows(rows, timeframe)
+        bars = chart_bar_array(strategy, rows)
+        minute_split = split
+        split //= timeframe
+        result.update(input_tf=timeframe, minute_split=minute_split, split=split, distribution=3)
+        if packets is None:
+            batch = strategy.batch(bars, timeframe, output / "chart-batch", input_tf=timeframe, distribution=3)
+            modeled = strategy.stream(bars, split, timeframe, input_tf=timeframe)
+        else:
+            if minute_split % timeframe:
+                raise ValueError("tick warmup must end on a complete chart bar")
+            modeled = strategy.tick_stream(bars, split, timeframe, packets, input_tf=timeframe)
+            batch = {"state": modeled["state"],
+                     "actions": [dict(row, origin_input_index=split) for row in modeled["actions"]]}
         write_json(output / "forward-state.json", modeled["state"])
         expected = [action_key(row) for row in batch["actions"]
-                    if live_action(row["origin_input_index"], timeframe, split)]
+                    if live_action(row["origin_input_index"], 1, split)]
         result["modeled_action_difference"] = first_difference(expected, [action_key(row) for row in modeled["actions"]])
         result["report_difference"] = first_difference(batch["state"], modeled["state"])
         tape_files(output, rows, split)
@@ -508,8 +549,9 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
             raise RuntimeError("NOT EXERCISED: no live actions")
         receiver = MockReceiver(output, fail_first, crash_action)
         command = [str(runner), "run", "--strategy", str(strategy.path), "--warmup", str(output / "warmup.csv"),
-            "--input-tf", "1", "--script-tf", str(timeframe), "--session", "24x7", "--timezone", "UTC",
+            "--input-tf", str(timeframe), "--script-tf", str(timeframe), "--session", "24x7", "--timezone", "UTC",
             "--chart-timezone", "UTC", "--mode", "ticks" if packets is not None else "bars",
+            "--poll-ms", "100",
             "--feed", str(output / "tail.jsonl"),
             "--ledger", str(output / "orders.sqlite3"), "--symbol", "BINANCE:ETHUSDT.P", "--name", strategy.path.stem,
             "--syminfo", "type=crypto", "--syminfo", "currency=USDT", "--syminfo", "basecurrency=ETH",
