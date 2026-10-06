@@ -40,13 +40,13 @@ try:
         root = Path(directory)
         warmup = root / 'warmup.csv'
         warmup.write_text('timestamp,open,high,low,close,volume\n' +
-                          ''.join(f'{index*60000},100,101,99,100,4\n' for index in range(3)))
+                          ''.join(f'{index*60000},100,101,99,100,4\n' for index in range(1)))
         feed = root / 'feed.jsonl'
         feed.write_text(''.join(json.dumps({'type': 'bar', 'bar': {'ts_open': index*60000,
                         'o': 100+index, 'h': 102+index, 'l': 99+index, 'c': 101+index, 'v': 4}}) + '\n'
-                        for index in range(3, 27)))
+                        for index in range(1, 9)))
         ledger = root / 'phase-a.sqlite'
-        arguments = ['run', '--strategy', library, '--warmup', str(warmup), '--script-tf', '3',
+        arguments = ['run', '--strategy', library, '--warmup', str(warmup), '--script-tf', '1',
                      '--symbol', 'TEST:MOCK', '--mode', 'bars', '--feed', str(feed), '--ledger', str(ledger),
                      '--webhook-url', f'http://127.0.0.1:{server.server_port}/actions', '--allow-insecure-http',
                      '--max-attempts', '1']

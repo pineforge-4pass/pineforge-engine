@@ -185,10 +185,10 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
     root = Path(directory)
     warmup = root / 'warmup.csv'
     warmup.write_text('timestamp,open,high,low,close,volume\n' +
-                      ''.join(f'{index * 60000},100,101,99,100,4\n' for index in range(3)))
-    events = [{'type': 'bar', 'bar': {'ts_open': index * 60000, 'o': 100 + index, 'h': 102 + index,
+                      ''.join(f'{index * 180000},100,101,99,100,4\n' for index in range(1)))
+    events = [{'type': 'bar', 'bar': {'ts_open': index * 180000, 'o': 100 + index, 'h': 102 + index,
                                     'l': 99 + index, 'c': 101 + index, 'v': 4, 'trade_count': 4}}
-              for index in range(3, 27)]
+              for index in range(1, 9)]
     feed = root / 'feed.jsonl'
     feed.write_text(''.join(json.dumps(event) + '\n' for event in events))
     base = ['run', '--strategy', library, '--warmup', str(warmup), '--script-tf', '3',

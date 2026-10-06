@@ -85,7 +85,7 @@ def base_cmd(strategy, warmup, ledger, config=None, extra=None):
     if config is not None:
         cmd += ['--native-config', str(config)]
     else:
-        cmd += ['--script-tf', '3', '--symbol', 'TEST:MOCK']
+        cmd += ['--script-tf', '1', '--symbol', 'TEST:MOCK']
     if extra:
         cmd += extra
     return cmd

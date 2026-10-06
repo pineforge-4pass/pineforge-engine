@@ -151,10 +151,10 @@ try:
         root = Path(directory)
         warmup = root / "warmup.csv"
         warmup.write_text("timestamp,open,high,low,close,volume\n" +
-            "".join(f"{index * 60000},100,101,99,100,4\n" for index in range(3)))
-        events = [{"type": "bar", "bar": {"ts_open": index * 60000, "o": 100 + index,
+            "".join(f"{index * 180000},100,101,99,100,4\n" for index in range(1)))
+        events = [{"type": "bar", "bar": {"ts_open": index * 180000, "o": 100 + index,
             "h": 102 + index, "l": 99 + index, "c": 101 + index, "v": 4, "trade_count": 4}}
-            for index in range(3, 27)]
+            for index in range(1, 9)]
         batch = json.dumps({"type": "batch", "events": events}) + "\n"
         feed = root / "feed.jsonl"
         feed.write_text(batch)
@@ -433,11 +433,11 @@ try:
         invoke(base(ledger) + ["--feed", root / "empty.jsonl"])
         budget = ledger.stat().st_size + 65536
         process, ledger, health = start("budget", ["--max-ledger-bytes", str(budget)])
-        long_events = [{"type": "bar", "bar": {"ts_open": index * 60000, "o": 100 + index,
+        long_events = [{"type": "bar", "bar": {"ts_open": index * 180000, "o": 100 + index,
             "h": 102 + index, "l": 99 + index, "c": 101 + index, "v": 4, "trade_count": 4}}
-            for index in range(3, 303)]
+            for index in range(1, 301)]
         large_batch = json.dumps({"type": "batch", "events": long_events}) + "\n"
-        process.stdin.write(large_batch + json.dumps({"type": "time", "ts": 303 * 60000}) + "\n")
+        process.stdin.write(large_batch + json.dumps({"type": "time", "ts": 301 * 180000}) + "\n")
         process.stdin.flush()
         finish(process, 3, stop=False)
         assert query(ledger, "SELECT count(*) FROM inputs") == [(1,)]

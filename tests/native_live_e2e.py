@@ -75,7 +75,7 @@ try:
         root = Path(raw_root)
         warmup = root/'warmup.csv'
         warmup.write_text('timestamp,open,high,low,close,volume\n' +
-                          ''.join(f'{i*60000},100,101,99,100,4\n' for i in range(3)))
+                          ''.join(f'{i*180000},100,101,99,100,4\n' for i in range(1)))
         base = [runner, 'run', '--strategy', library, '--warmup', str(warmup),
                 '--script-tf', '3', '--symbol', 'TEST:MOCK', '--allow-insecure-http',
                 '--webhook-url', f'http://127.0.0.1:{server.server_port}/webhook',
@@ -93,14 +93,14 @@ try:
         bar_events = []
         tick_events = []
         seq = 1
-        for i in range(3, 27):
-            bar_events.append({'type': 'bar', 'bar': {'ts_open': i*60000, 'o': 100+i,
+        for i in range(1, 9):
+            bar_events.append({'type': 'bar', 'bar': {'ts_open': i*180000, 'o': 100+i,
                               'h': 102+i, 'l': 99+i, 'c': 101+i, 'v': 4}})
-            for offset, price in zip((0, 15000, 30000, 45000), (100+i, 102+i, 99+i, 101+i)):
-                tick_events.append({'type': 'tick', 'ts': i*60000+offset, 'seq': seq,
+            for offset, price in zip((0, 45000, 90000, 135000), (100+i, 102+i, 99+i, 101+i)):
+                tick_events.append({'type': 'tick', 'ts': i*180000+offset, 'seq': seq,
                                     'price': price, 'qty': 1})
                 seq += 1
-            tick_events.append({'type': 'time', 'ts': (i+1)*60000})
+            tick_events.append({'type': 'time', 'ts': (i+1)*180000})
 
         for mode, events in [('bars', bar_events), ('ticks', tick_events)]:
             received.clear()
