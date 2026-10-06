@@ -29,6 +29,7 @@ import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
+import os
 from pathlib import Path
 import shlex
 import sqlite3
@@ -466,9 +467,10 @@ class MockReceiver:
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.routes = output / "routes.json"
+        self.environment = {**os.environ, "PINEFORGE_EQUIVALENCE_HMAC": "equivalence-fixture"}
         write_json(self.routes, {"schema_version": 1, "default_target": "default",
             "targets": {"default": {"url": f"http://127.0.0.1:{self.server.server_address[1]}/actions",
-                                    "secret_env": ""}}, "rules": [],
+                                    "secret_env": "PINEFORGE_EQUIVALENCE_HMAC"}}, "rules": [],
             "delivery": {"max_in_flight": 1, "transport_retries": 2,
                          "retry_backoff_ms": [10, 20]}})
 
@@ -567,7 +569,7 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
             "--webhook-routes", str(receiver.routes), "--allow-insecure-http"]
         write_json(output / "command.json", command)
         with (output / "runner.log").open("w") as log:
-            process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+            process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
             if restart:
                 if not receiver.accepted.wait(120):
                     raise RuntimeError("accepted-effect crash window not reached")
@@ -578,7 +580,7 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
                 result["crash_receipt"] = {"accepted_effect": crash_action, "returncode": killed_returncode,
                     "ack_withheld": True, "same_command": True, "same_ledger": True}
                 receiver.release_ack.set()
-                process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+                process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
             result["runner_returncode"] = process.wait(timeout=600)
         attempts, effects = receiver.finish(output)
         errors = receiver.errors

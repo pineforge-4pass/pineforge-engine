@@ -323,7 +323,7 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
                 commands.append(timed)
                 with feed_path.open("rb") as source:
                     process = subprocess.Popen(timed, stdin=source if transport == "stdin" else subprocess.DEVNULL,
-                        stdout=log, stderr=subprocess.STDOUT)
+                        stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
                     if restart and launch == 0:
                         deadline = time.monotonic() + 600
                         recorded = 0
