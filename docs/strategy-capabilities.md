@@ -148,7 +148,7 @@ must fit trading days and session-break reopens: 240 minutes
 works on 24x7 UTC, while 7 minutes does not; 60 minutes works on New York
 session calendars across daylight-saving transitions, while 45, 120 and 240
 minutes do not. A `0930-1130,1300-1500` session admits 30-minute bars but
-refuses 60-minute bars at startup. Startup checks the whole warmup and at
+refuses 60-minute bars at startup. Some split-session charts are refused conservatively until calendar-aware chart labels ship. Startup checks the whole warmup and at
 least three years after its last bar and
 refuses unsupported shapes by name before a ledger exists. Passing intraday
 tick paths remain admitted. These restrictions lift when the engine supports

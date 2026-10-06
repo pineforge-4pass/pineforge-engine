@@ -344,7 +344,7 @@ prices is not aggregation. `tools/aggregate_feed.cpp` is a UTC/24x7 corpus tool,
 not a session-aware live feed adapter. In bars mode, chart periods must fit
 the configured trading days, including each reopen after a session break.
 For `0930-1130,1300-1500`, 60-minute bars are refused while 30-minute bars
-cross the lunch reopen correctly. Startup checks the whole warmup and at
+cross the lunch reopen correctly. Some split-session charts are refused conservatively until calendar-aware chart labels ship. Startup checks the whole warmup and at
 least three years after its last bar, including future clock changes,
 before creating a ledger.
 For 24x7 UTC, use a period that divides 1440 minutes (240 works; 7 does not).

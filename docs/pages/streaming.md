@@ -170,6 +170,7 @@ a ledger. For 24x7 UTC, 240 minutes works but 7 minutes does not; for New York
 24x7, 17:00-cutoff and regular-hours calendars, 60 minutes works across daylight
 saving but 45, 120 and 240 minutes do not. On `0930-1130,1300-1500`,
 60-minute bars are refused while 30-minute bars cross the lunch reopen.
+Some split-session charts are refused conservatively until calendar-aware chart labels ship.
 Other calendars use their actual session openings, not a timezone-name allowlist. Unsupported bars refuse by name
 and explain which chart clock to use. Passing intraday ticks-mode paths remain
 admitted. These restrictions lift when the engine supports the corresponding
