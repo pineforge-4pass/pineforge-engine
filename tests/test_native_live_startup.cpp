@@ -288,6 +288,22 @@ void native_identity_changes() {
     CHECK(dump.find("\"chart_timezone_dependency\":null") != std::string::npos);
 }
 
+void chart_calendar_admission() {
+    constexpr std::int64_t start = 1735689600000;
+    for (const auto* timeframe : {"D", "W", "2D", "2W"}) {
+        for (const auto* timezone : {"UTC", "Etc/UTC", "UTC+05:30", "EST5", "Asia/Taipei", "Asia/Kolkata"})
+            require_chart_calendar(timeframe, timezone, start);
+        for (const auto* timezone : {"America/New_York", "US/Eastern", "Europe/Paris", "Australia/Lord_Howe",
+                                     "EST5EDT", "EST5EDT,M3.2.0,M11.1.0"})
+            CHECK(throws_containing([&] { require_chart_calendar(timeframe, timezone, start); },
+                                    "daily/weekly chart delivery on a daylight-saving calendar is not supported yet"));
+    }
+    for (const auto* timeframe : {"1", "7", "15", "60", "120"})
+        require_chart_calendar(timeframe, "America/New_York", start);
+    CHECK(throws_containing([&] { require_chart_calendar("D", "Invalid/Timezone", start); }, "timezone"));
+    CHECK(throws_containing([&] { require_chart_calendar("D", "America/New_York", 2208988800000); }, "daylight-saving"));
+}
+
 }  // namespace
 
 int main() {
@@ -298,6 +314,7 @@ int main() {
     daily_dst_continuity();
     timezone_identity();
     native_identity_changes();
+    chart_calendar_admission();
     if (failures) {
         std::cerr << "test_native_live_startup failures: " << failures << '\n';
         return 1;
