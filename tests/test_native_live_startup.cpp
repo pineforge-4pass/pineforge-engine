@@ -326,7 +326,11 @@ void chart_calendar_admission() {
     require_chart_calendar("30", "UTC", start, "0930-1130,1300-1500:23456");
     require_chart_calendar("60", "UTC", start, "0900-1200,1300-1500:23456");
     // A reopen 210 minutes after the first opening is on the 15- and 30-minute
-    // grids only: Tokyo and Hong Kong lunch breaks refuse 45, 60 and 120.
+    // grids only, so Tokyo and Hong Kong lunch breaks refuse 45, 60 and 120. The
+    // 120 rows are conservative: the bucket that holds the reopen has already
+    // traded before the break, keeps its nominal label, and the engine would run
+    // it. The check refuses it by name at startup, never mid-run, until
+    // calendar-aware chart labels ship.
     for (const auto* timeframe : {"45", "60", "120"}) {
         CHECK(throws_containing([&] { require_chart_calendar(timeframe, "Asia/Tokyo", start, "0900-1130,1230-1500:23456"); },
                                "its bars do not tile the calendar's trading days"));
