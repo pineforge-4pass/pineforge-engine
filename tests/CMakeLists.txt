@@ -3961,6 +3961,9 @@ endif()
 if(PINEFORGE_BUILD_SOURCE_LAYER AND TARGET test_adapter_live_state_equivalence)
     add_test(NAME test_adapter_margin_revival_erasure
              COMMAND test_adapter_live_state_equivalence --margin-revival)
+    # The fragments header is generated from the retirement cursor walks of pine_adapter.cpp by a regex over their
+    # formatting (see the header of retirement_cursor_fragments.py): reformatting a walk fails this build with an
+    # #error until the generator follows.
     set(_pf_retirement_fragments "${CMAKE_CURRENT_BINARY_DIR}/retirement_cursor_fragments.hpp")
     add_custom_command(OUTPUT "${_pf_retirement_fragments}"
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/retirement_cursor_fragments.py"

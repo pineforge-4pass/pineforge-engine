@@ -1,3 +1,8 @@
+// This test compiles the production delivery worker (runner/delivery.cpp) into itself under other class names and
+// gives it the fake transport defined below, instead of the one pineforge_live_support links. That lets it stop the
+// worker at an exact point of its loop and hand it a chosen batch of completions, which no real HTTP receiver can.
+// The renames keep the fake clear of the real WebhookMulti and DeliveryWorker; the fake must keep the interface
+// delivery.cpp uses (the constructor, add and poll, and the completed-result fields).
 #define WebhookMulti StopPollWebhookMulti
 #define DeliveryWorker StopPollDeliveryWorker
 #include "../runner/delivery.cpp"
