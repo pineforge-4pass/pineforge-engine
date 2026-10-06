@@ -11,8 +11,11 @@ event entry; the phase names; `freq` on the events of an alert output only;
 null for a NaN or infinite double, for a time equal to INT64_MIN and for an
 hline price no bar wrote (a run with no rows); integers for an `rgba-u32`
 slot or constant; `manifest_sha256` over the raw bytes the library returned;
-the ctypes mirror of pf_output_event_v1_t; and that build_report_dict, which
-every run calls, writes no `outputs` key.
+the ctypes mirror of pf_output_event_v1_t; that build_report_dict, which
+every run calls, writes no `outputs` key; and that a manifest the harness
+cannot read, a slot it does not list as recorded or an event of an output it
+does not list is an OutputsError coded strategy_library_incompatible
+{reason: outputs_manifest_invalid}, never a traceback or a null id.
 """
 from __future__ import annotations
 
@@ -174,6 +177,30 @@ class OutputsBlockTests(unittest.TestCase):
         self.assertEqual(third["phase"], "realtime")
         self.assertIsNone(third["bar_open_ms"])
         self.assertNotIn("confirmed", third)
+
+    def assert_manifest_invalid(self, outputs_reader, needle: str) -> None:
+        with self.assertRaises(run_json.OutputsError) as caught:
+            run_json.build_outputs_block(outputs_reader)
+        self.assertEqual(caught.exception.code, "strategy_library_incompatible")
+        self.assertEqual(caught.exception.code_args, {"reason": "outputs_manifest_invalid"})
+        self.assertIn(needle, str(caught.exception))
+
+    def test_a_manifest_the_harness_cannot_read(self) -> None:
+        for raw, needle in ((b"{not json", "is not JSON"),
+                            (b"[1, 2]", "is not a JSON object"),
+                            (json.dumps({"outputs": [{"id": "o0"}]}).encode(),
+                             "outputs is not a list of entries with index")):
+            outputs_reader = reader()
+            outputs_reader.manifest = lambda raw=raw: raw
+            self.assert_manifest_invalid(outputs_reader, needle)
+
+    def test_a_slot_the_library_does_not_record(self) -> None:
+        self.assert_manifest_invalid(reader(series=[[1.0, 2.0], [1.0, 2.0]]),
+                                     "names series slot 2, which the library does not record")
+
+    def test_an_event_of_an_output_the_manifest_does_not_list(self) -> None:
+        self.assert_manifest_invalid(reader(events=[event(output_index=9)]),
+                                     "lists no output 9, which an event names")
 
     def test_mirror_layout_matches_the_c_header(self) -> None:
         # pf_output_event_v1_t; src/c_abi.cpp pins the same numbers.

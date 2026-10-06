@@ -1,4 +1,4 @@
-// D2: a batch cut at bar t records, for every bar up to t, what the batch
+// A batch cut at bar t records, for every bar up to t, what the batch
 // over the whole input records. Five cut points over 48 five-minute bars; the
 // host records the close, a kernel ta:: average, a declared 15-minute
 // series (its delivered bucket, NaN until the first) and a colour, plus a
@@ -6,7 +6,7 @@
 // the events at bars <= t are equal, and so are the run constants.
 //
 // Negative control: a host value that depends on the batch's last bar (1 on
-// the bar it knows is the input's last) fails D2, and the harness names the
+// the bar it knows is the input's last) breaks the prefix, and the harness names the
 // cut bar it differs on.
 //
 // Source-free: this TU runs in the kernel-only profile.
@@ -67,7 +67,7 @@ Truncation run_prefix(const std::vector<Bar>& all, int last_bar, bool last_aware
 }
 
 // The first bar <= cut whose rows or events differ, or -1. `why` names it.
-int d2_mismatch(const Record& cut, const Record& full, int last, std::string& why) {
+int prefix_mismatch(const Record& cut, const Record& full, int last, std::string& why) {
     for (int i = 0; i <= last; ++i) {
         if (i >= cut.bars || i >= full.bars) {
             why = "missing row";
@@ -130,7 +130,7 @@ void prefixes_equal() {
         const Truncation part = run_prefix(bars, cut, false);
         CHECK(part.error.empty());
         std::string why;
-        const int bar = d2_mismatch(part.rows, full.rows, cut, why);
+        const int bar = prefix_mismatch(part.rows, full.rows, cut, why);
         if (bar >= 0) std::fprintf(stderr, "  cut %d: bar %d, %s\n", cut, bar, why.c_str());
         CHECK(bar == -1);
     }
@@ -144,7 +144,7 @@ void last_bar_control() {
     for (int cut : {0, 8, 19, 44, 46}) {
         const Truncation part = run_prefix(bars, cut, true);
         std::string why;
-        const int bar = d2_mismatch(part.rows, full.rows, cut, why);
+        const int bar = prefix_mismatch(part.rows, full.rows, cut, why);
         std::fprintf(stderr, "  control, cut %d: %s at bar %d\n", cut,
                      bar >= 0 ? why.c_str() : "no difference", bar);
         CHECK(bar == cut && why == "series slot 3");

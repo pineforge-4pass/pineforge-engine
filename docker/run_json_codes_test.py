@@ -836,6 +836,47 @@ def test_strategy_library_errors_stay_runtime_errors():
         run_json.check_abi(FakeLib(("pf_abi_version",), {"pf_abi_version": 3}))
 
 
+# --- --outputs ------------------------------------------------------------------
+
+OUTPUTS_EXPORTS = ("strategy_outputs_api_version",) + run_json._OUTPUTS_EXPORTS
+
+
+@pytest.mark.parametrize("names,returns,code,args,text", [
+    ((), {}, "outputs_rejected", {"reason": "not_declared"}, run_json._NO_OUTPUTS),
+    (("strategy_outputs_api_version",), {"strategy_outputs_api_version": 1},
+     "strategy_library_incompatible", {"reason": "outputs_api_mismatch"},
+     "--outputs: the library lacks strategy_outputs_manifest, which recording needs; rebuild."),
+    (OUTPUTS_EXPORTS, {"strategy_outputs_api_version": 2},
+     "strategy_library_incompatible", {"reason": "outputs_api_mismatch"},
+     "--outputs: the library's outputs API version is 2, the harness reads 1; rebuild."),
+], ids=["records-none", "lacks-manifest", "api-mismatch"])
+def test_an_outputs_refusal_is_coded_before_any_state(harness, names, returns, code, args, text):
+    lib = fake_lib(*names, returns=returns)
+    status, out = harness(lib, "--outputs")
+    doc = line_of(out)
+    assert status == 1
+    assert doc == {"engine": "pineforge", "error": text, "code": code, "args": args}
+    assert "strategy_create" not in lib.names()
+
+
+def test_a_switch_the_engine_refuses_carries_the_engine_code(harness):
+    lib = fake_lib("strategy_get_last_error", "strategy_get_last_error_code",
+                   "strategy_get_last_error_args", *OUTPUTS_EXPORTS, returns={
+                       "strategy_outputs_api_version": 1,
+                       "strategy_outputs_set_enabled": -1,
+                       "strategy_get_last_error": b"outputs: this module declares no outputs",
+                       "strategy_get_last_error_code": b"outputs_rejected",
+                       "strategy_get_last_error_args": b'{"reason":"not_declared"}'})
+    status, out = harness(lib, "--outputs")
+    doc = line_of(out)
+    assert status == 1
+    assert doc == {"engine": "pineforge",
+                   "error": "--outputs: outputs: this module declares no outputs",
+                   "code": "outputs_rejected", "args": {"reason": "not_declared"}}
+    assert ("strategy_free", ST) in lib.calls
+    assert "run_backtest_full" not in lib.names()
+
+
 SYMINFO_SETTERS = ("strategy_set_syminfo_metadata", "strategy_set_syminfo_mintick",
                    "strategy_set_syminfo_pointvalue", "strategy_set_syminfo_timezone",
                    "strategy_set_syminfo_session")

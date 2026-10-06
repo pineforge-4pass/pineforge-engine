@@ -15,7 +15,7 @@ JSON it prints with values computed here from the same rows:
     less `outputs`, `applied_runtime.outputs`, `fingerprint` and
     `elapsed_seconds`;
   * --outputs on a library without outputs, or on one whose switch is
-    refused, is the structured {"engine", "error"} failure, exit status 1;
+    refused, is the coded failure line, code outputs_rejected, exit status 1;
   * a run that publishes no bar writes empty arrays and a null hline price;
   * --bench --outputs is accepted and records the same block.
 """
@@ -151,6 +151,7 @@ class RunJsonOutputsTests(unittest.TestCase):
                               env={**os.environ, **(env or {})})
         lines = [line for line in done.stdout.splitlines() if line.strip()]
         self.assertEqual(len(lines), 1, done.stdout + done.stderr)
+        self.raw = lines[0]
         return done.returncode, json.loads(lines[0])
 
     def test_outputs_block(self) -> None:
@@ -160,6 +161,9 @@ class RunJsonOutputsTests(unittest.TestCase):
         self.assertIs(report["applied_runtime"]["outputs"], True)
         self.assertIs(report["fingerprint"]["provenance"]["runtime"]["outputs"], True)
         self.assertEqual(list(report)[-1], "fingerprint")
+        # An rgba-u32 slot is written as JSON integers: the first bar is up
+        # (green, 0x4CAF50FF), and an integer has no decimal point.
+        self.assertIn('"slot":1,"output":"o0","values":[1286557951,', self.raw)
 
     def test_without_the_flag_nothing_else_changes(self) -> None:
         code, flagged = self.run_json(self.outputs_library, "--outputs")
@@ -180,7 +184,9 @@ class RunJsonOutputsTests(unittest.TestCase):
     def test_a_library_without_outputs_is_refused(self) -> None:
         code, report = self.run_json(self.generated_library, "--outputs")
         self.assertEqual(code, 1)
-        self.assertEqual(report, {"engine": "pineforge", "error": NO_OUTPUTS_ERROR})
+        self.assertEqual(report, {"engine": "pineforge", "error": NO_OUTPUTS_ERROR,
+                                  "code": "outputs_rejected",
+                                  "args": {"reason": "not_declared"}})
         code, report = self.run_json(self.generated_library)
         self.assertEqual(code, 0, report)
         self.assertNotIn("outputs", report)
@@ -190,7 +196,9 @@ class RunJsonOutputsTests(unittest.TestCase):
                                      env={"PF_OUTPUTS_FIXTURE_UNDECLARED": "1"})
         self.assertEqual(code, 1)
         self.assertEqual(report, {"engine": "pineforge",
-                                  "error": "--outputs: outputs: this module declares no outputs"})
+                                  "error": "--outputs: outputs: this module declares no outputs",
+                                  "code": "outputs_rejected",
+                                  "args": {"reason": "not_declared"}})
 
     def test_a_run_with_no_rows(self) -> None:
         code, report = self.run_json(self.outputs_library, "--outputs",

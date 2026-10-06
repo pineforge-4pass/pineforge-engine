@@ -2194,8 +2194,10 @@ public:
     // the shape once (declare_outputs), the boundary of every run
     // (output_run_begin) and the identity of every row (output_bar): a row is
     // a bar the host published, keyed by its open time. A violated
-    // precondition throws std::logic_error, which inside a callback fails the
-    // run with that text. The methods are in src/engine_report.cpp.
+    // precondition throws std::logic_error coded engine_invariant (a cap the
+    // run reached, or a bar recalculated after its events were cleared, has
+    // its own run-failure code), which inside a callback fails the run with
+    // that text and code. The methods are in src/engine_report.cpp.
 public:
     struct OutputEvent {
         uint64_t sequence = 0;        // 1-based per run; a cleared one is never issued again

@@ -1,4 +1,4 @@
-// D1: a stream records what a batch over the same bars records. The batch
+// A stream records what a batch over the same bars records. The batch
 // runs over [0, T]; the stream begins on [0, W] and takes the rest bar by
 // bar, its caller reading and clearing the events after every input. The
 // series are equal bit for bit and the events equal in every field but
@@ -13,10 +13,10 @@
 // still records what a batch over the same bars (the carried flat bars
 // included) records.
 //
-// Negative control (a), kept in this file: a host that keys a row to every
-// counted calculation (the rule the contract's first revision had) fails D1
-// on the row count, and a host that states the real open for every
-// calculation fails the stream at the recorder's out-of-order refusal.
+// Negative controls, kept in this file: a host that keys a row to every
+// calculation the kernel counts breaks the equality on the row count, and a
+// host that states the real open for every calculation fails the stream at
+// the recorder's out-of-order refusal.
 //
 // Source-free: this TU runs in the kernel-only profile.
 #include "outputs_test_support.hpp"
@@ -133,8 +133,8 @@ Run stream_run(OutputsHost& host, const NativeRunSpec& spec, const std::vector<B
     return out;
 }
 
-// The first difference between a batch and a stream under D1, or "".
-std::string d1_mismatch(const Run& batch, const Run& stream) {
+// The first difference between a batch and a stream over the same bars, or "".
+std::string stream_mismatch(const Run& batch, const Run& stream) {
     if (!batch.error.empty()) return "batch failed: " + batch.error;
     if (!stream.error.empty()) return "stream failed: " + stream.error;
     if (batch.rows.bars != stream.rows.bars)
@@ -172,7 +172,7 @@ void chart_timeframe() {
     for (int warmup : {1, 12, 23}) {
         auto host = make_host();
         const Run stream = stream_run(*host, make_spec("outputs-d1", 1), bars, warmup);
-        const std::string why = d1_mismatch(batch, stream);
+        const std::string why = stream_mismatch(batch, stream);
         if (!why.empty()) std::fprintf(stderr, "  W=%d: %s\n", warmup, why.c_str());
         CHECK(why.empty());
         CHECK(stream.warmup_rows == warmup);
@@ -198,7 +198,7 @@ void aggregated() {
     for (int warmup : {1, 30, 59}) {
         auto host = make_host();
         const Run stream = stream_run(*host, make_spec("outputs-d1-agg", 1, "1", "5"), bars, warmup);
-        const std::string why = d1_mismatch(batch, stream);
+        const std::string why = stream_mismatch(batch, stream);
         if (!why.empty()) std::fprintf(stderr, "  aggregated W=%d: %s\n", warmup, why.c_str());
         CHECK(why.empty());
     }
@@ -246,12 +246,12 @@ void stale_carried() {
     CHECK(stream.processed == 8);
     CHECK(stream.rows.bars == 7);
     CHECK(stream.processed > stream.rows.bars);
-    const std::string why = d1_mismatch(batch, stream);
+    const std::string why = stream_mismatch(batch, stream);
     if (!why.empty()) std::fprintf(stderr, "  stale carried: %s\n", why.c_str());
     CHECK(why.empty());
 
-    // Control (a), the first revision's rule: a row for every counted
-    // calculation, keyed by the count. D1 fails on the row count.
+    // Control: a host that keys a row to every calculation the kernel counts
+    // (keyed by the count). The equality fails on the row count.
     struct CountKeyed : OutputsHost {
         using OutputsHost::OutputsHost;
         Script inner;
@@ -269,8 +269,8 @@ void stale_carried() {
         counted.inner = counted.script;
     }
     const Run control_a = stream_run(counted, tolerant_spec("outputs-d1-stale"), c.warmup, 4, c.advances);
-    const std::string why_a = d1_mismatch(batch, control_a);
-    std::fprintf(stderr, "  control (a), rows keyed to the count: %s\n", why_a.c_str());
+    const std::string why_a = stream_mismatch(batch, control_a);
+    std::fprintf(stderr, "  control, rows keyed to the count: %s\n", why_a.c_str());
     CHECK(why_a.rfind("row count 7 != 8", 0) == 0);
 
     // A host that states the real open for every calculation is refused by
@@ -278,10 +278,10 @@ void stale_carried() {
     auto every = make_host();
     every->skip_stale = false;
     const Run control_open = stream_run(*every, tolerant_spec("outputs-d1-stale"), c.warmup, 4, c.advances);
-    std::fprintf(stderr, "  control (a), every calculation published: %s\n",
+    std::fprintf(stderr, "  control, every calculation published: %s\n",
                  control_open.error.c_str());
     CHECK(control_open.error.find("is before the last recorded bar") != std::string::npos);
-    CHECK(!d1_mismatch(batch, control_open).empty());
+    CHECK(!stream_mismatch(batch, control_open).empty());
 }
 
 }  // namespace

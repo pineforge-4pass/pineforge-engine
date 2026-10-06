@@ -243,8 +243,14 @@ void BacktestEngine::free_report(ReportC* report) {
 // Recorded outputs (engine.hpp, docs/outputs.md). Kept after everything the
 // file held before, so no line above moves. The consumer's private header is
 // read for three facts only: whether the host is Running, the run's phase and
-// the current point's completion.
+// the current point's completion. Every refusal carries its run-failure code
+// (run_failure.hpp): a broken recorder contract is a host or generated-code
+// defect, engine_invariant; a cap the run reached is pine_runtime_limit; the
+// two a caller causes (a switch it may not flip, a bar recalculated after it
+// took that bar's events) are outputs_rejected.
 #include "native_execution_consumer.hpp"
+
+#include <pineforge/run_failure.hpp>
 
 #include <climits>
 #include <cstring>
@@ -258,7 +264,12 @@ namespace {
 constexpr double kUnwrittenOutput = std::numeric_limits<double>::quiet_NaN();
 
 [[noreturn]] void refuse_output(const std::string& text) {
-    throw std::logic_error("outputs: " + text);
+    throw coded<std::logic_error>(RunFailureCode::engine_invariant, {}, "outputs: " + text);
+}
+
+[[noreturn]] void refuse_output_limit(const char* limit, const char* text) {
+    throw coded<std::runtime_error>(RunFailureCode::pine_runtime_limit,
+                                    {{"limit", limit}, {"max", INT_MAX}}, text);
 }
 
 // FNV-1a 64 of the bytes, as stream_state_hash folds them.
@@ -304,16 +315,21 @@ void BacktestEngine::clear_output_record() {
 
 bool BacktestEngine::set_outputs_enabled(bool on) {
     if (on && !outputs_declared_) {
-        last_error_ = "outputs: this module declares no outputs";
+        note_run_failure(*this, "outputs: this module declares no outputs",
+                         RunFailureCode::outputs_rejected, {{"reason", "not_declared"}});
         return false;
     }
-    if (on == outputs_enabled_) return true;
-    if (output_host_running()) {
-        last_error_ = "outputs: recording cannot change during a run";
-        return false;
+    if (on != outputs_enabled_) {
+        if (output_host_running()) {
+            note_run_failure(*this, "outputs: recording cannot change during a run",
+                             RunFailureCode::outputs_rejected, {{"reason", "run_in_progress"}});
+            return false;
+        }
+        outputs_enabled_ = on;
+        clear_output_record();
     }
-    outputs_enabled_ = on;
-    clear_output_record();
+    // A setter that succeeds leaves no failure behind (strategy_get_last_error_code).
+    clear_run_failure(*this);
     return true;
 }
 
@@ -347,6 +363,9 @@ void BacktestEngine::output_bar(int64_t open_ms, int64_t close_ms) {
     if (!output_run_begun_) refuse_output("output_bar before any output_run_begin");
     const size_t slots = static_cast<size_t>(outputs_slots_);
     if (output_open_ms_.empty() || open_ms > output_open_ms_.back()) {
+        // bar_index is an int32_t, like the C record's.
+        if (output_open_ms_.size() >= static_cast<size_t>(INT_MAX))
+            refuse_output_limit("output_rows", "outputs: the row count is at its limit");
         output_series_.resize(output_series_.size() + slots, kUnwrittenOutput);
         output_open_ms_.push_back(open_ms);
         output_close_ms_.push_back(close_ms);
@@ -361,8 +380,10 @@ void BacktestEngine::output_bar(int64_t open_ms, int64_t close_ms) {
     // A recalculation of the last row. Its queued events are retracted and
     // their sequences issued again, unless a clear already handed one out.
     if (output_cleared_sequence_ > output_row_seq_base_) {
-        refuse_output("bar " + std::to_string(output_open_ms_.size() - 1)
-                      + " was recalculated after its events were cleared");
+        throw coded<std::runtime_error>(
+            RunFailureCode::outputs_rejected, {{"reason", "recalculated_after_clear"}},
+            "outputs: bar " + std::to_string(output_open_ms_.size() - 1)
+                + " was recalculated after its events were cleared");
     }
     std::fill(output_series_.end() - static_cast<std::ptrdiff_t>(slots), output_series_.end(),
               kUnwrittenOutput);
@@ -396,9 +417,9 @@ void BacktestEngine::record_output_event(int output, double value, const std::st
     if (output < 0 || output >= outputs_count_)
         refuse_output("output " + std::to_string(output) + " is out of range");
     if (output_events_.size() >= static_cast<size_t>(INT_MAX))
-        refuse_output("the event queue is full");
+        refuse_output_limit("output_events", "outputs: the event queue is full");
     if (output_sequence_ == std::numeric_limits<uint64_t>::max())
-        throw std::runtime_error("outputs: event sequence overflow");
+        refuse_output("event sequence overflow");
     OutputEvent event;
     event.sequence = output_sequence_ + 1;
     event.output_index = output;

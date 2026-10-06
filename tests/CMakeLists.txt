@@ -1796,8 +1796,8 @@ list(APPEND TEST_SOURCES test_report_timeframe_ratio)
 list(APPEND TEST_SOURCES test_aggregated_admission_receipt_tapes)
 # Recorded outputs (docs/outputs.md): a bare host's record read through the
 # strategy_outputs_* C exports -- hand values, the row and run-constant rules
-# and every refusal (recorder); a stream records what a batch records (D1); a
-# batch cut at bar t records bars <= t as the whole batch does (D2); the run
+# and every refusal (recorder); a stream records what a batch records; a
+# batch cut at bar t records bars <= t as the whole batch does; the run
 # boundary on a reused handle; and three trading hosts whose trades, equity
 # and hashes are equal with recording undeclared, off and on. All source-free,
 # so they also run in the kernel-only profile.
@@ -2482,6 +2482,8 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
             ${CMAKE_CURRENT_SOURCE_DIR}/test_per_entry_exit_tapes.py
             ${_pf_pee_fixtures} $<TARGET_FILE:per_entry_exit_tapes>
             ${PROJECT_SOURCE_DIR}/scripts)
+endif()
+
 # Recorded outputs through docker/run_json.py (--outputs): two strategy
 # libraries run as a process, one that records outputs
 # (outputs_fixture_strategy.cpp, a bare host with the per-library outputs

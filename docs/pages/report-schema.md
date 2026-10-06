@@ -284,7 +284,8 @@ equal to `INT64_MIN` and a run constant never written (an hline price in a run
 with no rows). A value whose manifest encoding is `rgba-u32` (a colour) is
 written as an integer. With `--bench` the timed runs record too, so the timing
 includes recording. `--outputs` on a module that records nothing is the
-structured `{"engine": "pineforge", "error": …}` failure, exit status 1.
+harness's coded failure line, code `outputs_rejected` (reason `not_declared`),
+exit status 1 (@ref run_failure_codes).
 
 ## Lifetime and ownership
 

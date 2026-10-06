@@ -19,7 +19,13 @@ version number follows semantic versioning over the surfaces the
   present in every module built on this engine, and a recording module adds
   `strategy_outputs_api_version`, `strategy_outputs_manifest` and
   `strategy_signal_safety_receipt`. `docker/run_json.py --outputs` writes the
-  record as the report's `outputs` block. Recording is off until a caller
+  record as the report's `outputs` block. Every refusal carries a run-failure
+  code: the new `outputs_rejected` (reasons `not_declared`, `run_in_progress`,
+  `recalculated_after_clear`), `pine_runtime_limit` with the new limits
+  `output_events` and `output_rows`, `strategy_library_incompatible` with the
+  new reasons `outputs_api_mismatch` and `outputs_manifest_invalid`, and
+  `engine_invariant` for a broken recorder precondition (all additions to
+  `docker/run_failure_codes.json`). Recording is off until a caller
   turns it on, and nothing a run computes depends on it: trades, reports,
   metrics and every hash are byte-identical, `pf_report_t` and every existing
   symbol are unchanged, and `PF_ABI_VERSION` stays 4. The new members enter

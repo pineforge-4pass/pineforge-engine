@@ -1728,16 +1728,22 @@ typedef struct pf_output_event_v1_s {
     uint32_t confirmed;       /**< 0 when recorded on a partially finalized bar */
     uint32_t reserved0;       /**< 0 */
     double   value;           /**< the event's value; NaN = na */
-    uint64_t message_hash64;  /**< FNV-1a 64 of the message bytes; 0 without one */
-    const char* message;      /**< NUL-terminated, or NULL without one; borrowed until the
-                                   next call that runs, streams or clears on the handle */
+    uint64_t message_hash64;  /**< FNV-1a 64 of every byte the module recorded as the
+                                   message; 0 without one */
+    const char* message;      /**< NUL-terminated, or NULL without one: a message holding a
+                                   NUL byte reads to its first NUL, while message_hash64
+                                   covers every recorded byte. Borrowed until the next call
+                                   that runs, streams or clears on the handle */
 } pf_output_event_v1_t;
 
-/** Turn recording on (@p on nonzero) or off. A change clears the record.
- *  Returns 0, or -1 with #strategy_get_last_error saying why and nothing
- *  changed: "outputs: this module declares no outputs" (turning on a module
- *  that records nothing; turning it off answers 0), or "outputs: recording
- *  cannot change during a run" (a change while a batch or a stream, from
+/** Turn recording on (@p on nonzero) or off. A change clears the record; a
+ *  call that changes nothing changes nothing, even while a run is in progress.
+ *  Returns 0 and leaves no failure (#strategy_get_last_error_code reads
+ *  `""`), or -1 with nothing changed and the failure recorded as code
+ *  `outputs_rejected`: reason `not_declared`, "outputs: this module declares
+ *  no outputs" (turning on a module that records nothing; turning it off
+ *  answers 0), or reason `run_in_progress`, "outputs: recording cannot
+ *  change during a run" (a change while a batch or a stream, from
  *  #strategy_stream_begin to #strategy_stream_end, is running). */
 PF_API int strategy_outputs_set_enabled(pf_strategy_t s, int on);
 /** Series slots per row; 0 while recording is off. */

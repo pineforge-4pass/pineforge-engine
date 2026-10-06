@@ -277,7 +277,7 @@ the run constants, each horizontal level's price and every event (sequence,
 output, bar, phase, value, message). Its keys are listed in the engine's
 report-schema page. Without the flag the report is unchanged. On a library that
 records no outputs the run fails before it starts: one line
-`{"engine":"pineforge","error":"--outputs: this library records no outputs (compile the script as an indicator, or with outputs on)"}`
+`{"engine":"pineforge","error":"--outputs: this library records no outputs (compile the script as an indicator, or with outputs on)","code":"outputs_rejected","args":{"reason":"not_declared"}}`
 on stdout, harness exit 1. With `--bench` the timed runs record too.
 
 The engine catches run errors (TF mismatch, unsupported emulation flags,

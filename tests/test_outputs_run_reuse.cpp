@@ -144,7 +144,7 @@ void off_and_on() {
     CHECK(failed_run.events.empty());
 }
 
-// Q20: the host states the run boundary.
+// The host states the run boundary itself.
 void host_without_run_begin() {
     const auto bars = make_bars(5, kStep);
     {

@@ -36,8 +36,11 @@ constant means is not the engine's business; the module's manifest
   `phase` is the run phase (batch, stream warm-up, stream realtime);
   `confirmed` is 0 only for an event recorded while a stream finalizes a bar
   it never saw close (`strategy_stream_end` with a partial input bar);
-  `message_hash64` is the FNV-1a 64 hash of the message bytes (0 without a
-  message).
+  `message_hash64` is the FNV-1a 64 hash of every byte recorded as the
+  message (0 without a message). A C reader receives the message as
+  NUL-terminated text, so a message holding a NUL byte reads to its first NUL
+  while its hash covers all of it: re-hash the bytes you recorded, not the
+  text you read back.
 - **Run constants.** One double per index per run, for a value fixed for the
   whole run, such as a level read from an input. NaN until written; the
   run's first write stores it and a later write must be equal (bit for bit,
@@ -58,18 +61,30 @@ subclass calls them; a C host has no writer in this version. Each writer but
 off, so a module can call them unconditionally; generated code tests
 `outputs_enabled_` first.
 
-| Member | Call it | Fails (throws `std::logic_error`) when |
+| Member | Call it | Fails when |
 |---|---|---|
 | `declare_outputs(slots, outputs, run_constants = 0)` | once, before the first run (a generated constructor) | a count is negative; the host is running; a second call names other counts |
 | `output_run_begin()` | at the start of every run, before any bar; a C++ host calls it in `on_native_run_begin` | never; calling it twice is calling it once |
-| `output_bar(open_ms, close_ms)` | first, in every calculation the host publishes | `output_run_begin()` was never called; `open_ms` is below the last row's |
+| `output_bar(open_ms, close_ms)` | first, in every calculation the host publishes | `output_run_begin()` was never called; `open_ms` is below the last row's; the row count reaches `INT_MAX` |
 | `output_value(slot, value)` | after `output_bar` | no row is open; `slot` is out of range |
 | `output_event(output, value)`, `output_event(output, value, message)` | after `output_bar` | no row is open; `output` is out of range; the queue holds `INT_MAX` events |
 | `output_constant(index, value)` | any time in the run | `output_run_begin()` was never called; `index` is out of range; the value differs from the run's first write |
 
+Call `output_bar` first in every calculation you write in. A row stays open
+until the next `output_bar`, so a calculation that skips it and still writes
+lands in the previous bar's row.
+
+Each failure carries a run-failure code (`docs/pages/run-failure-codes.md`)
+beside its text. A broken precondition of the table above is a host or
+generated-code defect, thrown as `std::logic_error` and coded
+`engine_invariant`. The event queue and the rows reaching `INT_MAX` are
+`pine_runtime_limit` (limit `output_events` or `output_rows`). A recalculation
+of a bar after a caller cleared that bar's events is `outputs_rejected`
+(reason `recalculated_after_clear`), and so are the switch's refusals below.
 Thrown inside a callback, the exception fails the run with its text in
-`last_error()` (`strategy_get_last_error`). A caller reads nothing after a
-failed run: the record then holds whatever the run wrote before it failed.
+`last_error()` (`strategy_get_last_error`) and its code in
+`strategy_get_last_error_code`. A caller reads nothing after a failed run:
+the record then holds whatever the run wrote before it failed.
 
 **The open and close a C++ host states.** The open is
 `NativeDecisionContext::script_bar_open_ms`. The close is the second argument;
@@ -138,7 +153,7 @@ private:
 
 | Function | Answers |
 |---|---|
-| `strategy_outputs_set_enabled(s, on)` | 0, or -1 and nothing changed: turning on a module that declares nothing, or changing the switch while a run is in progress (a batch, or a stream from `strategy_stream_begin` to `strategy_stream_end`). A change clears the record. |
+| `strategy_outputs_set_enabled(s, on)` | 0 with no failure left behind, or -1, nothing changed and the failure coded `outputs_rejected`: reason `not_declared` (turning on a module that declares nothing) or `run_in_progress` (changing the switch while a run is in progress: a batch, or a stream from `strategy_stream_begin` to `strategy_stream_end`). A change clears the record; a call that changes nothing answers 0, also during a run. |
 | `strategy_outputs_series_count(s)` | slots per row; 0 while recording is off |
 | `strategy_outputs_bars_len(s)` | rows |
 | `strategy_outputs_bar_times_copy(s, from_bar, open_ms, close_ms, capacity, written)` | the rows' times from `from_bar` on |
@@ -190,8 +205,13 @@ records, for every bar up to `t`, what the batch over all the bars records
 writes the record as the report's `outputs` key, just before `fingerprint`;
 `applied_runtime` and the fingerprint's `provenance.runtime` then hold
 `"outputs": true`. Without the flag the report is unchanged. On a module that
-records nothing, or one that refuses to record, the harness prints the
-structured `{"engine": "pineforge", "error": ...}` failure and exits 1.
+records nothing, or one that refuses to record, the harness prints its one
+failure line, `{"engine":"pineforge","error":...,"code":"outputs_rejected",
+"args":{"reason":"not_declared"}}`, and exits 1. A recording module whose
+outputs exports it cannot read (another outputs API version, a missing
+export, a manifest that is not a JSON object or does not list what the module
+recorded) fails as `strategy_library_incompatible` (reason
+`outputs_api_mismatch` or `outputs_manifest_invalid`).
 
 ```json
 "outputs": {

@@ -646,8 +646,8 @@ EXCLUDED_REGISTERED_MIN = {'debug': 780, 'sanitizers': 779, 'native': 789}
 # above, its comments kept here so that no line cited by line number moves.
 # Counted with ctest -N on the lane's tree:
 #   KERNEL_MIN_TESTS 305 run = those 299 plus six source-free rows:
-#     +5 test_outputs_recorder, test_outputs_stream_equivalence (D1),
-#        test_outputs_truncation (D2), test_outputs_run_reuse,
+#     +5 test_outputs_recorder, test_outputs_stream_equivalence,
+#        test_outputs_truncation, test_outputs_run_reuse,
 #        test_outputs_off_identity
 #     +1 test_outputs_c_api_c99 (group pf_outputs as strict C99)
 #     All six register in release too. 306 registered, 305 run: the
