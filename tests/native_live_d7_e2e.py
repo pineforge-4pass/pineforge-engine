@@ -63,13 +63,9 @@ def run_case(args, case):
     if "d4-" in case.name and config["timezone"] == "America/New_York":
         for mode in ("bars", "ticks"):
             refused = target / f"refused-{mode}.sqlite"
-            result = subprocess.run(list(map(str, command[:-len(config_args(config))] + config_args(config) +
-                                         ["--ledger", refused, "--mode", mode])),
-                                    text=True, capture_output=True, timeout=30)
-            if "duplicate option" in result.stderr:
-                result = subprocess.run(list(map(str, [args.runner, "run", "--strategy", library,
-                    "--warmup", warmup, "--ledger", refused, "--mode", mode] + config_args(config))),
-                    text=True, capture_output=True, timeout=30)
+            result = subprocess.run(list(map(str, [args.runner, "run", "--strategy", library,
+                "--warmup", warmup, "--ledger", refused, "--mode", mode] + config_args(config))),
+                text=True, capture_output=True, timeout=30)
             assert result.returncode == 1 and "daily/weekly chart delivery on a daylight-saving calendar is not supported yet" in result.stderr
             assert not refused.exists() and not Path(str(refused) + ".lock").exists()
         verdict = dict(case=case.name, bars="REFUSED D/W daylight-saving calendar", ticks="REFUSED", timezone=config["timezone"])
@@ -84,6 +80,7 @@ def run_case(args, case):
     batched(feed, (dict(type="bar", bar=bar) for bar in live))
     batch_actions = target / "batch-actions.jsonl"
     batch = checked(oracle_command(args.oracle, library, full, case / "config.json", batch_actions, timeframe), target / "batch.json")
+    assert batch["trades_len"] > 0, (case.name, "vacuous chart reference")
     checked(command + ["--feed", feed], target / "bars-summary.json")
     report = checked([args.runner, "report", "--ledger", ledger], target / "bars-report.json")
     equal(batch, report["report"], case.name + ".bars.report")
@@ -98,10 +95,14 @@ def run_case(args, case):
         before_full, before_feed = target / "full-1m.csv", target / "bars-1m.jsonl"
         write_csv(before_full, before_rows)
         batched(before_feed, (dict(type="bar", bar=bar) for bar in before_rows[len(rows(case / "warmup-1m.csv")):]))
-        before = checked([args.before_runner, "run", "--strategy", library, "--warmup", case / "warmup-1m.csv",
+        checked([args.before_runner, "run", "--strategy", library, "--warmup", case / "warmup-1m.csv",
                           "--feed", before_feed, "--ledger", target / "before.sqlite", "--mode", "bars",
                           "--input-tf", "1"] + config_args(config), target / "before-summary.json")
         before_report = checked([args.before_runner, "report", "--ledger", target / "before.sqlite"], target / "before-report.json")["report"]
+        before_batch = checked([args.oracle, library, before_full, timeframe, target / "before-batch-actions.jsonl",
+                                "--input-tf", "1", "--distribution", "3", "--config", case / "config.json",
+                                "--calendar-check"], target / "before-batch.json")
+        equal(before_batch, before_report, case.name + ".before.input1.reference")
         verdict["before_net_profit"] = before_report["net_profit"]
         excluded = {"input_bars_processed", "input_tf_seconds", "needs_aggregation", "script_tf_ratio"}
         verdict["before_trading_drift"] = first_drift({key: value for key, value in batch.items() if key not in excluded},
