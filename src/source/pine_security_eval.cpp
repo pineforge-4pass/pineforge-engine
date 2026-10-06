@@ -1061,7 +1061,9 @@ const NativeInstrumentFeed& source::PineStrategyHost::installed_symbol_feed(
     if (!symbol_feeds_lent_) return symbol_feeds_[i];
     const NativeRunSpec* spec = native_state().spec;
     if (spec == nullptr || i >= spec->instrument_feeds.size())
-        throw std::logic_error("request data: the run spec no longer holds the symbol feeds");
+        throw coded<std::logic_error>(
+            RunFailureCode::engine_invariant, {},
+            "request data: the run spec no longer holds the symbol feeds");
     return spec->instrument_feeds[i];
 }
 
@@ -1069,7 +1071,9 @@ void source::PineStrategyHost::restore_symbol_feeds() {
     if (!symbol_feeds_lent_) return;
     const NativeRunSpec* spec = native_state().spec;
     if (spec == nullptr || spec->instrument_feeds.size() != symbol_feeds_.size())
-        throw std::logic_error("request data: the run spec no longer holds the symbol feeds");
+        throw coded<std::logic_error>(
+            RunFailureCode::engine_invariant, {},
+            "request data: the run spec no longer holds the symbol feeds");
     // Every entry is the one lent at that index -- its key and its column
     // names -- before a byte is copied back, so a mismatch changes nothing.
     for (std::size_t i = 0; i < symbol_feeds_.size(); ++i) {
@@ -1080,7 +1084,9 @@ void source::PineStrategyHost::restore_symbol_feeds() {
         for (std::size_t c = 0; same && c < feed.columns.size(); ++c)
             same = held.columns[c].name == feed.columns[c].name;
         if (!same)
-            throw std::logic_error("request data: the run spec holds other symbol feeds");
+            throw coded<std::logic_error>(
+                RunFailureCode::engine_invariant, {},
+                "request data: the run spec holds other symbol feeds");
     }
     for (std::size_t i = 0; i < symbol_feeds_.size(); ++i) {
         const NativeInstrumentFeed& held = spec->instrument_feeds[i];

@@ -194,9 +194,9 @@ them for the record only. "Linux aarch64" is the maintainers' Cortex-A725 host.
 K4, the batch log pre-size. Since V19-B's step 6 (`08e71bae`) a run under the
 default `NativeEventRetention::Window` keeps no driver point and retires its
 journal at every script-bar boundary, so K4 has nothing to size.
-`reserve_driver_log` (`src/native_execution_consumer.cpp:2759-2764`) returns
+`reserve_driver_log` (`src/native_execution_consumer.cpp:2868-2873`) returns
 unless the retention is Full, and `presize_logs`
-(`src/native_execution_consumer.cpp:9486-9497`) sizes no journal under Window.
+(`src/native_execution_consumer.cpp:9634-9645`) sizes no journal under Window.
 `NativeRunSpec::event_retention` (`include/pineforge/native_run_spec.hpp:714`)
 defaults to Window, and the Pine adapter declares
 `NativeEventRetention::Window` (`src/source/pine_adapter.cpp:2806`). K4 still

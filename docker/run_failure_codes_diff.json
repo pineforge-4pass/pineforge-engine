@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "c570a4d84d448ffb24b6a131e704104c693cae29d33dbe325886fb8d35473d6c"
+    "catalogSha256": "b143522a5e35e14b208b0e7e609166a3596b54362f5901501d037fa45e0d0fa8"
   },
   "catalogSchema": {
     "before": null,
@@ -820,7 +820,8 @@
               "run_in_progress",
               "empty_key",
               "invalid_arrays",
-              "times_not_increasing"
+              "times_not_increasing",
+              "restore_failed"
             ]
           }
         },
@@ -1455,7 +1456,8 @@
               "mintick_invalid",
               "unknown_field",
               "invalid_arrays",
-              "times_not_increasing"
+              "times_not_increasing",
+              "restore_failed"
             ]
           },
           "script_tf": {

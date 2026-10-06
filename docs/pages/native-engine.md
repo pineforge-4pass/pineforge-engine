@@ -470,7 +470,7 @@ spec fields.
 The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
 overload (`engine.hpp:1800-1812`) is **not** refused as a source mutation: it
 reaches `NativeExecutionConsumer::run_rich`
-(`native_execution_consumer.cpp:9592-9632`), which admits the begin, checks the
+(`native_execution_consumer.cpp:9740-9782`), which admits the begin, checks the
 timeframe arguments against the spec, preflights and pumps the batch exactly
 like the plain overload. `inputs` / `syminfo` / `overrides` are carried only as
 `NativeBeginArgs` fields to `prepare_native_begin` — the overrides as the
@@ -638,13 +638,13 @@ a host reacts to its own execution and may submit again. A request born there,
 mid-bar on a continuous segment, is eligible on the **remaining path suffix** of
 that segment — the birth is admitted at the current cursor and the geometric
 search then sees only the unconsumed suffix (`born_on_remaining_path`,
-`native_execution_consumer.cpp:5817-5821`). Requests accepted before the
+`native_execution_consumer.cpp:5928-5932`). Requests accepted before the
 segment, and discrete points, keep the ordinary birth gate above.
 
 `on_native_bar_open` fires at the modeled opening, before that point's matching
-pass (`native_execution_consumer.cpp:7277-7279`). **Lookahead warning:** the
+pass (`native_execution_consumer.cpp:7399-7401`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
-`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:7247`), the
+`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:7369`), the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
 high, low and close are the finished bar's, not what is known at the open. A
 host that must decide on open-only information reads
@@ -2112,7 +2112,7 @@ default, set while no run is active — because each row is a full
 the live state, not the run's length: the closed rows enter through a running
 digest). With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:8159`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:8281`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
@@ -3086,7 +3086,7 @@ Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator
 aggregates with, and the one the kernel's `script_bucket_completions` query
 feeds when the Pine scheduler asks how its input span buckets
-(`TimeframeAggregator` `native_execution_consumer.cpp:8241`). What it does
+(`TimeframeAggregator` `native_execution_consumer.cpp:8363`). What it does
 **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
@@ -3099,7 +3099,7 @@ and not a way to register a series: registration is
 `NativeRunSpec::subscriptions` or `declare_timeframe_subscriptions`. In-run the
 setter is a source mutation and **throws**, latching `Failed`
 (`UnsupportedSource`) through `guard_native_mutation`
-(`engine_aux_security.cpp:82`, `guard_native_mutation` `engine_consumer.cpp:42`).
+(`engine_aux_security.cpp:83`, `guard_native_mutation` `engine_consumer.cpp:42`).
 
 ## Batch OHLCV vs ticks vs quiet
 
@@ -3150,7 +3150,7 @@ These are existing refusals, not implied future features:
 - In-session gaps on a realtime stream, and in a `Canonical` stream warmup
 - Source `calc_on_every_tick` / `calc_on_order_fills` enabled (the runner
   rejects an explicit true override, and the Pine host refuses a stream begin
-  with `calc_on_order_fills`, `pine_strategy_host.cpp:251-254`). This is a
+  with `calc_on_order_fills`, `pine_strategy_host.cpp:276-279`). This is a
   **source-route** refusal, not a limit on the native hooks: `on_native_tick`
   and `on_native_applied` are delivered on a stream, and a native host's own
   `NativeRunSpec::calculation` is accepted there, where `EveryModeledPoint`
@@ -4512,7 +4512,7 @@ Nor is there a build-level one. The two source sets are disjoint:
 `PINEFORGE_SOURCE_LAYER_SOURCES` (`CMakeLists.txt:91`) holds all six
 `src/compat/pine/` units and all twelve `src/source/` ones, and
 `PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:114`) holds the kernel's own
-thirty-five, which are what `add_library` (`CMakeLists.txt:154`) compiles into
+thirty-five, which are what `add_library` (`CMakeLists.txt:155`) compiles into
 `pineforge_kernel`. `libpineforge.a` still carries both sets when
 `PINEFORGE_BUILD_SOURCE_LAYER` is ON, which is the default; the kernel archive
 exists either way. The installed-header closure is clean too, which the

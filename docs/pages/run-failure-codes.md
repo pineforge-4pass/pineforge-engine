@@ -124,7 +124,7 @@ The tables below list the catalog at this tree.
 | `pine_string_error` | `strategy` | no | `reason` (vocab, 2 values) | A string built-in refused its arguments. |
 | `recalc_cap` | `strategy_limit` | no | none | The script's calc_on_order_fills recalculation loop reached its cap. |
 | `recorded_request_missing` | `no_data` | no | none | No recorded series is installed for a request the script reads. |
-| `recorded_request_refused` | `input` | no | `reason` (vocab, 4 values) | A recorded request series was refused. |
+| `recorded_request_refused` | `input` | no | `reason` (vocab, 5 values) | A recorded request series was refused. |
 | `request_symbol_invalid` | `strategy` | no | none | A request.security symbol is not a valid symbol. |
 | `request_timeframe_invalid` | `strategy` | no | `api` (vocab, 2 values) | A request timeframe literal does not parse. |
 | `request_timeframe_unsupported` | `unsupported` | no | `input_tf` (timeframe, optional), `reason` (vocab, 7 values), `script_tf` (timeframe, optional) | A request timeframe cannot be served for this run's chart timeframe. |
@@ -141,7 +141,7 @@ The tables below list the catalog at this tree.
 | `strategy_runtime_error` | `strategy` | no | none | The script stopped itself with runtime.error(); the message, possibly empty, is the text. |
 | `strategy_settings_rejected` | `strategy` | no | `field` (vocab, 30 values) | A strategy() declaration setting (or its override) is not a value the engine accepts. |
 | `stream_input_rejected` | `input` | no | none | A streaming input (bar, tick or auxiliary bar) was refused. |
-| `symbol_feeds_refused` | `symbol_feeds` | no | `field` (vocab, 6 values, optional), `input_tf` (timeframe, optional), `reason` (vocab, 40 values), `script_tf` (timeframe, optional) | Other symbols' bars installed for request.security were refused. |
+| `symbol_feeds_refused` | `symbol_feeds` | no | `field` (vocab, 6 values, optional), `input_tf` (timeframe, optional), `reason` (vocab, 41 values), `script_tf` (timeframe, optional) | Other symbols' bars installed for request.security were refused. |
 | `symbol_metadata_rejected` | `symbol_metadata` | yes | `field` (vocab, 14 values) | The symbol's catalog metadata (syminfo) is not a value the engine accepts. |
 | `syminfo_unreadable` | `symbol_metadata` | yes | `reason` (vocab, 4 values) | The harness could not read the run's syminfo file. |
 
