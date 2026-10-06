@@ -50,6 +50,7 @@ def image_e2e(image, artifacts, harness=None):
 
     with tempfile.TemporaryDirectory(prefix="typed-provenance-") as temporary:
         source = Path(temporary)
+        source.chmod(0o755)
         (source / "strategy.pine").write_text(STRATEGY, encoding="utf-8")
         (source / "ohlcv.csv").write_text(synthetic_csv(), encoding="utf-8")
         (artifacts / "strategy.pine").write_text(STRATEGY, encoding="utf-8")
