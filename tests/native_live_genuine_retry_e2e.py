@@ -7,8 +7,10 @@ Build the runner and an observer-linked example library before invoking it.
 import argparse
 from collections import Counter
 import json
+import os
 from pathlib import Path
 import sys
+import tempfile
 
 from native_live_equivalence_e2e import (
     Strategy, action_key, chart_bar_array, first_difference, ordered_delivery_effects, write_json,
@@ -147,15 +149,28 @@ def main():
     parser.add_argument("--runner", type=Path, required=True)
     parser.add_argument("--library", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--isolate-output", action="store_true")
+    parser.add_argument("--sanitizer", choices=("asan", "tsan"))
     parser.add_argument("--scenarios", nargs="+", default=[
         "file-batch", "restart-batch", "retry-batch", "combined-batch"])
     arguments = parser.parse_args()
+    if arguments.sanitizer:
+        os.environ.pop("LD_PRELOAD", None)
+        os.environ.pop("DYLD_INSERT_LIBRARIES", None)
+        if arguments.sanitizer == "asan":
+            leaks = "0" if sys.platform == "darwin" else "1"
+            os.environ["ASAN_OPTIONS"] = f"detect_leaks={leaks}:halt_on_error=1:abort_on_error=1"
     root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(root / "scripts"))
     from run_strategy import BarC, ReportC
 
     output = arguments.output.resolve()
-    output.mkdir(parents=True)
+    if arguments.isolate_output:
+        output.mkdir(parents=True, exist_ok=True)
+        output = Path(tempfile.mkdtemp(prefix="run-", dir=output))
+        print(f"Witness output: {output}", flush=True)
+    else:
+        output.mkdir(parents=True)
     strategy = Strategy(arguments.library, BarC, ReportC)
     warmup, packets, bars = synthetic_fixture()
     write_json(output / "fixture.json", {"kind": "synthetic normalized ticks; no genuine-market-data claim",
