@@ -1,4 +1,4 @@
-"""Replay externally supplied chart-delivery regression fixtures with the engine oracle."""
+"""Replay external D7 fixtures with the engine oracle, outside the self-contained CTest inventory."""
 import argparse
 import csv
 import json
