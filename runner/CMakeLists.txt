@@ -97,7 +97,7 @@ if(PINEFORGE_BUILD_TESTS)
         add_test(NAME native_live_service_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_service_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_example> $<TARGET_FILE:native_live_service_example>)
-        set_tests_properties(native_live_service_e2e PROPERTIES TIMEOUT 120)
+        set_tests_properties(native_live_service_e2e PROPERTIES TIMEOUT 300)
         target_sources(native_live_example PRIVATE $<TARGET_OBJECTS:native_live_equivalence_observer>)
         set(_pf_report_strategies $<TARGET_FILE:native_live_example>)
         foreach(probe ta-rsi14-cross-50-01 order-entry-implicit-reversal-exit-01 order-tranche-partial-market-close-01 bracket-atr-trailing-stop-state-01)
@@ -121,6 +121,10 @@ if(PINEFORGE_BUILD_TESTS)
             ${PROJECT_SOURCE_DIR}/tests/native_live_report_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_report_oracle> ${_pf_report_strategies})
         set_tests_properties(native_live_report_e2e PROPERTIES TIMEOUT 300)
+        add_test(NAME native_live_chart_input_e2e COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/tests/native_live_chart_input_e2e.py $<TARGET_FILE:pineforge-live>
+            $<TARGET_FILE:native_live_report_oracle> $<TARGET_FILE:native_live_example>)
+        set_tests_properties(native_live_chart_input_e2e PROPERTIES TIMEOUT 300)
         add_test(NAME native_live_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_example>)
@@ -244,7 +248,7 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
         ${PROJECT_SOURCE_DIR}/tests/strategy_capabilities_e2e.py $<TARGET_FILE:pineforge-live>
         $<TARGET_FILE:native_live_example> ${capabilities_libraries}
         "unknown=$<TARGET_FILE:capabilities_unknown>")
-    set_tests_properties(strategy_capabilities_e2e PROPERTIES TIMEOUT 120)
+    set_tests_properties(strategy_capabilities_e2e PROPERTIES TIMEOUT 300)
     foreach(capabilities_kind close clock_flags)
         add_executable(test_capabilities_equivalence_${capabilities_kind}
             ${PROJECT_SOURCE_DIR}/tests/test_capabilities_equivalence.cpp

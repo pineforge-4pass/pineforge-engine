@@ -18,9 +18,9 @@ def checked(command):
     return json.loads(result.stdout)
 
 
-def chart_rows(timeframe, session=False):
+def chart_rows(timeframe, session=False, timezone="UTC"):
     starts = []
-    zone = ZoneInfo("America/New_York")
+    zone = ZoneInfo("America/New_York" if session else timezone)
     if session:
         day = datetime(2025, 3, 7, 9, 30, tzinfo=zone)
         while len(starts) < 96:
@@ -43,9 +43,9 @@ def chart_rows(timeframe, session=False):
     return rows
 
 
-def config_for(timeframe, session=False):
+def config_for(timeframe, session=False, timezone="UTC"):
     return dict(symbol="TEST:EXAMPLE", script_tf=timeframe,
-                timezone="America/New_York" if session or timeframe in ("D", "W") else "UTC",
+                timezone="America/New_York" if session else timezone,
                 chart_timezone="UTC", session="0930-1600:23456" if session else "24x7",
                 syminfo=[["mintick", "0.25"], ["pointvalue", "2.5"], ["qty_step", "0.001"]],
                 inputs=[], overrides=[["commission_value", "0.1"], ["slippage", "1"]])
@@ -67,7 +67,9 @@ def tick_events(rows, timeframe, minute_boundaries):
     sequence = 1
     for bar in rows:
         stamp = bar["ts_open"]
-        duration = int(timeframe) * 60000
+        duration = {"D": 86400000, "W": 604800000}.get(timeframe)
+        if duration is None:
+            duration = int(timeframe) * 60000
         path = (bar["o"], bar["h"], bar["l"], bar["c"])
         offsets = (0, duration // 3, 2 * duration // 3, duration - 1)
         pending = [dict(type="tick", ts=stamp + offset, seq=sequence + index, price=price, qty=1)
@@ -106,9 +108,9 @@ def prove(root, runner, oracle, library, timeframe, session, engine_only, split=
     print(f"INPUT-N batch input={timeframe} script={timeframe}: calendar accepted; "
           f"ENDPOINTS=3; trades={batch['trades_len']}", flush=True)
     assert batch["trades_len"] > 0, (timeframe, "vacuous chart reference")
-    modes = [("bars", False)]
-    if not session and timeframe not in ("D", "W"):
-        modes += [("ticks", False), ("ticks", True)]
+    modes = [("bars", False), ("ticks", False)]
+    if timeframe not in ("D", "W"):
+        modes += [("ticks", True)]
     for mode, minute_boundaries in modes:
         events = ([dict(type="bar", bar=bar) for bar in rows[split:]] if mode == "bars" else
                   tick_events(rows[split:], timeframe, minute_boundaries))
@@ -162,6 +164,18 @@ def refusals(root, runner, library):
         assert result.returncode == 1 and "input-tf" in result.stderr and "script-tf" in result.stderr
         assert "15" in result.stderr and ("omit" in result.stderr or "remove" in result.stderr)
         assert not ledger.exists() and not Path(str(ledger) + ".lock").exists()
+    for timeframe in ("D", "W"):
+        write_csv(warmup, chart_rows(timeframe, timezone="America/New_York")[:24])
+        for timezone in ("America/New_York", "US/Eastern", "EST5EDT", "EST5EDT,M3.2.0,M11.1.0"):
+            for mode in ("bars", "ticks"):
+                ledger = root / f"dst-{timeframe}-{timezone.replace('/', '-')}-{mode}.sqlite"
+                command = [runner, "run", "--strategy", library, "--warmup", warmup,
+                           "--feed", feed, "--ledger", ledger, "--mode", mode,
+                           "--script-tf", timeframe, "--symbol", "TEST:EXAMPLE", "--timezone", timezone]
+                result = subprocess.run(list(map(str, command)), text=True, capture_output=True, timeout=30)
+                assert result.returncode == 1, (command, result.stdout, result.stderr)
+                assert "daily/weekly chart delivery on a daylight-saving calendar is not supported yet" in result.stderr
+                assert not ledger.exists() and not Path(str(ledger) + ".lock").exists()
     for name, rows in (("1m", chart_rows("1")[:24]), ("gap", chart_rows("15")[:24:2]),
                        ("unaligned", [{**bar, "ts_open": bar["ts_open"] + 60000} for bar in chart_rows("15")[:24]])):
         write_csv(warmup, rows)
@@ -177,7 +191,7 @@ def main():
     parser.add_argument("oracle")
     parser.add_argument("library")
     parser.add_argument("--engine-only", action="store_true")
-    parser.add_argument("--timeframe", choices=("1", "5", "15", "60", "D", "W"))
+    parser.add_argument("--timeframe", choices=("1", "5", "7", "15", "60", "120", "D", "W"))
     parser.add_argument("--split", type=int, default=24)
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
@@ -185,7 +199,7 @@ def main():
         root = args.output_dir or Path(temporary)
         root.mkdir(parents=True, exist_ok=True)
         clocks = ((args.timeframe, False),) if args.timeframe else (
-            ("1", False), ("5", False), ("15", False), ("60", False),
+            ("1", False), ("5", False), ("7", False), ("15", False), ("60", False), ("120", False),
             ("15", True), ("D", False), ("W", False))
         for timeframe, session in clocks:
             target = root / f"{timeframe}-{session}"
