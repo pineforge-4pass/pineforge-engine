@@ -9,6 +9,7 @@
  *     BEFORE shipping a .so that consumers depend on.
  *   - The runtime-library-side `extern "C"` symbols (the closed-trade
  *     incarnation accessor, setters, strategy_get_last_error,
+ *     strategy_get_last_error_code, strategy_get_last_error_args,
  *     the security-feed and symbol-data setters, the strategy_stream_* lifecycle,
  *     native stream bar input/action polling/fingerprint/API-version exports,
  *     the live-runtime surface (strategy_request_abort,
@@ -42,6 +43,7 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
 #include <pineforge/native_host.hpp>
+#include <pineforge/run_failure.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/magnifier.hpp>
 #include <cstddef>
@@ -413,6 +415,21 @@ PF_API void strategy_set_trace_enabled(pf_strategy_t s, int on) {
 PF_API const char* strategy_get_last_error(pf_strategy_t s) {
     if (!s) return nullptr;
     return static_cast<pineforge::BacktestEngine*>(s)->last_error().c_str();
+}
+
+/* The stable code of the failure strategy_get_last_error reports, and its
+ * arguments as canonical JSON (include/pineforge/run_failure.hpp): "" when the
+ * most recent run or setter recorded no failure, NULL only for a NULL handle.
+ * Static names and the record's own string: valid until the next run or
+ * setter, like the text. */
+PF_API const char* strategy_get_last_error_code(pf_strategy_t s) {
+    if (!s) return nullptr;
+    return pineforge::run_failure_code_of(*static_cast<pineforge::BacktestEngine*>(s));
+}
+
+PF_API const char* strategy_get_last_error_args(pf_strategy_t s) {
+    if (!s) return nullptr;
+    return pineforge::run_failure_args_of(*static_cast<pineforge::BacktestEngine*>(s));
 }
 
 PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms) {

@@ -89,10 +89,12 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_set_symbol_feed_column",
     "strategy_set_symbol_facts",
     "strategy_set_recorded_series",
+    "strategy_get_last_error_code",
+    "strategy_get_last_error_args",
 })
 
-EXPECTED_PUBLIC_DECLARATIONS = 79
-EXPECTED_RUNTIME_IMPLEMENTATIONS = 62
+EXPECTED_PUBLIC_DECLARATIONS = 81
+EXPECTED_RUNTIME_IMPLEMENTATIONS = 64
 
 # Runtime setters whose data a stream cannot take: the source host refuses
 # stream_begin() while any of them holds data (the native daily feed since its
@@ -109,7 +111,7 @@ HISTORICAL_ONLY_RUNTIME = frozenset({
 })
 HISTORICAL_ONLY_PHRASE = "stream_begin() fails closed"
 
-# The C-level native host API. Additive to the 62 above: every symbol here is
+# The C-level native host API. Additive to the 64 above: every symbol here is
 # declared in include/pineforge/native_c_api.h and implemented in
 # src/native_c_host.cpp, and neither file contributes to the two counts above.
 EXPECTED_NATIVE_C_API = frozenset({

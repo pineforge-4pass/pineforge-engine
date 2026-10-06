@@ -1257,12 +1257,92 @@ void NativeExecutionConsumer::fail(BacktestEngine& engine, NativeFailure failure
     engine.last_run_status_ = 1;
 }
 
-void NativeExecutionConsumer::render(BacktestEngine& engine, const char* text) const {
+void NativeExecutionConsumer::store_rendered(BacktestEngine& engine, const char* text,
+                                             RunFailureValue value) const {
     engine.last_error_ = text ? text : "";
+    run_failure_.code = value.code;
+    run_failure_.args = std::move(value.args);
+    run_failure_.text = engine.last_error_;
 }
 
-void NativeExecutionConsumer::present_refusal(BacktestEngine& engine, const char* text) {
-    render(engine, text);
+void NativeExecutionConsumer::render(BacktestEngine& engine, const char* text,
+                                     RunFailureCode code, const RunFailureArgs& args) const {
+    store_rendered(engine, text, make_run_failure(code, args));
+}
+
+void NativeExecutionConsumer::render_exception(BacktestEngine& engine,
+                                               const std::exception& error) const {
+    store_rendered(engine, error.what(), classify_run_failure(error));
+}
+
+void NativeExecutionConsumer::render_unclassified(BacktestEngine& engine,
+                                                  const char* text) const {
+    store_rendered(engine, text,
+                   RunFailureValue{RunFailureCode::engine_unclassified_error, nullptr});
+}
+
+void NativeExecutionConsumer::clear_rendered(BacktestEngine& engine) const noexcept {
+    engine.last_error_.clear();
+    run_failure_.code = RunFailureCode::none;
+    run_failure_.args.reset();
+    run_failure_.text.clear();
+}
+
+void NativeExecutionConsumer::note_failure_record(BacktestEngine& engine, std::string text,
+                                                  RunFailureValue value) {
+    NativeExecutionConsumer& consumer = bound(engine);
+    engine.last_error_ = std::move(text);
+    consumer.run_failure_.code = value.code;
+    consumer.run_failure_.args = std::move(value.args);
+    consumer.run_failure_.text = engine.last_error_;
+}
+
+void NativeExecutionConsumer::clear_failure_record(BacktestEngine& engine) noexcept {
+    engine.last_error_.clear();
+    if (auto* consumer = engine.execution_consumer_slot_.ptr.get()) {
+        static_cast<NativeExecutionConsumer*>(consumer)->clear_rendered(engine);
+    }
+}
+
+const char* NativeExecutionConsumer::failure_code_of(const BacktestEngine& engine) noexcept {
+    if (const auto* consumer = engine.execution_consumer_slot_.ptr.get()) {
+        const RunFailureRecord& record =
+            static_cast<const NativeExecutionConsumer*>(consumer)->run_failure_;
+        if (record.code != RunFailureCode::none && record.text == engine.last_error_) {
+            return run_failure_code_name(record.code);
+        }
+    }
+    return engine.last_error_.empty()
+        ? "" : run_failure_code_name(RunFailureCode::engine_unclassified_error);
+}
+
+const char* NativeExecutionConsumer::failure_args_of(const BacktestEngine& engine) noexcept {
+    if (const auto* consumer = engine.execution_consumer_slot_.ptr.get()) {
+        const RunFailureRecord& record =
+            static_cast<const NativeExecutionConsumer*>(consumer)->run_failure_;
+        if (record.code != RunFailureCode::none && record.text == engine.last_error_) {
+            return record.args ? record.args->c_str() : "{}";
+        }
+    }
+    return engine.last_error_.empty() ? "" : "{}";
+}
+
+RunFailureValue NativeExecutionConsumer::failure_value_of(const BacktestEngine& engine) noexcept {
+    if (const auto* consumer = engine.execution_consumer_slot_.ptr.get()) {
+        const RunFailureRecord& record =
+            static_cast<const NativeExecutionConsumer*>(consumer)->run_failure_;
+        if (record.code != RunFailureCode::none && record.text == engine.last_error_) {
+            return RunFailureValue{record.code, record.args};
+        }
+    }
+    if (engine.last_error_.empty()) return RunFailureValue{};
+    return RunFailureValue{RunFailureCode::engine_unclassified_error, nullptr};
+}
+
+void NativeExecutionConsumer::present_refusal(BacktestEngine& engine, const char* text,
+                                              RunFailureCode code,
+                                              const RunFailureArgs& args) {
+    render(engine, text, code, args);
     engine.last_run_status_ = 1;
 }
 
@@ -1392,7 +1472,7 @@ void NativeExecutionConsumer::latch_abort(BacktestEngine& engine,
     if (!spec || spec->abort_reporting == NativeAbortReporting::Error) {
         render(engine, "native run aborted");
     } else {
-        engine.last_error_.clear();
+        clear_rendered(engine);
     }
 }
 
@@ -2323,7 +2403,7 @@ NativeSetupResult NativeExecutionConsumer::configure_spec(BacktestEngine& engine
     leave_running();
     state_ = NativeReady{std::move(candidate)};
     result.status = NativeSetupStatus::Applied;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     return result;
 }
 
@@ -8779,7 +8859,7 @@ NativeAuxiliaryAppendResult NativeExecutionConsumer::append_auxiliary_bars(
         return refused(entered_failed ? NativeAuxiliaryAppendError::HostFailed
                                       : NativeAuxiliaryAppendError::Reentrant);
     }
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     const auto* running = std::get_if<NativeRunning>(&state_);
     if (!running || running->phase != NativeRunPhase::Realtime) {
@@ -9552,7 +9632,7 @@ void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars
     args.simple_run = true;
     if (!prepare_public_begin(engine, args)) return;
     if (!admit_public_begin(engine, "native run requires configure_native")) return;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     engine.abort_requested_.store(false, std::memory_order_relaxed);
     try {
@@ -9585,7 +9665,7 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
         magnifier_samples, magnifier_dist, engine.magnifier_volume_weighted_, 2};
     if (!prepare_public_begin(engine, args)) return;
     if (!admit_public_begin(engine, "native run requires configure_native")) return;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     engine.abort_requested_.store(false, std::memory_order_relaxed);
     try {
@@ -9635,7 +9715,7 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
     args.overrides_opaque = overrides;
     if (!prepare_public_begin(engine, args)) return;
     if (!admit_public_begin(engine, "native run requires configure_native")) return;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     engine.abort_requested_.store(false, std::memory_order_relaxed);
     try {
@@ -9696,7 +9776,7 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
     args.warmup_n = n_warmup;
     if (!prepare_public_begin(engine, args)) return false;
     if (!admit_public_begin(engine, "native stream_begin requires Ready")) return false;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     engine.abort_requested_.store(false, std::memory_order_relaxed);
     try {
@@ -9774,7 +9854,7 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
 
 bool NativeExecutionConsumer::stream_push_bar(BacktestEngine& engine, const Bar& bar) {
     if (!admit_public_stream_input(engine, NativeFailureOperation::Input)) return false;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     try {
         const auto* running = std::get_if<NativeRunning>(&state_);
@@ -10180,7 +10260,7 @@ bool NativeExecutionConsumer::deliver_tick(BacktestEngine& engine, const TradeTi
 
 bool NativeExecutionConsumer::stream_push_tick(BacktestEngine& engine, const TradeTick& tick) {
     if (!admit_public_stream_input(engine, NativeFailureOperation::Input)) return false;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     try {
         if (!preflight_ticks(engine, &tick, 1)) return false;
@@ -10200,7 +10280,7 @@ bool NativeExecutionConsumer::stream_push_tick(BacktestEngine& engine, const Tra
 
 bool NativeExecutionConsumer::stream_push_ticks(BacktestEngine& engine, const TradeTick* ticks, int n) {
     if (!admit_public_stream_input(engine, NativeFailureOperation::Input)) return false;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     try {
         if (!preflight_ticks(engine, ticks, n)) return false;
@@ -10224,7 +10304,7 @@ bool NativeExecutionConsumer::stream_push_ticks(BacktestEngine& engine, const Tr
 
 bool NativeExecutionConsumer::stream_advance_time(BacktestEngine& engine, int64_t timestamp_ms) {
     if (!admit_public_stream_input(engine, NativeFailureOperation::Stream)) return false;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     try {
         const auto* running = std::get_if<NativeRunning>(&state_);
@@ -10270,7 +10350,7 @@ bool NativeExecutionConsumer::stream_advance_time(BacktestEngine& engine, int64_
 
 bool NativeExecutionConsumer::stream_end(BacktestEngine& engine, bool finalize_partial_input_bar) {
     if (!admit_public_stream_input(engine, NativeFailureOperation::Stream)) return false;
-    engine.last_error_.clear();
+    clear_rendered(engine);
     engine.last_run_status_ = 0;
     try {
         if (!std::holds_alternative<NativeRunning>(state_)) {
