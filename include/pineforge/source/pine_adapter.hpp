@@ -333,6 +333,7 @@ struct PlacementSnapshot {
     // request remains owned and settled by the native core; only its
     // immutable terms fact is source-specific.
     double forced_execution_price = std::numeric_limits<double>::quiet_NaN();
+    double forced_waypoint_print = std::numeric_limits<double>::quiet_NaN();
     bool coof_open_stop_next_waypoint = false;
     double projection_tv_carry_qty = 0.0;
     double projection_default_stop_equity = std::numeric_limits<double>::quiet_NaN();
@@ -474,6 +475,7 @@ struct ScriptRuleSwitches {
     // when the book still holds an exit whose entry is neither open nor
     // working (flush_pending_bracket_legs).
     bool pooc_bracket_skips_inert_exits = true;
+    bool coof_forced_fill_at_waypoint = true;
 };
 ScriptRuleSwitches& script_rule_switches() noexcept;
 
@@ -2581,6 +2583,7 @@ private:
     std::uint64_t coof_market_entry_recalc_fill_seq_ = 0;
     std::uint64_t coof_current_fill_seq_ = 0;
     double coof_fill_cursor_t_ = std::numeric_limits<double>::quiet_NaN();
+    double coof_fill_target_print_ = std::numeric_limits<double>::quiet_NaN();
     NativeDecisionContext coof_context_{};
     Bar coof_script_bar_{};
     bool coof_script_bar_valid_ = false;

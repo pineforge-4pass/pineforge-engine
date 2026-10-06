@@ -1,0 +1,30 @@
+{
+ "symbol": "NYSE:F",
+ "frm": "2025-11-18",
+ "to": "2025-11-19",
+ "tick": 0.01,
+ "step": 1.0,
+ "capital": 38.939999999,
+ "slip": 2,
+ "fee": 0.0,
+ "margin": 100,
+ "pooc": true,
+ "coof": true,
+ "q0": 3,
+ "q1": 1,
+ "t_start": "2025-11-18 16:00",
+ "t_end": "2025-11-18 16:15",
+ "call_bar": "2025-11-18 16:15",
+ "last_bar": "2025-11-19 00:00",
+ "entry_fill": 12.98,
+ "note": "reverse parity, low-first call bar (replaces r2-p2-lf, whose 3-share entry the engine drops at the 13.29 fill)",
+ "script": "P2",
+ "call_bar_ohlc": {
+  "t": "2025-11-18 16:15",
+  "o": 12.95,
+  "h": 13.0,
+  "l": 12.94,
+  "c": 12.99
+ },
+ "call_bar_high_first": false
+}

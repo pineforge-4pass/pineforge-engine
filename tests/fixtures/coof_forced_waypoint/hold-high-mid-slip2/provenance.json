@@ -1,0 +1,31 @@
+{
+  "original_control": "r1/pf-n2lc-r1-hf-mid-s2",
+  "symbol": "NYSE:F",
+  "timeframe": "15",
+  "export_timezone": "UTC+8",
+  "source_sha256": "d9114351911fec1e8a40d141f005679beda9cb51997ca260d2b9a1542817c725",
+  "tv_trades_sha256": "c9f8c5bb84e783592f765a26b4d23309253bf7e068bcafad14f9dcc6739bda53",
+  "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32",
+  "bars_sha256": "42103d867ffd048d5f4a71d2cac1b0a08a692c5ad9f1f05606a2b18ac4021762",
+  "prediction_sha256": "9074f6485afc3e16dac34571321c6fadd3cd4747aaf8f935fe3ee6400a76dd60",
+  "export_A_provenance": {
+    "name": "pf-n2lc-r1-hf-mid-s2",
+    "rep": "A",
+    "symbol": "NYSE:F",
+    "from": "2026-01-27",
+    "to": "2026-01-28",
+    "start": "2026-10-06T02:05:20Z",
+    "end": "2026-10-06T02:05:30Z",
+    "exit": 0
+  },
+  "export_B_provenance": {
+    "name": "pf-n2lc-r1-hf-mid-s2",
+    "rep": "B",
+    "symbol": "NYSE:F",
+    "from": "2026-01-27",
+    "to": "2026-01-28",
+    "start": "2026-10-06T02:05:40Z",
+    "end": "2026-10-06T02:05:47Z",
+    "exit": 0
+  }
+}

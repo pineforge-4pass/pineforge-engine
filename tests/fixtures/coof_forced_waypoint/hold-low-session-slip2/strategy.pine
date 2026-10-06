@@ -1,0 +1,16 @@
+//@version=6
+strategy("pf-n2lc-r1-replica", overlay=true, initial_capital=27.3599999998592, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0, slippage=2, process_orders_on_close=true, calc_on_order_fills=true)
+// px-pin-n2lc synthetic control: a 2-share long whose cost exceeds the capital by a hair is called one unit at
+// the next open; a hold-one-bar rule then re-enters 1 share(s) while flat inside a fixed window and closes a
+// position the bar after it was opened. varip k counts calculations; each order's comment reads the calc.
+varip int k = 0
+k += 1
+tStart = timestamp("UTC", 2025, 12, 15, 20, 30)
+tEnd = timestamp("UTC", 2025, 12, 16, 15, 0)
+live = time >= tStart and time <= tEnd
+string tag = "k" + str.tostring(k) + " p" + str.tostring(strategy.position_size) + " q" + str.tostring(strategy.position_size[1])
+if live and strategy.position_size == 0
+    strategy.entry("L", strategy.long, qty = time == tStart ? 2 : 1, comment = "E " + tag)
+if strategy.position_size > 0 and strategy.position_size[1] == 0
+    strategy.close("L", comment = "X " + tag)
+plot(strategy.equity, "equity")

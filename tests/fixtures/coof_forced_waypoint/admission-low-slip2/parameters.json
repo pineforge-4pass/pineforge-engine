@@ -1,0 +1,30 @@
+{
+ "symbol": "NYSE:F",
+ "frm": "2026-03-02",
+ "to": "2026-03-03",
+ "tick": 0.01,
+ "step": 1.0,
+ "capital": 39.869999999,
+ "slip": 2,
+ "fee": 0.0,
+ "margin": 100,
+ "pooc": true,
+ "coof": true,
+ "q0": 3,
+ "q1": 1,
+ "t_start": "2026-03-02 18:45",
+ "t_end": "2026-03-02 19:00",
+ "call_bar": "2026-03-02 19:00",
+ "last_bar": "2026-03-03 00:00",
+ "entry_fill": 13.29,
+ "note": "reverse parity on a low-first call bar: O calc closes 1, W1 (low) calc closes the rest, W2 (high) calc re-enters",
+ "script": "P2",
+ "call_bar_ohlc": {
+  "t": "2026-03-02 19:00",
+  "o": 13.27,
+  "h": 13.34,
+  "l": 13.26,
+  "c": 13.33
+ },
+ "call_bar_high_first": false
+}

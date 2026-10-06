@@ -1,0 +1,16 @@
+{
+  "title": "pf-n2lc-r1-hf-mid-s2",
+  "slug": "pf-n2lc-r1-hf-mid-s2",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-10-06T02:05:30.775Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2026-01-27",
+    "to": "2026-01-28"
+  },
+  "pine_sha256": "d9114351911fec1e8a40d141f005679beda9cb51997ca260d2b9a1542817c725",
+  "tv_trades_sha256": "c9f8c5bb84e783592f765a26b4d23309253bf7e068bcafad14f9dcc6739bda53",
+  "tv_trades_rows": 10
+}

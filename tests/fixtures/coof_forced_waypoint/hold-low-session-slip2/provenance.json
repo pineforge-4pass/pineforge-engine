@@ -1,0 +1,31 @@
+{
+  "original_control": "r1/pf-n2lc-r1-replica",
+  "symbol": "NYSE:F",
+  "timeframe": "15",
+  "export_timezone": "UTC+8",
+  "source_sha256": "385b07ea28945d974013e287e21c1b435cc07152f226f5051d6a8574c54a7ea2",
+  "tv_trades_sha256": "b1f5a02a4d30d7e767b950fdc4e89f9bc598318e76f550f3a9e664be6ce5a78b",
+  "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32",
+  "bars_sha256": "232ad7eb3804b05ef3af230df51b3d21a30131146ea30ab9de9a66cb0aa81884",
+  "prediction_sha256": "c592b8aa4c1a6a2da21b6512e454c00f89061fb608374fa6fd139c31a74f322b",
+  "export_A_provenance": {
+    "name": "pf-n2lc-r1-replica",
+    "rep": "A",
+    "symbol": "NYSE:F",
+    "from": "2025-12-15",
+    "to": "2025-12-17",
+    "start": "2026-10-06T02:05:20Z",
+    "end": "2026-10-06T02:05:23Z",
+    "exit": 0
+  },
+  "export_B_provenance": {
+    "name": "pf-n2lc-r1-replica",
+    "rep": "B",
+    "symbol": "NYSE:F",
+    "from": "2025-12-15",
+    "to": "2025-12-17",
+    "start": "2026-10-06T02:05:40Z",
+    "end": "2026-10-06T02:05:43Z",
+    "exit": 0
+  }
+}
