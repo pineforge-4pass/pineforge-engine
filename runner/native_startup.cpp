@@ -5,6 +5,7 @@
 #include <pineforge/bar.hpp>
 #include <pineforge/market_driver.hpp>
 #include <pineforge/native_calendar.hpp>
+#include "../src/native_calendar_memo.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -604,15 +605,16 @@ void require_chart_calendar(const std::string& script_tf, const std::string& tim
             " chart on this session calendar is not supported yet: its bars do not tile the calendar's trading days. Keep the configured session and timezone, and use a supported chart timeframe (on a daylight-saving calendar, an intraday timeframe that divides 60 minutes).");
     };
     std::optional<std::int64_t> previous_origin;
+    pineforge::native_calendar::SessionDayMemo calendar_memo;
     auto cursor = first_timestamp;
     while (cursor <= last_timestamp) {
-        const auto day = pineforge::native_calendar::session_day_at(*calendar, cursor);
+        const auto day = pineforge::native_calendar::session_day_at(*calendar, cursor, calendar_memo);
         if (!day || day->next_origin_ms <= cursor)
             throw std::runtime_error("chart session-day origins cannot be inspected");
         if (!day->spans.empty()) {
             if (calendar_chart) {
                 const auto interval = pineforge::native_calendar::interval_containing(
-                    *calendar, *clock, day->spans.front().first);
+                    *calendar, *clock, day->spans.front().first, calendar_memo);
                 if (!interval)
                     throw std::runtime_error("chart calendar intervals cannot be inspected");
                 if (previous_origin && (interval->eligible_open_ms - *previous_origin) % period != 0)
