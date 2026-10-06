@@ -489,6 +489,12 @@ class MockReceiver:
         write_json(output / "effects.json", effects)
         return attempts, effects
 
+    def redelivery_command(self, runner, ledger):
+        with sqlite3.connect(ledger) as database:
+            identity = database.execute("SELECT identity FROM metadata WHERE singleton=1").fetchone()[0]
+        return [str(runner), "redeliver", "--ledger", str(ledger),
+                "--deployment", identity, "--target", "default"]
+
 
 def tape_files(output, rows, split):
     with (output / "warmup.csv").open("w", newline="") as destination:
@@ -570,6 +576,13 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
         write_json(output / "command.json", command)
         with (output / "runner.log").open("w") as log:
             process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
+            if fail_first:
+                result["initial_runner_returncode"] = process.wait(timeout=600)
+                if result["initial_runner_returncode"] != 0:
+                    raise RuntimeError("initial HTTP-failure run did not complete")
+                command = receiver.redelivery_command(runner, output / "orders.sqlite3")
+                result["redelivery_command"] = command
+                process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
             if restart:
                 if not receiver.accepted.wait(120):
                     raise RuntimeError("accepted-effect crash window not reached")
@@ -578,7 +591,8 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
                 if killed_returncode != -9:
                     raise RuntimeError(f"runner was not SIGKILLed: {killed_returncode}")
                 result["crash_receipt"] = {"accepted_effect": crash_action, "returncode": killed_returncode,
-                    "ack_withheld": True, "same_command": True, "same_ledger": True}
+                    "ack_withheld": True, "same_command": True, "same_ledger": True,
+                    "component": "offline redelivery" if fail_first else "runner"}
                 receiver.release_ack.set()
                 process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
             result["runner_returncode"] = process.wait(timeout=600)

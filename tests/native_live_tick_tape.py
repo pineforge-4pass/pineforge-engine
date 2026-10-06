@@ -354,6 +354,17 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
                     else:
                         result["runner_returncode"] = process.wait(timeout=1800)
                 costs.append(parse_cost(cost_path))
+            if fail_first:
+                cost_path = output / "time-redelivery.txt"
+                command = receiver.redelivery_command(runner, output / "orders.sqlite3")
+                timed = ["/usr/bin/time", "-v", "-o", str(cost_path)] + command
+                commands.append(timed)
+                completed = subprocess.run(timed, stdout=log, stderr=subprocess.STDOUT,
+                    env=receiver.environment, timeout=1800)
+                result["redelivery_returncode"] = completed.returncode
+                if completed.returncode != 0:
+                    raise RuntimeError("explicit HTTP-failure redelivery did not complete")
+                costs.append(parse_cost(cost_path))
         attempts, effects = receiver.finish(output)
         receiver_errors = list(receiver.errors)
         receiver = None
