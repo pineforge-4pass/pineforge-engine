@@ -1033,6 +1033,35 @@ std::int64_t source::PineStrategyHost::find_symbol_feed(const std::string& key,
     return -1;
 }
 
+// AR-R4: an applied configure holds the feeds' bytes in the kernel's run spec
+// (prepare_native_begin), which keeps them, in this host's order, from that
+// configure to the next one: the spec is moved, never rewritten, from Ready to
+// Running to Completed, and a failure carries it into Failed.
+const NativeInstrumentFeed& source::PineStrategyHost::installed_symbol_feed(
+        std::size_t i) const {
+    if (!symbol_feeds_lent_) return symbol_feeds_[i];
+    const NativeRunSpec* spec = native_state().spec;
+    if (spec == nullptr || i >= spec->instrument_feeds.size())
+        throw std::logic_error("request data: the run spec no longer holds the symbol feeds");
+    return spec->instrument_feeds[i];
+}
+
+void source::PineStrategyHost::restore_symbol_feeds() {
+    if (!symbol_feeds_lent_) return;
+    const NativeRunSpec* spec = native_state().spec;
+    if (spec == nullptr || spec->instrument_feeds.size() != symbol_feeds_.size())
+        throw std::logic_error("request data: the run spec no longer holds the symbol feeds");
+    for (std::size_t i = 0; i < symbol_feeds_.size(); ++i) {
+        const NativeInstrumentFeed& held = spec->instrument_feeds[i];
+        NativeInstrumentFeed& feed = symbol_feeds_[i];
+        feed.bars = held.bars;
+        feed.close_ms = held.close_ms;
+        for (std::size_t c = 0; c < feed.columns.size(); ++c)
+            feed.columns[c].values = held.columns[c].values;
+    }
+    symbol_feeds_lent_ = false;
+}
+
 void source::PineStrategyHost::prepare_foreign_security_sites(
         std::vector<NativeTimeframeSubscription>& declared) {
     foreign_security_series_.assign(declared.size(), -1);
@@ -1195,7 +1224,7 @@ void source::PineStrategyHost::read_ahead_foreign_security_sites(const Bar& char
                            : is_na(chart_close)) {
             continue;
         }
-        const NativeInstrumentFeed& feed = symbol_feeds_[site.feed];
+        const NativeInstrumentFeed& feed = installed_symbol_feed(site.feed);
         while (static_cast<std::size_t>(site.delivered) < feed.bars.size()) {
             const auto at = static_cast<std::size_t>(site.delivered);
             const bool visible = site.lookahead ? feed.bars[at].timestamp <= chart_bar.timestamp
@@ -1221,7 +1250,7 @@ double source::PineStrategyHost::security_column_value(int sec_id,
     const ForeignSecuritySite& site = found->second;
     if (site.subscription < 0 || site.delivered <= 0 || site.feed >= symbol_feeds_.size())
         return std::numeric_limits<double>::quiet_NaN();
-    const NativeInstrumentFeed& feed = symbol_feeds_[site.feed];
+    const NativeInstrumentFeed& feed = installed_symbol_feed(site.feed);
     const auto at = static_cast<std::size_t>(site.delivered - 1);
     for (const auto& column : feed.columns) {
         if (column.name != name) continue;
@@ -1257,6 +1286,7 @@ bool source::PineStrategyHost::set_symbol_feed(const std::string& key,
         return false;
     };
     if (run_in_progress(*this)) return refuse(kRunInProgress);
+    restore_symbol_feeds();
     if (key.empty()) return refuse("empty symbol key");
     const std::string tf = canonical_symbol_timeframe(timeframe);
     if (tf.empty() || !native_calendar::parse_timeframe(tf)) {
@@ -1304,6 +1334,7 @@ bool source::PineStrategyHost::set_symbol_feed_column(const std::string& key,
         return false;
     };
     if (run_in_progress(*this)) return refuse(kRunInProgress);
+    restore_symbol_feeds();
     const std::int64_t found = find_symbol_feed(key, canonical_symbol_timeframe(timeframe));
     if (found < 0) {
         return refuse("no feed is installed for symbol '" + key + "' at timeframe '"
@@ -1350,6 +1381,7 @@ bool source::PineStrategyHost::set_symbol_facts(const std::string& key,
         return false;
     };
     if (run_in_progress(*this)) return refuse(kRunInProgress);
+    restore_symbol_feeds();
     if (key.empty()) return refuse("empty symbol key");
     SymbolFacts candidate = symbol_facts_.count(key) ? symbol_facts_[key] : SymbolFacts{};
     if (field == "canonical") {
@@ -1389,6 +1421,7 @@ bool source::PineStrategyHost::set_recorded_series(const std::string& key,
         return false;
     };
     if (run_in_progress(*this)) return refuse(kRunInProgress);
+    restore_symbol_feeds();
     if (key.empty()) return refuse("empty key");
     if (n < 0 || (n > 0 && (chart_open_ms == nullptr || values == nullptr)))
         return refuse("invalid arrays");

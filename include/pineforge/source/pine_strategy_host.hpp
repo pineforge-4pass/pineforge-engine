@@ -919,6 +919,11 @@ private:
     void clear_gapped_foreign_security_sites();
     std::int64_t find_symbol_feed(const std::string& key, const std::string& tf) const;
     void refresh_symbol_data_digest() noexcept;
+    // AR-R4: feed i's bars, closes and column values, wherever they are held:
+    // this host's store, or the kernel's run spec while they are lent to it.
+    const NativeInstrumentFeed& installed_symbol_feed(std::size_t i) const;
+    // Copies lent bytes back from the kernel's spec, which keeps its own.
+    void restore_symbol_feeds();
     // True while the running spec names this host's sites: the kernel steps
     // them and the scheduler feeds nothing.
     bool security_sites_kernel_routed() const noexcept;
@@ -1074,7 +1079,13 @@ protected:
     // canonical timeframe spelling), so the kernel digests their bars; the
     // facts and tapes are this host's alone and fold through the digest
     // below, taken whenever they are set (never during a run).
+    // AR-R4: one copy of the bytes. A configure the kernel applies takes each
+    // feed's bars, closes and column values into its run spec (lent, below);
+    // while lent, an entry here keeps its instrument, tf and column names --
+    // all generated code reads of it -- and its bytes are read through
+    // installed_symbol_feed(i). A door or the next begin copies them back.
     std::vector<NativeInstrumentFeed> symbol_feeds_;
+    bool symbol_feeds_lent_ = false;
     std::map<std::string, SymbolFacts> symbol_facts_;
     std::map<std::string, RecordedSeries> recorded_series_;
     std::uint64_t symbol_data_digest_ = 1469598103934665603ULL;

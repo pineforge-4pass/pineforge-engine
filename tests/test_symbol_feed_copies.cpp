@@ -86,11 +86,11 @@ constexpr int kFeedBars = 200000;
 constexpr int kChartBars = 64;
 // One copy of the feed: kFeedBars bars of 48 bytes and closes of 8.
 constexpr double kCopyBytes = 56.0 * kFeedBars;
-// A fresh handle: the host's store and the kernel's run spec.
-constexpr double kRunCopies = 2.25;
-// A handle run again: its store, the completed run's spec and the new
-// configure's candidate, the store one column (8 of 56 bytes) heavier.
-constexpr double kRerunCopies = 3.5;
+// A fresh handle: the one copy the kernel's run spec holds, lent by the host.
+constexpr double kRunCopies = 1.25;
+// A handle run again: the completed run's spec and the store copied back
+// from it, one column (8 of 56 bytes) heavier.
+constexpr double kRerunCopies = 2.25;
 
 const std::string kKey = "SYN:F";
 const std::int64_t kStart = utc_ms(2025, 1, 1);

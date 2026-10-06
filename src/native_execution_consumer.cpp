@@ -2205,6 +2205,19 @@ bool NativeExecutionConsumer::projection_ok(const BacktestEngine& engine) const 
 
 NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
                                                      const NativeRunSpec& spec) {
+    return configure_spec(engine, &spec, nullptr);
+}
+
+NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
+                                                     NativeRunSpec&& spec) {
+    return configure_spec(engine, nullptr, &spec);
+}
+
+// Exactly one of `borrowed` and `owned` is set. A borrowed spec is copied at
+// the point a candidate is needed; an owned one is the candidate itself.
+NativeSetupResult NativeExecutionConsumer::configure_spec(BacktestEngine& engine,
+                                                          const NativeRunSpec* borrowed,
+                                                          NativeRunSpec* owned) {
     NativeSetupResult result;
     const NativeRunSpec* prior_spec = nullptr;
     // A refusal for the host's phase judges no field: it is WrongPhase at
@@ -2238,7 +2251,8 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
         result.validation = wrong_phase;
         return result;
     }
-    NativeRunSpec candidate = spec;
+    std::optional<NativeRunSpec> copied;
+    NativeRunSpec& candidate = owned != nullptr ? *owned : copied.emplace(*borrowed);
     const auto validation = normalize_native_run_spec(candidate);
     result.validation = validation;
     if (!validation) {
