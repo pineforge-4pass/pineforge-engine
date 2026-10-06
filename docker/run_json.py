@@ -87,13 +87,37 @@ symbols' bars for request.security (see load_symbol_feeds):
                                    "source_values_sha256": "<hex>"}}}}}
 Without --symbol-feeds (or with an index naming no symbol) the key is absent.
 
+--outputs reads what a library that records outputs recorded (the group
+pf_outputs of pineforge.h; docs/outputs.md): the report gains "outputs",
+written just before "fingerprint", and applied_runtime (and so
+provenance.runtime) holds "outputs": true. See build_outputs_block:
+    "outputs": {
+      "schema_version":  "pineforge-outputs/v1",
+      "message_format":  "pineforge/v1",
+      "manifest_sha256": "<sha256 of the manifest bytes the library returned>",
+      "manifest":        { ...the library's outputs manifest... },
+      "bars":      {"open_ms": [int, ...], "close_ms": [int, ...]},
+      "series":    [{"slot": int, "output": "<id>", "values": [number|null, ...]}, ...],
+      "constants": [number|null, ...],            # one per run-constant index
+      "hlines":    [{"output": "<id>", "price": number|null}, ...],
+      "events":    [{"sequence": int, "output": "<id>", "bar_index": int,
+                     "bar_open_ms": int, "bar_close_ms": int, "ordinal_in_bar": int,
+                     "phase": "batch" | "warmup" | "realtime",
+                     "value": number|null, "message": str|null,
+                     "freq": str}, ...]           # freq: an alert output's events only
+    }
+A double that is not finite is null, as everywhere in the report; a time
+equal to INT64_MIN is null; a slot or constant whose manifest encoding is
+"rgba-u32" is written as an integer. --bench --outputs records in the timed
+runs too. Without --outputs nothing of this is read or written.
+
 A failed run prints one line instead, exit status 1 (2 for a command line
 argparse refuses):
     {"engine":"pineforge","error":"<text>","code":"<code>","args":{...}}
 That is the run's own error, a --syminfo the harness rejects (see
 apply_syminfo), a --symbol-feeds it cannot install (see load_symbol_feeds), a
-setting the strategy refuses, or any other failure of the harness (see
-failure_line and main). "code" is a stable code of the closed vocabulary
+setting the strategy refuses, an --outputs it cannot honour (see OutputsError),
+or any other failure of the harness (see failure_line and main). "code" is a stable code of the closed vocabulary
 docker/run_failure_codes.json and "args" its typed arguments. The engine's code
 is read only from strategy_get_last_error_code and its args from
 strategy_get_last_error_args. A run failure from a library without the code
@@ -124,6 +148,7 @@ import struct
 import sys
 import time
 import traceback
+import types
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -2369,6 +2394,26 @@ class ReportC(ctypes.Structure):
     ]
 
 
+class OutputEventC(ctypes.Structure):
+    """Mirror of pf_output_event_v1_t (strategy_outputs_event_get)."""
+    _fields_ = [
+        ("struct_version", ctypes.c_uint32),
+        ("size",           ctypes.c_uint32),
+        ("sequence",       ctypes.c_uint64),
+        ("output_index",   ctypes.c_int32),
+        ("bar_index",      ctypes.c_int32),
+        ("bar_open_ms",    ctypes.c_int64),
+        ("bar_close_ms",   ctypes.c_int64),
+        ("ordinal_in_bar", ctypes.c_uint32),
+        ("phase",          ctypes.c_uint32),
+        ("confirmed",      ctypes.c_uint32),
+        ("reserved0",      ctypes.c_uint32),
+        ("value",          ctypes.c_double),
+        ("message_hash64", ctypes.c_uint64),
+        ("message",        ctypes.c_char_p),
+    ]
+
+
 class PfVersionC(ctypes.Structure):
     """Mirror of pf_version_t (returned by value from pf_version_get)."""
     _fields_ = [("major", ctypes.c_int), ("minor", ctypes.c_int),
@@ -2585,9 +2630,47 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
         lib.strategy_set_magnifier_volume_weighted.argtypes = [ctypes.c_void_p, ctypes.c_int]
         lib.strategy_set_magnifier_volume_weighted.restype = None
 
+    # Recorded outputs (--outputs). The readers are runtime exports of every
+    # library built on an engine that has them; the manifest and the version
+    # are a recording library's own. All hasattr-guarded: require_outputs
+    # refuses --outputs by name on a library that lacks them.
+    _bind_outputs(lib)
+
     lib.strategy_free.argtypes = [ctypes.c_void_p]
     lib.report_free.argtypes   = [ctypes.POINTER(ReportC)]
     return lib
+
+
+def _bind_outputs(lib) -> None:
+    signatures = {
+        "strategy_outputs_set_enabled": (ctypes.c_int, [ctypes.c_void_p, ctypes.c_int]),
+        "strategy_outputs_series_count": (ctypes.c_int, [ctypes.c_void_p]),
+        "strategy_outputs_bars_len": (ctypes.c_int64, [ctypes.c_void_p]),
+        "strategy_outputs_bar_times_copy": (ctypes.c_int, [
+            ctypes.c_void_p, ctypes.c_int64, ctypes.POINTER(ctypes.c_int64),
+            ctypes.POINTER(ctypes.c_int64), ctypes.c_int64, ctypes.POINTER(ctypes.c_int64)]),
+        "strategy_outputs_series_copy": (ctypes.c_int, [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_int64, ctypes.POINTER(ctypes.c_double),
+            ctypes.c_int64, ctypes.POINTER(ctypes.c_int64)]),
+        "strategy_outputs_events_len": (ctypes.c_int, [ctypes.c_void_p]),
+        "strategy_outputs_event_get": (ctypes.c_int, [
+            ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(OutputEventC), ctypes.c_size_t]),
+        "strategy_outputs_events_clear": (None, [ctypes.c_void_p]),
+        "strategy_outputs_constants_copy": (ctypes.c_int, [
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_double), ctypes.c_int]),
+        "strategy_outputs_api_version": (ctypes.c_uint32, []),
+        "strategy_outputs_manifest": (ctypes.c_int, [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+            ctypes.c_char_p, ctypes.c_size_t]),
+        "strategy_signal_safety_receipt": (ctypes.c_int, [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+            ctypes.c_char_p, ctypes.c_size_t]),
+    }
+    for name, (restype, argtypes) in signatures.items():
+        if hasattr(lib, name):
+            fn = getattr(lib, name)
+            fn.restype = restype
+            fn.argtypes = argtypes
 
 
 # --- Creating a strategy and applying the run's settings ----------------------
@@ -2768,6 +2851,15 @@ class SyminfoError(RunFailure, ValueError):
     lot_grid_rejected, syminfo_unreadable{reason} or
     strategy_library_incompatible{reason: setter_missing, missing}. main()
     reports it as the one failure line (exit 1), never as a traceback."""
+
+
+class OutputsError(RunFailure, ValueError):
+    """An --outputs the harness cannot honour, with its code: outputs_rejected
+    {reason} for a library that records no outputs (or whose switch the engine
+    refuses: the engine's own code), strategy_library_incompatible{reason:
+    outputs_api_mismatch | outputs_manifest_invalid} for a recording library
+    whose outputs exports the harness cannot read. main() reports it as the
+    one failure line (exit 1)."""
 
 
 # This file is vendored: pineforge-release copies it from the pineforge-engine
@@ -3172,6 +3264,252 @@ def symbol_feeds_record(symbols) -> dict:
             } for sym in symbols}}
 
 
+# --- Recorded outputs (--outputs) --------------------------------------------
+#
+# A library that records outputs (docs/outputs.md) exports
+# strategy_outputs_api_version and its manifest; every library built on an
+# engine with the group has the readers. The harness switches recording on
+# before the run, then reads the rows, the run constants and the events once,
+# after it: a batch caller never clears.
+
+OUTPUTS_API_VERSION = 1
+OUTPUTS_SCHEMA_VERSION = "pineforge-outputs/v1"
+OUTPUTS_MESSAGE_FORMAT = "pineforge/v1"
+OUTPUT_PHASES = {0: "batch", 1: "warmup", 2: "realtime"}
+_INT64_MIN = -(2 ** 63)
+_OUTPUTS_EXPORTS = (
+    "strategy_outputs_manifest", "strategy_outputs_set_enabled",
+    "strategy_outputs_series_count", "strategy_outputs_bars_len",
+    "strategy_outputs_bar_times_copy", "strategy_outputs_series_copy",
+    "strategy_outputs_events_len", "strategy_outputs_event_get",
+    "strategy_outputs_constants_copy")
+_NO_OUTPUTS = ("--outputs: this library records no outputs (compile the script as an "
+               "indicator, or with outputs on)")
+
+
+def _outputs_incompatible(text: str, reason: str) -> OutputsError:
+    return OutputsError("--outputs: " + text, "strategy_library_incompatible",
+                        {"reason": reason})
+
+
+def require_outputs(lib) -> None:
+    """OutputsError unless `lib` records outputs, has every export recording
+    reads, and answers the outputs API version this harness reads."""
+    if not hasattr(lib, "strategy_outputs_api_version"):
+        raise OutputsError(_NO_OUTPUTS, "outputs_rejected", {"reason": "not_declared"})
+    for name in _OUTPUTS_EXPORTS:
+        if not hasattr(lib, name):
+            raise _outputs_incompatible(
+                f"the library lacks {name}, which recording needs; rebuild.",
+                "outputs_api_mismatch")
+    version = int(lib.strategy_outputs_api_version())
+    if version != OUTPUTS_API_VERSION:
+        raise _outputs_incompatible(
+            f"the library's outputs API version is {version}, the harness reads "
+            f"{OUTPUTS_API_VERSION}; rebuild.", "outputs_api_mismatch")
+
+
+def enable_outputs(lib, strat) -> None:
+    """Switch recording on for `strat`. A refusal is the engine's own failure,
+    its text after "--outputs: " and its code from the getters."""
+    if lib.strategy_outputs_set_enabled(strat, 1) == 0:
+        return
+    text = ""
+    if hasattr(lib, "strategy_get_last_error"):
+        text = _c_text(lib.strategy_get_last_error(strat))
+    engine = engine_failure_code(lib, strat)
+    code, args = engine if engine is not None and engine[0] else (
+        "outputs_rejected", {"reason": "not_declared"})
+    raise OutputsError("--outputs: " + (text or "the library refused to record"), code, args)
+
+
+def _outputs_manifest(lib, strat) -> bytes:
+    required = ctypes.c_size_t(0)
+    error = ctypes.create_string_buffer(512)
+    lib.strategy_outputs_manifest(strat, None, 0, ctypes.byref(required), error, len(error))
+    status = -1
+    buffer = None
+    if required.value > 0:
+        buffer = ctypes.create_string_buffer(required.value)
+        status = lib.strategy_outputs_manifest(strat, buffer, required.value,
+                                               ctypes.byref(required), error, len(error))
+    if status != 0 or buffer is None:
+        raise _outputs_incompatible(
+            "the library returned no outputs manifest: "
+            + error.value.decode("utf-8", "replace"), "outputs_manifest_invalid")
+    return buffer.raw[:required.value - 1]
+
+
+def make_outputs_reader(lib, strat):
+    """The reader build_outputs_block takes: callables over the C readers of
+    `strat`. Each copies when called; an event's message is copied out with
+    the event (the library lends it only until the next call that runs or
+    clears)."""
+
+    def bar_times():
+        n = int(lib.strategy_outputs_bars_len(strat))
+        opens = (ctypes.c_int64 * max(n, 1))()
+        closes = (ctypes.c_int64 * max(n, 1))()
+        written = ctypes.c_int64(0)
+        if n > 0 and lib.strategy_outputs_bar_times_copy(
+                strat, 0, opens, closes, n, ctypes.byref(written)) != 0:
+            raise _outputs_incompatible("the bar times could not be read",
+                                        "outputs_api_mismatch")
+        return list(opens[:written.value]), list(closes[:written.value])
+
+    def series(slot):
+        n = int(lib.strategy_outputs_bars_len(strat))
+        values = (ctypes.c_double * max(n, 1))()
+        written = ctypes.c_int64(0)
+        if lib.strategy_outputs_series_copy(strat, slot, 0, values, n,
+                                            ctypes.byref(written)) != 0:
+            raise _outputs_incompatible(f"series slot {slot} could not be read",
+                                        "outputs_api_mismatch")
+        return list(values[:written.value])
+
+    def constants():
+        n = int(lib.strategy_outputs_constants_copy(strat, None, 0))
+        values = (ctypes.c_double * max(n, 1))()
+        if n > 0:
+            lib.strategy_outputs_constants_copy(strat, values, n)
+        return list(values[:max(n, 0)])
+
+    def events():
+        out = []
+        for index in range(int(lib.strategy_outputs_events_len(strat))):
+            event = OutputEventC()
+            if lib.strategy_outputs_event_get(strat, index, ctypes.byref(event),
+                                              ctypes.sizeof(event)) != 0:
+                raise _outputs_incompatible(f"event {index} could not be read",
+                                            "outputs_api_mismatch")
+            # A c_char_p field reads as a bytes copy: taken here, while the
+            # library still lends the text.
+            out.append(types.SimpleNamespace(
+                **{name: getattr(event, name) for name, _ in OutputEventC._fields_}))
+        return out
+
+    return types.SimpleNamespace(
+        manifest=lambda: _outputs_manifest(lib, strat),
+        bar_times=bar_times,
+        series_count=lambda: int(lib.strategy_outputs_series_count(strat)),
+        series=series,
+        constants=constants,
+        events=events,
+    )
+
+
+def _output_value(value, encoding):
+    """A slot or constant value: null when not finite, an integer under the
+    rgba-u32 encoding, else the double."""
+    number = _num(value)
+    if number is not None and encoding == "rgba-u32":
+        return int(number)
+    return number
+
+
+def _output_time(ms) -> int | None:
+    ms = int(ms)
+    return None if ms == _INT64_MIN else ms
+
+
+def _manifest_entries(manifest: dict, key: str, fields: tuple) -> list:
+    entries = manifest.get(key, [])
+    if not isinstance(entries, list) or not all(
+            isinstance(e, dict) and all(f in e for f in fields) for e in entries):
+        raise _outputs_incompatible(
+            f"the outputs manifest's {key} is not a list of entries with {', '.join(fields)}",
+            "outputs_manifest_invalid")
+    return entries
+
+
+def build_outputs_block(reader) -> dict:
+    """The report's "outputs" block, from a reader of callables (see
+    make_outputs_reader): manifest() -> the raw manifest bytes,
+    bar_times() -> (opens, closes), series_count() -> int,
+    series(slot) -> [double], constants() -> [double], events() -> records
+    with the fields of pf_output_event_v1_t (message as bytes or None).
+
+    series[] has one entry per manifest series[] entry, in slot order;
+    hlines[] one per hline output, its price the run constant its manifest
+    entry names (null when na or not written, as in a run with no rows);
+    an event of an alert output also carries the output's freq. A manifest
+    that is not a JSON object, names a slot the library does not record, or
+    lacks an output an event names is an OutputsError."""
+    raw = reader.manifest()
+    try:
+        manifest = json.loads(raw)
+    except (ValueError, UnicodeDecodeError, RecursionError) as error:
+        raise _outputs_incompatible(f"the outputs manifest is not JSON: {error}",
+                                    "outputs_manifest_invalid") from None
+    if not isinstance(manifest, dict):
+        raise _outputs_incompatible("the outputs manifest is not a JSON object",
+                                    "outputs_manifest_invalid")
+    output_entries = _manifest_entries(manifest, "outputs", ("index",))
+    outputs = {entry["index"]: entry for entry in output_entries}
+    series_entries = _manifest_entries(manifest, "series", ("slot",))
+    constant_entries = _manifest_entries(manifest, "constants", ("index",))
+    opens, closes = reader.bar_times()
+    slots = reader.series_count()
+    series = []
+    for entry in sorted(series_entries, key=lambda e: e["slot"]):
+        slot = entry["slot"]
+        if not isinstance(slot, int) or not 0 <= slot < slots:
+            raise _outputs_incompatible(
+                f"the outputs manifest names series slot {slot}, which the library "
+                f"does not record", "outputs_manifest_invalid")
+        encoding = entry.get("encoding")
+        series.append({"slot": slot, "output": entry.get("output"),
+                       "values": [_output_value(v, encoding) for v in reader.series(slot)]})
+    encodings = {entry["index"]: entry.get("encoding") for entry in constant_entries}
+    constants = [_output_value(v, encodings.get(k)) for k, v in enumerate(reader.constants())]
+    hlines = []
+    for entry in output_entries:
+        if entry.get("kind") != "hline":
+            continue
+        price = entry.get("price")
+        index = price.get("constant") if isinstance(price, dict) else None
+        hlines.append({"output": entry.get("id"),
+                       "price": (constants[index] if isinstance(index, int)
+                                 and 0 <= index < len(constants) else None)})
+    events = []
+    for event in reader.events():
+        output_index = int(event.output_index)
+        if output_index not in outputs:
+            raise _outputs_incompatible(
+                f"the outputs manifest lists no output {output_index}, which an event "
+                f"names", "outputs_manifest_invalid")
+        output = outputs[output_index]
+        message = event.message
+        if isinstance(message, bytes):
+            message = message.decode("utf-8", "replace")
+        row = {
+            "sequence": int(event.sequence),
+            "output": output.get("id"),
+            "bar_index": int(event.bar_index),
+            "bar_open_ms": _output_time(event.bar_open_ms),
+            "bar_close_ms": _output_time(event.bar_close_ms),
+            "ordinal_in_bar": int(event.ordinal_in_bar),
+            "phase": OUTPUT_PHASES.get(int(event.phase), str(int(event.phase))),
+            "value": _num(event.value),
+            "message": message,
+        }
+        if output.get("kind") == "alert":
+            row["freq"] = output.get("freq")
+        events.append(row)
+    return {
+        "schema_version": OUTPUTS_SCHEMA_VERSION,
+        "message_format": manifest.get("message_format", OUTPUTS_MESSAGE_FORMAT),
+        "manifest_sha256": hashlib.sha256(raw).hexdigest(),
+        "manifest": manifest,
+        "bars": {"open_ms": [_output_time(t) for t in opens],
+                 "close_ms": [_output_time(t) for t in closes]},
+        "series": series,
+        "constants": constants,
+        "hlines": hlines,
+        "events": events,
+    }
+
+
 def fmt_utc(ms: int) -> str:
     return datetime.fromtimestamp(
         ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -3560,6 +3898,10 @@ def _main(argv=None) -> int:
                          "request.security reads, keyed by the exact symbol string "
                          "and timeframe (strategy_set_symbol_feed / _facts); see "
                          "load_symbol_feeds.")
+    ap.add_argument("--outputs", action="store_true",
+                    help="Record the library's outputs (a library compiled to record "
+                         "them) and write them as the report's \"outputs\" block; see "
+                         "build_outputs_block. A failure on a library that records none.")
     args = ap.parse_args(argv)
 
     inputs    = parse_kv_json(args.inputs,    "--inputs")
@@ -3578,6 +3920,8 @@ def _main(argv=None) -> int:
 
     lib = load_strategy(args.so)
     checked = uses_checked_settings(lib)
+    if args.outputs:
+        require_outputs(lib)
 
     # Volume-weighted magnifier only meaningful when the magnifier is on.
     vw_on = bool(args.magnifier_volume_weighted) and bar_magnifier == 1
@@ -3611,6 +3955,8 @@ def _main(argv=None) -> int:
                 lib.strategy_set_chart_timezone(st, args.chart_tz.encode())
             if vw_on and hasattr(lib, "strategy_set_magnifier_volume_weighted"):
                 lib.strategy_set_magnifier_volume_weighted(st, 1)
+            if args.outputs:
+                enable_outputs(lib, st)
         except BaseException:
             lib.strategy_free(st)
             raise
@@ -3701,6 +4047,10 @@ def _main(argv=None) -> int:
             applied_runtime["syminfo"] = syminfo_applied
         if symbol_feeds:
             applied_runtime["symbol_feeds"] = symbol_feeds_record(symbol_feeds)
+        outputs_block = None
+        if args.outputs:
+            outputs_block = build_outputs_block(make_outputs_reader(lib, state))
+            applied_runtime["outputs"] = True
         incarnation_accessor = getattr(
             lib, "strategy_closed_trade_entry_incarnation", None)
         trade_entry_incarnations = (
@@ -3717,6 +4067,8 @@ def _main(argv=None) -> int:
             out["diagnostics"]["throughput"] = _throughput_block(
                 report.input_bars_processed, timing["samples_ns"],
                 bar_magnifier=bar_magnifier)
+        if outputs_block is not None:
+            out["outputs"] = outputs_block
         try:
             # The frozen helpers' regex readers never see the C++: the release
             # reader below owns every declared value, and only the digest of

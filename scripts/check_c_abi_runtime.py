@@ -91,10 +91,23 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_set_recorded_series",
     "strategy_get_last_error_code",
     "strategy_get_last_error_args",
+    # Recorded outputs (group pf_outputs): the switch and the readers. The
+    # group's three per-library declarations (strategy_outputs_api_version,
+    # strategy_outputs_manifest, strategy_signal_safety_receipt) are generated
+    # per module, so they count as declarations only.
+    "strategy_outputs_set_enabled",
+    "strategy_outputs_series_count",
+    "strategy_outputs_bars_len",
+    "strategy_outputs_bar_times_copy",
+    "strategy_outputs_series_copy",
+    "strategy_outputs_events_len",
+    "strategy_outputs_event_get",
+    "strategy_outputs_events_clear",
+    "strategy_outputs_constants_copy",
 })
 
-EXPECTED_PUBLIC_DECLARATIONS = 81
-EXPECTED_RUNTIME_IMPLEMENTATIONS = 64
+EXPECTED_PUBLIC_DECLARATIONS = 93
+EXPECTED_RUNTIME_IMPLEMENTATIONS = 73
 
 # Runtime setters whose data a stream cannot take: the source host refuses
 # stream_begin() while any of them holds data (the native daily feed since its
@@ -111,7 +124,7 @@ HISTORICAL_ONLY_RUNTIME = frozenset({
 })
 HISTORICAL_ONLY_PHRASE = "stream_begin() fails closed"
 
-# The C-level native host API. Additive to the 64 above: every symbol here is
+# The C-level native host API. Additive to the 73 above: every symbol here is
 # declared in include/pineforge/native_c_api.h and implemented in
 # src/native_c_host.cpp, and neither file contributes to the two counts above.
 EXPECTED_NATIVE_C_API = frozenset({

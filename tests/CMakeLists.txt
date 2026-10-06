@@ -1794,6 +1794,18 @@ list(APPEND TEST_SOURCES test_pooc_limit_close_tapes)
 # (tests/fixtures/aggregated_admission_receipt, E2). Source-bound.
 list(APPEND TEST_SOURCES test_report_timeframe_ratio)
 list(APPEND TEST_SOURCES test_aggregated_admission_receipt_tapes)
+# Recorded outputs (docs/outputs.md): a bare host's record read through the
+# strategy_outputs_* C exports -- hand values, the row and run-constant rules
+# and every refusal (recorder); a stream records what a batch records (D1); a
+# batch cut at bar t records bars <= t as the whole batch does (D2); the run
+# boundary on a reused handle; and three trading hosts whose trades, equity
+# and hashes are equal with recording undeclared, off and on. All source-free,
+# so they also run in the kernel-only profile.
+list(APPEND TEST_SOURCES test_outputs_recorder)
+list(APPEND TEST_SOURCES test_outputs_stream_equivalence)
+list(APPEND TEST_SOURCES test_outputs_truncation)
+list(APPEND TEST_SOURCES test_outputs_run_reuse)
+list(APPEND TEST_SOURCES test_outputs_off_identity)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
@@ -2470,6 +2482,38 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
             ${CMAKE_CURRENT_SOURCE_DIR}/test_per_entry_exit_tapes.py
             ${_pf_pee_fixtures} $<TARGET_FILE:per_entry_exit_tapes>
             ${PROJECT_SOURCE_DIR}/scripts)
+# Recorded outputs through docker/run_json.py (--outputs): two strategy
+# libraries run as a process, one that records outputs
+# (outputs_fixture_strategy.cpp, a bare host with the per-library outputs
+# exports) and one frozen generated strategy that records none. Both load
+# into the Python interpreter, so neither is built under the sanitizer or
+# coverage instrumentation.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    set(_pf_outputs_dir ${CMAKE_BINARY_DIR}/outputs_fixture)
+    add_library(outputs_fixture_strategy MODULE outputs_fixture_strategy.cpp)
+    add_library(outputs_fixture_generated MODULE
+        ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/callback_lifecycle/carried-static-stop/generated.cpp)
+    target_include_directories(outputs_fixture_generated PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(outputs_fixture_generated PRIVATE -O0 -ffp-contract=off
+        -Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-parameter
+        -Wno-unused-function -Wno-sign-compare)
+    foreach(_pf_outputs_library outputs_fixture_strategy outputs_fixture_generated)
+        target_link_libraries(${_pf_outputs_library} PRIVATE pineforge)
+        if(APPLE)
+            target_link_options(${_pf_outputs_library} PRIVATE
+                "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+        else()
+            target_link_options(${_pf_outputs_library} PRIVATE
+                "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+        endif()
+        set_target_properties(${_pf_outputs_library} PROPERTIES
+            LIBRARY_OUTPUT_DIRECTORY ${_pf_outputs_dir} PREFIX "" SUFFIX ".so")
+    endforeach()
+    add_test(NAME test_run_json_outputs
+        COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_run_json_outputs.py
+            $<TARGET_FILE:outputs_fixture_strategy> $<TARGET_FILE:outputs_fixture_generated>)
 endif()
 
 # TradingView's same-side exit tapes (tests/fixtures/same_side_exit): a
@@ -3691,6 +3735,20 @@ if(PINEFORGE_ENABLE_COVERAGE)
     target_compile_options(test_native_c_api_c99 PRIVATE ${_pf_cov_test_flags})
 endif()
 pineforge_add_twin_test(test_native_c_api_c99 test_native_c_api_c99)
+
+# Recorded outputs: group pf_outputs of <pineforge/pineforge.h> (its runtime
+# readers and the per-library declarations) as a strict C99 consumer compiles
+# it, the event record's layout pinned at compile time, and a native C host's
+# handle answering the readers as a module that declares no outputs.
+add_executable(test_outputs_c_api_c99 test_outputs_c_api_c99.c)
+set_target_properties(test_outputs_c_api_c99 PROPERTIES
+    C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF LINKER_LANGUAGE CXX)
+target_link_libraries(test_outputs_c_api_c99 PRIVATE pineforge)
+target_compile_options(test_outputs_c_api_c99 PRIVATE -UNDEBUG -pedantic-errors -Wall -Wextra)
+if(PINEFORGE_ENABLE_COVERAGE)
+    target_compile_options(test_outputs_c_api_c99 PRIVATE ${_pf_cov_test_flags})
+endif()
+pineforge_add_twin_test(test_outputs_c_api_c99 test_outputs_c_api_c99)
 
 # R5 lane H-MEASURE (AUDIT4-codex A4-ACID-COVERAGE): the G1 composite witness.
 # One ctest row, two translation units, the test_native_c_api pattern. The C++

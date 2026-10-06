@@ -9,13 +9,13 @@
  *     BEFORE shipping a .so that consumers depend on.
  *   - The runtime-library-side `extern "C"` symbols (the closed-trade
  *     incarnation accessor, setters, strategy_get_last_error,
- *     strategy_get_last_error_code, strategy_get_last_error_args,
- *     the security-feed and symbol-data setters, the strategy_stream_* lifecycle,
- *     native stream bar input/action polling/fingerprint/API-version exports,
- *     the live-runtime surface (strategy_request_abort,
- *     strategy_last_run_status, strategy_set_realtime_tail,
- *     strategy_set_probe_suppress_tail_logic, strategy_set_path_order,
- *     strategy_last_bar_dual_entry_path,
+ *     strategy_get_last_error_code, strategy_get_last_error_args, the
+ *     security-feed and symbol-data setters, the strategy_stream_*
+ *     lifecycle, the strategy_outputs_* readers, native stream bar
+ *     input/action polling/fingerprint/API-version exports, the live-runtime
+ *     surface (strategy_request_abort, strategy_last_run_status,
+ *     strategy_set_realtime_tail, strategy_set_probe_suppress_tail_logic,
+ *     strategy_set_path_order, strategy_last_bar_dual_entry_path,
  *     strategy_set_broker_state_hash_recording, strategy_broker_state_hash,
  *     strategy_pending_orders_len, strategy_pending_order_get,
  *     strategy_pending_order_layout, strategy_pending_order_fill_qty,
@@ -1065,5 +1065,109 @@ PF_API int strategy_set_recorded_series(pf_strategy_t s, const char* key,
     });
 }
 #endif
+
+/* Recorded outputs (group pf_outputs, docs/outputs.md): the readers of the
+ * record BacktestEngine keeps, and its switch. The event copy is size
+ * prefixed like strategy_pending_order_get: min(size_in, sizeof) bytes, and a
+ * size_in below the 8-byte header is refused. */
+static_assert(offsetof(pf_output_event_v1_t, size) == 4,
+              "pf_output_event_v1_t: size follows struct_version");
+static_assert(offsetof(pf_output_event_v1_t, sequence) == 8
+                  && offsetof(pf_output_event_v1_t, value) == 56
+                  && offsetof(pf_output_event_v1_t, message_hash64) == 64,
+              "pf_output_event_v1_t: every 8-byte field at a multiple of 8");
+static_assert(offsetof(pf_output_event_v1_t, message) == 72,
+              "pf_output_event_v1_t: a 72-byte prefix before the one pointer");
+#if UINTPTR_MAX == UINT64_MAX
+static_assert(sizeof(pf_output_event_v1_t) == 80, "pf_output_event_v1_t is 80 bytes on 64-bit");
+#endif
+static_assert(static_cast<int>(pineforge::NativeRunPhase::Batch) == PF_OUTPUT_PHASE_BATCH
+                  && static_cast<int>(pineforge::NativeRunPhase::Warmup) == PF_OUTPUT_PHASE_WARMUP
+                  && static_cast<int>(pineforge::NativeRunPhase::Realtime)
+                         == PF_OUTPUT_PHASE_REALTIME,
+              "pf_output_phase_t mirrors NativeRunPhase");
+
+PF_API int strategy_outputs_set_enabled(pf_strategy_t s, int on) {
+    return pf_cabi_int(s, [&] {
+        if (!s) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)->set_outputs_enabled(on != 0) ? 0 : -1;
+    });
+}
+
+PF_API int strategy_outputs_series_count(pf_strategy_t s) {
+    if (!s) return -1;
+    return static_cast<const pineforge::BacktestEngine*>(s)->output_series_count();
+}
+
+PF_API int64_t strategy_outputs_bars_len(pf_strategy_t s) {
+    if (!s) return -1;
+    return static_cast<const pineforge::BacktestEngine*>(s)->output_bars_len();
+}
+
+PF_API int strategy_outputs_bar_times_copy(pf_strategy_t s, int64_t from_bar, int64_t* open_ms,
+                                           int64_t* close_ms, int64_t capacity,
+                                           int64_t* written) {
+    return pf_cabi_int(s, [&] {
+        if (!s) return -1;
+        return static_cast<const pineforge::BacktestEngine*>(s)->output_bar_times_copy(
+                   from_bar, open_ms, close_ms, capacity, written)
+            ? 0 : -1;
+    });
+}
+
+PF_API int strategy_outputs_series_copy(pf_strategy_t s, int series, int64_t from_bar,
+                                        double* out, int64_t capacity, int64_t* written) {
+    return pf_cabi_int(s, [&] {
+        if (!s) return -1;
+        return static_cast<const pineforge::BacktestEngine*>(s)->output_series_copy(
+                   series, from_bar, out, capacity, written)
+            ? 0 : -1;
+    });
+}
+
+PF_API int strategy_outputs_events_len(pf_strategy_t s) {
+    if (!s) return -1;
+    return static_cast<const pineforge::BacktestEngine*>(s)->output_events_len();
+}
+
+PF_API int strategy_outputs_event_get(pf_strategy_t s, int index, void* out, size_t size_in) {
+    if (!s || !out) return -1;
+    if (size_in < offsetof(pf_output_event_v1_t, size) + sizeof(uint32_t)) return -1;
+    const auto* event = static_cast<const pineforge::BacktestEngine*>(s)->output_event_at(index);
+    if (!event) return -1;
+    pf_output_event_v1_t tmp;
+    std::memset(&tmp, 0, sizeof(tmp));
+    tmp.struct_version = 1;
+    tmp.size = static_cast<uint32_t>(sizeof(tmp));
+    tmp.sequence = event->sequence;
+    tmp.output_index = event->output_index;
+    tmp.bar_index = event->bar_index;
+    tmp.bar_open_ms = event->bar_open_ms;
+    tmp.bar_close_ms = event->bar_close_ms;
+    tmp.ordinal_in_bar = event->ordinal_in_bar;
+    tmp.phase = event->phase;
+    tmp.confirmed = event->confirmed;
+    tmp.value = event->value;
+    tmp.message_hash64 = event->message_hash64;
+    tmp.message = event->has_message ? event->message.c_str() : nullptr;
+    std::memcpy(out, &tmp, size_in < sizeof(tmp) ? size_in : sizeof(tmp));
+    return 0;
+}
+
+PF_API void strategy_outputs_events_clear(pf_strategy_t s) {
+    pf_cabi_void([&] {
+        if (s) static_cast<pineforge::BacktestEngine*>(s)->output_events_clear();
+    });
+}
+
+PF_API int strategy_outputs_constants_copy(pf_strategy_t s, double* out, int capacity) {
+    return pf_cabi_int(s, [&] {
+        if (!s || capacity < 0 || (capacity > 0 && !out)) return -1;
+        const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
+        const int n = engine->output_constants_count();
+        for (int i = 0; i < capacity && i < n; ++i) out[i] = engine->output_constant_value(i);
+        return n;
+    });
+}
 
 } /* extern "C" */

@@ -237,3 +237,252 @@ void BacktestEngine::free_report(ReportC* report) {
 }
 
 }  // namespace pineforge
+
+
+// ---------------------------------------------------------------------------
+// Recorded outputs (engine.hpp, docs/outputs.md). Kept after everything the
+// file held before, so no line above moves. The consumer's private header is
+// read for three facts only: whether the host is Running, the run's phase and
+// the current point's completion.
+#include "native_execution_consumer.hpp"
+
+#include <climits>
+#include <cstring>
+#include <limits>
+#include <string>
+
+namespace pineforge {
+
+namespace {
+
+constexpr double kUnwrittenOutput = std::numeric_limits<double>::quiet_NaN();
+
+[[noreturn]] void refuse_output(const std::string& text) {
+    throw std::logic_error("outputs: " + text);
+}
+
+// FNV-1a 64 of the bytes, as stream_state_hash folds them.
+uint64_t output_message_hash(const std::string& text) {
+    uint64_t hash = 1469598103934665603ULL;
+    for (const unsigned char c : text) {
+        hash ^= c;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+// Equal bit for bit, or both NaN.
+bool same_output_constant(double a, double b) {
+    if (std::isnan(a) && std::isnan(b)) return true;
+    uint64_t x = 0;
+    uint64_t y = 0;
+    std::memcpy(&x, &a, sizeof(x));
+    std::memcpy(&y, &b, sizeof(y));
+    return x == y;
+}
+
+}  // namespace
+
+bool BacktestEngine::output_host_running() const {
+    return execution_consumer_slot_.ptr
+        && as_native_consumer(*execution_consumer_slot_.ptr).state_kind()
+               == NativeLifecycleKind::Running;
+}
+
+void BacktestEngine::clear_output_record() {
+    output_series_.clear();
+    output_open_ms_.clear();
+    output_close_ms_.clear();
+    output_events_.clear();
+    output_sequence_ = 0;
+    output_row_seq_base_ = 0;
+    output_cleared_sequence_ = 0;
+    std::fill(output_ordinals_.begin(), output_ordinals_.end(), 0u);
+    std::fill(output_constants_.begin(), output_constants_.end(), kUnwrittenOutput);
+    std::fill(output_constant_written_.begin(), output_constant_written_.end(), uint8_t{0});
+}
+
+bool BacktestEngine::set_outputs_enabled(bool on) {
+    if (on && !outputs_declared_) {
+        last_error_ = "outputs: this module declares no outputs";
+        return false;
+    }
+    if (on == outputs_enabled_) return true;
+    if (output_host_running()) {
+        last_error_ = "outputs: recording cannot change during a run";
+        return false;
+    }
+    outputs_enabled_ = on;
+    clear_output_record();
+    return true;
+}
+
+void BacktestEngine::declare_outputs(int series_slots, int outputs, int run_constants) {
+    if (series_slots < 0 || outputs < 0 || run_constants < 0)
+        refuse_output("declared counts must not be negative");
+    if (output_host_running()) refuse_output("declare_outputs while a run is in progress");
+    if (outputs_declared_) {
+        if (series_slots != outputs_slots_ || outputs != outputs_count_
+            || run_constants != outputs_constants_) {
+            refuse_output("declare_outputs repeated with other counts");
+        }
+        return;
+    }
+    outputs_slots_ = series_slots;
+    outputs_count_ = outputs;
+    outputs_constants_ = run_constants;
+    output_ordinals_.assign(static_cast<size_t>(outputs), 0u);
+    output_constants_.assign(static_cast<size_t>(run_constants), kUnwrittenOutput);
+    output_constant_written_.assign(static_cast<size_t>(run_constants), uint8_t{0});
+    outputs_declared_ = true;
+}
+
+void BacktestEngine::output_run_begin() {
+    clear_output_record();
+    output_run_begun_ = true;
+}
+
+void BacktestEngine::output_bar(int64_t open_ms, int64_t close_ms) {
+    if (!outputs_enabled_) return;
+    if (!output_run_begun_) refuse_output("output_bar before any output_run_begin");
+    const size_t slots = static_cast<size_t>(outputs_slots_);
+    if (output_open_ms_.empty() || open_ms > output_open_ms_.back()) {
+        output_series_.resize(output_series_.size() + slots, kUnwrittenOutput);
+        output_open_ms_.push_back(open_ms);
+        output_close_ms_.push_back(close_ms);
+        std::fill(output_ordinals_.begin(), output_ordinals_.end(), 0u);
+        output_row_seq_base_ = output_sequence_;
+        return;
+    }
+    if (open_ms < output_open_ms_.back()) {
+        refuse_output("bar opened at " + std::to_string(open_ms)
+                      + " is before the last recorded bar");
+    }
+    // A recalculation of the last row. Its queued events are retracted and
+    // their sequences issued again, unless a clear already handed one out.
+    if (output_cleared_sequence_ > output_row_seq_base_) {
+        refuse_output("bar " + std::to_string(output_open_ms_.size() - 1)
+                      + " was recalculated after its events were cleared");
+    }
+    std::fill(output_series_.end() - static_cast<std::ptrdiff_t>(slots), output_series_.end(),
+              kUnwrittenOutput);
+    output_close_ms_.back() = close_ms;
+    std::fill(output_ordinals_.begin(), output_ordinals_.end(), 0u);
+    while (!output_events_.empty() && output_events_.back().sequence > output_row_seq_base_)
+        output_events_.pop_back();
+    output_sequence_ = output_row_seq_base_;
+}
+
+void BacktestEngine::output_value(int slot, double value) {
+    if (!outputs_enabled_) return;
+    if (output_open_ms_.empty()) refuse_output("output_value with no open bar");
+    if (slot < 0 || slot >= outputs_slots_)
+        refuse_output("series slot " + std::to_string(slot) + " is out of range");
+    output_series_[(output_open_ms_.size() - 1) * static_cast<size_t>(outputs_slots_)
+                   + static_cast<size_t>(slot)] = value;
+}
+
+void BacktestEngine::output_event(int output, double value) {
+    record_output_event(output, value, nullptr);
+}
+
+void BacktestEngine::output_event(int output, double value, const std::string& message) {
+    record_output_event(output, value, &message);
+}
+
+void BacktestEngine::record_output_event(int output, double value, const std::string* message) {
+    if (!outputs_enabled_) return;
+    if (output_open_ms_.empty()) refuse_output("output_event with no open bar");
+    if (output < 0 || output >= outputs_count_)
+        refuse_output("output " + std::to_string(output) + " is out of range");
+    if (output_events_.size() >= static_cast<size_t>(INT_MAX))
+        refuse_output("the event queue is full");
+    if (output_sequence_ == std::numeric_limits<uint64_t>::max())
+        throw std::runtime_error("outputs: event sequence overflow");
+    OutputEvent event;
+    event.sequence = output_sequence_ + 1;
+    event.output_index = output;
+    event.bar_index = static_cast<int32_t>(output_open_ms_.size() - 1);
+    event.bar_open_ms = output_open_ms_.back();
+    event.bar_close_ms = output_close_ms_.back();
+    event.ordinal_in_bar = output_ordinals_[static_cast<size_t>(output)];
+    const NativeExecutionConsumer& consumer = as_native_consumer(execution_consumer());
+    event.phase = static_cast<uint32_t>(consumer.state_phase());
+    const NativeCurrentPointView* point = consumer.current_point();
+    event.confirmed = point != nullptr
+            && point->decision.coordinate.completion == NativeCompletionKind::PartialFinalized
+        ? 0u : 1u;
+    event.value = value;
+    if (message != nullptr) {
+        event.has_message = true;
+        event.message = *message;
+        event.message_hash64 = output_message_hash(*message);
+    }
+    output_events_.push_back(std::move(event));
+    output_sequence_ = output_events_.back().sequence;
+    ++output_ordinals_[static_cast<size_t>(output)];
+}
+
+void BacktestEngine::output_constant(int index, double value) {
+    if (!outputs_enabled_) return;
+    if (!output_run_begun_) refuse_output("output_constant before any output_run_begin");
+    if (index < 0 || index >= outputs_constants_)
+        refuse_output("run constant " + std::to_string(index) + " is out of range");
+    const size_t at = static_cast<size_t>(index);
+    if (!output_constant_written_[at]) {
+        output_constants_[at] = value;
+        output_constant_written_[at] = 1;
+        return;
+    }
+    if (!same_output_constant(output_constants_[at], value))
+        refuse_output("run constant " + std::to_string(index) + " changed within a run");
+}
+
+bool BacktestEngine::output_bar_times_copy(int64_t from_bar, int64_t* open_ms,
+                                           int64_t* close_ms, int64_t capacity,
+                                           int64_t* written) const {
+    const int64_t rows = output_bars_len();
+    if (written == nullptr || capacity < 0 || from_bar < 0 || from_bar > rows) return false;
+    const int64_t n = std::min(capacity, rows - from_bar);
+    const auto first = static_cast<std::ptrdiff_t>(from_bar);
+    if (open_ms != nullptr)
+        std::copy(output_open_ms_.begin() + first, output_open_ms_.begin() + first + n, open_ms);
+    if (close_ms != nullptr)
+        std::copy(output_close_ms_.begin() + first, output_close_ms_.begin() + first + n, close_ms);
+    *written = n;
+    return true;
+}
+
+bool BacktestEngine::output_series_copy(int slot, int64_t from_bar, double* out,
+                                        int64_t capacity, int64_t* written) const {
+    const int64_t rows = output_bars_len();
+    if (written == nullptr || slot < 0 || slot >= output_series_count() || capacity < 0
+        || (capacity > 0 && out == nullptr) || from_bar < 0 || from_bar > rows) {
+        return false;
+    }
+    const int64_t n = std::min(capacity, rows - from_bar);
+    const size_t stride = static_cast<size_t>(outputs_slots_);
+    for (int64_t i = 0; i < n; ++i)
+        out[i] = output_series_[static_cast<size_t>(from_bar + i) * stride + static_cast<size_t>(slot)];
+    *written = n;
+    return true;
+}
+
+const BacktestEngine::OutputEvent* BacktestEngine::output_event_at(int index) const {
+    if (index < 0 || index >= output_events_len()) return nullptr;
+    return &output_events_[static_cast<size_t>(index)];
+}
+
+void BacktestEngine::output_events_clear() {
+    if (output_events_.empty()) return;
+    output_cleared_sequence_ = std::max(output_cleared_sequence_, output_events_.back().sequence);
+    output_events_.clear();
+}
+
+double BacktestEngine::output_constant_value(int index) const {
+    if (index < 0 || index >= output_constants_count()) return kUnwrittenOutput;
+    const size_t at = static_cast<size_t>(index);
+    return output_constant_written_[at] ? output_constants_[at] : kUnwrittenOutput;
+}
+
+}  // namespace pineforge

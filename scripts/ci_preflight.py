@@ -695,6 +695,10 @@ def check_commands(source: Path) -> list[tuple]:
         # release.yml's version arithmetic is a tested script.
         ('report-schema-key-tests',
          [sys.executable, str(source / 'scripts/test_report_schema_keys.py')]),
+        # Recorded outputs: the keys, order and value rules of run_json's
+        # "outputs" block, with no engine (docs/outputs.md).
+        ('report-outputs-key-tests',
+         [sys.executable, str(source / 'scripts/test_report_outputs_keys.py')]),
         ('release-version-tests',
          [sys.executable, str(source / 'scripts/test_release_version.py')]),
         # R5 run-failure codes: the catalog diff release.yml stamps is a tested

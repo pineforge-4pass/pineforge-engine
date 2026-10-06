@@ -2185,6 +2185,101 @@ public:
     void trace(const std::string& name, bool value)  { trace(name, value ? 1.0 : 0.0); }
     void trace(const std::string& name, int value)   { trace(name, static_cast<double>(value)); }
 
+    // --- Recorded outputs (docs/outputs.md) ---
+    // Named slots of doubles kept per bar, values kept once per run, and
+    // events with an optional text, written by a generated module or a C++
+    // host and read through the strategy_outputs_* C exports. Off until a
+    // caller enables recording; no matching, fill, margin, sizing, report or
+    // hash path reads the record, and none of it is hashed. The host states
+    // the shape once (declare_outputs), the boundary of every run
+    // (output_run_begin) and the identity of every row (output_bar): a row is
+    // a bar the host published, keyed by its open time. A violated
+    // precondition throws std::logic_error, which inside a callback fails the
+    // run with that text. The methods are in src/engine_report.cpp.
+public:
+    struct OutputEvent {
+        uint64_t sequence = 0;        // 1-based per run; a cleared one is never issued again
+        int32_t output_index = 0;
+        int32_t bar_index = 0;        // the row it was recorded on
+        int64_t bar_open_ms = 0;
+        int64_t bar_close_ms = 0;
+        uint32_t ordinal_in_bar = 0;  // per output, from 0 within the row
+        uint32_t phase = 0;           // the run's NativeRunPhase when recorded
+        uint32_t confirmed = 1;       // 0 on a calculation of a partially finalized bar
+        double value = 0.0;
+        uint64_t message_hash64 = 0;  // FNV-1a 64 of the message bytes; 0 without one
+        bool has_message = false;
+        std::string message;
+    };
+
+    bool outputs_declared() const { return outputs_declared_; }
+    // false: refused (nothing declared, or a change while the host is
+    // Running); last_error() says which and nothing changed. A change of the
+    // flag clears the record.
+    bool set_outputs_enabled(bool on);
+    // The readers behind the C exports. While recording is off the record is
+    // empty and the counts are 0.
+    int output_series_count() const { return outputs_enabled_ ? outputs_slots_ : 0; }
+    int64_t output_bars_len() const { return static_cast<int64_t>(output_open_ms_.size()); }
+    bool output_bar_times_copy(int64_t from_bar, int64_t* open_ms, int64_t* close_ms,
+                               int64_t capacity, int64_t* written) const;
+    bool output_series_copy(int slot, int64_t from_bar, double* out, int64_t capacity,
+                            int64_t* written) const;
+    int output_events_len() const { return static_cast<int>(output_events_.size()); }
+    const OutputEvent* output_event_at(int index) const;
+    // Drops the queued events; rows, ordinals and the sequence stay.
+    void output_events_clear();
+    int output_constants_count() const { return outputs_enabled_ ? outputs_constants_ : 0; }
+    // NaN for na, for a value not written this run, or out of range.
+    double output_constant_value(int index) const;
+
+protected:
+    // Read by generated code before each recorder call, as trace_enabled_ is.
+    bool outputs_enabled_ = false;
+    // Once, before the first run: the slots per row, the outputs an event may
+    // name and the values kept per run. Repeating it repeats the same counts.
+    // @host-seam (native_c_api.h, COVERAGE / BASE-CLASS SEAMS)
+    void declare_outputs(int series_slots, int outputs, int run_constants = 0);
+    // At every run's beginning (a C++ host: on_native_run_begin): an empty
+    // record, the sequence from 1, every run value unwritten. Idempotent.
+    // @host-seam (native_c_api.h, COVERAGE / BASE-CLASS SEAMS)
+    void output_run_begin();
+    // Opens the row of the bar being calculated: a new row above the last
+    // row's open, the last row again (a recalculation) at an equal one; a
+    // lower open throws. The writers below return at once while recording is
+    // off.
+    // @host-seam (native_c_api.h, COVERAGE / BASE-CLASS SEAMS)
+    void output_bar(int64_t open_ms, int64_t close_ms);
+    // @host-seam (native_c_api.h, COVERAGE / BASE-CLASS SEAMS)
+    void output_value(int slot, double value);
+    // @host-seam (native_c_api.h, COVERAGE / BASE-CLASS SEAMS)
+    void output_event(int output, double value);
+    // @host-seam (native_c_api.h, COVERAGE / BASE-CLASS SEAMS)
+    void output_event(int output, double value, const std::string& message);
+    // The run's first write of an index stores it; a later one must be equal.
+    // @host-seam (native_c_api.h, COVERAGE / BASE-CLASS SEAMS)
+    void output_constant(int index, double value);
+
+private:
+    void clear_output_record();
+    bool output_host_running() const;
+    void record_output_event(int output, double value, const std::string* message);
+    int outputs_slots_ = 0;
+    int outputs_count_ = 0;
+    int outputs_constants_ = 0;
+    bool outputs_declared_ = false;
+    bool output_run_begun_ = false;
+    std::vector<double> output_series_;          // row-major, rows x slots; NaN unwritten
+    std::vector<int64_t> output_open_ms_;
+    std::vector<int64_t> output_close_ms_;
+    std::vector<OutputEvent> output_events_;     // since the run began or the last clear
+    uint64_t output_sequence_ = 0;               // the last sequence issued
+    uint64_t output_row_seq_base_ = 0;           // its value when the last row opened
+    uint64_t output_cleared_sequence_ = 0;       // the highest sequence a clear dropped
+    std::vector<uint32_t> output_ordinals_;      // per output, within the last row
+    std::vector<double> output_constants_;
+    std::vector<uint8_t> output_constant_written_;
+
 private:
     // The run spec's quantity tolerance (NativeRunSpec::quantity_tolerance),
     // 0 when the run declares none, which keeps the settlement exact. The FIFO

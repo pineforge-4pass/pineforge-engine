@@ -210,23 +210,23 @@
  *
  * BASE-CLASS SEAMS
  * ────────────────
- * The rows at the top of this block census NativeStrategyHost's own surface,
- * so they cannot see a member of its base. The BacktestEngine members a host
- * is documented to call or override from its callbacks are opted in one by
- * one: engine.hpp marks each with a `@host-seam` line, and
- * scripts/check_native_c_api_surface.py proves this list is exactly the
- * marked set, with a C spelling or a reason for each, exactly as it does for
- * those rows. A new protected member a host is meant to reach takes the
- * marker and a row here.
+ * The rows at the top of this block census NativeStrategyHost's own surface. A BacktestEngine member a host calls
+ * or overrides is opted in one by one: engine.hpp marks it `@host-seam`, and scripts/check_native_c_api_surface.py
+ * proves this list is exactly the marked set, each with a C spelling or a reason. A new one takes the marker and a row.
  *
  *   [C]  declare_opened_lot_entry_bar_mask strategy_native_declare_opened_lot_entry_bar_mask_v1 -- legal
  *                                          inside on_applied alone; executed by the entry-bar mask
  *                                          scenario of tests/test_native_c_api.c
  *   [C]  hash_host_extension               pf_native_callbacks_v1::on_hash_extension -- the host folds a
  *                                          64-bit digest of its own state after the kernel's bytes
- *   [--] hash_source_extension             the deprecated spelling of hash_host_extension, kept for C++
- *                                          subclasses written against it; a C host has only the current
- *                                          spelling, on_hash_extension
+ *   [--] hash_source_extension             the deprecated spelling of hash_host_extension, kept for C++ subclasses
+ *                                          written against it; a C host has only the current one, on_hash_extension
+ *   [--] declare_outputs                   C++ only in outputs v1: the record's slots, outputs and run constants, once
+ *   [--] output_run_begin                  C++ only in outputs v1: the boundary of each run; C reads strategy_outputs_*
+ *   [--] output_bar                        C++ only in outputs v1: one row per bar the host publishes, keyed by its open
+ *   [--] output_value                      C++ only in outputs v1: one double in a slot of the open row
+ *   [--] output_event                      C++ only in outputs v1: an event of the open row, with an optional message
+ *   [--] output_constant                   C++ only in outputs v1: one value per declared index per run
  *
  * HARDENING RULES
  * ───────────────
