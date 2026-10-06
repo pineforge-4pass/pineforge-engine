@@ -122,12 +122,11 @@ int main(int argc, char** argv) {
             auto advance = require_symbol<decltype(&strategy_stream_advance_time)>(library, "strategy_stream_advance_time");
             auto fill = require_symbol<decltype(&strategy_stream_fill_report)>(library, "strategy_stream_fill_report");
             check(begin(state, bars.data(), static_cast<int>(bars.size()), input_tf.c_str(), argv[3]));
-            std::istringstream feed(read_text(stream_feed.c_str()));
-            std::string line;
-            while (std::getline(feed, line)) {
-                const auto event = parse_json(line);
+            const auto consume = [&](const Json& event, const auto& self) -> void {
                 const auto type = event.at("type").text();
-                if (type == "bar") {
+                if (type == "batch") {
+                    for (const auto& item : event.at("events").items) self(item, self);
+                } else if (type == "bar") {
                     const auto& value = event.at("bar");
                     pf_bar_t bar{};
                     bar.timestamp = value.at("ts_open").integer<std::int64_t>();
@@ -145,7 +144,12 @@ int main(int argc, char** argv) {
                     check(push_tick(state, &tick));
                 } else if (type == "time") check(advance(state, event.at("ts").integer<std::int64_t>()));
                 else throw std::runtime_error("unknown stream oracle event");
-            }
+            };
+            std::ifstream feed(stream_feed);
+            if (!feed) throw std::runtime_error("cannot open stream oracle feed");
+            std::string line;
+            while (std::getline(feed, line)) consume(parse_json(line), consume);
+            if (feed.bad()) throw std::runtime_error("stream oracle feed read failed");
             check(fill(state, &report));
         }
         if (const auto* message = error(state); message && *message)
