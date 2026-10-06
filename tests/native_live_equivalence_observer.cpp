@@ -2,6 +2,7 @@
 
 #include "json.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -11,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <variant>
+#include <vector>
 
 namespace {
 
@@ -138,17 +140,31 @@ extern "C" int equivalence_export_actions(void* state, const char* path) {
         std::ofstream output(path);
         if (!output) return -1;
         const auto lots = host->native_open_lots(std::numeric_limits<double>::quiet_NaN());
+        std::vector<bool> exported(host->closed_trade_count(), false);
         for (const auto& event : host->native_events(0)) {
             if (!event.command) continue;
             const auto* applied = std::get_if<orders::ExecutionAppliedEvent>(&*event.command);
             if (!applied) continue;
             const int origin = applied->cursor.point.input_interval_index;
-            for (std::size_t offset = 0; offset < applied->closed_trade_count; ++offset) {
-                const auto& trade = host->closed_trade(applied->first_trade_index + offset);
+            std::size_t closed = 0;
+            for (std::size_t index = 0; index < host->closed_trade_count() && closed < applied->closed_trade_count; ++index) {
+                const auto& trade = host->closed_trade(index);
+                if (exported[index] || trade.open_at_end || trade.exit_id != applied->request().label ||
+                    trade.exit_price != applied->resolved_price || trade.exit_bar_index != applied->interval_index()) continue;
+                if (const auto* opening = std::get_if<pineforge::execution::OpeningExposure>(&applied->scope)) {
+                    if (trade.entry_incarnation != opening->incarnation) continue;
+                }
+                if (const auto* selected = std::get_if<orders::SelectedExposure>(&applied->scope)) {
+                    if (std::find(selected->incarnations.begin(), selected->incarnations.end(), trade.entry_incarnation)
+                        == selected->incarnations.end()) continue;
+                }
                 output << action(applied->effective_time_ms(), applied->cursor.point.interval_index, false,
-                    trade.is_long, trade.qty, trade.exit_price, trade.exit_id,
+                    trade.is_long, trade.qty, applied->resolved_price, applied->request().label,
                     trade.entry_incarnation, origin).dump() << '\n';
+                exported[index] = true;
+                ++closed;
             }
+            if (closed != applied->closed_trade_count) throw std::runtime_error("closing metadata unavailable");
             if (!applied->opened_lot_incarnation) continue;
             bool found = false;
             for (const auto& lot : lots) {
