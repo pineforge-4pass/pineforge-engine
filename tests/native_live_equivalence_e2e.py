@@ -447,25 +447,44 @@ def ordered_delivery_effects(attempts, effects, redelivery=None):
     selected = set(redelivery["event_ids"])
     if not selected <= set(bodies):
         raise RuntimeError("explicit redelivery selected an unknown event")
-    redelivery_sequences = [json.loads(attempt["body"])["sequence"]
-                            for attempt in attempts[redelivery["attempts_before"]:]
-                            if attempt["event_id"] in selected]
-    if redelivery_sequences != sorted(redelivery_sequences):
-        raise RuntimeError("explicit redelivery attempts are reordered")
-    redelivery_effects = [effect["sequence"] for effect in effects[boundary:]
-                         if effect["event_id"] in selected]
-    if redelivery_effects != sorted(redelivery_effects):
-        raise RuntimeError("explicit redelivery effects are reordered")
+    invocations = redelivery["invocations"]
+    if not invocations or any(invocations[0][key] != redelivery[key]
+                              for key in ("attempts_before", "effects_before")):
+        raise RuntimeError("invalid explicit-redelivery invocation boundary")
+    end = {"attempts_before": len(attempts), "effects_before": len(effects)}
+    for invocation, following in zip(invocations, invocations[1:] + [end]):
+        for key, limit in end.items():
+            if not 0 <= invocation[key] <= following[key] <= limit:
+                raise RuntimeError("invalid explicit-redelivery invocation boundary")
+        invocation_attempts = attempts[invocation["attempts_before"]:following["attempts_before"]]
+        invocation_effects = effects[invocation["effects_before"]:following["effects_before"]]
+        redelivery_sequences = [json.loads(attempt["body"])["sequence"]
+                                for attempt in invocation_attempts if attempt["event_id"] in selected]
+        if redelivery_sequences != sorted(redelivery_sequences):
+            raise RuntimeError("explicit redelivery attempts are reordered")
+        redelivery_effects = [effect["sequence"] for effect in invocation_effects
+                             if effect["event_id"] in selected]
+        if redelivery_effects != sorted(redelivery_effects):
+            raise RuntimeError("explicit redelivery effects are reordered")
+        for effect in invocation_effects:
+            if effect["event_id"] in selected and not any(
+                    attempt["event_id"] == effect["event_id"] and attempt["status"] == 200
+                    for attempt in invocation_attempts):
+                raise RuntimeError("explicit redelivery effect has no successful attempt")
     first_pass = [effect["sequence"] for index, effect in enumerate(effects)
                   if index < boundary or effect["event_id"] not in selected]
     if first_pass != sorted(first_pass):
         raise RuntimeError("non-redelivered effects are reordered")
-    for effect in effects[boundary:]:
-        if effect["event_id"] in selected and not any(
-                attempt["event_id"] == effect["event_id"] and attempt["status"] == 200
-                for attempt in attempts[redelivery["attempts_before"]:]):
-            raise RuntimeError("explicit redelivery effect has no successful attempt")
     return sorted(effects, key=lambda effect: effect["sequence"])
+
+
+def require_replay_after_restart(attempts, event_id, invocation):
+    boundary = invocation["attempts_before"]
+    if not 0 <= boundary <= len(attempts):
+        raise RuntimeError("invalid restart invocation boundary")
+    if not any(row["event_id"] == event_id and row["status"] == 200
+               for row in attempts[boundary:]):
+        raise RuntimeError("accepted-but-ack-lost action was not replayed after restart")
 
 
 class MockReceiver:
@@ -477,6 +496,7 @@ class MockReceiver:
         self.lock = threading.Lock()
         self.errors = []
         self.redelivery = None
+        self.invocations = []
         self.database = sqlite3.connect(output / "receiver.sqlite3", check_same_thread=False)
         self.database.execute("PRAGMA journal_mode=WAL")
         self.database.execute("PRAGMA synchronous=FULL")
@@ -546,6 +566,7 @@ class MockReceiver:
         self.database.close()
         write_json(output / "attempts.json", attempts)
         write_json(output / "effects.json", effects)
+        write_json(output / "invocations.json", self.invocations)
         if self.redelivery is not None:
             write_json(output / "redelivery.json", self.redelivery)
         return attempts, effects
@@ -556,11 +577,24 @@ class MockReceiver:
             selected = [row[0] for row in database.execute(
                 "SELECT e.event_id FROM events e JOIN event_routes r USING(ordinal) WHERE r.target_id='default'")]
         with self.lock:
-            self.redelivery = {"event_ids": selected,
+            self.redelivery = {"event_ids": selected, "invocations": [],
                 "attempts_before": self.database.execute("SELECT COUNT(*) FROM attempts").fetchone()[0],
                 "effects_before": self.database.execute("SELECT COUNT(*) FROM effects").fetchone()[0]}
         return [str(runner), "redeliver", "--ledger", str(ledger),
                 "--deployment", identity, "--target", "default"]
+
+
+    def begin_invocation(self, command):
+        # Called after the preceding process has exited and before Popen, even
+        # when a restart deliberately selects already acknowledged actions.
+        with self.lock:
+            boundary = {"command": list(command),
+                "attempts_before": self.database.execute("SELECT COUNT(*) FROM attempts").fetchone()[0],
+                "effects_before": self.database.execute("SELECT COUNT(*) FROM effects").fetchone()[0]}
+            self.invocations.append(boundary)
+            if command[1] == "redeliver":
+                self.redelivery["invocations"].append(boundary)
+            return boundary
 
 
 def tape_files(output, rows, split):
@@ -642,6 +676,7 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
             "--webhook-routes", str(receiver.routes), "--allow-insecure-http"]
         write_json(output / "command.json", command)
         with (output / "runner.log").open("w") as log:
+            receiver.begin_invocation(command)
             process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
             if fail_first:
                 result["initial_runner_returncode"] = process.wait(timeout=600)
@@ -649,6 +684,7 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
                     raise RuntimeError("initial HTTP-failure run did not complete")
                 command = receiver.redelivery_command(runner, output / "orders.sqlite3")
                 result["redelivery_command"] = command
+                receiver.begin_invocation(command)
                 process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
             if restart:
                 if not receiver.accepted.wait(120):
@@ -661,6 +697,8 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
                     "ack_withheld": True, "same_command": True, "same_ledger": True,
                     "component": "offline redelivery" if fail_first else "runner"}
                 receiver.release_ack.set()
+                restart_invocation = receiver.begin_invocation(command)
+                result["crash_receipt"]["restart_invocation"] = restart_invocation
                 process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
             result["runner_returncode"] = process.wait(timeout=600)
         redelivery = receiver.redelivery
@@ -681,8 +719,8 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
             rejected = Counter(row["event_id"] for row in attempts if row["status"] == 503)
             if set(rejected) != {row["event_id"] for row in effects} or any(count != 1 for count in rejected.values()):
                 raise RuntimeError("fail-first coverage missing")
-        if restart and len([row for row in attempts if row["event_id"] == effects[crash_action - 1]["event_id"]]) < 2:
-            raise RuntimeError("accepted-but-ack-lost action was not replayed")
+        if restart:
+            require_replay_after_restart(attempts, effects[crash_action - 1]["event_id"], restart_invocation)
         with sqlite3.connect(output / "orders.sqlite3") as ledger:
             ledger_hashes = [row[0] for row in ledger.execute("SELECT state_hash FROM inputs ORDER BY input_index")]
             pending = ledger.execute("SELECT COUNT(*) FROM events WHERE acknowledged=0").fetchone()[0]

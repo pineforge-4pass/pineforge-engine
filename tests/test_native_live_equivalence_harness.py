@@ -3,7 +3,10 @@ import json
 from pathlib import Path
 import tempfile
 
-from native_live_equivalence_e2e import first_difference, live_action, ordered_delivery_effects, synthetic_prints
+from native_live_equivalence_e2e import (
+    first_difference, live_action, ordered_delivery_effects,
+    require_replay_after_restart, synthetic_prints,
+)
 from native_live_tick_tape import bar_differences, file_digest, load_tick_tape, message_groups, message_hashes, parse_cost
 from native_live_tick_oracle import classify_first_divergence, first_fill, modeled_points, script_bars
 
@@ -20,9 +23,13 @@ class HarnessContract(unittest.TestCase):
         attempts += [{**attempt, "status": 200} for attempt in attempts]
         return attempts, effects
 
+    def redelivery_fixture(self, event_ids, effects_before=0):
+        return {"event_ids": event_ids, "attempts_before": 3, "effects_before": effects_before,
+                "invocations": [{"attempts_before": 3, "effects_before": effects_before}]}
+
     def test_explicit_redelivery_allows_an_earlier_failed_effect_after_later_effects(self):
         attempts, effects = self.delivery_fixture((2, 1, 3))
-        redelivery = {"event_ids": ["1", "3"], "attempts_before": 3, "effects_before": 1}
+        redelivery = self.redelivery_fixture(["1", "3"], effects_before=1)
         self.assertEqual([effect["sequence"] for effect in ordered_delivery_effects(
             attempts, effects, redelivery)], [1, 2, 3])
         with self.assertRaisesRegex(RuntimeError, "first-pass effects"):
@@ -30,7 +37,7 @@ class HarnessContract(unittest.TestCase):
 
     def test_redelivery_does_not_allow_initial_effects_or_first_attempts_to_reorder(self):
         attempts, effects = self.delivery_fixture((2, 1, 3))
-        redelivery = {"event_ids": ["1", "2", "3"], "attempts_before": 3, "effects_before": 2}
+        redelivery = self.redelivery_fixture(["1", "2", "3"], effects_before=2)
         with self.assertRaisesRegex(RuntimeError, "first-pass effects"):
             ordered_delivery_effects(attempts, effects, redelivery)
         attempts[0], attempts[1] = attempts[1], attempts[0]
@@ -41,7 +48,7 @@ class HarnessContract(unittest.TestCase):
         attempts, effects = self.delivery_fixture((2, 1, 3))
         with self.assertRaisesRegex(RuntimeError, "non-redelivered"):
             ordered_delivery_effects(attempts, effects,
-                {"event_ids": ["3"], "attempts_before": 3, "effects_before": 0})
+                self.redelivery_fixture(["3"]))
 
     def test_redelivery_still_requires_exact_bodies_keys_and_complete_unique_effects(self):
         attempts, effects = self.delivery_fixture()
@@ -56,12 +63,61 @@ class HarnessContract(unittest.TestCase):
 
     def test_redelivery_selection_keeps_attempt_and_effect_order(self):
         attempts, effects = self.delivery_fixture((2, 3, 1))
-        redelivery = {"event_ids": ["1", "3"], "attempts_before": 3, "effects_before": 1}
+        redelivery = self.redelivery_fixture(["1", "3"], effects_before=1)
         with self.assertRaisesRegex(RuntimeError, "redelivery effects"):
             ordered_delivery_effects(attempts, effects, redelivery)
         attempts[3], attempts[5] = attempts[5], attempts[3]
         with self.assertRaisesRegex(RuntimeError, "redelivery attempts"):
             ordered_delivery_effects(attempts, effects, redelivery)
+
+    def test_redelivery_restart_reselects_acknowledged_actions_in_order(self):
+        attempts, effects = self.delivery_fixture()
+        attempts += [dict(attempt) for attempt in attempts[3:]]
+        redelivery = self.redelivery_fixture(["1", "2", "3"])
+        redelivery["invocations"].append({"attempts_before": 6, "effects_before": 3})
+        self.assertEqual(ordered_delivery_effects(attempts, effects, redelivery), effects)
+        for start in (3, 6):
+            altered = list(attempts)
+            altered[start + 1], altered[start + 2] = altered[start + 2], altered[start + 1]
+            with self.subTest(invocation_start=start):
+                with self.assertRaisesRegex(RuntimeError, "redelivery attempts"):
+                    ordered_delivery_effects(altered, effects, redelivery)
+
+    def test_redelivery_restart_preserves_exact_bytes_keys_and_unique_effects(self):
+        attempts, effects = self.delivery_fixture()
+        attempts += [dict(attempt) for attempt in attempts[3:]]
+        redelivery = self.redelivery_fixture(["1", "2", "3"])
+        redelivery["invocations"].append({"attempts_before": 6, "effects_before": 3})
+        for field, replacement in (("body", attempts[-1]["body"] + " "),
+                                   ("idempotency_header", "wrong"), ("event_header", "wrong")):
+            altered = [dict(attempt) for attempt in attempts]
+            altered[-1][field] = replacement
+            with self.subTest(field=field):
+                with self.assertRaises(RuntimeError):
+                    ordered_delivery_effects(altered, effects, redelivery)
+        for altered in (effects[:-1], effects + effects[:1]):
+            with self.assertRaises(RuntimeError):
+                ordered_delivery_effects(attempts, altered, redelivery)
+
+    def test_redelivery_invocation_boundaries_cannot_omit_or_overlap_attempts(self):
+        attempts, effects = self.delivery_fixture()
+        for boundaries in ([], [{"attempts_before": 4, "effects_before": 0}],
+                           [{"attempts_before": 3, "effects_before": 0},
+                            {"attempts_before": 2, "effects_before": 3}]):
+            redelivery = self.redelivery_fixture(["1", "2", "3"])
+            redelivery["invocations"] = boundaries
+            with self.assertRaisesRegex(RuntimeError, "invocation boundary"):
+                ordered_delivery_effects(attempts, effects, redelivery)
+
+    def test_acknowledgement_loss_requires_success_after_restart_boundary(self):
+        attempts, _ = self.delivery_fixture()
+        restart = {"attempts_before": 6, "effects_before": 3}
+        # The original 503 and the accepted pre-crash request are not replay.
+        with self.assertRaisesRegex(RuntimeError, "not replayed after restart"):
+            require_replay_after_restart(attempts, "3", restart)
+        with self.assertRaisesRegex(RuntimeError, "not replayed after restart"):
+            require_replay_after_restart(attempts + attempts[3:5], "3", restart)
+        require_replay_after_restart(attempts + attempts[3:], "3", restart)
 
     def test_live_filter_uses_the_sealed_script_bucket(self):
         self.assertFalse(live_action(1439, 15, 1447))

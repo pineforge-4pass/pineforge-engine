@@ -44,7 +44,7 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--measure", action="store_true")
     parser.add_argument("--unprimed", action="store_true")
-    parser.add_argument("--distribution", type=int, choices=range(6), default=3)
+    parser.add_argument("--distribution", type=int, choices=range(4), default=3)
     args = parser.parse_args()
     temporary = None
     if args.output is None:

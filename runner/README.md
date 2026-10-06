@@ -93,7 +93,7 @@ no report field is silently excluded from the confirmed-bar E2E comparison.
 ## Service operation
 
 ```sh
-pineforge-live run --strategy strategy.so --warmup history.csv --script-tf 3 \
+pineforge-live run --strategy strategy.so --warmup history-15m.csv --script-tf 15 \
   --symbol EXCHANGE:SYMBOL --mode bars --feed - --ledger orders.sqlite3 \
   --status-file status.json --status-interval 1 --control-dir control \
   --feed-idle-timeout 15 --feed-message-timeout 15 --max-ledger-bytes 1073741824
@@ -320,13 +320,18 @@ strategy implementation is required.
 
 ## Warmup and feeds
 
-Warmup is a user-provided CSV with exactly these columns:
+Warmup is a user-provided CSV with exactly these columns. The illustrated
+`history-15m.csv` used by the examples has 15-minute chart bars:
 
 ```csv
 timestamp,open,high,low,close,volume
 0,100,102,99,101,4
 900000,101,103,100,102,4
 ```
+
+These examples use `--script-tf 15`, with omitted `--input-tf` also meaning
+15 minutes. A different script clock requires matching warmup and confirmed
+feed bars at that clock; the illustrated timestamps cannot be reused unchanged.
 
 Pine strategies use **chart-timeframe input**: input and script timeframes
 must match in both bars and ticks modes, including warmup. Omit `--input-tf`
