@@ -1,0 +1,8 @@
+//@version=6
+strategy("pf-f5-s-open-ticks", initial_capital=9993.927455, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=2, process_orders_on_close=false)
+if time == timestamp("UTC", 2025, 11, 21, 0, 15)
+    strategy.exit("X", loss=1, profit=43626)
+    strategy.entry("E", strategy.short, qty=3.5)
+if time == timestamp("UTC", 2025, 11, 21, 1, 0)
+    strategy.close_all()
+plot(strategy.equity, "equity")

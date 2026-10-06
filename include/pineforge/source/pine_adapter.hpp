@@ -202,6 +202,13 @@ struct PlacementSnapshot {
     // (withdraw_void_exits), and a re-issue made once the entry exists takes
     // a new place in the exit queue rather than this one's.
     bool void_issue = false;
+    // A strategy.exit without from_entry called while no position was held
+    // and no entry order of any id was working, which TradingView voids too
+    // (MarginOpeningSwitches::void_flat_global_exit). Its request waits in
+    // the book as a void call's does; a market entry's opening check never
+    // gives way to it and its fill withdraws it, a stop or limit entry's
+    // fill clears the flag (settle_void_global_exits).
+    bool void_global_issue = false;
     // A strategy.exit called while the position was open and its from_entry
     // held no lot but had an entry order working: TradingView binds it to the
     // entry id, so it waits for that id's next fill through closes, the flat
@@ -2382,6 +2389,7 @@ private:
     void observe_close_ledger(const native_order::ExecutionAppliedEvent&,
                               const PlacementSnapshot*);
     bool entry_order_pending(const SourceId&) const;
+    bool entry_order_working(const SourceId* id) const;
     bool priced_entry_order_working(const SourceId* id) const;
     bool margins_disabled() const noexcept;
     bool whole_level_exit(double limit_price, double stop_price, double trail_points,
@@ -2392,6 +2400,7 @@ private:
     void unvoid_exit(PlacementSnapshot& row);
     void execute_or_withdraw_close(native_order::RequestHandle close, bool void_issue);
     void withdraw_void_exits(const SourceId& entry_id);
+    void settle_void_global_exits(bool market_entry);
     void bind_pending_exits_to_fill(const SourceId& entry_id);
     void withdraw_unplaced_cap_adds(const NativeDecisionContext& context);
     void stash_id_bound_exits(const SourceId& entry_id);
@@ -2891,6 +2900,12 @@ struct MarginOpeningSwitches {
     // check's call. Off, and for every other fill or leg: a short's check
     // gives way to any leg the bar touches.
     bool open_marketable_exit_first = true;
+    // A strategy.exit without from_entry called while flat with no entry
+    // order of any id working (not calc_on_order_fills) is void: the opening
+    // check of the market entry placed after it is taken as with no exit,
+    // and that entry's fill withdraws its legs, which never fill. Where a
+    // stop or limit entry fills first the legs keep their former course.
+    bool void_flat_global_exit = true;
 };
 MarginOpeningSwitches& margin_opening_switches() noexcept;
 } // namespace detail

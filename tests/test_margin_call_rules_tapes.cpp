@@ -1102,6 +1102,7 @@ int main() {
         {"short_point_drops_owed", &O::short_point_drops_owed},
         {"lot_by_lot_open_follow_up", &O::lot_by_lot_open_follow_up},
         {"open_marketable_exit_first", &O::open_marketable_exit_first},
+        {"void_flat_global_exit", &O::void_flat_global_exit},
     };
     CHECK(opening_ablations.size() == sizeof(O) / sizeof(bool));
     schedule = schedule_on;

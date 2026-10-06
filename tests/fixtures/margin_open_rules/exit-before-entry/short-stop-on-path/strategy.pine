@@ -1,0 +1,8 @@
+//@version=6
+strategy("pf-f5-s-path", initial_capital=8692.47656, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=2, process_orders_on_close=false)
+if time == timestamp("UTC", 2025, 7, 1, 0, 15)
+    strategy.exit("X", stop=2485.69, limit=2103.76)
+    strategy.entry("E", strategy.short, qty=3.5)
+if time == timestamp("UTC", 2025, 7, 1, 1, 0)
+    strategy.close_all()
+plot(strategy.equity, "equity")

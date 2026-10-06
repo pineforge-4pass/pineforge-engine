@@ -60,6 +60,9 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     // Folded only when set, so a run that never issues a void exit keeps
     // its digest (lane W3B-ENG-GRID).
     if (value.void_issue) f.b(true);
+    // Folded only when set, like void_issue (MarginOpeningSwitches::
+    // void_flat_global_exit).
+    if (value.void_global_issue) f.u(0x766f6964676cULL);
     // Folded only when set, like void_issue: the exit is bound to its entry
     // id, not to lots (ExitBindingRuleSwitches).
     if (value.pending_bound_exit) f.u(0x70656e64ULL);

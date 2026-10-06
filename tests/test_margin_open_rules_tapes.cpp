@@ -4,7 +4,7 @@
  * and the refined lagged follow-up on TradingView's own tapes, in a backtest
  * and in a forward (stream) run.
  *
- * tests/fixtures/margin_open_rules holds 84 `lab tv` tapes of synthetic
+ * tests/fixtures/margin_open_rules holds 99 `lab tv` tapes of synthetic
  * controls (README.md there names the groups), each exported twice, both
  * exports byte-identical, every prediction written before its export: a
  * full-margin process_orders_on_close position's call at the open after the
@@ -20,7 +20,10 @@
  * over-fill lot after them (lots/), and a market entry's opening check at
  * its open fill against the strategy.exit legs it released, its own or a
  * global exit's: after the legs already marketable at that open, on the book
- * they leave, and ahead of a leg the bar reaches only later (exit-order/).
+ * they leave, and ahead of a leg the bar reaches only later (exit-order/),
+ * and a strategy.exit without from_entry called while flat with no entry
+ * order working, which TradingView voids: the entry placed after it is
+ * checked as with no exit and the exit never fills (exit-before-entry/).
  * Each tape directory holds the script TradingView ran (strategy.pine), its
  * trade list (tv_trades.csv), its export summary (metrics.json) and
  * spec.txt, the replay this test drives:
@@ -32,8 +35,13 @@
  *   sizing percent_of_equity <value>   (the default quantity, as the config line's last field; else fixed 1)
  *   ev <utc ms> entry <id> <long|short> <qty, nan or - for the default> <any|flat|notflat>
  *   ev <utc ms> bracket <id> <from_entry, - for none> <qty>/<stop>/<limit> <cond>   (- for none)
+ *   ev <utc ms> ticks <id> <from_entry, - for none> <qty>/<loss>/<profit> <cond>   (legs in ticks)
+ *   ev <utc ms> limitentry <id> <long|short> <qty>@<limit> <cond>
  *   ev <utc ms> close_all - - - <cond>
  *   ev <utc ms> close <id> - - <cond>
+ *
+ * `*` in place of the time fires the event on every bar (a call at the
+ * script's top level).
  *
  * A `nan` or `-` quantity is a default-sized entry, sized by the default
  * percent of equity the config or sizing line names.
@@ -94,8 +102,8 @@ static int tests_failed = 0;
 namespace {
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-constexpr std::size_t kTapes = 84;
-constexpr std::size_t kTvRows = 244;
+constexpr std::size_t kTapes = 99;
+constexpr std::size_t kTvRows = 283;
 
 using pineforge::source::detail::MarginOpeningSwitches;
 
@@ -118,6 +126,7 @@ std::string fixture(const std::string& relative) {
 
 struct Event {
     std::int64_t ms = 0;
+    bool every_bar = false;
     std::string kind, a, b, c, cond;
 };
 
@@ -157,9 +166,13 @@ Spec parse_spec(const std::string& path, std::istream& in) {
             CHECK(type == "percent_of_equity" && spec.percent_of_equity > 0.0);
         } else if (word == "ev") {
             Event e;
-            words >> e.ms >> e.kind >> e.a >> e.b >> e.c >> e.cond;
+            std::string when;
+            words >> when >> e.kind >> e.a >> e.b >> e.c >> e.cond;
+            e.every_bar = when == "*";
+            if (!e.every_bar) e.ms = std::strtoll(when.c_str(), nullptr, 10);
             CHECK(e.kind == "entry" || e.kind == "close_all" || e.kind == "close"
-                  || e.kind == "exit" || e.kind == "stopentry" || e.kind == "bracket");
+                  || e.kind == "exit" || e.kind == "stopentry" || e.kind == "bracket"
+                  || e.kind == "ticks" || e.kind == "limitentry");
             spec.events.push_back(e);
         } else if (!word.empty()) {
             CHECK(!"unknown spec line");
@@ -294,7 +307,7 @@ public:
 
     void on_source_bar(const Bar& bar) override {
         for (const Event& e : spec_.events) {
-            if (e.ms != bar.timestamp) continue;
+            if (!e.every_bar && e.ms != bar.timestamp) continue;
             const double position = signed_position_size();
             if (e.cond == "flat" && position != 0.0) continue;
             if (e.cond == "notflat" && position == 0.0) continue;
@@ -307,6 +320,14 @@ public:
                 strategy_exit(e.a, e.b == "-" ? std::string() : e.b, number(e.c.substr(second + 1)),
                               number(e.c.substr(first + 1, second - first - 1)), kNaN, kNaN, kNaN,
                               100.0, {}, number(e.c.substr(0, first)));
+            } else if (e.kind == "ticks") {
+                // <qty>/<loss>/<profit>: strategy.exit's legs in ticks from the entry.
+                const auto first = e.c.find('/');
+                const auto second = e.c.find('/', first + 1);
+                strategy_exit(e.a, e.b == "-" ? std::string() : e.b, kNaN, kNaN, kNaN, kNaN, kNaN,
+                              100.0, {}, number(e.c.substr(0, first)), {},
+                              number(e.c.substr(second + 1)),
+                              number(e.c.substr(first + 1, second - first - 1)));
             } else if (e.kind == "close_all")
                 strategy_close_all();
             else if (e.kind == "close")
@@ -318,6 +339,12 @@ public:
                 const auto at = e.c.find('@');
                 strategy_entry(e.a, e.b == "long", kNaN,
                                std::strtod(e.c.substr(at + 1).c_str(), nullptr),
+                               std::strtod(e.c.substr(0, at).c_str(), nullptr));
+            } else if (e.kind == "limitentry") {
+                // <qty>@<limit>: a limit entry resting at that level.
+                const auto at = e.c.find('@');
+                strategy_entry(e.a, e.b == "long",
+                               std::strtod(e.c.substr(at + 1).c_str(), nullptr), kNaN,
                                std::strtod(e.c.substr(0, at).c_str(), nullptr));
             }
         }
@@ -413,7 +440,7 @@ std::string first_difference(const std::vector<Row>& tv, const Outcome& engine) 
 }
 
 MarginOpeningSwitches all_on() {
-    static_assert(sizeof(MarginOpeningSwitches) == 11 * sizeof(bool),
+    static_assert(sizeof(MarginOpeningSwitches) == 12 * sizeof(bool),
                   "MarginOpeningSwitches changed: name its new field here and in the ablation table");
     MarginOpeningSwitches on;
     on.close_sized_long_call = true;
@@ -427,6 +454,7 @@ MarginOpeningSwitches all_on() {
     on.short_point_drops_owed = true;
     on.lot_by_lot_open_follow_up = true;
     on.open_marketable_exit_first = true;
+    on.void_flat_global_exit = true;
     return on;
 }
 
@@ -535,6 +563,7 @@ int main() {
         {"short_point_drops_owed", &M::short_point_drops_owed},
         {"lot_by_lot_open_follow_up", &M::lot_by_lot_open_follow_up},
         {"open_marketable_exit_first", &M::open_marketable_exit_first},
+        {"void_flat_global_exit", &M::void_flat_global_exit},
     };
     CHECK(ablations.size() == sizeof(MarginOpeningSwitches) / sizeof(bool));
     for (const Ablation& ablation : ablations) {

@@ -10362,8 +10362,14 @@ bool PineExecutionAdapter::priced_entry_order_working(const SourceId* id) const 
 }
 
 bool PineExecutionAdapter::entry_order_pending(const SourceId& id) const {
+    return entry_order_working(&id);
+}
+
+// Whether an entry order of any trigger works -- of `id`, or of any id when
+// `id` is null: a live opening request or one the adapter still holds.
+bool PineExecutionAdapter::entry_order_working(const SourceId* id) const {
     const auto entry_of = [&](const PlacementSnapshot& row) {
-        return row.opening && row.source_id == id
+        return row.opening && (id == nullptr || row.source_id == *id)
             && (row.family == PineOrderFamily::Entry || row.family == PineOrderFamily::Order);
     };
     for (const auto& pending : pending_entries_)
@@ -10584,6 +10590,66 @@ void PineExecutionAdapter::stash_id_bound_exits(const SourceId& entry_id) {
     refresh_pending_view();
 }
 
+// The first opening fill settles every strategy.exit TradingView voided as
+// called while flat with no entry order working (PlacementSnapshot::
+// void_global_issue). A market entry's fill, which the tapes pin, withdraws
+// them: none binds to the lot it opens, whatever its id. Only the legs still
+// working are cancelled. The kernel already ended a leg it reached while the
+// book was flat, and the opening check skips that leg
+// (priced_exit_precedes_opening). A stop or limit entry's fill, which no tape
+// covers, clears the flag instead and leaves the legs their former course.
+void PineExecutionAdapter::settle_void_global_exits(bool market_entry) {
+    const auto voided = [](const PlacementSnapshot& row) { return row.void_global_issue; };
+    if (!market_entry) {
+        for (auto& row : pending_bracket_legs_) row.snapshot.void_global_issue = false;
+        for (auto& row : pending_coof_requests_) row.snapshot.void_global_issue = false;
+        for (auto& row : delayed_market_orders_) row.snapshot.void_global_issue = false;
+        for (const auto& handle : live_handles_) {
+            const auto row = placement_.find(handle.incarnation);
+            if (row != placement_.end() && voided(row->second))
+                row->second.void_global_issue = false;
+        }
+        return;
+    }
+    pending_bracket_legs_.erase(
+        std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
+            [&](const PendingBracketLeg& row) { return voided(row.snapshot); }),
+        pending_bracket_legs_.end());
+    pending_coof_requests_.erase(
+        std::remove_if(pending_coof_requests_.begin(), pending_coof_requests_.end(),
+            [&](const PendingCoofRequest& row) { return voided(row.snapshot); }),
+        pending_coof_requests_.end());
+    delayed_market_orders_.erase(
+        std::remove_if(delayed_market_orders_.begin(), delayed_market_orders_.end(),
+            [&](const DelayedMarketOrder& row) { return voided(row.snapshot); }),
+        delayed_market_orders_.end());
+    std::vector<native_order::RequestHandle> handles;
+    for (const auto& handle : live_handles_) {
+        const auto row = placement_.find(handle.incarnation);
+        if (row != placement_.end() && voided(row->second)) handles.push_back(handle);
+    }
+    if (handles.empty()) return;
+    const auto working = require_host().native_working_requests();
+    handles.erase(std::remove_if(handles.begin(), handles.end(),
+        [&](const native_order::RequestHandle& handle) {
+            return std::none_of(working.begin(), working.end(),
+                [&](const NativeWorkingRequest& request) {
+                    return request.definition->handle == handle;
+                });
+        }), handles.end());
+    if (handles.empty()) return;
+    for (const auto& handle : handles) {
+        const auto result = require_host().cancel(handle);
+        if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
+    }
+    for (auto family = bracket_families_.begin(); family != bracket_families_.end();) {
+        family->second.remove_all(handles);
+        if (family->second.empty()) family = bracket_families_.erase(family);
+        else ++family;
+    }
+    refresh_pending_view();
+}
+
 // The entry order just placed for `entry_id` takes the exits its id kept
 // bound through a cancel, each called again as it was called.
 void PineExecutionAdapter::rearm_id_bound_exits(const SourceId& entry_id) {
@@ -10689,6 +10755,22 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         && !(cohort_exposure_for(from_entry) > 0.0)
         && !(!config_.close_entries_rule_any && fixture_close_logical_units(from_entry) > 0.0)
         && priced_entry_order_working(&from_entry) && !open_lot_of(from_entry);
+    // TradingView voids a strategy.exit without from_entry called while no
+    // position is held and no entry order of any id is working: an entry
+    // placed after it opens a book with no exit, whose opening check is
+    // booked as with none, and none of its legs ever fills, the
+    // process_orders_on_close close included (lab tv tapes tests/fixtures/
+    // margin_open_rules exit-before-entry/). With an entry order working the
+    // exit binds, and the first fill takes it. As a void named exit's, the
+    // call's request still waits in the book, so every later request keeps
+    // its incarnation; the first opening fill, a market entry's, withdraws
+    // it (settle_void_global_exits). Not under calc_on_order_fills, nor
+    // where a stop or limit entry fills first: no tape covers either.
+    const bool void_global_issue = from_entry.empty()
+        && detail::margin_opening_switches().void_flat_global_exit
+        && !config_.calc_on_order_fills
+        && detail::run_position(require_host()).signed_units == 0.0
+        && !entry_order_working(nullptr);
     // A pending variable short-context entry is only tentatively held for the
     // three-object ShortSeed command book.  A bracket call proves it belongs
     // to an ordinary entry family, so materialize that entry before binding
@@ -11467,6 +11549,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             snapshot.reservation_deferred_to_pending_entry =
                 binds_pending_reversal_entry;
             snapshot.void_issue = void_issue;
+            snapshot.void_global_issue = void_global_issue;
             snapshot.pending_bound_exit = pending_bound_exit;
             snapshot.is_long = false;
             snapshot.command_sequence = command_sequence;
@@ -23313,6 +23396,9 @@ bool PineExecutionAdapter::priced_exit_precedes_opening(
             && row.bracket_origin == filled->bracket_origin) {
             continue;
         }
+        // A void global exit's leg is no leg for TradingView: it never
+        // precedes the check, released or touched (void_global_issue).
+        if (row.void_global_issue) continue;
         if (row.projection_created_bar < 0
             || row.projection_created_bar > projection_bar_index(context)) {
             continue;
@@ -23895,6 +23981,11 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     if (placement_snapshot && placement_snapshot->opening
         && std::abs(event.opened_units) > 0.0) {
         withdraw_void_exits(placement_snapshot->source_id);
+        // A market entry is one the script gave neither a limit nor a stop:
+        // a limit entry marketable at a process_orders_on_close close fills
+        // through a market request and is a limit entry here.
+        settle_void_global_exits(!finite_positive(placement_snapshot->exit_levels.limit)
+                                 && !finite_positive(placement_snapshot->exit_levels.stop));
         bind_pending_exits_to_fill(placement_snapshot->source_id);
         // Explicit brackets armed while their same-id parent was still flat
         // use origin zero as a temporary source binding. Once that parent

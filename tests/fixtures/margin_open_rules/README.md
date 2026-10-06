@@ -1,7 +1,7 @@
 # margin_open_rules
 
 TradingView strategy tapes of synthetic controls that pin the opening-call
-rules behind `pineforge::source::detail::MarginOpeningSwitches`: 84 tapes (244
+rules behind `pineforge::source::detail::MarginOpeningSwitches`: 99 tapes (283
 trades), each exported twice with `lab tv --no-note` over the ws-report-v1
 channel, both exports byte-identical, every export's range proof `covered`.
 Every prediction was written before its export (`provenance.json` names the
@@ -134,19 +134,35 @@ at slippage 0. Two tapes are known divergences the test lists
   stop 3.5 and no call. No tape covers adds, books of several entries, limit
   entries, process_orders_on_close or calc_on_order_fills here; the engine
   keeps ab9714be's rule for them too.
-  A known divergence without a tape: a `strategy.exit` without `from_entry`
-  placed *before* the entry, while the book is flat. TradingView voids an
-  exit called while no position is held and no entry order is working (its
-  exit-binding pins), so no leg rests there and, by inference, it calls a
-  short's opening check at the open print as for an entry with no exit. The
-  engine keeps that call as a live leg that never fills, at the open or
-  later. It is not a leg the fill released, so it keeps ab9714be's rule: a
-  short's opening call gives way whenever the bar touches the leg's stop,
-  and the short is called at the path's extreme instead (the same with
-  `open_marketable_exit_first` off). Counting the leg as released would
-  defer the check to its fill, which never comes, and drop the check, a
-  long's included. The exclusion stays for that engine-only reason until the
-  leg itself goes.
+  A `strategy.exit` without `from_entry` placed *before* the entry, while the
+  book is flat, is the `exit-before-entry/` group's.
+
+- `exit-before-entry/` (15, BINANCE:ETHUSDT.P 15, commission 0.05 %,
+  slippage 2): each is one of `exit-order/`'s global-exit controls with the
+  `strategy.exit` call moved ahead of the entry, so it runs while no position
+  is held. With no entry order of any id working, TradingView voids it
+  (`void_flat_global_exit`): the entry placed after it opens a book with no
+  exit, its opening check is booked at the open print as with none, and the
+  exit never fills -- not at the open, not on the path, not under
+  process_orders_on_close. A short calls 0.0048 at the open print and 0.0416
+  at the high's waypoint, and `close_all` closes 3.4536
+  (`short-stop-on-path`); a void stop already through the open fills nothing
+  there (`short-stop-at-open`: 0.0048, then 0.128 at the path's waypoint;
+  `long-stop-at-open`: 0.0048, then `close_all`), nor does one the path
+  reaches (`long-stop-on-path`). Called at the script's top level on every
+  bar, the exit is void while flat and live from the next bar once the
+  position is held (`-every-bar`: X 3.4536 and 3.3672 at the 00:45 open).
+  Relative legs give the same tapes (`*-loss-ticks-*`, byte-identical to
+  their absolute pairs), as does process_orders_on_close (`*-pooc`: the void
+  stop fills neither at the next bar's path nor at the entry's own close). A
+  long limit entry `W` at 1000, which never fills, working when the exit is
+  called -- placed on the bar before (`short-stop-on-path-limit-entry-working`)
+  or in the signal block ahead of the exit (`-same-bar`) -- makes the exit
+  bind, and the short's fill takes it: those two tapes are
+  `global-short-stop-on-path`'s byte for byte. No tape covers
+  calc_on_order_fills, nor a void call followed by a stop or limit entry;
+  the engine keeps its former course in both (the exit's legs rest, and
+  those still working when the entry fills close the book it opens).
 
 ## Layout
 
@@ -156,7 +172,7 @@ at slippage 0. Two tapes are known divergences the test lists
   `tests/test_margin_open_rules_tapes.cpp` drives (format in that file's
   header: the strategy settings, the bars window, the exchange session for
   NYSE:F and for the two EURUSD windows spanning a weekend, and the script's
-  `strategy.*` calls at the bars they name).
+  `strategy.*` calls at the bars they name, `*` for a call on every bar).
 - `bars/`: 15-minute OHLCV windows (`timestamp,open,high,low,close,volume`,
   UTC milliseconds), every bar from the chart's `from` 00:00 UTC through its
   `to` 00:00 UTC inclusive, cut from the lane feeds named in

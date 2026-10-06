@@ -1082,15 +1082,15 @@ row C).
 | **D** | the kernel's cohort rosters on a Pine host: O(openings) per row (V19-A's finding) | ×2.45, ×2.80, ×3.06 per doubling from 4,000 to 32,000 bars of a flip recorded per bar on `91d65ad6` (0.206 s to 4.33 s), against ×2.02 with recording off | **resolved** by R5 lane V19-FIX: the adapter takes an origin that can no longer be bound off its kernel roster, so the continuation folds the openings that still work or hold a lot |
 
 **A. The adapter's recording fold.** Until R5 lane V19-E (below),
-`PineExecutionAdapter::hash_state` pine_state_hash.cpp:258 folded, at every
+`PineExecutionAdapter::hash_state` pine_state_hash.cpp:261 folded, at every
 row, every placement snapshot the run had accepted (a sorted walk of every
 key, since replaced by the walk of the retained rows, `placement_`
 pine_state_hash.cpp:318) — one per accepted request, cleared only by
 `reset_for_run` pine_adapter.cpp:2329 — and reflected the whole admission
 journal (since replaced by a running digest of its events, `admission_journal`
-pine_state_hash.cpp:729). `PineScheduler::hash_state` pine_state_hash.cpp:767
+pine_state_hash.cpp:732). `PineScheduler::hash_state` pine_state_hash.cpp:770
 re-folded the consumed source prefix too (`consumed`
-pine_state_hash.cpp:754-776). Measured with recording on and off, in two
+pine_state_hash.cpp:757-779). Measured with recording on and off, in two
 shapes:
 
 - the audit's order-and-cancel probe (one `strategy_order` accepted and
@@ -1619,7 +1619,7 @@ the rule gives 9.9 + 9.89).
 | P1 | **Epoch bumps** move the frozen C++ ABI fixtures and the settlement ABI checker `CLAUDE.md` names; a neutral-refactor worker may not edit frozen headers | Bump lanes are not neutral-refactor lanes; the brief lists the header extension (§3.1 c) | F O S |
 | P2 | **Stale fence.** `CLAUDE.md` names "measured sources" `engine_strategy_commands.cpp`, `engine_fills.cpp`, `engine_risk.cpp`, `engine_market_admission.cpp`; none exists in `src/` at `73817c1` (only `engine_orders.cpp` and `engine_run.cpp` do) | Done: `CLAUDE.md` now names the post-R4-C measured sources (`src/native_execution_consumer.cpp`, `src/native_order.cpp`, `src/engine_execution.cpp`, `src/engine_orders.cpp`, `src/engine_run.cpp`, `src/engine_path_resolve.cpp`, `src/source/*`) | F |
 | P3 | **Corpus gate state.** S's audit found `scripts/run_corpus.sh` stopping at the corpus strategy compile: committed `generated.cpp` files no longer match the engine (8/8 drifted from the pinned codegen commit under `VERIFY=1 ONLY=validation/analyzer scripts/regen_corpus_cpp.sh`) | §3.1 a relies on that script. Re-pin the engine / codegen corpus tuple before L1. Not re-verified in this merge (no builds were run). Resolved since: the corpus was re-pinned (the submodule is at `b40aa8e`) and the sweep runs on `main` | S (single-source) |
-| P4 | **Hash compatibility.** The source hash covers hundreds of adapter and scheduler fields (`PineExecutionAdapter::hash_state` pine_state_hash.cpp:258, `PineScheduler::hash_state` pine_state_hash.cpp:767); L4 / L9 add hashed state, L12 removes some | A hash mismatch is a diagnostic until the trade diff is known, never a reason to relax parity (S). Open: does the campaign gate compare broker-state hashes across releases, or only trades (O)? → Q3 | O S |
+| P4 | **Hash compatibility.** The source hash covers hundreds of adapter and scheduler fields (`PineExecutionAdapter::hash_state` pine_state_hash.cpp:261, `PineScheduler::hash_state` pine_state_hash.cpp:770); L4 / L9 add hashed state, L12 removes some | A hash mismatch is a diagnostic until the trade diff is known, never a reason to relax parity (S). Open: does the campaign gate compare broker-state hashes across releases, or only trades (O)? → Q3 | O S |
 | P5 | **Test asymmetry:** 430 adapter test files vs 14 native when this plan was written (on this tree 543 `tests/*.cpp` name `source::PineStrategyHost`, 110 `NativeStrategyHost`) | native-only tests in every lane (§3.1 b) | O |
 | P6 | **Stream vs batch.** The stream refuses monthly input, mixed modes, in-session gaps, security feeds and source setters, and tick input under an FX curve (any non-empty curve until audit lane N6) (`native-engine.md`, "Stream limitations (current)") | L5 and L6 must state which refusals are generic and which are deliberate source limits | S |
 | P7 | **C ABI variant growth** | §2.iii hardening rules | S |
