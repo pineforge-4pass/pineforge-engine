@@ -157,7 +157,10 @@ either.
   schedule ([#345]). Each rule is pinned by synthetic TradingView controls,
   predicted before export and committed as tests. Each has an internal switch
   that ships on; the switches are process-wide test hooks, not API, inputs or
-  strategy settings.
+  strategy settings. Release 1.3.0 is graded on registry baseline <!-- pf:releases[1.3.0].scoreboard.id|code -->`pineforge-parity-baseline-20261006-engine-7a1f01c0`<!-- /pf -->
+  (engine <!-- pf:releases[1.3.0].scoreboard.engineCommit|short -->7a1f01c0<!-- /pf -->, the merge of [#347], which v1.3.0 equals in behaviour, and codegen <!-- pf:releases[1.3.0].scoreboard.codegenCommit|short -->3e50082f<!-- /pf -->), which
+  holds <!-- pf:releases[1.3.0].scoreboard.excellent|int -->7,982<!-- /pf --> excellent / <!-- pf:releases[1.3.0].scoreboard.strong|int -->7<!-- /pf --> strong of <!-- pf:releases[1.3.0].scoreboard.graded|int -->7,989<!-- /pf --> probes,
+  and <!-- pf:releases[1.3.0].scoreboard.belowStrong|int -->0<!-- /pf --> below strong. Release 1.2.0 grades <!-- pf:releases[1.2.0].scoreboard.excellent|int -->7,970<!-- /pf --> / <!-- pf:releases[1.2.0].scoreboard.strong|int -->19<!-- /pf -->.
 
 - **Tests and documentation ([#343], [#344]).** A test pins that the
   exit-binding rule's pyramiding-cap part judges an add once, and the README's
