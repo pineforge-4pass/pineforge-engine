@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 import json
-import math
 import os
 from pathlib import Path
 import re
@@ -1093,7 +1092,7 @@ def ctest_deadline_errors(inventory: dict, cfg: VerifyConfig) -> list[str]:
                                      for label in properties.get('LABELS', [])):
             continue
         seconds = float(properties.get('TIMEOUT', cfg.test_timeout))
-        if not math.isfinite(seconds) or seconds <= 0 or seconds >= ctest_timeout(cfg):
+        if not 0 < seconds < ctest_timeout(cfg):
             errors.append(f'{test["name"]}: TIMEOUT {seconds:g} must be positive and '
                           f'less than stage deadline {ctest_timeout(cfg)}')
     return errors

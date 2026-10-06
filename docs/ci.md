@@ -123,8 +123,13 @@ requires the WebSocket test.
 The runner's curl version floor still applies at configure time.
 `live-tsan` runs the same inventory in a separate ThreadSanitizer build,
 checks every runner compile unit for instrumentation, and stops on a race.
-`native-live.yml` runs both profiles alongside `native`, reusing the same
-checksum-pinned WebSocket-enabled curl, and retains all profiles' diagnostics.
+`native-live.yml` runs `native`, `live-sanitizers` and `live-tsan` in three
+independent matrix cells with `fail-fast: false`. Each uses the same
+checksum-pinned WebSocket-enabled curl recipe, its own compiler and dependency
+cache namespace, and its own diagnostic artifact. A failed cell does not
+cancel its peers. The `native-live-gate` job requires the matrix to succeed;
+the caller's `build` aggregate still requires the reusable workflow to succeed.
+Only the native cell accepts the caller's existing PR-only slow-label exclusion.
 
 The kernel profile also gates the CTest row count: `tests/CMakeLists.txt`
 drops every test TU whose include closure reaches `pineforge/source/` or
@@ -188,6 +193,33 @@ Pass `--ccache` when ccache is installed. It caches compiler work, not complete
 build directories or verification receipts. Compiler, source, header and flag
 checks remain in effect. The native curl cache is separately bound to its source
 checksum, workflow configuration, compiler/package environment and install path.
+Each native profile restores only its own compiler namespace and resets ccache
+statistics after restore so the retained counters describe that job. The curl
+action saves a successful pinned installation immediately after dependency
+setup. Compiler objects are saved explicitly after diagnostics on an ordinary
+test failure as well as on success; neither cache depends on a cancelled job's
+post step. Compiler and dependency caches remain separate from verification
+receipts, and saving a cache cannot turn a failed verification into success.
+
+The optional `--test-timeout N` gives CTest a default per-test deadline in
+seconds. Existing explicit `TIMEOUT` properties remain unchanged; the driver
+checks that every selected row's effective deadline is positive and shorter
+than the CTest stage deadline. `--ctest-timeout N` sets that stage's bound.
+Without these options, the driver's existing profile bounds and CTest behavior
+are unchanged. The native workflow supplies 2100/2400 seconds for native
+test/stage deadlines, and 900/1200 seconds for each live sanitizer. The summary
+records both bounds, discovered and selected row counts, executed rows, skipped
+or not-run rows, and stage timings, including when a test fails.
+
+For an explicit cold proof, dispatch `native-live.yml` with `cold_cache: true`,
+or dispatch `ci.yml` with `cold_native_cache: true`. The reusable workflow also
+accepts `cold_cache`. Both compiler and curl cache restore **and save** are
+bypassed in every native cell. Manual runs select the full main-equivalent row
+set; there is no manual slow-exclusion input. Normal runs default these controls
+to false. A cold proof must inspect each profile's verdict and retained counts,
+not just the caller aggregate. A local Spot run is evidence about that host and
+tree; the final candidate still needs its own GitHub PR checks and explicit
+full-row cold workflow run.
 
 ## Version identity and historical ABI checks
 
@@ -900,8 +932,21 @@ bounds the M2 from above.
 | `build` | 75 (was 45) | A Release leg runs its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets 17.2-17.7 min. On the larger Linux runner a full leg is its build plus the serial `test_ci_verify` row, 976-1288 s: about 30 min. The M1's 37.0 min bounds the M2. 11.1-18.4 min on the verification hosts. |
 | `sanitizers` | 120 | The verifier bounds a full run's CTest stage at 60 min after the build, a pull-request set's at 30 min. A fork's pull-request set took 35.2 min on the standard runner, whose compile alone took 1277-1335 s of the verifier's 1800-s build bound (pull-request run 36139176292, and main at 0d76a099). Full runs now land only on the larger runner; on the standard runner they took 34.0-69.4 min (at 0d76a099 30 min of build and ABI providers, then 39 min of CTest, 1768 s of it the serial `test_ci_verify` row), so about 40 min there with a faster build, and 18.2-19.0 min on the verification hosts. |
 | `kernel-only` | 60 (was 45) | Every event runs the whole kernel set: 7.9-22.3 min on the standard runner, 6.5-9.8 min on the verification hosts. |
-| `native-live` | 60 (was 45) | Only the larger runner runs the full set, which is its build plus the serial `test_ci_verify` row (1034 s on the standard runner at 0d76a099): about 25 min, against 14.1-31.4 min for the full set on the standard runner. The verification hosts' release profile, the nearest they run, took 11.2-18.4 min. A fork's pull request runs the set without that row: 3.4 min on the standard runner. |
+| `native-live (native)` | 75; verification step 65 | Main runs 37398893123, 37461653250 and 37478400505 spent 35.40–40.65 min in native, including 25.32–29.53 min in full CTest. Their matching PRs took 2.39–5.67 min in native CTest with the existing slow exclusion. The longest measured `test_ci_verify` row was 1695 s; its new 2100-s default deadline gives 24% margin within a 2400-s CTest stage. The independent job leaves 10 min outside verification for setup and retention. These are observed GitHub timings; final-head cold proof remains required. |
+| `native-live (live-sanitizers)` | 45; verification step 35 | The same three main runs spent 15.10–16.33 min in this profile after native. A separate 45-min job allows a cold build and leaves 10 min outside verification. Existing row deadlines, up to 900 s, remain intact; otherwise-unbounded rows receive 900 s within a 1200-s CTest stage. |
+| `native-live (live-tsan)` | 45; verification step 35 | The old shared 60-min job left only 9.20, 4.67 and 2.67 min for TSan before cancellation. Matching passing PR profiles took 10.87, 10.93 and 7.70 min. The independent job uses the same 900/1200-s row/stage bounds and 10-min setup/retention margin as live-sanitizers. |
+| `native-live-gate` | 5 | Seconds; failure, cancellation and unexpected skip all fail the aggregate. |
 | `corpus-parity` | 120 | 16.3-26.2 min on the standard runner, 10.1-10.3 min on the verification hosts. |
 | `corpus-parity-subset` | 30 | 1.8-4.7 min on the standard runner, 2.4-3.8 min on the verification hosts. |
 | `build` (aggregate) | 5 | Seconds. |
 | `changes` | 5 | Seconds: a two-commit checkout and one `git diff`, on the standard runner. |
+
+Those three cancelled main jobs and the separate ASan failure in run
+[37428280396](https://github.com/pineforge-4pass/pineforge-engine/actions/runs/37428280396)
+all restored compiler fallback keys and exact curl keys. Each corresponding
+passing PR had the same tree and restored the same keys. The logs therefore
+do not support a branch-cache restore miss as the explanation for the event
+split. Cancelled/failed jobs did skip the old compiler post-save, which reduced
+cache freshness; the new save ordering addresses that independently. The
+historical ASan startup assertion remains a separate diagnosis, and splitting
+jobs does not establish a runtime fix or dismiss a sanitizer failure.
