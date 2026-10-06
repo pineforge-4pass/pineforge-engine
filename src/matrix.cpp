@@ -1,4 +1,5 @@
 #include <pineforge/matrix.hpp>
+#include <pineforge/run_failure.hpp>
 #include <algorithm>
 #include <limits>
 #include <map>
@@ -9,6 +10,17 @@ namespace pineforge {
 
 static constexpr double EPS = 1e-10;
 
+namespace {
+
+// A method called on an na matrix ID: pine_na_reference, raised as before.
+// Out of line and cold, so require_storage stays as small as it was.
+[[noreturn, gnu::noinline, gnu::cold]] void na_matrix_error(const char* what) {
+    throw coded<std::runtime_error>(RunFailureCode::pine_na_reference,
+                                    {{"object", "matrix"}}, what);
+}
+
+}  // namespace
+
 // ── Construction ────────────────────────────────────────────────────────────
 
 NumericMatrix NumericMatrix::new_(int rows, int cols, double init_val) {
@@ -16,12 +28,12 @@ NumericMatrix NumericMatrix::new_(int rows, int cols, double init_val) {
 }
 
 NumericMatrix::Storage& NumericMatrix::require_storage() {
-    if (!storage_) throw std::runtime_error(kNaIdError);
+    if (!storage_) na_matrix_error(kNaIdError);
     return *storage_;
 }
 
 const NumericMatrix::Storage& NumericMatrix::require_storage() const {
-    if (!storage_) throw std::runtime_error(kNaIdError);
+    if (!storage_) na_matrix_error(kNaIdError);
     return *storage_;
 }
 
@@ -32,7 +44,8 @@ NumericMatrix::Snapshot NumericMatrix::snapshot() const {
 
 void NumericMatrix::restore(const Snapshot& snapshot) {
     if (!snapshot.identity_) {
-        throw std::runtime_error(kInvalidSnapshotError);
+        throw coded<std::runtime_error>(RunFailureCode::engine_invariant, {},
+                                        kInvalidSnapshotError);
     }
     // Clone before touching the live ID, then swap the fully-built state into
     // the original backing store. Existing aliases keep that exact identity.
@@ -79,7 +92,10 @@ int NumericMatrix::columns() const {
 void NumericMatrix::add_row(int idx, const std::vector<double>& values) {
     int r = rows(), c = columns();
     if (static_cast<int>(values.size()) != c)
-        throw std::invalid_argument("add_row: values size mismatch");
+        throw coded<std::invalid_argument>(
+            RunFailureCode::pine_matrix_error,
+            {{"function", "matrix.add_row"}, {"reason", "values_size_mismatch"}},
+            "add_row: values size mismatch");
     data().conservativeResize(r + 1, c);
     // shift rows down from bottom to idx
     for (int i = r; i > idx; --i)
@@ -91,7 +107,10 @@ void NumericMatrix::add_row(int idx, const std::vector<double>& values) {
 void NumericMatrix::add_col(int idx, const std::vector<double>& values) {
     int r = rows(), c = columns();
     if (static_cast<int>(values.size()) != r)
-        throw std::invalid_argument("add_col: values size mismatch");
+        throw coded<std::invalid_argument>(
+            RunFailureCode::pine_matrix_error,
+            {{"function", "matrix.add_col"}, {"reason", "values_size_mismatch"}},
+            "add_col: values size mismatch");
     data().conservativeResize(r, c + 1);
     for (int j = c; j > idx; --j)
         data().col(j) = data().col(j - 1);
@@ -137,7 +156,10 @@ NumericMatrix NumericMatrix::submatrix(int from_row, int to_row, int from_col, i
 
 void NumericMatrix::reshape(int r, int c) {
     if (r * c != rows() * columns())
-        throw std::invalid_argument("reshape: total element count must match");
+        throw coded<std::invalid_argument>(
+            RunFailureCode::pine_matrix_error,
+            {{"function", "matrix.reshape"}, {"reason", "element_count_mismatch"}},
+            "reshape: total element count must match");
     // Eigen stores column-major; we read row-major into a flat vector then refill
     std::vector<double> flat;
     flat.reserve(r * c);

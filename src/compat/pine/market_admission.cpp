@@ -1,4 +1,5 @@
 #include <pineforge/compat/pine/market_admission.hpp>
+#include <pineforge/run_failure.hpp>
 #include <algorithm>
 #include <cmath>
 #include <set>
@@ -72,7 +73,10 @@ bool awaits_default_review(const admission::Draft& d) {
 }
 inline const admission::Event& event_ref(const admission::Event& event) { return event; }
 inline const admission::Event& event_ref(const admission::Event* event) {
-    if (!event) throw std::logic_error("null admission history event");
+    if (!event) {
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "null admission history event");
+    }
     return *event;
 }
 template<class Range>

@@ -9,6 +9,7 @@
 
 #include <pineforge/ta.hpp>
 #include <pineforge/na.hpp>
+#include <pineforge/run_failure.hpp>
 #include <pineforge/ta_compare_band.hpp>
 
 #include <algorithm>
@@ -547,7 +548,10 @@ PivotLevelsType pivot_levels_type(const std::string& name) {
     if (name == "Classic") return PivotLevelsType::Classic;
     if (name == "DM") return PivotLevelsType::DM;
     if (name == "Camarilla") return PivotLevelsType::Camarilla;
-    throw std::invalid_argument("pivot point levels: unknown type '" + name + "'");
+    throw coded<std::invalid_argument>(
+        RunFailureCode::pine_invalid_argument,
+        {{"function", "ta.pivot_point_levels"}, {"argument", "type"}, {"rule", "unknown_option"}},
+        "pivot point levels: unknown type '" + name + "'");
 }
 
 void PivotPointLevels::Period::enter(double o, double h, double l, double c) {
@@ -566,7 +570,10 @@ PivotPointLevels::Levels PivotPointLevels::no_levels() {
 std::vector<double> PivotPointLevels::compute(PivotLevelsType type, bool anchor, bool developing,
                                               double open, double high, double low, double close) {
     if (developing && type == PivotLevelsType::Woodie) {
-        throw std::runtime_error(
+        throw coded<std::runtime_error>(
+            RunFailureCode::pine_invalid_argument,
+            {{"function", "ta.pivot_point_levels"}, {"argument", "developing"},
+             {"rule", "unsupported_combination"}},
             "pivot point levels: the Woodie type has no developing levels (a Woodie "
             "period's levels need the open of the period after it)");
     }

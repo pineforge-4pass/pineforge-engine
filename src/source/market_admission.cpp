@@ -1,4 +1,5 @@
 #include <pineforge/source/market_admission.hpp>
+#include <pineforge/run_failure.hpp>
 #include <algorithm>
 #include <exception>
 #include <stdexcept>
@@ -23,33 +24,39 @@ void require_origin(const std::shared_ptr<const CommandObservation>& origin,
                     uint64_t target, uint64_t event, int bar) {
     if (!origin || target != origin->command || event <= origin->command ||
         bar < origin->bar)
-        throw std::invalid_argument("admission receipt requires its exact earlier command");
+        throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                           "admission receipt requires its exact earlier command");
 }
 }
 void Draft::bind(std::shared_ptr<const CommandObservation> observation) {
     if(observation_ || !observation || observation->command==0)
-        throw std::logic_error("market draft requires one original command observation");
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "market draft requires one original command observation");
     observation_=std::move(observation);
 }
 void Draft::reviewed(ReviewReceipt receipt) {
     require_origin(observation_, receipt.target_command, receipt.sequence, receipt.bar);
     if (!known_checkpoint(receipt.checkpoint))
-        throw std::invalid_argument("review requires a known checkpoint");
+        throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                           "review requires a known checkpoint");
     if (review_) {
         if (same(*review_, receipt)) return;
-        throw std::logic_error("first admission review cannot be replaced");
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "first admission review cannot be replaced");
     }
     review_ = receipt;
 }
 void Draft::sizing_revised(SizingRevision receipt) {
     require_origin(observation_, receipt.target_command, receipt.sequence, receipt.bar);
     if (receipt.cause_fill == 0)
-        throw std::invalid_argument("sizing revision requires committed cause");
+        throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                           "sizing revision requires committed cause");
     if (sizing_revision_) {
         if (same(*sizing_revision_, receipt)) return;
         if (receipt.sequence <= sizing_revision_->sequence ||
             receipt.bar < sizing_revision_->bar || receipt.cause_fill < sizing_revision_->cause_fill)
-            throw std::logic_error("sizing revision cannot rewrite or precede its latest cause");
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "sizing revision cannot rewrite or precede its latest cause");
     }
     sizing_revision_ = receipt;
 }
@@ -57,7 +64,10 @@ uint64_t sequence(const Event& event) {
     return std::visit([](const auto& value)->uint64_t {
         using T=std::decay_t<decltype(value)>;
         if constexpr(std::is_same_v<T,CommandEvent>) {
-            if(!value.observation)throw std::invalid_argument("command event requires an observation");
+            if(!value.observation) {
+                throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                                   "command event requires an observation");
+            }
             return value.observation->command;
         }
         else return value.receipt.sequence;
@@ -65,7 +75,8 @@ uint64_t sequence(const Event& event) {
 }
 Journal::Journal(const Journal& other) {
     if (other.active_allocations_ != 0)
-        throw std::logic_error("cannot copy admission journal with active captures");
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "cannot copy admission journal with active captures");
     next_sequence_ = other.next_sequence_;
     outstanding_sequences_ = other.outstanding_sequences_;
     events_ = other.events_;
@@ -73,7 +84,8 @@ Journal::Journal(const Journal& other) {
 Journal& Journal::operator=(const Journal& other) {
     if (this == &other) return *this;
     if (active_allocations_ != 0)
-        throw std::logic_error("cannot replace admission journal with active captures");
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "cannot replace admission journal with active captures");
     Journal copy(other);
     std::swap(next_sequence_, copy.next_sequence_);
     outstanding_sequences_.swap(copy.outstanding_sequences_);
@@ -82,7 +94,8 @@ Journal& Journal::operator=(const Journal& other) {
 }
 Journal::Journal(Journal&& other) {
     if (other.active_allocations_ != 0)
-        throw std::logic_error("cannot move admission journal with active captures");
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "cannot move admission journal with active captures");
     next_sequence_ = other.next_sequence_;
     outstanding_sequences_ = std::move(other.outstanding_sequences_);
     events_ = std::move(other.events_);
@@ -93,7 +106,8 @@ Journal::Journal(Journal&& other) {
 Journal& Journal::operator=(Journal&& other) {
     if (this == &other) return *this;
     if (active_allocations_ != 0)
-        throw std::logic_error("cannot replace admission journal with active captures");
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "cannot replace admission journal with active captures");
     Journal moved(std::move(other));
     std::swap(next_sequence_, moved.next_sequence_);
     outstanding_sequences_.swap(moved.outstanding_sequences_);
@@ -101,7 +115,10 @@ Journal& Journal::operator=(Journal&& other) {
     return *this;
 }
 uint64_t Journal::next_sequence() {
-    if(next_sequence_==std::numeric_limits<uint64_t>::max())throw std::overflow_error("admission event sequence exhausted");
+    if(next_sequence_==std::numeric_limits<uint64_t>::max()) {
+        throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                         "admission event sequence exhausted");
+    }
     outstanding_sequences_.push_back(next_sequence_);
     return next_sequence_++;
 }
@@ -128,7 +145,8 @@ void Journal::append(Event event) {
     const auto id=sequence(event);
     const auto pending = std::find(outstanding_sequences_.begin(), outstanding_sequences_.end(), id);
     if (pending == outstanding_sequences_.end())
-        throw std::logic_error("admission event has no outstanding allocation");
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "admission event has no outstanding allocation");
     auto at=std::lower_bound(events_.begin(),events_.end(),id,[](const auto& e,uint64_t n){return sequence(e)<n;});
     events_.insert(at,std::move(event));
     // Consume only after insertion succeeds. Allocation failure leaves a caller
@@ -142,13 +160,15 @@ void Journal::retain(const std::vector<uint64_t>& retained) {
 }
 void Journal::reset() {
     if (!outstanding_sequences_.empty() || active_allocations_ != 0)
-        throw std::logic_error("cannot reset admission journal with unfinished events");
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "cannot reset admission journal with unfinished events");
     events_.clear();next_sequence_=1;
 }
 CommandCapture::CommandCapture(Allocation allocation,CommandObservation input,std::vector<BookObservation> before,
         std::function<void(CommandEvent)> complete):allocation_(std::move(allocation)),input_(std::move(input)),before_(std::move(before)),complete_(std::move(complete)) {
     if (input_.command != allocation_.sequence())
-        throw std::invalid_argument("command capture requires its allocated event");
+        throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                           "command capture requires its allocated event");
 }
 CommandCapture::~CommandCapture() noexcept(false) {
     // Never run a potentially throwing completion while another exception is
@@ -166,7 +186,8 @@ ReviewCapture::ReviewCapture(Allocation allocation,ReviewEvent event,
     : allocation_(std::move(allocation)),event_(std::move(event)),complete_(std::move(complete)) {
     if (event_.receipt.sequence != allocation_.sequence() || event_.receipt.target_command != 0 ||
         !known_checkpoint(event_.receipt.checkpoint))
-        throw std::invalid_argument("review capture requires an allocated batch checkpoint");
+        throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                           "review capture requires an allocated batch checkpoint");
 }
 ReviewCapture::~ReviewCapture() noexcept(false) {
     if (std::uncaught_exceptions() != 0) return;
@@ -177,7 +198,8 @@ ReviewReceipt ReviewCapture::receipt_for(const Draft& draft) const {
     if (!origin || std::none_of(event_.reviewed.begin(), event_.reviewed.end(), [&](const auto& order) {
             return order.draft.observation() && order.draft.observation()->command == origin->command;
         }))
-        throw std::invalid_argument("draft does not belong to this admission review");
+        throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                           "draft does not belong to this admission review");
     auto receipt = event_.receipt;
     receipt.target_command = origin->command;
     require_origin(origin, receipt.target_command, receipt.sequence, receipt.bar);

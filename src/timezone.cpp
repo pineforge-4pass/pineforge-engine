@@ -1,8 +1,10 @@
 #include "timezone.hpp"
+#include <pineforge/run_failure.hpp>
 #include <cctype>
 #include <cstdlib>
 #include <ctime>
 #include <sstream>
+#include <stdexcept>
 
 namespace pineforge {
 namespace tz_util {
@@ -16,6 +18,24 @@ std::mutex& timezone_mutex() {
 // Last TZ written into the process environment. Guarded by timezone_mutex();
 // lets a same-TZ scope skip the setenv/tzset syscall pair (lazy caching).
 std::string g_active_tz = "NOT_SET";
+
+// std::stoi of a UTC offset's hours or minutes. A timezone the script builds
+// at run time can fail it (too many digits): the same exception type and text
+// as ever, coded pine_invalid_argument. Valid input takes exactly the path it
+// always took.
+int timezone_offset_part(const std::string& text) {
+    try {
+        return std::stoi(text);
+    } catch (const std::invalid_argument& error) {
+        throw coded<std::invalid_argument>(
+            RunFailureCode::pine_invalid_argument,
+            {{"argument", "timezone"}, {"rule", "unparseable"}}, error.what());
+    } catch (const std::out_of_range& error) {
+        throw coded<std::out_of_range>(
+            RunFailureCode::pine_invalid_argument,
+            {{"argument", "timezone"}, {"rule", "unparseable"}}, error.what());
+    }
+}
 
 bool all_digits(const std::string& s) {
     if (s.empty()) return false;
@@ -67,8 +87,8 @@ std::string normalize_timezone_for_posix(const std::string& tz) {
         return tz;
     }
 
-    int hours = std::stoi(hour_s);
-    int minutes = std::stoi(minute_s);
+    int hours = timezone_offset_part(hour_s);
+    int minutes = timezone_offset_part(minute_s);
     if (hours > 23 || minutes > 59) {
         return tz;
     }

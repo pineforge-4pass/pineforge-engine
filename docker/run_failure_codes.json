@@ -706,7 +706,8 @@
       "run_in_progress",
       "empty_key",
       "invalid_arrays",
-      "times_not_increasing"
+      "times_not_increasing",
+      "restore_failed"
      ]
     }
    },
@@ -1273,7 +1274,8 @@
       "mintick_invalid",
       "unknown_field",
       "invalid_arrays",
-      "times_not_increasing"
+      "times_not_increasing",
+      "restore_failed"
      ]
     },
     "script_tf": {

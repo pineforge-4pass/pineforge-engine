@@ -14,6 +14,7 @@
 
 #include "../engine_internal.hpp"
 #include "../native_execution_consumer.hpp"
+#include "pine_run_failure.hpp"
 
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
@@ -40,7 +41,8 @@ namespace {
 // the message and the refusal are unchanged).
 void ensure_supported_lower_tf_emulation_flags(bool lookahead_on, bool gaps_on) {
     if (lookahead_on || gaps_on) {
-        throw std::runtime_error(
+        throw coded<std::runtime_error>(
+            RunFailureCode::request_unsupported, {{"reason", "lower_tf_lookahead_or_gaps"}},
             "request.security lower TF emulation only supports lookahead=barmerge.lookahead_off and gaps=barmerge.gaps_off"
         );
     }
@@ -166,7 +168,8 @@ static int safe_tf_to_seconds(const std::string& tf) {
 void source::PineStrategyHost::validate_security_timeframes(const std::string& input_tf) {
     if (input_tf.empty()) {
         if (!security_eval_states_.empty()) {
-            throw std::runtime_error(
+            throw coded<std::runtime_error>(
+                RunFailureCode::run_options_rejected, {{"option", "input_timeframe"}},
                 "request.security cannot infer input timeframe from available input bars; pass input_tf explicitly"
             );
         }
@@ -227,7 +230,8 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
         if (requested_seconds <= 0 && !is_calendar_month) {
             const char* api = pine.lower_tf_array_requested
                 ? "request.security_lower_tf" : "request.security";
-            throw std::runtime_error(
+            throw coded<std::runtime_error>(
+                RunFailureCode::request_timeframe_invalid, {{"api", api}},
                 std::string(api) + ": invalid timeframe literal '" + state.tf + "'"
             );
         }
@@ -249,7 +253,9 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
                     pine.no_loaded_bars = true;
                     continue;
                 }
-                throw std::runtime_error(
+                throw coded<std::runtime_error>(
+                    RunFailureCode::request_timeframe_unsupported,
+                    {{"reason", "finer_than_input"}, {"input_tf", input_tf}},
                     "request.security: requested timeframe '" + state.tf
                     + "' is finer than input '" + input_tf
                     + "'. Use request.security_lower_tf for sub-input timeframes."
@@ -257,7 +263,9 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
             }
             // LTF case: must be an exact integer divisor.
             if (input_seconds % requested_seconds != 0) {
-                throw std::runtime_error(
+                throw coded<std::runtime_error>(
+                    RunFailureCode::request_timeframe_unsupported,
+                    {{"reason", "lower_tf_not_divisor_of_input"}, {"input_tf", input_tf}},
                     "request.security_lower_tf: requested timeframe '" + state.tf
                     + "' is not an integer divisor of input '" + input_tf
                     + "' (ratio " + std::to_string(
@@ -269,7 +277,8 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
             // accepted by supports_lower_tf_emulation above. Reaching
             // here implies a mismatch between the two checks (e.g. a
             // non-fixed-intraday TF on one side).
-            throw std::runtime_error(
+            throw coded<std::runtime_error>(
+                RunFailureCode::engine_invariant, {},
                 "request.security_lower_tf: internal error - passed integer-ratio check but emulation support returned false (requested '"
                 + state.tf + "', input '" + input_tf + "')"
             );
@@ -281,27 +290,35 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
         // finer than the script TF.
         if (pine.lower_tf_array_requested) {
             if (script_seconds <= 0) {
-                throw std::runtime_error(
+                throw coded<std::runtime_error>(
+                    RunFailureCode::request_timeframe_unsupported,
+                    {{"reason", "lower_tf_script_unknown"}},
                     "request.security_lower_tf: script timeframe is unknown — cannot validate '"
                     + state.tf + "' against script TF"
                 );
             }
             if (requested_seconds >= script_seconds) {
-                throw std::runtime_error(
+                throw coded<std::runtime_error>(
+                    RunFailureCode::request_timeframe_unsupported,
+                    {{"reason", "lower_tf_not_finer_than_script"}, {"script_tf", script_tf_}},
                     "request.security_lower_tf: requested timeframe '" + state.tf
                     + "' must be finer than script timeframe '" + script_tf_
                     + "'. Lower-TF API requires a strictly finer timeframe."
                 );
             }
             if (script_seconds % requested_seconds != 0) {
-                throw std::runtime_error(
+                throw coded<std::runtime_error>(
+                    RunFailureCode::request_timeframe_unsupported,
+                    {{"reason", "lower_tf_not_divisor_of_script"}, {"script_tf", script_tf_}},
                     "request.security_lower_tf: requested timeframe '" + state.tf
                     + "' must evenly divide script timeframe '"
                     + script_tf_ + "' (script_tf must be an integer multiple of requested TF)"
                 );
             }
             if (requested_seconds % input_seconds != 0) {
-                throw std::runtime_error(
+                throw coded<std::runtime_error>(
+                    RunFailureCode::request_timeframe_unsupported,
+                    {{"reason", "lower_tf_not_multiple_of_input"}, {"input_tf", input_tf}},
                     "request.security_lower_tf: requested timeframe '" + state.tf
                     + "' is not an integer multiple of input '" + input_tf
                     + "' (cannot aggregate raw input bars to requested TF)"
@@ -704,7 +721,9 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         std::vector<Bar> synthetic_bars =
             synthesize_lower_tf_bars(input_bar, pine.lower_tf_ratio, pine.lower_tf_seconds);
         if (synthetic_bars.empty()) {
-            throw std::runtime_error(
+            throw coded<std::runtime_error>(
+                RunFailureCode::request_timeframe_unsupported,
+                {{"reason", "lower_tf_synthesis_failed"}, {"input_tf", security_input_tf_}},
                 "request.security lower TF emulation could not synthesize bars for requested "
                 + state.tf + " from input timeframe " + security_input_tf_
             );
@@ -1096,7 +1115,11 @@ void source::PineStrategyHost::prepare_foreign_security_sites(
     const int ratio = input_tf_.empty() || script_tf_.empty() ? 0
                                                               : tf_ratio(input_tf_, script_tf_);
     if (input_tf_.empty() || ratio > 1 || ratio == -1) {
-        throw std::runtime_error(
+        RunFailureArgs aggregated{{"reason", "chart_input_aggregated"}};
+        if (!input_tf_.empty()) aggregated.emplace_back("input_tf", input_tf_);
+        if (!script_tf_.empty()) aggregated.emplace_back("script_tf", script_tf_);
+        throw coded<std::runtime_error>(
+            RunFailureCode::symbol_feeds_refused, aggregated,
             "request.security of another symbol needs the chart's own bars as input; input '"
             + input_tf_ + "' aggregated to chart '" + script_tf_ + "' is not supported");
     }
@@ -1121,16 +1144,23 @@ void source::PineStrategyHost::prepare_foreign_security_sites(
             // TradingView reads na for an invalid symbol under
             // ignore_invalid_symbol and raises a runtime error without it.
             if (!site.ignore_invalid) {
-                throw std::runtime_error("request.security: symbol '" + site.symbol
-                                         + "' is invalid");
+                throw coded<std::runtime_error>(RunFailureCode::request_symbol_invalid, {},
+                                                "request.security: symbol '" + site.symbol
+                                                    + "' is invalid");
             }
             site.invalid = true;
             continue;
         }
         const std::int64_t feed = find_symbol_feed(site.symbol, site.tf);
         if (feed < 0) {
-            throw std::runtime_error("request.security: no feed is installed for symbol '"
-                                     + site.symbol + "' at timeframe '" + site.tf + "'");
+            // The timeframe is an argument only when it is the run's own chart
+            // timeframe (no requested timeframe), never the script's.
+            RunFailureArgs missing;
+            if (site.requested_tf.empty()) missing.emplace_back("timeframe", site.tf);
+            throw coded<std::runtime_error>(RunFailureCode::other_symbol_feed_missing, missing,
+                                            "request.security: no feed is installed for symbol '"
+                                                + site.symbol + "' at timeframe '" + site.tf
+                                                + "'");
         }
         site.feed = static_cast<std::size_t>(feed);
         // The requested context's syminfo: the symbol's own facts, and nothing
@@ -1286,8 +1316,9 @@ double source::PineStrategyHost::security_column_value(int sec_id,
 double source::PineStrategyHost::recorded_series_value(const std::string& key) const {
     const auto found = recorded_series_.find(key);
     if (found == recorded_series_.end()) {
-        throw std::runtime_error("request data: no recorded series is installed for key '"
-                                 + key + "'");
+        throw coded<std::runtime_error>(RunFailureCode::recorded_request_missing, {},
+                                        "request data: no recorded series is installed for key '"
+                                            + key + "'");
     }
     const RecordedSeries& series = found->second;
     const auto at = std::lower_bound(series.open_ms.begin(), series.open_ms.end(),
@@ -1304,18 +1335,22 @@ bool source::PineStrategyHost::set_symbol_feed(const std::string& key,
                                                const Bar* bars, const int64_t* close_ms,
                                                int n) {
     guard_native_mutation("set_symbol_feed");
-    const auto refuse = [this](const std::string& why) {
-        last_error_ = "strategy_set_symbol_feed: " + why;
+    const auto refuse = [this](const char* reason, const std::string& why,
+                               const char* field = nullptr) {
+        RunFailureArgs args{{"reason", reason}};
+        if (field) args.emplace_back("field", field);
+        note_run_failure(*this, "strategy_set_symbol_feed: " + why,
+                         RunFailureCode::symbol_feeds_refused, args);
         return false;
     };
-    if (run_in_progress(*this)) return refuse(kRunInProgress);
-    if (key.empty()) return refuse("empty symbol key");
+    if (run_in_progress(*this)) return refuse("run_in_progress", kRunInProgress);
+    if (key.empty()) return refuse("empty_key", "empty symbol key");
     const std::string tf = canonical_symbol_timeframe(timeframe);
     if (tf.empty() || !native_calendar::parse_timeframe(tf)) {
-        return refuse("timeframe '" + timeframe + "' does not parse");
+        return refuse("timeframe_unparsable", "timeframe '" + timeframe + "' does not parse");
     }
     if (n < 0 || (n > 0 && (bars == nullptr || close_ms == nullptr)))
-        return refuse("invalid bar array");
+        return refuse("invalid_bars", "invalid bar array");
     const std::int64_t existing = find_symbol_feed(key, tf);
     // n == 0 is a symbol with no bars over the run (a feed file with a header
     // only): installed, so its sites read na rather than fail as unfed. The
@@ -1332,20 +1367,22 @@ bool source::PineStrategyHost::set_symbol_feed(const std::string& key,
     // here rather than at the next begin.
     const auto judged = validate_native_instrument_feeds(judged_feeds);
     if (!judged) {
-        return refuse("feed refused (NativeRunSpecError "
+        return refuse("kernel_refused", "feed refused (NativeRunSpecError "
                       + std::to_string(static_cast<int>(judged.error)) + ", field "
-                      + std::to_string(static_cast<int>(judged.field)) + ")");
+                      + std::to_string(static_cast<int>(judged.field)) + ")",
+                      instrument_feed_field_name(judged.field));
     }
     // Every refusal above reads keys only; a store whose bytes are lent
     // (restore_symbol_feeds) gets them back before one of its feeds changes.
-    if (const std::string why = restore_symbol_feeds_reason(); !why.empty()) return refuse(why);
+    if (const std::string why = restore_symbol_feeds_reason(); !why.empty())
+        return refuse("restore_failed", why);
     if (existing >= 0) {
         symbol_feeds_[static_cast<std::size_t>(existing)] = std::move(feed);
     } else {
         symbol_feeds_.push_back(std::move(feed));
     }
     refresh_symbol_data_digest();
-    last_error_.clear();
+    clear_run_failure(*this);
     return true;
 }
 
@@ -1354,24 +1391,29 @@ bool source::PineStrategyHost::set_symbol_feed_column(const std::string& key,
                                                       const std::string& name,
                                                       const double* values, int n) {
     guard_native_mutation("set_symbol_feed_column");
-    const auto refuse = [this](const std::string& why) {
-        last_error_ = "strategy_set_symbol_feed_column: " + why;
+    const auto refuse = [this](const char* reason, const std::string& why,
+                               const char* field = nullptr) {
+        RunFailureArgs args{{"reason", reason}};
+        if (field) args.emplace_back("field", field);
+        note_run_failure(*this, "strategy_set_symbol_feed_column: " + why,
+                         RunFailureCode::symbol_feeds_refused, args);
         return false;
     };
-    if (run_in_progress(*this)) return refuse(kRunInProgress);
+    if (run_in_progress(*this)) return refuse("run_in_progress", kRunInProgress);
     const std::int64_t found = find_symbol_feed(key, canonical_symbol_timeframe(timeframe));
     if (found < 0) {
-        return refuse("no feed is installed for symbol '" + key + "' at timeframe '"
+        return refuse("no_feed", "no feed is installed for symbol '" + key + "' at timeframe '"
                       + timeframe + "'");
     }
-    if (name.empty()) return refuse("empty column name");
+    if (name.empty()) return refuse("empty_column", "empty column name");
     // The refusals above read keys only; the count check below reads the
     // feed's bars, so a lent store gets its bytes back first.
-    if (const std::string why = restore_symbol_feeds_reason(); !why.empty()) return refuse(why);
+    if (const std::string why = restore_symbol_feeds_reason(); !why.empty())
+        return refuse("restore_failed", why);
     NativeInstrumentFeed& feed = symbol_feeds_[static_cast<std::size_t>(found)];
     if (n < 0 || static_cast<std::size_t>(n) != feed.bars.size() || (n > 0 && values == nullptr))
-        return refuse("column '" + name + "' has " + std::to_string(n) + " values for "
-                      + std::to_string(feed.bars.size()) + " bars");
+        return refuse("column_length", "column '" + name + "' has " + std::to_string(n)
+                      + " values for " + std::to_string(feed.bars.size()) + " bars");
     // The kernel's judgement of the name, here rather than at the next begin:
     // a feed of the same key without bars carries it (the count is checked
     // above, and no column value is refused).
@@ -1380,9 +1422,10 @@ bool source::PineStrategyHost::set_symbol_feed_column(const std::string& key,
     named.tf = feed.tf;
     named.columns.push_back(NativeInstrumentColumn{name, {}});
     if (const auto judged = validate_native_instrument_feeds({named}); !judged) {
-        return refuse("column '" + name + "' refused (NativeRunSpecError "
+        return refuse("column_refused", "column '" + name + "' refused (NativeRunSpecError "
                       + std::to_string(static_cast<int>(judged.error)) + ", field "
-                      + std::to_string(static_cast<int>(judged.field)) + ")");
+                      + std::to_string(static_cast<int>(judged.field)) + ")",
+                      instrument_feed_field_name(judged.field));
     }
     NativeInstrumentColumn column{name, n > 0 ? std::vector<double>(values, values + n)
                                               : std::vector<double>{}};
@@ -1395,7 +1438,7 @@ bool source::PineStrategyHost::set_symbol_feed_column(const std::string& key,
     }
     if (!replaced) feed.columns.push_back(std::move(column));
     refresh_symbol_data_digest();
-    last_error_.clear();
+    clear_run_failure(*this);
     return true;
 }
 
@@ -1403,19 +1446,21 @@ bool source::PineStrategyHost::set_symbol_facts(const std::string& key,
                                                 const std::string& field,
                                                 const std::string& value) {
     guard_native_mutation("set_symbol_facts");
-    const auto refuse = [this](const std::string& why) {
-        last_error_ = "strategy_set_symbol_facts: " + why;
+    const auto refuse = [this](const char* reason, const std::string& why) {
+        note_run_failure(*this, "strategy_set_symbol_facts: " + why,
+                         RunFailureCode::symbol_feeds_refused, {{"reason", reason}});
         return false;
     };
-    if (run_in_progress(*this)) return refuse(kRunInProgress);
-    if (key.empty()) return refuse("empty symbol key");
+    if (run_in_progress(*this)) return refuse("run_in_progress", kRunInProgress);
+    if (key.empty()) return refuse("empty_key", "empty symbol key");
     SymbolFacts candidate = symbol_facts_.count(key) ? symbol_facts_[key] : SymbolFacts{};
     if (field == "canonical") {
         candidate.canonical = value;
     } else if (field == "valid") {
         if (value == "true") candidate.valid = true;
         else if (value == "false") candidate.valid = false;
-        else return refuse("valid must be \"true\" or \"false\", got '" + value + "'");
+        else return refuse("valid_not_boolean",
+                           "valid must be \"true\" or \"false\", got '" + value + "'");
     } else if (field == "type") {
         candidate.type = value;
     } else if (field == "timezone") {
@@ -1427,17 +1472,19 @@ bool source::PineStrategyHost::set_symbol_facts(const std::string& key,
     } else if (field == "mintick") {
         double parsed = 0.0;
         if (!parse_fact_number(value, parsed) || !std::isfinite(parsed) || parsed <= 0.0)
-            return refuse("mintick must be a positive decimal, got '" + value + "'");
+            return refuse("mintick_invalid",
+                          "mintick must be a positive decimal, got '" + value + "'");
         candidate.mintick = parsed;
     } else {
-        return refuse("unknown field '" + field + "'");
+        return refuse("unknown_field", "unknown field '" + field + "'");
     }
     // The digest below reads the feeds' sizes: a lent store gets its bytes
     // back first, after every refusal.
-    if (const std::string why = restore_symbol_feeds_reason(); !why.empty()) return refuse(why);
+    if (const std::string why = restore_symbol_feeds_reason(); !why.empty())
+        return refuse("restore_failed", why);
     symbol_facts_[key] = std::move(candidate);
     refresh_symbol_data_digest();
-    last_error_.clear();
+    clear_run_failure(*this);
     return true;
 }
 
@@ -1445,17 +1492,19 @@ bool source::PineStrategyHost::set_recorded_series(const std::string& key,
                                                    const int64_t* chart_open_ms,
                                                    const double* values, int n) {
     guard_native_mutation("set_recorded_series");
-    const auto refuse = [this](const std::string& why) {
-        last_error_ = "strategy_set_recorded_series: " + why;
+    const auto refuse = [this](const char* reason, const std::string& why) {
+        note_run_failure(*this, "strategy_set_recorded_series: " + why,
+                         RunFailureCode::recorded_request_refused, {{"reason", reason}});
         return false;
     };
-    if (run_in_progress(*this)) return refuse(kRunInProgress);
-    if (key.empty()) return refuse("empty key");
+    if (run_in_progress(*this)) return refuse("run_in_progress", kRunInProgress);
+    if (key.empty()) return refuse("empty_key", "empty key");
     if (n < 0 || (n > 0 && (chart_open_ms == nullptr || values == nullptr)))
-        return refuse("invalid arrays");
+        return refuse("invalid_arrays", "invalid arrays");
     for (int i = 1; i < n; ++i) {
         if (chart_open_ms[i] <= chart_open_ms[i - 1])
-            return refuse("chart open times must be strictly increasing (row "
+            return refuse("times_not_increasing",
+                          "chart open times must be strictly increasing (row "
                           + std::to_string(i) + ")");
     }
     // n == 0 is a request that returned na on every chart bar (a tape with a
@@ -1467,10 +1516,11 @@ bool source::PineStrategyHost::set_recorded_series(const std::string& key,
     }
     // As in set_symbol_facts: the bytes back before the digest, after every
     // refusal.
-    if (const std::string why = restore_symbol_feeds_reason(); !why.empty()) return refuse(why);
+    if (const std::string why = restore_symbol_feeds_reason(); !why.empty())
+        return refuse("restore_failed", why);
     recorded_series_[key] = std::move(series);
     refresh_symbol_data_digest();
-    last_error_.clear();
+    clear_run_failure(*this);
     return true;
 }
 

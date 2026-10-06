@@ -5,6 +5,7 @@
 
 #include "../engine_internal.hpp"
 #include "../native_execution_consumer.hpp"
+#include <pineforge/run_failure.hpp>
 
 #include <pineforge/source/pine_security_timeframe.hpp>
 #include <pineforge/ta.hpp>
@@ -29,8 +30,9 @@ bool source::PineStrategyHost::set_aux_security_feed(const Bar* bars, int n,
         return true;
     }
     if (n < 0 || bars == nullptr || input_tf.empty()) {
-        last_error_ =
-            "auxiliary request.security feed requires bars, a positive count, and input_tf";
+        note_run_failure(
+            *this, "auxiliary request.security feed requires bars, a positive count, and input_tf",
+            RunFailureCode::security_feed_refused, {{"reason", "aux_feed_shape"}});
         return false;
     }
     int seconds = 0;
@@ -40,21 +42,23 @@ bool source::PineStrategyHost::set_aux_security_feed(const Bar* bars, int n,
         seconds = 0;
     }
     if (seconds <= 0) {
-        last_error_ =
-            "auxiliary request.security feed requires a fixed positive input_tf";
+        note_run_failure(*this, "auxiliary request.security feed requires a fixed positive input_tf",
+                         RunFailureCode::security_feed_refused,
+                         {{"reason", "aux_feed_timeframe"}});
         return false;
     }
     for (int i = 1; i < n; ++i) {
         if (bars[i].timestamp <= bars[i - 1].timestamp) {
-            last_error_ =
-                "auxiliary request.security feed timestamps must be strictly increasing";
+            note_run_failure(
+                *this, "auxiliary request.security feed timestamps must be strictly increasing",
+                RunFailureCode::security_feed_refused, {{"reason", "aux_feed_order"}});
             return false;
         }
     }
     aux_security_bars_.assign(bars, bars + n);
     aux_security_input_tf_ = input_tf;
     clear_aux_security_chart_ranges();
-    last_error_.clear();
+    clear_run_failure(*this);
     return true;
 }
 
@@ -100,7 +104,8 @@ void source::PineStrategyHost::prepare_aux_security_chart_ranges(
     clear_aux_security_chart_ranges();
     if (!aux_security_feed_enabled()) return;
     if (chart_bars == nullptr || n_chart <= 0) {
-        throw std::runtime_error(
+        throw coded<std::runtime_error>(
+            RunFailureCode::security_feed_refused, {{"reason", "aux_feed_no_chart"}},
             "auxiliary request.security feed requires at least one native chart bar");
     }
 
@@ -115,16 +120,19 @@ void source::PineStrategyHost::prepare_aux_security_chart_ranges(
     }
     if (chart_seconds <= 0 || aux_seconds <= 0
         || aux_seconds >= chart_seconds) {
-        throw std::runtime_error(
+        throw coded<std::runtime_error>(
+            RunFailureCode::security_feed_refused, {{"reason", "aux_feed_not_finer"}},
             "auxiliary request.security feed input_tf must be fixed and strictly finer than the native chart timeframe");
     }
     if (chart_seconds % aux_seconds != 0) {
-        throw std::runtime_error(
+        throw coded<std::runtime_error>(
+            RunFailureCode::security_feed_refused, {{"reason", "aux_feed_not_divisor"}},
             "auxiliary request.security feed input_tf must evenly divide the native chart timeframe");
     }
     for (int i = 1; i < n_chart; ++i) {
         if (chart_bars[i].timestamp <= chart_bars[i - 1].timestamp) {
-            throw std::runtime_error(
+            throw coded<std::runtime_error>(
+                RunFailureCode::security_feed_refused, {{"reason", "aux_chart_order"}},
                 "native chart feed timestamps must be strictly increasing with an auxiliary security feed");
         }
     }
@@ -169,7 +177,8 @@ void source::PineStrategyHost::prepare_aux_security_chart_ranges(
         if (!chart_route_keys.empty()
             && (calendar_chart ? key < chart_route_keys.back()
                                : key <= chart_route_keys.back())) {
-            throw std::runtime_error(
+            throw coded<std::runtime_error>(
+                RunFailureCode::security_feed_refused, {{"reason", "aux_chart_period_identity"}},
                 "native chart feed trading-period identities must be unique and strictly increasing with an auxiliary security feed");
         }
         chart_route_keys.push_back(key);
@@ -218,7 +227,8 @@ void source::PineStrategyHost::prepare_aux_security_chart_ranges(
                 ++chart_index;
             }
             if (chart_route_keys[chart_index] != label) {
-                throw std::runtime_error(
+                throw coded<std::runtime_error>(
+                    RunFailureCode::engine_invariant, {},
                     "auxiliary request.security bar does not map to a native chart bar");
             }
             record_aux(aux_index);
@@ -253,14 +263,16 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
     const std::size_t idx = static_cast<std::size_t>(chart_index);
     if (idx >= aux_security_chart_begin_.size()
         || idx >= aux_security_chart_end_.size()) {
-        throw std::runtime_error(
+        throw coded<std::runtime_error>(
+            RunFailureCode::engine_invariant, {},
             "auxiliary request.security chart routing is not initialized");
     }
     const std::size_t begin = aux_security_chart_begin_[idx];
     const std::size_t end = aux_security_chart_end_[idx];
     const Bar* calling_bar = scheduler_.current_script_bar();
     if (calling_bar == nullptr) {
-        throw std::runtime_error(
+        throw coded<std::runtime_error>(
+            RunFailureCode::engine_invariant, {},
             "auxiliary request.security routing requires a calling chart bar");
     }
     const auto chart_timeframe = native_calendar::parse_timeframe(script_tf_);
@@ -408,14 +420,16 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
                 std::vector<Bar> synthetic = internal::synthesize_lower_tf_bars(
                     aux_bar, pine.lower_tf_ratio, pine.lower_tf_seconds);
                 if (synthetic.empty()) {
-                    throw std::runtime_error(
+                    throw coded<std::runtime_error>(
+                        RunFailureCode::engine_invariant, {},
                         "request.security_lower_tf could not synthesize auxiliary sub-bars");
                 }
                 pine.lower_tf_input_buffer.insert(
                     pine.lower_tf_input_buffer.end(),
                     synthetic.begin(), synthetic.end());
             } else {
-                throw std::runtime_error(
+                throw coded<std::runtime_error>(
+                    RunFailureCode::engine_invariant, {},
                     "request.security_lower_tf auxiliary routing is not initialized");
             }
         }

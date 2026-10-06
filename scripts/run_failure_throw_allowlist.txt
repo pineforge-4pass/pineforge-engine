@@ -1,0 +1,32 @@
+# Uncoded throws the run-failure throw scan accepts (scripts/check_run_failure_codes.py).
+#
+# The scan reads every `throw` statement in THROW_SCAN_GLOBS (the Pine-library
+# headers generated strategies compile, the source layer, and the kernel units
+# behind Pine built-ins). A throw there must either carry its code at its site
+# (`throw coded<...>(RunFailureCode::..., {args}, "<English>")`, or a helper that
+# does) or be listed here. One row per uncoded throw statement of a file:
+#
+#   path | throw text fragment | reason
+#
+# path      repo-relative, exactly as the scan prints it;
+# fragment  a substring of the throw statement with its whitespace collapsed
+#           (the first row of the path whose fragment matches wins, so identical
+#           statements -- every `throw;` of one file -- share one row, and its
+#           reason counts them);
+# reason    why the site needs no code of its own: a rethrow (the exception in
+#           flight keeps the code it carries, or the classifier's answer for
+#           its type), or an engine invariant deliberately left to the
+#           classifier's safety net (the std::logic_error family reads
+#           engine_invariant). A strategy-reachable throw never belongs here.
+#
+# The check fails on an uncoded throw with no row and on a row that matches no
+# throw (stale). Blank lines and lines starting with `#` are ignored.
+
+include/pineforge/map.hpp | throw; | rethrow after PineMap::put rolls its new entry back: a hashing or allocation failure (out_of_memory) or the coded key-index invariant passes through unchanged
+include/pineforge/drawing.hpp | throw; | rethrow after a drawing record block's copy constructor destroys its partial copies: the allocation failure (out_of_memory) passes through unchanged
+include/pineforge/source/pine_adapter.hpp | source placement handle is absent | engine invariant, 2 sites (PlacementTable::at, mutable and const): the adapter reads only placements it holds; std::out_of_range reads engine_invariant; an installed source header, whose inline bodies stay byte-for-byte (script ABI receipts)
+include/pineforge/source/pine_adapter.hpp | source placement incarnation is out of range | engine invariant (PlacementTable::try_emplace with incarnation 0 or UINT64_MAX): std::length_error reads engine_invariant; an installed source header, whose inline bodies stay byte-for-byte (script ABI receipts)
+include/pineforge/source/pine_adapter.hpp | throw; | 2 rethrows (PlacementTable::try_emplace, OriginRoster::push_back) after a failed insert is rolled back: the allocation failure (out_of_memory) passes through unchanged
+src/source/pine_adapter.cpp | throw; | rethrow after a relative exit's materialization resets its in-progress flags: the exception from exit() keeps its own code
+src/source/pine_scheduler_native.cpp | throw; | rethrow after a calc_on_order_fills recalculation restores the previous bar timestamp and ends the recalculation: the script's or the engine's exception keeps its own code
+src/source/pine_strategy_host.cpp | throw; | 4 rethrows: the coded run_options_rejected script-timeframe refusal through the catch-all around tf_ratio (prepare_native_begin); checked_settings::LatchedSettingsFailure, the generated setter refusal, twice (prepare_native_begin, on_native_run_begin); a stream run's script-preparation failure, which the consumer classifies

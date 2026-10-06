@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pineforge/na.hpp>
+#include <pineforge/run_failure.hpp>
 
 #include <cmath>
 #include <cstddef>
@@ -23,6 +24,28 @@ namespace detail {
 
 template <typename T>
 using PineMapBare = std::remove_cv_t<std::remove_reference_t<T>>;
+
+// A map method called on an na map ID: pine_na_reference. These raise the
+// exception type and English the map always had; out of line and cold, so
+// the methods that check stay as small as they were.
+[[noreturn, gnu::noinline, gnu::cold]] inline void map_na_error(const char* what) {
+    throw coded<std::runtime_error>(RunFailureCode::pine_na_reference,
+                                    {{"object", "map"}}, what);
+}
+
+// A new key beyond the map's pair cap: pine_runtime_limit.
+[[noreturn, gnu::noinline, gnu::cold]] inline void map_capacity_error(int cap,
+                                                                     const char* what) {
+    throw coded<std::runtime_error>(RunFailureCode::pine_runtime_limit,
+                                    {{"limit", "map_pairs"}, {"max", cap}}, what);
+}
+
+// A broken key index, an unreachable size or a checkpoint never taken: an
+// engine invariant.
+template <class Base>
+[[noreturn, gnu::noinline, gnu::cold]] void map_invariant_error(const char* what) {
+    throw coded<Base>(RunFailureCode::engine_invariant, {}, what);
+}
 
 template <typename T>
 inline constexpr bool is_pine_map_key_v =
@@ -146,7 +169,7 @@ class PineMap {
             for (auto it = entries.begin(); it != entries.end(); ++it) {
                 const auto inserted = replacement.emplace(it->first, it).second;
                 if (!inserted) {
-                    throw std::runtime_error(kIndexInvariantError);
+                    detail::map_invariant_error<std::runtime_error>(kIndexInvariantError);
                 }
             }
             index.swap(replacement);
@@ -232,7 +255,7 @@ public:
         }
 
         if (storage.entries.size() >= static_cast<std::size_t>(max_pairs)) {
-            throw std::runtime_error(kCapacityError);
+            detail::map_capacity_error(max_pairs, kCapacityError);
         }
 
         storage.entries.emplace_back(std::move(key), std::move(value));
@@ -240,7 +263,7 @@ public:
         try {
             const auto inserted = storage.index.emplace(entry->first, entry).second;
             if (!inserted) {
-                throw std::runtime_error(kIndexInvariantError);
+                detail::map_invariant_error<std::runtime_error>(kIndexInvariantError);
             }
         } catch (...) {
             // Both a false emplace result and hashing/allocation exceptions
@@ -280,7 +303,8 @@ public:
         const Storage& storage = require_storage();
         if (storage.entries.size() >
             static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-            throw std::overflow_error("map.size: result exceeds int range");
+            detail::map_invariant_error<std::overflow_error>(
+                "map.size: result exceeds int range");
         }
         return static_cast<int>(storage.entries.size());
     }
@@ -311,7 +335,7 @@ public:
             // Preflight keeps put_all transactional with respect to the
             // capacity check: existing values are not overwritten before a
             // later new key discovers that the map is full.
-            throw std::runtime_error(kCapacityError);
+            detail::map_capacity_error(max_pairs, kCapacityError);
         }
 
         for (const auto& entry : source_storage.entries) {
@@ -363,7 +387,7 @@ public:
                   std::is_same_v<T, Value>, int> = 0>
     void restore(const Snapshot& snapshot) {
         if (!snapshot.identity_) {
-            throw std::runtime_error(kInvalidSnapshotError);
+            detail::map_invariant_error<std::runtime_error>(kInvalidSnapshotError);
         }
         // Build the replacement completely before touching live state.  The
         // subsequent swaps preserve snapshot.identity_ itself, so all handles
@@ -375,12 +399,12 @@ public:
 
 private:
     [[nodiscard]] Storage& require_storage() {
-        if (!storage_) throw std::runtime_error(kNaIdError);
+        if (!storage_) detail::map_na_error(kNaIdError);
         return *storage_;
     }
 
     [[nodiscard]] const Storage& require_storage() const {
-        if (!storage_) throw std::runtime_error(kNaIdError);
+        if (!storage_) detail::map_na_error(kNaIdError);
         return *storage_;
     }
 

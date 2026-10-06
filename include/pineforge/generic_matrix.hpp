@@ -1,4 +1,5 @@
 #pragma once
+#include <pineforge/run_failure.hpp>
 #include <vector>
 #include <string>
 #include <type_traits>
@@ -12,6 +13,36 @@
 namespace pineforge {
 
 namespace detail {
+
+// A matrix call the script got wrong: the exception type and English it always
+// had, coded pine_matrix_error with the Pine function and the reason. Out of
+// line and cold, so the accessors that check stay as small as they were.
+template <class Base>
+[[noreturn, gnu::noinline, gnu::cold]] void matrix_call_error(const char* function,
+                                                              const char* reason,
+                                                              const char* what) {
+    throw coded<Base>(RunFailureCode::pine_matrix_error,
+                      {{"function", function}, {"reason", reason}}, what);
+}
+
+// The matrix element cap (the int range): pine_runtime_limit.
+template <class Base>
+[[noreturn, gnu::noinline, gnu::cold]] void matrix_limit_error(const char* what) {
+    throw coded<Base>(RunFailureCode::pine_runtime_limit,
+                      {{"limit", "matrix_elements"},
+                       {"max", std::numeric_limits<int>::max()}}, what);
+}
+
+// A method called on an na matrix ID: pine_na_reference.
+[[noreturn, gnu::noinline, gnu::cold]] inline void matrix_na_error(const char* what) {
+    throw coded<std::runtime_error>(RunFailureCode::pine_na_reference,
+                                    {{"object", "matrix"}}, what);
+}
+
+// Restoring a checkpoint the generated code never took: an engine invariant.
+[[noreturn, gnu::noinline, gnu::cold]] inline void matrix_snapshot_error(const char* what) {
+    throw coded<std::runtime_error>(RunFailureCode::engine_invariant, {}, what);
+}
 
 // Storage-agnostic structural helpers parameterized on the underlying
 // row container type. Used by both GenericMatrix<T> (T != bool;
@@ -90,10 +121,12 @@ template <typename Row>
 inline void reshape_impl(std::vector<Row>& data, int new_rows, int new_cols,
                          const typename Row::value_type& zero) {
     if (new_rows < 0 || new_cols < 0)
-        throw std::runtime_error("GenericMatrix::reshape: negative dimension");
+        matrix_call_error<std::runtime_error>(
+            "matrix.reshape", "negative_dimensions",
+            "GenericMatrix::reshape: negative dimension");
     int64_t total = static_cast<int64_t>(new_rows) * static_cast<int64_t>(new_cols);
     if (total > static_cast<int64_t>(std::numeric_limits<int>::max()))
-        throw std::runtime_error("matrix.reshape: dimension overflow");
+        matrix_limit_error<std::runtime_error>("matrix.reshape: dimension overflow");
     std::vector<typename Row::value_type> flat;
     flat.reserve(static_cast<size_t>(total));
     for (const auto& r : data) for (const auto& v : r) flat.push_back(v);
@@ -112,7 +145,8 @@ inline int elements_count_impl(const std::vector<Row>& data) {
     int64_t total = 0;
     for (const auto& r : data) total += static_cast<int64_t>(r.size());
     if (total > static_cast<int64_t>(std::numeric_limits<int>::max()))
-        throw std::overflow_error("matrix.elements_count: total exceeds int range");
+        matrix_limit_error<std::overflow_error>(
+            "matrix.elements_count: total exceeds int range");
     return static_cast<int>(total);
 }
 
@@ -148,12 +182,12 @@ class GenericMatrix {
         : storage_(std::make_shared<Storage>(std::move(data))) {}
 
     Storage& require_storage() {
-        if (!storage_) throw std::runtime_error(kNaIdError);
+        if (!storage_) detail::matrix_na_error(kNaIdError);
         return *storage_;
     }
 
     const Storage& require_storage() const {
-        if (!storage_) throw std::runtime_error(kNaIdError);
+        if (!storage_) detail::matrix_na_error(kNaIdError);
         return *storage_;
     }
 
@@ -199,7 +233,9 @@ public:
 
     [[nodiscard]] static GenericMatrix new_(int rows, int cols, T init) {
         if (rows < 0 || cols < 0)
-            throw std::invalid_argument("matrix.new: negative dimensions");
+            detail::matrix_call_error<std::invalid_argument>(
+                "matrix.new", "negative_dimensions",
+                "matrix.new: negative dimensions");
         Data data(static_cast<size_t>(rows),
                   std::vector<T>(static_cast<size_t>(cols), init));
         return GenericMatrix(std::move(data));
@@ -209,7 +245,9 @@ public:
         static_assert(std::is_default_constructible_v<T>,
                       "matrix.new: no-init overload requires default-constructible T");
         if (rows < 0 || cols < 0)
-            throw std::invalid_argument("matrix.new: negative dimensions");
+            detail::matrix_call_error<std::invalid_argument>(
+                "matrix.new", "negative_dimensions",
+                "matrix.new: negative dimensions");
         Data data(static_cast<size_t>(rows),
                   std::vector<T>(static_cast<size_t>(cols), T{}));
         return GenericMatrix(std::move(data));
@@ -218,18 +256,26 @@ public:
     T get(int row, int col) const {
         const Data& values = data();
         if (row < 0 || row >= rows())
-            throw std::out_of_range("matrix.get: row index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.get", "row_index_out_of_range",
+                "matrix.get: row index out of range");
         if (col < 0 || col >= columns())
-            throw std::out_of_range("matrix.get: column index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.get", "column_index_out_of_range",
+                "matrix.get: column index out of range");
         return values[static_cast<size_t>(row)][static_cast<size_t>(col)];
     }
 
     void set(int row, int col, T val) {
         Data& values = data();
         if (row < 0 || row >= rows())
-            throw std::out_of_range("matrix.set: row index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.set", "row_index_out_of_range",
+                "matrix.set: row index out of range");
         if (col < 0 || col >= columns())
-            throw std::out_of_range("matrix.set: column index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.set", "column_index_out_of_range",
+                "matrix.set: column index out of range");
         values[static_cast<size_t>(row)][static_cast<size_t>(col)] = val;
     }
 
@@ -248,14 +294,18 @@ public:
     std::vector<T> row(int idx) const {
         const Data& values = data();
         if (idx < 0 || idx >= rows())
-            throw std::out_of_range("matrix.row: row index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.row", "row_index_out_of_range",
+                "matrix.row: row index out of range");
         return values[static_cast<size_t>(idx)];
     }
 
     std::vector<T> col(int idx) const {
         const Data& values = data();
         if (idx < 0 || idx >= columns())
-            throw std::out_of_range("matrix.col: column index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.col", "column_index_out_of_range",
+                "matrix.col: column index out of range");
         std::vector<T> out;
         out.reserve(values.size());
         for (const auto& r : values) out.push_back(r[static_cast<size_t>(idx)]);
@@ -267,16 +317,22 @@ public:
     const std::vector<T>& row_ref(int idx) const {
         const Data& values = data();
         if (idx < 0 || idx >= rows())
-            throw std::out_of_range("matrix.row_ref: row index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.row", "row_index_out_of_range",
+                "matrix.row_ref: row index out of range");
         return values[static_cast<size_t>(idx)];
     }
 
     void add_row(int idx, const std::vector<T>& values) {
         Data& matrix_data = data();
         if (idx < 0 || idx > rows())
-            throw std::out_of_range("matrix.add_row: row index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.add_row", "row_index_out_of_range",
+                "matrix.add_row: row index out of range");
         if (!matrix_data.empty() && values.size() != static_cast<size_t>(columns()))
-            throw std::runtime_error("matrix.add_row: values size must equal columns()");
+            detail::matrix_call_error<std::runtime_error>(
+                "matrix.add_row", "values_size_mismatch",
+                "matrix.add_row: values size must equal columns()");
         matrix_data.reserve(matrix_data.size() + 1);
         matrix_data.insert(matrix_data.begin() + idx, values);
     }
@@ -284,11 +340,17 @@ public:
     void add_col(int idx, const std::vector<T>& values) {
         Data& matrix_data = data();
         if (matrix_data.empty())
-            throw std::logic_error("matrix.add_col on empty matrix: use add_row first");
+            detail::matrix_call_error<std::logic_error>(
+                "matrix.add_col", "empty_matrix",
+                "matrix.add_col on empty matrix: use add_row first");
         if (idx < 0 || idx > columns())
-            throw std::out_of_range("matrix.add_col: column index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.add_col", "column_index_out_of_range",
+                "matrix.add_col: column index out of range");
         if (values.size() != matrix_data.size())
-            throw std::runtime_error("matrix.add_col: values size must equal rows()");
+            detail::matrix_call_error<std::runtime_error>(
+                "matrix.add_col", "values_size_mismatch",
+                "matrix.add_col: values size must equal rows()");
         // Strong guarantee: build a new buffer, swap on success.
         Data next;
         next.reserve(matrix_data.size());
@@ -303,28 +365,36 @@ public:
     void remove_row(int idx) {
         (void)data();
         if (idx < 0 || idx >= rows())
-            throw std::out_of_range("matrix.remove_row: row index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.remove_row", "row_index_out_of_range",
+                "matrix.remove_row: row index out of range");
         detail::erase_row(data(), idx);
     }
 
     void remove_col(int idx) {
         (void)data();
         if (idx < 0 || idx >= columns())
-            throw std::out_of_range("matrix.remove_col: column index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.remove_col", "column_index_out_of_range",
+                "matrix.remove_col: column index out of range");
         detail::erase_col(data(), idx);
     }
 
     void swap_rows(int i, int j) {
         (void)data();
         if (i < 0 || i >= rows() || j < 0 || j >= rows())
-            throw std::out_of_range("matrix.swap_rows: row index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.swap_rows", "row_index_out_of_range",
+                "matrix.swap_rows: row index out of range");
         detail::swap_rows_impl(data(), i, j);
     }
 
     void swap_columns(int i, int j) {
         (void)data();
         if (i < 0 || i >= columns() || j < 0 || j >= columns())
-            throw std::out_of_range("matrix.swap_columns: column index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.swap_columns", "column_index_out_of_range",
+                "matrix.swap_columns: column index out of range");
         detail::swap_cols_impl(data(), i, j);
     }
 
@@ -336,13 +406,21 @@ public:
                                               int from_col, int to_col) const {
         (void)data();
         if (from_row < 0 || to_row > rows())
-            throw std::out_of_range("matrix.submatrix: row index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.submatrix", "row_index_out_of_range",
+                "matrix.submatrix: row index out of range");
         if (from_col < 0 || to_col > columns())
-            throw std::out_of_range("matrix.submatrix: column index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.submatrix", "column_index_out_of_range",
+                "matrix.submatrix: column index out of range");
         if (from_row > to_row)
-            throw std::invalid_argument("matrix.submatrix: from_row must be <= to_row");
+            detail::matrix_call_error<std::invalid_argument>(
+                "matrix.submatrix", "from_row_after_to_row",
+                "matrix.submatrix: from_row must be <= to_row");
         if (from_col > to_col)
-            throw std::invalid_argument("matrix.submatrix: from_col must be <= to_col");
+            detail::matrix_call_error<std::invalid_argument>(
+                "matrix.submatrix", "from_col_after_to_col",
+                "matrix.submatrix: from_col must be <= to_col");
         return GenericMatrix(
             detail::copy_submatrix(data(), from_row, to_row,
                                    from_col, to_col));
@@ -360,10 +438,14 @@ public:
         (void)other.data();
         if (horizontal) {
             if (rows() != other.rows())
-                throw std::invalid_argument("matrix.concat: row count mismatch");
+                detail::matrix_call_error<std::invalid_argument>(
+                    "matrix.concat", "row_count_mismatch",
+                    "matrix.concat: row count mismatch");
         } else {
             if (columns() != other.columns())
-                throw std::invalid_argument("matrix.concat: column count mismatch");
+                detail::matrix_call_error<std::invalid_argument>(
+                    "matrix.concat", "column_count_mismatch",
+                    "matrix.concat: column count mismatch");
         }
         GenericMatrix m = copy();
         detail::concat_impl(m.data(), other.data(), horizontal);
@@ -402,7 +484,7 @@ public:
 
     void restore(const Snapshot& snapshot) {
         if (!snapshot.identity_) {
-            throw std::runtime_error(kInvalidSnapshotError);
+            detail::matrix_snapshot_error(kInvalidSnapshotError);
         }
         Data replacement(snapshot.state_);
         snapshot.identity_->data.swap(replacement);
@@ -437,12 +519,12 @@ class GenericMatrix<bool> {
         : storage_(std::make_shared<Storage>(std::move(data))) {}
 
     Storage& require_storage() {
-        if (!storage_) throw std::runtime_error(kNaIdError);
+        if (!storage_) detail::matrix_na_error(kNaIdError);
         return *storage_;
     }
 
     const Storage& require_storage() const {
-        if (!storage_) throw std::runtime_error(kNaIdError);
+        if (!storage_) detail::matrix_na_error(kNaIdError);
         return *storage_;
     }
 
@@ -479,7 +561,9 @@ public:
 
     [[nodiscard]] static GenericMatrix new_(int rows, int cols, bool init) {
         if (rows < 0 || cols < 0)
-            throw std::invalid_argument("matrix.new: negative dimensions");
+            detail::matrix_call_error<std::invalid_argument>(
+                "matrix.new", "negative_dimensions",
+                "matrix.new: negative dimensions");
         Data data(static_cast<size_t>(rows),
                   std::vector<char>(static_cast<size_t>(cols), init ? 1 : 0));
         return GenericMatrix(std::move(data));
@@ -492,18 +576,26 @@ public:
     bool get(int row, int col) const {
         const Data& values = data();
         if (row < 0 || row >= rows())
-            throw std::out_of_range("matrix.get: row index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.get", "row_index_out_of_range",
+                "matrix.get: row index out of range");
         if (col < 0 || col >= columns())
-            throw std::out_of_range("matrix.get: column index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.get", "column_index_out_of_range",
+                "matrix.get: column index out of range");
         return values[static_cast<size_t>(row)][static_cast<size_t>(col)] != 0;
     }
 
     void set(int row, int col, bool val) {
         Data& values = data();
         if (row < 0 || row >= rows())
-            throw std::out_of_range("matrix.set: row index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.set", "row_index_out_of_range",
+                "matrix.set: row index out of range");
         if (col < 0 || col >= columns())
-            throw std::out_of_range("matrix.set: column index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.set", "column_index_out_of_range",
+                "matrix.set: column index out of range");
         values[static_cast<size_t>(row)][static_cast<size_t>(col)] = val ? 1 : 0;
     }
 
@@ -523,7 +615,9 @@ public:
     std::vector<bool> row(int idx) const {
         const Data& values = data();
         if (idx < 0 || idx >= rows())
-            throw std::out_of_range("matrix.row: row index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.row", "row_index_out_of_range",
+                "matrix.row: row index out of range");
         std::vector<bool> out;
         const auto& src = values[static_cast<size_t>(idx)];
         out.reserve(src.size());
@@ -534,7 +628,9 @@ public:
     std::vector<bool> col(int idx) const {
         const Data& values = data();
         if (idx < 0 || idx >= columns())
-            throw std::out_of_range("matrix.col: column index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.col", "column_index_out_of_range",
+                "matrix.col: column index out of range");
         std::vector<bool> out;
         out.reserve(values.size());
         for (const auto& r : values) out.push_back(r[static_cast<size_t>(idx)] != 0);
@@ -547,9 +643,13 @@ public:
     void add_row(int idx, const std::vector<bool>& values) {
         Data& matrix_data = data();
         if (idx < 0 || idx > rows())
-            throw std::out_of_range("matrix.add_row: row index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.add_row", "row_index_out_of_range",
+                "matrix.add_row: row index out of range");
         if (!matrix_data.empty() && values.size() != static_cast<size_t>(columns()))
-            throw std::runtime_error("matrix.add_row: values size must equal columns()");
+            detail::matrix_call_error<std::runtime_error>(
+                "matrix.add_row", "values_size_mismatch",
+                "matrix.add_row: values size must equal columns()");
         std::vector<char> row;
         row.reserve(values.size());
         for (bool v : values) row.push_back(v ? 1 : 0);
@@ -560,11 +660,17 @@ public:
     void add_col(int idx, const std::vector<bool>& values) {
         Data& matrix_data = data();
         if (matrix_data.empty())
-            throw std::logic_error("matrix.add_col on empty matrix: use add_row first");
+            detail::matrix_call_error<std::logic_error>(
+                "matrix.add_col", "empty_matrix",
+                "matrix.add_col on empty matrix: use add_row first");
         if (idx < 0 || idx > columns())
-            throw std::out_of_range("matrix.add_col: column index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.add_col", "column_index_out_of_range",
+                "matrix.add_col: column index out of range");
         if (values.size() != matrix_data.size())
-            throw std::runtime_error("matrix.add_col: values size must equal rows()");
+            detail::matrix_call_error<std::runtime_error>(
+                "matrix.add_col", "values_size_mismatch",
+                "matrix.add_col: values size must equal rows()");
         Data next;
         next.reserve(matrix_data.size());
         for (size_t r = 0; r < matrix_data.size(); ++r) {
@@ -578,28 +684,36 @@ public:
     void remove_row(int idx) {
         (void)data();
         if (idx < 0 || idx >= rows())
-            throw std::out_of_range("matrix.remove_row: row index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.remove_row", "row_index_out_of_range",
+                "matrix.remove_row: row index out of range");
         detail::erase_row(data(), idx);
     }
 
     void remove_col(int idx) {
         (void)data();
         if (idx < 0 || idx >= columns())
-            throw std::out_of_range("matrix.remove_col: column index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.remove_col", "column_index_out_of_range",
+                "matrix.remove_col: column index out of range");
         detail::erase_col(data(), idx);
     }
 
     void swap_rows(int i, int j) {
         (void)data();
         if (i < 0 || i >= rows() || j < 0 || j >= rows())
-            throw std::out_of_range("matrix.swap_rows: row index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.swap_rows", "row_index_out_of_range",
+                "matrix.swap_rows: row index out of range");
         detail::swap_rows_impl(data(), i, j);
     }
 
     void swap_columns(int i, int j) {
         (void)data();
         if (i < 0 || i >= columns() || j < 0 || j >= columns())
-            throw std::out_of_range("matrix.swap_columns: column index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.swap_columns", "column_index_out_of_range",
+                "matrix.swap_columns: column index out of range");
         detail::swap_cols_impl(data(), i, j);
     }
 
@@ -611,13 +725,21 @@ public:
                                               int from_col, int to_col) const {
         (void)data();
         if (from_row < 0 || to_row > rows())
-            throw std::out_of_range("matrix.submatrix: row index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.submatrix", "row_index_out_of_range",
+                "matrix.submatrix: row index out of range");
         if (from_col < 0 || to_col > columns())
-            throw std::out_of_range("matrix.submatrix: column index out of range");
+            detail::matrix_call_error<std::out_of_range>(
+                "matrix.submatrix", "column_index_out_of_range",
+                "matrix.submatrix: column index out of range");
         if (from_row > to_row)
-            throw std::invalid_argument("matrix.submatrix: from_row must be <= to_row");
+            detail::matrix_call_error<std::invalid_argument>(
+                "matrix.submatrix", "from_row_after_to_row",
+                "matrix.submatrix: from_row must be <= to_row");
         if (from_col > to_col)
-            throw std::invalid_argument("matrix.submatrix: from_col must be <= to_col");
+            detail::matrix_call_error<std::invalid_argument>(
+                "matrix.submatrix", "from_col_after_to_col",
+                "matrix.submatrix: from_col must be <= to_col");
         return GenericMatrix(
             detail::copy_submatrix(data(), from_row, to_row,
                                    from_col, to_col));
@@ -643,10 +765,14 @@ public:
         (void)other.data();
         if (horizontal) {
             if (rows() != other.rows())
-                throw std::invalid_argument("matrix.concat: row count mismatch");
+                detail::matrix_call_error<std::invalid_argument>(
+                    "matrix.concat", "row_count_mismatch",
+                    "matrix.concat: row count mismatch");
         } else {
             if (columns() != other.columns())
-                throw std::invalid_argument("matrix.concat: column count mismatch");
+                detail::matrix_call_error<std::invalid_argument>(
+                    "matrix.concat", "column_count_mismatch",
+                    "matrix.concat: column count mismatch");
         }
         GenericMatrix m = copy();
         detail::concat_impl(m.data(), other.data(), horizontal);
@@ -673,7 +799,7 @@ public:
 
     void restore(const Snapshot& snapshot) {
         if (!snapshot.identity_) {
-            throw std::runtime_error(kInvalidSnapshotError);
+            detail::matrix_snapshot_error(kInvalidSnapshotError);
         }
         Data replacement(snapshot.state_);
         snapshot.identity_->data.swap(replacement);

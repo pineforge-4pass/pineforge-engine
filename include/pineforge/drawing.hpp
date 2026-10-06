@@ -40,6 +40,7 @@
 #include <type_traits>
 #include <utility>
 #include <pineforge/na.hpp>
+#include <pineforge/run_failure.hpp>
 
 namespace pineforge {
 
@@ -91,6 +92,33 @@ struct pine_drawing_error : std::runtime_error {
 };
 
 namespace detail {
+
+// The Pine kind of a drawing record (pine_na_reference's object), known from
+// the record type at the call and never read from the script.
+template <class Rec>
+constexpr const char* drawing_object_name() noexcept {
+    if constexpr (std::is_same_v<Rec, LineRec>) return "line";
+    else if constexpr (std::is_same_v<Rec, BoxRec>) return "box";
+    else if constexpr (std::is_same_v<Rec, LabelRec>) return "label";
+    else if constexpr (std::is_same_v<Rec, LinefillRec>) return "linefill";
+    else static_assert(!std::is_same_v<Rec, Rec>, "name the drawing kind of this record");
+}
+
+// A drawing call the script got wrong, raised as the pine_drawing_error it
+// always was (the same English): a na handle is pine_na_reference, a bad
+// argument pine_invalid_argument. Out of line and cold, so the accessors that
+// check stay as small as they were.
+[[noreturn, gnu::noinline, gnu::cold]] inline void drawing_na_error(const char* object,
+                                                                   const char* what) {
+    throw coded<pine_drawing_error>(RunFailureCode::pine_na_reference,
+                                    {{"object", object}}, what);
+}
+[[noreturn, gnu::noinline, gnu::cold]] inline void drawing_argument_error(
+        const char* function, const char* argument, const char* rule, const char* what) {
+    throw coded<pine_drawing_error>(
+        RunFailureCode::pine_invalid_argument,
+        {{"function", function}, {"argument", argument}, {"rule", rule}}, what);
+}
 
 // ---- record store: a vector, or blocks shared between copies ----------------
 // The records of one DrawingArena, indexed by id. A store starts as a vector,
@@ -419,12 +447,14 @@ public:
 // Setters take the mutable form; getters the const one, which never unshares.
 template <class Rec, class Handle>
 inline Rec& pf_require_live(DrawingArena<Rec>& a, Handle h) {
-    if (h.id < 0 || h.id >= a.size()) throw pine_drawing_error("drawing access on na handle");
+    if (h.id < 0 || h.id >= a.size())
+        detail::drawing_na_error(detail::drawing_object_name<Rec>(), "drawing access on na handle");
     return a.at(h.id);
 }
 template <class Rec, class Handle>
 inline const Rec& pf_require_live(const DrawingArena<Rec>& a, Handle h) {
-    if (h.id < 0 || h.id >= a.size()) throw pine_drawing_error("drawing access on na handle");
+    if (h.id < 0 || h.id >= a.size())
+        detail::drawing_na_error(detail::drawing_object_name<Rec>(), "drawing access on na handle");
     return a.at(h.id);
 }
 
@@ -474,10 +504,11 @@ inline void pf_line_set_xloc(DrawingArena<LineRec>& a, Line h, int64_t x1, int64
 // real computation: infinite line, ignores extend; valid for xloc.bar_index (spec §3.6).
 inline double pf_line_get_price(DrawingArena<LineRec>& a, Line h, int64_t x) {
     if (h.id < 0 || h.id >= a.size())            // na/out-of-range line -> throw -> halt (like TV)
-        throw pine_drawing_error("drawing access on na handle");
+        detail::drawing_na_error("line", "drawing access on na handle");
     const LineRec& r = std::as_const(a).at(h.id); // dead record's geometry is still readable (TV-faithful)
-    if (r.xloc == XLoc::bar_time)
-        throw pine_drawing_error("line.get_price requires xloc.bar_index"); // TV errors on bar_time lines
+    if (r.xloc == XLoc::bar_time)                 // TV errors on bar_time lines
+        detail::drawing_argument_error("line.get_price", "xloc", "requires_xloc_bar_index",
+                                       "line.get_price requires xloc.bar_index");
     if (r.x1 == r.x2) return na<double>();              // degenerate vertical -> na (matches TV)
     return r.y1 + (r.y2 - r.y1) / (double)(r.x2 - r.x1) * (double)(x - r.x1); // infinite line, ignores extend
 }
