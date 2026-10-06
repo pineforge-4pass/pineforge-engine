@@ -594,6 +594,8 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
                 pending = sum(target['unsent'] for target in status.values())
                 completed = query(fatal_ledger, "SELECT count(DISTINCT event_id) FROM delivery_log WHERE phase='completed'")[0][0]
                 assert completed + pending == 4
+                if mode == 'hang':
+                    assert completed <= 1, (completed, stderr)
                 assert f'{pending} actions not sent' in stderr.splitlines()[-1]
                 if pending:
                     assert 'pineforge-live redeliver --ledger' in stderr.splitlines()[-1]

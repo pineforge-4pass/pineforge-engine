@@ -3,12 +3,66 @@ import json
 from pathlib import Path
 import tempfile
 
-from native_live_equivalence_e2e import first_difference, live_action, synthetic_prints
+from native_live_equivalence_e2e import first_difference, live_action, ordered_delivery_effects, synthetic_prints
 from native_live_tick_tape import bar_differences, file_digest, load_tick_tape, message_groups, message_hashes, parse_cost
 from native_live_tick_oracle import classify_first_divergence, first_fill, modeled_points, script_bars
 
 
 class HarnessContract(unittest.TestCase):
+    def delivery_fixture(self, order=(1, 2, 3)):
+        effects = [{"event_id": str(sequence), "delivery_id": f"key-{sequence}",
+                    "sequence": sequence} for sequence in order]
+        attempts = [{"event_id": str(sequence), "event_header": str(sequence),
+                     "idempotency_header": f"key-{sequence}", "status": 503,
+                     "body": json.dumps({"event_id": str(sequence),
+                         "delivery_id": f"key-{sequence}", "sequence": sequence})}
+                    for sequence in (1, 2, 3)]
+        attempts += [{**attempt, "status": 200} for attempt in attempts]
+        return attempts, effects
+
+    def test_explicit_redelivery_allows_an_earlier_failed_effect_after_later_effects(self):
+        attempts, effects = self.delivery_fixture((2, 1, 3))
+        redelivery = {"event_ids": ["1", "3"], "attempts_before": 3, "effects_before": 1}
+        self.assertEqual([effect["sequence"] for effect in ordered_delivery_effects(
+            attempts, effects, redelivery)], [1, 2, 3])
+        with self.assertRaisesRegex(RuntimeError, "first-pass effects"):
+            ordered_delivery_effects(attempts, effects)
+
+    def test_redelivery_does_not_allow_initial_effects_or_first_attempts_to_reorder(self):
+        attempts, effects = self.delivery_fixture((2, 1, 3))
+        redelivery = {"event_ids": ["1", "2", "3"], "attempts_before": 3, "effects_before": 2}
+        with self.assertRaisesRegex(RuntimeError, "first-pass effects"):
+            ordered_delivery_effects(attempts, effects, redelivery)
+        attempts[0], attempts[1] = attempts[1], attempts[0]
+        with self.assertRaisesRegex(RuntimeError, "first-attempt"):
+            ordered_delivery_effects(attempts, effects, redelivery)
+
+    def test_redelivery_does_not_allow_unselected_effects_to_reorder(self):
+        attempts, effects = self.delivery_fixture((2, 1, 3))
+        with self.assertRaisesRegex(RuntimeError, "non-redelivered"):
+            ordered_delivery_effects(attempts, effects,
+                {"event_ids": ["3"], "attempts_before": 3, "effects_before": 0})
+
+    def test_redelivery_still_requires_exact_bodies_keys_and_complete_unique_effects(self):
+        attempts, effects = self.delivery_fixture()
+        for field, replacement in (("body", "{}"), ("idempotency_header", "wrong")):
+            altered = [dict(attempt) for attempt in attempts]
+            altered[-1][field] = replacement
+            with self.assertRaises((RuntimeError, KeyError)):
+                ordered_delivery_effects(altered, effects)
+        for altered in (effects[:-1], effects + effects[:1]):
+            with self.assertRaises(RuntimeError):
+                ordered_delivery_effects(attempts, altered)
+
+    def test_redelivery_selection_keeps_attempt_and_effect_order(self):
+        attempts, effects = self.delivery_fixture((2, 3, 1))
+        redelivery = {"event_ids": ["1", "3"], "attempts_before": 3, "effects_before": 1}
+        with self.assertRaisesRegex(RuntimeError, "redelivery effects"):
+            ordered_delivery_effects(attempts, effects, redelivery)
+        attempts[3], attempts[5] = attempts[5], attempts[3]
+        with self.assertRaisesRegex(RuntimeError, "redelivery attempts"):
+            ordered_delivery_effects(attempts, effects, redelivery)
+
     def test_live_filter_uses_the_sealed_script_bucket(self):
         self.assertFalse(live_action(1439, 15, 1447))
         self.assertFalse(live_action(1441, 15, 1455))

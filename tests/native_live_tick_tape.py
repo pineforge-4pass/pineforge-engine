@@ -29,7 +29,7 @@ import traceback
 
 from native_live_equivalence_e2e import (
     MockReceiver, Strategy, TradeTick, action_key, chart_bar_array, chart_rows, compile_library,
-    first_difference, read_rows, write_json,
+    first_difference, ordered_delivery_effects, read_rows, write_json,
 )
 from native_live_tick_oracle import classify_first_divergence
 
@@ -365,13 +365,15 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
                 if completed.returncode != 0:
                     raise RuntimeError("explicit HTTP-failure redelivery did not complete")
                 costs.append(parse_cost(cost_path))
+        redelivery = receiver.redelivery
         attempts, effects = receiver.finish(output)
         receiver_errors = list(receiver.errors)
         receiver = None
         if receiver_errors:
             raise RuntimeError("webhook receiver errors: " + json.dumps(receiver_errors))
         expected = [action_key(action) for action in reference["actions"]]
-        result["action_difference"] = first_difference(expected, [action_key(action) for action in effects])
+        aligned_effects = ordered_delivery_effects(attempts, effects, redelivery)
+        result["action_difference"] = first_difference(expected, [action_key(action) for action in aligned_effects])
         with sqlite3.connect(output / "orders.sqlite3") as ledger:
             actual_hashes = [record[0] for record in ledger.execute("SELECT state_hash FROM inputs ORDER BY input_index")]
             pending = ledger.execute("SELECT COUNT(*) FROM events WHERE acknowledged=0").fetchone()[0]
@@ -379,10 +381,6 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
         result.update(actions=len(effects), expected_actions=len(expected), attempts=len(attempts),
             committed_inputs=len(actual_hashes), pending_events=pending,
             closed_trades=len(reference["state"]["closed_trades"]), equity_points=len(reference["state"]["equity_curve"]))
-        if [effect["sequence"] for effect in effects] != list(range(1, len(effects) + 1)):
-            raise RuntimeError("webhook effects are reordered, missing or duplicated")
-        if len({effect["event_id"] for effect in effects}) != len(effects):
-            raise RuntimeError("duplicate webhook effect")
         if fail_first:
             rejected = Counter(attempt["event_id"] for attempt in attempts if attempt["status"] == 503)
             if set(rejected) != {effect["event_id"] for effect in effects} or any(count != 1 for count in rejected.values()):

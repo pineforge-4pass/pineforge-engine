@@ -410,6 +410,64 @@ class Strategy:
             self.library.strategy_free(handle)
 
 
+def ordered_delivery_effects(attempts, effects, redelivery=None):
+    sequences = [effect["sequence"] for effect in effects]
+    if sorted(sequences) != list(range(1, len(effects) + 1)):
+        raise RuntimeError("effect sequence gap or duplication")
+    if len({effect["event_id"] for effect in effects}) != len(effects):
+        raise RuntimeError("duplicate logical effect")
+    bodies = {}
+    first_attempts = []
+    for attempt in attempts:
+        payload = json.loads(attempt["body"])
+        event_id = attempt["event_id"]
+        if (payload["event_id"] != event_id or attempt["event_header"] != event_id
+                or attempt["idempotency_header"] != payload.get("delivery_id", event_id)):
+            raise RuntimeError("idempotency header/payload mismatch")
+        if event_id not in bodies:
+            first_attempts.append(payload["sequence"])
+            bodies[event_id] = attempt["body"]
+        elif bodies[event_id] != attempt["body"]:
+            raise RuntimeError("retry body changed")
+    if first_attempts != list(range(1, len(effects) + 1)):
+        raise RuntimeError("first-attempt deliveries are reordered or incomplete")
+    for effect in effects:
+        if effect != json.loads(bodies[effect["event_id"]]):
+            raise RuntimeError("effect body differs from its delivery")
+    if redelivery is None:
+        if sequences != sorted(sequences):
+            raise RuntimeError("first-pass effects are reordered")
+        return effects
+    boundary = redelivery["effects_before"]
+    if not 0 <= boundary <= len(effects):
+        raise RuntimeError("invalid explicit-redelivery boundary")
+    initial = sequences[:boundary]
+    if initial != sorted(initial):
+        raise RuntimeError("first-pass effects are reordered")
+    selected = set(redelivery["event_ids"])
+    if not selected <= set(bodies):
+        raise RuntimeError("explicit redelivery selected an unknown event")
+    redelivery_sequences = [json.loads(attempt["body"])["sequence"]
+                            for attempt in attempts[redelivery["attempts_before"]:]
+                            if attempt["event_id"] in selected]
+    if redelivery_sequences != sorted(redelivery_sequences):
+        raise RuntimeError("explicit redelivery attempts are reordered")
+    redelivery_effects = [effect["sequence"] for effect in effects[boundary:]
+                         if effect["event_id"] in selected]
+    if redelivery_effects != sorted(redelivery_effects):
+        raise RuntimeError("explicit redelivery effects are reordered")
+    first_pass = [effect["sequence"] for index, effect in enumerate(effects)
+                  if index < boundary or effect["event_id"] not in selected]
+    if first_pass != sorted(first_pass):
+        raise RuntimeError("non-redelivered effects are reordered")
+    for effect in effects[boundary:]:
+        if effect["event_id"] in selected and not any(
+                attempt["event_id"] == effect["event_id"] and attempt["status"] == 200
+                for attempt in attempts[redelivery["attempts_before"]:]):
+            raise RuntimeError("explicit redelivery effect has no successful attempt")
+    return sorted(effects, key=lambda effect: effect["sequence"])
+
+
 class MockReceiver:
     def __init__(self, output, fail_first=False, restart_action=0):
         self.fail_first = fail_first
@@ -418,6 +476,7 @@ class MockReceiver:
         self.release_ack = threading.Event()
         self.lock = threading.Lock()
         self.errors = []
+        self.redelivery = None
         self.database = sqlite3.connect(output / "receiver.sqlite3", check_same_thread=False)
         self.database.execute("PRAGMA journal_mode=WAL")
         self.database.execute("PRAGMA synchronous=FULL")
@@ -487,11 +546,19 @@ class MockReceiver:
         self.database.close()
         write_json(output / "attempts.json", attempts)
         write_json(output / "effects.json", effects)
+        if self.redelivery is not None:
+            write_json(output / "redelivery.json", self.redelivery)
         return attempts, effects
 
     def redelivery_command(self, runner, ledger):
         with sqlite3.connect(ledger) as database:
             identity = database.execute("SELECT identity FROM metadata WHERE singleton=1").fetchone()[0]
+            selected = [row[0] for row in database.execute(
+                "SELECT e.event_id FROM events e JOIN event_routes r USING(ordinal) WHERE r.target_id='default'")]
+        with self.lock:
+            self.redelivery = {"event_ids": selected,
+                "attempts_before": self.database.execute("SELECT COUNT(*) FROM attempts").fetchone()[0],
+                "effects_before": self.database.execute("SELECT COUNT(*) FROM effects").fetchone()[0]}
         return [str(runner), "redeliver", "--ledger", str(ledger),
                 "--deployment", identity, "--target", "default"]
 
@@ -596,23 +663,20 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
                 receiver.release_ack.set()
                 process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
             result["runner_returncode"] = process.wait(timeout=600)
+        redelivery = receiver.redelivery
         attempts, effects = receiver.finish(output)
         errors = receiver.errors
         receiver = None
         if errors:
             raise RuntimeError("receiver failure: " + errors[0])
-        actual = [action_key(row) for row in effects]
+        aligned_effects = ordered_delivery_effects(attempts, effects, redelivery)
+        actual = [action_key(row) for row in aligned_effects]
         result["action_difference"] = first_difference(expected, actual)
         result["actions"] = len(effects)
         result["expected_actions"] = len(expected)
         result["attempts"] = len(attempts)
         result["closed_trades"] = len(modeled["state"]["closed_trades"])
         result["equity_points"] = len(modeled["state"]["equity_curve"])
-        sequences = [row["sequence"] for row in effects]
-        if sequences != list(range(1, len(effects) + 1)):
-            raise RuntimeError("effect sequence gap/reordering")
-        if len({row["event_id"] for row in effects}) != len(effects):
-            raise RuntimeError("duplicate logical effect")
         if fail_first:
             rejected = Counter(row["event_id"] for row in attempts if row["status"] == 503)
             if set(rejected) != {row["event_id"] for row in effects} or any(count != 1 for count in rejected.values()):
