@@ -66,6 +66,7 @@
 #include <limits>
 #include <string>
 #include <vector>
+#include "retirement_cursor_fragments.hpp"
 
 namespace {
 using namespace pineforge;
@@ -94,6 +95,60 @@ int checks = 0;
 constexpr double kNa = std::numeric_limits<double>::quiet_NaN();
 constexpr std::int64_t T0 = 1736121600000LL;
 
+struct CountedOrigins {
+    const std::vector<std::uint64_t>& values;
+    mutable std::size_t reads = 0;
+    mutable std::size_t advances = 0;
+    struct Cursor {
+        const CountedOrigins* owner;
+        std::size_t offset;
+        bool operator!=(const Cursor& other) const { return offset != other.offset; }
+        std::uint64_t operator*() const {
+            ++owner->reads;
+            return owner->values.at(offset);
+        }
+        Cursor& operator++() {
+            ++owner->advances;
+            ++offset;
+            return *this;
+        }
+    };
+    Cursor begin() const { return {this, 0}; }
+    Cursor end() const { return {this, values.size()}; }
+};
+
+void retirement_cursor_checks(const source::PlacementTable& table) {
+    std::vector<std::uint64_t> visited;
+    table.visit_rows([&](std::uint64_t incarnation, const auto&) {
+        CHECK(visited.empty() || visited.back() < incarnation);
+        visited.push_back(incarnation);
+        return false;
+    });
+    for (const auto& origins : std::vector<std::vector<std::uint64_t>>{
+            {}, {1}, {17, 65, 128}, {2, 18, 66, 90, 129},
+            {1, 2, 16, 17, 18, 64, 65, 66, 88, 89, 90, 127, 128, 129}}) {
+        for (std::size_t skip = 0; skip <= 4; ++skip) {
+            CountedOrigins prepass{origins}, candidates{origins}, roots{origins};
+            auto prepass_cursor = prepass.begin();
+            auto candidate_cursor = candidates.begin();
+            auto root_cursor = roots.begin();
+            std::size_t queried = 0;
+            for (const auto incarnation : visited) {
+                if (skip != 0 && incarnation % skip == 0) continue;
+                const bool expected = std::binary_search(origins.begin(), origins.end(), incarnation);
+                CHECK(prepass_membership(prepass_cursor, prepass, incarnation) == !expected);
+                CHECK(candidate_membership(candidate_cursor, candidates, incarnation) == expected);
+                CHECK(root_membership(root_cursor, roots, incarnation) == !expected);
+                ++queried;
+            }
+            for (const auto* counted : {&prepass, &candidates, &roots}) {
+                CHECK(counted->advances <= origins.size());
+                CHECK(counted->reads <= 2 * queried + origins.size());
+            }
+        }
+    }
+}
+
 void placement_visit_checks() {
     source::PlacementTable table;
     const auto compare = [&] {
@@ -104,10 +159,12 @@ void placement_visit_checks() {
         rows.visit_rows([&](std::uint64_t incarnation, const auto& snapshot) {
             static_assert(std::is_const_v<std::remove_reference_t<decltype(snapshot)>>);
             CHECK(snapshot.command_sequence == incarnation);
+            CHECK(visited.empty() || visited.back().first < incarnation);
             visited.emplace_back(incarnation, &snapshot);
             return false;
         });
         CHECK(visited == expected);
+        retirement_cursor_checks(rows);
         for (std::size_t limit = 1; limit <= expected.size(); ++limit) {
             visited.clear();
             rows.visit_rows([&](std::uint64_t incarnation, const auto& snapshot) {
@@ -1179,6 +1236,11 @@ int margin_revival_main() {
 
 int main(int argc, char** argv) {
 #ifndef PINEFORGE_V19E_HARVEST
+    if (argc > 1 && std::string(argv[1]) == "--retirement-cursors") {
+        placement_visit_checks();
+        std::printf("retirement cursors: %d checks, %d failures\n", checks, failures);
+        return failures == 0 ? 0 : 1;
+    }
     if (argc > 1 && std::string(argv[1]) == "--reissue-binding") return reissue_binding_main();
     if (argc > 1 && std::string(argv[1]) == "--margin-revival") return margin_revival_main();
 #else
