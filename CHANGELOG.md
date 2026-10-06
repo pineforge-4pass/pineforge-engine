@@ -134,7 +134,9 @@ version number follows semantic versioning over the surfaces the
 - **Redeploy a deployment that ran a coarser script on one-minute input.** An
   explicit `--input-tf 1` with a coarser script is refused before a ledger
   exists, and a ledger an earlier runner wrote for that shape is refused on
-  resume without a byte changed. Stop the old deployment, resolve or
+  resume without modifying ledger database content in the read-only legacy
+  identity check. This does not promise unchanged SQLite sidecar files.
+  Stop the old deployment, resolve or
   redeliver its unsent actions, reconcile its open position with the receiver
   or broker (the runner never closes or migrates one), keep the old ledger for
   audit, then start a new ledger with chart-timeframe warmup and feed and no
@@ -142,14 +144,16 @@ version number follows semantic versioning over the surfaces the
   steps.
 - **Some calendars are refused until calendar-aware chart labels ship.**
   Daily, weekly and multi-day charts are refused in both modes on a calendar
-  whose clock changes (daylight saving, or a standard-offset change) and, for
-  a multi-day chart, on a weekday-masked calendar. In bars mode an intraday
+  with daylight-saving transitions from warmup onward; that detection has no
+  three-year bound. Standard-offset changes are checked by the tiling scan
+  only within the warmup plus 1,098 days after its last bar (about three years).
+  Multi-day charts are also refused on a weekday-masked calendar. In bars mode an intraday
   period that does not tile the session's trading days is refused too: 7
   minutes on UTC 24x7; 45, 120 and 240 minutes on New York calendars (60
   works); and a split session whose reopen is off the chart grid (60 minutes
   on `0930-1130,1300-1500`; 30 works). Some split-session charts are refused
-  conservatively. Startup checks the whole warmup and three years past its
-  last bar, names the reason and creates no ledger.
+  conservatively. The tiling scan stays anchored at the original warmup end
+  on restart. Startup names the refusal reason and creates no new ledger.
 - **A run could exit 0 with one webhook still pending; fixed.** The delivery
   worker decided that nothing was left from a ledger scan taken before it
   read the end-of-input request, so an action committed between the two

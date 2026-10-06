@@ -349,9 +349,10 @@ prices is not aggregation. `tools/aggregate_feed.cpp` is a UTC/24x7 corpus tool,
 not a session-aware live feed adapter. In bars mode, chart periods must fit
 the configured trading days, including each reopen after a session break.
 For `0930-1130,1300-1500`, 60-minute bars are refused while 30-minute bars
-cross the lunch reopen correctly. Some split-session charts are refused conservatively until calendar-aware chart labels ship. Startup checks the whole warmup and at
-least three years after its last bar, including future clock changes,
-before creating a ledger.
+cross the lunch reopen correctly. Some split-session charts are refused
+conservatively until calendar-aware chart labels ship. Startup checks the whole
+warmup and 1,098 days after its last bar (about three years), including clock
+changes within that window, before creating a ledger.
 For 24x7 UTC, use a period that divides 1440 minutes (240 works; 7 does not).
 For New York calendars, use a period that divides 60 minutes (60 works;
 45, 120 and 240 do not), including 17:00-cutoff and regular-hours sessions.
@@ -362,7 +363,10 @@ intraday ticks-mode paths remain admitted where they pass the engine's
 calendar aggregation. These restrictions lift when the engine supports
 the corresponding session-aware chart-bar delivery. Daily/weekly chart delivery
 is refused in **both bars and ticks modes** on calendars with daylight-saving
-transitions from warmup onward; standard-offset changes can also make a chart unsupported.
+transitions from warmup onward, without the tiling scan's time bound.
+Standard-offset changes can also make a chart unsupported when they fall
+within the checked warmup-plus-1,098-day window, which remains anchored at
+the original warmup end on restart.
 The daylight-saving refusal says "daily/weekly chart delivery on a
 daylight-saving calendar is not supported yet". UTC daily/weekly charts
 are supported; monthly stream input remains unsupported. The configured
@@ -399,13 +403,24 @@ One-minute Pine deployments retain their deployment identity and existing
 session-close handling. Existing input-1/coarser-script ledgers are refused
 instead of silently migrated. Stop the old deployment, inspect its delivery
 status, and resolve or deliberately redeliver failed/unsent actions using
-the old ledger and deployment identity. Keep that ledger for audit.
+the old ledger and deployment identity. For phase-A ledgers that have never
+been resumed by a routing-aware runner, drain and reconcile using the previous
+runner binary before moving to chart input. The new runner's `status` and
+`actions` commands can inspect these ledgers, but its `run` refuses the obsolete
+input-1/coarser-script shape; a new-runner `run`/`redeliver` cycle cannot prepare
+them for redelivery. Keep the old ledger for audit.
 Reconcile open positions with the receiver or broker before enabling a
 replacement deployment: the runner does not close, migrate or reconcile
 external positions. A fresh ledger transfers neither old unsent actions nor
 open positions. Prepare chart-spaced warmup and feeds, then redeploy with a
-**new ledger** and input equal to script. Do not restore the obsolete input-1
-configuration or change the session/timezone to bypass calendar admission.
+**new ledger** and input equal to script. Restoring the obsolete input-1
+configuration does not make it runnable with the new binary. Do not change
+the session/timezone to bypass calendar admission.
+
+An accidental settings or routing identity mismatch in an otherwise compatible
+deployment can be resolved by restoring its original configuration. The
+input-1/coarser-clock upgrade specifically requires the reconciliation and new
+chart-input ledger above.
 
 Keep symbol metadata consistent with the corresponding backtest. `--syminfo`
 supports `type`, `currency`, `basecurrency`, `description`, `volumetype`,
@@ -589,6 +604,13 @@ action payload before sending anything. Strategy private members are not
 serialized: hand-written strategies must be deterministic and avoid external
 I/O/random state influencing decisions. The hash covers observable engine
 and stream state, not arbitrary C++ private variables.
+
+Replay fails closed if changed timezone rules or session configuration make
+recorded input incompatible with the calendar. A cadence or input-gap refusal
+can indicate this change, even when the feed bytes are unchanged. Restore the
+original compatible environment and configuration, or reconcile the old
+deployment and redeploy with a new ledger; do not relabel recorded bars to
+bypass the refusal.
 
 Files and HTTP snapshots normally repeat the full normalized event prefix;
 matching records are skipped, changed records are refused. `--from-input N`
