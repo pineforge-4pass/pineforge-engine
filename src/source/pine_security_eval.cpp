@@ -1033,6 +1033,58 @@ std::int64_t source::PineStrategyHost::find_symbol_feed(const std::string& key,
     return -1;
 }
 
+// AR-R4: an applied configure holds the feeds' bytes in the kernel's run spec
+// (prepare_native_begin), which keeps them, in this host's order, from that
+// configure to the next one: the spec is moved, never rewritten, from Ready to
+// Running to Completed, and a failure carries it into Failed.
+const NativeInstrumentFeed& source::PineStrategyHost::installed_symbol_feed(
+        std::size_t i) const {
+    if (!symbol_feeds_lent_) return symbol_feeds_[i];
+    const NativeRunSpec* spec = native_state().spec;
+    if (spec == nullptr || i >= spec->instrument_feeds.size())
+        throw std::logic_error("request data: the run spec no longer holds the symbol feeds");
+    return spec->instrument_feeds[i];
+}
+
+void source::PineStrategyHost::restore_symbol_feeds() {
+    if (!symbol_feeds_lent_) return;
+    const NativeRunSpec* spec = native_state().spec;
+    if (spec == nullptr || spec->instrument_feeds.size() != symbol_feeds_.size())
+        throw std::logic_error("request data: the run spec no longer holds the symbol feeds");
+    // Every entry is the one lent at that index -- its key and its column
+    // names -- before a byte is copied back, so a mismatch changes nothing.
+    for (std::size_t i = 0; i < symbol_feeds_.size(); ++i) {
+        const NativeInstrumentFeed& held = spec->instrument_feeds[i];
+        const NativeInstrumentFeed& feed = symbol_feeds_[i];
+        bool same = held.instrument == feed.instrument && held.tf == feed.tf
+            && held.columns.size() == feed.columns.size();
+        for (std::size_t c = 0; same && c < feed.columns.size(); ++c)
+            same = held.columns[c].name == feed.columns[c].name;
+        if (!same)
+            throw std::logic_error("request data: the run spec holds other symbol feeds");
+    }
+    for (std::size_t i = 0; i < symbol_feeds_.size(); ++i) {
+        const NativeInstrumentFeed& held = spec->instrument_feeds[i];
+        NativeInstrumentFeed& feed = symbol_feeds_[i];
+        feed.bars = held.bars;
+        feed.close_ms = held.close_ms;
+        for (std::size_t c = 0; c < feed.columns.size(); ++c)
+            feed.columns[c].values = held.columns[c].values;
+    }
+    symbol_feeds_lent_ = false;
+}
+
+// A door's restore: the reason it failed, empty when the store holds its
+// bytes, so the door refuses with that text rather than with none.
+std::string source::PineStrategyHost::restore_symbol_feeds_reason() {
+    try {
+        restore_symbol_feeds();
+    } catch (const std::exception& error) {
+        return std::string("request data could not be restored: ") + error.what();
+    }
+    return {};
+}
+
 void source::PineStrategyHost::prepare_foreign_security_sites(
         std::vector<NativeTimeframeSubscription>& declared) {
     foreign_security_series_.assign(declared.size(), -1);
@@ -1195,7 +1247,7 @@ void source::PineStrategyHost::read_ahead_foreign_security_sites(const Bar& char
                            : is_na(chart_close)) {
             continue;
         }
-        const NativeInstrumentFeed& feed = symbol_feeds_[site.feed];
+        const NativeInstrumentFeed& feed = installed_symbol_feed(site.feed);
         while (static_cast<std::size_t>(site.delivered) < feed.bars.size()) {
             const auto at = static_cast<std::size_t>(site.delivered);
             const bool visible = site.lookahead ? feed.bars[at].timestamp <= chart_bar.timestamp
@@ -1221,7 +1273,7 @@ double source::PineStrategyHost::security_column_value(int sec_id,
     const ForeignSecuritySite& site = found->second;
     if (site.subscription < 0 || site.delivered <= 0 || site.feed >= symbol_feeds_.size())
         return std::numeric_limits<double>::quiet_NaN();
-    const NativeInstrumentFeed& feed = symbol_feeds_[site.feed];
+    const NativeInstrumentFeed& feed = installed_symbol_feed(site.feed);
     const auto at = static_cast<std::size_t>(site.delivered - 1);
     for (const auto& column : feed.columns) {
         if (column.name != name) continue;
@@ -1266,8 +1318,10 @@ bool source::PineStrategyHost::set_symbol_feed(const std::string& key,
         return refuse("invalid bar array");
     const std::int64_t existing = find_symbol_feed(key, tf);
     // n == 0 is a symbol with no bars over the run (a feed file with a header
-    // only): installed, so its sites read na rather than fail as unfed.
-    NativeInstrumentFeed feed;
+    // only): installed, so its sites read na rather than fail as unfed. The
+    // feed is built inside the one-feed list it is judged in, then moved out.
+    std::vector<NativeInstrumentFeed> judged_feeds(1);
+    NativeInstrumentFeed& feed = judged_feeds.front();
     feed.instrument = key;
     feed.tf = tf;
     if (n > 0) {
@@ -1276,12 +1330,15 @@ bool source::PineStrategyHost::set_symbol_feed(const std::string& key,
     }
     // The kernel's own judgement of the feed, so a refusal names its field
     // here rather than at the next begin.
-    const auto judged = validate_native_instrument_feeds({feed});
+    const auto judged = validate_native_instrument_feeds(judged_feeds);
     if (!judged) {
         return refuse("feed refused (NativeRunSpecError "
                       + std::to_string(static_cast<int>(judged.error)) + ", field "
                       + std::to_string(static_cast<int>(judged.field)) + ")");
     }
+    // Every refusal above reads keys only; a store whose bytes are lent
+    // (restore_symbol_feeds) gets them back before one of its feeds changes.
+    if (const std::string why = restore_symbol_feeds_reason(); !why.empty()) return refuse(why);
     if (existing >= 0) {
         symbol_feeds_[static_cast<std::size_t>(existing)] = std::move(feed);
     } else {
@@ -1308,6 +1365,9 @@ bool source::PineStrategyHost::set_symbol_feed_column(const std::string& key,
                       + timeframe + "'");
     }
     if (name.empty()) return refuse("empty column name");
+    // The refusals above read keys only; the count check below reads the
+    // feed's bars, so a lent store gets its bytes back first.
+    if (const std::string why = restore_symbol_feeds_reason(); !why.empty()) return refuse(why);
     NativeInstrumentFeed& feed = symbol_feeds_[static_cast<std::size_t>(found)];
     if (n < 0 || static_cast<std::size_t>(n) != feed.bars.size() || (n > 0 && values == nullptr))
         return refuse("column '" + name + "' has " + std::to_string(n) + " values for "
@@ -1372,6 +1432,9 @@ bool source::PineStrategyHost::set_symbol_facts(const std::string& key,
     } else {
         return refuse("unknown field '" + field + "'");
     }
+    // The digest below reads the feeds' sizes: a lent store gets its bytes
+    // back first, after every refusal.
+    if (const std::string why = restore_symbol_feeds_reason(); !why.empty()) return refuse(why);
     symbol_facts_[key] = std::move(candidate);
     refresh_symbol_data_digest();
     last_error_.clear();
@@ -1402,6 +1465,9 @@ bool source::PineStrategyHost::set_recorded_series(const std::string& key,
         series.open_ms.assign(chart_open_ms, chart_open_ms + n);
         series.values.assign(values, values + n);
     }
+    // As in set_symbol_facts: the bytes back before the digest, after every
+    // refusal.
+    if (const std::string why = restore_symbol_feeds_reason(); !why.empty()) return refuse(why);
     recorded_series_[key] = std::move(series);
     refresh_symbol_data_digest();
     last_error_.clear();

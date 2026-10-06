@@ -102,6 +102,10 @@ public:
     bool stream_end(BacktestEngine& engine, bool finalize_partial_input_bar) override;
 
     NativeSetupResult configure(BacktestEngine& engine, const NativeRunSpec& spec);
+    // The same configure on a spec the caller gives up: it is judged in
+    // place and moved into Ready only when Applied, so nothing is copied and
+    // a refusal leaves the caller its own (normalized) object.
+    NativeSetupResult configure(BacktestEngine& engine, NativeRunSpec&& spec);
     NativeFxCurveSetupResult configure_fx_curve(const NativeFxCurve& curve);
     // One named result, so the view is built in the caller's slot.
     NativeStateView view() const {
@@ -958,6 +962,8 @@ private:
     std::int64_t day_label_origin(std::int64_t timestamp) const;
     bool validate_undetected_begin(BacktestEngine& engine, const NativeBeginArgs& args);
     bool apply_spec(BacktestEngine& engine, const NativeRunSpec& spec);
+    NativeSetupResult configure_spec(BacktestEngine& engine, const NativeRunSpec* borrowed,
+                                     NativeRunSpec* owned);
     bool projection_ok(const BacktestEngine& engine) const;
     // The string equality projection_ok compares with (the .cpp's same_text),
     // for tests/test_native_projection_compare.cpp to hold against
@@ -1532,7 +1538,6 @@ private:
     native_calendar::Timeframe script_tf_{};
     std::optional<native_calendar::Timeframe> intrabar_tf_;
     native_calendar::TimeframeCompatibility pairing_{};
-    NativeRunSpec applied_{};
     std::optional<NativeFxCurve> staged_fx_curve_;
     bool staged_ingress_fx_ = false;
     bool in_callback_ = false;

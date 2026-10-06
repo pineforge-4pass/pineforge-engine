@@ -1578,6 +1578,11 @@ def main() -> int:
 
         # --- Body run: one configured run for trades / metrics / diagnostics. ---
         state = _make_state()
+        # The body state is the last one installed and the engine copied the
+        # feeds' arrays: release them before the run (the records stay).
+        for sym in symbol_feeds or ():
+            for feed in sym["feeds"]:
+                feed["bars"] = feed["close_ms"] = None
     except (SyminfoError, SymbolFeedsError) as e:
         # A rejected --syminfo or --symbol-feeds: the structured failure, before
         # any stdout.

@@ -22,7 +22,7 @@ SOURCE_CLASSES = {
     "include/pineforge/source/pine_language_state.hpp": ("PineLanguageState",),
 }
 NESTED_STRUCTS = {
-    "PineStrategyConfig", "StrategyOverrides", "StagedConfiguration",
+    "PineStrategyConfig", "StrategyOverrides", "StagedConfiguration", "StagedInstrumentFeed",
     "PineExitLevels", "PineCancellationReceipt", "PineSizingSnapshot",
     "PlacementSnapshot", "ShortSeedPlan", "PendingShortSeedPlan",
     "DroppedCloseReceipt", "OpenEntryFeeFact", "SourceDayLedger",

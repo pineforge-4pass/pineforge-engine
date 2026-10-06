@@ -88,6 +88,16 @@ struct StrategyOverrides {
     int close_entries_rule = -1;
 };
 
+// One installed feed of another symbol as the adapter folds it (hash_state):
+// its key and its sizes. Its bars are never staged (AR-R4): the host hands
+// them to the projected spec for its configure.
+struct StagedInstrumentFeed {
+    std::string instrument{};
+    std::string tf{};
+    std::uint64_t bars = 0;
+    std::uint64_t columns = 0;
+};
+
 // Value snapshot supplied by PineStrategyHost at the begin boundary. It owns
 // every source-side value the adapter needs to form a run spec; none of these
 // values are retained by generic native code.
@@ -100,8 +110,8 @@ struct StagedConfiguration {
     std::vector<double> account_fx_per_quote{};
     std::optional<double> quantity_grid{};
     // Other symbols' feeds the host installed for its request sites (lane
-    // XSYM-D); project() hands them to the kernel as its instrument feeds.
-    std::vector<NativeInstrumentFeed> instrument_feeds{};
+    // XSYM-D), by key and size; the host lends their bars to the spec.
+    std::vector<StagedInstrumentFeed> instrument_feeds{};
 };
 
 enum class PineOrderFamily : std::uint8_t {
@@ -1479,9 +1489,12 @@ public:
     void set_staged_configuration(const StagedConfiguration& staged);
     void set_begin_mode(bool is_stream, bool bar_magnifier = false) noexcept;
 
+    // `instrument_feeds`, when given, is moved into the spec's instrument
+    // feeds (and back into it if the projection throws).
     NativeRunSpec project(const PineStrategyConfig&, const StagedConfiguration&,
                           const NativeBeginArgs&,
-                          NativePathOrder path_order = NativePathOrder::Auto) const;
+                          NativePathOrder path_order = NativePathOrder::Auto,
+                          std::vector<NativeInstrumentFeed>* instrument_feeds = nullptr) const;
 
     void entry(const SourceId& id, bool is_long,
                double limit_price = std::numeric_limits<double>::quiet_NaN(),

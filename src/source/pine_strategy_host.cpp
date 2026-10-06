@@ -81,6 +81,39 @@ void validate_source_begin_bars(const NativeBeginArgs& args) {
     }
 }
 
+// AR-R4: each installed feed lent to a projected spec. The lent entry holds
+// the bars, closes and column values; the store keeps the instrument, tf and
+// column names. Every allocation happens before the first byte moves, and the
+// moves are swaps, so a throw leaves the store whole.
+std::vector<NativeInstrumentFeed> lend_feed_bytes(std::vector<NativeInstrumentFeed>& store) {
+    std::vector<NativeInstrumentFeed> lent(store.size());
+    for (std::size_t i = 0; i < store.size(); ++i) {
+        lent[i].instrument = store[i].instrument;
+        lent[i].tf = store[i].tf;
+        lent[i].columns.resize(store[i].columns.size());
+        for (std::size_t c = 0; c < store[i].columns.size(); ++c)
+            lent[i].columns[c].name = store[i].columns[c].name;
+    }
+    for (std::size_t i = 0; i < store.size(); ++i) {
+        lent[i].bars.swap(store[i].bars);
+        lent[i].close_ms.swap(store[i].close_ms);
+        for (std::size_t c = 0; c < store[i].columns.size(); ++c)
+            lent[i].columns[c].values.swap(store[i].columns[c].values);
+    }
+    return lent;
+}
+
+// The bytes of a configure that did not apply go back where they came from.
+void return_feed_bytes(std::vector<NativeInstrumentFeed>& store,
+                       std::vector<NativeInstrumentFeed>& lent) noexcept {
+    for (std::size_t i = 0; i < store.size() && i < lent.size(); ++i) {
+        store[i].bars.swap(lent[i].bars);
+        store[i].close_ms.swap(lent[i].close_ms);
+        for (std::size_t c = 0; c < store[i].columns.size() && c < lent[i].columns.size(); ++c)
+            store[i].columns[c].values.swap(lent[i].columns[c].values);
+    }
+}
+
 }  // namespace
 
 source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
@@ -162,7 +195,12 @@ StagedConfiguration source::PineStrategyHost::staged_configuration() const {
     staged.account_fx_effective_from_ms = account_currency_fx_timestamps_;
     staged.account_fx_per_quote = account_currency_fx_rates_;
     if (std::isfinite(qty_step_) && qty_step_ > 0.0) staged.quantity_grid = qty_step_;
-    staged.instrument_feeds = symbol_feeds_;
+    staged.instrument_feeds.reserve(symbol_feeds_.size());
+    for (std::size_t i = 0; i < symbol_feeds_.size(); ++i) {
+        const NativeInstrumentFeed& feed = installed_symbol_feed(i);
+        staged.instrument_feeds.push_back(
+            {feed.instrument, feed.tf, feed.bars.size(), feed.columns.size()});
+    }
     return staged;
 }
 
@@ -253,9 +291,34 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
         ? NativePathOrder::HighFirst
         : (path_order_mode_ == 2 ? NativePathOrder::LowFirst
                                  : NativePathOrder::Auto);
-    const NativeRunSpec spec = adapter_.project(effective, staged, args, path_order);
+    // The installed feeds' bytes move into the projected spec (project()
+    // moves them in, and back out if it throws), which the kernel keeps as its
+    // own when it applies it: one copy, read through installed_symbol_feed()
+    // while it is lent (AR-R4). A refusal, or an exception, hands them back.
+    // Nothing of this host or of the script runs inside configure.
+    restore_symbol_feeds();
+    std::vector<NativeInstrumentFeed> lent = lend_feed_bytes(symbol_feeds_);
+    NativeRunSpec spec = [&] {
+        try {
+            return adapter_.project(effective, staged, args, path_order, &lent);
+        } catch (...) {
+            return_feed_bytes(symbol_feeds_, lent);
+            throw;
+        }
+    }();
     const bool failed_before = native_state().kind == NativeLifecycleKind::Failed;
-    const auto setup = configure_native(spec);
+    NativeSetupResult setup;
+    try {
+        setup = NativeExecutionConsumer::bound(*this).configure(*this, std::move(spec));
+    } catch (...) {
+        return_feed_bytes(symbol_feeds_, spec.instrument_feeds);
+        throw;
+    }
+    if (setup.status == NativeSetupStatus::Applied) {
+        symbol_feeds_lent_ = !symbol_feeds_.empty();
+    } else {
+        return_feed_bytes(symbol_feeds_, spec.instrument_feeds);
+    }
     if (setup.status != NativeSetupStatus::Applied) {
         if (failed_before) {
             try { prepare_script_run(nullptr, 0, false); }
