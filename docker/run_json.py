@@ -87,9 +87,18 @@ symbols' bars for request.security (see load_symbol_feeds):
                                    "source_values_sha256": "<hex>"}}}}}
 Without --symbol-feeds (or with an index naming no symbol) the key is absent.
 
-A run error, a --syminfo the harness rejects (see apply_syminfo) or a
---symbol-feeds it cannot install (see load_symbol_feeds) prints one line
-{"engine": "pineforge", "error": "<text>"} instead, exit status 1.
+A failed run prints one line instead, exit status 1 (2 for a command line
+argparse refuses):
+    {"engine":"pineforge","error":"<text>","code":"<code>","args":{...}}
+That is the run's own error, a --syminfo the harness rejects (see
+apply_syminfo), a --symbol-feeds it cannot install (see load_symbol_feeds), a
+setting the strategy refuses, or any other failure of the harness (see
+failure_line and main). "code" is a stable code of the closed vocabulary
+docker/run_failure_codes.json and "args" its typed arguments. The engine's code
+is read only from strategy_get_last_error_code and its args from
+strategy_get_last_error_args; for a run error from a library without those
+getters the line has no "code" and no "args" and is byte-identical to the
+earlier {"engine":"pineforge","error":"<text>"} line.
 
 NaN convention: any metric with an empty/zero denominator is null (JSON has no
 NaN); a real computed 0 stays 0. See the report-schema + metrics reference docs
@@ -103,12 +112,14 @@ import calendar
 import csv
 import ctypes
 import hashlib
+import io
 import json
 import math
 import re
 import struct
 import sys
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -605,6 +616,150 @@ def build_fingerprint(provenance: dict) -> dict:
 # <<< fingerprint helpers
 
 
+# --- The failure line -------------------------------------------------------
+#
+# Every failure prints ONE line on stdout, written by failure_line:
+#     {"engine":"pineforge","error":"<text>","code":"<code>","args":{...}}
+# "engine" and "error" lead, so the line still starts with
+# {"engine":"pineforge","error":" and "error" is the English text, unchanged
+# wherever one existed before codes. "code" is a code of the closed vocabulary
+# docker/run_failure_codes.json and "args" its typed arguments. The code is the
+# engine's (strategy_get_last_error_code / _args), or run_json's own for a
+# failure it finds itself (RunFailure): never read from any text. A run error
+# from a library without the code getter prints neither key, so that line is
+# the earlier one byte for byte (the app keeps its text rules for it).
+#
+# Caps keep the line well inside the 64 KiB the app reads: the text is cut at
+# 16 KiB and each string argument at 1 KiB of UTF-8, on a character boundary;
+# a line still over 60 KiB (only text that JSON escapes heavily, control
+# characters are six bytes each) has its text cut further until it fits.
+
+ERROR_TEXT_MAX = 16 * 1024
+ERROR_ARG_TEXT_MAX = 1024
+ERROR_LINE_MAX = 60 * 1024
+_CODE_RE = re.compile(r"[a-z][a-z0-9_]{2,47}")
+
+# A failed run that reported neither a text nor a code (strategy_last_run_status
+# 1 and nothing else): run_json's own engine_unclassified_error.
+RUN_STATUS_FAILED_TEXT = "the run did not complete and the engine reported no error"
+
+
+class RunFailure(Exception):
+    """A failure run_json reports itself: the line's text, its code, the code's
+    typed arguments and the exit status. The arguments are code_args because
+    BaseException.args is the exception's own tuple. The code is chosen where
+    the failure is raised, never derived from a text."""
+
+    def __init__(self, text, code, code_args=None, *, exit_status=1):
+        super().__init__(text)
+        self.code = code
+        self.code_args = dict(code_args or {})
+        self.exit_status = exit_status
+
+
+class StrategyLibraryError(RunFailure, RuntimeError):
+    """The strategy library does not match the harness (a load failure, an ABI
+    or a missing export): strategy_library_incompatible."""
+
+    def __init__(self, text, code_args):
+        super().__init__(text, "strategy_library_incompatible", code_args)
+
+
+def _cut_utf8(text: str, limit: int) -> str:
+    """text cut to at most limit bytes of UTF-8, on a character boundary (a lone
+    surrogate counts as its three bytes and survives)."""
+    raw = text.encode("utf-8", "surrogatepass")
+    if len(raw) <= limit:
+        return text
+    while limit > 0 and (raw[limit] & 0xC0) == 0x80:  # inside a character
+        limit -= 1
+    return raw[:limit].decode("utf-8", "surrogatepass")
+
+
+def _dump_line(doc: dict) -> str:
+    # The writer the failure line has always used: json.dump with these
+    # separators and json's default ensure_ascii, so the line is ASCII.
+    out = io.StringIO()
+    json.dump(doc, out, separators=(",", ":"))
+    return out.getvalue()
+
+
+def failure_line(text, code=None, code_args=None) -> str:
+    """The one failure line, newline included. Without a code (a run error from
+    a library without strategy_get_last_error_code) it is exactly the earlier
+    {"engine":"pineforge","error":"<text>"} line."""
+    full = str(text)
+    doc = {"engine": "pineforge", "error": _cut_utf8(full, ERROR_TEXT_MAX)}
+    if code is not None:
+        doc["code"] = code
+        doc["args"] = {name: _cut_utf8(value, ERROR_ARG_TEXT_MAX)
+                       if isinstance(value, str) else value
+                       for name, value in (code_args or {}).items()}
+    line = _dump_line(doc)
+    if len(line) > ERROR_LINE_MAX:
+        low, high = 0, len(doc["error"].encode("utf-8", "surrogatepass"))
+        while low < high:  # the longest cut whose line fits
+            mid = (low + high + 1) // 2
+            doc["error"] = _cut_utf8(full, mid)
+            if len(_dump_line(doc)) <= ERROR_LINE_MAX:
+                low = mid
+            else:
+                high = mid - 1
+        doc["error"] = _cut_utf8(full, low)
+        if code is not None and len(_dump_line(doc)) > ERROR_LINE_MAX:
+            doc["args"] = {}  # arguments no registry could hold: the code stays
+        line = _dump_line(doc)
+    return line + "\n"
+
+
+def write_failure(text, code=None, code_args=None) -> None:
+    sys.stdout.write(failure_line(text, code, code_args))
+    sys.stdout.flush()
+
+
+def _c_text(raw) -> str:
+    """A const char* result (bytes, or None for NULL) as text."""
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw
+    return bytes(raw).decode("utf-8", "replace")
+
+
+def _engine_args(raw) -> dict:
+    """strategy_get_last_error_args re-parsed: a JSON object whose values are all
+    strings, integers, finite numbers, booleans or null; anything else is {}."""
+    try:
+        doc = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+    except (TypeError, ValueError, AttributeError, RecursionError):
+        return {}
+    if not isinstance(doc, dict):
+        return {}
+    for value in doc.values():
+        if isinstance(value, float) and not math.isfinite(value):
+            return {}
+        if value is not None and not isinstance(value, (str, int, float)):
+            return {}
+    return doc
+
+
+def engine_failure_code(lib, strat):
+    """The engine's (code, args) for the last failure on strat: None when the
+    library has no strategy_get_last_error_code, ("", {}) when it recorded no
+    failure. A code that is not a code name reads engine_unclassified_error."""
+    if not hasattr(lib, "strategy_get_last_error_code"):
+        return None
+    code = _c_text(lib.strategy_get_last_error_code(strat))
+    if not code:
+        return "", {}
+    if not _CODE_RE.fullmatch(code):
+        return "engine_unclassified_error", {}
+    args = {}
+    if hasattr(lib, "strategy_get_last_error_args"):
+        args = _engine_args(lib.strategy_get_last_error_args(strat))
+    return code, args
+
+
 # --- ctypes mirror of <pineforge/pineforge.h> -------------------------
 
 class BarC(ctypes.Structure):
@@ -776,34 +931,65 @@ def check_abi(lib: ctypes.CDLL) -> None:
         lib.pf_abi_version.restype = ctypes.c_int
         abi = lib.pf_abi_version()
     except AttributeError:
-        raise RuntimeError(
+        raise StrategyLibraryError(
             "strategy .so predates pf_abi_version (ABI v1); rebuild it against "
-            "the current pineforge runtime (pf_report_t grew).")
+            "the current pineforge runtime (pf_report_t grew).",
+            {"reason": "abi_missing"}) from None
     if abi != EXPECTED_PF_ABI:
-        raise RuntimeError(
+        raise StrategyLibraryError(
             f"pineforge ABI mismatch: .so reports {abi}, harness expects "
-            f"{EXPECTED_PF_ABI}; rebuild.")
+            f"{EXPECTED_PF_ABI}; rebuild.",
+            {"reason": "abi_mismatch", "abi": int(abi)})
 
 
 # --- helpers ----------------------------------------------------------
 
+class ChartBarsError(RunFailure, ValueError):
+    """An --ohlcv tape the harness cannot read: chart_bars_unreadable{reason}."""
+
+    def __init__(self, text, reason):
+        super().__init__(text, "chart_bars_unreadable", {"reason": reason})
+
+
+def _bars_unreadable(text: str, reason: str) -> ChartBarsError:
+    return ChartBarsError(text, reason)
+
+
 def load_bars(csv_path: Path) -> tuple[ctypes.Array, int, str]:
-    """Load the source tape once and return bars, count, and canonical hash."""
+    """Load the source tape once and return bars, count, and canonical hash.
+    A file it cannot read is a ChartBarsError (a ValueError),
+    chart_bars_unreadable{reason}: io (the file cannot be opened or read),
+    columns (a row lacks a column), value (a value is not a number, or the file
+    is not a UTF-8 CSV). An empty tape is returned as zero bars (main refuses
+    it: reason empty)."""
     rows: list[tuple[float, float, float, float, float, int]] = []
     feed_hasher = _new_source_feed_hasher()
-    with csv_path.open(newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            parsed = (
-                float(row["open"]),
-                float(row["high"]),
-                float(row["low"]),
-                float(row["close"]),
-                float(row["volume"]),
-                int(row["timestamp"]),
-            )
-            _update_source_feed_hash(feed_hasher, parsed)
-            rows.append(parsed)
+    try:
+        with csv_path.open(newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    parsed = (
+                        float(row["open"]),
+                        float(row["high"]),
+                        float(row["low"]),
+                        float(row["close"]),
+                        float(row["volume"]),
+                        int(row["timestamp"]),
+                    )
+                except KeyError as e:
+                    raise _bars_unreadable(
+                        f"--ohlcv: {csv_path}: no column {e.args[0]}", "columns") from None
+                except (TypeError, ValueError):
+                    raise _bars_unreadable(
+                        f"--ohlcv: {csv_path} line {reader.line_num}: not a number",
+                        "value") from None
+                _update_source_feed_hash(feed_hasher, parsed)
+                rows.append(parsed)
+    except OSError as e:
+        raise _bars_unreadable(f"--ohlcv: {csv_path}: {e.strerror or e}", "io") from None
+    except (UnicodeDecodeError, csv.Error) as e:
+        raise _bars_unreadable(f"--ohlcv: {csv_path}: not a UTF-8 CSV ({e})", "value") from None
     n = len(rows)
     bars = (BarC * n)()
     for i, (o, h, l, c, v, ts) in enumerate(rows):
@@ -816,9 +1002,23 @@ def load_bars(csv_path: Path) -> tuple[ctypes.Array, int, str]:
     return bars, n, feed_hasher.hexdigest()
 
 
+# The exports every run calls; a library without one is
+# strategy_library_incompatible{reason: symbol_missing, missing: <name>}.
+_REQUIRED_EXPORTS = ("strategy_create", "strategy_set_input", "strategy_set_override",
+                     "run_backtest_full", "strategy_free", "report_free")
+
+
 def load_strategy(so_path: Path) -> ctypes.CDLL:
-    lib = ctypes.CDLL(str(so_path))
+    try:
+        lib = ctypes.CDLL(str(so_path))
+    except OSError as e:
+        raise StrategyLibraryError(f"cannot load the strategy library: {e}",
+                                   {"reason": "load_failed"}) from None
     check_abi(lib)
+    for name in _REQUIRED_EXPORTS:
+        if not hasattr(lib, name):
+            raise StrategyLibraryError(f"the strategy library has no {name}",
+                                       {"reason": "symbol_missing", "missing": name})
 
     lib.strategy_create.argtypes = [ctypes.c_char_p]
     lib.strategy_create.restype  = ctypes.c_void_p
@@ -838,10 +1038,38 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
     if hasattr(lib, "strategy_get_last_error"):
         lib.strategy_get_last_error.argtypes = [ctypes.c_void_p]
         lib.strategy_get_last_error.restype  = ctypes.c_char_p
+    # The failure's code and arguments (engine 1.3.0+), and whether the last
+    # run completed (ABI v4). hasattr-guarded: an older library has none.
+    for _n in ("strategy_get_last_error_code", "strategy_get_last_error_args"):
+        if hasattr(lib, _n):
+            getattr(lib, _n).argtypes = [ctypes.c_void_p]
+            getattr(lib, _n).restype = ctypes.c_char_p
+    if hasattr(lib, "strategy_last_run_status"):
+        lib.strategy_last_run_status.argtypes = [ctypes.c_void_p]
+        lib.strategy_last_run_status.restype = ctypes.c_int
     if hasattr(lib, "strategy_closed_trade_entry_incarnation"):
         lib.strategy_closed_trade_entry_incarnation.argtypes = [
             ctypes.c_void_p, ctypes.c_int]
         lib.strategy_closed_trade_entry_incarnation.restype = ctypes.c_uint64
+    # The checked settings API of a generated strategy (docs/checked-settings.md),
+    # used when present (see uses_checked_settings).
+    if hasattr(lib, "strategy_settings_api_version"):
+        lib.strategy_settings_api_version.argtypes = []
+        lib.strategy_settings_api_version.restype = ctypes.c_uint32
+    if hasattr(lib, "strategy_create_checked"):
+        lib.strategy_create_checked.argtypes = [
+            ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p, ctypes.c_size_t]
+        lib.strategy_create_checked.restype = ctypes.c_int
+    for _n in ("strategy_set_input_checked", "strategy_set_override_checked"):
+        if hasattr(lib, _n):
+            getattr(lib, _n).argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p,
+                                         ctypes.c_char_p, ctypes.c_size_t]
+            getattr(lib, _n).restype = ctypes.c_int
+    if hasattr(lib, "strategy_get_effective_settings"):
+        lib.strategy_get_effective_settings.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+            ctypes.c_char_p, ctypes.c_size_t]
+        lib.strategy_get_effective_settings.restype = ctypes.c_int
 
     # syminfo setters — declare argtypes so ctypes does not default the float
     # args to c_int (which would truncate mintick=0.5 to 0). Guarded with
@@ -888,9 +1116,163 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
     return lib
 
 
-class SyminfoError(ValueError):
-    """A --syminfo file the harness cannot apply as given. main() reports it as
-    the structured {"engine", "error"} failure (exit 1), never as a traceback."""
+# --- Creating a strategy and applying the run's settings ----------------------
+#
+# A library exporting the checked settings API (strategy_settings_api_version()
+# == 1, docs/checked-settings.md) is created and configured through it, so a
+# setting the strategy cannot honour fails the run before it starts: an unknown
+# input or override key, an invalid enum, an unparseable value, which the
+# legacy setters drop silently. A library without it keeps the legacy setters.
+
+PF_SETTINGS_OK = 0
+PF_SETTINGS_INVALID_ARGUMENT = 1
+PF_SETTINGS_UNSUPPORTED = 2
+PF_SETTINGS_BUFFER_TOO_SMALL = 4
+_SETTINGS_ERROR_CAPACITY = 4096
+_CHECKED_SETTINGS_EXPORTS = ("strategy_settings_api_version", "strategy_create_checked",
+                             "strategy_set_input_checked", "strategy_set_override_checked")
+
+# The checked setters' own messages (checked_settings.hpp and the generated
+# setters, statuses INVALID_ARGUMENT / UNSUPPORTED) -> setting_rejected's reason.
+# The message is the API's, never the value the request supplied.
+SETTING_REJECTED_REASONS = {
+    "expected an integer": "expected_integer",
+    "invalid integer exponent": "invalid_integer_exponent",
+    "invalid integer or trailing bytes": "invalid_integer_or_trailing_bytes",
+    "expected an integral value": "expected_integral_value",
+    "integer out of range": "integer_out_of_range",
+    "invalid integer sign": "invalid_integer_sign",
+    "expected a finite decimal number": "expected_finite_decimal",
+    "invalid numeric exponent": "invalid_numeric_exponent",
+    "invalid number or trailing bytes": "invalid_number_or_trailing_bytes",
+    "number out of finite range": "number_out_of_finite_range",
+    "number underflows to zero": "number_underflows_to_zero",
+    "number cannot be consumed by the strategy getter": "number_not_consumable",
+    "invalid boolean": "invalid_boolean",
+    "invalid enum option": "invalid_enum_option",
+    "value below minimum": "value_below_minimum",
+    "value above maximum": "value_above_maximum",
+    "invalid input option": "invalid_input_option",
+    "unknown input key": "unknown_key",
+    "unknown override key": "unknown_key",
+    "ambiguous input key": "ambiguous_key",
+}
+# A declared input the compiled strategy cannot honour: setting_unsupported.
+SETTING_UNSUPPORTED_MESSAGE = "input cannot be honoured by this compiled strategy"
+# The setters' host-contract checks: a harness or engine fault, never the
+# request's (run_json configures a fresh handle with non-null arguments).
+SETTING_INVARIANT_MESSAGES = frozenset({
+    "settings are frozen after execution begins",
+    "input was not installed",
+    "null strategy, key or value",
+})
+
+
+def uses_checked_settings(lib) -> bool:
+    """True when lib exports the checked settings API at version 1."""
+    if not all(hasattr(lib, name) for name in _CHECKED_SETTINGS_EXPORTS):
+        return False
+    return lib.strategy_settings_api_version() == 1
+
+
+def create_strategy(lib, checked: bool):
+    """A new strategy handle, through strategy_create_checked when checked. A
+    creation that fails (a NULL handle, or a checked status other than OK) is
+    strategy_create_failed, whatever the cause: run_json reads no code from the
+    checked API's message, it only shows it."""
+    if not checked:
+        handle = lib.strategy_create(b"{}")
+        if not handle:
+            raise RunFailure("strategy_create failed", "strategy_create_failed")
+        return handle
+    out = ctypes.c_void_p()
+    error = ctypes.create_string_buffer(_SETTINGS_ERROR_CAPACITY)
+    status = lib.strategy_create_checked(None, ctypes.byref(out), error,
+                                         _SETTINGS_ERROR_CAPACITY)
+    if status == PF_SETTINGS_OK and out.value:
+        return out.value
+    if out.value:
+        lib.strategy_free(out.value)
+    message = _c_text(error.value)
+    raise RunFailure("strategy_create failed" + (f": {message}" if message else ""),
+                     "strategy_create_failed")
+
+
+def receipt_input_titles(lib, strat) -> frozenset:
+    """The input titles strategy_get_effective_settings lists (each the literal
+    the transpiler emitted), or none when the receipt is unavailable."""
+    if not hasattr(lib, "strategy_get_effective_settings"):
+        return frozenset()
+    try:
+        required = ctypes.c_size_t(0)
+        error = ctypes.create_string_buffer(_SETTINGS_ERROR_CAPACITY)
+        if lib.strategy_get_effective_settings(
+                strat, None, 0, ctypes.byref(required), error,
+                _SETTINGS_ERROR_CAPACITY) != PF_SETTINGS_BUFFER_TOO_SMALL:
+            return frozenset()
+        receipt = ctypes.create_string_buffer(required.value)
+        if lib.strategy_get_effective_settings(
+                strat, receipt, required.value, ctypes.byref(required), error,
+                _SETTINGS_ERROR_CAPACITY) != PF_SETTINGS_OK:
+            return frozenset()
+        rows = json.loads(receipt.value.decode("utf-8"))["inputs"]
+        return frozenset(row["name"] for row in rows
+                         if isinstance(row, dict) and isinstance(row.get("name"), str))
+    except (TypeError, ValueError, KeyError, AttributeError, RecursionError):
+        return frozenset()
+
+
+def setting_failure(lib, strat, entrypoint: str, key: str, status: int,
+                    message: str) -> RunFailure:
+    """The failure of a checked setter that returned status with message. The
+    text is "<entrypoint>: <message>", as the generated setters latch theirs.
+    setting_rejected names its reason (SETTING_REJECTED_REASONS; another
+    INVALID_ARGUMENT message is unparseable_value) and, for an input, the input
+    when the key is a title the receipt lists; setting_unsupported has no
+    arguments (also for another UNSUPPORTED message); an exception or a latched
+    failure (RUN_FAILED) is engine_unclassified_error."""
+    text = f"{entrypoint}: {message}"
+    if status not in (PF_SETTINGS_INVALID_ARGUMENT, PF_SETTINGS_UNSUPPORTED):
+        return RunFailure(text, "engine_unclassified_error")
+    if message in SETTING_INVARIANT_MESSAGES:
+        return RunFailure(text, "engine_invariant")
+    reason = SETTING_REJECTED_REASONS.get(message)
+    if message == SETTING_UNSUPPORTED_MESSAGE or (
+            reason is None and status == PF_SETTINGS_UNSUPPORTED):
+        return RunFailure(text, "setting_unsupported")
+    args = {"entrypoint": entrypoint, "reason": reason or "unparseable_value"}
+    if entrypoint == "strategy_set_input" and key in receipt_input_titles(lib, strat):
+        args["input"] = key
+    return RunFailure(text, "setting_rejected", args)
+
+
+def apply_settings(lib, strat, inputs: dict, overrides: dict, checked: bool) -> None:
+    """Every input, then every override. Through the checked setters the first
+    one refused fails the run (setting_failure); the legacy setters report
+    nothing here."""
+    if not checked:
+        for k, v in inputs.items():
+            lib.strategy_set_input(strat, k.encode(), v.encode())
+        for k, v in overrides.items():
+            lib.strategy_set_override(strat, k.encode(), v.encode())
+        return
+    for entrypoint, setter, settings in (
+            ("strategy_set_input", lib.strategy_set_input_checked, inputs),
+            ("strategy_set_override", lib.strategy_set_override_checked, overrides)):
+        for key, value in settings.items():
+            error = ctypes.create_string_buffer(_SETTINGS_ERROR_CAPACITY)
+            status = setter(strat, key.encode(), value.encode(), error,
+                            _SETTINGS_ERROR_CAPACITY)
+            if status != PF_SETTINGS_OK:
+                raise setting_failure(lib, strat, entrypoint, key, status,
+                                      _c_text(error.value))
+
+
+class SyminfoError(RunFailure, ValueError):
+    """A --syminfo file the harness cannot apply as given, with its code:
+    lot_grid_rejected, syminfo_unreadable{reason} or
+    strategy_library_incompatible{reason: setter_missing, missing}. main()
+    reports it as the one failure line (exit 1), never as a traceback."""
 
 
 # This file is vendored: pineforge-release copies it from the pineforge-engine
@@ -902,15 +1284,46 @@ def apply_syminfo(lib, strat, syminfo_path):
 
     mincontract (TradingView's syminfo.mincontract, the instrument's lot size)
     is strict: absent or null applies nothing; anything else must be a positive
-    finite JSON number, else SyminfoError before any setter runs. A valid one is
-    set first, as the metadata key qty_step (the engine floors order quantities
-    to that grid) and as mincontract (what syminfo.mincontract reads return).
+    finite JSON number, else SyminfoError lot_grid_rejected before any setter
+    runs. A valid one is set first, as the metadata key qty_step (the engine
+    floors order quantities to that grid) and as mincontract (what
+    syminfo.mincontract reads return).
+
+    Every value is read before any setter runs. A file that cannot be read, is
+    not JSON or holds no syminfo object, and a mintick, pointvalue, timezone or
+    session the setters cannot take, is SyminfoError
+    syminfo_unreadable{reason: io|not_json|not_object|value_type}; a library
+    without the setter a key needs is strategy_library_incompatible{reason:
+    setter_missing, missing}.
     Returns what main() records in applied_runtime["syminfo"]:
     {"qty_step": v, "mincontract": v}, or {} when no grid was applied."""
-    import json
-    doc = json.loads(open(syminfo_path).read())
-    si = doc.get("syminfo", doc)
+    def unreadable(text, reason):
+        return SyminfoError(text, "syminfo_unreadable", {"reason": reason})
+
+    def setter(name, key):
+        if not hasattr(lib, name):
+            raise SyminfoError(
+                f"the strategy library has no {name}, so syminfo.{key} cannot be applied",
+                "strategy_library_incompatible", {"reason": "setter_missing", "missing": name})
+        return getattr(lib, name)
+
+    try:
+        with open(syminfo_path) as f:
+            text = f.read()
+    except OSError as e:
+        raise unreadable(f"--syminfo: {syminfo_path}: {e.strerror or e}", "io") from None
+    except ValueError as e:  # not text in the file's encoding
+        raise unreadable(f"--syminfo: {syminfo_path} is not JSON: {e}", "not_json") from None
+    try:
+        doc = json.loads(text)
+    except (ValueError, RecursionError) as e:
+        raise unreadable(f"--syminfo: {syminfo_path} is not JSON: {e}", "not_json") from None
+    si = doc.get("syminfo", doc) if isinstance(doc, dict) else None
+    if not isinstance(si, dict):
+        raise unreadable(f"--syminfo: {syminfo_path}: the syminfo is not a JSON object",
+                         "not_object")
     applied = {}
+    calls = []
     lot = si.get("mincontract")
     if lot is not None:
         try:
@@ -921,18 +1334,28 @@ def apply_syminfo(lib, strat, syminfo_path):
         if not (math.isfinite(v) and v > 0):
             raise SyminfoError(
                 "syminfo.mincontract must be a positive finite number, got "
-                + json.dumps(lot)[:80])
-        if not hasattr(lib, "strategy_set_syminfo_metadata"):
-            raise SyminfoError(
-                "the strategy library has no strategy_set_syminfo_metadata, "
-                "so syminfo.mincontract cannot be applied")
-        lib.strategy_set_syminfo_metadata(strat, b"qty_step", v)
-        lib.strategy_set_syminfo_metadata(strat, b"mincontract", v)
+                + json.dumps(lot)[:80], "lot_grid_rejected")
+        meta = setter("strategy_set_syminfo_metadata", "mincontract")
+        calls += [(meta, b"qty_step", v), (meta, b"mincontract", v)]
         applied = {"qty_step": v, "mincontract": v}
-    if "mintick" in si:    lib.strategy_set_syminfo_mintick(strat, float(si["mintick"]))
-    if "pointvalue" in si: lib.strategy_set_syminfo_pointvalue(strat, float(si["pointvalue"]))
-    if si.get("timezone"): lib.strategy_set_syminfo_timezone(strat, str(si["timezone"]).encode())
-    if si.get("session"):  lib.strategy_set_syminfo_session(strat, str(si["session"]).encode())
+    for key, name, present, convert, kind in (
+            ("mintick", "strategy_set_syminfo_mintick", "mintick" in si, float, "a number"),
+            ("pointvalue", "strategy_set_syminfo_pointvalue", "pointvalue" in si, float,
+             "a number"),
+            ("timezone", "strategy_set_syminfo_timezone", bool(si.get("timezone")),
+             lambda x: str(x).encode(), "UTF-8 text"),
+            ("session", "strategy_set_syminfo_session", bool(si.get("session")),
+             lambda x: str(x).encode(), "UTF-8 text")):
+        if not present:
+            continue
+        try:
+            value = convert(si[key])
+        except (TypeError, ValueError, OverflowError):
+            raise unreadable(f"syminfo.{key} must be {kind}, got {json.dumps(si[key])[:80]}",
+                             "value_type") from None
+        calls.append((setter(name, key), value))
+    for call in calls:
+        call[0](strat, *call[1:])
     return applied
 
 
@@ -962,9 +1385,15 @@ _SYMBOL_FACT_KEYS = (("tickerid", "canonical"), ("type", "type"), ("timezone", "
 _SYMBOL_FEED_SETTERS = ("strategy_set_symbol_facts", "strategy_set_symbol_feed")
 
 
-class SymbolFeedsError(ValueError):
+class SymbolFeedsError(RunFailure, ValueError):
     """A --symbol-feeds index or feed the harness cannot install as given; main()
-    reports it as the structured {"engine", "error"} failure (exit 1)."""
+    reports it as the one failure line (exit 1). Its code is
+    symbol_feeds_refused{reason}, one reason per refusal; a feed the engine
+    refused carries the engine's own code instead when the library reports one
+    (install_symbol_feeds)."""
+
+    def __init__(self, text, reason):
+        super().__init__(text, "symbol_feeds_refused", {"reason": reason})
 
 
 def _shown(value) -> str:
@@ -981,7 +1410,8 @@ def _symbol_text(value, what: str) -> str:
             or any(ord(ch) < 0x20 for ch in value)):
         raise SymbolFeedsError(
             f"--symbol-feeds: {what} must be a non-empty string of at most "
-            f"{_SYMBOL_KEY_MAX} characters without control characters, got {_shown(value)}")
+            f"{_SYMBOL_KEY_MAX} characters without control characters, got {_shown(value)}",
+            "symbol_text_invalid")
     return value
 
 
@@ -994,7 +1424,7 @@ def symbol_timeframe(tf) -> str:
     if not (isinstance(tf, str) and _SYMBOL_TF_RE.fullmatch(tf)):
         raise SymbolFeedsError(
             "--symbol-feeds: a timeframe is whole minutes (\"15\", \"240\") or "
-            f"<n>D|W|M|S (\"1D\", \"1W\"), got {_shown(tf)}")
+            f"<n>D|W|M|S (\"1D\", \"1W\"), got {_shown(tf)}", "timeframe_invalid")
     return tf
 
 
@@ -1032,7 +1462,8 @@ def _load_symbol_feed(path: Path, symbol: str, tf: str) -> dict:
             missing = [c for c in ("timestamp", "open", "high", "low", "close")
                        if c not in columns]
             if missing:
-                raise SymbolFeedsError(f"{where}: no column {', '.join(missing)}")
+                raise SymbolFeedsError(f"{where}: no column {', '.join(missing)}",
+                                       "feed_columns_missing")
             for row in reader:
                 line = reader.line_num
                 try:
@@ -1043,23 +1474,24 @@ def _load_symbol_feed(path: Path, symbol: str, tf: str) -> dict:
                     cell = (row.get("time_close") or "").strip()
                     close = int(cell) if cell else None  # empty: open + timeframe
                 except (TypeError, ValueError):
-                    raise SymbolFeedsError(f"{where} line {line}: not a number") from None
+                    raise SymbolFeedsError(f"{where} line {line}: not a number",
+                                           "feed_value_not_number") from None
                 if not all(math.isfinite(x) for x in (o, h, l, c)) or v < 0 or math.isinf(v):
                     raise SymbolFeedsError(
                         f"{where} line {line}: prices must be finite and volume "
-                        "nonnegative or empty")
+                        "nonnegative or empty", "feed_value_invalid")
                 if close is None:
                     close = _bar_close_ms(ts, tf)
                 if not all(x is not None and abs(x) <= _SYMBOL_STAMP_MAX for x in (ts, close)):
                     raise SymbolFeedsError(
                         f"{where} line {line}: a time must be unix milliseconds "
-                        f"within +-{_SYMBOL_STAMP_MAX}")
+                        f"within +-{_SYMBOL_STAMP_MAX}", "feed_time_out_of_range")
                 rows.append((o, h, l, c, v, ts, close))
                 lines.append(line)
     except OSError as e:
-        raise SymbolFeedsError(f"{where}: {e.strerror or e}") from None
+        raise SymbolFeedsError(f"{where}: {e.strerror or e}", "feed_unreadable") from None
     except (UnicodeDecodeError, csv.Error) as e:
-        raise SymbolFeedsError(f"{where}: not a UTF-8 CSV ({e})") from None
+        raise SymbolFeedsError(f"{where}: not a UTF-8 CSV ({e})", "feed_not_utf8_csv") from None
     n = len(rows)
     bars = (BarC * n)()
     closes = (ctypes.c_int64 * n)()
@@ -1067,11 +1499,13 @@ def _load_symbol_feed(path: Path, symbol: str, tf: str) -> dict:
     for i, (o, h, l, c, v, ts, close) in enumerate(rows):
         next_open = rows[i + 1][5] if i + 1 < n else None
         if next_open is not None and next_open <= ts:
-            raise SymbolFeedsError(f"{where} line {lines[i + 1]}: timestamps must increase")
+            raise SymbolFeedsError(f"{where} line {lines[i + 1]}: timestamps must increase",
+                                   "feed_not_increasing")
         if close <= ts or (next_open is not None and close > next_open):
             raise SymbolFeedsError(
                 f"{where} line {lines[i]}: its close {close} is not after its open {ts} "
-                "and at or before the next bar's open (is the timeframe right?)")
+                "and at or before the next bar's open (is the timeframe right?)",
+                "feed_close_time_invalid")
         bars[i].open, bars[i].high, bars[i].low, bars[i].close = o, h, l, c
         bars[i].volume, bars[i].timestamp = v, ts
         closes[i] = close
@@ -1092,7 +1526,8 @@ def _symbol_facts(doc, symbol: str) -> list:
         return []
     si = doc.get("syminfo", doc) if isinstance(doc, dict) else None
     if not isinstance(si, dict):
-        raise SymbolFeedsError(f"--symbol-feeds: {symbol}: syminfo must be an object")
+        raise SymbolFeedsError(f"--symbol-feeds: {symbol}: syminfo must be an object",
+                               "syminfo_not_object")
     facts = []
     for key, field in _SYMBOL_FACT_KEYS:
         value = si.get(key)
@@ -1107,7 +1542,7 @@ def _symbol_facts(doc, symbol: str) -> list:
             if not ok:
                 raise SymbolFeedsError(
                     f"--symbol-feeds: {symbol}: syminfo.mintick must be a positive "
-                    f"finite number, got {_shown(value)}")
+                    f"finite number, got {_shown(value)}", "syminfo_mintick_invalid")
             facts.append((field, float(value)))
         else:
             facts.append((field, _symbol_text(value, f"{symbol}: syminfo.{key}")))
@@ -1126,43 +1561,53 @@ def load_symbol_feeds(index_path: Path) -> list:
         out = {}
         for k, v in pairs:
             if k in out:
-                raise SymbolFeedsError(f"--symbol-feeds: duplicate key {_shown(k)}")
+                raise SymbolFeedsError(f"--symbol-feeds: duplicate key {_shown(k)}",
+                                       "index_duplicate_key")
             out[k] = v
         return out
     try:
         doc = json.loads(index_path.read_text(encoding="utf-8"), object_pairs_hook=unique)
     except OSError as e:
-        raise SymbolFeedsError(f"--symbol-feeds: {index_path}: {e.strerror or e}") from None
+        raise SymbolFeedsError(f"--symbol-feeds: {index_path}: {e.strerror or e}",
+                               "index_unreadable") from None
     except (ValueError, RecursionError) as e:
         if isinstance(e, SymbolFeedsError):
             raise
-        raise SymbolFeedsError(f"--symbol-feeds: {index_path} is not JSON: {e}") from None
+        raise SymbolFeedsError(f"--symbol-feeds: {index_path} is not JSON: {e}",
+                               "index_not_json") from None
     symbols = doc.get("symbols") if isinstance(doc, dict) else None
     if not isinstance(symbols, dict):
-        raise SymbolFeedsError('--symbol-feeds: the index must be {"symbols": {...}}')
+        raise SymbolFeedsError('--symbol-feeds: the index must be {"symbols": {...}}',
+                               "index_shape")
     if len(symbols) > _SYMBOL_FEEDS_MAX:
-        raise SymbolFeedsError(f"--symbol-feeds: more than {_SYMBOL_FEEDS_MAX} symbols")
+        raise SymbolFeedsError(f"--symbol-feeds: more than {_SYMBOL_FEEDS_MAX} symbols",
+                               "too_many_symbols")
     out, total = [], 0
     for symbol, entry in symbols.items():
         _symbol_text(symbol, "a symbol")
         if not isinstance(entry, dict) or set(entry) - {"syminfo", "feeds"}:
             raise SymbolFeedsError(
-                f'--symbol-feeds: {symbol}: an entry is {{"feeds": {{...}}, "syminfo": {{...}}}}')
+                f'--symbol-feeds: {symbol}: an entry is {{"feeds": {{...}}, "syminfo": {{...}}}}',
+                "entry_shape")
         feeds = entry.get("feeds", {})
         if not isinstance(feeds, dict):
-            raise SymbolFeedsError(f"--symbol-feeds: {symbol}: feeds must be an object")
+            raise SymbolFeedsError(f"--symbol-feeds: {symbol}: feeds must be an object",
+                                   "feeds_not_object")
         total += len(feeds)
         if total > _SYMBOL_FEEDS_MAX:
-            raise SymbolFeedsError(f"--symbol-feeds: more than {_SYMBOL_FEEDS_MAX} feeds")
+            raise SymbolFeedsError(f"--symbol-feeds: more than {_SYMBOL_FEEDS_MAX} feeds",
+                                   "too_many_feeds")
         named = {}
         for tf, file in feeds.items():
             canonical = symbol_timeframe(tf)
             if canonical in named:
                 raise SymbolFeedsError(
-                    f"--symbol-feeds: {symbol}: two feeds at timeframe {canonical}")
+                    f"--symbol-feeds: {symbol}: two feeds at timeframe {canonical}",
+                    "duplicate_timeframe")
             if not isinstance(file, str) or not file:
                 raise SymbolFeedsError(
-                    f"--symbol-feeds: {symbol}@{canonical}: the feed must name a CSV file")
+                    f"--symbol-feeds: {symbol}@{canonical}: the feed must name a CSV file",
+                    "feed_path_invalid")
             named[canonical] = index_path.parent / file
         facts = _symbol_facts(entry.get("syminfo"), symbol)
         out.append({"symbol": symbol, "facts": facts,
@@ -1173,20 +1618,29 @@ def load_symbol_feeds(index_path: Path) -> list:
 
 def install_symbol_feeds(lib, strat, symbols) -> None:
     """Install what load_symbol_feeds read: each symbol's facts, then its feeds.
-    The engine copies the arrays, so one load serves every state of a run."""
+    The engine copies the arrays, so one load serves every state of a run.
+    A setter's refusal keeps run_json's text, with the engine's code and
+    arguments for it when the library reports one (the engine names why it
+    refused: a specific symbol_feeds_refused reason, out_of_memory, an engine
+    fault), else symbol_feeds_refused{reason: engine_refused}."""
     missing = [n for n in _SYMBOL_FEED_SETTERS if not hasattr(lib, n)]
     if missing:
         raise SymbolFeedsError(
             f"--symbol-feeds: the strategy library has no {', '.join(missing)}, so "
-            "other symbols' bars cannot be installed (engine 1.0.0 or later)")
+            "other symbols' bars cannot be installed (engine 1.0.0 or later)",
+            "library_without_symbol_feeds")
 
     def refused(what):
         detail = ""
         if hasattr(lib, "strategy_get_last_error"):
             err = lib.strategy_get_last_error(strat)
             detail = err.decode("utf-8", "replace") if err else ""
-        raise SymbolFeedsError(f"--symbol-feeds: the engine refused {what}"
-                               + (f": {detail}" if detail else ""))
+        error = SymbolFeedsError(f"--symbol-feeds: the engine refused {what}"
+                                 + (f": {detail}" if detail else ""), "engine_refused")
+        engine = engine_failure_code(lib, strat)
+        if engine and engine[0]:
+            error.code, error.code_args = engine
+        raise error
 
     for sym in symbols:
         key = sym["symbol"].encode()
@@ -1351,19 +1805,33 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
     }
 
 
+def _request_invalid(text: str, option: str, exit_status: int = 1) -> RunFailure:
+    return RunFailure(text, "run_request_invalid", {"option": option},
+                      exit_status=exit_status)
+
+
 def parse_kv_json(s: str | None, label: str) -> dict[str, str]:
     """Parse a JSON object of {key: value} into a {str: str} map.
     Empty / None / "{}" → {}. Non-object payloads abort with a clear
-    error so junk env vars don't silently noop."""
+    error so junk env vars don't silently noop: run_request_invalid{option}
+    (the label without its dashes)."""
     if not s or s.strip() in ("", "{}"):
         return {}
+    option = label.lstrip("-").replace("-", "_")
     try:
         obj = json.loads(s)
-    except json.JSONDecodeError as e:
-        sys.exit(f"error: {label} is not valid JSON: {e}")
+    except (json.JSONDecodeError, RecursionError) as e:
+        raise _request_invalid(f"error: {label} is not valid JSON: {e}", option) from None
     if not isinstance(obj, dict):
-        sys.exit(f"error: {label} must be a JSON object, got {type(obj).__name__}")
-    return {str(k): str(v) for k, v in obj.items()}
+        raise _request_invalid(
+            f"error: {label} must be a JSON object, got {type(obj).__name__}", option)
+    out = {str(k): str(v) for k, v in obj.items()}
+    for text in (*out, *out.values()):
+        try:
+            text.encode("utf-8")
+        except UnicodeEncodeError:  # a lone surrogate escape
+            raise _request_invalid(f"error: {label} must hold UTF-8 text", option) from None
+    return out
 
 
 # MagnifierDistribution enum values mirror include/pineforge/magnifier.hpp.
@@ -1383,11 +1851,15 @@ def parse_magnifier_dist(s: str) -> int:
     key = s.strip().lower()
     if key in MAGNIFIER_DISTS:
         return MAGNIFIER_DISTS[key]
-    if key.isdigit() and 0 <= int(key) <= 5:
-        return int(key)
-    sys.exit(
+    try:
+        if key.isdigit() and 0 <= int(key) <= 5:
+            return int(key)
+    except ValueError:  # a digit int() does not read, such as "²"
+        pass
+    raise _request_invalid(
         f"error: --magnifier-dist must be one of "
-        f"{sorted(MAGNIFIER_DISTS)} or 0-5, got {s!r}"
+        f"{sorted(MAGNIFIER_DISTS)} or 0-5, got {s!r}",
+        "magnifier_dist"
     )
 
 
@@ -1425,9 +1897,81 @@ def _throughput_block(items_processed, samples_ns, *, bar_magnifier) -> dict:
     }
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+# run_request_invalid's option for a command line argparse refuses: the flag the
+# error names (dashes to underscores) when it is one of these, else "arguments"
+# (an unknown flag, several missing ones).
+_RUN_REQUEST_OPTIONS = frozenset({
+    "so", "ohlcv", "inputs", "overrides", "input_tf", "script_tf", "bar_magnifier",
+    "magnifier_samples", "magnifier_dist", "generated_cpp", "transpiled", "syminfo",
+    "trade_start_ms", "chart_tz", "magnifier_volume_weighted", "bench", "warmup",
+    "repeats", "symbol_feeds",
+})
+
+
+def argparse_option(message: str) -> str:
+    """run_request_invalid's option for an argparse error message."""
+    m = (re.match(r"argument (--[a-z][a-z-]*): ", message)
+         or re.fullmatch(r"the following arguments are required: (--[a-z][a-z-]*)", message))
+    option = m.group(1)[2:].replace("-", "_") if m else "arguments"
+    return option if option in _RUN_REQUEST_OPTIONS else "arguments"
+
+
+class _ArgumentParser(argparse.ArgumentParser):
+    """argparse whose usage error is also the failure line,
+    run_request_invalid{option}; it still prints the usage and the message to
+    stderr and exits 2."""
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        text = f"{self.prog}: error: {message}"
+        write_failure(text, "run_request_invalid", {"option": argparse_option(message)})
+        self.exit(2, text + "\n")
+
+
+def run_failure(lib, strat):
+    """(text, code, args) of the failure line for the run just made on strat, or
+    None when it succeeded. A run failed when the engine reports a text, a code
+    or a run status of 1 (strategy_last_run_status), so runtime.error() with an
+    empty message fails: text "", code strategy_runtime_error. With a library
+    without strategy_get_last_error_code a failure with a text keeps the earlier
+    line (no code); a failure reported with no code at all (status 1 alone, or a
+    text the code getter does not name) is run_json's engine_unclassified_error."""
+    text = ""
+    if hasattr(lib, "strategy_get_last_error"):
+        text = _c_text(lib.strategy_get_last_error(strat))
+    engine = engine_failure_code(lib, strat)
+    status = (lib.strategy_last_run_status(strat)
+              if hasattr(lib, "strategy_last_run_status") else 0)
+    code, args = engine if engine is not None else (None, None)
+    if not (text or code or status == 1):
+        return None
+    if engine is None and text:
+        return text, None, None
+    if code:
+        return text, code, args
+    return text or RUN_STATUS_FAILED_TEXT, "engine_unclassified_error", {}
+
+
+def main(argv=None) -> int:
+    """Run the harness. Every failure ends as the one failure line on stdout:
+    run_json's own (RunFailure) with its code, and anything unexpected as
+    harness_internal_error (its traceback on stderr). Exit status 1, or 2 for a
+    command line argparse refuses."""
+    try:
+        return _main(argv)
+    except RunFailure as failure:
+        write_failure(str(failure), failure.code, failure.code_args)
+        return failure.exit_status
+    except Exception as error:
+        traceback.print_exc(file=sys.stderr)
+        write_failure(f"harness internal error: {type(error).__name__}: {error}",
+                      "harness_internal_error")
+        return 1
+
+
+def _main(argv=None) -> int:
+    ap = _ArgumentParser(description=__doc__,
+                         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--so",        type=Path, required=True, help="strategy.so path")
     ap.add_argument("--ohlcv",     type=Path, required=True, help="OHLCV CSV path")
     ap.add_argument("--inputs",    default="",
@@ -1480,7 +2024,7 @@ def main() -> int:
                          "request.security reads, keyed by the exact symbol string "
                          "and timeframe (strategy_set_symbol_feed / _facts); see "
                          "load_symbol_feeds.")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     inputs    = parse_kv_json(args.inputs,    "--inputs")
     overrides = parse_kv_json(args.overrides, "--overrides")
@@ -1491,9 +2035,12 @@ def main() -> int:
     magnifier_dist = parse_magnifier_dist(args.magnifier_dist)
 
     bars, n, source_feed_sha256 = load_bars(args.ohlcv)
+    if n == 0:
+        raise _bars_unreadable(f"--ohlcv: {args.ohlcv}: no bars", "empty")
     first_ts, last_ts = bars[0].timestamp, bars[n - 1].timestamp
 
     lib = load_strategy(args.so)
+    checked = uses_checked_settings(lib)
 
     # Volume-weighted magnifier only meaningful when the magnifier is on.
     vw_on = bool(args.magnifier_volume_weighted) and bar_magnifier == 1
@@ -1508,33 +2055,28 @@ def main() -> int:
     def _make_state():
         """Create + fully configure a fresh strategy state — everything EXCEPT the
         timed run_backtest_full call. Mirrors scripts/run_strategy.py's setup so the
-        engine behaves identically to the ctypes validation harness."""
+        engine behaves identically to the ctypes validation harness. The handle is
+        checked before anything is set on it; a state that fails to configure is
+        freed before its failure propagates."""
         nonlocal syminfo_applied
-        st = lib.strategy_create(b"{}")
-        for k, v in inputs.items():
-            lib.strategy_set_input(st, k.encode(), v.encode())
-        for k, v in overrides.items():
-            lib.strategy_set_override(st, k.encode(), v.encode())
-        if args.syminfo:
-            try:
+        st = create_strategy(lib, checked)
+        try:
+            apply_settings(lib, st, inputs, overrides, checked)
+            if args.syminfo:
                 # A replacement apply_syminfo may return None (or another non-dict).
                 r = apply_syminfo(lib, st, args.syminfo)
                 syminfo_applied = r if isinstance(r, dict) else {}
-            except SyminfoError:
-                lib.strategy_free(st)
-                raise
-        if symbol_feeds:
-            try:
+            if symbol_feeds:
                 install_symbol_feeds(lib, st, symbol_feeds)
-            except SymbolFeedsError:
-                lib.strategy_free(st)
-                raise
-        if args.trade_start_ms is not None and hasattr(lib, "strategy_set_trade_start_time"):
-            lib.strategy_set_trade_start_time(st, int(args.trade_start_ms))
-        if args.chart_tz and hasattr(lib, "strategy_set_chart_timezone"):
-            lib.strategy_set_chart_timezone(st, args.chart_tz.encode())
-        if vw_on and hasattr(lib, "strategy_set_magnifier_volume_weighted"):
-            lib.strategy_set_magnifier_volume_weighted(st, 1)
+            if args.trade_start_ms is not None and hasattr(lib, "strategy_set_trade_start_time"):
+                lib.strategy_set_trade_start_time(st, int(args.trade_start_ms))
+            if args.chart_tz and hasattr(lib, "strategy_set_chart_timezone"):
+                lib.strategy_set_chart_timezone(st, args.chart_tz.encode())
+            if vw_on and hasattr(lib, "strategy_set_magnifier_volume_weighted"):
+                lib.strategy_set_magnifier_volume_weighted(st, 1)
+        except BaseException:
+            lib.strategy_free(st)
+            raise
         return st
 
     def _run(st, rep):
@@ -1548,61 +2090,50 @@ def main() -> int:
     # --- Bench mode: warm up, then time ONLY run_backtest_full over N repeats. ---
     # Setup (create/set_input/free) is OUTSIDE the timed region so the sample
     # isolates the engine hot loop (closest to the GBench harness). dlopen
-    # already happened above (load_strategy), outside any loop.
+    # already happened above (load_strategy), outside any loop. A rejected
+    # --syminfo / --symbol-feeds / setting raises its RunFailure before any
+    # stdout; main() prints it.
     timing = None
-    try:
-        if args.symbol_feeds:
-            symbol_feeds = load_symbol_feeds(args.symbol_feeds)
-        if args.bench:
-            warmup = max(0, int(args.warmup))
-            repeats = max(1, int(args.repeats))
-            for _ in range(warmup):
-                st = _make_state(); rep = ReportC()
-                try:
-                    _run(st, rep)
-                finally:
-                    lib.report_free(ctypes.byref(rep)); lib.strategy_free(st)
-            samples_ns: list[int] = []
-            for _ in range(repeats):
-                st = _make_state(); rep = ReportC()
-                try:
-                    t0 = time.perf_counter_ns(); _run(st, rep); t1 = time.perf_counter_ns()
-                    samples_ns.append(t1 - t0)
-                finally:
-                    lib.report_free(ctypes.byref(rep)); lib.strategy_free(st)
-            timing = _timing_block(
-                samples_ns, warmup=warmup, repeats=repeats,
-                bar_magnifier=bar_magnifier, magnifier_samples=magnifier_samples,
-                magnifier_dist=args.magnifier_dist.strip().lower() or "endpoints",
-                volume_weighted=vw_on)
+    if args.symbol_feeds:
+        symbol_feeds = load_symbol_feeds(args.symbol_feeds)
+    if args.bench:
+        warmup = max(0, int(args.warmup))
+        repeats = max(1, int(args.repeats))
+        for _ in range(warmup):
+            st = _make_state(); rep = ReportC()
+            try:
+                _run(st, rep)
+            finally:
+                lib.report_free(ctypes.byref(rep)); lib.strategy_free(st)
+        samples_ns: list[int] = []
+        for _ in range(repeats):
+            st = _make_state(); rep = ReportC()
+            try:
+                t0 = time.perf_counter_ns(); _run(st, rep); t1 = time.perf_counter_ns()
+                samples_ns.append(t1 - t0)
+            finally:
+                lib.report_free(ctypes.byref(rep)); lib.strategy_free(st)
+        timing = _timing_block(
+            samples_ns, warmup=warmup, repeats=repeats,
+            bar_magnifier=bar_magnifier, magnifier_samples=magnifier_samples,
+            magnifier_dist=args.magnifier_dist.strip().lower() or "endpoints",
+            volume_weighted=vw_on)
 
-        # --- Body run: one configured run for trades / metrics / diagnostics. ---
-        state = _make_state()
-        # The body state is the last one installed and the engine copied the
-        # feeds' arrays: release them before the run (the records stay).
-        for sym in symbol_feeds or ():
-            for feed in sym["feeds"]:
-                feed["bars"] = feed["close_ms"] = None
-    except (SyminfoError, SymbolFeedsError) as e:
-        # A rejected --syminfo or --symbol-feeds: the structured failure, before
-        # any stdout.
-        json.dump({"engine": "pineforge", "error": str(e)},
-                  sys.stdout, separators=(",", ":"))
-        sys.stdout.write("\n")
-        return 1
+    # --- Body run: one configured run for trades / metrics / diagnostics. ---
+    state = _make_state()
+    # The body state is the last one installed and the engine copied the
+    # feeds' arrays: release them before the run (the records stay).
+    for sym in symbol_feeds or ():
+        for feed in sym["feeds"]:
+            feed["bars"] = feed["close_ms"] = None
     report = ReportC()
     started = time.time()
     try:
         _run(state, report)
         elapsed = time.time() - started
-        err_msg = ""
-        if hasattr(lib, "strategy_get_last_error"):
-            err_ptr = lib.strategy_get_last_error(state)
-            err_msg = err_ptr.decode("utf-8", "replace") if err_ptr else ""
-        if err_msg:
-            json.dump({"engine": "pineforge", "error": err_msg},
-                      sys.stdout, separators=(",", ":"))
-            sys.stdout.write("\n")
+        failure = run_failure(lib, state)
+        if failure is not None:
+            write_failure(*failure)
             return 1
         applied_runtime = {
             "input_tf":           input_tf.decode() if input_tf else "",
@@ -1650,11 +2181,15 @@ def main() -> int:
             ))
         except Exception:
             out["fingerprint"] = None
-        json.dump(out, sys.stdout, separators=(",", ":"))
-        sys.stdout.write("\n")
+        # Serialized whole before any byte is written (the same json.dump), so
+        # a failure while it is built never follows half a report.
+        buffer = io.StringIO()
+        json.dump(out, buffer, separators=(",", ":"))
+        buffer.write("\n")
     finally:
         lib.report_free(ctypes.byref(report))
         lib.strategy_free(state)
+    sys.stdout.write(buffer.getvalue())
     return 0
 
 

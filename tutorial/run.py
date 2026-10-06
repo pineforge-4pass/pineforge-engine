@@ -136,6 +136,26 @@ def check_abi(lib: ctypes.CDLL) -> None:
             f"{EXPECTED_PF_ABI}; rebuild.")
 
 
+# A failure's stable code and arguments (engine 1.3.0+; an older .so has neither).
+def declare_error_code(lib: ctypes.CDLL) -> None:
+    for name in ("strategy_get_last_error_code", "strategy_get_last_error_args"):
+        if hasattr(lib, name):
+            getattr(lib, name).argtypes = [ctypes.c_void_p]
+            getattr(lib, name).restype = ctypes.c_char_p
+
+
+def error_code(lib: ctypes.CDLL, state) -> str:
+    """'<code> <args JSON>' of the last failure on state, or '' without one."""
+    if not hasattr(lib, "strategy_get_last_error_code"):
+        return ""
+    code = lib.strategy_get_last_error_code(state)
+    if not code:
+        return ""
+    args = (lib.strategy_get_last_error_args(state)
+            if hasattr(lib, "strategy_get_last_error_args") else None)
+    return f"{code.decode()} {args.decode() if args else '{}'}"
+
+
 def main() -> int:
     if not SO.exists():
         sys.exit(f"strategy.so missing — run `bash tutorial/run.sh` first")
@@ -162,6 +182,7 @@ def main() -> int:
     if hasattr(lib, "strategy_get_last_error"):
         lib.strategy_get_last_error.argtypes = [ctypes.c_void_p]
         lib.strategy_get_last_error.restype  = ctypes.c_char_p
+    declare_error_code(lib)
 
     state, report = lib.strategy_create(b"{}"), ReportC()
     t0 = time.time()
@@ -172,9 +193,11 @@ def main() -> int:
         if err_ptr:
             err_msg = err_ptr.decode("utf-8", "replace")
             if err_msg:
+                code = error_code(lib, state)
                 lib.report_free(ctypes.byref(report))
                 lib.strategy_free(state)
-                print(f"engine error: {err_msg}", file=sys.stderr)
+                print(f"engine error: {err_msg}" + (f" ({code})" if code else ""),
+                      file=sys.stderr)
                 return 1
 
     pnls = [report.trades[i].pnl for i in range(report.trades_len)]

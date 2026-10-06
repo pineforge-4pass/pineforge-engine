@@ -21,7 +21,7 @@ from pathlib import Path
 # Reuse the ctypes struct mirrors + paths from run.py — same engine,
 # same ABI, no need to retype 60 lines of struct fields.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run import BarC, ReportC, SO, OHLCV, check_abi  # noqa: E402
+from run import BarC, ReportC, SO, OHLCV, check_abi, declare_error_code, error_code  # noqa: E402
 
 import csv  # noqa: E402
 
@@ -55,6 +55,7 @@ def load_lib():
     if hasattr(lib, "strategy_get_last_error"):
         lib.strategy_get_last_error.argtypes = [ctypes.c_void_p]
         lib.strategy_get_last_error.restype  = ctypes.c_char_p
+    declare_error_code(lib)
     return lib
 
 
@@ -77,9 +78,11 @@ def run_one(lib, bars, n, *, inputs: dict[str, str],
         if err_ptr:
             err_msg = err_ptr.decode("utf-8", "replace")
             if err_msg:
+                code = error_code(lib, state)
                 lib.report_free(ctypes.byref(report))
                 lib.strategy_free(state)
-                raise RuntimeError("pineforge engine rejected run: " + err_msg)
+                raise RuntimeError("pineforge engine rejected run: " + err_msg
+                                   + (f" ({code})" if code else ""))
 
     pnls = [report.trades[i].pnl for i in range(report.trades_len)]
     wins = sum(p > 0 for p in pnls)

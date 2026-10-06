@@ -1945,6 +1945,23 @@ def probe_requests_provenance(requests: dict) -> dict:
     }
 
 
+def _with_run_failure_code(error: Exception, lib, state) -> Exception:
+    """error, carrying the engine's run-failure code when the library reports
+    one (strategy_get_last_error_code / _args, engine 1.3.0+):
+    ``run_failure_code`` (str) and ``run_failure_args`` (the canonical JSON
+    object text). The message and type are unchanged; the command line prints
+    the code to stderr (see the __main__ block)."""
+    if hasattr(lib, "strategy_get_last_error_code"):
+        raw = lib.strategy_get_last_error_code(state)
+        code = raw.decode("utf-8", "replace") if raw else ""
+        if code:
+            raw_args = (lib.strategy_get_last_error_args(state)
+                        if hasattr(lib, "strategy_get_last_error_args") else None)
+            error.run_failure_code = code
+            error.run_failure_args = raw_args.decode("utf-8", "replace") if raw_args else "{}"
+    return error
+
+
 class Strategy:
     """Thin ctypes wrapper around one strategy.so."""
 
@@ -1988,6 +2005,10 @@ class Strategy:
         if hasattr(L, "strategy_get_last_error"):
             L.strategy_get_last_error.argtypes = [ctypes.c_void_p]
             L.strategy_get_last_error.restype = ctypes.c_char_p
+        for name in ("strategy_get_last_error_code", "strategy_get_last_error_args"):
+            if hasattr(L, name):
+                getattr(L, name).argtypes = [ctypes.c_void_p]
+                getattr(L, name).restype = ctypes.c_char_p
         if hasattr(L, "strategy_stream_begin"):
             L.strategy_stream_begin.argtypes = [
                 ctypes.c_void_p, ctypes.POINTER(BarC), ctypes.c_int,
@@ -2215,7 +2236,9 @@ class Strategy:
                 err_ptr = self.lib.strategy_get_last_error(state)
                 if err_ptr:
                     detail = err_ptr.decode("utf-8", "replace")
-            raise RuntimeError(f"engine rejected {what}" + (f": {detail}" if detail else ""))
+            raise _with_run_failure_code(
+                RuntimeError(f"engine rejected {what}" + (f": {detail}" if detail else "")),
+                self.lib, state)
         for symbol in requests["symbols"]:
             for field, value in symbol["facts"]:
                 if self.lib.strategy_set_symbol_facts(
@@ -2661,9 +2684,9 @@ class Strategy:
                         err_ptr = self.lib.strategy_get_last_error(state)
                         if err_ptr:
                             detail = err_ptr.decode("utf-8", "replace")
-                    raise RuntimeError(
+                    raise _with_run_failure_code(RuntimeError(
                         "engine rejected auxiliary request.security feed"
-                        + (f": {detail}" if detail else ""))
+                        + (f": {detail}" if detail else "")), self.lib, state)
             for feed_tf, feed_bars, feed_n in native_feed_arrays:
                 rc = self.lib.strategy_set_native_security_feed(
                     state, feed_tf.encode(), feed_bars, feed_n)
@@ -2673,9 +2696,9 @@ class Strategy:
                         err_ptr = self.lib.strategy_get_last_error(state)
                         if err_ptr:
                             detail = err_ptr.decode("utf-8", "replace")
-                    raise RuntimeError(
+                    raise _with_run_failure_code(RuntimeError(
                         f"engine rejected native request.security feed {feed_tf}"
-                        + (f": {detail}" if detail else ""))
+                        + (f": {detail}" if detail else "")), self.lib, state)
             if probe_requests is not None:
                 self._install_probe_requests(state, probe_requests)
             self.lib.run_backtest_full(
@@ -2689,9 +2712,9 @@ class Strategy:
                 if err_ptr:
                     err_msg = err_ptr.decode("utf-8", "replace")
                     if err_msg:
-                        raise RuntimeError(
+                        raise _with_run_failure_code(RuntimeError(
                             "pineforge engine rejected run: " + err_msg
-                        )
+                        ), self.lib, state)
             if on_report is not None:
                 on_report(report)
             result = _report_to_dict(report)
@@ -4619,4 +4642,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except RuntimeError as error:
+        # The engine's run-failure code, before the traceback: the traceback's
+        # last line stays the engine's text, as before.
+        if getattr(error, "run_failure_code", None):
+            print(f"run failure code: {error.run_failure_code}", file=sys.stderr)
+        raise

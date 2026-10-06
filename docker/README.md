@@ -157,10 +157,14 @@ library's `strategy_set_syminfo_*` setters.
   must be a positive finite number, got <value>"}` on stdout, where `<value>` is
   the parsed value re-encoded as JSON (so `1e-400` shows as `0.0`) cut to 80
   characters (`got true`, `got "0.001"`), harness exit status 1, entrypoint exit
-  4. A strategy library without `strategy_set_syminfo_metadata` fails the same
-  way when `mincontract` is set: the harness never runs without the grid it was
-  given. A file that is not valid JSON, or not a JSON object, is not covered by
-  this: the harness ends in a Python traceback, as before.
+  4 (code `lot_grid_rejected`). A strategy library without
+  `strategy_set_syminfo_metadata` fails the same way when `mincontract` is set
+  (code `strategy_library_incompatible`): the harness never runs without the grid
+  it was given. A file that cannot be read, is not valid JSON or holds no JSON
+  object, and a `mintick` / `pointvalue` / `timezone` / `session` the setters
+  cannot take, fail the same way before any setter runs, with code
+  `syminfo_unreadable` and `args.reason` `io`, `not_json`, `not_object` or
+  `value_type` (see "The failure line" below).
 - An applied grid is recorded as `applied_runtime.syminfo`
   (`{"qty_step": <v>, "mincontract": <v>}`) and so in
   `fingerprint.provenance.runtime`: its fingerprint digest differs from the
@@ -246,8 +250,8 @@ docker run --rm \
   a non-positive `mintick`, more than 256 feeds, a library without the setters,
   a feed the engine refuses)
   fails the run before it starts: one line
-  `{"engine":"pineforge","error":"--symbol-feeds: ..."}` on stdout, harness exit
-  1, entrypoint exit 4.
+  `{"engine":"pineforge","error":"--symbol-feeds: ...","code":"symbol_feeds_refused",...}`
+  on stdout, harness exit 1, entrypoint exit 4 (see "The failure line" below).
 - What was installed is recorded as `applied_runtime.symbol_feeds` (each
   symbol's facts, and per feed its bar count, first and last open and a hash of
   its values), so the fingerprint digest differs from a run without it. Unset,
@@ -259,6 +263,69 @@ flags, unknown-input-TF, etc.) into `strategy_get_last_error()`; the
 container surfaces these as `{"engine":"pineforge","error":"..."}` on
 stdout and the container exits `4` (the harness returns 1; the entrypoint
 maps any harness failure to 4) instead of crashing.
+
+### The failure line
+
+Every failure of `docker/run_json.py` prints exactly one line on stdout and no
+report, whatever failed: the run, the request, a file, the strategy library or
+the harness itself.
+
+```json
+{"engine":"pineforge","error":"<English text>","code":"<code>","args":{...}}
+```
+
+- `engine` and `error` lead, so the line starts with
+  `{"engine":"pineforge","error":"` as before; `error` is the English text,
+  unchanged wherever a text existed before codes.
+- `code` is a stable code from the closed vocabulary `docker/run_failure_codes.json`
+  (schema `pineforge-run-failure-catalog/v1`: each code's class, retryable flag,
+  arguments and English templates). `args` holds its typed arguments: strings,
+  integers, numbers. A code is never read from a text: a script's
+  `runtime.error("<any text>")` is always `strategy_runtime_error`.
+- The run's own failure takes its code from `strategy_get_last_error_code` and its
+  arguments from `strategy_get_last_error_args` (re-parsed; anything but a JSON
+  object of scalars becomes `{}`). A strategy library without those getters
+  (built before them) prints no `code` and no `args`: the line is the earlier
+  `{"engine":"pineforge","error":"<text>"}`, byte for byte.
+- A run fails when the engine reports a text, a code, or a run status of 1
+  (`strategy_last_run_status`). `runtime.error()` with an empty message therefore
+  fails (`"error":""`, code `strategy_runtime_error`) instead of reporting the
+  bars it reached as a result. A status of 1 with neither a text nor a code is
+  `engine_unclassified_error`, text `the run did not complete and the engine
+  reported no error`.
+- Caps keep the line inside the first 64 KiB a reader takes: `error` is cut at
+  16 KiB and each string argument at 1 KiB of UTF-8, on a character boundary; a
+  line still over 60 KiB (text JSON escapes heavily, such as control characters)
+  has its text cut further.
+- Exit status 1, or 2 for a command line argparse refuses (its usage still goes
+  to stderr); the entrypoint maps both to 4.
+
+The harness's own failures and their codes:
+
+| Failure | `code` | `args` |
+| --- | --- | --- |
+| `--inputs` / `--overrides` not a JSON object, `--magnifier-dist` unknown, a command line argparse refuses (exit 2) | `run_request_invalid` | `option`: the flag (`inputs`, `magnifier_samples`, ...) or `arguments` |
+| `--ohlcv` unreadable, a missing column, a value that is not a number, no bars | `chart_bars_unreadable` | `reason`: `io`, `columns`, `value`, `empty` |
+| `--syminfo` unreadable or unusable (above) | `syminfo_unreadable` | `reason`: `io`, `not_json`, `not_object`, `value_type` |
+| `syminfo.mincontract` not a positive finite number | `lot_grid_rejected` | |
+| `--symbol-feeds` index or feed refused (one reason per refusal) | `symbol_feeds_refused` | `reason`: `timeframe_invalid`, `feed_not_increasing`, ... |
+| a feed the engine refuses | the engine's code when it reports one, else `symbol_feeds_refused` | the engine's, else `reason`: `engine_refused` |
+| the strategy library cannot be loaded, has another ABI, lacks an export or a setter | `strategy_library_incompatible` | `reason`: `load_failed`, `abi_missing`, `abi_mismatch`, `symbol_missing`, `setter_missing`; `missing`; `abi` |
+| `strategy_create` returns no strategy (checked before any setter) | `strategy_create_failed` | |
+| a setting the strategy refuses (below) | `setting_rejected` | `entrypoint`, `reason`, and `input` (the input's title) when the key is a title the strategy declares |
+| a declared input the compiled strategy cannot honour | `setting_unsupported` | |
+| anything else (a harness bug; its traceback on stderr) | `harness_internal_error` | |
+
+Settings: a strategy library exporting the checked settings API
+(`strategy_settings_api_version() == 1`, see `docs/checked-settings.md`) is created
+with `strategy_create_checked` and configured with `strategy_set_input_checked` /
+`strategy_set_override_checked`. A setting it refuses (an unknown input title or
+override key, an enum or option outside its list, a value that does not parse or
+is out of range) fails the run before it starts, with the text
+`strategy_set_input: <message>` or `strategy_set_override: <message>` and code
+`setting_rejected`, `args.reason` naming the message (`unknown_key`,
+`invalid_input_option`, `expected_integer`, ...). A library without that API
+keeps the legacy setters, which ignore such settings silently.
 
 Mount a `strategy.pine` and the bundled `pineforge-codegen`
 ([source-available](https://github.com/pineforge-4pass/pineforge-codegen-oss),
