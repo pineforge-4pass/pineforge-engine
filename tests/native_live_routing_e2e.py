@@ -458,6 +458,7 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
         finally:
             if retry_process.poll() is None:
                 retry_process.kill(); retry_process.communicate(timeout=30)
+        # This row covers newer starts while a transport retry is held in flight, not a worker that only sleeps through its backoff.
         print('PASS newer actions start after a transport failure and after its retry starts, before that held retry completes; pure sleeping-backoff delay untested', flush=True)
 
         timeout_document = copy.deepcopy(isolation_document)

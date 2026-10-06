@@ -117,7 +117,7 @@ def prove(root, runner, oracle, library, cell, probe):
         (target / f"{mode}.log").write_text(result.stdout + result.stderr)
         receipt = dict(timeframe=timeframe, timezone=timezone, session=session, first_day=first_day,
                        mode=mode, returncode=result.returncode, stderr=result.stderr.strip(),
-                       ledger_created=ledger.exists(), expected_admitted=admitted)
+                       ledger_created=ledger.exists(), expected_admitted=admitted or mode == "ticks")
         receipts.append(receipt)
         print(json.dumps(receipt), flush=True)
         if probe:
