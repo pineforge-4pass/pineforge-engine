@@ -44,7 +44,7 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--measure", action="store_true")
     parser.add_argument("--unprimed", action="store_true")
-    parser.add_argument("--distribution", type=int, choices=range(6))
+    parser.add_argument("--distribution", type=int, choices=range(6), default=3)
     args = parser.parse_args()
     temporary = None
     if args.output is None:
@@ -60,11 +60,18 @@ def main():
         name = f"tf{timeframe}-{entry}-{timing}-{direction}-{exit_kind}-{'off' if offset else 'on'}"
         directory = root / name
         directory.mkdir(parents=True, exist_ok=True)
-        bars = tape(timeframe, timing, direction, exit_kind, offset)
+        minutes = tape(timeframe, timing, direction, exit_kind, offset)
+        bars = []
+        for start in range(0, len(minutes), timeframe):
+            children = minutes[start:start + timeframe]
+            bars.append(dict(ts_open=children[0]["ts_open"], o=children[0]["o"],
+                             h=max(child["h"] for child in children),
+                             l=min(child["l"] for child in children), c=children[-1]["c"],
+                             v=sum(child["v"] for child in children)))
         full, warmup, feed = directory / "full.csv", directory / "warmup.csv", directory / "feed.jsonl"
         write_csv(full, bars)
-        write_csv(warmup, bars[:timeframe])
-        feed.write_text("".join(json.dumps(dict(type="bar", bar=bar)) + "\n" for bar in bars[timeframe:]))
+        write_csv(warmup, bars[:1])
+        feed.write_text("".join(json.dumps(dict(type="bar", bar=bar)) + "\n" for bar in bars[1:]))
         config = dict(symbol="TEST:BRACKET", session="24x7", timezone="UTC", chart_timezone="UTC",
                       syminfo=[["type", "stock"], ["mintick", "0.01"], ["pointvalue", "1"], ["qty_step", "1"]],
                       inputs=[["Entry kind", entry], ["Exit timing", timing], ["Direction", direction],
@@ -76,12 +83,13 @@ def main():
         configuration.write_text(json.dumps(config))
         batch_actions = directory / "batch-actions.jsonl"
         batch = checked([args.oracle, args.library, str(full), str(timeframe), str(batch_actions),
-                         "--config", str(configuration)])
+                         "--config", str(configuration), "--input-tf", str(timeframe),
+                         "--distribution", str(args.distribution)])
         (directory / "batch-report.json").write_text(json.dumps(batch, sort_keys=True) + "\n")
         assert batch["trades_len"] == 1 and not batch["trades"][0]["open_at_end"], (name, batch["trades"])
         ledger = directory / "ledger.sqlite"
         command = [args.runner, "run", "--strategy", args.library, "--warmup", str(warmup),
-                   "--feed", str(feed), "--ledger", str(ledger), "--mode", "bars", "--input-tf", "1",
+                   "--feed", str(feed), "--ledger", str(ledger), "--mode", "bars", "--input-tf", str(timeframe),
                    "--script-tf", str(timeframe), "--symbol", config["symbol"], "--session", "24x7",
                    "--timezone", "UTC", "--chart-timezone", "UTC"]
         for key, value in config["syminfo"]:

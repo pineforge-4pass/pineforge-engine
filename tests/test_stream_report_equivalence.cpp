@@ -209,6 +209,7 @@ private:
 void same_calculation_bracket_reports(int timeframe, int entry_kind,
                                      bool same_calculation, bool is_long,
                                      bool limit_exit, double offset, bool prearm) {
+    // Kernel-only DEFECT-7 characterization: aggregated input 1 is not runner admission.
     std::vector<pineforge::Bar> bars;
     const int exit_bar = same_calculation ? 2 : 3;
     const double sign = is_long == limit_exit ? 1.0 : -1.0;

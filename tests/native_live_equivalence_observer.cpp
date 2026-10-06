@@ -202,6 +202,7 @@ extern "C" int equivalence_export_receipts(void* state, const char* path) {
             if (!event.command) continue;
             orders::DefinitionRef definition;
             const char* kind = nullptr;
+            int match_reject_reason = -1;
             if (const auto* accepted = std::get_if<orders::AcceptedEvent>(&*event.command)) {
                 definition = accepted->definition;
                 kind = "accepted";
@@ -215,6 +216,30 @@ extern "C" int equivalence_export_receipts(void* state, const char* path) {
                 definition = activated->definition;
                 origin = activated->cursor.point.input_interval_index;
                 kind = "activated";
+            } else if (const auto* terms = std::get_if<orders::TermsResolvedEvent>(&*event.command)) {
+                definition = terms->definition;
+                origin = terms->cursor.point.input_interval_index;
+                timestamp = terms->cursor.point.effective_time_ms;
+                raw_price = terms->input.raw_price;
+                resolved_price = terms->input.terms.resolved_price;
+                provenance = static_cast<int>(terms->cursor.point.provenance);
+                path_phase = static_cast<int>(terms->cursor.point.path_phase);
+                kind = "terms_resolved";
+            } else if (const auto* rejected = std::get_if<orders::MatchRejectedEvent>(&*event.command)) {
+                definition = rejected->definition;
+                origin = rejected->cursor.point.input_interval_index;
+                timestamp = rejected->cursor.point.effective_time_ms;
+                provenance = static_cast<int>(rejected->cursor.point.provenance);
+                path_phase = static_cast<int>(rejected->cursor.point.path_phase);
+                match_reject_reason = static_cast<int>(rejected->reason);
+                kind = "match_rejected";
+            } else if (const auto* no_effect = std::get_if<orders::NoEffectEvent>(&*event.command)) {
+                definition = no_effect->definition;
+                origin = no_effect->cursor.point.input_interval_index;
+                timestamp = no_effect->cursor.point.effective_time_ms;
+                provenance = static_cast<int>(no_effect->cursor.point.provenance);
+                path_phase = static_cast<int>(no_effect->cursor.point.path_phase);
+                kind = "no_effect";
             } else if (const auto* applied = std::get_if<orders::ExecutionAppliedEvent>(&*event.command)) {
                 definition = applied->definition;
                 origin = applied->cursor.point.input_interval_index;
@@ -229,6 +254,7 @@ extern "C" int equivalence_export_receipts(void* state, const char* path) {
             output << Json::object({
                 {"ordinal", integer(static_cast<std::int64_t>(event.ordinal))},
                 {"kind", Json::string(kind)},
+                {"match_reject_reason", integer(match_reject_reason)},
                 {"type", Json::string(trigger_name(definition->request.trigger))},
                 {"id", Json::string(definition->request.label)},
                 {"origin_input_index", integer(origin)},

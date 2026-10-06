@@ -53,7 +53,7 @@ class StopStrategy(Strategy):
                 if error:
                     raise RuntimeError(error.decode())
             else:
-                self.check(self.library.strategy_stream_begin(handle, bars, len(bars), b"1", b"5"))
+                self.check(self.library.strategy_stream_begin(handle, bars, len(bars), b"5", b"5"))
                 for packet in packets:
                     if packet["type"] == "tick":
                         tick = TradeTick(packet["ts"], packet["seq"], packet["price"], packet["qty"])
@@ -98,16 +98,22 @@ def bar_array(rows):
     return (BarC * len(rows))(*(BarC(row["open"], row["high"], row["low"], row["close"], row["volume"], row["timestamp"]) for row in rows))
 
 
+def chart_warmup(rows):
+    return [dict(timestamp=rows[0]["timestamp"], open=rows[0]["open"],
+        high=max(row["high"] for row in rows[:5]), low=min(row["low"] for row in rows[:5]),
+        close=rows[4]["close"], volume=sum(row["volume"] for row in rows[:5]))]
+
+
 def runner_actions(args, probe, rows, packets, output):
     output.mkdir(parents=True)
     warmup, feed, ledger = (output / name for name in ("warmup.csv", "ticks.jsonl", "ledger.sqlite"))
     with warmup.open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=("timestamp", "open", "high", "low", "close", "volume"))
         writer.writeheader()
-        writer.writerows(rows[:5])
+        writer.writerows(chart_warmup(rows))
     feed.write_text("".join(json.dumps(packet) + "\n" for packet in packets))
     command = [str(args.runner), "run", "--strategy", str(args.library), "--warmup", str(warmup),
-               "--input-tf", "1", "--script-tf", "5", "--mode", "ticks", "--feed", str(feed),
+               "--input-tf", "5", "--script-tf", "5", "--mode", "ticks", "--feed", str(feed),
                "--ledger", str(ledger), "--symbol", "BINANCE:ETHUSDT.P", "--name", "lv-d8",
                "--session", "24x7", "--timezone", "UTC", "--chart-timezone", "UTC", "--input", f"Long={str(probe.long_side).lower()}"]
     for key, value in (("type", "crypto"), ("currency", "USDT"), ("basecurrency", "ETH"),
@@ -134,7 +140,7 @@ def run(args, output):
                     rows, packets = make_tape(long_side, variant)
                     probe = StopStrategy(args.library, long_side, pyramid, percent)
                     batch = probe.execute(bar_array(rows), None, folder / "batch")
-                    mirror = probe.execute(bar_array(rows[:5]), packets, folder / "mirror")
+                    mirror = probe.execute(bar_array(chart_warmup(rows)), packets, folder / "mirror")
                     live = runner_actions(args, probe, rows, packets, folder / "runner")
                     fields = ("id", "action", "leg", "contracts", "price", "reduce_only", "entry_incarnation")
                     assert [[row["order"][key] for key in fields] for row in live] == [
@@ -154,10 +160,13 @@ def run(args, output):
                     assert bool(rejected) == refused, (case, rejected)
                     if refused:
                         assert rejected[0]["reason"] == 8, (case, rejected)
-                    if args.require_terminal_receipts and variant == "gap-open" and refused:
-                        for mode, result in (("batch", batch), ("ticks", mirror)):
-                            assert any(row["kind"] == "match_rejected" for row in result["receipts"]), (
-                                f"{case}: {mode} receipt omits native HostPrecommit terminal event")
+                    if args.require_terminal_receipts and refused:
+                        terminal = [row for row in mirror["receipts"] if row["kind"] == "match_rejected"]
+                        assert terminal and terminal[0]["match_reject_reason"] == 8, (case, terminal)
+                        assert any(row["kind"] == "terms_resolved" for row in mirror["receipts"]), case
+                        if variant == "gap-open":
+                            assert any(row["kind"] == "match_rejected" and row["match_reject_reason"] == 8
+                                for row in batch["receipts"]), case
                     if args.assume_fill_equivalence and percent == 100 and long_side and variant == "cross":
                         assert len(live) == len(batch["actions"]), (
                             f"{case}: runner TICK entries={len(live)} canonical ENDPOINTS entries={len(batch['actions'])}; native rejection={rejected}")

@@ -4055,6 +4055,19 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND PINEFORGE_BUILD_LIVE_RUNNER)
         ${CMAKE_CURRENT_SOURCE_DIR}/same_calc_bracket_e2e.py $<TARGET_FILE:pineforge-live>
         $<TARGET_FILE:native_live_report_oracle> $<TARGET_FILE:same_calc_bracket_strategy>)
     set_tests_properties(confirmed_capabilities_same_calc_bracket_e2e PROPERTIES TIMEOUT 300)
+    if(PINEFORGE_ENABLE_SANITIZERS)
+        set_tests_properties(confirmed_capabilities_same_calc_bracket_e2e PROPERTIES TIMEOUT 600)
+    endif()
+endif()
+
+if(PINEFORGE_BUILD_SOURCE_LAYER AND PINEFORGE_BUILD_LIVE_RUNNER)
+    add_executable(test_native_live_observer_exit_order test_native_live_observer_exit_order.cpp
+        $<TARGET_OBJECTS:native_live_equivalence_observer>)
+    target_link_libraries(test_native_live_observer_exit_order PRIVATE pineforge)
+    target_include_directories(test_native_live_observer_exit_order PRIVATE ${PROJECT_SOURCE_DIR}/runner)
+    target_compile_options(test_native_live_observer_exit_order PRIVATE -UNDEBUG -ffp-contract=off)
+    add_test(NAME test_native_live_observer_exit_order COMMAND test_native_live_observer_exit_order)
+endif()
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_executable(test_lv_d8_tick_stop_activation test_lv_d8_tick_stop_activation.cpp)
     target_link_libraries(test_lv_d8_tick_stop_activation PRIVATE pineforge)
@@ -4074,7 +4087,8 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
         endif()
         add_test(NAME test_lv_d8_tick_stop_equivalence COMMAND ${Python3_EXECUTABLE} -B
             ${CMAKE_CURRENT_SOURCE_DIR}/lv_d8_tick_stop_equivalence.py
-            --library $<TARGET_FILE:lv_d8_stop_strategy> --runner $<TARGET_FILE:pineforge-live>)
+            --library $<TARGET_FILE:lv_d8_stop_strategy> --runner $<TARGET_FILE:pineforge-live>
+            --require-terminal-receipts)
         set_tests_properties(test_lv_d8_tick_stop_equivalence PROPERTIES TIMEOUT 120)
     endif()
 endif()
