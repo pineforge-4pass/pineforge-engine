@@ -445,5 +445,77 @@ class PortableProcessContract(unittest.TestCase):
         self.assertEqual(self.peak_rss_kib(4096, "darwin"), 4)
 
 
+class SanitizerEpilogueContract(unittest.TestCase):
+    def run_child(self, body):
+        return subprocess.run([sys.executable, "-B", "-c", textwrap.dedent(body)],
+            cwd=Path(__file__).resolve().parent, capture_output=True, text=True, timeout=10)
+
+    def test_main_exception_is_preserved_after_cleanup_and_finalization(self):
+        child = self.run_child('''
+            from native_live_sanitizer import run_with_finalizer
+            def main():
+                try:
+                    raise RuntimeError("MAIN_FAILURE")
+                finally:
+                    print("native-cleanup", flush=True)
+            def finalize():
+                print("finalized", flush=True)
+            raise SystemExit(run_with_finalizer(main, finalize))
+        ''')
+        self.assertEqual(child.returncode, 1, child)
+        self.assertIn("RuntimeError: MAIN_FAILURE", child.stderr)
+        self.assertEqual(child.stdout.splitlines(), ["native-cleanup", "finalized"])
+
+    def test_explicit_nonzero_exit_and_return_are_preserved(self):
+        for statement in ("raise SystemExit(7)", "return 7"):
+            with self.subTest(statement=statement):
+                child = self.run_child(f'''
+                    from native_live_sanitizer import run_with_finalizer
+                    def main():
+                        {statement}
+                    def finalize():
+                        print("finalized", flush=True)
+                    raise SystemExit(run_with_finalizer(main, finalize))
+                ''')
+                self.assertEqual(child.returncode, 7, child)
+                self.assertEqual(child.stdout, "finalized\n")
+                self.assertEqual(child.stderr, "")
+
+    def test_finalization_exceptions_cannot_leave_success(self):
+        for fault in ("collection", "completion-report"):
+            with self.subTest(fault=fault):
+                child = self.run_child(f'''
+                    import native_live_sanitizer as sanitizer
+                    def fail(*args, **kwargs):
+                        raise RuntimeError("FINALIZATION_FAILURE")
+                    sanitizer._native_leak_check = lambda: None
+                    if {fault!r} == "collection":
+                        sanitizer.gc.collect = fail
+                    else:
+                        sanitizer.print = fail
+                    raise SystemExit(sanitizer.run_with_finalizer(lambda: 0,
+                        sanitizer.finalize_sanitizer))
+                ''')
+                self.assertEqual(child.returncode, 1, child)
+                self.assertIn("RuntimeError: FINALIZATION_FAILURE", child.stderr)
+                self.assertNotIn("Exception ignored", child.stderr)
+
+    def test_successful_completion_finalizes_after_native_cleanup(self):
+        child = self.run_child('''
+            from native_live_sanitizer import run_with_finalizer
+            def main():
+                try:
+                    return 0
+                finally:
+                    print("native-cleanup", flush=True)
+            def finalize():
+                print("finalized", flush=True)
+            raise SystemExit(run_with_finalizer(main, finalize))
+        ''')
+        self.assertEqual(child.returncode, 0, child)
+        self.assertEqual(child.stdout.splitlines(), ["native-cleanup", "finalized"])
+        self.assertEqual(child.stderr, "")
+
+
 if __name__ == "__main__":
     unittest.main()

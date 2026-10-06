@@ -17,7 +17,7 @@ from native_live_tick_tape import (
     TIMESTAMP_CONTRACT, direct_tape, file_digest, genuine_case, message_groups, message_hashes,
 )
 from native_live_test_process import isolated_output
-from native_live_sanitizer import prepare_sanitizer
+from native_live_sanitizer import finalize_sanitizer, prepare_sanitizer, run_with_finalizer
 
 
 def synthetic_fixture():
@@ -212,4 +212,4 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run_with_finalizer(main, finalize_sanitizer))
