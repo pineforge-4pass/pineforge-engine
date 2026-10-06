@@ -280,7 +280,7 @@ def runner_command(strategy, output, runner, receiver, mode):
         "--symbol", "BINANCE:ETHUSDT.P", "--name", strategy.path.stem,
         "--syminfo", "type=crypto", "--syminfo", "currency=USDT", "--syminfo", "basecurrency=ETH",
         "--syminfo", "mintick=0.01", "--syminfo", "pointvalue=1", "--syminfo", "qty_step=0.001",
-        "--webhook-url", f"http://127.0.0.1:{receiver.server.server_address[1]}/actions", "--allow-insecure-http"]
+        "--webhook-routes", str(receiver.routes), "--allow-insecure-http"]
 
 
 def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scenario, mode="ticks"):
@@ -301,7 +301,8 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
     process = None
     result = {"scenario": scenario, "probe": strategy.path.stem, "batch_size": batch_size,
         "transport": transport, "messages": len(messages), "feed_bytes": feed_path.stat().st_size,
-        "fail_first": fail_first, "restart": restart}
+        "fail_first": fail_first, "restart": restart,
+        "delivery_policy": "single-flight, two explicit transport retries"}
     costs = []
     commands = []
     try:

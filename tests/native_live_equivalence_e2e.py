@@ -429,9 +429,10 @@ class MockReceiver:
                 try:
                     body = self.rfile.read(int(self.headers["Content-Length"]))
                     payload = json.loads(body)
-                    event_id = self.headers.get("Idempotency-Key")
+                    event_id = payload["event_id"]
+                    idempotency_header = self.headers.get("Idempotency-Key")
                     event_header = self.headers.get("X-PineForge-Event-Id")
-                    if event_id != event_header or event_id != payload["event_id"]:
+                    if event_id != event_header or idempotency_header != payload.get("delivery_id", event_id):
                         raise RuntimeError("idempotency header/payload mismatch")
                     with owner.lock:
                         prior = owner.database.execute("SELECT body FROM attempts WHERE event_id=?", (event_id,)).fetchall()
@@ -439,7 +440,7 @@ class MockReceiver:
                             raise RuntimeError("retry body changed")
                         rejected = owner.fail_first and not prior
                         owner.database.execute("INSERT INTO attempts VALUES(NULL,?,?,?,?,?)",
-                            (event_id, body, event_id, event_header, 503 if rejected else 200))
+                            (event_id, body, idempotency_header, event_header, 503 if rejected else 200))
                         is_new = not owner.database.execute("SELECT 1 FROM effects WHERE event_id=?", (event_id,)).fetchone()
                         if not rejected:
                             owner.database.execute("INSERT OR IGNORE INTO effects VALUES(NULL,?,?)", (event_id, body))
@@ -464,6 +465,12 @@ class MockReceiver:
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Receiver)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
+        self.routes = output / "routes.json"
+        write_json(self.routes, {"schema_version": 1, "default_target": "default",
+            "targets": {"default": {"url": f"http://127.0.0.1:{self.server.server_address[1]}/actions",
+                                    "secret_env": ""}}, "rules": [],
+            "delivery": {"max_in_flight": 1, "transport_retries": 2,
+                         "retry_backoff_ms": [10, 20]}})
 
     def finish(self, output):
         self.release_ack.set()
@@ -548,6 +555,7 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
         if not expected:
             raise RuntimeError("NOT EXERCISED: no live actions")
         receiver = MockReceiver(output, fail_first, crash_action)
+        result["delivery_policy"] = "single-flight, two explicit transport retries"
         command = [str(runner), "run", "--strategy", str(strategy.path), "--warmup", str(output / "warmup.csv"),
             "--input-tf", str(timeframe), "--script-tf", str(timeframe), "--session", "24x7", "--timezone", "UTC",
             "--chart-timezone", "UTC", "--mode", "ticks" if packets is not None else "bars",
@@ -556,7 +564,7 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
             "--ledger", str(output / "orders.sqlite3"), "--symbol", "BINANCE:ETHUSDT.P", "--name", strategy.path.stem,
             "--syminfo", "type=crypto", "--syminfo", "currency=USDT", "--syminfo", "basecurrency=ETH",
             "--syminfo", "mintick=0.01", "--syminfo", "pointvalue=1", "--syminfo", "qty_step=0.001",
-            "--webhook-url", f"http://127.0.0.1:{receiver.server.server_address[1]}/actions", "--allow-insecure-http"]
+            "--webhook-routes", str(receiver.routes), "--allow-insecure-http"]
         write_json(output / "command.json", command)
         with (output / "runner.log").open("w") as log:
             process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
