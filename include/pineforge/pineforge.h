@@ -1738,13 +1738,14 @@ typedef struct pf_output_event_v1_s {
 
 /** Turn recording on (@p on nonzero) or off. A change clears the record; a
  *  call that changes nothing changes nothing, even while a run is in progress.
- *  Returns 0 and leaves no failure (#strategy_get_last_error_code reads
- *  `""`), or -1 with nothing changed and the failure recorded as code
+ *  Returns 0, or -1 with nothing changed and the refusal recorded as code
  *  `outputs_rejected`: reason `not_declared`, "outputs: this module declares
  *  no outputs" (turning on a module that records nothing; turning it off
  *  answers 0), or reason `run_in_progress`, "outputs: recording cannot
  *  change during a run" (a change while a batch or a stream, from
- *  #strategy_stream_begin to #strategy_stream_end, is running). */
+ *  #strategy_stream_begin to #strategy_stream_end, is running). As with
+ *  #strategy_set_trace_enabled, a success leaves #strategy_get_last_error
+ *  and its code as they were; a refusal keeps a failed run's own. */
 PF_API int strategy_outputs_set_enabled(pf_strategy_t s, int on);
 /** Series slots per row; 0 while recording is off. */
 PF_API int strategy_outputs_series_count(pf_strategy_t s);

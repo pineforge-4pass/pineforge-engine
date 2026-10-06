@@ -121,12 +121,13 @@ The tables below list the catalog at this tree.
 | `other_symbol_feed_missing` | `no_data` | no | `timeframe` (timeframe, optional) | No feed is installed for another symbol's request at its timeframe. |
 | `other_symbol_request` | `no_data` | no | `call` (pine_source), `function` (vocab, 2 values), `line` (integer), `symbol` (symbol, optional) | The script read another symbol's request and no bars of that symbol were installed. |
 | `out_of_memory` | `resource` | yes | none | The run ran out of memory. |
+| `outputs_limit` | `strategy_limit` | no | `max` (integer), `reason` (vocab, 2 values) | A recorded-outputs capacity limit was reached during the run. |
 | `outputs_rejected` | `input` | no | `reason` (vocab, 3 values) | Recorded outputs were asked of a strategy library that records none, or the recording cannot be honoured as asked. |
 | `pine_array_error` | `strategy` | no | `collection` (vocab, 2 values, optional), `method` (vocab, 12 values, optional), `reason` (vocab, 5 values) | An array call failed: an index out of bounds, an inverted slice, an empty array, an invalid size, or a modified historical collection. |
 | `pine_invalid_argument` | `strategy` | no | `argument` (identifier, optional), `function` (identifier, optional), `rule` (vocab, 6 values) | A built-in refused the value of one of its arguments. |
 | `pine_matrix_error` | `strategy` | no | `function` (vocab, 15 values), `reason` (vocab, 10 values) | A matrix built-in refused its arguments (an index, a dimension, a size or an empty matrix). |
 | `pine_na_reference` | `strategy` | no | `object` (vocab, 10 values) | The script called a method on an na reference (an array, matrix, map, drawing or object id). |
-| `pine_runtime_limit` | `strategy_limit` | no | `limit` (vocab, 6 values), `max` (integer, optional) | The script reached a TradingView or PineForge resource limit. |
+| `pine_runtime_limit` | `strategy_limit` | no | `limit` (vocab, 4 values), `max` (integer, optional) | The script reached a TradingView or PineForge resource limit. |
 | `pine_string_error` | `strategy` | no | `reason` (vocab, 2 values) | A string built-in refused its arguments. |
 | `recalc_cap` | `strategy_limit` | no | none | The script's calc_on_order_fills recalculation loop reached its cap. |
 | `recorded_request_missing` | `no_data` | no | none | No recorded series is installed for a request the script reads. |

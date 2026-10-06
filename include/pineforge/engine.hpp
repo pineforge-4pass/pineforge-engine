@@ -2194,10 +2194,10 @@ public:
     // the shape once (declare_outputs), the boundary of every run
     // (output_run_begin) and the identity of every row (output_bar): a row is
     // a bar the host published, keyed by its open time. A violated
-    // precondition throws std::logic_error coded engine_invariant (a cap the
-    // run reached, or a bar recalculated after its events were cleared, has
-    // its own run-failure code), which inside a callback fails the run with
-    // that text and code. The methods are in src/engine_report.cpp.
+    // precondition throws std::logic_error coded engine_invariant; a cap the
+    // run reached (outputs_limit) or a bar recalculated after its events were
+    // cleared (outputs_rejected) throws std::runtime_error. Either fails the
+    // run inside a callback with its text and code. See src/engine_report.cpp.
 public:
     struct OutputEvent {
         uint64_t sequence = 0;        // 1-based per run; a cleared one is never issued again
@@ -2215,9 +2215,9 @@ public:
     };
 
     bool outputs_declared() const { return outputs_declared_; }
-    // false: refused (nothing declared, or a change while the host is
-    // Running); last_error() says which and nothing changed. A change of the
-    // flag clears the record.
+    // false: refused (nothing declared, or a change while the host is Running);
+    // last_error() says which unless it holds a failed run's error, and a
+    // success leaves it as it is. A change of the flag clears the record.
     bool set_outputs_enabled(bool on);
     // The readers behind the C exports. While recording is off the record is
     // empty and the counts are 0.

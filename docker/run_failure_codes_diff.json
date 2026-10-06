@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "d478755921d41831b8fd0e6e5a41d2e905c615e37ec57b0c6a9ba1782fda3f83"
+    "catalogSha256": "bd2b3dcbe1646275cb392e8f3408cccab21186671be4908fb72aa0d54f19d596"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -16,6 +16,32 @@
   },
   "metadataChanges": [],
   "added": [
+    {
+      "code": "outputs_limit",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "max": {
+            "kind": "integer"
+          },
+          "reason": {
+            "kind": "vocab",
+            "values": [
+              "too_many_events",
+              "too_many_rows"
+            ]
+          }
+        },
+        "class": "strategy_limit",
+        "description": "A recorded-outputs capacity limit was reached during the run.",
+        "english": [
+          "outputs: the event queue is full",
+          "outputs: the row count is at its limit"
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
     {
       "code": "outputs_rejected",
       "collection": "codes",
@@ -453,52 +479,6 @@
             "vector::_M_range_check: __n (which is {n}) >= this->size() (which is {size})",
             "{any}",
             "{entrypoint}: {message}"
-          ]
-        }
-      ]
-    },
-    {
-      "code": "pine_runtime_limit",
-      "collection": "codes",
-      "fields": [
-        {
-          "path": "args.limit.values",
-          "beforePresent": true,
-          "afterPresent": true,
-          "before": [
-            "map_pairs",
-            "max_bars_back",
-            "matrix_elements",
-            "udt_objects"
-          ],
-          "after": [
-            "map_pairs",
-            "max_bars_back",
-            "matrix_elements",
-            "udt_objects",
-            "output_events",
-            "output_rows"
-          ]
-        },
-        {
-          "path": "english",
-          "beforePresent": true,
-          "afterPresent": true,
-          "before": [
-            "UDT object-ID capacity exceeded",
-            "map cannot contain more than 50000 key-value pairs",
-            "matrix.elements_count: total exceeds int range",
-            "matrix.reshape: dimension overflow",
-            "{bar_prefix}The script attempts to reference historical data that is too far from the current bar ({bars_back} bars back). The historical buffer's limit is {limit} bars."
-          ],
-          "after": [
-            "UDT object-ID capacity exceeded",
-            "map cannot contain more than 50000 key-value pairs",
-            "matrix.elements_count: total exceeds int range",
-            "matrix.reshape: dimension overflow",
-            "outputs: the event queue is full",
-            "outputs: the row count is at its limit",
-            "{bar_prefix}The script attempts to reference historical data that is too far from the current bar ({bars_back} bars back). The historical buffer's limit is {limit} bars."
           ]
         }
       ]

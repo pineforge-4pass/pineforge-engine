@@ -10,7 +10,9 @@
 // change, off, index range), two calculations stating one open merging into
 // one row, the confirmed flag of a bar a stream finalizes before it closed,
 // the run-failure code of every refusal (strategy_get_last_error_code beside
-// the text), and a handle that declares nothing.
+// the text) and of the two caps, the failure record a switch leaves (a success
+// keeps it, a refusal keeps a failed run's), and a handle that declares
+// nothing.
 //
 // Source-free: this TU runs in the kernel-only profile.
 #include "outputs_test_support.hpp"
@@ -18,6 +20,7 @@
 #include <pineforge/run_failure.hpp>
 
 #include <algorithm>
+#include <climits>
 #include <stdexcept>
 
 using namespace outputs_test;
@@ -78,9 +81,11 @@ void undeclared_and_null_handles() {
     CHECK(last_error(s) == "outputs: this module declares no outputs");
     CHECK(code_of(s) == "outputs_rejected");
     CHECK(args_of(s) == R"({"reason":"not_declared"})");
-    // A switch that succeeds leaves no failure behind.
+    // A switch that succeeds leaves the record as it was, as
+    // strategy_set_trace_enabled does: the refusal stays readable.
     CHECK(strategy_outputs_set_enabled(s, 0) == 0);
-    CHECK(last_error(s).empty() && code_of(s).empty() && args_of(s).empty());
+    CHECK(last_error(s) == "outputs: this module declares no outputs");
+    CHECK(code_of(s) == "outputs_rejected" && args_of(s) == R"({"reason":"not_declared"})");
     CHECK(strategy_outputs_series_count(s) == 0);
     CHECK(strategy_outputs_bars_len(s) == 0);
     CHECK(strategy_outputs_events_len(s) == 0);
@@ -447,7 +452,7 @@ void in_run() {
             CHECK(code_of(s) == "outputs_rejected");
             CHECK(args_of(s) == R"({"reason":"run_in_progress"})");
             CHECK(strategy_outputs_set_enabled(s, 1) == 0);
-            CHECK(code_of(s).empty());
+            CHECK(code_of(s) == "outputs_rejected");   // a success leaves the record
             if (i < 6) CHECK(strategy_stream_push_bar(s, &c_bars[i]) == 0);
         }
         Record r = read_record(s);
@@ -496,6 +501,75 @@ void in_run() {
             CHECK(r.events[4].value == 5.0 && r.events[4].bar_index == 4 && r.events[4].sequence == 5);
         }
     }
+}
+
+// After a failed run the switch keeps that run's text and code, whether it
+// succeeds (a declared module turned off) or refuses (an undeclared module
+// turned on), as the C boundary keeps them for a refused call.
+void failed_run_record() {
+    for (const bool declare : {true, false}) {
+        OutputsHost host({1, 1, 0, declare});
+        pf_strategy_t s = host.handle();
+        CHECK(host.configure_native(make_spec("outputs-failed-run", 1)).status
+              == NativeSetupStatus::Applied);
+        if (declare) CHECK(strategy_outputs_set_enabled(s, 1) == 0);
+        host.script = [](OutputsHost& h, const Bar&, const NativeDecisionContext&) {
+            if (h.published == 3) throw std::runtime_error("host failure");
+        };
+        const auto bars = make_bars(6, kStep);
+        host.run(bars.data(), static_cast<int>(bars.size()));
+        CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
+        CHECK(strategy_last_run_status(s) != 0);
+        const std::string text = last_error(s), code = code_of(s), args = args_of(s);
+        CHECK(text.find("host failure") != std::string::npos);
+        CHECK(!code.empty() && code != "outputs_rejected");
+        if (declare) {
+            CHECK(strategy_outputs_set_enabled(s, 0) == 0);
+            CHECK(strategy_outputs_bars_len(s) == 0);
+        } else {
+            CHECK(strategy_outputs_set_enabled(s, 1) == -1);
+        }
+        CHECK(last_error(s) == text && code_of(s) == code && args_of(s) == args);
+    }
+}
+
+// The two INT_MAX caps, 2^31 events or rows, are out of a test's reach. Their
+// exception as the sites in engine_report.cpp throw it: a std::runtime_error
+// read as outputs_limit, the reason naming the cap and max the cap itself.
+// The registry checks the arguments where they are raised: a reason outside
+// the catalog's list (the last row) reads engine_invariant instead.
+void limit_codes() {
+    struct Row {
+        const char* reason;
+        const char* text;
+        RunFailureCode code;
+        const char* args;
+    };
+    const Row rows[] = {
+        {"too_many_events", "outputs: the event queue is full", RunFailureCode::outputs_limit,
+         R"({"max":2147483647,"reason":"too_many_events"})"},
+        {"too_many_rows", "outputs: the row count is at its limit", RunFailureCode::outputs_limit,
+         R"({"max":2147483647,"reason":"too_many_rows"})"},
+        {"output_rows", "outputs: the row count is at its limit", RunFailureCode::engine_invariant,
+         "{}"},
+    };
+    for (const Row& row : rows) {
+        bool thrown = false;
+        try {
+            throw coded<std::runtime_error>(RunFailureCode::outputs_limit,
+                                            {{"reason", row.reason}, {"max", INT_MAX}}, row.text);
+        } catch (const std::runtime_error& e) {
+            thrown = true;
+            const RunFailureValue value = classify_run_failure(e);
+            CHECK(value.code == row.code);
+            CHECK((value.args ? *value.args : std::string("{}")) == row.args);
+            CHECK(std::string(e.what()) == row.text);
+        }
+        CHECK(thrown);
+    }
+    CHECK(run_failure_code_class(RunFailureCode::outputs_limit) == RunFailureClass::strategy_limit);
+    CHECK(!run_failure_code_retryable(RunFailureCode::outputs_limit));
+    CHECK(std::string(run_failure_code_name(RunFailureCode::outputs_limit)) == "outputs_limit");
 }
 
 // A stream ended while its last slot is still forming
@@ -548,5 +622,7 @@ int main() {
     row_rules();
     in_run();
     partially_finalized_bar();
+    failed_run_record();
+    limit_codes();
     return finish("test_outputs_recorder");
 }

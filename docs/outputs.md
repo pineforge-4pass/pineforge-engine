@@ -77,10 +77,11 @@ lands in the previous bar's row.
 Each failure carries a run-failure code (`docs/pages/run-failure-codes.md`)
 beside its text. A broken precondition of the table above is a host or
 generated-code defect, thrown as `std::logic_error` and coded
-`engine_invariant`. The event queue and the rows reaching `INT_MAX` are
-`pine_runtime_limit` (limit `output_events` or `output_rows`). A recalculation
-of a bar after a caller cleared that bar's events is `outputs_rejected`
-(reason `recalculated_after_clear`), and so are the switch's refusals below.
+`engine_invariant`. An event queue or a row count that reaches `INT_MAX`
+throws `std::runtime_error` coded `outputs_limit` (reason `too_many_events`
+or `too_many_rows`). A recalculation of a bar after a caller cleared that
+bar's events throws `std::runtime_error` coded `outputs_rejected` (reason
+`recalculated_after_clear`), the code of the switch's refusals below.
 Thrown inside a callback, the exception fails the run with its text in
 `last_error()` (`strategy_get_last_error`) and its code in
 `strategy_get_last_error_code`. A caller reads nothing after a failed run:
@@ -153,7 +154,7 @@ private:
 
 | Function | Answers |
 |---|---|
-| `strategy_outputs_set_enabled(s, on)` | 0 with no failure left behind, or -1, nothing changed and the failure coded `outputs_rejected`: reason `not_declared` (turning on a module that declares nothing) or `run_in_progress` (changing the switch while a run is in progress: a batch, or a stream from `strategy_stream_begin` to `strategy_stream_end`). A change clears the record; a call that changes nothing answers 0, also during a run. |
+| `strategy_outputs_set_enabled(s, on)` | 0, or -1, nothing changed and the refusal coded `outputs_rejected`: reason `not_declared` (turning on a module that declares nothing) or `run_in_progress` (changing the switch while a run is in progress: a batch, or a stream from `strategy_stream_begin` to `strategy_stream_end`). A change clears the record; a call that changes nothing answers 0, also during a run. As with `strategy_set_trace_enabled`, a success leaves `strategy_get_last_error` and its code as they were, and a refusal keeps a failed run's own: read a failed run's error before or after the switch alike. |
 | `strategy_outputs_series_count(s)` | slots per row; 0 while recording is off |
 | `strategy_outputs_bars_len(s)` | rows |
 | `strategy_outputs_bar_times_copy(s, from_bar, open_ms, close_ms, capacity, written)` | the rows' times from `from_bar` on |
@@ -242,7 +243,7 @@ and `scripts/test_run_json_outputs.py` runs the harness end to end.
 ## Costs and limits
 
 - A row costs 8 bytes per slot and is kept for the whole run or stream.
-- The event queue holds at most `INT_MAX` events between clears; one more
-  fails the run.
+- The event queue holds at most `INT_MAX` events between clears, and a run
+  at most `INT_MAX` rows; one more fails the run as `outputs_limit`.
 - Recording is a branch per writer call while it is off, and generated code
   takes that branch once per call site.

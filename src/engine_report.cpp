@@ -245,7 +245,7 @@ void BacktestEngine::free_report(ReportC* report) {
 // read for three facts only: whether the host is Running, the run's phase and
 // the current point's completion. Every refusal carries its run-failure code
 // (run_failure.hpp): a broken recorder contract is a host or generated-code
-// defect, engine_invariant; a cap the run reached is pine_runtime_limit; the
+// defect, engine_invariant; a cap the run reached is outputs_limit; the
 // two a caller causes (a switch it may not flip, a bar recalculated after it
 // took that bar's events) are outputs_rejected.
 #include "native_execution_consumer.hpp"
@@ -267,9 +267,19 @@ constexpr double kUnwrittenOutput = std::numeric_limits<double>::quiet_NaN();
     throw coded<std::logic_error>(RunFailureCode::engine_invariant, {}, "outputs: " + text);
 }
 
-[[noreturn]] void refuse_output_limit(const char* limit, const char* text) {
-    throw coded<std::runtime_error>(RunFailureCode::pine_runtime_limit,
-                                    {{"limit", limit}, {"max", INT_MAX}}, text);
+[[noreturn]] void refuse_output_limit(const char* reason, const char* text) {
+    throw coded<std::runtime_error>(RunFailureCode::outputs_limit,
+                                    {{"reason", reason}, {"max", INT_MAX}}, text);
+}
+
+// A refused switch, recorded as the C boundary records a refused call: a
+// handle whose last run failed keeps that run's own text and code.
+void note_switch_refusal(BacktestEngine& engine, const char* text, const char* reason) {
+    if (engine.last_run_status() != 0
+        && run_failure_value_of(engine).code != RunFailureCode::none) {
+        return;
+    }
+    note_run_failure(engine, text, RunFailureCode::outputs_rejected, {{"reason", reason}});
 }
 
 // FNV-1a 64 of the bytes, as stream_state_hash folds them.
@@ -315,21 +325,20 @@ void BacktestEngine::clear_output_record() {
 
 bool BacktestEngine::set_outputs_enabled(bool on) {
     if (on && !outputs_declared_) {
-        note_run_failure(*this, "outputs: this module declares no outputs",
-                         RunFailureCode::outputs_rejected, {{"reason", "not_declared"}});
+        note_switch_refusal(*this, "outputs: this module declares no outputs", "not_declared");
         return false;
     }
     if (on != outputs_enabled_) {
         if (output_host_running()) {
-            note_run_failure(*this, "outputs: recording cannot change during a run",
-                             RunFailureCode::outputs_rejected, {{"reason", "run_in_progress"}});
+            note_switch_refusal(*this, "outputs: recording cannot change during a run",
+                                "run_in_progress");
             return false;
         }
         outputs_enabled_ = on;
         clear_output_record();
     }
-    // A setter that succeeds leaves no failure behind (strategy_get_last_error_code).
-    clear_run_failure(*this);
+    // Success leaves the failure record as it is, as strategy_set_trace_enabled
+    // and the checked settings setters do: a failed run's text and code survive.
     return true;
 }
 
@@ -365,7 +374,7 @@ void BacktestEngine::output_bar(int64_t open_ms, int64_t close_ms) {
     if (output_open_ms_.empty() || open_ms > output_open_ms_.back()) {
         // bar_index is an int32_t, like the C record's.
         if (output_open_ms_.size() >= static_cast<size_t>(INT_MAX))
-            refuse_output_limit("output_rows", "outputs: the row count is at its limit");
+            refuse_output_limit("too_many_rows", "outputs: the row count is at its limit");
         output_series_.resize(output_series_.size() + slots, kUnwrittenOutput);
         output_open_ms_.push_back(open_ms);
         output_close_ms_.push_back(close_ms);
@@ -417,7 +426,7 @@ void BacktestEngine::record_output_event(int output, double value, const std::st
     if (output < 0 || output >= outputs_count_)
         refuse_output("output " + std::to_string(output) + " is out of range");
     if (output_events_.size() >= static_cast<size_t>(INT_MAX))
-        refuse_output_limit("output_events", "outputs: the event queue is full");
+        refuse_output_limit("too_many_events", "outputs: the event queue is full");
     if (output_sequence_ == std::numeric_limits<uint64_t>::max())
         refuse_output("event sequence overflow");
     OutputEvent event;

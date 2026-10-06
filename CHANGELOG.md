@@ -21,8 +21,8 @@ version number follows semantic versioning over the surfaces the
   `strategy_signal_safety_receipt`. `docker/run_json.py --outputs` writes the
   record as the report's `outputs` block. Every refusal carries a run-failure
   code: the new `outputs_rejected` (reasons `not_declared`, `run_in_progress`,
-  `recalculated_after_clear`), `pine_runtime_limit` with the new limits
-  `output_events` and `output_rows`, `strategy_library_incompatible` with the
+  `recalculated_after_clear`), the new `outputs_limit` (reasons
+  `too_many_events`, `too_many_rows`), `strategy_library_incompatible` with the
   new reasons `outputs_api_mismatch` and `outputs_manifest_invalid`, and
   `engine_invariant` for a broken recorder precondition (all additions to
   `docker/run_failure_codes.json`). Recording is off until a caller

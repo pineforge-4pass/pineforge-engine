@@ -466,6 +466,28 @@
    "retryable": true,
    "since": "1.4.0"
   },
+  "outputs_limit": {
+   "args": {
+    "max": {
+     "kind": "integer"
+    },
+    "reason": {
+     "kind": "vocab",
+     "values": [
+      "too_many_events",
+      "too_many_rows"
+     ]
+    }
+   },
+   "class": "strategy_limit",
+   "description": "A recorded-outputs capacity limit was reached during the run.",
+   "english": [
+    "outputs: the event queue is full",
+    "outputs: the row count is at its limit"
+   ],
+   "retryable": false,
+   "since": "1.5.0"
+  },
   "outputs_rejected": {
    "args": {
     "reason": {
@@ -687,9 +709,7 @@
       "map_pairs",
       "max_bars_back",
       "matrix_elements",
-      "udt_objects",
-      "output_events",
-      "output_rows"
+      "udt_objects"
      ]
     },
     "max": {
@@ -704,8 +724,6 @@
     "map cannot contain more than 50000 key-value pairs",
     "matrix.elements_count: total exceeds int range",
     "matrix.reshape: dimension overflow",
-    "outputs: the event queue is full",
-    "outputs: the row count is at its limit",
     "{bar_prefix}The script attempts to reference historical data that is too far from the current bar ({bars_back} bars back). The historical buffer's limit is {limit} bars."
    ],
    "retryable": false,
