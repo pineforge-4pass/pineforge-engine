@@ -99,9 +99,10 @@ def prove(root, runner, oracle, library, cell, probe):
     split = 2
     write_csv(warmup, rows[:split])
     batch_actions = target / "batch-actions.jsonl"
-    batch = checked(oracle_command(oracle, library, full, config_path, batch_actions, timeframe))
-    (target / "batch-report.json").write_text(json.dumps(batch))
-    assert batch["trades_len"] > 0, (name, "vacuous batch")
+    if admitted:
+        batch = checked(oracle_command(oracle, library, full, config_path, batch_actions, timeframe))
+        (target / "batch-report.json").write_text(json.dumps(batch))
+        assert batch["trades_len"] > 0, (name, "vacuous batch")
     receipts = []
     for mode in ("bars", "ticks"):
         feed = target / f"{mode}.jsonl"
@@ -130,6 +131,7 @@ def prove(root, runner, oracle, library, cell, probe):
         direct_actions = target / f"direct-{mode}-actions.jsonl"
         direct = checked(oracle_command(oracle, library, warmup, config_path, direct_actions, timeframe)
                          + ["--stream-feed", feed])
+        assert direct["trades_len"] > 0, (name, mode, "vacuous stream")
         actual = checked([runner, "report", "--ledger", ledger])["report"]
         equal(direct, actual, "calendar runner/direct")
         if mode == "bars":

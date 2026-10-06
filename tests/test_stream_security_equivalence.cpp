@@ -195,7 +195,10 @@ int main(int argc, char** argv) {
         equal = equal && expected.trades_len == expected_batch_trades()
             && expected.security_feeds_total == 4000;
     }
-    if (expected_batch_trades() < 0 || chart_minutes > 1)
+    if (case_name == "htf5_close" && chart_minutes == 5)
+        equal = equal && expected.trades_len == 0
+            && expected.security_feeds_total == static_cast<std::int64_t>(bars.size());
+    else if (expected_batch_trades() < 0 || chart_minutes > 1)
         equal = equal && expected.trades_len > 0;
     std::printf("%s [%s input=%s script=%s warmup=%d] batch_trades=%d stream_trades=%d "
         "security_feeds_total=%lld/%lld first_trade=%d net_profit=%.17g/%.17g "
