@@ -52,7 +52,8 @@ int main() {
         {100, 100, 100, 100, 1, 1704067260000LL},
         {100, 115, 99, 103, 1, 1704067320000LL},
         {103, 103, 103, 103, 1, 1704067380000LL}};
-    host.run(bars.data(), static_cast<int>(bars.size()), "1", "1", 0, 4, 3);
+    host.run(bars.data(), static_cast<int>(bars.size()), "1", "1", false, 4,
+             pineforge::MagnifierDistribution::ENDPOINTS);
     assert(host.last_error().empty());
     std::vector<const orders::ExecutionAppliedEvent*> receipts;
     for (const auto& event : host.native_events(0)) {
@@ -73,7 +74,7 @@ int main() {
     std::string line;
     std::size_t index = 0;
     while (std::getline(input, line)) {
-        const auto record = pineforge::live::Json::parse(line);
+        const auto record = pineforge::live::parse_json(line);
         const auto& order = record.at("order");
         if (order.at("leg").value != "exit") continue;
         assert(index < receipts.size());
