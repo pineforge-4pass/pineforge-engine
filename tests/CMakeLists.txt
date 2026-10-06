@@ -4115,6 +4115,11 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
             --library $<TARGET_FILE:lv_d8_stop_strategy> --runner $<TARGET_FILE:pineforge-live>
             --require-terminal-receipts)
         add_test(NAME test_lv_d8_tick_stop_equivalence COMMAND ${_pf_d8_equivalence_command})
-        set_tests_properties(test_lv_d8_tick_stop_equivalence PROPERTIES TIMEOUT 120)
+        # 38 s on an idle 32-vCPU host; the row spawns many ctypes scenarios, so
+        # keep an order of magnitude over that for loaded and instrumented runs.
+        set_tests_properties(test_lv_d8_tick_stop_equivalence PROPERTIES TIMEOUT 300)
+        if(PINEFORGE_ENABLE_SANITIZERS)
+            set_tests_properties(test_lv_d8_tick_stop_equivalence PROPERTIES TIMEOUT 900)
+        endif()
     endif()
 endif()
