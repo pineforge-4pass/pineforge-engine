@@ -600,8 +600,15 @@ struct Cursor {
     std::int64_t bar_timestamp = -1;
 };
 struct InputGap : std::runtime_error { using std::runtime_error::runtime_error; };
-bool legacy_minute_input(const Config& config) {
+// Pine 1m/1m keeps the pre-chart-delivery handling exactly: the contiguous
+// minute warmup, no runner cadence check and the engine's own one-minute guard.
+bool pine_minute_input(const Config& config) {
     return !config.native.present && config.input_tf == "1" && config.script_tf == "1";
+}
+// Chart delivery is the Pine path with input equal to a coarser script clock;
+// hand-written --native-config modules keep their one-minute input rule.
+bool chart_delivery(const Config& config) {
+    return !config.native.present && !pine_minute_input(config);
 }
 pineforge::native_calendar::NativeInterval input_interval(const Config& config, std::int64_t timestamp) {
     const auto interval = pineforge::native_calendar::interval_containing(
@@ -611,8 +618,8 @@ pineforge::native_calendar::NativeInterval input_interval(const Config& config, 
     return *interval;
 }
 std::int64_t input_close(const Config& config, std::int64_t timestamp) {
-    return legacy_minute_input(config) ? timestamp + 60000
-                                      : input_interval(config, timestamp).last_traded_close_ms;
+    return chart_delivery(config) ? input_interval(config, timestamp).last_traded_close_ms
+                                  : timestamp + 60000;
 }
 void apply(Strategy &s, const Config &c, Cursor &cursor, const Json &frame) {
     auto type = frame.at("type").text();
@@ -648,7 +655,7 @@ void apply(Strategy &s, const Config &c, Cursor &cursor, const Json &frame) {
         b.low = j.at("l").real();
         b.close = j.at("c").real();
         b.volume = j.at("v").real();
-        if (!legacy_minute_input(c)) {
+        if (chart_delivery(c)) {
             const auto previous = input_interval(c, cursor.bar_timestamp);
             if (b.timestamp != previous.next_input_open_ms)
                 throw InputGap("input bar cadence must follow the configured input timeframe and session calendar");
@@ -832,11 +839,13 @@ int run(Config c) {
     if (sha256_hex(read_file(c.strategy, 512ULL * 1024 * 1024)) != sha256_hex(library))
         throw std::runtime_error("strategy library changed during initialization");
     strategy.require_contract(c);
-    auto warmup = history(original, !legacy_minute_input(c));
-    c.input_clock = pineforge::native_calendar::parse_timeframe(c.input_tf);
-    c.input_calendar = pineforge::native_calendar::parse_session(c.session, c.timezone);
-    if (!c.input_clock || !c.input_calendar)
-        throw std::runtime_error("input timeframe or session calendar is invalid");
+    auto warmup = history(original, !pine_minute_input(c));
+    if (chart_delivery(c)) {
+        c.input_clock = pineforge::native_calendar::parse_timeframe(c.input_tf);
+        c.input_calendar = pineforge::native_calendar::parse_session(c.session, c.timezone);
+        if (!c.input_clock || !c.input_calendar)
+            throw std::runtime_error("input timeframe or session calendar is invalid");
+    }
     strategy.configure(c);
     const auto settings_receipt = strategy.effective_settings();
     const auto capabilities_receipt = strategy.capabilities();
@@ -847,7 +856,7 @@ int run(Config c) {
         refuse_legacy_ledger(c.ledger, bind_deployment_identity(identity(legacy, original, library),
             settings_receipt, capabilities_receipt, c.routing.routed, c.routing.file_identity, confirmed_bar_receipt));
     }
-    if (!c.native.present && !legacy_minute_input(c))
+    if (chart_delivery(c))
         require_chart_calendar(c.script_tf, c.timezone, warmup.front().timestamp, c.session,
                                c.mode == "bars", warmup.back().timestamp);
     NativeConfigValues clock = c.native;
@@ -869,7 +878,7 @@ int run(Config c) {
             }
         }
     }
-    if (!legacy_minute_input(c))
+    if (chart_delivery(c))
         require_native_warmup(clock, warmup);
     std::string deployment =
         c.native.present
