@@ -1051,6 +1051,18 @@ void source::PineStrategyHost::restore_symbol_feeds() {
     const NativeRunSpec* spec = native_state().spec;
     if (spec == nullptr || spec->instrument_feeds.size() != symbol_feeds_.size())
         throw std::logic_error("request data: the run spec no longer holds the symbol feeds");
+    // Every entry is the one lent at that index -- its key and its column
+    // names -- before a byte is copied back, so a mismatch changes nothing.
+    for (std::size_t i = 0; i < symbol_feeds_.size(); ++i) {
+        const NativeInstrumentFeed& held = spec->instrument_feeds[i];
+        const NativeInstrumentFeed& feed = symbol_feeds_[i];
+        bool same = held.instrument == feed.instrument && held.tf == feed.tf
+            && held.columns.size() == feed.columns.size();
+        for (std::size_t c = 0; same && c < feed.columns.size(); ++c)
+            same = held.columns[c].name == feed.columns[c].name;
+        if (!same)
+            throw std::logic_error("request data: the run spec holds other symbol feeds");
+    }
     for (std::size_t i = 0; i < symbol_feeds_.size(); ++i) {
         const NativeInstrumentFeed& held = spec->instrument_feeds[i];
         NativeInstrumentFeed& feed = symbol_feeds_[i];
@@ -1060,6 +1072,17 @@ void source::PineStrategyHost::restore_symbol_feeds() {
             feed.columns[c].values = held.columns[c].values;
     }
     symbol_feeds_lent_ = false;
+}
+
+// A door's restore: the reason it failed, empty when the store holds its
+// bytes, so the door refuses with that text rather than with none.
+std::string source::PineStrategyHost::restore_symbol_feeds_reason() {
+    try {
+        restore_symbol_feeds();
+    } catch (const std::exception& error) {
+        return std::string("request data could not be restored: ") + error.what();
+    }
+    return {};
 }
 
 void source::PineStrategyHost::prepare_foreign_security_sites(
@@ -1286,7 +1309,6 @@ bool source::PineStrategyHost::set_symbol_feed(const std::string& key,
         return false;
     };
     if (run_in_progress(*this)) return refuse(kRunInProgress);
-    restore_symbol_feeds();
     if (key.empty()) return refuse("empty symbol key");
     const std::string tf = canonical_symbol_timeframe(timeframe);
     if (tf.empty() || !native_calendar::parse_timeframe(tf)) {
@@ -1314,6 +1336,9 @@ bool source::PineStrategyHost::set_symbol_feed(const std::string& key,
                       + std::to_string(static_cast<int>(judged.error)) + ", field "
                       + std::to_string(static_cast<int>(judged.field)) + ")");
     }
+    // Every refusal above reads keys only; a store whose bytes are lent
+    // (restore_symbol_feeds) gets them back before one of its feeds changes.
+    if (const std::string why = restore_symbol_feeds_reason(); !why.empty()) return refuse(why);
     if (existing >= 0) {
         symbol_feeds_[static_cast<std::size_t>(existing)] = std::move(feed);
     } else {
@@ -1334,13 +1359,15 @@ bool source::PineStrategyHost::set_symbol_feed_column(const std::string& key,
         return false;
     };
     if (run_in_progress(*this)) return refuse(kRunInProgress);
-    restore_symbol_feeds();
     const std::int64_t found = find_symbol_feed(key, canonical_symbol_timeframe(timeframe));
     if (found < 0) {
         return refuse("no feed is installed for symbol '" + key + "' at timeframe '"
                       + timeframe + "'");
     }
     if (name.empty()) return refuse("empty column name");
+    // The refusals above read keys only; the count check below reads the
+    // feed's bars, so a lent store gets its bytes back first.
+    if (const std::string why = restore_symbol_feeds_reason(); !why.empty()) return refuse(why);
     NativeInstrumentFeed& feed = symbol_feeds_[static_cast<std::size_t>(found)];
     if (n < 0 || static_cast<std::size_t>(n) != feed.bars.size() || (n > 0 && values == nullptr))
         return refuse("column '" + name + "' has " + std::to_string(n) + " values for "
@@ -1381,7 +1408,6 @@ bool source::PineStrategyHost::set_symbol_facts(const std::string& key,
         return false;
     };
     if (run_in_progress(*this)) return refuse(kRunInProgress);
-    restore_symbol_feeds();
     if (key.empty()) return refuse("empty symbol key");
     SymbolFacts candidate = symbol_facts_.count(key) ? symbol_facts_[key] : SymbolFacts{};
     if (field == "canonical") {
@@ -1406,6 +1432,9 @@ bool source::PineStrategyHost::set_symbol_facts(const std::string& key,
     } else {
         return refuse("unknown field '" + field + "'");
     }
+    // The digest below reads the feeds' sizes: a lent store gets its bytes
+    // back first, after every refusal.
+    if (const std::string why = restore_symbol_feeds_reason(); !why.empty()) return refuse(why);
     symbol_facts_[key] = std::move(candidate);
     refresh_symbol_data_digest();
     last_error_.clear();
@@ -1421,7 +1450,6 @@ bool source::PineStrategyHost::set_recorded_series(const std::string& key,
         return false;
     };
     if (run_in_progress(*this)) return refuse(kRunInProgress);
-    restore_symbol_feeds();
     if (key.empty()) return refuse("empty key");
     if (n < 0 || (n > 0 && (chart_open_ms == nullptr || values == nullptr)))
         return refuse("invalid arrays");
@@ -1437,6 +1465,9 @@ bool source::PineStrategyHost::set_recorded_series(const std::string& key,
         series.open_ms.assign(chart_open_ms, chart_open_ms + n);
         series.values.assign(values, values + n);
     }
+    // As in set_symbol_facts: the bytes back before the digest, after every
+    // refusal.
+    if (const std::string why = restore_symbol_feeds_reason(); !why.empty()) return refuse(why);
     recorded_series_[key] = std::move(series);
     refresh_symbol_data_digest();
     last_error_.clear();

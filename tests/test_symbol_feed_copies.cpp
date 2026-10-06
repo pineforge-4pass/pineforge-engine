@@ -16,7 +16,15 @@
 //      changed) leaves the installed feed whole: a column of the feed's own
 //      length is still accepted afterwards.
 // The values a site reads are checked bar by bar in every scenario, so a
-// copy saved can never be a value lost.
+// copy saved can never be a value lost. Three more scenarios run a body that
+// trades on two feeds that each carry a column, and compare the run's trades
+// and per-bar broker_state_hash with a fresh handle's:
+//   6. The same handle run again: both feeds and both columns come back from
+//      the kernel's spec, by index.
+//   7. A feed replaced under its key after a run, then a run again.
+//   8. A run the kernel stops at its begin (an abort requested from the
+//      run-begin callback, so the lent bytes sit in the failed state's
+//      spec), then a run again.
 
 #include "native_instrument_feed_fixture.hpp"
 
@@ -24,7 +32,10 @@
 #include <pineforge/source/pine_strategy_host.hpp>
 
 #include <atomic>
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <new>
 #include <string>
@@ -312,6 +323,229 @@ void refused_configure_keeps_the_feed() {
     CHECK(install_column(pine, feed));
 }
 
+// ---- two feeds with columns, and a body that trades on them ------------------
+
+const std::string kKeyG = "SYN:G";
+
+// The second symbol's bars, or the first symbol's after a replacement: every
+// field differs from the first feed's, bar by bar.
+Feed make_other_feed(int shift, double base, double column_scale) {
+    Feed feed;
+    feed.bars.reserve(kFeedBars);
+    feed.close_ms.reserve(kFeedBars);
+    feed.column.reserve(kFeedBars);
+    for (int k = 0; k < kFeedBars; ++k) {
+        const std::int64_t open = kStart + k * kMinute;
+        feed.bars.push_back(make_bar(open, k + shift, base));
+        feed.close_ms.push_back(open + kMinute);
+        feed.column.push_back(column_scale * ((k * 37) % 101) - 11.0);
+    }
+    return feed;
+}
+
+class TwoSites final : public source::PineStrategyHost {
+public:
+    Row value_f, value_g;
+    bool abort_at_begin = false;
+
+    TwoSites() {
+        set_syminfo_timezone("Etc/UTC");
+        set_syminfo_session("24x7");
+        set_syminfo_type("crypto");
+        set_syminfo_string("tickerid", "SYN:BASE");
+        set_syminfo_string("ticker", "BASE");
+        set_syminfo_mintick(0.01);
+        source::PineStrategyConfig config;
+        config.initial_capital = 100000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        configure_pine_strategy(config);
+        set_broker_state_hash_recording(true);
+    }
+    bool lent() const { return symbol_feeds_lent_; }
+
+    void configure_security_evaluators() override {
+        security_eval_states_.clear();
+        value_f = Row{};
+        value_g = Row{};
+        register_security_eval(0, kKey, "1", input_tf_, false, false, false);
+        register_security_eval(1, kKeyG, "1", input_tf_, false, false, false);
+        if (abort_at_begin) {
+            abort_at_begin = false;
+            request_abort();
+        }
+    }
+    void evaluate_security(int sec_id, const Bar& bar, bool) override {
+        Row& value = sec_id == 0 ? value_f : value_g;
+        value.close = bar.close;
+        value.time = static_cast<double>(bar.timestamp);
+        value.column = security_column_value(sec_id, sec_id == 0 ? "x" : "y");
+    }
+    void clear_security(int sec_id) override { (sec_id == 0 ? value_f : value_g) = Row{}; }
+    // Enters long or short on what both sites read, columns included, and
+    // flattens later, so the trades depend on every byte the sites reach.
+    void on_source_bar(const Bar&) override {
+        if (std::isnan(value_f.close) || std::isnan(value_g.close)) return;
+        const double column_f = std::isnan(value_f.column) ? 0.0 : value_f.column;
+        const double column_g = std::isnan(value_g.column) ? 0.0 : value_g.column;
+        const double signal = value_f.close - value_g.close + 0.03 * column_f - 0.02 * column_g;
+        const int i = pine_bar_index();
+        if (i % 6 == 1) strategy_entry("E", std::fmod(std::fabs(signal) * 10.0, 2.0) < 1.0);
+        if (i % 6 == 4) strategy_close_all();
+    }
+};
+
+// What a run left for a caller to compare: its trades, its per-bar broker
+// hashes and the final one.
+struct RunRecord {
+    std::vector<std::string> trades;
+    std::vector<std::uint64_t> hashes;
+    std::uint64_t final_hash = 0;
+    bool operator==(const RunRecord& other) const {
+        return trades == other.trades && hashes == other.hashes && final_hash == other.final_hash;
+    }
+};
+
+RunRecord record_of(TwoSites& pine) {
+    RunRecord record;
+    ReportC report{};
+    pine.fill_report(&report);
+    for (int i = 0; i < report.trades_len; ++i) {
+        const TradeC& trade = report.trades[i];
+        char line[192];
+        std::snprintf(line, sizeof line, "%lld %lld %d %.17g %.17g %.17g %.17g",
+                      static_cast<long long>(trade.entry_time),
+                      static_cast<long long>(trade.exit_time), trade.is_long, trade.entry_price,
+                      trade.exit_price, trade.qty, trade.pnl);
+        record.trades.emplace_back(line);
+    }
+    for (std::int64_t i = 0; i < report.broker_state_hash_len; ++i)
+        record.hashes.push_back(report.broker_state_hash[i]);
+    BacktestEngine::free_report(&report);
+    record.final_hash = pine.broker_state_hash();
+    return record;
+}
+
+bool install_two(TwoSites& pine, const Feed& f, bool f_column, const Feed& g) {
+    bool ok = pine.set_symbol_feed(kKey, "1", f.bars.data(), f.close_ms.data(), kFeedBars);
+    if (f_column) ok = ok && pine.set_symbol_feed_column(kKey, "1", "x", f.column.data(), kFeedBars);
+    ok = ok && pine.set_symbol_feed(kKeyG, "1", g.bars.data(), g.close_ms.data(), kFeedBars);
+    return ok && pine.set_symbol_feed_column(kKeyG, "1", "y", g.column.data(), kFeedBars);
+}
+
+bool run_two(TwoSites& pine, const std::vector<Bar>& chart) {
+    pine.run(chart.data(), static_cast<int>(chart.size()), "1", "1", false, 4,
+             MagnifierDistribution::ENDPOINTS);
+    if (!pine.last_error().empty()) std::printf("  run error: %s\n", pine.last_error().c_str());
+    return pine.last_error().empty();
+}
+
+// A fresh handle with the given data, run once: what every handle that holds
+// the same data must report.
+RunRecord fresh_record(const Feed& f, bool f_column, const Feed& g,
+                       const std::vector<Bar>& chart) {
+    TwoSites fresh;
+    CHECK(install_two(fresh, f, f_column, g));
+    CHECK(run_two(fresh, chart));
+    return record_of(fresh);
+}
+
+void check_same(const RunRecord& got, const RunRecord& want) {
+    CHECK(!want.trades.empty());
+    CHECK(want.hashes.size() == static_cast<std::size_t>(kChartBars));
+    CHECK(got.trades == want.trades);
+    CHECK(got.hashes == want.hashes);
+    CHECK(got.final_hash == want.final_hash);
+    std::printf("  %zu trades, %zu bar hashes, final %016llx: %s\n", got.trades.size(),
+                got.hashes.size(), static_cast<unsigned long long>(got.final_hash),
+                got == want ? "equal to a fresh handle" : "DIFFERENT from a fresh handle");
+}
+
+void two_feeds_with_columns() {
+    scenario = "copies: two feeds with columns, run again";
+    const Feed f = make_feed();
+    const Feed g = make_other_feed(7, 61.0, 0.25);
+    const std::vector<Bar> chart = make_chart();
+    TwoSites pine;
+    live_heap::restart_peak();
+    const long long base = live_heap::live.load();
+    CHECK(install_two(pine, f, true, g));
+    const double installed = static_cast<double>(live_heap::live.load() - base);
+    live_heap::restart_peak();
+    CHECK(run_two(pine, chart));
+    const double run_peak = static_cast<double>(live_heap::peak.load() - base) / installed;
+    CHECK(pine.lent());
+    const RunRecord first = record_of(pine);
+    live_heap::restart_peak();
+    CHECK(run_two(pine, chart));
+    const double rerun_peak = static_cast<double>(live_heap::peak.load() - base) / installed;
+    std::printf("  run peak %.3f, rerun peak %.3f copies of both feeds\n", run_peak, rerun_peak);
+    CHECK(run_peak < kRunCopies);
+    CHECK(rerun_peak < kRerunCopies);
+    const RunRecord want = fresh_record(f, true, g, chart);
+    check_same(first, want);
+    check_same(record_of(pine), want);
+}
+
+void feed_replaced_after_a_run() {
+    scenario = "copies: a feed replaced after a run";
+    const Feed f = make_feed();
+    const Feed g = make_other_feed(7, 61.0, 0.25);
+    const Feed replaced = make_other_feed(3, 47.5, 0.5);
+    const std::vector<Bar> chart = make_chart();
+    TwoSites pine;
+    live_heap::restart_peak();
+    const long long base = live_heap::live.load();
+    CHECK(install_two(pine, f, true, g));
+    const double installed = static_cast<double>(live_heap::live.load() - base);
+    CHECK(run_two(pine, chart));
+    const RunRecord before = record_of(pine);
+    // The door replaces the first feed under its key (its column goes with
+    // it); the store gets its bytes back from the kernel's spec first.
+    live_heap::restart_peak();
+    CHECK(pine.set_symbol_feed(kKey, "1", replaced.bars.data(), replaced.close_ms.data(),
+                               kFeedBars));
+    CHECK(!pine.lent());
+    CHECK(run_two(pine, chart));
+    const double peak = static_cast<double>(live_heap::peak.load() - base) / installed;
+    // The completed run's spec, the store copied back from it, and the
+    // incoming feed (56 of the 128 bytes a bar of both feeds holds).
+    const double bound = 2.0 + 56.0 / 128.0 + 0.1;
+    std::printf("  replace + run peak %.3f copies of both feeds (bound %.3f)\n", peak, bound);
+    CHECK(peak < bound);
+    const RunRecord after = record_of(pine);
+    CHECK(after.hashes != before.hashes);
+    check_same(after, fresh_record(replaced, false, g, chart));
+}
+
+void rerun_after_a_begin_failure() {
+    scenario = "copies: a run again after the kernel stops a begin";
+    const Feed f = make_feed();
+    const Feed g = make_other_feed(7, 61.0, 0.25);
+    const std::vector<Bar> chart = make_chart();
+    TwoSites pine;
+    live_heap::restart_peak();
+    const long long base = live_heap::live.load();
+    CHECK(install_two(pine, f, true, g));
+    const double installed = static_cast<double>(live_heap::live.load() - base);
+    pine.abort_at_begin = true;
+    run_two(pine, chart);
+    const auto state = pine.native_state();
+    CHECK(state.kind == NativeLifecycleKind::Failed
+          && state.failure.code == NativeFailureCode::Aborted);
+    // The lent bytes sit in the failed state's spec, every bar of both feeds.
+    CHECK(pine.lent());
+    CHECK(state.spec != nullptr && state.spec->instrument_feeds.size() == 2
+          && state.spec->instrument_feeds[0].bars.size() == static_cast<std::size_t>(kFeedBars)
+          && state.spec->instrument_feeds[1].columns.size() == 1);
+    live_heap::restart_peak();
+    CHECK(run_two(pine, chart));
+    const double peak = static_cast<double>(live_heap::peak.load() - base) / installed;
+    std::printf("  rerun peak %.3f copies of both feeds\n", peak);
+    CHECK(peak < kRerunCopies);
+    check_same(record_of(pine), fresh_record(f, true, g, chart));
+}
+
 }  // namespace
 
 int main() {
@@ -319,6 +553,9 @@ int main() {
     inert_intrabar_path();
     rerun_after_a_door();
     refused_configure_keeps_the_feed();
+    two_feeds_with_columns();
+    feed_replaced_after_a_run();
+    rerun_after_a_begin_failure();
     std::printf("test_symbol_feed_copies: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

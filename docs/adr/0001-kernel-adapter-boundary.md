@@ -339,7 +339,7 @@ kernel and own these quirks, each at its site:
 - **Pine language state and harness flags.** Series, the tick-level barstate flags and
   position-view freezing (`PineLanguageState` `pine_language_state.hpp:12`); the session flags,
   `PineStrategyHost` members since R5 lane F5 (`session_ismarket_`
-  `pine_strategy_host.hpp:1136`), which `scheduler_update_session_state`
+  `pine_strategy_host.hpp:1138`), which `scheduler_update_session_state`
   (`pine_strategy_host.cpp:2116`) selects from the kernel's session-day facts before each source
   callback — `session_ismarket_` and the `_regular` pair are those facts as they are, and the plain
   `session.isfirstbar` / `islastbar` pair widens the regular day by the pre- and post-market bars an

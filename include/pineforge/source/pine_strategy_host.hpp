@@ -924,6 +924,8 @@ private:
     const NativeInstrumentFeed& installed_symbol_feed(std::size_t i) const;
     // Copies lent bytes back from the kernel's spec, which keeps its own.
     void restore_symbol_feeds();
+    // The same for a request-data door: the reason it failed, or empty.
+    std::string restore_symbol_feeds_reason();
     // True while the running spec names this host's sites: the kernel steps
     // them and the scheduler feeds nothing.
     bool security_sites_kernel_routed() const noexcept;
