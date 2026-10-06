@@ -56,8 +56,12 @@ def image_e2e(image, artifacts, harness=None):
         (artifacts / "ohlcv.csv").write_text(synthetic_csv(), encoding="utf-8")
 
         def run(label, inputs=None, overrides=None, failure_option=None):
+            compiled = (artifacts / "compiled" / label).resolve()
+            compiled.mkdir(parents=True, exist_ok=True)
+            compiled.chmod(0o777)
             command = ["docker", "run", "--rm", "--network", "none",
-                       "--mount", f"type=bind,src={source},dst=/in,readonly"]
+                       "--mount", f"type=bind,src={source},dst=/in,readonly",
+                       "--mount", f"type=bind,src={compiled},dst=/proof"]
             if harness:
                 command += ["--mount", f"type=bind,src={harness.resolve()},"
                             "dst=/opt/pineforge/bin/run_json.py,readonly"]
