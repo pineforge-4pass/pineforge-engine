@@ -1,9 +1,9 @@
 // D2: a batch cut at bar t records, for every bar up to t, what the batch
 // over the whole input records. Five cut points over 48 five-minute bars; the
-// host records the close, a kernel ta:: average and a declared 15-minute
-// series (its delivered bucket, NaN until the first), plus a mark and a
-// message event. The rows, their values and the events at bars <= t are
-// equal, and so are the run constants.
+// host records the close, a kernel ta:: average, a declared 15-minute
+// series (its delivered bucket, NaN until the first) and a colour, plus a
+// mark and a message event and a run constant. The rows, their values and
+// the events at bars <= t are equal, and so are the run constants.
 //
 // Negative control: a host value that depends on the batch's last bar (1 on
 // the bar it knows is the input's last) fails D2, and the harness names the
@@ -37,7 +37,7 @@ NativeRunSpec spec_with_series(std::uint64_t run) {
 // `last_aware`: the negative control's value, 1 on the bar the host was told
 // is the batch's last.
 Truncation run_prefix(const std::vector<Bar>& all, int last_bar, bool last_aware) {
-    OutputsHost host({4, 2, 1});
+    OutputsHost host({5, 2, 1});
     auto sma = std::make_shared<std::unique_ptr<ta::SMA>>();
     host.on_begin = [sma](OutputsHost&) { *sma = std::make_unique<ta::SMA>(4); };
     const int n = last_bar + 1;
@@ -47,6 +47,7 @@ Truncation run_prefix(const std::vector<Bar>& all, int last_bar, bool last_aware
         const std::optional<Bar> bucket = h.native_series_bar(0);
         h.value(2, bucket ? bucket->close : kNaN);
         if (last_aware) h.value(3, h.published == n ? 1.0 : 0.0);
+        h.value(4, rgba(b.close >= b.open ? 0xFF4CAF50u : 0xFFF23645u));
         if (b.close < b.open) h.event(0, b.low);
         if (bucket && h.published % 4 == 0) h.event(1, bucket->high, "bucket");
         h.constant(0, 21.0);
@@ -112,8 +113,11 @@ void prefixes_equal() {
     CHECK(full.error.empty());
     CHECK(full.rows.bars == kTotal);
     // The 15-minute series is delivered on the bar that completes its bucket.
-    CHECK(full.rows.series.size() == 4);
-    if (full.rows.series.size() == 4 && full.rows.bars == kTotal) {
+    CHECK(full.rows.series.size() == 5);
+    CHECK(full.rows.constants.size() == 1 && full.rows.constants[0] == 21.0);
+    if (full.rows.series.size() == 5 && full.rows.bars == kTotal) {
+        CHECK(full.rows.series[4][0] == rgba(bars[0].close >= bars[0].open ? 0xFF4CAF50u
+                                                                             : 0xFFF23645u));
         CHECK(std::isnan(full.rows.series[2][0]) && std::isnan(full.rows.series[2][1]));
         CHECK(full.rows.series[2][2] == bars[2].close);
         CHECK(full.rows.series[2][4] == bars[2].close);
