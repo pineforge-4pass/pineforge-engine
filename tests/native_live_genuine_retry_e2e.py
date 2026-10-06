@@ -11,7 +11,9 @@ from pathlib import Path
 import sys
 
 from native_live_equivalence_e2e import Strategy, action_key, chart_bar_array, write_json
-from native_live_tick_tape import direct_tape, genuine_case, message_groups, message_hashes
+from native_live_tick_tape import (
+    TIMESTAMP_CONTRACT, direct_tape, file_digest, genuine_case, message_groups, message_hashes,
+)
 
 
 def synthetic_fixture():
@@ -63,6 +65,47 @@ def check_case(result, directory, reference, total_inputs):
         assert result["redelivery_returncode"] == 0, result
 
 
+def check_timestamp_contract(strategy, warmup, packets, bars, output):
+    write_json(output / "timestamp-contract.json", TIMESTAMP_CONTRACT)
+    emitted = json.loads((output / "timestamp-contract.json").read_text())
+    batch_calls = []
+    original_batch = strategy.library.run_backtest_full
+
+    def record_batch(*arguments):
+        batch_calls.append({"input_tf": int(arguments[3]), "script_tf": int(arguments[4]),
+            "magnifier": arguments[5], "tick_samples": arguments[6],
+            "distribution": arguments[7], "distribution_name": "ENDPOINTS"})
+        return original_batch(*arguments)
+
+    strategy.library.run_backtest_full = record_batch
+    try:
+        strategy.batch(chart_bar_array(strategy, warmup + bars), 15,
+            output / "chart-input-batch", input_tf=15, distribution=3)
+    finally:
+        strategy.library.run_backtest_full = original_batch
+    assert batch_calls == [emitted["chart_input_batch"]], (batch_calls, emitted)
+    reconstruction_calls = []
+    original_begin = strategy.library.strategy_stream_begin
+
+    def record_begin(*arguments):
+        reconstruction_calls.append({"input_tf": int(arguments[3]), "script_tf": int(arguments[4])})
+        return original_begin(*arguments)
+
+    minute_warmup = [{**warmup[0], "timestamp": str(index * 60000)} for index in range(30)]
+    strategy.library.strategy_stream_begin = record_begin
+    try:
+        rebuilt = direct_tape(strategy, chart_bar_array(strategy, minute_warmup), packets[:2049],
+            1024, output, observe_bars=True, timeframe=1)["source_bars"]
+    finally:
+        strategy.library.strategy_stream_begin = original_begin
+    assert reconstruction_calls == [{key: emitted["one_minute_reconstruction"][key]
+        for key in ("input_tf", "script_tf")}], (reconstruction_calls, emitted)
+    assert rebuilt, "one-minute reconstruction control must observe a source bar"
+    write_json(output / "reconstruction-source-bars.json", rebuilt)
+    write_json(output / "exercised-reference-settings.json", {
+        "chart_input_batch": batch_calls, "one_minute_reconstruction": reconstruction_calls})
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runner", type=Path, required=True)
@@ -83,7 +126,7 @@ def main():
         "chart_input_tf": 15, "script_tf": 15, "warmup_bars": len(warmup),
         "live_bars": len(bars), "ticks_per_bar": 2048, "packets": len(packets),
         "runner": str(arguments.runner.resolve()), "library": str(strategy.path),
-        "library_sha256": strategy.sha256})
+        "runner_sha256": file_digest(arguments.runner.resolve()), "library_sha256": strategy.sha256})
     reference = direct_tape(strategy, chart_bar_array(strategy, warmup), packets, 1024,
         output, hashes=True, retain=True, timeframe=15, message_size=1024)
     assert reference["actions"], "synthetic fixture must produce actions"
@@ -112,8 +155,10 @@ def main():
     if failures:
         print(json.dumps(failures), file=sys.stderr)
         return 1
+    check_timestamp_contract(strategy, warmup, packets, bars, output)
     print(f"PASS {len(results)} actual genuine_case synthetic scenarios; "
         f"actions={len(reference['actions'])}, message_hashes={total_inputs}, pending=0")
+    print("PASS emitted metadata matches real chart-input ENDPOINTS/3 batch and separate one-minute reconstruction calls")
     return 0
 
 

@@ -470,11 +470,13 @@ contains one event or one such batch. No source receives webhook credentials.
 ### Tick mode
 
 ```json
-{"type":"tick","ts":120001,"seq":1,"price":102.5,"qty":0.2}
-{"type":"tick","ts":120010,"seq":2,"price":103,"qty":0.1}
-{"type":"time","ts":180000}
+{"type":"tick","ts":1800001,"seq":1,"price":102.5,"qty":0.2}
+{"type":"tick","ts":1800010,"seq":2,"price":103,"qty":0.1}
+{"type":"time","ts":2700000}
 ```
 
+These ticks follow the illustrated `history-15m.csv`: its two confirmed
+bars end at `1800000`, and completeness at `2700000` seals the next 15-minute slot.
 Use `--mode ticks`. Trade sequence numbers must be positive and contiguous
 (`last + 1`); a sequence hole stops processing rather than fabricating trades.
 Exact duplicates may be replayed as the recorded input prefix on reconnect;
@@ -628,7 +630,7 @@ normalized tick/bar/time events.
 The webhook payload schema is `pineforge-native-order-action/v1`:
 
 ```json
-{"schema_version":"pineforge-native-order-action/v1","event":"order_action","event_id":"...","deployment":"...","strategy":"my-strategy","symbol":"BINANCE:ETHUSDT.P","timeframe":"15","sequence":1,"timestamp":120001,"bar_index":2,"order":{"id":"Long","comment":"","action":"buy","leg":"entry","contracts":1,"price":102.5,"reduce_only":false,"entry_incarnation":7}}
+{"schema_version":"pineforge-native-order-action/v1","event":"order_action","event_id":"...","deployment":"...","strategy":"my-strategy","symbol":"BINANCE:ETHUSDT.P","timeframe":"15","sequence":1,"timestamp":1800001,"bar_index":2,"order":{"id":"Long","comment":"","action":"buy","leg":"entry","contracts":1,"price":102.5,"reduce_only":false,"entry_incarnation":7}}
 ```
 
 `event_id` is stable over retries and recovery. The request includes

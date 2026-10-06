@@ -1,17 +1,52 @@
+import ast
+import inspect
 import unittest
 import json
 from pathlib import Path
 import tempfile
+import textwrap
 
 from native_live_equivalence_e2e import (
-    first_difference, live_action, ordered_delivery_effects,
+    Strategy, first_difference, live_action, ordered_delivery_effects,
     require_replay_after_restart, synthetic_prints,
 )
-from native_live_tick_tape import bar_differences, file_digest, load_tick_tape, message_groups, message_hashes, parse_cost
+from native_live_tick_tape import (
+    TIMESTAMP_CONTRACT, bar_differences, file_digest, load_tick_tape,
+    message_groups, message_hashes, parse_cost, run_genuine,
+)
 from native_live_tick_oracle import classify_first_divergence, first_fill, modeled_points, script_bars
 
 
 class HarnessContract(unittest.TestCase):
+    def test_timestamp_contract_matches_chart_batch_and_separate_reconstruction(self):
+        calls = [node for node in ast.walk(ast.parse(inspect.getsource(run_genuine)))
+                 if isinstance(node, ast.Call)]
+        batch_calls = [node for node in calls if isinstance(node.func, ast.Attribute)
+                       and node.func.attr == "batch"]
+        self.assertEqual(len(batch_calls), 1)
+        batch = batch_calls[0]
+        keywords = {entry.arg: ast.literal_eval(entry.value) for entry in batch.keywords}
+        native_calls = [node for node in ast.walk(ast.parse(textwrap.dedent(inspect.getsource(Strategy.batch))))
+                        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "run_backtest_full"]
+        self.assertEqual(len(native_calls), 1)
+        self.assertEqual(TIMESTAMP_CONTRACT["chart_input_batch"], {
+            "input_tf": keywords["input_tf"], "script_tf": ast.literal_eval(batch.args[1]),
+            "magnifier": ast.literal_eval(native_calls[0].args[5]),
+            "tick_samples": ast.literal_eval(native_calls[0].args[6]),
+            "distribution": keywords["distribution"], "distribution_name": "ENDPOINTS"})
+        self.assertEqual(TIMESTAMP_CONTRACT["chart_input_batch"]["distribution"], 3)
+        reconstruction = [node for node in calls if isinstance(node.func, ast.Name)
+                          and node.func.id == "direct_tape" and any(
+                              entry.arg == "observe_bars" and ast.literal_eval(entry.value)
+                              for entry in node.keywords)]
+        self.assertEqual(len(reconstruction), 1)
+        timeframe = next(ast.literal_eval(entry.value) for entry in reconstruction[0].keywords
+                         if entry.arg == "timeframe")
+        self.assertEqual(timeframe, 1)
+        self.assertEqual(TIMESTAMP_CONTRACT["one_minute_reconstruction"]["input_tf"], timeframe)
+        self.assertEqual(TIMESTAMP_CONTRACT["one_minute_reconstruction"]["script_tf"], timeframe)
+
     def delivery_fixture(self, order=(1, 2, 3)):
         effects = [{"event_id": str(sequence), "delivery_id": f"key-{sequence}",
                     "sequence": sequence} for sequence in order]

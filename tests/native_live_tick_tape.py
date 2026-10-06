@@ -42,8 +42,13 @@ SCENARIOS = (
 TIMESTAMP_CONTRACT = {
     "physical_R_A": "No mapping: physical action milliseconds and every message hash are exact.",
     "R_B": "Only action.timestamp and closed/terminal trade entry_time/exit_time are mapped to floor(ts/900000)*900000. The historical script-bar open labels the modeled fill; an observed fill carries print milliseconds. All prices, quantities, order metadata, other trade fields, curve points and metrics remain bitwise exact.",
-    "magnifier": "off; run_backtest_full(..., 0, 4, 0, ...)",
-    "sealing": "A time event at each next 1m boundary seals the preceding minute; final time seals the tape's last minute.",
+    "magnifier": "off; chart-input run_backtest_full(..., input_tf=15, script_tf=15, 0, 4, 3, ...)",
+    "chart_input_batch": {"input_tf": 15, "script_tf": 15, "magnifier": 0,
+        "tick_samples": 4, "distribution": 3, "distribution_name": "ENDPOINTS"},
+    "one_minute_reconstruction": {"input_tf": 1, "script_tf": 1,
+        "ingress": "strategy_stream_begin, strategy_stream_push_ticks, strategy_stream_advance_time",
+        "purpose": "Separate tick-built source-bar control, not the chart-input batch reference."},
+    "sealing": "Time events declare completeness at each next 1m boundary. Chart-input references seal 15m slots; the separate input_tf=script_tf=1 reconstruction seals minutes. Final time seals the tape's last minute.",
 }
 
 
@@ -322,6 +327,7 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
                 timed = ["/usr/bin/time", "-v", "-o", str(cost_path)] + command
                 commands.append(timed)
                 with feed_path.open("rb") as source:
+                    receiver.begin_invocation(command)
                     process = subprocess.Popen(timed, stdin=source if transport == "stdin" else subprocess.DEVNULL,
                         stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
                     if restart and launch == 0:
@@ -359,6 +365,7 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
                 command = receiver.redelivery_command(runner, output / "orders.sqlite3")
                 timed = ["/usr/bin/time", "-v", "-o", str(cost_path)] + command
                 commands.append(timed)
+                receiver.begin_invocation(command)
                 completed = subprocess.run(timed, stdout=log, stderr=subprocess.STDOUT,
                     env=receiver.environment, timeout=1800)
                 result["redelivery_returncode"] = completed.returncode

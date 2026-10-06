@@ -147,7 +147,9 @@ version number follows semantic versioning over the surfaces the
   with daylight-saving transitions from warmup onward; that detection has no
   three-year bound. Standard-offset changes are checked by the tiling scan
   only within the warmup plus 1,098 days after its last bar (about three years).
-  Multi-day charts are also refused on a weekday-masked calendar. In bars mode an intraday
+  Multi-day charts are refused on a weekday-masked calendar when eligible
+  opening-label gaps do not tile the chart period, as with `2D` and `3D` on
+  UTC `24x7:23456`; this is not a blanket `nD` refusal (`7D` can tile). In bars mode an intraday
   period that does not tile the session's trading days is refused too: 7
   minutes on UTC 24x7; 45, 120 and 240 minutes on New York calendars (60
   works); and a split session whose reopen is off the chart grid (60 minutes
