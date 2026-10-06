@@ -2812,7 +2812,9 @@ bool NativeExecutionConsumer::preflight_intrabar_path(BacktestEngine& engine) {
 }
 
 void NativeExecutionConsumer::exhaust_ordinals() {
-    throw std::overflow_error("native timeline ordinal exhausted");
+    // An exhausted counter is an engine invariant (run-failure codes).
+    throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                     "native timeline ordinal exhausted");
 }
 
 void NativeExecutionConsumer::raise_floor(int64_t t) {
@@ -5741,7 +5743,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         render_exception(engine, e);
     } catch (...) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Settlement, P});
-        if (engine.last_error_.empty())
+        if (!recoverable_abort() && failure_value_of(engine).code == RunFailureCode::none)
             render_unclassified(engine, "native settlement exception");
     }
     return std::nullopt;
@@ -6927,9 +6929,22 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
     // temporarily modified fee, FX, price tick, calendar or admission setting.
     // It is the execution's own precondition, not a callback boundary, so a
     // pump does not defer it (V19-C).
+    // A failure this frame raises after an inner site recorded its cause
+    // carries that cause's code under the frame's own text (run_aborted after
+    // an abort whose report was cleared).
+    const auto recorded_cause = [this, &engine]() {
+        RunFailureValue cause = run_failure_value_of(engine);
+        if (cause.code == RunFailureCode::none) {
+            cause = RunFailureValue{recoverable_abort() ? RunFailureCode::run_aborted
+                                                        : RunFailureCode::engine_invariant,
+                                    nullptr};
+        }
+        return cause;
+    };
     if (!check_abort(engine, NativeFailureOperation::Command)
         || !check_projection(engine, NativeFailureOperation::Command))
-        throw std::runtime_error("native current execution projection/abort failure");
+        throw coded<std::runtime_error>(recorded_cause(),
+                                        "native current execution projection/abort failure");
     try {
         if (auto refusal = validate_current_execution(engine, command)) return *refusal;
         consuming_request_ = true;
@@ -6958,12 +6973,13 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
                                                      next_timeline_ordinal_));
         if (const auto* error = std::get_if<native_order::PreparationError>(&step)) {
             fail_preparation(engine, *error, NativeFailureOperation::Settlement);
-            throw std::runtime_error("native current evaluation failed");
+            throw coded<std::runtime_error>(recorded_cause(), "native current evaluation failed");
         }
         if (!std::holds_alternative<native_order::NoChange>(step)) {
             if (!settle_step(engine, std::move(step), NativeFailureOperation::Settlement,
                              point.coordinate.ordinal))
-                throw std::runtime_error("native current evaluation install failed");
+                throw coded<std::runtime_error>(recorded_cause(),
+                                                "native current evaluation install failed");
         }
         live = requests_.find_live(command.target);
         if (live && !same_allowance_bits(
@@ -6980,7 +6996,10 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
             NativeCurrentExecutionResult outcome{*no_effect};
             const native_order::EventId cause{command.target.run, no_effect->ordinal};
             drain_parent_terminal(engine, cause, command.target, NativeFailureOperation::Settlement);
-            if (failed()) throw std::runtime_error("native current terminal drain failed");
+            if (failed()) {
+                throw coded<std::runtime_error>(recorded_cause(),
+                                                "native current terminal drain failed");
+            }
             consuming_request_ = false;
             return outcome;
         }
@@ -6994,7 +7013,9 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
         auto outcome = consume_matched_request(engine, command.target, evaluation,
             anchor.price, resolved, anchor,
             native_order::NativeCandidatePriceKind::CurrentQuote, command.price_rule);
-        if (failed() || !outcome) throw std::runtime_error("native current execution failed");
+        if (failed() || !outcome) {
+            throw coded<std::runtime_error>(recorded_cause(), "native current execution failed");
+        }
         consuming_request_ = false;
         return std::move(*outcome);
     } catch (const std::bad_alloc& e) {
@@ -7011,7 +7032,7 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
     } catch (...) {
         consuming_request_ = false;
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Settlement});
-        if (engine.last_error_.empty())
+        if (!recoverable_abort() && failure_value_of(engine).code == RunFailureCode::none)
             render_unclassified(engine, "native current execution exception");
         throw;
     }
@@ -7142,7 +7163,7 @@ void NativeExecutionConsumer::invoke_recalculation(
         current_frame_.reset();
         if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
             NativeFailureOperation::Callback, ordinal});
-        if (engine.last_error_.empty())
+        if (!recoverable_abort() && failure_value_of(engine).code == RunFailureCode::none)
             render_unclassified(engine, "native recalculation callback exception");
         return;
     }
@@ -7195,7 +7216,7 @@ void NativeExecutionConsumer::invoke_sub_bar_callback(
         current_frame_.reset();
         if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
             NativeFailureOperation::Callback, ordinal});
-        if (engine.last_error_.empty())
+        if (!recoverable_abort() && failure_value_of(engine).code == RunFailureCode::none)
             render_unclassified(engine, "native sub-bar callback exception");
         return;
     }
@@ -7284,7 +7305,7 @@ void NativeExecutionConsumer::invoke_applied_callback(
         current_frame_.reset();
         if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
             NativeFailureOperation::Callback, notification.ordinal});
-        if (engine.last_error_.empty())
+        if (!recoverable_abort() && failure_value_of(engine).code == RunFailureCode::none)
             render_unclassified(engine, "native applied callback exception");
     }
 }

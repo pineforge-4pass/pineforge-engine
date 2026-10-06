@@ -101,6 +101,10 @@ public:
         } catch (...) {
         }
     }
+    /// The text alone, as before run-failure codes: engine_unclassified_error.
+    void note_error(const char* text) noexcept {
+        note_error(text, RunFailureValue{RunFailureCode::engine_unclassified_error, nullptr});
+    }
 };
 
 inline BacktestEngine* as_engine(pf_strategy_t strategy) {
@@ -120,6 +124,12 @@ void note_error(pf_strategy_t strategy, const char* text, const RunFailureValue&
 /// The code of an exception no coded site raised: engine_unclassified_error.
 inline RunFailureValue unclassified_failure() noexcept {
     return RunFailureValue{RunFailureCode::engine_unclassified_error, nullptr};
+}
+
+/// The text alone, as before run-failure codes: engine_unclassified_error.
+template <typename Host>
+void note_error(pf_strategy_t strategy, const char* text) {
+    note_error<Host>(strategy, text, unclassified_failure());
 }
 
 /// Runs `fn` and converts any escaping exception into presentation text and

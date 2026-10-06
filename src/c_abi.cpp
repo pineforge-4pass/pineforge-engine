@@ -73,11 +73,16 @@ void pf_cabi_void(Fn&& fn) noexcept {
 /* A refusal that escaped an int entry point as an exception: its what() and
  * its run-failure code (run_failure.hpp) beside the handle, so a -1 reads
  * back the reason through strategy_get_last_error / _code. A NULL handle has
- * nowhere to keep it. Never throws: it runs on the C boundary. */
+ * nowhere to keep it, and a handle whose run already failed keeps that run's
+ * own text and code. Never throws: it runs on the C boundary. */
 void note_cabi_refusal(pf_strategy_t s, const std::exception* error) noexcept {
     if (!s) return;
     try {
         auto& engine = *static_cast<pineforge::BacktestEngine*>(s);
+        if (engine.last_run_status() != 0
+            && pineforge::run_failure_value_of(engine).code != pineforge::RunFailureCode::none) {
+            return;
+        }
         if (error) {
             pineforge::note_run_failure(engine, std::string(error->what()),
                                         pineforge::classify_run_failure(*error));

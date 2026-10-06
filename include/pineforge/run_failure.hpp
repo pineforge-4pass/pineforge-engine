@@ -68,7 +68,7 @@
 //                  slice | first | last | pop | shift
 //   pine_collection_stop(const char* collection, const char* reason,
 //                        const char* english)
-//       collection: array | matrix
+//       collection: array | matrix (any other collection: engine_invariant)
 //       reason historical_modified -> pine_array_error {reason, collection}
 //       reason na_reference        -> pine_na_reference {object: collection}
 //   pine_na_stop(const char* object, const char* english)
@@ -100,7 +100,19 @@
 //   note_run_failure(BacktestEngine&, std::string text, RunFailureCode,
 //                    const RunFailureArgs&)
 //       a latched setter refusal: setting_rejected with its entrypoint and
-//       reason.
+//       reason;
+//   note_run_failure(BacktestEngine&, std::string text,
+//                    const RunFailureValue&)
+//       the same refusal with the value its RunFailureInfo holds.
+//
+// The latched setter failure also uses these names: RunFailureInfo as a
+// public base of its own exception type (beside
+// checked_settings::LatchedSettingsFailure) and as a copy-assignable member,
+// built with the (RunFailureCode, const RunFailureArgs&) constructor and read
+// with run_failure(); RunFailureValue; and the codes RunFailureCode::none,
+// ::setting_rejected and ::out_of_memory. An exception thrown where the script
+// is prepared that already carries a code keeps it; a latched failure without
+// one reads setting_rejected.
 // ---------------------------------------------------------------------------
 
 #include <pineforge/run_failure_codes.hpp>
@@ -285,11 +297,15 @@ RunFailureValue run_failure_value_of(const BacktestEngine& engine) noexcept;
 [[noreturn]] inline void pine_collection_stop(const char* collection, const char* reason,
                                               const char* english) {
     const char* text = english ? english : "";
-    if (reason && std::strcmp(reason, "na_reference") == 0) {
+    // Only the contract's two collections: pine_na_reference alone would also
+    // take the other objects of its list.
+    const bool listed = collection && (std::strcmp(collection, "array") == 0
+                                       || std::strcmp(collection, "matrix") == 0);
+    if (listed && reason && std::strcmp(reason, "na_reference") == 0) {
         throw coded<std::runtime_error>(RunFailureCode::pine_na_reference,
                                         {{"object", collection}}, text);
     }
-    if (reason && std::strcmp(reason, "historical_modified") == 0) {
+    if (listed && reason && std::strcmp(reason, "historical_modified") == 0) {
         throw coded<std::runtime_error>(
             RunFailureCode::pine_array_error,
             {{"reason", "historical_modified"}, {"collection", collection}}, text);

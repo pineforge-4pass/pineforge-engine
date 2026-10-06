@@ -3,8 +3,8 @@
 //
 // Each row runs a strategy codegen emitted (tests/fixtures/run_failure_codes,
 // compiled into this binary by run_failure_codes_strategies.hpp) through the C
-// entry points a harness calls, and asserts four things the app reads after a
-// run: the code (strategy_get_last_error_code), its arguments as canonical JSON
+// entry points a harness calls, and asserts four things a consumer reads after
+// a run: the code (strategy_get_last_error_code), its arguments as canonical JSON
 // (strategy_get_last_error_args), the English (strategy_get_last_error) and the
 // run status (strategy_last_run_status), plus the report's trade count. The
 // English, the status and the trade count are the ones the base engine
@@ -19,7 +19,9 @@
 
 #include "run_failure_codes_strategies.hpp"
 
+#include <pineforge/checked_settings.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/native_module.hpp>
 #include <pineforge/native_run_spec.hpp>
 #include <pineforge/run_failure.hpp>
 
@@ -38,6 +40,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -265,6 +268,22 @@ void refused_begin_rows(const std::vector<pineforge::Bar>& minute) {
         // The next successful run on the same handle clears the record.
         expect_row("success_after_coded_failure", h.run(minute, "1", "1"), {"", "", "", 0, 30});
     }
+    {
+        // One handle: the session refusal, then a script whose runtime.error
+        // prints that refusal's English. The second run reads
+        // strategy_runtime_error, never the earlier record's code.
+        Handle h(rfc::kForged);
+        h.input("Case", "0");
+        strategy_set_syminfo_session(h.s, "bogus");
+        expect_row("same_handle_session_refusal", h.run(minute, "1", "1"),
+                   {"symbol_metadata_rejected", R"({"field":"session"})",
+                    "Pine adapter produced invalid native run spec field 13", 0, 0});
+        strategy_set_syminfo_session(h.s, "24x7");
+        h.input("Case", "5");
+        expect_row("same_handle_forged_refusal_text", h.run(minute, "1", "1"),
+                   {"strategy_runtime_error", "{}",
+                    "Pine adapter produced invalid native run spec field 13", 1, -1});
+    }
 }
 
 // A request.security of another symbol on an aggregated
@@ -371,6 +390,14 @@ void helper_contract_rows() {
          "no_data_request", R"js({"call":"c(\"x\")","function":"request.earnings","line":9})js"},
         {"pine_no_data_stop outside list",
          [] { pine_no_data_stop("request.security", "c", 9, "E"); }, "engine_invariant", "{}"},
+        // Canonical escaping: quote and backslash escaped, control bytes as
+        // six-character escapes, a byte that is not well-formed UTF-8 as
+        // U+FFFD, the rest kept.
+        {"pine_no_data_stop escaping",
+         [] { pine_no_data_stop("request.earnings", "q\"\\\x01\x7f\xc3(\xe2\x82\xac", 9, "E"); },
+         "no_data_request",
+         "{\"call\":\"q\\\"\\\\\\u0001\\u007f\xEF\xBF\xBD(\xE2\x82\xAC\",\"function\":"
+         "\"request.earnings\",\"line\":9}"},
         {"pine_other_symbol_stop symbol",
          [] { pine_other_symbol_stop("request.security_lower_tf", "NYSE:IBM", "c", 3, "E"); },
          "other_symbol_request",
@@ -396,6 +423,8 @@ void helper_contract_rows() {
         {"pine_collection_stop outside list",
          [] { pine_collection_stop("map", "historical_modified", "E"); }, "engine_invariant",
          "{}"},
+        {"pine_collection_stop na outside list",
+         [] { pine_collection_stop("map", "na_reference", "E"); }, "engine_invariant", "{}"},
         {"pine_collection_stop unknown reason",
          [] { pine_collection_stop("array", "stale", "E"); }, "engine_invariant", "{}"},
         {"pine_na_stop", [] { pine_na_stop("udt_object", "E"); }, "pine_na_reference",
@@ -510,6 +539,213 @@ void latched_setting_rows(const std::vector<pineforge::Bar>& minute) {
     CHECK(got.text.rfind("strategy_set_override: stod", 0) == 0);
     CHECK_EQ("legacy_setter_latched: run status", std::to_string(got.status), "1");
     CHECK_EQ("legacy_setter_latched: report trades", std::to_string(got.trades), "0");
+}
+
+// The generated strategy's legacy setter writes its text before any run, as
+// the transpiler that emitted the fixture did, without a code: the getters
+// read engine_unclassified_error for a text no coded site wrote.
+void uncoded_writer_rows() {
+    Handle h(rfc::kForged);
+    rfc_forged::rfc_forged_strategy_set_override(h.s, "initial_capital", "not a number");
+    Observed got = observe(h.s);
+    got.trades = 0;
+    std::printf("row %-38s code=%s args=%s status=%d text=%s\n", "uncoded_setter_text",
+                got.code.c_str(), got.args.c_str(), got.status, json_quote(got.text).c_str());
+    CHECK(!got.text_null && !got.code_null && !got.args_null);
+    CHECK(got.text.rfind("strategy_set_override: stod", 0) == 0);
+    CHECK_EQ("uncoded_setter_text: code", got.code, "engine_unclassified_error");
+    CHECK_EQ("uncoded_setter_text: args", got.args, "{}");
+    CHECK_EQ("uncoded_setter_text: status", std::to_string(got.status), "0");
+}
+
+// The latched setter failure as the transpiler's run-failure-codes emission
+// spells it (the contract in run_failure.hpp): its own type derives from
+// LatchedSettingsFailure and RunFailureInfo, a RunFailureInfo member is built
+// with the (code, args) constructor and copy-assigned, and the exception is
+// thrown where the script is prepared. The engine rethrows it as is, so its
+// arguments reach the getters.
+class CodedLatchedSettingStrategy final : public rfc_forged::GeneratedStrategy {
+public:
+    struct Latched : pineforge::checked_settings::LatchedSettingsFailure,
+                     pineforge::RunFailureInfo {
+        Latched(const std::string& text, const pineforge::RunFailureInfo& info)
+            : pineforge::checked_settings::LatchedSettingsFailure(text),
+              pineforge::RunFailureInfo(info) {}
+    };
+    pineforge::RunFailureInfo info{RunFailureCode::none, {}};
+    void prepare_script_run(const pineforge::Bar*, int, bool) override {
+        info = pineforge::RunFailureInfo(
+            RunFailureCode::setting_rejected,
+            {{"entrypoint", "strategy_set_input"}, {"reason", "expected_integer"}});
+        throw Latched("strategy_set_input: Case: expected an integer", info);
+    }
+};
+
+void coded_latched_setting_rows(const std::vector<pineforge::Bar>& minute) {
+    auto* strategy = new CodedLatchedSettingStrategy();
+    void* s = static_cast<rfc_forged::GeneratedStrategy*>(strategy);
+    std::vector<pineforge::Bar> bars = minute;
+    pineforge::ReportC report{};
+    rfc::kForged.run_full(s, bars.data(), static_cast<int>(bars.size()), "1", "1", 0, 4,
+                          PF_MAGNIFIER_ENDPOINTS, &report);
+    Observed got = observe(s);
+    got.trades = report.total_trades;
+    rfc::kForged.report_free(&report);
+    expect_row("coded_latched_setting", got,
+               {"setting_rejected",
+                R"({"entrypoint":"strategy_set_input","reason":"expected_integer"})",
+                "strategy_set_input: Case: expected an integer", 1, 0});
+    CHECK_EQ("coded_latched_setting: member", code_name(strategy->info.run_failure().code),
+             "setting_rejected");
+    rfc::kForged.free(s);
+}
+
+// A native host that records its own failure and then throws a non-standard
+// exception from on_native_applied: the catch-all keeps the record, an empty
+// text included, rather than writing "native applied callback exception".
+class RecordThenThrowHost final : public pineforge::NativeStrategyHost {
+public:
+    const char* text = "";
+    int bars = 0;
+    void on_native_bar(const pineforge::Bar&, const pineforge::NativeDecisionContext&) override {
+        if (bars++ == 0) {
+            submit_market(pineforge::native_order::Request{
+                pineforge::order_action::Transact{1.0}, "buy", ""});
+        }
+    }
+    void on_native_applied(const pineforge::native_order::ExecutionAppliedEvent&,
+                           const pineforge::NativeDecisionContext&) override {
+        pineforge::note_run_failure(*this, text, RunFailureCode::strategy_runtime_error);
+        throw 42;
+    }
+};
+
+// A failure inside execute_current, here the host's terms hook running out of
+// memory while the request settles: the frame keeps its own text and carries
+// that failure's code.
+class TermsThrowHost final : public pineforge::NativeStrategyHost {
+public:
+    int bars = 0;
+    bool executed = false;
+    pineforge::native_order::ExecutionTerms resolve_execution_terms(
+            const pineforge::NativeExecutionTermsFacts&) const override {
+        throw std::bad_alloc();
+    }
+    void on_native_bar(const pineforge::Bar&, const pineforge::NativeDecisionContext&) override {
+        if (bars++ != 0) return;
+        const auto submitted = submit_market(pineforge::native_order::Request{
+            pineforge::order_action::Transact{1.0}, "buy", ""});
+        if (!submitted.handle) return;
+        executed = true;
+        (void)execute_current(pineforge::NativeCurrentExecution{
+            *submitted.handle, pineforge::NativeCurrentPriceRule::AsPresented});
+    }
+};
+
+// A native host whose bar callback throws a standard exception: the code is
+// the classifier's answer by type.
+class StdThrowHost final : public pineforge::NativeStrategyHost {
+public:
+    bool bad_alloc = true;
+    void on_native_bar(const pineforge::Bar&, const pineforge::NativeDecisionContext&) override {
+        if (bad_alloc) throw std::bad_alloc();
+        throw std::logic_error("host invariant");
+    }
+};
+
+void recorded_failure_rows() {
+    using pineforge::NativeSetupStatus;
+    const auto bars = rfc::native_bars();
+    for (const char* text : {"host stop", ""}) {
+        RecordThenThrowHost host;
+        host.text = text;
+        CHECK(host.configure_native(rfc::native_spec("rfc-native-record-then-throw")).status
+              == NativeSetupStatus::Applied);
+        host.run(bars.data(), static_cast<int>(bars.size()));
+        expect_row(*text ? "native_recorded_then_nonstd_throw"
+                         : "native_recorded_empty_then_nonstd_throw",
+                   observe(rfc::as_handle(host)), {"strategy_runtime_error", "{}", text, 1, -1});
+    }
+    {
+        // A C entry point refused on a host whose run failed keeps the run's
+        // own text and code.
+        rfc::AppliedThrowHost host;
+        CHECK(host.configure_native(rfc::native_spec("rfc-native-failed-setter")).status
+              == NativeSetupStatus::Applied);
+        host.run(bars.data(), static_cast<int>(bars.size()));
+        CHECK_EQ("setter on a failed host",
+                 std::to_string(strategy_set_native_security_feed(rfc::as_handle(host), "5",
+                                                                  nullptr, 0)),
+                 "-1");
+        expect_row("native_failed_host_setter_keeps_run", observe(rfc::as_handle(host)),
+                   {"engine_unclassified_error", "{}", "native applied callback exception", 1,
+                    -1});
+    }
+    {
+        TermsThrowHost host;
+        CHECK(host.configure_native(rfc::native_spec("rfc-native-terms-throw")).status
+              == NativeSetupStatus::Applied);
+        host.run(bars.data(), static_cast<int>(bars.size()));
+        CHECK(host.executed);
+        expect_row("native_current_execution_carries_cause", observe(rfc::as_handle(host)),
+                   {"out_of_memory", "{}", "native current execution failed", 1, -1});
+    }
+    for (const bool bad_alloc : {true, false}) {
+        StdThrowHost host;
+        host.bad_alloc = bad_alloc;
+        CHECK(host.configure_native(rfc::native_spec("rfc-native-std-throw")).status
+              == NativeSetupStatus::Applied);
+        host.run(bars.data(), static_cast<int>(bars.size()));
+        if (bad_alloc) {
+            expect_row("native_bar_bad_alloc", observe(rfc::as_handle(host)),
+                       {"out_of_memory", "{}", "std::bad_alloc", 1, -1});
+        } else {
+            expect_row("native_bar_logic_error", observe(rfc::as_handle(host)),
+                       {"engine_invariant", "{}", "host invariant", 1, -1});
+        }
+    }
+}
+
+// A stream entry point's refusal: a confirmed bar pushed out of order after
+// the warmup returns -1 and leaves an input-class code beside its text.
+void stream_refusal_rows(const std::vector<pineforge::Bar>& minute) {
+    Handle h(rfc::kForged);
+    h.input("Case", "0");
+    const auto* warmup = reinterpret_cast<const pf_bar_t*>(minute.data());
+    CHECK_EQ("stream begin", std::to_string(strategy_stream_begin(h.s, warmup, 10, "1", "1")),
+             "0");
+    pf_bar_t stale{};
+    std::memcpy(&stale, &minute[3], sizeof stale);
+    CHECK_EQ("stream push out of order", std::to_string(strategy_stream_push_bar(h.s, &stale)),
+             "-1");
+    Observed got = observe(h.s);
+    got.trades = -1;
+    expect_row("stream_bar_out_of_order", got,
+               {"stream_input_rejected", "{}",
+                "native confirmed bar timestamp is out of order or off the input grid", 1, -1});
+}
+
+// An external native module's text-only note_error, the form it had before
+// run-failure codes, still compiles and reads engine_unclassified_error.
+class ModuleHost : public pineforge::NativeStrategyHost {
+public:
+    void on_native_bar(const pineforge::Bar&, const pineforge::NativeDecisionContext&) override {}
+};
+
+void native_module_rows() {
+    pineforge::native_module::Module<ModuleHost> module;
+    CHECK(module.configure_native(rfc::native_spec("rfc-native-module")).status
+          == pineforge::NativeSetupStatus::Applied);
+    module.note_error("module text");
+    Observed member = observe(rfc::as_handle(module));
+    member.trades = 0;
+    expect_row("native_module_note_error_text", member,
+               {"engine_unclassified_error", "{}", "module text", 0, 0});
+    pineforge::native_module::note_error<ModuleHost>(rfc::as_handle(module), "module free text");
+    Observed free_form = observe(rfc::as_handle(module));
+    free_form.trades = 0;
+    expect_row("native_module_free_note_error_text", free_form,
+               {"engine_unclassified_error", "{}", "module free text", 0, 0});
 }
 
 // The kernel without a Pine source layer (native hosts): its own bar
@@ -1132,7 +1368,12 @@ int main() {
     helper_contract_rows();
     record_lifecycle_rows(minute);
     latched_setting_rows(minute);
+    uncoded_writer_rows();
+    coded_latched_setting_rows(minute);
     native_host_rows();
+    recorded_failure_rows();
+    native_module_rows();
+    stream_refusal_rows(minute);
     run_spec_field_rows();
     registry_rows();
     std::printf("test_run_failure_codes: %d checks, %d failed\n", g_checks, g_failures);
