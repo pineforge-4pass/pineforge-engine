@@ -1,0 +1,82 @@
+{
+ "a-l-p5-lim-cf": {
+  "engine": [
+   "long",
+   1.0,
+   1743515100000,
+   1743605100000,
+   10.05,
+   10.12
+  ],
+  "reason": "calc_on_order_fills, outside the rule: the pin exported the fill-recalculation scripts but did not model them, so the engine books this tape exactly as before the rule (switch on or off). The add's limit 10.05 fills on L's entry bar (2025-04-01 13:45 UTC) in the fill recalculation; TradingView covers the two entries one by one (trade 1, L at 10.08, closes at the add's level 10.10 on 2025-04-02 14:30 UTC, trade 2 at L's level 10.13 on 14:45), the engine closes both at the average's level 10.12 on 14:45.",
+  "trade": 1,
+  "tv": [
+   "long",
+   1.0,
+   1743515100000,
+   1743604200000,
+   10.08,
+   10.1
+  ]
+ },
+ "a-l-p5-stp-cf": {
+  "engine": [
+   "long",
+   1.0,
+   1743515100000,
+   1743605100000,
+   10.08,
+   10.14
+  ],
+  "reason": "calc_on_order_fills, outside the rule: the pin exported the fill-recalculation scripts but did not model them, so the engine books this tape exactly as before the rule (switch on or off). The add's stop fills at 10.10 on 2025-04-02 14:30 UTC; on 14:45 TradingView closes L at its own level 10.13 and the add at its own 10.15, the engine both at the average's 10.14.",
+  "trade": 1,
+  "tv": [
+   "long",
+   1.0,
+   1743515100000,
+   1743605100000,
+   10.08,
+   10.13
+  ]
+ },
+ "a-s-p5-mkt-cf": {
+  "engine": [
+   "short",
+   1.0,
+   1743515100000,
+   1743527700000,
+   9.94,
+   9.88
+  ],
+  "reason": "calc_on_order_fills, outside the rule: the pin exported the fill-recalculation scripts but did not model them, so the engine books this tape exactly as before the rule (switch on or off). H re-enters at 9.94 on 2025-04-01 13:45 UTC in the fill recalculation and the market add fills at 9.93 on the 14:00 open; TradingView closes H at its own level 9.89 on 14:00, the engine closes both at the average's level 9.88 on 17:15.",
+  "trade": 3,
+  "tv": [
+   "short",
+   1.0,
+   1743515100000,
+   1743516000000,
+   9.94,
+   9.89
+  ]
+ },
+ "a-s-p5-stp-cf": {
+  "engine": [
+   "short",
+   1.0,
+   1743515100000,
+   1743515100000,
+   10.06,
+   9.94
+  ],
+  "reason": "calc_on_order_fills, outside the rule: the pin exported the fill-recalculation scripts but did not model them, so the engine books this tape exactly as before the rule (switch on or off). H (10.08) and the add's stop (10.06) both fill on 2025-04-01 13:45 UTC; TradingView closes each at its own level in that bar (10.03, 10.01), the engine both at 9.94.",
+  "trade": 1,
+  "tv": [
+   "short",
+   1.0,
+   1743515100000,
+   1743515100000,
+   10.06,
+   10.01
+  ]
+ }
+}

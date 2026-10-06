@@ -1114,6 +1114,7 @@ stream.
 | `resting_stop_entry_survives_close` | under `process_orders_on_close`, an earlier bar's stop entry of the side a close flattens survives it, as a limit does | the stale-entry cancel in `on_applied` |
 | `priced_add_at_cap_not_placed` | under `process_orders_on_close`, a priced add of an id holding no lot, still at the pyramiding cap once its bar's closes are done, leaves the book at the next opening, judged at that opening only | `withdraw_unplaced_cap_adds` in `on_bar_open` |
 | `global_exit_binds_held_position` | a global exit called while a position is held takes that position as its parent: an entry order of either side working beside it (resting, placed earlier in the calculation, or queued by a fill recalculation) lends it neither its side nor its price basis, nor a wait for its fill, so its limit and stop rest on the held side and a profit, loss or trail leg resolves against the held position | `observe_staged_parent` in `exit` |
+| `global_exit_per_entry_levels` | such a held global exit with relative legs covers the position entry by entry once it holds two entries: each entry's bracket at levels from its own fill, a later entry's placed at its fill, each filling once and closing the oldest trade, the brackets left ending on a flat book; at one point stop and market orders fill before limits, buys before sells | `per_entry_exit_call` in `exit`, `per_entry_exits_at_entry_fill` and `per_entry_exits_after_fill` in `on_applied`, `order_per_entry_point_ties` in `on_bar_close`, the units in `resolve_source_terms` |
 
 The first four parts' tapes run with margin requirements off (`margin_long =
 margin_short = 0`) and without `calc_on_order_fills`, and those parts act only
@@ -1143,10 +1144,36 @@ competing order of the book for the profit-and-loss bracket the exit stages
 in the entry's fill recalculation, which took the bracket's chart-tick reach,
 so it acted one bar late. TradingView has no such competing exclusion,
 beside an add or any other order (`tests/fixtures/coof_competing_tick`,
-below), and the engine has none now. A global exit over pyramided lots (an add
-that fills while the exit works) is a separate rule, not modelled:
-TradingView gives each entry its own exit levels and books FIFO, the engine
-one exit at the average price.
+below), and the engine has none now.
+
+When the add fills while such an exit works, TradingView covers the
+position entry by entry (`global_exit_per_entry_levels`, the 66 synthetic
+tapes of `tests/fixtures/per_entry_exit`, `test_per_entry_exit_tapes`, NYSE:F
+15m): each entry has its own bracket at levels from its own fill price, the
+add's bracket is placed at its fill and acts in the rest of that bar, each
+bracket fills once (a re-issued exit gives a consumed entry no new one), every
+exit fill closes the oldest open trade, and a flat book ends the brackets
+left, so an entry filling later in that bar waits for the next call. At one
+point of the path stop and market orders fill before limit orders, and among
+them buys before sells. The engine kept one exit over the whole position,
+re-priced at the average price: all 60 tapes without `calc_on_order_fills`
+departed, and now book TradingView's trades row for row (79,480 trades); a
+stream of each run of the feed books the backtest's. One entry keeps its one
+exit, which is that entry's bracket; the second entry's fill turns its legs
+into the first entry's bracket and places the new entry's at the fill. The
+kernel breaks a tie at one point by queue order, so after the script the add
+and the exit's legs are re-priced in place into TradingView's order, the
+technique of `order_open_marketable_limit_entries`. This re-price moves the
+selected requests behind every other working request at that point. It also
+moves entry incarnations and the broker state hash of runs in this shape;
+entry incarnation is an ABI provenance field, run-scoped rather than a
+stable cross-run identifier. No fill, price, quantity, money or time field
+moves in the unreached-add controls. The tapes pin the rule without
+`calc_on_order_fills` (its six `-cf` tapes are exported but not modelled: the
+engine books them as before) or `process_orders_on_close`, on the chart's own
+bars, under the FIFO close rule, for lots opened by `strategy.entry` and an
+exit with only profit and loss legs; every other configuration keeps the one
+exit at the average price.
 
 The first two parts act on a whole exit at absolute levels whose pending
 parent rests at a level (`whole_level_exit`); the stop entry and cap parts act

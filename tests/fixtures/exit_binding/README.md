@@ -35,13 +35,15 @@ depart from TradingView, so every part is live and pinned:
 | `resting_stop_entry_survives_close` | under `process_orders_on_close`, an earlier bar's stop entry survives a close's flat | `stop-entry-parent` |
 | `priced_add_at_cap_not_placed` | under `process_orders_on_close`, a priced add of an id holding no lot, still at the pyramiding cap once its bar's closes are done, leaves the book at the next opening, judged at that opening only | `pyr1`, `pyr1-close-sibling` |
 | `global_exit_binds_held_position` | a global exit called while a position is held binds to that position: an entry order of either side working beside it lends it neither its side nor its price basis, nor a wait for its fill | the `*-opp-*` tapes of tests/fixtures/cross_side_exit and the `-lim-` and `-stp-` tapes of tests/fixtures/same_side_exit (no tape here has that shape) |
+| `global_exit_per_entry_levels` | such a global exit with relative legs covers the position entry by entry once it holds two entries: each entry's own levels, a later entry's bracket at its fill, each bracket filling once and closing the oldest trade, brackets left ending on a flat book | the 60 non-COOF tapes of tests/fixtures/per_entry_exit (no tape here has that shape) |
 
 With every switch off the engine books what it booked before the rule: 18 of the 36 tapes depart.
 
 **Scope.** Every tape runs with margin requirements off (`margin_long = margin_short = 0`), so every
 part but `global_exit_binds_held_position` (pinned by tests/fixtures/cross_side_exit, whose TradingView
-exports bind the same with and without a margin requirement, and tests/fixtures/same_side_exit) acts
-only there: with a margin requirement, margin calls act on the same exits and orders, and no
+exports bind the same with and without a margin requirement, and tests/fixtures/same_side_exit) and
+`global_exit_per_entry_levels` (pinned by tests/fixtures/per_entry_exit) acts only there: with a
+margin requirement, margin calls act on the same exits and orders, and no
 tape (nor the pin's reference model, which has no margin model) covers that; the engine keeps its
 former course. No part but that one acts under `calc_on_order_fills`. The two exit parts act on whole exits at
 absolute levels. Every tape's pending parent rests at a level (a limit, or `stop-entry-parent`'s stop),

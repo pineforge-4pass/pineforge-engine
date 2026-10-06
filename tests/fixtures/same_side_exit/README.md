@@ -49,13 +49,19 @@ stop fills on another bar), and `calc_on_order_fills` re-entries in the fill rec
 trade 21 and `l-pl-*-cf` trade 152 on the 2025-04-09 13:30 UTC gap bar, `s-pl-*-cf` trade 28: the
 re-entry books at another point of the bar).
 
-## Not modelled: an add that fills
+## An add that fills
 
 When the add IS reached while the global exit works, TradingView covers both lots, but per entry: each
 lot's exit levels come from its own fill price, an entry that fills after the call gets its orders at
-its fill, and every exit fill closes the oldest open trade (FIFO). The engine books one exit for the
-whole position at the average price. That is a separate rule (pinned by its own synthetics, not
-committed here); none of these tapes reaches it, because their adds never fill.
+its fill, and every exit fill closes the oldest open trade (FIFO). That is a separate rule, pinned by its
+own synthetics in tests/fixtures/per_entry_exit (`ExitBindingRuleSwitches::global_exit_per_entry_levels`);
+none of these tapes reaches it, because their adds never fill. Its point order (stop and market orders
+before limits, buys before sells) re-prices the resting add and the exit's legs here into that order,
+which moves entry incarnations and the broker state hash of runs in this shape, but no fill,
+price, quantity, money or time field. The entry incarnation is an ABI provenance field: a
+run-scoped physical-entry identifier, not a stable cross-run identifier. The re-price moves
+the selected requests behind every other working request at that path point, not only
+behind each other.
 
 ## The test
 
