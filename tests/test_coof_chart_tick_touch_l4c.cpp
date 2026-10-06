@@ -136,11 +136,17 @@ void lower_controls() {
     check(next_tick,jan_bars(),100,13.78,5000,13.64,"END");
 }
 void narrow_scope_and_liveness() {
-    // Scope compatibility: a competing pending order does not gain a new
-    // ranking interaction through this single-exit fallback.
+    // A far strategy.order beside the stop changes nothing: the stop books
+    // on the touch bar at the chart tick, as it does alone. TradingView
+    // has no competing chart-tick exclusion: the lab tv synthetics
+    // tests/fixtures/coof_competing_tick h-s-stp-k2r-cf and z-s-stp-k2r-cf
+    // (a short's off-grid buy stop between a half-cent raw high and its
+    // chart tick, beside a far strategy.order) book every such event as
+    // their k1 controls do. This row expected 4000 (one bar late) before,
+    // which no tape backed.
     TickProbe competing(false,979,10.257194001727152,kNaN,3);
     competing.extra_order();
-    check(competing,may_bars(),979,10.22,4000,10.26,"X");
+    check(competing,may_bars(),979,10.22,3000,10.26,"X");
 
     TickProbe e(false,979,10.257194001727152,kNaN,3);
     auto input=may_bars();

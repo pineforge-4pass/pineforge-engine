@@ -1,0 +1,47 @@
+{
+  "synthetic": true,
+  "authored_for": "calc_on_order_fills competing chart-tick pin, px-pin-grid set 2 (own script; no population source was sent)",
+  "pin_script": "pxgrid-H-L-stp-K1-cf",
+  "parameters": {
+    "family": "exit first called in the fill recalculation; half-cent raw extremes (classes Hx Hi Hm Ho)",
+    "side": "long",
+    "leg": "sell stop",
+    "book": "the exit alone",
+    "calc_on_order_fills": true,
+    "events": "H-L-stp",
+    "event_classes": {
+      "Hi": 8,
+      "Hm": 8,
+      "Ho": 8,
+      "Hx": 8
+    }
+  },
+  "export": {
+    "tool": "lab tv --no-note",
+    "channel": "ws-report-v1",
+    "exported_at": "2026-10-06T02:05:33.193Z",
+    "chart": {
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "from": "2025-04-01",
+      "to": "2026-05-01"
+    },
+    "returned_range": {
+      "from": 1743514200000,
+      "to": 1777578300000
+    },
+    "range_proof": "covered",
+    "raw_frame_sha256": "84ea67af9bb31008939537a76b2e4e3b83812ba9252d7a773b1c29873751c992",
+    "closed_trades": 32,
+    "second_export": {
+      "exported_at": "2026-10-06T02:05:59.851Z",
+      "tv_trades_sha256": "cafbc8cc1a029924b91284c7b3ae8816b7e8dc2bf597f6df666f13406dd4e141",
+      "raw_frame_sha256": "439258a019db0ccdefaddafadb27fc0e1db89ec8ece8bfb3680bf5485c4925fb",
+      "identical_trades": true
+    }
+  },
+  "strategy_pine_sha256": "9092f5095d58bdbf41d36c3c1e2463c820914f63fbee9c5f3782aca5fec42b3b",
+  "tv_trades_sha256": "cafbc8cc1a029924b91284c7b3ae8816b7e8dc2bf597f6df666f13406dd4e141",
+  "generated_by": "d1220bb (pineforge-codegen-oss main)",
+  "prediction": "written and hashed before the export (PREDICTIONS2.md of the pin, frozen 2026-10-06T02:05:16Z, sha256 c1537e661dc4e05dda09a5a0bf75608547260f5238d53eb67e7f398d73b5962d): every event books as with no competing chart-tick shift"
+}

@@ -25,13 +25,15 @@ is another rule's (each with its reason and first departing row, the same in
 an add tape and its control); for those the test requires exactly that first
 departure.
 
-The rule has two switches (ExitBindingRuleSwitches). With
-global_exit_binds_held_position off, exactly the `-lim-` and `-stp-` tapes
-must move, each departing from TradingView as rule_off_departures.json
-records; with held_exit_bracket_ignores_same_side_entries off, exactly the
-calc_on_order_fills profit-and-loss `-lim-` and `-stp-` tapes. No control and
-no `-cap-` tape may move. The calc_on_order_fills add tapes must be refused by
-a forward stream; every other add tape is replayed as a stream too, one
+The rule has a switch (ExitBindingRuleSwitches::
+global_exit_binds_held_position). With it off, exactly the `-lim-` and
+`-stp-` tapes must move, each departing from TradingView as
+rule_off_departures.json records. No control and no `-cap-` tape may move.
+Under calc_on_order_fills the bracket the exit stages in a fill
+recalculation acts beside the resting add as it does alone: TradingView has
+no competing chart-tick exclusion (tests/fixtures/coof_competing_tick).
+The calc_on_order_fills add tapes must be refused by a forward stream;
+every other add tape is replayed as a stream too, one
 stream per run of the feed between two nights (a stream refuses a weekend or
 a holiday, because the lane's session names no days), each over 1 and (in a
 run longer than that) 30 bars of history, and must book the trades of a
@@ -49,7 +51,7 @@ import re
 import sys
 from pathlib import Path
 
-PARTS = ("global_exit_binds_held_position", "held_exit_bracket_ignores_same_side_entries")
+PARTS = ("global_exit_binds_held_position",)
 STREAM_WARMUPS = (1, 30)
 FORWARD_REFUSAL = "calc_on_order_fills is unsupported"
 NIGHT_MS = 20 * 3600000
@@ -295,7 +297,6 @@ def main():
     assert set(known) <= set(names), "known divergences name only tapes"
     adds = [n for n in names if n.split("-")[2] in ("lim", "stp", "cap")]
     resting = [n for n in adds if n.split("-")[2] in ("lim", "stp")]
-    bracket = [n for n in resting if n.split("-")[1] == "pl" and is_coof(fixtures, n)]
     failures = []
 
     # The pin: TradingView books every add tape exactly as its control.
@@ -333,7 +334,7 @@ def main():
     recorded_path = fixtures / "rule_off_departures.json"
     recorded = {} if record else json.loads(recorded_path.read_text())
     moved_by_part = {}
-    for part, expected_movers in ((PARTS[0], resting), (PARTS[1], bracket)):
+    for part, expected_movers in ((PARTS[0], resting),):
         set_switches(lib, {part: False})
         try:
             off = run_tapes(fixtures, names, lib, TapeStrategy, inputs_run_kwargs)

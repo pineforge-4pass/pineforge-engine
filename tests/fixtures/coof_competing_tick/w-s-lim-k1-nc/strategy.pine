@@ -1,0 +1,12 @@
+//@version=6
+strategy("pxgrid-W-S-lim-K1-nc", overlay=true, initial_capital=1000000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1, calc_on_order_fills=false, process_orders_on_close=false)
+var T = array.from(1743515100000.0, 1743521400000.0, 1743613200000.0, 1744045200000.0, 1744134300000.0, 1744830000000.0, 1744914600000.0, 1745343000000.0, 1746194400000.0, 1746549000000.0, 1747403100000.0, 1747929600000.0, 1748439000000.0, 1749663000000.0, 1750095000000.0, 1751304600000.0, 1751386500000.0, 1752685200000.0, 1752760800000.0, 1753110000000.0, 1753974000000.0, 1756821600000.0, 1758728700000.0, 1760454000000.0)
+var V = array.from(9.89, 9.95, 10.2, 9.12, 8.83, 9.29, 9.62, 9.56, 10.29, 10.41, 10.7, 10.43, 10.2, 10.67, 10.62, 10.73, 11.29, 11.2, 11.12, 11.35, 10.95, 11.79, 11.62, 11.54)
+sig = array.indexof(T, float(time))
+ev = array.indexof(T, float(time[1]))
+if strategy.position_size == 0 and sig >= 0
+    strategy.entry("H", strategy.short)
+    strategy.exit("X", "H", limit=array.get(V, sig))
+else if strategy.position_size < 0 and ev < 0
+    strategy.cancel("X")
+    strategy.close_all(comment="late")

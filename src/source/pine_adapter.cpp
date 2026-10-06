@@ -12635,57 +12635,6 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
         }
         queued = std::move(resting);
     }
-    // The source book's distinct (id, from_entry) keys, less the rows `skip`
-    // names.
-    const auto source_book_population = [&](const auto& skip) {
-        std::unordered_set<std::uint64_t> source_pending_orders;
-        const auto note = [&](const PlacementSnapshot& row) {
-            if (!skip(row))
-                source_pending_orders.insert(key_for(row.source_id, row.from_entry));
-        };
-        for (const auto& handle : live_handles_) {
-            const auto live = placement_.find(handle.incarnation);
-            if (live != placement_.end()) note(live->second);
-        }
-        for (const auto& leg : queued) note(leg.snapshot);
-        for (const auto& entry : pending_entries_) note(entry.snapshot);
-        for (const auto& command : pending_same_bar_commands_) note(command.snapshot);
-        for (const auto& pending : pending_coof_requests_) note(pending.snapshot);
-        for (const auto& delayed : delayed_market_orders_) note(delayed.snapshot);
-        for (const auto& shadow : source_shadow_pending_) note(shadow.snapshot);
-        return source_pending_orders.size();
-    };
-    const std::size_t source_pending_population
-        = source_book_population([](const PlacementSnapshot&) { return false; });
-    // A global exit called while a position is held binds to that position
-    // (global_exit_binds_held_position), and an entry order of the held side
-    // working beside it does not compete with the bracket that exit stages
-    // in a fill recalculation either: the census of such a leg leaves that
-    // order out, so the leg keeps the reach it has with no such order and
-    // acts for the rest of the fill bar. lab tv synthetics
-    // tests/fixtures/same_side_exit, calc_on_order_fills: a profit and loss
-    // bracket beside a resting same-side limit or stop add books every trade
-    // of the bracket without the add (ExitBindingRuleSwitches::
-    // held_exit_bracket_ignores_same_side_entries).
-    std::size_t held_exit_population = source_pending_population;
-    auto held_side = static_cast<std::int32_t>(PositionSide::FLAT);
-    if (source_pending_population != 1U
-        && detail::exit_binding_rule_switches().held_exit_bracket_ignores_same_side_entries
-        && std::any_of(queued.begin(), queued.end(), [](const PendingBracketLeg& leg) {
-               return leg.snapshot.projection_created_during_coof
-                   && leg.snapshot.from_entry.empty();
-           })) {
-        const double held_units = detail::run_position(require_host()).signed_units;
-        if (held_units != 0.0) {
-            const bool held_long = held_units > 0.0;
-            held_side = static_cast<std::int32_t>(
-                held_long ? PositionSide::LONG : PositionSide::SHORT);
-            held_exit_population = source_book_population([&](const PlacementSnapshot& row) {
-                return row.opening && row.family == PineOrderFamily::Entry
-                    && row.is_long == held_long;
-            });
-        }
-    }
     // Re-issued explicit brackets are one leg family per entry instance.
     // The legacy book walked instances first (T1/T2 for opening A, then
     // T1/T2 for opening B), not every T1 across all openings before T2.
@@ -12697,38 +12646,12 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
         if (left_origin == right_origin) return false;
         return left_origin < right_origin;
     });
+    // A stop or limit leg staged in a fill recalculation keeps the trigger
+    // exit() installed whatever else the book holds: TradingView has no
+    // "competing chart tick" exclusion, so beside another order it reaches
+    // what it reaches alone (lab tv synthetics tests/fixtures/
+    // coof_competing_tick).
     for (auto& leg : queued) {
-        const bool held_global_exit = leg.snapshot.from_entry.empty()
-            && held_side != static_cast<std::int32_t>(PositionSide::FLAT)
-            && leg.snapshot.projection_position_side == held_side;
-        const bool competing_chart_tick
-            = (held_global_exit ? held_exit_population : source_pending_population) != 1U
-            && leg.snapshot.projection_created_during_coof
-            && (leg.snapshot.family == PineOrderFamily::ExitStop
-                || leg.snapshot.family == PineOrderFamily::ExitLimit);
-        const double competing_level = leg.snapshot.family == PineOrderFamily::ExitStop
-            ? leg.snapshot.exit_levels.stop : leg.snapshot.exit_levels.limit;
-        // ab9714be pine_fills.cpp:592-641: the chart-tick touch this shift
-        // suppresses exists only for a level strictly inside (raw, tick(raw)],
-        // i.e. OFF the tick grid.  An on-grid level books AT the level
-        // (bar_fill_price), so a half-tick native threshold beyond it turns
-        // every such fill into an InvalidTerms rejection (sell limit booked
-        // below its native level) and the leg never fills.
-        const bool competing_level_on_grid = finite_positive(staged_.syminfo.mintick)
-            && std::isfinite(competing_level)
-            && nearest_tick(competing_level, staged_.syminfo.mintick) == competing_level;
-        if (competing_chart_tick && !competing_level_on_grid) {
-            const bool exit_is_buy = detail::run_position(require_host()).signed_units < 0.0;
-            const bool upward = leg.snapshot.family == PineOrderFamily::ExitLimit
-                ? !exit_is_buy : exit_is_buy;
-            const double source_level = competing_level;
-            const double threshold = source_level + (upward ? 0.5 : -0.5)
-                * staged_.syminfo.mintick;
-            if (leg.snapshot.family == PineOrderFamily::ExitStop)
-                leg.request.trigger = native_order::Stop{threshold};
-            else
-                leg.request.trigger = native_order::Limit{threshold};
-        }
         // A global exit called while the book is flat is bound to the limit
         // and stop entry orders working then and waits for their fill
         // (materialized by the opening, materialize_pending_bracket_legs):

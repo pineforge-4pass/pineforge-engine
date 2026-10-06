@@ -35,16 +35,15 @@ depart from TradingView, so every part is live and pinned:
 | `resting_stop_entry_survives_close` | under `process_orders_on_close`, an earlier bar's stop entry survives a close's flat | `stop-entry-parent` |
 | `priced_add_at_cap_not_placed` | under `process_orders_on_close`, a priced add of an id holding no lot, still at the pyramiding cap once its bar's closes are done, leaves the book at the next opening, judged at that opening only | `pyr1`, `pyr1-close-sibling` |
 | `global_exit_binds_held_position` | a global exit called while a position is held binds to that position: an entry order of either side working beside it lends it neither its side nor its price basis, nor a wait for its fill | the `*-opp-*` tapes of tests/fixtures/cross_side_exit and the `-lim-` and `-stp-` tapes of tests/fixtures/same_side_exit (no tape here has that shape) |
-| `held_exit_bracket_ignores_same_side_entries` | under `calc_on_order_fills`, an entry order of the held side working beside such a held global exit does not compete with the bracket the exit stages in a fill recalculation | the `-pl-lim-cf` and `-pl-stp-cf` tapes of tests/fixtures/same_side_exit (no tape here calculates on order fills) |
 
 With every switch off the engine books what it booked before the rule: 18 of the 36 tapes depart.
 
 **Scope.** Every tape runs with margin requirements off (`margin_long = margin_short = 0`), so every
 part but `global_exit_binds_held_position` (pinned by tests/fixtures/cross_side_exit, whose TradingView
-exports bind the same with and without a margin requirement, and tests/fixtures/same_side_exit) and
-`held_exit_bracket_ignores_same_side_entries` acts only there: with a margin requirement, margin calls act on the same exits and orders, and no
+exports bind the same with and without a margin requirement, and tests/fixtures/same_side_exit) acts
+only there: with a margin requirement, margin calls act on the same exits and orders, and no
 tape (nor the pin's reference model, which has no margin model) covers that; the engine keeps its
-former course. No part but those two acts under `calc_on_order_fills`. The two exit parts act on whole exits at
+former course. No part but that one acts under `calc_on_order_fills`. The two exit parts act on whole exits at
 absolute levels. Every tape's pending parent rests at a level (a limit, or `stop-entry-parent`'s stop),
 so the binding to the entry id applies to a limit or stop order of the id; an exit called beside a
 market order of its id keeps its former course (tests/fixtures/samebar_pyramiding_entries
