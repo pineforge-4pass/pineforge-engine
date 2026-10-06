@@ -21,6 +21,11 @@ env:
   CCACHE_COMPILERCHECK: content
   CCACHE_COMPRESS: "1"
   CCACHE_MAXSIZE: 500M
+  # The run-failure source guards read the newest release tag. Every job that
+  # runs them fetches it (fetch-depth: 0), so here a missing tag fails them
+  # instead of taking their tag-less offline path (rebuilding the published
+  # catalog from the checked-in diff), which only a clone without tags needs.
+  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
 
 # The heavy jobs run on the organization's 16-core larger runner, and the macOS
 # legs on GitHub's M2 runner for the macos-26 image, for a push, the schedule, a
@@ -82,6 +87,13 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      # pytest for the run-json-harness-tests stage (docker/run_json_*_test.py),
+      # every wheel pinned by version and sha256 like actionlint below.
+      - name: Install the harness test runner
+        run: |
+          python3 -m pip install --disable-pip-version-check --no-input \
+            --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
 
       - name: Install workflow linters
         shell: bash

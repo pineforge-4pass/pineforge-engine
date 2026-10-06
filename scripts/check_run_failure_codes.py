@@ -19,14 +19,47 @@ This guard fails closed when:
   2. a generated file differs from what the catalog generates (run
      `--write-registry` and commit both);
   3. against the catalog of the newest release tag (`git show`), a code was
-     removed or renamed, or an existing code's class, retryable flag, an
-     arg's kind, or its value list lost a value -- unless the old code is
-     marked `deprecated` with `replacedBy` naming codes that exist (a value
-     added to a closed list, a new optional arg and new codes are additions);
+     removed or renamed, or its `since` changed (never allowed, deprecated or
+     not), or an existing code's class, retryable flag, an arg's kind, or
+     its value list lost a value -- unless the old code is marked
+     `deprecated` with `replacedBy` naming codes that exist (a value added to
+     a closed list, a new optional arg and new codes are additions). In a
+     clone without tags (or when git cannot read the tag) the published
+     catalog is the one the checked-in diff's `from` names, as
+     scripts/gen_run_failure_catalog_diff.py --check reads it: with
+     PINEFORGE_REQUIRE_RELEASE_TAGS set to any value but 0 or empty (every
+     workflow that runs the guards sets it to 1) the check fails, exit 2;
+     `from.tag` must be v<VERSION>; a null `from.catalogSha256` (a release
+     older than 1.4.0, the first that published a catalog) leaves nothing to
+     compare, and the note says so; otherwise the catalog is rebuilt by
+     running the diff backwards and must hash to `from.catalogSha256`.
+     Offline, neither `from.tag` nor `from.catalogSha256` is verified against
+     git: only the rebuilt catalog against the sha the diff states;
   4. a `throw` in the Pine-library headers, src/source/ or the Pine-library
-     kernel units is neither a coded<...> throw nor listed in
-     scripts/run_failure_throw_allowlist.txt (path, the throw's text, and the
-     reason it is an engine invariant or never reaches a run).
+     kernel units -- `throw`, `std::throw_with_nested`,
+     `std::rethrow_exception` or `std::rethrow_if_nested` -- is neither coded
+     (`throw coded<...>(...)`,
+     or `std::throw_with_nested(coded<...>(...))`) nor admitted by a row of
+     scripts/run_failure_throw_allowlist.txt (path, the throw's text, how
+     many such statements it admits, and the reason it is an engine
+     invariant or never reaches a run).
+
+The throw scan reads the statements written in the files it scans, with
+comments and string literals (raw ones with any encoding prefix too) masked.
+It does not see:
+
+  * a throw the standard library raises for its caller -- `.at()`,
+    `std::stoi`, `substr` past the end, a vector length -- nor one inside a
+    helper function, or behind a macro defined in a file it does not scan;
+  * a `coded<>` spelled through another namespace or an alias (flagged as
+    uncoded, the safe side);
+  * the kernel units (src/engine_*.cpp, src/native_*.cpp, src/c_abi.cpp,
+    src/reservation_expansion.cpp, ...) and the kernel headers, among them
+    include/pineforge/native_module.hpp, which it does not scan: a throw
+    there is taken for an engine invariant the classifier reads by its type
+    (engine_invariant for the std::logic_error family,
+    engine_unclassified_error otherwise). That no script's own values reach
+    one is not proven site by site.
 
 `--self-test` drives every check against fixtures. Exit 0 on success, 1 on a
 finding, 2 when an input cannot be read.
@@ -40,6 +73,11 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+# The generator owns the diff and how it runs backwards; a guard run leaves no
+# scripts/__pycache__ behind.
+sys.dont_write_bytecode = True
+import gen_run_failure_catalog_diff as catalog_diff  # noqa: E402  (this directory)
 
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = Path("docker/run_failure_codes.json")
@@ -90,7 +128,10 @@ THROW_SCAN_GLOBS = (
     "src/session_time.cpp",
     "src/math.cpp",
 )
-THROW = re.compile(r"\bthrow\b")
+# A throw statement, and the standard functions that throw for their caller.
+THROW = re.compile(r"\b(?:throw|throw_with_nested|rethrow_exception|rethrow_if_nested)\b")
+# The encoding prefixes a raw string literal may carry before its R.
+RAW_PREFIXES = ("", "u8", "u", "U", "L")
 
 
 class CheckError(Exception):
@@ -314,27 +355,59 @@ def catalog_at(root: Path, tag: str) -> str | None:
     return result.stdout.decode("utf-8")
 
 
-def published_catalog(root: Path) -> tuple[str | None, str]:
-    """The newest release's catalog bytes (None: that release has none).
+def published_catalog(root: Path, *,
+                      require_tags: str | None = None) -> tuple[str | None, str, str | None]:
+    """The newest release's catalog (None: that release has none), its label,
+    and a note when it was not read from git.
 
     The newest `v*` tag reachable from HEAD decides. A clone without tags (a
-    remote verifier's ref-less checkout) falls back to the release the
-    checked-in diff names as its `from`: when that release published no
-    catalog (`catalogSha256` null) there is nothing to compare; otherwise its
-    catalog must be readable, or the check fails closed.
+    remote verifier's ref-less checkout), or one that cannot read the tag,
+    takes the release the checked-in diff names as its `from`
+    (published_without_git).
     """
     tag = newest_release_tag(root)
+    reason = "no release tag v* is reachable from HEAD (a clone without tags)"
     if tag is not None:
-        return catalog_at(root, tag), tag
+        try:
+            return catalog_at(root, tag), tag, None
+        except InputError as error:
+            reason = str(error)
+    return published_without_git(root, reason, require_tags=require_tags)
+
+
+def published_without_git(root: Path, reason: str, *,
+                          require_tags: str | None = None) -> tuple[str | None, str, str | None]:
+    """The published catalog when git cannot read its tag, by the generator's
+    three cases: tags required (`require_tags` names what requires them:
+    InputError), a null from of a release older than the first catalog
+    release (nothing to compare), or the catalog rebuilt by running the
+    checked-in diff backwards, held to its from.catalogSha256; from.tag must
+    be v<VERSION> (CheckError when either is not)."""
+    if require_tags:
+        raise InputError(f"{reason}, and {require_tags} requires the release tags: fetch them "
+                         "(git fetch --tags; actions/checkout with fetch-depth: 0)")
     try:
         diff = json.loads((root / DIFF).read_text(encoding="utf-8"))
-        origin = diff["from"]
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        raise InputError("no release tag v* reachable from HEAD and no readable "
-                         f"{DIFF} to name the published release ({error})") from error
-    if origin.get("catalogSha256") is None:
-        return None, str(origin.get("tag"))
-    return catalog_at(root, str(origin.get("tag"))), str(origin.get("tag"))
+        catalog = (root / CATALOG).read_bytes()
+    except (OSError, ValueError) as error:
+        raise InputError(f"{reason}, and {DIFF} cannot be read to name the published release "
+                         f"({error})") from error
+    if not isinstance(diff, dict):
+        raise CheckError(f"{DIFF} is not a JSON object")
+    try:
+        rebuilt, tag = catalog_diff.published_offline(diff, catalog,
+                                                      catalog_diff.default_config(root))
+    except catalog_diff.Finding as error:
+        raise CheckError(f"{reason}: {error}") from error
+    except catalog_diff.InputError as error:
+        raise InputError(f"{reason}: {error}") from error
+    if rebuilt is None:
+        return None, tag, (f"history not compared: {tag} published no catalog ({reason}; "
+                           "from.tag, VERSION's, is not verified against git)")
+    return (rebuilt.decode("utf-8"), f"{tag} (rebuilt from {DIFF})",
+            f"history compared against the catalog {tag} published, rebuilt by running {DIFF} "
+            f"backwards ({reason}; it hashes to the sha256 the diff states; neither from.tag, "
+            "VERSION's, nor from.catalogSha256 is verified against git)")
 
 
 def compatibility(old: dict, new: dict) -> list[str]:
@@ -347,6 +420,10 @@ def compatibility(old: dict, new: dict) -> list[str]:
             errors.append(f"code {name} was removed or renamed; a published code stays "
                           "(mark it deprecated with replacedBy)")
             continue
+        if before.get("since") != after.get("since"):
+            errors.append(f"code {name}: since changed {before.get('since')!r} -> "
+                          f"{after.get('since')!r}: it names the release that first shipped "
+                          "the code, which never changes")
         if after.get("deprecated"):
             continue
         for field in ("class", "retryable"):
@@ -403,8 +480,7 @@ def strip_comments(text: str) -> str:
             i = j
         elif text[i] == "'" and digit_separator(text, i):
             i += 1  # C++14 digit separator (50'000), not a character literal
-        elif text.startswith('R"', i) and (i == 0 or not (text[i - 1].isalnum()
-                                                          or text[i - 1] == "_")):
+        elif text.startswith('R"', i) and raw_string_prefix(text, i):
             open_paren = text.find("(", i + 2)
             close = text.find(")" + text[i + 2:open_paren] + '"', open_paren + 1)
             end = n if open_paren < 0 or close < 0 else close + len(text[i + 2:open_paren]) + 2
@@ -432,8 +508,19 @@ def digit_separator(text: str, at: int) -> bool:
     return start < at and text[start].isdigit()
 
 
+def raw_string_prefix(text: str, at: int) -> bool:
+    """Whether the `R"` at `at` opens a raw string literal: the identifier
+    characters before its R are nothing, or one encoding prefix (u8R, uR, UR,
+    LR); `fooR"` is an identifier and an ordinary string."""
+    start = at
+    while start > 0 and (text[start - 1].isalnum() or text[start - 1] == "_"):
+        start -= 1
+    return text[start:at] in RAW_PREFIXES
+
+
 def throw_statements(text: str) -> list[tuple[int, str]]:
-    """Each `throw` and the statement text up to its `;`, by line."""
+    """Each throw -- `throw`, `std::throw_with_nested`, `std::rethrow_exception`,
+    `std::rethrow_if_nested` -- and the statement text up to its `;`, by line."""
     masked = strip_comments(text)
     found = []
     for match in THROW.finditer(masked):
@@ -446,7 +533,10 @@ def throw_statements(text: str) -> list[tuple[int, str]]:
 
 
 def is_coded(statement: str) -> bool:
-    return bool(re.match(r"throw\s+(?:::)?(?:pineforge::)?coded\s*<", statement))
+    """`throw coded<...>(...)`, or `std::throw_with_nested(coded<...>(...))`,
+    whose exception derives from the coded one and so carries its code."""
+    return bool(re.match(r"(?:throw\s+|throw_with_nested\s*\(\s*)(?:::)?(?:pineforge::)?"
+                         r"coded\s*<", statement))
 
 
 def scan_files(root: Path) -> list[Path]:
@@ -461,7 +551,7 @@ def scan_files(root: Path) -> list[Path]:
     return unique
 
 
-def load_allowlist(root: Path) -> list[tuple[str, str, str]]:
+def load_allowlist(root: Path) -> list[tuple[str, str, int, str]]:
     rows = []
     path = root / ALLOWLIST
     try:
@@ -473,9 +563,11 @@ def load_allowlist(root: Path) -> list[tuple[str, str, str]]:
         if not line or line.startswith("#"):
             continue
         parts = [part.strip() for part in raw.split("|")]
-        if len(parts) != 3 or not all(parts):
-            raise CheckError(f"{ALLOWLIST}:{number}: expected `path | throw text | reason`")
-        rows.append((parts[0], parts[1], parts[2]))
+        if len(parts) != 4 or not all(parts) or not re.fullmatch(r"[1-9][0-9]*", parts[2]):
+            raise CheckError(f"{ALLOWLIST}:{number}: expected `path | throw text | count | "
+                             "reason`, count the number of throw statements the row admits "
+                             "(1 or more)")
+        rows.append((parts[0], parts[1], int(parts[2]), parts[3]))
     return rows
 
 
@@ -487,40 +579,50 @@ def uncoded_throws(root: Path) -> list[str]:
         rel = path.relative_to(root).as_posix()
         text = path.read_text(encoding="utf-8", errors="replace")
         for line, statement in throw_statements(text):
-            if statement in ("throw;",) and False:
-                continue
             if is_coded(statement):
                 continue
             hit = False
-            for index, (allow_path, fragment, _reason) in enumerate(allow):
+            for index, (allow_path, fragment, _count, _reason) in enumerate(allow):
                 if allow_path == rel and fragment in statement:
                     used[index] += 1
                     hit = True
                     break
             if not hit:
                 findings.append(f"{rel}:{line}: uncoded throw: {statement[:160]}")
-    for index, count in enumerate(used):
-        if count == 0:
-            findings.append(f"{ALLOWLIST}: stale row (no such throw): {allow[index][0]} | "
-                            f"{allow[index][1]}")
+    for (allow_path, fragment, count, _reason), matched in zip(allow, used):
+        if matched == 0:
+            findings.append(f"{ALLOWLIST}: stale row (no such throw): {allow_path} | {fragment}")
+        elif matched != count:
+            findings.append(f"{ALLOWLIST}: the row {allow_path} | {fragment} admits {count} "
+                            f"throw statement(s), but {matched} match: read each one, then set "
+                            "its count (a strategy-reachable throw is coded, never admitted)")
     return findings
 
 
 # --------------------------------------------------------------------------
 
 
-def run_checks(root: Path, *, history: bool = True) -> list[str]:
+def run_checks(root: Path, *, history: bool = True,
+               require_tags: str | None = None) -> tuple[list[str], list[str]]:
+    """The findings, and the notes worth printing."""
     catalog, text = load_catalog(root)
     errors = validate_catalog(catalog, text)
     if errors:
-        return errors
+        return errors, []
     errors += check_generated(root, catalog)
+    notes = []
     if history:
-        published, label = published_catalog(root)
-        if published is not None:
-            errors += [f"against {label}: {e}" for e in compatibility(json.loads(published), catalog)]
+        try:
+            published, label, note = published_catalog(root, require_tags=require_tags)
+        except CheckError as error:
+            errors.append(str(error))
+        else:
+            notes += [note] if note else []
+            if published is not None:
+                errors += [f"against {label}: {e}"
+                           for e in compatibility(json.loads(published), catalog)]
     errors += uncoded_throws(root)
-    return errors
+    return errors, notes
 
 
 def self_test() -> int:
@@ -580,6 +682,59 @@ def self_test() -> int:
     required["codes"]["beta_code"]["args"]["new_arg"] = {"kind": "integer"}
     if not compatibility(good, required):
         failures.append("a new required arg passed")
+    for retired in (False, True):
+        moved = json.loads(json.dumps(good))
+        moved["codes"]["beta_code"]["since"] = "1.9.0"
+        if retired:
+            moved["codes"]["beta_code"].update({"deprecated": True, "replacedBy": ["alpha_code"]})
+        if not any("since changed" in error for error in compatibility(good, moved)):
+            failures.append(f"a published code's since moved (deprecated: {retired})")
+    # history without git: the checked-in diff run backwards, or nothing to compare
+    with tempfile.TemporaryDirectory(prefix="pf-run-failure-history-") as temporary:
+        root = Path(temporary)
+        (root / "docker").mkdir()
+        cfg = catalog_diff.default_config(root)
+        published = canonical(good).encode("utf-8")
+
+        def offline(tree: dict, diff: dict, *, require_tags: str | None = None,
+                    version: str | None = None):
+            (root / CATALOG).write_text(canonical(tree), encoding="utf-8")
+            (root / DIFF).write_text(catalog_diff.render(diff), encoding="utf-8")
+            (root / "VERSION").write_text((version or diff["from"]["version"]) + "\n",
+                                          encoding="utf-8")
+            try:
+                return published_without_git(root, "offline", require_tags=require_tags)
+            except (CheckError, InputError) as error:
+                return error
+
+        def diff_to(tree: dict, old: bytes | None, tag: str) -> dict:
+            return catalog_diff.build_diff(old, canonical(tree).encode("utf-8"), tag, cfg)
+
+        found = offline(newer, diff_to(newer, published, "v1.4.0"))
+        if (not isinstance(found, tuple) or found[0] != published.decode("utf-8")
+                or "rebuilt" not in found[2] or compatibility(json.loads(found[0]), newer)):
+            failures.append("the published catalog was not rebuilt offline: " + repr(found))
+        found = offline(removed, diff_to(removed, published, "v1.4.0"))
+        if (not isinstance(found, tuple)
+                or not any("beta_code was removed" in error
+                           for error in compatibility(json.loads(found[0]), removed))):
+            failures.append("a removal the diff states was not compared offline: " + repr(found))
+        hidden = diff_to(removed, published, "v1.4.0")
+        hidden["removed"] = []
+        if not isinstance(offline(removed, hidden), CheckError):
+            failures.append("a removal the diff hides passed offline")
+        if not isinstance(offline(removed, diff_to(removed, None, "v1.4.0")), CheckError):
+            failures.append("a null from of v1.4.0 passed offline")
+        found = offline(newer, diff_to(newer, None, "v1.3.0"))
+        if not isinstance(found, tuple) or found[0] is not None or "not compared" not in found[2]:
+            failures.append("a null from of v1.3.0 was not taken offline: " + repr(found))
+        if not isinstance(offline(removed, diff_to(removed, None, "v1.3.0"), version="1.4.0"),
+                          CheckError):
+            failures.append("a null from of v1.3.0 passed after VERSION reached 1.4.0")
+        found = offline(newer, diff_to(newer, published, "v1.4.0"),
+                        require_tags=f"{catalog_diff.REQUIRE_TAGS_ENV}='false'")
+        if not isinstance(found, InputError) or "='false' requires" not in str(found):
+            failures.append("required tags were not required: " + repr(found))
     # generated files
     header = render_codes_header(good)
     if "alpha_code = 1," not in header or "kRunFailureCodeCount = 3" not in header:
@@ -603,16 +758,42 @@ def self_test() -> int:
             "  throw std::out_of_range(\"after a digit separator\");\n"
             "  // the scan's apostrophe\n"
             "  const char* r = R\"x(throw in a raw string)x\";\n"
+            "  const char* p = u8R\"(a\"b)\";\n"
+            "  throw std::out_of_range(\"after a prefixed raw string\");\n"
+            "  const wchar_t* w = LR\"q(\"throw\" in a wide raw string)q\";\n"
+            "  std::throw_with_nested(std::runtime_error(\"nested\"));\n"
+            "  std::throw_with_nested(coded<std::runtime_error>(RunFailureCode::engine_invariant,"
+            " {}, \"y\"));\n"
+            "  std::rethrow_exception(pending);\n"
+            "  std::rethrow_if_nested(error);\n"
             "}\n")
+        (root / "src/source/b.cpp").write_text("void g() { try {} catch (...) { throw; }\n"
+                                               "  try {} catch (...) { throw; } }\n")
+        (root / "src/source/c.cpp").write_text("void h() { try {} catch (...) { throw; } }\n")
         (root / ALLOWLIST).write_text(
             "# comment\n"
-            "src/source/a.cpp | allowed invariant | an invariant\n"
-            "src/source/a.cpp | gone | stale row\n")
+            "src/source/a.cpp | allowed invariant | 1 | an invariant\n"
+            "src/source/a.cpp | gone | 1 | stale row\n"
+            "src/source/a.cpp | rethrow_exception | 1 | a rethrow\n"
+            "src/source/b.cpp | throw; | 1 | one rethrow admitted, two written\n"
+            "src/source/c.cpp | throw; | 3 | three rethrows admitted, one written\n")
         findings = uncoded_throws(root)
-        if (len(findings) != 3 or "\"uncoded\"" not in findings[0]
-                or "after a digit separator" not in findings[1]
-                or "stale row" not in findings[2]):
+        expected = ("\"uncoded\"", "after a digit separator", "after a prefixed raw string",
+                    "throw_with_nested(std::runtime_error(\"nested\"))",
+                    "rethrow_if_nested(error);", "stale row",
+                    "b.cpp | throw; admits 1 throw statement(s), but 2 match",
+                    "c.cpp | throw; admits 3 throw statement(s), but 1 match")
+        if len(findings) != len(expected) or not all(
+                needle in finding for needle, finding in zip(expected, findings)):
             failures.append("the throw scan is wrong: " + repr(findings))
+        for row in ("src/source/a.cpp | gone | stale row\n",
+                    "src/source/a.cpp | gone | 0 | stale row\n"):
+            (root / ALLOWLIST).write_text(row)
+            try:
+                uncoded_throws(root)
+                failures.append(f"an allowlist row without a count passed: {row.strip()}")
+            except CheckError:
+                pass
     for failure in failures:
         print("check_run_failure_codes: self-test: " + failure, file=sys.stderr)
     return 1 if failures else 0
@@ -628,6 +809,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-history", action="store_true",
                         help="skip the comparison with the newest release tag's catalog")
     args = parser.parse_args(argv)
+    notes: list[str] = []
     if args.self_test:
         return self_test()
     if self_test():
@@ -645,13 +827,16 @@ def main(argv: list[str] | None = None) -> int:
                 (root / path).write_text(content, encoding="utf-8")
                 print(f"check_run_failure_codes: wrote {path}")
             return 0
-        errors = run_checks(root, history=not args.no_history)
+        errors, notes = run_checks(root, history=not args.no_history,
+                                   require_tags=catalog_diff.tags_requirement())
     except InputError as error:
         print("check_run_failure_codes: " + str(error), file=sys.stderr)
         return 2
     except CheckError as error:
         print("check_run_failure_codes: " + str(error), file=sys.stderr)
         return 1
+    for note in notes:
+        print("check_run_failure_codes: " + note)
     if errors:
         for error in errors:
             print("check_run_failure_codes: " + error, file=sys.stderr)

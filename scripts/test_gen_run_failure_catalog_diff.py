@@ -6,10 +6,13 @@ The generator's in-file --self-test drives every rule against in-memory
 fixtures, and every other mode runs it first. These tests drive the command
 line against real repositories instead: the release cycle the release
 workflow runs (--write, --check, --stamp, --reset before the tag exists, then
---check on the tagged commit), a removal, a clone without tags (a diff whose
-from tag published no catalog is recomputed offline; one whose from tag
-published a catalog fails closed), the flags a sibling catalog uses, and
-this tree's own checked-in diff.
+--check on the tagged commit), a final release after its candidate (the diff
+from the previous final release and the chain step, then both rebuilt from
+git alone with --to-tag), the minor-release rule, a removal, a clone without
+tags (a diff whose from tag published no catalog is recomputed offline; one
+whose from tag published a catalog is rebuilt by running the diff backwards;
+a hidden removal, a forged null from and required tags fail), the flags a
+sibling catalog uses, and this tree's own checked-in diff.
 
 The documentation page lists every class, code and argument kind of
 docker/run_failure_codes.json between two markers; test_docs_tables holds
@@ -33,9 +36,16 @@ ROOT = SCRIPT.parents[1]
 CATALOG = "docker/run_failure_codes.json"
 DIFF = "docker/run_failure_codes_diff.json"
 SCHEMA = "pineforge-run-failure-catalog/v1"
-# The fixtures' git: no user configuration (signing, hooks, templates) leaks in.
-GIT_ENV = {**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+REQUIRE_TAGS = "PINEFORGE_REQUIRE_RELEASE_TAGS"
+# The fixtures' git: no user configuration (signing, hooks, templates) leaks in,
+# and no caller's PINEFORGE_REQUIRE_RELEASE_TAGS: a test that wants it sets it.
+GIT_ENV = {**{key: value for key, value in os.environ.items() if key != REQUIRE_TAGS},
+           "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
            "GIT_TERMINAL_PROMPT": "0"}
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(SCRIPT.parent))
+import gen_run_failure_catalog_diff as generator  # noqa: E402  (builds the forged diffs)
 GIT = ("git", "-c", "user.name=PineForge test", "-c", "user.email=test@example.invalid",
        "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", "-c", "init.defaultBranch=main",
        "-c", "core.hooksPath=" + os.devnull)
@@ -125,12 +135,22 @@ class Repo:
     def tag(self, tag: str) -> None:
         self.git("tag", "-a", tag, "-m", "Release " + tag)
 
-    def run(self, *argv: str) -> subprocess.CompletedProcess:
+    def run(self, *argv: str, env: dict | None = None) -> subprocess.CompletedProcess:
         return subprocess.run([sys.executable, str(SCRIPT), "--root", str(self.path), *argv],
-                              env=GIT_ENV, capture_output=True, text=True, cwd=self.path)
+                              env={**GIT_ENV, **(env or {})}, capture_output=True, text=True,
+                              cwd=self.path)
 
     def diff(self) -> dict:
         return json.loads((self.path / DIFF).read_text(encoding="utf-8"))
+
+    def write_diff(self, diff: dict) -> None:
+        self.write(DIFF, generator.render(diff).encode("utf-8"))
+
+    def built_diff(self, old: bytes | None, tag: str) -> dict:
+        """What --write would give from `old`, the catalog `tag` published, to
+        this tree's catalog: what a forger runs."""
+        return generator.build_diff(old, (self.path / CATALOG).read_bytes(), tag,
+                                    generator.default_config(self.path))
 
 
 class CatalogDiff(unittest.TestCase):
@@ -142,6 +162,7 @@ class CatalogDiff(unittest.TestCase):
         self.repo.path.mkdir()
         self.repo.git("init", "-q")
         self.repo.write("README.md", b"fixture\n")
+        self.repo.write("VERSION", b"1.0.0\n")   # what release.yml writes with each tag
         self.repo.commit("initial")
         self.repo.tag("v1.0.0")          # a release that published no catalog
 
@@ -198,7 +219,7 @@ class CatalogDiff(unittest.TestCase):
         self.fails(self.repo.run("--stamp", "--to-version", "1.2.0", "--previous-tag", "v1.0.0",
                                  "--output", str(asset)), 1, "since is '1.1.0'")
         self.fails(self.repo.run("--stamp", "--to-version", "1.1.0", "--previous-tag", "v0.9.0",
-                                 "--output", str(asset)), 1, "previous release tag v0.9.0")
+                                 "--output", str(asset)), 1, "--previous-tag is v0.9.0")
         # The release: reset before the tag exists, commit with VERSION, tag, check.
         self.release("v1.1.0")
         catalog = (self.repo.path / CATALOG).read_bytes()
@@ -222,6 +243,90 @@ class CatalogDiff(unittest.TestCase):
         self.repo.tag("v1.2.0")
         self.fails(self.repo.run("--check"), 1, "newest release tag reachable from HEAD is v1.2.0")
 
+    def test_final_release_after_a_candidate(self) -> None:
+        self.start({"alpha": code("1.1.0")})
+        self.release("v1.1.0")
+        # 1.2.0 ships through a candidate: beta in the candidate, gamma after it.
+        self.repo.write(CATALOG, catalog_bytes({"alpha": code("1.1.0"), "beta": code("1.2.0")}))
+        self.ok(self.repo.run("--write"))
+        self.repo.commit("beta")
+        assets = self.tmp / "assets"
+        candidate_step = assets / "run_failure_codes_diff-v1.2.0-rc.1-from-v1.1.0.json"
+        self.ok(self.repo.run("--stamp", "--to-version", "1.2.0-rc.1", "--previous-tag", "v1.1.0",
+                              "--output", str(assets / "run_failure_codes_diff-v1.2.0-rc.1.json"),
+                              "--chain-output", str(candidate_step)))
+        # A candidate's diff starts where its notes do: no chain step of its own.
+        self.assertFalse(candidate_step.exists())
+        self.release("v1.2.0-rc.1")
+        self.repo.write(CATALOG, catalog_bytes({"alpha": code("1.1.0"), "beta": code("1.2.0"),
+                                                "gamma": code("1.2.0")}))
+        self.ok(self.repo.run("--write"))
+        self.repo.commit("gamma")
+        self.assertEqual(self.repo.diff()["from"]["tag"], "v1.2.0-rc.1")
+        # The final release: its notes start at v1.1.0, its chain at the candidate.
+        stable = assets / "run_failure_codes_diff-v1.2.0.json"
+        step = assets / "run_failure_codes_diff-v1.2.0-from-v1.2.0-rc.1.json"
+        stamp = ("--stamp", "--to-version", "1.2.0", "--previous-tag", "v1.1.0",
+                 "--output", str(stable))
+        self.fails(self.repo.run(*stamp), 2, "--chain-output")
+        self.ok(self.repo.run(*stamp, "--chain-output", str(step)))
+        catalog = (self.repo.path / CATALOG).read_bytes()
+        published = catalog_bytes({"alpha": code("1.1.0")})   # v1.1.0's catalog
+        stable_diff = json.loads(stable.read_text(encoding="utf-8"))
+        step_diff = json.loads(step.read_text(encoding="utf-8"))
+        self.assertEqual(stable_diff["from"], {
+            "version": "1.1.0", "tag": "v1.1.0",
+            "catalogSha256": hashlib.sha256(published).hexdigest()})
+        self.assertEqual([item["code"] for item in stable_diff["added"]], ["beta", "gamma"])
+        self.assertEqual(step_diff["from"]["tag"], "v1.2.0-rc.1")
+        self.assertEqual([item["code"] for item in step_diff["added"]], ["gamma"])
+        for diff in (stable_diff, step_diff):
+            self.assertEqual(diff["to"], {"version": "1.2.0",
+                                          "catalogSha256": hashlib.sha256(catalog).hexdigest()})
+        # Once tagged, git alone rebuilds both assets byte for byte (the
+        # recovery when the GitHub release was not created after the push).
+        self.release("v1.2.0")
+        again = self.tmp / "again.json"
+        for start, asset in (("v1.1.0", stable), ("v1.2.0-rc.1", step)):
+            self.ok(self.repo.run("--stamp", "--to-tag", "v1.2.0", "--previous-tag", start,
+                                  "--output", str(again)))
+            self.assertEqual(again.read_bytes(), asset.read_bytes(), start)
+        # A previous tag HEAD does not reach (a hotfix tagged on another branch)
+        # is refused: the diff and the notes would start at different releases.
+        self.repo.git("checkout", "-q", "-b", "hotfix")
+        self.repo.write("README.md", b"hotfix\n")
+        self.repo.commit("hotfix")
+        self.repo.tag("v1.2.1")
+        self.repo.git("checkout", "-q", "main")
+        self.fails(self.repo.run("--stamp", "--to-version", "1.3.0", "--previous-tag", "v1.2.1",
+                                 "--output", str(again)), 1, "HEAD does not reach")
+
+    def test_a_release_that_adds_or_changes_codes_is_a_minor_one(self) -> None:
+        self.start({"alpha": code("1.1.0")})
+        self.release("v1.1.0")
+        self.repo.write(CATALOG, catalog_bytes({"alpha": code("1.1.0"), "beta": code("1.2.0")}))
+        self.ok(self.repo.run("--write"))
+        self.repo.commit("beta")
+        asset = str(self.tmp / "asset.json")
+        # The default patch bump: one line says what to do.
+        result = self.repo.run("--stamp", "--to-version", "1.1.1", "--previous-tag", "v1.1.0",
+                               "--output", asset)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(result.stderr.splitlines(), [
+            "gen_run_failure_catalog_diff: this release adds or changes codes: bump minor "
+            "(or override 1.2.0)"])
+        self.ok(self.repo.run("--stamp", "--to-version", "1.2.0", "--previous-tag", "v1.1.0",
+                              "--output", asset))
+        # A changed field alone needs the minor release too.
+        self.repo.write(CATALOG, catalog_bytes({"alpha": dict(code("1.1.0"), description="e")}))
+        self.ok(self.repo.run("--write"))
+        self.fails(self.repo.run("--stamp", "--to-version", "1.1.1", "--previous-tag", "v1.1.0",
+                                 "--output", asset), 1, "bump minor (or override 1.2.0)")
+        # An added code names a release after the diff's start: --check says so.
+        self.repo.write(CATALOG, catalog_bytes({"alpha": code("1.1.0"), "beta": code("1.1.0")}))
+        self.ok(self.repo.run("--write"))
+        self.fails(self.repo.run("--check"), 1, "since is '1.1.0', but the diff starts at 1.1.0")
+
     def test_removed_code_is_refused(self) -> None:
         self.start({"alpha": code("1.1.0"), "beta": code("1.1.0")})
         self.release("v1.1.0")
@@ -241,20 +346,46 @@ class CatalogDiff(unittest.TestCase):
         self.fails(self.repo.run("--reset", "--tag", "v1.1.0"), 1, "is not this tree's catalog")
 
     def test_clone_without_tags(self) -> None:
-        self.start({"alpha": code("1.1.0")})
+        # v1.0.0 published no catalog; v1.4.0, the first catalog release, does.
+        self.start({"alpha": code("1.4.0", ["one"])})
         unpublished = self.repo.git("rev-parse", "HEAD")
-        self.release("v1.1.0")
-        self.repo.write(CATALOG, catalog_bytes({"alpha": code("1.1.0"), "beta": code("1.2.0")}))
+        self.release("v1.4.0")
+        published = (self.repo.path / CATALOG).read_bytes()
+        self.repo.write(CATALOG, catalog_bytes({"alpha": code("1.4.0", ["one", "two"]),
+                                                "beta": code("1.5.0")}))
         self.ok(self.repo.run("--write"))
         self.repo.commit("beta")
         clone = Repo(self.tmp / "clone")
         subprocess.run([*GIT, "clone", "-q", "--no-tags", str(self.repo.path), str(clone.path)],
                        env=GIT_ENV, check=True, capture_output=True)
         self.assertEqual(clone.git("tag", "--list"), "")
-        # The diff starts at v1.1.0, which published a catalog: fail closed.
-        self.fails(clone.run("--check"), 2, "Fetch the tags")
+        # The diff starts at v1.4.0, which published a catalog: the diff run
+        # backwards rebuilds it, its sha256 is from.catalogSha256, and the diff
+        # is then recomputed in full.
+        self.assertIn("rebuilt the catalog v1.4.0 published", self.ok(clone.run("--check")))
+        self.assertEqual(generator.reconstruct_old_catalog(
+            clone.diff(), (clone.path / CATALOG).read_bytes(),
+            generator.default_config(clone.path)), published)
+        # Where the tags are required -- every workflow that runs the guards -- it fails.
+        self.fails(clone.run("--check", env={REQUIRE_TAGS: "1"}), 2, "Fetch the tags")
+        # A removal the diff hides: alpha gone, the diff says nothing of it.
+        clone.write(CATALOG, catalog_bytes({"beta": code("1.5.0")}))
+        hidden = clone.built_diff(published, "v1.4.0")
+        self.assertEqual([item["code"] for item in hidden["removed"]], ["alpha"])
+        hidden["removed"] = []
+        clone.write_diff(hidden)
+        self.fails(clone.run("--check"), 1, "rebuilds a catalog hashing to")
+        # A forged null from: "v1.4.0 published no catalog", everything added.
+        clone.write_diff(clone.built_diff(None, "v1.4.0"))
+        self.fails(clone.run("--check"), 1, "not older than 1.4.0")
+        # A forged null from under an older tag -- or a branch cut before
+        # v1.4.0 and rebased after it, keeping its old diff: VERSION names
+        # v1.4.0, the release the diff must start at.
+        for older in ("v1.3.0", "v1.3.99", "v0.0.0"):
+            clone.write_diff(clone.built_diff(None, older))
+            self.fails(clone.run("--check"), 1, f"from.tag is {older}, but VERSION is '1.4.0'")
         # Before that release the diff started at v1.0.0, which published none.
-        clone.git("checkout", "-q", unpublished)
+        clone.git("checkout", "-q", "--force", unpublished)
         result = clone.run("--check")
         self.assertIn("recomputed in full without git", self.ok(result))
         # Recomputed means compared: a tampered addition still fails offline.

@@ -14,7 +14,7 @@ flags (--catalog, --catalog-path-in-git, --diff, --schema, --diff-schema,
 --collection).
 
     {"schema": "pineforge-run-failure-catalog-diff/v1",
-     "from": {"version": "1.2.0", "tag": "v1.2.0", "catalogSha256": null},
+     "from": {"version": "1.3.0", "tag": "v1.3.0", "catalogSha256": null},
      "to": {"version": null, "unreleased": true, "catalogSha256": "<hex>"},
      "catalogSchema": {"before": null, "after": "pineforge-run-failure-catalog/v1"},
      "metadataChanges": [<change>...],
@@ -38,7 +38,8 @@ flags (--catalog, --catalog-path-in-git, --diff, --schema, --diff-schema,
     with the whole value on its side. The presence flags tell an absent field
     from an explicit null; an absent side's value is null. A list is one
     value: a vocabulary list that gains or loses a value is one change of
-    `args.<name>.values` with both lists, in their declared order.
+    `args.<name>.values` with both lists, in their declared order. No
+    catalog key holds a `.`, so a path names exactly one field.
   * `metadataChanges` are the same changes over the root fields that are
     neither `schema` (which `catalogSchema` states) nor a collection.
   * `added` and `removed` carry the whole entry; `changed` lists the changed
@@ -51,6 +52,14 @@ flags (--catalog, --catalog-path-in-git, --diff, --schema, --diff-schema,
     sorted order of their paths, object keys sorted inside every catalog
     value and list order kept, two-space indent, one final newline, and no
     timestamp, path or host.
+  * A diff runs backwards (reconstruct_old_catalog): this tree's catalog
+    with every metadata and field change put back to its `before` side,
+    `schema` set to `catalogSchema.before`, the added entries dropped and the
+    removed ones restored, in the canonical bytes (keys sorted, one-space
+    indent, UTF-8, a final newline -- scripts/check_run_failure_codes.py
+    holds the catalog to them), is the catalog `from` names, byte for byte.
+    (A catalog serialized otherwise does not rebuild to its own bytes, so
+    its check without tags fails closed.)
 
 Modes:
 
@@ -60,16 +69,52 @@ Modes:
             `to.catalogSha256` must hash this tree's catalog, `from.tag` must
             be the newest release tag reachable from HEAD and
             `from.catalogSha256` the catalog at that tag, `removed` must be
-            empty. In a clone without tags git cannot name the tag: when
-            `from.catalogSha256` is null the diff is still recomputed in full
-            (every entry added; `from.tag` itself unverified, and the note
-            says so); when it is not null the check fails closed.
-  --stamp --to-version X.Y.Z[-rc.N] --previous-tag vA.B.C --output PATH
-            the release: everything --check holds, plus `from.tag` must be
-            the previous release tag, and every added entry that states a
-            `since` must state X.Y.Z (a release candidate's own X.Y.Z). Writes
-            the stamped copy (`to.version` set, `unreleased` dropped) to PATH,
-            never over the checked-in diff.
+            empty, and every added entry that states a `since` must state a
+            release after `from.version`. In a clone without tags (or when git
+            cannot read the tag) git cannot name the release:
+              - with PINEFORGE_REQUIRE_RELEASE_TAGS set to any value but 0
+                (or empty) -- every workflow that runs the guards sets it to
+                1 -- the check fails, exit 2: fetch the tags;
+              - `from.tag` must be v<VERSION>: the release workflow writes
+                VERSION and resets the diff to that release in one commit,
+                so a diff from another release (a branch cut before a release
+                and rebased after it, keeping its old diff) is refused;
+              - a null `from.catalogSha256` is taken only for a release older
+                than FIRST_CATALOG_RELEASE (1.4.0): every release from it on,
+                its candidates included, publishes a catalog;
+              - otherwise the catalog `from` names is rebuilt by running the
+                diff backwards, and it must hash to `from.catalogSha256`.
+            The diff is then recomputed in full. Offline, neither `from.tag`
+            nor `from.catalogSha256` is verified against git: only the rebuilt
+            catalog against the sha the diff states, and `from.tag` against
+            VERSION; the note says so.
+  --stamp --to-version X.Y.Z[-rc.N] --previous-tag vA.B.C[-rc.N]
+          --output PATH [--chain-output PATH]
+            the release. --previous-tag is the release its notes start at
+            (scripts/release_version.py's `previous`: for a final release,
+            the previous final release). Everything --check holds, the tags
+            required; then the checked-in diff's start decides the assets:
+              - the previous tag itself: PATH is the checked-in diff stamped;
+              - a release candidate after the previous tag (a final release
+                that follows its candidates): PATH is a fresh diff from the
+                catalog the previous tag published (read from git) to this
+                tree's, and --chain-output gets the chain step, the
+                checked-in diff stamped;
+              - anything else is refused: the notes would start at a release
+                HEAD does not reach.
+            Each diff must remove nothing; a release that adds or changes
+            entries must be a minor or major release over the diff's start
+            (after a candidate of its own X.Y.Z: an X.Y.0); and every added
+            entry that states a `since` must state X.Y.Z (a release
+            candidate's own X.Y.Z), or in the fresh diff a release after its
+            start and not after X.Y.Z. A stamped copy has `to.version` set
+            and `unreleased` dropped; the checked-in diff is never written.
+  --stamp --to-tag vX.Y.Z[-rc.N] --previous-tag vA.B.C[-rc.N] --output PATH
+            a published release's stamped diff, rebuilt from git alone: the
+            catalog --to-tag published against the one --previous-tag
+            published, with the same checks, byte for byte the asset the
+            release attached. A release whose assets were lost after its tag
+            was pushed rebuilds them so, from any checkout with the tags.
   --reset --tag vX.Y.Z [--output PATH]
             the state main is in right after a release: `from` is that tag
             and this tree's catalog, nothing added. The release workflow
@@ -80,7 +125,8 @@ Modes:
             runs it first, so a broken generator never judges.
 
 Exit status: 0 on success, 1 on a finding, 2 when an input cannot be read --
-a missing file, or git cannot read a tag the mode needs.
+a missing file, or git cannot read a tag the mode needs (the tags required
+and absent included).
 """
 from __future__ import annotations
 
@@ -88,6 +134,7 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -107,6 +154,14 @@ TAG_MATCH = "v[0-9]*"
 _NUMBER = r"(?:0|[1-9][0-9]*)"
 VERSION = re.compile(_NUMBER + r"\." + _NUMBER + r"\." + _NUMBER + r"(?:-rc\.[1-9][0-9]*)?")
 UNRELEASED_TO = ("version", "unreleased", "catalogSha256")
+# The first release that publishes a catalog: from it on every release, its
+# candidates included, does, so a diff whose `from` is such a release and whose
+# from.catalogSha256 is null is forged or stale (checked without git).
+FIRST_CATALOG_RELEASE = "1.4.0"
+# Set (to 1) by every workflow that runs the guards, whose checkouts fetch the
+# tags: there a missing tag fails, and the offline path never runs. Any value
+# but 0 or empty requires the tags, `false` included.
+REQUIRE_TAGS_ENV = "PINEFORGE_REQUIRE_RELEASE_TAGS"
 
 
 class InputError(Exception):
@@ -203,6 +258,33 @@ def tag_version(tag: str) -> str:
     return tag[1:] if tag.startswith("v") else tag
 
 
+def version_key(version: object) -> tuple | None:
+    """Semver precedence of X.Y.Z or X.Y.Z-rc.N (a candidate sorts below its
+    release, candidates by N); None for anything else."""
+    if not isinstance(version, str) or not VERSION.fullmatch(version):
+        return None
+    release, _, candidate = version.partition("-rc.")
+    major, minor, patch = (int(part) for part in release.split("."))
+    return (major, minor, patch, 0 if candidate else 1, int(candidate or 0))
+
+
+def release_of(version: str) -> str:
+    """The X.Y.Z of X.Y.Z or X.Y.Z-rc.N."""
+    return version.split("-", 1)[0]
+
+
+def is_candidate(tag: object) -> bool:
+    return is_tag(tag) and "-rc." in tag
+
+
+def tags_requirement(environ=None) -> str | None:
+    """What requires the release tags, as a message names it
+    (`PINEFORGE_REQUIRE_RELEASE_TAGS='1'`), when the variable holds any value
+    but 0 or empty; else None."""
+    value = (os.environ if environ is None else environ).get(REQUIRE_TAGS_ENV, "")
+    return None if value.strip() in ("", "0") else f"{REQUIRE_TAGS_ENV}={value!r}"
+
+
 def sorted_value(value):
     """Object keys sorted at every depth; list order is the catalog's own."""
     if isinstance(value, dict):
@@ -244,6 +326,19 @@ def field_changes(before, after, prefix: str = "") -> list:
     return [_change(prefix, True, True, before, after)]
 
 
+def dotted_key(value, parent: str = "") -> tuple | None:
+    """The first object key, at any depth of nested objects, that holds a `.`
+    (a list is one value: its items are never walked): (its parent, the key)."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if "." in key:
+                return parent, key
+            found = dotted_key(item, f"{parent}.{key}" if parent else key)
+            if found is not None:
+                return found
+    return None
+
+
 def parse_catalog(data: bytes, where: str, cfg: Config) -> dict:
     try:
         catalog = json.loads(data.decode("utf-8"))
@@ -256,6 +351,10 @@ def parse_catalog(data: bytes, where: str, cfg: Config) -> dict:
         if not isinstance(entries, dict) or not all(isinstance(entry, dict)
                                                     for entry in entries.values()):
             raise Finding(f"{where}: {collection} must be an object of objects")
+    dotted = dotted_key(catalog)
+    if dotted is not None:
+        raise Finding(f"{where}: the key {dotted[1]!r} (in {dotted[0] or 'the root'}) holds a "
+                      "'.': a change's path joins keys with '.', so no catalog key may hold one")
     return catalog
 
 
@@ -339,6 +438,199 @@ def removal_error(diff: dict) -> str:
             "renamed; keep it and mark it deprecated with replacedBy")
 
 
+def default_config(root: Path) -> Config:
+    """The run-failure catalog's own paths and names under `root`."""
+    return Config(root, root / CATALOG, CATALOG, root / DIFF, SCHEMA, DIFF_SCHEMA, COLLECTIONS)
+
+
+# --------------------------------------------------------------------------
+# A diff run backwards: the published catalog without git
+
+
+def canonical_catalog(catalog: dict) -> bytes:
+    """A catalog's canonical bytes: keys sorted, one-space indent, UTF-8 and
+    one final newline. scripts/check_run_failure_codes.py holds the checked-in
+    catalog, and so every catalog a release published, to them."""
+    return (json.dumps(catalog, indent=1, sort_keys=True, ensure_ascii=False)
+            + "\n").encode("utf-8")
+
+
+def _undo(target: dict, change: dict) -> None:
+    """Put one change's `before` side back at its path: the value, or no
+    member when it was absent before."""
+    *parents, last = change["path"].split(".")
+    for key in parents:
+        target = target[key]
+    if not isinstance(target, dict):
+        raise TypeError(f"{change['path']} does not name an object member")
+    if change["beforePresent"] is True:
+        target[last] = copy.deepcopy(change["before"])
+    elif change["beforePresent"] is False:
+        del target[last]
+    else:
+        raise TypeError(f"{change['path']}: beforePresent is not a boolean")
+
+
+def reconstruct_old_catalog(diff: dict, new_bytes: bytes, cfg: Config) -> bytes | None:
+    """The catalog the diff's `from` names, rebuilt from this tree's catalog by
+    running the diff backwards (see the module docstring); None when the diff
+    says `from` published no catalog (catalogSchema.before is null).
+
+    Raises Finding when the diff does not run backwards over this catalog: a
+    path that names no field, an added entry the catalog lacks, a malformed
+    member. The caller compares the bytes with from.catalogSha256: an honest
+    diff rebuilds the published catalog byte for byte, and one that hides a
+    removal or a change does not."""
+    new = parse_catalog(new_bytes, cfg.show(cfg.catalog), cfg)
+    try:
+        before_schema = diff["catalogSchema"]["before"]
+        if before_schema is None:
+            return None
+        old = {key: copy.deepcopy(value) for key, value in new.items()
+               if key != "schema" and key not in cfg.collections}
+        for change in diff["metadataChanges"]:
+            _undo(old, change)
+        old["schema"] = before_schema
+        for collection in cfg.collections:
+            entries = copy.deepcopy(new.get(collection, {}))
+            for item in diff["added"]:
+                if item["collection"] == collection:
+                    del entries[item["code"]]
+            for item in diff["removed"]:
+                if item["collection"] == collection:
+                    entries[item["code"]] = copy.deepcopy(item["entry"])
+            for item in diff["changed"]:
+                if item["collection"] == collection:
+                    for change in item["fields"]:
+                        _undo(entries[item["code"]], change)
+            if collection in new or entries:
+                old[collection] = entries
+    except (KeyError, IndexError, TypeError, AttributeError) as error:
+        raise Finding(f"{cfg.show(cfg.diff)} does not run backwards over "
+                      f"{cfg.show(cfg.catalog)}: {type(error).__name__}: {error}") from error
+    return canonical_catalog(old)
+
+
+def published_offline(diff: dict, new_bytes: bytes, cfg: Config) -> tuple:
+    """The release the diff starts at, and the catalog it published, when git
+    cannot read that release's tag: (catalog bytes, or None when the release
+    published none; the tag). Raises Finding when the diff cannot stand for
+    the published catalog: from.tag is no release tag or not v<VERSION>, a
+    null from.catalogSha256 names a release that published one (any from
+    FIRST_CATALOG_RELEASE on), or the diff run backwards does not hash to
+    from.catalogSha256; InputError when VERSION cannot be read. Neither
+    from.tag nor from.catalogSha256 is verified against git here.
+    scripts/check_run_failure_codes.py calls it too."""
+    origin = diff.get("from") if isinstance(diff.get("from"), dict) else {}
+    tag, sha = origin.get("tag"), origin.get("catalogSha256")
+    if not is_tag(tag):
+        raise Finding(f"from.tag {tag!r} is not a release tag vX.Y.Z[-rc.N]")
+    version_file = cfg.root / "VERSION"
+    try:
+        version = version_file.read_text(encoding="utf-8").strip()
+    except OSError as error:
+        raise InputError(f"{cfg.show(version_file)}: {error.strerror or error}: without the "
+                         "tags, from.tag is held to the release VERSION names") from error
+    if tag != "v" + version:
+        raise Finding(
+            f"from.tag is {tag}, but VERSION is {version!r}: the release workflow writes VERSION "
+            "and resets the diff to that release in one commit, so the diff must start at "
+            f"v{version}. This one was written against another release (a branch cut before a "
+            "release and rebased after it, keeping its old diff?); run --write in a clone with "
+            "the tags")
+    if sha is None:
+        if version_key(release_of(tag_version(tag))) >= version_key(FIRST_CATALOG_RELEASE):
+            raise Finding(
+                f"from.catalogSha256 is null, but {tag} is not older than "
+                f"{FIRST_CATALOG_RELEASE}: every release from {FIRST_CATALOG_RELEASE} on, its "
+                "candidates included, publishes a catalog, so the diff claims that a published "
+                "catalog does not exist; run --write in a clone with the tags")
+        return None, tag
+    rebuilt = reconstruct_old_catalog(diff, new_bytes, cfg)
+    if rebuilt is None or sha256(rebuilt) != sha:
+        rebuilt_sha = "no catalog" if rebuilt is None else f"a catalog hashing to {sha256(rebuilt)}"
+        raise Finding(
+            f"{cfg.show(cfg.diff)} run backwards over {cfg.show(cfg.catalog)} rebuilds "
+            f"{rebuilt_sha}, not the catalog {tag} published (from.catalogSha256 {sha}): an "
+            "entry was removed, renamed or changed without the diff saying so (a published "
+            "entry is deprecated, never removed), or the diff is stale; run --write in a clone "
+            "with the tags")
+    return rebuilt, tag
+
+
+# --------------------------------------------------------------------------
+# The release rules a stamped diff keeps
+
+
+def _listed(names: list) -> str:
+    shown = ", ".join(names[:3])
+    return shown + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+
+
+def since_findings(diff: dict, release: str | None = None, *, exact: bool = False) -> list:
+    """Added entries whose `since` does not fit, one line per `since` value.
+
+    An added entry that states a `since` names a release after the diff's
+    start (--check); a release stamping the diff also needs it not after the
+    release's X.Y.Z (`release`), and that X.Y.Z itself when the diff is the
+    chain step (`exact`). A start that is no release version holds nothing."""
+    start = diff["from"]["version"]
+    start_key = version_key(start)
+    if start_key is None:
+        return []
+    release_key = version_key(release) if release is not None else None
+    wrong: dict = {}
+    for item in diff["added"]:
+        entry = item.get("entry")
+        if not isinstance(entry, dict) or "since" not in entry:
+            continue
+        key = version_key(entry["since"])
+        fits = key is not None and key > start_key
+        if fits and release_key is not None:
+            fits = key == release_key if exact else key <= release_key
+        if not fits:
+            wrong.setdefault(repr(entry["since"]), (key, []))[1].append(
+                f"{item['collection']}.{item['code']}")
+    findings = []
+    for since, (key, names) in wrong.items():
+        if key is None:
+            why = "which is no release X.Y.Z"
+        elif key <= start_key:
+            why = (f"but the diff starts at {start}: an entry added after a release first "
+                   "ships in a later one")
+        elif exact and key != release_key:
+            why = (f"but this release is {release}: an added entry's since names the release "
+                   "that first ships it")
+        else:
+            why = f"which is after this release {release}"
+        findings.append(f"added {_listed(names)}: since is {since}, {why}")
+    return findings
+
+
+def needs_minor_release(diff: dict, to_version: str) -> bool:
+    """Whether stamping `diff` as release `to_version` breaks the versioning
+    rule: the diff adds or changes entries, but `to_version` is no minor or
+    major release over the diff's start -- nor, after a release candidate of
+    its own X.Y.Z, an X.Y.0."""
+    if not (diff["added"] or diff["changed"]):
+        return False
+    start_tag = diff["from"]["tag"]
+    start = tag_version(start_tag)
+    major, minor, patch = (int(part) for part in release_of(to_version).split("."))
+    if is_candidate(start_tag) and release_of(start) == release_of(to_version):
+        return patch != 0
+    start_major, start_minor, _ = (int(part) for part in release_of(start).split("."))
+    return (major, minor) <= (start_major, start_minor)
+
+
+def minor_release_line(start_tags: list, to_version: str) -> str:
+    """The one line a stamp prints when the release must be a minor one."""
+    major, minor = max(tuple(int(part) for part in release_of(tag_version(tag)).split(".")[:2])
+                       for tag in start_tags)
+    suggestion = f"{major}.{minor + 1}.0" + ("-rc.1" if "-rc." in to_version else "")
+    return f"this release adds or changes codes: bump minor (or override {suggestion})"
+
+
 # --------------------------------------------------------------------------
 # Modes
 
@@ -358,7 +650,10 @@ def do_write(cfg: Config, git) -> Outcome:
     return outcome
 
 
-def do_check(cfg: Config, git) -> Outcome:
+def do_check(cfg: Config, git, require_tags: str | None = None) -> Outcome:
+    """--check. `require_tags`, what requires the release tags (see
+    tags_requirement), turns a missing or unreadable tag into exit 2 instead
+    of the offline path."""
     outcome = Outcome()
     errors = outcome.errors
     new_bytes = read_bytes(cfg.catalog, cfg)
@@ -405,21 +700,29 @@ def do_check(cfg: Config, git) -> Outcome:
             reason = f"{error} (a clone without its history)"
             tag = None
     if tag is None:
-        if recorded_sha is not None:
+        if require_tags:
             outcome.status = 2
-            errors.append(f"{reason}, and from.catalogSha256 is {recorded_sha}: the catalog "
-                          f"{recorded_tag} published cannot be read, so the diff cannot be "
-                          "verified. Fetch the tags (git fetch --tags; actions/checkout with "
-                          "fetch-depth: 0)")
+            errors.append(f"{reason}, and {require_tags} requires the release tags: from.tag "
+                          f"{recorded_tag} cannot be verified against git. Fetch the tags (git "
+                          "fetch --tags; actions/checkout with fetch-depth: 0)")
             return outcome
-        if not is_tag(recorded_tag):
-            errors.append(f"from.tag {recorded_tag!r} is not a release tag vX.Y.Z[-rc.N]")
+        try:
+            old_bytes, tag = published_offline(diff, new_bytes, cfg)
+        except Finding as error:
+            errors.append(f"{reason}: {error}")
             return outcome
-        tag = recorded_tag
-        outcome.notes.append(
-            f"{reason}: from.tag {recorded_tag} is not verified against git, but "
-            "from.catalogSha256 is null (that tag published no catalog), so the diff was "
-            "recomputed in full without git (every entry added)")
+        if old_bytes is None:
+            outcome.notes.append(
+                f"{reason}: from.tag {tag} (VERSION's) is not verified against git, but "
+                f"from.catalogSha256 is null ({tag}, older than {FIRST_CATALOG_RELEASE}, "
+                "published no catalog), so the diff was recomputed in full without git "
+                "(every entry added)")
+        else:
+            outcome.notes.append(
+                f"{reason}: rebuilt the catalog {tag} published by running the diff backwards "
+                f"(it hashes to the sha256 {recorded_sha[:12]} the diff states) and recomputed "
+                "the diff in full without git; neither from.tag (VERSION's) nor "
+                "from.catalogSha256 is verified against git")
     expected = build_diff(old_bytes, new_bytes, tag, cfg)
     if recorded_sha != expected["from"]["catalogSha256"]:
         actual_from = expected["from"]["catalogSha256"] or "nothing (it has no catalog)"
@@ -427,6 +730,7 @@ def do_check(cfg: Config, git) -> Outcome:
                       f"{tag} hashes to {actual_from}; run --write")
     if expected["removed"]:
         errors.append(removal_error(expected))
+    errors.extend(since_findings(expected))
     if render(expected) != text and not errors:
         errors.append(f"{shown} is stale: {cfg.show(cfg.catalog)} against {tag} gives "
                       f"{summary(expected)} and other bytes; run --write")
@@ -436,16 +740,41 @@ def do_check(cfg: Config, git) -> Outcome:
     return outcome
 
 
-def do_stamp(cfg: Config, git, to_version: str, previous_tag: str, output: Path) -> Outcome:
+def stamp_findings(diffs: list, to_version: str) -> list:
+    """What forbids stamping each of `diffs`, a (diff, exact) pair, as release
+    `to_version`: a removal, then the minor-release rule as ONE line for them
+    all, or else the `since` of every added entry (`exact`: the chain step,
+    whose added entries all first ship in this release)."""
+    errors = [removal_error(diff) for diff, _ in diffs if diff["removed"]]
+    starts = [diff["from"]["tag"] for diff, _ in diffs if needs_minor_release(diff, to_version)]
+    if starts:
+        return errors + [minor_release_line(starts, to_version)]
+    for diff, exact in diffs:
+        errors += since_findings(diff, release_of(to_version), exact=exact)
+    return errors
+
+
+def stamped_copy(diff: dict, to_version: str) -> dict:
+    stamped = dict(diff)
+    stamped["to"] = {"version": to_version, "catalogSha256": diff["to"]["catalogSha256"]}
+    return stamped
+
+
+def do_stamp(cfg: Config, git, to_version: str, previous_tag: str, output: Path,
+             chain_output: Path | None = None) -> Outcome:
     if not VERSION.fullmatch(to_version):
         raise InputError(f"--to-version {to_version!r} is not X.Y.Z or X.Y.Z-rc.N")
     if not is_tag(previous_tag):
         raise InputError(f"--previous-tag {previous_tag!r} is not vX.Y.Z or vX.Y.Z-rc.N")
-    if output.resolve() == cfg.diff.resolve():
-        raise InputError("--output is the checked-in diff: the stamped diff is a release "
-                         "asset, written beside it, never over it")
-    outcome = do_check(cfg, git)
-    if outcome.status or not cfg.diff.is_file():
+    for path, flag in ((output, "--output"), (chain_output, "--chain-output")):
+        if path is not None and path.resolve() == cfg.diff.resolve():
+            raise InputError(f"{flag} is the checked-in diff: a stamped diff is a release "
+                             "asset, written beside it, never over it")
+    if chain_output is not None and chain_output.resolve() == output.resolve():
+        raise InputError("--chain-output is --output: the chain step is an asset of its own")
+    # A release reads its tags: the offline path never stamps.
+    outcome = do_check(cfg, git, require_tags="--stamp")
+    if outcome.status or outcome.errors or not cfg.diff.is_file():
         return outcome
     outcome.notes = [note for note in outcome.notes if not note.endswith("... OK")]
     errors = outcome.errors
@@ -453,27 +782,71 @@ def do_stamp(cfg: Config, git, to_version: str, previous_tag: str, output: Path)
         diff = json.loads(cfg.diff.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return outcome
-    recorded_from = diff.get("from") if isinstance(diff.get("from"), dict) else {}
-    if recorded_from.get("tag") != previous_tag:
-        errors.append(f"from.tag is {recorded_from.get('tag')!r}, not the previous release tag "
-                      f"{previous_tag}: the diff must start where the last release ended")
-    if "v" + to_version == previous_tag:
-        errors.append(f"--to-version {to_version} is the previous release itself")
-    if diff.get("removed"):
-        errors.append(removal_error(diff))
-    release = to_version.split("-", 1)[0]
-    for item in diff.get("added") or []:
-        entry = item.get("entry") if isinstance(item, dict) else None
-        if isinstance(entry, dict) and "since" in entry and entry["since"] != release:
-            errors.append(f"added {item.get('collection')} entry {item.get('code')}: since is "
-                          f"{entry['since']!r}, but this release is {release}")
+    # --check held the start to the newest release tag HEAD reaches.
+    base = diff["from"]["tag"]
+    if version_key(tag_version(previous_tag)) >= version_key(to_version):
+        errors.append(f"--previous-tag {previous_tag} does not sort below the release "
+                      f"{to_version}: it names the release the notes start at")
+        return outcome
+    if base == previous_tag:
+        stamps = [(diff, True, output)]
+    elif (is_candidate(base) and version_key(tag_version(base))
+          > version_key(tag_version(previous_tag))):
+        if chain_output is None:
+            raise InputError(f"the checked-in diff starts at the release candidate {base}, after "
+                             f"{previous_tag}: name --chain-output for that chain step")
+        old_bytes = git.file_at(previous_tag, cfg.catalog_in_git)
+        fresh = build_diff(old_bytes, read_bytes(cfg.catalog, cfg), previous_tag, cfg)
+        stamps = [(fresh, False, output), (diff, True, chain_output)]
+    else:
+        errors.append(
+            f"the checked-in diff starts at {base}, the newest release tag HEAD reaches, but "
+            f"--previous-tag is {previous_tag}: a release's diff starts at the release its "
+            "notes start at (scripts/release_version.py's previous), or at a release candidate "
+            f"after it. A previous tag above {base} is a release HEAD does not reach (made on "
+            "another branch): merge it first")
+        return outcome
+    errors.extend(dict.fromkeys(stamp_findings([(stamp, exact) for stamp, exact, _ in stamps],
+                                               to_version)))
     if errors:
         return outcome
-    stamped = dict(diff)
-    stamped["to"] = {"version": to_version, "catalogSha256": diff["to"]["catalogSha256"]}
-    write_text(output, render(stamped))
-    outcome.notes.append(f"wrote {cfg.show(output)}: {previous_tag} -> {to_version}: "
-                         f"{summary(stamped)}")
+    for stamp, exact, path in stamps:
+        write_text(path, render(stamped_copy(stamp, to_version)))
+        what = "the chain step " if exact and len(stamps) > 1 else ""
+        outcome.notes.append(f"wrote {cfg.show(path)}: {what}{stamp['from']['tag']} -> "
+                             f"{to_version}: {summary(stamp)}")
+    if chain_output is not None and len(stamps) == 1:
+        outcome.notes.append(f"the checked-in diff starts at {base}, where the notes do: no "
+                             f"chain step of its own, {cfg.show(chain_output)} not written")
+    return outcome
+
+
+def do_stamp_tags(cfg: Config, git, to_tag: str, previous_tag: str, output: Path) -> Outcome:
+    """--stamp --to-tag: a published release's stamped diff from git alone."""
+    for tag, flag in ((to_tag, "--to-tag"), (previous_tag, "--previous-tag")):
+        if not is_tag(tag):
+            raise InputError(f"{flag} {tag!r} is not vX.Y.Z or vX.Y.Z-rc.N")
+    if output.resolve() == cfg.diff.resolve():
+        raise InputError("--output is the checked-in diff: a stamped diff is a release asset, "
+                         "written beside it, never over it")
+    outcome = Outcome()
+    to_version = tag_version(to_tag)
+    if version_key(tag_version(previous_tag)) >= version_key(to_version):
+        outcome.errors.append(f"--previous-tag {previous_tag} does not sort below {to_tag}")
+        return outcome
+    new_bytes = git.file_at(to_tag, cfg.catalog_in_git)
+    if new_bytes is None:
+        outcome.errors.append(f"{cfg.catalog_in_git} is not in {to_tag}: that release "
+                              "published no catalog")
+        return outcome
+    diff = build_diff(git.file_at(previous_tag, cfg.catalog_in_git), new_bytes, previous_tag,
+                      cfg)
+    outcome.errors.extend(dict.fromkeys(stamp_findings([(diff, False)], to_version)))
+    if outcome.errors:
+        return outcome
+    write_text(output, render(stamped_copy(diff, to_version)))
+    outcome.notes.append(f"wrote {cfg.show(output)}: {previous_tag} -> {to_version}, from git "
+                         f"alone: {summary(diff)}")
     return outcome
 
 
@@ -531,7 +904,7 @@ def _fixture(codes: dict, *, schema: str = SCHEMA, classes: dict | None = None,
     catalog = {"schema": schema, "classes": classes or {"input": "i", "strategy": "s"},
                "kinds": {"integer": "n", "vocab": "v"}, "codes": codes}
     catalog.update(extra or {})
-    return (json.dumps(catalog, indent=1, sort_keys=True) + "\n").encode()
+    return canonical_catalog(catalog)
 
 
 def self_test() -> int:
@@ -679,6 +1052,54 @@ def self_test() -> int:
                == [("codes", "E1"), ("fragments", "F1")] and not diff["metadataChanges"],
                "collections and schema names are not generic: " + repr(diff["added"]))
 
+        # A diff runs backwards: whatever changed, the tree's catalog and the
+        # diff rebuild the old catalog byte for byte; a null from rebuilds none.
+        backwards = (
+            ("a code added", base, variant(lambda codes: codes.update(gamma=gamma))),
+            ("a code removed", base, variant(lambda codes: codes.pop("beta"))),
+            ("a class changed", base,
+             variant(lambda codes: codes["beta"].update({"class": "strategy"}))),
+            ("a value added", base,
+             variant(lambda codes: codes["alpha"]["args"]["reason"]["values"].append("three"))),
+            ("an optional argument added", base, variant(lambda codes: codes["alpha"]["args"]
+                                                         .update(extra={"kind": "integer",
+                                                                        "optional": True}))),
+            ("an argument turned optional", base,
+             variant(lambda codes: codes["alpha"]["args"]["reason"].update(optional=True))),
+            ("a kind changed", base,
+             variant(lambda codes: codes["alpha"]["args"].update(reason={"kind": "identifier"}))),
+            ("a deprecation", base,
+             variant(lambda codes: codes["alpha"].update(deprecated=True, replacedBy=["beta"]))),
+            ("metadata changed", base, _fixture(base_codes, classes={"input": "i2", "strategy": "s"},
+                                                extra={"note": "n"})),
+            ("metadata removed", _fixture(base_codes, extra={"note": "n"}), base),
+            ("the schema changed", _fixture(base_codes, schema="pineforge-run-failure-catalog/v0"),
+             base),
+            ("non-ASCII text", base,
+             variant(lambda codes: codes["beta"].update(description="b é中"))),
+        )
+        for name, old, new in backwards:
+            try:
+                rebuilt = reconstruct_old_catalog(json.loads(render(build(old, new))), new, cfg)
+            except Finding as error:
+                rebuilt = str(error).encode()
+            expect(rebuilt == old, f"{name}: the diff run backwards is not the old catalog: "
+                   + repr(rebuilt[:200]))
+        expect(reconstruct_old_catalog(json.loads(render(build(None, base))), base, cfg) is None,
+               "a diff from a release without a catalog rebuilt one")
+        lying = json.loads(render(build(base, variant(lambda codes: codes.update(gamma=gamma)))))
+        lying["added"][0]["code"] = "zeta"
+        try:
+            reconstruct_old_catalog(lying, variant(lambda codes: codes.update(gamma=gamma)), cfg)
+            failures.append("a diff adding an entry the catalog lacks ran backwards")
+        except Finding:
+            pass
+        try:
+            parse_catalog(_fixture(base_codes, classes={"in.put": "i", "strategy": "s"}), "x", cfg)
+            failures.append("a catalog key holding a '.' was accepted")
+        except Finding:
+            pass
+
         # The modes, on files.
         def reset_files(catalog: bytes) -> None:
             (root / "docker").mkdir(exist_ok=True)
@@ -690,6 +1111,8 @@ def self_test() -> int:
             return " | ".join(outcome.errors + outcome.notes)
 
         reset_files(base)
+        version = root / "VERSION"   # the release the checked-in diff starts at
+        version.write_text("1.2.0\n", encoding="utf-8")
         published = FakeGit("v1.2.0", {"v1.2.0": None})
         written = do_write(cfg, published)
         expect(written.code() == 0 and cfg.diff.is_file(), "--write failed: " + joined(written))
@@ -734,7 +1157,9 @@ def self_test() -> int:
         expect(checked.code() == 1 and "from.tag" in joined(checked),
                "a diff from an old tag passed: " + joined(checked))
 
-        # Offline: no tag reachable. Null from recomputes; a real from fails closed.
+        # Offline: no tag reachable. A null from of a release older than the
+        # first catalog release recomputes; tags required fail; a null from of
+        # a release that published a catalog is forged.
         offline = FakeGit(None)
         checked = do_check(cfg, offline)
         expect(checked.code() == 0 and "recomputed in full" in joined(checked),
@@ -742,6 +1167,35 @@ def self_test() -> int:
         checked = do_check(cfg, FakeGit("v1.2.0", unreadable=("v1.2.0",)))
         expect(checked.code() == 0 and "recomputed in full" in joined(checked),
                "an unreadable tag with a null from did not recompute: " + joined(checked))
+        checked = do_check(cfg, offline, require_tags=tags_requirement({REQUIRE_TAGS_ENV: "false"}))
+        expect(checked.code() == 2 and f"{REQUIRE_TAGS_ENV}='false'" in joined(checked)
+               and "Fetch the tags" in joined(checked),
+               "required tags were not required: " + joined(checked))
+        expect(tags_requirement({}) is None and tags_requirement({REQUIRE_TAGS_ENV: "0"}) is None,
+               "an unset or 0 PINEFORGE_REQUIRE_RELEASE_TAGS required the tags")
+        for first in (FIRST_CATALOG_RELEASE, FIRST_CATALOG_RELEASE + "-rc.1"):
+            forged = json.loads(good)
+            forged["from"] = {"version": first, "tag": "v" + first, "catalogSha256": None}
+            cfg.diff.write_text(render(forged), encoding="utf-8")
+            version.write_text(first + "\n", encoding="utf-8")
+            checked = do_check(cfg, offline)
+            expect(checked.code() == 1 and "not older than" in joined(checked),
+                   f"a null from of v{first} passed offline: " + joined(checked))
+        # A null from of an older release, kept after a later release reached
+        # the branch (VERSION names it): not the release the diff must start at.
+        cfg.diff.write_text(good, encoding="utf-8")
+        version.write_text(FIRST_CATALOG_RELEASE + "\n", encoding="utf-8")
+        checked = do_check(cfg, offline)
+        expect(checked.code() == 1 and "from.tag is v1.2.0, but VERSION is '1.4.0'"
+               in joined(checked), "a diff from before VERSION's release passed: "
+               + joined(checked))
+        version.unlink()
+        try:
+            do_check(cfg, offline)
+            failures.append("the offline check ran without VERSION")
+        except InputError:
+            pass
+        version.write_text("1.2.0\n", encoding="utf-8")
         expect(do_write(cfg, published).code() == 0, "--write failed")
 
         # Removal: --write writes it and exits 1, --check and --stamp refuse it.
@@ -758,13 +1212,47 @@ def self_test() -> int:
                and not (root / "out" / "stamped.json").exists(),
                "--stamp accepted a removal: " + joined(stamped))
 
-        # A real from that git cannot read: fail closed.
-        cfg.catalog.write_bytes(base)
+        # A published from that git cannot read: rebuilt by running the diff
+        # backwards and held to from.catalogSha256, then recomputed in full.
+        grown = variant(lambda codes: (codes.update(gamma=gamma),
+                                       codes["alpha"]["args"]["reason"]["values"].append("three")))
+        cfg.catalog.write_bytes(grown)
         do_write(cfg, tagged)
+        honest = cfg.diff.read_text(encoding="utf-8")
         for blind in (FakeGit(None), FakeGit("v1.2.0", unreadable=("v1.2.0",))):
             checked = do_check(cfg, blind)
+            expect(checked.code() == 0 and "rebuilt the catalog v1.2.0 published" in joined(checked),
+                   "a published from was not rebuilt offline: " + joined(checked))
+            checked = do_check(cfg, blind, require_tags=f"{REQUIRE_TAGS_ENV}='1'")
             expect(checked.code() == 2 and "Fetch the tags" in joined(checked),
-                   "an unverifiable published from passed: " + joined(checked))
+                   "required tags were not required for a published from: " + joined(checked))
+        tampered = json.loads(honest)
+        tampered["added"][0]["entry"]["description"] = "forged"
+        cfg.diff.write_text(render(tampered), encoding="utf-8")
+        checked = do_check(cfg, offline)
+        expect(checked.code() == 1 and "stale" in joined(checked),
+               "a tampered entry passed offline: " + joined(checked))
+        # A removal the diff hides: the rebuilt catalog lacks the entry.
+        shrunk = variant(lambda codes: (codes.update(gamma=gamma), codes.pop("beta")))
+        cfg.catalog.write_bytes(shrunk)
+        hidden = json.loads(render(build_diff(base, shrunk, "v1.2.0", cfg)))
+        hidden["removed"] = []
+        cfg.diff.write_text(render(hidden), encoding="utf-8")
+        checked = do_check(cfg, offline)
+        expect(checked.code() == 1 and "rebuilds a catalog hashing to" in joined(checked),
+               "a hidden removal passed offline: " + joined(checked))
+        expect("removed is not empty" in joined(do_check(cfg, tagged)),
+               "a hidden removal passed with the tags")
+
+        # An added entry's since names a release after the diff's start.
+        reset_files(variant(lambda codes: codes.update(gamma=dict(gamma, since="1.2.0"))))
+        do_write(cfg, tagged)
+        checked = do_check(cfg, tagged)
+        expect(checked.code() == 1 and "since is '1.2.0'" in joined(checked)
+               and "the diff starts at 1.2.0" in joined(checked),
+               "an added entry since the diff's own start passed: " + joined(checked))
+        cfg.catalog.write_bytes(base)
+        do_write(cfg, tagged)
 
         # --stamp: a release, a release candidate, and each refusal.
         reset_files(variant(lambda codes: codes.update(gamma=gamma)))
@@ -787,8 +1275,11 @@ def self_test() -> int:
         expect(stamped.code() == 1 and "since" in joined(stamped),
                "a since mismatch passed: " + joined(stamped))
         stamped = do_stamp(cfg, tagged, "1.3.0", "v1.1.0", output)
-        expect(stamped.code() == 1 and "previous release tag" in joined(stamped),
+        expect(stamped.code() == 1 and "--previous-tag is v1.1.0" in joined(stamped),
                "a wrong previous tag passed: " + joined(stamped))
+        stamped = do_stamp(cfg, tagged, "1.2.0", "v1.2.0", output)
+        expect(stamped.code() == 1 and "does not sort below" in joined(stamped),
+               "the previous release stamped again: " + joined(stamped))
         cfg.catalog.write_bytes(variant(lambda codes: codes.update(gamma=gamma, delta=gamma)))
         stamped = do_stamp(cfg, tagged, "1.3.0", "v1.2.0", output)
         expect(stamped.code() == 1 and "to.catalogSha256" in joined(stamped),
@@ -804,6 +1295,74 @@ def self_test() -> int:
                 failures.append(f"--stamp accepted {bad}")
             except InputError:
                 pass
+
+        # A release that adds or changes codes is a minor one, said in one line.
+        for change in (lambda codes: codes.update(gamma=gamma),
+                       lambda codes: codes["beta"].update(description="b2")):
+            reset_files(variant(change))
+            do_write(cfg, tagged)
+            stamped = do_stamp(cfg, tagged, "1.2.1", "v1.2.0", output)
+            expect(stamped.errors == ["this release adds or changes codes: bump minor (or "
+                                      "override 1.3.0)"],
+                   "a patch release that adds or changes codes: " + joined(stamped))
+        reset_files(base)
+        do_write(cfg, tagged)
+        expect(do_stamp(cfg, tagged, "1.2.1", "v1.2.0", output).code() == 0,
+               "a patch release of an unchanged catalog was refused")
+
+        # A final release after its candidate: the diff from the previous final
+        # release (from git), and the chain step from the candidate.
+        candidate = variant(lambda codes: codes.update(gamma=gamma))
+        final = variant(lambda codes: codes.update(gamma=gamma, delta=dict(gamma, english=[])))
+        chain = FakeGit("v1.3.0-rc.1", {"v1.2.0": base, "v1.3.0-rc.1": candidate})
+        reset_files(final)
+        do_write(cfg, chain)
+        stable_path, chain_path = root / "out" / "stable.json", root / "out" / "chain.json"
+        stamped = do_stamp(cfg, chain, "1.3.0", "v1.2.0", stable_path, chain_path)
+        stable = json.loads(stable_path.read_text(encoding="utf-8")) if stable_path.is_file() else {}
+        step = json.loads(chain_path.read_text(encoding="utf-8")) if chain_path.is_file() else {}
+        expect(stamped.code() == 0
+               and stable.get("from") == {"version": "1.2.0", "tag": "v1.2.0",
+                                          "catalogSha256": sha256(base)}
+               and [item["code"] for item in stable.get("added", [])] == ["delta", "gamma"]
+               and step.get("from", {}).get("tag") == "v1.3.0-rc.1"
+               and [item["code"] for item in step.get("added", [])] == ["delta"]
+               and stable.get("to") == step.get("to") == {"version": "1.3.0",
+                                                          "catalogSha256": sha256(final)},
+               "a final release after its candidate: " + joined(stamped))
+        try:
+            do_stamp(cfg, chain, "1.3.0", "v1.2.0", stable_path)
+            failures.append("--stamp after a candidate wrote no chain step")
+        except InputError:
+            pass
+        # The same bytes from git alone, once the release is tagged.
+        released_git = FakeGit("v1.3.0", {"v1.2.0": base, "v1.3.0-rc.1": candidate,
+                                          "v1.3.0": final})
+        again = root / "out" / "again.json"
+        for start, asset in (("v1.2.0", stable_path), ("v1.3.0-rc.1", chain_path)):
+            rebuilt = do_stamp_tags(cfg, released_git, "v1.3.0", start, again)
+            expect(rebuilt.code() == 0 and again.is_file()
+                   and again.read_bytes() == asset.read_bytes(),
+                   f"--to-tag from {start} is not the release's asset: " + joined(rebuilt))
+        expect(do_stamp_tags(cfg, released_git, "v1.2.0", "v1.3.0", again).code() == 1,
+               "--to-tag accepted a start above the release")
+        # A patch release's candidate adds no code, even after its own candidate.
+        patch_git = FakeGit("v1.2.1-rc.1", {"v1.2.0": base, "v1.2.1-rc.1": base})
+        reset_files(variant(lambda codes: codes.update(gamma=dict(gamma, since="1.2.1"))))
+        do_write(cfg, patch_git)
+        stamped = do_stamp(cfg, patch_git, "1.2.1-rc.2", "v1.2.1-rc.1", output)
+        expect(stamped.errors == ["this release adds or changes codes: bump minor (or "
+                                  "override 1.3.0-rc.1)"],
+               "a patch candidate added a code: " + joined(stamped))
+        # The notes cannot start at a release HEAD does not reach.
+        hotfix = FakeGit("v1.2.0", {"v1.2.0": base, "v1.2.1": base})
+        reset_files(base)
+        do_write(cfg, hotfix)
+        stamped = do_stamp(cfg, hotfix, "1.3.0", "v1.2.1", output)
+        expect(stamped.code() == 1 and "HEAD does not reach" in joined(stamped),
+               "a previous tag HEAD does not reach passed: " + joined(stamped))
+        reset_files(base)
+        do_write(cfg, tagged)
 
         # --reset before the tag exists, then main right after the release.
         released = variant(lambda codes: codes.update(gamma=gamma))
@@ -887,14 +1446,27 @@ def main(argv: list | None = None) -> int:
                         help="a catalog member whose entries are diffed one by one; "
                              "repeatable (default: codes)")
     parser.add_argument("--to-version", help="--stamp: the release, X.Y.Z or X.Y.Z-rc.N")
-    parser.add_argument("--previous-tag", help="--stamp: the release tag the diff starts at")
+    parser.add_argument("--to-tag",
+                        help="--stamp: instead of --to-version, rebuild the stamped diff of this "
+                             "published release from git alone")
+    parser.add_argument("--previous-tag",
+                        help="--stamp: the release tag the release's diff starts at, where its "
+                             "notes start (scripts/release_version.py's previous)")
     parser.add_argument("--tag", help="--reset: the release tag, vX.Y.Z or vX.Y.Z-rc.N")
     parser.add_argument("--output", type=Path,
-                        help="--stamp: where the stamped copy goes (required); --reset: "
-                             "where the reset diff goes (default: the checked-in diff)")
+                        help="--stamp: where the release's stamped diff goes (required); "
+                             "--reset: where the reset diff goes (default: the checked-in diff)")
+    parser.add_argument("--chain-output", type=Path,
+                        help="--stamp --to-version: where the chain step goes, the checked-in "
+                             "diff stamped, when it starts at a release candidate after "
+                             "--previous-tag (written only then)")
     args = parser.parse_args(argv)
-    if args.stamp and not (args.to_version and args.previous_tag and args.output):
-        parser.error("--stamp needs --to-version, --previous-tag and --output")
+    if args.stamp and (bool(args.to_version) == bool(args.to_tag)
+                       or not (args.previous_tag and args.output)):
+        parser.error("--stamp needs --previous-tag, --output and one of --to-version or "
+                     "--to-tag")
+    if args.chain_output is not None and not (args.stamp and args.to_version):
+        parser.error("--chain-output goes with --stamp --to-version")
     if args.reset and not args.tag:
         parser.error("--reset needs --tag")
     if args.self_test:
@@ -904,21 +1476,24 @@ def main(argv: list | None = None) -> int:
         return code
     if self_test():
         return 1
+    def absolute(path: Path | None) -> Path | None:
+        return path if path is None or path.is_absolute() else Path.cwd() / path
+
     try:
         cfg = config_from(args)
         git = Git(cfg.root)
         if args.write:
             outcome = do_write(cfg, git)
         elif args.check:
-            outcome = do_check(cfg, git)
+            outcome = do_check(cfg, git, require_tags=tags_requirement())
+        elif args.stamp and args.to_tag:
+            outcome = do_stamp_tags(cfg, git, args.to_tag, args.previous_tag,
+                                    absolute(args.output))
         elif args.stamp:
-            output = args.output if args.output.is_absolute() else Path.cwd() / args.output
-            outcome = do_stamp(cfg, git, args.to_version, args.previous_tag, output)
+            outcome = do_stamp(cfg, git, args.to_version, args.previous_tag,
+                               absolute(args.output), absolute(args.chain_output))
         else:
-            output = None
-            if args.output is not None:
-                output = args.output if args.output.is_absolute() else Path.cwd() / args.output
-            outcome = do_reset(cfg, git, args.tag, output)
+            outcome = do_reset(cfg, git, args.tag, absolute(args.output))
     except InputError as error:
         print(f"{PROG}: {error}", file=sys.stderr)
         return 2

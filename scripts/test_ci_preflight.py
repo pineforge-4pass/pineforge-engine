@@ -672,9 +672,26 @@ class PreflightFailures(unittest.TestCase):
         for name in ('doc-anchors', 'doc-lint', 'doc-anchors-tests', 'doc-lint-tests',
                      'doc-pine-coverage', 'design-inventory', 'design-inventory-tests',
                      'doc-reverts', 'doc-reverts-tests',
-                     'kernel-seam-rows', 'kernel-seam-rows-tests'):
+                     'kernel-seam-rows', 'kernel-seam-rows-tests',
+                     'run-json-harness-tests'):
             self.assertIn(name, plan)
             self.assertEqual(len(plan[name]), 2, name)
+
+    def test_the_harness_tests_run_every_file_under_pytest(self):
+        # docker/run_json_*_test.py need pytest: every one, found when the plan
+        # is built, with nothing written into the checkout.
+        argv = {entry[0]: entry[1] for entry in check_commands(ROOT)}['run-json-harness-tests']
+        self.assertEqual(argv[:9], [sys.executable, '-B', '-m', 'pytest', '-q', '-p',
+                                    'no:cacheprovider', '--rootdir', str(ROOT)])
+        tests = sorted(str(path) for path in (ROOT / 'docker').glob('run_json_*_test.py'))
+        self.assertGreaterEqual(len(tests), 4)
+        self.assertEqual(argv[9:], tests)
+        # A tree without them names the pattern, which pytest refuses: the stage
+        # never falls back to collecting the whole tree.
+        argv = {entry[0]: entry[1]
+                for entry in check_commands(Path('/nonexistent-pineforge-src'))}[
+                    'run-json-harness-tests']
+        self.assertEqual(argv[9:], ['/nonexistent-pineforge-src/docker/run_json_*_test.py'])
 
     def test_no_stage_is_advisory_today(self):
         for entry in check_commands(Path('/src')):
