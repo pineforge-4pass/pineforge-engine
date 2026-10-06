@@ -491,6 +491,27 @@ void record_lifecycle_rows(const std::vector<pineforge::Bar>& minute) {
     }
 }
 
+// A legacy setter the generated strategy latched (an override value std::stod
+// cannot read) refuses the run where the script is prepared: the latched text
+// (std::stod's what() differs between C++ libraries, so only its stable prefix
+// is pinned), coded setting_rejected without arguments -- the engine knows the
+// failure only by its type. The run fails (status 1) and reports nothing.
+void latched_setting_rows(const std::vector<pineforge::Bar>& minute) {
+    Handle h(rfc::kForged);
+    h.input("Case", "0");
+    rfc_forged::rfc_forged_strategy_set_override(h.s, "initial_capital", "not a number");
+    const Observed got = h.run(minute, "1", "1");
+    std::printf("row %-38s code=%s args=%s status=%d trades=%d text=%s\n",
+                "legacy_setter_latched", got.code.c_str(), got.args.c_str(), got.status,
+                got.trades, json_quote(got.text).c_str());
+    CHECK(!got.text_null && !got.code_null && !got.args_null);
+    CHECK_EQ("legacy_setter_latched: code", got.code, "setting_rejected");
+    CHECK_EQ("legacy_setter_latched: args", got.args, "{}");
+    CHECK(got.text.rfind("strategy_set_override: stod", 0) == 0);
+    CHECK_EQ("legacy_setter_latched: run status", std::to_string(got.status), "1");
+    CHECK_EQ("legacy_setter_latched: report trades", std::to_string(got.trades), "0");
+}
+
 // The kernel without a Pine source layer (native hosts): its own bar
 // preflight, and the catch (...) sites that latched a failure with no text
 // before run-failure codes (base 7a1f01c0 reported "" for these runs; the
@@ -1110,6 +1131,7 @@ int main() {
     helper_stop_rows(minute);
     helper_contract_rows();
     record_lifecycle_rows(minute);
+    latched_setting_rows(minute);
     native_host_rows();
     run_spec_field_rows();
     registry_rows();
