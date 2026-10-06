@@ -15,6 +15,15 @@ from native_live_chart_input_e2e import (
 from native_live_report_e2e import action_key, equal, write_csv
 
 
+def session_windows(session):
+    """Opening/closing wall-clock times of each window in a "HHMM-HHMM,...:days" session."""
+    windows = []
+    for window in session.split(":")[0].split(","):
+        opening, closing = window.split("-")
+        windows.append((int(opening[:2]), int(opening[2:]), int(closing[:2]), int(closing[2:])))
+    return windows
+
+
 def calendar_rows(timeframe, timezone, session, first_day):
     zone = ZoneInfo(timezone)
     day = datetime.fromisoformat(first_day).replace(tzinfo=zone)
@@ -26,9 +35,9 @@ def calendar_rows(timeframe, timezone, session, first_day):
         if session == "0930-1600:23456":
             opening = trading_day.replace(hour=9, minute=30)
             closing = trading_day.replace(hour=16)
-        elif session == "0930-1130,1300-1500:23456":
+        elif "," in session:
             period = int(timeframe) * 60000
-            for hour, minute, end_hour, end_minute in ((9, 30, 11, 30), (13, 0, 15, 0)):
+            for hour, minute, end_hour, end_minute in session_windows(session):
                 start = int(trading_day.replace(hour=hour, minute=minute).timestamp() * 1000)
                 end = int(trading_day.replace(hour=end_hour, minute=end_minute).timestamp() * 1000)
                 intervals.extend((stamp, min(stamp + period, end))
@@ -75,6 +84,9 @@ def cells():
     yield "7", "UTC", "24x7", "2025-01-01", False
     yield "60", "UTC", "0930-1130,1300-1500:23456", "2025-01-06", False
     yield "30", "UTC", "0930-1130,1300-1500:23456", "2025-01-06", True
+    # The reopen is on the 60-minute grid here, so the same chart period is admitted.
+    yield "60", "UTC", "0900-1200,1300-1500:23456", "2025-01-06", True
+    yield "60", "Asia/Tokyo", "0900-1130,1230-1500:23456", "2025-01-06", False
     for first_day in ("2025-03-06", "2025-10-30"):
         for timeframe in ("240", "45", "120"):
             yield timeframe, "America/New_York", "24x7", first_day, False

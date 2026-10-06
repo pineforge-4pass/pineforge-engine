@@ -324,6 +324,19 @@ void chart_calendar_admission() {
     CHECK(throws_containing([&] { require_chart_calendar("60", "UTC", start, "0930-1130,1300-1500:23456"); },
                            "its bars do not tile the calendar's trading days"));
     require_chart_calendar("30", "UTC", start, "0930-1130,1300-1500:23456");
+    require_chart_calendar("60", "UTC", start, "0900-1200,1300-1500:23456");
+    // A reopen 210 minutes after the first opening is on the 15- and 30-minute
+    // grids only: Tokyo and Hong Kong lunch breaks refuse 45, 60 and 120.
+    for (const auto* timeframe : {"45", "60", "120"}) {
+        CHECK(throws_containing([&] { require_chart_calendar(timeframe, "Asia/Tokyo", start, "0900-1130,1230-1500:23456"); },
+                               "its bars do not tile the calendar's trading days"));
+        CHECK(throws_containing([&] { require_chart_calendar(timeframe, "Asia/Hong_Kong", start, "0930-1200,1300-1600:23456"); },
+                               "its bars do not tile the calendar's trading days"));
+    }
+    for (const auto* timeframe : {"15", "30"}) {
+        require_chart_calendar(timeframe, "Asia/Tokyo", start, "0900-1130,1230-1500:23456");
+        require_chart_calendar(timeframe, "Asia/Hong_Kong", start, "0930-1200,1300-1600:23456");
+    }
     for (const auto* timeframe : {"2D", "3D"}) {
         CHECK(throws_containing([&] { require_chart_calendar(timeframe, "UTC", start, "24x7:23456"); },
                                "its bars do not tile the calendar's trading days"));
