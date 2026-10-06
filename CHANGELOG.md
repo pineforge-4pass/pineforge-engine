@@ -118,6 +118,45 @@ version number follows semantic versioning over the surfaces the
   `note_error` takes the code beside the text; the text-only form it had
   stays and records `engine_unclassified_error`.
 
+### Live runner: chart-timeframe input
+
+- **`pineforge-live` runs a Pine script on its chart clock.** `--input-tf`
+  defaults to `--script-tf`, and the warmup, the confirmed-bar feed and the
+  tick time boundaries are chart bars on the configured session calendar,
+  each labelled at the session-aware opening of its slot. In bars mode the run
+  equals the chart-timeframe batch (`run_backtest_full` with the ENDPOINTS
+  magnifier distribution) on every report field and physical action; in ticks
+  mode it equals the engine fed the same prints. Until now a coarser script
+  was fed one-minute bars, the kernel's decision floor deferred a bracket
+  born at a script open to its close, and the runner's report differed from
+  the batch's. A script and input of `1`, and a hand-written
+  `--native-config` strategy, keep the handling they had. The kernel, the C
+  ABI and the report layout are unchanged.
+- **Redeploy a deployment that ran a coarser script on one-minute input.** An
+  explicit `--input-tf 1` with a coarser script is refused before a ledger
+  exists, and a ledger an earlier runner wrote for that shape is refused on
+  resume without a byte changed. Stop the old deployment, resolve or
+  redeliver its unsent actions, reconcile its open position with the receiver
+  or broker (the runner never closes or migrates one), keep the old ledger for
+  audit, then start a new ledger with chart-timeframe warmup and feed and no
+  `--input-tf`. The runner README's *Upgrading from 1-minute input* has the
+  steps.
+- **Some calendars are refused until the kernel's calendar-aware label grid
+  ships.** Daily and weekly charts are refused in both modes on a calendar
+  whose clock changes (daylight saving, or a standard-offset change). In
+  bars mode a period that does not tile the session's trading days is
+  refused too: 7 minutes on UTC
+  24x7; 45, 120 and 240 minutes on New York calendars (60 works); multi-day
+  charts on weekday-masked calendars; and a split session whose reopen is off
+  the chart grid (60 minutes on `0930-1130,1300-1500`; 30 works). Startup
+  checks the whole warmup and three years past its last bar, names the
+  reason and creates no ledger.
+- **A run that ends normally no longer exits 0 with its last action unsent.**
+  The delivery worker decided that nothing was left from a ledger scan taken
+  before it read the end-of-input request, so an action committed between the
+  two stayed unsent until the next start (`webhooks_pending` 1, no error). It
+  reads the request first now.
+
 ## 1.3.0 — 2026-10-06
 
 A minor release: `pineforge-live` admits the confirmed-bar request shapes and
