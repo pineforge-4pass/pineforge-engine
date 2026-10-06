@@ -4085,10 +4085,36 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
             target_link_options(lv_d8_stop_strategy PRIVATE
                 "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
         endif()
-        add_test(NAME test_lv_d8_tick_stop_equivalence COMMAND ${Python3_EXECUTABLE} -B
+        set(_pf_d8_equivalence_command)
+        if(PINEFORGE_ENABLE_SANITIZERS)
+            if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+                set(_pf_d8_runtime_name libasan.so)
+            elseif(APPLE)
+                set(_pf_d8_runtime_name libclang_rt.asan_osx_dynamic.dylib)
+            else()
+                set(_pf_d8_runtime_name "libclang_rt.asan-${CMAKE_SYSTEM_PROCESSOR}.so")
+            endif()
+            execute_process(COMMAND ${CMAKE_CXX_COMPILER} "-print-file-name=${_pf_d8_runtime_name}"
+                OUTPUT_VARIABLE _pf_d8_sanitizer_runtime OUTPUT_STRIP_TRAILING_WHITESPACE
+                COMMAND_ERROR_IS_FATAL ANY)
+            if(NOT EXISTS "${_pf_d8_sanitizer_runtime}")
+                message(FATAL_ERROR "The stop-equivalence Python test requires the compiler's shared ASan runtime")
+            endif()
+            if(APPLE)
+                set(_pf_d8_runtime_environment "DYLD_INSERT_LIBRARIES=${_pf_d8_sanitizer_runtime}")
+            else()
+                set(_pf_d8_runtime_environment "LD_PRELOAD=${_pf_d8_sanitizer_runtime}")
+            endif()
+            list(APPEND _pf_d8_equivalence_command ${CMAKE_COMMAND} -E env
+                "${_pf_d8_runtime_environment}"
+                "ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:abort_on_error=1"
+                "UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1")
+        endif()
+        list(APPEND _pf_d8_equivalence_command ${Python3_EXECUTABLE} -B
             ${CMAKE_CURRENT_SOURCE_DIR}/lv_d8_tick_stop_equivalence.py
             --library $<TARGET_FILE:lv_d8_stop_strategy> --runner $<TARGET_FILE:pineforge-live>
             --require-terminal-receipts)
+        add_test(NAME test_lv_d8_tick_stop_equivalence COMMAND ${_pf_d8_equivalence_command})
         set_tests_properties(test_lv_d8_tick_stop_equivalence PROPERTIES TIMEOUT 120)
     endif()
 endif()
