@@ -1,11 +1,13 @@
 """Replay external D7 fixtures with the engine oracle, outside the self-contained CTest inventory."""
 import argparse
 import csv
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import sqlite3
 import subprocess
 import shutil
+from zoneinfo import ZoneInfo
 
 from native_live_chart_input_e2e import config_args, oracle_command
 from native_live_report_e2e import action_key, equal, write_csv
@@ -71,7 +73,11 @@ def run_case(args, case):
     ledger = target / "bars.sqlite"
     command = [args.runner, "run", "--strategy", library, "--warmup", warmup,
                "--ledger", ledger, "--mode", "bars"] + config_args(config)
-    if "d4-" in case.name and config["timezone"] == "America/New_York":
+    zone = ZoneInfo(config["timezone"])
+    warmup_start = datetime.fromtimestamp(rows(warmup)[0]["ts_open"] / 1000, zone)
+    daylight_calendar = any((warmup_start + timedelta(days=offset)).dst()
+                            for offset in range(1099))
+    if timeframe.endswith(("D", "W")) and daylight_calendar:
         for mode in ("bars", "ticks"):
             refused = target / f"refused-{mode}.sqlite"
             result = subprocess.run(list(map(str, [args.runner, "run", "--strategy", library,

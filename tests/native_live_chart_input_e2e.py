@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -143,6 +144,10 @@ def prove(root, runner, oracle, library, timeframe, session, engine_only, split=
                        "--ledger", ledger, "--mode", mode] + config_args(config)
             if explicit:
                 command += ["--input-tf", timeframe]
+            if mode == "bars" and timeframe == "15" and not session and not explicit:
+                checked(command + ["--max-events", "7"])
+                with sqlite3.connect(ledger) as database:
+                    assert database.execute("SELECT COUNT(*) FROM inputs").fetchone()[0] == 7
             checked(command)
             report = checked([runner, "report", "--ledger", ledger])
             equal(direct, report["report"], "chart runner/direct stream")
@@ -166,8 +171,8 @@ def refusals(root, runner, library):
         ledger = root / f"refused-{mode}.sqlite"
         command = base[:-1] + [mode, "--input-tf", "1", "--ledger", ledger]
         result = subprocess.run(list(map(str, command)), text=True, capture_output=True, timeout=30)
-        assert result.returncode == 1 and "input-tf" in result.stderr and "script-tf" in result.stderr
-        assert "15" in result.stderr and ("omit" in result.stderr or "remove" in result.stderr)
+        assert result.returncode == 1 and result.stderr.startswith(
+            "pineforge-live: chart delivery refuses --input-tf 1 with --script-tf 15;"), result.stderr
         assert not ledger.exists() and not Path(str(ledger) + ".lock").exists()
     for timeframe in ("D", "W"):
         write_csv(warmup, chart_rows(timeframe, timezone="America/New_York")[:24])
@@ -179,14 +184,16 @@ def refusals(root, runner, library):
                            "--script-tf", timeframe, "--symbol", "TEST:EXAMPLE", "--timezone", timezone]
                 result = subprocess.run(list(map(str, command)), text=True, capture_output=True, timeout=30)
                 assert result.returncode == 1, (command, result.stdout, result.stderr)
-                assert "daily/weekly chart delivery on a daylight-saving calendar is not supported yet" in result.stderr
+                assert result.stderr.startswith("pineforge-live: daily/weekly chart delivery on a daylight-saving calendar is not supported yet;"), result.stderr
                 assert not ledger.exists() and not Path(str(ledger) + ".lock").exists()
     for name, rows in (("1m", chart_rows("1")[:24]), ("gap", chart_rows("15")[:24:2]),
                        ("unaligned", [{**bar, "ts_open": bar["ts_open"] + 60000} for bar in chart_rows("15")[:24]])):
         write_csv(warmup, rows)
         ledger = root / f"bad-warmup-{name}.sqlite"
         result = subprocess.run(list(map(str, base + ["--ledger", ledger])), text=True, capture_output=True, timeout=30)
-        assert result.returncode == 1 and ("warmup" in result.stderr or "input" in result.stderr), result.stderr
+        prefix = ("native warmup has an in-session gap" if name == "gap" else
+                  "native warmup bar is not aligned to the configured calendar;")
+        assert result.returncode == 1 and result.stderr.startswith("pineforge-live: " + prefix), result.stderr
         assert not ledger.exists()
     write_csv(warmup, chart_rows("15")[:24])
     for offset in (60000, 1800000):
@@ -194,7 +201,8 @@ def refusals(root, runner, library):
                                                          "ts_open": chart_rows("15")[23]["ts_open"] + offset})) + "\n")
         ledger = root / f"bad-feed-{offset}.sqlite"
         result = subprocess.run(list(map(str, base + ["--ledger", ledger])), text=True, capture_output=True, timeout=30)
-        assert result.returncode == 1 and "input" in result.stderr, result.stderr
+        assert result.returncode == 1 and result.stderr.startswith(
+            "pineforge-live: input bar cadence must follow the configured input timeframe and session calendar"), result.stderr
         with sqlite3.connect(ledger) as database:
             assert database.execute("SELECT COUNT(*) FROM inputs").fetchone()[0] == 0
     feed.write_text("")
@@ -215,8 +223,56 @@ def refusals(root, runner, library):
         original = ledger.read_bytes()
         result = subprocess.run(list(map(str, base[:-1] + [mode, "--ledger", ledger])),
                                 text=True, capture_output=True, timeout=30)
-        assert result.returncode == 1 and "redeploy" in result.stderr and "input" in result.stderr, result.stderr
+        assert result.returncode == 1 and result.stderr.startswith(
+            "pineforge-live: legacy input-tf 1 < script-tf ledger cannot resume with chart delivery; redeploy"), result.stderr
         assert ledger.read_bytes() == original and not Path(str(ledger) + ".lock").exists()
+    if os.name == "posix" and os.uname().sysname == "Linux":
+        tzdir = root / "malformed-zoneinfo"
+        (tzdir / "Bad").mkdir(parents=True)
+        (tzdir / "Bad" / "Zone").write_bytes(b"TZif2" + bytes(39))
+        ledger = root / "malformed-tzdata.sqlite"
+        write_csv(warmup, chart_rows("D")[:24])
+        command = [runner, "run", "--strategy", library, "--warmup", warmup, "--feed", feed,
+                   "--script-tf", "D", "--symbol", "TEST:EXAMPLE", "--mode", "bars",
+                   "--timezone", "Bad/Zone", "--ledger", ledger]
+        result = subprocess.run(list(map(str, command)), text=True, capture_output=True, timeout=30,
+                                env={**os.environ, "TZDIR": str(tzdir)})
+        assert result.returncode == 1 and result.stderr.startswith(
+            "pineforge-live: chart timezone rules cannot be inspected"), result.stderr
+        assert not ledger.exists() and not Path(str(ledger) + ".lock").exists()
+
+
+def legacy_minute_session(root, runner, library):
+    zone = ZoneInfo("America/New_York")
+    start = int(datetime(2025, 1, 6, 15, 0, tzinfo=zone).timestamp() * 1000)
+    rows = [{**bar, "ts_open": start + index * 60000}
+            for index, bar in enumerate(chart_rows("1"))]
+    warmup, feed = root / "minute-session.csv", root / "minute-session.jsonl"
+    write_csv(warmup, rows[:72])
+    write_events(feed, [dict(type="bar", bar=bar) for bar in rows[72:]])
+    config = config_for("1", True)
+
+    def execute(executable, name):
+        ledger = root / f"minute-session-{name}.sqlite"
+        command = [executable, "run", "--strategy", library, "--warmup", warmup,
+                   "--feed", feed, "--ledger", ledger, "--mode", "bars"] + config_args(config)
+        checked(command + ["--max-events", "7"])
+        with sqlite3.connect(ledger) as database:
+            assert database.execute("SELECT COUNT(*) FROM inputs").fetchone()[0] == 7
+        checked(command)
+        report = checked([executable, "report", "--ledger", ledger])
+        checked(command)
+        equal(report, checked([executable, "report", "--ledger", ledger]), "closed-minute recovery")
+        with sqlite3.connect(ledger) as database:
+            assert database.execute("SELECT COUNT(*) FROM inputs").fetchone()[0] == 24
+            events = [json.loads(row[0]) for row in database.execute("SELECT payload FROM events ORDER BY ordinal")]
+        return report, events
+
+    actual = execute(runner, "current")
+    reference_runner = os.environ.get("PINEFORGE_LEGACY_RUNNER")
+    if reference_runner:
+        equal(execute(reference_runner, "main"), actual, "engine-main closed-minute startup/replay")
+    print("LEGACY 1m/1m session-close warmup/feed/restart/replay PASS", flush=True)
 
 
 def main():
@@ -225,6 +281,7 @@ def main():
     parser.add_argument("oracle")
     parser.add_argument("library")
     parser.add_argument("--engine-only", action="store_true")
+    parser.add_argument("--legacy-minute-only", action="store_true")
     parser.add_argument("--timeframe", choices=("1", "5", "7", "15", "60", "120", "D", "W"))
     parser.add_argument("--split", type=int, default=24)
     parser.add_argument("--output-dir", type=Path)
@@ -232,6 +289,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix="chart-input-") as temporary:
         root = args.output_dir or Path(temporary)
         root.mkdir(parents=True, exist_ok=True)
+        if args.legacy_minute_only:
+            legacy_minute_session(root, args.runner, args.library)
+            return
         clocks = ((args.timeframe, False),) if args.timeframe else (
             ("1", False), ("5", False), ("15", False), ("60", False), ("120", False),
             ("15", True), ("D", False), ("W", False))
@@ -241,6 +301,7 @@ def main():
             prove(target, args.runner, args.oracle, args.library, timeframe, session, args.engine_only, args.split)
         if not args.engine_only:
             refusals(root, args.runner, args.library)
+            legacy_minute_session(root, args.runner, args.library)
     print("chart-input contract PASS", flush=True)
 
 

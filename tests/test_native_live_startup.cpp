@@ -330,6 +330,9 @@ void chart_calendar_admission() {
     }
     CHECK(throws_containing([&] { require_chart_calendar("D", "Asia/Almaty", 1709078400000); },
                            "its bars do not tile the calendar's trading days"));
+    CHECK(throws_containing([&] {
+        require_chart_calendar("D", "Asia/Almaty", 1546300800000, "24x7", false, 1735689600000);
+    }, "its bars do not tile the calendar's trading days"));
 }
 
 }  // namespace
