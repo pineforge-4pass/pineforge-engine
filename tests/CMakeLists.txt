@@ -1012,7 +1012,8 @@ list(APPEND TEST_SOURCES
     test_carried_trail_open_tapes
     test_pooc_pending_stop_tapes
     test_coof_marketable_stop_tapes
-    test_coof_close_slippage_tapes)
+    test_coof_close_slippage_tapes
+    test_coof_forced_waypoint_tapes)
 # ... and a flat pair of opposite fixed-quantity market entries whose gross is
 # over the equity keeps only its earlier call under process_orders_on_close
 # and with costs (tests/fixtures/pooc_pair_gross), on TradingView's tapes.
@@ -3266,6 +3267,7 @@ if(TARGET test_session_transition_clock_tapes)
 endif()
 foreach(tape_target IN ITEMS test_cross_mechanism_tapes test_carried_trail_open_tapes test_pooc_pending_stop_tapes
                             test_coof_marketable_stop_tapes test_coof_close_slippage_tapes
+                            test_coof_forced_waypoint_tapes
                             test_explicit_qty_floor_tapes test_pooc_close_bar_fills_tapes)
     if(TARGET ${tape_target})
         target_compile_definitions(${tape_target} PRIVATE

@@ -1,0 +1,29 @@
+{
+ "symbol": "NYSE:F",
+ "frm": "2026-01-27",
+ "to": "2026-01-28",
+ "tick": 0.01,
+ "step": 1.0,
+ "capital": 27.659999999,
+ "slip": 2,
+ "fee": 0.0,
+ "margin": 100,
+ "pooc": true,
+ "coof": true,
+ "q0": 2,
+ "q1": 1,
+ "t_start": "2026-01-27 16:15",
+ "t_end": "2026-01-27 17:00",
+ "call_bar": "2026-01-27 16:30",
+ "last_bar": "2026-01-28 00:00",
+ "entry_fill": 13.83,
+ "note": "low-first mid-session call bar, slippage 2",
+ "call_bar_ohlc": {
+  "t": "2026-01-27 16:30",
+  "o": 13.81,
+  "h": 13.84,
+  "l": 13.79,
+  "c": 13.82
+ },
+ "call_bar_high_first": false
+}

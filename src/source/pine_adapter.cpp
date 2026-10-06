@@ -2404,6 +2404,7 @@ void PineExecutionAdapter::reset_for_run() {
     coof_market_entry_recalc_fill_seq_ = 0;
     coof_current_fill_seq_ = 0;
     coof_fill_cursor_t_ = kNaN;
+    coof_fill_target_print_ = kNaN;
     coof_context_ = {};
     coof_script_bar_ = {};
     coof_script_bar_valid_ = false;
@@ -6542,6 +6543,21 @@ void PineExecutionAdapter::begin_coof_recalc(
     coof_market_entry_recalc_fill_seq_ = source_fill_sequence;
     coof_market_entry_recalc_incarnation_ = 0;
     const auto placement = placement_.find(event.handle().incarnation);
+    coof_fill_target_print_ = kNaN;
+    if (!bar_magnifier_ && placement != placement_.end()
+        && finite_positive(placement->second.forced_execution_price)
+        && finite_positive(placement->second.forced_waypoint_print)
+        && placement->second.placement_script_open_ms == context.script_bar_open_ms) {
+        const double tick = staged_.syminfo.mintick;
+        const double target = placement->second.forced_waypoint_print;
+        const double slippage = config_.slippage * tick;
+        const double forced_price = placement->second.forced_execution_price;
+        const bool paired = same_double_bits(forced_price, nearest_tick(target, tick) + slippage)
+            || same_double_bits(forced_price, nearest_tick(target, tick) - slippage)
+            || same_double_bits(forced_price, source_bar_fill_tick(target, tick) + slippage)
+            || same_double_bits(forced_price, source_bar_fill_tick(target, tick) - slippage);
+        if (paired) coof_fill_target_print_ = target;
+    }
     coof_open_stop_next_waypoint_ = placement != placement_.end()
         && placement->second.coof_open_stop_next_waypoint;
     if (event.opened_units != 0.0
@@ -6582,6 +6598,7 @@ void PineExecutionAdapter::end_coof_recalc() noexcept {
     coof_market_entry_recalc_fill_seq_ = 0;
     coof_current_fill_seq_ = 0;
     coof_fill_cursor_t_ = kNaN;
+    coof_fill_target_print_ = kNaN;
     coof_context_ = {};
 }
 
@@ -6724,6 +6741,9 @@ bool PineExecutionAdapter::coof_fill_at_path_point(double waypoint) const noexce
     // (pine_fills.cpp:7962-7966), a tick a mid-leg fill can also book, so
     // that tick names the waypoint only for a fill placed on a path point.
     const double tick = staged_.syminfo.mintick;
+    if (coof_recalc_active_ && detail::script_rule_switches().coof_forced_fill_at_waypoint
+        && finite_positive(coof_fill_target_print_))
+        return source_same_point(coof_fill_target_print_, waypoint, tick);
     if (source_same_point(point->price, waypoint, tick)) return true;
     return finite_positive(tick) && source_bar_fill_tick(waypoint, tick) != waypoint
         && source_decimal_tick(point->price, tick) == source_decimal_tick(waypoint, tick)
@@ -6828,7 +6848,10 @@ double PineExecutionAdapter::coof_next_waypoint(int* path_index) const noexcept 
         const double tick = staged_.syminfo.mintick;
         const bool on_grid_waypoint = finite_positive(tick)
             && source_bar_fill_tick(path_price[index], tick) == path_price[index];
-        const bool at_waypoint = point && finite_positive(tick)
+        const bool at_waypoint = detail::script_rule_switches().coof_forced_fill_at_waypoint
+                && finite_positive(coof_fill_target_print_)
+            ? source_same_point(coof_fill_target_print_, path_price[index], tick)
+            : point && finite_positive(tick)
             ? source_decimal_tick(point->price, tick)
                     == source_decimal_tick(path_price[index], tick)
                 && (on_grid_waypoint || coof_fill_on_path_point())
@@ -7714,6 +7737,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
                     : std::numeric_limits<double>::max()}}
         : trigger_for(native_limit, native_stop);
     double coof_market_fill = kNaN;
+    double coof_market_target = kNaN;
     if (coof_recalc_active_ && !coof_first_open_ && !coof_market_next_open
         && !coof_market_next_sub_bar && coof_script_bar_valid_
         && std::holds_alternative<native_order::Market>(request.trigger)
@@ -7727,6 +7751,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         const double next_extreme = coof_market_at_second_extreme
             ? coof_second_extreme : coof_next_waypoint(&next_extreme_index);
         if (coof_market_at_second_extreme) next_extreme_index = 2;
+        coof_market_target = next_extreme;
         const auto point = detail::callback_point(require_host());
         const double current_quote = point ? point->price : kNaN;
         coof_market_fill = source_bar_fill_tick(
@@ -7861,8 +7886,10 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
     snapshot.close_first_entry = close_first_fact;
     snapshot.signal_price_refused = signal_price_refused;
     snapshot.sizing = sizing_snapshot();
-    if (finite_positive(coof_market_fill))
+    if (finite_positive(coof_market_fill)) {
         snapshot.forced_execution_price = coof_market_fill;
+        snapshot.forced_waypoint_print = coof_market_target;
+    }
     bool coof_priced_next_open = false;
     if (coof_recalc_active_ && !coof_first_open_ && !coof_lower_path && priced) {
         const auto point = detail::callback_point(require_host());
@@ -9530,10 +9557,12 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
             }
         }
         double coof_close_all_fill = kNaN;
+        double coof_close_all_target = kNaN;
         if (coof_recalc_active_ && !coof_first_open_ && !immediately
             && coof_script_bar_valid_) {
             int next_extreme_index = -1;
             const double next_extreme = coof_next_waypoint(&next_extreme_index);
+            coof_close_all_target = next_extreme;
             const auto point = detail::callback_point(require_host());
             const double current_quote = point ? point->price : kNaN;
             const bool buy = detail::run_position(require_host()).signed_units < 0.0;
@@ -9586,6 +9615,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
             }
         }
         snapshot.forced_execution_price = coof_close_all_fill;
+        snapshot.forced_waypoint_print = coof_close_all_target;
         snapshot.crosses_zero = close_sized_before_call;
         (void)qty;
         (void)qty_percent;
@@ -10033,6 +10063,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     request.label = "__close__" + id;
     request.comment = comment;
     double coof_close_fill = kNaN;
+    double coof_close_target = kNaN;
     // A matcher fill AT the bar's second extreme: the close fills there, at
     // that extreme, as the market entry does (H-MEASURE Finding 6d). ab9714be
     // advanced it to the close point, which admits no cascade order, and so to
@@ -10052,6 +10083,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                 const double endpoint = source_path_uses_high_first(coof_script_bar_)
                     ? coof_script_bar_.low : coof_script_bar_.high;
                 const bool buy = current < 0.0;
+                coof_close_target = endpoint;
                 coof_close_fill = source_bar_fill_tick(endpoint, staged_.syminfo.mintick)
                     + (buy ? 1.0 : -1.0) * config_.slippage * staged_.syminfo.mintick;
             }
@@ -10068,6 +10100,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         const auto point = detail::callback_point(require_host());
         const double current_quote = point ? point->price : kNaN;
         const bool buy = current < 0.0;
+        coof_close_target = next_waypoint;
         coof_close_fill = source_bar_fill_tick(
             next_waypoint, staged_.syminfo.mintick)
             + (buy ? 1.0 : -1.0) * config_.slippage
@@ -10137,6 +10170,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         }
     }
     snapshot.forced_execution_price = coof_close_fill;
+    snapshot.forced_waypoint_print = coof_close_target;
     snapshot.immediately = immediately; snapshot.deferred_cohort = host_sized; snapshot.sizing = sizing_snapshot();
     if (paired_reversal_parent && !paired_reversal_whole_drop)
         snapshot.paired_reversal_parent = *paired_reversal_parent;

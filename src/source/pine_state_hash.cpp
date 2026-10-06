@@ -122,6 +122,9 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.b(value.projection_predecessor_market); f.b(value.projection_predecessor_exit);
     f.b(value.projection_created_during_coof); f.b(value.projection_coof_at_terminal);
     f.b(value.projection_coof_mid_bar); f.d(value.forced_execution_price);
+    if (!std::isnan(value.forced_waypoint_print)) {
+        f.u(0x7761797074ULL); f.d(value.forced_waypoint_print);
+    }
     if (value.coof_open_stop_next_waypoint) f.u(0x6f70656e73746f70ULL);
     f.d(value.projection_tv_carry_qty);
     f.d(value.projection_default_stop_equity);
@@ -572,6 +575,9 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     // Live only inside a fill recalculation (NaN otherwise); folded then so
     // the idle digest keeps its prior form.
     if (coof_recalc_active_) f.d(coof_fill_cursor_t_);
+    if (coof_recalc_active_ && !std::isnan(coof_fill_target_print_)) {
+        f.u(0x7761797466ULL); f.d(coof_fill_target_print_);
+    }
     if (coof_recalc_active_) f.b(coof_fill_forced_);
     const auto& coof_coord = coof_context_.coordinate;
     f.u(coof_coord.ordinal); f.i(coof_coord.interval_index); f.i(coof_coord.open_ms);

@@ -1,0 +1,30 @@
+{
+ "symbol": "NYSE:F",
+ "frm": "2025-11-20",
+ "to": "2025-11-21",
+ "tick": 0.01,
+ "step": 1.0,
+ "capital": 37.649999999,
+ "slip": 2,
+ "fee": 0.0,
+ "margin": 100,
+ "pooc": true,
+ "coof": true,
+ "q0": 3,
+ "q1": 1,
+ "t_start": "2025-11-20 18:30",
+ "t_end": "2025-11-20 18:45",
+ "call_bar": "2025-11-20 18:45",
+ "last_bar": "2025-11-21 00:00",
+ "entry_fill": 12.55,
+ "note": "reverse parity on a high-first call bar: O calc closes 1, W1 (high) calc closes the rest, W2 (low) calc re-enters",
+ "script": "P2",
+ "call_bar_ohlc": {
+  "t": "2025-11-20 18:45",
+  "o": 12.53,
+  "h": 12.55,
+  "l": 12.5,
+  "c": 12.52
+ },
+ "call_bar_high_first": true
+}

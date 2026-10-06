@@ -1,0 +1,21 @@
+//@version=6
+strategy("pf-n2lc-r2-p2-hf-s2", overlay=true, initial_capital=37.649999999, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0, slippage=2, process_orders_on_close=true, calc_on_order_fills=true)
+// px-pin-n2lc synthetic control (reverse parity): a 3-share long whose cost exceeds the capital by a hair is
+// called one unit at the next open; on that bar a calculation holding 2 closes one share, one holding 1 closes the
+// rest, and a flat one re-enters 1 share(s) under another id; later bars close everything. varip k counts calcs.
+varip int k = 0
+k += 1
+tStart = timestamp("UTC", 2025, 11, 20, 18, 30)
+tCall = timestamp("UTC", 2025, 11, 20, 18, 45)
+string tag = "k" + str.tostring(k) + " p" + str.tostring(strategy.position_size) + " q" + str.tostring(strategy.position_size[1])
+if time == tStart and strategy.position_size == 0
+    strategy.entry("L", strategy.long, qty = 3, comment = "E " + tag)
+if time == tCall and strategy.position_size == 2
+    strategy.close("L", qty = 1, comment = "P " + tag)
+if time == tCall and strategy.position_size == 1
+    strategy.close("L", comment = "X " + tag)
+if time == tCall and strategy.position_size == 0
+    strategy.entry("R", strategy.long, qty = 1, comment = "R " + tag)
+if time > tCall and strategy.position_size > 0
+    strategy.close_all(comment = "Z " + tag)
+plot(strategy.equity, "equity")

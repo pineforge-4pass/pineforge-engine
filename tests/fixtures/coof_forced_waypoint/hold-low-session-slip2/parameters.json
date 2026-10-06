@@ -1,0 +1,29 @@
+{
+ "symbol": "NYSE:F",
+ "frm": "2025-12-15",
+ "to": "2025-12-17",
+ "tick": 0.01,
+ "step": 1.0,
+ "capital": 27.3599999998592,
+ "slip": 2,
+ "fee": 0.0,
+ "margin": 100,
+ "pooc": true,
+ "coof": true,
+ "q0": 2,
+ "q1": 1,
+ "t_start": "2025-12-15 20:30",
+ "t_end": "2025-12-16 15:00",
+ "call_bar": "2025-12-15 20:45",
+ "last_bar": "2025-12-17 00:00",
+ "entry_fill": 13.68,
+ "note": "probe 07 witness bar: call bar 20:45 low-first, session's last bar; capital = member-24 literal",
+ "call_bar_ohlc": {
+  "t": "2025-12-15 20:45",
+  "o": 13.655,
+  "h": 13.69,
+  "l": 13.64,
+  "c": 13.64
+ },
+ "call_bar_high_first": false
+}
