@@ -458,7 +458,8 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
         finally:
             if retry_process.poll() is None:
                 retry_process.kill(); retry_process.communicate(timeout=30)
-        # This row covers newer starts while a transport retry is held in flight, not a worker that only sleeps through its backoff.
+        # This row covers newer starts while a transport retry is held in flight. A worker that only sleeps through its
+        # backoff would not be told apart from one that does not: that case stays untested.
         print('PASS newer actions start after a transport failure and after its retry starts, before that held retry completes; pure sleeping-backoff delay untested', flush=True)
 
         timeout_document = copy.deepcopy(isolation_document)
@@ -589,6 +590,8 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
                 wait_for(lambda: committed_actions(fatal_ledger))
                 started = time.monotonic()
                 stdout, stderr = fatal.communicate(input='malformed\n', timeout=60)
+                # The 3x bound is the guard this row keeps. Telling one timeout from two is deferred until a tighter
+                # check passes repeated ASan runs under load.
                 drain_bound = 3 * fatal_document['delivery']['total_timeout_ms'] / 1000
                 assert fatal.returncode == 1 and time.monotonic() - started < drain_bound, stderr
                 status = json.loads(invoke(['status', '--ledger', str(fatal_ledger)]).stdout)['targets']

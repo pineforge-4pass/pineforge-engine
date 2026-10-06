@@ -718,12 +718,6 @@ An action at a target whose in-flight limit is reached stays durable and
 unsent until that target has a slot; it never blocks computation or another
 target. New actions take priority over due transport retries.
 
-Routing regression coverage distinguishes newer starts during an in-flight
-retry, but detecting a worker that only sleeps through its backoff remains
-untested. The fatal-drain row retains its 3x global-timeout guard; distinguishing
-one timeout from two is deferred until a tighter check passes repeated ASan
-runs under load.
-
 The routing file bytes join deployment identity. Restore the original file
 or choose a new ledger after any routing configuration change. Secrets are
 read from the environment at startup, so rotating their values does not
