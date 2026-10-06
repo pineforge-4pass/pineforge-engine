@@ -523,6 +523,11 @@ def check_commands(source: Path) -> list[tuple]:
          [sys.executable, str(source / 'scripts/test_report_schema_keys.py')]),
         ('release-version-tests',
          [sys.executable, str(source / 'scripts/test_release_version.py')]),
+        # R5 run-failure codes: the catalog diff release.yml stamps is a tested
+        # script, and the code tables of docs/pages/run-failure-codes.md are
+        # generated from the catalog it diffs.
+        ('run-failure-diff-tests',
+         [sys.executable, str(source / 'scripts/test_gen_run_failure_catalog_diff.py')]),
         # Lane pf-ci-docs: ci.yml skips its proof jobs on a documentation-only
         # change, and scripts/ci_docs_only.py's rule decides which that is.
         ('docs-only-tests',

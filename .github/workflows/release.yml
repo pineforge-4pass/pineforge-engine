@@ -1,16 +1,26 @@
 name: Release
 
 # Bump VERSION, tag, cut a GitHub Release with generated notes, attach the
-# prebuilt static-lib tarballs, and notify the pineforge-release hub — all
+# prebuilt static-lib tarballs and the run-failure code catalog with its diff
+# against the previous release, and notify the pineforge-release hub — all
 # from a single workflow_dispatch click. This workflow publishes no container
 # image: the GHCR image is the hub's, built from these tarballs.
 #
 # Trigger: GitHub UI → Actions → Release → "Run workflow" → pick bump, or
 # name the exact version in `override` (a release candidate is
 # X.Y.Z-rc.N, then the final release is override X.Y.Z). Tick `dry_run` to
-# rehearse: it computes the version, builds, installs, verifies and packs
-# every tarball (kept as workflow artifacts), and commits, tags, releases,
-# uploads and dispatches nothing.
+# rehearse: it computes the version, stamps and resets the run-failure
+# catalog diff, builds, installs, verifies and packs every tarball (the
+# tarballs and the catalog assets are kept as workflow artifacts), and
+# commits, tags, releases, uploads and dispatches nothing.
+#
+# The run-failure catalog (docker/run_failure_codes.json) ships as two
+# release assets, run_failure_codes-<tag>.json and
+# run_failure_codes_diff-<tag>.json: the checked-in diff
+# (docker/run_failure_codes_diff.json) stamped with this version by
+# scripts/gen_run_failure_catalog_diff.py --stamp. The diff reset to the new
+# tag (--reset) is committed with the VERSION bump, so main's source guard
+# (--check) holds from the release commit on.
 #
 # A release candidate (X.Y.Z-rc.N) is created as a GitHub prerelease, and
 # the hub dispatch carries it: client_payload = {version: "vX.Y.Z-rc.N",
@@ -26,7 +36,8 @@ name: Release
 #     scripts/release_version.py, through an `env:` block, which refuses
 #     anything but X.Y.Z or X.Y.Z-rc.N before any later step reads it.
 #   - All other interpolations are GitHub-controlled context (repo, actor,
-#     sha, secrets) or values the script computed from VERSION and the tags.
+#     sha, secrets) or values the scripts computed from VERSION, the tags and
+#     the checked-in catalog; every one reaches a `run:` through `env:`.
 
 on:
   workflow_dispatch:
@@ -113,17 +124,56 @@ jobs:
             exit 1
           fi
 
-      - name: Write bumped VERSION, commit, tag, push
-        if: ${{ !inputs.dry_run }}
+      # The run-failure catalog's assets, before anything is committed.
+      # --stamp fails the release when the catalog changed after the checked-in
+      # diff was generated, the diff does not start at the previous release
+      # tag, a published code was removed, or a code this release adds does not
+      # say `since` this version (a candidate's X.Y.Z). The previous tag is the
+      # newest one HEAD reaches -- the tag the diff's own --check reads: the
+      # diff chains through every release, candidates included, where the
+      # release-notes base `previous` skips a final release's candidates.
+      # --reset computes the diff main starts from after this release: from
+      # this tag and this catalog, nothing added.
+      - name: Stamp the run-failure catalog diff
+        id: catalog
         env:
           NEXT: ${{ steps.bump.outputs.next }}
           TAG:  ${{ steps.bump.outputs.tag }}
         run: |
           set -euo pipefail
+          base="$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD)"
+          assets="${RUNNER_TEMP}/run-failure-catalog"
+          mkdir -p "${assets}"
+          python3 scripts/gen_run_failure_catalog_diff.py --stamp \
+            --to-version "${NEXT}" --previous-tag "${base}" \
+            --output "${assets}/run_failure_codes_diff-${TAG}.json"
+          cp docker/run_failure_codes.json "${assets}/run_failure_codes-${TAG}.json"
+          python3 scripts/gen_run_failure_catalog_diff.py --reset --tag "${TAG}" \
+            --output "${RUNNER_TEMP}/run_failure_codes_diff.reset.json"
+          {
+            echo "base=${base}"
+            echo "catalog=${assets}/run_failure_codes-${TAG}.json"
+            echo "diff=${assets}/run_failure_codes_diff-${TAG}.json"
+            echo "reset=${RUNNER_TEMP}/run_failure_codes_diff.reset.json"
+          } >> "${GITHUB_OUTPUT}"
+
+      # The reset diff rides the VERSION bump's commit, and the guard main runs
+      # from now on (--check: the diff starts at the newest tag HEAD reaches)
+      # must pass on the tagged commit before anything is pushed.
+      - name: Write bumped VERSION, commit, tag, push
+        if: ${{ !inputs.dry_run }}
+        env:
+          NEXT:  ${{ steps.bump.outputs.next }}
+          TAG:   ${{ steps.bump.outputs.tag }}
+          RESET: ${{ steps.catalog.outputs.reset }}
+        run: |
+          set -euo pipefail
           printf '%s\n' "${NEXT}" > VERSION
-          git add VERSION
+          cp "${RESET}" docker/run_failure_codes_diff.json
+          git add VERSION docker/run_failure_codes_diff.json
           git commit -m "chore(release): ${TAG}"
           git tag -a "${TAG}" -m "Release ${TAG}"
+          python3 scripts/gen_run_failure_catalog_diff.py --check
           git push origin HEAD
           git push origin "${TAG}"
 
@@ -137,6 +187,7 @@ jobs:
           TAG:       ${{ steps.bump.outputs.tag }}
           PREV:      ${{ steps.bump.outputs.previous }}
           RANGE_END: ${{ inputs.dry_run && github.sha || steps.bump.outputs.tag }}
+          BASE:      ${{ steps.catalog.outputs.base }}
         run: |
           set -euo pipefail
           {
@@ -157,6 +208,11 @@ jobs:
             echo
             echo "Per-arch static-lib + headers tarballs are attached below (C ABI)."
             echo "For the full PineScript -> backtest image, use \`ghcr.io/pineforge-4pass/pineforge-release\`."
+            echo
+            echo "### Run-failure codes"
+            echo
+            echo "\`run_failure_codes-${TAG}.json\` is the run-failure code catalog this release publishes;"
+            echo "\`run_failure_codes_diff-${TAG}.json\` lists its changes since ${BASE}."
           } > RELEASE_NOTES.md
           echo "path=RELEASE_NOTES.md" >> "$GITHUB_OUTPUT"
 
@@ -169,6 +225,8 @@ jobs:
           TAG:        ${{ steps.bump.outputs.tag }}
           NOTES:      ${{ steps.notes.outputs.path }}
           PRERELEASE: ${{ steps.bump.outputs.prerelease }}
+          CATALOG:    ${{ steps.catalog.outputs.catalog }}
+          DIFF:       ${{ steps.catalog.outputs.diff }}
         run: |
           set -euo pipefail
           prerelease=()
@@ -177,7 +235,8 @@ jobs:
             --title "${TAG}" \
             --notes-file "${NOTES}" \
             --verify-tag \
-            "${prerelease[@]}"
+            "${prerelease[@]}" \
+            "${CATALOG}" "${DIFF}"
 
       - name: Dry run summary
         if: ${{ inputs.dry_run }}
@@ -189,18 +248,30 @@ jobs:
           PREV:       ${{ steps.bump.outputs.previous }}
           NOTES:      ${{ steps.notes.outputs.path }}
           RUN_ID:     ${{ github.run_id }}
+          BASE:       ${{ steps.catalog.outputs.base }}
         run: |
           set -euo pipefail
           {
             echo "## Dry run: ${CURRENT} -> ${NEXT}"
             echo
-            echo "- would commit VERSION=${NEXT} and push the tag ${TAG}"
+            echo "- would commit VERSION=${NEXT} and the run-failure catalog diff reset to ${TAG}, and push the tag ${TAG}"
             echo "- would create the GitHub release ${TAG} (prerelease: ${PRERELEASE}), notes since ${PREV:-the first commit}"
+            echo "- would attach run_failure_codes-${TAG}.json and run_failure_codes_diff-${TAG}.json (stamped ${BASE} -> ${NEXT}; kept as a workflow artifact)"
             echo "- would dispatch engine-release to pineforge-release with client_payload {\"version\": \"${TAG}\", \"prerelease\": ${PRERELEASE}, \"run_id\": ${RUN_ID}}"
             echo
             cat "${NOTES}"
           } >> "${GITHUB_STEP_SUMMARY}"
           cat "${GITHUB_STEP_SUMMARY}"
+
+      - name: Keep the dry run's run-failure catalog assets as a workflow artifact
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-failure-catalog-${{ steps.bump.outputs.tag }}
+          path: |
+            ${{ steps.catalog.outputs.catalog }}
+            ${{ steps.catalog.outputs.diff }}
+          retention-days: 7
 
   # Prebuilt static-lib + headers tarballs, one per (os, arch). Attached
   # to the GitHub Release created above. Tarball layout:

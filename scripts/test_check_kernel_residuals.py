@@ -218,7 +218,7 @@ class SanitizerAndDebugBuildTests(unittest.TestCase):
         self.assertEqual(findings, [], [str(f) for f in findings])
         findings, summary = evaluate_table(strings + [text], nm)   # a debug archive: covered
         self.assertEqual(findings, [], [str(f) for f in findings])
-        self.assertEqual(summary["phraseHits"], 4)
+        self.assertEqual(summary["phraseHits"], 22)
 
     def test_only_a_marked_row_may_be_absent(self) -> None:
         adr = guard.ADR.read_text(encoding="utf-8")
@@ -255,7 +255,7 @@ class RuledTableTests(unittest.TestCase):
             sum(1 for n in names if n.startswith("market_admission_sizing_revision_")), 5)
         self.assertIn("tv_carry_qty", names)
         self.assertEqual(
-            sum(1 for p in RULED.phrases if "request.security" in p), 3)
+            sum(1 for p in RULED.phrases if "request.security" in p), 5)
 
     def test_citations_in_the_first_column_are_not_rulings(self) -> None:
         self.assertFalse(any("/" in token for token in RULED.identifiers | RULED.phrases))
@@ -279,7 +279,7 @@ class EvaluatorTests(unittest.TestCase):
                          sum(1 for n in RULED.identifiers
                              if any(p.search(n) for _, p in guard.IDENTIFIER_PATTERNS)
                              or guard.SENTINEL[1].match(n)))
-        self.assertEqual(summary["phraseHits"], 3)
+        self.assertEqual(summary["phraseHits"], 21)
 
     def test_a_name_outside_the_table_fails(self) -> None:
         for intruder in ("market_admission_observation_bogus", "coof_bogus", "pooc_bogus",
@@ -444,7 +444,7 @@ class AuditBlindSpotTests(unittest.TestCase):
     def test_pine_parameter_words_are_residue(self) -> None:
         for word in ("over_pyramiding_probe", "default_qty_type", "calc_on_every_tick",
                      "use_bar_magnifier", "backtest_fill_limits_assumption",
-                     "close_entries_rule", "fill_orders_on_standard_ohlc", "max_bars_back",
+                     "close_entries_rule", "fill_orders_on_standard_ohlc", "max_bars_back_probe",
                      "calc_bars_count", "dynamic_requests", "syminfo_probe",
                      "strategy_position_entry_name", "strategy_closedtrades_probe",
                      "ta_highestbars_probe", "barstate_isconfirmed_probe"):
