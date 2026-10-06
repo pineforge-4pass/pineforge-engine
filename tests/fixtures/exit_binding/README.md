@@ -45,7 +45,7 @@ exports bind the same with and without a margin requirement, and tests/fixtures/
 `global_exit_per_entry_levels` (pinned by tests/fixtures/per_entry_exit) acts only there: with a
 margin requirement, margin calls act on the same exits and orders, and no
 tape (nor the pin's reference model, which has no margin model) covers that; the engine keeps its
-former course. No part but that one acts under `calc_on_order_fills`. The two exit parts act on whole exits at
+former course. No part but `global_exit_binds_held_position` acts under `calc_on_order_fills`. The two exit parts act on whole exits at
 absolute levels. Every tape's pending parent rests at a level (a limit, or `stop-entry-parent`'s stop),
 so the binding to the entry id applies to a limit or stop order of the id; an exit called beside a
 market order of its id keeps its former course (tests/fixtures/samebar_pyramiding_entries
