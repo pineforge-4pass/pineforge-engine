@@ -545,7 +545,7 @@ void require_native_warmup(const NativeConfigValues& spec, const std::vector<pf_
         throw std::runtime_error("native warmup has an in-session gap");
     case pineforge::NativeInputPreflightError::Unaligned:
     case pineforge::NativeInputPreflightError::OffGridLabel:
-        throw std::runtime_error("native warmup bar is not aligned to the configured calendar");
+        throw std::runtime_error("native warmup bar is not aligned to the configured calendar; warmup must contain chart bars at the input timeframe, labelled at session-aware opening times");
     case pineforge::NativeInputPreflightError::OverlappingSlot:
         throw std::runtime_error("native warmup input intervals overlap");
     case pineforge::NativeInputPreflightError::NotStrictlyIncreasing:
@@ -561,12 +561,14 @@ void require_native_warmup(const NativeConfigValues& spec, const std::vector<pf_
 
 void require_chart_calendar(const std::string& script_tf, const std::string& timezone,
                             std::int64_t first_timestamp, const std::string& session,
-                            bool confirmed_chart_bars) {
+                            bool confirmed_chart_bars,
+                            std::optional<std::int64_t> last_warmup_timestamp) {
     const auto clock = pineforge::native_calendar::parse_timeframe(script_tf);
     if (!clock)
         throw std::runtime_error("chart timeframe is invalid");
     using Unit = pineforge::native_calendar::TimeframeUnit;
-    if (clock->unit() == Unit::Day || clock->unit() == Unit::Week) {
+    const bool calendar_chart = clock->unit() == Unit::Day || clock->unit() == Unit::Week;
+    if (calendar_chart) {
         const auto facts = pineforge::native_calendar::timezone_identity_descriptor(timezone);
         if (!facts || !facts->valid())
             throw std::runtime_error("chart timezone rules cannot be inspected");
@@ -581,20 +583,26 @@ void require_chart_calendar(const std::string& script_tf, const std::string& tim
             daylight = daylight || tzfile_has_dst(*bytes, first_timestamp);
         }
         if (daylight)
-            throw std::runtime_error("daily/weekly chart delivery on a daylight-saving calendar is not supported yet; use an intraday chart or a non-daylight-saving timezone");
-        return;
+            throw std::runtime_error("daily/weekly chart delivery on a daylight-saving calendar is not supported yet; keep the configured session and timezone, and use a supported intraday chart or defer deployment until calendar support is available");
     }
-    if (!confirmed_chart_bars || !clock->is_fixed())
+    if (!calendar_chart && (!confirmed_chart_bars || !clock->is_fixed()))
         return;
     const auto calendar = pineforge::native_calendar::parse_session(session, timezone);
     if (!calendar)
         throw std::runtime_error("chart session calendar is invalid");
     constexpr std::int64_t horizon = 1098LL * 86400000;
-    if (first_timestamp > std::numeric_limits<std::int64_t>::max() - horizon)
+    const auto live_start = last_warmup_timestamp.value_or(first_timestamp);
+    if (live_start < first_timestamp || live_start > std::numeric_limits<std::int64_t>::max() - horizon)
         throw std::runtime_error("chart calendar admission horizon is out of range");
-    const auto last_timestamp = first_timestamp + horizon;
+    const auto last_timestamp = live_start + horizon;
     const auto period = static_cast<std::int64_t>(clock->count()) *
-                        (clock->unit() == Unit::Second ? 1000 : 60000);
+                        (clock->unit() == Unit::Second ? 1000 :
+                         clock->unit() == Unit::Day ? 86400000 :
+                         clock->unit() == Unit::Week ? 604800000 : 60000);
+    const auto refuse_tiling = [&] {
+        throw std::runtime_error("chart delivery for a " + script_tf +
+            " chart on this session calendar is not supported yet: its bars do not tile the calendar's trading days. Keep the configured session and timezone, and use a supported chart timeframe (on a daylight-saving calendar, an intraday timeframe that divides 60 minutes).");
+    };
     std::optional<std::int64_t> previous_origin;
     auto cursor = first_timestamp;
     while (cursor <= last_timestamp) {
@@ -602,10 +610,22 @@ void require_chart_calendar(const std::string& script_tf, const std::string& tim
         if (!day || day->next_origin_ms <= cursor)
             throw std::runtime_error("chart session-day origins cannot be inspected");
         if (!day->spans.empty()) {
-            if (previous_origin && (day->origin_ms - *previous_origin) % period != 0)
-                throw std::runtime_error("chart delivery for a " + script_tf +
-                    " chart on this session calendar is not supported yet: its bars do not tile the calendar's trading days. Use a chart timeframe that divides the trading day (on a daylight-saving calendar, one that divides 60 minutes).");
-            previous_origin = day->origin_ms;
+            if (calendar_chart) {
+                const auto interval = pineforge::native_calendar::interval_containing(
+                    *calendar, *clock, day->spans.front().first);
+                if (!interval)
+                    throw std::runtime_error("chart calendar intervals cannot be inspected");
+                if (previous_origin && (interval->eligible_open_ms - *previous_origin) % period != 0)
+                    refuse_tiling();
+                previous_origin = interval->eligible_open_ms;
+            } else {
+                if (previous_origin && (day->origin_ms - *previous_origin) % period != 0)
+                    refuse_tiling();
+                for (const auto& span : day->spans)
+                    if ((span.first - day->origin_ms) % period != 0)
+                        refuse_tiling();
+                previous_origin = day->origin_ms;
+            }
         }
         cursor = day->next_origin_ms;
     }

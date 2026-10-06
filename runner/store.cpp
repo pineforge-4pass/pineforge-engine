@@ -287,7 +287,7 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity)
     {
         Statement q(impl_->db, "SELECT schema_version,identity FROM metadata WHERE singleton=1");
         if (!q.row() || q.integer(0) != 1 || q.text(1) != deployment_identity)
-            throw std::runtime_error("native ledger deployment identity or schema mismatch (including webhook routing); restore the original configuration or use a new ledger");
+            throw std::runtime_error("native ledger deployment identity or schema mismatch (including webhook routing); reconcile the old deployment and redeploy with a new ledger");
         if (q.row() || scalar(impl_->db, "SELECT COUNT(*) FROM metadata") != 1) database_error();
     }
     exec(impl_->db,

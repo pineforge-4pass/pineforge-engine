@@ -10,6 +10,7 @@
 #include "service.hpp"
 #include <pineforge/pineforge.h>
 #include <pineforge/native_calendar.hpp>
+#include "../src/native_calendar_memo.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -52,6 +53,7 @@ struct Config {
     NativeConfigValues native;
     std::optional<pineforge::native_calendar::Timeframe> input_clock;
     std::optional<pineforge::native_calendar::SessionCalendar> input_calendar;
+    mutable pineforge::native_calendar::SessionDayMemo input_calendar_memo;
     std::uint64_t from_input = 0, max_events = 0, max_attempts = 8;
     std::uint64_t status_interval = 1, max_ledger_bytes = 0, feed_idle_timeout = 15, feed_message_timeout = 15;
     long poll_ms = 1000;
@@ -598,11 +600,19 @@ struct Cursor {
     std::int64_t bar_timestamp = -1;
 };
 struct InputGap : std::runtime_error { using std::runtime_error::runtime_error; };
+bool legacy_minute_input(const Config& config) {
+    return !config.native.present && config.input_tf == "1" && config.script_tf == "1";
+}
 pineforge::native_calendar::NativeInterval input_interval(const Config& config, std::int64_t timestamp) {
-    const auto interval = pineforge::native_calendar::interval_containing(*config.input_calendar, *config.input_clock, timestamp);
+    const auto interval = pineforge::native_calendar::interval_containing(
+        *config.input_calendar, *config.input_clock, timestamp, config.input_calendar_memo);
     if (!interval)
         throw std::runtime_error("input bar is outside the configured calendar");
     return *interval;
+}
+std::int64_t input_close(const Config& config, std::int64_t timestamp) {
+    return legacy_minute_input(config) ? timestamp + 60000
+                                      : input_interval(config, timestamp).last_traded_close_ms;
 }
 void apply(Strategy &s, const Config &c, Cursor &cursor, const Json &frame) {
     auto type = frame.at("type").text();
@@ -638,9 +648,11 @@ void apply(Strategy &s, const Config &c, Cursor &cursor, const Json &frame) {
         b.low = j.at("l").real();
         b.close = j.at("c").real();
         b.volume = j.at("v").real();
-        const auto previous = input_interval(c, cursor.bar_timestamp);
-        if (b.timestamp != previous.next_input_open_ms)
-            throw InputGap("input bar cadence must follow the configured input timeframe and session calendar");
+        if (!legacy_minute_input(c)) {
+            const auto previous = input_interval(c, cursor.bar_timestamp);
+            if (b.timestamp != previous.next_input_open_ms)
+                throw InputGap("input bar cadence must follow the configured input timeframe and session calendar");
+        }
         s.check(s.bar(s.state, &b));
         cursor.bar_timestamp = b.timestamp;
     } else if (type == "time") {
@@ -820,7 +832,7 @@ int run(Config c) {
     if (sha256_hex(read_file(c.strategy, 512ULL * 1024 * 1024)) != sha256_hex(library))
         throw std::runtime_error("strategy library changed during initialization");
     strategy.require_contract(c);
-    auto warmup = history(original, true);
+    auto warmup = history(original, !legacy_minute_input(c));
     c.input_clock = pineforge::native_calendar::parse_timeframe(c.input_tf);
     c.input_calendar = pineforge::native_calendar::parse_session(c.session, c.timezone);
     if (!c.input_clock || !c.input_calendar)
@@ -835,8 +847,9 @@ int run(Config c) {
         refuse_legacy_ledger(c.ledger, bind_deployment_identity(identity(legacy, original, library),
             settings_receipt, capabilities_receipt, c.routing.routed, c.routing.file_identity, confirmed_bar_receipt));
     }
-    require_chart_calendar(c.script_tf, c.timezone, warmup.front().timestamp, c.session,
-                           c.mode == "bars" && c.input_tf == c.script_tf);
+    if (!c.native.present && !legacy_minute_input(c))
+        require_chart_calendar(c.script_tf, c.timezone, warmup.front().timestamp, c.session,
+                               c.mode == "bars", warmup.back().timestamp);
     NativeConfigValues clock = c.native;
     clock.input_tf = c.input_tf;
     clock.script_tf = c.script_tf;
@@ -856,7 +869,8 @@ int run(Config c) {
             }
         }
     }
-    require_native_warmup(clock, warmup);
+    if (!legacy_minute_input(c))
+        require_native_warmup(clock, warmup);
     std::string deployment =
         c.native.present
             ? native_identity(c.native, c.mode, c.name, c.webhook, original, library)
@@ -931,7 +945,7 @@ int run(Config c) {
                             [] { return stopped != 0; }, c.control_dir, deployment);
     bool storage_stop = false;
     bool prefix_verified = recorded == 0 || c.from_input == recorded;
-    std::uint64_t source_timestamp = static_cast<std::uint64_t>(input_interval(c, warmup.back().timestamp).last_traded_close_ms);
+    std::uint64_t source_timestamp = static_cast<std::uint64_t>(input_close(c, warmup.back().timestamp));
     std::uint64_t intake_bytes = 0;
     const auto source_time = [&](const Json& record, const auto& self) -> std::uint64_t {
         const auto type = record.at("type").text();
@@ -940,7 +954,7 @@ int run(Config c) {
             for (const auto& event : record.at("events").items) newest = std::max(newest, self(event, self));
             return newest;
         }
-        if (type == "bar") return static_cast<std::uint64_t>(input_interval(c, record.at("bar").at("ts_open").integer<std::int64_t>()).last_traded_close_ms);
+        if (type == "bar") return static_cast<std::uint64_t>(input_close(c, record.at("bar").at("ts_open").integer<std::int64_t>()));
         return record.at("ts").integer<std::uint64_t>();
     };
     if (recorded) source_timestamp = source_time(parse_json(ledger.input(recorded - 1)->canonical_json), source_time);

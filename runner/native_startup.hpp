@@ -7,6 +7,7 @@
 #include <pineforge/pineforge.h>
 
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -49,7 +50,8 @@ std::vector<pf_bar_t> history(const std::string& csv, bool native = false);
 void require_native_warmup(const NativeConfigValues& spec, const std::vector<pf_bar_t>& bars);
 void require_chart_calendar(const std::string& script_tf, const std::string& timezone,
                             std::int64_t first_timestamp, const std::string& session = "24x7",
-                            bool confirmed_chart_bars = true);
+                            bool confirmed_chart_bars = true,
+                            std::optional<std::int64_t> last_warmup_timestamp = std::nullopt);
 
 Json timezone_rule_identity(std::string_view timezone, bool required);
 
