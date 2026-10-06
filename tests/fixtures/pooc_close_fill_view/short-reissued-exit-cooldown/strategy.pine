@@ -1,0 +1,16 @@
+//@version=6
+strategy("sig18-k7-short-reissue-cooldown", initial_capital=100000, pyramiding=0, process_orders_on_close=true)
+var int lastExitBar = na
+if time == timestamp("UTC", 2026, 1, 8, 19, 45)
+    strategy.entry("seed", strategy.short, qty=1)
+exitCooldownOk = na(lastExitBar) or bar_index - lastExitBar > 4
+if time == timestamp("UTC", 2026, 1, 8, 23, 30) and strategy.position_size >= 0 and exitCooldownOk
+    strategy.entry("candidate", strategy.short, qty=1)
+if strategy.position_size < 0 and time < timestamp("UTC", 2026, 1, 8, 23, 15)
+    strategy.exit("x", "seed", stop=3200.0)
+if time == timestamp("UTC", 2026, 1, 8, 23, 15)
+    strategy.exit("x", "seed", stop=3109.0)
+if strategy.position_size[1] < 0 and strategy.position_size == 0
+    lastExitBar := bar_index
+if time == timestamp("UTC", 2026, 1, 9, 1, 0)
+    strategy.close_all()

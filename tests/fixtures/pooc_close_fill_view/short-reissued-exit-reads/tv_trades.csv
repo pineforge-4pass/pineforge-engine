@@ -1,0 +1,5 @@
+﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)
+1,Exit short,2026-01-09 07:15,x,3116.97,1,3110.13,-13.0671,-0.42,6.2271,19.66987,0.63,-22.58013,-0.73,-13.0671,-0.01,14
+1,Entry short,2026-01-09 03:45,seed,3110.13,1,3110.13,-13.0671,-0.42,6.2271,19.66987,0.63,-22.58013,-0.73,-13.0671,-0.01,14
+2,Exit short,2026-01-09 09:00,Close position order,3113.49,1,3108,-11.71149,-0.38,6.22149,1.792,0.06,-11.848,-0.38,-24.77859,-0.02,6
+2,Entry short,2026-01-09 07:30,O1C0PpreNpreEpre,3108,1,3108,-11.71149,-0.38,6.22149,1.792,0.06,-11.848,-0.38,-24.77859,-0.02,6

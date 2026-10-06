@@ -1,0 +1,27 @@
+{
+  "synthetic": true,
+  "authored_for": "same-side global exit binding pin, set N (own script; no population source was sent)",
+  "pin_script": "pxsame-L-t-lim-cf",
+  "export": {
+    "tool": "lab tv --no-note",
+    "channel": "ws-report-v1",
+    "exported_at": "2026-10-05T18:57:13.652Z",
+    "chart": {
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "from": "2025-04-01",
+      "to": "2025-05-01"
+    },
+    "returned_range": {
+      "from": 1743514200000,
+      "to": 1746042300000
+    },
+    "range_proof": "covered",
+    "raw_frame_sha256": "8fea0eaf7f98470220f7109cd936774ba057d90bd9bf7cd274fb0bdbab8d4349",
+    "closed_trades": 5
+  },
+  "strategy_pine_sha256": "4827b2775dbdabe048116735a39c00272538ca1c242c75803d64b4ae838736da",
+  "tv_trades_sha256": "367e4f6a320cfac36b767b37f3d38eef2bc305f06690a25dcb6a65055deeb29d",
+  "generated_by": "c1df8a69 (pineforge-codegen-oss main)",
+  "prediction": "pred/pxsame-L-t-lim-cf.pred.csv of the pin (written before the export: the engine run of the control script)"
+}

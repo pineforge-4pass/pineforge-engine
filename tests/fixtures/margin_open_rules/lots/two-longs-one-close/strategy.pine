@@ -1,0 +1,8 @@
+//@version=6
+strategy("pf-12b-c1-two-entries", initial_capital=711106.4018, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0.05, slippage=2, process_orders_on_close=true, pyramiding=2)
+if time == timestamp("UTC", 2025, 9, 16, 20, 45)
+    strategy.entry("A", strategy.long, qty=20.0)
+    strategy.entry("B", strategy.long, qty=599000.37)
+if time == timestamp("UTC", 2025, 9, 16, 21, 0)
+    strategy.close_all()
+plot(strategy.equity, "equity")

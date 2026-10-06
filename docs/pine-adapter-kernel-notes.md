@@ -446,14 +446,18 @@ way. Its tapes are `tests/fixtures/margin_schedule_rules` and the
 | `whole_share_lagged_follow_up` | on | a long's lagged follow-up on a whole-share lot grid too | `lagged_margin_follow_up_units` |
 | `long_call_gain_loss` | on | a commission-free long's one-unit call reads initial + (G + L), inside `gain_loss_regime()`; a fee-bearing book keeps the closed-trade equity | `gain_loss_closed_equity` in `slipped_long_margin_units`, `slipped_long_unit_shortfall`, `submit_tv_money_long_margin_call` |
 | `close_call_follow_up_at_open` | on | a process_orders_on_close short's call sized at the previous close and executed at the open is followed once at that open, at its own fill (one follow-up restores the book there); inside the opening-call schedule's shape below, `booked_open_recheck` and `open_print_follow_up` replace it | the opening checkpoint in `on_bar_open` |
+| `close_follow_up_after_script` | on | a carried process_orders_on_close short's lagged follow-up owed to its bar's close is held through the close's own check (rule 7 still drops it where the close is short) and booked after the script, ahead of the close's fills, at the same print; a `strategy.close(id)` of the whole one-lot book or a `close_all()` placed there keeps the size the script saw and opens the excess as a lot of its own, credited to the close ledger and the pyramiding records under the close order's label; beside that lot only a market entry filling at its placement close skips the pyramiding-0 refusal (and, default-sized, the fill-time affordability check) | `hold_owed_close_follow_up`, `book_owed_close_follow_up` in `on_bar_close`, `flush_pending_closes`, `close_all`, `on_applied`, `validate_precommit` |
 
 `MarginOpeningSwitches` (same header and namespace, read through
 `margin_opening_switches()`) holds the opening-call rules: the call a
-full-margin, one-lot process_orders_on_close position (percent commission,
-slippage, a lot grid of at most one) takes at the open after the close fill
+full-margin process_orders_on_close position (percent commission, slippage,
+a lot grid of at most one; several lots only on a fractional grid) takes at
+the open after the close fill
 that opened it, the open's check after an add filled there, the fill-time
-admission of an explicit quantity at the open and the refined lagged
-follow-up. Its tapes are `tests/fixtures/margin_open_rules`.
+admission of an explicit quantity at the open, the refined lagged
+follow-up and the order of a market entry's opening check at its open fill
+against the exit legs it released. Its tapes are
+`tests/fixtures/margin_open_rules`.
 
 | Switch | Default | Gates | Where |
 |---|---|---|---|
@@ -466,6 +470,8 @@ follow-up. Its tapes are `tests/fixtures/margin_open_rules`.
 | `whole_share_lagged_short` | on | a short's lagged follow-up on whole-share books in the path walk, with the one-unit fallback | `whole_share_lag_units`, `call_short_with_lagged_follow_up` |
 | `chained_follow_up` | on | on those books an owed follow-up that books leaves its own follow-up for the next point | `call_short_with_lagged_follow_up` (`owed`) |
 | `short_point_drops_owed` | on | an owed follow-up is dropped at a point whose own check finds the book short; the open's own call of a carried short in the walk's scope and the opening-call scope (`close_sized_open_call_scope`) owes its follow-up to the first extreme instead of repeating it at its print, and so does a booked re-check of a short in the walk's scope (`run_close_sized_open_calls`): booked at that point's print, or dropped where the point is short itself | `execute_owed_short_follow_up`, `open_call_owing_follow_up`, `run_close_sized_open_calls` |
+| `lot_by_lot_open_follow_up` | on | on a fractional lot grid the schedule also takes a book of several lots the close's fills opened: the call sized at the close on the whole book, taken first in first out, and its follow-up checked lot by lot over the lots it took, the last still-short check deciding; a short's booked re-check on such a book is followed by nothing; one-lot books keep `open_print_follow_up_units`, whole-share books of several lots the previous rules | `close_sized_open_call_scope`, `open_print_lot_follow_up_units`, `run_close_sized_open_calls` |
+| `open_marketable_exit_first` | on | a market entry opening the book from flat at a bar's open (one entry, neither process_orders_on_close nor calc_on_order_fills) is checked there after the strategy.exit legs it released -- its own, and a strategy.exit without from_entry placed while flat after the entry -- already marketable at that open have filled (a short's stop at or below the open's tick or its limit at or above it, a long's mirror), on the book they leave; a leg the bar reaches only after the open fills after the check's call at the fill. Off, and for every other fill or leg: a short's check gives way to any leg its bar touches (ab9714be); TradingView refutes that for a short reversal and a short stop entry gapped at the open too (two known divergences in the fixture) | `priced_exit_precedes_opening`, `opening_released_leg`, `run_opening_checkpoint`, `open_exit_first_bar_` in `on_applied` |
 
 ### 1.7 Evidence
 
@@ -487,7 +493,7 @@ tapes, 3 commission-0 controls, the oracle control of §1.2, 10 order
 controls replayed through handwritten hosts and 67 tapes of the short call
 gate and schedule (`short-cutoff-gate`). With every switch on, as shipped,
 the engine reproduces 258 of its 266 tapes and 373 of the 381 ledger tapes,
-38 of the 39 `margin_schedule_rules` tapes and all 43 `margin_open_rules`
+38 of the 39 `margin_schedule_rules` tapes and 82 of the 84 `margin_open_rules`
 tapes (each of those also as a stream, trade for trade); turning the
 placement half off costs 108 ledger tapes, the fill half 32 ledger and
 3 single-position tapes. `test_margin_rules_forward_replay` replays a sample of both
@@ -1105,7 +1111,8 @@ stream.
 | `global_exit_binds_working_entries` | a global exit called flat waits for the fill of the limit and stop entry orders working | `flush_pending_bracket_legs` |
 | `resting_stop_entry_survives_close` | under `process_orders_on_close`, an earlier bar's stop entry of the side a close flattens survives it, as a limit does | the stale-entry cancel in `on_applied` |
 | `priced_add_at_cap_not_placed` | under `process_orders_on_close`, a priced add of an id holding no lot, still at the pyramiding cap once its bar's closes are done, leaves the book at the next opening, judged at that opening only | `withdraw_unplaced_cap_adds` in `on_bar_open` |
-| `global_exit_binds_held_position` | a global exit called while a position is held takes that position as its parent: an entry order of the other side working beside it (resting, or placed earlier in the calculation) lends it neither its side nor its price basis, so its limit and stop rest on the held side and a profit or loss leg resolves against the held position | `observe_staged_parent` in `exit` |
+| `global_exit_binds_held_position` | a global exit called while a position is held takes that position as its parent: an entry order of either side working beside it (resting, placed earlier in the calculation, or queued by a fill recalculation) lends it neither its side nor its price basis, nor a wait for its fill, so its limit and stop rest on the held side and a profit, loss or trail leg resolves against the held position | `observe_staged_parent` in `exit` |
+| `held_exit_bracket_ignores_same_side_entries` | under `calc_on_order_fills`, an entry order of the held side working beside such a held global exit is left out of the book census of the bracket the exit stages in a fill recalculation, so the bracket keeps the reach it has without that order and acts for the rest of the fill bar | `flush_pending_bracket_legs` |
 
 The first four parts' tapes run with margin requirements off (`margin_long =
 margin_short = 0`) and without `calc_on_order_fills`, and those parts act only
@@ -1120,6 +1127,24 @@ the margin setting. It moved fills in three random witnesses of
 and the witness re-pin"). TradingView's margin-0 exports are byte-identical
 to the default-margin ones (the pin's evidence); the committed tape test runs
 the default margin.
+
+The same part is pinned for an entry order of the held side by the 56
+synthetic tapes of `tests/fixtures/same_side_exit`
+(`test_same_side_exit_tapes`), NYSE:F 15m, with and without
+`calc_on_order_fills`: TradingView books each of the 36 scripts that rest a
+same-side limit or stop add beside their global exit (profit, loss, both, or
+trail), or call a market add at the pyramiding cap, exactly as the same
+script without the add, byte for byte. The engine books 38 of the 56 tapes
+row for row; the other 18 depart at one row, the same in a control and its
+add tapes (the trailing leg and `calc_on_order_fills` re-entries, another
+rule's). Under `calc_on_order_fills` the resting add also counted as a
+competing order of the book for the profit-and-loss bracket the exit stages
+in the entry's fill recalculation, which took the bracket's chart-tick reach,
+so it acted one bar late: `held_exit_bracket_ignores_same_side_entries`
+leaves the add out of that census. A global exit over pyramided lots (an add
+that fills while the exit works) is a separate rule, not modelled:
+TradingView gives each entry its own exit levels and books FIFO, the engine
+one exit at the average price.
 
 The first two parts act on a whole exit at absolute levels whose pending
 parent rests at a level (`whole_level_exit`); the stop entry and cap parts act
@@ -1142,3 +1167,56 @@ fills there before the cap part judges it, as before the rule; and an add at
 the cap whose own bar's close frees the slot, which stays, as before (the cap
 part judges an add once, at the next opening; the pin's model rejects it at
 the call).
+
+## 7. The script's position view after a close fill under `process_orders_on_close`
+
+TradingView executes the orders a `process_orders_on_close` pass places at the
+bar's close, after the pass. An order that fills there stays invisible to the
+pass that placed it: the rest of the pass reads the pre-fill
+`strategy.position_size` and `strategy.position_avg_price`. The adapter fills
+two calls at the call itself. An ordinary `close_all` freezes the script's
+position view first (KI-64). The other is the re-issued exit that
+`PineExecutionAdapter::exit()` fills at its call when a one-lot short's stop
+or limit is already through the close (its current-close path). That exit now freezes the
+view as `close_all` does. Once the fill has left the book flat, a generated
+`strategy.position_avg_price` read keeps the pre-fill average until the pass
+ends. `PineStrategyHost::hold_script_average_price` writes it, and
+`release_script_average_price` restores the flat book's 0 right after
+`on_source_bar`, before the orders the pass placed settle.
+
+`PoocCloseFillViewSwitches` (`include/pineforge/source/pine_adapter.hpp`, read
+through `pooc_close_fill_view_switches()`) holds one switch per part, all on;
+only tests change one.
+
+| Switch | Gates | Where |
+|---|---|---|
+| `current_exit_keeps_position_view` | the re-issued exit filled at its call freezes the script's position view before it executes | the current-close block of `exit` |
+| `current_exit_keeps_average_price` | while that frozen view holds over the flat book, a generated `strategy.position_avg_price` read returns the pre-fill average | `hold_script_average_price`, `release_script_average_price` |
+
+The rule is pinned by the synthetic tapes of
+`tests/fixtures/pooc_close_fill_view` (`test_pooc_close_fill_view_tapes`),
+BINANCE:ETHUSDT.P 15m. They cover re-issued and first-issue exits,
+`strategy.close`, `strategy.close_all` and a long mirror, which all keep the
+pre-fill size. The re-issued exit, on its stop and on its limit leg, also
+keeps the pre-fill average. TradingView gave 0 counterexamples. The test
+clears each part, and exactly the re-issued short tapes depart. It also
+replays every tape as a stream with both parts on and off, and requires the
+per-bar broker-state hashes with the average part on and off to be equal
+wherever the trades are, so a held average that outlived its pass fails it.
+The scraped `job-2947` probe on BINANCE:ETHUSDT.P 15 lost its 2026-01-08
+23:30 UTC short and every later trade: a late exit observer behind a
+cooldown fired one bar early.
+
+Two tapes of the fixture are known divergences that TradingView pins and the
+rule leaves open:
+
+- `close_all`'s own `strategy.position_avg_price` read: TradingView keeps the
+  pre-fill average, but the freeze covers the size only
+  (`short-close-all-average`).
+- Script reads of `strategy.opentrades`, `strategy.closedtrades`,
+  `strategy.openprofit`, `strategy.netprofit` and `strategy.equity` after the
+  re-issued exit: they read the book after the fill, where TradingView keeps
+  the pre-fill values (`short-reissued-exit-reads`).
+
+A `strategy.close` that fills at the call under an active intraday cap freezes
+nothing, and no tape covers it.

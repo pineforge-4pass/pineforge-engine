@@ -599,6 +599,14 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.i(close_call_after_script_bar_); f.d(close_call_after_script_book_);
         f.d(close_call_after_script_units_);
     }
+    // An opening checkpoint owed after the exit legs marketable at an open
+    // (MarginOpeningSwitches::open_marketable_exit_first); folded only while
+    // set, so every other run keeps its digest.
+    if (open_exit_first_bar_ != std::numeric_limits<std::int64_t>::min()) {
+        f.s("pineforge-open-exit-first/v1");
+        f.i(open_exit_first_bar_); f.u(open_exit_first_origin_); f.s(open_exit_first_id_);
+        f.d(open_exit_first_fill_);
+    }
     // The close-first fact (record_close_first); folded only once a whole
     // close of an open position was recorded, so every other run keeps its
     // digest.

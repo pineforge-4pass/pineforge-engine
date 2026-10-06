@@ -1,0 +1,7 @@
+config 692159.466 1e-05 0.01 2 0.05 100.0 1 0
+bars eur-2025-06-19-2025-06-23.csv
+session America/New_York 1700-1700:23456
+ev 1750451400000 entry S short 600000.0 any
+ev 1750452300000 close S - - any
+ev 1750452300000 entry L long 599716.27 any
+ev 1750626000000 close_all - - - any

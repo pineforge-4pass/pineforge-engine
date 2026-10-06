@@ -1,0 +1,46 @@
+{
+ "short-close-all-average": {
+  "engine": [
+   "short",
+   3.0,
+   1767915000000,
+   1767920400000,
+   3108.0,
+   3113.49,
+   "AVGOTHER"
+  ],
+  "reason": "strategy.position_avg_price read right after an ordinary strategy.close_all(). TradingView keeps the pre-fill average 3110.13 (AVGPRE); close_all freezes the size only (KI-64), so the engine reads the flat book's 0 behind the frozen size (AVGOTHER). Outside this rule's switches: the average part acts at the re-issued exit only.",
+  "trade": 2,
+  "tv": [
+   "short",
+   1.0,
+   1767915000000,
+   1767920400000,
+   3108.0,
+   3113.49,
+   "AVGPRE"
+  ]
+ },
+ "short-reissued-exit-reads": {
+  "engine": [
+   "short",
+   1.0,
+   1767915000000,
+   1767920400000,
+   3108.0,
+   3113.49,
+   "O0C1PzeroNpostEpost"
+  ],
+  "reason": "strategy.opentrades, strategy.closedtrades, strategy.openprofit, strategy.netprofit and strategy.equity read right after the re-issued exit read the book after its fill at the call. TradingView keeps their pre-fill values (1, 0, -6.84, -3.11013, 99990.04987; entry id O1C0PpreNpreEpre); the engine reads 0, 1, 0, -13.0671, 99986.9329. The rule serves strategy.position_size and strategy.position_avg_price only; generated code reads opentrades and closedtrades from host members (pyramid_entries_, trades_).",
+  "trade": 2,
+  "tv": [
+   "short",
+   1.0,
+   1767915000000,
+   1767920400000,
+   3108.0,
+   3113.49,
+   "O1C0PpreNpreEpre"
+  ]
+ }
+}

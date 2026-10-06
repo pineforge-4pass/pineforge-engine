@@ -1,12 +1,15 @@
 # margin_open_rules
 
 TradingView strategy tapes of synthetic controls that pin the opening-call
-rules behind `pineforge::source::detail::MarginOpeningSwitches`: 43 tapes (129
+rules behind `pineforge::source::detail::MarginOpeningSwitches`: 84 tapes (244
 trades), each exported twice with `lab tv --no-note` over the ws-report-v1
 channel, both exports byte-identical, every export's range proof `covered`.
 Every prediction was written before its export (`provenance.json` names the
 preregistration file of each round). All are commission 0.05 % (percent),
-margin 100 % but `add-open/` (1 %), slippage 1 or 2 but `add-open/` (0).
+margin 100 % but `add-open/` (1 %), slippage 1 or 2 but `add-open/` (0);
+`exit-order/` has two tapes at commission 0.1 %, two at margin 50 % and four
+at slippage 0. Two tapes are known divergences the test lists
+(`kKnownDivergences`).
 
 ## Groups
 
@@ -63,6 +66,30 @@ margin 100 % but `add-open/` (1 %), slippage 1 or 2 but `add-open/` (0).
 - `add-open/` (1, EURUSD, margin 1 %, slippage 0): a short add filling at an
   open is in the book, with its entry fee, when that open is checked: 3069.72
   at the open, then 51027.16 at the high (`open_check_after_add_fill`).
+- `lots/` (10, OANDA:EURUSD 15, process_orders_on_close): a
+  carried short's lagged follow-up owed to its bar's close is booked after the
+  script, ahead of the close's fills (`MarginScheduleSwitches::
+  close_follow_up_after_script`), and the script's orders keep the sizes they
+  were placed with: `strategy.close("S")` (`close-id-overfill-*`) or
+  `close_all()` (`close-all-overfill-gap`) buys the units the script saw and
+  opens the excess long as its own lot (41.52, 34.4, 0.56), the reversal entry
+  "L" opening its own leg beside it; a reversal entry alone takes the excess
+  into its own lot (`reversal-entry-joins-lot`, 1.4). At the next open the
+  call sized at the close takes the whole book first in first out, and its
+  follow-up is checked lot by lot, the last still-short check deciding
+  (`lot_by_lot_open_follow_up`): 41.52 + 1069.84 then 950.68 across a weekend
+  gap; on books two or three entries of one close opened, 20 + 338.96 then
+  279.12 (`two-longs-one-close`), 12 + 18 + 309.08 then 219.24
+  (`three-longs-last-short`), shorts 20 + 186.64 then 167.8
+  (`two-shorts-one-close`). `close-id-overfill-0409` is OANDA:EURUSD
+  2026-04-09 01:00-02:15's own bars at a lane-chosen capital. The over-fill
+  lot is a lot of its own in the close ledger: after the open's calls took it
+  first, `strategy.close("L")` closes all of L (18619.72) and a short S2 opens
+  its 18000 (`overfill-then-close-entry`); with L default-sized at 100 % of
+  equity it opens 18664.13 beside the lot at the close it was placed at, and
+  the close takes 18586.61 (`overfill-default-then-close-entry`; the config
+  line's ninth field is the default percent of equity, a `nan` quantity a
+  default-sized entry).
 - `lag/` (5, NYSE:F and EURUSD, process_orders_on_close): the lagged follow-up
   of a short's call on whole-share books with the one-unit fallback
   (`whole_share_lagged_short`), a follow-up that books leaving its own for the
@@ -71,6 +98,55 @@ margin 100 % but `add-open/` (1 %), slippage 1 or 2 but `add-open/` (0).
   finds the book short, the open's own call owing its follow-up to the first
   extreme in the opening-call scope (`short_point_drops_owed`; `owed-dropped-fractional`: 41.52 at the
   high, not 0.64 at the open and 38.96).
+
+- `exit-order/` (31, BINANCE:ETHUSDT.P and NYSE:F 15, not
+  process_orders_on_close): a market entry from flat
+  filling at a bar's open with a `strategy.exit` bracket placed on its signal
+  bar. A leg already marketable at that open -- a short's stop at or below
+  the open's tick or its limit at or above it, a long's mirror -- fills there
+  first and the opening check runs on the book it leaves: nothing after a
+  whole exit (`short-stop-at-open`, `-equal-open`, `-noslip`, `-margin50`,
+  `short-limit-at-open`, `long-stop-at-open`, `long-limit-at-open`,
+  `short-equity-sized-stop-at-open`), 0.0032 called at the open's print after
+  an exit of 0.0004 (`short-partial-stop-at-open`). A leg the bar reaches
+  only after the open, one tick after it included, fills after the check's
+  call at the fill (`short-stop-on-path`: 0.0048 called, then the stop fills
+  3.4952; `-limit-`, `-noslip`, `-one-unit`, `-margin50`, `-one-tick-above-open`,
+  `short-partial-stop-on-path`, `long-stop-on-path`, `-one-tick-below-open`,
+  `f-short-stop-on-path`, `short-equity-sized-stop-on-path`), and
+  `short-fee-stop-on-path` / `-open-at-low` take the settings and bar shape
+  of `test_margin_call_1x_long_entry_fill` scenario E: 0.008 called at the
+  open, then the stop fills 3.492 (`open_marketable_exit_first`).
+  `eth-short-stop-on-path-0623` replicates a population entry (ETH 15,
+  2025-06-23 13:30 UTC: its bar, quantity, TradingView-derived cash and stop):
+  0.0068 at 2247.38, then 3.5224 at 2267.78. `short-stop-on-path-no-deficit`
+  books no call, and `f-short-refused` no trade.
+  A `strategy.exit` without `from_entry` placed with the entry is ordered the
+  same way (`global-short-stop-on-path`, `-stop-at-open`,
+  `global-long-stop-at-open`, `-stop-on-path`: each is its bound control
+  with the exit made global, and TradingView books the bound control's
+  rows). Known divergences, kept on ab9714be's rule by the
+  engine (a short gives way to any leg its bar touches): a short reversal
+  (`reversal-short-stop-on-path`: out of a 0.001 long) and a short stop entry
+  gapped at the open (`stop-entry-short-stop-on-path`: a sell stop at 2490.0
+  above the 2483.19 close), where TradingView calls 0.0048 at the open print
+  before the stop fills 3.4952, as for the market entry; the engine books the
+  stop 3.5 and no call. No tape covers adds, books of several entries, limit
+  entries, process_orders_on_close or calc_on_order_fills here; the engine
+  keeps ab9714be's rule for them too.
+  A known divergence without a tape: a `strategy.exit` without `from_entry`
+  placed *before* the entry, while the book is flat. TradingView voids an
+  exit called while no position is held and no entry order is working (its
+  exit-binding pins), so no leg rests there and, by inference, it calls a
+  short's opening check at the open print as for an entry with no exit. The
+  engine keeps that call as a live leg that never fills, at the open or
+  later. It is not a leg the fill released, so it keeps ab9714be's rule: a
+  short's opening call gives way whenever the bar touches the leg's stop,
+  and the short is called at the path's extreme instead (the same with
+  `open_marketable_exit_first` off). Counting the leg as released would
+  defer the check to its fill, which never comes, and drop the check, a
+  long's included. The exclusion stays for that engine-only reason until the
+  leg itself goes.
 
 ## Layout
 

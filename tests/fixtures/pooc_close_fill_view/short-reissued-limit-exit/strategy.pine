@@ -1,0 +1,21 @@
+//@version=6
+strategy("sig18-k11-short-reissue-limit-view", initial_capital=100000, pyramiding=0, process_orders_on_close=true)
+var float seen = na
+var float seenAvg = na
+if time == timestamp("UTC", 2026, 1, 8, 19, 45)
+    strategy.entry("seed", strategy.short, qty=1)
+if strategy.position_size < 0 and time < timestamp("UTC", 2026, 1, 8, 23, 15)
+    strategy.exit("x", "seed", limit=3000.0)
+if time == timestamp("UTC", 2026, 1, 8, 23, 15)
+    strategy.exit("x", "seed", limit=3120.0)
+    seen := strategy.position_size
+    seenAvg := strategy.position_avg_price
+if time == timestamp("UTC", 2026, 1, 8, 23, 30)
+    if seen < 0 and math.abs(seenAvg - 3110.13) < 0.005
+        strategy.entry("SAWPOSPRE", strategy.short, qty=1)
+    else if seen < 0
+        strategy.entry("SAWPOSOTHER", strategy.short, qty=3)
+    else if seen == 0
+        strategy.entry("SAWFLAT", strategy.short, qty=2)
+if time == timestamp("UTC", 2026, 1, 9, 1, 0)
+    strategy.close_all()

@@ -150,7 +150,7 @@ bool same_switches(const MarginRuleSwitches& a, const MarginRuleSwitches& b) {
 
 // Every schedule rule on; every field is named here and in the ablation table.
 MarginScheduleSwitches all_schedule_rules_on() {
-    static_assert(sizeof(MarginScheduleSwitches) == 9 * sizeof(bool),
+    static_assert(sizeof(MarginScheduleSwitches) == 10 * sizeof(bool),
                   "MarginScheduleSwitches changed: name its new field here and in the ablation table");
     MarginScheduleSwitches on;
     on.short_call_gate = true;
@@ -162,6 +162,7 @@ MarginScheduleSwitches all_schedule_rules_on() {
     on.whole_share_lagged_follow_up = true;
     on.long_call_gain_loss = true;
     on.close_call_follow_up_at_open = true;
+    on.close_follow_up_after_script = true;
     return on;
 }
 
@@ -1060,6 +1061,8 @@ int main() {
         // the open's calls after the close-sized one replace it: literal-21
         // is pinned by booked_open_recheck and open_print_follow_up now.
         {"close_call_follow_up_at_open", &M::close_call_follow_up_at_open, false},
+        // Pinned by tests/fixtures/margin_open_rules lots/.
+        {"close_follow_up_after_script", &M::close_follow_up_after_script, false},
     };
     CHECK(schedule_ablations.size() == sizeof(MarginScheduleSwitches) / sizeof(bool));
     switches = defaults;
@@ -1097,6 +1100,8 @@ int main() {
         {"whole_share_lagged_short", &O::whole_share_lagged_short},
         {"chained_follow_up", &O::chained_follow_up},
         {"short_point_drops_owed", &O::short_point_drops_owed},
+        {"lot_by_lot_open_follow_up", &O::lot_by_lot_open_follow_up},
+        {"open_marketable_exit_first", &O::open_marketable_exit_first},
     };
     CHECK(opening_ablations.size() == sizeof(O) / sizeof(bool));
     schedule = schedule_on;

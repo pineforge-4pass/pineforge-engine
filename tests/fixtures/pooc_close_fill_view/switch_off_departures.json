@@ -1,0 +1,228 @@
+{
+ "average off": {
+  "short-reissued-exit-average": {
+   "engine": [
+    "short",
+    3.0,
+    1767915000000,
+    1767920400000,
+    3108.0,
+    3113.49,
+    "AVGOTHER"
+   ],
+   "trade": 2,
+   "tv": [
+    "short",
+    1.0,
+    1767915000000,
+    1767920400000,
+    3108.0,
+    3113.49,
+    "AVGPRE"
+   ]
+  },
+  "short-reissued-limit-exit": {
+   "engine": [
+    "short",
+    3.0,
+    1767915000000,
+    1767920400000,
+    3108.0,
+    3113.49,
+    "SAWPOSOTHER"
+   ],
+   "trade": 2,
+   "tv": [
+    "short",
+    1.0,
+    1767915000000,
+    1767920400000,
+    3108.0,
+    3113.49,
+    "SAWPOSPRE"
+   ]
+  }
+ },
+ "both off": {
+  "atr-exit-cooldown-pyramiding-0": {
+   "engine": null,
+   "trade": 4,
+   "tv": [
+    "short",
+    0.2172,
+    1767915000000,
+    1767915900000,
+    3108.0,
+    3111.82,
+    "candidate"
+   ]
+  },
+  "short-reissued-exit-average": {
+   "engine": [
+    "short",
+    2.0,
+    1767915000000,
+    1767920400000,
+    3108.0,
+    3113.49,
+    "AVGNA"
+   ],
+   "trade": 2,
+   "tv": [
+    "short",
+    1.0,
+    1767915000000,
+    1767920400000,
+    3108.0,
+    3113.49,
+    "AVGPRE"
+   ]
+  },
+  "short-reissued-exit-cooldown": {
+   "engine": null,
+   "trade": 2,
+   "tv": [
+    "short",
+    1.0,
+    1767915000000,
+    1767920400000,
+    3108.0,
+    3113.49,
+    "candidate"
+   ]
+  },
+  "short-reissued-exit-size": {
+   "engine": [
+    "short",
+    2.0,
+    1767915000000,
+    1767920400000,
+    3108.0,
+    3113.49,
+    "SAWFLAT"
+   ],
+   "trade": 2,
+   "tv": [
+    "short",
+    1.0,
+    1767915000000,
+    1767920400000,
+    3108.0,
+    3113.49,
+    "SAWPOS"
+   ]
+  },
+  "short-reissued-limit-exit": {
+   "engine": [
+    "short",
+    2.0,
+    1767915000000,
+    1767920400000,
+    3108.0,
+    3113.49,
+    "SAWFLAT"
+   ],
+   "trade": 2,
+   "tv": [
+    "short",
+    1.0,
+    1767915000000,
+    1767920400000,
+    3108.0,
+    3113.49,
+    "SAWPOSPRE"
+   ]
+  }
+ },
+ "view off": {
+  "atr-exit-cooldown-pyramiding-0": {
+   "engine": null,
+   "trade": 4,
+   "tv": [
+    "short",
+    0.2172,
+    1767915000000,
+    1767915900000,
+    3108.0,
+    3111.82,
+    "candidate"
+   ]
+  },
+  "short-reissued-exit-average": {
+   "engine": [
+    "short",
+    2.0,
+    1767915000000,
+    1767920400000,
+    3108.0,
+    3113.49,
+    "AVGNA"
+   ],
+   "trade": 2,
+   "tv": [
+    "short",
+    1.0,
+    1767915000000,
+    1767920400000,
+    3108.0,
+    3113.49,
+    "AVGPRE"
+   ]
+  },
+  "short-reissued-exit-cooldown": {
+   "engine": null,
+   "trade": 2,
+   "tv": [
+    "short",
+    1.0,
+    1767915000000,
+    1767920400000,
+    3108.0,
+    3113.49,
+    "candidate"
+   ]
+  },
+  "short-reissued-exit-size": {
+   "engine": [
+    "short",
+    2.0,
+    1767915000000,
+    1767920400000,
+    3108.0,
+    3113.49,
+    "SAWFLAT"
+   ],
+   "trade": 2,
+   "tv": [
+    "short",
+    1.0,
+    1767915000000,
+    1767920400000,
+    3108.0,
+    3113.49,
+    "SAWPOS"
+   ]
+  },
+  "short-reissued-limit-exit": {
+   "engine": [
+    "short",
+    2.0,
+    1767915000000,
+    1767920400000,
+    3108.0,
+    3113.49,
+    "SAWFLAT"
+   ],
+   "trade": 2,
+   "tv": [
+    "short",
+    1.0,
+    1767915000000,
+    1767920400000,
+    3108.0,
+    3113.49,
+    "SAWPOSPRE"
+   ]
+  }
+ }
+}

@@ -99,7 +99,7 @@ using pineforge::source::detail::MarginScheduleSwitches;
 const std::vector<std::pair<std::string, std::string>> kKnownDivergences = {
     {"frozen/close-id",
      "a strategy.close(id) placed before an after-script margin call keeps its size "
-     "(not implemented: the close waits as a same-bar command there)"},
+     "(implemented under process_orders_on_close only: margin_open_rules lots/close-id-*)"},
 };
 
 std::string fixture(const std::string& relative) {
@@ -377,7 +377,7 @@ std::string first_difference(const std::vector<Row>& tv, const Outcome& engine) 
 }
 
 MarginScheduleSwitches all_on() {
-    static_assert(sizeof(MarginScheduleSwitches) == 9 * sizeof(bool),
+    static_assert(sizeof(MarginScheduleSwitches) == 10 * sizeof(bool),
                   "MarginScheduleSwitches changed: name its new field here and in the ablation table");
     MarginScheduleSwitches on;
     on.short_call_gate = true;
@@ -389,6 +389,7 @@ MarginScheduleSwitches all_on() {
     on.whole_share_lagged_follow_up = true;
     on.long_call_gain_loss = true;
     on.close_call_follow_up_at_open = true;
+    on.close_follow_up_after_script = true;
     return on;
 }
 
@@ -571,8 +572,9 @@ int main() {
     // matches with every switch on; one pinned in another fixture
     // (load_bearing false: short_call_gate, short_path_points and
     // lagged_short_follow_up by margin_call_rules' short-cutoff-gate tapes
-    // as well, close_call_follow_up_at_open by its literal-21) must not gain
-    // one.
+    // as well, close_call_follow_up_at_open by its literal-21,
+    // close_follow_up_after_script by margin_open_rules' lots/ tapes) must
+    // not gain one.
     const std::set<std::string> all_matched = matching();
     using M = MarginScheduleSwitches;
     const std::vector<Ablation> ablations = {
@@ -585,6 +587,7 @@ int main() {
         {"whole_share_lagged_follow_up", &M::whole_share_lagged_follow_up},
         {"long_call_gain_loss", &M::long_call_gain_loss},
         {"close_call_follow_up_at_open", &M::close_call_follow_up_at_open, false},
+        {"close_follow_up_after_script", &M::close_follow_up_after_script, false},
     };
     CHECK(ablations.size() == sizeof(MarginScheduleSwitches) / sizeof(bool));
     for (const Ablation& ablation : ablations) {

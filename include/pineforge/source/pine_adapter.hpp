@@ -455,14 +455,15 @@ ScriptRuleSwitches& script_rule_switches() noexcept;
 
 // One switch per part of TradingView's strategy.exit binding rule, pinned on
 // the tapes under tests/fixtures/exit_binding, the pending-* tapes of
-// tests/fixtures/global_exit_children and tests/fixtures/cross_side_exit, so
-// a regression bisects per part. A strategy.exit binds when it is called: to
-// its entry's open lots, else to the entry id while an order of it is
-// working, else the call is ignored. Every part but
-// global_exit_binds_held_position acts only with margin requirements off
-// (margin_long = margin_short = 0), the setting of their tapes. All on; only
-// tests change one. Process-wide, read by every adapter; not installed API,
-// and no strategy input reaches it.
+// tests/fixtures/global_exit_children, tests/fixtures/cross_side_exit and
+// tests/fixtures/same_side_exit, so a regression bisects per part. A
+// strategy.exit binds when it is called: to its entry's open lots, else to
+// the entry id while an order of it is working, else the call is ignored.
+// Every part but global_exit_binds_held_position and
+// held_exit_bracket_ignores_same_side_entries acts only with margin
+// requirements off (margin_long = margin_short = 0), the setting of their
+// tapes. All on; only tests change one. Process-wide, read by every adapter;
+// not installed API, and no strategy input reaches it.
 struct ExitBindingRuleSwitches {
     // An exit called in position for an entry id with no lot but a limit or
     // stop order working is bound to the id: a close or the flat does not
@@ -482,14 +483,41 @@ struct ExitBindingRuleSwitches {
     // book at the next opening, judged at that opening only.
     bool priced_add_at_cap_not_placed = true;
     // A global exit called while a position is held binds to that position,
-    // whatever the margin setting: an entry order of the other side working
-    // beside it (resting, or placed earlier in the same calculation) lends it
-    // neither its side nor its price basis. Its limit and stop rest on the
-    // held side and a profit or loss leg resolves against the held position
-    // (PineExecutionAdapter::exit()).
+    // whatever the margin setting: an entry order of either side working
+    // beside it (resting, placed earlier in the same calculation, or queued
+    // by a fill recalculation) lends it neither its side nor its price
+    // basis, nor a wait for its fill. Its limit and stop rest on the held
+    // side and a profit, loss or trail leg resolves against the held
+    // position (PineExecutionAdapter::exit()).
     bool global_exit_binds_held_position = true;
+    // With calc_on_order_fills, an entry order of the held side working
+    // beside such a held global exit does not compete with the bracket the
+    // exit stages in a fill recalculation either: the book census that takes
+    // a chart-tick reach from a competing leg leaves it out, so the bracket
+    // acts for the rest of the fill bar as it does with no such order
+    // (PineExecutionAdapter::flush_pending_bracket_legs()).
+    bool held_exit_bracket_ignores_same_side_entries = true;
 };
 ExitBindingRuleSwitches& exit_binding_rule_switches() noexcept;
+
+// One switch per part of TradingView's same-pass position view under
+// process_orders_on_close, pinned on the tapes under
+// tests/fixtures/pooc_close_fill_view: an order that fills at the bar's close
+// stays invisible to the script pass that placed it. Both parts act only at
+// the re-issued exit that exit() fills at its call (its current-close path,
+// stop or limit leg); an ordinary close_all keeps its own size freeze
+// (KI-64). All on; only tests change one. Process-wide, read by every adapter;
+// not installed API, and no strategy input reaches it.
+struct PoocCloseFillViewSwitches {
+    // The rest of the pass reads the pre-fill strategy.position_size (and so
+    // strategy.position_size[1] < 0 and strategy.position_size == 0 stays
+    // false until the next bar).
+    bool current_exit_keeps_position_view = true;
+    // ... and the pre-fill strategy.position_avg_price, while the frozen
+    // view holds. Needs current_exit_keeps_position_view.
+    bool current_exit_keeps_average_price = true;
+};
+PoocCloseFillViewSwitches& pooc_close_fill_view_switches() noexcept;
 } // namespace detail
 
 #ifndef PINEFORGE_PLACEMENT_AUDIT
@@ -2016,14 +2044,27 @@ private:
     // The opening-call schedule after a process_orders_on_close close fill
     // (MarginOpeningSwitches): its scope, the call sized at the close and the
     // calls the open takes after it.
-    bool close_sized_open_call_scope(bool short_book) const;
+    bool close_sized_open_call_scope(bool short_book, bool several_lots = false) const;
     double close_sized_open_units(double close_mark, double print,
                                   std::int64_t sub_bar_open_ms) const;
     bool run_close_sized_open_calls(double units, double opening_mark,
                                     const NativeDecisionContext&);
+    // The opening checkpoint at the fill that opened or grew a full-margin
+    // book (on_applied): the exit legs that fill ahead of it, and its call.
+    bool opening_released_leg(const PlacementSnapshot& row, std::uint64_t leg,
+                              std::uint64_t opening, const SourceId& id, bool short_book,
+                              const NativeDecisionContext&) const;
+    bool priced_exit_precedes_opening(bool short_book, std::uint64_t opening,
+                                      const SourceId& opening_id, const NativeDecisionContext&,
+                                      const PlacementSnapshot* filled, bool* at_open) const;
+    void run_opening_checkpoint(double fill, bool market, bool sibling_book,
+                                bool adds_book_last, const NativeDecisionContext&);
     double open_print_follow_up_units(double held_before, double equity_before, double entry,
                                       double called, double fill, bool short_book,
                                       std::int64_t sub_bar_open_ms) const;
+    double open_print_lot_follow_up_units(const std::vector<std::pair<double, double>>& taken,
+                                          double equity_before, double held_before, double fill,
+                                          bool short_book, std::int64_t sub_bar_open_ms) const;
     bool lagged_short_scope() const noexcept;
     double lagged_short_follow_up_units(const std::vector<std::pair<double, double>>& taken,
                                         double equity_before, double held_before, double fill,
@@ -2037,6 +2078,8 @@ private:
     bool open_call_owing_follow_up(double opening_mark, const NativeDecisionContext&);
     bool short_path_points_scope(const NativeDecisionContext&) const;
     void execute_owed_short_follow_up(int point, double price, const NativeDecisionContext&);
+    void hold_owed_close_follow_up(double close, const NativeDecisionContext&);
+    void book_owed_close_follow_up(const Bar&, const NativeDecisionContext&);
     void walk_short_path_points(const Bar&, const NativeDecisionContext&);
     void schedule_lagged_short_follow_up(const native_order::ExecutionAppliedEvent&,
                                          const NativeDecisionContext&);
@@ -2613,6 +2656,15 @@ private:
     std::int64_t close_call_after_script_bar_ = std::numeric_limits<std::int64_t>::min();
     double close_call_after_script_book_ = 0.0;
     double close_call_after_script_units_ = 0.0;
+    // The opening checkpoint a market entry opening the book at an open owes
+    // once the exit legs it released, marketable at that open, have filled
+    // there, on the book they leave (MarginOpeningSwitches::
+    // open_marketable_exit_first): the script bar, the entry's request and id
+    // and its fill.
+    std::int64_t open_exit_first_bar_ = std::numeric_limits<std::int64_t>::min();
+    std::uint64_t open_exit_first_origin_ = 0;
+    SourceId open_exit_first_id_{};
+    double open_exit_first_fill_ = 0.0;
     // @source-state end
     // Set while an open's calls that TradingView does not repeat at one
     // price book (run_close_sized_open_calls, open_call_owing_follow_up); the
@@ -2769,6 +2821,12 @@ struct MarginScheduleSwitches {
     // A process_orders_on_close short's call sized at the previous close and
     // executed at the open is followed at that open, at the call's own fill.
     bool close_call_follow_up_at_open = true;
+    // A process_orders_on_close short's lagged follow-up owed to its bar's
+    // close is booked after the script, ahead of the fills of the orders the
+    // script placed there, which keep the sizes they were placed with: a
+    // strategy.close(id) or close_all() opens the excess on the other side as
+    // its own lot, a reversal entry's excess joins the entry's lot.
+    bool close_follow_up_after_script = true;
 };
 MarginScheduleSwitches& margin_schedule_switches() noexcept;
 
@@ -2807,6 +2865,19 @@ struct MarginOpeningSwitches {
     // In the opening-call scope the open's own call, and a short's booked
     // re-check, owe their follow-up to the bar's first extreme.
     bool short_point_drops_owed = true;
+    // The schedule on a book of several lots the close's fills opened: the
+    // call sized at the close on the whole book, taken first in first out,
+    // and its follow-up checked lot by lot over the lots it took.
+    bool lot_by_lot_open_follow_up = true;
+    // A market entry opening the book from flat at a bar's open (one entry,
+    // neither process_orders_on_close nor calc_on_order_fills) is checked
+    // there after the exit legs it released -- its own, and a strategy.exit
+    // without from_entry placed while flat after the entry -- already
+    // marketable at that open, have filled, on the book they leave, a long's
+    // as a short's; a leg the bar reaches only after the open fills after the
+    // check's call. Off, and for every other fill or leg: a short's check
+    // gives way to any leg the bar touches.
+    bool open_marketable_exit_first = true;
 };
 MarginOpeningSwitches& margin_opening_switches() noexcept;
 } // namespace detail

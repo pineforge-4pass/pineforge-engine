@@ -874,6 +874,867 @@
       ],
       "note": "prediction written before export: controls/rc3/preregistered-rc3-20261005T164055Z.json; NYSE:F, process_orders_on_close short of 5000 at the 10.34 close, capital 51696.55: 5000 x 10.34 exceeds it by 3.45 though 5000 x the 10.32 slipped fill does not; TradingView books no trade (every model of the preregistration predicted the fill: the predictor prices the slipped fill)",
       "scratch": "px-pin-recheck"
+    },
+    {
+      "path": "lots/close-id-overfill-weekend",
+      "origin": "controls/r1/pf-12b-a1-wkgap-closeid",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-06-19",
+      "chart_to": "2025-06-23",
+      "tv_trades_sha256": "018bce208cc5302c206037c1d1d0a679b5ecce332ba57c357768a048a9458fd1",
+      "repeat_tv_trades_sha256": "018bce208cc5302c206037c1d1d0a679b5ecce332ba57c357768a048a9458fd1",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "32d89e24c3073ab9206c0bcbac29ae66ec53d861a596d6c653c4d1f40dc157ae",
+      "tv_rows": 7,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:22:45Z",
+        "2026-10-05T19:22:52Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T192230Z.json; POOC short 600000 Fri 2025-06-20 20:30; the 20:45 high calls 13.92 and owes 41.52 to the close, booked after the script: strategy.close(\"S\") keeps the 599986.08 it saw (41.52 over-fill lot, its own entry) + L 599716.27; Sunday open -652 ticks: X_c 41.52 + 1069.84 FIFO, follow-up 950.68 lot by lot",
+      "scratch": "px-pin-12b"
+    },
+    {
+      "path": "lots/close-id-overfill-gap",
+      "origin": "controls/r1/pf-12b-a2-gap-closeid",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-09-15",
+      "chart_to": "2025-09-17",
+      "tv_trades_sha256": "4d03f11b636abf8260c0f2cc34e9bc09e838c14d53ead22496e963ddf4a9649a",
+      "repeat_tv_trades_sha256": "4d03f11b636abf8260c0f2cc34e9bc09e838c14d53ead22496e963ddf4a9649a",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "70079b6b0287d35f4f891911b83f074350ab49e0679dc3cb3d3a8529f61c30dd",
+      "tv_rows": 7,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:22:45Z",
+        "2026-10-05T19:22:52Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T192230Z.json; a1's shape 2025-09-16 20:45, daily gap -62 ticks: over-fill 34.4, X_c 34.4 + 934.4, follow-up 831.64",
+      "scratch": "px-pin-12b"
+    },
+    {
+      "path": "lots/close-all-overfill-gap",
+      "origin": "controls/r1/pf-12b-a3-gap-closeall",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-09-15",
+      "chart_to": "2025-09-17",
+      "tv_trades_sha256": "9fd562a79547d92fe09e572356f14bdcd8926e847673d74f283f7e844c1ce270",
+      "repeat_tv_trades_sha256": "9fd562a79547d92fe09e572356f14bdcd8926e847673d74f283f7e844c1ce270",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "f1c4e0db082df5811d2a23559c72189f277c1198112a0b8133ad7914bda6f2c9",
+      "tv_rows": 7,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:22:45Z",
+        "2026-10-05T19:22:52Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T192230Z.json; a2 with strategy.close_all(): over-fill lot 'Close position order' 34.4, then the same open calls",
+      "scratch": "px-pin-12b"
+    },
+    {
+      "path": "lots/close-id-overfill-0409",
+      "origin": "controls/r1/pf-12b-r0-pop-replica",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2026-04-08",
+      "chart_to": "2026-04-10",
+      "tv_trades_sha256": "af65f67d6d6591039d1d9b3a58e94594ed2a6b6f06402dd9452c2e18451bd418",
+      "repeat_tv_trades_sha256": "af65f67d6d6591039d1d9b3a58e94594ed2a6b6f06402dd9452c2e18451bd418",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "1054ac6451c4765fec1e4f54f845e421525d6798df328fca567327527bc21f99",
+      "tv_rows": 7,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:22:49Z",
+        "2026-10-05T19:22:56Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T192230Z.json; the population's bars 2026-04-09 01:00-02:15, short 18667.93: 0.24 at the high, 0.56 owed to the close booked after the script; over-fill 0.56; next open X_c 0.56 + 20.68, follow-up 19.0",
+      "scratch": "px-pin-12b"
+    },
+    {
+      "path": "lots/two-longs-one-close",
+      "origin": "controls/r1/pf-12b-c1-two-entries",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-09-15",
+      "chart_to": "2025-09-17",
+      "tv_trades_sha256": "02d017ef73413b568f8b54566f991b6bc82e2bce92bc37dc8adce4d42a7db517",
+      "repeat_tv_trades_sha256": "02d017ef73413b568f8b54566f991b6bc82e2bce92bc37dc8adce4d42a7db517",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "2a0eaf090c37ed214880247c257277666299760ee3038d93c3db0491d15d97e2",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:22:48Z",
+        "2026-10-05T19:22:54Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T192230Z.json; longs A 20 + B 599000.37 at one close (pyramiding 2), no over-fill: X_c 20 + 338.96, follow-up 279.12",
+      "scratch": "px-pin-12b"
+    },
+    {
+      "path": "lots/reversal-entry-joins-lot",
+      "origin": "controls/r1/pf-12b-e1-entry-only",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-09-15",
+      "chart_to": "2025-09-17",
+      "tv_trades_sha256": "02419198dfaee0fe61734ab0b0c1e09713351f8f6e420d6de32c0483967d990c",
+      "repeat_tv_trades_sha256": "02419198dfaee0fe61734ab0b0c1e09713351f8f6e420d6de32c0483967d990c",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "dc402c69790ad88355b8b0d6710535b78680bf799448fa7a5eaf847c4ea644d0",
+      "tv_rows": 5,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:22:48Z",
+        "2026-10-05T19:22:56Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T192230Z.json; a reversal strategy.entry only: the 1.4 owed to the close joins the entry's own lot (599852.43); next open 1107.88",
+      "scratch": "px-pin-12b"
+    },
+    {
+      "path": "lots/two-shorts-one-close",
+      "origin": "controls/r2/pf-12b-c2-two-shorts",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2026-04-08",
+      "chart_to": "2026-04-10",
+      "tv_trades_sha256": "e831e17b2a6240bee1c2a62044776cb75215c5fbb90aa28a23d29ff06cb9f3b0",
+      "repeat_tv_trades_sha256": "e831e17b2a6240bee1c2a62044776cb75215c5fbb90aa28a23d29ff06cb9f3b0",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "cb73fac9d81341425bab301faeb5f7dc6f0eff490654ec5a7097e2761898395b",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:26:24Z",
+        "2026-10-05T19:26:29Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T192623Z.json; shorts A 20 + B 600000.37 at 2026-04-09 01:45: X_c 20 + 186.64, follow-up 167.8 at the open",
+      "scratch": "px-pin-12b"
+    },
+    {
+      "path": "lots/three-longs-last-short",
+      "origin": "controls/r2/pf-12b-c3-three-entries",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2025-09-15",
+      "chart_to": "2025-09-17",
+      "tv_trades_sha256": "b4b1dba37ad75dfe4e952ae7658b6b3bfbe951045c628b2735f26f64394c89fe",
+      "repeat_tv_trades_sha256": "b4b1dba37ad75dfe4e952ae7658b6b3bfbe951045c628b2735f26f64394c89fe",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "73c1db7df3064d8e3465f8af0b295afa6a5f9de6285fac5c7b75c7c3e36953bb",
+      "tv_rows": 5,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:26:24Z",
+        "2026-10-05T19:26:29Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T192623Z.json; longs 12 + 18 + 599000.37: X_c 12 + 18 + 309.08, follow-up 219.24 from the last still-short check",
+      "scratch": "px-pin-12b"
+    },
+    {
+      "path": "lots/overfill-then-close-entry",
+      "origin": "controls/r3/pf-12bf-k1-overfill-closeid-explicit",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2026-04-08",
+      "chart_to": "2026-04-10",
+      "tv_trades_sha256": "4638c18e6242d50330b43c028ec55bf39dd18bf747358a0645e36ef67afb6660",
+      "repeat_tv_trades_sha256": "4638c18e6242d50330b43c028ec55bf39dd18bf747358a0645e36ef67afb6660",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "4a66597c98e0501205c0c1fb50c978526a25b7ff26a5b871eafac5b6e6f7bbee",
+      "tv_rows": 8,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T21:52:19Z",
+        "2026-10-05T21:52:42Z"
+      ],
+      "note": "prediction written before export: controls/r3/preregistered-r3-20261005T215203Z.json; close-id-overfill-0409's shape, then at the next bar's close strategy.close(\"L\") and a short S2 of 18000: after the open's calls (0.56 from the over-fill lot, 20.68 + 19 from L) the close takes all of L's 18619.72 and S2 opens 18000 (the over-fill lot is a lot of its own in the close ledger)",
+      "scratch": "px-12b-impl"
+    },
+    {
+      "path": "lots/overfill-default-then-close-entry",
+      "origin": "controls/r3/pf-12bf-k2-overfill-closeid-default",
+      "symbol": "OANDA:EURUSD",
+      "interval": "15",
+      "chart_from": "2026-04-08",
+      "chart_to": "2026-04-10",
+      "tv_trades_sha256": "38a69463256e39ec701eda77d35f6e60d290b89b6412bdc9cc41f0d8f56f9ee5",
+      "repeat_tv_trades_sha256": "38a69463256e39ec701eda77d35f6e60d290b89b6412bdc9cc41f0d8f56f9ee5",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "4530612a3a2432160e5be15e6848a75b16476c5dd0205d213f995f376c385026",
+      "tv_rows": 8,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T21:52:19Z",
+        "2026-10-05T21:52:42Z"
+      ],
+      "note": "prediction written before export: controls/r3/preregistered-r3-20261005T215203Z.json; the same with L default-sized (100 % of equity): L opens 18664.13 beside the 0.56 over-fill lot at the close it was placed at, the open calls 0.56 + 39.6 then 37.92, and strategy.close(\"L\") takes 18586.61",
+      "scratch": "px-12b-impl"
+    },
+    {
+      "path": "exit-order/short-stop-on-path",
+      "origin": "controls/r1/pf-16b-s16-stop",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-07-01",
+      "chart_to": "2025-07-03",
+      "tv_trades_sha256": "f3287b47cb414e2dfc3a19f7cbb988ee0a298442224bcf006f10812793c3267a",
+      "repeat_tv_trades_sha256": "f3287b47cb414e2dfc3a19f7cbb988ee0a298442224bcf006f10812793c3267a",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "a368a1a74ce623c9a54365177250d5bdda2043ae96f46c6f5637094a2738e40b",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:04:31Z",
+        "2026-10-05T19:04:51Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T190418Z.json; market short of 3.5 ETH from flat filling at the open, its stop above the open reached on the path: the opening call 0.0048 at the open print first, then the stop fills 3.4952",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/short-limit-on-path",
+      "origin": "controls/r1/pf-16b-s16-limit",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-07-21",
+      "chart_to": "2025-07-23",
+      "tv_trades_sha256": "b0b254acbde035a45369400c765f4b07e20d5e2fc4a145a1ae4dd1a0f22b8474",
+      "repeat_tv_trades_sha256": "b0b254acbde035a45369400c765f4b07e20d5e2fc4a145a1ae4dd1a0f22b8474",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "3457fb4566e88967f3626d39908ef0e98879328ae76e74dd6cf824c8f6ba7df6",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:04:28Z",
+        "2026-10-05T19:04:48Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T190418Z.json; as short-stop-on-path with the limit below the open reached on the path: 0.0048 called at the open print, then the limit fills 3.4952",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/short-fee-stop-on-path",
+      "origin": "controls/r1/pf-16b-ab-e-stop",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-08-11",
+      "chart_to": "2025-08-13",
+      "tv_trades_sha256": "fe23dcaab7c0dfa01c61ab1f2d22182ac39d09f9897010336ad6f9de8e7f3907",
+      "repeat_tv_trades_sha256": "fe23dcaab7c0dfa01c61ab1f2d22182ac39d09f9897010336ad6f9de8e7f3907",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "9b8a42d823899bc7886616c68703b56e155808b52c72da00157052d7a759cec4",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:04:24Z",
+        "2026-10-05T19:04:45Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T190418Z.json; the shape of test_margin_call_1x_long_entry_fill scenario E (slippage 0, commission 0.1 %, a stop only, reached on the path): 0.008 called at the open, then the stop fills 3.492",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/short-fee-stop-on-path-open-at-low",
+      "origin": "controls/r2/pf-16b-ab-e-exact",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-04-20",
+      "chart_to": "2025-04-22",
+      "tv_trades_sha256": "390ffa9045f086cb6b9ad010d4ee4edd16fbda402a7aaf7fdfb81907fa700d44",
+      "repeat_tv_trades_sha256": "390ffa9045f086cb6b9ad010d4ee4edd16fbda402a7aaf7fdfb81907fa700d44",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "595b016a24113178f33a2f97b8f1a20ad9936f3448a96d21420e8362b0a6eb8f",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:08:52Z",
+        "2026-10-05T19:09:02Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T190848Z.json; scenario E's bar shape too, a fill bar opening at its low: 0.008 called at the open, then the stop fills 3.492",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/short-stop-on-path-noslip",
+      "origin": "controls/r1/pf-16b-s16-noslip",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-09-01",
+      "chart_to": "2025-09-03",
+      "tv_trades_sha256": "ce164e59f7a14ba450ed737237d0f07dde86b7e70213ace52dbad10dac4fb97a",
+      "repeat_tv_trades_sha256": "ce164e59f7a14ba450ed737237d0f07dde86b7e70213ace52dbad10dac4fb97a",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "fbbf80ce25928b9aeccf5e7d66659967afe1d010c74fff6beaea74a848a29309",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:04:30Z",
+        "2026-10-05T19:04:49Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T190418Z.json; as short-stop-on-path at slippage 0: 0.0048 called at the open, then the stop fills the rest",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/short-stop-on-path-one-unit",
+      "origin": "controls/r1/pf-16b-s16-unit",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-09-21",
+      "chart_to": "2025-09-23",
+      "tv_trades_sha256": "995363077fc73d571efcfc99144b03f75c5dd87ceba2f40f55aa17519e2c71c3",
+      "repeat_tv_trades_sha256": "995363077fc73d571efcfc99144b03f75c5dd87ceba2f40f55aa17519e2c71c3",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "26cdf05ade8a3f3a0d7e6ea2b5be9759e2d15fcf2a05d9e57def42dd00750278",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:04:32Z",
+        "2026-10-05T19:04:51Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T190418Z.json; deficit inside the one-unit band: 1.0 called at the open print, then the stop fills 2.5",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/short-stop-on-path-margin50",
+      "origin": "controls/r1/pf-16b-s16-lev50",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-10-12",
+      "chart_to": "2025-10-14",
+      "tv_trades_sha256": "46ca4ccd64493b6fe1426f9d1a458817f3d0039999139f0240fb4676f4817f76",
+      "repeat_tv_trades_sha256": "46ca4ccd64493b6fe1426f9d1a458817f3d0039999139f0240fb4676f4817f76",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "09ac36d3fd6cd1e3e62fc5b9f4f02c181a2cebe4827bd49097d0f4cc8f0b0f75",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:04:27Z",
+        "2026-10-05T19:04:47Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T190418Z.json; margin 50 %, 7 ETH: 0.0048 called at the open print, then the stop fills 6.9952",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/short-partial-stop-on-path",
+      "origin": "controls/r1/pf-16b-s16-partial",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-11-01",
+      "chart_to": "2025-11-03",
+      "tv_trades_sha256": "1a6b5533cf0227011929c95ba2e393641cc72d841adecc0f7ce51c500ed4bf34",
+      "repeat_tv_trades_sha256": "1a6b5533cf0227011929c95ba2e393641cc72d841adecc0f7ce51c500ed4bf34",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "af3f3102f61738870628cb7c2c6ead8d264a0488b0cff71e630df9a7cbeacbc3",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:04:30Z",
+        "2026-10-05T19:04:50Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T190418Z.json; exit qty 1.75 of 3.5, stop on the path: 0.0048 called at the open print, the stop fills 1.75, the close 1.7452",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/short-stop-one-tick-above-open",
+      "origin": "controls/r2/pf-16b-s16-near1",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2026-03-26",
+      "chart_to": "2026-03-28",
+      "tv_trades_sha256": "319e64ac79af0dd79d801e5211f857168a98a2ef899db4e17403d7143e7f9a3c",
+      "repeat_tv_trades_sha256": "319e64ac79af0dd79d801e5211f857168a98a2ef899db4e17403d7143e7f9a3c",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "19569b3af35548093cddae577e91803462c772971bec0641205adf922c41410b",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:08:58Z",
+        "2026-10-05T19:09:07Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T190848Z.json; stop one tick above the open, reached by the first tick after it: 0.0048 called at the open print, then the stop fills 3.4952",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/f-short-stop-on-path",
+      "origin": "controls/r2/pf-16b-f-stop2",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-04-07",
+      "chart_to": "2025-04-09",
+      "tv_trades_sha256": "707c5b5d0a335f0de7cacd5c9f73d4b733c833ac7e47628f18060532e867acaf",
+      "repeat_tv_trades_sha256": "707c5b5d0a335f0de7cacd5c9f73d4b733c833ac7e47628f18060532e867acaf",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "b5a2a5637eea02d784746fe311cca41dc55eee724ed10e94ce6196d6d7685434",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:08:52Z",
+        "2026-10-05T19:09:02Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T190848Z.json; NYSE:F, 2000 shares, stop on the path: 8 called at the open print, then the stop fills 1992",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/eth-short-stop-on-path-0623",
+      "origin": "controls/r3/pf-16b-r16-0623",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-06-23",
+      "chart_to": "2025-06-25",
+      "tv_trades_sha256": "f6ea2906d35e0b3b7624856ea5cebd103b03ba0e8586a51c69b631b9e3b2880e",
+      "repeat_tv_trades_sha256": "f6ea2906d35e0b3b7624856ea5cebd103b03ba0e8586a51c69b631b9e3b2880e",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "45bc7100ead354949e3663bbc9f606de50eb80090fe29fa659d0fe99b1519778",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:12:47Z",
+        "2026-10-05T19:12:53Z"
+      ],
+      "note": "prediction written before export: controls/r3/preregistered-r3-20261005T191247Z.json; replica of a population entry (BINANCE:ETHUSDT.P 15, 2025-06-23 13:30 UTC: its bar, quantity 3.5292, TradingView-derived cash and stop 2267.76): 0.0068 called at 2247.38, then the stop fills 3.5224 at 2267.78",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/short-equity-sized-stop-on-path",
+      "origin": "controls/r4/pf-16b-s16-pct-stop",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-04-02",
+      "chart_to": "2025-04-04",
+      "tv_trades_sha256": "bce84e51b79891955d8e7f941e9f1b6f46a2593675ae208b87108140c896c5a4",
+      "repeat_tv_trades_sha256": "bce84e51b79891955d8e7f941e9f1b6f46a2593675ae208b87108140c896c5a4",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "1a70e4cc041a30817513b198e924c760f8ae144c6b37f11cd1e69f4a4e088a24",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:20:40Z",
+        "2026-10-05T19:20:46Z"
+      ],
+      "note": "prediction written before export: controls/r4/preregistered-r4-20261005T192040Z.json; percent_of_equity 100 sizing (net of the fee at the slipped signal close), stop on the path: 1.0 called at the open print, then the stop fills 4.2689",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/short-stop-at-open",
+      "origin": "controls/r1/pf-16b-s16-gap",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-11-21",
+      "chart_to": "2025-11-23",
+      "tv_trades_sha256": "99cdb8cdd181ccd0941dd34d4a2a26a8a4aef3ede21a47e1c683400a4cf7859e",
+      "repeat_tv_trades_sha256": "99cdb8cdd181ccd0941dd34d4a2a26a8a4aef3ede21a47e1c683400a4cf7859e",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "34c8f9e260cd9e158aa1f0e18c0ad7a7c7e47ede286ff7bedbab1f2018b1c321",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:04:24Z",
+        "2026-10-05T19:04:45Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T190418Z.json; stop 3 ticks below the open, marketable at the open: the stop fills 3.5 at the open print, no call",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/short-stop-equal-open",
+      "origin": "controls/r2/pf-16b-s16-at-open",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2026-03-11",
+      "chart_to": "2026-03-13",
+      "tv_trades_sha256": "8750f3cba466e6dcab43909a6256bf126aaa1c41f6e47ebe1014162490f2d0c9",
+      "repeat_tv_trades_sha256": "8750f3cba466e6dcab43909a6256bf126aaa1c41f6e47ebe1014162490f2d0c9",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "a48e5e0280595adaf99225ae860b9b446c5a6e76469cba413c7380347a7de9de",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:08:52Z",
+        "2026-10-05T19:09:02Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T190848Z.json; stop equal to the open: the stop fills 3.5 at the open print, no call",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/short-stop-at-open-noslip",
+      "origin": "controls/r2/pf-16b-s16-gap-noslip",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2026-01-26",
+      "chart_to": "2026-01-28",
+      "tv_trades_sha256": "57226f1015bf3ae5c682a53a84d7bdf6f599a7d8fa068d21848410f1c3b74910",
+      "repeat_tv_trades_sha256": "57226f1015bf3ae5c682a53a84d7bdf6f599a7d8fa068d21848410f1c3b74910",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "6628f2b46d655a99bf054b3b495ff1b4e73488242f55c0e332338bb56f0eefd7",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:08:57Z",
+        "2026-10-05T19:09:05Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T190848Z.json; stop marketable at the open, slippage 0: the stop fills 3.5 at the open, no call",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/short-stop-at-open-margin50",
+      "origin": "controls/r2/pf-16b-s16-gap-lev50",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2026-02-11",
+      "chart_to": "2026-02-13",
+      "tv_trades_sha256": "33ef4859d2748b09c7add4e7d8c418679becdad30fc07c885153f0aae069889e",
+      "repeat_tv_trades_sha256": "33ef4859d2748b09c7add4e7d8c418679becdad30fc07c885153f0aae069889e",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "c1efe2340fbe53c56539a75a9fcb60a0a829c05daea03c028296214172427e21",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:08:56Z",
+        "2026-10-05T19:09:05Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T190848Z.json; stop marketable at the open, margin 50 %: the stop fills 7.0 at the open print, no call",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/short-limit-at-open",
+      "origin": "controls/r2/pf-16b-s16-gaplim",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-12-31",
+      "chart_to": "2026-01-02",
+      "tv_trades_sha256": "3adddc2a5b860eabdb789a6fe50e7bb33267ffe10977199f38471a3c0dc81472",
+      "repeat_tv_trades_sha256": "3adddc2a5b860eabdb789a6fe50e7bb33267ffe10977199f38471a3c0dc81472",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "924b1a4d6c0f712412157f220d291373e58d929081b8627b16ab7f9299f3abc4",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:08:57Z",
+        "2026-10-05T19:09:06Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T190848Z.json; buy limit above the open, marketable at the open: the limit fills 3.5 at the open (no slippage), no call",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/short-partial-stop-at-open",
+      "origin": "controls/r3/pf-16b-s16-gap-tiny",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-04-21",
+      "chart_to": "2025-04-23",
+      "tv_trades_sha256": "a47a777eade22c2565baaa7517c1bd8cf0bd36a459ad97d2cd34cdd930d5f597",
+      "repeat_tv_trades_sha256": "a47a777eade22c2565baaa7517c1bd8cf0bd36a459ad97d2cd34cdd930d5f597",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "f02a21218236c6da41c930693edc36507c89d87895f43c1fbea1f020e9ca604c",
+      "tv_rows": 4,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:12:47Z",
+        "2026-10-05T19:12:53Z"
+      ],
+      "note": "prediction written before export: controls/r3/preregistered-r3-20261005T191247Z.json; an exit of 0.0004 only, its stop marketable at the open: the stop fills 0.0004 at the open print, then the opening call 0.0032 on the rest at that print, 0.1788 at the high, the close 3.3176",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/long-stop-at-open",
+      "origin": "controls/r2/pf-16b-l16-gap",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2026-02-26",
+      "chart_to": "2026-02-28",
+      "tv_trades_sha256": "6a5a8b34e8bbee425d31d12931909917efa5c424589b162e2dcaf374f67a35d9",
+      "repeat_tv_trades_sha256": "6a5a8b34e8bbee425d31d12931909917efa5c424589b162e2dcaf374f67a35d9",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "fc9702a3001538194a7c95019ec121f0cd31e537705643da8d4b4233306db0a1",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:08:52Z",
+        "2026-10-05T19:09:02Z"
+      ],
+      "note": "prediction written before export: controls/r2/preregistered-r2-20261005T190848Z.json; long, sell stop above the open, marketable at the open: the stop fills 3.5 at the open print, no call",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/long-limit-at-open",
+      "origin": "controls/r3/pf-16b-l16-gaplim",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-05-21",
+      "chart_to": "2025-05-23",
+      "tv_trades_sha256": "a176e0ede3b56342d9554171a1f92642f1706e640a4f1bf878ba7e15146fc071",
+      "repeat_tv_trades_sha256": "a176e0ede3b56342d9554171a1f92642f1706e640a4f1bf878ba7e15146fc071",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "f1f397a0f9ddb19c7e25a47097f2783b29593b6f0e68463dbb76e98326dd4b2d",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:12:47Z",
+        "2026-10-05T19:12:53Z"
+      ],
+      "note": "prediction written before export: controls/r3/preregistered-r3-20261005T191247Z.json; long, sell limit below the open, marketable at the open: the limit fills 3.5 at the open, no call",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/long-stop-on-path",
+      "origin": "controls/r1/pf-16b-l16-stop",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2026-01-05",
+      "chart_to": "2026-01-07",
+      "tv_trades_sha256": "905567d6095217aa680b4208e16c2b4651c97990a09111cdf9ae9fd5ab3547a0",
+      "repeat_tv_trades_sha256": "905567d6095217aa680b4208e16c2b4651c97990a09111cdf9ae9fd5ab3547a0",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "e46c1d9152bca4dddcc267f02e272db56fd2e7dfec8d5bb9e7e1c5654055221e",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:04:24Z",
+        "2026-10-05T19:04:45Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T190418Z.json; long, stop below the open reached on the path: 0.0048 called at the open print, then the stop fills 3.4952",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/long-stop-one-tick-below-open",
+      "origin": "controls/r3/pf-16b-l16-near1",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-06-11",
+      "chart_to": "2025-06-13",
+      "tv_trades_sha256": "ce3f424ad670bd92984565d9ffd898c096b0b7ff792437a5bf71f1144931b919",
+      "repeat_tv_trades_sha256": "ce3f424ad670bd92984565d9ffd898c096b0b7ff792437a5bf71f1144931b919",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "974129ed0f1b35b23c0562a9378131c26b927e6d74c1f65b8de3e5540099e5b9",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:12:47Z",
+        "2026-10-05T19:12:53Z"
+      ],
+      "note": "prediction written before export: controls/r3/preregistered-r3-20261005T191247Z.json; long, stop one tick below the open: 0.0048 called at the open print, then the stop fills 3.4952",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/short-stop-on-path-no-deficit",
+      "origin": "controls/r1/pf-16b-s16-nodef",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-12-11",
+      "chart_to": "2025-12-13",
+      "tv_trades_sha256": "f3fcd9a42393db76a5ffa5e30888924948a33db804480eb3013efdbd287aa6dd",
+      "repeat_tv_trades_sha256": "f3fcd9a42393db76a5ffa5e30888924948a33db804480eb3013efdbd287aa6dd",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "c61c49b771f9e5d64207e7ab1e5e6cf8315c3f996ee1702b635e853646970a7d",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:04:29Z",
+        "2026-10-05T19:04:49Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T190418Z.json; no opening deficit: the stop fills 3.5 on the path, no call",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/short-equity-sized-stop-at-open",
+      "origin": "controls/r4/pf-16b-s16-pct-gap",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-05-21",
+      "chart_to": "2025-05-23",
+      "tv_trades_sha256": "2069f43f8df3e8c198d0dceadd058c0d853cbe4b93c38db3c57e4c82a1e6c802",
+      "repeat_tv_trades_sha256": "2069f43f8df3e8c198d0dceadd058c0d853cbe4b93c38db3c57e4c82a1e6c802",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "c4c7d23f22cd7b6e280180e4bc1a59f3e82946638725d47653a2ef9f5a56cd2f",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:20:40Z",
+        "2026-10-05T19:20:46Z"
+      ],
+      "note": "prediction written before export: controls/r4/preregistered-r4-20261005T192040Z.json; percent_of_equity 100 sizing, stop marketable at the open: the stop fills 3.9509 at the open print, no call (no deficit is due)",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/f-short-refused",
+      "origin": "controls/r1/pf-16b-f-stop",
+      "symbol": "NYSE:F",
+      "interval": "15",
+      "chart_from": "2025-08-11",
+      "chart_to": "2025-08-13",
+      "tv_trades_sha256": "86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c",
+      "repeat_tv_trades_sha256": "86e88f3e8067b4b2595036db9feaa39a14df66b43e6b306397c0ed2445acd76c",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "fd76c982080d889ee8a1acb8d55f24f88d5282a20bd87b0758374c90d949a299",
+      "tv_rows": 0,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T19:04:24Z",
+        "2026-10-05T19:04:45Z"
+      ],
+      "note": "prediction written before export: controls/r1/preregistered-r1-20261005T190418Z.json; NYSE:F, 500 shares on cash 5556.095: TradingView books no trade, as the engine (Q x the signal close 5560 exceeds the cash, Q x the slipped fill 5550 does not; that admission is not pinned here)",
+      "scratch": "px-pin-16b"
+    },
+    {
+      "path": "exit-order/global-short-stop-on-path",
+      "origin": "controls/pf-16b-g-s16-stop",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-07-01",
+      "chart_to": "2025-07-03",
+      "tv_trades_sha256": "f3287b47cb414e2dfc3a19f7cbb988ee0a298442224bcf006f10812793c3267a",
+      "repeat_tv_trades_sha256": "f3287b47cb414e2dfc3a19f7cbb988ee0a298442224bcf006f10812793c3267a",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "25862089243029011b46b953f06f0150a8928be1cf3b51ee3ea25b44c8cad49f",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T21:53:31Z",
+        "2026-10-05T21:53:39Z"
+      ],
+      "note": "prediction written before export: controls/preregistered-fix1-20261005T215323Z.json; short-stop-on-path with a strategy.exit without from_entry: TradingView calls 0.0048 at the open print, then the stop fills 3.4952 (= the bound control, tape byte-identical)",
+      "scratch": "px-16b-impl-scratch/fix1"
+    },
+    {
+      "path": "exit-order/global-short-stop-at-open",
+      "origin": "controls/pf-16b-g-s16-gap",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-11-21",
+      "chart_to": "2025-11-23",
+      "tv_trades_sha256": "99cdb8cdd181ccd0941dd34d4a2a26a8a4aef3ede21a47e1c683400a4cf7859e",
+      "repeat_tv_trades_sha256": "99cdb8cdd181ccd0941dd34d4a2a26a8a4aef3ede21a47e1c683400a4cf7859e",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "cd1d143c72b5372be7e7e6d8fab5c6830db7b8e74c394f7172bf6ad39ca9b80f",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T21:53:31Z",
+        "2026-10-05T21:53:39Z"
+      ],
+      "note": "prediction written before export: controls/preregistered-fix1-20261005T215323Z.json; short-stop-at-open with a global exit: the stop fills 3.5 at the open print, no call",
+      "scratch": "px-16b-impl-scratch/fix1"
+    },
+    {
+      "path": "exit-order/global-long-stop-at-open",
+      "origin": "controls/pf-16b-g-l16-gap",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2026-02-26",
+      "chart_to": "2026-02-28",
+      "tv_trades_sha256": "6a5a8b34e8bbee425d31d12931909917efa5c424589b162e2dcaf374f67a35d9",
+      "repeat_tv_trades_sha256": "6a5a8b34e8bbee425d31d12931909917efa5c424589b162e2dcaf374f67a35d9",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "7c5adcf63aaebacd9c1cd615acc390e69d11b41ccff2181699f55d102b905ce3",
+      "tv_rows": 1,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T21:53:31Z",
+        "2026-10-05T21:53:39Z"
+      ],
+      "note": "prediction written before export: controls/preregistered-fix1-20261005T215323Z.json; long-stop-at-open with a global exit: the sell stop marketable at the open fills 3.5 there, no call",
+      "scratch": "px-16b-impl-scratch/fix1"
+    },
+    {
+      "path": "exit-order/global-long-stop-on-path",
+      "origin": "controls/pf-16b-g-l16-stop",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2026-01-05",
+      "chart_to": "2026-01-07",
+      "tv_trades_sha256": "905567d6095217aa680b4208e16c2b4651c97990a09111cdf9ae9fd5ab3547a0",
+      "repeat_tv_trades_sha256": "905567d6095217aa680b4208e16c2b4651c97990a09111cdf9ae9fd5ab3547a0",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "66f7a0e3b792b7f5d6eaac1ca46402b28799d6066da8e247e398a4ba3efea661",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T21:53:31Z",
+        "2026-10-05T21:53:39Z"
+      ],
+      "note": "prediction written before export: controls/preregistered-fix1-20261005T215323Z.json; long-stop-on-path with a global exit: 0.0048 called at the open print, then the stop fills 3.4952",
+      "scratch": "px-16b-impl-scratch/fix1"
+    },
+    {
+      "path": "exit-order/reversal-short-stop-on-path",
+      "origin": "controls/pf-16b-rv-s16-stop",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-07-01",
+      "chart_to": "2025-07-03",
+      "tv_trades_sha256": "4d2d6956009c85ffc8c46e591a92725652eedc8e0eb6d42f8b1efd3a72229362",
+      "repeat_tv_trades_sha256": "4d2d6956009c85ffc8c46e591a92725652eedc8e0eb6d42f8b1efd3a72229362",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "ccfd413debae5b2a4d197f6ffe2fe7c994b633b0ff9f7fed7da0e5bb02bc1f5c",
+      "tv_rows": 3,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T21:53:35Z",
+        "2026-10-05T21:53:43Z"
+      ],
+      "note": "prediction written before export: controls/preregistered-fix1-20261005T215323Z.json; KNOWN DIVERGENCE: short-stop-on-path entered as a reversal of a 0.001 long opened one bar earlier: TradingView calls 0.0048 at the open print before the stop fills 3.4952; the engine keeps ab9714be's rule for a reversal and books the stop 3.5 with no call",
+      "scratch": "px-16b-impl-scratch/fix1"
+    },
+    {
+      "path": "exit-order/stop-entry-short-stop-on-path",
+      "origin": "controls/pf-16b-se-s16-stop",
+      "symbol": "BINANCE:ETHUSDT.P",
+      "interval": "15",
+      "chart_from": "2025-07-01",
+      "chart_to": "2025-07-03",
+      "tv_trades_sha256": "f3287b47cb414e2dfc3a19f7cbb988ee0a298442224bcf006f10812793c3267a",
+      "repeat_tv_trades_sha256": "f3287b47cb414e2dfc3a19f7cbb988ee0a298442224bcf006f10812793c3267a",
+      "repeat_identical": true,
+      "strategy_pine_sha256": "ecb64e95e60878ae21adf97ceaf98706e5e56dd43c5376e12e8dfc3cb672ed76",
+      "tv_rows": 2,
+      "tool": "lab tv --no-note",
+      "channel": "ws-report-v1",
+      "exported": [
+        "2026-10-05T21:53:36Z",
+        "2026-10-05T21:53:43Z"
+      ],
+      "note": "prediction written before export: controls/preregistered-fix1-20261005T215323Z.json; KNOWN DIVERGENCE: short-stop-on-path entered by a sell stop at 2490.0, above the signal close, gapped at the open: TradingView calls 0.0048 at the open print before the stop fills 3.4952 (tape byte-identical to the market control); the engine keeps ab9714be's rule for a stop entry and books the stop 3.5 with no call",
+      "scratch": "px-16b-impl-scratch/fix1"
     }
   ],
   "bars": {
@@ -1095,6 +1956,168 @@
     },
     "f-2025-06-09-2025-06-11.csv": {
       "sha256": "72464dc10cb5a3b64c8f5b322c7509f5504477f1a03b567055235d657b30c475",
+      "rows": 52,
+      "feed": "f-15.csv",
+      "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32"
+    },
+    "eur-2025-06-19-2025-06-23.csv": {
+      "sha256": "60172d003699d8eb8f04d77a4a347b541d27a2d96191cd2b58703d22dfa42d8f",
+      "rows": 193,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eur-2025-09-15-2025-09-17.csv": {
+      "sha256": "668f5d2782792221a45b2e70b922f4ddecd752687615c765716b51351ff5ffba",
+      "rows": 193,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eur-2026-04-08-2026-04-10.csv": {
+      "sha256": "cc8780cf8702f992ec3fa967bec563fff0ddc2e1d2efb51424a61cd1ed5e2f78",
+      "rows": 193,
+      "feed": "eurusd-15.csv",
+      "feed_sha256": "c4ffa3e17348d80aec5678a299ebf6708525c83b7cb636dba640cdb47cffd03f"
+    },
+    "eth-2025-07-01-2025-07-03.csv": {
+      "sha256": "42f8cef2419ce52bf5259d8d1ac8106376a9f903d1e212fd932c8d159d7834bf",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-07-21-2025-07-23.csv": {
+      "sha256": "443a73026342801f8f5565c963f287e24fcb29d7de5dcbf9567724780583217f",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-08-11-2025-08-13.csv": {
+      "sha256": "4585fc93581ad70778ec562eacfff3ceff209c6cd4c50b1ef337746667aded77",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-04-20-2025-04-22.csv": {
+      "sha256": "6afefd74de9e0992bc6161e3b271eb8f56c200a23e60d9c131bc17ad5e5ab203",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-09-01-2025-09-03.csv": {
+      "sha256": "18130bc400783f5c87a1d735a8c05efef3ee1bfd2618e7e0f9de1232503fa51a",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-09-21-2025-09-23.csv": {
+      "sha256": "f3a2d041576b3f06d3a19574168d0251a93e6b3938bfcc30ae863222a960c39e",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-10-12-2025-10-14.csv": {
+      "sha256": "cc8aede2e2d2a80c38fa5a8aebcb60bb767532d1180a62ace89069f48e43da7b",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-11-01-2025-11-03.csv": {
+      "sha256": "f80cdc8648bc0de0c6d89c6da61822faa61dec40710c7d36abfd2963d0392eb0",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2026-03-26-2026-03-28.csv": {
+      "sha256": "e987912fde1975cf31f14572d4fd1f952aa88a09a149fb710cdb1ab92e9b697d",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "f-2025-04-07-2025-04-09.csv": {
+      "sha256": "a292fd0da9262dc526de79e3c36f2f11e4f843e0f0949955d8ead36d74a34c3c",
+      "rows": 52,
+      "feed": "f-15.csv",
+      "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32"
+    },
+    "eth-2025-06-23-2025-06-25.csv": {
+      "sha256": "cb79e08028106d15acab02a1a872045389ec0a15c5e645f9b4282519dd24ca89",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-04-02-2025-04-04.csv": {
+      "sha256": "0bf14a433dbc200a9eba5da9322c63ffdf675d09353ff86bfcac856034d3e5cd",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-11-21-2025-11-23.csv": {
+      "sha256": "ad6674f3483e3f589ca7bbdb72897bcb22c2a6f9b7968f34a4fc69fb9c173c0b",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2026-03-11-2026-03-13.csv": {
+      "sha256": "dea8b9afe27f5d8832f62f08d47a4fa5bcf65f661519495157c340a95fab4b7c",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2026-01-26-2026-01-28.csv": {
+      "sha256": "e49f931d532f924afa7bc38e0b74c1c4fe1904bedeb20201bab1fb52de5bbbbf",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2026-02-11-2026-02-13.csv": {
+      "sha256": "ff8effa64a6775431a64e4c618041688177997933a6d2fab11db4fa56fbe44f3",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-12-31-2026-01-02.csv": {
+      "sha256": "bab8f5e6099d89d60ff3f83b37b2018023c1c4dff35dc7125257a69797f58df9",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-04-21-2025-04-23.csv": {
+      "sha256": "32410c239d7dd39d597f7f93c6f0dd710eff6e34a4b5a4f54f41e190607ba8d5",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2026-02-26-2026-02-28.csv": {
+      "sha256": "5455e383eec6cb077bdc885115404c925186647737681e85115a548a2eb74bc9",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-05-21-2025-05-23.csv": {
+      "sha256": "49d1dfaff7d4055fa50d2129b1b6185372872d35cf747a3896514715f8233e59",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2026-01-05-2026-01-07.csv": {
+      "sha256": "74f5164b82914c12c5d5be3f6e421d0f10dad9ec28310bb1d6ddd1ccbba47066",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-06-11-2025-06-13.csv": {
+      "sha256": "80e27d1a333cfa7007891535e260ce949e4b0847a7cf7d46fff0f76aa4bea5ca",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "eth-2025-12-11-2025-12-13.csv": {
+      "sha256": "d09af4a55a4da355eb3f92906e4283401404abd0e3aca4d7b34ea3e6a78d6045",
+      "rows": 193,
+      "feed": "eth-15.csv",
+      "feed_sha256": "27b62431096edf1bfba71b2409f8dc183f69213dec2834560b3241750f8e7026"
+    },
+    "f-2025-08-11-2025-08-13.csv": {
+      "sha256": "3fd2a4a90994005133174916397387ea42cc24d84934b73b1c239bb0d6eb2110",
       "rows": 52,
       "feed": "f-15.csv",
       "feed_sha256": "80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32"
