@@ -266,6 +266,20 @@ docker run --rm \
   or an index naming no symbol: the key is absent and the report is what it was
   before this variable existed, apart from `elapsed_seconds`.
 
+### Recorded outputs (the harness's `--outputs`)
+
+A library compiled to record outputs keeps, besides its trades, values per bar,
+values per run and events with an optional message (`docs/outputs.md` in the
+engine repository). `run_json.py --outputs` turns recording on and writes the
+record as the report's `outputs` key, just before `fingerprint`, with
+`"outputs": true` in `applied_runtime`: the bars' times, each listed series,
+the run constants, each horizontal level's price and every event (sequence,
+output, bar, phase, value, message). Its keys are listed in the engine's
+report-schema page. Without the flag the report is unchanged. On a library that
+records no outputs the run fails before it starts: one line
+`{"engine":"pineforge","error":"--outputs: this library records no outputs (compile the script as an indicator, or with outputs on)"}`
+on stdout, harness exit 1. With `--bench` the timed runs record too.
+
 The engine catches run errors (TF mismatch, unsupported emulation flags,
 unknown-input-TF, etc.) into `strategy_get_last_error()` and, with the
 1.4.0 runtime, its code/args getters. The failure line below describes both

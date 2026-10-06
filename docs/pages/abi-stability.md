@@ -60,11 +60,11 @@ Three layers:
 
 ## Symbol inventory
 
-A built strategy `.so` exposes 80 compiled-strategy `PF_API` declarations
-(64 runtime implementations plus sixteen generated exports) plus 43 native-host
-declarations: 123 `PF_API` exports in total; a script that declares
-`use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, the
-81st declaration of `pineforge.h`. `nm -gU` also reports libc++'s
+A built strategy `.so` exposes 89 compiled-strategy `PF_API` declarations
+(73 runtime implementations plus sixteen generated exports) plus 43 native-host
+declarations: 132 `PF_API` exports in total; a script that declares
+`use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, and a
+module that records outputs its three outputs exports. `nm -gU` also reports libc++'s
 `std::piecewise_construct`; no project-internal C++ symbol is exported. The grouped table below is a guide,
 not the complete inventory:
 
@@ -101,9 +101,21 @@ not the complete inventory:
 | `pf_version_get` | @ref pf_version |
 | `pf_abi_version` | @ref pf_version |
 | `pf_version_string` | @ref pf_version |
+| `strategy_outputs_set_enabled` | @ref pf_outputs |
+| `strategy_outputs_series_count` | @ref pf_outputs |
+| `strategy_outputs_bars_len` | @ref pf_outputs |
+| `strategy_outputs_bar_times_copy` | @ref pf_outputs |
+| `strategy_outputs_series_copy` | @ref pf_outputs |
+| `strategy_outputs_events_len` | @ref pf_outputs |
+| `strategy_outputs_event_get` | @ref pf_outputs |
+| `strategy_outputs_events_clear` | @ref pf_outputs |
+| `strategy_outputs_constants_copy` | @ref pf_outputs |
+| `strategy_outputs_api_version` | @ref pf_outputs (a recording module's own) |
+| `strategy_outputs_manifest` | @ref pf_outputs (a recording module's own) |
+| `strategy_signal_safety_receipt` | @ref pf_outputs (a recording module's own) |
 
 Sixteen per-strategy exports include the five create/run/free lifecycle
-functions. The remaining 64 runtime implementations, including the
+functions. The remaining 73 runtime implementations, including the
 closed-trade incarnation accessor, are force-linked into each strategy library,
 so consumers resolve the same complete ABI from the strategy `.so`. All
 additions remain covered by the minor-version append-only guarantee.
@@ -207,6 +219,19 @@ header is rebuilt with the library (the subclass contract is internal, as
 a run with no symbol data folds nothing new. The C side is append-only -- four
 functions, each behind its own `PINEFORGE_HAS_…_V1` probe -- so
 `PF_ABI_VERSION` stays 4.
+
+Recorded outputs (lane SM-E1, `docs/outputs.md`) adds the recorder to
+`BacktestEngine` inside v19, without an epoch: data members outside both
+hashed regions and non-virtual members (`declare_outputs`, `output_run_begin`,
+`output_bar`, `output_value`, `output_event`, `output_constant` and the
+readers behind the C functions); no virtual is added. The layout grows, so a
+generated or native C++ object compiled against an earlier v19 header is
+rebuilt with the library, as for XSYM-D's virtuals; the script and settlement
+ABI matrices accept it unchanged. No value moves: recording is off until a
+caller enables it, and nothing a run computes reads the record. The C side is
+append-only -- group `pf_outputs`, behind `PINEFORGE_HAS_OUTPUTS_V1`: nine
+runtime functions and three a recording module defines -- so `PF_ABI_VERSION`
+stays 4 and `pf_report_t` is unchanged.
 
 R5 gap lane P2c gave two TradingView-named public surfaces a generic primary
 spelling without an epoch, because an alias needs none, and lane REL10 removed

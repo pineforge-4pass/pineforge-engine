@@ -62,10 +62,10 @@
 ## Public C ABI
 
 `<pineforge/pineforge.h>` is the **single canonical consumer header**. It has
-exactly 81 public `PF_API` declarations: 64 runtime implementations and seventeen
+exactly 93 public `PF_API` declarations: 73 runtime implementations and twenty
 per-strategy generated exports. Every compiled PineForge strategy `.so` exports
 that public set, except that `strategy_declares_bar_magnifier` is exported only
-by a script that declares `use_bar_magnifier = true`; older modules lack the six
+by a script that declares `use_bar_magnifier = true` and the three [outputs](outputs.md) exports only by a module that records outputs; older modules lack the six
 opt-in [checked-settings exports](checked-settings.md) and the two opt-in
 [execution-capability exports](strategy-capabilities.md). The historical 28-symbol module sentence was not a current
 module inventory; the grouped table below is a guide, not the count:

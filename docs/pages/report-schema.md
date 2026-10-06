@@ -255,6 +255,37 @@ bare native host using the default `HostRecorded` policy has no kernel-owned
 curve. The array is heap-allocated and freed by #report_free. Note the length
 field is `int64_t`, not `int`.
 
+## Recorded outputs (outside the report)
+
+What a module records besides its trades -- values kept per bar, values kept
+once per run, events with an optional message -- is not part of
+`pf_report_t`, and recording changes no field of it. A caller reads the record
+through the `strategy_outputs_*` functions (@ref pf_outputs) after a batch, or
+between a stream's inputs; the record's rules are in `docs/outputs.md`.
+
+`docker/run_json.py --outputs` writes the record into its JSON report as an
+`outputs` key, just before `fingerprint`, and marks the run with
+`"outputs": true` in `applied_runtime` and in the fingerprint's
+`provenance.runtime`; without the flag the report is unchanged:
+
+| Key | Content |
+|---|---|
+| `schema_version` | `"pineforge-outputs/v1"` |
+| `message_format` | the manifest's message format, `"pineforge/v1"` |
+| `manifest_sha256`, `manifest` | the SHA-256 of the manifest bytes the module returned, and the parsed manifest |
+| `bars` | `open_ms`, `close_ms`: one entry per recorded row |
+| `series` | one `{slot, output, values}` per slot the manifest lists, in slot order |
+| `constants` | one value per run-constant index |
+| `hlines` | one `{output, price}` per horizontal-level output: the run constant the manifest names |
+| `events` | `{sequence, output, bar_index, bar_open_ms, bar_close_ms, ordinal_in_bar, phase, value, message}`, and `freq` on an alert output's events; `phase` is `batch`, `warmup` or `realtime` |
+
+A double that is not finite is `null`, as everywhere in the report; so is a time
+equal to `INT64_MIN` and a run constant never written (an hline price in a run
+with no rows). A value whose manifest encoding is `rgba-u32` (a colour) is
+written as an integer. With `--bench` the timed runs record too, so the timing
+includes recording. `--outputs` on a module that records nothing is the
+structured `{"engine": "pineforge", "error": …}` failure, exit status 1.
+
 ## Lifetime and ownership
 
 Every heap pointer in `pf_report_t` is freed by a single call to
