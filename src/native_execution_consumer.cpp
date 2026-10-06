@@ -2093,7 +2093,6 @@ bool NativeExecutionConsumer::apply_spec(BacktestEngine& engine, const NativeRun
     engine.syminfo_.session = spec.session;
     engine.chart_timezone_ = spec.chart_timezone;
     engine.slippage_ = 0;
-    applied_ = spec;
     auto parsed_session = native_calendar::parse_session(spec.session, spec.timezone);
     if (!parsed_session) return false;
     intrabar_tf_.reset();
@@ -2351,7 +2350,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         render(engine, "native begin requires Ready");
         return false;
     }
-    NativeRunSpec spec = ready->spec;
+    const NativeRunSpec& spec = ready->spec;
     if (bound_session_key_.empty()) bound_session_key_ = spec.identity.session_key;
     else if (spec.identity.session_key != bound_session_key_) {
         fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
@@ -2505,7 +2504,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     begin_bars_ = nullptr;
     begin_n_ = 0;
     begin_is_stream_ = false;
-    state_ = NativeRunning{std::move(spec), phase};
+    state_ = NativeRunning{std::move(ready->spec), phase};
     cache_running_policy();
     if (!check_abort_or_projection(engine, NativeFailureOperation::Begin)) return false;
     // The previous run's declared series are torn down BEFORE the host's
@@ -2665,7 +2664,20 @@ bool NativeExecutionConsumer::preflight_intrabar_path(BacktestEngine& engine) {
         present_refusal(engine, "native intrabar path timeframe or bar count is invalid");
         return false;
     }
-    NativeRunSpec path_spec = *spec;
+    // preflight_native_inputs reads the calendar and tolerance facts alone, so
+    // the copy it is handed is taken with the Ready spec's other-instrument
+    // feeds swapped out (and back) rather than duplicated.
+    NativeRunSpec path_spec = [&] {
+        auto* ready = std::get_if<NativeReady>(&state_);
+        if (ready == nullptr || &ready->spec != spec) return *spec;
+        struct Aside {
+            std::vector<NativeInstrumentFeed>& home;
+            std::vector<NativeInstrumentFeed> held;
+            ~Aside() { home.swap(held); }
+        } aside{ready->spec.instrument_feeds, {}};
+        aside.home.swap(aside.held);
+        return ready->spec;
+    }();
     path_spec.input_tf = lower.tf;
     path_spec.script_tf = lower.tf;
     const auto result = preflight_native_inputs(
@@ -9539,9 +9551,9 @@ void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars
         record_open_position_report_rows(engine);
         auto* running = std::get_if<NativeRunning>(&state_);
         if (!running) return;
-        NativeRunSpec spec = running->spec;
         leave_running();
-        state_ = NativeCompleted{std::move(spec), NativeCompletion::BatchComplete};
+        state_ = NativeCompleted{std::move(running->spec),
+                                 NativeCompletion::BatchComplete};
         verify_closed_rows(engine);
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
@@ -9584,9 +9596,9 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
         record_open_position_report_rows(engine);
         auto* running = std::get_if<NativeRunning>(&state_);
         if (!running) return;
-        NativeRunSpec spec = running->spec;
         leave_running();
-        state_ = NativeCompleted{std::move(spec), NativeCompletion::BatchComplete};
+        state_ = NativeCompleted{std::move(running->spec),
+                                 NativeCompletion::BatchComplete};
         verify_closed_rows(engine);
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
@@ -9627,9 +9639,9 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
         record_open_position_report_rows(engine);
         auto* running = std::get_if<NativeRunning>(&state_);
         if (!running) return;
-        NativeRunSpec spec = running->spec;
         leave_running();
-        state_ = NativeCompleted{std::move(spec), NativeCompletion::BatchComplete};
+        state_ = NativeCompleted{std::move(running->spec),
+                                 NativeCompletion::BatchComplete};
         verify_closed_rows(engine);
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});

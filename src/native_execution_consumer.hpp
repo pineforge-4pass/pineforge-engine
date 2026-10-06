@@ -1532,7 +1532,6 @@ private:
     native_calendar::Timeframe script_tf_{};
     std::optional<native_calendar::Timeframe> intrabar_tf_;
     native_calendar::TimeframeCompatibility pairing_{};
-    NativeRunSpec applied_{};
     std::optional<NativeFxCurve> staged_fx_curve_;
     bool staged_ingress_fx_ = false;
     bool in_callback_ = false;

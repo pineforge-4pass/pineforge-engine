@@ -162,7 +162,11 @@ StagedConfiguration source::PineStrategyHost::staged_configuration() const {
     staged.account_fx_effective_from_ms = account_currency_fx_timestamps_;
     staged.account_fx_per_quote = account_currency_fx_rates_;
     if (std::isfinite(qty_step_) && qty_step_ > 0.0) staged.quantity_grid = qty_step_;
-    staged.instrument_feeds = symbol_feeds_;
+    staged.instrument_feeds.reserve(symbol_feeds_.size());
+    for (const auto& feed : symbol_feeds_) {
+        staged.instrument_feeds.push_back(
+            {feed.instrument, feed.tf, feed.bars.size(), feed.columns.size()});
+    }
     return staged;
 }
 
@@ -253,9 +257,20 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
         ? NativePathOrder::HighFirst
         : (path_order_mode_ == 2 ? NativePathOrder::LowFirst
                                  : NativePathOrder::Auto);
-    const NativeRunSpec spec = adapter_.project(effective, staged, args, path_order);
+    // The installed feeds ride in the projected spec (moved in by project())
+    // for the length of its configure, which keeps a copy of its own, and
+    // come straight back: nothing of this host or of the script runs inside
+    // configure_native.
+    NativeRunSpec spec = adapter_.project(effective, staged, args, path_order, &symbol_feeds_);
     const bool failed_before = native_state().kind == NativeLifecycleKind::Failed;
-    const auto setup = configure_native(spec);
+    NativeSetupResult setup;
+    try {
+        setup = configure_native(spec);
+    } catch (...) {
+        symbol_feeds_ = std::exchange(spec.instrument_feeds, {});
+        throw;
+    }
+    symbol_feeds_ = std::exchange(spec.instrument_feeds, {});
     if (setup.status != NativeSetupStatus::Applied) {
         if (failed_before) {
             try { prepare_script_run(nullptr, 0, false); }

@@ -5,6 +5,25 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
+## Unreleased
+
+- **Fewer copies of another symbol's feed (memory only).** A Pine strategy
+  that reads another symbol through `request.security` held up to five
+  copies of every installed feed (`strategy_set_symbol_feed`) while a run was
+  set up and four for the rest of the run: the host's store, two staged
+  configurations, the projected run spec and the kernel's own copies of it
+  (one of them never read). A handle now holds two, the host's store and the
+  kernel's run spec: staging carries each feed's key and sizes only
+  (`StagedConfiguration::instrument_feeds` in
+  `pineforge/source/pine_adapter.hpp` is now a list of
+  `StagedInstrumentFeed`), the projected spec borrows the store for its
+  configure, the kernel moves its spec into the run and out of it instead of
+  copying it and keeps no unread copy, and installing a feed no longer copies
+  it to judge it. At 56 bytes per bar, a year of one-minute bars is 29.4 MB per
+  feed per copy. What a run computes does not change: trades, reports,
+  metrics and state hashes are byte-identical, and the C ABI, the layout
+  versions and the hash domains are unchanged.
+
 ## 1.3.0 — 2026-10-06
 
 A minor release: `pineforge-live` admits the confirmed-bar request shapes and

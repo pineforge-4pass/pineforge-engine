@@ -28,6 +28,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <map>
 #include <memory>
@@ -2536,7 +2537,8 @@ void PineExecutionAdapter::set_begin_mode(bool is_stream, bool bar_magnifier) no
 NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
                                              const StagedConfiguration& staged,
                                              const NativeBeginArgs& args,
-                                             NativePathOrder path_order) const {
+                                             NativePathOrder path_order,
+                                             std::vector<NativeInstrumentFeed>* instrument_feeds) const {
     NativeRunSpec spec;
     if (run_counter_ == std::numeric_limits<std::uint64_t>::max()) {
         throw std::overflow_error("Pine native run counter exhausted");
@@ -2595,8 +2597,19 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     spec.quantity_grid = staged.quantity_grid;
     // Lane XSYM-D: another symbol's bars a request site reads are the
     // kernel's instrument feeds, merged by interval there. A run that
-    // installs none leaves the field empty, which folds nothing.
-    spec.instrument_feeds = staged.instrument_feeds;
+    // installs none leaves the field empty, which folds nothing. They are the
+    // host's own, moved in rather than copied (AR-R4); a throw below, the
+    // validation at the end included, moves them back.
+    struct FeedsBack {
+        std::vector<NativeInstrumentFeed>* home;
+        NativeRunSpec& spec;
+        int pending = std::uncaught_exceptions();
+        ~FeedsBack() {
+            if (home != nullptr && std::uncaught_exceptions() > pending)
+                *home = std::exchange(spec.instrument_feeds, {});
+        }
+    } feeds_back{instrument_feeds, spec};
+    if (instrument_feeds != nullptr) spec.instrument_feeds = std::exchange(*instrument_feeds, {});
     // A13: source hosts opt into the generic tolerant batch ingress.
     // Native-only hosts retain the strict Canonical/None defaults.
     spec.slot_label_policy = NativeSlotLabelPolicy::FeedTolerant;

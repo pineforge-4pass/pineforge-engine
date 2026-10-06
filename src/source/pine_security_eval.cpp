@@ -1266,8 +1266,10 @@ bool source::PineStrategyHost::set_symbol_feed(const std::string& key,
         return refuse("invalid bar array");
     const std::int64_t existing = find_symbol_feed(key, tf);
     // n == 0 is a symbol with no bars over the run (a feed file with a header
-    // only): installed, so its sites read na rather than fail as unfed.
-    NativeInstrumentFeed feed;
+    // only): installed, so its sites read na rather than fail as unfed. The
+    // feed is built inside the one-feed list it is judged in, then moved out.
+    std::vector<NativeInstrumentFeed> judged_feeds(1);
+    NativeInstrumentFeed& feed = judged_feeds.front();
     feed.instrument = key;
     feed.tf = tf;
     if (n > 0) {
@@ -1276,7 +1278,7 @@ bool source::PineStrategyHost::set_symbol_feed(const std::string& key,
     }
     // The kernel's own judgement of the feed, so a refusal names its field
     // here rather than at the next begin.
-    const auto judged = validate_native_instrument_feeds({feed});
+    const auto judged = validate_native_instrument_feeds(judged_feeds);
     if (!judged) {
         return refuse("feed refused (NativeRunSpecError "
                       + std::to_string(static_cast<int>(judged.error)) + ", field "

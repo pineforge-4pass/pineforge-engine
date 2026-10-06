@@ -282,8 +282,8 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         for (const auto& feed : staged_.instrument_feeds) {
             f.s(feed.instrument);
             f.s(feed.tf);
-            f.u(feed.bars.size());
-            f.u(feed.columns.size());
+            f.u(feed.bars);
+            f.u(feed.columns);
         }
     }
     std::vector<std::string> input_keys;
