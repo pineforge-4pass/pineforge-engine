@@ -4096,8 +4096,8 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
             endif()
             execute_process(COMMAND ${CMAKE_CXX_COMPILER} "-print-file-name=${_pf_d8_runtime_name}"
                 OUTPUT_VARIABLE _pf_d8_sanitizer_runtime OUTPUT_STRIP_TRAILING_WHITESPACE
-                COMMAND_ERROR_IS_FATAL ANY)
-            if(NOT EXISTS "${_pf_d8_sanitizer_runtime}")
+                RESULT_VARIABLE _pf_d8_runtime_result)
+            if(NOT _pf_d8_runtime_result EQUAL 0 OR NOT EXISTS "${_pf_d8_sanitizer_runtime}")
                 message(FATAL_ERROR "The stop-equivalence Python test requires the compiler's shared ASan runtime")
             endif()
             if(APPLE)
