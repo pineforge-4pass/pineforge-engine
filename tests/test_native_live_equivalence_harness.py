@@ -12,14 +12,14 @@ from native_live_equivalence_e2e import (
 )
 from native_live_tick_tape import (
     TIMESTAMP_CONTRACT, bar_differences, file_digest, load_tick_tape,
-    message_groups, message_hashes, parse_cost, run_genuine,
+    message_groups, message_hashes, parse_cost, run_genuine_tape,
 )
 from native_live_tick_oracle import classify_first_divergence, first_fill, modeled_points, script_bars
 
 
 class HarnessContract(unittest.TestCase):
     def test_timestamp_contract_matches_chart_batch_and_separate_reconstruction(self):
-        calls = [node for node in ast.walk(ast.parse(inspect.getsource(run_genuine)))
+        calls = [node for node in ast.walk(ast.parse(inspect.getsource(run_genuine_tape)))
                  if isinstance(node, ast.Call)]
         batch_calls = [node for node in calls if isinstance(node.func, ast.Attribute)
                        and node.func.attr == "batch"]
