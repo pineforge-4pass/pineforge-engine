@@ -158,9 +158,19 @@ applied if a later tick fails.
 
 ## Tick and bar semantics
 
-- Warmup bars must be strictly increasing, confirmed, and use a fixed-duration
-  input timeframe. The first normalized trade belongs at or after the next
-  input-bar open.
+For `pineforge-live`, Pine warmup and confirmed-bar feeds use the script
+timeframe in both modes; omitted input defaults to that chart clock.
+Explicit one-minute input with a coarser script is refused before ledger
+creation, and old ledgers for that deployment must be replaced by a new
+chart-input deployment. Intraday session calendars support daylight saving;
+daily/weekly chart delivery requires no daylight-saving transitions from
+warmup onward. UTC daily and weekly charts are supported. Unsupported
+daily/weekly calendars are refused by name. This runner policy does not
+change the direct engine API's independently configured input clock.
+
+- Warmup bars must be strictly increasing, confirmed, and aligned to the
+  input timeframe and session calendar. The first normalized trade belongs
+  at or after the next input-bar open on that calendar.
 - Timestamps may be equal but cannot move backwards. Non-zero normalized
   sequence values must increase strictly; use zero if the source has no stable
   ordering key.

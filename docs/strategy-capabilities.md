@@ -100,8 +100,9 @@ confirmed-bar version is ignored: ordinary strategies retain their original
 eligibility, while requests and varip still require a recognized proof.
 POOC remains refused regardless of the optional receipt.
 
-New admission requires confirmed one-minute bars, UTC/24x7 source settings,
-no external native configuration, and the following exact proof population:
+New admission requires confirmed bars at the script timeframe, matching
+input and script clocks, UTC/24x7 source settings, no external native
+configuration, and the following exact proof population:
 
 | Same-chart requested series | Request clock | Script clock | Merge policy |
 | --- | --- | --- | --- |
@@ -129,12 +130,20 @@ assert refusal before any ledger, control directory or status file exists.
 The receipt's modeled call/argument allowlist remains metadata, not a runtime
 certificate for nullable prices or pending/global exits.
 Two requests together and request-plus-varip are also refused.
-Close-only `varip` is admitted on script clock `1`, never observed ticks.
+Close-only `varip` is admitted on script/input clock `1`, never observed ticks.
 Every admitted source has a generated C++ batch/stream equivalence row and a
 runner E2E comparing physical actions and every ABI report field bitwise on a
 tape, at warmup splits 30, 33 and 500 and after replay. Daily requests also
 exercise split 1500 after the first daily boundary. The original #325 numerical pins
 remain unchanged. See `tests/fixtures/confirmed_capabilities/README.md`.
+
+The runner defaults input to the script clock. Explicit one-minute input
+with a coarser script clock is refused before creating a ledger. Existing
+deployments with that identity must redeploy with chart-timeframe warmup/feed
+and a new ledger; they cannot silently migrate. Intraday clocks allow
+daylight-saving calendars. Daily/weekly chart delivery is supported only
+without daylight-saving transitions from warmup onward, such as UTC;
+unsupported calendars are refused by name before a ledger exists.
 
 Upgrading an original-receipt runner to one that recognizes the confirmed-bar
 extension changes the deployment identity of every dual-receipt library,

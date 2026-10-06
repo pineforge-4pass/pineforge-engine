@@ -335,11 +335,20 @@ timestamp,open,high,low,close,volume
 60000,101,103,100,102,4
 ```
 
-This first runner accepts **1m input** and any supported fixed-duration
-script timeframe. Warmup timestamps are nonnegative Unix milliseconds,
-minute-aligned and contiguous; prices are positive finite values and volume
-is nonnegative. Provide at least one complete 1m input bar. A partial script
-timeframe aggregate may continue from warmup into live data. The configured
+Pine strategies use **chart-timeframe input**: input and script timeframes
+must match in both bars and ticks modes, including warmup. Omit `--input-tf`
+to use `--script-tf`, or specify that same clock explicitly. For example,
+`--input-tf 1 --script-tf 15` is refused before a ledger exists; supply
+15-minute warmup/feed bars and omit `--input-tf` instead. Script/input `1`
+is unchanged. Warmup timestamps are nonnegative Unix milliseconds, aligned
+and contiguous at the input clock on the configured session calendar;
+prices are positive finite values and volume is nonnegative. Provide at
+least one complete chart bar. Intraday minute/hour clocks support session
+calendars across daylight-saving transitions. Daily/weekly chart delivery
+requires a timezone without daylight-saving transitions from warmup onward;
+otherwise startup refuses with "daily/weekly chart delivery on a
+daylight-saving calendar is not supported yet". UTC daily/weekly charts
+are supported; monthly stream input remains unsupported. The configured
 warmup never produces webhook actions, but it can establish a modeled
 position and pending orders. Your broker bridge must reconcile actual
 account state before enabling submission; the runner does not read it.
@@ -347,7 +356,7 @@ account state before enabling submission; the runner does not read it.
 ```sh
 build-live/bin/pineforge-live run \
   --strategy build-live/lib/native-live-example.so \
-  --warmup history-1m.csv --input-tf 1 --script-tf 15 --mode ticks \
+  --warmup history-15m.csv --script-tf 15 --mode ticks \
   --feed events.jsonl --ledger orders.sqlite3 \
   --symbol BINANCE:ETHUSDT.P --name my-strategy \
   --syminfo type=crypto --syminfo currency=USDT \
@@ -361,8 +370,12 @@ Native strategies use `--native-config FILE` instead of `--input` /
 `clock`, `instrument` and `execution` keys. Explicit CLI clock/symbol flags
 must equal the file; omitted CLI clock values take the file. Monthly stream
 input and any `input_tf` other than `"1"` are refused before the ledger is
-bound. Legacy 1m identity bytes are
-unchanged when `--native-config` is absent. The native examples are
+bound. This handwritten-strategy path retains its one-minute input rule;
+the chart-input default applies to Pine libraries without `--native-config`.
+One-minute Pine deployments keep their identity bytes. An existing ledger
+created with input `1` and a coarser script clock cannot resume under chart
+delivery: redeploy with chart-timeframe warmup/feed and a **new ledger**.
+There is no silent migration. The native examples are
 `native-market-example` and `native-selected-example`; the latter demonstrates
 host-sized terms, exact reversal, and a selected current-point close.
 
@@ -458,9 +471,9 @@ index-aligned identical prefix, including identical message framing.
 {"type":"bar","bar":{"ts_open":120000,"o":102,"h":104,"l":101,"c":103,"v":4}}
 ```
 
-Use `--mode bars`. Each event is a confirmed 1m bar. The native timeframe
-aggregator produces script bars and executes the engine's established OHLC
-path on script close. Missing active-session bars, invalid prices, regression
+Use `--mode bars`. Each Pine event is a confirmed chart-timeframe bar.
+The engine executes its established OHLC path on that bar's close.
+Missing active-session bars, invalid prices, regression
 or mixed tick/bar input are refused. A later bar cannot silently supply a
 missing active interval. This mode does not invent synthetic trade ticks.
 
@@ -481,9 +494,10 @@ It also refuses declaration-owned clocks, account-currency conversion/FX curves,
 auxiliary/native security feeds, recorded request series, historical probe/tail
 overrides and unresolved execution requirements. A new optional confirmed-bar
 receipt (since 1.3.0) admits only the [proven shape table](../docs/strategy-capabilities.md#confirmed-bar-extension)
-for confirmed one-minute input, UTC/24x7 source settings: same-chart security
+for confirmed input equal to the script clock (one-minute input up to 1.3.0), UTC/24x7 source settings: same-chart security
 close at 5/60/D, SMA(4) at 15, EMA(3) with gaps at 60, previous close at
-`timeframe.period`, and Heikin-Ashi close at 5; and standalone close-only `varip`. Only the
+`timeframe.period`, and Heikin-Ashi close at 5; and standalone close-only
+`varip` only on script/input `1`. Only the
 explicitly tested script-clock controls are admitted. Constant timeframes,
 a single-literal-call helper and a Heikin-Ashi alias use the actual lowering
 metadata. Observed ticks, other clocks/expressions/merge policies, foreign feeds
