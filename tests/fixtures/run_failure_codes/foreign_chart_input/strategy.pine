@@ -1,0 +1,7 @@
+//@version=6
+strategy("R5 request.security of another symbol", overlay = true)
+eth = request.security("BINANCE:ETHUSDT", "60", close)
+if close > nz(eth)
+    strategy.entry("L", strategy.long)
+else
+    strategy.close("L")

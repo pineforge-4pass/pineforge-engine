@@ -1,0 +1,26 @@
+{
+  "synthetic": true,
+  "authored_for": "tests/test_run_failure_codes.cpp (stable run-failure codes, R5)",
+  "drives": "A script-preparation failure (request.security finer than the input) is coded although the lifecycle completes with status 0 -> request_timeframe_unsupported {reason: finer_than_input, input_tf}",
+  "run": "60 five-minute bars, input_tf \"5\" script_tf \"5\"",
+  "strategy_pine_sha256": "618a3764e1045e31e49f77babffc19fdb743275f9b263faf9c32acfb7bae5f7c",
+  "generated_cpp": {
+    "repository": "pineforge-codegen-oss",
+    "commit": "cb5eb9402dc96eea1bcfa84fd245dea3c1807688",
+    "version_file": "1.2.0",
+    "call": "pineforge_codegen.transpile(<strategy.pine text>, filename=\"strategy.pine\")",
+    "sha256": "18c4dcb8d3821a07f43a58e1b1744b548ef01bef1e83e4f9f3cdbf938132418f",
+    "hand_edited": false
+  },
+  "base_engine": {
+    "commit": "7a1f01c0",
+    "rows": [
+      {
+        "row": "preparation_failure_completes",
+        "strategy_get_last_error": "request.security: requested timeframe '1' is finer than input '5'. Use request.security_lower_tf for sub-input timeframes.",
+        "strategy_last_run_status": 0,
+        "report_total_trades": 0
+      }
+    ]
+  }
+}

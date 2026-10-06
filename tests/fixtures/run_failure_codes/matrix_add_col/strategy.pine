@@ -1,0 +1,9 @@
+//@version=6
+strategy("R5 matrix.add_col on an empty matrix<int>", overlay = true)
+var m = matrix.new<int>()
+if bar_index == 2
+    matrix.add_col(m, 0, array.from(1))
+if bar_index % 2 == 0
+    strategy.entry("L", strategy.long)
+else
+    strategy.close("L")

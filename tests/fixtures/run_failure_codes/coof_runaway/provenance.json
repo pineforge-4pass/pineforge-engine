@@ -1,0 +1,26 @@
+{
+  "synthetic": true,
+  "authored_for": "tests/test_run_failure_codes.cpp (stable run-failure codes, R5)",
+  "drives": "A calc_on_order_fills strategy that reverses on every fill. \"Pine COOF first-open loop guard exhausted\" (recalc_cap) needs more than 1 << 20 market orders accepted in ONE first-open recalculation; accepting and executing them is quadratic (1,000 orders 0.39 s, 10,000 orders 24.5 s, 50,000 > 300 s on the c7i.4xlarge box against base 7a1f01c0), so no test script reaches it. This runaway advances along the bar's path and completes: no failure, code \"\".",
+  "run": "60 one-minute bars, input_tf \"1\" script_tf \"1\"",
+  "strategy_pine_sha256": "63d471930ad144c84eb5c3ca75e7bb9bf79d55d33126b2c46f1fcdaeec140ea8",
+  "generated_cpp": {
+    "repository": "pineforge-codegen-oss",
+    "commit": "cb5eb9402dc96eea1bcfa84fd245dea3c1807688",
+    "version_file": "1.2.0",
+    "call": "pineforge_codegen.transpile(<strategy.pine text>, filename=\"strategy.pine\")",
+    "sha256": "6762eb049e27b448aa4a0028973d7bbe2a2abc6fa396faefa3a0bccc9839a7ae",
+    "hand_edited": false
+  },
+  "base_engine": {
+    "commit": "7a1f01c0",
+    "rows": [
+      {
+        "row": "coof_runaway_completes",
+        "strategy_get_last_error": "",
+        "strategy_last_run_status": 0,
+        "report_total_trades": 236
+      }
+    ]
+  }
+}
