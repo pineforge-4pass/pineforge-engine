@@ -1397,6 +1397,10 @@ def refusal(reason, raw):
     return {"status": "unresolved", "reason": reason, "raw_default": raw}
 
 
+def duplicate_title(raw, distinct):
+    return dict(refusal("duplicate_title", raw), distinct_native_inputs=distinct)
+
+
 def test_allowlist_certifies_only_recognized_symbol_occurrences(tmp_path):
     result = legacy_document(tmp_path, ENUM_TU, ENUM_RECEIPT)
     assert result["inputs"]["Side"] == {"type": "int", "default": 1, "value": 1}
@@ -1802,11 +1806,11 @@ def test_native_ambiguous_titles_never_certify_and_other_titles_keep_the_receipt
     receipt = legacy_receipt(*ENUM_RECEIPT["inputs"], receipt_row("dup", "int", "1"),
                              receipt_row("dup", "int", "2"))
     result = legacy_document(tmp_path, cpp, receipt)
-    assert result["inputs"]["dup"]["resolution"] == refusal("ambiguous_binding", "1")
+    assert result["inputs"]["dup"]["resolution"] == duplicate_title("1", 2)
     assert result["inputs"]["Side"] == {"type": "int", "default": 1, "value": 1}
     receipt = legacy_receipt(*ENUM_RECEIPT["inputs"], receipt_row("len", "int", "11"))
     result = legacy_document(tmp_path, ENUM_TU, receipt)
-    assert result["inputs"]["len"]["resolution"] == refusal("ambiguous_binding", "10")
+    assert result["inputs"]["len"]["resolution"] == duplicate_title("10", 2)
     receipt = legacy_receipt(*ENUM_RECEIPT["inputs"], receipt_row("len", "int", "10"))
     result = legacy_document(tmp_path, ENUM_TU, receipt)
     assert result["inputs"]["len"] == {"type": "int", "default": 10, "value": 10}
@@ -2029,4 +2033,82 @@ def test_unreadable_conflicting_getters_keep_their_own_refusal(tmp_path):
                           'len = get_input_int64("len", 0xffLL); n = get_input_int64("len", 0x1LL);')
     result = legacy_document(tmp_path, cpp, None)
     assert result["inputs"]["len"]["resolution"] == refusal("unsupported_default", "0xffLL")
+
+
+# --- Continuation 2: getters in macro arguments, duplicate native titles -----
+
+MACRO_DEFINES = {
+    "_PF_ENGINE_INVARIANT": "#define _PF_ENGINE_INVARIANT(english, legacy_type) "
+                            "::pineforge::pine_engine_invariant(english)",
+    "_PF_INVARIANT_AT": "#define _PF_INVARIANT_AT(container, index) _pf_invariant_at(container, index)",
+    "_PF_ARRAY_STOP": "#define _PF_ARRAY_STOP(reason, method, english) "
+                      "::pineforge::pine_array_stop(reason, method, std::string(english).c_str())",
+    "_PF_NO_DATA_STOP": "#define _PF_NO_DATA_STOP(function, call, line, english) "
+                        "::pineforge::pine_no_data_stop(function, call, line, english)",
+    "_PF_OTHER_SYMBOL_STOP": "#define _PF_OTHER_SYMBOL_STOP(function, symbol, call, line, english) "
+                             "::pineforge::pine_other_symbol_stop(function, symbol, call, line, english)",
+}
+
+
+@pytest.mark.parametrize("macro,invocation", [
+    # The cont2 review witness: the release replacement list drops `legacy_type`.
+    ("_PF_ENGINE_INVARIANT", '_PF_ENGINE_INVARIANT("unused", GHOST);'),
+    # One per producer macro arity (2 to 5), the getter in a kept argument.
+    ("_PF_INVARIANT_AT", "_PF_INVARIANT_AT(values, GHOST);"),
+    ("_PF_ARRAY_STOP", '_PF_ARRAY_STOP(GHOST, "method", "english");'),
+    ("_PF_NO_DATA_STOP", '_PF_NO_DATA_STOP("f", "call", GHOST, "english");'),
+    ("_PF_OTHER_SYMBOL_STOP", '_PF_OTHER_SYMBOL_STOP("f", GHOST, "call", 1, "english");'),
+    # A standard-library macro.
+    ("", "assert(GHOST > 0);"),
+])
+def test_getters_in_macro_arguments_are_never_certified(tmp_path, macro, invocation):
+    prelude = MACRO_DEFINES[macro] + "\n" if macro else ""
+    cpp = prelude + ENUM_TU.replace(
+        "        len = get_input_int",
+        "        " + invocation.replace("GHOST", 'get_input_int("ghost", 7)')
+        + "\n        len = get_input_int")
+    with_ghost = legacy_receipt(*ENUM_RECEIPT["inputs"], receipt_row("ghost", "int", "7"))
+    for receipt in (None, ENUM_RECEIPT, with_ghost):
+        result = legacy_document(tmp_path, cpp, receipt)
+        assert result["inputs"]["ghost"] == {"type": "int", "default": None, "value": None,
+                                             "resolution": refusal("macro_argument", "7")}
+        # The rest of the unit is still read.
+        assert result["inputs"]["len"] == {"type": "int", "default": 10, "value": 10}
+
+
+def test_a_title_also_read_in_a_macro_argument_is_not_certified(tmp_path):
+    cpp = MACRO_DEFINES["_PF_INVARIANT_AT"] + "\n" + ENUM_TU.replace(
+        "        len = get_input_int",
+        '        _PF_INVARIANT_AT(values, get_input_int("len", 10));\n        len = get_input_int')
+    result = legacy_document(tmp_path, cpp, ENUM_RECEIPT)
+    assert result["inputs"]["len"]["resolution"] == refusal("macro_argument", "10")
+    assert result["inputs"]["Side"] == {"type": "int", "default": 1, "value": 1}
+
+
+@pytest.mark.parametrize("defaults,distinct", [
+    (("1", "2"), 2), (("1", "2", "3"), 3), (("1", "2", "1"), 2)])
+def test_duplicate_native_titles_carry_their_reason_and_distinct_input_count(
+        tmp_path, defaults, distinct):
+    # TOP ruling 2026-10-07 22:58: a specific reason and the number of
+    # distinct native inputs, never the generic ambiguous_binding.
+    getters = " ".join('d%d = get_input_int("dup", %s);' % (number, value)
+                       for number, value in enumerate(defaults))
+    cpp = ENUM_TU.replace('len = get_input_int("len", 10);',
+                          'len = get_input_int("len", 10); ' + getters)
+    receipt = legacy_receipt(*ENUM_RECEIPT["inputs"],
+                             *(receipt_row("dup", "int", value) for value in defaults))
+    result = legacy_document(tmp_path, cpp, receipt)
+    assert result["inputs"]["dup"] == {"type": "int", "default": None, "value": None,
+                                       "resolution": duplicate_title(defaults[0], distinct)}
+    assert result["inputs"]["len"] == {"type": "int", "default": 10, "value": 10}
+
+
+def test_a_title_listed_twice_with_one_setting_is_not_a_duplicate_title(tmp_path):
+    cpp = ENUM_TU.replace('len = get_input_int("len", 10);',
+                          'len = get_input_int("len", 10); a = get_input_int("dup", 4); '
+                          'b = get_input_int("dup", 4);')
+    receipt = legacy_receipt(*ENUM_RECEIPT["inputs"], receipt_row("dup", "int", "4"),
+                             receipt_row("dup", "int", "4"))
+    result = legacy_document(tmp_path, cpp, receipt)
+    assert result["inputs"]["dup"] == {"type": "int", "default": 4, "value": 4}
 
