@@ -508,13 +508,28 @@ integers outside the product safe-integer domain, unpaired surrogates
 normalization (duplicate normalized JSON names).
 
 Legacy declaration normalization runs before hashing and does not evaluate C++
-expressions or perform C++ name lookup. Literal defaults retain their declared
-types. Symbolic numeric defaults require one recognized decimal `const int` or
-`constexpr int` declaration, no competing declaration-like use, and matching
-validated native settings metadata. Identifier characters mirror the bundled
-producer's `isalpha`/`isalnum` rules, including Unicode; string identities decode
-the producer's C++ escapes and stop at the native first-NUL boundary. The image
-CLI class matrix binds these mirrors to the pinned lexer and emitter sources.
+expressions or perform C++ name lookup. It certifies by positive allowlist: a
+value is typed only when every token it relies on is in a recognized form, and
+anything else is refused. Absence of a known bad shape is never proof.
+
+The translation unit is read lexically: comments, ordinary and prefixed string
+and character literals and raw string literals (`R"delim(...)delim"`, with
+`u8R`/`uR`/`UR`/`LR`) are delimited exactly. Code context excludes preprocessor
+lines and every conditional group except `#ifdef PF_SETTINGS_API_VERSION` (the
+producer's checked-settings metadata). The recognized directives are
+`#include <...>`, `#define`/`#undef` of `_PF_*` names, `#error` and conditionals;
+any other directive, a line splice anywhere, or a backslash outside a literal
+(a universal-character name) leaves no row of that unit certified.
+
+| Relied-on token | Recognized form (anything else refuses) |
+|---|---|
+| Getter call | One of `get_input_int`, `_int64`, `_double`, `_bool`, `_string`, `_source`, in code context, after an expression token, as `name("title", default)` with an unprefixed literal title and exactly one default argument. Every other `get_input_*` occurrence refuses the unit. |
+| Title | The producer's narrow-literal escapes, decoded to the native first-NUL identity. All occurrences of one title must agree on getter type and default tokens. |
+| Numeric/bool/string default | A decimal literal (optional sign), `true`/`false`, or a plain or `std::string("...")` literal. |
+| Symbolic numeric default | Every occurrence of the identifier is the single file-scope `[static] const\|constexpr int NAME = <decimal int32>;`, a whole getter default, or the producer's metadata default `{"title", "enum", ::pineforge::checked_settings::number(NAME),`. Any other occurrence in any position, including a comparison in the script body, refuses. The value also needs a supported native receipt row that agrees. |
+| Source default | `_src_<selector>_` for a selector in the native vocabulary `open high low close volume hl2 hlc3 ohlc4 hlcc4`, recorded as the selector; that identifier may otherwise appear only before `.`. An override is certified only when it is such a selector; anything else (the native getter falls back) is refused, never echoed. |
+| Native receipt row | Compared independently, each side parsed by its own declared type: the receipt `type` must be the getter's (`int`/`enum`, `int`, `float`, `bool`, `string`, `source`), and a supported row's default and effective value must equal the certified ones exactly. |
+| strategy() default | One `GeneratedStrategy(...)` constructor whose top-level statements are one `PineStrategyConfig cfg;` declaration, `cfg.<field> = <rhs>;` assignments, and one following `configure_pine_strategy(cfg);` (or pre-R4-C `<field>_ = <rhs>;` writes). Numbers are decimal literals, booleans `true`/`false`, and enums `static_cast<int>(QtyType::NAME)`, `QtyType::NAME` (likewise `CommissionType`) or the index `0`-`2`, where every occurrence of `QtyType`/`CommissionType` in the unit is followed by `::` and a canonical member. |
 
 An input whose default cannot be proved stays in the fingerprint with its
 declared `type`, `default: null`, `value: null`, and this explicit refusal:
@@ -530,21 +545,30 @@ declared `type`, `default: null`, `value: null`, and this explicit refusal:
 Here `null` means unresolved, not a claimed native value. The raw token is the
 actual declared default expression. Its applied input value remains the original
 wire string, even when an override was provided; the applied key set and top-level
-wire echoes are unchanged. Unknown inputs also remain strings. The refusal is
-part of the canonical token and digest, so these cases retain a fingerprint.
+wire echoes are unchanged. Unknown inputs also remain strings. A strategy()
+default refused the same way is `null` in `strategy`, with its record under
+`strategy_resolution`, unless an applied override sets the field (the override
+is then the effective value). When a literal or comment context cannot be
+delimited at all, every applied input key is an `unknown` row with `value: null`
+and an `unsupported_binding` refusal (`raw_default: null`), and every strategy()
+default is refused. The refusal is part of the canonical token and digest, so
+these cases retain a fingerprint.
 
 | Reason | Refused class |
 |---|---|
-| `ambiguous_binding` | Multiple declaration-like uses (including class/local/parameter shadows), or disagreement with validated native metadata. |
-| `unsupported_binding` | A binding/use shape the conservative lexical check cannot establish, including unrecognized calls or raw C++ literal contexts. |
-| `unsupported_default` | Unrecognized default expressions, definitions, numeric spellings/ranges or getter types; no expression is evaluated to guess a value. |
-| `receipt_unavailable` | A symbolic default without usable, supported, validated native settings metadata. |
+| `ambiguous_binding` | An identifier with an occurrence besides its one recognized declaration and recognized uses (shadows, local declarators, script-body uses), conflicting getter occurrences of one title, or disagreement with native receipt type, default or value. |
+| `unsupported_binding` | No recognized declaration, an unrecognized lexical or preprocessor context, an unrecognized getter-family token, an undelimitable literal or comment, or an unrecognized strategy() constructor flow. |
+| `unsupported_default` | Unrecognized default expressions, definitions, numeric spellings/ranges, source expressions, enum spellings outside the canonical vocabulary and non-`true`/`false` booleans; no expression is evaluated to guess a value. |
+| `unsupported_override` | A source override outside the native selector vocabulary. |
+| `receipt_unavailable` | A symbolic default without a usable, supported native settings receipt row. |
 
-Conservative refusal can include valid C++ forms outside the recognized producer
-subset. Concrete represented values still pass the unchanged numeric/Unicode
-domain checks above; a domain failure, malformed checked receipt, or conflicting
-native declaration identity can still make the complete fingerprint `null`.
-No unresolved marker bypasses those checks for a concrete scalar.
+Conservative refusal includes valid C++ forms outside the recognized producer
+subset. Every concrete scalar the resolver knows (a recognized literal, an
+emulated legacy override, or a numeric value in the native receipt) passes the
+unchanged numeric/Unicode domain checks above before any refusal: an
+out-of-domain value keeps its existing refusal (no fingerprint), and `null` never
+erases it. A malformed checked receipt or a non-canonical checked source selector
+also makes the complete fingerprint `null`.
 
 Decode the token to inspect the canonical provenance JSON:
 

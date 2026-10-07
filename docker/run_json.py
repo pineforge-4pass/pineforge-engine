@@ -725,168 +725,456 @@ def _release_cpp_input_name(spelling):
     return bytes(raw).split(b"\0", 1)[0].decode("utf-8")
 
 
+class _ReleaseUnreadable(ValueError):
+    """A literal, comment or conditional the lexical scan cannot delimit."""
+
+
+# Positive allowlist of the legacy declaration reader. A value is certified
+# only when every token it relies on is in one of these forms; any other
+# occurrence refuses (resolution reason), never "no bad shape detected".
+_RELEASE_GETTERS = {
+    "get_input_int": "int", "get_input_int64": "int64", "get_input_double": "double",
+    "get_input_bool": "bool", "get_input_string": "string", "get_input_source": "source",
+}
+# Native receipt `type` a getter is compared against; never coerced to it.
+_RELEASE_RECEIPT_TYPES = {
+    "int": ("int", "enum"), "int64": ("int",), "double": ("float",),
+    "bool": ("bool",), "string": ("string",), "source": ("source",),
+}
+# PineScheduler::source_series: the finite native source selector vocabulary.
+_RELEASE_SOURCE_SELECTORS = ("open", "high", "low", "close", "volume",
+                             "hl2", "hlc3", "ohlc4", "hlcc4")
+_RELEASE_DECIMAL = re.compile(
+    r'[+-]?(?:(?:0|[1-9][0-9]*)(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?')
+_RELEASE_INTEGER = re.compile(r'[+-]?(?:0|[1-9][0-9]*)')
+# Tokens a recognized getter call follows: the producer's expression contexts.
+_RELEASE_CALL_CONTEXT = frozenset({
+    "=", "(", ",", "?", ":", "return", "{", "[", "!", "+", "-", "*", "/", "%",
+    "<", ">", "<=", ">=", "==", "!=", "&&", "||", ";", "}"})
+# The only conditional branch a recognized getter or symbol use may sit in:
+# the producer's checked-settings metadata. Anything else is unrecognized.
+_RELEASE_SETTINGS_BRANCH = ("ifdef", "PF_SETTINGS_API_VERSION")
+_RELEASE_OPERATORS = ("...", "->*", "::", "&&", "||", "==", "!=", "<=", ">=",
+                      "++", "--", "->", ".*", "+=", "-=", "*=", "/=", "%=",
+                      "&=", "|=", "^=", "<<", ">>", "##")
+_RELEASE_STRATEGY_ENUMS = {
+    "default_qty_type": ("QtyType", ("FIXED", "PERCENT_OF_EQUITY", "CASH")),
+    "commission_type": ("CommissionType", ("PERCENT", "CASH_PER_ORDER", "CASH_PER_CONTRACT")),
+}
+_RELEASE_STRATEGY_BOOLS = ("process_orders_on_close", "calc_on_order_fills",
+                           "close_entries_rule")
+
+
+def _release_domain(value):
+    """The product scalar domain; known out-of-domain evidence is refused."""
+    if type(value) is int and not _JS_MIN_SAFE_INTEGER <= value <= _JS_MAX_SAFE_INTEGER:
+        raise ValueError("native integer outside the product domain")
+    if type(value) is float and not math.isfinite(value):
+        raise ValueError("native number outside the product domain")
+    return value
+
+
+def _release_receipt_value(text, receipt_type):
+    """One receipt scalar parsed by the receipt's own declared type, or None."""
+    if not isinstance(text, str):
+        return None
+    if receipt_type in ("int", "enum"):
+        return int(text) if re.fullmatch(r'[+-]?[0-9]+', text) else None
+    if receipt_type == "float":
+        if text.strip().lower().lstrip("+-") in ("inf", "infinity", "nan"):
+            return float(text)
+        return float(text) if _RELEASE_DECIMAL.fullmatch(text) else None
+    if receipt_type == "bool":
+        return {"true": True, "false": False}.get(text)
+    if receipt_type in ("string", "source"):
+        return text
+    return None
+
+
 def _release_cpp_tokens(text):
-    """Flat lexical tokens only: no C++ evaluation, scopes or name lookup."""
+    """Flat lexical scan: no C++ evaluation, scopes or name lookup.
+
+    Each token is (text, start, end, kind, directive, branches): kind is
+    ident/number/string (unprefixed ordinary literal)/literal/op, directive
+    marks a preprocessor line and branches the enclosing conditional groups.
+    Returns (tokens, trusted). trusted is False for a line splice, a backslash
+    outside a literal (universal-character names), or a directive the producer
+    never emits. Raises _ReleaseUnreadable for an undelimitable context."""
     tokens = []
+    trusted = re.search(r'\\[ \t\f\v]*(?:\r\n|\n|\r)', text) is None
+    stack = []
     position = 0
-    while position < len(text):
+    line_start = True
+    directive = None
+    length = len(text)
+
+    def close_directive():
+        nonlocal trusted
+        words = [token[0] for token in directive]
+        name = words[1] if len(words) > 1 else ""
+        if name in ("if", "ifdef", "ifndef"):
+            stack.append(tuple([name] + words[2:]))
+        elif name in ("elif", "else"):
+            if not stack:
+                raise _ReleaseUnreadable("unbalanced conditional")
+            stack[-1] = tuple([name] + words[2:])
+        elif name == "endif":
+            if not stack:
+                raise _ReleaseUnreadable("unbalanced conditional")
+            stack.pop()
+        elif name == "include":
+            if not (len(words) > 3 and words[2] == "<" and words[-1] == ">"):
+                trusted = False
+        elif name in ("define", "undef"):
+            if not (len(words) > 2 and re.fullmatch(r"_PF_[A-Z0-9_]*", words[2])):
+                trusted = False
+        elif name not in ("", "error"):
+            trusted = False
+
+    while position < length:
         start = position
         char = text[position]
+        if char in "\r\n":
+            if directive is not None:
+                close_directive()
+                directive = None
+            line_start = True
+            position += 1
+            continue
         if char.isspace():
             position += 1
             continue
         if text.startswith("//", position):
             end = text.find("\n", position)
-            position = len(text) if end < 0 else end
+            position = length if end < 0 else end
             continue
         if text.startswith("/*", position):
             end = text.find("*/", position + 2)
             if end < 0:
-                raise ValueError("unterminated C++ comment")
+                raise _ReleaseUnreadable("unterminated C++ comment")
+            if directive is not None and "\n" in text[position:end]:
+                raise _ReleaseUnreadable("multi-line comment in a directive")
             position = end + 2
             continue
-        if char in ('"', "'"):
-            position += 1
-            while position < len(text) and text[position] != char:
-                position += 2 if text[position] == "\\" else 1
-            if position >= len(text):
-                raise ValueError("unterminated C++ literal")
+        kind = "op"
+        if char == "#" and line_start and directive is None:
+            directive = []
             position += 1
         elif char.isalpha() or char == "_":
             position += 1
-            while position < len(text) and (text[position].isalnum() or text[position] == "_"):
+            while position < length and (text[position].isalnum() or text[position] == "_"):
                 position += 1
-        else:
-            operator = next((op for op in ("...", "::", "&&", "==", "!=", "<=", ">=", "++", "--", "->")
+            word = text[start:position]
+            kind = "ident"
+            if position < length and text[position] == '"' and word in ("R", "u8R", "uR", "UR", "LR"):
+                match = re.compile(r'"([^ ()\\\t\v\f\r\n]{0,16})\(').match(text, position)
+                if not match:
+                    raise _ReleaseUnreadable("malformed raw string literal")
+                end = text.find(")" + match.group(1) + '"', match.end())
+                if end < 0:
+                    raise _ReleaseUnreadable("unterminated raw string literal")
+                position = end + len(match.group(1)) + 2
+                kind = "literal"
+            elif position < length and text[position] in "\"'" and word in ("u8", "u", "U", "L"):
+                kind = None
+        elif "0" <= char <= "9" or (char == "." and position + 1 < length
+                                    and "0" <= text[position + 1] <= "9"):
+            position += 1
+            while position < length:
+                current = text[position]
+                if current in "+-" and text[position - 1] in "eEpP":
+                    position += 1
+                elif current == "'" and position + 1 < length and text[position + 1].isalnum():
+                    position += 1
+                elif current.isascii() and (current.isalnum() or current in "_."):
+                    position += 1
+                else:
+                    break
+            kind = "number"
+        elif char not in "\"'":
+            if char == "\\":
+                trusted = False
+            operator = next((op for op in _RELEASE_OPERATORS
                              if text.startswith(op, position)), char)
             position += len(operator)
-        tokens.append((text[start:position], start, position))
-    return tokens
+        if kind is None or (kind == "op" and char in "\"'"):
+            quote = text[position]
+            kind = "string" if start == position and quote == '"' else "literal"
+            position += 1
+            while position < length and text[position] != quote:
+                if text[position] in "\r\n":
+                    raise _ReleaseUnreadable("unterminated C++ literal")
+                position += 2 if text[position] == "\\" else 1
+            if position >= length:
+                raise _ReleaseUnreadable("unterminated C++ literal")
+            position += 1
+        line_start = False
+        token = (text[start:position], start, position, kind,
+                 directive is not None, tuple(stack))
+        if directive is not None:
+            directive.append(token)
+        tokens.append(token)
+    if directive is not None:
+        close_directive()
+    if stack:
+        raise _ReleaseUnreadable("unterminated conditional")
+    return tokens, trusted
 
 
-def _release_getter_declarations(cpp_text, tokens):
-    """Read literal-title getter calls without parsing defaults as C++ code."""
-    seen = set()
-    for index, (word, _, _) in enumerate(tokens[:-4]):
-        if not word.startswith("get_input_") or tokens[index + 1][0] != "(":
+def _release_code_context(token):
+    return not token[4] and token[5] in ((), (_RELEASE_SETTINGS_BRANCH,))
+
+
+def _release_previous(tokens, index):
+    """The previous code token, skipping preprocessor lines."""
+    index -= 1
+    while index >= 0 and tokens[index][4]:
+        index -= 1
+    return tokens[index] if index >= 0 else None
+
+
+def _release_closing(tokens, index, directives=False):
+    """Index of the token closing the bracket opened at index, or None. A
+    preprocessor line inside refuses unless directives (a body) are allowed."""
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    expected = []
+    for position in range(index, len(tokens)):
+        word = tokens[position][0]
+        if tokens[position][4]:
+            if directives:
+                continue
+            return None
+        if word in pairs and tokens[position][3] == "op":
+            expected.append(pairs[word])
+        elif word in (")", "]", "}") and tokens[position][3] == "op":
+            if not expected or expected.pop() != word:
+                return None
+            if not expected:
+                return position
+    return None
+
+
+def _release_getter_calls(tokens):
+    """Recognized getter calls, and whether every getter-family token is one.
+
+    A recognized call is one of the six producer getters in code context,
+    after an expression token, with a plain literal title and exactly one
+    balanced default argument: name ( "title" , default )."""
+    calls = []
+    intact = True
+    for index, token in enumerate(tokens):
+        if token[3] != "ident" or not token[0].startswith("get_input_"):
             continue
-        title = tokens[index + 2][0]
-        if not title.startswith('"') or tokens[index + 3][0] != ",":
+        previous = _release_previous(tokens, index)
+        close = (_release_closing(tokens, index + 1)
+                 if index + 4 < len(tokens) and tokens[index + 1][0] == "(" else None)
+        if (token[0] not in _RELEASE_GETTERS or not _release_code_context(token)
+                or previous is None or previous[0] not in _RELEASE_CALL_CONTEXT
+                or previous[3] not in ("op", "ident")
+                or close is None or tokens[index + 2][3] != "string"
+                or tokens[index + 3][0] != "," or close <= index + 4):
+            intact = False
             continue
-        depth = 1
-        end = index + 4
-        while end < len(tokens) and depth:
-            depth += (tokens[end][0] == "(") - (tokens[end][0] == ")")
-            end += 1
-        if depth or title in seen:
-            continue
-        seen.add(title)
-        raw = cpp_text[tokens[index + 3][2]:tokens[end - 1][1]].strip()
-        yield word[len("get_input_"):], title[1:-1], raw
+        default = tokens[index + 4:close]
+        depth = 0
+        for item in default:
+            if item[3] == "op" and item[0] in ("(", "[", "{"):
+                depth += 1
+            elif item[3] == "op" and item[0] in (")", "]", "}"):
+                depth -= 1
+            elif depth == 0 and item[0] == ",":
+                intact = False
+                break
+        else:
+            calls.append((index, close, _RELEASE_GETTERS[token[0]], tokens[index + 2][0][1:-1],
+                          default))
+    return calls, intact
 
 
-def _release_symbolic_default(cpp_text, tokens, symbol, declared_type, native):
-    # Count every declaration-like use, irrespective of scope or constness.
-    # Unrecognized uses are refused; this deliberately over-refuses rather
-    # than pretending to implement C++ lookup (including local/member shadows).
+def _release_previous_index(tokens, index):
+    """Index of the previous code token, skipping preprocessor lines, or -1."""
+    index -= 1
+    while index >= 0 and tokens[index][4]:
+        index -= 1
+    return index
+
+
+def _release_symbol_occurrences(tokens, symbol, calls):
+    """Classify every occurrence of symbol: (declarations, other count).
+
+    Recognized: the global `[static] const|constexpr int SYMBOL = ...;`, a
+    whole numeric getter default, and the producer's checked-settings metadata
+    default `{"title", "enum", ::pineforge::checked_settings::number(SYMBOL),`.
+    Every other occurrence, in any syntactic position, is counted against it."""
+    uses = {call[4][0][1] for call in calls
+            if len(call[4]) == 1 and call[4][0][0] == symbol
+            and call[2] in ("int", "int64", "double")}
+    metadata = ("{", None, ",", '"enum"', ",", "::", "pineforge", "::",
+                "checked_settings", "::", "number", "(")
     declarations = []
-    unrecognized = False
-    for index, (word, _, _) in enumerate(tokens):
-        if word != symbol:
+    others = 0
+    depth = 0
+    for index, token in enumerate(tokens):
+        if not token[4] and token[3] == "op" and token[0] in ("{", "}"):
+            depth += 1 if token[0] == "{" else -1
+        if token[0] != symbol or token[3] != "ident":
             continue
-        before = tokens[index - 1][0] if index else ""
-        after = tokens[index + 1][0] if index + 1 < len(tokens) else ""
-        candidate = (_release_codegen_identifier(before)
-                     or before in ("*", "&", "&&", "[", "...") or after in ("=", "{")
-                     or (before in (",", "::", "]") and after in (";", "=", "[", "{", "]")))
-        if candidate:
-            declarations.append(tokens[index][1])
-        if before == "(" and index > 1:
-            callee = tokens[index - 2][0]
-            if _release_codegen_identifier(callee) and callee != "number":
-                unrecognized = True
-    if len(declarations) > 1:
-        return None, "ambiguous_binding"
-    raw_literal = any(word == "R" and index + 1 < len(tokens)
-                      and tokens[index + 1][0].startswith('"')
-                      and end == tokens[index + 1][1]
-                      for index, (word, _, end) in enumerate(tokens))
-    if len(declarations) != 1 or unrecognized or raw_literal:
+        if token[1] in uses:
+            continue
+        window = tokens[index - 12:index] if index >= 12 else []
+        if (_release_code_context(token) and window
+                and all(not item[4] and expected in (None, item[0])
+                        for expected, item in zip(metadata, window))
+                and window[1][3] == "string" and window[3][3] == "string"
+                and index + 2 < len(tokens)
+                and tokens[index + 1][0] == ")" and tokens[index + 2][0] == ","):
+            continue
+        end = index + 2
+        while end < len(tokens) and tokens[end][0] != ";" and not tokens[end][4]:
+            end += 1
+        kind = _release_previous_index(tokens, index)
+        qualifier = _release_previous_index(tokens, kind) if kind >= 0 else -1
+        head = _release_previous_index(tokens, qualifier) if qualifier >= 0 else -1
+        if head >= 0 and tokens[head][0] == "static":
+            head = _release_previous_index(tokens, head)
+        if (not token[4] and token[5] == () and depth == 0
+                and kind >= 0 and tokens[kind][0] == "int"
+                and qualifier >= 0 and tokens[qualifier][0] in ("const", "constexpr")
+                and (head < 0 or tokens[head][0] in (";", "}"))
+                and index + 2 < end < len(tokens) and tokens[index + 1][0] == "="
+                and tokens[end][0] == ";"):
+            declarations.append((index, tokens[index + 2:end]))
+        else:
+            others += 1
+    return declarations, others
+
+
+def _release_symbolic_default(tokens, trusted, calls, symbol, declared_type):
+    """A unique, positively recognized global integer constant, or a reason."""
+    if not trusted:
         return None, "unsupported_binding"
-    # Match the one recognized emitted enum declaration, never an expression.
-    definitions = list(re.finditer(
-        r'(?m)^[ \t]*(?:static\s+)?(?:const|constexpr)\s+int\s+(?P<name>' + re.escape(symbol)
-        + r')\s*=\s*(?P<value>[^;\n]+);', cpp_text))
-    if (len(definitions) != 1
-            or definitions[0].start("name") != declarations[0]
-            or not re.fullmatch(r'[+-]?(?:0|[1-9][0-9]*)', definitions[0].group("value").strip())
-            or not -(2 ** 31) <= int(definitions[0].group("value")) < 2 ** 31):
-        return None, "unsupported_default"
-    candidate = _release_scalar(definitions[0].group("value").strip(), declared_type)
-    # Corroborate against the compiled declaration's validated native metadata.
-    # A receipt-free legacy plugin remains usable, but its symbolic value is
-    # explicitly unresolved instead of being inferred from source alone.
-    if (native is None or native.get("supported") is not True
-            or native.get("type") not in (declared_type, "enum")):
-        return None, "receipt_unavailable"
-    try:
-        actual = _release_scalar(native["default"], declared_type)
-    except ValueError:
-        return None, "receipt_unavailable"
-    if type(actual) is not type(candidate) or actual != candidate:
+    declarations, others = _release_symbol_occurrences(tokens, symbol, calls)
+    if len(declarations) + others > 1:
         return None, "ambiguous_binding"
-    return actual, None
+    if len(declarations) != 1:
+        return None, "unsupported_binding"
+    words = "".join(item[0] for item in declarations[0][1])
+    if (not all(item[3] in ("number", "op") for item in declarations[0][1])
+            or not _RELEASE_INTEGER.fullmatch(words)
+            or not -(2 ** 31) <= int(words) < 2 ** 31):
+        return None, "unsupported_default"
+    return _release_scalar(words, declared_type), None
+
+
+def _release_source_bound(tokens, calls, symbol):
+    """`_src_<selector>_` is only a getter default or a member access."""
+    defaults = {call[4][0][1] for call in calls
+                if len(call[4]) == 1 and call[4][0][0] == symbol}
+    for index, token in enumerate(tokens):
+        if token[0] == symbol and token[3] == "ident" and token[1] not in defaults:
+            if token[4] or index + 1 >= len(tokens) or tokens[index + 1][0] != ".":
+                return False
+    return True
+
+
+def _release_literal_default(words, kinds, declared_type):
+    """A recognized literal default for a getter type, or a refusal reason."""
+    text = "".join(words)
+    if declared_type in ("int", "int64", "double"):
+        if (not 1 <= len(words) <= 2 or kinds[-1] != "number"
+                or (len(words) == 2 and words[0] not in "+-")
+                or not _RELEASE_DECIMAL.fullmatch(text)):
+            return None, "unsupported_default"
+        value = float(text)
+        _release_domain(value)
+        if declared_type == "double":
+            return value, None
+        if not value.is_integer():
+            return None, "unsupported_default"
+        integer = int(text) if _RELEASE_INTEGER.fullmatch(text) else int(value)
+        _release_domain(integer)
+        bits = 32 if declared_type == "int" else 64
+        if not -(2 ** (bits - 1)) <= integer < 2 ** (bits - 1):
+            return None, "unsupported_default"
+        return integer, None
+    if declared_type == "bool":
+        if words in (["true"], ["false"]):
+            return words == ["true"], None
+        return None, "unsupported_default"
+    if declared_type == "string":
+        if kinds == ["string"]:
+            literal = words[0]
+        elif (words[:4] == ["std", "::", "string", "("] and len(words) == 6
+                and kinds[4] == "string" and words[5] == ")"):
+            literal = words[4]
+        else:
+            return None, "unsupported_default"
+        try:
+            return _release_cpp_input_name(literal[1:-1]), None
+        except ValueError:
+            return None, "unsupported_default"
+    return None, "unsupported_default"
 
 
 def _release_legacy_declarations(cpp_text, receipt=None, *, allow_unresolved=False):
-    """Recover producer literals; preserve unproved defaults as explicit refusal."""
-    declared = {}
-    tokens = _release_cpp_tokens(cpp_text)
+    """Typed legacy defaults certified by the positive allowlist above.
+
+    Returns {native name: {"type", "default", "_raw_default", "_reason"}}; an
+    uncertified default is None with a stable reason. Raises ValueError for a
+    reason unless allow_unresolved, and for known out-of-domain evidence."""
     try:
-        native_rows = _release_receipt_rows(receipt, "inputs") if receipt is not None else {}
-    except ValueError:
-        native_rows = {}
-    for declared_type, spelling, raw in _release_getter_declarations(cpp_text, tokens):
-        name = _release_cpp_input_name(spelling)
-        metadata = {"type": declared_type, "default": None, "_raw_default": raw}
-        value = _unwrap_std_string(raw)
-        reason = None
-        if declared_type == "source":
-            literal = re.fullmatch(r'"((?:[^"\\]|\\[\s\S])*)"', value)
-            metadata["default"] = (_release_cpp_input_name(literal.group(1)) if literal else value)
-        elif declared_type == "string":
-            literal = re.fullmatch(r'"((?:[^"\\]|\\[\s\S])*)"', value)
-            if literal:
-                metadata["default"] = _release_cpp_input_name(literal.group(1))
+        tokens, trusted = _release_cpp_tokens(cpp_text)
+    except _ReleaseUnreadable:
+        if not allow_unresolved:
+            raise
+        return None
+    calls, intact = _release_getter_calls(tokens)
+    for _, _, declared_type, _, default in calls:
+        if declared_type in ("int", "int64", "double"):
+            # Concrete literal evidence meets the domain before any refusal.
+            _release_literal_default([item[0] for item in default],
+                                     [item[3] for item in default], declared_type)
+    rows = {}
+    for index, close, declared_type, spelling, default in calls:
+        try:
+            name = _release_cpp_input_name(spelling)
+        except ValueError:
+            intact = False
+            continue
+        words = [item[0] for item in default]
+        raw = cpp_text[default[0][1]:default[-1][2]]
+        rows.setdefault(name, []).append((declared_type, tuple(words), raw, default))
+    declared = {}
+    for name, occurrences in rows.items():
+        declared_type, words, raw, default = occurrences[0]
+        kinds = [item[3] for item in default]
+        metadata = {"type": declared_type, "default": None, "_raw_default": raw,
+                    "_reason": None}
+        if not intact or not trusted:
+            metadata["_reason"] = "unsupported_binding"
+        elif len({(kind, text) for kind, text, _, _ in occurrences}) > 1:
+            metadata["_reason"] = "ambiguous_binding"
+        elif declared_type == "source":
+            selector = re.fullmatch(r"_src_([a-z0-9]+)_", words[0]) if len(words) == 1 else None
+            if not selector or selector.group(1) not in _RELEASE_SOURCE_SELECTORS:
+                metadata["_reason"] = "unsupported_default"
+            elif not _release_source_bound(tokens, calls, words[0]):
+                metadata["_reason"] = "unsupported_binding"
             else:
-                reason = "unsupported_default"
-        elif declared_type == "bool" and value in ("true", "false"):
-            metadata["default"] = value == "true"
-        elif declared_type in ("int", "int64", "float", "double"):
-            if _release_codegen_identifier(value):
-                metadata["default"], reason = _release_symbolic_default(
-                    cpp_text, tokens, value, declared_type, native_rows.get(name))
-            elif re.fullmatch(r'[+-]?(?:(?:0|[1-9][0-9]*)(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?', value):
-                try:
-                    metadata["default"] = _release_scalar(value, declared_type)
-                except ValueError:
-                    reason = "unsupported_default"
-                if not reason and declared_type in ("int", "int64"):
-                    bits = 32 if declared_type == "int" else 64
-                    if not -(2 ** (bits - 1)) <= metadata["default"] < 2 ** (bits - 1):
-                        reason = "unsupported_default"
-            else:
-                reason = "unsupported_default"
+                metadata["default"] = selector.group(1)
+        elif (declared_type in ("int", "int64", "double") and len(words) == 1
+                and kinds == ["ident"] and _release_codegen_identifier(words[0])):
+            metadata["default"], metadata["_reason"] = _release_symbolic_default(
+                tokens, trusted, calls, words[0], declared_type)
+            metadata["_symbolic"] = True
         else:
-            reason = "unsupported_default"
-        if reason:
+            metadata["default"], metadata["_reason"] = _release_literal_default(
+                list(words), kinds, declared_type)
+        if metadata["_reason"]:
+            metadata["default"] = None
             if not allow_unresolved:
-                raise ValueError(reason)
-            metadata.update(default=None, value=None, resolution={
-                "status": "unresolved", "reason": reason, "raw_default": raw})
-        if name in declared and declared[name] != metadata:
-            raise ValueError("ambiguous native legacy input name")
-        declared.setdefault(name, metadata)
+                raise ValueError(metadata["_reason"])
+        declared[name] = metadata
     return declared
 
 
@@ -932,6 +1220,202 @@ def _release_receipt_rows(receipt, section):
     return result
 
 
+class _ReleaseRefusal:
+    """An uncertified legacy strategy() default: a stable reason and raw token."""
+
+    __slots__ = ("reason", "raw")
+
+    def __init__(self, reason, raw=None):
+        self.reason = reason
+        self.raw = raw
+
+
+def _release_statements(tokens, start, end):
+    """Top-level statements of a body, as token index lists (no directives)."""
+    statements = []
+    statement = []
+    depth = 0
+    for index in range(start, end):
+        token = tokens[index]
+        if token[4]:
+            continue
+        statement.append(index)
+        if token[3] == "op" and token[0] in ("(", "[", "{"):
+            depth += 1
+        elif token[3] == "op" and token[0] in (")", "]", "}"):
+            depth -= 1
+            following = index + 1
+            while following < end and tokens[following][4]:
+                following += 1
+            if (depth == 0 and token[0] == "}"
+                    and (following >= end or tokens[following][0] not in (";", ",", ")"))):
+                statements.append(statement)
+                statement = []
+        elif depth == 0 and token[0] == ";":
+            statements.append(statement)
+            statement = []
+    if statement:
+        statements.append(statement)
+    return statements
+
+
+def _release_strategy_value(key, rhs, enum_bound):
+    """One recognized strategy() default, or a _ReleaseRefusal."""
+    words = [token[0] for token in rhs]
+    kinds = [token[3] for token in rhs]
+    declared_type = _RELEASE_OVERRIDE_TYPES[key]
+    if key in _RELEASE_STRATEGY_ENUMS:
+        enum_name, members = _RELEASE_STRATEGY_ENUMS[key]
+        names = _QTY_TYPE if key == "default_qty_type" else _COMM_TYPE
+        inner = words
+        if inner[:5] == ["static_cast", "<", "int", ">", "("] and inner[-1:] == [")"]:
+            inner = inner[5:-1]
+        for prefix in ([], ["::"], ["pineforge", "::"], ["::", "pineforge", "::"]):
+            if (enum_bound and len(inner) == len(prefix) + 3
+                    and inner[:len(prefix)] == prefix
+                    and inner[len(prefix):len(prefix) + 2] == [enum_name, "::"]
+                    and inner[-1] in members):
+                return names[inner[-1]]
+        if words in (["0"], ["1"], ["2"]) and kinds == ["number"]:
+            return names[members[int(words[0])]]
+        return _ReleaseRefusal("unsupported_default")
+    if declared_type == "bool":
+        if words in (["true"], ["false"]):
+            value = words == ["true"]
+            return ("ANY" if value else "FIFO") if key == "close_entries_rule" else value
+        return _ReleaseRefusal("unsupported_default")
+    text = "".join(words)
+    if (not 1 <= len(words) <= 2 or kinds[-1] != "number"
+            or (len(words) == 2 and words[0] not in "+-")
+            or not _RELEASE_DECIMAL.fullmatch(text)):
+        return _ReleaseRefusal("unsupported_default")
+    # A recognized literal is concrete evidence: its domain failure refuses.
+    return _release_domain(_release_scalar(text, declared_type))
+
+
+def _release_legacy_strategy(cpp_text):
+    """strategy() defaults from the one generated constructor, by allowlist.
+
+    Every release key maps to a typed value (the PineStrategyConfig seed when
+    the constructor leaves it alone) or a _ReleaseRefusal. Recognized: one
+    `GeneratedStrategy(...) [: init] { ... }` holding either one
+    `PineStrategyConfig cfg;` with top-level `cfg.<field> = <rhs>;` statements
+    before its single `configure_pine_strategy(cfg);`, or pre-R4-C top-level
+    `<field>_ = <rhs>;` member writes. Any other occurrence refuses."""
+    keys = list(_RELEASE_OVERRIDE_TYPES)
+
+    def refuse(reason):
+        return {key: _ReleaseRefusal(reason) for key in keys}
+
+    try:
+        tokens, trusted = _release_cpp_tokens(cpp_text)
+    except _ReleaseUnreadable:
+        return refuse("unsupported_binding")
+    if not trusted:
+        return refuse("unsupported_binding")
+    bodies = []
+    for index, token in enumerate(tokens):
+        if (token[0] != "GeneratedStrategy" or token[3] != "ident" or token[4]
+                or index + 1 >= len(tokens) or tokens[index + 1][0] != "("):
+            continue
+        close = _release_closing(tokens, index + 1)
+        if close is None or close + 1 >= len(tokens):
+            return refuse("unsupported_binding")
+        opening = None
+        if tokens[close + 1][0] == "{":
+            opening = close + 1
+        elif tokens[close + 1][0] == ":":
+            position = close + 2
+            while position < len(tokens):
+                if tokens[position][3] == "op" and tokens[position][0] in ("(", "{"):
+                    if tokens[position][0] == "{" and tokens[position - 1][0] in (")", "}"):
+                        opening = position
+                        break
+                    skipped = _release_closing(tokens, position, directives=True)
+                    if skipped is None:
+                        break
+                    position = skipped + 1
+                    continue
+                position += 1
+            if opening is None:
+                return refuse("unsupported_binding")
+        else:
+            continue
+        closing = _release_closing(tokens, opening, directives=True)
+        if closing is None:
+            return refuse("unsupported_binding")
+        bodies.append((opening, closing))
+    if len(bodies) != 1:
+        return refuse("ambiguous_binding" if bodies else "unsupported_binding")
+    opening, closing = bodies[0]
+    enum_bound = {}
+    for key, (enum_name, members) in _RELEASE_STRATEGY_ENUMS.items():
+        enum_bound[key] = all(
+            not token[4] and index + 2 < len(tokens) and tokens[index + 1][0] == "::"
+            and tokens[index + 2][0] in members
+            for index, token in enumerate(tokens) if token[0] == enum_name)
+    cfg_fields = dict(_CFG_FIELD_KEY, calc_on_order_fills="calc_on_order_fills")
+    member_fields = dict(_STRAT_FIELD_KEY, calc_on_order_fills_="calc_on_order_fills")
+    statements = _release_statements(tokens, opening + 1, closing)
+    words_of = [[tokens[index][0] for index in statement] for statement in statements]
+    declarations = []
+    declaring = set()
+    for number, (statement, words) in enumerate(zip(statements, words_of)):
+        if "PineStrategyConfig" not in words:
+            continue
+        at = words.index("PineStrategyConfig")
+        prefix, rest = words[:at], words[at + 1:]
+        if (prefix in ([], ["source", "::"], ["pineforge", "::", "source", "::"],
+                       ["::", "pineforge", "::", "source", "::"])
+                and len(rest) >= 2 and tokens[statement[at + 1]][3] == "ident"
+                and rest[1:] in ([";"], ["{", "}", ";"], ["(", ")", ";"])
+                and words.count("PineStrategyConfig") == 1):
+            declarations.append(rest[0])
+            declaring.add(number)
+        else:
+            return refuse("unsupported_binding")
+    if len(declarations) > 1:
+        return refuse("ambiguous_binding")
+    variable = declarations[0] if declarations else None
+    assigned = {}
+    configured = 0
+    for number, (statement, words) in enumerate(zip(statements, words_of)):
+        relevant = (variable is not None and variable in words) or any(
+            word in member_fields for word in words)
+        if number in declaring or not relevant:
+            continue
+        if any(tokens[index][5] != () for index in statement):
+            return refuse("unsupported_binding")
+        if variable is not None and words == ["configure_pine_strategy", "(", variable, ")", ";"]:
+            configured += 1
+            continue
+        if (variable is not None and len(words) >= 6 and words[0] == variable
+                and words[1] == "." and words[2] in cfg_fields and words[3] == "="
+                and words[-1] == ";" and words.count(variable) == 1
+                and not any(word in member_fields for word in words)):
+            if configured:
+                return refuse("unsupported_binding")
+            assigned[cfg_fields[words[2]]] = statement[4:-1]
+            continue
+        if (variable is None and len(words) >= 4 and words[0] in member_fields
+                and words[1] == "=" and words[-1] == ";"
+                and sum(word in member_fields for word in words) == 1):
+            assigned[member_fields[words[0]]] = statement[2:-1]
+            continue
+        return refuse("unsupported_binding")
+    if variable is not None and configured != 1:
+        return refuse("unsupported_binding")
+    result = dict(STRATEGY_SEED, calc_on_order_fills=False)
+    for key in keys:
+        if key in assigned:
+            rhs = [tokens[index] for index in assigned[key]]
+            value = _release_strategy_value(key, rhs, enum_bound.get(key, True))
+            if isinstance(value, _ReleaseRefusal):
+                value.raw = cpp_text[rhs[0][1]:rhs[-1][2]]
+            result[key] = value
+    return result
+
+
 def normalize_release_provenance(provenance, cpp_text, receipt, checked):
     """Normalize only the fresh release document, before its fingerprint."""
     applied_inputs = provenance["applied"]["inputs"]
@@ -958,6 +1442,9 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
             # getter still evaluates the default; metadata can be a placeholder.
             default = (_release_scalar(row["default"], scalar_type)
                        if row["supported"] else value)
+            if declared_type == "source" and not (
+                    value in _RELEASE_SOURCE_SELECTORS and default in _RELEASE_SOURCE_SELECTORS):
+                raise ValueError("noncanonical checked source selector")
             declared[name] = {"type": declared_type, "default": default,
                               "value": value}
         for name, text in applied_inputs.items():
@@ -973,60 +1460,86 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
     else:
         native_inputs = {name.split("\0", 1)[0]: value.split("\0", 1)[0]
                          for name, value in applied_inputs.items()}
-        declared = _release_legacy_declarations(cpp_text, receipt, allow_unresolved=True)
         try:
             legacy_rows = _release_receipt_rows(receipt, "inputs") if receipt is not None else {}
         except ValueError:
             legacy_rows = {}
-        declared_names = frozenset(declared)
+        # Known native scalars meet the product domain before any refusal.
+        for row in legacy_rows.values():
+            if row["type"] in ("int", "float") or (row["type"] == "enum" and row["supported"]):
+                for key in ("default", "effective_value"):
+                    native_value = _release_receipt_value(row[key], "float")
+                    if native_value is not None:
+                        _release_domain(native_value)
+                        if row["type"] != "float" and native_value.is_integer():
+                            exact = _release_receipt_value(row[key], "int")
+                            _release_domain(int(native_value) if exact is None else exact)
+        declared = _release_legacy_declarations(cpp_text, receipt, allow_unresolved=True)
+        unreadable = declared is None
+        declared = declared or {}
         for name, metadata in declared.items():
             raw_default = metadata.pop("_raw_default")
-            if "resolution" in metadata:
-                continue
+            reason = metadata.pop("_reason")
+            symbolic = metadata.pop("_symbolic", False)
             declared_type = metadata["type"]
-            default = _release_scalar(metadata["default"], declared_type)
+            default = metadata["default"]
             value = default
-            if name in native_inputs:
+            if reason is None and name in native_inputs:
                 text = native_inputs[name]
                 if declared_type == "bool":
                     value = (True if text in ("true", "1") else
                              False if text in ("false", "0") else default)
-                elif declared_type in ("int", "int64", "float", "double"):
+                elif declared_type in ("int", "int64", "double"):
                     try:
                         value = _release_legacy_number(text, declared_type)
                     except ValueError:
                         value = default
+                    value = _release_domain(_release_scalar(value, declared_type))
+                elif declared_type == "source":
+                    # The native getter falls back from any other selector.
+                    if text not in _RELEASE_SOURCE_SELECTORS:
+                        reason = "unsupported_override"
+                    value = text
                 else:
                     value = text
-            metadata["default"] = default
-            metadata["value"] = _release_scalar(value, declared_type)
             native = legacy_rows.get(name)
-            if native is not None and native["supported"] is True:
-                native_value = _release_scalar(native["effective_value"], declared_type)
-                if type(native_value) is not type(metadata["value"]) or native_value != metadata["value"]:
-                    metadata.update(default=None, value=None, resolution={
-                        "status": "unresolved", "reason": "ambiguous_binding",
-                        "raw_default": raw_default})
+            if reason is None and native is not None:
+                # Each side keeps its own declared type: never coerce one
+                # through the other to hide a type, default or value conflict.
+                if native["type"] not in _RELEASE_RECEIPT_TYPES[declared_type]:
+                    reason = "ambiguous_binding"
+                elif native["supported"] is True:
+                    receipt_default = _release_receipt_value(native["default"], native["type"])
+                    receipt_value = _release_receipt_value(
+                        native["effective_value"], native["type"])
+                    if (type(receipt_default) is not type(default) or receipt_default != default
+                            or type(receipt_value) is not type(value) or receipt_value != value):
+                        reason = "ambiguous_binding"
+            if reason is None and symbolic and (native is None or native["supported"] is not True):
+                reason = "receipt_unavailable"
+            if reason is None:
+                metadata["default"] = default
+                metadata["value"] = value
+            else:
+                metadata.update(default=None, value=None, resolution={
+                    "status": "unresolved", "reason": reason, "raw_default": raw_default})
         for raw_name, text in applied_inputs.items():
             native_name = raw_name.split("\0", 1)[0]
-            if native_name in declared_names:
+            if native_name in declared:
                 if "resolution" not in declared[native_name]:
                     applied_inputs[raw_name] = declared[native_name]["value"]
+            elif unreadable:
+                declared[raw_name] = {"type": "unknown", "default": None, "value": None,
+                                      "resolution": {"status": "unresolved",
+                                                     "reason": "unsupported_binding",
+                                                     "raw_default": None}}
             else:
                 declared[raw_name] = {"type": "unknown", "default": None,
                                       "value": str(text)}
         provenance["inputs"] = declared
 
-    defaults = effective_strategy(cpp_text, {})
-    body = _ctor_body(cpp_text)
-    declaration = _CFG_DECL_RE.search(body)
-    pattern = (r"\b" + re.escape(declaration.group(1))
-               + r"\.calc_on_order_fills\s*=\s*([^;]+);"
-               if declaration else r"\bcalc_on_order_fills_\s*=\s*([^;]+);")
-    fill_defaults = re.findall(pattern, body)
-    defaults["calc_on_order_fills"] = (
-        _coerce_scalar(fill_defaults[-1]) if fill_defaults else False)
-
+    legacy_defaults = None if checked else _release_legacy_strategy(cpp_text)
+    unresolved = {}
     for name, declared_type in _RELEASE_OVERRIDE_TYPES.items():
         if checked:
             row = override_rows.get(name)
@@ -1037,7 +1550,9 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
             if name in _RELEASE_ENUM_WORDS and value not in _RELEASE_ENUM_WORDS[name]:
                 raise ValueError("noncanonical checked strategy enum")
         else:
-            value = _release_scalar(defaults[name], declared_type)
+            value = legacy_defaults[name]
+            if not isinstance(value, _ReleaseRefusal):
+                value = _release_scalar(value, declared_type)
             # A later alias may be a no-op. Replay the setter order instead
             # of collapsing aliases and losing the preceding accepted value.
             for raw_name, raw_text in applied_overrides.items():
@@ -1060,11 +1575,19 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
                     ignored = (converted < 0 if declared_type == "int"
                                else math.isnan(converted))
                     if not ignored:
-                        value = _release_scalar(converted, declared_type)
+                        value = _release_domain(_release_scalar(converted, declared_type))
+            if isinstance(value, _ReleaseRefusal):
+                # Applied overrides keep their wire strings; no value is guessed.
+                provenance["strategy"][name] = None
+                unresolved[name] = {"status": "unresolved", "reason": value.reason,
+                                    "raw_default": value.raw}
+                continue
         provenance["strategy"][name] = value
         for raw_name in applied_overrides:
             if raw_name.split("\0", 1)[0] == name:
                 applied_overrides[raw_name] = value
+    if unresolved:
+        provenance["strategy_resolution"] = unresolved
     return provenance
 
 
