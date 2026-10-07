@@ -734,8 +734,8 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
     """Normalize only the fresh release document, before its fingerprint."""
     applied_inputs = provenance["applied"]["inputs"]
     applied_overrides = provenance["applied"]["overrides"]
-    native_overrides = {name.split("\0", 1)[0]: value
-                        for name, value in applied_overrides.items()}
+    native_inputs = {name.split("\0", 1)[0]: value.split("\0", 1)[0]
+                     for name, value in applied_inputs.items()}
     input_rows = {}
     override_rows = {}
     if checked:
@@ -751,10 +751,12 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
         for name, row in input_rows.items():
             declared_type = ("source" if row.get("kind") == "source"
                              else row["type"])
-            value = _release_scalar(row["effective_value"], declared_type)
+            scalar_type = ("int" if declared_type == "enum" and row["supported"]
+                           else declared_type)
+            value = _release_scalar(row["effective_value"], scalar_type)
             # Unsupported means the setter cannot honour an override. Its
             # getter still evaluates the default; metadata can be a placeholder.
-            default = (_release_scalar(row["default"], declared_type)
+            default = (_release_scalar(row["default"], scalar_type)
                        if row["supported"] else value)
             declared[name] = {"type": declared_type, "default": default,
                               "value": value}
@@ -769,15 +771,14 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
                                   "value": str(text)}
         provenance["inputs"] = declared
     else:
-        for name, metadata in provenance["inputs"].items():
+        declared = {name: metadata for name, metadata in provenance["inputs"].items()
+                    if metadata["type"] != "unknown"}
+        for name, metadata in declared.items():
             declared_type = metadata["type"]
-            if declared_type == "unknown":
-                metadata["value"] = str(metadata["value"])
-                continue
             default = _release_scalar(metadata["default"], declared_type)
             value = default
-            if name in applied_inputs:
-                text = applied_inputs[name].split("\0", 1)[0]
+            if name in native_inputs:
+                text = native_inputs[name]
                 if declared_type == "bool":
                     value = (True if text in ("true", "1") else
                              False if text in ("false", "0") else default)
@@ -790,8 +791,14 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
                     value = text
             metadata["default"] = default
             metadata["value"] = _release_scalar(value, declared_type)
-            if name in applied_inputs:
-                applied_inputs[name] = metadata["value"]
+        for raw_name, text in applied_inputs.items():
+            native_name = raw_name.split("\0", 1)[0]
+            if native_name in declared:
+                applied_inputs[raw_name] = declared[native_name]["value"]
+            else:
+                declared[raw_name] = {"type": "unknown", "default": None,
+                                      "value": str(text)}
+        provenance["inputs"] = declared
 
     defaults = effective_strategy(cpp_text, {})
     body = _ctor_body(cpp_text)
@@ -814,8 +821,12 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
                 raise ValueError("noncanonical checked strategy enum")
         else:
             value = _release_scalar(defaults[name], declared_type)
-            if name in native_overrides:
-                text = native_overrides[name].split("\0", 1)[0]
+            # A later alias may be a no-op. Replay the setter order instead
+            # of collapsing aliases and losing the preceding accepted value.
+            for raw_name, raw_text in applied_overrides.items():
+                if raw_name.split("\0", 1)[0] != name:
+                    continue
+                text = raw_text.split("\0", 1)[0]
                 if declared_type == "bool":
                     value = text in ("true", "1")
                 elif name == "close_entries_rule":

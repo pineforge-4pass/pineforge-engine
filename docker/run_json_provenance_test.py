@@ -224,10 +224,115 @@ def image_e2e(image, artifacts, harness=None):
     return int(bool(failed))
 
 
+def review_e2e(image, artifacts, legacy_cpp):
+    """Real CLI counterexamples; only checked-export names change for legacy."""
+    artifacts.mkdir(parents=True, exist_ok=True)
+    checks = []
+
+    def check(name, condition, value):
+        checks.append((name, bool(condition)))
+        print(f"{'PASS' if condition else 'FAIL'} {name}: {value}", flush=True)
+
+    legacy = legacy_cpp.read_text()
+    for name in ("strategy_settings_api_version", "strategy_create_checked",
+                 "strategy_set_input_checked", "strategy_set_override_checked"):
+        legacy = legacy.replace(name, "fixture_legacy_" + name)
+    enum_source = STRATEGY.replace(
+        'armed = input.bool', 'enum Side\n    neutral\n    long\n    short\n'
+        'side = input.enum(Side.long, "Side", options=[Side.long, Side.short])\n'
+        'armed = input.bool').replace(
+            "if armed and close > mid", "if armed and side == Side.long and close > mid")
+    overrides = {
+        "initial_capital": "5000", "initial_capital\0alias": "nan",
+        "pyramiding": "2", "pyramiding\0alias": "-1",
+        "default_qty_type": "cash", "default_qty_type\0alias": "invalid",
+        "commission_type": "cash_per_order", "commission_type\0alias": "invalid",
+    }
+    cases = [
+        ("legacy-key", legacy, {"armed\0suffix": "false\0true"}, {}, None),
+        ("legacy-order", legacy, {}, overrides, None),
+        ("enum-default", enum_source, {}, {}, 1),
+        ("enum-label", enum_source, {"Side": "Side.short"}, {}, 2),
+        ("enum-index", enum_source, {"Side": "1"}, {}, 1),
+    ]
+    for label, source_text, inputs, settings, enum_value in cases:
+        source = (artifacts / label / "input").resolve()
+        compiled = (artifacts / label / "compiled").resolve()
+        source.mkdir(parents=True)
+        compiled.mkdir()
+        compiled.chmod(0o777)
+        (source / ("strategy.cpp" if label.startswith("legacy") else
+                   "strategy.pine")).write_text(source_text, encoding="utf-8")
+        (source / "ohlcv.csv").write_text(synthetic_csv())
+        command = ["docker", "run", "--rm", "--network", "none",
+                   "--mount", f"type=bind,src={source},dst=/in,readonly",
+                   "--mount", f"type=bind,src={compiled},dst=/proof",
+                   "-e", "PINEFORGE_INPUTS=" + json.dumps(inputs),
+                   "-e", "PINEFORGE_OVERRIDES=" + json.dumps(settings), image]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+        case = artifacts / label
+        (case / "command.json").write_text(json.dumps(command))
+        (case / "stdout.json").write_text(result.stdout)
+        (case / "stderr.log").write_text(result.stderr)
+        (case / "exit").write_text(str(result.returncode) + "\n")
+        report = json.loads(result.stdout)
+        check(label + " CLI success", result.returncode == 0, result.returncode)
+        fp = report.get("fingerprint") or {}
+        provenance = fp.get("provenance", {})
+        token = base64.b64decode(fp.get("token", ""))
+        check(label + " fingerprint", bool(token) and json.loads(token) == provenance
+              and fp.get("digest") == "sha256:" + hashlib.sha256(token).hexdigest(), fp.get("digest"))
+        for kind, values in (("inputs", inputs), ("overrides", settings)):
+            check(label + " raw " + kind, report.get("applied_" + kind) == values, values)
+            check(label + " keys " + kind,
+                  set(provenance.get("applied", {}).get(kind, {})) == set(values), values)
+        if label == "legacy-key":
+            check(label + " native effect", report["summary"]["total_trades"] == 0,
+                  report["summary"])
+            check(label + " declared bool", provenance.get("inputs", {}).get(
+                "armed", {}).get("value") is False, provenance.get("inputs"))
+            check(label + " alias bool", provenance.get("applied", {}).get(
+                "inputs", {}).get("armed\0suffix") is False, provenance.get("applied"))
+        elif label == "legacy-order":
+            check(label + " native capital", report["equity_curve"][0]["equity"] == 5000,
+                  report["equity_curve"][0])
+            check(label + " native pyramiding", report["summary"]["total_trades"] == 2,
+                  report["summary"])
+            expected = {"initial_capital": 5000.0, "pyramiding": 2,
+                        "default_qty_type": "cash", "commission_type": "cash_per_order"}
+            for name, value in expected.items():
+                actual = provenance.get("strategy", {}).get(name)
+                check(label + " ordered " + name,
+                      type(actual) is type(value) and actual == value, actual)
+                for raw in (name, name + "\0alias"):
+                    actual = provenance.get("applied", {}).get("overrides", {}).get(raw)
+                    check(label + " applied " + repr(raw),
+                          type(actual) is type(value) and actual == value, actual)
+        else:
+            row = provenance.get("inputs", {}).get("Side", {})
+            check(label + " default int", type(row.get("default")) is int
+                  and row["default"] == 1, row)
+            check(label + " effective int", type(row.get("value")) is int
+                  and row["value"] == enum_value, row)
+            if inputs:
+                actual = provenance.get("applied", {}).get("inputs", {}).get("Side")
+                check(label + " applied int", type(actual) is int and actual == enum_value, actual)
+            check(label + " native selection",
+                  (report["summary"]["total_trades"] > 0) is (enum_value == 1),
+                  report["summary"])
+    (artifacts / "checks.json").write_text(json.dumps(checks, indent=2) + "\n")
+    print(f"{sum(passed for _, passed in checks)}/{len(checks)} checks passed", flush=True)
+    return int(not all(passed for _, passed in checks))
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
     parser.add_argument("--artifacts", required=True, type=Path)
     parser.add_argument("--harness", type=Path)
+    parser.add_argument("--review-legacy-cpp", type=Path)
     options = parser.parse_args()
-    raise SystemExit(image_e2e(options.image, options.artifacts, options.harness))
+    raise SystemExit(
+        review_e2e(options.image, options.artifacts, options.review_legacy_cpp)
+        if options.review_legacy_cpp else
+        image_e2e(options.image, options.artifacts, options.harness))
