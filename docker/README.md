@@ -515,26 +515,33 @@ anything else is refused. Absence of a known bad shape is never proof.
 The translation unit is read lexically: comments, ordinary and prefixed string
 and character literals and raw string literals (`R"delim(...)delim"`, with
 `u8R`/`uR`/`UR`/`LR`) are delimited exactly. Code context excludes preprocessor
-lines and every conditional group except `#ifdef PF_SETTINGS_API_VERSION` (the
-producer's checked-settings metadata). The recognized directives are
-`#include <pineforge/...hpp>` or a bare standard header, `#define`/`#undef` of
-the 13 macro names the producer defines,
+lines and every conditional group except the first branch of
+`#ifdef PF_SETTINGS_API_VERSION` (the producer's checked-settings metadata) and
+any branch of `#ifdef PINEFORGE_HAS_SYMBOL_SECURITY_EVAL_V1` (its request of
+another symbol). The recognized directives are
+`#include <pineforge/...hpp>` or a bare standard header, a `#define` line
+identical to one the producer emits (its replacement list included),
 `#error` and conditionals;
-any other directive, a line splice anywhere, or a backslash outside a literal
-(a universal-character name) leaves no row of that unit certified.
+any other directive, a line splice anywhere, a backslash outside a literal
+(a universal-character name), a digraph, or a relied-on name used other than
+the producer does (`std` and `checked_settings` only qualifying, `pineforge`
+only qualifying or in `using namespace pineforge;`) leaves no row of that unit
+certified.
 
 | Relied-on token | Recognized form (anything else refuses) |
 |---|---|
-| Getter call | One of `get_input_int`, `_int64`, `_double`, `_bool`, `_string`, `_source`, in code context, after an expression token, as `name("title", default)` with an unprefixed literal title and exactly one default argument. Every other `get_input_*` occurrence refuses the unit. |
-| Title | The producer's narrow-literal escapes, decoded to the native first-NUL identity. All occurrences of one title must agree on getter type and default tokens. |
+| Getter call | One of `get_input_int`, `_int64`, `_double`, `_bool`, `_string`, `_source`, in code context, after an expression token or a producer C-style cast `(int)`, `(double)`, `(int64_t)` (the cast is not part of the input), as `name("title", default)` with an unprefixed literal title and exactly one default argument, and not in a spelling that can declare a local of that name (after a
+statement-level comma or one inside `for`/`if`/`switch`/`while` parentheses,
+or wrapped only in parentheses after `>` or a statement-initial name). Every other `get_input_*` occurrence (other casts included) refuses the unit. |
+| Title | The producer's narrow-literal escapes, decoded to the native first-NUL identity. When the getters of one title disagree on getter type or default, or a getter sits in a security-guard branch that the other branches (an implicit empty `#else` included) do not repeat, the native receipt arbitrates: a supported row whose type and default (each parsed by its own type) match exactly one distinct pair certifies that pair; otherwise `ambiguous_binding`. Never first-wins. |
 | Numeric/bool/string default | A decimal literal (optional sign), `true`/`false`, or a plain or `std::string("...")` literal. |
-| Symbolic numeric default | Every occurrence of the identifier is the single file-scope `[static] const\|constexpr int NAME = <decimal int32>;`, a whole getter default, or the producer's metadata default `{"title", "enum", ::pineforge::checked_settings::number(NAME),`. Any other occurrence in any position, including a comparison in the script body, refuses. The value also needs a supported native receipt row that agrees. |
+| Symbolic numeric default | Exactly one file-scope `[static] const\|constexpr int NAME = <decimal int32>;`, and every other occurrence in this closed list of pure reads: a whole getter default; the metadata default `{"title", "enum", ::pineforge::checked_settings::number(NAME),`; `auto _pna_l = (NAME);` or `auto _pna_r = (NAME);` (the na-aware relational temporaries); `(__switch_val_<n> == NAME) {` (the switch lowering). Any other occurrence, in any position, refuses. The value also needs a supported native receipt row that agrees. |
 | Source default | `_src_<selector>_` for a selector in the native vocabulary `open high low close volume hl2 hlc3 ohlc4 hlcc4`, recorded as the selector; that identifier may otherwise appear only before `.`. An override is certified only when it is such a selector; anything else (the native getter falls back) is refused, never echoed. |
 | Native receipt row | Compared independently, each side parsed by its own declared type: the receipt `type` must be the getter's (`int`/`enum`, `int`, `float`, `bool`, `string`, `source`), and a supported row's default and effective value must equal the certified ones exactly. |
-| strategy() default | One `GeneratedStrategy(...)` constructor whose top-level statements are one `PineStrategyConfig cfg;` declaration, `cfg.<field> = <rhs>;` assignments to the producer's 13 members (`margin_long`,
+| strategy() default | One parameterless `GeneratedStrategy()` constructor whose top-level statements are, outside any conditional except the adapter hooks, one `pineforge::source::PineStrategyConfig cfg{};` declaration first, `cfg.<field> = <rhs>;` assignments to the producer's 13 members (`margin_long`,
 `margin_short` and `src_series_active` are recognized but not provenance), and
 one final `configure_pine_strategy(cfg);` (besides the producer's adapter
-hook calls, nothing else may stand in the constructor) (or pre-R4-C `<field>_ = <rhs>;` writes). Numbers are decimal literals, booleans `true`/`false`, and enums `static_cast<int>(QtyType::NAME)`, `QtyType::NAME` (likewise `CommissionType`) or the index `0`-`2`, where every occurrence of `QtyType`/`CommissionType` in the unit is followed by `::` and a canonical member. |
+hook calls, nothing else may stand in the constructor) (or pre-R4-C `<field>_ = <rhs>;` writes). Numbers are decimal literals (integers within the native `int` width), booleans `true`/`false`, and enums `static_cast<int>(QtyType::NAME)`, `QtyType::NAME` (likewise `CommissionType`) or the index `0`-`2`, where every occurrence of `QtyType`/`CommissionType` in the unit is followed by `::` and a canonical member. |
 
 An input whose default cannot be proved stays in the fingerprint with its
 declared `type`, `default: null`, `value: null`, and this explicit refusal:
@@ -561,7 +568,7 @@ these cases retain a fingerprint.
 
 | Reason | Refused class |
 |---|---|
-| `ambiguous_binding` | An identifier with an occurrence besides its one recognized declaration and recognized uses (shadows, local declarators, script-body uses), conflicting getter occurrences of one title, or disagreement with native receipt type, default or value. |
+| `ambiguous_binding` | An identifier with an occurrence outside its one recognized declaration and the closed read list (shadows, local declarators, other script-body uses); getters of one title (or security-guard branches) that disagree where the receipt does not pick exactly one; a title the native receipt lists more than once with different settings (several inputs share it); or disagreement with the native receipt's type, default or value, for inputs and for strategy() values alike. |
 | `unsupported_binding` | No recognized declaration, an unrecognized lexical or preprocessor context, an unrecognized getter-family token, an undelimitable literal or comment, or an unrecognized strategy() constructor flow. |
 | `unsupported_default` | Unrecognized default expressions, definitions, numeric spellings/ranges, source expressions, enum spellings outside the canonical vocabulary and non-`true`/`false` booleans; no expression is evaluated to guess a value. |
 | `unsupported_override` | A source override outside the native selector vocabulary. |
