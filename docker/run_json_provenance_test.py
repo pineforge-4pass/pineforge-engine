@@ -441,15 +441,12 @@ def legacy_declaration_e2e(image, artifacts, escaped_cpp, enum_cpp):
                 else:
                     check(label + " applied native float", type(value) is float and value == 1.5, value)
         else:
-            # The emitted script compares Side.long in its logic: that occurrence
-            # is outside the allowlisted declaration/getter forms, so refused.
             row = declared.get("Side", {})
-            check(label + " symbolic default", row.get("default") is None and row.get("resolution") == {
-                "status": "unresolved", "reason": "ambiguous_binding",
-                "raw_default": "Side__long_"}, row)
-            check(label + " numeric value", row.get("value") is None, row)
+            check(label + " symbolic default", type(row.get("default")) is int and row["default"] == 1, row)
+            check(label + " numeric value", type(row.get("value")) is int and row["value"] == expected, row)
             if inputs:
-                check(label + " applied enum integer", applied.get("Side") == "2", applied)
+                check(label + " applied enum integer", type(applied.get("Side")) is int
+                      and applied["Side"] == 2, applied)
         check(label + " native trading", (report["summary"]["total_trades"] > 0) is trading,
               report["summary"])
         check(label + " native capital", report["equity_curve"][0]["equity"] == 10000,
@@ -620,18 +617,6 @@ def class_matrix_e2e(image, artifacts, unicode_only=False):
             actual = provenance.get("inputs", {}).get(row["title"], {})
             typ = int if row["kind"] == "int" else str
             expected = row["value"] if overridden else row["default"]
-            if is_legacy and row["kind"] == "int":
-                # The quantity expression compares each enum member: an
-                # occurrence outside the allowlist, so the default is refused.
-                resolution = actual.get("resolution", {})
-                check(label + " default " + row["class"], actual.get("default") is None
-                      and resolution.get("status") == "unresolved"
-                      and resolution.get("reason") == "ambiguous_binding", actual)
-                check(label + " value " + row["class"], actual.get("value") is None, actual)
-                if overridden:
-                    check(label + " applied " + row["class"],
-                          applied.get(row["title"]) == row["override"], applied.get(row["title"]))
-                continue
             check(label + " default " + row["class"], type(actual.get("default")) is typ
                   and actual["default"] == row["default"], actual)
             check(label + " value " + row["class"], type(actual.get("value")) is typ
@@ -702,10 +687,7 @@ def shadow_binding_e2e(image, artifacts, enum_cpp):
               and fp.get("digest") == "sha256:" + hashlib.sha256(token).hexdigest(), fp.get("digest"))
         row = prov.get("inputs", {}).get("Side", {})
         if label == "plain":
-            # The plain emission also compares Side.long in the script body.
-            check(label + " typed default", row.get("default") is None and row.get("resolution") == {
-                "status": "unresolved", "reason": "ambiguous_binding",
-                "raw_default": "Side__long_"}, row)
+            check(label + " typed default", type(row.get("default")) is int and row["default"] == 1, row)
         else:
             check(label + " explicit unresolved", row.get("default") is None and row.get("value") is None
                   and row.get("resolution") == {"status": "unresolved", "reason": "ambiguous_binding",
@@ -816,6 +798,9 @@ def allowlist_witness_e2e(image, artifacts):
             'get_input_double("mult", 2.0)', 'get_input_double("mult", 1e400)').replace(
             mult_metadata, mult_metadata.replace("2.0", "1e400")), {}),
         ("w5-raw-string", "5-raw", legacy + '\nconst char* note = R"(a"b)";\n', {}),
+        # Review finding 7: raw-string content only, 5,000 digits long.
+        ("w5b-raw-string-digits", "5-raw", legacy + '\nconst char* note7 = R"tag(get_input_int("__raw_only__", '
+         + "7" * 5000 + ')tag";\n', {}),
         ("w6a-qty-type-binding", "6-strategy", once(once(
             legacy, qty_type, "cfg.default_qty_type = q;"),
             "const int Side__long_ = 1;", "constexpr int q = 2;\nconst int Side__long_ = 1;"), {}),
@@ -893,6 +878,9 @@ def allowlist_witness_e2e(image, artifacts):
                     and row["resolution"].get("raw_default") == raw)
 
         if family in ("control", "5-raw") or label == "control-source-high":
+            row = declared.get("Side", {})
+            check(label + " enum read in the body stays typed", type(row.get("default")) is int
+                  and row["default"] == 1 and row.get("value") == 1, row)
             for key, value in (("len", 10), ("mult", 2.0), ("Big", 1)):
                 row = declared.get(key, {})
                 check(label + " typed " + key, type(row.get("default")) is type(value)
@@ -921,9 +909,12 @@ def allowlist_witness_e2e(image, artifacts):
                   and next(row["default"] for row in native["inputs"] if row["name"] == "Side") == "1",
                   [report["summary"]["total_trades"], control["summary"]["total_trades"]])
         if label == "w2a-conflicting-getter":
-            check(label + " conflicting title refused", refused(
-                declared.get("mult", {}), ("ambiguous_binding",), "1"), declared.get("mult"))
-            check(label + " unresolved override stays wire text", applied.get("mult") == "2", applied)
+            # Disposition 3: the receipt (float, default 2) picks the double
+            # getter among the title's two getters; never first-wins.
+            check(label + " conflicting title arbitrated by the receipt", declared.get("mult") == {
+                "type": "double", "default": 2.0, "value": 2.0}, declared.get("mult"))
+            check(label + " applied value is the certified double",
+                  type(applied.get("mult")) is float and applied["mult"] == 2.0, applied)
             row = next(row for row in native["inputs"] if row["name"] == "mult")
             check(label + " native declaration is float", row["type"] == "float"
                   and row["default"] == "2", row)
