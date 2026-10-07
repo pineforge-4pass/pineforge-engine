@@ -11,6 +11,7 @@ import base64
 import hashlib
 import json
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -457,7 +458,176 @@ def legacy_declaration_e2e(image, artifacts, escaped_cpp, enum_cpp):
     return int(not all(passed for _, passed in checks))
 
 
+def producer_classes():
+    """Oracle from the installed pinned producer, never from the consumer mirror."""
+    import importlib.util
+    import inspect
+    from pineforge_codegen.lexer import Lexer, TokenType
+    from pineforge_codegen.codegen.helpers import NamingHelper
+    # Any producer change requires re-auditing the class inventory and mirrors.
+    pinned = {
+        Lexer: "d1285cdfa5883f439d142d9b7855bbb7c1c0ec97709ae43bf7161bc84c15130a",
+        NamingHelper: "130a33d7861d97e75644f2444875e1155ad789c13f40382f0d89769b7e56bf1d",
+    }
+    for owner, digest in pinned.items():
+        assert hashlib.sha256(Path(inspect.getfile(owner)).read_bytes()).hexdigest() == digest
+    spec = importlib.util.spec_from_file_location("installed_release", "/opt/pineforge/bin/run_json.py")
+    consumer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(consumer)
+    identifiers = [
+        ("ascii-upper", "Ascii", "Member"), ("ascii-lower", "ascii", "member"),
+        ("underscore", "_Side", "_member"), ("ascii-digit", "Side2", "member2"),
+        ("unicode-Lu", "ΩSide", "Ωvalue"), ("unicode-Ll", "éSide", "évalue"),
+        ("unicode-Lt", "ǅSide", "ǅvalue"), ("unicode-Lm", "ʰSide", "ʰvalue"),
+        ("unicode-Lo-CJK", "方向", "做多"), ("unicode-Nd", "Side٢", "member٢"),
+        ("unicode-Nl", "SideⅫ", "memberⅫ"), ("unicode-No-digit", "Side²", "member²"),
+        ("unicode-No-number", "Side½", "member½"),
+        ("cpp-reserved", "long", "short"), ("reserved-collision", "_long_", "_short_"),
+        ("accessor-name", "gross_profit", "gross_loss"),
+        ("emitter-temporary", "_nz_v", "_pf_substring_arg1"),
+    ]
+    strings = [
+        ("double-quote", r'"double-quote: \"yes\""'),
+        ("single-quote", r"'single-quote: \'yes\''"),
+        ("backslash", r'"backslash: \\tail"'),
+        ("newline-escape", r'"newline-escape: \nline"'),
+        ("tab-escape", r'"tab-escape: \tstop"'),
+        ("unknown-r", r'"unknown-r: \rtail"'),
+        ("unknown-zero", r'"unknown-zero: \0tail"'),
+        ("unknown-hex", r'"unknown-hex: \x41"'),
+        ("unknown-unicode-notation", r'"unknown-unicode-notation: \u4e2d"'),
+        ("unknown-letter", r'"unknown-letter: \qtail"'),
+        ("unknown-Unicode", r'"unknown-Unicode: \界"'),
+        ("escaped-physical-newline", '"escaped-physical-newline: one\\\ntwo"'),
+        ("wrapped", '"wrapped: one\n    two"'),
+        ("triple-double", '"""triple-double: one\n  two"""'),
+        ("triple-single", "'''triple-single: one\n  two'''"),
+        ("raw-tab", '"raw-tab: A\tB"'), ("raw-CR", '"raw-CR: A\rB"'),
+        ("raw-NUL", '"raw-NUL: before\0after"'),
+        ("raw-controls", '"raw-controls: ' + ''.join(chr(n) for n in range(1, 32)
+                                                      if n not in (9, 10, 13)) + chr(127) + '"'),
+        ("literal-Unicode", '"literal-Unicode: 倍数Ωé🙂"'),
+        ("literal-backslash-unknown", r'"literal-backslash-unknown: \\q"'),
+    ]
+    rows, declarations, quantities, bindings = [], [], [], []
+    predicate = getattr(consumer, "_release_codegen_identifier", lambda value: False)
+    for i, (label, name, member) in enumerate(identifiers):
+        for word in (name, member):
+            tokens = [t for t in Lexer(word).tokenize() if t.type not in (TokenType.NEWLINE, TokenType.EOF_TOKEN)]
+            assert len(tokens) == 1 and tokens[0].type == TokenType.IDENT and tokens[0].value == word
+            bindings.append([label + " identifier " + word, predicate(word)])
+        title = "enum:" + label
+        declarations.append(f'enum {name}\n    neutral\n    {member}\n    other\nv{i} = input.enum({name}.{member}, "{title}")')
+        quantities.append(f'(v{i} == {name}.{member} ? 1 : 2)')
+        rows.append({"class": label, "title": title, "default": 1, "override": "2", "value": 2, "kind": "int"})
+    for i, (label, literal) in enumerate(strings):
+        tokens = [t for t in Lexer(literal).tokenize() if t.type == TokenType.STRING]
+        assert len(tokens) == 1
+        value = tokens[0].value
+        encoded = NamingHelper._cpp_string_escape(value)
+        native = value.split("\0", 1)[0]
+        bindings.append([label + " emitter inverse", consumer._release_cpp_input_name(encoded) == native])
+        declarations.append(f's{i} = input.string({literal}, {literal})')
+        override = value + ":override"
+        rows.append({"class": label, "title": native, "default": native,
+                     "override": override, "value": override.split("\0", 1)[0], "kind": "str",
+                     "pine_literal": literal, "pine_decoded": value, "cpp_encoded": encoded})
+    for rejected in ("2Side", "٢Side", "a\u0301", "$name", "a-b", "🙂"):
+        try:
+            tokens = [t for t in Lexer(rejected).tokenize() if t.type not in (TokenType.NEWLINE, TokenType.EOF_TOKEN)]
+            accepted = len(tokens) == 1 and tokens[0].type == TokenType.IDENT and tokens[0].value == rejected
+        except Exception:
+            accepted = False
+        bindings.append(["rejected boundary " + repr(rejected), predicate(rejected) == accepted])
+    strategy = STRATEGY.replace('armed = input.bool', '\n'.join(declarations) + '\narmed = input.bool')
+    strategy = strategy.replace('qty=mult', 'qty=(' + ' + '.join(quantities) + ')')
+    return {"producer_sha256": list(pinned.values()), "rows": rows, "bindings": bindings,
+            "strategy": strategy, "enum_count": len(identifiers)}
+
+
+def class_matrix_e2e(image, artifacts):
+    """One producer-bound table for identifier/escape defaults and overrides."""
+    artifacts.mkdir(parents=True)
+    checks = []
+    def check(name, condition, value):
+        checks.append((name, bool(condition)))
+        print(f"{'PASS' if condition else 'FAIL'} {name}: {value}", flush=True)
+    oracle_command = ["docker", "run", "--rm", "--network", "none", "--user", "0",
+                      "--mount", f"type=bind,src={Path(__file__).resolve()},dst=/probe.py,readonly",
+                      "--entrypoint", "python3", image, "/probe.py", "--producer-classes"]
+    oracle = subprocess.run(oracle_command, capture_output=True, text=True, timeout=120)
+    (artifacts / "producer.command.json").write_text(json.dumps(oracle_command))
+    (artifacts / "producer.stdout.json").write_text(oracle.stdout)
+    (artifacts / "producer.stderr.log").write_text(oracle.stderr)
+    (artifacts / "producer.exit").write_text(str(oracle.returncode) + "\n")
+    if oracle.returncode:
+        raise RuntimeError("Pinned producer binding/setup failed; no matrix run")
+    data = json.loads(oracle.stdout)
+    for name, passed in data["bindings"]:
+        check("binding " + name, passed, passed)
+    legacy = None
+    for label, is_legacy, overridden in (("checked-default", False, False),
+                                         ("legacy-default", True, False),
+                                         ("legacy-override", True, True)):
+        case = (artifacts / label).resolve()
+        source, compiled = case / "input", case / "compiled"
+        source.mkdir(parents=True)
+        compiled.mkdir()
+        compiled.chmod(0o777)
+        (source / ("strategy.cpp" if is_legacy else "strategy.pine")).write_text(
+            legacy if is_legacy else data["strategy"], encoding="utf-8")
+        (source / "ohlcv.csv").write_text(synthetic_csv())
+        inputs = {row["title"]: row["override"] for row in data["rows"]} if overridden else {}
+        command = ["docker", "run", "--rm", "--network", "none",
+                   "--mount", f"type=bind,src={source},dst=/in,readonly",
+                   "--mount", f"type=bind,src={compiled},dst=/proof",
+                   "-e", "PINEFORGE_INPUTS=" + json.dumps(inputs), image]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+        (case / "command.json").write_text(json.dumps(command))
+        (case / "stdout.json").write_text(result.stdout)
+        (case / "stderr.log").write_text(result.stderr)
+        (case / "exit").write_text(str(result.returncode) + "\n")
+        report = json.loads(result.stdout)
+        check(label + " CLI success", result.returncode == 0, result.returncode)
+        if result.returncode:
+            raise RuntimeError("Native matrix run failed; dependent runs not launched")
+        if not is_legacy:
+            sources = list(compiled.glob("*.cpp"))
+            assert len(sources) == 1
+            legacy = sources[0].read_text()
+            for name in ("strategy_settings_api_version", "strategy_create_checked",
+                         "strategy_set_input_checked", "strategy_set_override_checked"):
+                legacy = legacy.replace(name, "fixture_legacy_" + name)
+        fp = report.get("fingerprint") or {}
+        provenance = fp.get("provenance", {})
+        token = base64.b64decode(fp.get("token", ""))
+        check(label + " fingerprint", bool(token) and json.loads(token) == provenance
+              and fp.get("digest") == "sha256:" + hashlib.sha256(token).hexdigest(), fp.get("digest"))
+        check(label + " raw inputs", report.get("applied_inputs") == inputs, report.get("applied_inputs"))
+        applied = provenance.get("applied", {}).get("inputs", {})
+        check(label + " applied keys", set(applied) == set(inputs), list(applied))
+        for row in data["rows"]:
+            actual = provenance.get("inputs", {}).get(row["title"], {})
+            typ = int if row["kind"] == "int" else str
+            expected = row["value"] if overridden else row["default"]
+            check(label + " default " + row["class"], type(actual.get("default")) is typ
+                  and actual["default"] == row["default"], actual)
+            check(label + " value " + row["class"], type(actual.get("value")) is typ
+                  and actual["value"] == expected, actual)
+            if overridden:
+                check(label + " applied " + row["class"], type(applied.get(row["title"])) is typ
+                      and applied[row["title"]] == expected, applied.get(row["title"]))
+        check(label + " native quantity", report["trades"][0]["qty"] == data["enum_count"] * (2 if overridden else 1),
+              report["trades"][0])
+    (artifacts / "checks.json").write_text(json.dumps(checks, indent=2) + "\n")
+    print(f"{sum(passed for _, passed in checks)}/{len(checks)} checks passed", flush=True)
+    return int(not all(passed for _, passed in checks))
+
+
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--producer-classes"]:
+        print(json.dumps(producer_classes(), ensure_ascii=True))
+        raise SystemExit(0)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
     parser.add_argument("--artifacts", required=True, type=Path)
@@ -465,7 +635,10 @@ if __name__ == "__main__":
     parser.add_argument("--review-legacy-cpp", type=Path)
     parser.add_argument("--legacy-escaped-cpp", type=Path)
     parser.add_argument("--legacy-enum-cpp", type=Path)
+    parser.add_argument("--class-matrix", action="store_true")
     options = parser.parse_args()
+    if options.class_matrix:
+        raise SystemExit(class_matrix_e2e(options.image, options.artifacts))
     if options.legacy_escaped_cpp or options.legacy_enum_cpp:
         if not (options.legacy_escaped_cpp and options.legacy_enum_cpp):
             parser.error("both legacy declaration sources are required")
