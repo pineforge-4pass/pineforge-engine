@@ -807,6 +807,16 @@ _RELEASE_PRODUCER_DEFINES = frozenset(r'''#define _PF_NO_DATA_STOP(function, cal
 #define PF_PINE_TIME_SESSION_DAY_ARGS(tz, sess)
 #define PF_VWAP_SESSION_ANCHOR_ARGS(tz, sess) , tz, sess
 #define PF_VWAP_SESSION_ANCHOR_ARGS(tz, sess)'''.splitlines())
+# Function-like macros a getter argument could reach: the producer's own (the
+# only #define lines a unit may hold; the engine headers define none) and the
+# standard library's. A replacement list may drop or repeat an argument, so a
+# getter inside a macro argument is never certified.
+_RELEASE_MACROS = frozenset(
+    re.match(r"#define ([A-Za-z_][A-Za-z0-9_]*)\(", line).group(1)
+    for line in _RELEASE_PRODUCER_DEFINES) | frozenset({
+        "assert", "offsetof", "setjmp", "va_arg", "va_copy", "va_end", "va_start",
+        "INT8_C", "INT16_C", "INT32_C", "INT64_C", "INTMAX_C",
+        "UINT8_C", "UINT16_C", "UINT32_C", "UINT64_C", "UINTMAX_C"})
 _RELEASE_OPERATORS = ("...", "->*", "::", "&&", "||", "==", "!=", "<=", ">=",
                       "++", "--", "->", ".*", "+=", "-=", "*=", "/=", "%=",
                       "&=", "|=", "^=", "<<", ">>", "##")
@@ -1028,7 +1038,8 @@ def _release_cpp_tokens(text):
 
 def _release_code_context(token):
     """Code the producer emits: no directive line, and only inside the first
-    branch of its settings guard or any branch of its security guard."""
+    branch of its settings guard or the #ifdef / #else branch of its security
+    guard."""
     return not token[4] and all(
         (opener == _RELEASE_SETTINGS_BRANCH and branch == opener)
         or (opener == _RELEASE_SECURITY_GUARD and branch in (opener, ("else",)))
@@ -1121,11 +1132,37 @@ def _release_getter_calls(tokens):
 
     A recognized call is one of the six producer getters in code context,
     after an expression token, with a plain literal title and exactly one
-    balanced default argument: name ( "title" , default )."""
+    balanced default argument: name ( "title" , default ). A getter call of
+    that shape inside a macro argument is returned apart (never certified)."""
     calls = []
+    macro_calls = []
     intact = True
+    # Code tokens inside an argument of a function-like macro invocation.
+    in_macro = [False] * len(tokens)
+    stack = []
+    for index, token in enumerate(tokens):
+        if token[4]:
+            continue
+        in_macro[index] = any(stack)
+        if token[3] == "op" and token[0] in ("(", "[", "{"):
+            previous = _release_previous(tokens, index)
+            stack.append(token[0] == "(" and previous is not None and previous[3] == "ident"
+                         and previous[0] in _RELEASE_MACROS)
+        elif token[3] == "op" and token[0] in (")", "]", "}") and stack:
+            stack.pop()
     for index, token in enumerate(tokens):
         if token[3] != "ident" or not token[0].startswith("get_input_"):
+            continue
+        if in_macro[index]:
+            close = (_release_closing(tokens, index + 1)
+                     if index + 4 < len(tokens) and tokens[index + 1][0] == "(" else None)
+            if (token[0] in _RELEASE_GETTERS and _release_code_context(token)
+                    and close is not None and tokens[index + 2][3] == "string"
+                    and tokens[index + 3][0] == "," and close > index + 4):
+                macro_calls.append((index, close, _RELEASE_GETTERS[token[0]],
+                                    tokens[index + 2][0][1:-1], tokens[index + 4:close]))
+            else:
+                intact = False
             continue
         previous = _release_previous(tokens, index)
         position = _release_previous_index(tokens, index)
@@ -1165,7 +1202,7 @@ def _release_getter_calls(tokens):
         else:
             calls.append((index, close, _RELEASE_GETTERS[token[0]], tokens[index + 2][0][1:-1],
                           default))
-    return calls, intact
+    return calls, intact, macro_calls
 
 
 def _release_previous_index(tokens, index):
@@ -1369,12 +1406,20 @@ def _release_legacy_declarations(cpp_text, receipt=None, *, allow_unresolved=Fal
         if not allow_unresolved:
             raise
         return None
-    calls, intact = _release_getter_calls(tokens)
-    for _, _, declared_type, _, default in calls:
+    calls, intact, macro_calls = _release_getter_calls(tokens)
+    for _, _, declared_type, _, default in calls + macro_calls:
         if declared_type in ("int", "int64", "double"):
             # Concrete literal evidence meets the domain before any refusal.
             _release_literal_default([item[0] for item in default],
                                      [item[3] for item in default], declared_type)
+    in_macros = {}
+    for _, _, declared_type, spelling, default in macro_calls:
+        try:
+            name = _release_cpp_input_name(spelling)
+        except ValueError:
+            intact = False
+            continue
+        in_macros.setdefault(name, (declared_type, cpp_text[default[0][1]:default[-1][2]]))
     rows = {}
     for index, close, declared_type, spelling, default in calls:
         try:
@@ -1419,11 +1464,23 @@ def _release_legacy_declarations(cpp_text, receipt=None, *, allow_unresolved=Fal
                 tokens, trusted, calls, declared_type, list(words), default)
             if symbolic:
                 metadata["_symbolic"] = True
+        if name in in_macros:
+            # A getter of this title sits in a macro argument, which the
+            # replacement list may drop or repeat: no declaration to certify.
+            metadata.pop("_candidates", None)
+            metadata.pop("_symbolic", None)
+            metadata["_reason"] = "macro_argument"
         if metadata["_reason"]:
             metadata["default"] = None
             if not allow_unresolved:
                 raise ValueError(metadata["_reason"])
         declared[name] = metadata
+    for name, (declared_type, raw) in in_macros.items():
+        if name not in declared:
+            if not allow_unresolved:
+                raise ValueError("macro_argument")
+            declared[name] = {"type": declared_type, "default": None, "_raw_default": raw,
+                              "_reason": "macro_argument", "_types": [declared_type]}
     return declared
 
 
@@ -1694,26 +1751,30 @@ def _release_legacy_strategy(cpp_text):
 
 def _release_legacy_receipt_rows(receipt, section="inputs"):
     """Legacy receipt rows by native name: (unique rows, native-ambiguous
-    names, every row). A malformed row makes the receipt unusable; a name the
-    receipt lists more than once with differing settings is native-ambiguous
-    (several inputs share that title) and is never used to certify."""
+    names with their number of distinct uncoerced (type, default) pairs, every
+    row). A malformed row makes the receipt unusable; a name the receipt lists
+    more than once with differing settings is native-ambiguous (several inputs
+    share that title) and is never used to certify."""
     rows = receipt.get(section) if isinstance(receipt, dict) else None
     if not isinstance(rows, list):
-        return {}, frozenset(), []
+        return {}, {}, []
     by_name = {}
     for row in rows:
         if (not isinstance(row, dict) or not isinstance(row.get("name"), str)
                 or type(row.get("supported")) is not bool
                 or not all(isinstance(row.get(key), str)
                            for key in ("type", "default", "effective_value"))):
-            return {}, frozenset(), []
+            return {}, {}, []
         by_name.setdefault(row["name"], []).append(row)
     unique = {}
+    ambiguous = {}
     for name, items in by_name.items():
         if len({(item["type"], item["default"], item["effective_value"], item["supported"])
                 for item in items}) == 1:
             unique[name] = items[0]
-    return unique, frozenset(by_name) - frozenset(unique), rows
+        else:
+            ambiguous[name] = len({(item["type"], item["default"]) for item in items})
+    return unique, ambiguous, rows
 
 
 def normalize_release_provenance(provenance, cpp_text, receipt, checked):
@@ -1795,11 +1856,14 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
                         continue
                     _release_domain(_release_scalar(converted, kind))
             native = legacy_rows.get(name)
+            distinct = native_ambiguous.get(name, 0)
             if name in native_ambiguous:
                 # The native settings list this title more than once with
                 # different settings: no single declaration to certify.
                 candidates = None
-                reason = reason or "ambiguous_binding"
+                # TOP ruling 2026-10-07 22:58: two or more distinct native
+                # (type, default) pairs share the title; name it, with the count.
+                reason = "duplicate_title" if distinct >= 2 else reason or "ambiguous_binding"
             if candidates is not None and native is not None and native["supported"] is True:
                 # The receipt arbitrates: exactly one (getter type, default)
                 # must match its own type and default, without coercion.
@@ -1851,6 +1915,8 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
             else:
                 metadata.update(default=None, value=None, resolution={
                     "status": "unresolved", "reason": reason, "raw_default": raw_default})
+                if reason == "duplicate_title":
+                    metadata["resolution"]["distinct_native_inputs"] = distinct
         declared_names = frozenset(declared)
         for raw_name, text in applied_inputs.items():
             native_name = raw_name.split("\0", 1)[0]
