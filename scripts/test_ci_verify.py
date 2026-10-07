@@ -2609,7 +2609,7 @@ class CTestDeadlines(unittest.TestCase):
             self.assertIn('Timeout', (build / 'ci-logs/ctest.log').read_text())
 
     def test_failed_and_skipped_labelled_rows_keep_their_counts(self):
-        # Real CTest prints a listed row's labels after its status, as a main
+        # Newer CTest prints a listed row's labels after its status, as a main
         # run printed '\t  2 - test_ci_verify (Timeout)    slow' for the timed-out
         # slow row. Those rows must stay counted so a failed run's summary
         # still records how many rows ran, were skipped or could not start.
@@ -2629,11 +2629,27 @@ class CTestDeadlines(unittest.TestCase):
         ))
         with tempfile.TemporaryDirectory() as temporary:
             (Path(temporary) / 'CTestTestfile.cmake').write_text(inventory + '\n')
+            discovered = default_runner(
+                ['ctest', '--test-dir', temporary, '--show-only=json-v1'],
+                timeout=120, stream_output=False)
+            self.assertEqual(discovered.returncode, 0, discovered.stdout)
+            registered = json.loads(discovered.stdout)['tests']
+            self.assertEqual({test['name'] for test in registered},
+                             {'labelled_pass', 'labelled_fail', 'labelled_skip',
+                              'labelled_not_run'})
+            for test in registered:
+                with self.subTest(name=test['name']):
+                    properties = {item['name']: item['value']
+                                  for item in test['properties']}
+                    self.assertEqual(set(properties['LABELS']), {'slow', 'live'})
             result = default_runner(
                 ['ctest', '--test-dir', temporary, '--output-on-failure', '--no-tests=error',
                  '--parallel', '2'], timeout=120, stream_output=False)
         output = result.stdout.decode('utf-8', 'replace')
-        self.assertRegex(output, r'labelled_fail \(Failed\)[ \t]+\S', output)
+        self.assertEqual(result.returncode, 8, output)
+        self.assertRegex(output,
+                         r'(?m)^[ \t]*2 - labelled_fail \(Failed\)(?:[ \t]+\S.*)?[ \t]*$',
+                         output)
         rows = ctest_rows(result.stdout)
         self.assertEqual((rows.total, rows.ran), (4, 2), output)
         self.assertEqual(rows.skipped, ('labelled_skip',), output)
