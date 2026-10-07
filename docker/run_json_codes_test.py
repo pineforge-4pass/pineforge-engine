@@ -1427,6 +1427,8 @@ def test_any_other_symbol_occurrence_refuses(tmp_path, extra):
     "#define get_input_int(a, b) 7\n",
     '#include "local.h"\n',
     "#pragma once\n",
+    "%:define true false\n",
+    "int table<:2:> = <%1, 2%>;\n",
 ])
 def test_unrecognized_lexical_context_refuses_every_row(tmp_path, extra):
     cpp = extra + ENUM_TU
@@ -1593,6 +1595,8 @@ def test_unrecognized_strategy_defaults_are_unresolved(tmp_path, assignment, key
      "        configure_pine_strategy(cfg);\n        cfg.pyramiding = 3;"),
     ("    void init() {", "    void init() { enum class QtyType { CASH }; }\n    void other() {"),
     ("        cfg.default_qty_type", "        if (side) cfg.pyramiding = 2;\n        cfg.default_qty_type"),
+    ("    void init() {", "    void configure_pine_strategy(int) {}\n    void init() {"),
+    ("    void init() {", "    struct PineStrategyConfig { int pyramiding; };\n    void init() {"),
 ])
 def test_unrecognized_strategy_flow_refuses_every_default(tmp_path, change):
     cpp = ENUM_TU.replace(*change)

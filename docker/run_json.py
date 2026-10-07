@@ -904,6 +904,13 @@ def _release_cpp_tokens(text):
         elif char not in "\"'":
             if char == "\\":
                 trusted = False
+            # Digraphs (%: <% %> <: :>) would hide a directive or a brace;
+            # `<::` not followed by `:` or `>` is the ordinary `<` `::`.
+            pair = text[position:position + 2]
+            if pair in ("%:", "<%", "%>", ":>") or (
+                    pair == "<:" and (text[position:position + 3] != "<::"
+                                      or text[position + 3:position + 4] in (":", ">"))):
+                trusted = False
             operator = next((op for op in _RELEASE_OPERATORS
                              if text.startswith(op, position)), char)
             position += len(operator)
@@ -1360,6 +1367,14 @@ def _release_legacy_strategy(cpp_text):
     if len(bodies) != 1:
         return refuse("ambiguous_binding" if bodies else "unsupported_binding")
     opening, closing = bodies[0]
+    # The engine's config type and its one configure call, never a local one.
+    for index, token in enumerate(tokens):
+        if token[0] == "PineStrategyConfig" and (
+                token[4] or [item[0] for item in tokens[max(0, index - 4):index]]
+                != ["pineforge", "::", "source", "::"]):
+            return refuse("unsupported_binding")
+    if sum(token[0] == "configure_pine_strategy" for token in tokens) > 1:
+        return refuse("unsupported_binding")
     enum_bound = {}
     for key, (enum_name, members) in _RELEASE_STRATEGY_ENUMS.items():
         enum_bound[key] = all(
@@ -1377,7 +1392,7 @@ def _release_legacy_strategy(cpp_text):
             continue
         at = words.index("PineStrategyConfig")
         prefix, rest = words[:at], words[at + 1:]
-        if (prefix in ([], ["source", "::"], ["pineforge", "::", "source", "::"],
+        if (prefix in (["pineforge", "::", "source", "::"],
                        ["::", "pineforge", "::", "source", "::"])
                 and len(rest) >= 2 and tokens[statement[at + 1]][3] == "ident"
                 and rest[1:] in ([";"], ["{", "}", ";"], ["(", ")", ";"])
