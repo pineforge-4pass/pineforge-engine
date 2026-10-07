@@ -1430,6 +1430,8 @@ def test_any_other_symbol_occurrence_refuses(tmp_path, extra):
     '#include "local.h"\n',
     "#pragma once\n",
     "%:define true false\n",
+    "#include </in/strategy_header.h>\n",
+    "#include <pineforge/../../in/header.hpp>\n",
     "int table<:2:> = <%1, 2%>;\n",
 ])
 def test_unrecognized_lexical_context_refuses_every_row(tmp_path, extra):

@@ -842,7 +842,12 @@ def _release_cpp_tokens(text):
                 raise _ReleaseUnreadable("unbalanced conditional")
             stack.pop()
         elif name == "include":
-            if not (len(words) > 3 and words[2] == "<" and words[-1] == ">"):
+            # Only the producer's engine and standard headers, never a path
+            # that could reach a header of the caller's.
+            header = "".join(words[3:-1])
+            if not (len(words) > 3 and words[2] == "<" and words[-1] == ">"
+                    and ".." not in header
+                    and re.fullmatch(r"pineforge/[A-Za-z0-9_/]+\.hpp|[a-z_]+", header)):
                 trusted = False
         elif name in ("define", "undef"):
             if not (len(words) > 2 and words[2] in _RELEASE_PRODUCER_MACROS):

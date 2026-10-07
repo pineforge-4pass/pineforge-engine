@@ -517,7 +517,8 @@ and character literals and raw string literals (`R"delim(...)delim"`, with
 `u8R`/`uR`/`UR`/`LR`) are delimited exactly. Code context excludes preprocessor
 lines and every conditional group except `#ifdef PF_SETTINGS_API_VERSION` (the
 producer's checked-settings metadata). The recognized directives are
-`#include <...>`, `#define`/`#undef` of the 13 macro names the producer defines,
+`#include <pineforge/...hpp>` or a bare standard header, `#define`/`#undef` of
+the 13 macro names the producer defines,
 `#error` and conditionals;
 any other directive, a line splice anywhere, or a backslash outside a literal
 (a universal-character name) leaves no row of that unit certified.
