@@ -85,7 +85,7 @@ def image_e2e(image, artifacts, harness=None):
                 return document
             check(label + " CLI success", process.returncode == 0
                   and "fingerprint" in document, process.returncode)
-            fingerprint = document.get("fingerprint", {})
+            fingerprint = document.get("fingerprint") or {}
             provenance = fingerprint.get("provenance", {})
             token = base64.b64decode(fingerprint.get("token", ""))
             check(label + " fingerprint identity", bool(token)
@@ -94,6 +94,9 @@ def image_e2e(image, artifacts, harness=None):
                   fingerprint.get("digest"))
             for name, values in (("inputs", inputs), ("overrides", overrides)):
                 expected = {key: str(value) for key, value in (values or {}).items()}
+                check(label + " applied keys " + name,
+                      set(provenance.get("applied", {}).get(name, {})) == set(expected),
+                      provenance.get("applied", {}).get(name, {}))
                 check(label + " setter wire " + name,
                       document.get("applied_" + name) == expected,
                       document.get("applied_" + name))
@@ -123,7 +126,7 @@ def image_e2e(image, artifacts, harness=None):
         for label, inputs, overrides, armed, length, multiplier, close in cases:
             report = run(label, inputs, overrides)
             reports[label] = report
-            provenance = report.get("fingerprint", {}).get("provenance", {})
+            provenance = (report.get("fingerprint") or {}).get("provenance", {})
             declared = provenance.get("inputs", {})
             for key, expected, value_type in (("armed", armed, bool), ("len", length, int),
                                               ("mult", multiplier, float)):
@@ -168,12 +171,50 @@ def image_e2e(image, artifacts, harness=None):
                     "pyramiding": 2, "slippage": 1, "process_orders_on_close": True,
                     "calc_on_order_fills": False, "close_entries_rule": "ANY",
                     "default_qty_type": "cash", "commission_type": "cash_per_order"}
-        provenance = enum_report.get("fingerprint", {}).get("provenance", {})
+        provenance = (enum_report.get("fingerprint") or {}).get("provenance", {})
         for name, actual in (("strategy", provenance.get("strategy", {})),
                              ("applied overrides", provenance.get("applied", {}).get("overrides", {}))):
             check("all overrides " + name,
                   all(type(actual.get(key)) is type(value) and actual[key] == value
                       for key, value in expected.items()), actual)
+
+        titles = {"armed": 'armed "yes"', "len": "path\\length",
+                  "mult": '倍数\\ "quoted"'}
+        escaped_strategy = STRATEGY
+        for plain, title in titles.items():
+            escaped_strategy = escaped_strategy.replace(
+                json.dumps(plain), json.dumps(title, ensure_ascii=False))
+        escaped_strategy += 'unused = input.string(size.tiny, "unused")\n'
+        (source / "strategy.pine").write_text(escaped_strategy, encoding="utf-8")
+        (artifacts / "escaped-strategy.pine").write_text(
+            escaped_strategy, encoding="utf-8")
+        for label, values, expected in (
+            ("escaped-defaults", None, (True, 10, 2.0)),
+            ("escaped-overrides", {titles["armed"]: "false",
+                                   titles["len"]: "14.0",
+                                   titles["mult"]: "1.5"}, (False, 14, 1.5)),
+            ("escaped-c-string", {titles["armed"] + "\0suffix": "false\0true",
+                                  titles["len"]: "14", titles["mult"]: "1.5"},
+             (False, 14, 1.5)),
+        ):
+            report = run(label, values)
+            declared = (report.get("fingerprint") or {}).get(
+                "provenance", {}).get("inputs", {})
+            check(label + " decoded identities",
+                  set(declared) == set(titles.values()) | {
+                      "scalar", "numeric_text", "unused"}, list(declared))
+            for plain, value in zip(titles, expected):
+                row = declared.get(titles[plain], {})
+                default = {"armed": True, "len": 10, "mult": 2.0}[plain]
+                check(label + " typed " + plain,
+                      type(row.get("value")) is type(value)
+                      and row["value"] == value
+                      and type(row.get("default")) is type(default)
+                      and row["default"] == default, row)
+            check(label + " unused unsupported default",
+                  declared.get("unused", {}).get("default") == ""
+                  and declared.get("unused", {}).get("value") == "",
+                  declared.get("unused"))
 
     failed = [name for name, passed in results if not passed]
     (artifacts / "checks.json").write_text(json.dumps(results, indent=2) + "\n")

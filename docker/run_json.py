@@ -620,6 +620,226 @@ def build_fingerprint(provenance: dict) -> dict:
 # <<< fingerprint helpers
 
 
+_RELEASE_OVERRIDE_TYPES = {
+    "initial_capital": "float",
+    "commission_value": "float",
+    "default_qty_value": "float",
+    "pyramiding": "int",
+    "slippage": "int",
+    "process_orders_on_close": "bool",
+    "calc_on_order_fills": "bool",
+    "close_entries_rule": "string",
+    "default_qty_type": "string",
+    "commission_type": "string",
+}
+_RELEASE_ENUM_WORDS = {
+    "close_entries_rule": ("FIFO", "ANY"),
+    "default_qty_type": ("fixed", "percent_of_equity", "cash"),
+    "commission_type": ("percent", "cash_per_order", "cash_per_contract"),
+}
+
+
+def _release_scalar(value, declared_type):
+    if declared_type in ("string", "source", "enum", "unknown"):
+        return str(value)
+    if declared_type == "bool":
+        if type(value) is bool:
+            return value
+        if value in ("true", "1"):
+            return True
+        if value in ("false", "0"):
+            return False
+        raise ValueError("unrepresentable declared boolean")
+    scalar = _coerce_scalar(str(value))
+    if type(scalar) not in (int, float):
+        raise ValueError("unrepresentable declared number")
+    if declared_type in ("int", "int64"):
+        if type(scalar) is float and not scalar.is_integer():
+            raise ValueError("nonintegral declared integer")
+        return int(scalar)
+    if declared_type in ("float", "double"):
+        result = float(scalar)
+        if not math.isfinite(result):
+            raise ValueError("nonfinite declared float")
+        return result
+    raise ValueError("unsupported declared scalar type")
+
+
+def _release_legacy_number(text, declared_type):
+    """Use the same C conversions underlying std::stoi/stoll/stod."""
+    library = ctypes.CDLL(None, use_errno=True)
+    integer = declared_type in ("int", "int64")
+    function = library.strtoll if integer else library.strtod
+    function.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
+    function.restype = ctypes.c_longlong if integer else ctypes.c_double
+    if integer:
+        function.argtypes.append(ctypes.c_int)
+    buffer = ctypes.create_string_buffer(text.encode("utf-8"))
+    end = ctypes.c_void_p()
+    ctypes.set_errno(0)
+    arguments = [buffer, ctypes.byref(end)]
+    if integer:
+        arguments.append(10)
+    result = function(*arguments)
+    if end.value == ctypes.addressof(buffer) or ctypes.get_errno():
+        raise ValueError("legacy numeric conversion failed")
+    if declared_type == "int" and not -(2 ** 31) <= result < 2 ** 31:
+        raise ValueError("legacy integer conversion out of range")
+    return result
+
+
+def _release_settings_receipt(lib, state, checked):
+    if not checked or not hasattr(lib, "strategy_get_effective_settings"):
+        return None
+    try:
+        required = ctypes.c_size_t()
+        error = ctypes.create_string_buffer(_SETTINGS_ERROR_CAPACITY)
+        getter = lib.strategy_get_effective_settings
+        if getter(state, None, 0, ctypes.byref(required), error,
+                  _SETTINGS_ERROR_CAPACITY) != PF_SETTINGS_BUFFER_TOO_SMALL:
+            return None
+        if not 0 < required.value <= 16 * 1024 * 1024:
+            return None
+        buffer = ctypes.create_string_buffer(required.value)
+        if getter(state, buffer, required.value, ctypes.byref(required), error,
+                  _SETTINGS_ERROR_CAPACITY) != PF_SETTINGS_OK:
+            return None
+        receipt = json.loads(buffer.value.decode("utf-8"))
+        if not isinstance(receipt, dict) or receipt.get("version") != 1:
+            return None
+        return receipt
+    except (AttributeError, TypeError, ValueError, RecursionError):
+        return None
+
+
+def _release_receipt_rows(receipt, section):
+    rows = receipt.get(section)
+    if not isinstance(rows, list):
+        raise ValueError("missing checked settings section")
+    result = {}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("name"), str):
+            raise ValueError("malformed checked setting")
+        name = row["name"]
+        if name in result or type(row.get("supported")) is not bool:
+            raise ValueError("ambiguous or malformed checked setting")
+        if not all(isinstance(row.get(key), str)
+                   for key in ("type", "default", "effective_value")):
+            raise ValueError("malformed checked scalar")
+        result[name] = row
+    return result
+
+
+def normalize_release_provenance(provenance, cpp_text, receipt, checked):
+    """Normalize only the fresh release document, before its fingerprint."""
+    applied_inputs = provenance["applied"]["inputs"]
+    applied_overrides = provenance["applied"]["overrides"]
+    native_overrides = {name.split("\0", 1)[0]: value
+                        for name, value in applied_overrides.items()}
+    input_rows = {}
+    override_rows = {}
+    if checked:
+        if receipt is None:
+            raise ValueError("checked settings receipt unavailable")
+        input_rows = _release_receipt_rows(receipt, "inputs")
+        override_rows = _release_receipt_rows(receipt, "overrides")
+
+    if checked:
+        # Receipt names are native decoded identities. Getter regex captures
+        # contain C++ escapes and must never be joined to these verbatim.
+        declared = {}
+        for name, row in input_rows.items():
+            declared_type = ("source" if row.get("kind") == "source"
+                             else row["type"])
+            value = _release_scalar(row["effective_value"], declared_type)
+            # Unsupported means the setter cannot honour an override. Its
+            # getter still evaluates the default; metadata can be a placeholder.
+            default = (_release_scalar(row["default"], declared_type)
+                       if row["supported"] else value)
+            declared[name] = {"type": declared_type, "default": default,
+                              "value": value}
+        for name, text in applied_inputs.items():
+            # ctypes passes UTF-8 C strings: embedded NUL terminates a key.
+            # Keep the raw applied key, but use the native key for its value.
+            native_name = name.split("\0", 1)[0]
+            if native_name in declared:
+                applied_inputs[name] = declared[native_name]["value"]
+            else:
+                declared[name] = {"type": "unknown", "default": None,
+                                  "value": str(text)}
+        provenance["inputs"] = declared
+    else:
+        for name, metadata in provenance["inputs"].items():
+            declared_type = metadata["type"]
+            if declared_type == "unknown":
+                metadata["value"] = str(metadata["value"])
+                continue
+            default = _release_scalar(metadata["default"], declared_type)
+            value = default
+            if name in applied_inputs:
+                text = applied_inputs[name].split("\0", 1)[0]
+                if declared_type == "bool":
+                    value = (True if text in ("true", "1") else
+                             False if text in ("false", "0") else default)
+                elif declared_type in ("int", "int64", "float", "double"):
+                    try:
+                        value = _release_legacy_number(text, declared_type)
+                    except ValueError:
+                        value = default
+                else:
+                    value = text
+            metadata["default"] = default
+            metadata["value"] = _release_scalar(value, declared_type)
+            if name in applied_inputs:
+                applied_inputs[name] = metadata["value"]
+
+    defaults = effective_strategy(cpp_text, {})
+    body = _ctor_body(cpp_text)
+    declaration = _CFG_DECL_RE.search(body)
+    pattern = (r"\b" + re.escape(declaration.group(1))
+               + r"\.calc_on_order_fills\s*=\s*([^;]+);"
+               if declaration else r"\bcalc_on_order_fills_\s*=\s*([^;]+);")
+    fill_defaults = re.findall(pattern, body)
+    defaults["calc_on_order_fills"] = (
+        _coerce_scalar(fill_defaults[-1]) if fill_defaults else False)
+
+    for name, declared_type in _RELEASE_OVERRIDE_TYPES.items():
+        if checked:
+            row = override_rows.get(name)
+            if (row is None or row["type"] != declared_type
+                    or row["supported"] is not True):
+                raise ValueError("declared override missing or mistyped in receipt")
+            value = _release_scalar(row["effective_value"], declared_type)
+            if name in _RELEASE_ENUM_WORDS and value not in _RELEASE_ENUM_WORDS[name]:
+                raise ValueError("noncanonical checked strategy enum")
+        else:
+            value = _release_scalar(defaults[name], declared_type)
+            if name in native_overrides:
+                text = native_overrides[name].split("\0", 1)[0]
+                if declared_type == "bool":
+                    value = text in ("true", "1")
+                elif name == "close_entries_rule":
+                    value = "ANY" if text in ("ANY", "any", "1") else "FIFO"
+                elif name in _RELEASE_ENUM_WORDS:
+                    prefix = ("strategy.commission." if name == "commission_type"
+                              else "strategy.")
+                    for index, word in enumerate(_RELEASE_ENUM_WORDS[name]):
+                        if text in (word, prefix + word, str(index)):
+                            value = word
+                            break
+                else:
+                    converted = _release_legacy_number(text, declared_type)
+                    ignored = (converted < 0 if declared_type == "int"
+                               else math.isnan(converted))
+                    if not ignored:
+                        value = _release_scalar(converted, declared_type)
+        provenance["strategy"][name] = value
+        for raw_name in applied_overrides:
+            if raw_name.split("\0", 1)[0] == name:
+                applied_overrides[raw_name] = value
+    return provenance
+
+
 # --- The failure line -------------------------------------------------------
 #
 # Every failure prints ONE line on stdout, written by failure_line:
@@ -2212,6 +2432,7 @@ def _main(argv=None) -> int:
     report = ReportC()
     started = time.time()
     try:
+        settings_receipt = _release_settings_receipt(lib, state, checked)
         _run(state, report)
         elapsed = time.time() - started
         failure = run_failure(lib, state)
@@ -2263,7 +2484,7 @@ def _main(argv=None) -> int:
                 report.input_bars_processed, timing["samples_ns"],
                 bar_magnifier=bar_magnifier)
         try:
-            out["fingerprint"] = build_fingerprint(build_provenance(
+            provenance = build_provenance(
                 engine_version(lib),
                 args.generated_cpp,
                 parse_bool(args.transpiled),
@@ -2271,7 +2492,14 @@ def _main(argv=None) -> int:
                 overrides,
                 applied_runtime,
                 source_feed_sha256=source_feed_sha256,
-            ))
+            )
+            cpp_text = ""
+            if args.generated_cpp:
+                with open(args.generated_cpp, encoding="utf-8", errors="replace") as source:
+                    cpp_text = source.read()
+            provenance = normalize_release_provenance(
+                provenance, cpp_text, settings_receipt, checked)
+            out["fingerprint"] = build_fingerprint(provenance)
         except Exception:
             out["fingerprint"] = None
         # Serialized whole before any byte is written (the same json.dump), so

@@ -19,6 +19,140 @@ import run_json  # docker/ is on sys.path in the engine test env
 
 CATALOG = json.loads((Path(__file__).resolve().parent / "run_failure_codes.json")
                      .read_text(encoding="utf-8"))
+
+
+def release_provenance(tmp_path, inputs=None, overrides=None):
+    cpp = '''GeneratedStrategy() {
+        pineforge::source::PineStrategyConfig cfg{};
+        cfg.calc_on_order_fills = true;
+        get_input_bool("armed", true);
+        get_input_bool("disabled", false);
+        get_input_int("length", 10);
+        get_input_int64("time", 1000);
+        get_input_double("mult", 2.0);
+        get_input_string("text", std::string("base"));
+        get_input_source("source", close);
+    }'''
+    path = tmp_path / "generated.cpp"
+    path.write_text(cpp)
+    inputs = inputs or {}
+    overrides = overrides or {}
+    document = run_json.build_provenance(
+        {}, path, True, inputs, overrides, {}, source_feed_sha256="0" * 64)
+    return document, cpp
+
+
+@pytest.mark.parametrize("token,expected", [
+    ("true", True), ("1", True), ("false", False), ("0", False),
+    ("False", True), ("", True), (" true", True), ("2", True),
+])
+def test_release_input_boolean_tokens_and_default(tmp_path, token, expected):
+    inputs = {"armed": token, "disabled": "unrecognized"}
+    before = dict(inputs)
+    document, cpp = release_provenance(tmp_path, inputs)
+    result = run_json.normalize_release_provenance(document, cpp, None, False)
+    assert result["inputs"]["armed"]["value"] is expected
+    assert result["inputs"]["disabled"]["value"] is False
+    assert result["applied"]["inputs"]["armed"] is expected
+    assert inputs == before
+    assert set(result["applied"]["inputs"]) == set(inputs)
+    assert result["applied"]["overrides"] == {}
+
+
+def test_release_legacy_numbers_strings_unknowns_and_hash(tmp_path):
+    inputs = {"length": "1.4e1", "time": "1001tail", "mult": "1.50e0",
+              "text": "false", "source": "14", "unknown": "true"}
+    document, cpp = release_provenance(tmp_path, inputs)
+    result = run_json.normalize_release_provenance(document, cpp, None, False)
+    expected = {"length": 1, "time": 1001, "mult": 1.5,
+                "text": "false", "source": "14", "unknown": "true"}
+    for name, value in expected.items():
+        assert type(result["inputs"][name]["value"]) is type(value)
+        assert result["inputs"][name]["value"] == value
+        assert result["applied"]["inputs"][name] == value
+    fingerprint = run_json.build_fingerprint(result)
+    assert json.loads(run_json.base64.b64decode(fingerprint["token"])) == result
+    assert fingerprint["digest"] == "sha256:" + run_json.hashlib.sha256(
+        run_json.base64.b64decode(fingerprint["token"])).hexdigest()
+    assert inputs["length"] == "1.4e1"
+
+
+@pytest.mark.parametrize("token", ["nonsense", "2147483648", "1e999"])
+def test_release_legacy_integer_conversion_falls_back(tmp_path, token):
+    document, cpp = release_provenance(tmp_path, {"length": token})
+    result = run_json.normalize_release_provenance(document, cpp, None, False)
+    expected = 1 if token == "1e999" else 10
+    assert result["inputs"]["length"]["value"] == expected
+    assert type(result["inputs"]["length"]["value"]) is int
+
+
+def test_release_all_override_types_and_legacy_fallbacks(tmp_path):
+    overrides = {
+        "initial_capital": "5e3", "commission_value": "0.04",
+        "default_qty_value": "3.5", "pyramiding": "2.0", "slippage": "1e0",
+        "process_orders_on_close": "1", "calc_on_order_fills": "True",
+        "close_entries_rule": "true", "default_qty_type": "strategy.cash",
+        "commission_type": "strategy.commission.cash_per_order", "unknown": "false",
+    }
+    before = dict(overrides)
+    document, cpp = release_provenance(tmp_path, overrides=overrides)
+    result = run_json.normalize_release_provenance(document, cpp, None, False)
+    expected = {
+        "initial_capital": 5000.0, "commission_value": 0.04,
+        "default_qty_value": 3.5, "pyramiding": 2, "slippage": 1,
+        "process_orders_on_close": True, "calc_on_order_fills": False,
+        "close_entries_rule": "FIFO", "default_qty_type": "cash",
+        "commission_type": "cash_per_order", "unknown": "false",
+    }
+    for section in (result["strategy"], result["applied"]["overrides"]):
+        for name, value in expected.items():
+            assert type(section[name]) is type(value)
+            assert section[name] == value
+    assert overrides == before
+    assert set(result["applied"]["overrides"]) == set(overrides)
+    document, cpp = release_provenance(tmp_path, overrides={
+        "pyramiding": "-1", "slippage": "-1", "initial_capital": "nan",
+        "default_qty_type": "invalid", "commission_type": "invalid"})
+    result = run_json.normalize_release_provenance(document, cpp, None, False)
+    for name in result["applied"]["overrides"]:
+        assert result["applied"]["overrides"][name] == run_json.STRATEGY_SEED[name]
+
+
+def test_release_checked_receipt_is_authoritative_or_fails(tmp_path):
+    inputs = {"length": "1.4e1", "armed": "0", "text": "false"}
+    document, cpp = release_provenance(tmp_path, inputs)
+    receipt = {"version": 1, "inputs": [], "overrides": []}
+    for name, metadata in document["inputs"].items():
+        declared_type = {"double": "float", "int64": "int"}.get(
+            metadata["type"], metadata["type"])
+        default = str(metadata["default"]).lower()
+        value = {"length": "14", "armed": "false", "text": "false"}.get(name, default)
+        receipt["inputs"].append({
+            "name": name, "type": declared_type, "kind": metadata["type"],
+            "default": default, "effective_value": value, "supported": True})
+    for name, declared_type in run_json._RELEASE_OVERRIDE_TYPES.items():
+        value = str(run_json.STRATEGY_SEED.get(name, True))
+        if declared_type == "bool":
+            value = value.lower()
+        receipt["overrides"].append({
+            "name": name, "type": declared_type, "default": value,
+            "effective_value": value, "supported": True})
+    result = run_json.normalize_release_provenance(document, cpp, receipt, True)
+    assert result["inputs"]["length"]["value"] == 14
+    assert result["inputs"]["armed"]["value"] is False
+    assert result["inputs"]["text"]["value"] == "false"
+    assert result["inputs"]["source"]["value"] == "close"
+    assert result["applied"]["overrides"] == {}
+    assert inputs == {"length": "1.4e1", "armed": "0", "text": "false"}
+    with pytest.raises(ValueError, match="unavailable"):
+        run_json.normalize_release_provenance(document, cpp, None, True)
+    receipt["inputs"][0]["supported"] = False
+    result = run_json.normalize_release_provenance(document, cpp, receipt, True)
+    assert result["inputs"]["armed"]["default"] is False
+    receipt["inputs"].append(dict(receipt["inputs"][0]))
+    with pytest.raises(ValueError, match="ambiguous"):
+        run_json.normalize_release_provenance(document, cpp, receipt, True)
+
 ST = 7
 CORE = ("pf_abi_version", "strategy_create", "strategy_set_input", "strategy_set_override",
         "run_backtest_full", "strategy_free", "report_free")

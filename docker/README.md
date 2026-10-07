@@ -352,6 +352,8 @@ the strategy declares:
 - a title two inputs share: `setting_rejected`, `reason` `ambiguous_key` (the
   legacy setter set both).
 
+Both inputs and overrides accept a JSON object whose values are strings or numbers; express booleans as lowercase "true" or "false" strings, because native JSON booleans, null, arrays and objects are rejected.
+
 A value the checked setter cannot parse reads its own message, such as
 `strategy_set_override: expected a finite decimal number`, where a legacy setter
 that threw left `strategy_set_override: stod`. Whatever the library, a boolean,
