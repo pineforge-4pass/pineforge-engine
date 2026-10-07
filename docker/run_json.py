@@ -734,8 +734,6 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
     """Normalize only the fresh release document, before its fingerprint."""
     applied_inputs = provenance["applied"]["inputs"]
     applied_overrides = provenance["applied"]["overrides"]
-    native_inputs = {name.split("\0", 1)[0]: value.split("\0", 1)[0]
-                     for name, value in applied_inputs.items()}
     input_rows = {}
     override_rows = {}
     if checked:
@@ -771,6 +769,8 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
                                   "value": str(text)}
         provenance["inputs"] = declared
     else:
+        native_inputs = {name.split("\0", 1)[0]: value.split("\0", 1)[0]
+                         for name, value in applied_inputs.items()}
         declared = {name: metadata for name, metadata in provenance["inputs"].items()
                     if metadata["type"] != "unknown"}
         for name, metadata in declared.items():
