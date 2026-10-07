@@ -1534,6 +1534,8 @@ def test_redeclared_source_series_is_unresolved(tmp_path):
     ('get_input_double("Big", 1.0f)', receipt_row("Big", "float", "na")),
     ('get_input_double("Big", 1e400)', None),
     ('get_input_int64("Big", 9007199254740993)', None),
+    # Zero-padded integer receipt text is read by its own type (cont1 finding 4).
+    ('get_input_int64("Big", 9007199254740992LL)', receipt_row("Big", "int", "09007199254740992")),
 ])
 def test_known_out_of_domain_scalars_keep_their_refusal(tmp_path, getter, receipt):
     cpp = ENUM_TU.replace('len = get_input_int("len", 10);', 'len = ' + getter + ';')
@@ -1861,14 +1863,14 @@ def test_constructor_flow_outside_the_producer_shape_refuses(tmp_path, change):
     assert result["strategy_resolution"]["default_qty_type"]["reason"] == "unsupported_binding"
 
 
-def test_pre_r4c_constructor_needs_only_member_writes(tmp_path):
-    cpp = ("struct GeneratedStrategy {\n    GeneratedStrategy() {\n        initial_capital_ = 5.0;\n"
-           "        helper();\n    }\n};\n")
+@pytest.mark.parametrize("member", ["", "    double initial_capital_ = 9.0;\n"])
+def test_pre_r4c_constructor_member_writes_are_not_certified(tmp_path, member):
+    # An unqualified write may reach a derived member (review cont1 finding 2).
+    cpp = ("struct GeneratedStrategy {\n" + member + "    GeneratedStrategy() {\n"
+           "        initial_capital_ = 5.0;\n    }\n};\n")
     result = legacy_document(tmp_path, cpp, None)
     assert result["strategy"]["initial_capital"] is None
-    cpp = "struct GeneratedStrategy {\n    GeneratedStrategy() {\n        initial_capital_ = 5.0;\n    }\n};\n"
-    result = legacy_document(tmp_path, cpp, None)
-    assert result["strategy"]["initial_capital"] == 5.0
+    assert result["strategy_resolution"]["initial_capital"]["reason"] == "unsupported_binding"
 
 
 def test_strategy_integers_keep_the_native_width(tmp_path):
@@ -1901,10 +1903,11 @@ def test_refused_default_keeps_the_override_domain_refusal(tmp_path):
         run_json.normalize_release_provenance(document, cpp, None, False)
 
 
-def test_legacy_override_receipt_scalars_meet_the_domain_first(tmp_path):
+@pytest.mark.parametrize("native", ["9007199254740993", "09007199254740993"])
+def test_legacy_override_receipt_scalars_meet_the_domain_first(tmp_path, native):
     receipt = dict(ENUM_RECEIPT, overrides=[
-        {"name": "pyramiding", "type": "int", "default": "9007199254740993",
-         "effective_value": "9007199254740993", "supported": True}])
+        {"name": "pyramiding", "type": "int", "default": native,
+         "effective_value": native, "supported": True}])
     path = tmp_path / "generated.cpp"
     path.write_text(ENUM_TU)
     document = run_json.build_provenance({}, path, True, {}, {}, {}, source_feed_sha256="0" * 64)
@@ -1920,3 +1923,107 @@ def test_producer_prelude_names_stay_trusted(tmp_path):
     result = legacy_document(tmp_path, prelude + ENUM_TU, ENUM_RECEIPT)
     assert result["inputs"]["Side"] == {"type": "int", "default": 1, "value": 1}
     assert result["strategy"]["default_qty_type"] == "cash"
+
+
+
+COMMA_MACRO = "#define PF_PINE_TIME_SESSION_DAY_ARGS(tz, sess) , tz, sess\n"
+
+
+@pytest.mark.parametrize("invocation,trusted", [
+    ("t = f(a PF_PINE_TIME_SESSION_DAY_ARGS(syminfo_.timezone, syminfo_.session));", True),
+    # Review cont1 finding 1: the expansion declares `get_input_int` locally.
+    ('Probe unused PF_PINE_TIME_SESSION_DAY_ARGS(\n        get_input_int("ghost", 7), spare);',
+     False),
+    ("t = f(a PF_PINE_TIME_SESSION_DAY_ARGS(syminfo_.timezone, other));", False),
+    ("t = f(a PF_PINE_TIME_SESSION_DAY_ARGS);", False),
+])
+def test_comma_macros_are_trusted_only_in_the_producer_invocation(tmp_path, invocation, trusted):
+    cpp = COMMA_MACRO + ENUM_TU.replace(
+        "        len = get_input_int", "        " + invocation + "\n        len = get_input_int")
+    result = legacy_document(tmp_path, cpp, ENUM_RECEIPT)
+    assert result["inputs"].get("ghost", {}).get("default") is None
+    if trusted:
+        assert result["inputs"]["len"] == {"type": "int", "default": 10, "value": 10}
+    else:
+        assert result["inputs"]["len"]["resolution"] == refusal("unsupported_binding", "10")
+        assert result["inputs"]["Side"]["resolution"]["reason"] == "unsupported_binding"
+
+
+GHOST = '        x = get_input_int("ghost", 7);\n'
+
+
+@pytest.mark.parametrize("arms", [
+    # No #else: the implicit empty branch takes no getter.
+    "#ifdef PINEFORGE_HAS_SYMBOL_SECURITY_EVAL_V1\n" + GHOST + "#endif\n",
+    # Review cont1 finding 3: an #elif arm with no final #else.
+    "#ifdef PINEFORGE_HAS_SYMBOL_SECURITY_EVAL_V1\n" + GHOST + "#elif 0\n" + GHOST + "#endif\n",
+    "#ifdef PINEFORGE_HAS_SYMBOL_SECURITY_EVAL_V1\n" + GHOST + "#elif 1\n" + GHOST
+    + "#else\n" + GHOST + "#endif\n",
+])
+def test_security_guard_needs_its_explicit_else_to_cover_every_branch(tmp_path, arms):
+    cpp = ENUM_TU.replace("    void init() {\n", "    void init() {\n" + arms)
+    result = legacy_document(tmp_path, cpp, None)
+    assert result["inputs"].get("ghost", {}).get("default") is None
+    if "#elif" not in arms:
+        # The getter may not run at all: only the native receipt certifies it.
+        assert result["inputs"]["ghost"]["resolution"] == refusal("ambiguous_binding", "7")
+        receipt = legacy_receipt(*ENUM_RECEIPT["inputs"], receipt_row("ghost", "int", "7"))
+        result = legacy_document(tmp_path, cpp, receipt)
+        assert result["inputs"]["ghost"] == {"type": "int", "default": 7, "value": 7}
+
+
+# TOP ruling 2026-10-07 21:55 (Option A): the same input keeps the fingerprint
+# the base resolver (8e49cd58, where this round started) gave it whenever no
+# certified value changed. Both resolvers certify the same values on these
+# inputs; the source getters, whose certified values this round changes
+# (rule 3), are left out.
+STABLE_TU = ENUM_TU.replace('        src = get_input_source("Source", _src_close_)[0];\n', "")
+STABLE_RECEIPT = legacy_receipt(*(row for row in ENUM_RECEIPT["inputs"] if row["name"] != "Source"))
+STABLE_CASES = {
+    "receipt": (STABLE_TU, STABLE_RECEIPT, {}, {}),
+    "receipt-requests": (STABLE_TU, STABLE_RECEIPT, {"len": "14", "Side": "1"}, {}),
+    "receipt-overrides": (STABLE_TU, STABLE_RECEIPT, {}, {"initial_capital": "5000"}),
+    "no-receipt": (STABLE_TU, None, {"len": "12"}, {}),
+    "release-numbers": (None, None, {"length": "1.4e1", "time": "1001tail", "mult": "1.50e0",
+                                     "text": "false", "unknown": "true"}, {}),
+    "release-booleans": (None, None, {"armed": "true", "disabled": "unrecognized"}, {}),
+}
+
+
+def stable_case(tmp_path, name):
+    cpp, receipt, inputs, overrides = STABLE_CASES[name]
+    if cpp is None:
+        cpp = release_provenance(tmp_path)[1].replace('        get_input_source("source", close);\n', "")
+    return cpp, receipt, dict(inputs), dict(overrides)
+
+
+# Digests the base resolver (8e49cd58 docker/run_json.py, SHA-256 80dbc642...)
+# gave exactly these cases (computed on the third Spot box, 2026-10-07).
+BASE_FINGERPRINTS = {
+    "no-receipt": "sha256:63c498b9d0ee67985b301482239d44995a9db4b8e2af59f944c3e21b669237b2",
+    "receipt": "sha256:02ad81404194f9cb591700e46a04ad4fce6369cbaf60be0e7a07c1b1b86c3ab5",
+    "receipt-overrides":
+        "sha256:9a1d7e2834ea0ac287dee7a415f891c8ea125eda5804b23d39b474c69e184b97",
+    "receipt-requests":
+        "sha256:782a19690c56e3c7e401321de4e062d83ef7949e410f77afe0f4836cbd301fa3",
+    "release-booleans":
+        "sha256:65b406ad8451fb0dc8f8b92e2450d54ceec08c4d5cd7a81d5baea437baac999c",
+    "release-numbers":
+        "sha256:42551c34415bf99163b4504d656ac59c8674c32a96f9fc776cb003c5a074aba4",
+}
+
+
+@pytest.mark.parametrize("name", sorted(STABLE_CASES))
+def test_unchanged_certified_values_keep_the_base_fingerprint(tmp_path, name):
+    cpp, receipt, inputs, overrides = stable_case(tmp_path, name)
+    receipt = json.loads(json.dumps(receipt))
+    result = legacy_document(tmp_path, cpp, receipt, inputs, overrides)
+    assert run_json.build_fingerprint(result)["digest"] == BASE_FINGERPRINTS[name]
+
+
+def test_unreadable_conflicting_getters_keep_their_own_refusal(tmp_path):
+    cpp = ENUM_TU.replace('len = get_input_int("len", 10);',
+                          'len = get_input_int64("len", 0xffLL); n = get_input_int64("len", 0x1LL);')
+    result = legacy_document(tmp_path, cpp, None)
+    assert result["inputs"]["len"]["resolution"] == refusal("unsupported_default", "0xffLL")
+
