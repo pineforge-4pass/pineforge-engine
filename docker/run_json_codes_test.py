@@ -1998,7 +1998,8 @@ def stable_case(tmp_path, name):
 
 
 # Digests the base resolver (8e49cd58 docker/run_json.py, SHA-256 80dbc642...)
-# gave exactly these cases (computed on the third Spot box, 2026-10-07).
+# gave exactly these cases (computed on the third Spot box, 2026-10-07, in the
+# verification image, whose installed pineforge-codegen reports 1.3.0).
 BASE_FINGERPRINTS = {
     "no-receipt": "sha256:63c498b9d0ee67985b301482239d44995a9db4b8e2af59f944c3e21b669237b2",
     "receipt": "sha256:02ad81404194f9cb591700e46a04ad4fce6369cbaf60be0e7a07c1b1b86c3ab5",
@@ -2014,7 +2015,9 @@ BASE_FINGERPRINTS = {
 
 
 @pytest.mark.parametrize("name", sorted(STABLE_CASES))
-def test_unchanged_certified_values_keep_the_base_fingerprint(tmp_path, name):
+def test_unchanged_certified_values_keep_the_base_fingerprint(tmp_path, monkeypatch, name):
+    # The installed codegen's version is part of the fingerprinted input.
+    monkeypatch.setattr(run_json, "_codegen_version", lambda: "1.3.0")
     cpp, receipt, inputs, overrides = stable_case(tmp_path, name)
     receipt = json.loads(json.dumps(receipt))
     result = legacy_document(tmp_path, cpp, receipt, inputs, overrides)
