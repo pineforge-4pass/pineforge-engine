@@ -25,6 +25,9 @@ def release_provenance(tmp_path, inputs=None, overrides=None):
     cpp = '''GeneratedStrategy() {
         pineforge::source::PineStrategyConfig cfg{};
         cfg.calc_on_order_fills = true;
+        configure_pine_strategy(cfg);
+    }
+    void init() {
         get_input_bool("armed", true);
         get_input_bool("disabled", false);
         get_input_int("length", 10);
@@ -32,7 +35,6 @@ def release_provenance(tmp_path, inputs=None, overrides=None):
         get_input_double("mult", 2.0);
         get_input_string("text", std::string("base"));
         get_input_source("source", close);
-        configure_pine_strategy(cfg);
     }'''
     path = tmp_path / "generated.cpp"
     path.write_text(cpp)
@@ -1597,6 +1599,8 @@ def test_unrecognized_strategy_defaults_are_unresolved(tmp_path, assignment, key
     ("        cfg.default_qty_type", "        if (side) cfg.pyramiding = 2;\n        cfg.default_qty_type"),
     ("    void init() {", "    void configure_pine_strategy(int) {}\n    void init() {"),
     ("    void init() {", "    struct PineStrategyConfig { int pyramiding; };\n    void init() {"),
+    ("        configure_pine_strategy(cfg);", "        set_strategy_override(\"pyramiding\", \"3\");\n"
+     "        configure_pine_strategy(cfg);"),
 ])
 def test_unrecognized_strategy_flow_refuses_every_default(tmp_path, change):
     cpp = ENUM_TU.replace(*change)

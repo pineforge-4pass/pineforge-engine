@@ -773,6 +773,10 @@ _RELEASE_STRATEGY_ENUMS = {
     "default_qty_type": ("QtyType", ("FIXED", "PERCENT_OF_EQUITY", "CASH")),
     "commission_type": ("CommissionType", ("PERCENT", "CASH_PER_ORDER", "CASH_PER_CONTRACT")),
 }
+# The producer's adapter hooks, the only other constructor statements it emits.
+_RELEASE_ADAPTER_STATEMENTS = tuple(
+    ["pineforge", "::", "source", "::", "PineStrategyHost", "::", hook, "(", ")", ";"]
+    for hook in ("attach_pine_execution_adapter", "enable_pine_intraday_cap"))
 # The producer's other PineStrategyConfig members: recognized, not provenance.
 _RELEASE_CONFIG_OTHER = frozenset({"margin_long", "margin_short", "src_series_active"})
 
@@ -1462,11 +1466,18 @@ def _release_legacy_strategy(cpp_text):
     for number, (statement, words) in enumerate(zip(statements, words_of)):
         relevant = (variable is not None and variable in words) or any(
             word in member_fields for word in words)
-        if number in declaring or not relevant:
+        if number in declaring or (variable is not None and words in _RELEASE_ADAPTER_STATEMENTS):
             continue
+        if not relevant:
+            if variable is None:
+                continue
+            # The producer's constructor holds nothing else: refuse the rest.
+            return refuse("unsupported_binding")
         if any(tokens[index][5] != () for index in statement):
             return refuse("unsupported_binding")
         if variable is not None and words == ["configure_pine_strategy", "(", variable, ")", ";"]:
+            if number != len(statements) - 1:
+                return refuse("unsupported_binding")
             configured += 1
             continue
         if (variable is not None and len(words) >= 6 and words[0] == variable

@@ -532,7 +532,8 @@ any other directive, a line splice anywhere, or a backslash outside a literal
 | Native receipt row | Compared independently, each side parsed by its own declared type: the receipt `type` must be the getter's (`int`/`enum`, `int`, `float`, `bool`, `string`, `source`), and a supported row's default and effective value must equal the certified ones exactly. |
 | strategy() default | One `GeneratedStrategy(...)` constructor whose top-level statements are one `PineStrategyConfig cfg;` declaration, `cfg.<field> = <rhs>;` assignments to the producer's 13 members (`margin_long`,
 `margin_short` and `src_series_active` are recognized but not provenance), and
-one following `configure_pine_strategy(cfg);` (or pre-R4-C `<field>_ = <rhs>;` writes). Numbers are decimal literals, booleans `true`/`false`, and enums `static_cast<int>(QtyType::NAME)`, `QtyType::NAME` (likewise `CommissionType`) or the index `0`-`2`, where every occurrence of `QtyType`/`CommissionType` in the unit is followed by `::` and a canonical member. |
+one final `configure_pine_strategy(cfg);` (besides the producer's adapter
+hook calls, nothing else may stand in the constructor) (or pre-R4-C `<field>_ = <rhs>;` writes). Numbers are decimal literals, booleans `true`/`false`, and enums `static_cast<int>(QtyType::NAME)`, `QtyType::NAME` (likewise `CommissionType`) or the index `0`-`2`, where every occurrence of `QtyType`/`CommissionType` in the unit is followed by `::` and a canonical member. |
 
 An input whose default cannot be proved stays in the fingerprint with its
 declared `type`, `default: null`, `value: null`, and this explicit refusal:
