@@ -251,6 +251,10 @@ def review_e2e(image, artifacts, legacy_cpp):
     cases = [
         ("legacy-key", legacy, {"armed\0suffix": "false\0true"}, {}, None),
         ("legacy-order", legacy, {}, overrides, None),
+        ("legacy-unknown-direct-first", legacy,
+         {"unused": "true", "unused\0alias": "false"}, {}, None),
+        ("legacy-unknown-alias-first", legacy,
+         {"unused\0alias": "false", "unused": "true"}, {}, None),
         ("enum-default", enum_source, {}, {}, 1),
         ("enum-label", enum_source, {"Side": "Side.short"}, {}, 2),
         ("enum-index", enum_source, {"Side": "1"}, {}, 1),
@@ -308,6 +312,26 @@ def review_e2e(image, artifacts, legacy_cpp):
                     actual = provenance.get("applied", {}).get("overrides", {}).get(raw)
                     check(label + " applied " + repr(raw),
                           type(actual) is type(value) and actual == value, actual)
+        elif label.startswith("legacy-unknown-"):
+            declared = provenance.get("inputs", {})
+            expected_names = {"armed", "len", "mult", "scalar", "numeric_text"} | set(inputs)
+            check(label + " declared and unknown keys",
+                  set(declared) == expected_names, list(declared))
+            for raw, text in inputs.items():
+                row = declared.get(raw, {})
+                check(label + " unknown row " + repr(raw),
+                      row.get("type") == "unknown"
+                      and row.get("default") is None
+                      and type(row.get("value")) is str
+                      and row["value"] == text, row)
+                actual = provenance.get("applied", {}).get("inputs", {}).get(raw)
+                check(label + " unknown applied string " + repr(raw),
+                      type(actual) is str and actual == text, actual)
+            check(label + " native trading unchanged",
+                  report["summary"]["total_trades"] == 1
+                  and report["trades"][0]["qty"] == 2
+                  and report["equity_curve"][0]["equity"] == 10000,
+                  report["summary"])
         else:
             row = provenance.get("inputs", {}).get("Side", {})
             check(label + " default int", type(row.get("default")) is int
