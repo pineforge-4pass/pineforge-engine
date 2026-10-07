@@ -773,6 +773,7 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
                          for name, value in applied_inputs.items()}
         declared = {name: metadata for name, metadata in provenance["inputs"].items()
                     if metadata["type"] != "unknown"}
+        declared_names = frozenset(declared)
         for name, metadata in declared.items():
             declared_type = metadata["type"]
             default = _release_scalar(metadata["default"], declared_type)
@@ -793,7 +794,7 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
             metadata["value"] = _release_scalar(value, declared_type)
         for raw_name, text in applied_inputs.items():
             native_name = raw_name.split("\0", 1)[0]
-            if native_name in declared:
+            if native_name in declared_names:
                 applied_inputs[raw_name] = declared[native_name]["value"]
             else:
                 declared[raw_name] = {"type": "unknown", "default": None,
