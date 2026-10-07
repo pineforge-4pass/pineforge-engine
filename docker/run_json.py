@@ -768,8 +768,8 @@ _RELEASE_STRATEGY_ENUMS = {
     "default_qty_type": ("QtyType", ("FIXED", "PERCENT_OF_EQUITY", "CASH")),
     "commission_type": ("CommissionType", ("PERCENT", "CASH_PER_ORDER", "CASH_PER_CONTRACT")),
 }
-_RELEASE_STRATEGY_BOOLS = ("process_orders_on_close", "calc_on_order_fills",
-                           "close_entries_rule")
+# The producer's other PineStrategyConfig members: recognized, not provenance.
+_RELEASE_CONFIG_OTHER = frozenset({"margin_long", "margin_short", "src_series_active"})
 
 
 def _release_domain(value):
@@ -1402,12 +1402,14 @@ def _release_legacy_strategy(cpp_text):
             configured += 1
             continue
         if (variable is not None and len(words) >= 6 and words[0] == variable
-                and words[1] == "." and words[2] in cfg_fields and words[3] == "="
+                and words[1] == "." and words[3] == "="
+                and (words[2] in cfg_fields or words[2] in _RELEASE_CONFIG_OTHER)
                 and words[-1] == ";" and words.count(variable) == 1
                 and not any(word in member_fields for word in words)):
             if configured:
                 return refuse("unsupported_binding")
-            assigned[cfg_fields[words[2]]] = statement[4:-1]
+            if words[2] in cfg_fields:
+                assigned[cfg_fields[words[2]]] = statement[4:-1]
             continue
         if (variable is None and len(words) >= 4 and words[0] in member_fields
                 and words[1] == "=" and words[-1] == ";"
@@ -1535,9 +1537,10 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
             else:
                 metadata.update(default=None, value=None, resolution={
                     "status": "unresolved", "reason": reason, "raw_default": raw_default})
+        declared_names = frozenset(declared)
         for raw_name, text in applied_inputs.items():
             native_name = raw_name.split("\0", 1)[0]
-            if native_name in declared:
+            if native_name in declared_names:
                 if "resolution" not in declared[native_name]:
                     applied_inputs[raw_name] = declared[native_name]["value"]
             elif unreadable:
