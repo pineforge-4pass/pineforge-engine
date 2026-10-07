@@ -441,12 +441,15 @@ def legacy_declaration_e2e(image, artifacts, escaped_cpp, enum_cpp):
                 else:
                     check(label + " applied native float", type(value) is float and value == 1.5, value)
         else:
+            # The emitted script compares Side.long in its logic: that occurrence
+            # is outside the allowlisted declaration/getter forms, so refused.
             row = declared.get("Side", {})
-            check(label + " symbolic default", type(row.get("default")) is int and row["default"] == 1, row)
-            check(label + " numeric value", type(row.get("value")) is int and row["value"] == expected, row)
+            check(label + " symbolic default", row.get("default") is None and row.get("resolution") == {
+                "status": "unresolved", "reason": "ambiguous_binding",
+                "raw_default": "Side__long_"}, row)
+            check(label + " numeric value", row.get("value") is None, row)
             if inputs:
-                check(label + " applied enum integer", type(applied.get("Side")) is int
-                      and applied["Side"] == 2, applied)
+                check(label + " applied enum integer", applied.get("Side") == "2", applied)
         check(label + " native trading", (report["summary"]["total_trades"] > 0) is trading,
               report["summary"])
         check(label + " native capital", report["equity_curve"][0]["equity"] == 10000,
@@ -617,6 +620,18 @@ def class_matrix_e2e(image, artifacts, unicode_only=False):
             actual = provenance.get("inputs", {}).get(row["title"], {})
             typ = int if row["kind"] == "int" else str
             expected = row["value"] if overridden else row["default"]
+            if is_legacy and row["kind"] == "int":
+                # The quantity expression compares each enum member: an
+                # occurrence outside the allowlist, so the default is refused.
+                resolution = actual.get("resolution", {})
+                check(label + " default " + row["class"], actual.get("default") is None
+                      and resolution.get("status") == "unresolved"
+                      and resolution.get("reason") == "ambiguous_binding", actual)
+                check(label + " value " + row["class"], actual.get("value") is None, actual)
+                if overridden:
+                    check(label + " applied " + row["class"],
+                          applied.get(row["title"]) == row["override"], applied.get(row["title"]))
+                continue
             check(label + " default " + row["class"], type(actual.get("default")) is typ
                   and actual["default"] == row["default"], actual)
             check(label + " value " + row["class"], type(actual.get("value")) is typ
@@ -687,7 +702,10 @@ def shadow_binding_e2e(image, artifacts, enum_cpp):
               and fp.get("digest") == "sha256:" + hashlib.sha256(token).hexdigest(), fp.get("digest"))
         row = prov.get("inputs", {}).get("Side", {})
         if label == "plain":
-            check(label + " typed default", type(row.get("default")) is int and row["default"] == 1, row)
+            # The plain emission also compares Side.long in the script body.
+            check(label + " typed default", row.get("default") is None and row.get("resolution") == {
+                "status": "unresolved", "reason": "ambiguous_binding",
+                "raw_default": "Side__long_"}, row)
         else:
             check(label + " explicit unresolved", row.get("default") is None and row.get("value") is None
                   and row.get("resolution") == {"status": "unresolved", "reason": "ambiguous_binding",
@@ -702,9 +720,269 @@ def shadow_binding_e2e(image, artifacts, enum_cpp):
     return int(not all(p for _, p in checks))
 
 
+ALLOWLIST_STRATEGY = '''//@version=6
+strategy("Allowlist Witness", initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+enum Side
+    neutral
+    long
+    short
+side = input.enum(Side.long, "Side")
+len = input.int(10, "len")
+mult = input.float(2.0, "mult")
+src = input.source(close, "Source")
+big = input.int(1, "Big")
+mid = ta.sma(src, len)
+if side == Side.long and close > mid and big > 0
+    strategy.entry("L", strategy.long, qty=mult)
+if close < mid
+    strategy.close("L")
+'''
+
+
+def allowlist_witness_e2e(image, artifacts):
+    """Every reviewed allowlist counterexample through the installed image CLI.
+
+    Each witness is the producer's own emission, made legacy by renaming only
+    the checked exports, plus the reviewed mutation. The native receipt of the
+    compiled plugin and its trades are recorded as the independent oracle."""
+    artifacts.mkdir(parents=True)
+    checks = []
+
+    def check(name, condition, value):
+        checks.append((name, bool(condition)))
+        print(f"{'PASS' if condition else 'FAIL'} {name}: {value}", flush=True)
+
+    with tempfile.TemporaryDirectory(prefix="allowlist-") as temporary:
+        source = Path(temporary)
+        source.chmod(0o755)
+        (source / "strategy.pine").write_text(ALLOWLIST_STRATEGY, encoding="utf-8")
+        command = ["docker", "run", "--rm", "--network", "none",
+                   "--mount", f"type=bind,src={source},dst=/in,readonly",
+                   "-e", "PINEFORGE_TRANSPILE_ONLY=1", image]
+        emitted = subprocess.run(command, capture_output=True, text=True, timeout=180)
+    (artifacts / "strategy.pine").write_text(ALLOWLIST_STRATEGY, encoding="utf-8")
+    (artifacts / "transpile.command.json").write_text(json.dumps(command))
+    (artifacts / "transpile.cpp").write_text(emitted.stdout, encoding="utf-8")
+    (artifacts / "transpile.stderr.log").write_text(emitted.stderr)
+    (artifacts / "transpile.exit").write_text(str(emitted.returncode) + "\n")
+    if emitted.returncode:
+        raise RuntimeError("producer transpile failed: setup, not a witness result")
+    legacy = emitted.stdout
+    for name in ("strategy_settings_api_version", "strategy_create_checked",
+                 "strategy_set_input_checked", "strategy_set_override_checked"):
+        legacy = legacy.replace(name, "fixture_legacy_" + name)
+    getter = '            side = get_input_int("Side", Side__long_);'
+    marker = "class GeneratedStrategy : public pineforge::source::PineStrategyHost {\npublic:"
+    declaration = "pineforge::source::PineStrategyConfig cfg{};"
+    qty_type = "cfg.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);"
+    source_getter = 'get_input_source("Source", _src_close_)'
+    for needle in (getter, marker, declaration, qty_type, source_getter,
+                   'get_input_double("mult", 2.0)', "const int Side__long_ = 1;"):
+        assert needle in legacy, needle
+
+    def once(text, old, new):
+        assert old in text, old
+        return text.replace(old, new, 1)
+
+    unicode = legacy.replace("Side__long_", "方向_Up")
+    unicode = unicode.replace('side = get_input_int("Side", 方向_Up);',
+                              'int \\u65b9\\u5411_Up = 2;\n' + getter.replace("Side__long_", "方向_Up"), 1)
+    mult_metadata = '{"mult", "float", ::pineforge::checked_settings::number(2.0)'
+    witnesses = [
+        # (label, class, translation unit, inputs)
+        ("control", "control", legacy, {}),
+        ("control-source-high", "3-source", legacy, {"Source": "high"}),
+        ("w1a-comma-declarator", "1-symbol", legacy.replace(
+            getter, "            int unused = 0, Side__long_(2);\n" + getter, 1), {}),
+        ("w1b-parenthesized-declarator", "1-symbol", legacy.replace(
+            getter, "            int ((Side__long_)) = 2;\n" + getter, 1), {}),
+        ("w1c-universal-character-name", "1-symbol", unicode, {}),
+        ("w2a-conflicting-getter", "2-getter", once(
+            legacy, marker, marker + '\n    int unused_probe() { return get_input_int ("mult", 1); }'),
+         {"mult": "2"}),
+        ("w2b-getter-text-in-raw-string", "2-getter", once(
+            legacy, "const int Side__long_ = 1;",
+            "const int Side__long_ = 1;\n"
+            'static const char* _pf_fake = R"(");get_input_int("ghost", 7);(")";'),
+         {"ghost": "9"}),
+        ("w3a-source-invalid-override", "3-source", legacy, {"Source": "14"}),
+        ("w3b-source-expression", "3-source", legacy.replace(
+            source_getter, 'get_input_source("Source", source_series(std::string("close")))'), {}),
+        ("w4a-int64-suffix-out-of-domain", "4-domain", legacy.replace(
+            'get_input_int("Big", 1)', 'get_input_int64("Big", 9007199254740992LL)').replace(
+            '{"Big", "int", ::pineforge::checked_settings::number(1)',
+            '{"Big", "int", ::pineforge::checked_settings::number(9007199254740992LL)'), {}),
+        ("w4b-overflowing-float", "4-domain", legacy.replace(
+            'get_input_double("mult", 2.0)', 'get_input_double("mult", 1e400)').replace(
+            mult_metadata, mult_metadata.replace("2.0", "1e400")), {}),
+        ("w5-raw-string", "5-raw", legacy + '\nconst char* note = R"(a"b)";\n', {}),
+        ("w6a-qty-type-binding", "6-strategy", once(once(
+            legacy, qty_type, "cfg.default_qty_type = q;"),
+            "const int Side__long_ = 1;", "constexpr int q = 2;\nconst int Side__long_ = 1;"), {}),
+        ("w6b-close-rule-integer", "6-strategy", once(
+            legacy, declaration, declaration + "\n        cfg.close_entries_rule_any = 1;"), {}),
+        ("w6c-commission-binding", "6-strategy", once(once(
+            legacy, declaration, declaration + "\n        cfg.commission_type = c;"),
+            "const int Side__long_ = 1;", "constexpr int c = 1;\nconst int Side__long_ = 1;"), {}),
+    ]
+    results = {}
+    for label, family, text, inputs in witnesses:
+        case = (artifacts / label).resolve()
+        cpp_dir, compiled = case / "input", case / "compiled"
+        cpp_dir.mkdir(parents=True)
+        compiled.mkdir()
+        compiled.chmod(0o777)
+        (cpp_dir / "strategy.cpp").write_text(text, encoding="utf-8")
+        (cpp_dir / "ohlcv.csv").write_text(synthetic_csv())
+        command = ["docker", "run", "--rm", "--network", "none",
+                   "--mount", f"type=bind,src={cpp_dir},dst=/in,readonly",
+                   "--mount", f"type=bind,src={compiled},dst=/proof",
+                   "-e", "PINEFORGE_INPUTS=" + json.dumps(inputs), image]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=240)
+        (case / "command.json").write_text(json.dumps(command))
+        (case / "stdout.json").write_text(result.stdout)
+        (case / "stderr.log").write_text(result.stderr)
+        (case / "exit").write_text(str(result.returncode) + "\n")
+        check(label + " CLI success", result.returncode == 0, result.returncode)
+        plugins = list(compiled.glob("*.so"))
+        if result.returncode or len(plugins) != 1:
+            # Setup failure: recorded, never counted as a reproduced witness.
+            (case / "setup-failure").write_text(result.stderr[-4000:])
+            continue
+        report = json.loads(result.stdout)
+        plugin = plugins[0]
+        observe = ["docker", "run", "--rm", "--network", "none",
+                   "--mount", f"type=bind,src={Path(__file__).resolve()},dst=/probe.py,readonly",
+                   "--mount", f"type=bind,src={compiled},dst=/proof,readonly",
+                   "--entrypoint", "python3", image, "/probe.py", "--allowlist-native",
+                   "/proof/" + plugin.name, json.dumps(inputs)]
+        observed = subprocess.run(observe, capture_output=True, text=True, timeout=60)
+        (case / "native.command.json").write_text(json.dumps(observe))
+        (case / "native.stdout.json").write_text(observed.stdout)
+        (case / "native.stderr.log").write_text(observed.stderr)
+        (case / "native.exit").write_text(str(observed.returncode) + "\n")
+        check(label + " native receipt observed", observed.returncode == 0, observed.returncode)
+        if observed.returncode:
+            continue
+        native = json.loads(observed.stdout)
+        results[label] = (report, native)
+        fp = report.get("fingerprint")
+        if label.startswith("w4"):
+            # Known out-of-domain native evidence keeps its existing refusal.
+            row = next((row for row in native["inputs"]
+                        if row["name"] == ("Big" if label.startswith("w4a") else "mult")), None)
+            check(label + " native concrete scalar", row is not None, row)
+            check(label + " domain refusal keeps no fingerprint", fp is None,
+                  None if fp is None else fp.get("provenance", {}).get("inputs"))
+            continue
+        provenance = (fp or {}).get("provenance", {})
+        token = base64.b64decode((fp or {}).get("token", ""))
+        check(label + " fingerprint", bool(token) and json.loads(token) == provenance
+              and fp.get("digest") == "sha256:" + hashlib.sha256(token).hexdigest(),
+              (fp or {}).get("digest"))
+        check(label + " raw inputs", report.get("applied_inputs") == inputs,
+              report.get("applied_inputs"))
+        declared = provenance.get("inputs", {})
+        applied = provenance.get("applied", {}).get("inputs", {})
+        check(label + " applied keys", set(applied) == set(inputs), list(applied))
+
+        def refused(row, reasons, raw):
+            return (row.get("default") is None and row.get("value") is None
+                    and row.get("resolution", {}).get("status") == "unresolved"
+                    and row["resolution"].get("reason") in reasons
+                    and row["resolution"].get("raw_default") == raw)
+
+        if family in ("control", "5-raw") or label == "control-source-high":
+            for key, value in (("len", 10), ("mult", 2.0), ("Big", 1)):
+                row = declared.get(key, {})
+                check(label + " typed " + key, type(row.get("default")) is type(value)
+                      and row["default"] == value and type(row.get("value")) is type(value)
+                      and row["value"] == value, row)
+            row = declared.get("Source", {})
+            expected = inputs.get("Source", "close")
+            check(label + " canonical source", row.get("default") == "close"
+                  and row.get("value") == expected and "resolution" not in row, row)
+            if inputs:
+                check(label + " applied canonical source", applied.get("Source") == "high", applied)
+            strategy = provenance.get("strategy", {})
+            check(label + " typed strategy defaults",
+                  strategy.get("default_qty_type") == "percent_of_equity"
+                  and strategy.get("close_entries_rule") == "FIFO"
+                  and strategy.get("commission_type") == "percent"
+                  and "strategy_resolution" not in provenance, strategy)
+        if family == "1-symbol":
+            raw = "方向_Up" if "universal" in label else "Side__long_"
+            check(label + " symbol refused", refused(
+                declared.get("Side", {}), ("ambiguous_binding", "unsupported_binding"), raw),
+                declared.get("Side"))
+            control = results["control"][0]
+            check(label + " native body binding differs from receipt",
+                  control["summary"]["total_trades"] > 0 and report["summary"]["total_trades"] == 0
+                  and next(row["default"] for row in native["inputs"] if row["name"] == "Side") == "1",
+                  [report["summary"]["total_trades"], control["summary"]["total_trades"]])
+        if label == "w2a-conflicting-getter":
+            check(label + " conflicting title refused", refused(
+                declared.get("mult", {}), ("ambiguous_binding",), "1"), declared.get("mult"))
+            check(label + " unresolved override stays wire text", applied.get("mult") == "2", applied)
+            row = next(row for row in native["inputs"] if row["name"] == "mult")
+            check(label + " native declaration is float", row["type"] == "float"
+                  and row["default"] == "2", row)
+        if label == "w2b-getter-text-in-raw-string":
+            check(label + " literal text is not a declaration", declared.get("ghost") == {
+                "type": "unknown", "default": None, "value": "9"}, declared.get("ghost"))
+            check(label + " native has no such input",
+                  all(row["name"] != "ghost" for row in native["inputs"]), native["inputs"])
+        if label == "w3a-source-invalid-override":
+            check(label + " invalid selector refused", refused(
+                declared.get("Source", {}), ("unsupported_override",), "_src_close_"),
+                declared.get("Source"))
+            check(label + " override stays wire text", applied.get("Source") == "14", applied)
+            control = results["control"][0]
+            check(label + " native falls back to close",
+                  report["summary"] == control["summary"], report["summary"])
+        if label == "w3b-source-expression":
+            check(label + " expression refused", refused(
+                declared.get("Source", {}), ("unsupported_default",),
+                'source_series(std::string("close"))'), declared.get("Source"))
+        if family == "6-strategy":
+            key = {"w6a-qty-type-binding": "default_qty_type",
+                   "w6b-close-rule-integer": "close_entries_rule",
+                   "w6c-commission-binding": "commission_type"}[label]
+            raw = {"default_qty_type": "q", "close_entries_rule": "1", "commission_type": "c"}[key]
+            native_value = next(row["effective_value"] for row in native["overrides"]
+                                if row["name"] == key)
+            check(label + " native strategy value", native_value == {
+                "default_qty_type": "cash", "close_entries_rule": "ANY",
+                "commission_type": "cash_per_order"}[key], native_value)
+            check(label + " strategy default refused",
+                  provenance.get("strategy", {}).get(key, "missing") is None
+                  and provenance.get("strategy_resolution", {}).get(key) == {
+                      "status": "unresolved", "reason": "unsupported_default", "raw_default": raw},
+                  [provenance.get("strategy", {}).get(key),
+                   provenance.get("strategy_resolution")])
+    (artifacts / "checks.json").write_text(json.dumps(checks, indent=2) + "\n")
+    print(f"{sum(p for _, p in checks)}/{len(checks)} checks passed", flush=True)
+    return int(not all(p for _, p in checks))
+
+
 if __name__ == "__main__":
     if sys.argv[1:] in (["--producer-classes"], ["--producer-unicode"]):
         print(json.dumps(producer_classes(sys.argv[1] == "--producer-unicode"), ensure_ascii=True))
+        raise SystemExit(0)
+    if len(sys.argv) == 4 and sys.argv[1] == "--allowlist-native":
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("native_observer", "/opt/pineforge/bin/run_json.py")
+        observer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(observer)
+        library = observer.load_strategy(Path(sys.argv[2]))
+        state = observer.create_strategy(library, False)
+        try:
+            observer.apply_settings(library, state, json.loads(sys.argv[3]), {}, False)
+            receipt = observer._release_settings_receipt(library, state, True)
+            assert receipt is not None
+            print(json.dumps(receipt))
+        finally:
+            library.strategy_free(state)
         raise SystemExit(0)
     if len(sys.argv) == 3 and sys.argv[1] == "--native-receipt":
         import importlib.util
@@ -730,7 +1008,10 @@ if __name__ == "__main__":
     parser.add_argument("--class-matrix", action="store_true")
     parser.add_argument("--unicode-only", action="store_true")
     parser.add_argument("--shadow-cpp", type=Path)
+    parser.add_argument("--allowlist-witnesses", action="store_true")
     options = parser.parse_args()
+    if options.allowlist_witnesses:
+        raise SystemExit(allowlist_witness_e2e(options.image, options.artifacts))
     if options.shadow_cpp:
         raise SystemExit(shadow_binding_e2e(options.image, options.artifacts, options.shadow_cpp))
     if options.class_matrix:

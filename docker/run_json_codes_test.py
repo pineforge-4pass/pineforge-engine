@@ -32,6 +32,7 @@ def release_provenance(tmp_path, inputs=None, overrides=None):
         get_input_double("mult", 2.0);
         get_input_string("text", std::string("base"));
         get_input_source("source", close);
+        configure_pine_strategy(cfg);
     }'''
     path = tmp_path / "generated.cpp"
     path.write_text(cpp)
@@ -65,11 +66,18 @@ def test_release_legacy_numbers_strings_unknowns_and_hash(tmp_path):
     document, cpp = release_provenance(tmp_path, inputs)
     result = run_json.normalize_release_provenance(document, cpp, None, False)
     expected = {"length": 1, "time": 1001, "mult": 1.5,
-                "text": "false", "source": "14", "unknown": "true"}
+                "text": "false", "unknown": "true"}
     for name, value in expected.items():
         assert type(result["inputs"][name]["value"]) is type(value)
         assert result["inputs"][name]["value"] == value
         assert result["applied"]["inputs"][name] == value
+    # A source default outside the native selector vocabulary is refused, and
+    # the override "14" is not echoed as effective: it stays wire text.
+    assert result["inputs"]["source"] == {
+        "type": "source", "default": None, "value": None,
+        "resolution": {"status": "unresolved", "reason": "unsupported_default",
+                       "raw_default": "close"}}
+    assert result["applied"]["inputs"]["source"] == "14"
     fingerprint = run_json.build_fingerprint(result)
     assert json.loads(run_json.base64.b64decode(fingerprint["token"])) == result
     assert fingerprint["digest"] == "sha256:" + run_json.hashlib.sha256(
@@ -1327,3 +1335,279 @@ def test_unproved_legacy_defaults_remain_in_the_fingerprint(tmp_path, definition
     raw = run_json.base64.b64decode(fp["token"])
     assert json.loads(raw) == result
     assert fp["digest"] == "sha256:" + run_json.hashlib.sha256(raw).hexdigest()
+
+
+# --- Positive allowlist: every relied-on token in a recognized form ---------
+
+ENUM_TU = '''const int Side__long_ = 1;
+class GeneratedStrategy {
+    GeneratedStrategy() {
+        pineforge::source::PineStrategyConfig cfg{};
+        cfg.default_qty_type = static_cast<int>(QtyType::CASH);
+        configure_pine_strategy(cfg);
+    }
+    void init() {
+        side = get_input_int("Side", Side__long_);
+        len = get_input_int("len", 10);
+        src = get_input_source("Source", _src_close_)[0];
+        _src_close_.clear();
+    }
+#ifdef PF_SETTINGS_API_VERSION
+    std::vector<int> rows() const {
+        return {
+            {"Side", "enum", ::pineforge::checked_settings::number(Side__long_), {}},
+        };
+    }
+#endif
+};
+'''
+
+
+def receipt_row(name, kind, default, value=None, supported=True):
+    return {"name": name, "type": kind, "kind": kind, "default": default,
+            "effective_value": default if value is None else value,
+            "supported": supported}
+
+
+def legacy_receipt(*rows):
+    return {"version": 1, "inputs": list(rows), "overrides": []}
+
+
+ENUM_RECEIPT = legacy_receipt(receipt_row("Side", "enum", "1"), receipt_row("len", "int", "10"),
+                              receipt_row("Source", "source", "close"))
+
+
+def legacy_document(tmp_path, cpp, receipt=None, inputs=None, overrides=None):
+    path = tmp_path / "generated.cpp"
+    path.write_text(cpp)
+    inputs = dict(inputs or {})
+    overrides = dict(overrides or {})
+    document = run_json.build_provenance(
+        {}, path, True, inputs, overrides, {}, source_feed_sha256="0" * 64)
+    result = run_json.normalize_release_provenance(document, cpp, receipt, False)
+    fingerprint = run_json.build_fingerprint(result)
+    raw = run_json.base64.b64decode(fingerprint["token"])
+    assert json.loads(raw) == result
+    return result
+
+
+def refusal(reason, raw):
+    return {"status": "unresolved", "reason": reason, "raw_default": raw}
+
+
+def test_allowlist_certifies_only_recognized_symbol_occurrences(tmp_path):
+    result = legacy_document(tmp_path, ENUM_TU, ENUM_RECEIPT)
+    assert result["inputs"]["Side"] == {"type": "int", "default": 1, "value": 1}
+    assert result["inputs"]["len"] == {"type": "int", "default": 10, "value": 10}
+    assert result["inputs"]["Source"] == {"type": "source", "default": "close", "value": "close"}
+    assert result["strategy"]["default_qty_type"] == "cash"
+
+
+@pytest.mark.parametrize("extra", [
+    "            int unused = 0, Side__long_(2);\n",
+    "            int ((Side__long_)) = 2;\n",
+    "            bool same = side == (Side__long_);\n",
+    "            Side__long_;\n",
+])
+def test_any_other_symbol_occurrence_refuses(tmp_path, extra):
+    cpp = ENUM_TU.replace("        side = get_input_int", extra + "        side = get_input_int")
+    result = legacy_document(tmp_path, cpp, ENUM_RECEIPT, {"Side": "2"})
+    assert result["inputs"]["Side"]["default"] is None
+    assert result["inputs"]["Side"]["value"] is None
+    assert result["inputs"]["Side"]["resolution"] == refusal("ambiguous_binding", "Side__long_")
+    assert result["applied"]["inputs"]["Side"] == "2"
+    assert result["inputs"]["len"]["default"] == 10
+
+
+@pytest.mark.parametrize("extra", [
+    "            int \\u0053ide__long_ = 2;\n",
+    "            int x = 1; \\\n",
+    "// comment \\\n",
+    "#define Side__long_ 2\n",
+    "#define get_input_int(a, b) 7\n",
+    '#include "local.h"\n',
+    "#pragma once\n",
+])
+def test_unrecognized_lexical_context_refuses_every_row(tmp_path, extra):
+    cpp = extra + ENUM_TU
+    result = legacy_document(tmp_path, cpp, ENUM_RECEIPT, {"len": "14"})
+    for name in ("Side", "len", "Source"):
+        assert result["inputs"][name]["resolution"]["reason"] == "unsupported_binding"
+        assert result["inputs"][name]["value"] is None
+    assert result["applied"]["inputs"]["len"] == "14"
+    assert result["strategy"]["default_qty_type"] is None
+    assert result["strategy_resolution"]["default_qty_type"]["reason"] == "unsupported_binding"
+
+
+def test_conflicting_getter_occurrences_refuse_the_title(tmp_path):
+    cpp = ENUM_TU.replace("    void init() {", '''    int unused_probe() { return get_input_int ("len", 1); }
+    void init() {''')
+    result = legacy_document(tmp_path, cpp, ENUM_RECEIPT, {"len": "2"})
+    assert result["inputs"]["len"]["resolution"] == refusal("ambiguous_binding", "1")
+    assert result["applied"]["inputs"]["len"] == "2"
+
+
+def test_receipt_type_default_and_value_are_compared_without_coercion(tmp_path):
+    cpp = ENUM_TU.replace('get_input_int("len", 10)', 'get_input_int("len", 2)')
+    receipt = legacy_receipt(receipt_row("Side", "enum", "1"), receipt_row("len", "float", "2"),
+                             receipt_row("Source", "source", "close"))
+    result = legacy_document(tmp_path, cpp, receipt, {"len": "2"})
+    assert result["inputs"]["len"]["resolution"] == refusal("ambiguous_binding", "2")
+    receipt["inputs"][1] = receipt_row("len", "int", "3", "2")
+    result = legacy_document(tmp_path, cpp, receipt, {"len": "2"})
+    assert result["inputs"]["len"]["resolution"] == refusal("ambiguous_binding", "2")
+    receipt["inputs"][1] = receipt_row("len", "int", "2", "2")
+    result = legacy_document(tmp_path, cpp, receipt, {"len": "2"})
+    assert result["inputs"]["len"] == {"type": "int", "default": 2, "value": 2}
+
+
+@pytest.mark.parametrize("context", [
+    'static const char* fake = R"(");get_input_int("ghost", 7);(")";\n',
+    'static const char* fake = R"x(get_input_int("ghost", 7))x";\n',
+    '// get_input_int("ghost", 7);\n',
+    '/* get_input_int("ghost", 7); */\n',
+])
+def test_getter_text_outside_code_context_is_not_a_declaration(tmp_path, context):
+    result = legacy_document(tmp_path, context + ENUM_TU, ENUM_RECEIPT, {"ghost": "9"})
+    assert result["inputs"]["ghost"] == {"type": "unknown", "default": None, "value": "9"}
+    assert result["inputs"]["Side"]["default"] == 1
+
+
+@pytest.mark.parametrize("guard", ["#if 0", "#ifdef SOMETHING", "#ifndef PF_SETTINGS_API_VERSION"])
+def test_getter_in_an_unrecognized_conditional_refuses_every_row(tmp_path, guard):
+    cpp = ENUM_TU + guard + '\nint ghost = get_input_int("ghost", 7);\n#endif\n'
+    result = legacy_document(tmp_path, cpp, ENUM_RECEIPT)
+    assert result["inputs"]["len"]["resolution"]["reason"] == "unsupported_binding"
+
+
+@pytest.mark.parametrize("inputs,expected", [
+    ({}, {"type": "source", "default": "close", "value": "close"}),
+    ({"Source": "high"}, {"type": "source", "default": "close", "value": "high"}),
+    ({"Source": "14"}, {"type": "source", "default": None, "value": None,
+                        "resolution": refusal("unsupported_override", "_src_close_")}),
+    ({"Source": ""}, {"type": "source", "default": None, "value": None,
+                      "resolution": refusal("unsupported_override", "_src_close_")}),
+])
+def test_source_inputs_certify_only_canonical_selectors(tmp_path, inputs, expected):
+    receipt = legacy_receipt(receipt_row("Side", "enum", "1"), receipt_row("len", "int", "10"),
+                             receipt_row("Source", "source", "close", inputs.get("Source")))
+    result = legacy_document(tmp_path, ENUM_TU, receipt, inputs)
+    assert result["inputs"]["Source"] == expected
+    if inputs:
+        applied = result["applied"]["inputs"]["Source"]
+        assert applied == (expected["value"] if expected["value"] else inputs["Source"])
+
+
+@pytest.mark.parametrize("default,reason", [
+    ('source_series(std::string("close"))', "unsupported_default"),
+    ("close", "unsupported_default"),
+    ("_src_typo_", "unsupported_default"),
+])
+def test_source_expressions_are_unresolved(tmp_path, default, reason):
+    cpp = ENUM_TU.replace('get_input_source("Source", _src_close_)',
+                          'get_input_source("Source", ' + default + ')')
+    result = legacy_document(tmp_path, cpp, None)
+    assert result["inputs"]["Source"]["resolution"] == refusal(reason, default)
+
+
+def test_redeclared_source_series_is_unresolved(tmp_path):
+    cpp = ENUM_TU.replace("    void init() {", "    Series<double> _src_close_;\n    void init() {")
+    result = legacy_document(tmp_path, cpp, None)
+    assert result["inputs"]["Source"]["resolution"] == refusal("unsupported_binding", "_src_close_")
+
+
+@pytest.mark.parametrize("getter,receipt", [
+    ('get_input_int64("Big", 9007199254740992LL)', receipt_row("Big", "int", "9007199254740992")),
+    ('get_input_int64("Big", 1)', receipt_row("Big", "int", "1", "9007199254740993")),
+    ('get_input_double("Big", 1.0f)', receipt_row("Big", "float", "inf")),
+    ('get_input_double("Big", 1e400)', None),
+    ('get_input_int64("Big", 9007199254740993)', None),
+])
+def test_known_out_of_domain_scalars_keep_their_refusal(tmp_path, getter, receipt):
+    cpp = ENUM_TU.replace('len = get_input_int("len", 10);', 'len = ' + getter + ';')
+    rows = [row for row in ENUM_RECEIPT["inputs"] if row["name"] != "len"]
+    path = tmp_path / "generated.cpp"
+    path.write_text(cpp)
+    document = run_json.build_provenance(
+        {}, path, True, {}, {}, {}, source_feed_sha256="0" * 64)
+    with pytest.raises(ValueError):
+        run_json.normalize_release_provenance(
+            document, cpp, legacy_receipt(*(rows + ([receipt] if receipt else []))), False)
+
+
+def test_conflicting_getters_do_not_erase_out_of_domain_evidence(tmp_path):
+    cpp = ENUM_TU.replace('len = get_input_int("len", 10);',
+                          'len = get_input_int64("len", 9007199254740993); '
+                          'int other = get_input_int64("len", 1);')
+    path = tmp_path / "generated.cpp"
+    path.write_text(cpp)
+    document = run_json.build_provenance(
+        {}, path, True, {}, {}, {}, source_feed_sha256="0" * 64)
+    with pytest.raises(ValueError):
+        run_json.normalize_release_provenance(document, cpp, None, False)
+
+
+@pytest.mark.parametrize("literal", ['R"(a"b)"', 'R"x()" )x"', 'u8R"(q"q)"', 'LR"--(a)"b)--"'])
+def test_valid_raw_literals_keep_typed_rows_and_the_fingerprint(tmp_path, literal):
+    cpp = ENUM_TU + "const char* note = " + literal + ";\n"
+    result = legacy_document(tmp_path, cpp, ENUM_RECEIPT)
+    assert result["inputs"]["len"] == {"type": "int", "default": 10, "value": 10}
+
+
+@pytest.mark.parametrize("tail", ['const char* note = R"(never closed;\n',
+                                  'const char* note = "never closed;\n',
+                                  "/* never closed\n", "#if 1\n"])
+def test_unreadable_literal_context_is_explicitly_unsupported(tmp_path, tail):
+    result = legacy_document(tmp_path, ENUM_TU + tail, ENUM_RECEIPT, {"len": "14"})
+    assert result["inputs"]["len"] == {"type": "unknown", "default": None, "value": None,
+                                       "resolution": refusal("unsupported_binding", None)}
+    assert result["applied"]["inputs"]["len"] == "14"
+    assert all(value is None for value in (result["strategy"][key] for key in
+                                           run_json._RELEASE_OVERRIDE_TYPES))
+
+
+@pytest.mark.parametrize("assignment,key,raw", [
+    ("cfg.default_qty_type = q;", "default_qty_type", "q"),
+    ("cfg.commission_type = c;", "commission_type", "c"),
+    ("cfg.default_qty_type = static_cast<int>(QtyType::OTHER);", "default_qty_type",
+     "static_cast<int>(QtyType::OTHER)"),
+    ("cfg.close_entries_rule_any = 1;", "close_entries_rule", "1"),
+    ("cfg.close_entries_rule_any = (true);", "close_entries_rule", "(true)"),
+    ("cfg.process_orders_on_close = enabled;", "process_orders_on_close", "enabled"),
+    ("cfg.initial_capital = 1000 * 2;", "initial_capital", "1000 * 2"),
+])
+def test_unrecognized_strategy_defaults_are_unresolved(tmp_path, assignment, key, raw):
+    cpp = ENUM_TU.replace("        configure_pine_strategy(cfg);",
+                          "        " + assignment + "\n        configure_pine_strategy(cfg);")
+    result = legacy_document(tmp_path, cpp, ENUM_RECEIPT)
+    assert result["strategy"][key] is None
+    assert result["strategy_resolution"][key] == refusal("unsupported_default", raw)
+    result = legacy_document(tmp_path, cpp, ENUM_RECEIPT, overrides={key: "1"})
+    assert result["strategy"][key] is not None
+    assert key not in result.get("strategy_resolution", {})
+
+
+@pytest.mark.parametrize("change", [
+    ("        configure_pine_strategy(cfg);",
+     "        configure_pine_strategy(cfg);\n        cfg.pyramiding = 3;"),
+    ("    void init() {", "    void init() { enum class QtyType { CASH }; }\n    void other() {"),
+    ("        cfg.default_qty_type", "        if (side) cfg.pyramiding = 2;\n        cfg.default_qty_type"),
+])
+def test_unrecognized_strategy_flow_refuses_every_default(tmp_path, change):
+    cpp = ENUM_TU.replace(*change)
+    result = legacy_document(tmp_path, cpp, ENUM_RECEIPT)
+    assert result["strategy"]["default_qty_type"] is None
+    assert "default_qty_type" in result["strategy_resolution"]
+
+
+def test_recognized_strategy_defaults_and_enum_spellings(tmp_path):
+    cpp = ENUM_TU.replace("static_cast<int>(QtyType::CASH)", "QtyType::PERCENT_OF_EQUITY").replace(
+        "        configure_pine_strategy(cfg);",
+        "        cfg.commission_type = 2;\n        cfg.close_entries_rule_any = true;\n"
+        "        cfg.initial_capital = 5e3;\n        configure_pine_strategy(cfg);")
+    result = legacy_document(tmp_path, cpp, ENUM_RECEIPT)
+    assert result["strategy"]["default_qty_type"] == "percent_of_equity"
+    assert result["strategy"]["commission_type"] == "cash_per_contract"
+    assert result["strategy"]["close_entries_rule"] == "ANY"
+    assert result["strategy"]["initial_capital"] == 5000.0
+    assert "strategy_resolution" not in result
