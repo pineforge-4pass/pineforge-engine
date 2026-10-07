@@ -877,6 +877,145 @@ def test_a_switch_the_engine_refuses_carries_the_engine_code(harness):
     assert "run_backtest_full" not in lib.names()
 
 
+def manifest_entry_fixture():
+    return {
+        "outputs": [{"index": 0, "id": "opaque/id:\u03b1", "kind": "plotshape"},
+                    {"index": 1, "id": "h0", "kind": "hline",
+                     "price": {"constant": 0}}],
+        "series": [{"slot": 1, "output": "opaque/id:\u03b1", "encoding": "rgba-u32"},
+                   {"slot": 0, "output": "opaque/id:\u03b1"}],
+        "constants": [{"index": 0, "output": "h0", "param": "price"}],
+        "future_metadata": {"unconsumed": [True, None]},
+    }
+
+
+def manifest_entry_fake_lib(manifest):
+    """Fake-library error witness through the real main/C-reader boundary.
+
+    Only ctypes.CDLL is substituted by harness; manifest parsing, reader
+    copies, report serialization, cleanup and failure handling are real.
+    This is not a compiled-engine or recorder witness.
+    """
+    raw = json.dumps(manifest, indent=2, ensure_ascii=False).encode()
+
+    def copy_manifest(st, out, capacity, required, error, error_capacity):
+        ctypes.cast(required, ctypes.POINTER(ctypes.c_size_t))[0] = len(raw) + 1
+        if capacity < len(raw) + 1:
+            return PF_SMALL
+        ctypes.memmove(out, raw + b"\0", len(raw) + 1)
+        return PF_OK
+
+    def copy_times(st, start, opens, closes, capacity, written):
+        opens[0], closes[0] = 1000, 2000
+        ctypes.cast(written, ctypes.POINTER(ctypes.c_int64))[0] = 1
+        return PF_OK
+
+    def copy_series(st, slot, start, out, capacity, written):
+        out[0] = [1.25, 1286557951.0][slot]
+        ctypes.cast(written, ctypes.POINTER(ctypes.c_int64))[0] = 1
+        return PF_OK
+
+    def copy_constants(st, out, capacity):
+        if capacity:
+            out[0] = 50.0
+        return 1
+
+    def copy_event(st, index, out, capacity):
+        event = run_json.OutputEventC(
+            struct_version=1, size=ctypes.sizeof(run_json.OutputEventC),
+            sequence=1, output_index=0, bar_index=0, bar_open_ms=1000,
+            bar_close_ms=2000, ordinal_in_bar=0, phase=0, confirmed=1,
+            value=1.0, message=b"recorded")
+        ctypes.memmove(out, ctypes.byref(event), ctypes.sizeof(event))
+        return PF_OK
+
+    return fake_lib(*OUTPUTS_EXPORTS, returns={
+        "strategy_outputs_api_version": 1, "strategy_outputs_set_enabled": 0,
+        "strategy_outputs_series_count": 2, "strategy_outputs_bars_len": 1,
+        "strategy_outputs_events_len": 1,
+    }, impl={
+        "strategy_outputs_manifest": copy_manifest,
+        "strategy_outputs_bar_times_copy": copy_times,
+        "strategy_outputs_series_copy": copy_series,
+        "strategy_outputs_constants_copy": copy_constants,
+        "strategy_outputs_event_get": copy_event,
+    })
+
+
+@pytest.mark.parametrize("key,field", [
+    ("outputs", "index"), ("constants", "index"), ("series", "slot")])
+@pytest.mark.parametrize("value", [[], {}, None, "x", 0.0, True, False, -1],
+                         ids=["array", "object", "null", "text", "float",
+                              "true", "false", "negative"])
+def test_manifest_entry_index_failure_at_real_harness_boundary(harness, key, field, value):
+    manifest = manifest_entry_fixture()
+    manifest[key][0][field] = value
+    lib = manifest_entry_fake_lib(manifest)
+    status, out = harness(lib, "--outputs")
+    doc = line_of(out)
+    assert status == 1
+    assert (doc["code"], doc["args"]) == (
+        "strategy_library_incompatible", {"reason": "outputs_manifest_invalid"})
+    assert harness.stderr == ""
+    assert lib.names().count("run_backtest_full") == 1
+    assert lib.names().count("report_free") == lib.names().count("strategy_free") == 1
+
+
+@pytest.mark.parametrize("key,field", [("outputs", "id"), ("series", "output")])
+@pytest.mark.parametrize("value", [None, "", 0, 1.5, True, False, [], {}, "missing"],
+                         ids=["null", "empty", "integer", "float", "true", "false",
+                              "array", "object", "missing"])
+def test_manifest_entry_id_failure_at_real_harness_boundary(harness, key, field, value):
+    manifest = manifest_entry_fixture()
+    if value == "missing":
+        del manifest[key][0][field]
+    else:
+        manifest[key][0][field] = value
+    lib = manifest_entry_fake_lib(manifest)
+    status, out = harness(lib, "--outputs")
+    doc = line_of(out)
+    assert status == 1
+    assert (doc["code"], doc["args"]) == (
+        "strategy_library_incompatible", {"reason": "outputs_manifest_invalid"})
+    assert harness.stderr == ""
+    assert lib.names().count("run_backtest_full") == 1
+    assert lib.names().count("report_free") == lib.names().count("strategy_free") == 1
+
+
+def test_manifest_entry_valid_wire_control_at_real_harness_boundary(harness):
+    manifest = manifest_entry_fixture()
+    lib = manifest_entry_fake_lib(manifest)
+    status, out = harness(lib, "--outputs")
+    assert status == 0
+    assert harness.stderr == ""
+    block = json.loads(out)["outputs"]
+    assert block["manifest"] == manifest
+    import hashlib
+    raw = json.dumps(manifest, indent=2, ensure_ascii=False).encode()
+    assert block["manifest_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert json.dumps(block["series"], separators=(",", ":")) == (
+        '[{"slot":0,"output":"opaque/id:\\u03b1","values":[1.25]},'
+        '{"slot":1,"output":"opaque/id:\\u03b1","values":[1286557951]}]')
+    assert block["constants"] == [50.0]
+    assert block["hlines"] == [{"output": "h0", "price": 50.0}]
+    assert block["events"] == [{
+        "sequence": 1, "output": "opaque/id:\u03b1", "bar_index": 0,
+        "bar_open_ms": 1000, "bar_close_ms": 2000, "ordinal_in_bar": 0,
+        "phase": "batch", "value": 1.0, "message": "recorded"}]
+    assert lib.names().count("report_free") == lib.names().count("strategy_free") == 1
+
+
+def test_manifest_entry_invalid_manifest_is_unread_with_outputs_off(harness):
+    lib = manifest_entry_fake_lib({"outputs": [{"index": []}]})
+    status, out = harness(lib)
+    plain_status, plain_out = harness(fake_lib())
+    assert status == plain_status == 0
+    assert report_of(out) == report_of(plain_out)
+    assert "outputs" not in json.loads(out)
+    assert not any(name.startswith("strategy_outputs_") for name in lib.names())
+    assert harness.stderr == ""
+
+
 SYMINFO_SETTERS = ("strategy_set_syminfo_metadata", "strategy_set_syminfo_mintick",
                    "strategy_set_syminfo_pointvalue", "strategy_set_syminfo_timezone",
                    "strategy_set_syminfo_session")

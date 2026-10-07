@@ -231,5 +231,71 @@ class OutputsBlockTests(unittest.TestCase):
         self.assertNotIn("outputs", rep["applied_runtime"])
 
 
+class ManifestEntryTypesTests(unittest.TestCase):
+    """Reader-callable witnesses; these do not execute a compiled library."""
+
+    def assert_invalid(self, manifest) -> None:
+        outputs_reader = reader(events=[event(output_index=0)])
+        outputs_reader.manifest = lambda: json.dumps(manifest).encode()
+        with self.assertRaises(run_json.OutputsError) as caught:
+            run_json.build_outputs_block(outputs_reader)
+        self.assertEqual(caught.exception.code, "strategy_library_incompatible")
+        self.assertEqual(caught.exception.code_args,
+                         {"reason": "outputs_manifest_invalid"})
+
+    def test_manifest_entry_indices_are_nonnegative_integers(self) -> None:
+        for key, field in (("outputs", "index"), ("constants", "index"),
+                           ("series", "slot")):
+            for value in ([], {}, None, "x", 0.0, True, False, -1):
+                with self.subTest(key=key, value=value):
+                    manifest = json.loads(MANIFEST_BYTES)
+                    # Leave other valid slots present: mixed types must be
+                    # refused before sorting, not fail in Python's comparison.
+                    manifest[key][0][field] = value
+                    self.assert_invalid(manifest)
+
+    def test_manifest_entry_ids_are_required_nonempty_strings(self) -> None:
+        for key, field in (("outputs", "id"), ("series", "output")):
+            for value in (None, "", 0, 1.5, True, False, [], {}):
+                with self.subTest(key=key, value=value):
+                    manifest = json.loads(MANIFEST_BYTES)
+                    manifest[key][0][field] = value
+                    self.assert_invalid(manifest)
+            with self.subTest(key=key, missing=field):
+                manifest = json.loads(MANIFEST_BYTES)
+                del manifest[key][0][field]
+                self.assert_invalid(manifest)
+
+    def test_manifest_entry_validation_keeps_valid_values_and_raw_digest(self) -> None:
+        manifest = json.loads(MANIFEST_BYTES)
+        # IDs are opaque strings, and indices need not be contiguous here.
+        manifest["outputs"][0].update(index=17, id="opaque/id:\u03b1")
+        manifest["series"][1]["output"] = "opaque/id:\u03b1"
+        manifest["future_metadata"] = {"unconsumed": [True, None]}
+        raw = json.dumps(manifest, indent=3, ensure_ascii=False).encode()
+        outputs_reader = reader(events=[event(output_index=17)])
+        outputs_reader.manifest = lambda: raw
+        block = run_json.build_outputs_block(outputs_reader)
+        self.assertEqual(block["manifest"], manifest)
+        self.assertEqual(block["manifest_sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertEqual(block["events"][0]["output"], "opaque/id:\u03b1")
+        self.assertEqual(block["series"][0],
+                         {"slot": 0, "output": "opaque/id:\u03b1",
+                          "values": [101.5, 102.0]})
+        self.assertEqual([entry["slot"] for entry in block["series"]], [0, 1, 2])
+        self.assertEqual(block["constants"], [50.0, 2021161215, None])
+        self.assertEqual(block["hlines"], [{"output": "h0", "price": 50.0},
+                                          {"output": "h1", "price": None}])
+
+    def test_manifest_entry_validation_accepts_empty_optional_collections(self) -> None:
+        for manifest in ({}, {"outputs": [], "series": [], "constants": []}):
+            with self.subTest(manifest=manifest):
+                outputs_reader = reader(bars=(), series=[], constants=[])
+                outputs_reader.manifest = lambda: json.dumps(manifest).encode()
+                block = run_json.build_outputs_block(outputs_reader)
+                for key in ("series", "constants", "hlines", "events"):
+                    self.assertEqual(block[key], [])
+
+
 if __name__ == "__main__":
     unittest.main()
