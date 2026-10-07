@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      cold_native_cache:
+        description: Run full native profiles without compiler or libcurl caches
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -332,6 +337,7 @@ jobs:
     uses: ./.github/workflows/native-live.yml
     with:
       exclude_slow: ${{ github.event_name == 'pull_request' }}
+      cold_cache: ${{ inputs.cold_native_cache || false }}
 
   # Advisory TradingView parity subset on every CI run of a change that is not
   # docs-only. The maintainers post the required pineforge/parity status from

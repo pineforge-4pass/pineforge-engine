@@ -1,5 +1,12 @@
 name: Set up native runner libcurl
 description: Cache and build the checksum-pinned WebSocket-enabled libcurl
+inputs:
+  cache-namespace:
+    description: Isolate dependency caches for each verification profile
+    default: shared
+  cold-cache:
+    description: Bypass dependency cache restore and save
+    default: 'false'
 outputs:
   curl-dir:
     description: CMake package directory for ci_verify.py --curl-dir
@@ -26,12 +33,22 @@ runs:
         echo "curl-dir=${GITHUB_WORKSPACE}/build-native-deps/curl-install/lib/cmake/CURL" >> "$GITHUB_OUTPUT"
     - name: Restore pinned WebSocket-enabled libcurl
       id: curl-cache
-      uses: actions/cache@v4
+      if: ${{ inputs.cold-cache != 'true' }}
+      uses: actions/cache/restore@v4
       with:
         path: build-native-deps/curl-install
-        key: curl-${{ steps.dependencies.outputs.version }}-${{ steps.dependencies.outputs.sha256 }}-${{ steps.dependencies.outputs.identity }}-${{ hashFiles('.github/actions/setup-live-curl/action.yml', 'scripts/build_live_curl.sh') }}-${{ runner.os }}-${{ runner.arch }}
+        key: curl-${{ inputs.cache-namespace }}-${{ steps.dependencies.outputs.version }}-${{ steps.dependencies.outputs.sha256 }}-${{ steps.dependencies.outputs.identity }}-${{ hashFiles('.github/actions/setup-live-curl/action.yml', 'scripts/build_live_curl.sh') }}-${{ runner.os }}-${{ runner.arch }}
     - name: Build pinned WebSocket-enabled libcurl
+      id: curl-build
       shell: bash
       env:
         CURL_CACHE_HIT: ${{ steps.curl-cache.outputs.cache-hit }}
       run: bash scripts/build_live_curl.sh build-native-deps 4
+    # Save as soon as the dependency build succeeds. Later test failures and
+    # job timeouts must not prevent a valid pinned installation from surviving.
+    - name: Save pinned WebSocket-enabled libcurl
+      if: ${{ inputs.cold-cache != 'true' && steps.curl-build.outcome == 'success' && steps.curl-cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: build-native-deps/curl-install
+        key: ${{ steps.curl-cache.outputs.cache-primary-key }}

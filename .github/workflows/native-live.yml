@@ -7,100 +7,155 @@ on:
         description: Exclude measured slow CTest rows in the caller's PR run
         type: boolean
         default: false
+      cold_cache:
+        description: Bypass compiler and libcurl cache restore and save for every profile
+        type: boolean
+        default: false
   workflow_dispatch:
+    inputs:
+      cold_cache:
+        description: Prove the full row set without compiler or libcurl caches
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
-# The caller owns PR cancellation. Keep a distinct group: github.workflow in
-# a reusable workflow names the caller, so an unprefixed group would collide
-# with CI and could cancel it. Main/manual proof groups stay unique per run.
+# The caller owns PR cancellation. A reusable workflow's github.workflow is
+# its caller, so the prefix avoids cancelling CI. Main/manual runs are unique.
 concurrency:
   group: native-live-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  CCACHE_DIR: ${{ github.workspace }}/.ccache
   CCACHE_COMPILERCHECK: content
   CCACHE_COMPRESS: "1"
   CCACHE_MAXSIZE: 500M
-  # The run-failure source guards in every ci_verify profile read the newest
-  # release tag, which this checkout fetches (fetch-depth: 0): a missing tag
-  # fails them rather than taking their tag-less offline path. A called
-  # workflow does not inherit CI's env, so it says so itself.
+  # A reusable workflow does not inherit the caller's environment. The guards
+  # require the release tags fetched by every profile's full checkout.
   PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
 
-# The organization's 16-core larger runner for a push, the schedule, a
-# dispatch and a pull request from a branch of this repository; every other
-# event, a fork's pull request above all, runs on the free standard runner. In
-# a workflow_call the github context is the caller's, so a fork's pull request
-# through CI lands there too. scripts/ci_preflight.py pins the runner and limit.
 jobs:
   native-live:
+    name: native-live (${{ matrix.profile }})
+    # Same trusted-event 16-core policy as CI; forks use the standard runner.
     runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
-    # The full set waits on the test_ci_verify CTest row, 1034 s on the
-    # standard runner at 0d76a099, which more cores do not shorten.
-    timeout-minutes: 60
+    timeout-minutes: ${{ matrix.job_minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: native
+            build_dir: build-live
+            job_minutes: 75
+            verify_minutes: 65
+            test_timeout: 2700
+            ctest_timeout: 2820
+          - profile: live-sanitizers
+            build_dir: build-live-sanitizers
+            job_minutes: 45
+            verify_minutes: 35
+            test_timeout: 900
+            ctest_timeout: 1200
+          - profile: live-tsan
+            build_dir: build-live-tsan
+            job_minutes: 45
+            verify_minutes: 35
+            test_timeout: 900
+            ctest_timeout: 1200
+    # Main runs 37398893123/37461653250/37478400505 took 35.4–40.7m
+    # native + 15.1–16.3m ASan before TSan exhausted the shared hour, despite
+    # compiler and curl cache hits. Independent 75/45/45m budgets allow cold
+    # builds and leave ten minutes outside verification for setup/collection.
+    # test_ci_verify took 1695s on GitHub and 2178s on a c5.4xlarge; 2700s
+    # gives that host 24% margin, inside a 2820s stage. Live rows allow up to
+    # 900s; keep those limits and a 1200s stage. No row inventory changes.
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache/${{ matrix.profile }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-          fetch-depth: 0   # ci_verify runs the benchmark provenance CTest row
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      # tzdata-legacy carries the backward links test_native_calendar resolves
-      # (US/Eastern, Japan, GB); noble split them out of tzdata, and this job
-      # runs the calendar row too.
       - name: Install native build dependencies
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache
 
       - name: Restore ccache
-        uses: actions/cache@v4
+        id: ccache-restore
+        if: ${{ !inputs.cold_cache }}
+        uses: actions/cache/restore@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-native-${{ github.sha }}
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-live-v2-${{ matrix.profile }}-${{ github.sha }}
           restore-keys: |
-            ccache-${{ runner.os }}-${{ runner.arch }}-native-
+            ccache-${{ runner.os }}-${{ runner.arch }}-live-v2-${{ matrix.profile }}-
 
       - name: Set up pinned WebSocket-enabled libcurl
         id: curl-deps
         uses: ./.github/actions/setup-live-curl
+        with:
+          cache-namespace: ${{ matrix.profile }}
+          cold-cache: ${{ inputs.cold_cache }}
 
-      - name: Verify native live
-        run: python3 scripts/ci_verify.py native --build-dir build-live --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" --ccache --require-websocket ${{ inputs.exclude_slow && '--exclude-label slow' || '' }}
+      - name: Record compiler cache before verification
+        run: |
+          mkdir -p "${{ matrix.build_dir }}"
+          ccache --show-stats > "${{ matrix.build_dir }}/ccache-before.log"
+          ccache --zero-stats
 
-      - name: Verify every live runner target with ASan and UBSan
-        if: ${{ !cancelled() }}
-        run: python3 scripts/ci_verify.py live-sanitizers --build-dir build-live-sanitizers --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" --ccache
+      - name: Verify (${{ matrix.profile }})
+        id: verify
+        timeout-minutes: ${{ matrix.verify_minutes }}
+        run: python3 scripts/ci_verify.py ${{ matrix.profile }} --build-dir ${{ matrix.build_dir }} --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" --ccache --test-timeout ${{ matrix.test_timeout }} --ctest-timeout ${{ matrix.ctest_timeout }} ${{ matrix.profile == 'native' && '--require-websocket' || '' }} ${{ matrix.profile == 'native' && inputs.exclude_slow && '--exclude-label slow' || '' }}
 
       - name: Stage and summarize diagnostics
         if: always()
         env:
           CURL_CACHE_HIT: ${{ steps.curl-deps.outputs.cache-hit }}
-        run: python3 scripts/collect_ci_diagnostics.py --build-dir build-live --profile native --dependency-dir build-native-deps
-
-      - name: Verify every live runner target with ThreadSanitizer
-        if: ${{ !cancelled() }}
-        run: python3 scripts/ci_verify.py live-tsan --build-dir build-live-tsan --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" --ccache
-
-      - name: Stage thread sanitizer diagnostics
-        if: always()
-        run: python3 scripts/collect_ci_diagnostics.py --build-dir build-live-tsan --profile live-tsan --output ci-diagnostics/live-tsan --dependency-dir build-native-deps
-
-      - name: Stage live sanitizer diagnostics
-        if: always()
-        run: python3 scripts/collect_ci_diagnostics.py --build-dir build-live-sanitizers --profile live-sanitizers --output ci-diagnostics/live-sanitizers --dependency-dir build-native-deps
+          CCACHE_CACHE_HIT: ${{ steps.ccache-restore.outputs.cache-hit }}
+          CCACHE_RESTORE_KEY: ${{ steps.ccache-restore.outputs.cache-matched-key }}
+          COLD_CACHE: ${{ inputs.cold_cache }}
+        run: |
+          python3 scripts/collect_ci_diagnostics.py --build-dir ${{ matrix.build_dir }} --profile ${{ matrix.profile }} --dependency-dir build-native-deps
+          printf 'cold_cache=%s\ncompiler_exact_hit=%s\ncompiler_restore_key=%s\n' "$COLD_CACHE" "$CCACHE_CACHE_HIT" "$CCACHE_RESTORE_KEY" > ci-diagnostics/cache-info.txt
+          if [[ -f "${{ matrix.build_dir }}/ccache-before.log" ]]; then
+            cp "${{ matrix.build_dir }}/ccache-before.log" ci-diagnostics/ccache-before.log
+          fi
 
       - name: Retain CI diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-diagnostics-native-live
+          name: ci-diagnostics-native-live-${{ matrix.profile }}
           path: ci-diagnostics/
           if-no-files-found: warn
+
+      # A failing test does not invalidate compiler objects. Save explicitly
+      # after diagnostics, even on normal failure; cancellation is no cache plan.
+      - name: Save ccache after verification
+        if: ${{ !cancelled() && !inputs.cold_cache && steps.verify.outcome != 'skipped' && steps.ccache-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
+
+  native-live-gate:
+    needs: native-live
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every native profile to have passed
+        env:
+          PROFILES_RESULT: ${{ needs.native-live.result }}
+        run: |
+          printf 'native profiles: %s\n' "$PROFILES_RESULT"
+          test "$PROFILES_RESULT" = success

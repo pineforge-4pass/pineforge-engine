@@ -5,15 +5,16 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 
-from ci_preflight import (CORES, DOCS_ONLY_SKIP, JOB_RUNNERS, LINUX_RUNNER, MATRIX_RUNNER,
+from ci_preflight import (CORES, DOCS_ONLY_SKIP, JOB_RUNNERS, LINUX_RUNNER, MATRIX_RUNNER, NATIVE_EXCLUSION, NATIVE_CACHE_SAVE, CURL_CACHE_SAVE,
                           PROOF_JOBS, STAGE_TIMEOUT_SECONDS, _jobs, check_commands,
-                          ci_workflow_findings, run_checks)
+                          ci_workflow_findings, native_workflow_findings, run_checks)
 
 ROOT = Path(__file__).resolve().parents[1]
 KERNEL_VERIFY = ('run: python3 scripts/ci_verify.py kernel --build-dir build-kernel '
@@ -94,7 +95,7 @@ class PreflightFailures(unittest.TestCase):
             (0, "github.event_name == 'pull_request' && '--exclude-label slow'", "'--exclude-label slow'"),
             (0, "exclude_slow: ${{ github.event_name == 'pull_request' }}", 'exclude_slow: true'),
             (1, '        default: false', '        default: true'),
-            (1, "${{ inputs.exclude_slow && '--exclude-label slow' || '' }}", ''),
+            (1, NATIVE_EXCLUSION, ''),
             # Baseline promotion runs main's copy of the workflow and no PR
             # code, and needs the newest two statuses on the PR head.
             (2, '  pull_request_target:\n', '  pull_request:\n'),
@@ -237,8 +238,8 @@ class PreflightFailures(unittest.TestCase):
              'ci.yml job changes must run on ubuntu-24.04'),
             (0, 'changes', '    timeout-minutes: 5\n', '    timeout-minutes: 30\n',
              'ci.yml job changes must allow 5'),
-            (1, 'native-live', 'timeout-minutes: 60', 'timeout-minutes: 45',
-             'native-live.yml job native-live must allow 60'),
+            (1, 'native-live', 'timeout-minutes: ${{ matrix.job_minutes }}', 'timeout-minutes: 60',
+             'native-live.yml job native-live must allow ${{ matrix.job_minutes }}'),
             (4, 'corpus-parity', 'timeout-minutes: 120', 'timeout-minutes: 30',
              'corpus-parity.yml job corpus-parity must allow 120'),
             (4, 'corpus-parity-subset', 'timeout-minutes: 30', 'timeout-minutes: 10',
@@ -599,6 +600,7 @@ class PreflightFailures(unittest.TestCase):
         shutil.copytree(ROOT / 'scripts', tree / 'scripts',
                         ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
         shutil.copytree(ROOT / '.github/workflows', tree / '.github/workflows')
+        shutil.copytree(ROOT / '.github/actions', tree / '.github/actions')
         (tree / 'tests').mkdir()
         shutil.copyfile(ROOT / 'tests/CMakeLists.txt', tree / 'tests/CMakeLists.txt')
         if mutation:
@@ -716,7 +718,8 @@ class PinnedLiveCurl(unittest.TestCase):
                     self.assertIn('--curl-dir "${{ steps.curl-deps.outputs.curl-dir }}"', line)
         action = (ROOT / '.github/actions/setup-live-curl/action.yml').read_text()
         self.assertIn('bash scripts/build_live_curl.sh --metadata', action)
-        self.assertIn('uses: actions/cache@v4', action)
+        self.assertIn('uses: actions/cache/restore@v4', action)
+        self.assertIn('uses: actions/cache/save@v4', action)
         self.assertIn('bash scripts/build_live_curl.sh build-native-deps 4', action)
 
     def test_shared_curl_pin_and_websocket_build_flags(self):
@@ -730,6 +733,105 @@ class PinnedLiveCurl(unittest.TestCase):
         self.assertIn('-DENABLE_WEBSOCKETS=ON', build)
         self.assertIn('-DBUILD_STATIC_LIBS=ON', build)
         self.assertIn('-DCURL_USE_OPENSSL=ON', build)
+
+
+class IndependentNativeProfiles(unittest.TestCase):
+    def test_native_contract_rejects_lost_profiles_budgets_caches_and_diagnostics(self):
+        native = (ROOT / '.github/workflows/native-live.yml').read_text()
+        action = (ROOT / '.github/actions/setup-live-curl/action.yml').read_text()
+        self.assertEqual(native_workflow_findings(native, action), [])
+        mutations = [
+            ('fail-fast: false', 'fail-fast: true'),
+            ('    name: native-live (${{ matrix.profile }})',
+             '    name: native-live (${{ matrix.profile }})\n    needs: prior'),
+            ('needs: native-live', 'needs: []'),
+            ('test "$PROFILES_RESULT" = success', 'true'),
+            ('PROFILES_RESULT: ${{ needs.native-live.result }}', 'PROFILES_RESULT: success'),
+            ('contents: read', 'contents: write'),
+            ('persist-credentials: false', 'persist-credentials: true'),
+            ('fetch-depth: 0', 'fetch-depth: 1'),
+            ('PINEFORGE_REQUIRE_RELEASE_TAGS: "1"', 'PINEFORGE_REQUIRE_RELEASE_TAGS: "0"'),
+            ('if: ${{ !inputs.cold_cache }}', 'if: always()'),
+            ('cold-cache: ${{ inputs.cold_cache }}', "cold-cache: 'false'"),
+            ('cache-namespace: ${{ matrix.profile }}', 'cache-namespace: shared'),
+            ('live-v2-${{ matrix.profile }}-', 'live-v2-shared-'),
+            ('ccache --zero-stats', 'ccache --show-stats'),
+            (NATIVE_CACHE_SAVE, "${{ success() }}"),
+            ('uses: actions/cache/save@v4', 'uses: actions/cache@v4'),
+            ('name: ci-diagnostics-native-live-${{ matrix.profile }}',
+             'name: ci-diagnostics-native-live'),
+            ('--test-timeout ${{ matrix.test_timeout }}', ''),
+            ('--ctest-timeout ${{ matrix.ctest_timeout }}', ''),
+            (NATIVE_EXCLUSION, NATIVE_EXCLUSION + ' --min-tests 1'),
+            (NATIVE_EXCLUSION, NATIVE_EXCLUSION + ' || true'),
+            ('--require-websocket', '--min-tests 1'),
+            (NATIVE_EXCLUSION, "${{ inputs.exclude_slow && '--exclude-label slow' || '' }}"),
+            ('id: verify\n', 'id: verify\n        if: success()\n'),
+            ('      - name: Stage and summarize diagnostics\n        if: always()',
+             '      - name: Stage and summarize diagnostics\n        if: success()'),
+            ('      - name: Retain CI diagnostics\n        if: always()',
+             '      - name: Retain CI diagnostics\n        if: success()'),
+        ]
+        for profile in ('native', 'live-sanitizers', 'live-tsan'):
+            block = re.search(r'          - profile: ' + re.escape(profile)
+                              + r'\n(?:            .*\n)+', native).group()
+            mutations.append((block, ''))
+            for key in ('job_minutes', 'verify_minutes', 'test_timeout', 'ctest_timeout'):
+                mutations.append((block, re.sub(r'(' + key + r': )\d+', r'\g<1>1', block)))
+        for before, after in mutations:
+            with self.subTest(mutation=(before, after)):
+                self.assertIn(before, native)
+                self.assertTrue(native_workflow_findings(native.replace(before, after, 1), action))
+        # Both entry points must keep the cold proof explicit and opt-in.
+        for event in ('workflow_call', 'workflow_dispatch'):
+            at = native.index('  ' + event + ':')
+            cold = native.index('      cold_cache:', at)
+            changed = native[:cold] + native[cold:].replace('default: false', 'default: true', 1)
+            self.assertTrue(native_workflow_findings(changed, action))
+
+    def test_curl_contract_rejects_post_only_save_and_unguarded_cold_restore(self):
+        native = (ROOT / '.github/workflows/native-live.yml').read_text()
+        action = (ROOT / '.github/actions/setup-live-curl/action.yml').read_text()
+        for before, after in (
+                ("if: ${{ inputs.cold-cache != 'true' }}", 'if: always()'),
+                (CURL_CACHE_SAVE, '${{ success() }}'),
+                ('uses: actions/cache/restore@v4', 'uses: actions/cache@v4'),
+                ('uses: actions/cache/save@v4', 'uses: actions/cache@v4'),
+                ('curl-${{ inputs.cache-namespace }}-', 'curl-shared-'),
+                ('${{ steps.dependencies.outputs.sha256 }}', 'unpinned'),
+                ('${{ steps.dependencies.outputs.identity }}', 'shared-toolchain'),
+                ('bash scripts/build_live_curl.sh build-native-deps 4', 'true')):
+            with self.subTest(mutation=(before, after)):
+                self.assertIn(before, action)
+                self.assertTrue(native_workflow_findings(native, action.replace(before, after, 1)))
+
+    def test_native_aggregate_rejects_failure_cancellation_and_skip(self):
+        native = (ROOT / '.github/workflows/native-live.yml').read_text()
+        script = job_script(native, 'native-live-gate')
+        for result in ('success', 'failure', 'cancelled', 'skipped', ''):
+            with self.subTest(result=result):
+                ran = subprocess.run(['bash', '-e', '-c', script], capture_output=True,
+                                     env={**os.environ, 'PROFILES_RESULT': result}, timeout=10)
+                self.assertEqual(ran.returncode == 0, result == 'success', ran.stdout)
+
+    def test_three_profiles_have_independent_budgets_and_no_fail_fast(self):
+        native = (ROOT / '.github/workflows/native-live.yml').read_text()
+        job = _jobs(native)['native-live']
+        self.assertIn('fail-fast: false', job)
+        for profile in ('native', 'live-sanitizers', 'live-tsan'):
+            self.assertIn(f'- profile: {profile}\n', job)
+        self.assertIn('timeout-minutes: ${{ matrix.job_minutes }}', job)
+        self.assertIn('needs: native-live', _jobs(native)['native-live-gate'])
+
+    def test_cold_mode_bypasses_both_restores_and_dependencies_save_early(self):
+        native = (ROOT / '.github/workflows/native-live.yml').read_text()
+        action = (ROOT / '.github/actions/setup-live-curl/action.yml').read_text()
+        self.assertIn('if: ${{ !inputs.cold_cache }}', native)
+        self.assertIn('cold-cache: ${{ inputs.cold_cache }}', native)
+        self.assertIn("if: ${{ inputs.cold-cache != 'true' }}", action)
+        self.assertIn('uses: actions/cache/restore@v4', action)
+        self.assertIn('uses: actions/cache/save@v4', action)
+        self.assertNotIn('uses: actions/cache@v4', action)
 
 
 if __name__ == '__main__':

@@ -1821,6 +1821,9 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         self.assertIn('native-help', stage_names(summary))
         names = stage_names(summary)
         self.assertLess(names.index('install'), names.index('native-help'))
+        self.assertEqual(summary['ctestRegistered'], ci_verify.EXCLUDED_REGISTERED_MIN['native'])
+        self.assertEqual(summary['ctestSelected'], summary['ctestRegistered'])
+        self.assertEqual(summary['ctestSkipped'], [])
 
     def test_sanitizer_missing_public_flag_fails_before_build(self):
         code, summary, scripted, _ = self.run_profile('sanitizers', sanitizer_flag='absent')
@@ -1853,6 +1856,8 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                 self.assertEqual(summary['requireWebsocket'], present)
                 self.assertEqual(summary['minTests'], LIVE_SANITIZERS_MIN_TESTS - int(not present))
                 self.assertEqual(summary['ctestRows'], summary['minTests'])
+                self.assertEqual(summary['ctestRegistered'], summary['minTests'])
+                self.assertEqual(summary['ctestSelected'], summary['minTests'])
                 inventory = next(stage for stage in summary['stages']
                                  if stage['name'] == 'live-test-inventory-required')
                 inventory_log = (build_dir / inventory['log']).read_text()
@@ -1884,6 +1889,9 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         self.assertEqual(code, 0, summary['failures'])
         self.assertIn('runner-thread-sanitizer-coverage', stage_names(summary))
         self.assertIn('live-test-inventory-required', stage_names(summary))
+        self.assertEqual(summary['ctestRegistered'], LIVE_SANITIZERS_MIN_TESTS)
+        self.assertEqual(summary['ctestSelected'], LIVE_SANITIZERS_MIN_TESTS)
+        self.assertEqual(summary['ctestSkipped'], [])
         self.assertNotIn('sanitizer-public-flag', stage_names(summary))
         self.assertNotIn('live-sanitizer-coverage', stage_names(summary))
         for name in ('ctest', 'native-help', 'require-websocket'):
@@ -2523,6 +2531,129 @@ class DiagnosticsCollection(unittest.TestCase):
             self.assertEqual(json.loads((output / 'native-abi-receipt.json').read_text()), receipt)
             self.assertNotIn('native-abi-receipt.json',
                              json.loads((output / 'missing.json').read_text()))
+
+
+class CTestDeadlines(unittest.TestCase):
+    def test_explicit_test_properties_are_preserved_but_must_leave_collection_time(self):
+        cfg = ci_verify.build_config(['native', '--test-timeout', '2100',
+                                      '--ctest-timeout', '2400'])
+        inventory = {'tests': [
+            {'name': 'slow-default'},
+            {'name': 'explicit', 'properties': [{'name': 'TIMEOUT', 'value': 900}]}]}
+        self.assertEqual(ci_verify.ctest_deadline_errors(inventory, cfg), [])
+        for seconds in (0, -1, 2400, 9999, float('nan'), float('inf')):
+            inventory['tests'][1]['properties'][0]['value'] = seconds
+            self.assertIn('explicit', ci_verify.ctest_deadline_errors(inventory, cfg)[0])
+
+    def test_commands_keep_every_profile_inventory_and_only_explicit_label_exclusion(self):
+        for profile in ('native', 'live-sanitizers', 'live-tsan'):
+            cfg = ci_verify.build_config([profile, '--test-timeout', '900',
+                                          '--ctest-timeout', '1200'])
+            argv = ci_verify.ctest_command(cfg, cfg.build_dir, jobs=16, junit=True)
+            self.assertNotIn('-R', argv)
+            self.assertNotIn('-E', argv)
+            self.assertNotIn('-LE', argv)
+            self.assertIn('--no-tests=error', argv)
+            self.assertEqual(argv[argv.index('--timeout') + 1], '900')
+        cfg = ci_verify.build_config(['native', '--exclude-label', 'slow'])
+        argv = ci_verify.ctest_command(cfg, cfg.build_dir, jobs=16, junit=False)
+        self.assertEqual(argv[argv.index('-LE') + 1], 'slow')
+        self.assertNotIn('--timeout', argv)
+
+    def test_defaults_remain_compatible_and_explicit_deadlines_are_recorded(self):
+        for profile, stage_seconds in (('native', 1800), ('live-sanitizers', 3600),
+                                        ('live-tsan', 1800)):
+            with self.subTest(profile=profile):
+                cfg = ci_verify.build_config([profile])
+                self.assertIsNone(cfg.test_timeout)
+                self.assertEqual(ci_verify.ctest_timeout(cfg), stage_seconds)
+                cfg = ci_verify.build_config(
+                    [profile, '--test-timeout', '900', '--ctest-timeout', '1200'])
+                summary = ci_verify.Driver(cfg).summary
+                self.assertEqual(summary['testTimeoutSeconds'], 900)
+                self.assertEqual(summary['ctestTimeoutSeconds'], 1200)
+
+    def test_invalid_deadlines_are_refused(self):
+        for flags in (['--test-timeout', '0'], ['--test-timeout', '-1'],
+                      ['--ctest-timeout', '0'], ['--ctest-timeout', '-1'],
+                      ['--test-timeout', '1800'],
+                      ['--test-timeout', '900', '--ctest-timeout', '900']):
+            with self.subTest(flags=flags), self.assertRaises(ConfigError):
+                ci_verify.build_config(['native', *flags])
+
+    def test_real_ctest_names_the_hang_and_runs_the_remaining_row(self):
+        # Real CTest, with no engine build or mocked timer: a hanging child
+        # must be named, the other row must run, and supported JUnit must survive.
+        with tempfile.TemporaryDirectory() as temporary:
+            build = Path(temporary)
+            (build / 'CTestTestfile.cmake').write_text(
+                f'add_test(hanging "{shutil.which("cmake")}" -E sleep 20)\n'
+                f'add_test(witness "{shutil.which("cmake")}" -E echo executed)\n')
+            cfg = ci_verify.build_config(['native', '--build-dir', str(build),
+                                          '--test-timeout', '1', '--ctest-timeout', '10'])
+            driver = ci_verify.Driver(cfg)
+            junit = ci_verify.ctest_supports_junit(ci_verify.default_runner)
+            argv = ci_verify.ctest_command(cfg, build, jobs=1, junit=junit)
+            result = driver.invoke('ctest', argv, timeout=ci_verify.ctest_timeout(cfg),
+                                   stream_output=False)
+            driver.enforce_test_floor(result, registered=2, selected=2)
+            self.assertEqual(result.returncode, 8, result.stdout)
+            self.assertIn(b'hanging', result.stdout)
+            self.assertIn(b'Timeout', result.stdout)
+            self.assertIn(b'witness', result.stdout)
+            self.assertEqual(driver.summary['ctestRows'], 2)
+            self.assertEqual(driver.summary['ctestSkipped'], [])
+            self.assertLess(driver.stages[0]['durationSeconds'], 10)
+            if junit:
+                self.assertTrue((build / 'ctest-junit.xml').is_file())
+            self.assertIn('Timeout', (build / 'ci-logs/ctest.log').read_text())
+
+    def test_failed_and_skipped_labelled_rows_keep_their_counts(self):
+        # Newer CTest prints a listed row's labels after its status, as a main
+        # run printed '\t  2 - test_ci_verify (Timeout)    slow' for the timed-out
+        # slow row. Those rows must stay counted so a failed run's summary
+        # still records how many rows ran, were skipped or could not start.
+        self.assertEqual(ctest_rows(
+            b'99% tests passed, 1 tests failed out of 941\n\nThe following tests FAILED:\n'
+            b'\t  2 - test_ci_verify (Timeout)                          slow\n'
+            b'Errors while running CTest\n').ran, 941)
+        python = sys.executable
+        inventory = '\n'.join((
+            f'add_test(labelled_pass "{python}" "-c" "raise SystemExit(0)")',
+            f'add_test(labelled_fail "{python}" "-c" "raise SystemExit(3)")',
+            f'add_test(labelled_skip "{python}" "-c" "raise SystemExit(77)")',
+            'add_test(labelled_not_run "/nonexistent/ci-verify-missing-executable")',
+            'set_tests_properties(labelled_pass labelled_fail labelled_skip labelled_not_run '
+            'PROPERTIES LABELS "slow;live")',
+            'set_tests_properties(labelled_skip PROPERTIES SKIP_RETURN_CODE 77)',
+        ))
+        with tempfile.TemporaryDirectory() as temporary:
+            (Path(temporary) / 'CTestTestfile.cmake').write_text(inventory + '\n')
+            discovered = default_runner(
+                ['ctest', '--test-dir', temporary, '--show-only=json-v1'],
+                timeout=120, stream_output=False)
+            self.assertEqual(discovered.returncode, 0, discovered.stdout)
+            registered = json.loads(discovered.stdout)['tests']
+            self.assertEqual({test['name'] for test in registered},
+                             {'labelled_pass', 'labelled_fail', 'labelled_skip',
+                              'labelled_not_run'})
+            for test in registered:
+                with self.subTest(name=test['name']):
+                    properties = {item['name']: item['value']
+                                  for item in test['properties']}
+                    self.assertEqual(set(properties['LABELS']), {'slow', 'live'})
+            result = default_runner(
+                ['ctest', '--test-dir', temporary, '--output-on-failure', '--no-tests=error',
+                 '--parallel', '2'], timeout=120, stream_output=False)
+        output = result.stdout.decode('utf-8', 'replace')
+        self.assertEqual(result.returncode, 8, output)
+        self.assertRegex(output,
+                         r'(?m)^[ \t]*2 - labelled_fail \(Failed\)(?:[ \t]+\S.*)?[ \t]*$',
+                         output)
+        rows = ctest_rows(result.stdout)
+        self.assertEqual((rows.total, rows.ran), (4, 2), output)
+        self.assertEqual(rows.skipped, ('labelled_skip',), output)
+        self.assertEqual(rows.not_run, ('labelled_not_run',), output)
 
 
 if __name__ == '__main__':

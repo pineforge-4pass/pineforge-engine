@@ -653,6 +653,8 @@ LIVE_SANITIZERS_MIN_TESTS = 12
 
 
 def ctest_timeout(cfg: 'VerifyConfig') -> int:
+    if cfg.ctest_stage_timeout is not None:
+        return cfg.ctest_stage_timeout
     if cfg.profile.sanitizers and not cfg.exclude_label:
         return SANITIZERS_FULL_CTEST_TIMEOUT
     return CTEST_TIMEOUT
@@ -664,10 +666,10 @@ def ctest_timeout(cfg: 'VerifyConfig') -> int:
 # failed), but not a disabled one; the lists printed after it tell them apart.
 CTEST_ROW_COUNT = re.compile(
     r'% tests passed(?:, (?P<failed>\d+) tests? failed)? out of (?P<total>\d+)')
-# A row listed after the summary: '\t182 - name (Skipped)' or '(Disabled)'
-# under 'The following tests did not run:'; '\t  6 - name (Not Run)',
-# '(Failed)', '(Timeout)', ... under 'The following tests FAILED:'.
-CTEST_LISTED_ROW = re.compile(r'^\s*\d+ - (.+) \(([^()\n]+)\)\s*$', re.MULTILINE)
+# A row listed after the summary: '\t182 - name (Skipped)' or '(Disabled)' under 'The
+# following tests did not run:'; '\t  6 - name (Not Run)', '(Failed)', '(Timeout)', ...
+# under 'The following tests FAILED:'. CTest appends a labelled row's labels ('  slow').
+CTEST_LISTED_ROW = re.compile(r'^\s*\d+ - (.+?) \(([^()\n]+)\)(?:[ \t]+[^\s()][^()\n]*)?[ \t]*$', re.MULTILINE)
 # A skipped row's own result line: ' 4/10 Test  #3: name .....***Skipped   0.01 sec'.
 CTEST_SKIPPED_RESULT = re.compile(r'^\s*\d+/\d+ Test\s+#\d+: .*\*\*\*Skipped\b', re.MULTILINE)
 CTEST_LIST_COUNT = re.compile(r'^Total Tests:\s*(\d+)\s*$', re.MULTILINE)
@@ -785,6 +787,10 @@ class VerifyConfig:
     exclude_label: str | None = None
     # The effective CTest row floor: --min-tests, else the profile's own.
     min_tests: int | None = None
+    # Opt-in CI bounds. CTest's explicit TIMEOUT properties remain authoritative;
+    # --test-timeout covers otherwise unbounded rows. Defaults are unchanged.
+    test_timeout: int | None = None
+    ctest_stage_timeout: int | None = None
 
 
 class Parser(argparse.ArgumentParser):
@@ -985,6 +991,11 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
     parser.add_argument('--exclude-label', default=None,
                         help='exclude one CTest label; verify the run count against '
                              'CTest discovery with and without -LE')
+    parser.add_argument('--test-timeout', type=int, default=None,
+                        help='CTest default per-test deadline in seconds; explicit TIMEOUT '
+                             'properties are preserved and must fit inside the stage deadline')
+    parser.add_argument('--ctest-timeout', type=int, default=None,
+                        help='CTest stage deadline in seconds; default keeps the profile bound')
     parser.add_argument('--min-tests', type=int, default=None,
                         help='fail the ctest-floor stage unless at least N CTest rows ran '
                              '(a skipped or not-run row is listed, never counted); '
@@ -1003,6 +1014,15 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
                     which: Callable[[str], str | None] = shutil.which) -> VerifyConfig:
     if not JOBS_MIN <= args.jobs <= JOBS_MAX:
         raise ConfigError(f'--jobs must be {JOBS_MIN}..{JOBS_MAX}')
+    for name in ('test_timeout', 'ctest_timeout'):
+        value = getattr(args, name)
+        if value is not None and value < 1:
+            raise ConfigError(f'--{name.replace("_", "-")} must be at least 1 second')
+    stage_timeout = args.ctest_timeout or (
+        SANITIZERS_FULL_CTEST_TIMEOUT if PROFILE[args.profile].sanitizers
+        and not args.exclude_label else CTEST_TIMEOUT)
+    if args.test_timeout is not None and args.test_timeout >= stage_timeout:
+        raise ConfigError('--test-timeout must be shorter than the CTest stage deadline')
     if args.require_websocket and args.profile not in {'native', 'live-sanitizers', 'live-tsan'}:
         raise ConfigError('--require-websocket is only valid with the native or '
                           'live-sanitizers or live-tsan profile')
@@ -1046,7 +1066,36 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
         exclude_label=args.exclude_label,
         min_tests=(args.min_tests if args.min_tests is not None else
                    profile_min_tests(PROFILE[args.profile], source)),
+        test_timeout=args.test_timeout,
+        ctest_stage_timeout=args.ctest_timeout,
     )
+
+
+def ctest_command(cfg: VerifyConfig, test_dir: Path, *, jobs: int, junit: bool) -> list[str]:
+    argv = ['ctest', '--test-dir', str(test_dir), '--output-on-failure',
+            '--no-tests=error', '--parallel', str(jobs)]
+    if cfg.test_timeout is not None:
+        argv += ['--timeout', str(cfg.test_timeout)]
+    if cfg.exclude_label:
+        argv += ['-LE', cfg.exclude_label]
+    if junit:
+        argv += ['--output-junit', str(cfg.build_dir / 'ctest-junit.xml')]
+    return argv
+
+
+def ctest_deadline_errors(inventory: dict, cfg: VerifyConfig) -> list[str]:
+    """Name a row whose own timeout would outlive the collecting CTest process."""
+    errors = []
+    for test in inventory['tests']:
+        properties = {p['name']: p['value'] for p in test.get('properties', [])}
+        if cfg.exclude_label and any(re.search(cfg.exclude_label, label)
+                                     for label in properties.get('LABELS', [])):
+            continue
+        seconds = float(properties.get('TIMEOUT', cfg.test_timeout))
+        if not 0 < seconds < ctest_timeout(cfg):
+            errors.append(f'{test["name"]}: TIMEOUT {seconds:g} must be positive and '
+                          f'less than stage deadline {ctest_timeout(cfg)}')
+    return errors
 
 
 def default_runner(argv: list[str], *, extra_env: dict[str, str] | None = None,
@@ -1366,6 +1415,8 @@ class Driver:
             'curlDir': str(cfg.curl_dir) if cfg.curl_dir else None,
             'minTests': cfg.min_tests,
             'excludeLabel': cfg.exclude_label,
+            'testTimeoutSeconds': cfg.test_timeout,
+            'ctestTimeoutSeconds': ctest_timeout(cfg),
             'ctestRegistered': None,
             'ctestSelected': None,
             # Rows that ran, the floor's count; CTest's own count; the rows
@@ -1888,27 +1939,42 @@ class Driver:
                 return self.finish('failed', 1)
             self.pass_stage('live-test-inventory-required',
                             'all required runner rows registered: ' + ', '.join(sorted(names)))
-        registered = selected = None
+        listing = ['ctest', '--test-dir', str(test_dir), '-N']
+        all_rows = self.invoke('ctest-list-all', listing, timeout=120,
+                               stream_output=False)
+        registered = (ctest_list_count(all_rows.stdout + all_rows.stderr)
+                      if all_rows.returncode == 0 else None)
+        selected = registered
         if self.cfg.exclude_label:
-            listing = ['ctest', '--test-dir', str(self.cfg.build_dir), '-N']
-            all_rows = self.invoke('ctest-list-all', listing, timeout=120,
-                                   stream_output=False)
             selected_rows = self.invoke('ctest-list-selected',
                                         listing + ['-LE', self.cfg.exclude_label],
                                         timeout=120, stream_output=False)
-            if all_rows.returncode == 0:
-                registered = ctest_list_count(all_rows.stdout + all_rows.stderr)
-            if selected_rows.returncode == 0:
-                selected = ctest_list_count(selected_rows.stdout + selected_rows.stderr)
-            self.summary['ctestRegistered'] = registered
-            self.summary['ctestSelected'] = selected
-            self.write_summary()
-        ctest = ['ctest', '--test-dir', str(test_dir),
-                 '--output-on-failure', '--no-tests=error', '--parallel', str(ctest_jobs)]
-        if self.cfg.exclude_label:
-            ctest += ['-LE', self.cfg.exclude_label]
-        if ctest_supports_junit(self.cfg.runner):
-            ctest += ['--output-junit', str(self.cfg.build_dir / 'ctest-junit.xml')]
+            selected = (ctest_list_count(selected_rows.stdout + selected_rows.stderr)
+                        if selected_rows.returncode == 0 else None)
+        self.summary['ctestRegistered'] = registered
+        self.summary['ctestSelected'] = selected
+        if registered is None or selected is None:
+            self.fail_stage('ctest-discovery', 'could not read registered/selected CTest counts')
+        self.write_summary()
+        if self.cfg.test_timeout is not None:
+            deadline_inventory = self.invoke(
+                'ctest-deadline-inventory',
+                ['ctest', '--test-dir', str(test_dir), '--show-only=json-v1'],
+                timeout=120, stream_output=False)
+            try:
+                if deadline_inventory.returncode != 0:
+                    raise ValueError('CTest deadline discovery failed')
+                errors = ctest_deadline_errors(json.loads(deadline_inventory.stdout), self.cfg)
+                if errors:
+                    raise ValueError('\n'.join(errors))
+            except (KeyError, TypeError, ValueError) as error:
+                self.fail_stage('ctest-deadlines', str(error))
+                return self.finish('failed', 1)
+            self.pass_stage('ctest-deadlines',
+                            f'default per-test {self.cfg.test_timeout}s; explicit TIMEOUT '
+                            f'properties preserved; every row bounded below {ctest_timeout(self.cfg)}s')
+        ctest = ctest_command(self.cfg, test_dir, jobs=ctest_jobs,
+                              junit=ctest_supports_junit(self.cfg.runner))
         ran = self.invoke('ctest', ctest, extra_env=self.sanitizer_env(),
                           timeout=ctest_timeout(self.cfg))
         self.enforce_test_floor(ran, registered=registered, selected=selected)
