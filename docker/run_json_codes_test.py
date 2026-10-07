@@ -1520,6 +1520,7 @@ def test_redeclared_source_series_is_unresolved(tmp_path):
     ('get_input_int64("Big", 9007199254740992LL)', receipt_row("Big", "int", "9007199254740992")),
     ('get_input_int64("Big", 1)', receipt_row("Big", "int", "1", "9007199254740993")),
     ('get_input_double("Big", 1.0f)', receipt_row("Big", "float", "inf")),
+    ('get_input_double("Big", 1.0f)', receipt_row("Big", "float", "na")),
     ('get_input_double("Big", 1e400)', None),
     ('get_input_int64("Big", 9007199254740993)', None),
 ])

@@ -750,10 +750,17 @@ _RELEASE_INTEGER = re.compile(r'[+-]?(?:0|[1-9][0-9]*)')
 # Tokens a recognized getter call follows: the producer's expression contexts.
 _RELEASE_CALL_CONTEXT = frozenset({
     "=", "(", ",", "?", ":", "return", "{", "[", "!", "+", "-", "*", "/", "%",
-    "<", ">", "<=", ">=", "==", "!=", "&&", "||", ";", "}"})
+    "<", ">", "<=", ">=", "==", "!=", "&&", "||", ";", "}", "&", "|", "^", "~",
+    "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="})
 # The only conditional branch a recognized getter or symbol use may sit in:
 # the producer's checked-settings metadata. Anything else is unrecognized.
 _RELEASE_SETTINGS_BRANCH = ("ifdef", "PF_SETTINGS_API_VERSION")
+# Every macro the pinned producer defines; any other #define/#undef refuses.
+_RELEASE_PRODUCER_MACROS = frozenset({
+    "_PF_ARRAY_STOP", "_PF_COLLECTION_STOP", "_PF_ENGINE_INVARIANT", "_PF_INVARIANT_AT",
+    "_PF_LIMIT_STOP", "_PF_NA_STOP", "_PF_NO_DATA_STOP", "_PF_OTHER_SYMBOL_STOP",
+    "_PF_SETTING_FAILURE", "_PF_STRING_STOP", "_PF_UNSUPPORTED_STOP",
+    "PF_PINE_TIME_SESSION_DAY_ARGS", "PF_VWAP_SESSION_ANCHOR_ARGS"})
 _RELEASE_OPERATORS = ("...", "->*", "::", "&&", "||", "==", "!=", "<=", ">=",
                       "++", "--", "->", ".*", "+=", "-=", "*=", "/=", "%=",
                       "&=", "|=", "^=", "<<", ">>", "##")
@@ -781,6 +788,9 @@ def _release_receipt_value(text, receipt_type):
     if receipt_type in ("int", "enum"):
         return int(text) if re.fullmatch(r'[+-]?[0-9]+', text) else None
     if receipt_type == "float":
+        # The settings receipt spells a non-finite native number "na".
+        if text == "na":
+            return math.nan
         if text.strip().lower().lstrip("+-") in ("inf", "infinity", "nan"):
             return float(text)
         return float(text) if _RELEASE_DECIMAL.fullmatch(text) else None
@@ -826,7 +836,7 @@ def _release_cpp_tokens(text):
             if not (len(words) > 3 and words[2] == "<" and words[-1] == ">"):
                 trusted = False
         elif name in ("define", "undef"):
-            if not (len(words) > 2 and re.fullmatch(r"_PF_[A-Z0-9_]*", words[2])):
+            if not (len(words) > 2 and words[2] in _RELEASE_PRODUCER_MACROS):
                 trusted = False
         elif name not in ("", "error"):
             trusted = False
@@ -1092,11 +1102,10 @@ def _release_literal_default(words, kinds, declared_type):
         if not value.is_integer():
             return None, "unsupported_default"
         integer = int(text) if _RELEASE_INTEGER.fullmatch(text) else int(value)
-        _release_domain(integer)
         bits = 32 if declared_type == "int" else 64
         if not -(2 ** (bits - 1)) <= integer < 2 ** (bits - 1):
             return None, "unsupported_default"
-        return integer, None
+        return _release_domain(integer), None
     if declared_type == "bool":
         if words in (["true"], ["false"]):
             return words == ["true"], None
@@ -1315,8 +1324,10 @@ def _release_legacy_strategy(cpp_text):
         return refuse("unsupported_binding")
     bodies = []
     for index, token in enumerate(tokens):
+        previous = _release_previous(tokens, index)
         if (token[0] != "GeneratedStrategy" or token[3] != "ident" or token[4]
-                or index + 1 >= len(tokens) or tokens[index + 1][0] != "("):
+                or index + 1 >= len(tokens) or tokens[index + 1][0] != "("
+                or (previous is not None and previous[0] == "~")):
             continue
         close = _release_closing(tokens, index + 1)
         if close is None or close + 1 >= len(tokens):
