@@ -1272,3 +1272,35 @@ def test_every_own_code_is_catalogued():
     for code in ("strategy_create_failed", "setting_unsupported", "engine_invariant",
                  "engine_unclassified_error", "harness_internal_error", "lot_grid_rejected"):
         assert catalogued(code, {})
+
+
+@pytest.mark.parametrize("spelling,native", [
+    (r'path\\length', 'path\\length'),
+    (r'armed \"yes\"', 'armed "yes"'),
+    ('倍数\\\\ \\"quoted\\"', '倍数\\ "quoted"'),
+    (r'caf\xc3\xa9', 'café'),
+    (r'\u500d\u6570', '倍数'),
+    (r'name\000suffix', 'name'),
+    (r'name\x00suffix', 'name'),
+    (r'\141\142\143', 'abc'),
+])
+def test_legacy_native_literal_identity(spelling, native):
+    assert run_json._release_cpp_input_name(spelling) == native
+
+
+@pytest.mark.parametrize("spelling", [r'bad\q', 'bad\\', r'bad\x100', r'bad\377'])
+def test_legacy_unknown_literal_encoding_is_not_guessed(spelling):
+    with pytest.raises(ValueError):
+        run_json._release_cpp_input_name(spelling)
+
+
+@pytest.mark.parametrize("definition", [
+    'const int Side__long_ = 01;',
+    'const int Side__long_ = 1 + 1;',
+    'const int Side__long_ = 4294967297;',
+    'const int Side__long_ = 1;\nconst int Side__long_ = 2;',
+])
+def test_legacy_numeric_default_requires_one_supported_literal(definition):
+    with pytest.raises(ValueError):
+        run_json._release_legacy_declarations(
+            definition + '\nget_input_int("Side", Side__long_);')

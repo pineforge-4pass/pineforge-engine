@@ -688,6 +688,59 @@ def _release_legacy_number(text, declared_type):
     return result
 
 
+def _release_cpp_input_name(spelling):
+    """Decode an emitted narrow C++ literal, then apply its C-string boundary."""
+    simple = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11,
+              "\\": 92, '"': 34, "'": 39, "?": 63}
+    pieces = re.findall(r'\\(?:[0-7]{1,3}|x[0-9a-fA-F]+|u[0-9a-fA-F]{4}'
+                        r'|U[0-9a-fA-F]{8}|[\s\S]|$)|[^\\]+', spelling)
+    raw = bytearray()
+    for piece in pieces:
+        if not piece.startswith("\\"):
+            raw.extend(piece.encode("utf-8"))
+            continue
+        escape = piece[1:]
+        if escape in simple:
+            raw.append(simple[escape])
+        elif re.fullmatch(r'[0-7]{1,3}|x[0-9a-fA-F]+', escape):
+            # Out-of-byte-range escapes are implementation-defined; refuse
+            # them instead of inventing a native name.
+            raw.append(int(escape[1:], 16) if escape.startswith("x") else int(escape, 8))
+        elif re.fullmatch(r'u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}', escape):
+            raw.extend(chr(int(escape[1:], 16)).encode("utf-8"))
+        else:
+            raise ValueError("unsupported C++ input-name escape")
+    return bytes(raw).split(b"\0", 1)[0].decode("utf-8")
+
+
+def _release_legacy_declarations(cpp_text):
+    """Recover emitted names and literal-backed numeric constants, without eval."""
+    declared = {}
+    for spelling, parsed in parse_inputs(cpp_text).items():
+        name = _release_cpp_input_name(spelling)
+        metadata = dict(parsed)
+        value = metadata["default"]
+        if (metadata["type"] in ("int", "int64", "float", "double")
+                and isinstance(value, str)
+                and re.fullmatch(r'[A-Za-z_]\w*', value)):
+            # Codegen emits enum primitives as `const int Name = 1;`.
+            # Require one definition and a scalar RHS; ambiguous or computed
+            # expressions stay unrepresentable under the existing domain rules.
+            definitions = re.findall(
+                r'(?m)^[ \t]*(?:static\s+)?(?:const|constexpr)\s+'
+                r'int\s+' + re.escape(value)
+                + r'\s*=\s*([^;\n]+);', cpp_text)
+            if (len(definitions) != 1
+                    or not re.fullmatch(r'[+-]?(?:0|[1-9][0-9]*)', definitions[0].strip())
+                    or not -(2 ** 31) <= int(definitions[0]) < 2 ** 31):
+                raise ValueError("unresolved or ambiguous legacy numeric default")
+            metadata["default"] = _release_scalar(definitions[0].strip(), metadata["type"])
+        if name in declared and declared[name] != metadata:
+            raise ValueError("ambiguous native legacy input name")
+        declared.setdefault(name, metadata)
+    return declared
+
+
 def _release_settings_receipt(lib, state, checked):
     if not checked or not hasattr(lib, "strategy_get_effective_settings"):
         return None
@@ -771,8 +824,7 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
     else:
         native_inputs = {name.split("\0", 1)[0]: value.split("\0", 1)[0]
                          for name, value in applied_inputs.items()}
-        declared = {name: metadata for name, metadata in provenance["inputs"].items()
-                    if metadata["type"] != "unknown"}
+        declared = _release_legacy_declarations(cpp_text)
         declared_names = frozenset(declared)
         for name, metadata in declared.items():
             declared_type = metadata["type"]
