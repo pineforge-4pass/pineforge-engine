@@ -748,10 +748,15 @@ _RELEASE_DECIMAL = re.compile(
     r'[+-]?(?:(?:0|[1-9][0-9]*)(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?')
 _RELEASE_INTEGER = re.compile(r'[+-]?(?:0|[1-9][0-9]*)')
 # Tokens a recognized getter call follows: the producer's expression contexts.
+# (`>`, `>>` and `}` are left out: they can end the type of a declaration.)
 _RELEASE_CALL_CONTEXT = frozenset({
     "=", "(", ",", "?", ":", "return", "{", "[", "!", "+", "-", "*", "/", "%",
-    "<", ">", "<=", ">=", "==", "!=", "&&", "||", ";", "}", "&", "|", "^", "~",
-    "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="})
+    "<", "<=", ">=", "==", "!=", "&&", "||", ";", "&", "|", "^", "~",
+    "<<", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="})
+# Keywords whose parenthesis opens an expression, never a declarator.
+_RELEASE_EXPRESSION_KEYWORDS = frozenset({
+    "if", "while", "switch", "for", "return", "sizeof", "alignof", "decltype",
+    "static_assert", "case", "noexcept"})
 # The only conditional branch a recognized getter or symbol use may sit in:
 # the producer's checked-settings metadata. Anything else is unrecognized.
 _RELEASE_SETTINGS_BRANCH = ("ifdef", "PF_SETTINGS_API_VERSION")
@@ -971,6 +976,53 @@ def _release_closing(tokens, index, directives=False):
     return None
 
 
+def _release_declarator_risk(tokens, index):
+    """True when the call at index could be spelled as a declarator instead:
+    right after a comma at statement level (an init-declarator list), or
+    wrapped only in parentheses that follow `>` or a (qualified) name at the
+    start of a statement, as in `T (get_input_int("x", 1));`."""
+    previous = _release_previous_index(tokens, index)
+    if previous >= 0 and tokens[previous][0] == ",":
+        depth = 0
+        position = _release_previous_index(tokens, previous)
+        while position >= 0:
+            token = tokens[position]
+            if token[3] == "op" and token[0] in (")", "]", "}"):
+                depth += 1
+            elif token[3] == "op" and token[0] in ("(", "[", "{"):
+                if not depth:
+                    if token[0] == "{":
+                        return True
+                    break
+                depth -= 1
+            elif token[0] == ";" and not depth:
+                return True
+            position = _release_previous_index(tokens, position)
+        else:
+            return True
+    while previous >= 0 and tokens[previous][0] == "(":
+        before = _release_previous_index(tokens, previous)
+        if before >= 0 and tokens[before][0] == "(":
+            previous = before
+            continue
+        if before >= 0 and tokens[before][0] in (">", ">>"):
+            return True
+        if before < 0 or tokens[before][3] != "ident" or tokens[before][0] in \
+                _RELEASE_EXPRESSION_KEYWORDS:
+            return False
+        head = before
+        while True:
+            prior = _release_previous_index(tokens, head)
+            if prior >= 0 and tokens[prior][0] == "::":
+                qualifier = _release_previous_index(tokens, prior)
+                if qualifier >= 0 and tokens[qualifier][3] == "ident":
+                    head = qualifier
+                    continue
+                prior = qualifier
+            return prior < 0 or tokens[prior][0] in (";", "{", "}", ":")
+    return False
+
+
 def _release_getter_calls(tokens):
     """Recognized getter calls, and whether every getter-family token is one.
 
@@ -989,7 +1041,8 @@ def _release_getter_calls(tokens):
                 or previous is None or previous[0] not in _RELEASE_CALL_CONTEXT
                 or previous[3] not in ("op", "ident")
                 or close is None or tokens[index + 2][3] != "string"
-                or tokens[index + 3][0] != "," or close <= index + 4):
+                or tokens[index + 3][0] != "," or close <= index + 4
+                or _release_declarator_risk(tokens, index)):
             intact = False
             continue
         default = tokens[index + 4:close]

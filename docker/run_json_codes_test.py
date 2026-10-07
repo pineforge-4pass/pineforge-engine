@@ -1616,3 +1616,25 @@ def test_recognized_strategy_defaults_and_enum_spellings(tmp_path):
     assert result["strategy"]["close_entries_rule"] == "ANY"
     assert result["strategy"]["initial_capital"] == 5000.0
     assert "strategy_resolution" not in result
+
+
+@pytest.mark.parametrize("declaration", [
+    '            Probe unused, get_input_int("ghost", 5);\n',
+    '            Probe (get_input_int("ghost", 5));\n',
+    '            ns::Probe ((get_input_int("ghost", 5)));\n',
+    '            std::vector<int> get_input_int("ghost", 5);\n',
+    '            Probe<int> (get_input_int("ghost", 5));\n',
+])
+def test_getter_spellings_that_can_declare_a_shadow_refuse_every_row(tmp_path, declaration):
+    cpp = ENUM_TU.replace("        side = get_input_int", declaration + "        side = get_input_int")
+    result = legacy_document(tmp_path, cpp, ENUM_RECEIPT)
+    for name in ("Side", "len", "Source"):
+        assert result["inputs"][name]["resolution"]["reason"] == "unsupported_binding"
+
+
+def test_getter_arguments_inside_calls_stay_recognized(tmp_path):
+    cpp = ENUM_TU.replace('len = get_input_int("len", 10);',
+                          'len = std::max(1, get_input_int("len", 10)); '
+                          'if (get_input_int("len", 10) > 0) len = ta::max(get_input_int("len", 10));')
+    result = legacy_document(tmp_path, cpp, ENUM_RECEIPT)
+    assert result["inputs"]["len"] == {"type": "int", "default": 10, "value": 10}
