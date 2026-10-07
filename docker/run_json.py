@@ -688,10 +688,22 @@ def _release_legacy_number(text, declared_type):
     return result
 
 
+# Exact character predicates from the pinned producer's Lexer._read_ident /
+# identifier start and NamingHelper._cpp_string_escape inverse. The real-image
+# class matrix binds both producer source blobs and exercises every class.
+def _release_codegen_identifier(value):
+    return bool(value) and (value[0].isalpha() or value[0] == "_") and all(
+        char.isalnum() or char == "_" for char in value)
+
+
+_RELEASE_EMITTED_ESCAPES = {"\\": "\\", '"': '"', "n": "\n", "r": "\r", "t": "\t"}
+
+
 def _release_cpp_input_name(spelling):
     """Decode an emitted narrow C++ literal, then apply its C-string boundary."""
-    simple = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11,
-              "\\": 92, '"': 34, "'": 39, "?": 63}
+    simple = {key: ord(value) for key, value in _RELEASE_EMITTED_ESCAPES.items()}
+    # Preserve the existing pre-transpiled C++ literal extensions as well.
+    simple.update({"a": 7, "b": 8, "f": 12, "v": 11, "'": 39, "?": 63})
     pieces = re.findall(r'\\(?:[0-7]{1,3}|x[0-9a-fA-F]+|u[0-9a-fA-F]{4}'
                         r'|U[0-9a-fA-F]{8}|[\s\S]|$)|[^\\]+', spelling)
     raw = bytearray()
@@ -713,28 +725,165 @@ def _release_cpp_input_name(spelling):
     return bytes(raw).split(b"\0", 1)[0].decode("utf-8")
 
 
-def _release_legacy_declarations(cpp_text):
-    """Recover emitted names and literal-backed numeric constants, without eval."""
+def _release_cpp_tokens(text):
+    """Flat lexical tokens only: no C++ evaluation, scopes or name lookup."""
+    tokens = []
+    position = 0
+    while position < len(text):
+        start = position
+        char = text[position]
+        if char.isspace():
+            position += 1
+            continue
+        if text.startswith("//", position):
+            end = text.find("\n", position)
+            position = len(text) if end < 0 else end
+            continue
+        if text.startswith("/*", position):
+            end = text.find("*/", position + 2)
+            if end < 0:
+                raise ValueError("unterminated C++ comment")
+            position = end + 2
+            continue
+        if char in ('"', "'"):
+            position += 1
+            while position < len(text) and text[position] != char:
+                position += 2 if text[position] == "\\" else 1
+            if position >= len(text):
+                raise ValueError("unterminated C++ literal")
+            position += 1
+        elif char.isalpha() or char == "_":
+            position += 1
+            while position < len(text) and (text[position].isalnum() or text[position] == "_"):
+                position += 1
+        else:
+            operator = next((op for op in ("...", "::", "&&", "==", "!=", "<=", ">=", "++", "--", "->")
+                             if text.startswith(op, position)), char)
+            position += len(operator)
+        tokens.append((text[start:position], start, position))
+    return tokens
+
+
+def _release_getter_declarations(cpp_text, tokens):
+    """Read literal-title getter calls without parsing defaults as C++ code."""
+    seen = set()
+    for index, (word, _, _) in enumerate(tokens[:-4]):
+        if not word.startswith("get_input_") or tokens[index + 1][0] != "(":
+            continue
+        title = tokens[index + 2][0]
+        if not title.startswith('"') or tokens[index + 3][0] != ",":
+            continue
+        depth = 1
+        end = index + 4
+        while end < len(tokens) and depth:
+            depth += (tokens[end][0] == "(") - (tokens[end][0] == ")")
+            end += 1
+        if depth or title in seen:
+            continue
+        seen.add(title)
+        raw = cpp_text[tokens[index + 3][2]:tokens[end - 1][1]].strip()
+        yield word[len("get_input_"):], title[1:-1], raw
+
+
+def _release_symbolic_default(cpp_text, tokens, symbol, declared_type, native):
+    # Count every declaration-like use, irrespective of scope or constness.
+    # Unrecognized uses are refused; this deliberately over-refuses rather
+    # than pretending to implement C++ lookup (including local/member shadows).
+    declarations = []
+    unrecognized = False
+    for index, (word, _, _) in enumerate(tokens):
+        if word != symbol:
+            continue
+        before = tokens[index - 1][0] if index else ""
+        after = tokens[index + 1][0] if index + 1 < len(tokens) else ""
+        candidate = (_release_codegen_identifier(before)
+                     or before in ("*", "&", "&&", "[", "...") or after in ("=", "{")
+                     or (before in (",", "::", "]") and after in (";", "=", "[", "{", "]")))
+        if candidate:
+            declarations.append(tokens[index][1])
+        if before == "(" and index > 1:
+            callee = tokens[index - 2][0]
+            if _release_codegen_identifier(callee) and callee != "number":
+                unrecognized = True
+    if len(declarations) > 1:
+        return None, "ambiguous_binding"
+    raw_literal = any(word == "R" and index + 1 < len(tokens)
+                      and tokens[index + 1][0].startswith('"')
+                      and end == tokens[index + 1][1]
+                      for index, (word, _, end) in enumerate(tokens))
+    if len(declarations) != 1 or unrecognized or raw_literal:
+        return None, "unsupported_binding"
+    # Match the one recognized emitted enum declaration, never an expression.
+    definitions = list(re.finditer(
+        r'(?m)^[ \t]*(?:static\s+)?(?:const|constexpr)\s+int\s+(?P<name>' + re.escape(symbol)
+        + r')\s*=\s*(?P<value>[^;\n]+);', cpp_text))
+    if (len(definitions) != 1
+            or definitions[0].start("name") != declarations[0]
+            or not re.fullmatch(r'[+-]?(?:0|[1-9][0-9]*)', definitions[0].group("value").strip())
+            or not -(2 ** 31) <= int(definitions[0].group("value")) < 2 ** 31):
+        return None, "unsupported_default"
+    candidate = _release_scalar(definitions[0].group("value").strip(), declared_type)
+    # Corroborate against the compiled declaration's validated native metadata.
+    # A receipt-free legacy plugin remains usable, but its symbolic value is
+    # explicitly unresolved instead of being inferred from source alone.
+    if (native is None or native.get("supported") is not True
+            or native.get("type") not in (declared_type, "enum")):
+        return None, "receipt_unavailable"
+    try:
+        actual = _release_scalar(native["default"], declared_type)
+    except ValueError:
+        return None, "receipt_unavailable"
+    if type(actual) is not type(candidate) or actual != candidate:
+        return None, "ambiguous_binding"
+    return actual, None
+
+
+def _release_legacy_declarations(cpp_text, receipt=None, *, allow_unresolved=False):
+    """Recover producer literals; preserve unproved defaults as explicit refusal."""
     declared = {}
-    for spelling, parsed in parse_inputs(cpp_text).items():
+    tokens = _release_cpp_tokens(cpp_text)
+    try:
+        native_rows = _release_receipt_rows(receipt, "inputs") if receipt is not None else {}
+    except ValueError:
+        native_rows = {}
+    for declared_type, spelling, raw in _release_getter_declarations(cpp_text, tokens):
         name = _release_cpp_input_name(spelling)
-        metadata = dict(parsed)
-        value = metadata["default"]
-        if (metadata["type"] in ("int", "int64", "float", "double")
-                and isinstance(value, str)
-                and re.fullmatch(r'[A-Za-z_]\w*', value)):
-            # Codegen emits enum primitives as `const int Name = 1;`.
-            # Require one definition and a scalar RHS; ambiguous or computed
-            # expressions stay unrepresentable under the existing domain rules.
-            definitions = re.findall(
-                r'(?m)^[ \t]*(?:static\s+)?(?:const|constexpr)\s+'
-                r'int\s+' + re.escape(value)
-                + r'\s*=\s*([^;\n]+);', cpp_text)
-            if (len(definitions) != 1
-                    or not re.fullmatch(r'[+-]?(?:0|[1-9][0-9]*)', definitions[0].strip())
-                    or not -(2 ** 31) <= int(definitions[0]) < 2 ** 31):
-                raise ValueError("unresolved or ambiguous legacy numeric default")
-            metadata["default"] = _release_scalar(definitions[0].strip(), metadata["type"])
+        metadata = {"type": declared_type, "default": None, "_raw_default": raw}
+        value = _unwrap_std_string(raw)
+        reason = None
+        if declared_type == "source":
+            literal = re.fullmatch(r'"((?:[^"\\]|\\[\s\S])*)"', value)
+            metadata["default"] = (_release_cpp_input_name(literal.group(1)) if literal else value)
+        elif declared_type == "string":
+            literal = re.fullmatch(r'"((?:[^"\\]|\\[\s\S])*)"', value)
+            if literal:
+                metadata["default"] = _release_cpp_input_name(literal.group(1))
+            else:
+                reason = "unsupported_default"
+        elif declared_type == "bool" and value in ("true", "false"):
+            metadata["default"] = value == "true"
+        elif declared_type in ("int", "int64", "float", "double"):
+            if _release_codegen_identifier(value):
+                metadata["default"], reason = _release_symbolic_default(
+                    cpp_text, tokens, value, declared_type, native_rows.get(name))
+            elif re.fullmatch(r'[+-]?(?:(?:0|[1-9][0-9]*)(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?', value):
+                try:
+                    metadata["default"] = _release_scalar(value, declared_type)
+                except ValueError:
+                    reason = "unsupported_default"
+                if not reason and declared_type in ("int", "int64"):
+                    bits = 32 if declared_type == "int" else 64
+                    if not -(2 ** (bits - 1)) <= metadata["default"] < 2 ** (bits - 1):
+                        reason = "unsupported_default"
+            else:
+                reason = "unsupported_default"
+        else:
+            reason = "unsupported_default"
+        if reason:
+            if not allow_unresolved:
+                raise ValueError(reason)
+            metadata.update(default=None, value=None, resolution={
+                "status": "unresolved", "reason": reason, "raw_default": raw})
         if name in declared and declared[name] != metadata:
             raise ValueError("ambiguous native legacy input name")
         declared.setdefault(name, metadata)
@@ -742,7 +891,7 @@ def _release_legacy_declarations(cpp_text):
 
 
 def _release_settings_receipt(lib, state, checked):
-    if not checked or not hasattr(lib, "strategy_get_effective_settings"):
+    if not hasattr(lib, "strategy_get_effective_settings"):
         return None
     try:
         required = ctypes.c_size_t()
@@ -824,9 +973,16 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
     else:
         native_inputs = {name.split("\0", 1)[0]: value.split("\0", 1)[0]
                          for name, value in applied_inputs.items()}
-        declared = _release_legacy_declarations(cpp_text)
+        declared = _release_legacy_declarations(cpp_text, receipt, allow_unresolved=True)
+        try:
+            legacy_rows = _release_receipt_rows(receipt, "inputs") if receipt is not None else {}
+        except ValueError:
+            legacy_rows = {}
         declared_names = frozenset(declared)
         for name, metadata in declared.items():
+            raw_default = metadata.pop("_raw_default")
+            if "resolution" in metadata:
+                continue
             declared_type = metadata["type"]
             default = _release_scalar(metadata["default"], declared_type)
             value = default
@@ -844,10 +1000,18 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
                     value = text
             metadata["default"] = default
             metadata["value"] = _release_scalar(value, declared_type)
+            native = legacy_rows.get(name)
+            if native is not None and native["supported"] is True:
+                native_value = _release_scalar(native["effective_value"], declared_type)
+                if type(native_value) is not type(metadata["value"]) or native_value != metadata["value"]:
+                    metadata.update(default=None, value=None, resolution={
+                        "status": "unresolved", "reason": "ambiguous_binding",
+                        "raw_default": raw_default})
         for raw_name, text in applied_inputs.items():
             native_name = raw_name.split("\0", 1)[0]
             if native_name in declared_names:
-                applied_inputs[raw_name] = declared[native_name]["value"]
+                if "resolution" not in declared[native_name]:
+                    applied_inputs[raw_name] = declared[native_name]["value"]
             else:
                 declared[raw_name] = {"type": "unknown", "default": None,
                                       "value": str(text)}

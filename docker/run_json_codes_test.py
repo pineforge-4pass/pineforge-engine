@@ -1304,3 +1304,26 @@ def test_legacy_numeric_default_requires_one_supported_literal(definition):
     with pytest.raises(ValueError):
         run_json._release_legacy_declarations(
             definition + '\nget_input_int("Side", Side__long_);')
+
+
+@pytest.mark.parametrize("definition,reason", [
+    ('const int Side__long_ = 1;\nclass Local { int Side__long_ = 2; };', "ambiguous_binding"),
+    ('const int Side__long_ = 1;\nvoid f(int Side__long_);', "ambiguous_binding"),
+    ('const int Side__long_ = 1 + 1;', "unsupported_default"),
+    ('const int Side__long_ = 1;', "receipt_unavailable"),
+])
+def test_unproved_legacy_defaults_remain_in_the_fingerprint(tmp_path, definition, reason):
+    inputs = {"Side": "2"}
+    document, cpp = release_provenance(tmp_path, inputs)
+    cpp += '\n' + definition + '\nget_input_int("Side", Side__long_);'
+    result = run_json.normalize_release_provenance(document, cpp, None, False)
+    row = result["inputs"]["Side"]
+    assert row["default"] is None and row["value"] is None
+    assert row["resolution"] == {"status": "unresolved", "reason": reason,
+                                 "raw_default": "Side__long_"}
+    assert result["applied"]["inputs"]["Side"] == "2"
+    assert inputs == {"Side": "2"}
+    fp = run_json.build_fingerprint(result)
+    raw = run_json.base64.b64decode(fp["token"])
+    assert json.loads(raw) == result
+    assert fp["digest"] == "sha256:" + run_json.hashlib.sha256(raw).hexdigest()

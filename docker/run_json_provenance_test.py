@@ -509,6 +509,7 @@ def producer_classes(unicode_only=False):
                                                       if n not in (9, 10, 13)) + chr(127) + '"'),
         ("literal-Unicode", '"literal-Unicode: 倍数Ωé🙂"'),
         ("literal-backslash-unknown", r'"literal-backslash-unknown: \\q"'),
+        ("literal-ASCII-punctuation", json.dumps("literal-ASCII-punctuation: " + ''.join(chr(n) for n in range(32, 127)))),
     ]
     if unicode_only:
         identifiers = [row for row in identifiers if row[0] == "unicode-Lo-CJK"]

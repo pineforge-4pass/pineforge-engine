@@ -507,6 +507,45 @@ integers outside the product safe-integer domain, unpaired surrogates
 (invalid I-JSON / UTF-8), and object keys that collide after `str.__str__`
 normalization (duplicate normalized JSON names).
 
+Legacy declaration normalization runs before hashing and does not evaluate C++
+expressions or perform C++ name lookup. Literal defaults retain their declared
+types. Symbolic numeric defaults require one recognized decimal `const int` or
+`constexpr int` declaration, no competing declaration-like use, and matching
+validated native settings metadata. Identifier characters mirror the bundled
+producer's `isalpha`/`isalnum` rules, including Unicode; string identities decode
+the producer's C++ escapes and stop at the native first-NUL boundary. The image
+CLI class matrix binds these mirrors to the pinned lexer and emitter sources.
+
+An input whose default cannot be proved stays in the fingerprint with its
+declared `type`, `default: null`, `value: null`, and this explicit refusal:
+
+```json
+"resolution": {
+  "status": "unresolved",
+  "reason": "ambiguous_binding",
+  "raw_default": "Side__long_"
+}
+```
+
+Here `null` means unresolved, not a claimed native value. The raw token is the
+actual declared default expression. Its applied input value remains the original
+wire string, even when an override was provided; the applied key set and top-level
+wire echoes are unchanged. Unknown inputs also remain strings. The refusal is
+part of the canonical token and digest, so these cases retain a fingerprint.
+
+| Reason | Refused class |
+|---|---|
+| `ambiguous_binding` | Multiple declaration-like uses (including class/local/parameter shadows), or disagreement with validated native metadata. |
+| `unsupported_binding` | A binding/use shape the conservative lexical check cannot establish, including unrecognized calls or raw C++ literal contexts. |
+| `unsupported_default` | Unrecognized default expressions, definitions, numeric spellings/ranges or getter types; no expression is evaluated to guess a value. |
+| `receipt_unavailable` | A symbolic default without usable, supported, validated native settings metadata. |
+
+Conservative refusal can include valid C++ forms outside the recognized producer
+subset. Concrete represented values still pass the unchanged numeric/Unicode
+domain checks above; a domain failure, malformed checked receipt, or conflicting
+native declaration identity can still make the complete fingerprint `null`.
+No unresolved marker bypasses those checks for a concrete scalar.
+
 Decode the token to inspect the canonical provenance JSON:
 
 ```bash
