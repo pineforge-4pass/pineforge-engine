@@ -666,10 +666,10 @@ def ctest_timeout(cfg: 'VerifyConfig') -> int:
 # failed), but not a disabled one; the lists printed after it tell them apart.
 CTEST_ROW_COUNT = re.compile(
     r'% tests passed(?:, (?P<failed>\d+) tests? failed)? out of (?P<total>\d+)')
-# A row listed after the summary: '\t182 - name (Skipped)' or '(Disabled)'
-# under 'The following tests did not run:'; '\t  6 - name (Not Run)',
-# '(Failed)', '(Timeout)', ... under 'The following tests FAILED:'.
-CTEST_LISTED_ROW = re.compile(r'^\s*\d+ - (.+) \(([^()\n]+)\)\s*$', re.MULTILINE)
+# A row listed after the summary: '\t182 - name (Skipped)' or '(Disabled)' under 'The
+# following tests did not run:'; '\t  6 - name (Not Run)', '(Failed)', '(Timeout)', ...
+# under 'The following tests FAILED:'. CTest appends a labelled row's labels ('  slow').
+CTEST_LISTED_ROW = re.compile(r'^\s*\d+ - (.+?) \(([^()\n]+)\)(?:[ \t]+[^\s()][^()\n]*)?[ \t]*$', re.MULTILINE)
 # A skipped row's own result line: ' 4/10 Test  #3: name .....***Skipped   0.01 sec'.
 CTEST_SKIPPED_RESULT = re.compile(r'^\s*\d+/\d+ Test\s+#\d+: .*\*\*\*Skipped\b', re.MULTILINE)
 CTEST_LIST_COUNT = re.compile(r'^Total Tests:\s*(\d+)\s*$', re.MULTILINE)

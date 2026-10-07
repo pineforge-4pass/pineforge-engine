@@ -2606,6 +2606,37 @@ class CTestDeadlines(unittest.TestCase):
             self.assertTrue((build / 'ctest-junit.xml').is_file())
             self.assertIn('Timeout', (build / 'ci-logs/ctest.log').read_text())
 
+    def test_failed_and_skipped_labelled_rows_keep_their_counts(self):
+        # Real CTest prints a listed row's labels after its status, as a main
+        # run printed '\t  2 - test_ci_verify (Timeout)    slow' for the timed-out
+        # slow row. Those rows must stay counted so a failed run's summary
+        # still records how many rows ran, were skipped or could not start.
+        self.assertEqual(ctest_rows(
+            b'99% tests passed, 1 tests failed out of 941\n\nThe following tests FAILED:\n'
+            b'\t  2 - test_ci_verify (Timeout)                          slow\n'
+            b'Errors while running CTest\n').ran, 941)
+        python = sys.executable
+        inventory = '\n'.join((
+            f'add_test(labelled_pass "{python}" "-c" "raise SystemExit(0)")',
+            f'add_test(labelled_fail "{python}" "-c" "raise SystemExit(3)")',
+            f'add_test(labelled_skip "{python}" "-c" "raise SystemExit(77)")',
+            'add_test(labelled_not_run "/nonexistent/ci-verify-missing-executable")',
+            'set_tests_properties(labelled_pass labelled_fail labelled_skip labelled_not_run '
+            'PROPERTIES LABELS "slow;live")',
+            'set_tests_properties(labelled_skip PROPERTIES SKIP_RETURN_CODE 77)',
+        ))
+        with tempfile.TemporaryDirectory() as temporary:
+            (Path(temporary) / 'CTestTestfile.cmake').write_text(inventory + '\n')
+            result = default_runner(
+                ['ctest', '--test-dir', temporary, '--output-on-failure', '--no-tests=error',
+                 '--parallel', '2'], timeout=120, stream_output=False)
+        output = result.stdout.decode('utf-8', 'replace')
+        self.assertRegex(output, r'labelled_fail \(Failed\)[ \t]+\S', output)
+        rows = ctest_rows(result.stdout)
+        self.assertEqual((rows.total, rows.ran), (4, 2), output)
+        self.assertEqual(rows.skipped, ('labelled_skip',), output)
+        self.assertEqual(rows.not_run, ('labelled_not_run',), output)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -70,8 +70,8 @@ NATIVE_STRATEGY = '''    strategy:
             build_dir: build-live
             job_minutes: 75
             verify_minutes: 65
-            test_timeout: 2100
-            ctest_timeout: 2400
+            test_timeout: 2700
+            ctest_timeout: 2820
           - profile: live-sanitizers
             build_dir: build-live-sanitizers
             job_minutes: 45

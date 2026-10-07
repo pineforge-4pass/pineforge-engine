@@ -49,8 +49,8 @@ jobs:
             build_dir: build-live
             job_minutes: 75
             verify_minutes: 65
-            test_timeout: 2100
-            ctest_timeout: 2400
+            test_timeout: 2700
+            ctest_timeout: 2820
           - profile: live-sanitizers
             build_dir: build-live-sanitizers
             job_minutes: 45
@@ -67,8 +67,8 @@ jobs:
     # native + 15.1–16.3m ASan before TSan exhausted the shared hour, despite
     # compiler and curl cache hits. Independent 75/45/45m budgets allow cold
     # builds and leave ten minutes outside verification for setup/collection.
-    # Native's slowest measured row was 1695s; its 2100s default deadline has
-    # 24% margin, within a 2400s CTest stage. Live rows already allow up to
+    # test_ci_verify took 1695s on GitHub and 2178s on a c5.4xlarge; 2700s
+    # gives that host 24% margin, inside a 2820s stage. Live rows allow up to
     # 900s; keep those limits and a 1200s stage. No row inventory changes.
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache/${{ matrix.profile }}
