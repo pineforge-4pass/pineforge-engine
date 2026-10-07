@@ -280,6 +280,16 @@ records no outputs the run fails before it starts: one line
 `{"engine":"pineforge","error":"--outputs: this library records no outputs (compile the script as an indicator, or with outputs on)","code":"outputs_rejected","args":{"reason":"not_declared"}}`
 on stdout, harness exit 1. With `--bench` the timed runs record too.
 
+Recording preserves the typed provenance rules described below. The runtime
+fact `"outputs": true` remains a boolean in both `applied_runtime` and the
+fingerprinted provenance; input and override normalization runs before the
+fingerprint is built. Recording does not certify a foreign source or replace
+the native settings receipt. Without `--outputs`, no output API is called and
+no `"outputs": false` runtime field is added. A provenance normalization
+failure keeps the existing `fingerprint: null` behavior, including a recorded
+output block when recording succeeded; an invalid output manifest instead
+produces the structured failure line and no partial report.
+
 The engine catches run errors (TF mismatch, unsupported emulation flags,
 unknown-input-TF, etc.) into `strategy_get_last_error()` and, with the
 1.4.0 runtime, its code/args getters. The failure line below describes both

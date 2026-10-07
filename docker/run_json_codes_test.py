@@ -2446,3 +2446,241 @@ def test_producer_hardening_settings_guard_needs_defining_include():
     after = run_json._release_legacy_declarations(include + guard + FOREIGN_TU, allow_unresolved=True)
     assert "ghost" not in before
     assert after["ghost"]["default"] == 7
+
+
+# --- Recorded outputs with typed release provenance ---------------------------
+# These controls use FakeLib through main and the real C readers/normalizer.
+# They do not establish compiled recorder behavior or actual producer origin.
+# transpiled=True models the internal fact supplied by the Pine entrypoint;
+# the separate real-image producer-boundary suite owns that origin proof.
+COMBINED_OUTPUTS_CPP = '''class GeneratedStrategy {
+    GeneratedStrategy() {
+        pineforge::source::PineStrategyConfig cfg{};
+        cfg.initial_capital = 10000.0;
+        configure_pine_strategy(cfg);
+    }
+    void init() {
+        len = get_input_int("len", 10);
+        armed = get_input_bool("armed", true);
+        text = get_input_string("text", std::string("base"));
+        src = get_input_source("Source", _src_close_)[0];
+        _src_close_.clear();
+    }
+};'''
+COMBINED_OUTPUTS_INPUTS = {"len": "14", "armed": "0", "text": "false", "Source": "hl2"}
+
+
+def combined_outputs_receipt():
+    receipt = legacy_receipt(
+        receipt_row("len", "int", "10", "14"),
+        receipt_row("armed", "bool", "true", "false"),
+        receipt_row("text", "string", "base", "false"),
+        receipt_row("Source", "source", "close", "hl2"))
+    defaults = dict(run_json.STRATEGY_SEED, initial_capital=10000.0,
+                    calc_on_order_fills=False)
+    for name, kind in run_json._RELEASE_OVERRIDE_TYPES.items():
+        default = str(defaults[name])
+        if kind == "bool":
+            default = default.lower()
+        receipt["overrides"].append(receipt_row(
+            name, kind, default, "5000" if name == "initial_capital" else default))
+    return receipt
+
+
+def combined_outputs_fake_lib(manifest, receipt, checked=False):
+    lib = manifest_entry_fake_lib(manifest)
+    settings = checked_lib(receipt=receipt)
+    names = list(CHECKED_EXPORTS) if checked else []
+    if receipt is not None:
+        names.append("strategy_get_effective_settings")
+    for name in names:
+        setattr(lib, name, lib._fn(name, getattr(settings, name)))
+    return lib
+
+
+def combined_outputs_args(tmp_path, transpiled):
+    source = tmp_path / "combined.cpp"
+    source.write_text(COMBINED_OUTPUTS_CPP, encoding="utf-8")
+    return ["--generated-cpp", str(source), "--transpiled", str(transpiled).lower(),
+            *settings_args(inputs=COMBINED_OUTPUTS_INPUTS,
+                           overrides={"initial_capital": "5000"})]
+
+
+@pytest.fixture
+def combined_outputs_harness(harness):
+    # Legacy numeric normalization calls libc. Substitute only the strategy
+    # library; retain real strtoll/strtod rather than replacing normalization.
+    native_cdll = ctypes.CDLL
+
+    def run(lib, *args):
+        def load(path, **kwargs):
+            return native_cdll(path, **kwargs) if path is None else lib
+        result = harness(lib, *args, cdll=load)
+        run.stderr = harness.stderr
+        return result
+
+    return run
+
+
+@pytest.mark.parametrize("checked", [False, True], ids=["legacy", "checked"])
+@pytest.mark.parametrize("transpiled", [False, True], ids=["foreign", "producer-fact-control"])
+def test_outputs_typed_provenance_on_off_reader_control(
+        combined_outputs_harness, tmp_path, checked, transpiled):
+    harness = combined_outputs_harness
+    args = combined_outputs_args(tmp_path, transpiled)
+    manifest = manifest_entry_fixture()
+    documents = []
+    for enabled in (False, True):
+        lib = combined_outputs_fake_lib(manifest, combined_outputs_receipt(), checked)
+        status, out = harness(lib, *args, *(["--outputs"] if enabled else []))
+        assert status == 0 and harness.stderr == ""
+        assert out.count("\n") == 1
+        doc = json.loads(out)
+        documents.append(doc)
+        fp = doc["fingerprint"]
+        raw = run_json.base64.b64decode(fp["token"])
+        assert json.loads(raw) == fp["provenance"]
+        assert fp["digest"] == "sha256:" + run_json.hashlib.sha256(raw).hexdigest()
+        provenance = fp["provenance"]
+        assert provenance["codegen"]["transpiled_from_pine"] is transpiled
+        assert provenance["codegen"]["generated_cpp_sha256"] == run_json.hashlib.sha256(
+            COMBINED_OUTPUTS_CPP.encode()).hexdigest()
+        expected = {"len": 14, "armed": False, "text": "false", "Source": "hl2"}
+        assert provenance["applied"]["inputs"] == expected
+        for name, value in expected.items():
+            assert type(provenance["inputs"][name]["value"]) is type(value)
+            assert provenance["inputs"][name]["value"] == value
+        assert provenance["inputs"]["Source"]["default"] == "close"
+        assert provenance["applied"]["overrides"] == {"initial_capital": 5000.0}
+        assert type(provenance["strategy"]["initial_capital"]) is float
+        assert doc["applied_inputs"] == COMBINED_OUTPUTS_INPUTS
+        assert doc["applied_overrides"] == {"initial_capital": "5000"}
+        assert provenance["runtime"] == doc["applied_runtime"]
+        if enabled:
+            assert doc["applied_runtime"]["outputs"] is True
+            assert ("strategy_outputs_set_enabled", ST, 1) in lib.calls
+            names = lib.names()
+            assert names.index("strategy_outputs_set_enabled") < names.index("run_backtest_full")
+            assert names.index("run_backtest_full") < names.index("strategy_outputs_manifest")
+            raw_manifest = json.dumps(manifest, indent=2, ensure_ascii=False).encode()
+            block = doc["outputs"]
+            assert list(block) == ["schema_version", "message_format", "manifest_sha256",
+                                   "manifest", "bars", "series", "constants", "hlines", "events"]
+            assert block["schema_version"] == "pineforge-outputs/v1"
+            assert block["message_format"] == "pineforge/v1"
+            assert block["manifest"] == manifest
+            assert block["manifest_sha256"] == run_json.hashlib.sha256(raw_manifest).hexdigest()
+            assert block["bars"] == {"open_ms": [1000], "close_ms": [2000]}
+            assert block["series"] == [
+                {"slot": 0, "output": "opaque/id:\u03b1", "values": [1.25]},
+                {"slot": 1, "output": "opaque/id:\u03b1", "values": [1286557951]}]
+            assert type(block["series"][1]["values"][0]) is int
+            assert block["constants"] == [50.0]
+            assert block["hlines"] == [{"output": "h0", "price": 50.0}]
+            assert block["events"] == [{
+                "sequence": 1, "output": "opaque/id:\u03b1", "bar_index": 0,
+                "bar_open_ms": 1000, "bar_close_ms": 2000, "ordinal_in_bar": 0,
+                "phase": "batch", "value": 1.0, "message": "recorded"}]
+        else:
+            assert "outputs" not in doc and "outputs" not in doc["applied_runtime"]
+            assert not any(name.startswith("strategy_outputs_") for name in lib.names())
+        create = "strategy_create_checked" if checked else "strategy_create"
+        assert lib.names().count(create) == 1
+        assert lib.names().count("report_free") == lib.names().count("strategy_free") == 1
+    off, on = documents
+    on_provenance = json.loads(json.dumps(on["fingerprint"]["provenance"]))
+    assert on_provenance["runtime"].pop("outputs") is True
+    assert on_provenance == off["fingerprint"]["provenance"]
+    assert run_json.build_fingerprint(on_provenance) == off["fingerprint"]
+    assert on["fingerprint"]["digest"] != off["fingerprint"]["digest"]
+    invalid = combined_outputs_fake_lib({"outputs": [{"index": True}]},
+                                        combined_outputs_receipt(), checked)
+    status, out = harness(invalid, *args)
+    assert status == 0 and harness.stderr == ""
+    assert report_of(out) == report_of(json.dumps(off))
+    assert not any(name.startswith("strategy_outputs_") for name in invalid.names())
+    assert invalid.names().count("report_free") == invalid.names().count("strategy_free") == 1
+
+
+@pytest.mark.parametrize("receipt", [None, legacy_receipt({"name": "broken"})],
+                         ids=["absent-receipt", "malformed-receipt"])
+def test_outputs_does_not_certify_foreign_source_reader_control(
+        combined_outputs_harness, tmp_path, receipt):
+    harness = combined_outputs_harness
+    args = combined_outputs_args(tmp_path, False)
+    documents = []
+    for enabled in (False, True):
+        lib = combined_outputs_fake_lib(manifest_entry_fixture(), receipt)
+        status, out = harness(lib, *args, *(["--outputs"] if enabled else []))
+        assert status == 0 and harness.stderr == ""
+        doc = json.loads(out)
+        provenance = doc["fingerprint"]["provenance"]
+        documents.append(provenance)
+        assert provenance["codegen"]["transpiled_from_pine"] is False
+        assert provenance["applied"]["inputs"] == COMBINED_OUTPUTS_INPUTS
+        assert provenance["applied"]["overrides"] == {"initial_capital": "5000"}
+        for name in COMBINED_OUTPUTS_INPUTS:
+            assert provenance["inputs"][name]["value"] is None
+            assert provenance["inputs"][name]["resolution"]["reason"] == "foreign_unverified_source"
+        assert provenance["strategy"]["initial_capital"] is None
+        assert provenance["strategy_resolution"]["initial_capital"]["reason"] == "foreign_unverified_source"
+        assert lib.names().count("report_free") == lib.names().count("strategy_free") == 1
+    off, on = documents
+    assert on["runtime"].pop("outputs") is True
+    assert on == off
+
+
+@pytest.mark.parametrize("key,field,value", [
+    ("outputs", "index", True), ("constants", "index", -1),
+    ("series", "slot", 0.0), ("outputs", "id", ""), ("series", "output", None)])
+def test_outputs_manifest_refusal_precedes_normalization_reader_control(
+        combined_outputs_harness, tmp_path, monkeypatch, key, field, value):
+    harness = combined_outputs_harness
+    manifest = manifest_entry_fixture()
+    manifest[key][0][field] = value
+    lib = combined_outputs_fake_lib(manifest, combined_outputs_receipt(), checked=True)
+    normalized = []
+    original = run_json.normalize_release_provenance
+
+    def observe(*args):
+        normalized.append(True)
+        return original(*args)
+
+    monkeypatch.setattr(run_json, "normalize_release_provenance", observe)
+    status, out = harness(lib, *combined_outputs_args(tmp_path, False), "--outputs")
+    assert status == 1 and harness.stderr == ""
+    doc = line_of(out)
+    assert (doc["code"], doc["args"]) == (
+        "strategy_library_incompatible", {"reason": "outputs_manifest_invalid"})
+    assert normalized == []
+    assert lib.names().count("run_backtest_full") == 1
+    assert lib.names().count("report_free") == lib.names().count("strategy_free") == 1
+
+
+@pytest.mark.parametrize("enabled", [False, True], ids=["outputs-off", "outputs-on"])
+@pytest.mark.parametrize("defect", ["missing-override", "integer-domain", "source-selector"])
+def test_outputs_normalization_failure_keeps_report_and_cleanup_reader_control(
+        combined_outputs_harness, tmp_path, enabled, defect):
+    harness = combined_outputs_harness
+    receipt = combined_outputs_receipt()
+    if defect == "missing-override":
+        receipt["overrides"] = []
+    elif defect == "integer-domain":
+        receipt["inputs"][0]["effective_value"] = str(2**53)
+    else:
+        receipt["inputs"][3]["effective_value"] = "14"
+    lib = combined_outputs_fake_lib(manifest_entry_fixture(), receipt, checked=True)
+    status, out = harness(lib, *combined_outputs_args(tmp_path, False),
+                          *(["--outputs"] if enabled else []))
+    assert status == 0 and harness.stderr == "" and out.count("\n") == 1
+    doc = json.loads(out)
+    assert doc["fingerprint"] is None
+    assert ("outputs" in doc) is enabled
+    if enabled:
+        assert doc["applied_runtime"]["outputs"] is True
+        assert doc["outputs"]["constants"] == [50.0]
+    else:
+        assert "outputs" not in doc["applied_runtime"]
+        assert not any(name.startswith("strategy_outputs_") for name in lib.names())
+    assert lib.names().count("run_backtest_full") == 1
+    assert lib.names().count("report_free") == lib.names().count("strategy_free") == 1
