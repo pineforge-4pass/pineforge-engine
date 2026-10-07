@@ -7,7 +7,50 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
-- **Fewer copies of another symbol's feed (memory only).** A Pine strategy
+**Planned 1.4.0**, paired with pineforge-codegen 1.4.0. This release is not
+tagged yet. The candidate pairs engine `b3192bfc` with codegen `bfc4ddce`;
+their version files still name 1.3.0 until the release workflow stamps them.
+The planned minor release adds run-failure codes, typed report provenance
+and the Pine adapter and live-runner corrections below. Regenerate strategy
+C++ with the matching codegen and relink against the matching engine headers
+and archive; replacing the archive alone does not update a statically linked
+strategy library.
+
+The C header adds `strategy_get_last_error_code` and
+`strategy_get_last_error_args`, behind `PINEFORGE_HAS_RUN_FAILURE_CODES_V1`.
+No existing C signature, struct layout or enumerator changes:
+`PF_ABI_VERSION` stays 4 and `PF_CAPABILITIES_API_VERSION` stays 1.
+The native C header and frozen header fixtures are unchanged. The script
+epoch stays `engine_script_run_v19`; *State hashes* below describes the
+recipe additions. *Report keys and provenance* describes the JSON changes
+that consumers must handle.
+
+The prepared 1.4.0 facts map to baseline
+`pineforge-parity-baseline-20261007-engine-b3192bfc`: its recorded grading
+outcomes are **<!-- pf:releases[1.4.0].scoreboard.excellent|int -->7,983<!-- /pf -->
+excellent / <!-- pf:releases[1.4.0].scoreboard.strong|int -->6<!-- /pf --> strong**
+on <!-- pf:releases[1.4.0].scoreboard.graded|int -->7,989<!-- /pf --> graded probes,
+with <!-- pf:releases[1.4.0].scoreboard.belowStrong|int -->0<!-- /pf --> below strong
+and <!-- pf:releases[1.4.0].scoreboard.engineErrors|int -->0<!-- /pf --> engine errors.
+These are the recorded population outcomes, not a claim that every internal
+attempt succeeded or that every supported configuration was measured.
+
+### Changes since 1.3.0
+
+| Request | Change and measured scope |
+|---|---|
+| [#346] | Adds routing, service and retirement-cursor regression coverage in seven test/documentation files. It changes no production behavior; the final release-pair population evidence covers all 7,989 probes. |
+| [#349] | Reduces symbol-feed copies per strategy handle. Dedicated ownership witnesses preserve trades and hashes while checking copy bounds; its 134-case gate retains all 7,989 probe outcomes. This is a memory/ownership change, with no new throughput claim. |
+| [#350] | Corrects flat global exits, competing fill-recalculation thresholds and per-entry relative exits over pyramided lots within the taped adapter rules. Synthetic controls establish those fixes; its 134-case population gate records zero tier/outcome movement. |
+| [#351] | Adds coded failures and the checked-settings path described below. The coordinated engine/codegen gate retains all 7,989 outcomes; explicit failure-channel tests cover empty `runtime.error` and checked-setting refusals. |
+| [#352] | Places forced fill-recalculation fills at paired same-bar waypoints. Ten zero-commission control tapes match fill fields; five known trade-excursion residuals remain. The forward stream still refuses `calc_on_order_fills`. |
+| [#353] | Uses chart-timeframe input in `pineforge-live` and drains the final webhook delivery. Accepted native/live verification covers the landed tree; the batch population grades do not certify real broker fills. |
+| [#354] | Separates native CI profiles and makes cold verification reproducible. The final behavior candidate passed all eight managed verification steps; these are verification changes, not a trading improvement. |
+| [#357] | Preserves certified scalar types and explicit unresolved provenance. Its 134/134 gate measures all 7,989 probes with no movement; the retained 1,523-pair provenance comparison records zero newly wrong or newly unresolved uniquely-correct values. |
+
+### Symbol-feed ownership
+
+- **Fewer copies of another symbol's feed (memory only, [#349]).** A Pine strategy
   that reads another symbol through `request.security` held up to five copies
   of every installed feed (`strategy_set_symbol_feed`) while a run was set up
   and four for the rest of the run: the host's store, two staged
@@ -28,7 +71,7 @@ version number follows semantic versioning over the surfaces the
   reports, metrics and state hashes are byte-identical, and the C ABI, the
   layout versions and the hash domains are unchanged.
 
-### Run-failure codes
+### Run-failure codes ([#351])
 
 - **Every run failure carries a stable code.** `<pineforge/pineforge.h>`
   declares `strategy_get_last_error_code()` and
@@ -118,7 +161,7 @@ version number follows semantic versioning over the surfaces the
   `note_error` takes the code beside the text; the text-only form it had
   stays and records `engine_unclassified_error`.
 
-### Live runner: chart-timeframe input
+### Live runner: chart-timeframe input ([#353])
 
 - **`pineforge-live` runs a Pine script on its chart clock.** `--input-tf`
   defaults to `--script-tf`, and the warmup, the confirmed-bar feed and the
@@ -161,6 +204,98 @@ version number follows semantic versioning over the surfaces the
   read the end-of-input request, so an action committed between the two
   stayed unsent until the next start (`webhooks_pending` 1, no error). It
   reads the request first now.
+
+### State hashes
+
+The broker-state and source-adapter domains remain
+`pineforge-broker-state/v19` and `pineforge-source-adapter/v4`; the stream
+fingerprint version remains 19 and the native consumer identity remains
+`native-consumer/v9`. The source adapter adds conditional folds for state
+used by the exit and waypoint fixes:
+
+- [#350] folds `void_global_issue` when set; a per-entry placement's
+  `per_entry_origin` and `per_entry_units` when its origin is nonzero; and a
+  nonempty per-entry exit book under `pineforge-source-per-entry-exits/v1`.
+  That book includes each exit's id, cycle, side, profit/loss ticks, comment
+  and children, and each child's origin, fill price, units and consumed bit.
+- [#352] folds a non-NaN `forced_waypoint_print` and, during fill
+  recalculation, a non-NaN `coof_fill_target_print_`, each with its own marker.
+- [#349] substitutes stored feed bar/column counts for the same vector sizes,
+  with the same unsigned encoding and order; no hash input is removed by
+  that ownership change.
+
+No existing hashed field is removed or re-encoded in this range. A run that
+uses the added state can have different hashes, and the behavior fixes can
+also change the values being hashed. The unchanged epoch/domain names are
+not a promise of equal 1.3.0 and 1.4.0 hash values. The release harness's
+SHA-256 provenance fingerprint is a separate identity, described next.
+
+### Report keys and provenance
+
+Successful reports keep their top-level trade, summary, diagnostics and
+metrics keys, including `sharpe_tv` and `sortino_tv`. Top-level
+`applied_inputs` and `applied_overrides` remain setter-wire strings.
+Inside `fingerprint.provenance`, [#357] changes certified input defaults,
+effective values and applied settings to their native scalar types: an
+integer override such as `"21"` is represented as `21`, a boolean as a JSON
+boolean, and a string or source selector as a string. Consumers must accept
+these typed values instead of assuming every applied value is a string.
+
+A value that cannot be certified remains explicit: the input's `default`
+and `value` are `null`, with a `resolution` object carrying
+`status: "unresolved"`, a `reason` and `raw_default`. Its applied wire value
+is retained. On the legacy-settings path, a native receipt with several
+distinct `(type, default)` pairs for one title produces
+`reason: "duplicate_title"` and the integer
+`distinct_native_inputs` count; repeated identical pairs are not counted as
+distinct inputs. Refused strategy defaults are `null` in `strategy`, with
+their records under the optional `strategy_resolution` key. Unresolved
+content normally remains in the fingerprint; `null` is not a certified
+native value.
+
+Only Pine transpiled during the invocation establishes producer origin.
+Supplied C++ needs a supported native receipt agreeing on the value, or its
+row is `foreign_unverified_source`; such a receipt is self-attested by the
+supplied module. The resolver does not evaluate arbitrary C++ expressions.
+The canonical encoder and feed canonicalization are unchanged, but changed
+types, values, reasons/counts, generated source and build identities change
+the token and digest. Existing out-of-domain refusals can still make the
+whole fingerprint `null`.
+The checked-settings path also makes the whole fingerprint `null` when its
+receipt repeats a title; it does not emit the legacy path's per-title
+duplicate record. A successful backtest can therefore have no fingerprint.
+
+Failure objects gain string `code` and typed-object `args` beside `engine`
+and `error` ([#351]); legacy libraries without the getters retain the earlier
+text-only form. Empty `runtime.error` now fails, and checked-settings
+refusals stop the run before execution. See the [release harness schema and
+source-trust rules](docker/README.md#backtest-fingerprint) and
+[run-failure vocabulary](docs/pages/run-failure-codes.md).
+The [public before/after sample](docs/pages/release-1.4.0-sample.md) retains
+actual 1.3.0-pair and candidate-pair observations, including the checked
+path's null fingerprint and the legacy path's per-title records.
+
+### Migration
+
+Use engine 1.4.0 with codegen 1.4.0 when the pair is released; earlier paired
+releases remain historical examples. Regenerate and rebuild every generated
+strategy and every C++ host against the new headers and archive. C loaders
+can probe the two new getters before using them with older libraries.
+Update JSON readers for typed/unresolved provenance and coded failures;
+decode and hash the original fingerprint token bytes to verify a digest.
+For a live deployment that fed a coarser script one-minute input, reconcile
+pending deliveries and positions, retain its ledger for audit, and start a
+new deployment with chart-timeframe warmup/feed as described above and in
+the [runner upgrade guide](runner/README.md#upgrading-from-1-minute-input).
+
+[#346]: https://github.com/pineforge-4pass/pineforge-engine/pull/346
+[#349]: https://github.com/pineforge-4pass/pineforge-engine/pull/349
+[#350]: https://github.com/pineforge-4pass/pineforge-engine/pull/350
+[#351]: https://github.com/pineforge-4pass/pineforge-engine/pull/351
+[#352]: https://github.com/pineforge-4pass/pineforge-engine/pull/352
+[#353]: https://github.com/pineforge-4pass/pineforge-engine/pull/353
+[#354]: https://github.com/pineforge-4pass/pineforge-engine/pull/354
+[#357]: https://github.com/pineforge-4pass/pineforge-engine/pull/357
 
 ## 1.3.0 — 2026-10-06
 

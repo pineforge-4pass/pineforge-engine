@@ -14,6 +14,13 @@ never leaves the container**. A pre-transpiled `strategy.cpp` is still
 accepted for back-compat. JSON report on stdout, build/transpile noise on
 stderr.
 
+This checkout documents the **planned 1.4.0 release (unreleased)**. Its
+candidate pairs engine `b3192bfc` and codegen `bfc4ddce`; their version files
+still say 1.3.0 until tagging. The release adds typed/unresolved provenance
+and coded failures, and the harness uses checked settings when the strategy
+exports that API. Use the same-version engine/codegen pair when released,
+regenerate the C++ and relink; an older image keeps its own harness behavior.
+
 ## Pull (prebuilt)
 
 This repository's workflows publish no image. The prebuilt image of this
@@ -260,11 +267,11 @@ docker run --rm \
   or an index naming no symbol: the key is absent and the report is what it was
   before this variable existed, apart from `elapsed_seconds`.
 
-The engine catches every error (TF mismatch, unsupported emulation
-flags, unknown-input-TF, etc.) into `strategy_get_last_error()`; the
-container surfaces these as `{"engine":"pineforge","error":"..."}` on
-stdout and the container exits `4` (the harness returns 1; the entrypoint
-maps any harness failure to 4) instead of crashing.
+The engine catches run errors (TF mismatch, unsupported emulation flags,
+unknown-input-TF, etc.) into `strategy_get_last_error()` and, with the planned
+1.4.0 runtime, its code/args getters. The failure line below describes both
+the coded form and the earlier text-only form. The container exits `4`
+(the harness returns 1; the entrypoint maps any harness failure to 4).
 
 ### The failure line
 
@@ -431,6 +438,11 @@ read-only mounts; the image performs no network I/O at run time.
 Every JSON report carries a `fingerprint` recording exactly what produced it —
 reversible, no key required:
 
+This is a schematic of the planned 1.4.0 provenance shape, not a measured
+before/after result. Certified values are typed; unresolved rows use the
+resolution records described below. The top-level `applied_inputs` and
+`applied_overrides` remain wire-string echoes.
+
 ```json
 "fingerprint": {
   "token":  "<base64 of the canonical provenance JSON>",
@@ -438,19 +450,21 @@ reversible, no key required:
   "provenance": {
     "engine":   { "version_string": "...", "major": 1, "minor": 0, "patch": 0, "commit_sha": "..." },
     "feed":     { "canonicalization": "pf-ohlcv-barc-le-v1", "source_values_sha256": "..." },
-    "codegen":  { "version": "1.0.0", "generated_cpp_sha256": "...", "transpiled_from_pine": true },
+    "codegen":  { "version": "...", "generated_cpp_sha256": "...", "transpiled_from_pine": true },
     "strategy": { "initial_capital": 1000000.0, "pyramiding": 1, "commission_type": "percent", "...": "all strategy() params, effective" },
-    "inputs":   { "Fast Length": { "type": "int", "default": 12, "value": "8" }, "...": "all input()s, effective" },
-    "applied":  { "inputs": { "Fast Length": "8" }, "overrides": {} },
+    "inputs":   { "Fast Length": { "type": "int", "default": 12, "value": 8 }, "...": "declared inputs or explicit unresolved rows" },
+    "applied":  { "inputs": { "Fast Length": 8 }, "overrides": {} },
     "runtime":  { "input_tf": "", "bar_magnifier": false, "...": "..." }
   }
 }
 ```
 
-`strategy` and `inputs` list the **full effective** parameter set — every
-`strategy()` field and every `input()` value, with declared defaults, even
-when no override was passed. `value` is the applied override if one was given,
-otherwise the default. `digest` is a stable id for a run under a given harness and its runtime settings (same inputs + same settings ⇒ same digest).
+`strategy` and `inputs` describe the effective parameter set where it can be
+certified, with explicit unresolved records otherwise. A certified `value`
+is the native effective value after setting overrides, or the default when
+none was applied. `digest` identifies the full provenance document under the
+given harness and build identities; it is not stable across release pairs
+whose types, values, resolution records or identities differ.
 
 `feed.source_values_sha256` identifies the primary OHLCV source by hashing a
 versioned domain prefix followed by every parsed source row, in original order,
@@ -478,8 +492,10 @@ match a JCS direct encoder for the types we accept:
 | Strings | JSON control escapes + `"`/`\`; **raw valid Unicode** (no `ensure_ascii` `\uXXXX` for non-ASCII); U+2028/U+2029 and non-BMP stay as UTF-8 code points. Unpaired UTF-16 surrogates: **rejected**. Str subclasses are normalized via base `str.__str__` first so hostile `__str__`/`__iter__`/`encode` hooks cannot change emission, key order, or bypass surrogate rejection. |
 | Bools / null | `true` / `false` / `null` |
 
-Semantic provenance values and the `{token,digest,provenance}` object shape
-are unchanged; only the hashed byte form is language-stable.
+The `{token,digest,provenance}` object shape and canonical encoder are
+unchanged in planned 1.4.0. Typed provenance normalization changes the values
+fed to that encoder, including explicit uncertainty; those changes can
+change the token and digest.
 
 **Verification (authoritative path):** base64-decode `token` to the canonical
 UTF-8 JSON bytes and hash those bytes. `digest` is exactly `sha256:` plus the
@@ -586,7 +602,7 @@ these cases retain a fingerprint.
 |---|---|
 | `foreign_unverified_source` | Supplied C++ has no unique supported native receipt confirming the row; source appearance cannot establish producer origin. Applied values keep their wire strings. |
 | `ambiguous_binding` | An identifier with an occurrence outside its one recognized declaration and the closed read list (shadows, local declarators, other script-body uses); getters of one title (or security-guard branches) that disagree where the receipt does not pick exactly one; or disagreement with the native receipt's type, default or value, for inputs and for strategy() values alike. |
-| `duplicate_title` | The native receipt lists the title more than once with two or more distinct (type, default) pairs, compared as written: several inputs share it, so no single value belongs to the title. The record adds `"distinct_native_inputs"`, the number of distinct pairs. Takes precedence over every other input reason. |
+| `duplicate_title` | On the legacy-settings path, the native receipt lists the title more than once with two or more distinct (type, default) pairs, compared as written: several inputs share it, so no single value belongs to the title. The record adds `"distinct_native_inputs"`, the number of distinct pairs. Takes precedence over every other input reason on that path. |
 | `macro_argument` | A getter of the title sits inside a macro argument (see "Getter call"). |
 | `unsupported_binding` | No recognized declaration, an unrecognized lexical or preprocessor context, an unrecognized getter-family token, an undelimitable literal or comment, or an unrecognized strategy() constructor flow. |
 | `unsupported_default` | Unrecognized default expressions, definitions, numeric spellings/ranges, source expressions, enum spellings outside the canonical vocabulary and non-`true`/`false` booleans; no expression is evaluated to guess a value. |
@@ -600,12 +616,19 @@ unchanged numeric/Unicode domain checks above before any refusal (a receipt
 integer is parsed by its own type, leading zeros included): an
 out-of-domain value keeps its existing refusal (no fingerprint), and `null` never
 erases it. A malformed checked receipt or a non-canonical checked source selector
-also makes the complete fingerprint `null`.
+also makes the complete fingerprint `null`. The checked-settings path
+rejects a receipt with any repeated title as ambiguous and likewise emits
+`fingerprint: null`, even if the backtest itself succeeds; it does not emit
+the legacy path's per-title duplicate record.
 
-Where no certified value changes, an input keeps the fingerprint the resolver
+Within the pre-release allowlist refinement, where no certified value changes,
+an input keeps the fingerprint the resolver
 before the allowlist gave it, except when a ruling changes a refusal reason or
 its count (those fields are hashed too). `run_json_codes_test.py` pins the base
 digests of six fixed cases (`BASE_FINGERPRINTS`).
+Those pins do not assert fingerprint equality with released 1.3.0: the
+release adds typed values and explicit uncertainty, and build/version inputs
+also differ.
 
 Decode the token to inspect the canonical provenance JSON:
 
