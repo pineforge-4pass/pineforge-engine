@@ -998,6 +998,15 @@ def _release_cpp_tokens(text):
         close_directive()
     if stack:
         raise _ReleaseUnreadable("unterminated conditional")
+    # The producer's leading-comma macros are invoked only as
+    # `NAME(syminfo_.timezone, syminfo_.session)` (tables.py, visit_call.py,
+    # visit_expr.py); any other invocation could splice a declarator.
+    for index, token in enumerate(tokens):
+        if (token[3] == "ident" and not token[4] and token[0] in (
+                "PF_PINE_TIME_SESSION_DAY_ARGS", "PF_VWAP_SESSION_ANCHOR_ARGS")
+                and [item[0] for item in tokens[index + 1:index + 10]] != [
+                    "(", "syminfo_", ".", "timezone", ",", "syminfo_", ".", "session", ")"]):
+            trusted = False
     # Names a certified form relies on are never redeclared or aliased: `std`
     # and `checked_settings` only qualify, `pineforge` only qualifies or is the
     # producer's `using namespace pineforge;`.
@@ -1022,7 +1031,8 @@ def _release_code_context(token):
     branch of its settings guard or any branch of its security guard."""
     return not token[4] and all(
         (opener == _RELEASE_SETTINGS_BRANCH and branch == opener)
-        or opener == _RELEASE_SECURITY_GUARD for opener, branch, _ in token[5])
+        or (opener == _RELEASE_SECURITY_GUARD and branch in (opener, ("else",)))
+        for opener, branch, _ in token[5])
 
 
 def _release_previous(tokens, index):
@@ -1333,7 +1343,9 @@ def _release_branch_dependent(tokens, occurrences):
             if opener != _RELEASE_SECURITY_GUARD:
                 continue
             arms = tokens.groups.get(instance, [opener])
-            if len(arms) < 2:
+            if arms != [opener, ("else",)]:
+                # Coverage needs the producer's explicit #else; otherwise a
+                # branch (an implicit empty one included) is missing.
                 return True
             for arm in arms:
                 if not any(other[0] == declared_type and other[1] == words
@@ -1388,14 +1400,20 @@ def _release_legacy_declarations(cpp_text, receipt=None, *, allow_unresolved=Fal
         elif len(pairs) > 1 or _release_branch_dependent(tokens, occurrences):
             # Never first-wins: the native receipt must pick exactly one.
             candidates = []
+            failures = []
             for pair_type, pair_words, pair_raw, pair_default, _ in pairs:
                 value, reason, _ = _release_resolve_default(
                     tokens, trusted, calls, pair_type, list(pair_words), pair_default)
-                if reason is None and all((pair_type, repr(value)) != (kind, repr(seen))
-                                          for kind, seen, _ in candidates):
+                if reason is not None:
+                    failures.append(reason)
+                elif all((pair_type, repr(value)) != (kind, repr(seen))
+                         for kind, seen, _ in candidates):
                     candidates.append((pair_type, value, pair_raw))
             metadata["_candidates"] = candidates
-            metadata["_reason"] = "ambiguous_binding"
+            # With no readable declaration the first one's own refusal stands
+            # (as before this round); otherwise the receipt has to choose.
+            metadata["_reason"] = (failures[0] if failures and not candidates
+                                   else "ambiguous_binding")
         else:
             metadata["default"], metadata["_reason"], symbolic = _release_resolve_default(
                 tokens, trusted, calls, declared_type, list(words), default)
@@ -1534,10 +1552,10 @@ def _release_legacy_strategy(cpp_text):
 
     Every release key maps to a typed value (the PineStrategyConfig seed when
     the constructor leaves it alone) or a _ReleaseRefusal. Recognized: one
-    `GeneratedStrategy(...) [: init] { ... }` holding either one
+    `GeneratedStrategy() [: init] { ... }` holding one
     `PineStrategyConfig cfg;` with top-level `cfg.<field> = <rhs>;` statements
-    before its single `configure_pine_strategy(cfg);`, or pre-R4-C top-level
-    `<field>_ = <rhs>;` member writes. Any other occurrence refuses."""
+    before its single closing `configure_pine_strategy(cfg);`. Pre-R4-C
+    member writes and any other occurrence refuse."""
     keys = list(_RELEASE_OVERRIDE_TYPES)
 
     def refuse(reason):
@@ -1654,14 +1672,11 @@ def _release_legacy_strategy(cpp_text):
             if words[2] in cfg_fields:
                 assigned[cfg_fields[words[2]]] = statement[4:-1]
             continue
-        if (variable is None and len(words) >= 4 and words[0] in member_fields
-                and words[1] == "=" and words[-1] == ";"
-                and sum(word in member_fields for word in words) == 1):
-            assigned[member_fields[words[0]]] = statement[2:-1]
-            continue
         # The producer's constructor holds nothing else: refuse the rest.
         return refuse("unsupported_binding")
-    if (variable is not None and configured != 1) or (variable is None and not assigned):
+    if variable is None or configured != 1:
+        # Pre-R4-C member writes are not certified: nothing establishes which
+        # member an unqualified field write reaches.
         return refuse("unsupported_binding")
     result = dict(STRATEGY_SEED, calc_on_order_fills=False)
     raws = {}
@@ -1751,12 +1766,17 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
         for row in receipt_rows + override_receipt_rows:
             if row["type"] in ("int", "float") or (row["type"] == "enum" and row["supported"]):
                 for key in ("default", "effective_value"):
+                    # Parse by the row's own type (an integer row's leading
+                    # zeros included) and as a number; check whatever parses.
                     native_value = _release_receipt_value(row[key], "float")
                     if native_value is not None:
                         _release_domain(native_value)
                         if row["type"] != "float" and native_value.is_integer():
-                            exact = _release_receipt_value(row[key], "int")
-                            _release_domain(int(native_value) if exact is None else exact)
+                            _release_domain(int(native_value))
+                    if row["type"] != "float":
+                        exact = _release_receipt_value(row[key], "int")
+                        if exact is not None:
+                            _release_domain(exact)
         declared = _release_legacy_declarations(cpp_text, receipt, allow_unresolved=True)
         unreadable = declared is None
         declared = declared or {}

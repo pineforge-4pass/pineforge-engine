@@ -517,12 +517,15 @@ and character literals and raw string literals (`R"delim(...)delim"`, with
 `u8R`/`uR`/`UR`/`LR`) are delimited exactly. Code context excludes preprocessor
 lines and every conditional group except the first branch of
 `#ifdef PF_SETTINGS_API_VERSION` (the producer's checked-settings metadata) and
-any branch of `#ifdef PINEFORGE_HAS_SYMBOL_SECURITY_EVAL_V1` (its request of
-another symbol). The recognized directives are
+the `#ifdef` branch and the `#else` branch of
+`#ifdef PINEFORGE_HAS_SYMBOL_SECURITY_EVAL_V1` (its request of another symbol).
+The recognized directives are
 `#include <pineforge/...hpp>` or a bare standard header, a `#define` line
 identical to one the producer emits (its replacement list included),
-`#error` and conditionals;
-any other directive, a line splice anywhere, a backslash outside a literal
+`#error` and conditionals; the producer's leading-comma macros
+`PF_PINE_TIME_SESSION_DAY_ARGS` and `PF_VWAP_SESSION_ANCHOR_ARGS` are invoked
+only as `NAME(syminfo_.timezone, syminfo_.session)`;
+any other directive or invocation of those macros, a line splice anywhere, a backslash outside a literal
 (a universal-character name), a digraph, or a relied-on name used other than
 the producer does (`std` and `checked_settings` only qualifying, `pineforge`
 only qualifying or in `using namespace pineforge;`) leaves no row of that unit
@@ -533,7 +536,7 @@ certified.
 | Getter call | One of `get_input_int`, `_int64`, `_double`, `_bool`, `_string`, `_source`, in code context, after an expression token or a producer C-style cast `(int)`, `(double)`, `(int64_t)` (the cast is not part of the input), as `name("title", default)` with an unprefixed literal title and exactly one default argument, and not in a spelling that can declare a local of that name (after a
 statement-level comma or one inside `for`/`if`/`switch`/`while` parentheses,
 or wrapped only in parentheses after `>` or a statement-initial name). Every other `get_input_*` occurrence (other casts included) refuses the unit. |
-| Title | The producer's narrow-literal escapes, decoded to the native first-NUL identity. When the getters of one title disagree on getter type or default, or a getter sits in a security-guard branch that the other branches (an implicit empty `#else` included) do not repeat, the native receipt arbitrates: a supported row whose type and default (each parsed by its own type) match exactly one distinct pair certifies that pair; otherwise `ambiguous_binding`. Never first-wins. |
+| Title | The producer's narrow-literal escapes, decoded to the native first-NUL identity. When the getters of one title disagree on getter type or default, or a getter sits in a security-guard branch that the other branch does not repeat (a guard without its own `#else`, whose implicit empty branch runs no getter, counts as not repeating), the native receipt arbitrates: a supported row whose type and default (each parsed by its own type) match exactly one distinct pair certifies that pair; otherwise `ambiguous_binding` (`unsupported_default` when no getter's default is readable at all). Never first-wins. |
 | Numeric/bool/string default | A decimal literal (optional sign), `true`/`false`, or a plain or `std::string("...")` literal. |
 | Symbolic numeric default | Exactly one file-scope `[static] const\|constexpr int NAME = <decimal int32>;`, and every other occurrence in this closed list of pure reads: a whole getter default; the metadata default `{"title", "enum", ::pineforge::checked_settings::number(NAME),`; `auto _pna_l = (NAME);` or `auto _pna_r = (NAME);` (the na-aware relational temporaries); `(__switch_val_<n> == NAME) {` (the switch lowering). Any other occurrence, in any position, refuses. The value also needs a supported native receipt row that agrees. |
 | Source default | `_src_<selector>_` for a selector in the native vocabulary `open high low close volume hl2 hlc3 ohlc4 hlcc4`, recorded as the selector; that identifier may otherwise appear only before `.`. An override is certified only when it is such a selector; anything else (the native getter falls back) is refused, never echoed. |
@@ -541,7 +544,7 @@ or wrapped only in parentheses after `>` or a statement-initial name). Every oth
 | strategy() default | One parameterless `GeneratedStrategy()` constructor whose top-level statements are, outside any conditional except the adapter hooks, one `pineforge::source::PineStrategyConfig cfg{};` declaration first, `cfg.<field> = <rhs>;` assignments to the producer's 13 members (`margin_long`,
 `margin_short` and `src_series_active` are recognized but not provenance), and
 one final `configure_pine_strategy(cfg);` (besides the producer's adapter
-hook calls, nothing else may stand in the constructor) (or pre-R4-C `<field>_ = <rhs>;` writes). Numbers are decimal literals (integers within the native `int` width), booleans `true`/`false`, and enums `static_cast<int>(QtyType::NAME)`, `QtyType::NAME` (likewise `CommissionType`) or the index `0`-`2`, where every occurrence of `QtyType`/`CommissionType` in the unit is followed by `::` and a canonical member. |
+hook calls, nothing else may stand in the constructor). Pre-R4-C `<field>_ = <rhs>;` member writes are refused: nothing establishes which member they reach. Numbers are decimal literals (integers within the native `int` width), booleans `true`/`false`, and enums `static_cast<int>(QtyType::NAME)`, `QtyType::NAME` (likewise `CommissionType`) or the index `0`-`2`, where every occurrence of `QtyType`/`CommissionType` in the unit is followed by `::` and a canonical member. |
 
 An input whose default cannot be proved stays in the fingerprint with its
 declared `type`, `default: null`, `value: null`, and this explicit refusal:
@@ -577,10 +580,15 @@ these cases retain a fingerprint.
 Conservative refusal includes valid C++ forms outside the recognized producer
 subset. Every concrete scalar the resolver knows (a recognized literal, an
 emulated legacy override, or a numeric value in the native receipt) passes the
-unchanged numeric/Unicode domain checks above before any refusal: an
+unchanged numeric/Unicode domain checks above before any refusal (a receipt
+integer is parsed by its own type, leading zeros included): an
 out-of-domain value keeps its existing refusal (no fingerprint), and `null` never
 erases it. A malformed checked receipt or a non-canonical checked source selector
 also makes the complete fingerprint `null`.
+
+Where no certified value changes, an input keeps the fingerprint the resolver
+before the allowlist gave it: `run_json_codes_test.py` pins the base digests
+of fixed cases (`BASE_FINGERPRINTS`).
 
 Decode the token to inspect the canonical provenance JSON:
 
