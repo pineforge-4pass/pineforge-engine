@@ -3413,12 +3413,24 @@ def _output_time(ms) -> int | None:
 
 
 def _manifest_entries(manifest: dict, key: str, fields: tuple) -> list:
+    """Validate the indices and output IDs this reader consumes before use."""
     entries = manifest.get(key, [])
     if not isinstance(entries, list) or not all(
             isinstance(e, dict) and all(f in e for f in fields) for e in entries):
         raise _outputs_incompatible(
             f"the outputs manifest's {key} is not a list of entries with {', '.join(fields)}",
             "outputs_manifest_invalid")
+    for entry in entries:
+        for field in fields:
+            value = entry[field]
+            if field in ("index", "slot"):
+                valid = type(value) is int and value >= 0
+            else:
+                valid = isinstance(value, str) and bool(value)
+            if not valid:
+                raise _outputs_incompatible(
+                    f"the outputs manifest's {key} entry has an invalid {field}",
+                    "outputs_manifest_invalid")
     return entries
 
 
@@ -3444,10 +3456,10 @@ def build_outputs_block(reader) -> dict:
     if not isinstance(manifest, dict):
         raise _outputs_incompatible("the outputs manifest is not a JSON object",
                                     "outputs_manifest_invalid")
-    output_entries = _manifest_entries(manifest, "outputs", ("index",))
-    outputs = {entry["index"]: entry for entry in output_entries}
-    series_entries = _manifest_entries(manifest, "series", ("slot",))
+    output_entries = _manifest_entries(manifest, "outputs", ("index", "id"))
+    series_entries = _manifest_entries(manifest, "series", ("slot", "output"))
     constant_entries = _manifest_entries(manifest, "constants", ("index",))
+    outputs = {entry["index"]: entry for entry in output_entries}
     opens, closes = reader.bar_times()
     slots = reader.series_count()
     series = []
