@@ -2192,6 +2192,54 @@ def test_foreign_duplicate_title_keeps_distinct_uncoerced_count(tmp_path):
     assert result["applied"]["inputs"] == {"len": "14"}
 
 
+def test_foreign_undeclared_applied_key_listed_in_receipt_refuses(tmp_path):
+    result = legacy_document(
+        tmp_path, FOREIGN_TU, legacy_receipt(receipt_row("other", "int", "10", "14")),
+        {"other": "14"}, transpiled=False)
+    assert result["inputs"]["other"] == {
+        "type": "unknown", "default": None, "value": None,
+        "resolution": refusal("foreign_unverified_source", None)}
+    assert result["applied"]["inputs"] == {"other": "14"}
+
+    # Canonical native names must be absent from both parsed maps.
+    alias = "other\0alias"
+    for receipt in (
+            legacy_receipt(receipt_row("other", "int", "10", "14")),
+            legacy_receipt(receipt_row("other", "int", "10", "14"),
+                           receipt_row("other", "int", "11", "14"))):
+        result = legacy_document(tmp_path, FOREIGN_TU, receipt, {alias: "14"}, transpiled=False)
+        assert result["inputs"][alias]["resolution"] == refusal("foreign_unverified_source", None)
+        assert result["inputs"][alias]["value"] is None
+        assert result["applied"]["inputs"] == {alias: "14"}
+    # Empty is valid, and a complete receipt can establish actual absence.
+    for receipt in (legacy_receipt(), legacy_receipt(receipt_row("len", "int", "10"))):
+        result = legacy_document(tmp_path, FOREIGN_TU, receipt, {alias: "14"}, transpiled=False)
+        assert result["inputs"][alias] == {"type": "unknown", "default": None, "value": "14"}
+        assert result["applied"]["inputs"] == {alias: "14"}
+
+
+def test_foreign_undeclared_applied_key_with_malformed_receipt_refuses(tmp_path):
+    result = legacy_document(
+        tmp_path, FOREIGN_TU, legacy_receipt({"name": "other"}),
+        {"other": "14"}, transpiled=False)
+    assert result["inputs"]["other"] == {
+        "type": "unknown", "default": None, "value": None,
+        "resolution": refusal("foreign_unverified_source", None)}
+    assert result["applied"]["inputs"] == {"other": "14"}
+
+    # A valid prefix does not make an incompletely parsed section evidence of absence.
+    partial = legacy_receipt(receipt_row("len", "int", "10"), {"name": "broken"})
+    result = legacy_document(tmp_path, FOREIGN_TU, partial, {"other": "14"}, transpiled=False)
+    assert result["inputs"]["other"]["resolution"] == refusal("foreign_unverified_source", None)
+    assert result["inputs"]["other"]["value"] is None
+    assert result["applied"]["inputs"] == {"other": "14"}
+    # The producer-origin fixture path keeps its existing unknown wire echo.
+    for receipt in (None, partial, legacy_receipt(receipt_row("other", "int", "10", "14"))):
+        result = legacy_document(tmp_path, FOREIGN_TU, receipt, {"other": "14"}, transpiled=True)
+        assert result["inputs"]["other"] == {"type": "unknown", "default": None, "value": "14"}
+        assert result["applied"]["inputs"] == {"other": "14"}
+
+
 @pytest.mark.parametrize("text", [
     '_PF_ENGINE_INVARIANT("unused", ] + get_input_int("ghost", 7));',
     '_PF_ENGINE_INVARIANT("unused", } + get_input_int("ghost", 7));',

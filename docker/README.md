@@ -518,13 +518,17 @@ require a unique supported native row agreeing on type and effective value.
 Without that confirmation the row is `foreign_unverified_source`. Existing
 scanner refusals still apply, and native duplicate titles retain their reason
 and distinct-input count. The scanner is not a general C++ certification parser.
+For supplied C++, `strategy_get_effective_settings` belongs to the strategy
+translation unit, so its native receipt is self-attested rather than independent
+verification.
 
 The translation unit is read lexically: comments, ordinary and prefixed string
 and character literals and raw string literals (`R"delim(...)delim"`, with
 `u8R`/`uR`/`UR`/`LR`) are delimited exactly. Code context excludes preprocessor
 lines and every conditional group except the first branch of
-`#ifdef PF_SETTINGS_API_VERSION` after the defining `checked_settings.hpp`
-include (the producer's checked-settings metadata) and
+`#ifdef PF_SETTINGS_API_VERSION` after the `checked_settings.hpp` include
+(the macro is defined in `pineforge.h`, so this include order is a proxy for
+the producer's layout) and
 the `#ifdef` branch and the `#else` branch of
 `#ifdef PINEFORGE_HAS_SYMBOL_SECURITY_EVAL_V1` (its request of another symbol).
 The recognized directives are

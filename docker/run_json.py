@@ -1788,19 +1788,21 @@ def _release_legacy_strategy(cpp_text):
 def _release_legacy_receipt_rows(receipt, section="inputs"):
     """Legacy receipt rows by native name: (unique rows, native-ambiguous
     names with their number of distinct uncoerced (type, default) pairs, every
-    row). A malformed row makes the receipt unusable; a name the receipt lists
+    row, or None when the section is missing or malformed). An empty list
+    therefore means a completely parsed empty section, not a parse failure.
+    A malformed row makes the receipt unusable; a name the receipt lists
     more than once with differing settings is native-ambiguous (several inputs
     share that title) and is never used to certify."""
     rows = receipt.get(section) if isinstance(receipt, dict) else None
     if not isinstance(rows, list):
-        return {}, {}, []
+        return {}, {}, None
     by_name = {}
     for row in rows:
         if (not isinstance(row, dict) or not isinstance(row.get("name"), str)
                 or type(row.get("supported")) is not bool
                 or not all(isinstance(row.get(key), str)
                            for key in ("type", "default", "effective_value"))):
-            return {}, {}, []
+            return {}, {}, None
         by_name.setdefault(row["name"], []).append(row)
     unique = {}
     ambiguous = {}
@@ -1874,7 +1876,7 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
         legacy_rows, native_ambiguous, receipt_rows = _release_legacy_receipt_rows(receipt)
         _, _, override_receipt_rows = _release_legacy_receipt_rows(receipt, "overrides")
         # Known native scalars meet the product domain before any refusal.
-        for row in receipt_rows + override_receipt_rows:
+        for row in (receipt_rows or []) + (override_receipt_rows or []):
             if row["type"] in ("int", "float") or (row["type"] == "enum" and row["supported"]):
                 for key in ("default", "effective_value"):
                     # Parse by the row's own type (an integer row's leading
@@ -1982,7 +1984,9 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
             if native_name in declared_names:
                 if "resolution" not in declared[native_name]:
                     applied_inputs[raw_name] = declared[native_name]["value"]
-            elif unreadable or (not producer_source and receipt is None):
+            elif unreadable or (not producer_source and (
+                    receipt_rows is None or native_name in legacy_rows
+                    or native_name in native_ambiguous)):
                 declared[raw_name] = {"type": "unknown", "default": None, "value": None,
                                       "resolution": {"status": "unresolved",
                                                      "reason": ("unsupported_binding" if producer_source
