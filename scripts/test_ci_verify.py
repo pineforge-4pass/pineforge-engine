@@ -2583,7 +2583,7 @@ class CTestDeadlines(unittest.TestCase):
 
     def test_real_ctest_names_the_hang_and_runs_the_remaining_row(self):
         # Real CTest, with no engine build or mocked timer: a hanging child
-        # must be named, the other row must run, and JUnit must survive.
+        # must be named, the other row must run, and supported JUnit must survive.
         with tempfile.TemporaryDirectory() as temporary:
             build = Path(temporary)
             (build / 'CTestTestfile.cmake').write_text(
@@ -2592,7 +2592,8 @@ class CTestDeadlines(unittest.TestCase):
             cfg = ci_verify.build_config(['native', '--build-dir', str(build),
                                           '--test-timeout', '1', '--ctest-timeout', '10'])
             driver = ci_verify.Driver(cfg)
-            argv = ci_verify.ctest_command(cfg, build, jobs=1, junit=True)
+            junit = ci_verify.ctest_supports_junit(ci_verify.default_runner)
+            argv = ci_verify.ctest_command(cfg, build, jobs=1, junit=junit)
             result = driver.invoke('ctest', argv, timeout=ci_verify.ctest_timeout(cfg),
                                    stream_output=False)
             driver.enforce_test_floor(result, registered=2, selected=2)
@@ -2603,7 +2604,8 @@ class CTestDeadlines(unittest.TestCase):
             self.assertEqual(driver.summary['ctestRows'], 2)
             self.assertEqual(driver.summary['ctestSkipped'], [])
             self.assertLess(driver.stages[0]['durationSeconds'], 10)
-            self.assertTrue((build / 'ctest-junit.xml').is_file())
+            if junit:
+                self.assertTrue((build / 'ctest-junit.xml').is_file())
             self.assertIn('Timeout', (build / 'ci-logs/ctest.log').read_text())
 
     def test_failed_and_skipped_labelled_rows_keep_their_counts(self):

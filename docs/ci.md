@@ -909,16 +909,21 @@ preflight. At that tree it takes 475 s on the maintainers' verification hosts
 1a0e7ea1): about 15 min there. The full corpus sweep's run phase is serial as
 well.
 
-The verifier's own bounds bind before these limits. CTest gets 30 minutes in
-every run but a full sanitizers one, and `test_ci_verify` alone took up to
-1288 s of them at 0d76a099 (Ubuntu Debug); a fork's sanitizers compile took
+The verifier's own bounds bind before these limits. By default, the driver gives
+CTest 30 minutes except for a full sanitizers run, which gets 60 minutes. The
+native workflow overrides these defaults with 47 minutes for native and 20
+minutes for each live sanitizer profile. Historically, `test_ci_verify` alone
+took up to 1288 s of the default 30 minutes at 0d76a099 (Ubuntu Debug); a fork's sanitizers compile took
 1277-1335 s of the build stage's 30 minutes on the standard runner. The row's
 growth (341-621 s a day earlier) is the next limit the whole CI meets, on any
 runner.
 
-Each limit below is at least twice the job's slowest time on a runner it can
-land on: measured where it has run there, and estimated for the full sets the
-larger runners take over. The standard-runner times are the eight CI runs from
+The limits below use measured durations where available and estimates for full
+sets on larger runners, with margins recorded in the table rather than a
+universal two-times multiplier. In particular, the native job's 75-minute limit
+is less than twice its observed 40.65-minute run; its row, CTest-stage and
+verification-step bounds leave the stated collection and setup margins.
+The standard-runner times are the eight CI runs from
 main's 8cf3be58 (2026-09-24) to 0d76a099 (2026-09-25), pull requests included,
 and the corpus-parity workflow's ten runs of 2026-09-22 to 2026-09-25. Until
 the larger runners' own runs accumulate, the maintainers' x86-64 verification
