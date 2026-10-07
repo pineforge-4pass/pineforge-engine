@@ -468,7 +468,7 @@ def producer_classes(unicode_only=False):
     # Any producer change requires re-auditing the class inventory and mirrors.
     pinned = {
         Lexer: "d1285cdfa5883f439d142d9b7855bbb7c1c0ec97709ae43bf7161bc84c15130a",
-        NamingHelper: "130a33d7861d97e75644f2444875e1155ad789c13f40382f0d89769b7e56bf1d",
+        NamingHelper: "b413ac35894c05c1834000061ff81a5b401f1411acebe1f30eeb76988c6021a0",
     }
     for owner, digest in pinned.items():
         assert hashlib.sha256(Path(inspect.getfile(owner)).read_bytes()).hexdigest() == digest
