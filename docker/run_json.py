@@ -1288,7 +1288,8 @@ def _release_strategy_value(key, rhs, enum_bound):
         if words in (["0"], ["1"], ["2"]) and kinds == ["number"]:
             return names[members[int(words[0])]]
         return _ReleaseRefusal("unsupported_default")
-    if declared_type == "bool":
+    if declared_type == "bool" or key == "close_entries_rule":
+        # close_entries_rule_any is a native bool: only true/false are read.
         if words in (["true"], ["false"]):
             value = words == ["true"]
             return ("ANY" if value else "FIFO") if key == "close_entries_rule" else value
