@@ -435,8 +435,8 @@ class PortableProcessContract(unittest.TestCase):
             (first / "orders.sqlite3").write_bytes(b"existing evidence")
             second = self.isolated_output(root)
             self.assertNotEqual(first, second)
-            self.assertEqual(first.parent, root)
-            self.assertEqual(second.parent, root)
+            self.assertEqual(first.parent, root.resolve())
+            self.assertEqual(second.parent, root.resolve())
             self.assertEqual(list(second.iterdir()), [])
             self.assertEqual((first / "orders.sqlite3").read_bytes(), b"existing evidence")
 
