@@ -458,12 +458,13 @@ def legacy_declaration_e2e(image, artifacts, escaped_cpp, enum_cpp):
     return int(not all(passed for _, passed in checks))
 
 
-def producer_classes():
+def producer_classes(unicode_only=False):
     """Oracle from the installed pinned producer, never from the consumer mirror."""
     import importlib.util
     import inspect
     from pineforge_codegen.lexer import Lexer, TokenType
     from pineforge_codegen.codegen.helpers import NamingHelper
+    from pineforge_codegen import transpile
     # Any producer change requires re-auditing the class inventory and mirrors.
     pinned = {
         Lexer: "d1285cdfa5883f439d142d9b7855bbb7c1c0ec97709ae43bf7161bc84c15130a",
@@ -509,6 +510,9 @@ def producer_classes():
         ("literal-Unicode", '"literal-Unicode: 倍数Ωé🙂"'),
         ("literal-backslash-unknown", r'"literal-backslash-unknown: \\q"'),
     ]
+    if unicode_only:
+        identifiers = [row for row in identifiers if row[0] == "unicode-Lo-CJK"]
+        strings = []
     rows, declarations, quantities, bindings = [], [], [], []
     predicate = getattr(consumer, "_release_codegen_identifier", lambda value: False)
     for i, (label, name, member) in enumerate(identifiers):
@@ -542,10 +546,11 @@ def producer_classes():
     strategy = STRATEGY.replace('armed = input.bool', '\n'.join(declarations) + '\narmed = input.bool')
     strategy = strategy.replace('qty=mult', 'qty=(' + ' + '.join(quantities) + ')')
     return {"producer_sha256": list(pinned.values()), "rows": rows, "bindings": bindings,
-            "strategy": strategy, "enum_count": len(identifiers)}
+            "strategy": strategy, "cpp": transpile(strategy), "enum_count": len(identifiers),
+            "scope": "unicode-isolation" if unicode_only else "full-class-matrix"}
 
 
-def class_matrix_e2e(image, artifacts):
+def class_matrix_e2e(image, artifacts, unicode_only=False):
     """One producer-bound table for identifier/escape defaults and overrides."""
     artifacts.mkdir(parents=True)
     checks = []
@@ -554,7 +559,8 @@ def class_matrix_e2e(image, artifacts):
         print(f"{'PASS' if condition else 'FAIL'} {name}: {value}", flush=True)
     oracle_command = ["docker", "run", "--rm", "--network", "none", "--user", "0",
                       "--mount", f"type=bind,src={Path(__file__).resolve()},dst=/probe.py,readonly",
-                      "--entrypoint", "python3", image, "/probe.py", "--producer-classes"]
+                      "--entrypoint", "python3", image, "/probe.py",
+                      "--producer-unicode" if unicode_only else "--producer-classes"]
     oracle = subprocess.run(oracle_command, capture_output=True, text=True, timeout=120)
     (artifacts / "producer.command.json").write_text(json.dumps(oracle_command))
     (artifacts / "producer.stdout.json").write_text(oracle.stdout)
@@ -574,8 +580,8 @@ def class_matrix_e2e(image, artifacts):
         source.mkdir(parents=True)
         compiled.mkdir()
         compiled.chmod(0o777)
-        (source / ("strategy.cpp" if is_legacy else "strategy.pine")).write_text(
-            legacy if is_legacy else data["strategy"], encoding="utf-8")
+        (source / "strategy.cpp").write_text(
+            legacy if is_legacy else data["cpp"], encoding="utf-8")
         (source / "ohlcv.csv").write_text(synthetic_csv())
         inputs = {row["title"]: row["override"] for row in data["rows"]} if overridden else {}
         command = ["docker", "run", "--rm", "--network", "none",
@@ -587,10 +593,10 @@ def class_matrix_e2e(image, artifacts):
         (case / "stdout.json").write_text(result.stdout)
         (case / "stderr.log").write_text(result.stderr)
         (case / "exit").write_text(str(result.returncode) + "\n")
-        report = json.loads(result.stdout)
         check(label + " CLI success", result.returncode == 0, result.returncode)
         if result.returncode:
             raise RuntimeError("Native matrix run failed; dependent runs not launched")
+        report = json.loads(result.stdout)
         if not is_legacy:
             sources = list(compiled.glob("*.cpp"))
             assert len(sources) == 1
@@ -624,9 +630,94 @@ def class_matrix_e2e(image, artifacts):
     return int(not all(passed for _, passed in checks))
 
 
+def shadow_binding_e2e(image, artifacts, enum_cpp):
+    artifacts.mkdir(parents=True)
+    original = enum_cpp.read_text()
+    for name in ("strategy_settings_api_version", "strategy_create_checked",
+                 "strategy_set_input_checked", "strategy_set_override_checked"):
+        original = original.replace(name, "fixture_legacy_" + name)
+    marker = "class GeneratedStrategy : public pineforge::source::PineStrategyHost {\npublic:"
+    assert original.count(marker) == 1
+    shadow = original.replace(marker, marker + "\n    int Side__long_ = 2;")
+    checks = []
+    def check(name, condition, value):
+        checks.append((name, bool(condition)))
+        print(f"{'PASS' if condition else 'FAIL'} {name}: {value}", flush=True)
+    for label, cpp, inputs in (("plain", original, {}), ("shadow", shadow, {}),
+                                ("shadow-override", shadow, {"Side": "2"})):
+        case = (artifacts / label).resolve()
+        source, compiled = case / "input", case / "compiled"
+        source.mkdir(parents=True)
+        compiled.mkdir()
+        compiled.chmod(0o777)
+        (source / "strategy.cpp").write_text(cpp)
+        (source / "ohlcv.csv").write_text(synthetic_csv())
+        command = ["docker", "run", "--rm", "--network", "none",
+                   "--mount", f"type=bind,src={source},dst=/in,readonly",
+                   "--mount", f"type=bind,src={compiled},dst=/proof",
+                   "-e", "PINEFORGE_INPUTS=" + json.dumps(inputs), image]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+        (case / "command.json").write_text(json.dumps(command))
+        (case / "stdout.json").write_text(result.stdout)
+        (case / "stderr.log").write_text(result.stderr)
+        (case / "exit").write_text(str(result.returncode) + "\n")
+        check(label + " CLI success", result.returncode == 0, result.returncode)
+        if result.returncode:
+            raise RuntimeError("Shadow fixture failed before runtime assertions")
+        report = json.loads(result.stdout)
+        plugin, = compiled.glob("*.so")
+        observe = ["docker", "run", "--rm", "--network", "none",
+                   "--mount", f"type=bind,src={Path(__file__).resolve()},dst=/probe.py,readonly",
+                   "--mount", f"type=bind,src={compiled},dst=/proof,readonly",
+                   "--entrypoint", "python3", image, "/probe.py", "--native-receipt", "/proof/" + plugin.name]
+        observed = subprocess.run(observe, capture_output=True, text=True, timeout=60)
+        (case / "native.command.json").write_text(json.dumps(observe))
+        (case / "native.stdout.json").write_text(observed.stdout)
+        (case / "native.stderr.log").write_text(observed.stderr)
+        (case / "native.exit").write_text(str(observed.returncode) + "\n")
+        if observed.returncode:
+            raise RuntimeError("Compiled native receipt observation failed")
+        native = next(row for row in json.loads(observed.stdout)["inputs"] if row["name"] == "Side")
+        check(label + " native binding", native["default"] == ("1" if label == "plain" else "2"), native)
+        fp = report.get("fingerprint") or {}
+        token = base64.b64decode(fp.get("token", ""))
+        prov = fp.get("provenance", {})
+        check(label + " fingerprint", bool(token) and json.loads(token) == prov
+              and fp.get("digest") == "sha256:" + hashlib.sha256(token).hexdigest(), fp.get("digest"))
+        row = prov.get("inputs", {}).get("Side", {})
+        if label == "plain":
+            check(label + " typed default", type(row.get("default")) is int and row["default"] == 1, row)
+        else:
+            check(label + " explicit unresolved", row.get("default") is None and row.get("value") is None
+                  and row.get("resolution") == {"status": "unresolved", "reason": "ambiguous_binding",
+                                                "raw_default": "Side__long_"}, row)
+        check(label + " raw inputs", report.get("applied_inputs") == inputs, report.get("applied_inputs"))
+        check(label + " applied keys", set(prov.get("applied", {}).get("inputs", {})) == set(inputs), prov.get("applied"))
+        if inputs:
+            check(label + " unresolved override remains wire text",
+                  prov.get("applied", {}).get("inputs", {}).get("Side") == "2", prov.get("applied"))
+    (artifacts / "checks.json").write_text(json.dumps(checks, indent=2) + "\n")
+    print(f"{sum(p for _, p in checks)}/{len(checks)} checks passed", flush=True)
+    return int(not all(p for _, p in checks))
+
+
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--producer-classes"]:
-        print(json.dumps(producer_classes(), ensure_ascii=True))
+    if sys.argv[1:] in (["--producer-classes"], ["--producer-unicode"]):
+        print(json.dumps(producer_classes(sys.argv[1] == "--producer-unicode"), ensure_ascii=True))
+        raise SystemExit(0)
+    if len(sys.argv) == 3 and sys.argv[1] == "--native-receipt":
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("native_observer", "/opt/pineforge/bin/run_json.py")
+        observer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(observer)
+        library = observer.load_strategy(Path(sys.argv[2]))
+        state = observer.create_strategy(library, False)
+        try:
+            receipt = observer._release_settings_receipt(library, state, True)
+            assert receipt is not None
+            print(json.dumps(receipt))
+        finally:
+            library.strategy_free(state)
         raise SystemExit(0)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
@@ -636,9 +727,13 @@ if __name__ == "__main__":
     parser.add_argument("--legacy-escaped-cpp", type=Path)
     parser.add_argument("--legacy-enum-cpp", type=Path)
     parser.add_argument("--class-matrix", action="store_true")
+    parser.add_argument("--unicode-only", action="store_true")
+    parser.add_argument("--shadow-cpp", type=Path)
     options = parser.parse_args()
+    if options.shadow_cpp:
+        raise SystemExit(shadow_binding_e2e(options.image, options.artifacts, options.shadow_cpp))
     if options.class_matrix:
-        raise SystemExit(class_matrix_e2e(options.image, options.artifacts))
+        raise SystemExit(class_matrix_e2e(options.image, options.artifacts, options.unicode_only))
     if options.legacy_escaped_cpp or options.legacy_enum_cpp:
         if not (options.legacy_escaped_cpp and options.legacy_enum_cpp):
             parser.error("both legacy declaration sources are required")
