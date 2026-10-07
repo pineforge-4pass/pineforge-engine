@@ -352,6 +352,8 @@ the strategy declares:
 - a title two inputs share: `setting_rejected`, `reason` `ambiguous_key` (the
   legacy setter set both).
 
+Both inputs and overrides accept a JSON object whose values are strings or numbers; express booleans as lowercase "true" or "false" strings, because native JSON booleans, null, arrays and objects are rejected.
+
 A value the checked setter cannot parse reads its own message, such as
 `strategy_set_override: expected a finite decimal number`, where a legacy setter
 that threw left `strategy_set_override: stod`. Whatever the library, a boolean,
@@ -504,6 +506,106 @@ integral-looking tokens re-enter as binary64 floats before re-encoding.
 integers outside the product safe-integer domain, unpaired surrogates
 (invalid I-JSON / UTF-8), and object keys that collide after `str.__str__`
 normalization (duplicate normalized JSON names).
+
+Legacy declaration normalization runs before hashing and does not evaluate C++
+expressions or perform C++ name lookup. The source scanner certifies only the
+producer subset emitted from Pine during this run. The entrypoint records that
+internal fact as `codegen.transpiled_from_pine`; generated-looking C++, comments
+and caller assertions do not establish origin. A supplied C++ source requires
+a unique supported native receipt row that agrees on type, default and effective
+value without coercion before an input can be certified. Strategy settings also
+require a unique supported native row agreeing on type and effective value.
+Without that confirmation the row is `foreign_unverified_source`. Existing
+scanner refusals still apply, and native duplicate titles retain their reason
+and distinct-input count. The scanner is not a general C++ certification parser.
+For supplied C++, `strategy_get_effective_settings` belongs to the strategy
+translation unit, so its native receipt is self-attested rather than independent
+verification.
+
+The translation unit is read lexically: comments, ordinary and prefixed string
+and character literals and raw string literals (`R"delim(...)delim"`, with
+`u8R`/`uR`/`UR`/`LR`) are delimited exactly. Code context excludes preprocessor
+lines and every conditional group except the first branch of
+`#ifdef PF_SETTINGS_API_VERSION` after the `checked_settings.hpp` include
+(the macro is defined in `pineforge.h`, so this include order is a proxy for
+the producer's layout) and
+the `#ifdef` branch and the `#else` branch of
+`#ifdef PINEFORGE_HAS_SYMBOL_SECURITY_EVAL_V1` (its request of another symbol).
+The recognized directives are
+`#include <pineforge/...hpp>` or a bare standard header, a `#define` line
+identical to one the producer emits (its replacement list included),
+`#error` and conditionals; the producer's leading-comma macros
+`PF_PINE_TIME_SESSION_DAY_ARGS` and `PF_VWAP_SESSION_ANCHOR_ARGS` are invoked
+only as `NAME(syminfo_.timezone, syminfo_.session)`;
+any other directive or invocation of those macros, mismatched brackets, a quote
+continuing a number (the producer emits no digit separators), a line splice anywhere, a backslash outside a literal
+(a universal-character name), a digraph, or a relied-on name used other than
+the producer does (`std` and `checked_settings` only qualifying, `pineforge`
+only qualifying or in `using namespace pineforge;`) leaves no row of that unit
+certified.
+
+| Relied-on token | Recognized form (anything else refuses) |
+|---|---|
+| Getter call | One of `get_input_int`, `_int64`, `_double`, `_bool`, `_string`, `_source`, in code context, after an expression token or a producer C-style cast `(int)`, `(double)`, `(int64_t)` (the cast is not part of the input), as `name("title", default)` with an unprefixed literal title and exactly one default argument, and not in a spelling that can declare a local of that name (after a
+statement-level comma or one inside `for`/`if`/`switch`/`while` parentheses,
+or wrapped only in parentheses after `>` or a statement-initial name). Every other `get_input_*` occurrence (other casts included) refuses the unit. A getter call inside a recognized macro invocation (the producer's macros and listed standard-library spellings such as `assert`; a replacement list may drop or repeat the argument) is never certified: its title is `macro_argument`. This list does not cover arbitrary toolchain macros. |
+| Title | The producer's narrow-literal escapes, decoded to the native first-NUL identity. When the getters of one title disagree on getter type or default, or a getter sits in a security-guard branch that the other branch does not repeat (a guard without its own `#else`, whose implicit empty branch runs no getter, counts as not repeating), the native receipt arbitrates: a supported row whose type and default (each parsed by its own type) match exactly one distinct pair certifies that pair; otherwise `ambiguous_binding` (`unsupported_default` when no getter's default is readable at all). Never first-wins. |
+| Numeric/bool/string default | A decimal literal (optional sign), `true`/`false`, or a plain or `std::string("...")` literal. |
+| Symbolic numeric default | Exactly one file-scope `[static] const\|constexpr int NAME = <decimal int32>;`, and every other occurrence in this closed list of pure reads: a whole getter default; the metadata default `{"title", "enum", ::pineforge::checked_settings::number(NAME),`; `auto _pna_l = (NAME);` or `auto _pna_r = (NAME);` (the na-aware relational temporaries); `(__switch_val_<n> == NAME) {` (the switch lowering). Any other occurrence, in any position, refuses. The value also needs a supported native receipt row that agrees. |
+| Source default | `_src_<selector>_` for a selector in the native vocabulary `open high low close volume hl2 hlc3 ohlc4 hlcc4`, recorded as the selector; that identifier may otherwise appear only before `.`. An override is certified only when it is such a selector; anything else (the native getter falls back) is refused, never echoed. |
+| Native receipt row | Compared independently, each side parsed by its own declared type: the receipt `type` must be the getter's (`int`/`enum`, `int`, `float`, `bool`, `string`, `source`), and a supported row's default and effective value must equal the certified ones exactly. |
+| strategy() default | One parameterless `GeneratedStrategy()` constructor whose top-level statements are, outside any conditional except the adapter hooks, one `pineforge::source::PineStrategyConfig cfg{};` declaration first, `cfg.<field> = <rhs>;` assignments to the producer's 13 members (`margin_long`,
+`margin_short` and `src_series_active` are recognized but not provenance), and
+one final `configure_pine_strategy(cfg);` (besides the producer's adapter
+hook calls, nothing else may stand in the constructor). Pre-R4-C `<field>_ = <rhs>;` member writes are refused: nothing establishes which member they reach. Numbers are decimal literals (integers within the native `int` width), booleans `true`/`false`, and enums `static_cast<int>(QtyType::NAME)`, `QtyType::NAME` (likewise `CommissionType`) or the index `0`-`2`, where every occurrence of `QtyType`/`CommissionType` in the unit is followed by `::` and a canonical member. |
+
+An input whose default cannot be proved stays in the fingerprint with its
+declared `type`, `default: null`, `value: null`, and this explicit refusal:
+
+```json
+"resolution": {
+  "status": "unresolved",
+  "reason": "ambiguous_binding",
+  "raw_default": "Side__long_"
+}
+```
+
+Here `null` means unresolved, not a claimed native value. The raw token is the
+actual declared default expression. Its applied input value remains the original
+wire string, even when an override was provided; the applied key set and top-level
+wire echoes are unchanged. Unknown inputs also remain strings. A strategy()
+default refused the same way is `null` in `strategy`, with its record under
+`strategy_resolution`, unless an applied override sets the field and satisfies
+the origin/receipt rule (the override is then the effective value). When a literal or comment context cannot be
+delimited at all, every applied input key is an `unknown` row with `value: null`
+and an `unsupported_binding` refusal (`raw_default: null`), and every strategy()
+default is refused. The refusal is part of the canonical token and digest, so
+these cases retain a fingerprint.
+
+| Reason | Refused class |
+|---|---|
+| `foreign_unverified_source` | Supplied C++ has no unique supported native receipt confirming the row; source appearance cannot establish producer origin. Applied values keep their wire strings. |
+| `ambiguous_binding` | An identifier with an occurrence outside its one recognized declaration and the closed read list (shadows, local declarators, other script-body uses); getters of one title (or security-guard branches) that disagree where the receipt does not pick exactly one; or disagreement with the native receipt's type, default or value, for inputs and for strategy() values alike. |
+| `duplicate_title` | The native receipt lists the title more than once with two or more distinct (type, default) pairs, compared as written: several inputs share it, so no single value belongs to the title. The record adds `"distinct_native_inputs"`, the number of distinct pairs. Takes precedence over every other input reason. |
+| `macro_argument` | A getter of the title sits inside a macro argument (see "Getter call"). |
+| `unsupported_binding` | No recognized declaration, an unrecognized lexical or preprocessor context, an unrecognized getter-family token, an undelimitable literal or comment, or an unrecognized strategy() constructor flow. |
+| `unsupported_default` | Unrecognized default expressions, definitions, numeric spellings/ranges, source expressions, enum spellings outside the canonical vocabulary and non-`true`/`false` booleans; no expression is evaluated to guess a value. |
+| `unsupported_override` | A source override outside the native selector vocabulary. |
+| `receipt_unavailable` | A symbolic default without a usable, supported native settings receipt row. |
+
+Conservative refusal includes valid C++ forms outside the recognized producer
+subset. Every concrete scalar the resolver knows (a recognized literal, an
+emulated legacy override, or a numeric value in the native receipt) passes the
+unchanged numeric/Unicode domain checks above before any refusal (a receipt
+integer is parsed by its own type, leading zeros included): an
+out-of-domain value keeps its existing refusal (no fingerprint), and `null` never
+erases it. A malformed checked receipt or a non-canonical checked source selector
+also makes the complete fingerprint `null`.
+
+Where no certified value changes, an input keeps the fingerprint the resolver
+before the allowlist gave it, except when a ruling changes a refusal reason or
+its count (those fields are hashed too). `run_json_codes_test.py` pins the base
+digests of six fixed cases (`BASE_FINGERPRINTS`).
 
 Decode the token to inspect the canonical provenance JSON:
 

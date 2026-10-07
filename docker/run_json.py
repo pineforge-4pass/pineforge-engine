@@ -620,6 +620,1460 @@ def build_fingerprint(provenance: dict) -> dict:
 # <<< fingerprint helpers
 
 
+_RELEASE_OVERRIDE_TYPES = {
+    "initial_capital": "float",
+    "commission_value": "float",
+    "default_qty_value": "float",
+    "pyramiding": "int",
+    "slippage": "int",
+    "process_orders_on_close": "bool",
+    "calc_on_order_fills": "bool",
+    "close_entries_rule": "string",
+    "default_qty_type": "string",
+    "commission_type": "string",
+}
+_RELEASE_ENUM_WORDS = {
+    "close_entries_rule": ("FIFO", "ANY"),
+    "default_qty_type": ("fixed", "percent_of_equity", "cash"),
+    "commission_type": ("percent", "cash_per_order", "cash_per_contract"),
+}
+
+
+def _release_scalar(value, declared_type):
+    if declared_type in ("string", "source", "enum", "unknown"):
+        return str(value)
+    if declared_type == "bool":
+        if type(value) is bool:
+            return value
+        if value in ("true", "1"):
+            return True
+        if value in ("false", "0"):
+            return False
+        raise ValueError("unrepresentable declared boolean")
+    scalar = _coerce_scalar(str(value))
+    if type(scalar) not in (int, float):
+        raise ValueError("unrepresentable declared number")
+    if declared_type in ("int", "int64"):
+        if type(scalar) is float and not scalar.is_integer():
+            raise ValueError("nonintegral declared integer")
+        return int(scalar)
+    if declared_type in ("float", "double"):
+        result = float(scalar)
+        if not math.isfinite(result):
+            raise ValueError("nonfinite declared float")
+        return result
+    raise ValueError("unsupported declared scalar type")
+
+
+def _release_legacy_number(text, declared_type):
+    """Use the same C conversions underlying std::stoi/stoll/stod."""
+    library = ctypes.CDLL(None, use_errno=True)
+    integer = declared_type in ("int", "int64")
+    function = library.strtoll if integer else library.strtod
+    function.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
+    function.restype = ctypes.c_longlong if integer else ctypes.c_double
+    if integer:
+        function.argtypes.append(ctypes.c_int)
+    buffer = ctypes.create_string_buffer(text.encode("utf-8"))
+    end = ctypes.c_void_p()
+    ctypes.set_errno(0)
+    arguments = [buffer, ctypes.byref(end)]
+    if integer:
+        arguments.append(10)
+    result = function(*arguments)
+    if end.value == ctypes.addressof(buffer) or ctypes.get_errno():
+        raise ValueError("legacy numeric conversion failed")
+    if declared_type == "int" and not -(2 ** 31) <= result < 2 ** 31:
+        raise ValueError("legacy integer conversion out of range")
+    return result
+
+
+# Exact character predicates from the pinned producer's Lexer._read_ident /
+# identifier start and NamingHelper._cpp_string_escape inverse. The real-image
+# class matrix binds both producer source blobs and exercises every class.
+def _release_codegen_identifier(value):
+    return bool(value) and (value[0].isalpha() or value[0] == "_") and all(
+        char.isalnum() or char == "_" for char in value)
+
+
+_RELEASE_EMITTED_ESCAPES = {"\\": "\\", '"': '"', "n": "\n", "r": "\r", "t": "\t"}
+
+
+def _release_cpp_input_name(spelling):
+    """Decode an emitted narrow C++ literal, then apply its C-string boundary."""
+    simple = {key: ord(value) for key, value in _RELEASE_EMITTED_ESCAPES.items()}
+    # Preserve the existing pre-transpiled C++ literal extensions as well.
+    simple.update({"a": 7, "b": 8, "f": 12, "v": 11, "'": 39, "?": 63})
+    pieces = re.findall(r'\\(?:[0-7]{1,3}|x[0-9a-fA-F]+|u[0-9a-fA-F]{4}'
+                        r'|U[0-9a-fA-F]{8}|[\s\S]|$)|[^\\]+', spelling)
+    raw = bytearray()
+    for piece in pieces:
+        if not piece.startswith("\\"):
+            raw.extend(piece.encode("utf-8"))
+            continue
+        escape = piece[1:]
+        if escape in simple:
+            raw.append(simple[escape])
+        elif re.fullmatch(r'[0-7]{1,3}|x[0-9a-fA-F]+', escape):
+            # Out-of-byte-range escapes are implementation-defined; refuse
+            # them instead of inventing a native name.
+            raw.append(int(escape[1:], 16) if escape.startswith("x") else int(escape, 8))
+        elif re.fullmatch(r'u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}', escape):
+            raw.extend(chr(int(escape[1:], 16)).encode("utf-8"))
+        else:
+            raise ValueError("unsupported C++ input-name escape")
+    return bytes(raw).split(b"\0", 1)[0].decode("utf-8")
+
+
+class _ReleaseUnreadable(ValueError):
+    """A literal, comment or conditional the lexical scan cannot delimit."""
+
+
+class _ReleaseTokens(list):
+    """Scanned tokens; .groups maps a conditional instance to its branches."""
+
+    groups = None
+
+
+# Positive allowlist of the legacy declaration reader. A value is certified
+# only when every token it relies on is in one of these forms; any other
+# occurrence refuses (resolution reason), never "no bad shape detected".
+_RELEASE_GETTERS = {
+    "get_input_int": "int", "get_input_int64": "int64", "get_input_double": "double",
+    "get_input_bool": "bool", "get_input_string": "string", "get_input_source": "source",
+}
+# Native receipt `type` a getter is compared against; never coerced to it.
+_RELEASE_RECEIPT_TYPES = {
+    "int": ("int", "enum"), "int64": ("int",), "double": ("float",),
+    "bool": ("bool",), "string": ("string",), "source": ("source",),
+}
+# PineScheduler::source_series: the finite native source selector vocabulary.
+_RELEASE_SOURCE_SELECTORS = ("open", "high", "low", "close", "volume",
+                             "hl2", "hlc3", "ohlc4", "hlcc4")
+_RELEASE_DECIMAL = re.compile(
+    r'[+-]?(?:(?:0|[1-9][0-9]*)(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?')
+_RELEASE_INTEGER = re.compile(r'[+-]?(?:0|[1-9][0-9]*)')
+# Tokens a recognized getter call follows: the producer's expression contexts.
+# (`>`, `>>` and `}` are left out: they can end the type of a declaration.)
+_RELEASE_CALL_CONTEXT = frozenset({
+    "=", "(", ",", "?", ":", "return", "{", "[", "!", "+", "-", "*", "/", "%",
+    "<", "<=", ">=", "==", "!=", "&&", "||", ";", "&", "|", "^", "~",
+    "<<", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="})
+# Keywords whose parenthesis opens an expression, never a declarator.
+_RELEASE_EXPRESSION_KEYWORDS = frozenset({
+    "if", "while", "switch", "for", "return", "sizeof", "alignof", "decltype",
+    "static_assert", "case", "noexcept"})
+# The only conditional branch a recognized getter or symbol use may sit in:
+# the producer's checked-settings metadata. Anything else is unrecognized.
+_RELEASE_SETTINGS_BRANCH = ("ifdef", "PF_SETTINGS_API_VERSION")
+# The producer's guard around another symbol's request
+# (emit_top.py _emit_foreign_security_registration): every branch is code, and
+# a getter in it is certified only when all branches agree or a native receipt
+# row picks exactly one.
+_RELEASE_SECURITY_GUARD = ("ifdef", "PINEFORGE_HAS_SYMBOL_SECURITY_EVAL_V1")
+# C-style casts the producer emits (helpers.py, tables.py, drawing.py); one may
+# stand right before a getter call. Any other cast refuses.
+_RELEASE_PRODUCER_CASTS = frozenset({"int", "double", "int64_t"})
+_RELEASE_BUILTIN_TYPES = frozenset({
+    "int", "double", "float", "bool", "char", "short", "long", "unsigned", "signed",
+    "int64_t", "int32_t", "int16_t", "int8_t", "uint64_t", "uint32_t", "uint16_t",
+    "uint8_t", "size_t", "auto", "wchar_t", "char8_t", "char16_t", "char32_t"})
+# Every #define line the pinned producer emits, verbatim (emit_top.py
+# _emit_includes; run_stops.py). A macro name alone does not authenticate a
+# replacement list: any other #define, any #undef, refuses.
+_RELEASE_PRODUCER_DEFINES = frozenset(r'''#define _PF_NO_DATA_STOP(function, call, line, english) ::pineforge::pine_no_data_stop(function, call, line, english)
+#define _PF_OTHER_SYMBOL_STOP(function, symbol, call, line, english) ::pineforge::pine_other_symbol_stop(function, symbol, call, line, english)
+#define _PF_ARRAY_STOP(reason, method, english) ::pineforge::pine_array_stop(reason, method, std::string(english).c_str())
+#define _PF_COLLECTION_STOP(reason, object, english) ::pineforge::pine_collection_stop(object, reason, english)
+#define _PF_NA_STOP(object, english) ::pineforge::pine_na_stop(object, english)
+#define _PF_LIMIT_STOP(limit, max, english) ::pineforge::pine_limit_stop(limit, max, english)
+#define _PF_UNSUPPORTED_STOP(reason, line, english) ::pineforge::pine_unsupported_stop(reason, line, english)
+#define _PF_STRING_STOP(reason, english) ::pineforge::pine_string_stop(reason, english)
+#define _PF_ENGINE_INVARIANT(english, legacy_type) ::pineforge::pine_engine_invariant(english)
+#define _PF_INVARIANT_AT(container, index) _pf_invariant_at(container, index)
+#define _PF_SETTING_FAILURE(strategy, entrypoint, message, reason) (strategy)->_pf_record_setting_failure(entrypoint, message, [] { return reason ? ::pineforge::RunFailureInfo(::pineforge::RunFailureCode::setting_rejected, {{"entrypoint", entrypoint}, {"reason", reason}}) : ::pineforge::RunFailureInfo(::pineforge::RunFailureCode::setting_rejected, {{"entrypoint", entrypoint}}); })
+#define _PF_NO_DATA_STOP(function, call, line, english) pine_runtime_error(std::string(english))
+#define _PF_OTHER_SYMBOL_STOP(function, symbol, call, line, english) pine_runtime_error(std::string(english))
+#define _PF_ARRAY_STOP(reason, method, english) pine_runtime_error(english)
+#define _PF_COLLECTION_STOP(reason, object, english) pine_runtime_error(english)
+#define _PF_NA_STOP(object, english) throw std::runtime_error(english)
+#define _PF_LIMIT_STOP(limit, max, english) throw std::length_error(english)
+#define _PF_UNSUPPORTED_STOP(reason, line, english) pine_runtime_error(std::string(english))
+#define _PF_STRING_STOP(reason, english) pine_runtime_error(std::string(english))
+#define _PF_ENGINE_INVARIANT(english, legacy_type) throw legacy_type(english)
+#define _PF_INVARIANT_AT(container, index) (container).at(index)
+#define _PF_SETTING_FAILURE(strategy, entrypoint, message, reason) (strategy)->_pf_record_setting_failure(entrypoint, message)
+#define PF_PINE_TIME_SESSION_DAY_ARGS(tz, sess) , tz, sess
+#define PF_PINE_TIME_SESSION_DAY_ARGS(tz, sess)
+#define PF_VWAP_SESSION_ANCHOR_ARGS(tz, sess) , tz, sess
+#define PF_VWAP_SESSION_ANCHOR_ARGS(tz, sess)'''.splitlines())
+# Macro spellings used by the producer subset and its standard-library calls.
+# This is not a table of every macro available to arbitrary C++; foreign
+# sources require native receipt confirmation independently of this scanner.
+_RELEASE_MACROS = frozenset(
+    re.match(r"#define ([A-Za-z_][A-Za-z0-9_]*)\(", line).group(1)
+    for line in _RELEASE_PRODUCER_DEFINES) | frozenset({
+        "assert", "offsetof", "setjmp", "va_arg", "va_copy", "va_end", "va_start",
+        "INT8_C", "INT16_C", "INT32_C", "INT64_C", "INTMAX_C",
+        "UINT8_C", "UINT16_C", "UINT32_C", "UINT64_C", "UINTMAX_C"})
+_RELEASE_OPERATORS = ("...", "->*", "::", "&&", "||", "==", "!=", "<=", ">=",
+                      "++", "--", "->", ".*", "+=", "-=", "*=", "/=", "%=",
+                      "&=", "|=", "^=", "<<", ">>", "##")
+_RELEASE_STRATEGY_ENUMS = {
+    "default_qty_type": ("QtyType", ("FIXED", "PERCENT_OF_EQUITY", "CASH")),
+    "commission_type": ("CommissionType", ("PERCENT", "CASH_PER_ORDER", "CASH_PER_CONTRACT")),
+}
+# The producer's adapter hooks, the only other constructor statements it emits.
+_RELEASE_ADAPTER_STATEMENTS = tuple(
+    ["pineforge", "::", "source", "::", "PineStrategyHost", "::", hook, "(", ")", ";"]
+    for hook in ("attach_pine_execution_adapter", "enable_pine_intraday_cap"))
+# The producer's other PineStrategyConfig members: recognized, not provenance.
+_RELEASE_CONFIG_OTHER = frozenset({"margin_long", "margin_short", "src_series_active"})
+
+
+def _release_domain(value):
+    """The product scalar domain; known out-of-domain evidence is refused."""
+    if type(value) is int and not _JS_MIN_SAFE_INTEGER <= value <= _JS_MAX_SAFE_INTEGER:
+        raise ValueError("native integer outside the product domain")
+    if type(value) is float and not math.isfinite(value):
+        raise ValueError("native number outside the product domain")
+    return value
+
+
+def _release_receipt_value(text, receipt_type):
+    """One receipt scalar parsed by the receipt's own declared type, or None."""
+    if not isinstance(text, str):
+        return None
+    if receipt_type in ("int", "enum"):
+        return int(text) if re.fullmatch(r'[+-]?[0-9]+', text) else None
+    if receipt_type == "float":
+        # The settings receipt spells a non-finite native number "na".
+        if text == "na":
+            return math.nan
+        if text.strip().lower().lstrip("+-") in ("inf", "infinity", "nan"):
+            return float(text)
+        return float(text) if _RELEASE_DECIMAL.fullmatch(text) else None
+    if receipt_type == "bool":
+        return {"true": True, "false": False}.get(text)
+    if receipt_type in ("string", "source"):
+        return text
+    return None
+
+
+def _release_cpp_tokens(text):
+    """Flat lexical scan: no C++ evaluation, scopes or name lookup.
+
+    Each token is (text, start, end, kind, directive, branches): kind is
+    ident/number/string (unprefixed ordinary literal)/literal/op, directive
+    marks a preprocessor line and branches the enclosing conditional groups.
+    Returns (tokens, trusted). trusted is False for a line splice, a backslash
+    outside a literal (universal-character names), or a directive the producer
+    never emits. Raises _ReleaseUnreadable for an undelimitable context."""
+    tokens = _ReleaseTokens()
+    tokens.groups = {}
+    trusted = re.search(r'\\[ \t\f\v]*(?:\r\n|\n|\r)', text) is None
+    stack = []
+    position = 0
+    line_start = True
+    directive = None
+    settings_include = False
+    inactive_settings = set()
+    length = len(text)
+
+    def close_directive():
+        nonlocal trusted, settings_include
+        words = [token[0] for token in directive]
+        name = words[1] if len(words) > 1 else ""
+        if name in ("if", "ifdef", "ifndef"):
+            opener = tuple([name] + words[2:])
+            instance = len(tokens.groups)
+            tokens.groups[instance] = [opener]
+            if opener == _RELEASE_SETTINGS_BRANCH and not settings_include:
+                inactive_settings.add(instance)
+            stack.append((opener, opener, instance))
+        elif name in ("elif", "else"):
+            if not stack:
+                raise _ReleaseUnreadable("unbalanced conditional")
+            opener, _, instance = stack[-1]
+            branch = tuple([name] + words[2:])
+            tokens.groups[instance].append(branch)
+            stack[-1] = (opener, branch, instance)
+        elif name == "endif":
+            if not stack:
+                raise _ReleaseUnreadable("unbalanced conditional")
+            stack.pop()
+        elif name == "include":
+            # Only the producer's engine and standard headers, never a path
+            # that could reach a header of the caller's.
+            header = "".join(words[3:-1])
+            if not (len(words) > 3 and words[2] == "<" and words[-1] == ">"
+                    and ".." not in header
+                    and re.fullmatch(r"pineforge/[A-Za-z0-9_/]+\.hpp|[a-z_]+", header)):
+                trusted = False
+            # The pinned producer includes this header before emitting any
+            # settings guard. Its first include defines PF_SETTINGS_API_VERSION.
+            if (header == "pineforge/checked_settings.hpp" and
+                    (not stack or all(opener == branch == (
+                        "if", "__has_include", "(", "<", "pineforge", "/",
+                        "checked_settings", ".", "hpp", ">", ")")
+                                      for opener, branch, _ in stack))):
+                settings_include = True
+        elif name == "define":
+            line = re.sub(r"\s+", " ", text[directive[0][1]:directive[-1][2]])
+            if line not in _RELEASE_PRODUCER_DEFINES:
+                trusted = False
+        elif name not in ("", "error"):
+            trusted = False
+
+    while position < length:
+        start = position
+        char = text[position]
+        if char in "\r\n":
+            if directive is not None:
+                close_directive()
+                directive = None
+            line_start = True
+            position += 1
+            continue
+        if char.isspace():
+            position += 1
+            continue
+        if text.startswith("//", position):
+            end = text.find("\n", position)
+            position = length if end < 0 else end
+            continue
+        if text.startswith("/*", position):
+            end = text.find("*/", position + 2)
+            if end < 0:
+                raise _ReleaseUnreadable("unterminated C++ comment")
+            if directive is not None and "\n" in text[position:end]:
+                raise _ReleaseUnreadable("multi-line comment in a directive")
+            position = end + 2
+            continue
+        kind = "op"
+        if char == "#" and line_start and directive is None:
+            directive = []
+            position += 1
+        elif char.isalpha() or char == "_":
+            position += 1
+            while position < length and (text[position].isalnum() or text[position] == "_"):
+                position += 1
+            word = text[start:position]
+            kind = "ident"
+            if position < length and text[position] == '"' and word in ("R", "u8R", "uR", "UR", "LR"):
+                match = re.compile(r'"([^ ()\\\t\v\f\r\n]{0,16})\(').match(text, position)
+                if not match:
+                    raise _ReleaseUnreadable("malformed raw string literal")
+                end = text.find(")" + match.group(1) + '"', match.end())
+                if end < 0:
+                    raise _ReleaseUnreadable("unterminated raw string literal")
+                position = end + len(match.group(1)) + 2
+                kind = "literal"
+            elif position < length and text[position] in "\"'" and word in ("u8", "u", "U", "L"):
+                kind = None
+        elif "0" <= char <= "9" or (char == "." and position + 1 < length
+                                    and "0" <= text[position + 1] <= "9"):
+            position += 1
+            while position < length:
+                current = text[position]
+                if current in "+-" and text[position - 1] in "eEpP":
+                    position += 1
+                elif current == "'":
+                    # No producer number contains a digit separator. Refuse
+                    # before a quote can be misread as the start of a literal.
+                    trusted = False
+                    position += 1
+                elif current.isascii() and (current.isalnum() or current in "_."):
+                    position += 1
+                else:
+                    break
+            kind = "number"
+        elif char not in "\"'":
+            if char == "\\":
+                trusted = False
+            # Digraphs (%: <% %> <: :>) would hide a directive or a brace;
+            # `<::` not followed by `:` or `>` is the ordinary `<` `::`.
+            pair = text[position:position + 2]
+            if pair in ("%:", "<%", "%>", ":>") or (
+                    pair == "<:" and (text[position:position + 3] != "<::"
+                                      or text[position + 3:position + 4] in (":", ">"))):
+                trusted = False
+            operator = next((op for op in _RELEASE_OPERATORS
+                             if text.startswith(op, position)), char)
+            position += len(operator)
+        if kind is None or (kind == "op" and char in "\"'"):
+            quote = text[position]
+            kind = "string" if start == position and quote == '"' else "literal"
+            position += 1
+            while position < length and text[position] != quote:
+                if text[position] in "\r\n":
+                    raise _ReleaseUnreadable("unterminated C++ literal")
+                position += 2 if text[position] == "\\" else 1
+            if position >= length:
+                raise _ReleaseUnreadable("unterminated C++ literal")
+            position += 1
+        line_start = False
+        token = (text[start:position], start, position, kind,
+                 directive is not None, tuple(stack))
+        if directive is not None:
+            directive.append(token)
+        # Before the defining include this metadata branch is inactive. Do
+        # not treat its getters, symbol reads or constructor text as code.
+        if token[4] or not any(instance in inactive_settings for _, _, instance in stack):
+            tokens.append(token)
+    if directive is not None:
+        close_directive()
+    if stack:
+        raise _ReleaseUnreadable("unterminated conditional")
+    brackets = []
+    closing = {"(": ")", "[": "]", "{": "}"}
+    for token in tokens:
+        if token[4] or token[3] != "op":
+            continue
+        if token[0] in closing:
+            brackets.append(closing[token[0]])
+        elif token[0] in (")", "]", "}"):
+            if not brackets or token[0] != brackets[-1]:
+                trusted = False
+            else:
+                brackets.pop()
+    # Alternative preprocessor arms can repeat an opening function brace
+    # before a shared closing brace. This flat scan checks mismatched closers,
+    # not the balance of the concatenation of mutually exclusive arms.
+    # The producer's leading-comma macros are invoked only as
+    # `NAME(syminfo_.timezone, syminfo_.session)` (tables.py, visit_call.py,
+    # visit_expr.py); any other invocation could splice a declarator.
+    for index, token in enumerate(tokens):
+        if (token[3] == "ident" and not token[4] and token[0] in (
+                "PF_PINE_TIME_SESSION_DAY_ARGS", "PF_VWAP_SESSION_ANCHOR_ARGS")
+                and [item[0] for item in tokens[index + 1:index + 10]] != [
+                    "(", "syminfo_", ".", "timezone", ",", "syminfo_", ".", "session", ")"]):
+            trusted = False
+    # Names a certified form relies on are never redeclared or aliased: `std`
+    # and `checked_settings` only qualify, `pineforge` only qualifies or is the
+    # producer's `using namespace pineforge;`.
+    for index, token in enumerate(tokens):
+        if token[3] != "ident" or token[0] not in ("std", "pineforge", "checked_settings"):
+            continue
+        following = tokens[index + 1][0] if index + 1 < len(tokens) else None
+        preceding = [item[0] for item in tokens[max(0, index - 2):index]]
+        if token[4] and (preceding[-1:] in (["<"], ["/"]) and following in ("/", ".", ">")):
+            continue  # a header-name component of #include / __has_include
+        if following == "::" and (token[0] != "checked_settings" or preceding[-1:] == ["::"]):
+            continue
+        if (token[0] == "pineforge" and following == ";" and preceding == ["using", "namespace"]
+                and not token[4] and token[5] == ()):
+            continue
+        trusted = False
+    return tokens, trusted
+
+
+def _release_code_context(token):
+    """Code the producer emits: no directive line, and only inside the first
+    branch of its settings guard or the #ifdef / #else branch of its security
+    guard."""
+    return not token[4] and all(
+        (opener == _RELEASE_SETTINGS_BRANCH and branch == opener)
+        or (opener == _RELEASE_SECURITY_GUARD and branch in (opener, ("else",)))
+        for opener, branch, _ in token[5])
+
+
+def _release_previous(tokens, index):
+    """The previous code token, skipping preprocessor lines."""
+    index -= 1
+    while index >= 0 and tokens[index][4]:
+        index -= 1
+    return tokens[index] if index >= 0 else None
+
+
+def _release_closing(tokens, index, directives=False):
+    """Index of the token closing the bracket opened at index, or None. A
+    preprocessor line inside refuses unless directives (a body) are allowed."""
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    expected = []
+    for position in range(index, len(tokens)):
+        word = tokens[position][0]
+        if tokens[position][4]:
+            if directives:
+                continue
+            return None
+        if word in pairs and tokens[position][3] == "op":
+            expected.append(pairs[word])
+        elif word in (")", "]", "}") and tokens[position][3] == "op":
+            if not expected or expected.pop() != word:
+                return None
+            if not expected:
+                return position
+    return None
+
+
+def _release_declarator_risk(tokens, index):
+    """True when the call at index could be spelled as a declarator instead:
+    right after a comma at statement level (an init-declarator list), or
+    wrapped only in parentheses that follow `>` or a (qualified) name at the
+    start of a statement, as in `T (get_input_int("x", 1));`."""
+    previous = _release_previous_index(tokens, index)
+    if previous >= 0 and tokens[previous][0] == ",":
+        depth = 0
+        position = _release_previous_index(tokens, previous)
+        while position >= 0:
+            token = tokens[position]
+            if token[3] == "op" and token[0] in (")", "]", "}"):
+                depth += 1
+            elif token[3] == "op" and token[0] in ("(", "[", "{"):
+                if not depth:
+                    if token[0] == "{":
+                        return True
+                    # for/if/switch/while parentheses admit a declaration.
+                    opener = _release_previous(tokens, position)
+                    if token[0] == "(" and opener is not None and opener[0] in (
+                            "for", "if", "switch", "while"):
+                        return True
+                    break
+                depth -= 1
+            elif token[0] == ";" and not depth:
+                return True
+            position = _release_previous_index(tokens, position)
+        else:
+            return True
+    while previous >= 0 and tokens[previous][0] == "(":
+        before = _release_previous_index(tokens, previous)
+        if before >= 0 and tokens[before][0] == "(":
+            previous = before
+            continue
+        if before >= 0 and tokens[before][0] in (">", ">>"):
+            return True
+        if before < 0 or tokens[before][3] != "ident" or tokens[before][0] in \
+                _RELEASE_EXPRESSION_KEYWORDS:
+            return False
+        head = before
+        while True:
+            prior = _release_previous_index(tokens, head)
+            if prior >= 0 and tokens[prior][0] == "::":
+                qualifier = _release_previous_index(tokens, prior)
+                if qualifier >= 0 and tokens[qualifier][3] == "ident":
+                    head = qualifier
+                    continue
+                prior = qualifier
+            return prior < 0 or tokens[prior][0] in (";", "{", "}", ":")
+    return False
+
+
+def _release_getter_calls(tokens):
+    """Recognized getter calls, and whether every getter-family token is one.
+
+    A recognized call is one of the six producer getters in code context,
+    after an expression token, with a plain literal title and exactly one
+    balanced default argument: name ( "title" , default ). A getter call of
+    that shape inside a macro argument is returned apart (never certified)."""
+    calls = []
+    macro_calls = []
+    intact = True
+    # Code tokens inside an argument of a function-like macro invocation.
+    in_macro = [False] * len(tokens)
+    stack = []
+    for index, token in enumerate(tokens):
+        if token[4]:
+            continue
+        in_macro[index] = any(marker for _, marker in stack)
+        if token[3] == "op" and token[0] in ("(", "[", "{"):
+            previous = _release_previous(tokens, index)
+            stack.append(({"(": ")", "[": "]", "{": "}"}[token[0]],
+                          token[0] == "(" and previous is not None and previous[3] == "ident"
+                          and previous[0] in _RELEASE_MACROS))
+        elif token[3] == "op" and token[0] in (")", "]", "}"):
+            if not stack or stack[-1][0] != token[0]:
+                intact = False
+            else:
+                stack.pop()
+    for index, token in enumerate(tokens):
+        if token[3] != "ident" or not token[0].startswith("get_input_"):
+            continue
+        if in_macro[index]:
+            close = (_release_closing(tokens, index + 1)
+                     if index + 4 < len(tokens) and tokens[index + 1][0] == "(" else None)
+            if (token[0] in _RELEASE_GETTERS and _release_code_context(token)
+                    and close is not None and tokens[index + 2][3] == "string"
+                    and tokens[index + 3][0] == "," and close > index + 4):
+                macro_calls.append((index, close, _RELEASE_GETTERS[token[0]],
+                                    tokens[index + 2][0][1:-1], tokens[index + 4:close]))
+            else:
+                intact = False
+            continue
+        previous = _release_previous(tokens, index)
+        position = _release_previous_index(tokens, index)
+        if previous is not None and previous[0] == ")" and previous[3] == "op":
+            # `( <producer cast type> ) get_input_*(...)`: read the context
+            # before the cast; the cast is not part of the input.
+            kind = _release_previous_index(tokens, position)
+            opening = _release_previous_index(tokens, kind) if kind >= 0 else -1
+            if (kind >= 0 and tokens[kind][0] in _RELEASE_PRODUCER_CASTS
+                    and opening >= 0 and tokens[opening][0] == "("):
+                previous = _release_previous(tokens, opening)
+        elif previous is not None and previous[0] == "(":
+            # A function-style cast `int(get_input_*(...))` is not on the list.
+            callee = _release_previous(tokens, position)
+            if callee is not None and callee[0] in _RELEASE_BUILTIN_TYPES:
+                previous = None
+        close = (_release_closing(tokens, index + 1)
+                 if index + 4 < len(tokens) and tokens[index + 1][0] == "(" else None)
+        if (token[0] not in _RELEASE_GETTERS or not _release_code_context(token)
+                or previous is None or previous[0] not in _RELEASE_CALL_CONTEXT
+                or previous[3] not in ("op", "ident")
+                or close is None or tokens[index + 2][3] != "string"
+                or tokens[index + 3][0] != "," or close <= index + 4
+                or _release_declarator_risk(tokens, index)):
+            intact = False
+            continue
+        default = tokens[index + 4:close]
+        depth = 0
+        for item in default:
+            if item[3] == "op" and item[0] in ("(", "[", "{"):
+                depth += 1
+            elif item[3] == "op" and item[0] in (")", "]", "}"):
+                depth -= 1
+            elif depth == 0 and item[0] == ",":
+                intact = False
+                break
+        else:
+            calls.append((index, close, _RELEASE_GETTERS[token[0]], tokens[index + 2][0][1:-1],
+                          default))
+    return calls, intact, macro_calls
+
+
+def _release_previous_index(tokens, index):
+    """Index of the previous code token, skipping preprocessor lines, or -1."""
+    index -= 1
+    while index >= 0 and tokens[index][4]:
+        index -= 1
+    return index
+
+
+def _release_pure_read(tokens, index):
+    """The closed list of producer read positions for a symbolic default.
+
+    R1 `auto _pna_l|_pna_r = ( SYMBOL ) ;` (visit_expr.py _emit_na_relational):
+    the parenthesis follows `=`, so it is the initializer's expression, never
+    a declarator. R2 `( __switch_val_<n> == SYMBOL ) {` (visit_stmt.py
+    _visit_switch / _visit_if_switch_expr): an equality operand is an
+    expression, never a declarator."""
+    def words(start, stop):
+        if start < 0 or stop > len(tokens) or any(tokens[i][4] for i in range(start, stop)):
+            return None
+        return [tokens[i][0] for i in range(start, stop)]
+    if (words(index - 4, index) in (["auto", "_pna_l", "=", "("], ["auto", "_pna_r", "=", "("])
+            and words(index + 1, index + 3) == [")", ";"]):
+        return True
+    before = words(index - 3, index)
+    return (before is not None and before[0] == "(" and before[2] == "=="
+            and re.fullmatch(r"__switch_val_[0-9]+", before[1]) is not None
+            and words(index + 1, index + 3) == [")", "{"])
+
+
+def _release_symbol_occurrences(tokens, symbol, calls):
+    """Classify every occurrence of symbol: (declarations, other count).
+
+    Recognized: the global `[static] const|constexpr int SYMBOL = ...;`, a
+    whole numeric getter default, the producer's checked-settings metadata
+    default `{"title", "enum", ::pineforge::checked_settings::number(SYMBOL),`,
+    and the pure reads of _release_pure_read. Every other occurrence, in any
+    syntactic position, is counted against it."""
+    uses = {call[4][0][1] for call in calls
+            if len(call[4]) == 1 and call[4][0][0] == symbol
+            and call[2] in ("int", "int64", "double")}
+    metadata = ("{", None, ",", '"enum"', ",", "::", "pineforge", "::",
+                "checked_settings", "::", "number", "(")
+    declarations = []
+    others = 0
+    depth = 0
+    for index, token in enumerate(tokens):
+        if not token[4] and token[3] == "op" and token[0] in ("{", "}"):
+            depth += 1 if token[0] == "{" else -1
+        if token[0] != symbol or token[3] != "ident":
+            continue
+        if token[1] in uses:
+            continue
+        if _release_code_context(token) and _release_pure_read(tokens, index):
+            continue
+        window = tokens[index - 12:index] if index >= 12 else []
+        if (_release_code_context(token) and window
+                and all(not item[4] and expected in (None, item[0])
+                        for expected, item in zip(metadata, window))
+                and window[1][3] == "string" and window[3][3] == "string"
+                and index + 2 < len(tokens)
+                and tokens[index + 1][0] == ")" and tokens[index + 2][0] == ","):
+            continue
+        end = index + 2
+        while end < len(tokens) and tokens[end][0] != ";" and not tokens[end][4]:
+            end += 1
+        kind = _release_previous_index(tokens, index)
+        qualifier = _release_previous_index(tokens, kind) if kind >= 0 else -1
+        head = _release_previous_index(tokens, qualifier) if qualifier >= 0 else -1
+        if head >= 0 and tokens[head][0] == "static":
+            head = _release_previous_index(tokens, head)
+        if (not token[4] and token[5] == () and depth == 0
+                and kind >= 0 and tokens[kind][0] == "int"
+                and qualifier >= 0 and tokens[qualifier][0] in ("const", "constexpr")
+                and (head < 0 or tokens[head][0] in (";", "}"))
+                and index + 2 < end < len(tokens) and tokens[index + 1][0] == "="
+                and tokens[end][0] == ";"):
+            declarations.append((index, tokens[index + 2:end]))
+        else:
+            others += 1
+    return declarations, others
+
+
+def _release_symbolic_default(tokens, trusted, calls, symbol, declared_type):
+    """A unique, positively recognized global integer constant, or a reason."""
+    if not trusted:
+        return None, "unsupported_binding"
+    declarations, others = _release_symbol_occurrences(tokens, symbol, calls)
+    if len(declarations) + others > 1:
+        return None, "ambiguous_binding"
+    if len(declarations) != 1:
+        return None, "unsupported_binding"
+    words = "".join(item[0] for item in declarations[0][1])
+    if (not all(item[3] in ("number", "op") for item in declarations[0][1])
+            or not _RELEASE_INTEGER.fullmatch(words)
+            or not -(2 ** 31) <= int(words) < 2 ** 31):
+        return None, "unsupported_default"
+    return _release_scalar(words, declared_type), None
+
+
+def _release_source_bound(tokens, calls, symbol):
+    """`_src_<selector>_` is only a getter default or a member access."""
+    defaults = {call[4][0][1] for call in calls
+                if len(call[4]) == 1 and call[4][0][0] == symbol}
+    for index, token in enumerate(tokens):
+        if token[0] == symbol and token[3] == "ident" and token[1] not in defaults:
+            if token[4] or index + 1 >= len(tokens) or tokens[index + 1][0] != ".":
+                return False
+    return True
+
+
+def _release_literal_default(words, kinds, declared_type):
+    """A recognized literal default for a getter type, or a refusal reason."""
+    text = "".join(words)
+    if declared_type in ("int", "int64", "double"):
+        if (not 1 <= len(words) <= 2 or kinds[-1] != "number"
+                or (len(words) == 2 and words[0] not in "+-")
+                or not _RELEASE_DECIMAL.fullmatch(text)):
+            return None, "unsupported_default"
+        value = float(text)
+        _release_domain(value)
+        if declared_type == "double":
+            return value, None
+        if not value.is_integer():
+            return None, "unsupported_default"
+        integer = int(text) if _RELEASE_INTEGER.fullmatch(text) else int(value)
+        bits = 32 if declared_type == "int" else 64
+        if not -(2 ** (bits - 1)) <= integer < 2 ** (bits - 1):
+            return None, "unsupported_default"
+        return _release_domain(integer), None
+    if declared_type == "bool":
+        if words in (["true"], ["false"]):
+            return words == ["true"], None
+        return None, "unsupported_default"
+    if declared_type == "string":
+        if kinds == ["string"]:
+            literal = words[0]
+        elif (words[:4] == ["std", "::", "string", "("] and len(words) == 6
+                and kinds[4] == "string" and words[5] == ")"):
+            literal = words[4]
+        else:
+            return None, "unsupported_default"
+        try:
+            return _release_cpp_input_name(literal[1:-1]), None
+        except ValueError:
+            return None, "unsupported_default"
+    return None, "unsupported_default"
+
+
+def _release_resolve_default(tokens, trusted, calls, declared_type, words, default):
+    """One getter occurrence's default: (value, reason, symbolic)."""
+    kinds = [item[3] for item in default]
+    if declared_type == "source":
+        selector = re.fullmatch(r"_src_([a-z0-9]+)_", words[0]) if len(words) == 1 else None
+        if not selector or selector.group(1) not in _RELEASE_SOURCE_SELECTORS:
+            return None, "unsupported_default", False
+        if not _release_source_bound(tokens, calls, words[0]):
+            return None, "unsupported_binding", False
+        return selector.group(1), None, False
+    if (declared_type in ("int", "int64", "double") and len(words) == 1
+            and kinds == ["ident"] and _release_codegen_identifier(words[0])):
+        value, reason = _release_symbolic_default(tokens, trusted, calls, words[0], declared_type)
+        return value, reason, True
+    value, reason = _release_literal_default(list(words), kinds, declared_type)
+    return value, reason, False
+
+
+def _release_branch_dependent(tokens, occurrences):
+    """True when an occurrence sits in the producer's security guard and some
+    branch of that conditional (an implicit empty #else included) lacks an
+    identical (getter type, default) occurrence of the same title."""
+    for declared_type, words, _, _, branches in occurrences:
+        for opener, _, instance in branches:
+            if opener != _RELEASE_SECURITY_GUARD:
+                continue
+            arms = tokens.groups.get(instance, [opener])
+            if arms != [opener, ("else",)]:
+                # Coverage needs the producer's explicit #else; otherwise a
+                # branch (an implicit empty one included) is missing.
+                return True
+            for arm in arms:
+                if not any(other[0] == declared_type and other[1] == words
+                           and (opener, arm, instance) in other[4] for other in occurrences):
+                    return True
+    return False
+
+
+def _release_legacy_declarations(cpp_text, receipt=None, *, allow_unresolved=False):
+    """Typed legacy defaults certified by the positive allowlist above.
+
+    Returns {native name: {"type", "default", "_raw_default", "_reason"}}; an
+    uncertified default is None with a stable reason. A title read by getters
+    that disagree, or whose getter depends on a security-guard branch, carries
+    its resolvable `_candidates` for receipt arbitration in normalization.
+    Raises ValueError for a reason unless allow_unresolved, and for known
+    out-of-domain evidence."""
+    try:
+        tokens, trusted = _release_cpp_tokens(cpp_text)
+    except _ReleaseUnreadable:
+        if not allow_unresolved:
+            raise
+        return None
+    calls, intact, macro_calls = _release_getter_calls(tokens)
+    for _, _, declared_type, _, default in calls + macro_calls:
+        if declared_type in ("int", "int64", "double"):
+            # Concrete literal evidence meets the domain before any refusal.
+            _release_literal_default([item[0] for item in default],
+                                     [item[3] for item in default], declared_type)
+    in_macros = {}
+    for _, _, declared_type, spelling, default in macro_calls:
+        try:
+            name = _release_cpp_input_name(spelling)
+        except ValueError:
+            intact = False
+            continue
+        in_macros.setdefault(name, (declared_type, cpp_text[default[0][1]:default[-1][2]]))
+    rows = {}
+    for index, close, declared_type, spelling, default in calls:
+        try:
+            name = _release_cpp_input_name(spelling)
+        except ValueError:
+            intact = False
+            continue
+        words = [item[0] for item in default]
+        raw = cpp_text[default[0][1]:default[-1][2]]
+        rows.setdefault(name, []).append(
+            (declared_type, tuple(words), raw, default, tokens[index][5]))
+    declared = {}
+    for name, occurrences in rows.items():
+        declared_type, words, raw, default, _ = occurrences[0]
+        metadata = {"type": declared_type, "default": None, "_raw_default": raw,
+                    "_reason": None, "_types": sorted({item[0] for item in occurrences})}
+        pairs = []
+        for occurrence in occurrences:
+            if all(occurrence[:2] != pair[:2] for pair in pairs):
+                pairs.append(occurrence)
+        if not intact or not trusted:
+            metadata["_reason"] = "unsupported_binding"
+        elif len(pairs) > 1 or _release_branch_dependent(tokens, occurrences):
+            # Never first-wins: the native receipt must pick exactly one.
+            candidates = []
+            failures = []
+            for pair_type, pair_words, pair_raw, pair_default, _ in pairs:
+                value, reason, _ = _release_resolve_default(
+                    tokens, trusted, calls, pair_type, list(pair_words), pair_default)
+                if reason is not None:
+                    failures.append(reason)
+                elif all((pair_type, repr(value)) != (kind, repr(seen))
+                         for kind, seen, _ in candidates):
+                    candidates.append((pair_type, value, pair_raw))
+            metadata["_candidates"] = candidates
+            # With no readable declaration the first one's own refusal stands
+            # (as before this round); otherwise the receipt has to choose.
+            metadata["_reason"] = (failures[0] if failures and not candidates
+                                   else "ambiguous_binding")
+        else:
+            metadata["default"], metadata["_reason"], symbolic = _release_resolve_default(
+                tokens, trusted, calls, declared_type, list(words), default)
+            if symbolic:
+                metadata["_symbolic"] = True
+        if name in in_macros:
+            # A getter of this title sits in a macro argument, which the
+            # replacement list may drop or repeat: no declaration to certify.
+            metadata.pop("_candidates", None)
+            metadata.pop("_symbolic", None)
+            metadata["_reason"] = "macro_argument"
+        if metadata["_reason"]:
+            metadata["default"] = None
+            if not allow_unresolved:
+                raise ValueError(metadata["_reason"])
+        declared[name] = metadata
+    for name, (declared_type, raw) in in_macros.items():
+        if name not in declared:
+            if not allow_unresolved:
+                raise ValueError("macro_argument")
+            declared[name] = {"type": declared_type, "default": None, "_raw_default": raw,
+                              "_reason": "macro_argument", "_types": [declared_type]}
+    return declared
+
+
+def _release_settings_receipt(lib, state, checked):
+    if not hasattr(lib, "strategy_get_effective_settings"):
+        return None
+    try:
+        required = ctypes.c_size_t()
+        error = ctypes.create_string_buffer(_SETTINGS_ERROR_CAPACITY)
+        getter = lib.strategy_get_effective_settings
+        if getter(state, None, 0, ctypes.byref(required), error,
+                  _SETTINGS_ERROR_CAPACITY) != PF_SETTINGS_BUFFER_TOO_SMALL:
+            return None
+        if not 0 < required.value <= 16 * 1024 * 1024:
+            return None
+        buffer = ctypes.create_string_buffer(required.value)
+        if getter(state, buffer, required.value, ctypes.byref(required), error,
+                  _SETTINGS_ERROR_CAPACITY) != PF_SETTINGS_OK:
+            return None
+        receipt = json.loads(buffer.value.decode("utf-8"))
+        if not isinstance(receipt, dict) or receipt.get("version") != 1:
+            return None
+        return receipt
+    except (AttributeError, TypeError, ValueError, RecursionError):
+        return None
+
+
+def _release_receipt_rows(receipt, section):
+    rows = receipt.get(section)
+    if not isinstance(rows, list):
+        raise ValueError("missing checked settings section")
+    result = {}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("name"), str):
+            raise ValueError("malformed checked setting")
+        name = row["name"]
+        if name in result or type(row.get("supported")) is not bool:
+            raise ValueError("ambiguous or malformed checked setting")
+        if not all(isinstance(row.get(key), str)
+                   for key in ("type", "default", "effective_value")):
+            raise ValueError("malformed checked scalar")
+        result[name] = row
+    return result
+
+
+class _ReleaseRefusal:
+    """An uncertified legacy strategy() default: a stable reason and raw token."""
+
+    __slots__ = ("reason", "raw")
+
+    def __init__(self, reason, raw=None):
+        self.reason = reason
+        self.raw = raw
+
+
+def _release_statements(tokens, start, end):
+    """Top-level statements of a body, as token index lists (no directives)."""
+    statements = []
+    statement = []
+    depth = 0
+    for index in range(start, end):
+        token = tokens[index]
+        if token[4]:
+            continue
+        statement.append(index)
+        if token[3] == "op" and token[0] in ("(", "[", "{"):
+            depth += 1
+        elif token[3] == "op" and token[0] in (")", "]", "}"):
+            depth -= 1
+            following = index + 1
+            while following < end and tokens[following][4]:
+                following += 1
+            if (depth == 0 and token[0] == "}"
+                    and (following >= end or tokens[following][0] not in (";", ",", ")"))):
+                statements.append(statement)
+                statement = []
+        elif depth == 0 and token[0] == ";":
+            statements.append(statement)
+            statement = []
+    if statement:
+        statements.append(statement)
+    return statements
+
+
+def _release_strategy_value(key, rhs, enum_bound):
+    """One recognized strategy() default, or a _ReleaseRefusal."""
+    words = [token[0] for token in rhs]
+    kinds = [token[3] for token in rhs]
+    declared_type = _RELEASE_OVERRIDE_TYPES[key]
+    if key in _RELEASE_STRATEGY_ENUMS:
+        enum_name, members = _RELEASE_STRATEGY_ENUMS[key]
+        names = _QTY_TYPE if key == "default_qty_type" else _COMM_TYPE
+        inner = words
+        if inner[:5] == ["static_cast", "<", "int", ">", "("] and inner[-1:] == [")"]:
+            inner = inner[5:-1]
+        for prefix in ([], ["::"], ["pineforge", "::"], ["::", "pineforge", "::"]):
+            if (enum_bound and len(inner) == len(prefix) + 3
+                    and inner[:len(prefix)] == prefix
+                    and inner[len(prefix):len(prefix) + 2] == [enum_name, "::"]
+                    and inner[-1] in members):
+                return names[inner[-1]]
+        if words in (["0"], ["1"], ["2"]) and kinds == ["number"]:
+            return names[members[int(words[0])]]
+        return _ReleaseRefusal("unsupported_default")
+    if declared_type == "bool" or key == "close_entries_rule":
+        # close_entries_rule_any is a native bool: only true/false are read.
+        if words in (["true"], ["false"]):
+            value = words == ["true"]
+            return ("ANY" if value else "FIFO") if key == "close_entries_rule" else value
+        return _ReleaseRefusal("unsupported_default")
+    text = "".join(words)
+    if (not 1 <= len(words) <= 2 or kinds[-1] != "number"
+            or (len(words) == 2 and words[0] not in "+-")
+            or not _RELEASE_DECIMAL.fullmatch(text)):
+        return _ReleaseRefusal("unsupported_default")
+    # A recognized literal is concrete evidence: its domain failure refuses.
+    value = _release_domain(_release_scalar(text, declared_type))
+    if declared_type == "int" and not -(2 ** 31) <= value < 2 ** 31:
+        # PineStrategyConfig's pyramiding and slippage are native int.
+        return _ReleaseRefusal("unsupported_default")
+    return value
+
+
+def _release_legacy_strategy(cpp_text):
+    """strategy() defaults from the one generated constructor, by allowlist.
+
+    Every release key maps to a typed value (the PineStrategyConfig seed when
+    the constructor leaves it alone) or a _ReleaseRefusal. Recognized: one
+    `GeneratedStrategy() [: init] { ... }` holding one
+    `PineStrategyConfig cfg;` with top-level `cfg.<field> = <rhs>;` statements
+    before its single closing `configure_pine_strategy(cfg);`. Pre-R4-C
+    member writes and any other occurrence refuse."""
+    keys = list(_RELEASE_OVERRIDE_TYPES)
+
+    def refuse(reason):
+        return {key: _ReleaseRefusal(reason) for key in keys}
+
+    try:
+        tokens, trusted = _release_cpp_tokens(cpp_text)
+    except _ReleaseUnreadable:
+        return refuse("unsupported_binding")
+    if not trusted:
+        return refuse("unsupported_binding")
+    bodies = []
+    for index, token in enumerate(tokens):
+        previous = _release_previous(tokens, index)
+        if (token[0] != "GeneratedStrategy" or token[3] != "ident" or token[4]
+                or index + 1 >= len(tokens) or tokens[index + 1][0] != "("
+                or (previous is not None and previous[0] == "~")):
+            continue
+        close = _release_closing(tokens, index + 1)
+        if close is None or close + 1 >= len(tokens):
+            return refuse("unsupported_binding")
+        opening = None
+        if tokens[close + 1][0] in ("{", ":") and close != index + 2:
+            # The producer's constructor takes no parameters.
+            return refuse("unsupported_binding")
+        if tokens[close + 1][0] == "{":
+            opening = close + 1
+        elif tokens[close + 1][0] == ":":
+            position = close + 2
+            while position < len(tokens):
+                if tokens[position][3] == "op" and tokens[position][0] in ("(", "{"):
+                    if tokens[position][0] == "{" and tokens[position - 1][0] in (")", "}"):
+                        opening = position
+                        break
+                    skipped = _release_closing(tokens, position, directives=True)
+                    if skipped is None:
+                        break
+                    position = skipped + 1
+                    continue
+                position += 1
+            if opening is None:
+                return refuse("unsupported_binding")
+        else:
+            continue
+        closing = _release_closing(tokens, opening, directives=True)
+        if closing is None:
+            return refuse("unsupported_binding")
+        bodies.append((opening, closing))
+    if len(bodies) != 1:
+        return refuse("ambiguous_binding" if bodies else "unsupported_binding")
+    opening, closing = bodies[0]
+    # The engine's config type and its one configure call, never a local one.
+    for index, token in enumerate(tokens):
+        if token[0] == "PineStrategyConfig" and (
+                token[4] or [item[0] for item in tokens[max(0, index - 4):index]]
+                != ["pineforge", "::", "source", "::"]):
+            return refuse("unsupported_binding")
+    if sum(token[0] == "configure_pine_strategy" for token in tokens) > 1:
+        return refuse("unsupported_binding")
+    enum_bound = {}
+    for key, (enum_name, members) in _RELEASE_STRATEGY_ENUMS.items():
+        enum_bound[key] = all(
+            not token[4] and index + 2 < len(tokens) and tokens[index + 1][0] == "::"
+            and tokens[index + 2][0] in members
+            for index, token in enumerate(tokens) if token[0] == enum_name)
+    cfg_fields = dict(_CFG_FIELD_KEY, calc_on_order_fills="calc_on_order_fills")
+    member_fields = dict(_STRAT_FIELD_KEY, calc_on_order_fills_="calc_on_order_fills")
+    statements = _release_statements(tokens, opening + 1, closing)
+    words_of = [[tokens[index][0] for index in statement] for statement in statements]
+    declarations = []
+    declaring = set()
+    for number, (statement, words) in enumerate(zip(statements, words_of)):
+        if "PineStrategyConfig" not in words:
+            continue
+        at = words.index("PineStrategyConfig")
+        prefix, rest = words[:at], words[at + 1:]
+        if (prefix in (["pineforge", "::", "source", "::"],
+                       ["::", "pineforge", "::", "source", "::"])
+                and len(rest) >= 2 and tokens[statement[at + 1]][3] == "ident"
+                and rest[1:] in ([";"], ["{", "}", ";"], ["(", ")", ";"])
+                and words.count("PineStrategyConfig") == 1):
+            declarations.append(rest[0])
+            declaring.add(number)
+        else:
+            return refuse("unsupported_binding")
+    if len(declarations) > 1:
+        return refuse("ambiguous_binding")
+    variable = declarations[0] if declarations else None
+    assigned = {}
+    configured = 0
+    for number, (statement, words) in enumerate(zip(statements, words_of)):
+        if words in _RELEASE_ADAPTER_STATEMENTS:
+            continue
+        # Nothing else of the constructor may sit in a conditional, the
+        # declaration included.
+        if any(tokens[index][5] != () for index in statement):
+            return refuse("unsupported_binding")
+        if number in declaring:
+            if assigned or configured:
+                return refuse("unsupported_binding")
+            continue
+        if variable is not None and words == ["configure_pine_strategy", "(", variable, ")", ";"]:
+            if number != len(statements) - 1:
+                return refuse("unsupported_binding")
+            configured += 1
+            continue
+        if (variable is not None and len(words) >= 6 and words[0] == variable
+                and words[1] == "." and words[3] == "="
+                and (words[2] in cfg_fields or words[2] in _RELEASE_CONFIG_OTHER)
+                and words[-1] == ";" and words.count(variable) == 1
+                and not any(word in member_fields for word in words)):
+            if configured:
+                return refuse("unsupported_binding")
+            if words[2] in cfg_fields:
+                assigned[cfg_fields[words[2]]] = statement[4:-1]
+            continue
+        # The producer's constructor holds nothing else: refuse the rest.
+        return refuse("unsupported_binding")
+    if variable is None or configured != 1:
+        # Pre-R4-C member writes are not certified: nothing establishes which
+        # member an unqualified field write reaches.
+        return refuse("unsupported_binding")
+    result = dict(STRATEGY_SEED, calc_on_order_fills=False)
+    raws = {}
+    for key in keys:
+        if key in assigned:
+            rhs = [tokens[index] for index in assigned[key]]
+            value = _release_strategy_value(key, rhs, enum_bound.get(key, True))
+            raws[key] = cpp_text[rhs[0][1]:rhs[-1][2]]
+            if isinstance(value, _ReleaseRefusal):
+                value.raw = raws[key]
+            result[key] = value
+    result["_raws"] = raws
+    return result
+
+
+def _release_legacy_receipt_rows(receipt, section="inputs"):
+    """Legacy receipt rows by native name: (unique rows, native-ambiguous
+    names with their number of distinct uncoerced (type, default) pairs, every
+    row, or None when the section is missing or malformed). An empty list
+    therefore means a completely parsed empty section, not a parse failure.
+    A malformed row makes the receipt unusable; a name the receipt lists
+    more than once with differing settings is native-ambiguous (several inputs
+    share that title) and is never used to certify."""
+    rows = receipt.get(section) if isinstance(receipt, dict) else None
+    if not isinstance(rows, list):
+        return {}, {}, None
+    by_name = {}
+    for row in rows:
+        if (not isinstance(row, dict) or not isinstance(row.get("name"), str)
+                or type(row.get("supported")) is not bool
+                or not all(isinstance(row.get(key), str)
+                           for key in ("type", "default", "effective_value"))):
+            return {}, {}, None
+        by_name.setdefault(row["name"], []).append(row)
+    unique = {}
+    ambiguous = {}
+    for name, items in by_name.items():
+        if len({(item["type"], item["default"], item["effective_value"], item["supported"])
+                for item in items}) == 1:
+            unique[name] = items[0]
+        else:
+            ambiguous[name] = len({(item["type"], item["default"]) for item in items})
+    return unique, ambiguous, rows
+
+
+def normalize_release_provenance(provenance, cpp_text, receipt, checked):
+    """Normalize only the fresh release document, before its fingerprint."""
+    # This is the entrypoint's internal run fact, set only by its successful
+    # Pine transpile branch. Source contents never establish producer origin.
+    producer_source = provenance["codegen"].get("transpiled_from_pine") is True
+    if not producer_source and (not isinstance(receipt, dict)
+                                or type(receipt.get("version")) is not int
+                                or receipt["version"] != 1):
+        receipt = None
+    applied_inputs = provenance["applied"]["inputs"]
+    applied_overrides = provenance["applied"]["overrides"]
+    input_rows = {}
+    override_rows = {}
+    if checked:
+        if receipt is None:
+            raise ValueError("checked settings receipt unavailable")
+        input_rows = _release_receipt_rows(receipt, "inputs")
+        override_rows = _release_receipt_rows(receipt, "overrides")
+
+    if checked:
+        # Receipt names are native decoded identities. Getter regex captures
+        # contain C++ escapes and must never be joined to these verbatim.
+        declared = {}
+        for name, row in input_rows.items():
+            declared_type = ("source" if row.get("kind") == "source"
+                             else row["type"])
+            scalar_type = ("int" if declared_type == "enum" and row["supported"]
+                           else declared_type)
+            value = _release_scalar(row["effective_value"], scalar_type)
+            # Unsupported means the setter cannot honour an override. Its
+            # getter still evaluates the default; metadata can be a placeholder.
+            default = (_release_scalar(row["default"], scalar_type)
+                       if row["supported"] else value)
+            if declared_type == "source" and not (
+                    value in _RELEASE_SOURCE_SELECTORS and default in _RELEASE_SOURCE_SELECTORS):
+                raise ValueError("noncanonical checked source selector")
+            if not producer_source and row["supported"] is not True:
+                declared[name] = {"type": declared_type, "default": None, "value": None,
+                                  "resolution": {"status": "unresolved",
+                                      "reason": "foreign_unverified_source",
+                                      "raw_default": row["default"]}}
+                continue
+            declared[name] = {"type": declared_type, "default": default,
+                              "value": value}
+        for name, text in applied_inputs.items():
+            # ctypes passes UTF-8 C strings: embedded NUL terminates a key.
+            # Keep the raw applied key, but use the native key for its value.
+            native_name = name.split("\0", 1)[0]
+            if native_name in declared:
+                if "resolution" not in declared[native_name]:
+                    applied_inputs[name] = declared[native_name]["value"]
+            else:
+                declared[name] = {"type": "unknown", "default": None,
+                                  "value": str(text)}
+        provenance["inputs"] = declared
+    else:
+        native_inputs = {name.split("\0", 1)[0]: value.split("\0", 1)[0]
+                         for name, value in applied_inputs.items()}
+        legacy_rows, native_ambiguous, receipt_rows = _release_legacy_receipt_rows(receipt)
+        _, _, override_receipt_rows = _release_legacy_receipt_rows(receipt, "overrides")
+        # Known native scalars meet the product domain before any refusal.
+        for row in (receipt_rows or []) + (override_receipt_rows or []):
+            if row["type"] in ("int", "float") or (row["type"] == "enum" and row["supported"]):
+                for key in ("default", "effective_value"):
+                    # Parse by the row's own type (an integer row's leading
+                    # zeros included) and as a number; check whatever parses.
+                    native_value = _release_receipt_value(row[key], "float")
+                    if native_value is not None:
+                        _release_domain(native_value)
+                        if row["type"] != "float" and native_value.is_integer():
+                            _release_domain(int(native_value))
+                    if row["type"] != "float":
+                        exact = _release_receipt_value(row[key], "int")
+                        if exact is not None:
+                            _release_domain(exact)
+        declared = _release_legacy_declarations(cpp_text, receipt, allow_unresolved=True)
+        unreadable = declared is None
+        declared = declared or {}
+        for name, metadata in declared.items():
+            raw_default = metadata.pop("_raw_default")
+            reason = metadata.pop("_reason")
+            symbolic = metadata.pop("_symbolic", False)
+            candidates = metadata.pop("_candidates", None)
+            # A numeric override the recognized getter consumes is concrete
+            # evidence even when the default itself is refused.
+            for kind in metadata.pop("_types", ()):
+                if kind in ("int", "int64", "double") and name in native_inputs:
+                    try:
+                        converted = _release_legacy_number(native_inputs[name], kind)
+                    except ValueError:
+                        continue
+                    _release_domain(_release_scalar(converted, kind))
+            native = legacy_rows.get(name)
+            distinct = native_ambiguous.get(name, 0)
+            if name in native_ambiguous:
+                # The native settings list this title more than once with
+                # different settings: no single declaration to certify.
+                candidates = None
+                # TOP ruling 2026-10-07 22:58: two or more distinct native
+                # (type, default) pairs share the title; name it, with the count.
+                reason = "duplicate_title" if distinct >= 2 else reason or "ambiguous_binding"
+            if candidates is not None and native is not None and native["supported"] is True:
+                # The receipt arbitrates: exactly one (getter type, default)
+                # must match its own type and default, without coercion.
+                native_default = _release_receipt_value(native["default"], native["type"])
+                matches = [(kind, value) for kind, value, _ in candidates
+                           if native["type"] in _RELEASE_RECEIPT_TYPES[kind]
+                           and type(native_default) is type(value) and native_default == value]
+                if len(matches) == 1:
+                    metadata["type"], metadata["default"] = matches[0]
+                    reason = None
+            declared_type = metadata["type"]
+            default = metadata["default"]
+            value = default
+            if reason is None and name in native_inputs:
+                text = native_inputs[name]
+                if declared_type == "bool":
+                    value = (True if text in ("true", "1") else
+                             False if text in ("false", "0") else default)
+                elif declared_type in ("int", "int64", "double"):
+                    try:
+                        value = _release_legacy_number(text, declared_type)
+                    except ValueError:
+                        value = default
+                    value = _release_domain(_release_scalar(value, declared_type))
+                elif declared_type == "source":
+                    # The native getter falls back from any other selector.
+                    if text not in _RELEASE_SOURCE_SELECTORS:
+                        reason = "unsupported_override"
+                    value = text
+                else:
+                    value = text
+            if reason is None and native is not None:
+                # Each side keeps its own declared type: never coerce one
+                # through the other to hide a type, default or value conflict.
+                if native["type"] not in _RELEASE_RECEIPT_TYPES[declared_type]:
+                    reason = "ambiguous_binding"
+                elif native["supported"] is True:
+                    receipt_default = _release_receipt_value(native["default"], native["type"])
+                    receipt_value = _release_receipt_value(
+                        native["effective_value"], native["type"])
+                    if (type(receipt_default) is not type(default) or receipt_default != default
+                            or type(receipt_value) is not type(value) or receipt_value != value):
+                        reason = "ambiguous_binding"
+            if reason is None and symbolic and (native is None or native["supported"] is not True):
+                reason = "receipt_unavailable"
+            if not producer_source and reason != "duplicate_title":
+                confirmed = (native is not None and native["supported"] is True
+                             and native["type"] in _RELEASE_RECEIPT_TYPES[declared_type]
+                             and type(_release_receipt_value(native["default"], native["type"])) is type(default)
+                             and _release_receipt_value(native["default"], native["type"]) == default
+                             and type(_release_receipt_value(native["effective_value"], native["type"])) is type(value)
+                             and _release_receipt_value(native["effective_value"], native["type"]) == value)
+                if not confirmed:
+                    reason = "foreign_unverified_source"
+            if reason is None:
+                metadata["default"] = default
+                metadata["value"] = value
+            else:
+                metadata.update(default=None, value=None, resolution={
+                    "status": "unresolved", "reason": reason, "raw_default": raw_default})
+                if reason == "duplicate_title":
+                    metadata["resolution"]["distinct_native_inputs"] = distinct
+        declared_names = frozenset(declared)
+        for raw_name, text in applied_inputs.items():
+            native_name = raw_name.split("\0", 1)[0]
+            if native_name in declared_names:
+                if "resolution" not in declared[native_name]:
+                    applied_inputs[raw_name] = declared[native_name]["value"]
+            elif unreadable or (not producer_source and (
+                    receipt_rows is None or native_name in legacy_rows
+                    or native_name in native_ambiguous)):
+                declared[raw_name] = {"type": "unknown", "default": None, "value": None,
+                                      "resolution": {"status": "unresolved",
+                                                     "reason": ("unsupported_binding" if producer_source
+                                                                else "foreign_unverified_source"),
+                                                     "raw_default": None}}
+            else:
+                declared[raw_name] = {"type": "unknown", "default": None,
+                                      "value": str(text)}
+        provenance["inputs"] = declared
+
+    legacy_defaults = None if checked else _release_legacy_strategy(cpp_text)
+    legacy_raws = legacy_defaults.pop("_raws", {}) if legacy_defaults else {}
+    legacy_overrides, ambiguous_overrides, _ = (
+        ({}, frozenset(), []) if checked else _release_legacy_receipt_rows(receipt, "overrides"))
+    unresolved = {}
+    for name, declared_type in _RELEASE_OVERRIDE_TYPES.items():
+        if checked:
+            row = override_rows.get(name)
+            if (row is None or row["type"] != declared_type
+                    or row["supported"] is not True):
+                raise ValueError("declared override missing or mistyped in receipt")
+            value = _release_scalar(row["effective_value"], declared_type)
+            if name in _RELEASE_ENUM_WORDS and value not in _RELEASE_ENUM_WORDS[name]:
+                raise ValueError("noncanonical checked strategy enum")
+        else:
+            value = legacy_defaults[name]
+            if not isinstance(value, _ReleaseRefusal):
+                value = _release_scalar(value, declared_type)
+            # A later alias may be a no-op. Replay the setter order instead
+            # of collapsing aliases and losing the preceding accepted value.
+            for raw_name, raw_text in applied_overrides.items():
+                if raw_name.split("\0", 1)[0] != name:
+                    continue
+                text = raw_text.split("\0", 1)[0]
+                if declared_type == "bool":
+                    value = text in ("true", "1")
+                elif name == "close_entries_rule":
+                    value = "ANY" if text in ("ANY", "any", "1") else "FIFO"
+                elif name in _RELEASE_ENUM_WORDS:
+                    prefix = ("strategy.commission." if name == "commission_type"
+                              else "strategy.")
+                    for index, word in enumerate(_RELEASE_ENUM_WORDS[name]):
+                        if text in (word, prefix + word, str(index)):
+                            value = word
+                            break
+                else:
+                    converted = _release_legacy_number(text, declared_type)
+                    ignored = (converted < 0 if declared_type == "int"
+                               else math.isnan(converted))
+                    if not ignored:
+                        value = _release_domain(_release_scalar(converted, declared_type))
+            native_override = legacy_overrides.get(name)
+            if not isinstance(value, _ReleaseRefusal) and (
+                    name in ambiguous_overrides or (
+                        native_override is not None and native_override["supported"] is True
+                        and (native_override["type"] != declared_type
+                             or type(_release_receipt_value(native_override["effective_value"],
+                                                            declared_type)) is not type(value)
+                             or _release_receipt_value(native_override["effective_value"],
+                                                       declared_type) != value))):
+                # The native receipt disagrees: no strategy() value is certified.
+                value = _ReleaseRefusal("ambiguous_binding", legacy_raws.get(name))
+            if not producer_source:
+                confirmed = (not isinstance(value, _ReleaseRefusal)
+                             and native_override is not None and native_override["supported"] is True
+                             and native_override["type"] == declared_type
+                             and type(_release_receipt_value(native_override["effective_value"],
+                                                            declared_type)) is type(value)
+                             and _release_receipt_value(native_override["effective_value"],
+                                                       declared_type) == value)
+                if not confirmed:
+                    value = _ReleaseRefusal("foreign_unverified_source", legacy_raws.get(name))
+            if isinstance(value, _ReleaseRefusal):
+                # Applied overrides keep their wire strings; no value is guessed.
+                provenance["strategy"][name] = None
+                unresolved[name] = {"status": "unresolved", "reason": value.reason,
+                                    "raw_default": value.raw}
+                continue
+        provenance["strategy"][name] = value
+        for raw_name in applied_overrides:
+            if raw_name.split("\0", 1)[0] == name:
+                applied_overrides[raw_name] = value
+    if unresolved:
+        provenance["strategy_resolution"] = unresolved
+    return provenance
+
+
 # --- The failure line -------------------------------------------------------
 #
 # Every failure prints ONE line on stdout, written by failure_line:
@@ -2212,6 +3666,7 @@ def _main(argv=None) -> int:
     report = ReportC()
     started = time.time()
     try:
+        settings_receipt = _release_settings_receipt(lib, state, checked)
         _run(state, report)
         elapsed = time.time() - started
         failure = run_failure(lib, state)
@@ -2263,15 +3718,27 @@ def _main(argv=None) -> int:
                 report.input_bars_processed, timing["samples_ns"],
                 bar_magnifier=bar_magnifier)
         try:
-            out["fingerprint"] = build_fingerprint(build_provenance(
+            # The frozen helpers' regex readers never see the C++: the release
+            # reader below owns every declared value, and only the digest of
+            # the file is taken here.
+            provenance = build_provenance(
                 engine_version(lib),
-                args.generated_cpp,
+                None,
                 parse_bool(args.transpiled),
                 inputs,
                 overrides,
                 applied_runtime,
                 source_feed_sha256=source_feed_sha256,
-            ))
+            )
+            provenance["codegen"]["generated_cpp_sha256"] = (
+                _sha256_file(args.generated_cpp) if args.generated_cpp else None)
+            cpp_text = ""
+            if args.generated_cpp:
+                with open(args.generated_cpp, encoding="utf-8", errors="replace") as source:
+                    cpp_text = source.read()
+            provenance = normalize_release_provenance(
+                provenance, cpp_text, settings_receipt, checked)
+            out["fingerprint"] = build_fingerprint(provenance)
         except Exception:
             out["fingerprint"] = None
         # Serialized whole before any byte is written (the same json.dump), so
