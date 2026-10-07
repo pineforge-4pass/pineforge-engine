@@ -349,13 +349,128 @@ def review_e2e(image, artifacts, legacy_cpp):
     return int(not all(passed for _, passed in checks))
 
 
+def legacy_declaration_e2e(image, artifacts, escaped_cpp, enum_cpp):
+    """Exercise emitted legacy declaration names/defaults through the image CLI."""
+    artifacts.mkdir(parents=True, exist_ok=True)
+    checks = []
+
+    def check(name, condition, value):
+        checks.append((name, bool(condition)))
+        print(f"{'PASS' if condition else 'FAIL'} {name}: {value}", flush=True)
+
+    def legacy(path):
+        text = path.read_text()
+        for name in ("strategy_settings_api_version", "strategy_create_checked",
+                     "strategy_set_input_checked", "strategy_set_override_checked"):
+            text = text.replace(name, "fixture_legacy_" + name)
+        return text
+
+    escaped, enum = legacy(escaped_cpp), legacy(enum_cpp)
+    title = "path\\length"
+    wrong = "path\\\\length"
+    armed = 'armed "yes"'
+    multiplier = '倍数\\ "quoted"'
+    literal = json.dumps(title)
+    assert literal in escaped
+    nul_source = escaped.replace(literal, literal[:-1] + r'\000suffix"')
+    cases = [
+        ("escaped-default", escaped, {}, 10, True, None),
+        ("escaped-decoded", escaped,
+         {title: "14", armed: "false", multiplier: "1.5"}, 14, False, None),
+        ("escaped-alias", escaped,
+         {title + "\0alias": "14", armed + "\0alias": "false\0true"}, 14, False, None),
+        ("escaped-wrong", escaped, {wrong: "14"}, 10, True, wrong),
+        ("escaped-wrong-alias", escaped, {wrong + "\0alias": "14"},
+         10, True, wrong + "\0alias"),
+        ("escaped-nul-declaration", nul_source, {title + "\0alias": "14"},
+         14, True, None),
+        ("legacy-enum-default", enum, {}, 1, True, None),
+        ("legacy-enum-index", enum, {"Side": "2"}, 2, False, None),
+    ]
+    for label, text, inputs, expected, trading, unknown in cases:
+        case = (artifacts / label).resolve()
+        source, compiled = case / "input", case / "compiled"
+        source.mkdir(parents=True)
+        compiled.mkdir()
+        compiled.chmod(0o777)
+        (source / "strategy.cpp").write_text(text, encoding="utf-8")
+        (source / "ohlcv.csv").write_text(synthetic_csv())
+        command = ["docker", "run", "--rm", "--network", "none",
+                   "--mount", f"type=bind,src={source},dst=/in,readonly",
+                   "--mount", f"type=bind,src={compiled},dst=/proof",
+                   "-e", "PINEFORGE_INPUTS=" + json.dumps(inputs), image]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+        (case / "command.json").write_text(json.dumps(command))
+        (case / "stdout.json").write_text(result.stdout)
+        (case / "stderr.log").write_text(result.stderr)
+        (case / "exit").write_text(str(result.returncode) + "\n")
+        report = json.loads(result.stdout)
+        check(label + " CLI success", result.returncode == 0, result.returncode)
+        fp = report.get("fingerprint") or {}
+        provenance = fp.get("provenance", {})
+        token = base64.b64decode(fp.get("token", ""))
+        check(label + " fingerprint", bool(token) and json.loads(token) == provenance
+              and fp.get("digest") == "sha256:" + hashlib.sha256(token).hexdigest(), fp.get("digest"))
+        check(label + " raw map", report.get("applied_inputs") == inputs,
+              report.get("applied_inputs"))
+        applied = provenance.get("applied", {}).get("inputs", {})
+        check(label + " applied keys", set(applied) == set(inputs), applied)
+        declared = provenance.get("inputs", {})
+        if label.startswith("escaped"):
+            names = {armed, title, multiplier, "scalar", "numeric_text", "unused"}
+            check(label + " native declaration identities",
+                  set(declared) == names | ({unknown} if unknown else set()), list(declared))
+            row = declared.get(title, {})
+            check(label + " native integer", type(row.get("default")) is int
+                  and row["default"] == 10 and type(row.get("value")) is int
+                  and row["value"] == expected, row)
+            check(label + " native boolean", declared.get(armed, {}).get("value") is trading,
+                  declared.get(armed))
+            for raw in inputs:
+                value = applied.get(raw)
+                if raw == unknown:
+                    check(label + " unknown string", type(value) is str and value == inputs[raw], value)
+                    row = declared.get(raw, {})
+                    check(label + " unknown row", row == {"type": "unknown", "default": None,
+                                                           "value": inputs[raw]}, row)
+                elif raw.split("\0", 1)[0] == title:
+                    check(label + " applied native integer", type(value) is int and value == 14, value)
+                elif raw.split("\0", 1)[0] == armed:
+                    check(label + " applied native boolean", value is False, value)
+                else:
+                    check(label + " applied native float", type(value) is float and value == 1.5, value)
+        else:
+            row = declared.get("Side", {})
+            check(label + " symbolic default", type(row.get("default")) is int and row["default"] == 1, row)
+            check(label + " numeric value", type(row.get("value")) is int and row["value"] == expected, row)
+            if inputs:
+                check(label + " applied enum integer", type(applied.get("Side")) is int
+                      and applied["Side"] == 2, applied)
+        check(label + " native trading", (report["summary"]["total_trades"] > 0) is trading,
+              report["summary"])
+        check(label + " native capital", report["equity_curve"][0]["equity"] == 10000,
+              report["equity_curve"][0])
+        if trading:
+            check(label + " native quantity", report["trades"][0]["qty"] == 2, report["trades"][0])
+    (artifacts / "checks.json").write_text(json.dumps(checks, indent=2) + "\n")
+    print(f"{sum(passed for _, passed in checks)}/{len(checks)} checks passed", flush=True)
+    return int(not all(passed for _, passed in checks))
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
     parser.add_argument("--artifacts", required=True, type=Path)
     parser.add_argument("--harness", type=Path)
     parser.add_argument("--review-legacy-cpp", type=Path)
+    parser.add_argument("--legacy-escaped-cpp", type=Path)
+    parser.add_argument("--legacy-enum-cpp", type=Path)
     options = parser.parse_args()
+    if options.legacy_escaped_cpp or options.legacy_enum_cpp:
+        if not (options.legacy_escaped_cpp and options.legacy_enum_cpp):
+            parser.error("both legacy declaration sources are required")
+        raise SystemExit(legacy_declaration_e2e(
+            options.image, options.artifacts, options.legacy_escaped_cpp, options.legacy_enum_cpp))
     raise SystemExit(
         review_e2e(options.image, options.artifacts, options.review_legacy_cpp)
         if options.review_legacy_cpp else
