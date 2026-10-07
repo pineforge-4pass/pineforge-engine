@@ -807,10 +807,9 @@ _RELEASE_PRODUCER_DEFINES = frozenset(r'''#define _PF_NO_DATA_STOP(function, cal
 #define PF_PINE_TIME_SESSION_DAY_ARGS(tz, sess)
 #define PF_VWAP_SESSION_ANCHOR_ARGS(tz, sess) , tz, sess
 #define PF_VWAP_SESSION_ANCHOR_ARGS(tz, sess)'''.splitlines())
-# Function-like macros a getter argument could reach: the producer's own (the
-# only #define lines a unit may hold; the engine headers define none) and the
-# standard library's. A replacement list may drop or repeat an argument, so a
-# getter inside a macro argument is never certified.
+# Macro spellings used by the producer subset and its standard-library calls.
+# This is not a table of every macro available to arbitrary C++; foreign
+# sources require native receipt confirmation independently of this scanner.
 _RELEASE_MACROS = frozenset(
     re.match(r"#define ([A-Za-z_][A-Za-z0-9_]*)\(", line).group(1)
     for line in _RELEASE_PRODUCER_DEFINES) | frozenset({
@@ -877,16 +876,20 @@ def _release_cpp_tokens(text):
     position = 0
     line_start = True
     directive = None
+    settings_include = False
+    inactive_settings = set()
     length = len(text)
 
     def close_directive():
-        nonlocal trusted
+        nonlocal trusted, settings_include
         words = [token[0] for token in directive]
         name = words[1] if len(words) > 1 else ""
         if name in ("if", "ifdef", "ifndef"):
             opener = tuple([name] + words[2:])
             instance = len(tokens.groups)
             tokens.groups[instance] = [opener]
+            if opener == _RELEASE_SETTINGS_BRANCH and not settings_include:
+                inactive_settings.add(instance)
             stack.append((opener, opener, instance))
         elif name in ("elif", "else"):
             if not stack:
@@ -907,6 +910,14 @@ def _release_cpp_tokens(text):
                     and ".." not in header
                     and re.fullmatch(r"pineforge/[A-Za-z0-9_/]+\.hpp|[a-z_]+", header)):
                 trusted = False
+            # The pinned producer includes this header before emitting any
+            # settings guard. Its first include defines PF_SETTINGS_API_VERSION.
+            if (header == "pineforge/checked_settings.hpp" and
+                    (not stack or all(opener == branch == (
+                        "if", "__has_include", "(", "<", "pineforge", "/",
+                        "checked_settings", ".", "hpp", ">", ")")
+                                      for opener, branch, _ in stack))):
+                settings_include = True
         elif name == "define":
             line = re.sub(r"\s+", " ", text[directive[0][1]:directive[-1][2]])
             if line not in _RELEASE_PRODUCER_DEFINES:
@@ -967,7 +978,10 @@ def _release_cpp_tokens(text):
                 current = text[position]
                 if current in "+-" and text[position - 1] in "eEpP":
                     position += 1
-                elif current == "'" and position + 1 < length and text[position + 1].isalnum():
+                elif current == "'":
+                    # No producer number contains a digit separator. Refuse
+                    # before a quote can be misread as the start of a literal.
+                    trusted = False
                     position += 1
                 elif current.isascii() and (current.isalnum() or current in "_."):
                     position += 1
@@ -1003,11 +1017,29 @@ def _release_cpp_tokens(text):
                  directive is not None, tuple(stack))
         if directive is not None:
             directive.append(token)
-        tokens.append(token)
+        # Before the defining include this metadata branch is inactive. Do
+        # not treat its getters, symbol reads or constructor text as code.
+        if token[4] or not any(instance in inactive_settings for _, _, instance in stack):
+            tokens.append(token)
     if directive is not None:
         close_directive()
     if stack:
         raise _ReleaseUnreadable("unterminated conditional")
+    brackets = []
+    closing = {"(": ")", "[": "]", "{": "}"}
+    for token in tokens:
+        if token[4] or token[3] != "op":
+            continue
+        if token[0] in closing:
+            brackets.append(closing[token[0]])
+        elif token[0] in (")", "]", "}"):
+            if not brackets or token[0] != brackets[-1]:
+                trusted = False
+            else:
+                brackets.pop()
+    # Alternative preprocessor arms can repeat an opening function brace
+    # before a shared closing brace. This flat scan checks mismatched closers,
+    # not the balance of the concatenation of mutually exclusive arms.
     # The producer's leading-comma macros are invoked only as
     # `NAME(syminfo_.timezone, syminfo_.session)` (tables.py, visit_call.py,
     # visit_expr.py); any other invocation could splice a declarator.
@@ -1143,13 +1175,17 @@ def _release_getter_calls(tokens):
     for index, token in enumerate(tokens):
         if token[4]:
             continue
-        in_macro[index] = any(stack)
+        in_macro[index] = any(marker for _, marker in stack)
         if token[3] == "op" and token[0] in ("(", "[", "{"):
             previous = _release_previous(tokens, index)
-            stack.append(token[0] == "(" and previous is not None and previous[3] == "ident"
-                         and previous[0] in _RELEASE_MACROS)
-        elif token[3] == "op" and token[0] in (")", "]", "}") and stack:
-            stack.pop()
+            stack.append(({"(": ")", "[": "]", "{": "}"}[token[0]],
+                          token[0] == "(" and previous is not None and previous[3] == "ident"
+                          and previous[0] in _RELEASE_MACROS))
+        elif token[3] == "op" and token[0] in (")", "]", "}"):
+            if not stack or stack[-1][0] != token[0]:
+                intact = False
+            else:
+                stack.pop()
     for index, token in enumerate(tokens):
         if token[3] != "ident" or not token[0].startswith("get_input_"):
             continue
@@ -1779,6 +1815,13 @@ def _release_legacy_receipt_rows(receipt, section="inputs"):
 
 def normalize_release_provenance(provenance, cpp_text, receipt, checked):
     """Normalize only the fresh release document, before its fingerprint."""
+    # This is the entrypoint's internal run fact, set only by its successful
+    # Pine transpile branch. Source contents never establish producer origin.
+    producer_source = provenance["codegen"].get("transpiled_from_pine") is True
+    if not producer_source and (not isinstance(receipt, dict)
+                                or type(receipt.get("version")) is not int
+                                or receipt["version"] != 1):
+        receipt = None
     applied_inputs = provenance["applied"]["inputs"]
     applied_overrides = provenance["applied"]["overrides"]
     input_rows = {}
@@ -1806,6 +1849,12 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
             if declared_type == "source" and not (
                     value in _RELEASE_SOURCE_SELECTORS and default in _RELEASE_SOURCE_SELECTORS):
                 raise ValueError("noncanonical checked source selector")
+            if not producer_source and row["supported"] is not True:
+                declared[name] = {"type": declared_type, "default": None, "value": None,
+                                  "resolution": {"status": "unresolved",
+                                      "reason": "foreign_unverified_source",
+                                      "raw_default": row["default"]}}
+                continue
             declared[name] = {"type": declared_type, "default": default,
                               "value": value}
         for name, text in applied_inputs.items():
@@ -1813,7 +1862,8 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
             # Keep the raw applied key, but use the native key for its value.
             native_name = name.split("\0", 1)[0]
             if native_name in declared:
-                applied_inputs[name] = declared[native_name]["value"]
+                if "resolution" not in declared[native_name]:
+                    applied_inputs[name] = declared[native_name]["value"]
             else:
                 declared[name] = {"type": "unknown", "default": None,
                                   "value": str(text)}
@@ -1909,6 +1959,15 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
                         reason = "ambiguous_binding"
             if reason is None and symbolic and (native is None or native["supported"] is not True):
                 reason = "receipt_unavailable"
+            if not producer_source and reason != "duplicate_title":
+                confirmed = (native is not None and native["supported"] is True
+                             and native["type"] in _RELEASE_RECEIPT_TYPES[declared_type]
+                             and type(_release_receipt_value(native["default"], native["type"])) is type(default)
+                             and _release_receipt_value(native["default"], native["type"]) == default
+                             and type(_release_receipt_value(native["effective_value"], native["type"])) is type(value)
+                             and _release_receipt_value(native["effective_value"], native["type"]) == value)
+                if not confirmed:
+                    reason = "foreign_unverified_source"
             if reason is None:
                 metadata["default"] = default
                 metadata["value"] = value
@@ -1923,10 +1982,11 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
             if native_name in declared_names:
                 if "resolution" not in declared[native_name]:
                     applied_inputs[raw_name] = declared[native_name]["value"]
-            elif unreadable:
+            elif unreadable or (not producer_source and receipt is None):
                 declared[raw_name] = {"type": "unknown", "default": None, "value": None,
                                       "resolution": {"status": "unresolved",
-                                                     "reason": "unsupported_binding",
+                                                     "reason": ("unsupported_binding" if producer_source
+                                                                else "foreign_unverified_source"),
                                                      "raw_default": None}}
             else:
                 declared[raw_name] = {"type": "unknown", "default": None,
@@ -1985,6 +2045,16 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
                                                        declared_type) != value))):
                 # The native receipt disagrees: no strategy() value is certified.
                 value = _ReleaseRefusal("ambiguous_binding", legacy_raws.get(name))
+            if not producer_source:
+                confirmed = (not isinstance(value, _ReleaseRefusal)
+                             and native_override is not None and native_override["supported"] is True
+                             and native_override["type"] == declared_type
+                             and type(_release_receipt_value(native_override["effective_value"],
+                                                            declared_type)) is type(value)
+                             and _release_receipt_value(native_override["effective_value"],
+                                                       declared_type) == value)
+                if not confirmed:
+                    value = _ReleaseRefusal("foreign_unverified_source", legacy_raws.get(name))
             if isinstance(value, _ReleaseRefusal):
                 # Applied overrides keep their wire strings; no value is guessed.
                 provenance["strategy"][name] = None

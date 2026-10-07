@@ -690,7 +690,7 @@ def shadow_binding_e2e(image, artifacts, enum_cpp):
             check(label + " typed default", type(row.get("default")) is int and row["default"] == 1, row)
         else:
             check(label + " explicit unresolved", row.get("default") is None and row.get("value") is None
-                  and row.get("resolution") == {"status": "unresolved", "reason": "ambiguous_binding",
+                  and row.get("resolution") == {"status": "unresolved", "reason": "foreign_unverified_source",
                                                 "raw_default": "Side__long_"}, row)
         check(label + " raw inputs", report.get("applied_inputs") == inputs, report.get("applied_inputs"))
         check(label + " applied keys", set(prov.get("applied", {}).get("inputs", {})) == set(inputs), prov.get("applied"))
@@ -901,7 +901,7 @@ def allowlist_witness_e2e(image, artifacts):
         if family == "1-symbol":
             raw = "方向_Up" if "universal" in label else "Side__long_"
             check(label + " symbol refused", refused(
-                declared.get("Side", {}), ("ambiguous_binding", "unsupported_binding"), raw),
+                declared.get("Side", {}), ("foreign_unverified_source",), raw),
                 declared.get("Side"))
             control = results["control"][0]
             check(label + " native body binding differs from receipt",
@@ -933,7 +933,7 @@ def allowlist_witness_e2e(image, artifacts):
                   report["summary"] == control["summary"], report["summary"])
         if label == "w3b-source-expression":
             check(label + " expression refused", refused(
-                declared.get("Source", {}), ("unsupported_default",),
+                declared.get("Source", {}), ("foreign_unverified_source",),
                 'source_series(std::string("close"))'), declared.get("Source"))
         if family == "6-strategy":
             key = {"w6a-qty-type-binding": "default_qty_type",
@@ -948,9 +948,114 @@ def allowlist_witness_e2e(image, artifacts):
             check(label + " strategy default refused",
                   provenance.get("strategy", {}).get(key, "missing") is None
                   and provenance.get("strategy_resolution", {}).get(key) == {
-                      "status": "unresolved", "reason": "unsupported_default", "raw_default": raw},
+                      "status": "unresolved", "reason": "foreign_unverified_source", "raw_default": raw},
                   [provenance.get("strategy", {}).get(key),
                    provenance.get("strategy_resolution")])
+    (artifacts / "checks.json").write_text(json.dumps(checks, indent=2) + "\n")
+    print(f"{sum(p for _, p in checks)}/{len(checks)} checks passed", flush=True)
+    return int(not all(p for _, p in checks))
+
+
+def producer_boundary_e2e(image, artifacts):
+    """Actual entrypoint origin: Pine, foreign receipt, and foreign no receipt.
+
+    Mutated C++ is always mounted as C++ and never asserts producer origin.
+    Original stdout, source, argv, compiler artifacts and exit are retained.
+    """
+    artifacts.mkdir(parents=True)
+    checks = []
+
+    def check(name, condition, detail):
+        checks.append((name, bool(condition)))
+        print(f"{'PASS' if condition else 'FAIL'} {name}: {detail}", flush=True)
+
+    source = (artifacts / "transpile-input").resolve()
+    source.mkdir()
+    (source / "strategy.pine").write_text(STRATEGY)
+    command = ["docker", "run", "--rm", "--network", "none", "--mount",
+               f"type=bind,src={source},dst=/in,readonly", "-e", "PINEFORGE_TRANSPILE_ONLY=1", image]
+    emitted = subprocess.run(command, capture_output=True, text=True, timeout=180)
+    (artifacts / "transpile.command.json").write_text(json.dumps(command))
+    (artifacts / "transpile.cpp").write_text(emitted.stdout)
+    (artifacts / "transpile.stderr.log").write_text(emitted.stderr)
+    (artifacts / "transpile.exit").write_text(str(emitted.returncode))
+    if emitted.returncode:
+        raise RuntimeError("producer setup failed; not behavioural RED")
+    legacy = emitted.stdout
+    for name in ("strategy_settings_api_version", "strategy_create_checked",
+                 "strategy_set_input_checked", "strategy_set_override_checked"):
+        legacy = legacy.replace(name, "fixture_legacy_" + name)
+    foreign = legacy.replace("strategy_get_effective_settings", "fixture_hidden_receipt")
+    marker = "class GeneratedStrategy : public pineforge::source::PineStrategyHost {\npublic:"
+    assert marker in foreign
+
+    def method(body):
+        return foreign.replace(marker, marker + '\n    void foreign_probe() { ' + body + ' }', 1)
+
+    cases = [
+        ("pine-origin", STRATEGY, "len", True, True),
+        ("foreign-receipt", legacy, "len", False, True),
+        ("foreign-no-receipt", foreign, "len", False, False),
+        ("foreign-bracket", method('if (false) _PF_ENGINE_INVARIANT("unused", ] + get_input_int("ghost", 7));'),
+         "ghost", False, False),
+        ("foreign-number-quote", method('if (false) _PF_ENGINE_INVARIANT("x", 1\'_); int r = get_input_int("digit", 99); '
+            'if (false) _PF_ENGINE_INVARIANT("y", \') ; int digit = get_input_int("digit", 14) ; (void) (\' 2\'_);'),
+         "digit", False, False),
+        ("foreign-guard-before-include", '#ifdef PF_SETTINGS_API_VERSION\n'
+         'static int ghost_probe = get_input_int("ghost", 7);\n#endif\n' + foreign,
+         "ghost", False, False),
+        ("foreign-stringize", method('const char* note = __STRING(get_input_int("ghost", 7));'),
+         "ghost", False, False),
+        ("foreign-paste", method('int r = __CONCAT(get_in, put_int)("digit", 99); '
+         'const char* note = __STRING(get_input_int("digit", 14));'), "digit", False, False),
+    ]
+    for label, text, title, pine, certified in cases:
+        case = (artifacts / label).resolve()
+        inputs_dir, compiled = case / "input", case / "compiled"
+        inputs_dir.mkdir(parents=True)
+        compiled.mkdir()
+        compiled.chmod(0o777)
+        (inputs_dir / ("strategy.pine" if pine else "strategy.cpp")).write_text(text)
+        (inputs_dir / "ohlcv.csv").write_text(synthetic_csv())
+        inputs = {title: "14" if title == "len" else "9"}
+        overrides = {"initial_capital": "5000"}
+        command = ["docker", "run", "--rm", "--network", "none", "--mount",
+                   f"type=bind,src={inputs_dir},dst=/in,readonly", "--mount",
+                   f"type=bind,src={compiled},dst=/proof", "-e", "PINEFORGE_INPUTS=" + json.dumps(inputs),
+                   "-e", "PINEFORGE_OVERRIDES=" + json.dumps(overrides), image]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=240)
+        for suffix, data in (("command.json", json.dumps(command)), ("stdout.json", result.stdout),
+                             ("stderr.log", result.stderr), ("exit", str(result.returncode))):
+            (case / suffix).write_text(data)
+        check(label + " CLI success", result.returncode == 0, result.returncode)
+        if result.returncode:
+            (case / "setup-failure").write_text(result.stderr)
+            continue
+        report = json.loads(result.stdout)
+        fp = report.get("fingerprint") or {}
+        document = fp.get("provenance", {})
+        token = base64.b64decode(fp.get("token", ""))
+        check(label + " fingerprint", bool(token) and json.loads(token) == document
+              and fp.get("digest") == "sha256:" + hashlib.sha256(token).hexdigest(), fp.get("digest"))
+        check(label + " actual origin", document.get("codegen", {}).get("transpiled_from_pine") is pine,
+              document.get("codegen"))
+        applied = document.get("applied", {})
+        row = document.get("inputs", {}).get(title, {})
+        if certified:
+            check(label + " typed input", row == {"type": "int", "default": 10, "value": 14}, row)
+            check(label + " typed applied", applied.get("inputs") == {title: 14}, applied)
+            check(label + " typed strategy", document.get("strategy", {}).get("initial_capital") == 5000.0,
+                  document.get("strategy"))
+        else:
+            check(label + " input refused", row.get("default") is None and row.get("value") is None
+                  and row.get("resolution", {}).get("reason") == "foreign_unverified_source", row)
+            check(label + " applied wire kept", applied.get("inputs") == inputs
+                  and applied.get("overrides") == overrides, applied)
+            check(label + " strategy refused", document.get("strategy", {}).get("initial_capital") is None
+                  and document.get("strategy_resolution", {}).get("initial_capital", {}).get("reason")
+                  == "foreign_unverified_source", document.get("strategy_resolution"))
+        check(label + " wire echoes", report.get("applied_inputs") == inputs
+              and report.get("applied_overrides") == overrides, report.get("applied_inputs"))
     (artifacts / "checks.json").write_text(json.dumps(checks, indent=2) + "\n")
     print(f"{sum(p for _, p in checks)}/{len(checks)} checks passed", flush=True)
     return int(not all(p for _, p in checks))
@@ -1000,7 +1105,10 @@ if __name__ == "__main__":
     parser.add_argument("--unicode-only", action="store_true")
     parser.add_argument("--shadow-cpp", type=Path)
     parser.add_argument("--allowlist-witnesses", action="store_true")
+    parser.add_argument("--producer-boundary", action="store_true")
     options = parser.parse_args()
+    if options.producer_boundary:
+        raise SystemExit(producer_boundary_e2e(options.image, options.artifacts))
     if options.allowlist_witnesses:
         raise SystemExit(allowlist_witness_e2e(options.image, options.artifacts))
     if options.shadow_cpp:
