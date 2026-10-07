@@ -31,6 +31,8 @@ def main():
                 contexts.append(("bars", "5", []))
             if name == "varip":
                 contexts.append(("bars", "5", []))
+            if name == "htf60_close":
+                contexts.append(("bars", "60", []))
             for context_index, (mode, timeframe, options) in enumerate(contexts):
                 if name == "varip":
                     declaration = "intrabar_persistence"

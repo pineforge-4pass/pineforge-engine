@@ -9,6 +9,8 @@
 #include "report.hpp"
 #include "service.hpp"
 #include <pineforge/pineforge.h>
+#include <pineforge/native_calendar.hpp>
+#include "../src/native_calendar_memo.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -40,7 +42,7 @@ void signal_stop(int) { stopped = 1; }
 constexpr std::size_t MAX_FRAME = 1024 * 1024;
 
 struct Config {
-    std::string strategy, warmup, feed = "-", ledger, webhook, mode = "", input_tf = "1", script_tf,
+    std::string strategy, warmup, feed = "-", ledger, webhook, mode = "", input_tf, script_tf,
                                   symbol, name = "strategy";
     std::string session = "24x7", timezone = "UTC", chart_timezone = "UTC", secret_env, feed_url,
                 subscribe_path, native_config, routes_path;
@@ -49,6 +51,9 @@ struct Config {
     std::vector<std::pair<std::string, std::string>> inputs, overrides, syminfo;
     std::set<std::string> explicit_flags;
     NativeConfigValues native;
+    std::optional<pineforge::native_calendar::Timeframe> input_clock;
+    std::optional<pineforge::native_calendar::SessionCalendar> input_calendar;
+    mutable pineforge::native_calendar::SessionDayMemo input_calendar_memo;
     std::uint64_t from_input = 0, max_events = 0, max_attempts = 8;
     std::uint64_t status_interval = 1, max_ledger_bytes = 0, feed_idle_timeout = 15, feed_message_timeout = 15;
     long poll_ms = 1000;
@@ -61,7 +66,7 @@ void help() {
                  "       --script-tf 15 --mode ticks|bars --ledger orders.sqlite3\n"
                  "       --symbol EXCHANGE:SYMBOL [--webhook-url https://receiver.example/events]\n"
                  "       [--feed events.jsonl|- | --feed-url https://...|wss://...]\n"
-                 "Options: --input-tf 1 --name NAME --session 24x7 --timezone UTC\n"
+                 "Options: --input-tf SCRIPT_TF (default) --name NAME --session 24x7 --timezone UTC\n"
                  "         --input TITLE=VALUE --override KEY=VALUE (repeatable)\n"
                  "         --syminfo KEY=VALUE --chart-timezone UTC\n"
                  "         --subscribe subscription.json (WebSocket only)\n"
@@ -220,9 +225,14 @@ Config args(int argc, char **argv) {
     } else {
         if (c.symbol.empty() || c.script_tf.empty())
             throw std::runtime_error("symbol and script-tf are required");
-        if (c.input_tf != "1")
-            throw std::runtime_error("native runner input-tf currently must be 1 minute");
         validate_script_tf(c.script_tf);
+        if (c.input_tf.empty()) c.input_tf = c.script_tf;
+        const auto input = pineforge::native_calendar::parse_timeframe(c.input_tf);
+        const auto script = pineforge::native_calendar::parse_timeframe(c.script_tf);
+        if (!input || !script || input->unit() != script->unit() || input->count() != script->count())
+            throw std::runtime_error("chart delivery refuses --input-tf " + c.input_tf + " with --script-tf " + c.script_tf +
+                                     "; omit --input-tf or set it to " + c.script_tf + "; existing input-1 ledgers must redeploy with a new ledger");
+        c.input_tf = c.script_tf;
         if (c.chart_timezone.empty())
             c.chart_timezone = "UTC";
     }
@@ -587,8 +597,30 @@ class Strategy {
 struct Cursor {
     std::uint64_t tick_seq = 0;
     bool seen_tick = false;
+    std::int64_t bar_timestamp = -1;
 };
 struct InputGap : std::runtime_error { using std::runtime_error::runtime_error; };
+// Pine 1m/1m keeps the pre-chart-delivery handling exactly: the contiguous
+// minute warmup, no runner cadence check and the engine's own one-minute guard.
+bool pine_minute_input(const Config& config) {
+    return !config.native.present && config.input_tf == "1" && config.script_tf == "1";
+}
+// Chart delivery is the Pine path with input equal to a coarser script clock;
+// hand-written --native-config modules keep their one-minute input rule.
+bool chart_delivery(const Config& config) {
+    return !config.native.present && !pine_minute_input(config);
+}
+pineforge::native_calendar::NativeInterval input_interval(const Config& config, std::int64_t timestamp) {
+    const auto interval = pineforge::native_calendar::interval_containing(
+        *config.input_calendar, *config.input_clock, timestamp, config.input_calendar_memo);
+    if (!interval)
+        throw std::runtime_error("input bar is outside the configured calendar");
+    return *interval;
+}
+std::int64_t input_close(const Config& config, std::int64_t timestamp) {
+    return chart_delivery(config) ? input_interval(config, timestamp).last_traded_close_ms
+                                  : timestamp + 60000;
+}
 void apply(Strategy &s, const Config &c, Cursor &cursor, const Json &frame) {
     auto type = frame.at("type").text();
     if (type == "tick") {
@@ -623,7 +655,13 @@ void apply(Strategy &s, const Config &c, Cursor &cursor, const Json &frame) {
         b.low = j.at("l").real();
         b.close = j.at("c").real();
         b.volume = j.at("v").real();
+        if (chart_delivery(c)) {
+            const auto previous = input_interval(c, cursor.bar_timestamp);
+            if (b.timestamp != previous.next_input_open_ms)
+                throw InputGap("input bar cadence must follow the configured input timeframe and session calendar");
+        }
         s.check(s.bar(s.state, &b));
+        cursor.bar_timestamp = b.timestamp;
     } else if (type == "time") {
         only_fields(frame, {"type", "ts"});
         if (c.mode != "ticks")
@@ -779,6 +817,7 @@ int run(Config c) {
         validate_websocket(feed);
     }
     if (!c.native_config.empty()) {
+        if (c.input_tf.empty()) c.input_tf = "1";
         c.native = parse_native_config(read_file(c.native_config, MAX_FRAME));
         NativeClockBindings clock{c.input_tf, c.script_tf, c.timezone, c.session,
                                   c.chart_timezone, c.symbol, c.explicit_flags};
@@ -800,11 +839,32 @@ int run(Config c) {
     if (sha256_hex(read_file(c.strategy, 512ULL * 1024 * 1024)) != sha256_hex(library))
         throw std::runtime_error("strategy library changed during initialization");
     strategy.require_contract(c);
-    auto warmup = history(original, c.native.present);
+    auto warmup = history(original, !pine_minute_input(c));
+    if (chart_delivery(c)) {
+        c.input_clock = pineforge::native_calendar::parse_timeframe(c.input_tf);
+        c.input_calendar = pineforge::native_calendar::parse_session(c.session, c.timezone);
+        if (!c.input_clock || !c.input_calendar)
+            throw std::runtime_error("input timeframe or session calendar is invalid");
+    }
     strategy.configure(c);
     const auto settings_receipt = strategy.effective_settings();
     const auto capabilities_receipt = strategy.capabilities();
     const auto confirmed_bar_receipt = strategy.capabilities(true);
+    if (!c.native.present && c.input_tf != "1") {
+        auto legacy = legacy_fields(c);
+        legacy.input_tf = "1";
+        refuse_legacy_ledger(c.ledger, bind_deployment_identity(identity(legacy, original, library),
+            settings_receipt, capabilities_receipt, c.routing.routed, c.routing.file_identity, confirmed_bar_receipt));
+    }
+    if (chart_delivery(c))
+        require_chart_calendar(c.script_tf, c.timezone, warmup.front().timestamp, c.session,
+                               c.mode == "bars", warmup.back().timestamp);
+    NativeConfigValues clock = c.native;
+    clock.input_tf = c.input_tf;
+    clock.script_tf = c.script_tf;
+    clock.timezone = c.timezone;
+    clock.chart_timezone = c.chart_timezone;
+    clock.session = c.session;
     if (!capabilities_receipt.empty()) {
         require_close_only_capabilities(capabilities_receipt, confirmed_bar_receipt,
                                        c.mode, c.input_tf, c.script_tf,
@@ -818,6 +878,8 @@ int run(Config c) {
             }
         }
     }
+    if (chart_delivery(c))
+        require_native_warmup(clock, warmup);
     std::string deployment =
         c.native.present
             ? native_identity(c.native, c.mode, c.name, c.webhook, original, library)
@@ -854,6 +916,7 @@ int run(Config c) {
     ReportDeltas report_deltas;
     ledger.verify_report(0, cumulative_report(strategy, deployment, 0, report_deltas), [&] { return report_deltas.json(); });
     Cursor cursor;
+    cursor.bar_timestamp = warmup.back().timestamp;
     auto recorded = ledger.input_count();
     auto recovering = Json::object({{"deployment", Json::string(deployment)}, {"state", Json::string("recovering")},
         {"ready", Json::boolean(false)}, {"readiness", Json::object({
@@ -891,7 +954,7 @@ int run(Config c) {
                             [] { return stopped != 0; }, c.control_dir, deployment);
     bool storage_stop = false;
     bool prefix_verified = recorded == 0 || c.from_input == recorded;
-    std::uint64_t source_timestamp = static_cast<std::uint64_t>(warmup.back().timestamp + 60000);
+    std::uint64_t source_timestamp = static_cast<std::uint64_t>(input_close(c, warmup.back().timestamp));
     std::uint64_t intake_bytes = 0;
     const auto source_time = [&](const Json& record, const auto& self) -> std::uint64_t {
         const auto type = record.at("type").text();
@@ -900,7 +963,7 @@ int run(Config c) {
             for (const auto& event : record.at("events").items) newest = std::max(newest, self(event, self));
             return newest;
         }
-        if (type == "bar") return record.at("bar").at("ts_open").integer<std::uint64_t>() + 60000;
+        if (type == "bar") return static_cast<std::uint64_t>(input_close(c, record.at("bar").at("ts_open").integer<std::int64_t>()));
         return record.at("ts").integer<std::uint64_t>();
     };
     if (recorded) source_timestamp = source_time(parse_json(ledger.input(recorded - 1)->canonical_json), source_time);

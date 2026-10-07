@@ -2,6 +2,7 @@
 
 #include "json.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -11,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <variant>
+#include <vector>
 
 namespace {
 
@@ -138,17 +140,31 @@ extern "C" int equivalence_export_actions(void* state, const char* path) {
         std::ofstream output(path);
         if (!output) return -1;
         const auto lots = host->native_open_lots(std::numeric_limits<double>::quiet_NaN());
+        std::vector<bool> exported(host->closed_trade_count(), false);
         for (const auto& event : host->native_events(0)) {
             if (!event.command) continue;
             const auto* applied = std::get_if<orders::ExecutionAppliedEvent>(&*event.command);
             if (!applied) continue;
             const int origin = applied->cursor.point.input_interval_index;
-            for (std::size_t offset = 0; offset < applied->closed_trade_count; ++offset) {
-                const auto& trade = host->closed_trade(applied->first_trade_index + offset);
+            std::size_t closed = 0;
+            for (std::size_t index = 0; index < host->closed_trade_count() && closed < applied->closed_trade_count; ++index) {
+                const auto& trade = host->closed_trade(index);
+                if (exported[index] || trade.open_at_end || trade.exit_id != applied->request().label ||
+                    trade.exit_price != applied->resolved_price || trade.exit_bar_index != applied->interval_index()) continue;
+                if (const auto* opening = std::get_if<pineforge::execution::OpeningExposure>(&applied->scope)) {
+                    if (trade.entry_incarnation != opening->incarnation) continue;
+                }
+                if (const auto* selected = std::get_if<orders::SelectedExposure>(&applied->scope)) {
+                    if (std::find(selected->incarnations.begin(), selected->incarnations.end(), trade.entry_incarnation)
+                        == selected->incarnations.end()) continue;
+                }
                 output << action(applied->effective_time_ms(), applied->cursor.point.interval_index, false,
-                    trade.is_long, trade.qty, trade.exit_price, trade.exit_id,
+                    trade.is_long, trade.qty, applied->resolved_price, applied->request().label,
                     trade.entry_incarnation, origin).dump() << '\n';
+                exported[index] = true;
+                ++closed;
             }
+            if (closed != applied->closed_trade_count) throw std::runtime_error("closing metadata unavailable");
             if (!applied->opened_lot_incarnation) continue;
             bool found = false;
             for (const auto& lot : lots) {
@@ -202,6 +218,7 @@ extern "C" int equivalence_export_receipts(void* state, const char* path) {
             if (!event.command) continue;
             orders::DefinitionRef definition;
             const char* kind = nullptr;
+            int match_reject_reason = -1;
             if (const auto* accepted = std::get_if<orders::AcceptedEvent>(&*event.command)) {
                 definition = accepted->definition;
                 kind = "accepted";
@@ -215,6 +232,30 @@ extern "C" int equivalence_export_receipts(void* state, const char* path) {
                 definition = activated->definition;
                 origin = activated->cursor.point.input_interval_index;
                 kind = "activated";
+            } else if (const auto* terms = std::get_if<orders::TermsResolvedEvent>(&*event.command)) {
+                definition = terms->definition;
+                origin = terms->cursor.point.input_interval_index;
+                timestamp = terms->cursor.point.effective_time_ms;
+                raw_price = terms->input.raw_price;
+                resolved_price = terms->input.terms.resolved_price;
+                provenance = static_cast<int>(terms->cursor.point.provenance);
+                path_phase = static_cast<int>(terms->cursor.point.path_phase);
+                kind = "terms_resolved";
+            } else if (const auto* rejected = std::get_if<orders::MatchRejectedEvent>(&*event.command)) {
+                definition = rejected->definition;
+                origin = rejected->cursor.point.input_interval_index;
+                timestamp = rejected->cursor.point.effective_time_ms;
+                provenance = static_cast<int>(rejected->cursor.point.provenance);
+                path_phase = static_cast<int>(rejected->cursor.point.path_phase);
+                match_reject_reason = static_cast<int>(rejected->reason);
+                kind = "match_rejected";
+            } else if (const auto* no_effect = std::get_if<orders::NoEffectEvent>(&*event.command)) {
+                definition = no_effect->definition;
+                origin = no_effect->cursor.point.input_interval_index;
+                timestamp = no_effect->cursor.point.effective_time_ms;
+                provenance = static_cast<int>(no_effect->cursor.point.provenance);
+                path_phase = static_cast<int>(no_effect->cursor.point.path_phase);
+                kind = "no_effect";
             } else if (const auto* applied = std::get_if<orders::ExecutionAppliedEvent>(&*event.command)) {
                 definition = applied->definition;
                 origin = applied->cursor.point.input_interval_index;
@@ -229,6 +270,7 @@ extern "C" int equivalence_export_receipts(void* state, const char* path) {
             output << Json::object({
                 {"ordinal", integer(static_cast<std::int64_t>(event.ordinal))},
                 {"kind", Json::string(kind)},
+                {"match_reject_reason", integer(match_reject_reason)},
                 {"type", Json::string(trigger_name(definition->request.trigger))},
                 {"id", Json::string(definition->request.label)},
                 {"origin_input_index", integer(origin)},

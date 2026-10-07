@@ -97,7 +97,7 @@ if(PINEFORGE_BUILD_TESTS)
         add_test(NAME native_live_service_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_service_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_example> $<TARGET_FILE:native_live_service_example>)
-        set_tests_properties(native_live_service_e2e PROPERTIES TIMEOUT 120)
+        set_tests_properties(native_live_service_e2e PROPERTIES TIMEOUT 300)
         target_sources(native_live_example PRIVATE $<TARGET_OBJECTS:native_live_equivalence_observer>)
         set(_pf_report_strategies $<TARGET_FILE:native_live_example>)
         foreach(probe ta-rsi14-cross-50-01 order-entry-implicit-reversal-exit-01 order-tranche-partial-market-close-01 bracket-atr-trailing-stop-state-01)
@@ -121,6 +121,14 @@ if(PINEFORGE_BUILD_TESTS)
             ${PROJECT_SOURCE_DIR}/tests/native_live_report_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_report_oracle> ${_pf_report_strategies})
         set_tests_properties(native_live_report_e2e PROPERTIES TIMEOUT 300)
+        add_test(NAME native_live_chart_input_e2e COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/tests/native_live_chart_input_e2e.py $<TARGET_FILE:pineforge-live>
+            $<TARGET_FILE:native_live_report_oracle> $<TARGET_FILE:native_live_example>)
+        set_tests_properties(native_live_chart_input_e2e PROPERTIES TIMEOUT 900)
+        add_test(NAME native_live_chart_calendar_e2e COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/tests/native_live_chart_calendar_e2e.py $<TARGET_FILE:pineforge-live>
+            $<TARGET_FILE:native_live_report_oracle> $<TARGET_FILE:native_live_example>)
+        set_tests_properties(native_live_chart_calendar_e2e PROPERTIES TIMEOUT 600)
         add_test(NAME native_live_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_example>)
@@ -244,7 +252,7 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
         ${PROJECT_SOURCE_DIR}/tests/strategy_capabilities_e2e.py $<TARGET_FILE:pineforge-live>
         $<TARGET_FILE:native_live_example> ${capabilities_libraries}
         "unknown=$<TARGET_FILE:capabilities_unknown>")
-    set_tests_properties(strategy_capabilities_e2e PROPERTIES TIMEOUT 120)
+    set_tests_properties(strategy_capabilities_e2e PROPERTIES TIMEOUT 300)
     foreach(capabilities_kind close clock_flags)
         add_executable(test_capabilities_equivalence_${capabilities_kind}
             ${PROJECT_SOURCE_DIR}/tests/test_capabilities_equivalence.cpp
@@ -368,5 +376,61 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
             add_test(NAME confirmed_capabilities_${confirmed_control}_tf${_pf_confirmed_clock}_equivalence
                 COMMAND test_confirmed_equivalence_${confirmed_control} ${_pf_confirmed_clock} 500)
         endforeach()
+    endif()
+endif()
+
+if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
+    set(_pf_genuine_retry_sanitizer_args)
+    if(PINEFORGE_ENABLE_SANITIZERS)
+        set(_pf_genuine_retry_sanitizer asan)
+    elseif(PINEFORGE_LIVE_TSAN)
+        set(_pf_genuine_retry_sanitizer tsan)
+    else()
+        set(_pf_genuine_retry_sanitizer "")
+    endif()
+    if(_pf_genuine_retry_sanitizer)
+        list(APPEND _pf_genuine_retry_sanitizer_args --sanitizer ${_pf_genuine_retry_sanitizer})
+    endif()
+    add_test(NAME native_live_genuine_retry_e2e COMMAND ${Python3_EXECUTABLE} -B
+        ${PROJECT_SOURCE_DIR}/tests/native_live_genuine_retry_e2e.py
+        --runner $<TARGET_FILE:pineforge-live> --library $<TARGET_FILE:native_live_example>
+        --output ${CMAKE_CURRENT_BINARY_DIR}/native_live_genuine_retry_e2e
+        ${_pf_genuine_retry_sanitizer_args})
+    set_tests_properties(native_live_genuine_retry_e2e PROPERTIES TIMEOUT 300)
+    if(_pf_genuine_retry_sanitizer)
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            set(_pf_genuine_retry_runtime_name "lib${_pf_genuine_retry_sanitizer}.so")
+        elseif(APPLE)
+            set(_pf_genuine_retry_runtime_name "libclang_rt.${_pf_genuine_retry_sanitizer}_osx_dynamic.dylib")
+        else()
+            set(_pf_genuine_retry_runtime_name "libclang_rt.${_pf_genuine_retry_sanitizer}-${CMAKE_SYSTEM_PROCESSOR}.so")
+        endif()
+        execute_process(COMMAND ${CMAKE_CXX_COMPILER} "-print-file-name=${_pf_genuine_retry_runtime_name}"
+            OUTPUT_VARIABLE _pf_genuine_retry_runtime OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE _pf_genuine_retry_runtime_result)
+        if(NOT _pf_genuine_retry_runtime_result EQUAL 0 OR NOT EXISTS "${_pf_genuine_retry_runtime}")
+            message(FATAL_ERROR "The genuine retry Python test requires the compiler's shared sanitizer runtime")
+        endif()
+        if(APPLE)
+            set(_pf_genuine_retry_environment "DYLD_INSERT_LIBRARIES=${_pf_genuine_retry_runtime}")
+        else()
+            set(_pf_genuine_retry_environment "LD_PRELOAD=${_pf_genuine_retry_runtime}")
+        endif()
+        if(PINEFORGE_ENABLE_SANITIZERS)
+            # Match ci_verify: Apple's runtime has no LeakSanitizer.
+            set(_pf_genuine_retry_detect_leaks 1)
+            if(APPLE)
+                set(_pf_genuine_retry_detect_leaks 0)
+            endif()
+            list(APPEND _pf_genuine_retry_environment
+                "ASAN_OPTIONS=detect_leaks=${_pf_genuine_retry_detect_leaks}:halt_on_error=1:abort_on_error=1"
+                "UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1"
+                # Expose Python allocations to the allocator the preloaded
+                # sanitizer intercepts, including the explicit LSan check.
+                "PYTHONMALLOC=malloc")
+        else()
+            list(APPEND _pf_genuine_retry_environment "TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1")
+        endif()
+        set_tests_properties(native_live_genuine_retry_e2e PROPERTIES ENVIRONMENT "${_pf_genuine_retry_environment}")
     endif()
 endif()

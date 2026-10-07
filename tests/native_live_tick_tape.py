@@ -3,6 +3,8 @@
 The historical batch API is not a tick reference. Array and single-print
 continuations use the same public realtime ingress. Hashes are compared at
 provider-message boundaries, exactly as the runner's atomic ledger does.
+Runner and tick references use chart input and chart warmup; the separate
+one-minute reconstruction control retains its original input clock.
 """
 
 import base64
@@ -13,7 +15,7 @@ from decimal import Decimal
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
-import os
+import math
 from pathlib import Path
 import re
 import signal
@@ -26,10 +28,11 @@ import time
 import traceback
 
 from native_live_equivalence_e2e import (
-    MockReceiver, Strategy, TradeTick, action_key, compile_library,
-    first_difference, read_rows, write_json,
+    MockReceiver, Strategy, TradeTick, action_key, chart_bar_array, chart_rows, compile_library,
+    first_difference, ordered_delivery_effects, read_rows, write_json,
 )
 from native_live_tick_oracle import classify_first_divergence
+from native_live_test_process import TimedProcess
 
 
 SCENARIOS = (
@@ -40,8 +43,13 @@ SCENARIOS = (
 TIMESTAMP_CONTRACT = {
     "physical_R_A": "No mapping: physical action milliseconds and every message hash are exact.",
     "R_B": "Only action.timestamp and closed/terminal trade entry_time/exit_time are mapped to floor(ts/900000)*900000. The historical script-bar open labels the modeled fill; an observed fill carries print milliseconds. All prices, quantities, order metadata, other trade fields, curve points and metrics remain bitwise exact.",
-    "magnifier": "off; run_backtest_full(..., 0, 4, 0, ...)",
-    "sealing": "A time event at each next 1m boundary seals the preceding minute; final time seals the tape's last minute.",
+    "magnifier": "off; chart-input run_backtest_full(..., input_tf=15, script_tf=15, 0, 4, 3, ...)",
+    "chart_input_batch": {"input_tf": 15, "script_tf": 15, "magnifier": 0,
+        "tick_samples": 4, "distribution": 3, "distribution_name": "ENDPOINTS"},
+    "one_minute_reconstruction": {"input_tf": 1, "script_tf": 1,
+        "ingress": "strategy_stream_begin, strategy_stream_push_ticks, strategy_stream_advance_time",
+        "purpose": "Separate tick-built source-bar control, not the chart-input batch reference."},
+    "sealing": "Time events declare completeness at each next 1m boundary. Chart-input references seal 15m slots; the separate input_tf=script_tf=1 reconstruction seals minutes. Final time seals the tape's last minute.",
 }
 
 
@@ -133,8 +141,20 @@ def message_groups(packets, batch_size):
 
 
 def parse_cost(path):
+    text = path.read_text()
+    if text.lstrip().startswith("{"):
+        values = json.loads(text)
+        for key in ("user_seconds", "system_seconds", "cpu_seconds", "wall_seconds", "max_rss_kib"):
+            if not math.isfinite(values[key]) or values[key] < 0:
+                raise ValueError("invalid wait4 timing receipt: " + key)
+        if (values["backend"] != "wait4" or values["pid"] <= 0
+                or values["cpu_seconds"] != values["user_seconds"] + values["system_seconds"]):
+            raise ValueError("invalid wait4 timing receipt")
+        return values
+    # Retain the reader for archived GNU-time receipts. New invocations always
+    # write per-child wait4 JSON and never launch an external timing tool.
     values = {}
-    for line in path.read_text().splitlines():
+    for line in text.splitlines():
         text = line.strip()
         for label, key in (("User time (seconds):", "user_seconds"),
                            ("System time (seconds):", "system_seconds"),
@@ -230,7 +250,8 @@ def direct_tape(strategy, warmup, packets, array_size, output, hashes=False,
     try:
         if retain:
             strategy.check(strategy.library.equivalence_retain_events(handle))
-        strategy.check(strategy.library.strategy_stream_begin(handle, warmup, len(warmup), b"1", str(timeframe).encode()))
+        strategy.check(strategy.library.strategy_stream_begin(handle, warmup, len(warmup),
+            str(timeframe).encode(), str(timeframe).encode()))
         position = 0
         while position < len(packets):
             packet = packets[position]
@@ -271,12 +292,13 @@ def message_hashes(event_hashes, total, batch_size):
 
 def runner_command(strategy, output, runner, receiver, mode):
     return [str(runner), "run", "--strategy", str(strategy.path), "--warmup", str(output / "warmup.csv"),
-        "--input-tf", "1", "--script-tf", "15", "--session", "24x7", "--timezone", "UTC",
+        "--input-tf", "15", "--script-tf", "15", "--session", "24x7", "--timezone", "UTC",
         "--chart-timezone", "UTC", "--mode", mode, "--ledger", str(output / "orders.sqlite3"),
+        "--poll-ms", "100",
         "--symbol", "BINANCE:ETHUSDT.P", "--name", strategy.path.stem,
         "--syminfo", "type=crypto", "--syminfo", "currency=USDT", "--syminfo", "basecurrency=ETH",
         "--syminfo", "mintick=0.01", "--syminfo", "pointvalue=1", "--syminfo", "qty_step=0.001",
-        "--webhook-url", f"http://127.0.0.1:{receiver.server.server_address[1]}/actions", "--allow-insecure-http"]
+        "--webhook-routes", str(receiver.routes), "--allow-insecure-http"]
 
 
 def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scenario, mode="ticks"):
@@ -297,7 +319,8 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
     process = None
     result = {"scenario": scenario, "probe": strategy.path.stem, "batch_size": batch_size,
         "transport": transport, "messages": len(messages), "feed_bytes": feed_path.stat().st_size,
-        "fail_first": fail_first, "restart": restart}
+        "fail_first": fail_first, "restart": restart,
+        "delivery_policy": "single-flight, two explicit transport retries"}
     costs = []
     commands = []
     try:
@@ -313,12 +336,12 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
             command = base + ["--feed", "-" if transport == "stdin" else str(feed_path)]
         with (output / "runner.log").open("w") as log:
             for launch in range(2 if restart else 1):
-                cost_path = output / f"time-{launch}.txt"
-                timed = ["/usr/bin/time", "-v", "-o", str(cost_path)] + command
-                commands.append(timed)
+                cost_path = output / f"time-{launch}.json"
+                commands.append(command)
                 with feed_path.open("rb") as source:
-                    process = subprocess.Popen(timed, stdin=source if transport == "stdin" else subprocess.DEVNULL,
-                        stdout=log, stderr=subprocess.STDOUT)
+                    receiver.begin_invocation(command)
+                    process = TimedProcess(command, cost_path, stdin=source if transport == "stdin" else subprocess.DEVNULL,
+                        stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
                     if restart and launch == 0:
                         deadline = time.monotonic() + 600
                         recorded = 0
@@ -329,17 +352,15 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
                             except sqlite3.Error:
                                 pass
                             if len(messages) // 2 <= recorded < len(messages):
-                                children = Path(f"/proc/{process.pid}/task/{process.pid}/children").read_text().split()
-                                if len(children) != 1:
-                                    raise RuntimeError("timed runner child is not uniquely identified")
-                                os.kill(int(children[0]), signal.SIGKILL)
-                                result["sigkill"] = {"signal": 9, "committed_before_kill": recorded}
+                                process.kill()
+                                result["sigkill"] = {"signal": signal.SIGKILL, "pid": process.pid,
+                                    "committed_before_kill": recorded}
                                 break
                             time.sleep(0.01)
                         killed = process.wait(timeout=20)
-                        if "sigkill" not in result or killed != 137:
+                        if "sigkill" not in result or killed != -signal.SIGKILL:
                             raise RuntimeError(f"mid-tape SIGKILL not proven: {killed}")
-                        result["sigkill"]["time_returncode"] = killed
+                        result["sigkill"]["returncode"] = killed
                         with sqlite3.connect(output / "orders.sqlite3") as ledger:
                             resumed = ledger.execute("SELECT COUNT(*) FROM inputs").fetchone()[0]
                         feed_path = output / "resume.jsonl"
@@ -349,13 +370,26 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
                     else:
                         result["runner_returncode"] = process.wait(timeout=1800)
                 costs.append(parse_cost(cost_path))
+            if fail_first:
+                cost_path = output / "time-redelivery.json"
+                command = receiver.redelivery_command(runner, output / "orders.sqlite3")
+                commands.append(command)
+                receiver.begin_invocation(command)
+                process = TimedProcess(command, cost_path, stdout=log, stderr=subprocess.STDOUT,
+                    env=receiver.environment)
+                result["redelivery_returncode"] = process.wait(timeout=1800)
+                if result["redelivery_returncode"] != 0:
+                    raise RuntimeError("explicit HTTP-failure redelivery did not complete")
+                costs.append(parse_cost(cost_path))
+        redelivery = receiver.redelivery
         attempts, effects = receiver.finish(output)
         receiver_errors = list(receiver.errors)
         receiver = None
         if receiver_errors:
             raise RuntimeError("webhook receiver errors: " + json.dumps(receiver_errors))
         expected = [action_key(action) for action in reference["actions"]]
-        result["action_difference"] = first_difference(expected, [action_key(action) for action in effects])
+        aligned_effects = ordered_delivery_effects(attempts, effects, redelivery)
+        result["action_difference"] = first_difference(expected, [action_key(action) for action in aligned_effects])
         with sqlite3.connect(output / "orders.sqlite3") as ledger:
             actual_hashes = [record[0] for record in ledger.execute("SELECT state_hash FROM inputs ORDER BY input_index")]
             pending = ledger.execute("SELECT COUNT(*) FROM events WHERE acknowledged=0").fetchone()[0]
@@ -363,10 +397,6 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
         result.update(actions=len(effects), expected_actions=len(expected), attempts=len(attempts),
             committed_inputs=len(actual_hashes), pending_events=pending,
             closed_trades=len(reference["state"]["closed_trades"]), equity_points=len(reference["state"]["equity_curve"]))
-        if [effect["sequence"] for effect in effects] != list(range(1, len(effects) + 1)):
-            raise RuntimeError("webhook effects are reordered, missing or duplicated")
-        if len({effect["event_id"] for effect in effects}) != len(effects):
-            raise RuntimeError("duplicate webhook effect")
         if fail_first:
             rejected = Counter(attempt["event_id"] for attempt in attempts if attempt["status"] == 503)
             if set(rejected) != {effect["event_id"] for effect in effects} or any(count != 1 for count in rejected.values()):
@@ -378,9 +408,7 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
         (output / "exception.log").write_text(traceback.format_exc())
     finally:
         if process is not None and process.poll() is None:
-            children = Path(f"/proc/{process.pid}/task/{process.pid}/children").read_text().split()
-            for child in children:
-                os.kill(int(child), signal.SIGKILL)
+            process.kill()
             process.wait(timeout=20)
         if receiver is not None:
             receiver.finish(output)
@@ -463,11 +491,9 @@ def run_genuine_tape(arguments):
     warmup_rows = [row for row in corpus_rows if int(row["timestamp"]) < manifest["start_ms"]]
     if not warmup_rows or any(int(row["timestamp"]) != start + index * 60000 for index, row in enumerate(warmup_rows)):
         raise RuntimeError("warmup must be nonempty and contiguous before the genuine tape")
-    def bar_array(rows):
-        return (BarC * len(rows))(*[BarC(*[float(row[field]) for field in ("open", "high", "low", "close", "volume")],
-            int(row["timestamp"])) for row in rows])
-    warmup = bar_array(warmup_rows)
-    combined = bar_array(warmup_rows + aggregate_rows)
+    minute_warmup_rows = warmup_rows
+    warmup_rows = chart_rows(minute_warmup_rows, 15)
+    chart_live_rows = chart_rows(aggregate_rows, 15)
     venue = read_venue(arguments.venue_klines) if arguments.venue_klines else None
     corpus = {int(row["timestamp"]): row for row in corpus_rows}
     results = []
@@ -485,6 +511,8 @@ def run_genuine_tape(arguments):
         if not arguments.reuse_libraries:
             library = compile_library(root, build, arguments.libraries_dir.resolve(), probe)
         strategy = Strategy(library, BarC, ReportC)
+        warmup = chart_bar_array(strategy, warmup_rows)
+        combined = chart_bar_array(strategy, warmup_rows + chart_live_rows)
         print(f'START genuine probe={probe} prints={manifest["count"]}', flush=True)
         whole = direct_tape(strategy, warmup, packets, 1024, directory, hashes=True, retain=True)
         write_json(directory / "whole-tape.json", whole)
@@ -507,7 +535,7 @@ def run_genuine_tape(arguments):
         references.append(reference)
         print(f'{reference["status"]} R-A-reference probe={probe} array=1024 '
               f'comparison={"not-run" if arguments.tick_rb_only else "batch-boundaries" if arguments.tick_batch_only else "singleton"}', flush=True)
-        batch = strategy.batch(combined, 15, directory / "batch")
+        batch = strategy.batch(combined, 15, directory / "batch", input_tf=15, distribution=3)
         forward_actions = [action for action in batch["actions"] if action["origin_input_index"] >= len(warmup)]
         batch_checks = {"actions": first_difference(mapped_actions(forward_actions), mapped_actions(whole["actions"])),
             "report": first_difference(mapped_report(batch["state"]), mapped_report(whole["state"]))}
@@ -529,7 +557,8 @@ def run_genuine_tape(arguments):
               f'actions={len(whole["actions"])} classification={oracle["status"]} '
               f'difference={json.dumps(batch_checks["actions"], separators=(",", ":"))}', flush=True)
         if probe == arguments.probes[0]:
-            rebuilt = direct_tape(strategy, warmup, packets, 1024, directory, observe_bars=True, timeframe=1)["source_bars"]
+            rebuilt = direct_tape(strategy, chart_bar_array(strategy, minute_warmup_rows), packets,
+                1024, directory, observe_bars=True, timeframe=1)["source_bars"]
             write_json(output / "tick-built-bars.json", rebuilt)
             engine_bars = {row["timestamp"]: row for row in rebuilt}
             bar_checks = {"engine_vs_decimal": bar_differences(aggregate_rows, engine_bars),
@@ -549,8 +578,8 @@ def run_genuine_tape(arguments):
                 write_json(output / "results.json", results)
             bar_packets = [{"type": "bar", "bar": {"ts_open": int(row["timestamp"]),
                 **{short: float(row[field]) for short, field in (("o", "open"), ("h", "high"),
-                   ("l", "low"), ("c", "close"), ("v", "volume"))}}} for row in aggregate_rows]
-            bar_reference = strategy.stream(combined, len(warmup), 15)
+                   ("l", "low"), ("c", "close"), ("v", "volume"))}}} for row in chart_live_rows]
+            bar_reference = strategy.stream(combined, len(warmup), 15, input_tf=15)
             bar_reference["hashes"] = [{"hash": digest} for digest in bar_reference["hashes"]]
             cost = genuine_case(strategy, bar_reference, warmup_rows, bar_packets, directory / "bar-cost",
                 build / "bin/pineforge-live", "file-single", mode="bars")

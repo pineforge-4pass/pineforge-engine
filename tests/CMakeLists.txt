@@ -3961,6 +3961,9 @@ endif()
 if(PINEFORGE_BUILD_SOURCE_LAYER AND TARGET test_adapter_live_state_equivalence)
     add_test(NAME test_adapter_margin_revival_erasure
              COMMAND test_adapter_live_state_equivalence --margin-revival)
+    # The fragments header is generated from the retirement cursor walks of pine_adapter.cpp by a regex over their
+    # formatting (see the header of retirement_cursor_fragments.py): reformatting a walk fails this build with an
+    # #error until the generator follows.
     set(_pf_retirement_fragments "${CMAKE_CURRENT_BINARY_DIR}/retirement_cursor_fragments.hpp")
     add_custom_command(OUTPUT "${_pf_retirement_fragments}"
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/retirement_cursor_fragments.py"
@@ -4037,4 +4040,89 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
         target_compile_options(test_run_failure_codes PRIVATE ${_pf_cov_test_flags})
     endif()
     add_test(NAME test_run_failure_codes COMMAND test_run_failure_codes)
+endif()
+
+if(PINEFORGE_BUILD_SOURCE_LAYER AND PINEFORGE_BUILD_LIVE_RUNNER)
+    add_library(same_calc_bracket_strategy MODULE
+        fixtures/same_calc_bracket/generated.cpp
+        $<TARGET_OBJECTS:native_live_equivalence_observer>)
+    target_link_libraries(same_calc_bracket_strategy PRIVATE pineforge)
+    target_compile_options(same_calc_bracket_strategy PRIVATE -ffp-contract=off)
+    if(APPLE)
+        target_link_options(same_calc_bracket_strategy PRIVATE "LINKER:-u,_pf_abi_version")
+    else()
+        target_link_options(same_calc_bracket_strategy PRIVATE "LINKER:-u,pf_abi_version")
+    endif()
+    set_target_properties(same_calc_bracket_strategy PROPERTIES PREFIX "")
+    add_test(NAME confirmed_capabilities_same_calc_bracket_e2e COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/same_calc_bracket_e2e.py $<TARGET_FILE:pineforge-live>
+        $<TARGET_FILE:native_live_report_oracle> $<TARGET_FILE:same_calc_bracket_strategy>)
+    set_tests_properties(confirmed_capabilities_same_calc_bracket_e2e PROPERTIES TIMEOUT 300)
+    if(PINEFORGE_ENABLE_SANITIZERS)
+        set_tests_properties(confirmed_capabilities_same_calc_bracket_e2e PROPERTIES TIMEOUT 600)
+    endif()
+endif()
+
+if(PINEFORGE_BUILD_SOURCE_LAYER AND PINEFORGE_BUILD_LIVE_RUNNER)
+    add_executable(test_native_live_observer_exit_order test_native_live_observer_exit_order.cpp
+        $<TARGET_OBJECTS:native_live_equivalence_observer>)
+    target_link_libraries(test_native_live_observer_exit_order PRIVATE pineforge)
+    target_include_directories(test_native_live_observer_exit_order PRIVATE ${PROJECT_SOURCE_DIR}/runner)
+    target_compile_options(test_native_live_observer_exit_order PRIVATE -UNDEBUG -ffp-contract=off)
+    add_test(NAME test_native_live_observer_exit_order COMMAND test_native_live_observer_exit_order)
+endif()
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_executable(test_lv_d8_tick_stop_activation test_lv_d8_tick_stop_activation.cpp)
+    target_link_libraries(test_lv_d8_tick_stop_activation PRIVATE pineforge)
+    target_compile_options(test_lv_d8_tick_stop_activation PRIVATE -UNDEBUG -ffp-contract=off)
+    add_test(NAME test_lv_d8_tick_stop_activation COMMAND test_lv_d8_tick_stop_activation)
+    if(PINEFORGE_BUILD_LIVE_RUNNER)
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        add_library(lv_d8_stop_strategy SHARED fixtures/lv_d8_stop_activation/generated.cpp
+            lv_d8_candidate_observer.cpp $<TARGET_OBJECTS:native_live_equivalence_observer>)
+        target_link_libraries(lv_d8_stop_strategy PRIVATE pineforge)
+        target_compile_options(lv_d8_stop_strategy PRIVATE -ffp-contract=off)
+        if(APPLE)
+            target_link_options(lv_d8_stop_strategy PRIVATE "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+        elseif(UNIX)
+            target_link_options(lv_d8_stop_strategy PRIVATE
+                "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+        endif()
+        set(_pf_d8_equivalence_command)
+        if(PINEFORGE_ENABLE_SANITIZERS)
+            if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+                set(_pf_d8_runtime_name libasan.so)
+            elseif(APPLE)
+                set(_pf_d8_runtime_name libclang_rt.asan_osx_dynamic.dylib)
+            else()
+                set(_pf_d8_runtime_name "libclang_rt.asan-${CMAKE_SYSTEM_PROCESSOR}.so")
+            endif()
+            execute_process(COMMAND ${CMAKE_CXX_COMPILER} "-print-file-name=${_pf_d8_runtime_name}"
+                OUTPUT_VARIABLE _pf_d8_sanitizer_runtime OUTPUT_STRIP_TRAILING_WHITESPACE
+                RESULT_VARIABLE _pf_d8_runtime_result)
+            if(NOT _pf_d8_runtime_result EQUAL 0 OR NOT EXISTS "${_pf_d8_sanitizer_runtime}")
+                message(FATAL_ERROR "The stop-equivalence Python test requires the compiler's shared ASan runtime")
+            endif()
+            if(APPLE)
+                set(_pf_d8_runtime_environment "DYLD_INSERT_LIBRARIES=${_pf_d8_sanitizer_runtime}")
+            else()
+                set(_pf_d8_runtime_environment "LD_PRELOAD=${_pf_d8_sanitizer_runtime}")
+            endif()
+            list(APPEND _pf_d8_equivalence_command ${CMAKE_COMMAND} -E env
+                "${_pf_d8_runtime_environment}"
+                "ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:abort_on_error=1"
+                "UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1")
+        endif()
+        list(APPEND _pf_d8_equivalence_command ${Python3_EXECUTABLE} -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/lv_d8_tick_stop_equivalence.py
+            --library $<TARGET_FILE:lv_d8_stop_strategy> --runner $<TARGET_FILE:pineforge-live>
+            --require-terminal-receipts)
+        add_test(NAME test_lv_d8_tick_stop_equivalence COMMAND ${_pf_d8_equivalence_command})
+        # 38 s on an idle 32-vCPU host; the row spawns many ctypes scenarios, so
+        # keep an order of magnitude over that for loaded and instrumented runs.
+        set_tests_properties(test_lv_d8_tick_stop_equivalence PROPERTIES TIMEOUT 300)
+        if(PINEFORGE_ENABLE_SANITIZERS)
+            set_tests_properties(test_lv_d8_tick_stop_equivalence PROPERTIES TIMEOUT 900)
+        endif()
+    endif()
 endif()

@@ -5,6 +5,7 @@
 #include <pineforge/bar.hpp>
 #include <pineforge/market_driver.hpp>
 #include <pineforge/native_calendar.hpp>
+#include "../src/native_calendar_memo.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -135,6 +136,88 @@ std::optional<std::string> read_resource_bytes(const std::string& path) {
         return std::nullopt;
     bytes.resize(off);
     return bytes;
+}
+
+bool posix_has_dst(std::string_view definition) {
+    std::size_t position = 0;
+    if (!definition.empty() && definition.front() == '<') {
+        position = definition.find('>');
+        if (position == std::string_view::npos)
+            throw std::runtime_error("chart timezone rules cannot be inspected");
+        ++position;
+    } else {
+        while (position < definition.size() &&
+               ((definition[position] >= 'A' && definition[position] <= 'Z') ||
+                (definition[position] >= 'a' && definition[position] <= 'z')))
+            ++position;
+    }
+    while (position < definition.size() &&
+           (definition[position] == '+' || definition[position] == '-' || definition[position] == ':' ||
+            (definition[position] >= '0' && definition[position] <= '9')))
+        ++position;
+    return position < definition.size();
+}
+
+bool tzfile_has_dst(const std::string& bytes, std::int64_t first_timestamp) {
+    const auto unsigned_value = [&](std::size_t offset, std::size_t width) {
+        if (offset > bytes.size() || width > bytes.size() - offset)
+            throw std::runtime_error("chart timezone rules cannot be inspected");
+        std::uint64_t value = 0;
+        for (std::size_t index = 0; index < width; ++index)
+            value = (value << 8) | static_cast<unsigned char>(bytes[offset + index]);
+        return value;
+    };
+    const auto block_size = [&](std::size_t header, std::size_t width) {
+        if (header > bytes.size() || bytes.size() - header < 44 || bytes.compare(header, 4, "TZif"))
+            throw std::runtime_error("chart timezone rules cannot be inspected");
+        return unsigned_value(header + 36, 4) * 6 + unsigned_value(header + 40, 4) +
+            unsigned_value(header + 32, 4) * (width + 1) +
+            unsigned_value(header + 28, 4) * (width + 4) +
+            unsigned_value(header + 24, 4) + unsigned_value(header + 20, 4);
+    };
+    std::size_t header = 0, width = 4;
+    auto length = block_size(header, width);
+    if (length > bytes.size() - 44)
+        throw std::runtime_error("chart timezone rules cannot be inspected");
+    if (bytes[4] != '\0') {
+        if (bytes[4] != '2' && bytes[4] != '3' && bytes[4] != '4')
+            throw std::runtime_error("chart timezone rules cannot be inspected");
+        header = 44 + static_cast<std::size_t>(length);
+        width = 8;
+        length = block_size(header, width);
+    }
+    if (length > bytes.size() - header - 44)
+        throw std::runtime_error("chart timezone rules cannot be inspected");
+    const auto count = unsigned_value(header + 32, 4);
+    const auto types = unsigned_value(header + 36, 4);
+    const auto data = header + 44;
+    const auto type_data = data + count * (width + 1);
+    if (!types || types > 256)
+        throw std::runtime_error("chart timezone rules cannot be inspected");
+    const auto daylight = [&](std::uint64_t index) {
+        if (index >= types)
+            throw std::runtime_error("chart timezone rules cannot be inspected");
+        return unsigned_value(type_data + index * 6 + 4, 1) != 0;
+    };
+    bool previous = daylight(0);
+    for (std::uint64_t index = 0; index < count; ++index) {
+        auto raw = unsigned_value(data + index * width, width);
+        if (width == 4 && (raw & 0x80000000ULL)) raw |= 0xffffffff00000000ULL;
+        const auto timestamp = raw <= static_cast<std::uint64_t>(INT64_MAX)
+            ? static_cast<std::int64_t>(raw) : -static_cast<std::int64_t>(~raw) - 1;
+        const bool next = daylight(unsigned_value(data + count * width + index, 1));
+        if (timestamp >= first_timestamp / 1000 && previous != next)
+            return true;
+        previous = next;
+    }
+    const auto footer = data + static_cast<std::size_t>(length);
+    if (width == 8 && footer < bytes.size() && bytes[footer] == '\n') {
+        const auto end = bytes.find('\n', footer + 1);
+        if (end == std::string::npos)
+            throw std::runtime_error("chart timezone rules cannot be inspected");
+        return posix_has_dst(std::string_view(bytes).substr(footer + 1, end - footer - 1));
+    }
+    return false;
 }
 
 const char* timezone_kind_name(pineforge::native_calendar::TimezoneSourceKind kind) {
@@ -463,7 +546,7 @@ void require_native_warmup(const NativeConfigValues& spec, const std::vector<pf_
         throw std::runtime_error("native warmup has an in-session gap");
     case pineforge::NativeInputPreflightError::Unaligned:
     case pineforge::NativeInputPreflightError::OffGridLabel:
-        throw std::runtime_error("native warmup bar is not aligned to the configured calendar");
+        throw std::runtime_error("native warmup bar is not aligned to the configured calendar; warmup must contain chart bars at the input timeframe, labelled at session-aware opening times");
     case pineforge::NativeInputPreflightError::OverlappingSlot:
         throw std::runtime_error("native warmup input intervals overlap");
     case pineforge::NativeInputPreflightError::NotStrictlyIncreasing:
@@ -474,6 +557,79 @@ void require_native_warmup(const NativeConfigValues& spec, const std::vector<pf_
         throw std::runtime_error("native warmup calendar validation failed");
     default:
         throw std::runtime_error("native warmup preflight refused");
+    }
+}
+
+void require_chart_calendar(const std::string& script_tf, const std::string& timezone,
+                            std::int64_t first_timestamp, const std::string& session,
+                            bool confirmed_chart_bars,
+                            std::optional<std::int64_t> last_warmup_timestamp) {
+    const auto clock = pineforge::native_calendar::parse_timeframe(script_tf);
+    if (!clock)
+        throw std::runtime_error("chart timeframe is invalid");
+    using Unit = pineforge::native_calendar::TimeframeUnit;
+    const bool calendar_chart = clock->unit() == Unit::Day || clock->unit() == Unit::Week;
+    if (calendar_chart) {
+        const auto facts = pineforge::native_calendar::timezone_identity_descriptor(timezone);
+        if (!facts || !facts->valid())
+            throw std::runtime_error("chart timezone rules cannot be inspected");
+        using Kind = pineforge::native_calendar::TimezoneSourceKind;
+        bool daylight = facts->kind == Kind::PosixDefaultDst;
+        if (facts->kind == Kind::PosixExplicit)
+            daylight = posix_has_dst(facts->effective_definition);
+        for (const auto& resource : facts->resource_paths) {
+            const auto bytes = read_resource_bytes(resource);
+            if (!bytes)
+                throw std::runtime_error("chart timezone rules cannot be inspected");
+            daylight = daylight || tzfile_has_dst(*bytes, first_timestamp);
+        }
+        if (daylight)
+            throw std::runtime_error("daily/weekly chart delivery on a daylight-saving calendar is not supported yet; keep the configured session and timezone, and use a supported intraday chart or defer deployment until calendar support is available");
+    }
+    if (!calendar_chart && (!confirmed_chart_bars || !clock->is_fixed()))
+        return;
+    const auto calendar = pineforge::native_calendar::parse_session(session, timezone);
+    if (!calendar)
+        throw std::runtime_error("chart session calendar is invalid");
+    constexpr std::int64_t horizon = 1098LL * 86400000;
+    const auto live_start = last_warmup_timestamp.value_or(first_timestamp);
+    if (live_start < first_timestamp || live_start > std::numeric_limits<std::int64_t>::max() - horizon)
+        throw std::runtime_error("chart calendar admission horizon is out of range");
+    const auto last_timestamp = live_start + horizon;
+    const auto period = static_cast<std::int64_t>(clock->count()) *
+                        (clock->unit() == Unit::Second ? 1000 :
+                         clock->unit() == Unit::Day ? 86400000 :
+                         clock->unit() == Unit::Week ? 604800000 : 60000);
+    const auto refuse_tiling = [&] {
+        throw std::runtime_error("chart delivery for a " + script_tf +
+            " chart on this session calendar is not supported yet: its bars do not tile the calendar's trading days. Keep the configured session and timezone, and use a supported chart timeframe (on a daylight-saving calendar, an intraday timeframe that divides 60 minutes).");
+    };
+    std::optional<std::int64_t> previous_origin;
+    pineforge::native_calendar::SessionDayMemo calendar_memo;
+    auto cursor = first_timestamp;
+    while (cursor <= last_timestamp) {
+        const auto day = pineforge::native_calendar::session_day_at(*calendar, cursor, calendar_memo);
+        if (!day || day->next_origin_ms <= cursor)
+            throw std::runtime_error("chart session-day origins cannot be inspected");
+        if (!day->spans.empty()) {
+            if (calendar_chart) {
+                const auto interval = pineforge::native_calendar::interval_containing(
+                    *calendar, *clock, day->spans.front().first, calendar_memo);
+                if (!interval)
+                    throw std::runtime_error("chart calendar intervals cannot be inspected");
+                if (previous_origin && (interval->eligible_open_ms - *previous_origin) % period != 0)
+                    refuse_tiling();
+                previous_origin = interval->eligible_open_ms;
+            } else {
+                if (previous_origin && (day->origin_ms - *previous_origin) % period != 0)
+                    refuse_tiling();
+                for (const auto& span : day->spans)
+                    if ((span.first - day->origin_ms) % period != 0)
+                        refuse_tiling();
+                previous_origin = day->origin_ms;
+            }
+        }
+        cursor = day->next_origin_ms;
     }
 }
 

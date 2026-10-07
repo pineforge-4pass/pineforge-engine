@@ -15,7 +15,7 @@ def checked(command):
     return json.loads(result.stdout)
 
 
-def bars():
+def bars(timeframe):
     result = []
     seed = 12345
     price = 100.0
@@ -31,7 +31,7 @@ def bars():
         close = max(5.0, opening + next_value() * 0.8 + math.sin(index / 97.0) * 0.15)
         high = max(opening, close) + abs(next_value()) * 0.6
         low = max(1.0, min(opening, close) - abs(next_value()) * 0.6)
-        result.append(dict(ts_open=1577836800000 + index * 60000, o=rounded(opening),
+        result.append(dict(ts_open=1577836800000 + index * int(timeframe) * 60000, o=rounded(opening),
                            h=rounded(high), l=rounded(low), c=rounded(close), v=5 + abs(next_value()) * 40))
         price = rounded(close)
     return result
@@ -40,13 +40,14 @@ def bars():
 def main():
     runner, oracle, name, library, *clock = sys.argv[1:]
     timeframe = clock[0] if clock else "1"
-    tape = bars()
+    tape = bars(timeframe)
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         full = root / "full.csv"
         write_csv(full, tape)
         batch_actions = root / "batch-actions.jsonl"
-        batch = checked([oracle, library, str(full), timeframe, str(batch_actions), "--confirmed"])
+        batch = checked([oracle, library, str(full), timeframe, str(batch_actions), "--confirmed",
+                         "--input-tf", timeframe, "--distribution", "3"])
         expected = [json.loads(line) for line in batch_actions.read_text().splitlines()]
         assert batch["trades_len"] > 0, (name, "no batch trades")
         splits = (30, 33, 500, 1500) if name in ("daily_close", "constant_daily") else (30, 33, 500)
@@ -58,7 +59,7 @@ def main():
             ledger = root / f"{split}.sqlite"
             command = [runner, "run", "--strategy", library, "--warmup", str(warmup),
                        "--feed", str(feed), "--ledger", str(ledger), "--mode", "bars",
-                       "--input-tf", "1", "--script-tf", timeframe, "--symbol", "BINANCE:ETHUSDT.P",
+                       "--input-tf", timeframe, "--script-tf", timeframe, "--symbol", "BINANCE:ETHUSDT.P",
                        "--syminfo", "type=crypto", "--syminfo", "currency=USDT",
                        "--syminfo", "basecurrency=ETH", "--syminfo", "mintick=0.01",
                        "--syminfo", "pointvalue=1", "--syminfo", "qty_step=0.001"]
@@ -68,9 +69,7 @@ def main():
             equal(batch, report["report"], name + ".report")
             with sqlite3.connect(ledger) as database:
                 actual = [json.loads(row[0]) for row in database.execute("SELECT payload FROM events ORDER BY ordinal")]
-            live_expected = [row for row in expected
-                             if row["origin_input_index"] - row["origin_input_index"] % int(timeframe)
-                             + int(timeframe) - 1 >= split]
+            live_expected = [row for row in expected if row["origin_input_index"] >= split]
             assert actual and live_expected, (name, "no live actions")
             equal([action_key(row) for row in live_expected], [action_key(row) for row in actual], name + ".actions")
             before = report

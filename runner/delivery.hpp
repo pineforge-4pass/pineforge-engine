@@ -29,6 +29,9 @@ public:
     std::uint64_t queue_bytes() const { return queue_bytes_.load(); }
     std::uint64_t control_errors() const { return control_errors_.load(); }
 private:
+    // tests/test_native_live_service.cpp sets finishing_ from the worker's own stop callback, where finish()
+    // cannot be called because it joins that thread.
+    friend struct DeliveryWorkerTestAccess;
     void run();
     Ledger& ledger_;
     DeliveryOptions settings_;

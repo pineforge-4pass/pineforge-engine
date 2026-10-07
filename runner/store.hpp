@@ -10,6 +10,8 @@
 
 namespace pineforge::live {
 
+void refuse_legacy_ledger(const std::string& path, const std::string& legacy_identity);
+
 struct Event {
     std::string id;
     std::string payload;

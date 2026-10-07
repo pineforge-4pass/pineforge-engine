@@ -69,11 +69,14 @@ def main():
                              h=max(opening, close) + 2, l=min(opening, close) - 2, c=close, v=10))
         warmup = root / "warmup.csv"
         split = 40
-        write_csv(warmup, bars[:split])
         feed = root / "feed.jsonl"
-        feed.write_text("".join(json.dumps(dict(type="bar", bar=bar)) + "\n" for bar in bars[split:]))
+        seed_bars = bars
         for number, library in enumerate(libraries):
             for timeframe in (1, 5):
+                bars = [{**bar, "ts_open": 1704067200000 + index * timeframe * 60000}
+                        for index, bar in enumerate(seed_bars)]
+                write_csv(warmup, bars[:split])
+                feed.write_text("".join(json.dumps(dict(type="bar", bar=bar)) + "\n" for bar in bars[split:]))
                 ledger = root / f"ledger-{number}-{timeframe}.sqlite"
                 command = [runner, "run", "--strategy", library, "--warmup", str(warmup),
                            "--feed", str(feed), "--ledger", str(ledger), "--mode", "bars",
@@ -88,7 +91,8 @@ def main():
                     snapshot = root / "snapshot.csv"
                     write_csv(snapshot, bars[:split + cursor])
                     batch_actions = root / "batch-actions.jsonl"
-                    batch = json.loads(checked([oracle, library, str(snapshot), str(timeframe), str(batch_actions)]))
+                    batch = json.loads(checked([oracle, library, str(snapshot), str(timeframe), str(batch_actions),
+                                               "--input-tf", str(timeframe), "--distribution", "3"]))
                     exported = checked([runner, "report", "--ledger", str(ledger), "--at-input", str(cursor)])
                     report = json.loads(exported)
                     equal(batch, report["report"])
@@ -108,20 +112,11 @@ def main():
                     comparisons += 1
                 if "bracket-atr-trailing-stop-state-01" in library and timeframe == 5:
                     write_csv(snapshot, bars[:split + 3])
-                    partial = json.loads(checked([oracle, library, str(snapshot), "5", str(batch_actions)]))
+                    partial = json.loads(checked([oracle, library, str(snapshot), "5", str(batch_actions),
+                                                 "--input-tf", "5", "--distribution", "3"]))
                     live_partial = json.loads(checked([runner, "report", "--ledger", str(ledger), "--at-input", "3"]))["report"]
-                    assert len(partial["equity_curve"]) == len(live_partial["equity_curve"])
-                    equal(partial["equity_curve"][:-1], live_partial["equity_curve"][:-1], "confirmed bucket prefix")
-                    assert partial["equity_curve"][-1] != live_partial["equity_curve"][-1]
-                    differences = {"equity_curve", "metrics", "net_profit", "total_trades", "trades", "trades_len"}
-                    equal({key: value for key, value in partial.items() if key not in differences},
-                          {key: value for key, value in live_partial.items() if key not in differences},
-                          "outside documented trailing-bucket fields")
-                    assert len(partial["trades"]) == len(live_partial["trades"]) + 1
-                    equal(partial["trades"][:-1], live_partial["trades"], "confirmed trades")
-                    assert partial["trades"][-1]["open_at_end"] == 1
-                    assert partial["trades"][-1]["exit_time"] == partial["equity_curve"][-1]["time_ms"]
-                    print("MID-BUCKET: trailing equity, hypothetical trade, net_profit, total_trades, trades_len and derived metrics differ; confirmed prefixes and every other field identical", flush=True)
+                    equal(partial, live_partial, "confirmed chart-bar trailing state")
+                    print("CHART BAR: trailing equity, trades and every report field BITWISE IDENTICAL", flush=True)
                 before = checked([runner, "report", "--ledger", str(ledger)])
                 with sqlite3.connect(ledger) as database:
                     database.execute("DROP TABLE report_integrity")

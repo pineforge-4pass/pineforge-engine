@@ -129,6 +129,11 @@ void DeliveryWorker::run() {
         active_ids.insert(event.id);
     };
     while (!should_stop()) {
+        // Read the finish request before this iteration's ledger scans. finish() is called after the last
+        // commit, so an iteration that sees the request also sees every committed action, and a scan that
+        // finds nothing then really is the end. Reading it at the exit test below, after the scans, let an
+        // action committed in between be skipped by a run that went on to exit 0.
+        const bool finish_requested = finishing_.load();
         const auto deadline = drain_until_.load();
         if (deadline && clock_time() >= deadline) return;
         if (deadline) {
@@ -196,7 +201,7 @@ void DeliveryWorker::run() {
                 position = retries.erase(position);
             } else ++position;
         }
-        if (finishing_ && exhausted && requests_exhausted && !waiting && active.empty() && retries.empty()) return;
+        if (finish_requested && exhausted && requests_exhausted && !waiting && active.empty() && retries.empty()) return;
         const auto remaining = drain_until_ ? std::max<std::int64_t>(0, drain_until_ - clock_time()) : 20;
         for (const auto& completed : transport.poll(static_cast<int>(std::min<std::int64_t>(20, remaining)))) {
             if (should_stop()) return;

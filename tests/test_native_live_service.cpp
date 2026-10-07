@@ -1,3 +1,8 @@
+// This test compiles the production delivery worker (runner/delivery.cpp) into itself under other class names and
+// gives it the fake transport defined below, instead of the one pineforge_live_support links. That lets it stop the
+// worker at an exact point of its loop and hand it a chosen batch of completions, which no real HTTP receiver can.
+// The renames keep the fake clear of the real WebhookMulti and DeliveryWorker; the fake must keep the interface
+// delivery.cpp uses (the constructor, add and poll, and the completed-result fields).
 #define WebhookMulti StopPollWebhookMulti
 #define DeliveryWorker StopPollDeliveryWorker
 #include "../runner/delivery.cpp"
@@ -95,10 +100,57 @@ void completed_poll_stop(const fs::path& root) {
     std::puts("PASS stop discards an already-returned completion batch; restart reuses keys and records one completion per attempt");
 }
 
+namespace pineforge::live {
+// delivery.hpp makes this a friend: finish() cannot be called from the worker's own thread (it joins that thread),
+// so the test sets the request the way finish() does, without the join.
+struct DeliveryWorkerTestAccess {
+    static void request_finish(StopPollDeliveryWorker& worker) { worker.finishing_ = true; }
+};
+}
+
+// The runner calls finish() right after the last input's commit, and the worker must send that action however the
+// commit falls against its loop. It used to decide that nothing was left from a ledger scan at the top of an
+// iteration and to read the finish request after the scans, so an action committed in between was skipped and the
+// run exited 0 with it unsent. The stop callback runs on the worker thread, after the delivery scan and before the
+// exit test, so committing the action and requesting the finish from inside it reproduces a descheduled worker
+// deterministically. The callback fires at each position of the loop in turn, so the row does not depend on how
+// many callbacks one iteration makes.
+void commit_races_finish(const fs::path& root) {
+    for (unsigned position = 1; position <= 9; ++position) {
+        const auto path = (root / ("finish-" + std::to_string(position) + ".sqlite")).string();
+        Ledger ledger(path, "deployment");
+        std::atomic<StopPollDeliveryWorker*> armed{nullptr};
+        std::atomic<bool> fired{false};
+        unsigned seen = 0;
+        StopPollDeliveryWorker worker(ledger, DeliveryOptions{}, {{"main", HttpOptions{}}}, std::nullopt, [&] {
+            auto* self = armed.load();
+            if (!self || fired.load() || ++seen < position) return false;
+            ledger.commit_input(0, "{}", 1, {{"last", "{\"sequence\":1}", "main", "delivery-last"}});
+            DeliveryWorkerTestAccess::request_finish(*self);
+            fired = true;
+            return false;
+        });
+        armed = &worker;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!fired && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        worker.finish();
+        assert(fired);
+        if (ledger.unsent_count() != 0 || worker.delivered() != 1 || worker.failed() != 0)
+            std::fprintf(stderr, "FAIL commit at stop-callback position %u: %llu unsent, %llu delivered, %llu failed\n",
+                         position, static_cast<unsigned long long>(ledger.unsent_count()),
+                         static_cast<unsigned long long>(worker.delivered()),
+                         static_cast<unsigned long long>(worker.failed()));
+        assert(ledger.unsent_count() == 0 && worker.delivered() == 1 && worker.failed() == 0);
+    }
+    std::puts("PASS an action committed just before finish() is sent at every position of the delivery loop");
+}
+
 int main() {
     const auto root = fs::temp_directory_path() / ("pineforge-service-" + std::to_string(getpid()));
     fs::create_directory(root);
     completed_poll_stop(root);
+    commit_races_finish(root);
     const auto status = (root / "status.json").string();
     auto healthy = Json::object({{"schema_version", Json::string("pineforge-live-status/v1")},
         {"ready", Json::boolean(true)}, {"liveness", Json::object({{"alive", Json::boolean(true)},

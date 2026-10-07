@@ -15,6 +15,9 @@ shipped 1m corpus, not historical observed trades. They prove same-print replay
 determinism across restart and exact 1m OHLCV reconstruction, not tick/batch fills.
 Configure with CMAKE_EXPORT_COMPILE_COMMANDS=ON and build all targets first;
 the observer is a CMake OBJECT target, not a standalone test executable.
+Runner scenarios aggregate prices to chart input and round minute splits down
+to the preceding complete chart bar. One-minute source reconstruction remains
+an independent direct-engine control.
 """
 
 import argparse
@@ -26,6 +29,7 @@ import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
+import os
 from pathlib import Path
 import shlex
 import sqlite3
@@ -66,6 +70,32 @@ class TradeTick(ctypes.Structure):
 def live_action(origin, timeframe, split):
     # A script bucket not sealed in warmup is replayed in realtime.
     return origin - origin % timeframe + timeframe - 1 >= split
+
+
+def chart_rows(rows, timeframe):
+    if not rows or len(rows) % timeframe:
+        raise ValueError("chart delivery requires complete input bars")
+    start = int(rows[0]["timestamp"])
+    if start % (timeframe * 60000) or any(int(row["timestamp"]) != start + index * 60000
+                                         for index, row in enumerate(rows)):
+        raise ValueError("chart delivery requires aligned, contiguous UTC minute prices")
+    grouped = []
+    for offset in range(0, len(rows), timeframe):
+        children = rows[offset:offset + timeframe]
+        volume = float(children[0]["volume"])
+        for row in children[1:]:
+            volume += float(row["volume"])
+        grouped.append({"timestamp": int(children[0]["timestamp"]),
+            "open": float(children[0]["open"]), "high": max(float(row["high"]) for row in children),
+            "low": min(float(row["low"]) for row in children), "close": float(children[-1]["close"]),
+            "volume": volume})
+    return grouped
+
+
+def chart_bar_array(strategy, rows):
+    return (strategy.bar_type * len(rows))(*[strategy.bar_type(
+        *[float(row[field]) for field in ("open", "high", "low", "close", "volume")],
+        int(row["timestamp"])) for row in rows])
 
 
 def write_json(path, value):
@@ -217,14 +247,14 @@ class Strategy:
                                  for index in range(report.equity_curve_len)],
                 "metrics": scalar(report.metrics)}
 
-    def batch(self, bars, timeframe, output):
+    def batch(self, bars, timeframe, output, input_tf=1, distribution=0):
         output.mkdir(parents=True)
         handle = self.create()
         report = self.report_type()
         try:
             self.check(self.library.equivalence_retain_events(handle))
-            self.library.run_backtest_full(handle, bars, len(bars), b"1", str(timeframe).encode(),
-                0, 4, 0, ctypes.byref(report))
+            self.library.run_backtest_full(handle, bars, len(bars), str(input_tf).encode(), str(timeframe).encode(),
+                0, 4, distribution, ctypes.byref(report))
             error = self.library.strategy_get_last_error(handle)
             if error:
                 raise RuntimeError(error.decode())
@@ -239,7 +269,7 @@ class Strategy:
             self.library.report_free(ctypes.byref(report))
             self.library.strategy_free(handle)
 
-    def stream(self, bars, split, timeframe, sample=False, observer_output=None, observe_bars=False):
+    def stream(self, bars, split, timeframe, sample=False, observer_output=None, observe_bars=False, input_tf=1):
         handle = self.create()
         report = self.report_type()
         actions = []
@@ -251,7 +281,7 @@ class Strategy:
             if observer_output is not None:
                 observer_output.mkdir(parents=True)
                 self.check(self.library.equivalence_retain_events(handle))
-            self.check(self.library.strategy_stream_begin(handle, bars, split, b"1", str(timeframe).encode()))
+            self.check(self.library.strategy_stream_begin(handle, bars, split, str(input_tf).encode(), str(timeframe).encode()))
             for index in range(split, len(bars)):
                 self.check(self.library.strategy_stream_push_bar(handle, ctypes.byref(bars[index])))
                 if observe_bars:
@@ -328,7 +358,7 @@ class Strategy:
         finally:
             self.library.report_free(ctypes.byref(report))
 
-    def tick_stream(self, bars, split, timeframe, packets, restart_at=0, observe_bars=False):
+    def tick_stream(self, bars, split, timeframe, packets, restart_at=0, observe_bars=False, input_tf=1):
         handle = self.create()
         actions = []
         hashes = []
@@ -336,7 +366,7 @@ class Strategy:
         restart_receipt = None
 
         def begin(current):
-            self.check(self.library.strategy_stream_begin(current, bars, split, b"1", str(timeframe).encode()))
+            self.check(self.library.strategy_stream_begin(current, bars, split, str(input_tf).encode(), str(timeframe).encode()))
 
         def push(current, packet):
             if packet["type"] == "tick":
@@ -380,6 +410,83 @@ class Strategy:
             self.library.strategy_free(handle)
 
 
+def ordered_delivery_effects(attempts, effects, redelivery=None):
+    sequences = [effect["sequence"] for effect in effects]
+    if sorted(sequences) != list(range(1, len(effects) + 1)):
+        raise RuntimeError("effect sequence gap or duplication")
+    if len({effect["event_id"] for effect in effects}) != len(effects):
+        raise RuntimeError("duplicate logical effect")
+    bodies = {}
+    first_attempts = []
+    for attempt in attempts:
+        payload = json.loads(attempt["body"])
+        event_id = attempt["event_id"]
+        if (payload["event_id"] != event_id or attempt["event_header"] != event_id
+                or attempt["idempotency_header"] != payload.get("delivery_id", event_id)):
+            raise RuntimeError("idempotency header/payload mismatch")
+        if event_id not in bodies:
+            first_attempts.append(payload["sequence"])
+            bodies[event_id] = attempt["body"]
+        elif bodies[event_id] != attempt["body"]:
+            raise RuntimeError("retry body changed")
+    if first_attempts != list(range(1, len(effects) + 1)):
+        raise RuntimeError("first-attempt deliveries are reordered or incomplete")
+    for effect in effects:
+        if effect != json.loads(bodies[effect["event_id"]]):
+            raise RuntimeError("effect body differs from its delivery")
+    if redelivery is None:
+        if sequences != sorted(sequences):
+            raise RuntimeError("first-pass effects are reordered")
+        return effects
+    boundary = redelivery["effects_before"]
+    if not 0 <= boundary <= len(effects):
+        raise RuntimeError("invalid explicit-redelivery boundary")
+    initial = sequences[:boundary]
+    if initial != sorted(initial):
+        raise RuntimeError("first-pass effects are reordered")
+    selected = set(redelivery["event_ids"])
+    if not selected <= set(bodies):
+        raise RuntimeError("explicit redelivery selected an unknown event")
+    invocations = redelivery["invocations"]
+    if not invocations or any(invocations[0][key] != redelivery[key]
+                              for key in ("attempts_before", "effects_before")):
+        raise RuntimeError("invalid explicit-redelivery invocation boundary")
+    end = {"attempts_before": len(attempts), "effects_before": len(effects)}
+    for invocation, following in zip(invocations, invocations[1:] + [end]):
+        for key, limit in end.items():
+            if not 0 <= invocation[key] <= following[key] <= limit:
+                raise RuntimeError("invalid explicit-redelivery invocation boundary")
+        invocation_attempts = attempts[invocation["attempts_before"]:following["attempts_before"]]
+        invocation_effects = effects[invocation["effects_before"]:following["effects_before"]]
+        redelivery_sequences = [json.loads(attempt["body"])["sequence"]
+                                for attempt in invocation_attempts if attempt["event_id"] in selected]
+        if redelivery_sequences != sorted(redelivery_sequences):
+            raise RuntimeError("explicit redelivery attempts are reordered")
+        redelivery_effects = [effect["sequence"] for effect in invocation_effects
+                             if effect["event_id"] in selected]
+        if redelivery_effects != sorted(redelivery_effects):
+            raise RuntimeError("explicit redelivery effects are reordered")
+        for effect in invocation_effects:
+            if effect["event_id"] in selected and not any(
+                    attempt["event_id"] == effect["event_id"] and attempt["status"] == 200
+                    for attempt in invocation_attempts):
+                raise RuntimeError("explicit redelivery effect has no successful attempt")
+    first_pass = [effect["sequence"] for index, effect in enumerate(effects)
+                  if index < boundary or effect["event_id"] not in selected]
+    if first_pass != sorted(first_pass):
+        raise RuntimeError("non-redelivered effects are reordered")
+    return sorted(effects, key=lambda effect: effect["sequence"])
+
+
+def require_replay_after_restart(attempts, event_id, invocation):
+    boundary = invocation["attempts_before"]
+    if not 0 <= boundary <= len(attempts):
+        raise RuntimeError("invalid restart invocation boundary")
+    if not any(row["event_id"] == event_id and row["status"] == 200
+               for row in attempts[boundary:]):
+        raise RuntimeError("accepted-but-ack-lost action was not replayed after restart")
+
+
 class MockReceiver:
     def __init__(self, output, fail_first=False, restart_action=0):
         self.fail_first = fail_first
@@ -388,6 +495,8 @@ class MockReceiver:
         self.release_ack = threading.Event()
         self.lock = threading.Lock()
         self.errors = []
+        self.redelivery = None
+        self.invocations = []
         self.database = sqlite3.connect(output / "receiver.sqlite3", check_same_thread=False)
         self.database.execute("PRAGMA journal_mode=WAL")
         self.database.execute("PRAGMA synchronous=FULL")
@@ -400,9 +509,10 @@ class MockReceiver:
                 try:
                     body = self.rfile.read(int(self.headers["Content-Length"]))
                     payload = json.loads(body)
-                    event_id = self.headers.get("Idempotency-Key")
+                    event_id = payload["event_id"]
+                    idempotency_header = self.headers.get("Idempotency-Key")
                     event_header = self.headers.get("X-PineForge-Event-Id")
-                    if event_id != event_header or event_id != payload["event_id"]:
+                    if event_id != event_header or idempotency_header != payload.get("delivery_id", event_id):
                         raise RuntimeError("idempotency header/payload mismatch")
                     with owner.lock:
                         prior = owner.database.execute("SELECT body FROM attempts WHERE event_id=?", (event_id,)).fetchall()
@@ -410,7 +520,7 @@ class MockReceiver:
                             raise RuntimeError("retry body changed")
                         rejected = owner.fail_first and not prior
                         owner.database.execute("INSERT INTO attempts VALUES(NULL,?,?,?,?,?)",
-                            (event_id, body, event_id, event_header, 503 if rejected else 200))
+                            (event_id, body, idempotency_header, event_header, 503 if rejected else 200))
                         is_new = not owner.database.execute("SELECT 1 FROM effects WHERE event_id=?", (event_id,)).fetchone()
                         if not rejected:
                             owner.database.execute("INSERT OR IGNORE INTO effects VALUES(NULL,?,?)", (event_id, body))
@@ -435,6 +545,13 @@ class MockReceiver:
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Receiver)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
+        self.routes = output / "routes.json"
+        self.environment = {**os.environ, "PINEFORGE_EQUIVALENCE_HMAC": "equivalence-fixture"}
+        write_json(self.routes, {"schema_version": 1, "default_target": "default",
+            "targets": {"default": {"url": f"http://127.0.0.1:{self.server.server_address[1]}/actions",
+                                    "secret_env": "PINEFORGE_EQUIVALENCE_HMAC"}}, "rules": [],
+            "delivery": {"max_in_flight": 1, "transport_retries": 2,
+                         "retry_backoff_ms": [10, 20]}})
 
     def finish(self, output):
         self.release_ack.set()
@@ -449,7 +566,35 @@ class MockReceiver:
         self.database.close()
         write_json(output / "attempts.json", attempts)
         write_json(output / "effects.json", effects)
+        write_json(output / "invocations.json", self.invocations)
+        if self.redelivery is not None:
+            write_json(output / "redelivery.json", self.redelivery)
         return attempts, effects
+
+    def redelivery_command(self, runner, ledger):
+        with sqlite3.connect(ledger) as database:
+            identity = database.execute("SELECT identity FROM metadata WHERE singleton=1").fetchone()[0]
+            selected = [row[0] for row in database.execute(
+                "SELECT e.event_id FROM events e JOIN event_routes r USING(ordinal) WHERE r.target_id='default'")]
+        with self.lock:
+            self.redelivery = {"event_ids": selected, "invocations": [],
+                "attempts_before": self.database.execute("SELECT COUNT(*) FROM attempts").fetchone()[0],
+                "effects_before": self.database.execute("SELECT COUNT(*) FROM effects").fetchone()[0]}
+        return [str(runner), "redeliver", "--ledger", str(ledger),
+                "--deployment", identity, "--target", "default"]
+
+
+    def begin_invocation(self, command):
+        # Called after the preceding process has exited and before Popen, even
+        # when a restart deliberately selects already acknowledged actions.
+        with self.lock:
+            boundary = {"command": list(command),
+                "attempts_before": self.database.execute("SELECT COUNT(*) FROM attempts").fetchone()[0],
+                "effects_before": self.database.execute("SELECT COUNT(*) FROM effects").fetchone()[0]}
+            self.invocations.append(boundary)
+            if command[1] == "redeliver":
+                self.redelivery["invocations"].append(boundary)
+            return boundary
 
 
 def tape_files(output, rows, split):
@@ -490,11 +635,23 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
     process = None
     receiver = None
     try:
-        if modeled is None:
-            modeled = strategy.stream(bars, split, timeframe)
+        rows = chart_rows(rows, timeframe)
+        bars = chart_bar_array(strategy, rows)
+        minute_split = split
+        split //= timeframe
+        result.update(input_tf=timeframe, minute_split=minute_split, split=split, distribution=3)
+        if packets is None:
+            batch = strategy.batch(bars, timeframe, output / "chart-batch", input_tf=timeframe, distribution=3)
+            modeled = strategy.stream(bars, split, timeframe, input_tf=timeframe)
+        else:
+            if minute_split % timeframe:
+                raise ValueError("tick warmup must end on a complete chart bar")
+            modeled = strategy.tick_stream(bars, split, timeframe, packets, input_tf=timeframe)
+            batch = {"state": modeled["state"],
+                     "actions": [dict(row, origin_input_index=split) for row in modeled["actions"]]}
         write_json(output / "forward-state.json", modeled["state"])
         expected = [action_key(row) for row in batch["actions"]
-                    if live_action(row["origin_input_index"], timeframe, split)]
+                    if live_action(row["origin_input_index"], 1, split)]
         result["modeled_action_difference"] = first_difference(expected, [action_key(row) for row in modeled["actions"]])
         result["report_difference"] = first_difference(batch["state"], modeled["state"])
         tape_files(output, rows, split)
@@ -507,17 +664,28 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
         if not expected:
             raise RuntimeError("NOT EXERCISED: no live actions")
         receiver = MockReceiver(output, fail_first, crash_action)
+        result["delivery_policy"] = "single-flight, two explicit transport retries"
         command = [str(runner), "run", "--strategy", str(strategy.path), "--warmup", str(output / "warmup.csv"),
-            "--input-tf", "1", "--script-tf", str(timeframe), "--session", "24x7", "--timezone", "UTC",
+            "--input-tf", str(timeframe), "--script-tf", str(timeframe), "--session", "24x7", "--timezone", "UTC",
             "--chart-timezone", "UTC", "--mode", "ticks" if packets is not None else "bars",
+            "--poll-ms", "100",
             "--feed", str(output / "tail.jsonl"),
             "--ledger", str(output / "orders.sqlite3"), "--symbol", "BINANCE:ETHUSDT.P", "--name", strategy.path.stem,
             "--syminfo", "type=crypto", "--syminfo", "currency=USDT", "--syminfo", "basecurrency=ETH",
             "--syminfo", "mintick=0.01", "--syminfo", "pointvalue=1", "--syminfo", "qty_step=0.001",
-            "--webhook-url", f"http://127.0.0.1:{receiver.server.server_address[1]}/actions", "--allow-insecure-http"]
+            "--webhook-routes", str(receiver.routes), "--allow-insecure-http"]
         write_json(output / "command.json", command)
         with (output / "runner.log").open("w") as log:
-            process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+            receiver.begin_invocation(command)
+            process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
+            if fail_first:
+                result["initial_runner_returncode"] = process.wait(timeout=600)
+                if result["initial_runner_returncode"] != 0:
+                    raise RuntimeError("initial HTTP-failure run did not complete")
+                command = receiver.redelivery_command(runner, output / "orders.sqlite3")
+                result["redelivery_command"] = command
+                receiver.begin_invocation(command)
+                process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
             if restart:
                 if not receiver.accepted.wait(120):
                     raise RuntimeError("accepted-effect crash window not reached")
@@ -526,33 +694,33 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
                 if killed_returncode != -9:
                     raise RuntimeError(f"runner was not SIGKILLed: {killed_returncode}")
                 result["crash_receipt"] = {"accepted_effect": crash_action, "returncode": killed_returncode,
-                    "ack_withheld": True, "same_command": True, "same_ledger": True}
+                    "ack_withheld": True, "same_command": True, "same_ledger": True,
+                    "component": "offline redelivery" if fail_first else "runner"}
                 receiver.release_ack.set()
-                process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+                restart_invocation = receiver.begin_invocation(command)
+                result["crash_receipt"]["restart_invocation"] = restart_invocation
+                process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
             result["runner_returncode"] = process.wait(timeout=600)
+        redelivery = receiver.redelivery
         attempts, effects = receiver.finish(output)
         errors = receiver.errors
         receiver = None
         if errors:
             raise RuntimeError("receiver failure: " + errors[0])
-        actual = [action_key(row) for row in effects]
+        aligned_effects = ordered_delivery_effects(attempts, effects, redelivery)
+        actual = [action_key(row) for row in aligned_effects]
         result["action_difference"] = first_difference(expected, actual)
         result["actions"] = len(effects)
         result["expected_actions"] = len(expected)
         result["attempts"] = len(attempts)
         result["closed_trades"] = len(modeled["state"]["closed_trades"])
         result["equity_points"] = len(modeled["state"]["equity_curve"])
-        sequences = [row["sequence"] for row in effects]
-        if sequences != list(range(1, len(effects) + 1)):
-            raise RuntimeError("effect sequence gap/reordering")
-        if len({row["event_id"] for row in effects}) != len(effects):
-            raise RuntimeError("duplicate logical effect")
         if fail_first:
             rejected = Counter(row["event_id"] for row in attempts if row["status"] == 503)
             if set(rejected) != {row["event_id"] for row in effects} or any(count != 1 for count in rejected.values()):
                 raise RuntimeError("fail-first coverage missing")
-        if restart and len([row for row in attempts if row["event_id"] == effects[crash_action - 1]["event_id"]]) < 2:
-            raise RuntimeError("accepted-but-ack-lost action was not replayed")
+        if restart:
+            require_replay_after_restart(attempts, effects[crash_action - 1]["event_id"], restart_invocation)
         with sqlite3.connect(output / "orders.sqlite3") as ledger:
             ledger_hashes = [row[0] for row in ledger.execute("SELECT state_hash FROM inputs ORDER BY input_index")]
             pending = ledger.execute("SELECT COUNT(*) FROM events WHERE acknowledged=0").fetchone()[0]

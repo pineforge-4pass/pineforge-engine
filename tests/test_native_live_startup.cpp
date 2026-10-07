@@ -288,6 +288,70 @@ void native_identity_changes() {
     CHECK(dump.find("\"chart_timezone_dependency\":null") != std::string::npos);
 }
 
+void chart_calendar_admission() {
+    constexpr std::int64_t start = 1735689600000;
+    for (const auto* timeframe : {"D", "W", "2D", "2W"}) {
+        for (const auto* timezone : {"UTC", "Etc/UTC", "UTC+05:30", "EST5", "Asia/Taipei", "Asia/Kolkata"})
+            require_chart_calendar(timeframe, timezone, start);
+        for (const auto* timezone : {"America/New_York", "US/Eastern", "Europe/Paris", "Australia/Lord_Howe",
+                                     "EST5EDT", "EST5EDT,M3.2.0,M11.1.0"})
+            CHECK(throws_containing([&] { require_chart_calendar(timeframe, timezone, start); },
+                                    "daily/weekly chart delivery on a daylight-saving calendar is not supported yet"));
+    }
+    for (const auto* timeframe : {"1", "5", "15", "60", "30S"})
+        require_chart_calendar(timeframe, "America/New_York", start);
+    for (const auto* timeframe : {"240", "120", "45"})
+        require_chart_calendar(timeframe, "UTC", start);
+    for (const auto* timeframe : {"7", "7S"})
+        CHECK(throws_containing([&] { require_chart_calendar(timeframe, "UTC", start); },
+                                "its bars do not tile the calendar's trading days"));
+    for (const auto* timeframe : {"240", "120", "45"})
+        CHECK(throws_containing([&] { require_chart_calendar(timeframe, "America/New_York", start); },
+                                "its bars do not tile the calendar's trading days"));
+    for (const auto* session : {"24x7", "1700-1700:23456", "0930-1600:23456"}) {
+        require_chart_calendar("60", "America/New_York", start, session);
+        require_chart_calendar("240", "America/New_York", start, session, false);
+        CHECK(throws_containing([&] { require_chart_calendar("240", "America/New_York", start, session); },
+                                "its bars do not tile the calendar's trading days"));
+    }
+    require_chart_calendar("7", "UTC", start, "24x7", false);
+    CHECK(throws_containing([&] { require_chart_calendar("D", "America/New_York", start, "24x7", false); },
+                            "daily/weekly chart delivery on a daylight-saving calendar is not supported yet"));
+    CHECK(throws_containing([&] { require_chart_calendar("60", "Australia/Lord_Howe", start); },
+                            "its bars do not tile the calendar's trading days"));
+    CHECK(throws_containing([&] { require_chart_calendar("D", "Invalid/Timezone", start); }, "timezone"));
+    CHECK(throws_containing([&] { require_chart_calendar("D", "America/New_York", 2208988800000); }, "daylight-saving"));
+    CHECK(throws_containing([&] { require_chart_calendar("60", "UTC", start, "0930-1130,1300-1500:23456"); },
+                           "its bars do not tile the calendar's trading days"));
+    require_chart_calendar("30", "UTC", start, "0930-1130,1300-1500:23456");
+    require_chart_calendar("60", "UTC", start, "0900-1200,1300-1500:23456");
+    // A reopen 210 minutes after the first opening is on the 15- and 30-minute
+    // grids only, so Tokyo and Hong Kong lunch breaks refuse 45, 60 and 120. The
+    // 120 rows are conservative: the bucket that holds the reopen has already
+    // traded before the break, keeps its nominal label, and the engine would run
+    // it. The check refuses it by name at startup, never mid-run, until
+    // calendar-aware chart labels ship.
+    for (const auto* timeframe : {"45", "60", "120"}) {
+        CHECK(throws_containing([&] { require_chart_calendar(timeframe, "Asia/Tokyo", start, "0900-1130,1230-1500:23456"); },
+                               "its bars do not tile the calendar's trading days"));
+        CHECK(throws_containing([&] { require_chart_calendar(timeframe, "Asia/Hong_Kong", start, "0930-1200,1300-1600:23456"); },
+                               "its bars do not tile the calendar's trading days"));
+    }
+    for (const auto* timeframe : {"15", "30"}) {
+        require_chart_calendar(timeframe, "Asia/Tokyo", start, "0900-1130,1230-1500:23456");
+        require_chart_calendar(timeframe, "Asia/Hong_Kong", start, "0930-1200,1300-1600:23456");
+    }
+    for (const auto* timeframe : {"2D", "3D"}) {
+        CHECK(throws_containing([&] { require_chart_calendar(timeframe, "UTC", start, "24x7:23456"); },
+                               "its bars do not tile the calendar's trading days"));
+    }
+    CHECK(throws_containing([&] { require_chart_calendar("D", "Asia/Almaty", 1709078400000); },
+                           "its bars do not tile the calendar's trading days"));
+    CHECK(throws_containing([&] {
+        require_chart_calendar("D", "Asia/Almaty", 1546300800000, "24x7", false, 1735689600000);
+    }, "its bars do not tile the calendar's trading days"));
+}
+
 }  // namespace
 
 int main() {
@@ -298,6 +362,7 @@ int main() {
     daily_dst_continuity();
     timezone_identity();
     native_identity_changes();
+    chart_calendar_admission();
     if (failures) {
         std::cerr << "test_native_live_startup failures: " << failures << '\n';
         return 1;

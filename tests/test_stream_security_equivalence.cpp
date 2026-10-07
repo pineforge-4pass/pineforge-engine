@@ -117,14 +117,32 @@ void print_trade(const char* mode, const pf_report_t& report, int index) {
 
 int main(int argc, char** argv) {
     const char* script_tf = argc > 1 ? argv[1] : "1";
-    const int warmup = argc > 2 ? std::atoi(argv[2]) : 500;
+    int warmup = argc > 2 ? std::atoi(argv[2]) : 500;
     auto bars = make_bars();
+    const int chart_minutes = std::atoi(script_tf);
+    if (chart_minutes < 1) return 2;
+    if (chart_minutes > 1) {
+        std::vector<pf_bar_t> chart_bars;
+        for (std::size_t offset = 0; offset < bars.size(); offset += chart_minutes) {
+            auto chart_bar = bars[offset];
+            const auto end = std::min(bars.size(), offset + chart_minutes);
+            for (std::size_t index = offset + 1; index < end; ++index) {
+                chart_bar.high = std::max(chart_bar.high, bars[index].high);
+                chart_bar.low = std::min(chart_bar.low, bars[index].low);
+                chart_bar.close = bars[index].close;
+                chart_bar.volume += bars[index].volume;
+            }
+            chart_bars.push_back(chart_bar);
+        }
+        bars = std::move(chart_bars);
+        warmup = std::max(1, warmup / chart_minutes);
+    }
     if (warmup < 1 || warmup > static_cast<int>(bars.size())) return 2;
     pf_strategy_t batch = strategy_create(nullptr);
     pf_strategy_t stream = strategy_create(nullptr);
     if (!batch || !stream) return 2;
     const std::string case_name = PINEFORGE_SECURITY_CASE;
-    const char* input_tf = "1";
+    const char* input_tf = script_tf;
     const bool fractional_sizing = case_name == "pooc_slipped_short"
         || case_name == "slipped_short" || case_name == "all_in_reversal";
     const bool whole_sizing = case_name == "whole_all_in_reversal";
@@ -177,7 +195,11 @@ int main(int argc, char** argv) {
         equal = equal && expected.trades_len == expected_batch_trades()
             && expected.security_feeds_total == 4000;
     }
-    if (expected_batch_trades() < 0) equal = equal && expected.trades_len > 0;
+    if (case_name == "htf5_close" && chart_minutes == 5)
+        equal = equal && expected.trades_len == 0
+            && expected.security_feeds_total == static_cast<std::int64_t>(bars.size());
+    else if (expected_batch_trades() < 0 || chart_minutes > 1)
+        equal = equal && expected.trades_len > 0;
     std::printf("%s [%s input=%s script=%s warmup=%d] batch_trades=%d stream_trades=%d "
         "security_feeds_total=%lld/%lld first_trade=%d net_profit=%.17g/%.17g "
         "trade_fingerprint=%016llx/%016llx\n",
