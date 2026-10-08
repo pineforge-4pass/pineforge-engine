@@ -373,12 +373,15 @@ values the strategy declares:
   not resolve): `setting_unsupported` (the legacy getter took the value);
 - a title two inputs share: `setting_rejected`, `reason` `ambiguous_key` (the
   legacy setter set both). Give the inputs unique titles in the Pine source;
-- a color input given as a Pine expression such as `"color.blue"`, a CSS name
-  or a hexadecimal string: `setting_rejected`, reason `expected_integer`.
+- a color input given as text: `setting_rejected` with an integer-parse
+  reason. The measured `"color.blue"` request reports `expected_integer`;
+  source inspection gives `invalid_integer_or_trailing_bytes` for `"#FF0000"`,
+  `"0xFF0000"` and `"black"`. These additional spellings were not run.
   Send the packed `0xAARRGGBB` value as a decimal integer instead, for example
   opaque red as `"4294901760"` (see [checked settings](../docs/checked-settings.md));
 - an input value outside its declared `options`: `setting_rejected`, reason
-  `invalid_input_option`. Choose one of the declared options.
+  `invalid_input_option` for numeric/string inputs, or `invalid_enum_option`
+  for enum inputs. Choose one of the declared options.
 
 **Known diagnostic limit:** a `setting_rejected` refusal of a strategy
 override carries `args.entrypoint: "strategy_set_override"` and

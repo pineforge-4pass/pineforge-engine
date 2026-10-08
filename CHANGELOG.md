@@ -399,7 +399,10 @@ send colors as decimal integers for packed `0xAARRGGBB` values (opaque red
 is `"4294901760"`, not a CSS/hex string or `"color.red"`), and choose values
 from each input's declared `options`. A shared title is refused as
 `ambiguous_key`; rename one input in the Pine source. Textual colors are
-refused as `expected_integer`, and out-of-options values as
+refused with `setting_rejected` and an integer-parse reason: the measured
+`"color.blue"` request reports `expected_integer`; source inspection gives
+`invalid_integer_or_trailing_bytes` for `"#FF0000"`, `"0xFF0000"` and `"black"`,
+which were not run. The measured out-of-options `Choice` request reports
 `invalid_input_option`. These are input settings in `--inputs`, separate
 from `strategy()` parameters in `--overrides`. Unknown input titles or
 override keys and declared numeric range violations are also refused;
