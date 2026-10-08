@@ -55,6 +55,9 @@ fingerprint; the candidate report has **`fingerprint: null`**. On the
 candidate's checked-settings path, a repeated title makes the native receipt
 ambiguous, so provenance normalization refuses the complete fingerprint.
 This does not turn the successful backtest into a failed run.
+Rename one of the two `Period` inputs so their titles are distinct to obtain
+a fingerprint on the checked path. This remedy is specific to the repeated
+title; an unresolved legacy row, shown below, can remain fingerprinted.
 
 ## Matched legacy-settings invocation
 
@@ -126,3 +129,19 @@ also includes generated-source and engine identity changes, so it does not
 isolate the effect of typing alone. See the [harness contract](../../docker/README.md#backtest-fingerprint)
 for source trust, unresolved values and the complete-fingerprint refusal
 conditions.
+
+## Failure contrasts
+
+A second bounded spot run used these exact source pairs and feed bytes for
+six requests on each pair, with explicit inputs/overrides replacing the
+earlier values. The [release notes](../../CHANGELOG.md#executed-setting-and-self-stop-contrasts)
+record every observed outcome and the candidate catalog classes. The first
+three requests return old success reports and candidate `setting_rejected`
+errors; both invalid-capital variants already fail on the old pair, and the
+deliberate script stop fails on both pairs. All 12 original stdout/stderr
+files, source bytes, actual compiled source, exits and request/install
+identities were harvested after each invocation. Their manifest SHA-256 is
+`06bc5c9fe93cca91baacb8f766098ff32f7f3d39877faa893ae25fb80e93c6ad`.
+The 38-code candidate catalog SHA-256 is
+`dcd701fe4bdd57a38d6858e96f719c1001f07f4a035f6b8ad25d720d4b83f601`.
+No failure envelope or absent old code/args was synthesized.

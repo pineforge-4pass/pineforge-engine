@@ -161,6 +161,35 @@ attempt succeeded or that every supported configuration was measured.
   `note_error` takes the code beside the text; the text-only form it had
   stays and records `engine_unclassified_error`.
 
+#### Executed setting and self-stop contrasts
+
+Six public synthetic requests were run through the installed entrypoint on
+the exact v1.3.0 pair and the pinned candidate pair, using the same 40-bar
+feed. Planned 1.4.0 refuses three requests that 1.3.0 allowed to complete:
+setting a duplicated `Period` title to `"7"`, passing `"color.blue"` to
+`Color`, and setting `Choice` to `"15"` outside its `[10, 20, 30]` options.
+The old pair returns success reports for these requests; that wire echo
+alone does not prove which native values were applied rather than ignored.
+
+| Request | v1.3.0 result | Candidate result |
+|---|---|---|
+| `Period="7"` with two declarations sharing the title | Success report, exit 0 | `setting_rejected`, reason `ambiguous_key`, exit 4 |
+| `Color="color.blue"` | Success report, exit 0 | `setting_rejected`, reason `expected_integer`, exit 4 |
+| `Choice="15"`, options `[10, 20, 30]` | Success report, exit 0 | `setting_rejected`, reason `invalid_input_option`, exit 4 |
+| `initial_capital="abc"` | Text-only error `strategy_set_override: stod`, exit 4 | `setting_rejected`, reason `expected_finite_decimal`, exit 4 |
+| `initial_capital="-1"` | Text-only error `Pine adapter produced invalid native run spec field 15`, exit 4 | `setting_rejected`, reason `value_below_minimum`, exit 4 |
+| `runtime.error("REL140 deliberate stop")` at `bar_index == 10` | Text-only error `REL140 deliberate stop`, exit 4 | Same text, `strategy_runtime_error`, `args: {}`, exit 4 |
+
+These are entrypoint exits, not direct harness exits. Both invalid-capital
+requests already failed in 1.3.0; the candidate reports them as coded setting
+refusals before execution. The candidate's 38-code
+[catalog](docker/run_failure_codes.json) classifies all five
+`setting_rejected` results as **`input`**, and the deliberate script stop as
+**`strategy`**. Consumers can distinguish request refusal from a script's
+self-stop using the code and catalog class; exit 4 alone does not make that
+distinction. No additional accepted/ignored setting class is inferred from
+these six requests.
+
 ### Live runner: chart-timeframe input ([#353])
 
 - **`pineforge-live` runs a Pine script on its chart clock.** `--input-tf`
@@ -264,6 +293,10 @@ whole fingerprint `null`.
 The checked-settings path also makes the whole fingerprint `null` when its
 receipt repeats a title; it does not emit the legacy path's per-title
 duplicate record. A successful backtest can therefore have no fingerprint.
+For the demonstrated script with two inputs sharing a title, rename one
+input to give both distinct titles and obtain a fingerprint on the checked
+path. This is different from an unresolved legacy row, which can remain
+inside a non-null fingerprint.
 
 Failure objects gain string `code` and typed-object `args` beside `engine`
 and `error` ([#351]); legacy libraries without the getters retain the earlier

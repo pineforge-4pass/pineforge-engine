@@ -318,6 +318,17 @@ after the part written.
 
 The harness's own failures and their codes:
 
+The [executed 1.3.0/candidate contrasts](../CHANGELOG.md#executed-setting-and-self-stop-contrasts)
+show the migration boundary: the candidate refuses a duplicated-title
+override, a textual color override and an out-of-options integer that the
+old pair let run. Non-numeric and negative initial capital already failed
+on the old pair; they now have coded setting refusals. All five candidate
+setting failures are `setting_rejected`, catalog class `input`; the explicit
+`runtime.error` self-stop is `strategy_runtime_error`, class `strategy`.
+Both have entrypoint exit 4, so classify by the code/catalog rather than exit
+alone. The original stdout/stderr and exact source/build identities were
+retained; no old failure was rewritten to add new keys.
+
 | Failure | `code` | `args` |
 | --- | --- | --- |
 | `--inputs` / `--overrides` not a JSON object or holding a boolean, `null`, array or object value, `--magnifier-dist` unknown, `--input-tf` / `--script-tf` / `--chart-tz` not UTF-8, a command line argparse refuses (exit 2) | `run_request_invalid` | `option`: the flag (`inputs`, `magnifier_samples`, ...) or `arguments` |
@@ -620,6 +631,9 @@ also makes the complete fingerprint `null`. The checked-settings path
 rejects a receipt with any repeated title as ambiguous and likewise emits
 `fingerprint: null`, even if the backtest itself succeeds; it does not emit
 the legacy path's per-title duplicate record.
+For the demonstrated duplicate-title script, rename one input so the titles
+are distinct to obtain a checked-path fingerprint. An unresolved legacy row
+can still belong to a non-null fingerprint; the two cases are different.
 
 Within the pre-release allowlist refinement, where no certified value changes,
 an input keeps the fingerprint the resolver
