@@ -91,6 +91,8 @@ codes it tested the text alone, so a script stopped by an empty
 
 The tables below list the catalog at this tree.
 
+The `outputs_limit` and `outputs_rejected` rows below are unreleased, targeted for 1.5.0, and not part of 1.4.0; the other 38 codes retain their released 1.4.0 status.
+
 <!-- BEGIN generated from docker/run_failure_codes.json: python3 scripts/test_gen_run_failure_catalog_diff.py --write-docs-tables -->
 
 ### Classes

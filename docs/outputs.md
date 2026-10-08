@@ -1,5 +1,7 @@
 # Recorded outputs
 
+Recorded outputs are unreleased, targeted for 1.5.0, and not part of 1.4.0.
+
 A module can record what it computes on each bar besides its trades: values
 kept per bar, values kept once per run, and events with an optional message.
 A generated module records them for a script compiled to record outputs; a

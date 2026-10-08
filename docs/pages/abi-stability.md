@@ -60,6 +60,8 @@ Three layers:
 
 ## Symbol inventory
 
+The counts below include recorded outputs and describe the unreleased API targeted for 1.5.0; recorded outputs are not part of 1.4.0.
+
 A built strategy `.so` exposes 89 compiled-strategy `PF_API` declarations
 (73 runtime implementations plus sixteen generated exports) plus 43 native-host
 declarations: 132 `PF_API` exports in total; a script that declares
@@ -219,6 +221,8 @@ header is rebuilt with the library (the subclass contract is internal, as
 a run with no symbol data folds nothing new. The C side is append-only -- four
 functions, each behind its own `PINEFORGE_HAS_…_V1` probe -- so
 `PF_ABI_VERSION` stays 4.
+
+Recorded outputs are unreleased, targeted for 1.5.0, and not part of 1.4.0.
 
 Recorded outputs (lane SM-E1, `docs/outputs.md`) adds the recorder to
 `BacktestEngine` inside v19, without an epoch: data members outside both

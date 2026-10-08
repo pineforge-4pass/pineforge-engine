@@ -135,6 +135,8 @@ directly, so a Pine-layer symbol reaching one is a link error.
 
 ## API at a glance
 
+The counts below include recorded outputs and describe the unreleased API targeted for 1.5.0; recorded outputs are not part of 1.4.0.
+
 The public C surface is **136 `PF_API` declarations** across two headers:
 
 - `<pineforge/pineforge.h>` — **93**: 73 runtime implementations plus twenty

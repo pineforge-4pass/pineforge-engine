@@ -504,6 +504,8 @@ API, the script ABI epoch and the pairing with codegen — is the
 [public contract](docs/pages/public-contract.md); what a 0.x user must act on
 is in [CHANGELOG.md](CHANGELOG.md).
 
+The counts below include recorded outputs and describe the unreleased API targeted for 1.5.0; recorded outputs are not part of 1.4.0.
+
 A newly generated strategy `.so` exposes 89 compiled-strategy `PF_API` declarations
 (73 runtime implementations plus sixteen generated exports) plus 43 native-host
 declarations: 132 `PF_API` exports in total; `use_bar_magnifier = true` adds
