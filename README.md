@@ -35,6 +35,9 @@ The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pinefo
 - **Deterministic to the bit.** Two runs with the same inputs produce identical trade lists. Same on Linux and macOS.
 - **Yours to embed.** 136 `PF_API` declarations across two headers — `pineforge.h`'s 93 (73 runtime exports and up to 20 per-strategy functions a generated module defines) and `native_c_api.h`'s 43 native-host declarations — an ABI that is append-only within a major version from 1.0 on. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
 
+Recorded outputs and their additional API declarations described here are
+unreleased work targeted for **1.5.0**; they are not part of 1.4.0.
+
 **[1.4.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.4.0)
 was released on 2026-10-08**, paired with
 [pineforge-codegen 1.4.0](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.4.0).
