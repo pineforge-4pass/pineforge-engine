@@ -14,11 +14,10 @@ never leaves the container**. A pre-transpiled `strategy.cpp` is still
 accepted for back-compat. JSON report on stdout, build/transpile noise on
 stderr.
 
-This checkout documents the **planned 1.4.0 release (unreleased)**. Its
-candidate pairs engine `b3192bfc` and codegen `bfc4ddce`; their version files
-still say 1.3.0 until tagging. The release adds typed/unresolved provenance
+This checkout documents the **1.4.0 release (2026-10-08)**, pairing engine
+1.4.0 with codegen 1.4.0. The release adds typed/unresolved provenance
 and coded failures, and the harness uses checked settings when the strategy
-exports that API. Use the same-version engine/codegen pair when released,
+exports that API. Use the same-version engine/codegen pair,
 regenerate the C++ and relink; an older image keeps its own harness behavior.
 
 ## Pull (prebuilt)
@@ -268,7 +267,7 @@ docker run --rm \
   before this variable existed, apart from `elapsed_seconds`.
 
 The engine catches run errors (TF mismatch, unsupported emulation flags,
-unknown-input-TF, etc.) into `strategy_get_last_error()` and, with the planned
+unknown-input-TF, etc.) into `strategy_get_last_error()` and, with the
 1.4.0 runtime, its code/args getters. The failure line below describes both
 the coded form and the earlier text-only form. The container exits `4`
 (the harness returns 1; the entrypoint maps any harness failure to 4).
@@ -473,7 +472,7 @@ read-only mounts; the image performs no network I/O at run time.
 Every JSON report carries a `fingerprint` recording exactly what produced it —
 reversible, no key required:
 
-This is a schematic of the planned 1.4.0 provenance shape, not a measured
+This is a schematic of the 1.4.0 provenance shape, not a measured
 before/after result. Certified values are typed; unresolved rows use the
 resolution records described below. The top-level `applied_inputs` and
 `applied_overrides` remain wire-string echoes.
@@ -528,7 +527,7 @@ match a JCS direct encoder for the types we accept:
 | Bools / null | `true` / `false` / `null` |
 
 The `{token,digest,provenance}` object shape and canonical encoder are
-unchanged in planned 1.4.0. Typed provenance normalization changes the values
+unchanged in 1.4.0. Typed provenance normalization changes the values
 fed to that encoder, including explicit uncertainty; those changes can
 change the token and digest.
 

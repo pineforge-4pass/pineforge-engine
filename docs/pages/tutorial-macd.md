@@ -83,7 +83,7 @@ bash tutorial/run.sh
 Configures CMake (first time only), builds
 `tutorial/macd/strategy.so`, then runs the harness. The output below is the
 recorded engine v1.0.0 / codegen 1.0.0 result on the frozen feed; it has not
-been re-measured for planned 1.4.0:
+been re-measured for 1.4.0:
 
 ```
 MACD(12,26,9) on BTCUSDT 15m — 672 bars, 2026-04-29 18:15 → 2026-05-06 18:00 UTC
