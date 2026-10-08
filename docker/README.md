@@ -14,6 +14,13 @@ never leaves the container**. A pre-transpiled `strategy.cpp` is still
 accepted for back-compat. JSON report on stdout, build/transpile noise on
 stderr.
 
+This checkout documents the **planned 1.4.0 release (unreleased)**. Its
+candidate pairs engine `b3192bfc` and codegen `bfc4ddce`; their version files
+still say 1.3.0 until tagging. The release adds typed/unresolved provenance
+and coded failures, and the harness uses checked settings when the strategy
+exports that API. Use the same-version engine/codegen pair when released,
+regenerate the C++ and relink; an older image keeps its own harness behavior.
+
 ## Pull (prebuilt)
 
 This repository's workflows publish no image. The prebuilt image of this
@@ -260,11 +267,11 @@ docker run --rm \
   or an index naming no symbol: the key is absent and the report is what it was
   before this variable existed, apart from `elapsed_seconds`.
 
-The engine catches every error (TF mismatch, unsupported emulation
-flags, unknown-input-TF, etc.) into `strategy_get_last_error()`; the
-container surfaces these as `{"engine":"pineforge","error":"..."}` on
-stdout and the container exits `4` (the harness returns 1; the entrypoint
-maps any harness failure to 4) instead of crashing.
+The engine catches run errors (TF mismatch, unsupported emulation flags,
+unknown-input-TF, etc.) into `strategy_get_last_error()` and, with the planned
+1.4.0 runtime, its code/args getters. The failure line below describes both
+the coded form and the earlier text-only form. The container exits `4`
+(the harness returns 1; the entrypoint maps any harness failure to 4).
 
 ### The failure line
 
@@ -311,6 +318,18 @@ after the part written.
 
 The harness's own failures and their codes:
 
+The [executed 1.3.0/candidate contrasts](../CHANGELOG.md#executed-setting-and-self-stop-contrasts)
+show the migration boundary: the candidate refuses three input settings the
+old pair let run: a value for a title two inputs share, a color input given
+as text, and an integer input outside its declared options. Non-numeric and
+negative initial capital already failed
+on the old pair; they now have coded setting refusals. All five candidate
+setting failures are `setting_rejected`, catalog class `input`; the explicit
+`runtime.error` self-stop is `strategy_runtime_error`, class `strategy`.
+Both have entrypoint exit 4, so classify by the code/catalog rather than exit
+alone. The original stdout/stderr and exact source/build identities were
+retained; no old failure was rewritten to add new keys.
+
 | Failure | `code` | `args` |
 | --- | --- | --- |
 | `--inputs` / `--overrides` not a JSON object or holding a boolean, `null`, array or object value, `--magnifier-dist` unknown, `--input-tf` / `--script-tf` / `--chart-tz` not UTF-8, a command line argparse refuses (exit 2) | `run_request_invalid` | `option`: the flag (`inputs`, `magnifier_samples`, ...) or `arguments` |
@@ -338,19 +357,42 @@ of that API (`strategy_settings_api_version`, `strategy_create_checked`,
 `strategy_set_input_checked`, `strategy_set_override_checked`) or another version
 of it is refused before any setter (`strategy_library_incompatible`, `reason`
 `settings_api_mismatch`). A library with none of it keeps the legacy setters,
-which ignore such settings silently.
+which accepted some settings, ignored others and already failed some with
+text-only errors. The six measured requests illustrate this change; they
+are not an exhaustive list of refusals.
 
-The checked setters also refuse requests the legacy setters ran, so send values
-the strategy declares:
+The checked setters enforce the declared settings before the run, so send
+values the strategy declares:
 
 - a number outside the input's declared `minval` / `maxval`, or an override
   outside its range (a negative `initial_capital`): `setting_rejected`, `reason`
-  `value_below_minimum` or `value_above_maximum` (the legacy setters ran with
-  the value);
+  `value_below_minimum` or `value_above_maximum`. Some legacy requests ran
+  with out-of-range values, but the measured negative-capital request already
+  failed later with a text-only run-spec error;
 - an input this compiled strategy cannot honour (a default the transpiler could
   not resolve): `setting_unsupported` (the legacy getter took the value);
 - a title two inputs share: `setting_rejected`, `reason` `ambiguous_key` (the
-  legacy setter set both).
+  legacy setter set both). Give the inputs unique titles in the Pine source;
+- a color input given as text: `setting_rejected` with an integer-parse
+  reason. The measured `"color.blue"` request reports `expected_integer`;
+  source inspection gives `invalid_integer_or_trailing_bytes` for `"#FF0000"`,
+  `"0xFF0000"` and `"black"`. These additional spellings were not run.
+  Send the packed `0xAARRGGBB` value as a decimal integer instead, for example
+  opaque red as `"4294901760"` (see [checked settings](../docs/checked-settings.md));
+- an input value outside its declared `options`: `setting_rejected`, reason
+  `invalid_input_option` for numeric/string inputs, or `invalid_enum_option`
+  for enum inputs. Choose one of the declared options.
+
+**Known diagnostic limit:** a `setting_rejected` refusal of a strategy
+override carries `args.entrypoint: "strategy_set_override"` and
+`args.reason`, but no override key. Its text also omits the key: the
+non-numeric capital request reads
+`strategy_set_override: expected a finite decimal number`. `args.input`
+names an input only when the strategy declares that title, so an unknown
+input title is not named. `setting_unsupported` carries `args: {}`. The
+harness stops at the first refused setting, processing all inputs before
+overrides. A host sending several overrides cannot derive the refused key
+from the failure line alone.
 
 Both inputs and overrides accept a JSON object whose values are strings or numbers; express booleans as lowercase "true" or "false" strings, because native JSON booleans, null, arrays and objects are rejected.
 
@@ -431,6 +473,11 @@ read-only mounts; the image performs no network I/O at run time.
 Every JSON report carries a `fingerprint` recording exactly what produced it —
 reversible, no key required:
 
+This is a schematic of the planned 1.4.0 provenance shape, not a measured
+before/after result. Certified values are typed; unresolved rows use the
+resolution records described below. The top-level `applied_inputs` and
+`applied_overrides` remain wire-string echoes.
+
 ```json
 "fingerprint": {
   "token":  "<base64 of the canonical provenance JSON>",
@@ -438,19 +485,21 @@ reversible, no key required:
   "provenance": {
     "engine":   { "version_string": "...", "major": 1, "minor": 0, "patch": 0, "commit_sha": "..." },
     "feed":     { "canonicalization": "pf-ohlcv-barc-le-v1", "source_values_sha256": "..." },
-    "codegen":  { "version": "1.0.0", "generated_cpp_sha256": "...", "transpiled_from_pine": true },
+    "codegen":  { "version": "...", "generated_cpp_sha256": "...", "transpiled_from_pine": true },
     "strategy": { "initial_capital": 1000000.0, "pyramiding": 1, "commission_type": "percent", "...": "all strategy() params, effective" },
-    "inputs":   { "Fast Length": { "type": "int", "default": 12, "value": "8" }, "...": "all input()s, effective" },
-    "applied":  { "inputs": { "Fast Length": "8" }, "overrides": {} },
+    "inputs":   { "Fast Length": { "type": "int", "default": 12, "value": 8 }, "...": "declared inputs or explicit unresolved rows" },
+    "applied":  { "inputs": { "Fast Length": 8 }, "overrides": {} },
     "runtime":  { "input_tf": "", "bar_magnifier": false, "...": "..." }
   }
 }
 ```
 
-`strategy` and `inputs` list the **full effective** parameter set — every
-`strategy()` field and every `input()` value, with declared defaults, even
-when no override was passed. `value` is the applied override if one was given,
-otherwise the default. `digest` is a stable id for a run under a given harness and its runtime settings (same inputs + same settings ⇒ same digest).
+`strategy` and `inputs` describe the effective parameter set where it can be
+certified, with explicit unresolved records otherwise. A certified `value`
+is the native effective value after setting overrides, or the default when
+none was applied. `digest` identifies the full provenance document under the
+given harness and build identities; it is not stable across release pairs
+whose types, values, resolution records or identities differ.
 
 `feed.source_values_sha256` identifies the primary OHLCV source by hashing a
 versioned domain prefix followed by every parsed source row, in original order,
@@ -478,8 +527,10 @@ match a JCS direct encoder for the types we accept:
 | Strings | JSON control escapes + `"`/`\`; **raw valid Unicode** (no `ensure_ascii` `\uXXXX` for non-ASCII); U+2028/U+2029 and non-BMP stay as UTF-8 code points. Unpaired UTF-16 surrogates: **rejected**. Str subclasses are normalized via base `str.__str__` first so hostile `__str__`/`__iter__`/`encode` hooks cannot change emission, key order, or bypass surrogate rejection. |
 | Bools / null | `true` / `false` / `null` |
 
-Semantic provenance values and the `{token,digest,provenance}` object shape
-are unchanged; only the hashed byte form is language-stable.
+The `{token,digest,provenance}` object shape and canonical encoder are
+unchanged in planned 1.4.0. Typed provenance normalization changes the values
+fed to that encoder, including explicit uncertainty; those changes can
+change the token and digest.
 
 **Verification (authoritative path):** base64-decode `token` to the canonical
 UTF-8 JSON bytes and hash those bytes. `digest` is exactly `sha256:` plus the
@@ -586,7 +637,7 @@ these cases retain a fingerprint.
 |---|---|
 | `foreign_unverified_source` | Supplied C++ has no unique supported native receipt confirming the row; source appearance cannot establish producer origin. Applied values keep their wire strings. |
 | `ambiguous_binding` | An identifier with an occurrence outside its one recognized declaration and the closed read list (shadows, local declarators, other script-body uses); getters of one title (or security-guard branches) that disagree where the receipt does not pick exactly one; or disagreement with the native receipt's type, default or value, for inputs and for strategy() values alike. |
-| `duplicate_title` | The native receipt lists the title more than once with two or more distinct (type, default) pairs, compared as written: several inputs share it, so no single value belongs to the title. The record adds `"distinct_native_inputs"`, the number of distinct pairs. Takes precedence over every other input reason. |
+| `duplicate_title` | On the legacy-settings path, the native receipt lists the title more than once with two or more distinct (type, default) pairs, compared as written: several inputs share it, so no single value belongs to the title. The record adds `"distinct_native_inputs"`, the number of distinct pairs. Takes precedence over every other input reason on that path. |
 | `macro_argument` | A getter of the title sits inside a macro argument (see "Getter call"). |
 | `unsupported_binding` | No recognized declaration, an unrecognized lexical or preprocessor context, an unrecognized getter-family token, an undelimitable literal or comment, or an unrecognized strategy() constructor flow. |
 | `unsupported_default` | Unrecognized default expressions, definitions, numeric spellings/ranges, source expressions, enum spellings outside the canonical vocabulary and non-`true`/`false` booleans; no expression is evaluated to guess a value. |
@@ -600,12 +651,23 @@ unchanged numeric/Unicode domain checks above before any refusal (a receipt
 integer is parsed by its own type, leading zeros included): an
 out-of-domain value keeps its existing refusal (no fingerprint), and `null` never
 erases it. A malformed checked receipt or a non-canonical checked source selector
-also makes the complete fingerprint `null`.
+also makes the complete fingerprint `null`. The checked-settings path
+rejects a receipt with any repeated title as ambiguous and likewise emits
+`fingerprint: null`, even if the backtest itself succeeds; it does not emit
+the legacy path's per-title duplicate record.
+For the demonstrated repeated-title script, giving the two inputs distinct
+titles is the source-derived remedy and is expected to restore the
+checked-path fingerprint. The retained sample did not execute the renamed
+variant. An unresolved legacy row can still belong to a non-null
+fingerprint; the two cases are different.
 
-Where no certified value changes, an input keeps the fingerprint the resolver
-before the allowlist gave it, except when a ruling changes a refusal reason or
-its count (those fields are hashed too). `run_json_codes_test.py` pins the base
-digests of six fixed cases (`BASE_FINGERPRINTS`).
+`run_json_codes_test.py` retains six recorded pre-release fingerprints
+(`BASE_FINGERPRINTS`). These checks cover the specific certified values and
+resolution records in those examples; changed reasons or counts also change
+the fingerprint, because those fields are hashed.
+Those pins do not assert fingerprint equality with released 1.3.0: the
+release adds typed values and explicit uncertainty, and build/version inputs
+also differ.
 
 Decode the token to inspect the canonical provenance JSON:
 

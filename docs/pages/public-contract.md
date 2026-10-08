@@ -23,6 +23,15 @@ tree; where no checker holds part of a rule, the page says so. The codegen
 states its half in its own `docs/PUBLIC_CONTRACT.md` (pineforge-codegen); the
 two releases pair as the last section below says.
 
+Planned 1.4.0 is unreleased. Its candidate (engine `b3192bfc`, codegen
+`bfc4ddce`) adds two runtime failure getters and the feature probe
+`PINEFORGE_HAS_RUN_FAILURE_CODES_V1`, without changing C layouts or
+`PF_ABI_VERSION` 4. It also changes report provenance types and adds
+resolution/failure fields. The repository's `CHANGELOG.md`, under
+*Unreleased*, inventories the state-hash additions and report migration;
+the version files still say 1.3.0 until tagging. This candidate is intended
+for the same-version 1.4.0 pair, with regeneration and relinking as below.
+
 ## Versions
 
 - A release's version is `X.Y.Z`, or `X.Y.Z-rc.N` (N from 1) for a release
