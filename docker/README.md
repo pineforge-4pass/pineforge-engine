@@ -319,9 +319,10 @@ after the part written.
 The harness's own failures and their codes:
 
 The [executed 1.3.0/candidate contrasts](../CHANGELOG.md#executed-setting-and-self-stop-contrasts)
-show the migration boundary: the candidate refuses a duplicated-title
-override, a textual color override and an out-of-options integer that the
-old pair let run. Non-numeric and negative initial capital already failed
+show the migration boundary: the candidate refuses three input settings the
+old pair let run: a value for a title two inputs share, a color input given
+as text, and an integer input outside its declared options. Non-numeric and
+negative initial capital already failed
 on the old pair; they now have coded setting refusals. All five candidate
 setting failures are `setting_rejected`, catalog class `input`; the explicit
 `runtime.error` self-stop is `strategy_runtime_error`, class `strategy`.
@@ -356,19 +357,39 @@ of that API (`strategy_settings_api_version`, `strategy_create_checked`,
 `strategy_set_input_checked`, `strategy_set_override_checked`) or another version
 of it is refused before any setter (`strategy_library_incompatible`, `reason`
 `settings_api_mismatch`). A library with none of it keeps the legacy setters,
-which ignore such settings silently.
+which accepted some settings, ignored others and already failed some with
+text-only errors. The six measured requests illustrate this change; they
+are not an exhaustive list of refusals.
 
-The checked setters also refuse requests the legacy setters ran, so send values
-the strategy declares:
+The checked setters enforce the declared settings before the run, so send
+values the strategy declares:
 
 - a number outside the input's declared `minval` / `maxval`, or an override
   outside its range (a negative `initial_capital`): `setting_rejected`, `reason`
-  `value_below_minimum` or `value_above_maximum` (the legacy setters ran with
-  the value);
+  `value_below_minimum` or `value_above_maximum`. Some legacy requests ran
+  with out-of-range values, but the measured negative-capital request already
+  failed later with a text-only run-spec error;
 - an input this compiled strategy cannot honour (a default the transpiler could
   not resolve): `setting_unsupported` (the legacy getter took the value);
 - a title two inputs share: `setting_rejected`, `reason` `ambiguous_key` (the
-  legacy setter set both).
+  legacy setter set both). Give the inputs unique titles in the Pine source;
+- a color input given as a Pine expression such as `"color.blue"`, a CSS name
+  or a hexadecimal string: `setting_rejected`, reason `expected_integer`.
+  Send the packed `0xAARRGGBB` value as a decimal integer instead, for example
+  opaque red as `"4294901760"` (see [checked settings](../docs/checked-settings.md));
+- an input value outside its declared `options`: `setting_rejected`, reason
+  `invalid_input_option`. Choose one of the declared options.
+
+**Known diagnostic limit:** a `setting_rejected` refusal of a strategy
+override carries `args.entrypoint: "strategy_set_override"` and
+`args.reason`, but no override key. Its text also omits the key: the
+non-numeric capital request reads
+`strategy_set_override: expected a finite decimal number`. `args.input`
+names an input only when the strategy declares that title, so an unknown
+input title is not named. `setting_unsupported` carries `args: {}`. The
+harness stops at the first refused setting, processing all inputs before
+overrides. A host sending several overrides cannot derive the refused key
+from the failure line alone.
 
 Both inputs and overrides accept a JSON object whose values are strings or numbers; express booleans as lowercase "true" or "false" strings, because native JSON booleans, null, arrays and objects are rejected.
 
@@ -631,15 +652,16 @@ also makes the complete fingerprint `null`. The checked-settings path
 rejects a receipt with any repeated title as ambiguous and likewise emits
 `fingerprint: null`, even if the backtest itself succeeds; it does not emit
 the legacy path's per-title duplicate record.
-For the demonstrated duplicate-title script, rename one input so the titles
-are distinct to obtain a checked-path fingerprint. An unresolved legacy row
-can still belong to a non-null fingerprint; the two cases are different.
+For the demonstrated repeated-title script, giving the two inputs distinct
+titles is the source-derived remedy and is expected to restore the
+checked-path fingerprint. The retained sample did not execute the renamed
+variant. An unresolved legacy row can still belong to a non-null
+fingerprint; the two cases are different.
 
-Within the pre-release allowlist refinement, where no certified value changes,
-an input keeps the fingerprint the resolver
-before the allowlist gave it, except when a ruling changes a refusal reason or
-its count (those fields are hashed too). `run_json_codes_test.py` pins the base
-digests of six fixed cases (`BASE_FINGERPRINTS`).
+`run_json_codes_test.py` retains six recorded pre-release fingerprints
+(`BASE_FINGERPRINTS`). These checks cover the specific certified values and
+resolution records in those examples; changed reasons or counts also change
+the fingerprint, because those fields are hashed.
 Those pins do not assert fingerprint equality with released 1.3.0: the
 release adds typed values and explicit uncertainty, and build/version inputs
 also differ.

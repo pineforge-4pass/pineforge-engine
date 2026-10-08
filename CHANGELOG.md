@@ -39,14 +39,14 @@ attempt succeeded or that every supported configuration was measured.
 
 | Request | Change and measured scope |
 |---|---|
-| [#346] | Adds routing, service and retirement-cursor regression coverage in seven test/documentation files. It changes no production behavior; the final release-pair population evidence covers all 7,989 probes. |
-| [#349] | Reduces symbol-feed copies per strategy handle. Dedicated ownership witnesses preserve trades and hashes while checking copy bounds; its 134-case gate retains all 7,989 probe outcomes. This is a memory/ownership change, with no new throughput claim. |
-| [#350] | Corrects flat global exits, competing fill-recalculation thresholds and per-entry relative exits over pyramided lots within the taped adapter rules. Synthetic controls establish those fixes; its 134-case population gate records zero tier/outcome movement. |
-| [#351] | Adds coded failures and the checked-settings path described below. The coordinated engine/codegen gate retains all 7,989 outcomes; explicit failure-channel tests cover empty `runtime.error` and checked-setting refusals. |
-| [#352] | Places forced fill-recalculation fills at paired same-bar waypoints. Ten zero-commission control tapes match fill fields; five known trade-excursion residuals remain. The forward stream still refuses `calc_on_order_fills`. |
-| [#353] | Uses chart-timeframe input in `pineforge-live` and drains the final webhook delivery. Accepted native/live verification covers the landed tree; the batch population grades do not certify real broker fills. |
-| [#354] | Separates native CI profiles and makes cold verification reproducible. The final behavior candidate passed all eight managed verification steps; these are verification changes, not a trading improvement. |
-| [#357] | Preserves certified scalar types and explicit unresolved provenance. Its 134/134 gate measures all 7,989 probes with no movement; the retained 1,523-pair provenance comparison records zero newly wrong or newly unresolved uniquely-correct values. |
+| [#346] | Adds routing, service and retirement-cursor regression coverage in seven test/documentation files. It changes no production behavior; the final release-pair comparison grades all 7,989 probes. |
+| [#349] | Reduces symbol-feed copies per strategy handle. Ownership checks preserve trades and hashes while measuring copy bounds; the comparison records no grade change on the 7,989 graded probes. This is a memory/ownership change, with no new throughput claim. |
+| [#350] | Corrects the exit behaviors explained under *Pine adapter corrections* below. Recorded synthetic examples establish those fixes; the population comparison records no grade change on the 7,989 graded probes. That result does not imply unchanged trades. |
+| [#351] | Adds coded failures and the checked-settings path described below. The paired engine/codegen comparison records no grade change on the 7,989 graded probes; failure checks cover empty `runtime.error` and checked-setting refusals. |
+| [#352] | Corrects the same-bar location of covered forced fills, as described below. Its population comparison moves one graded probe from strong to excellent and none down. Ten zero-commission examples match fill fields; five trades retain known favorable/adverse excursion differences. The forward stream still refuses `calc_on_order_fills`. |
+| [#353] | Uses chart-timeframe input in `pineforge-live` and drains the final webhook delivery. Native/live checks cover this change; the batch grades do not certify real broker fills. |
+| [#354] | Separates native CI profiles and makes verification from a clean build reproducible. The final behavior candidate passed all eight required verification steps; these are verification changes, not a trading improvement. |
+| [#357] | Preserves certified scalar types and explicit unresolved provenance. Its comparison records no grade change on the 7,989 graded probes. Separate pre-release checks compare input provenance in 1,523 cases and find no newly incorrect or newly unresolved values among those previously resolved uniquely and correctly. |
 
 ### Symbol-feed ownership
 
@@ -67,9 +67,70 @@ attempt succeeded or that every supported configuration was measured.
   `StagedInstrumentFeed`), the kernel moves its spec into the run and out of
   it instead of copying it and keeps no unread copy, and installing a feed no
   longer copies it to judge it. At 56 bytes per bar, a year of one-minute bars
-  is 29.4 MB per feed per copy. What a run computes does not change: trades,
-  reports, metrics and state hashes are byte-identical, and the C ABI, the
-  layout versions and the hash domains are unchanged.
+  is 29.4 MB per feed per copy. This ownership request alone does not change
+  what a run computes: trades, reports, metrics and state hashes are
+  byte-identical with and without #349, and the C ABI, the layout versions
+  and the hash domains are unchanged. Other 1.4.0 changes can change trades,
+  reports and hashes, as the sections below describe.
+
+### Pine adapter corrections that can change trades ([#350], [#352])
+
+Strategies that use these corrected paths can produce different trades
+than under 1.3.0, including different fill times, prices or quantities, and
+different report metrics and state-hash values. Re-run an affected strategy
+before relying on its 1.3.0 results. The covered behaviors are:
+
+- **An exit placed before any entry exists ([#350]).** Without
+  `calc_on_order_fills`, a `strategy.exit` without `from_entry`, called while
+  flat with no entry order working, is now treated as void for a subsequent
+  market opening. Its working legs are withdrawn at that fill and do not
+  bind to the new lot; 1.3.0 could let that earlier exit affect the opening.
+  An exit called while an entry order is already working retains its binding
+  behavior. A stop or limit entry filling first keeps the previous handling;
+  that case and fill recalculation are outside this correction's evidence.
+- **Competing orders during fill recalculation ([#350]).** A stop or limit
+  leg of `strategy.exit` created during `calc_on_order_fills` keeps the
+  trigger level installed by the exit call even when other orders compete
+  beside it. The former competing-order rule shifted a level it classified
+  as off-grid outward by half a tick, which could postpone a touched exit
+  until a later bar or re-issue. That extra shift is removed. The recorded
+  examples cover absolute and relative stop/limit legs, touched and crossed
+  levels on or off the tick grid, and multiple entry/exit order combinations;
+  this is not a change to every order kind or every half-tick rule.
+- **Relative exits over pyramided entries ([#350]).** A held position with
+  multiple `strategy.entry` lots can now receive one bracket per entry from
+  a `strategy.exit` without `from_entry`, with positive relative `profit`
+  and/or `loss` distances measured from each entry's fill price. Previously
+  one exit was repriced from the position's average price. Each bracket
+  closes that entry's quantity, while fills close the oldest lots first
+  (FIFO); an entry filling after the call receives its bracket at its fill.
+  This path uses the chart bars without magnifier intrabars, a positive
+  tick size and FIFO, with both `calc_on_order_fills` and
+  `process_orders_on_close` off. It excludes absolute limit/stop levels,
+  trails, explicit quantities, partial `qty_percent` and named OCA groups.
+  Other configurations retain the existing whole-position exit path. The
+  retained fill-recalculation examples are outside this rule and include
+  known divergences from TradingView.
+- **The price-path location of forced fills ([#352]).** On an unmagnified
+  chart path, a covered fill forced during `calc_on_order_fills` on the
+  order's placement bar is now located at its corresponding price point on
+  that bar. Previously the location test used the booked price, including
+  slippage, which could put a same-bar cascade at the wrong point. Slippage
+  still changes the booked price. The new location is used only while the
+  forced price still exactly matches the recorded target's rounded tick plus or
+  minus slippage. Magnified paths, repriced forced orders, later-bar fills
+  and resting non-forced orders retain their previous location tests.
+  Priced entries, `strategy.exit` legs and `strategy.order` do not record this
+  target. The ten zero-commission examples match fill time, type, price,
+  quantity and net PnL. Nine exercise cascades after a one-unit long margin
+  call; the tenth checks an initial entry that is not admitted. Five trades
+  retain known favorable/adverse excursion differences. The forward stream
+  still refuses `calc_on_order_fills`.
+
+On the measured population of 7,989 graded probes, #350 recorded no grade
+change, #352 moved one probe from strong to excellent with none down, and
+the later #357 comparison recorded no grade change. Those are grading
+results on that population, not cross-version trade or hash identity.
 
 ### Run-failure codes ([#351])
 
@@ -149,8 +210,9 @@ attempt succeeded or that every supported configuration was measured.
   (`strategy_settings_api_version() == 1`), the harness creates and configures
   the strategy through it: an unknown input title or override key, an option
   outside its list, or a value that does not parse or is out of range fails the
-  run before it starts (`setting_rejected`). The legacy setters dropped such a
-  setting silently, and the run went ahead with settings nobody chose. A
+  run before it starts (`setting_rejected`). Through the legacy setters,
+  1.3.0 accepted some settings, ignored others and already failed some with
+  text-only errors, as the executed contrasts below show. A
   library without that API keeps the legacy setters; one that exports only
   part of it, or another version, is refused
   (`strategy_library_incompatible`). A `true`, `false`, `null`, array or
@@ -163,7 +225,7 @@ attempt succeeded or that every supported configuration was measured.
 
 #### Executed setting and self-stop contrasts
 
-Six public synthetic requests were run through the installed entrypoint on
+Six synthetic requests were run through the installed entrypoint on
 the exact v1.3.0 pair and the pinned candidate pair, using the same 40-bar
 feed. Planned 1.4.0 refuses three requests that 1.3.0 allowed to complete:
 setting a duplicated `Period` title to `"7"`, passing `"color.blue"` to
@@ -187,8 +249,19 @@ refusals before execution. The candidate's 38-code
 `setting_rejected` results as **`input`**, and the deliberate script stop as
 **`strategy`**. Consumers can distinguish request refusal from a script's
 self-stop using the code and catalog class; exit 4 alone does not make that
-distinction. No additional accepted/ignored setting class is inferred from
-these six requests.
+distinction. These six requests illustrate the change; they are not the
+complete list of refusals.
+
+**Known diagnostic limit:** a `setting_rejected` refusal of a strategy
+override carries `args.entrypoint: "strategy_set_override"` and
+`args.reason`, but no override key. Its text does not name the key either:
+the non-numeric capital example reads
+`strategy_set_override: expected a finite decimal number`. `args.input`
+names an input only when the strategy declares that title, so an unknown
+input title is not named. `setting_unsupported` carries `args: {}`. The
+harness stops at the first refused setting, processing inputs before
+overrides. A host sending several overrides cannot identify the refused
+key from that failure alone.
 
 ### Live runner: chart-timeframe input ([#353])
 
@@ -253,10 +326,13 @@ used by the exit and waypoint fixes:
   with the same unsigned encoding and order; no hash input is removed by
   that ownership change.
 
-No existing hashed field is removed or re-encoded in this range. A run that
-uses the added state can have different hashes, and the behavior fixes can
-also change the values being hashed. The unchanged epoch/domain names are
-not a promise of equal 1.3.0 and 1.4.0 hash values. The release harness's
+Across #350 and #352, **29 added fold lines (23 + 6)** observe state.
+Adding those observations does not itself change trading behavior or
+non-hash report values. The accompanying adapter corrections can change
+trades, reports and the values being hashed on the affected paths.
+No existing hashed field is removed or re-encoded in this range. The
+unchanged enclosing epoch/domain names are not a promise of equal 1.3.0 and
+1.4.0 hash values. The release harness's
 SHA-256 provenance fingerprint is a separate identity, described next.
 
 ### Report keys and provenance
@@ -266,9 +342,10 @@ metrics keys, including `sharpe_tv` and `sortino_tv`. Top-level
 `applied_inputs` and `applied_overrides` remain setter-wire strings.
 Inside `fingerprint.provenance`, [#357] changes certified input defaults,
 effective values and applied settings to their native scalar types: an
-integer override such as `"21"` is represented as `21`, a boolean as a JSON
-boolean, and a string or source selector as a string. Consumers must accept
-these typed values instead of assuming every applied value is a string.
+integer input value such as Length `"21"` is represented as `21`, a decimal
+strategy override such as `initial_capital="12000"` as `12000.0`, a boolean
+as a JSON boolean, and a string or source selector as a string. Consumers
+must accept these typed values instead of assuming every applied value is a string.
 
 A value that cannot be certified remains explicit: the input's `default`
 and `value` are `null`, with a `resolution` object carrying
@@ -293,9 +370,10 @@ whole fingerprint `null`.
 The checked-settings path also makes the whole fingerprint `null` when its
 receipt repeats a title; it does not emit the legacy path's per-title
 duplicate record. A successful backtest can therefore have no fingerprint.
-For the demonstrated script with two inputs sharing a title, rename one
-input to give both distinct titles and obtain a fingerprint on the checked
-path. This is different from an unresolved legacy row, which can remain
+For the demonstrated repeated-title script, giving the two inputs distinct
+titles is the source-derived remedy and is expected to restore the
+checked-path fingerprint; the retained sample did not execute that renamed
+variant. This differs from an unresolved legacy row, which can remain
 inside a non-null fingerprint.
 
 Failure objects gain string `code` and typed-object `args` beside `engine`
@@ -316,6 +394,18 @@ strategy and every C++ host against the new headers and archive. C loaders
 can probe the two new getters before using them with older libraries.
 Update JSON readers for typed/unresolved provenance and coded failures;
 decode and hash the original fingerprint token bytes to verify a digest.
+For inputs sent to the checked-settings API, use unique declared titles,
+send colors as decimal integers for packed `0xAARRGGBB` values (opaque red
+is `"4294901760"`, not a CSS/hex string or `"color.red"`), and choose values
+from each input's declared `options`. A shared title is refused as
+`ambiguous_key`; rename one input in the Pine source. Textual colors are
+refused as `expected_integer`, and out-of-options values as
+`invalid_input_option`. These are input settings in `--inputs`, separate
+from `strategy()` parameters in `--overrides`. Unknown input titles or
+override keys and declared numeric range violations are also refused;
+see [checked settings](docs/checked-settings.md) and the
+[harness setting rules](docker/README.md#the-failure-line) for the remaining
+refusals and supported encodings.
 For a live deployment that fed a coarser script one-minute input, reconcile
 pending deliveries and positions, retain its ledger for audit, and start a
 new deployment with chart-timeframe warmup/feed as described above and in

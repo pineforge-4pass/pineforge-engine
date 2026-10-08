@@ -4,7 +4,7 @@
 
 This synthetic sample compares the released **1.3.0 source pair** with the
 **unreleased 1.4.0 candidate pair**. Both were built and installed on the same
-x86-64 Ubuntu 24.04 spot host with GCC 13.3.0, then run through their own
+x86-64 Ubuntu 24.04 host with GCC 13.3.0, then run through their own
 installed `docker/entrypoint.sh` and `run_json.py`. It is a report-shape
 example: 40 constant bars, no trades, no performance measurement and no
 private source or feed.
@@ -55,9 +55,10 @@ fingerprint; the candidate report has **`fingerprint: null`**. On the
 candidate's checked-settings path, a repeated title makes the native receipt
 ambiguous, so provenance normalization refuses the complete fingerprint.
 This does not turn the successful backtest into a failed run.
-Rename one of the two `Period` inputs so their titles are distinct to obtain
-a fingerprint on the checked path. This remedy is specific to the repeated
-title; an unresolved legacy row, shown below, can remain fingerprinted.
+Giving the two `Period` inputs distinct titles is the source-derived remedy
+and is expected to restore the checked-path fingerprint; the retained runs
+did not execute that renamed variant. This remedy is specific to the
+repeated title; an unresolved legacy row, shown below, can remain fingerprinted.
 
 ## Matched legacy-settings invocation
 
@@ -132,7 +133,7 @@ conditions.
 
 ## Failure contrasts
 
-A second bounded spot run used these exact source pairs and feed bytes for
+A second set of runs used these exact source pairs and feed bytes for
 six requests on each pair, with explicit inputs/overrides replacing the
 earlier values. The [release notes](../../CHANGELOG.md#executed-setting-and-self-stop-contrasts)
 record every observed outcome and the candidate catalog classes. The first
@@ -140,7 +141,9 @@ three requests return old success reports and candidate `setting_rejected`
 errors; both invalid-capital variants already fail on the old pair, and the
 deliberate script stop fails on both pairs. All 12 original stdout/stderr
 files, source bytes, actual compiled source, exits and request/install
-identities were harvested after each invocation. Their manifest SHA-256 is
+identities were retained after each invocation. The maintainers retain
+these records, including the short synthetic Choice and runtime-stop
+sources, which are not reproduced on this page. The retained manifest SHA-256 is
 `06bc5c9fe93cca91baacb8f766098ff32f7f3d39877faa893ae25fb80e93c6ad`.
 The 38-code candidate catalog SHA-256 is
 `dcd701fe4bdd57a38d6858e96f719c1001f07f4a035f6b8ad25d720d4b83f601`.
