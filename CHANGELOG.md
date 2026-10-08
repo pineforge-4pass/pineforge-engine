@@ -5,12 +5,13 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
-## Unreleased
+## 1.4.0 — 2026-10-08
 
-**Planned 1.4.0**, paired with pineforge-codegen 1.4.0. This release is not
-tagged yet. The candidate pairs engine `b3192bfc` with codegen `bfc4ddce`;
-their version files still name 1.3.0 until the release workflow stamps them.
-The planned minor release adds run-failure codes, typed report provenance
+**[1.4.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.4.0)**,
+paired with [pineforge-codegen 1.4.0](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.4.0).
+The pre-tag behavior candidate paired engine `b3192bfc` with codegen
+`bfc4ddce`; its version files still named 1.3.0 when the samples were built.
+This minor release adds run-failure codes, typed report provenance
 and the Pine adapter and live-runner corrections below. Regenerate strategy
 C++ with the matching codegen and relink against the matching engine headers
 and archive; replacing the archive alone does not update a statically linked
@@ -25,7 +26,7 @@ epoch stays `engine_script_run_v19`; *State hashes* below describes the
 recipe additions. *Report keys and provenance* describes the JSON changes
 that consumers must handle.
 
-The prepared 1.4.0 facts map to baseline
+The 1.4.0 facts map to baseline
 `pineforge-parity-baseline-20261007-engine-b3192bfc`: its recorded grading
 outcomes are **<!-- pf:releases[1.4.0].scoreboard.excellent|int -->7,983<!-- /pf -->
 excellent / <!-- pf:releases[1.4.0].scoreboard.strong|int -->6<!-- /pf --> strong**
@@ -227,7 +228,7 @@ results on that population, not cross-version trade or hash identity.
 
 Six synthetic requests were run through the installed entrypoint on
 the exact v1.3.0 pair and the pinned candidate pair, using the same 40-bar
-feed. Planned 1.4.0 refuses three requests that 1.3.0 allowed to complete:
+feed. 1.4.0 refuses three requests that 1.3.0 allowed to complete:
 setting a duplicated `Period` title to `"7"`, passing `"color.blue"` to
 `Color`, and setting `Choice` to `"15"` outside its `[10, 20, 30]` options.
 The old pair returns success reports for these requests; that wire echo
@@ -388,7 +389,7 @@ path's null fingerprint and the legacy path's per-title records.
 
 ### Migration
 
-Use engine 1.4.0 with codegen 1.4.0 when the pair is released; earlier paired
+Use engine 1.4.0 with codegen 1.4.0; earlier paired
 releases remain historical examples. Regenerate and rebuild every generated
 strategy and every C++ host against the new headers and archive. C loaders
 can probe the two new getters before using them with older libraries.

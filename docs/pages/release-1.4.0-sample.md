@@ -1,9 +1,9 @@
-# Planned 1.4.0 — public provenance sample {#release_140_sample}
+# 1.4.0 — pre-tag public provenance sample {#release_140_sample}
 
 @tableofcontents
 
-This synthetic sample compares the released **1.3.0 source pair** with the
-**unreleased 1.4.0 candidate pair**. Both were built and installed on the same
+This synthetic sample compared the released **1.3.0 source pair** with the
+**pre-tag 1.4.0 candidate pair**. Both were built and installed on the same
 x86-64 Ubuntu 24.04 host with GCC 13.3.0, then run through their own
 installed `docker/entrypoint.sh` and `run_json.py`. It is a report-shape
 example: 40 constant bars, no trades, no performance measurement and no
@@ -12,12 +12,12 @@ private source or feed.
 | Pair | Engine commit | Codegen commit |
 |---|---|---|
 | Released 1.3.0 sources | `ec5d8bf46210bac103870ecf6fc74865cad66c8d` | `0736180e4b1ae8068df222f72ccc6a8a64471d3f` |
-| Planned 1.4.0 candidate | `b3192bfc2f5a24bf4efd6d1d01e01e8fe619dfed` | `bfc4ddce453db1ba810692af9b9ba3310d87f0ac` |
+| Pre-tag 1.4.0 candidate | `b3192bfc2f5a24bf4efd6d1d01e01e8fe619dfed` | `bfc4ddce453db1ba810692af9b9ba3310d87f0ac` |
 
-These are fresh builds from pinned source, not downloaded release binaries.
-Both candidate VERSION files still say 1.3.0. With
-`PINEFORGE_VERSION_SOURCE=FILE`, the installed candidate reports version
-`1.3.0` and engine commit `b3192bf`; the old build reports `1.3.0` and
+These were fresh builds from pinned source, not downloaded release binaries.
+Both candidate VERSION files said 1.3.0 at sample-build time. With
+`PINEFORGE_VERSION_SOURCE=FILE`, the installed candidate reported version
+`1.3.0` and engine commit `b3192bf`; the old build reported `1.3.0` and
 `ec5d8bf`. The candidate output has not been relabeled as a tagged artifact.
 
 ## Shared inputs
