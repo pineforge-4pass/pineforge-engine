@@ -470,7 +470,7 @@ spec fields.
 The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
 overload (`engine.hpp:1800-1812`) is **not** refused as a source mutation: it
 reaches `NativeExecutionConsumer::run_rich`
-(`native_execution_consumer.cpp:9761-9803`), which admits the begin, checks the
+(`native_execution_consumer.cpp:9810-9852`), which admits the begin, checks the
 timeframe arguments against the spec, preflights and pumps the batch exactly
 like the plain overload. `inputs` / `syminfo` / `overrides` are carried only as
 `NativeBeginArgs` fields to `prepare_native_begin` — the overrides as the
@@ -498,7 +498,7 @@ Serialized external C++ calls may command only **between realtime inputs**,
 never reentrantly during input processing. A host written in C issues the same
 five commands through `strategy_native_submit_v1` / `_replace_v1` /
 `_cancel_v1` / `_cancel_all_v1` / `_cancel_where_v1`
-(`native_c_api.h:2723-2811`), under the same legality rule; see *Driving the
+(`native_c_api.h:2829-2917`), under the same legality rule; see *Driving the
 kernel from C* below.
 
 `native_order::Request` values belong to `native_order_v7`
@@ -638,13 +638,13 @@ a host reacts to its own execution and may submit again. A request born there,
 mid-bar on a continuous segment, is eligible on the **remaining path suffix** of
 that segment — the birth is admitted at the current cursor and the geometric
 search then sees only the unconsumed suffix (`born_on_remaining_path`,
-`native_execution_consumer.cpp:5930-5934`). Requests accepted before the
+`native_execution_consumer.cpp:5944-5948`). Requests accepted before the
 segment, and discrete points, keep the ordinary birth gate above.
 
 `on_native_bar_open` fires at the modeled opening, before that point's matching
-pass (`native_execution_consumer.cpp:7420-7422`). **Lookahead warning:** the
+pass (`native_execution_consumer.cpp:7434-7436`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
-`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:7390`), the
+`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:7404`), the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
 high, low and close are the finished bar's, not what is known at the open. A
 host that must decide on open-only information reads
@@ -2112,7 +2112,7 @@ default, set while no run is active — because each row is a full
 the live state, not the run's length: the closed rows enter through a running
 digest). With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:8302`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:8316`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
@@ -3086,7 +3086,7 @@ Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator
 aggregates with, and the one the kernel's `script_bucket_completions` query
 feeds when the Pine scheduler asks how its input span buckets
-(`TimeframeAggregator` `native_execution_consumer.cpp:8384`). What it does
+(`TimeframeAggregator` `native_execution_consumer.cpp:8398`). What it does
 **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
@@ -3175,7 +3175,7 @@ These are existing refusals, not implied future features:
 A C host has the same stream and the same commands. Streaming needs no new
 symbol — `strategy_stream_begin` and its family (`pineforge.h:739`) take
 a `pf_strategy_t` from `strategy_native_host_create_v1` unchanged — and
-`strategy_native_submit_v1` (`native_c_api.h:2723`) obeys the one legality
+`strategy_native_submit_v1` (`native_c_api.h:2742`) obeys the one legality
 rule its C++ spelling does.
 
 Rebuild strategy libraries against this engine. An ABI-v4 module without the
@@ -3999,6 +3999,27 @@ allocation. A batch run is `strategy_native_run_v1`; its report is released
 with `strategy_native_report_free_v1`, because the unprefixed `report_free` is
 one of the per-strategy exports the transpiler emits and is absent from
 a runtime a C host links on its own.
+
+**A run's report.** A report handed out belongs to the call that asked for
+it, or it is empty, and a refused call never answers OK. The engine keeps the
+rows of the last run it began, so `BacktestEngine::fill_report` — the one reader
+behind `strategy_native_run_v1`, the native module wrappers and the
+transpiler's `run_backtest` / `run_backtest_full` (`run()` then `fill_report`)
+— publishes them only while the latest `run` or `stream_begin` call began
+(reached `reset_run_state`); a call it refused without beginning (a begin
+outside `Ready`, a refused bar array or run option, a calendar or timezone
+refusal, a begin over a live stream) gets the empty report (every array `NULL`,
+every count 0), overwritten and never freed, and leaves the lifecycle, the run
+identity and the retained rows as it found them. A run that began owns its rows
+whatever became of it: a `Completed` report and a started-then-failed run's
+partial rows are published unchanged. `strategy_native_run_v1` answers
+`PF_NATIVE_OK` only for a run that call carried to `Completed` (the consumed
+run-number high-water moved) and `PF_NATIVE_E_RUN_FAILED` otherwise; the reason
+stays in `strategy_get_last_error`, `strategy_get_last_error_code` and
+`strategy_last_run_status` (1). A `Completed` handle runs again after a
+successful `strategy_configure_native_v1`. `strategy_stream_fill_report` is the
+explicit snapshot: the same function asked for the rows' own owner, so a live
+stream's rows survive a batch call refused over it, which reads empty.
 
 **Commands.** `strategy_native_submit_v1`, `_replace_v1` / `_replace_ext_v1`,
 `_cancel_v1`, `_cancel_all_v1`, `_cancel_where_v1` and `_execute_current_v1`

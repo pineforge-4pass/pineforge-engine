@@ -9340,6 +9340,890 @@ static void check_csurface_create_and_configure_refusals(void) {
     }
 }
 
+/* ── PX native-attempt characterization (lane px-native-attempt-repro) ─────
+ *
+ * strategy_native_run_v1 on a handle whose FIRST run completed, followed by a
+ * SECOND call the kernel refuses. The header documents PF_NATIVE_OK as "the
+ * run reached Completed" and the filled report as the run's own. These rows
+ * pin what a refused second attempt must answer, one group per refusal cause:
+ *
+ *   lifecycle      no re-arm between the two calls
+ *   bad settings   a refused re-arm: a pre-kernel typed refusal (handle stays
+ *                  Completed), a legacy invalid spec (latches Failed) and a
+ *                  reused session key (latches Failed)
+ *   bad feed       a successfully RE-ARMED (Ready) handle, then a bar array the
+ *                  preflight refuses. A feed refused only because the handle is
+ *                  not Ready is lifecycle coverage, never feed coverage.
+ *   capability     a successfully re-armed handle whose retained intrabar path
+ *                  fails its run-time preflight
+ *
+ * Every attempt records the actual return code, last_run_status, last error
+ * text and code, native state and a DEEP COPY of the report's defined fields
+ * (never struct bytes, pointers or padding). A scenario whose refusal is not
+ * the cause it names prints "PXCAUSE ... NOT-REACHED" and asserts nothing
+ * else, so a RED row is always a RED for the cause it states. The "control"
+ * groups are behaviour that is already correct (C argument guards, a fresh
+ * handle, a successful re-arm, a live stream snapshot) and must stay green
+ * under any fix. */
+
+#define PX_TEXT 256
+#define PX_MAX_TRADES 8
+#define PX_MAX_POINTS 64
+#define PX_SENTINEL (-777)
+#define PX_NOT_READY_TEXT "native run requires configure_native"
+#define PX_SPEC_REJECTED_TEXT "native run spec rejected"
+#define PX_KEY_CHANGED_TEXT "native session key cannot change on a reused host"
+#define PX_INTRABAR_TEXT "native intrabar path failed validation"
+
+enum { PX_OUT_UNTOUCHED = 0, PX_OUT_EMPTY = 1, PX_OUT_ROWS = 2 };
+static const char* const px_out_name[3] = {"untouched", "empty", "rows"};
+
+typedef struct px_trade {
+    int64_t entry_time;
+    int64_t exit_time;
+    double  entry_price;
+    double  exit_price;
+    double  pnl;
+    double  pnl_pct;
+    int     is_long;
+    double  max_runup;
+    double  max_drawdown;
+    double  qty;
+    double  commission;
+    int32_t entry_bar_index;
+    int32_t exit_bar_index;
+    int32_t open_at_end;
+} px_trade;
+
+typedef struct px_point {
+    int64_t time_ms;
+    double  equity;
+    double  open_profit;
+} px_point;
+
+/* The defined fields of a pf_report_t, deep-copied out of its heap arrays. */
+typedef struct px_report {
+    int      out_class;
+    int      total_trades;
+    int      trades_len;
+    double   net_profit;
+    int64_t  input_bars;
+    int64_t  script_bars;
+    int      input_tf_seconds;
+    int      script_tf_seconds;
+    int      script_tf_ratio;
+    int      needs_aggregation;
+    int      bar_magnifier_enabled;
+    int      all_num_trades;
+    int64_t  equity_len;
+    int64_t  hash_len;
+    int      trades_copied;
+    int      points_copied;
+    int      hashes_copied;
+    px_trade trades[PX_MAX_TRADES];
+    px_point points[PX_MAX_POINTS];
+    uint64_t hashes[PX_MAX_POINTS];
+} px_report;
+
+typedef struct px_state {
+    int      rc;
+    uint32_t lifecycle;
+    uint32_t failure_code;
+    uint32_t failure_operation;
+    uint32_t failure_discriminator;
+    uint32_t completion;
+    uint64_t failure_ordinal;
+    uint64_t consumed_high_water;
+    int64_t  decision_floor_ms;
+} px_state;
+
+typedef struct px_attempt {
+    const char* tag;
+    int         rc;
+    int         last_status;
+    char        error[PX_TEXT];
+    char        error_code[PX_TEXT];
+    px_state    st;
+    int         hash_rc;
+    uint64_t    hash;
+    px_report   rep;
+} px_attempt;
+
+typedef struct px_fixture {
+    pf_strategy_t         host;
+    twin_state            cb;
+    pf_native_run_spec_v1 spec;
+    const pf_bar_t*       bars;
+    int                   n;
+    px_attempt            first;
+} px_fixture;
+
+static void px_expect(int ok, const char* scenario, const char* what) {
+    if (!ok) {
+        fprintf(stderr, "FAIL px %s: %s\n", scenario, what);
+        ++failures;
+    }
+}
+
+static int px_cause(int reached, const char* scenario, const char* cause) {
+    printf("PXCAUSE scenario=%s cause=\"%s\" %s\n", scenario, cause,
+           reached ? "REACHED" : "NOT-REACHED");
+    fflush(stdout);
+    if (!reached) {
+        fprintf(stderr, "FAIL px %s: refusal cause not reached (%s); no RED is claimed for this row\n",
+                scenario, cause);
+        ++failures;
+    }
+    return reached;
+}
+
+static void px_copy_text(char* dst, size_t cap, const char* src) {
+    dst[0] = '\0';
+    if (!src) return;
+    strncpy(dst, src, cap - 1);
+    dst[cap - 1] = '\0';
+}
+
+/* A report pre-filled so "untouched" is distinguishable from "zero-filled". */
+static void px_sentinel(pf_report_t* r) {
+    memset(r, 0, sizeof(*r));
+    r->total_trades = PX_SENTINEL;
+    r->trades_len = PX_SENTINEL;
+    r->net_profit = (double)PX_SENTINEL;
+    r->input_bars_processed = PX_SENTINEL;
+    r->script_bars_processed = PX_SENTINEL;
+    r->equity_curve_len = PX_SENTINEL;
+    r->broker_state_hash_len = PX_SENTINEL;
+}
+
+static int px_out_class(const pf_report_t* r) {
+    if (r->total_trades == PX_SENTINEL && r->trades_len == PX_SENTINEL
+        && r->net_profit == (double)PX_SENTINEL && r->input_bars_processed == PX_SENTINEL
+        && r->script_bars_processed == PX_SENTINEL && r->equity_curve_len == PX_SENTINEL
+        && r->broker_state_hash_len == PX_SENTINEL) {
+        return PX_OUT_UNTOUCHED;
+    }
+    if (r->total_trades == 0 && r->trades_len == 0 && r->equity_curve_len == 0
+        && r->input_bars_processed == 0 && r->script_bars_processed == 0) {
+        return PX_OUT_EMPTY;
+    }
+    return PX_OUT_ROWS;
+}
+
+static void px_release(pf_report_t* r) {
+    if (px_out_class(r) != PX_OUT_UNTOUCHED) strategy_native_report_free_v1(r);
+}
+
+static void px_snapshot(px_report* d, const pf_report_t* s) {
+    int64_t i;
+    memset(d, 0, sizeof(*d));
+    d->out_class = px_out_class(s);
+    d->total_trades = s->total_trades;
+    d->trades_len = s->trades_len;
+    d->net_profit = s->net_profit;
+    d->input_bars = s->input_bars_processed;
+    d->script_bars = s->script_bars_processed;
+    d->input_tf_seconds = s->input_tf_seconds;
+    d->script_tf_seconds = s->script_tf_seconds;
+    d->script_tf_ratio = s->script_tf_ratio;
+    d->needs_aggregation = s->needs_aggregation;
+    d->bar_magnifier_enabled = s->bar_magnifier_enabled;
+    d->all_num_trades = (int)s->metrics.all.num_trades;
+    d->equity_len = s->equity_curve_len;
+    d->hash_len = s->broker_state_hash_len;
+    if (s->trades) {
+        for (i = 0; i < (int64_t)s->trades_len && i < PX_MAX_TRADES; ++i) {
+            const pf_trade_t* t = &s->trades[i];
+            px_trade* c = &d->trades[d->trades_copied++];
+            c->entry_time = t->entry_time;
+            c->exit_time = t->exit_time;
+            c->entry_price = t->entry_price;
+            c->exit_price = t->exit_price;
+            c->pnl = t->pnl;
+            c->pnl_pct = t->pnl_pct;
+            c->is_long = t->is_long;
+            c->max_runup = t->max_runup;
+            c->max_drawdown = t->max_drawdown;
+            c->qty = t->qty;
+            c->commission = t->commission;
+            c->entry_bar_index = t->entry_bar_index;
+            c->exit_bar_index = t->exit_bar_index;
+            c->open_at_end = t->open_at_end;
+        }
+    }
+    if (s->equity_curve) {
+        for (i = 0; i < s->equity_curve_len && i < PX_MAX_POINTS; ++i) {
+            px_point* c = &d->points[d->points_copied++];
+            c->time_ms = s->equity_curve[i].time_ms;
+            c->equity = s->equity_curve[i].equity;
+            c->open_profit = s->equity_curve[i].open_profit;
+        }
+    }
+    if (s->broker_state_hash) {
+        for (i = 0; i < s->broker_state_hash_len && i < PX_MAX_POINTS; ++i) {
+            d->hashes[d->hashes_copied++] = s->broker_state_hash[i];
+        }
+    }
+}
+
+static int px_same_double(double a, double b) {
+    return a == b || (isnan(a) && isnan(b));
+}
+
+static int px_trade_equal(const px_trade* a, const px_trade* b) {
+    return a->entry_time == b->entry_time && a->exit_time == b->exit_time
+        && px_same_double(a->entry_price, b->entry_price)
+        && px_same_double(a->exit_price, b->exit_price)
+        && px_same_double(a->pnl, b->pnl) && px_same_double(a->pnl_pct, b->pnl_pct)
+        && a->is_long == b->is_long
+        && px_same_double(a->max_runup, b->max_runup)
+        && px_same_double(a->max_drawdown, b->max_drawdown)
+        && px_same_double(a->qty, b->qty) && px_same_double(a->commission, b->commission)
+        && a->entry_bar_index == b->entry_bar_index && a->exit_bar_index == b->exit_bar_index
+        && a->open_at_end == b->open_at_end;
+}
+
+/* Field-by-field equality of two deep copies. include_hash = 0 leaves the
+ * per-bar continuation hashes out (they fold the run identity, so two runs
+ * under different run numbers legitimately differ there). */
+static int px_report_equal(const px_report* a, const px_report* b, int include_hash) {
+    int i;
+    if (a->total_trades != b->total_trades || a->trades_len != b->trades_len
+        || !px_same_double(a->net_profit, b->net_profit)
+        || a->input_bars != b->input_bars || a->script_bars != b->script_bars
+        || a->input_tf_seconds != b->input_tf_seconds
+        || a->script_tf_seconds != b->script_tf_seconds
+        || a->script_tf_ratio != b->script_tf_ratio
+        || a->needs_aggregation != b->needs_aggregation
+        || a->bar_magnifier_enabled != b->bar_magnifier_enabled
+        || a->all_num_trades != b->all_num_trades || a->equity_len != b->equity_len
+        || a->trades_copied != b->trades_copied || a->points_copied != b->points_copied) {
+        return 0;
+    }
+    for (i = 0; i < a->trades_copied; ++i) {
+        if (!px_trade_equal(&a->trades[i], &b->trades[i])) return 0;
+    }
+    for (i = 0; i < a->points_copied; ++i) {
+        if (a->points[i].time_ms != b->points[i].time_ms
+            || !px_same_double(a->points[i].equity, b->points[i].equity)
+            || !px_same_double(a->points[i].open_profit, b->points[i].open_profit)) {
+            return 0;
+        }
+    }
+    if (include_hash) {
+        if (a->hash_len != b->hash_len || a->hashes_copied != b->hashes_copied) return 0;
+        for (i = 0; i < a->hashes_copied; ++i) {
+            if (a->hashes[i] != b->hashes[i]) return 0;
+        }
+    }
+    return 1;
+}
+
+static void px_read_state(px_state* s, pf_strategy_t host) {
+    pf_native_state_v1 raw;
+    memset(s, 0, sizeof(*s));
+    memset(&raw, 0, sizeof(raw));
+    raw.struct_size = (uint32_t)sizeof(raw);
+    s->rc = strategy_native_state_v1(host, &raw);
+    if (s->rc != PF_NATIVE_OK) return;
+    s->lifecycle = raw.lifecycle;
+    s->failure_code = raw.failure_code;
+    s->failure_operation = raw.failure_operation;
+    s->failure_discriminator = raw.failure_discriminator;
+    s->completion = raw.completion;
+    s->failure_ordinal = raw.failure_ordinal;
+    s->consumed_high_water = raw.consumed_high_water;
+    s->decision_floor_ms = raw.decision_floor_ms;
+}
+
+/* Reads the presentation channels first: a later accessor may clear them. */
+static void px_observe(px_attempt* a, const char* tag, pf_strategy_t host, int rc,
+                       const pf_report_t* out) {
+    memset(a, 0, sizeof(*a));
+    a->tag = tag;
+    a->rc = rc;
+    a->last_status = strategy_last_run_status(host);
+    px_copy_text(a->error, sizeof(a->error), strategy_get_last_error(host));
+    px_copy_text(a->error_code, sizeof(a->error_code), strategy_get_last_error_code(host));
+    px_read_state(&a->st, host);
+    a->hash_rc = strategy_native_continuation_hash_v1(host, &a->hash);
+    px_snapshot(&a->rep, out);
+}
+
+static void px_print(const px_attempt* a) {
+    printf("PXREC tag=%s rc=%d last_status=%d error=\"%s\" error_code=\"%s\" state_rc=%d "
+           "lifecycle=%u failure=%u op=%u disc=%u completion=%u hwm=%llu hash_rc=%d hash=%016llx "
+           "out=%s total_trades=%d trades_len=%d net_profit=%.17g input_bars=%lld "
+           "script_bars=%lld equity_len=%lld hash_len=%lld\n",
+           a->tag, a->rc, a->last_status, a->error, a->error_code, a->st.rc,
+           (unsigned)a->st.lifecycle, (unsigned)a->st.failure_code,
+           (unsigned)a->st.failure_operation, (unsigned)a->st.failure_discriminator,
+           (unsigned)a->st.completion, (unsigned long long)a->st.consumed_high_water,
+           a->hash_rc, (unsigned long long)a->hash, px_out_name[a->rep.out_class],
+           a->rep.total_trades, a->rep.trades_len, a->rep.net_profit,
+           (long long)a->rep.input_bars, (long long)a->rep.script_bars,
+           (long long)a->rep.equity_len, (long long)a->rep.hash_len);
+    fflush(stdout);
+}
+
+static void px_print_configure(const char* tag, pf_strategy_t host, int rc, uint32_t error,
+                               uint32_t field) {
+    char text[PX_TEXT];
+    px_state st;
+    const int status = strategy_last_run_status(host);
+    px_copy_text(text, sizeof(text), strategy_get_last_error(host));
+    px_read_state(&st, host);
+    printf("PXCFG tag=%s rc=%d error=%u field=%u last_status=%d last_error=\"%s\" "
+           "lifecycle=%u failure=%u hwm=%llu\n",
+           tag, rc, (unsigned)error, (unsigned)field, status, text, (unsigned)st.lifecycle,
+           (unsigned)st.failure_code, (unsigned long long)st.consumed_high_water);
+    fflush(stdout);
+}
+
+/* One clean first run on a fresh handle: the setup of every refused-attempt
+ * row, and itself the "fresh handle" positive control. */
+static int px_open(px_fixture* f, const char* scenario, const char* session_key) {
+    pf_native_callbacks_v1 table;
+    pf_report_t out;
+    int rc;
+    memset(f, 0, sizeof(*f));
+    f->spec = twin_spec();
+    f->spec.session_key = session_key;
+    table = blank_callbacks(&f->cb);
+    table.on_bar = twin_on_bar;
+    f->host = strategy_native_host_create_v1(&table);
+    if (!f->host) {
+        px_expect(0, scenario, "host create failed");
+        return 0;
+    }
+    f->cb.host = f->host;
+    f->bars = pf_twin_bars(&f->n);
+    if (strategy_configure_native_v1(f->host, &f->spec) != 0) {
+        px_expect(0, scenario, "first configure refused");
+        strategy_native_host_free(f->host);
+        f->host = NULL;
+        return 0;
+    }
+    px_sentinel(&out);
+    rc = strategy_native_run_v1(f->host, f->bars, f->n, &out);
+    px_observe(&f->first, "first-run", f->host, rc, &out);
+    px_release(&out);
+    printf("PXSETUP scenario=%s\n", scenario);
+    px_print(&f->first);
+    if (!px_cause(f->first.rc == PF_NATIVE_OK && f->first.last_status == 0
+                      && f->first.error[0] == '\0'
+                      && f->first.st.lifecycle == PF_NATIVE_LIFECYCLE_COMPLETED
+                      && f->first.st.consumed_high_water == 1u
+                      && f->first.rep.out_class == PX_OUT_ROWS && f->first.rep.trades_copied >= 1,
+                  scenario, "the first run completed cleanly with rows that could go stale")) {
+        strategy_native_host_free(f->host);
+        f->host = NULL;
+        return 0;
+    }
+    return 1;
+}
+
+/* What every refused SECOND attempt must answer. The cause check comes first
+ * and gates the rest. A Failed host keeps the text of the refusal that latched
+ * it (the run call stops at prepare_public_begin), so for the latch rows the
+ * retained text names the settings cause. status_channel = 1 asserts that
+ * last_run_status records the refusal (true on every row measured). */
+static void px_check_refused(const char* scenario, const px_fixture* f, const px_attempt* a,
+                             const char* cause_text, int cause_is_prefix, uint32_t lifecycle,
+                             uint32_t failure_code, int status_channel) {
+    const size_t len = strlen(cause_text);
+    const int text_ok = cause_is_prefix ? strncmp(a->error, cause_text, len) == 0
+                                        : strcmp(a->error, cause_text) == 0;
+    if (!px_cause(text_ok && a->st.rc == PF_NATIVE_OK && a->st.lifecycle == lifecycle
+                      && a->st.failure_code == failure_code,
+                  scenario, cause_text)) {
+        return;
+    }
+    if (status_channel) {
+        px_expect(a->last_status != 0, scenario,
+                  "last_run_status does not record the refused attempt");
+    }
+    /* The return value is this attempt's status, not the handle's lifecycle. */
+    px_expect(a->rc != PF_NATIVE_OK && a->rc < 0, scenario,
+              "refused attempt did not return a failure status (current-attempt status)");
+    /* The report is this attempt's, never an earlier attempt's. */
+    px_expect(a->rep.out_class != PX_OUT_ROWS, scenario,
+              "refused attempt published report rows (no-report)");
+    px_expect(!(a->rep.out_class == PX_OUT_ROWS && px_report_equal(&a->rep, &f->first.rep, 1)),
+              scenario, "refused attempt published the previous run's report, every defined field equal");
+}
+
+/* ── Controls: behaviour that is already correct and must stay so ─── */
+
+static void px_control_rearm(void) {
+    const char* scenario = "control-successful-rearm";
+    px_fixture f;
+    px_attempt a;
+    pf_report_t out;
+    pf_native_run_spec_v1 next;
+    int rc;
+    if (!px_open(&f, scenario, "px-native-attempt-control-rearm")) return;
+    next = f.spec;
+    next.run_number = 2;
+    rc = strategy_configure_native_v1(f.host, &next);
+    px_expect(rc == 0, scenario, "the re-arm configure was refused");
+    f.cb.calculations = 0;
+    px_sentinel(&out);
+    rc = strategy_native_run_v1(f.host, f.bars, f.n, &out);
+    px_observe(&a, "control-rearm.second-run", f.host, rc, &out);
+    px_release(&out);
+    px_print(&a);
+    px_expect(a.rc == PF_NATIVE_OK && a.last_status == 0 && a.error[0] == '\0', scenario,
+              "a re-armed run is not a clean success");
+    px_expect(a.st.lifecycle == PF_NATIVE_LIFECYCLE_COMPLETED && a.st.consumed_high_water == 2u,
+              scenario, "a re-armed run did not complete as run 2");
+    px_expect(a.rep.out_class == PX_OUT_ROWS && px_report_equal(&a.rep, &f.first.rep, 0), scenario,
+              "a re-armed run's report differs from the first run's (same bars, same callbacks)");
+    strategy_native_host_free(f.host);
+}
+
+static void px_control_c_guards(void) {
+    const char* scenario = "control-null-handle-and-fresh-handle";
+    pf_native_callbacks_v1 table = blank_callbacks(NULL);
+    pf_report_t out;
+    px_attempt a;
+    pf_strategy_t host;
+    const pf_bar_t* bars;
+    int n = 0;
+    int rc;
+    bars = pf_twin_bars(&n);
+    px_sentinel(&out);
+    rc = strategy_native_run_v1(NULL, bars, n, &out);
+    px_expect(rc == PF_NATIVE_E_HANDLE && px_out_class(&out) == PX_OUT_UNTOUCHED, scenario,
+              "a NULL handle was not refused with E_HANDLE and an untouched report");
+    host = strategy_native_host_create_v1(&table);
+    px_expect(host != NULL, scenario, "fresh host create failed");
+    if (!host) return;
+    px_sentinel(&out);
+    rc = strategy_native_run_v1(host, bars, n, &out);
+    px_observe(&a, "control-fresh-unconfigured.run", host, rc, &out);
+    px_release(&out);
+    px_print(&a);
+    px_expect(a.rc == PF_NATIVE_E_RUN_FAILED, scenario,
+              "a never-configured handle did not answer E_RUN_FAILED");
+    px_expect(a.st.lifecycle == PF_NATIVE_LIFECYCLE_UNCONFIGURED, scenario,
+              "a never-configured handle left Unconfigured");
+    px_expect(a.rep.out_class != PX_OUT_ROWS, scenario,
+              "a never-configured handle published report rows");
+    strategy_native_host_free(host);
+}
+
+static void px_control_stream_snapshot(void) {
+    const char* scenario = "control-live-stream-snapshot";
+    px_fixture f;
+    px_attempt mid;
+    px_attempt end;
+    pf_native_callbacks_v1 table;
+    pf_report_t out;
+    int rc;
+    int i;
+    memset(&f, 0, sizeof(f));
+    f.spec = twin_spec();
+    f.spec.session_key = "px-native-attempt-control-stream";
+    table = blank_callbacks(&f.cb);
+    table.on_bar = twin_on_bar;
+    f.host = strategy_native_host_create_v1(&table);
+    px_expect(f.host != NULL, scenario, "stream host create failed");
+    if (!f.host) return;
+    f.cb.host = f.host;
+    f.bars = pf_twin_bars(&f.n);
+    px_expect(strategy_configure_native_v1(f.host, &f.spec) == 0, scenario, "stream configure refused");
+    px_expect(strategy_stream_begin(f.host, f.bars, 4, "5", "5") == 0, scenario,
+              "the stream warmup did not begin");
+    for (i = 4; i < 24; ++i) {
+        if (strategy_stream_push_bar(f.host, &f.bars[i]) != 0) {
+            px_expect(0, scenario, "a live bar was refused");
+            break;
+        }
+    }
+    px_sentinel(&out);
+    rc = strategy_stream_fill_report(f.host, &out);
+    px_observe(&mid, "control-stream.mid-snapshot", f.host, rc, &out);
+    px_release(&out);
+    px_print(&mid);
+    px_expect(mid.rc == 0 && mid.rep.out_class == PX_OUT_ROWS && mid.rep.script_bars > 0,
+              scenario, "a mid-stream snapshot did not return the stream's own rows");
+    for (i = 24; i < f.n; ++i) {
+        if (strategy_stream_push_bar(f.host, &f.bars[i]) != 0) {
+            px_expect(0, scenario, "a later live bar was refused");
+            break;
+        }
+    }
+    px_expect(strategy_stream_end(f.host, 0) == 0, scenario, "the stream did not end");
+    px_sentinel(&out);
+    rc = strategy_stream_fill_report(f.host, &out);
+    px_observe(&end, "control-stream.final-snapshot", f.host, rc, &out);
+    px_release(&out);
+    px_print(&end);
+    px_expect(end.rc == 0 && end.rep.out_class == PX_OUT_ROWS
+                  && end.rep.script_bars >= mid.rep.script_bars,
+              scenario, "the final stream snapshot did not extend the mid-stream one");
+    strategy_native_host_free(f.host);
+}
+
+/* ── Refused second attempts, one scenario per cause ──────────────── */
+
+static void px_refused_lifecycle(void) {
+    const char* scenario = "refused-lifecycle-no-rearm";
+    px_fixture f;
+    px_attempt a;
+    pf_report_t out;
+    int rc;
+    if (!px_open(&f, scenario, "px-native-attempt-lifecycle")) return;
+    /* Negative control: the C argument guard answers before the kernel, even on
+     * a Completed handle, and never fills a report. */
+    px_sentinel(&out);
+    rc = strategy_native_run_v1(f.host, NULL, f.n, &out);
+    px_observe(&a, "control-c-guard.completed-null-bars", f.host, rc, &out);
+    px_release(&out);
+    px_print(&a);
+    px_expect(a.rc == PF_NATIVE_E_ARGUMENT && a.rep.out_class == PX_OUT_UNTOUCHED
+                  && a.st.lifecycle == PF_NATIVE_LIFECYCLE_COMPLETED,
+              scenario, "NULL bars on a Completed handle was not refused by the C guard before any report");
+    /* A bad feed on a Completed handle is refused as "not Ready" before the bar
+     * preflight runs: that is lifecycle coverage, recorded here, never feed
+     * coverage (the feed rows re-arm the handle first). */
+    {
+        pf_bar_t bad_bars[TWIN_BARS];
+        memcpy(bad_bars, f.bars, sizeof(bad_bars));
+        bad_bars[20].timestamp = bad_bars[19].timestamp;
+        px_sentinel(&out);
+        rc = strategy_native_run_v1(f.host, bad_bars, f.n, &out);
+        px_observe(&a, "lifecycle.bad-feed-on-completed-handle(not-feed-coverage)", f.host, rc, &out);
+        px_release(&out);
+        px_print(&a);
+    }
+    px_sentinel(&out);
+    rc = strategy_native_run_v1(f.host, f.bars, f.n, &out);
+    px_observe(&a, "lifecycle.second-call", f.host, rc, &out);
+    px_release(&out);
+    px_print(&a);
+    px_expect(a.st.consumed_high_water == f.first.st.consumed_high_water, scenario,
+              "the refused second call moved the consumed high-water mark");
+    px_check_refused(scenario, &f, &a, PX_NOT_READY_TEXT, 0, PF_NATIVE_LIFECYCLE_COMPLETED,
+                     PF_NATIVE_FAILURE_NONE, 1);
+    strategy_native_host_free(f.host);
+}
+
+static void px_refused_settings_typed(void) {
+    const char* scenario = "refused-bad-settings-typed-refusal";
+    px_fixture f;
+    px_attempt a;
+    pf_report_t out;
+    pf_native_run_spec_v1 bad;
+    pf_native_run_spec_ext_v1 ext;
+    uint32_t error = TYPED_UNTOUCHED;
+    uint32_t field = TYPED_UNTOUCHED;
+    px_state st;
+    int cfg;
+    int rc;
+    if (!px_open(&f, scenario, "px-native-attempt-settings-typed")) return;
+    bad = f.spec;
+    bad.run_number = 2;
+    bad.initial_capital = 0.0;
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    cfg = strategy_configure_native_ext_result_v1(f.host, &bad, &ext, &error, &field);
+    px_print_configure("bad-settings-typed.configure", f.host, cfg, error, field);
+    px_read_state(&st, f.host);
+    if (!px_cause(cfg == PF_NATIVE_E_ARGUMENT && error == PF_NATIVE_SPEC_ERROR_NOT_FINITE_POSITIVE
+                      && field == PF_NATIVE_SPEC_FIELD_INITIAL_CAPITAL
+                      && st.lifecycle == PF_NATIVE_LIFECYCLE_COMPLETED,
+                  scenario, "typed settings refusal named initial_capital and left the handle Completed")) {
+        strategy_native_host_free(f.host);
+        return;
+    }
+    px_sentinel(&out);
+    rc = strategy_native_run_v1(f.host, f.bars, f.n, &out);
+    px_observe(&a, "bad-settings-typed.second-call", f.host, rc, &out);
+    px_release(&out);
+    px_print(&a);
+    px_check_refused(scenario, &f, &a, PX_NOT_READY_TEXT, 0, PF_NATIVE_LIFECYCLE_COMPLETED,
+                     PF_NATIVE_FAILURE_NONE, 1);
+    strategy_native_host_free(f.host);
+}
+
+static void px_refused_settings_latch(void) {
+    const char* scenario = "refused-bad-settings-invalid-spec-latch";
+    px_fixture f;
+    px_attempt a;
+    pf_report_t out;
+    pf_native_run_spec_v1 bad;
+    px_state st;
+    int cfg;
+    int rc;
+    if (!px_open(&f, scenario, "px-native-attempt-settings-latch")) return;
+    bad = f.spec;
+    bad.run_number = 2;
+    bad.initial_capital = 0.0;
+    cfg = strategy_configure_native_v1(f.host, &bad);
+    px_print_configure("bad-settings-latch.configure", f.host, cfg, 0u, 0u);
+    px_read_state(&st, f.host);
+    if (!px_cause(cfg == -1 && st.lifecycle == PF_NATIVE_LIFECYCLE_FAILED
+                      && st.failure_code == PF_NATIVE_FAILURE_INVALID_SPECIFICATION,
+                  scenario, "legacy configure of an invalid spec latched Failed(InvalidSpecification)")) {
+        strategy_native_host_free(f.host);
+        return;
+    }
+    px_sentinel(&out);
+    rc = strategy_native_run_v1(f.host, f.bars, f.n, &out);
+    px_observe(&a, "bad-settings-latch.second-call", f.host, rc, &out);
+    px_release(&out);
+    px_print(&a);
+    px_check_refused(scenario, &f, &a, PX_SPEC_REJECTED_TEXT, 0, PF_NATIVE_LIFECYCLE_FAILED,
+                     PF_NATIVE_FAILURE_INVALID_SPECIFICATION, 1);
+    strategy_native_host_free(f.host);
+}
+
+static void px_refused_settings_reuse(void) {
+    const char* scenario = "refused-bad-settings-reused-session-key";
+    px_fixture f;
+    px_attempt a;
+    pf_report_t out;
+    pf_native_run_spec_v1 changed;
+    pf_native_run_spec_ext_v1 ext;
+    uint32_t error = TYPED_UNTOUCHED;
+    uint32_t field = TYPED_UNTOUCHED;
+    px_state st;
+    int cfg;
+    int rc;
+    if (!px_open(&f, scenario, "px-native-attempt-settings-reuse")) return;
+    changed = f.spec;
+    changed.session_key = "px-native-attempt-settings-reuse-changed";
+    changed.run_number = 2;
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    cfg = strategy_configure_native_ext_result_v1(f.host, &changed, &ext, &error, &field);
+    px_print_configure("bad-settings-reuse.configure", f.host, cfg, error, field);
+    px_read_state(&st, f.host);
+    if (!px_cause(cfg == PF_NATIVE_E_ARGUMENT
+                      && error == PF_NATIVE_SPEC_ERROR_SESSION_KEY_CHANGED_ON_REUSE
+                      && field == PF_NATIVE_SPEC_FIELD_SESSION_KEY
+                      && st.lifecycle == PF_NATIVE_LIFECYCLE_FAILED
+                      && st.failure_code == PF_NATIVE_FAILURE_CONTRACT,
+                  scenario, "a reused host's changed session key latched Failed(Contract)")) {
+        strategy_native_host_free(f.host);
+        return;
+    }
+    px_sentinel(&out);
+    rc = strategy_native_run_v1(f.host, f.bars, f.n, &out);
+    px_observe(&a, "bad-settings-reuse.second-call", f.host, rc, &out);
+    px_release(&out);
+    px_print(&a);
+    px_check_refused(scenario, &f, &a, PX_KEY_CHANGED_TEXT, 0, PF_NATIVE_LIFECYCLE_FAILED,
+                     PF_NATIVE_FAILURE_CONTRACT, 1);
+    strategy_native_host_free(f.host);
+}
+
+/* The feed cause. The handle is re-armed FIRST, so the refusal that answers is
+ * the bar preflight's; the C argument guards on the same Ready handle are the
+ * negative controls (they refuse before the kernel and never fill a report). */
+static void px_refused_feed(void) {
+    const char* scenario = "refused-bad-feed-after-rearm";
+    px_fixture f;
+    px_attempt a;
+    px_attempt guard;
+    pf_report_t out;
+    pf_native_run_spec_v1 next;
+    pf_bar_t bad_bars[TWIN_BARS];
+    px_state st;
+    int rc;
+    if (!px_open(&f, scenario, "px-native-attempt-feed")) return;
+    next = f.spec;
+    next.run_number = 2;
+    rc = strategy_configure_native_v1(f.host, &next);
+    px_read_state(&st, f.host);
+    if (!px_cause(rc == 0 && st.lifecycle == PF_NATIVE_LIFECYCLE_READY, scenario,
+                  "the handle was re-armed to Ready before the bad feed")) {
+        strategy_native_host_free(f.host);
+        return;
+    }
+
+    /* Negative controls: the C argument guards, already correct. */
+    px_sentinel(&out);
+    rc = strategy_native_run_v1(f.host, NULL, f.n, &out);
+    px_observe(&guard, "control-c-guard.null-bars", f.host, rc, &out);
+    px_release(&out);
+    px_print(&guard);
+    px_expect(guard.rc == PF_NATIVE_E_ARGUMENT && guard.rep.out_class == PX_OUT_UNTOUCHED
+                  && guard.st.lifecycle == PF_NATIVE_LIFECYCLE_READY,
+              scenario, "NULL bars with n > 0 was not refused by the C guard before any report");
+    px_sentinel(&out);
+    rc = strategy_native_run_v1(f.host, f.bars, -1, &out);
+    px_observe(&guard, "control-c-guard.negative-count", f.host, rc, &out);
+    px_release(&out);
+    px_print(&guard);
+    px_expect(guard.rc == PF_NATIVE_E_ARGUMENT && guard.rep.out_class == PX_OUT_UNTOUCHED
+                  && guard.st.lifecycle == PF_NATIVE_LIFECYCLE_READY,
+              scenario, "a negative count was not refused by the C guard before any report");
+
+    /* The feed refusal: a repeated timestamp, reached through preflight_bars. */
+    memcpy(bad_bars, f.bars, sizeof(bad_bars));
+    bad_bars[20].timestamp = bad_bars[19].timestamp;
+    px_sentinel(&out);
+    rc = strategy_native_run_v1(f.host, bad_bars, f.n, &out);
+    px_observe(&a, "bad-feed.second-call", f.host, rc, &out);
+    px_release(&out);
+    px_print(&a);
+    px_check_refused(scenario, &f, &a, "bar[", 1, PF_NATIVE_LIFECYCLE_READY,
+                     PF_NATIVE_FAILURE_NONE, 1);
+
+    /* Refusals do not consume the arm: the same Ready handle then runs clean. */
+    f.cb.calculations = 0;
+    px_sentinel(&out);
+    rc = strategy_native_run_v1(f.host, f.bars, f.n, &out);
+    px_observe(&guard, "control-rearm.valid-run-after-refusals", f.host, rc, &out);
+    px_release(&out);
+    px_print(&guard);
+    px_expect(guard.rc == PF_NATIVE_OK && guard.last_status == 0 && guard.error[0] == '\0'
+                  && guard.st.lifecycle == PF_NATIVE_LIFECYCLE_COMPLETED
+                  && guard.st.consumed_high_water == 2u
+                  && px_report_equal(&guard.rep, &f.first.rep, 0),
+              scenario, "the valid run after the refusals was not a clean run 2");
+    strategy_native_host_free(f.host);
+}
+
+/* The capability cause: a retained intrabar path whose lower feed is refused by
+ * the run-time preflight, on a handle that was re-armed with it. */
+static pf_bar_t px_bad_lower[TWIN_BARS * SUB_PER_BAR];
+
+static void px_refused_capability(void) {
+    const char* scenario = "refused-capability-intrabar-path-after-rearm";
+    px_fixture f;
+    px_attempt a;
+    pf_report_t out;
+    pf_native_run_spec_v1 next;
+    pf_native_run_spec_ext_v1 ext;
+    const pf_bar_t* lower;
+    uint32_t error = TYPED_UNTOUCHED;
+    uint32_t field = TYPED_UNTOUCHED;
+    px_state st;
+    int lower_n = 0;
+    int cfg;
+    int rc;
+    if (!px_open(&f, scenario, "px-native-attempt-capability")) return;
+    lower = lower_feed(&lower_n);
+    memcpy(px_bad_lower, lower, sizeof(px_bad_lower));
+    px_bad_lower[3].timestamp = px_bad_lower[2].timestamp;
+    next = f.spec;
+    next.run_number = 2;
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_INTRABAR;
+    ext.intrabar_kind = PF_NATIVE_INTRABAR_LOWER_TF;
+    ext.intrabar_tf = "1";
+    ext.intrabar_bars = px_bad_lower;
+    ext.intrabar_n = lower_n;
+    ext.intrabar_samples = 4;
+    ext.intrabar_distribution = PF_MAGNIFIER_ENDPOINTS;
+    ext.intrabar_volume_weighted = 0u;
+    ext.intrabar_volume_weighted_min_samples = 2;
+    ext.intrabar_volume_weighted_max_samples = 64;
+    ext.intrabar_sample_eligibility = PF_NATIVE_SAMPLE_CONTINUOUS_SEGMENTS;
+    cfg = strategy_configure_native_ext_result_v1(f.host, &next, &ext, &error, &field);
+    px_print_configure("capability.configure", f.host, cfg, error, field);
+    px_read_state(&st, f.host);
+    if (!px_cause(cfg == PF_NATIVE_OK && st.lifecycle == PF_NATIVE_LIFECYCLE_READY, scenario,
+                  "the handle was re-armed to Ready with an intrabar path whose lower feed is bad")) {
+        strategy_native_host_free(f.host);
+        return;
+    }
+    px_sentinel(&out);
+    rc = strategy_native_run_v1(f.host, f.bars, f.n, &out);
+    px_observe(&a, "capability.second-call", f.host, rc, &out);
+    px_release(&out);
+    px_print(&a);
+    px_check_refused(scenario, &f, &a, PX_INTRABAR_TEXT, 0, PF_NATIVE_LIFECYCLE_READY,
+                     PF_NATIVE_FAILURE_NONE, 1);
+    strategy_native_host_free(f.host);
+}
+
+static void check_px_native_attempt(void) {
+    printf("PXSUITE begin\n");
+    px_control_rearm();
+    px_control_c_guards();
+    px_control_stream_snapshot();
+    px_refused_lifecycle();
+    px_refused_settings_typed();
+    px_refused_settings_latch();
+    px_refused_settings_reuse();
+    px_refused_feed();
+    px_refused_capability();
+    printf("PXSUITE end\n");
+    fflush(stdout);
+}
+
+/* A genuine host that produces a trade and then fails: the twin arm's entry
+ * and flatten close one round trip, then the callback refuses five
+ * calculations after the exit. With a non-NULL out the failed call keeps its
+ * own partial report (the closed trade and the bar counters of the run that
+ * began, as before the attempt gate), and the next call on the Failed handle is
+ * refused without beginning: E_RUN_FAILED and the empty report, never the failed
+ * run's rows. Defined fields only. */
+static int partial_trade_then_fail_on_bar(void* user, const pf_bar_t* bar,
+                                          const pf_native_decision_v1* at) {
+    twin_state* state = (twin_state*)user;
+    const int rc = twin_on_bar(user, bar, at);
+    if (rc != 0) return rc;
+    return state->calculations == PF_TWIN_EXIT_BAR + 5 ? 7 : 0;
+}
+
+static void check_started_then_failed_report(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+    pf_native_state_v1 native_state;
+    twin_state state;
+    pf_report_t report;
+    pf_report_t reuse;
+    const pf_bar_t* bars;
+    int n = 0;
+
+    memset(&state, 0, sizeof(state));
+    memset(&report, 0, sizeof(report));
+    table = blank_callbacks(&state);
+    table.on_bar = partial_trade_then_fail_on_bar;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "partial-report host create failed");
+    if (!state.host) return;
+    CHECK_EQ_INT(strategy_configure_native_v1(state.host, &spec), 0, "partial-report configure");
+    bars = pf_twin_bars(&n);
+    CHECK(n > PF_TWIN_EXIT_BAR + 5, "the twin bars end before the failing calculation");
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, &report), PF_NATIVE_E_RUN_FAILED,
+                 "a callback failure after a trade did not fail the run");
+    memset(&native_state, 0, sizeof(native_state));
+    native_state.struct_size = (uint32_t)sizeof(native_state);
+    CHECK_EQ_INT(strategy_native_state_v1(state.host, &native_state), PF_NATIVE_OK,
+                 "failed-state read");
+    CHECK_EQ_INT(native_state.lifecycle, PF_NATIVE_LIFECYCLE_FAILED, "lifecycle is not Failed");
+    CHECK_EQ_INT(state.command_error, 0, "a command returned an error before the failure");
+    CHECK_EQ_INT(report.total_trades, 1, "the partial report lost the closed trade");
+    CHECK_EQ_INT(report.trades_len, 1, "the partial report lost the trade row");
+    CHECK(report.trades != NULL, "the partial report has no trade array");
+    CHECK(report.script_bars_processed > PF_TWIN_EXIT_BAR,
+          "the partial report lost the bar counters");
+    strategy_native_report_free_v1(&report);
+
+    /* Indeterminate bytes in, the empty report out: overwritten, never freed. */
+    memset(&reuse, 0x5a, sizeof(reuse));
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, &reuse), PF_NATIVE_E_RUN_FAILED,
+                 "a Failed handle ran again");
+    CHECK_EQ_INT(reuse.total_trades, 0, "the refused call kept the failed run's trade count");
+    CHECK_EQ_INT(reuse.trades_len, 0, "the refused call kept the failed run's trade rows");
+    CHECK(reuse.trades == NULL, "the refused call handed out the failed run's trade array");
+    CHECK_EQ_INT(reuse.script_bars_processed, 0,
+                 "the refused call kept the failed run's bar counters");
+    strategy_native_report_free_v1(&reuse);
+    strategy_native_host_free(state.host);
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
     check_csurface_create_and_configure_refusals();
@@ -9348,6 +10232,7 @@ int pf_native_c_api_checks(void) {
     check_spec_extension();
     check_lifecycle_round_trips();
     check_callback_failure_latch();
+    check_started_then_failed_report();
     check_event_polling();
     check_event_retention();
     check_unrepresentable_quantity();
@@ -9393,5 +10278,6 @@ int pf_native_c_api_checks(void) {
     check_decision_session_day_of_a_masked_month();
     check_working_relation_tail();
     check_session_day_tail();
+    check_px_native_attempt();
     return failures;
 }

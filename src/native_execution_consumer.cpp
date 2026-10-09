@@ -1339,6 +1339,18 @@ RunFailureValue NativeExecutionConsumer::failure_value_of(const BacktestEngine& 
     return RunFailureValue{RunFailureCode::engine_unclassified_error, nullptr};
 }
 
+NativeExecutionConsumer::AttemptScope::AttemptScope(NativeExecutionConsumer& c) noexcept
+    : c_(c), nested_(c.in_attempt_call_), over_live_(!nested_ && (c.running_spec_
+          || c.in_callback_ || c.processing_input_ || c.preparing_begin_)) {
+    if (!nested_) c_.in_attempt_call_ = true;
+    if (!nested_ && !over_live_) c_.rows_current_ = c_.batch_current_ = false;
+}
+
+NativeExecutionConsumer::AttemptScope::~AttemptScope() {
+    if (!nested_) c_.in_attempt_call_ = false;
+    c_.batch_current_ = !nested_ && !over_live_ && c_.rows_current_;
+}
+
 void NativeExecutionConsumer::present_refusal(BacktestEngine& engine, const char* text,
                                               RunFailureCode code,
                                               const RunFailureArgs& args) {
@@ -2481,6 +2493,8 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         return false;
     }
     engine.reset_run_state();
+    // The rows are this attempt's from here on, whether it completes or fails.
+    rows_current_ = batch_current_ = true;
     // RULING A48: one generic capability, wired once per run. A host that
     // declares ownership supplies the closing-row magnitudes; the kernel then
     // keeps no excursion model of its own for this run.
@@ -9716,6 +9730,7 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
 }
 
 void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars, int n) {
+    const AttemptScope attempt(*this);
     NativeBeginArgs args{bars, n, {}, {}, false, 4,
         MagnifierDistribution::ENDPOINTS, engine.magnifier_volume_weighted_, 2};
     args.simple_run = true;
@@ -9750,6 +9765,7 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
                                      const std::string& script_tf,
                                      bool bar_magnifier, int magnifier_samples,
                                      MagnifierDistribution magnifier_dist) {
+    const AttemptScope attempt(*this);
     const NativeBeginArgs args{input_bars, n_input, input_tf, script_tf, bar_magnifier,
         magnifier_samples, magnifier_dist, engine.magnifier_volume_weighted_, 2};
     if (!prepare_public_begin(engine, args)) return;
@@ -9799,6 +9815,7 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
                                        const void* overrides,
                                        bool bar_magnifier, int magnifier_samples,
                                        MagnifierDistribution magnifier_dist) {
+    const AttemptScope attempt(*this);
     NativeBeginArgs args{input_bars, n_input, input_tf, script_tf, bar_magnifier,
         magnifier_samples, magnifier_dist, engine.magnifier_volume_weighted_, 2};
     args.inputs = &inputs;
@@ -9839,6 +9856,7 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
                                            const Bar* warmup_bars, int n_warmup,
                                            const std::string& input_tf,
                                            const std::string& script_tf) {
+    const AttemptScope attempt(*this);
     // Preserve the live stream before asking the provider to stage/configure a
     // new run.  The legacy route diagnoses this state first; in particular,
     // no warmup copy, adapter reset, or broker/spec mutation may occur.
@@ -11472,7 +11490,53 @@ std::uint64_t NativeStrategyHost::broker_state_hash_projection() const {
     return broker_state_hash_from_execution_hash(execution);
 }
 
+// The report gate (BacktestEngine::fill_report), answering for the latest
+// public run / stream_begin CALL. An AttemptScope is opened first by every such
+// call. A call entered while nothing is live is an attempt: it disowns the
+// retained rows until begin_ready's reset hands them back, so a refusal before
+// the reset (not Ready, bad bars or option, calendar refusal) reports empty and
+// a started-then-failed run keeps its partial rows. A call entered over a live
+// attempt (a stream between its pushes, a callback or an input in flight) is
+// refused by admission: it owns no rows and leaves rows_current_ alone, but its
+// exit clears batch_current_, so the report that call's wrapper reads right
+// after it is empty; a call nested inside another attempt call closes before the
+// outer one, whose exit sets batch_current_ from its own outcome. Bools only:
+// nothing counts, so nothing wraps; nothing here is hashed or read by a run.
+bool NativeExecutionConsumer::rows_are_current(const BacktestEngine& engine) noexcept {
+    const auto* consumer = static_cast<const NativeExecutionConsumer*>(
+        engine.execution_consumer_slot_.ptr.get());
+    return consumer == nullptr || consumer->batch_current_;
+}
+
+// The explicit snapshot reader: the same fill_report, the same gate, asked for
+// the rows' own owner (rows_current_) instead of the latest call's outcome, so
+// a live stream's snapshot survives a batch call refused over it.
+void NativeExecutionConsumer::fill_snapshot_report(const BacktestEngine& engine,
+                                                   ReportC* out) {
+    auto* consumer = static_cast<NativeExecutionConsumer*>(
+        engine.execution_consumer_slot_.ptr.get());
+    if (consumer == nullptr) {
+        engine.fill_report(out);
+        return;
+    }
+    const bool outcome = consumer->batch_current_;
+    consumer->batch_current_ = consumer->rows_current_;
+    try {
+        engine.fill_report(out);
+    } catch (...) {
+        consumer->batch_current_ = outcome;
+        throw;
+    }
+    consumer->batch_current_ = outcome;
+}
+
 }  // inline namespace engine_script_run_v19
+
+// The C stream seam's snapshot reader, declared in c_abi.cpp beside the native
+// C host's hooks: strategy_stream_fill_report reads through it.
+void native_stream_snapshot_report(BacktestEngine* engine, ReportC* out) {
+    NativeExecutionConsumer::fill_snapshot_report(*engine, out);
+}
 
 // The portable run-spec digest lives here, in the one translation unit that
 // owns `hash_spec` (see its definition above, beside the continuation fold),

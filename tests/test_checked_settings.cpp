@@ -78,6 +78,142 @@ void test_refused_report_allocations() {
     std::cout << "latched report refusal: legacy, full and checked allocation regression PASS\n";
 }
 
+// The generated run_backtest / run_backtest_full (tests/fixtures/checked_settings/
+// generated.cpp, emitted by the transpiler) call run() and then fill_report(),
+// unchanged. A run the engine refuses without beginning -- a bar array that
+// fails preflight -- must not hand out the rows of the run before it: a report
+// belongs to its own attempt or is empty, and the next valid run on the same
+// handle is current again.
+void test_refused_rerun_report_is_empty() {
+    std::vector<pf_bar_t> bars;
+    for (int index = 0; index < 60; ++index) {
+        const double price = 100 + index % 7;
+        bars.push_back({price, price + 2, price - 1, price + 1, 5,
+                       1577836800000LL + static_cast<std::int64_t>(index) * 60000});
+    }
+    auto invalid = bars;
+    invalid[0].open = std::numeric_limits<double>::quiet_NaN();
+    for (int mode = 0; mode < 2; ++mode) {
+        pf_strategy_t strategy = strategy_create(nullptr);
+        assert(strategy);
+        pf_report_t first{};
+        run_backtest_full(strategy, bars.data(), 60, "1", "1", 0, 4,
+                          PF_MAGNIFIER_ENDPOINTS, &first);
+        assert(first.total_trades > 0 && first.trades && first.trades_len == first.total_trades);
+        pf_report_t refused{};
+        if (mode == 0) {
+            run_backtest(strategy, invalid.data(), 60, &refused);
+        } else {
+            run_backtest_full(strategy, invalid.data(), 60, "1", "1", 0, 4,
+                              PF_MAGNIFIER_ENDPOINTS, &refused);
+        }
+        assert(!std::string(strategy_get_last_error(strategy)).empty());
+        assert(refused.total_trades == 0 && refused.trades_len == 0 && !refused.trades);
+        assert(refused.equity_curve_len == 0 && !refused.equity_curve);
+        report_free(&refused);
+        pf_report_t again{};
+        run_backtest_full(strategy, bars.data(), 60, "1", "1", 0, 4,
+                          PF_MAGNIFIER_ENDPOINTS, &again);
+        assert(again.total_trades == first.total_trades && again.trades_len == first.trades_len);
+        report_free(&again);
+        report_free(&first);
+        strategy_free(strategy);
+    }
+    std::cout << "refused rerun on a generated handle: empty report, next run current PASS\n";
+}
+
+// A live stream's snapshot is current. stream_begin makes the stream the
+// handle's latest attempt, so strategy_stream_fill_report holds its rows while
+// it runs and after it ends; an attempt the engine then refuses without
+// beginning (a bar array that fails preflight) leaves nothing to hand out, and
+// the snapshot is the empty report, never the stream's rows under a refused
+// call.
+void test_stream_snapshot_is_current() {
+    std::vector<pf_bar_t> bars;
+    for (int index = 0; index < 60; ++index) {
+        const double price = 100 + index % 7;
+        bars.push_back({price, price + 2, price - 1, price + 1, 5,
+                       1577836800000LL + static_cast<std::int64_t>(index) * 60000});
+    }
+    pf_strategy_t strategy = strategy_create(nullptr);
+    assert(strategy);
+    assert(strategy_stream_begin(strategy, bars.data(), 40, "1", "1") == 0);
+    pf_report_t live{};
+    assert(strategy_stream_fill_report(strategy, &live) == 0);
+    assert(live.script_bars_processed > 0);
+    report_free(&live);
+    for (int index = 40; index < 60; ++index)
+        assert(strategy_stream_push_bar(strategy, &bars[index]) == 0);
+    assert(strategy_stream_end(strategy, 0) == 0);
+    pf_report_t ended{};
+    assert(strategy_stream_fill_report(strategy, &ended) == 0);
+    assert(ended.script_bars_processed > 0);
+    report_free(&ended);
+    auto invalid = bars;
+    invalid[0].open = std::numeric_limits<double>::quiet_NaN();
+    pf_report_t refused{};
+    run_backtest(strategy, invalid.data(), 60, &refused);
+    assert(!std::string(strategy_get_last_error(strategy)).empty());
+    report_free(&refused);
+    pf_report_t after{};
+    assert(strategy_stream_fill_report(strategy, &after) == 0);
+    assert(after.total_trades == 0 && after.trades_len == 0 && !after.trades);
+    assert(after.input_bars_processed == 0 && after.script_bars_processed == 0);
+    report_free(&after);
+    strategy_free(strategy);
+    std::cout << "stream snapshot: live and ended rows current, refused attempt leaves the empty report PASS\n";
+}
+
+// A batch call refused over a live stream hands out no stream payload as ITS
+// report, and the stream's own snapshot still reads the stream's rows. Both
+// sides run through the unchanged generated wrappers (run_backtest, run_backtest_full)
+// and the C stream seam: admission refuses a begin while the stream runs, the
+// wrapper's fill_report then answers the refused call (empty), while
+// strategy_stream_fill_report asks for the rows' own owner and gets the stream's.
+// Defined fields only: the bar counters and the trade count.
+void test_refused_batch_over_live_stream() {
+    std::vector<pf_bar_t> bars;
+    for (int index = 0; index < 60; ++index) {
+        const double price = 100 + index % 7;
+        bars.push_back({price, price + 2, price - 1, price + 1, 5,
+                       1577836800000LL + static_cast<std::int64_t>(index) * 60000});
+    }
+    for (int mode = 0; mode < 2; ++mode) {
+        pf_strategy_t strategy = strategy_create(nullptr);
+        assert(strategy);
+        assert(strategy_stream_begin(strategy, bars.data(), 40, "1", "1") == 0);
+        for (int index = 40; index < 50; ++index)
+            assert(strategy_stream_push_bar(strategy, &bars[index]) == 0);
+        pf_report_t before{};
+        assert(strategy_stream_fill_report(strategy, &before) == 0);
+        assert(before.script_bars_processed > 0);
+        // The batch side: a valid array, refused only because the stream is live.
+        pf_report_t batch{};
+        batch.total_trades = 99;
+        if (mode == 0) {
+            run_backtest(strategy, bars.data(), 60, &batch);
+        } else {
+            run_backtest_full(strategy, bars.data(), 60, "1", "1", 0, 4,
+                              PF_MAGNIFIER_ENDPOINTS, &batch);
+        }
+        assert(!std::string(strategy_get_last_error(strategy)).empty());
+        assert(batch.total_trades == 0 && batch.trades_len == 0 && !batch.trades);
+        assert(batch.input_bars_processed == 0 && batch.script_bars_processed == 0);
+        assert(batch.equity_curve_len == 0 && !batch.equity_curve);
+        report_free(&batch);
+        // The snapshot side: the stream's own rows, unchanged by the refusal.
+        pf_report_t after{};
+        assert(strategy_stream_fill_report(strategy, &after) == 0);
+        assert(after.script_bars_processed == before.script_bars_processed);
+        assert(after.input_bars_processed == before.input_bars_processed);
+        assert(after.total_trades == before.total_trades);
+        report_free(&after);
+        report_free(&before);
+        strategy_free(strategy);
+    }
+    std::cout << "batch refused over a live stream: empty batch report, stream snapshot keeps its rows PASS\n";
+}
+
 std::string receipt_field(const std::string& document, const std::string& name,
                           const std::string& field) {
     const auto row = document.find("{\"name\":\"" + name + "\"");
@@ -122,6 +258,7 @@ void operator delete[](void* allocation, const std::nothrow_t&) noexcept { ::ope
 
 int main(int argc, char** argv) {
     test_refused_report_allocations();
+    test_refused_rerun_report_is_empty();
     if (argc == 2 && std::string(argv[1]) == "--report-leak-only") return 0;
     using namespace pineforge::checked_settings;
     assert(number(0xffff0000LL) == "4294901760");
@@ -368,5 +505,7 @@ int main(int argc, char** argv) {
     report_free(&report);
     strategy_free(configured);
     strategy_free(strategy);
+    test_stream_snapshot_is_current();
+    test_refused_batch_over_live_stream();
     std::cout << "checked settings: validation, receipt and exception containment PASS\n";
 }

@@ -469,6 +469,37 @@ int main(int argc, char** argv) {
     }
 
     {
+        // A module call the engine refuses without beginning (nothing re-armed
+        // a Completed handle) hands out the empty report, never the first
+        // run's rows: the shared engine report gate, not a wrapper policy. The
+        // handle keeps its Completed lifecycle and runs again once re-armed.
+        pf_strategy_t s = abi.create(nullptr);
+        CHECK(s != nullptr);
+        auto spec = complete_spec("native-example-refused-rerun", 1);
+        CHECK(abi.configure(s, &spec) == 0);
+        pf_report_t first{};
+        abi.run_full(s, bars, 5, "5", "5", 0, 4, PF_MAGNIFIER_ENDPOINTS, &first);
+        expect_closed_round_trip(first);
+        abi.report_free(&first);
+        pf_report_t refused{};
+        abi.run_full(s, bars, 5, "5", "5", 0, 4, PF_MAGNIFIER_ENDPOINTS, &refused);
+        const char* refusal = abi.last_error(s);
+        CHECK(refusal != nullptr && refusal[0] != '\0');
+        CHECK(abi.last_status(s) == 1);
+        CHECK(refused.trades == nullptr);
+        CHECK(refused.trades_len == 0);
+        CHECK(refused.total_trades == 0);
+        abi.report_free(&refused);
+        spec = complete_spec("native-example-refused-rerun", 2);
+        CHECK(abi.configure(s, &spec) == 0);
+        pf_report_t rearmed{};
+        abi.run_full(s, bars, 5, "5", "5", 0, 4, PF_MAGNIFIER_ENDPOINTS, &rearmed);
+        expect_closed_round_trip(rearmed);
+        abi.report_free(&rearmed);
+        abi.free_strategy(s);
+    }
+
+    {
         // Wrapper preflight preserves the output report on unsupported magnifier
         // arguments. Does not latch Failed; Ready remains usable.
         pf_strategy_t s = abi.create(nullptr);
