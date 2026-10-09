@@ -2690,8 +2690,27 @@ PF_API void strategy_native_host_free(pf_strategy_t s);
  *  The specification must already be Ready (#strategy_configure_native_v1).
  *  @p out may be NULL to skip reporting; otherwise its arrays are
  *  heap-allocated and released by #strategy_native_report_free_v1.
- *  @return PF_NATIVE_OK when the run reached Completed, PF_NATIVE_E_RUN_FAILED
- *  when it did not (read #strategy_native_state_v1 for the code). */
+ *
+ *  A report belongs to THIS attempt or is empty, and a refused attempt never
+ *  answers PF_NATIVE_OK. A call the host refuses without beginning (a handle
+ *  that is not Ready: Unconfigured, already Completed or Failed; a refused bar
+ *  array or run option) leaves the lifecycle, the run identity and the rows
+ *  the handle retains exactly as they were, answers PF_NATIVE_E_RUN_FAILED and
+ *  leaves @p out as the empty report (every array NULL, every count 0),
+ *  overwritten and never freed, so it is safe whether or not the caller
+ *  initialised it and #strategy_native_report_free_v1 on it is a no-op; the
+ *  reason is in #strategy_get_last_error, #strategy_get_last_error_code and
+ *  #strategy_last_run_status (1). A run that began and then failed answers
+ *  PF_NATIVE_E_RUN_FAILED too, leaves the handle Failed and keeps its partial
+ *  rows in @p out, as before. A Completed handle runs again after a successful
+ *  #strategy_configure_native_v1 (or #strategy_configure_native_ext_result_v1).
+ *  The refusals made before the engine sees the call, PF_NATIVE_E_HANDLE and
+ *  PF_NATIVE_E_ARGUMENT, leave @p out untouched. The gate is the engine's own
+ *  report reader, so every other run entrypoint obeys it; a call refused over
+ *  a live stream reads empty, and #strategy_stream_fill_report keeps its rows.
+ *  @return PF_NATIVE_OK when this call's run reached Completed,
+ *  PF_NATIVE_E_RUN_FAILED when it did not (read #strategy_native_state_v1 for a
+ *  Failed code, #strategy_get_last_error for a refusal). */
 PF_API int strategy_native_run_v1(pf_strategy_t s, const pf_bar_t* bars, int n,
                                   pf_report_t* out);
 

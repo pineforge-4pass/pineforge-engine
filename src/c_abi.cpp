@@ -54,10 +54,10 @@
 #include <string>
 #include <utility>
 #include <vector>
-
 namespace pineforge {
 void clear_native_c_host_refusal_error(BacktestEngine* engine) noexcept;
 bool native_c_host_in_postrun_hook_frame(BacktestEngine* engine) noexcept;
+inline namespace engine_script_run_v19 { void native_stream_snapshot_report(BacktestEngine* engine, ReportC* out); }
 }
 
 namespace {
@@ -767,8 +767,8 @@ PF_API int strategy_stream_end(pf_strategy_t s, int finalize_partial_input_bar) 
 PF_API int strategy_stream_fill_report(pf_strategy_t s, pf_report_t* out) {
     return pf_cabi_int(s, [&] {
         if (!s || !out) return -1;
-        static_cast<pineforge::BacktestEngine*>(s)->fill_report(
-            reinterpret_cast<pineforge::ReportC*>(out));
+        pineforge::native_stream_snapshot_report(
+            static_cast<pineforge::BacktestEngine*>(s), reinterpret_cast<pineforge::ReportC*>(out));
         return 0;
     });
 }

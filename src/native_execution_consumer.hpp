@@ -266,6 +266,15 @@ public:
     static const char* failure_code_of(const BacktestEngine& engine) noexcept;
     static const char* failure_args_of(const BacktestEngine& engine) noexcept;
     static RunFailureValue failure_value_of(const BacktestEngine& engine) noexcept;
+    // Whether the rows `engine` retains answer the latest run or stream_begin
+    // call it was given (the ledger below): false after a call that never
+    // reached begin_ready's reset_run_state() or was refused over a live
+    // attempt; true after one that began (a started-then-failed run owns its
+    // partial rows) and with no consumer bound. BacktestEngine::fill_report
+    // gates on it; fill_snapshot_report (the C stream seam) reads the rows of
+    // the latest attempt that reset them, through the same fill_report.
+    static bool rows_are_current(const BacktestEngine& engine) noexcept;
+    static void fill_snapshot_report(const BacktestEngine& engine, ReportC* out);
     std::vector<NativeMarketEvent> events_after(uint64_t after_ordinal) const;
     // The command rows of events_after(after_ordinal), read in place (R5 lane
     // PERF-P4). The history is in ordinal order, so those rows are exactly
@@ -1001,6 +1010,12 @@ private:
     // std::string's own.
     static bool same_bytes(const std::string& a, const std::string& b) noexcept;
     bool begin_ready(BacktestEngine& engine, NativeRunPhase phase, int64_t initial_floor_ms);
+    class AttemptScope {  // opened first by every public run / stream_begin call
+        NativeExecutionConsumer& c_; const bool nested_; const bool over_live_;
+    public:
+        explicit AttemptScope(NativeExecutionConsumer& c) noexcept;
+        ~AttemptScope();
+    };
     bool prepare_public_begin(BacktestEngine& engine, const NativeBeginArgs& args);
     bool apply_staged_ingress(BacktestEngine& engine);
     bool refuse_mixed_input_mode(BacktestEngine& engine, InputMode requested);
@@ -1561,6 +1576,15 @@ private:
     // tests/test_native_callback_caches.cpp.
     friend struct NativeExecutionConsumerProbe;
     uint64_t consumed_high_water_ = 0;
+    // The attempt ledger, report presentation only, never a run input, hashed
+    // or reset by a run. rows_current_: the retained rows belong to the latest
+    // attempt that could own them (set by begin_ready after the reset, cleared
+    // by a call entered while nothing is live). batch_current_: the latest
+    // call began (what fill_report gates on; cleared by a call over a live
+    // attempt, restored by the outermost call's exit). in_attempt_call_: open.
+    bool rows_current_ = true;
+    bool batch_current_ = true;
+    bool in_attempt_call_ = false;
     std::string bound_session_key_;
     native_order::WorkingRequestCore requests_{{"unbound", 1}};
     uint64_t next_timeline_ordinal_ = 1;

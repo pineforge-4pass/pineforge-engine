@@ -491,7 +491,7 @@ void record_lifecycle_rows(const std::vector<pineforge::Bar>& minute) {
         h.input("Case", "0");
         expect_row("reuse_failed_handle_refused", h.run(minute, "1", "1"),
                    {"engine_invariant", "{}",
-                    "Pine native adapter failed to configure projected run spec", 1, 1});
+                    "Pine native adapter failed to configure projected run spec", 1, 0});
     }
     {
         // The generated wrapper's contract (note_run_failure with an entrypoint).

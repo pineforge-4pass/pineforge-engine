@@ -3,6 +3,7 @@
  */
 
 #include "engine_internal.hpp"
+#include "native_execution_consumer.hpp"
 
 #include <pineforge/metrics.hpp>
 
@@ -37,7 +38,26 @@ void BacktestEngine::trace(const std::string& name, double value) {
 }
 
 
+// The report of the latest run or stream_begin call this engine was given, or
+// the empty report. The engine keeps the rows of the last run it BEGAN, and a
+// call that never began (a begin outside Ready, a refused bar array or run
+// option, a calendar or timezone refusal) leaves them in place on purpose, so
+// the rows alone cannot say which call they answer. Every batch reader shares
+// this one gate: strategy_native_run_v1, the native module wrappers and the
+// generated run_backtest / run_backtest_full, which call run() and then this.
+// A call that began owns its rows whatever became of it (a Completed report and
+// a started-then-failed run's partial rows publish unchanged); a call that did
+// not, or one refused over a live attempt (a batch call while a stream is live),
+// owns none: `*out` is overwritten with the empty report (every array NULL,
+// every count zero) and never freed, since what it held is not this call's to
+// release. strategy_stream_fill_report, the explicit snapshot, runs this same
+// function asking for the rows' own owner (NativeExecutionConsumer::
+// fill_snapshot_report), so a live stream's rows survive such a refusal.
 void BacktestEngine::fill_report(ReportC* out) const {
+    if (!NativeExecutionConsumer::rows_are_current(*this)) {
+        *out = ReportC{};
+        return;
+    }
     fill_trades_section(out);
 
     out->input_bars_processed = diag_input_bars_processed_;

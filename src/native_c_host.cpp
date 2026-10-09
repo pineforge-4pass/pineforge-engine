@@ -3460,9 +3460,22 @@ PF_API int strategy_native_run_v1(pf_strategy_t s, const pf_bar_t* bars, int n,
         auto* host = host_of(s);
         if (!host) return PF_NATIVE_E_HANDLE;
         if (n < 0 || (n > 0 && !bars)) return c_refuse(host, PF_NATIVE_E_ARGUMENT);
+        /* OK answers a run THIS call carried to Completed. A call the engine
+         * refuses without beginning (a Completed handle nothing re-armed, a
+         * Failed or not-yet-Ready handle, a refused bar array or run option)
+         * leaves the lifecycle, the run identity and the previous rows as they
+         * were, so the lifecycle alone cannot tell it from a finished run: the
+         * consumed run-number high-water can, because begin_ready moves it,
+         * strictly upward, for every attempt that gets past admission. The
+         * report is not decided here: BacktestEngine::fill_report publishes
+         * the rows of the latest attempt (a started-then-failed run's partial
+         * rows included) and the empty report for an attempt that did not
+         * begin. */
+        const std::uint64_t high_water = host->native_consumed_high_water();
         host->run(reinterpret_cast<const Bar*>(bars), n);
         if (out) host->fill_report(reinterpret_cast<pineforge::ReportC*>(out));
         return host->native_state().kind == pineforge::NativeLifecycleKind::Completed
+                && host->native_consumed_high_water() > high_water
             ? PF_NATIVE_OK
             : PF_NATIVE_E_RUN_FAILED;
     });
