@@ -1053,8 +1053,8 @@ class CAbiRuntimeInventory(unittest.TestCase):
         )
         header = _pf_api_names(ROOT / 'include/pineforge/pineforge.h')
         runtime = _pf_api_names(ROOT / 'src/c_abi.cpp')
-        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 81)
-        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 64)
+        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 93)
+        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 73)
         self.assertEqual(len(EXPECTED_RUNTIME), EXPECTED_RUNTIME_IMPLEMENTATIONS)
         self.assertEqual(len(header), EXPECTED_PUBLIC_DECLARATIONS)
         self.assertEqual(len(header), len(set(header)))
@@ -1504,7 +1504,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
 
     def test_pr_exclusion_proves_registered_minus_labelled_equals_ran(self):
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
-                         {'debug': 773, 'sanitizers': 773, 'native': 782})
+                         {'debug': 780, 'sanitizers': 779, 'native': 789})
         for profile, registered in ci_verify.EXCLUDED_REGISTERED_MIN.items():
             with self.subTest(profile=profile):
                 code, summary, scripted, _ = self.run_profile(

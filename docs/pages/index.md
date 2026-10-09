@@ -135,11 +135,13 @@ directly, so a Pine-layer symbol reaching one is a link error.
 
 ## API at a glance
 
-The public C surface is **124 `PF_API` declarations** across two headers:
+The counts below include recorded outputs and describe the unreleased API targeted for 1.5.0; recorded outputs are not part of 1.4.0.
 
-- `<pineforge/pineforge.h>` — **81**: 64 runtime implementations plus seventeen
+The public C surface is **136 `PF_API` declarations** across two headers:
+
+- `<pineforge/pineforge.h>` — **93**: 73 runtime implementations plus twenty
   per-strategy generated exports (`strategy_declares_bar_magnifier` only in a
-  script that declares `use_bar_magnifier = true`). This is what a compiled
+  script that declares `use_bar_magnifier = true`, the three recorded-outputs exports only in a module that records outputs). This is what a compiled
   strategy `.so` exports and what a harness calls. Older modules lack the six
   opt-in checked-settings exports (repository guide: `docs/checked-settings.md`)
   and two execution-capability exports (`docs/strategy-capabilities.md`).

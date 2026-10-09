@@ -317,8 +317,8 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #   +1 test_symbol_calendar (TradingView's symbol calendar as a run input: the
 #      tape converter, the loader, the harness's syminfo-metadata transport)
 # Both register in release too. 300 registered, 299 run after parser removal: the WebSocket row
-# still skips on a system libcurl.
-KERNEL_MIN_TESTS = 299
+# still skips on a system libcurl. Lane SM-E1's rows follow EXCLUDED_REGISTERED_MIN below.
+KERNEL_MIN_TESTS = 305
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -591,8 +591,8 @@ KERNEL_MIN_TESTS = 299
 #               and needs_aggregation on every run route)
 #   +1 FIX-E1E2 test_aggregated_admission_receipt_tapes (an aggregated
 #               chart's admission receipts in their command's bar space)
-# No release row skips, so 792 registered is 792 run.
-RELEASE_MIN_TESTS = 792
+# No release row skips, so 792 registered is 792 run (SM-E1: below EXCLUDED_REGISTERED_MIN).
+RELEASE_MIN_TESTS = 799
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
@@ -641,7 +641,26 @@ ADR_RULED_TEXTS_MIN = 59
 # counted the same way; 773/773/782 with lane FIX-E1E2's two rows of
 # RELEASE_MIN_TESTS in each, counted the same way.
 # An excluded run must still discover at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 773, 'sanitizers': 773, 'native': 782}
+EXCLUDED_REGISTERED_MIN = {'debug': 780, 'sanitizers': 779, 'native': 789}
+# Lane SM-E1 (recorded outputs, docs/outputs.md) raises the three floors
+# above, its comments kept here so that no line cited by line number moves.
+# Counted with ctest -N on the lane's tree:
+#   KERNEL_MIN_TESTS 305 run = those 299 plus six source-free rows:
+#     +5 test_outputs_recorder, test_outputs_stream_equivalence,
+#        test_outputs_truncation, test_outputs_run_reuse,
+#        test_outputs_off_identity
+#     +1 test_outputs_c_api_c99 (group pf_outputs as strict C99)
+#     All six register in release too. 306 registered, 305 run: the
+#     WebSocket row still skips on a system libcurl.
+#   RELEASE_MIN_TESTS 799 = those 792 plus the six above and one source-bound
+#     row the kernel profile does not build:
+#     +1 test_run_json_outputs (docker/run_json.py --outputs as a process,
+#        over a module that records outputs and a generated one that records
+#        none)
+#     No release row skips, so 799 registered is 799 run.
+#   EXCLUDED_REGISTERED_MIN 780/779/789 = 773/773/782 plus the seven, counted
+#     the same way; the sanitizers profile builds no module that loads into
+#     the interpreter, so it registers six of them.
 # The ctest stage's bound. A full sanitizers run (push to main, a manual
 # dispatch, the maintainers' verification) ran out of its 30 minutes twice on
 # main's four-core runner before every row had finished, so it gets an hour; a

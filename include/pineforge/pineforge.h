@@ -1677,6 +1677,130 @@ PF_API int run_backtest_full_checked(pf_strategy_t s, pf_bar_t* bars, int n,
 
 #endif
 
+/** @defgroup pf_outputs Recorded outputs
+ *  What a module records besides trades, read after a run or between the
+ *  inputs of a stream (docs/outputs.md). A module that records declares named
+ *  series slots, outputs and run constants, and per run writes one row per
+ *  bar it publishes: a double per slot (NaN = na), events with an optional
+ *  message, and one value per run constant. Nothing is recorded until
+ *  #strategy_outputs_set_enabled turns recording on, and nothing a run
+ *  computes depends on it: trades, the report, #PF_ABI_VERSION and every
+ *  hash are what they are with recording off. What a slot, an output or a
+ *  constant means is in the manifest the module exports
+ *  (#strategy_outputs_manifest).
+ *
+ *  Part B, the readers, is implemented by the runtime and present in every
+ *  module built on it; a module that declares nothing answers them as empty.
+ *  Part A is generated per module and present only in one that records:
+ *  detect recording with dlsym("strategy_outputs_api_version").
+ *
+ *  Threading: every strategy_outputs_* call runs on the thread that drives
+ *  the handle, never during one of its run or stream calls. A NULL handle
+ *  answers -1 (nothing for a void function).
+ *  @{ */
+
+/** Present in a pineforge.h that declares the group. */
+#define PINEFORGE_HAS_OUTPUTS_V1 1
+/** What #strategy_outputs_api_version answers. */
+#define PF_OUTPUTS_API_VERSION 1u
+
+/** The run phase an event was recorded in. */
+typedef enum pf_output_phase_e {
+    PF_OUTPUT_PHASE_BATCH = 0,   /**< a batch run */
+    PF_OUTPUT_PHASE_WARMUP = 1,  /**< a stream's warm-up, inside strategy_stream_begin */
+    PF_OUTPUT_PHASE_REALTIME = 2 /**< a stream after its warm-up */
+} pf_output_phase_t;
+PF_STATIC_ASSERT(sizeof(pf_output_phase_t) == 4);
+
+/** One recorded event, copied by #strategy_outputs_event_get. Every 8-byte
+ *  field sits at a multiple of 8, so the 72 bytes before `message` are laid
+ *  out alike on every target. */
+typedef struct pf_output_event_v1_s {
+    uint32_t struct_version;  /**< 1 */
+    uint32_t size;            /**< sizeof(pf_output_event_v1_t) as the runtime compiled it */
+    uint64_t sequence;        /**< 1-based per run; once cleared, never issued again */
+    int32_t  output_index;    /**< the output, as the manifest's `outputs[].index` */
+    int32_t  bar_index;       /**< the row, 0-based */
+    int64_t  bar_open_ms;     /**< the row's open, Unix ms */
+    int64_t  bar_close_ms;    /**< the row's close, Unix ms; INT64_MIN when unknown */
+    uint32_t ordinal_in_bar;  /**< per output, from 0 within the row */
+    uint32_t phase;           /**< a #pf_output_phase_t */
+    uint32_t confirmed;       /**< 0 when recorded on a partially finalized bar */
+    uint32_t reserved0;       /**< 0 */
+    double   value;           /**< the event's value; NaN = na */
+    uint64_t message_hash64;  /**< FNV-1a 64 of every byte the module recorded as the
+                                   message; 0 without one */
+    const char* message;      /**< NUL-terminated, or NULL without one: a message holding a
+                                   NUL byte reads to its first NUL, while message_hash64
+                                   covers every recorded byte. Borrowed until the next call
+                                   that runs, streams or clears on the handle */
+} pf_output_event_v1_t;
+
+/** Turn recording on (@p on nonzero) or off. A change clears the record; a
+ *  call that changes nothing changes nothing, even while a run is in progress.
+ *  Returns 0, or -1 with nothing changed and the refusal recorded as code
+ *  `outputs_rejected`: reason `not_declared`, "outputs: this module declares
+ *  no outputs" (turning on a module that records nothing; turning it off
+ *  answers 0), or reason `run_in_progress`, "outputs: recording cannot
+ *  change during a run" (a change while a batch or a stream, from
+ *  #strategy_stream_begin to #strategy_stream_end, is running). As with
+ *  #strategy_set_trace_enabled, a success leaves #strategy_get_last_error
+ *  and its code as they were; a refusal keeps a failed run's own. */
+PF_API int strategy_outputs_set_enabled(pf_strategy_t s, int on);
+/** Series slots per row; 0 while recording is off. */
+PF_API int strategy_outputs_series_count(pf_strategy_t s);
+/** Rows recorded: one per bar the module published this run. A module that
+ *  opens at most one row per calculation, as a generated one does, never
+ *  records more than #strategy_script_bars_processed. */
+PF_API int64_t strategy_outputs_bars_len(pf_strategy_t s);
+/** Copy the open and close times (Unix ms) of rows from @p from_bar on.
+ *  Requires 0 <= @p from_bar <= rows, @p capacity >= 0 and @p written; either
+ *  array may be NULL. Writes min(capacity, rows - from_bar) items, sets
+ *  *written to that count and returns 0; otherwise -1 and nothing written. */
+PF_API int strategy_outputs_bar_times_copy(pf_strategy_t s, int64_t from_bar,
+                                           int64_t* open_ms, int64_t* close_ms,
+                                           int64_t capacity, int64_t* written);
+/** Copy one slot's values (NaN = na) of rows from @p from_bar on, as
+ *  #strategy_outputs_bar_times_copy does; @p out is required when
+ *  @p capacity > 0, and @p series must be below the series count. */
+PF_API int strategy_outputs_series_copy(pf_strategy_t s, int series, int64_t from_bar,
+                                        double* out, int64_t capacity, int64_t* written);
+/** Events queued since the run began or since the last clear. */
+PF_API int strategy_outputs_events_len(pf_strategy_t s);
+/** Copy event @p index into @p out: min(@p size_in, sizeof(pf_output_event_v1_t))
+ *  bytes, so an older or newer caller's struct works. Returns 0, or -1 with
+ *  nothing written for an index out of range, a NULL @p out, or a @p size_in
+ *  below the 8 bytes of struct_version and size. */
+PF_API int strategy_outputs_event_get(pf_strategy_t s, int index, void* out, size_t size_in);
+/** Drop the queued events, in every mode; rows and the sequence are kept. A
+ *  streaming caller clears after #strategy_stream_begin and after each input
+ *  it has read; a batch caller need not clear. */
+PF_API void strategy_outputs_events_clear(pf_strategy_t s);
+/** Copy the run constants (NaN = na, or not written this run) into @p out:
+ *  the first min(@p capacity, n) of them. Returns n, the declared count (0
+ *  while recording is off), or -1 for @p capacity < 0 or a NULL @p out with
+ *  @p capacity > 0. */
+PF_API int strategy_outputs_constants_copy(pf_strategy_t s, double* out, int capacity);
+
+#ifndef PINEFORGE_NO_STRATEGY_DECLS
+/** Part A: #PF_OUTPUTS_API_VERSION. Present only in a module that records. */
+PF_API uint32_t strategy_outputs_api_version(void);
+/** Part A: the module's outputs manifest, canonical JSON
+ *  (`pineforge-outputs-manifest/v1`): what every output, slot and constant
+ *  means. The buffer and status protocol of #strategy_capabilities_receipt. */
+PF_API int strategy_outputs_manifest(pf_strategy_t s, char* json, size_t capacity,
+                                     size_t* required, char* error,
+                                     size_t error_capacity);
+/** Part A: the module's signal-safety receipt, canonical JSON
+ *  (`pineforge-signal-safety/v1`), per output. The protocol of
+ *  #strategy_capabilities_receipt. */
+PF_API int strategy_signal_safety_receipt(pf_strategy_t s, char* json, size_t capacity,
+                                          size_t* required, char* error,
+                                          size_t error_capacity);
+#endif
+
+/** @} */ /* end of pf_outputs */
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

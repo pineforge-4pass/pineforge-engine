@@ -249,6 +249,19 @@
     "null admission history event",
     "null strategy",
     "null strategy, key or value",
+    "outputs: bar opened at {open_ms} is before the last recorded bar",
+    "outputs: declare_outputs repeated with other counts",
+    "outputs: declare_outputs while a run is in progress",
+    "outputs: declared counts must not be negative",
+    "outputs: event sequence overflow",
+    "outputs: output {output} is out of range",
+    "outputs: output_bar before any output_run_begin",
+    "outputs: output_constant before any output_run_begin",
+    "outputs: output_event with no open bar",
+    "outputs: output_value with no open bar",
+    "outputs: run constant {index} changed within a run",
+    "outputs: run constant {index} is out of range",
+    "outputs: series slot {slot} is out of range",
     "params_json is reserved; use checked setters",
     "quantity fraction requires a positive finite denominator",
     "quantity grid requires a finite positive step",
@@ -452,6 +465,51 @@
    ],
    "retryable": true,
    "since": "1.4.0"
+  },
+  "outputs_limit": {
+   "args": {
+    "max": {
+     "kind": "integer"
+    },
+    "reason": {
+     "kind": "vocab",
+     "values": [
+      "too_many_events",
+      "too_many_rows"
+     ]
+    }
+   },
+   "class": "strategy_limit",
+   "description": "A recorded-outputs capacity limit was reached during the run.",
+   "english": [
+    "outputs: the event queue is full",
+    "outputs: the row count is at its limit"
+   ],
+   "retryable": false,
+   "since": "1.5.0"
+  },
+  "outputs_rejected": {
+   "args": {
+    "reason": {
+     "kind": "vocab",
+     "values": [
+      "not_declared",
+      "run_in_progress",
+      "recalculated_after_clear"
+     ]
+    }
+   },
+   "class": "input",
+   "description": "Recorded outputs were asked of a strategy library that records none, or the recording cannot be honoured as asked.",
+   "english": [
+    "--outputs: this library records no outputs (compile the script as an indicator, or with outputs on)",
+    "--outputs: {message}",
+    "outputs: bar {bar} was recalculated after its events were cleared",
+    "outputs: recording cannot change during a run",
+    "outputs: this module declares no outputs"
+   ],
+   "retryable": false,
+   "since": "1.5.0"
   },
   "pine_array_error": {
    "args": {
@@ -1117,13 +1175,26 @@
       "abi_mismatch",
       "symbol_missing",
       "setter_missing",
-      "settings_api_mismatch"
+      "settings_api_mismatch",
+      "outputs_api_mismatch",
+      "outputs_manifest_invalid"
      ]
     }
    },
    "class": "engine_fault",
    "description": "The compiled strategy library does not match the harness.",
    "english": [
+    "--outputs: event {index} could not be read",
+    "--outputs: series slot {slot} could not be read",
+    "--outputs: the bar times could not be read",
+    "--outputs: the library lacks {export}, which recording needs; rebuild.",
+    "--outputs: the library returned no outputs manifest: {error}",
+    "--outputs: the library's outputs API version is {version}, the harness reads 1; rebuild.",
+    "--outputs: the outputs manifest is not JSON: {error}",
+    "--outputs: the outputs manifest is not a JSON object",
+    "--outputs: the outputs manifest lists no output {index}, which an event names",
+    "--outputs: the outputs manifest names series slot {slot}, which the library does not record",
+    "--outputs: the outputs manifest's {key} is not a list of entries with {fields}",
     "cannot load the strategy library: {error}",
     "checked settings API mismatch: the strategy library must export strategy_settings_api_version() == 1, strategy_create_checked, strategy_set_input_checked and strategy_set_override_checked, or none of them; rebuild.",
     "pineforge ABI mismatch: .so reports {abi}, harness expects 4; rebuild.",

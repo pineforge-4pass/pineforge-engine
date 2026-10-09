@@ -91,6 +91,8 @@ codes it tested the text alone, so a script stopped by an empty
 
 The tables below list the catalog at this tree.
 
+The `outputs_limit` and `outputs_rejected` rows below are unreleased, targeted for 1.5.0, and not part of 1.4.0; the other 38 codes retain their released 1.4.0 status. The `strategy_library_incompatible` row counts the two unreleased 1.5.0 outputs reasons, `outputs_api_mismatch` and `outputs_manifest_invalid`, in addition to its six released 1.4.0 reasons.
+
 <!-- BEGIN generated from docker/run_failure_codes.json: python3 scripts/test_gen_run_failure_catalog_diff.py --write-docs-tables -->
 
 ### Classes
@@ -121,6 +123,8 @@ The tables below list the catalog at this tree.
 | `other_symbol_feed_missing` | `no_data` | no | `timeframe` (timeframe, optional) | No feed is installed for another symbol's request at its timeframe. |
 | `other_symbol_request` | `no_data` | no | `call` (pine_source), `function` (vocab, 2 values), `line` (integer), `symbol` (symbol, optional) | The script read another symbol's request and no bars of that symbol were installed. |
 | `out_of_memory` | `resource` | yes | none | The run ran out of memory. |
+| `outputs_limit` | `strategy_limit` | no | `max` (integer), `reason` (vocab, 2 values) | A recorded-outputs capacity limit was reached during the run. |
+| `outputs_rejected` | `input` | no | `reason` (vocab, 3 values) | Recorded outputs were asked of a strategy library that records none, or the recording cannot be honoured as asked. |
 | `pine_array_error` | `strategy` | no | `collection` (vocab, 2 values, optional), `method` (vocab, 12 values, optional), `reason` (vocab, 5 values) | An array call failed: an index out of bounds, an inverted slice, an empty array, an invalid size, or a modified historical collection. |
 | `pine_invalid_argument` | `strategy` | no | `argument` (identifier, optional), `function` (identifier, optional), `rule` (vocab, 6 values) | A built-in refused the value of one of its arguments. |
 | `pine_matrix_error` | `strategy` | no | `function` (vocab, 15 values), `reason` (vocab, 10 values) | A matrix built-in refused its arguments (an index, a dimension, a size or an empty matrix). |
@@ -142,7 +146,7 @@ The tables below list the catalog at this tree.
 | `setting_rejected` | `input` | no | `entrypoint` (vocab, 4 values, optional), `input` (pine_source, optional), `reason` (vocab, 21 values, optional) | A run setting (an input or a strategy() override) was refused. |
 | `setting_unsupported` | `unsupported` | no | none | A setting this compiled strategy cannot honour. |
 | `strategy_create_failed` | `engine_fault` | no | none | The compiled strategy could not be created. |
-| `strategy_library_incompatible` | `engine_fault` | no | `abi` (integer, optional), `missing` (vocab, 13 values, optional), `reason` (vocab, 6 values) | The compiled strategy library does not match the harness. |
+| `strategy_library_incompatible` | `engine_fault` | no | `abi` (integer, optional), `missing` (vocab, 13 values, optional), `reason` (vocab, 8 values) | The compiled strategy library does not match the harness. |
 | `strategy_runtime_error` | `strategy` | no | none | The script stopped itself with runtime.error(); the message, possibly empty, is the text. |
 | `strategy_settings_rejected` | `strategy` | no | `field` (vocab, 30 values) | A strategy() declaration setting (or its override) is not a value the engine accepts. |
 | `stream_input_rejected` | `input` | no | none | A streaming input (bar, tick or auxiliary bar) was refused. |

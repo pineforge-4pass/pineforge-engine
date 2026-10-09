@@ -5,6 +5,33 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
+## Unreleased
+
+- **Recorded outputs.** A module can record what it computes on each bar
+  besides its trades: doubles in named slots per bar, doubles kept once per
+  run, and events with an optional message, one row per bar the module
+  publishes (`docs/outputs.md`). A generated module or a C++ host writes them
+  through new protected `BacktestEngine` members (`declare_outputs`,
+  `output_run_begin`, `output_bar`, `output_value`, `output_event`,
+  `output_constant`); a caller reads them through nine new runtime exports of
+  `pineforge.h`, group `pf_outputs` (`strategy_outputs_set_enabled`, the
+  `strategy_outputs_*` readers, the size-prefixed `pf_output_event_v1_t`),
+  present in every module built on this engine, and a recording module adds
+  `strategy_outputs_api_version`, `strategy_outputs_manifest` and
+  `strategy_signal_safety_receipt`. `docker/run_json.py --outputs` writes the
+  record as the report's `outputs` block. Every refusal carries a run-failure
+  code: the new `outputs_rejected` (reasons `not_declared`, `run_in_progress`,
+  `recalculated_after_clear`), the new `outputs_limit` (reasons
+  `too_many_events`, `too_many_rows`), `strategy_library_incompatible` with the
+  new reasons `outputs_api_mismatch` and `outputs_manifest_invalid`, and
+  `engine_invariant` for a broken recorder precondition (all additions to
+  `docker/run_failure_codes.json`). Recording is off until a caller
+  turns it on, and nothing a run computes depends on it: trades, reports,
+  metrics and every hash are byte-identical, `pf_report_t` and every existing
+  symbol are unchanged, and `PF_ABI_VERSION` stays 4. The new members enter
+  `engine_script_run_v19` without an epoch; a C++ object compiled against an
+  earlier v19 header is rebuilt with the library.
+
 ## 1.4.0 — 2026-10-08
 
 **[1.4.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.4.0)**,
