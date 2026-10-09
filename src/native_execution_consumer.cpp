@@ -11530,13 +11530,13 @@ void NativeExecutionConsumer::fill_snapshot_report(const BacktestEngine& engine,
     consumer->batch_current_ = outcome;
 }
 
-}  // inline namespace engine_script_run_v19
-
 // The C stream seam's snapshot reader, declared in c_abi.cpp beside the native
-// C host's hooks: strategy_stream_fill_report reads through it.
+// C host's hooks, in the engine epoch: strategy_stream_fill_report reads through it.
 void native_stream_snapshot_report(BacktestEngine* engine, ReportC* out) {
     NativeExecutionConsumer::fill_snapshot_report(*engine, out);
 }
+
+}  // inline namespace engine_script_run_v19
 
 // The portable run-spec digest lives here, in the one translation unit that
 // owns `hash_spec` (see its definition above, beside the continuation fold),

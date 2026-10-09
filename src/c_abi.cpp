@@ -57,7 +57,7 @@
 namespace pineforge {
 void clear_native_c_host_refusal_error(BacktestEngine* engine) noexcept;
 bool native_c_host_in_postrun_hook_frame(BacktestEngine* engine) noexcept;
-void native_stream_snapshot_report(BacktestEngine* engine, ReportC* out);
+inline namespace engine_script_run_v19 { void native_stream_snapshot_report(BacktestEngine* engine, ReportC* out); }
 }
 
 namespace {
