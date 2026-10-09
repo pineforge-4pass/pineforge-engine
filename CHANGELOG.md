@@ -5,7 +5,7 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
-## Unreleased
+## 1.5.0 — Unreleased
 
 - **Recorded outputs.** A module can record what it computes on each bar
   besides its trades: doubles in named slots per bar, doubles kept once per
@@ -31,6 +31,22 @@ version number follows semantic versioning over the surfaces the
   symbol are unchanged, and `PF_ABI_VERSION` stays 4. The new members enter
   `engine_script_run_v19` without an epoch; a C++ object compiled against an
   earlier v19 header is rebuilt with the library.
+- **A run's report belongs to the call that began it ([#361]).** A batch run
+  call returns the report of its own attempt. A call that does not begin a run
+  (a begin outside `Ready`, a refused bar array or run option, a calendar or
+  timezone refusal, a begin over a live stream) now gets the empty report
+  (every array `NULL`, every count 0) instead of the rows the handle kept from
+  an earlier call, and `strategy_native_run_v1` answers it
+  `PF_NATIVE_E_RUN_FAILED`, never `PF_NATIVE_OK`; the reason stays in
+  `strategy_get_last_error`. A run that began and then failed still publishes
+  its partial report, and `strategy_stream_fill_report`, the explicit stream
+  snapshot, still returns a live stream's rows, even after a batch call was
+  refused over the stream. The gate is the engine's own report reader,
+  `BacktestEngine::fill_report`, so the C and native-module entry points and
+  the generated `run_backtest` / `run_backtest_full` wrappers all obey it, with
+  no change to emitted source.
+
+[#361]: https://github.com/pineforge-4pass/pineforge-engine/pull/361
 
 ## 1.4.0 — 2026-10-08
 
