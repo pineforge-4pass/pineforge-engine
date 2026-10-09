@@ -1676,7 +1676,7 @@ NativeMetricsView native_metrics() const;                          // S: net_pro
 - `KernelRecordedAtHostMarks` (R1, KERNEL-EDGE): the same recording, at the points a C++ host names with `NativeStrategyHost::mark_native_report_point` instead of once per calculation; the consumer never records on its own initiative under it, so the continuation identity stays where `HostRecorded` leaves it. The Pine adapter's existing `mark_script_report_point` route has the same kernel producer. It is what the adapter declares (`KernelRecordedAtHostMarks` pine_adapter.cpp:2790), with `report_open_position_at_end == false`.
 - Publish read-only `closed_trade_*` accessors (RP6).
 - Alternative: F's virtual `owns_equity_recording()` (the A48 ownership pattern of `owns_lot_excursions` native_host.hpp:1023). Same semantics, but it costs a host-epoch bump, so the spec form was chosen; the virtual was never added, and `NativeReportPolicy` is what landed (§3.4 row 3).
-- TUs: `native_execution_consumer.cpp` (seal path native_execution_consumer.cpp:5236-5278), `engine_run.cpp`, `engine_report.cpp`, `engine_state_hash.cpp`, `native_run_spec.{hpp,cpp}`.
+- TUs: `native_execution_consumer.cpp` (seal path, `seal_script` native_execution_consumer.cpp:8492-8515), `engine_run.cpp`, `engine_report.cpp`, `engine_state_hash.cpp`, `native_run_spec.{hpp,cpp}`.
 
 ### A.2 L3 — sizing, fractional reduce, sibling reservation (F P1, P7 + O G2 + S P2, P3)
 

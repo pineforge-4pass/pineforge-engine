@@ -644,7 +644,7 @@ segment, and discrete points, keep the ordinary birth gate above.
 `on_native_bar_open` fires at the modeled opening, before that point's matching
 pass (`native_execution_consumer.cpp:7434-7436`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
-`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:7404`), the
+`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:7428`), the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
 high, low and close are the finished bar's, not what is known at the open. A
 host that must decide on open-only information reads
@@ -4013,14 +4013,19 @@ count 0), overwritten and never freed. What such a call does to the handle
 depends on why it was refused, and none of it is new. A begin on a handle that
 is `Completed`, `Failed` or not configured, and a refused bar array or run
 option, leave the lifecycle, the run identity and the retained rows as they
-were. A calendar or timezone refusal comes after the consumed run-number
-high-water moved, and it fails the lifecycle. A begin while the handle is
-`Running` (a live stream, or a call made from a callback) is a contract
+were. A calendar or timezone failure inside `begin_ready` (the begin proper)
+comes after the consumed run-number high-water moved, and it fails the
+lifecycle. A calendar or timezone parse failure at configure time comes
+earlier, fails the lifecycle there, and leaves the high-water where it was. A
+batch begin over a live stream, or a begin made from a callback, is a contract
 failure that latches `Failed` (`Contract`, `Begin`; a generated source host,
 whose preparation calls `configure` first, latches `Contract`, `Configure`),
 so the stream cannot be driven on after it, although its snapshot stays
-readable. A run that began owns its rows whatever became of it: a `Completed`
-report and a started-then-failed run's partial rows are published unchanged.
+readable. A repeated `stream_begin` on a stream that is already realtime is the
+exception: it is refused (`stream is already realtime`) before the begin is
+admitted, latches nothing, and leaves the stream `Running`. A run that began
+owns its rows whatever became of it: a `Completed` report and a
+started-then-failed run's partial rows are published unchanged.
 `strategy_native_run_v1` answers `PF_NATIVE_OK` only for a run that call
 carried to `Completed` (the consumed run-number high-water moved) and
 `PF_NATIVE_E_RUN_FAILED` otherwise; the reason stays in
