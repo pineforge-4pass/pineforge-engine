@@ -10224,6 +10224,94 @@ static void check_started_then_failed_report(void) {
     strategy_native_host_free(state.host);
 }
 
+/* A genuine nested call. The twin host drives a second strategy_native_run_v1
+ * on its OWN handle from inside the calculation callback, five calculations
+ * after the flatten (the round trip is closed by then), over an output that
+ * holds indeterminate bytes. The engine refuses a begin while the host runs (a
+ * contract failure), so the nested call began nothing: it answers E_RUN_FAILED
+ * with the empty report, overwritten and never freed. The outer run did begin.
+ * It ends Failed (the nested refusal latched the lifecycle; the lifecycle is
+ * read here, never assumed Running) and still publishes its OWN partial rows:
+ * the closed trade stays. Two separate effects of the one nested exit are
+ * observed: the nested caller's report is empty, and the outer call keeps its
+ * right to publish. Defined fields only. */
+typedef struct nested_report_state {
+    twin_state      twin;       /* the twin callback's own state, first member */
+    const pf_bar_t* bars;
+    int             n;
+    int             fired;      /* the nested call was made */
+    int             nested_rc;
+    pf_report_t     nested;     /* the nested call's output */
+} nested_report_state;
+
+static int nested_run_after_trade_on_bar(void* user, const pf_bar_t* bar,
+                                         const pf_native_decision_v1* at) {
+    nested_report_state* state = (nested_report_state*)user;
+    const int rc = twin_on_bar(&state->twin, bar, at);
+    if (rc != 0) return rc;
+    if (state->twin.calculations == PF_TWIN_EXIT_BAR + 5 && !state->fired) {
+        state->fired = 1;
+        memset(&state->nested, 0x5a, sizeof(state->nested));
+        state->nested_rc = strategy_native_run_v1(state->twin.host, state->bars, state->n,
+                                                  &state->nested);
+    }
+    return 0;
+}
+
+static void check_nested_run_report_ownership(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+    nested_report_state state;
+    pf_report_t report;
+    px_state after;
+    const pf_bar_t* bars;
+    int n = 0;
+
+    memset(&state, 0, sizeof(state));
+    memset(&report, 0, sizeof(report));
+    table = blank_callbacks(&state);
+    table.on_bar = nested_run_after_trade_on_bar;
+    state.twin.host = strategy_native_host_create_v1(&table);
+    CHECK(state.twin.host != NULL, "nested-report host create failed");
+    if (!state.twin.host) return;
+    CHECK_EQ_INT(strategy_configure_native_v1(state.twin.host, &spec), 0,
+                 "nested-report configure");
+    bars = pf_twin_bars(&n);
+    CHECK(n > PF_TWIN_EXIT_BAR + 5, "the twin bars end before the nested call");
+    state.bars = bars;
+    state.n = n;
+    CHECK_EQ_INT(strategy_native_run_v1(state.twin.host, bars, n, &report), PF_NATIVE_E_RUN_FAILED,
+                 "a run whose callback made a nested run did not fail");
+    CHECK_EQ_INT(state.fired, 1, "the nested run was never made");
+    CHECK_EQ_INT(state.twin.command_error, 0, "a command returned an error before the nested run");
+
+    /* The nested call: refused without beginning, the empty report. */
+    CHECK_EQ_INT(state.nested_rc, PF_NATIVE_E_RUN_FAILED, "the nested run was not refused");
+    CHECK_EQ_INT(state.nested.total_trades, 0, "the nested call kept a trade count");
+    CHECK_EQ_INT(state.nested.trades_len, 0, "the nested call kept trade rows");
+    CHECK(state.nested.trades == NULL, "the nested call handed out a trade array");
+    CHECK_EQ_INT(state.nested.input_bars_processed, 0,
+                 "the nested call kept the outer run's input counter");
+    CHECK_EQ_INT(state.nested.script_bars_processed, 0,
+                 "the nested call kept the outer run's bar counters");
+    CHECK(state.nested.equity_curve == NULL, "the nested call handed out an equity curve");
+    strategy_native_report_free_v1(&state.nested);
+
+    /* The outer call: it began, so its partial rows are its own. */
+    px_read_state(&after, state.twin.host);
+    CHECK_EQ_INT(after.rc, PF_NATIVE_OK, "outer state read");
+    CHECK_EQ_INT(after.lifecycle, PF_NATIVE_LIFECYCLE_FAILED, "the outer lifecycle is not Failed");
+    CHECK_EQ_INT(after.failure_code, PF_NATIVE_FAILURE_CONTRACT,
+                 "the nested refusal did not latch a contract failure");
+    CHECK_EQ_INT(report.total_trades, 1, "the outer report lost the closed trade");
+    CHECK_EQ_INT(report.trades_len, 1, "the outer report lost the trade row");
+    CHECK(report.trades != NULL, "the outer report has no trade array");
+    CHECK(report.script_bars_processed > PF_TWIN_EXIT_BAR,
+          "the outer report lost the bar counters");
+    strategy_native_report_free_v1(&report);
+    strategy_native_host_free(state.twin.host);
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
     check_csurface_create_and_configure_refusals();
@@ -10233,6 +10321,7 @@ int pf_native_c_api_checks(void) {
     check_lifecycle_round_trips();
     check_callback_failure_latch();
     check_started_then_failed_report();
+    check_nested_run_report_ownership();
     check_event_polling();
     check_event_retention();
     check_unrepresentable_quantity();

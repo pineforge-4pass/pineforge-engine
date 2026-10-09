@@ -4006,20 +4006,32 @@ rows of the last run it began, so `BacktestEngine::fill_report` — the one read
 behind `strategy_native_run_v1`, the native module wrappers and the
 transpiler's `run_backtest` / `run_backtest_full` (`run()` then `fill_report`)
 — publishes them only while the latest `run` or `stream_begin` call began
-(reached `reset_run_state`); a call it refused without beginning (a begin
-outside `Ready`, a refused bar array or run option, a calendar or timezone
-refusal, a begin over a live stream) gets the empty report (every array `NULL`,
-every count 0), overwritten and never freed, and leaves the lifecycle, the run
-identity and the retained rows as it found them. A run that began owns its rows
-whatever became of it: a `Completed` report and a started-then-failed run's
-partial rows are published unchanged. `strategy_native_run_v1` answers
-`PF_NATIVE_OK` only for a run that call carried to `Completed` (the consumed
-run-number high-water moved) and `PF_NATIVE_E_RUN_FAILED` otherwise; the reason
-stays in `strategy_get_last_error`, `strategy_get_last_error_code` and
+(reached `reset_run_state`). A call that did not begin (a begin outside
+`Ready`, a refused bar array or run option, a calendar or timezone refusal, a
+begin over a live stream) gets the empty report (every array `NULL`, every
+count 0), overwritten and never freed. What such a call does to the handle
+depends on why it was refused, and none of it is new. A begin on a handle that
+is `Completed`, `Failed` or not configured, and a refused bar array or run
+option, leave the lifecycle, the run identity and the retained rows as they
+were. A calendar or timezone refusal comes after the consumed run-number
+high-water moved, and it fails the lifecycle. A begin while the handle is
+`Running` (a live stream, or a call made from a callback) is a contract
+failure that latches `Failed` (`Contract`, `Begin`; a generated source host,
+whose preparation calls `configure` first, latches `Contract`, `Configure`),
+so the stream cannot be driven on after it, although its snapshot stays
+readable. A run that began owns its rows whatever became of it: a `Completed`
+report and a started-then-failed run's partial rows are published unchanged.
+`strategy_native_run_v1` answers `PF_NATIVE_OK` only for a run that call
+carried to `Completed` (the consumed run-number high-water moved) and
+`PF_NATIVE_E_RUN_FAILED` otherwise; the reason stays in
+`strategy_get_last_error`, `strategy_get_last_error_code` and
 `strategy_last_run_status` (1). A `Completed` handle runs again after a
 successful `strategy_configure_native_v1`. `strategy_stream_fill_report` is the
 explicit snapshot: the same function asked for the rows' own owner, so a live
-stream's rows survive a batch call refused over it, which reads empty.
+stream's rows survive a batch call refused over it, which reads empty, and the
+batch reader stays empty after the snapshot until the next run call. A run call
+made from inside a running run's callback reads empty the same way, while the
+outer run, which began, publishes its own rows when it ends.
 
 **Commands.** `strategy_native_submit_v1`, `_replace_v1` / `_replace_ext_v1`,
 `_cancel_v1`, `_cancel_all_v1`, `_cancel_where_v1` and `_execute_current_v1`

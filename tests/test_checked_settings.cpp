@@ -214,6 +214,76 @@ void test_refused_batch_over_live_stream() {
     std::cout << "batch refused over a live stream: empty batch report, stream snapshot keeps its rows PASS\n";
 }
 
+// The explicit snapshot hands the batch gate back as it found it. A batch call
+// refused over a live stream closes the gate, so BacktestEngine::fill_report
+// (the function every generated wrapper calls right after run()) answers empty.
+// The snapshot read borrows the rows' own owner while it reads and must restore
+// the closed gate on every way out of the read: when it returns, and when it
+// throws. Both are observed by reading the batch gate directly AFTER the
+// snapshot with no run in between (a later run would reopen the gate and prove
+// nothing). The throw is the next allocation made by the read, injected with
+// the file's operator new, so the snapshot call fails and hands out nothing.
+// Defined fields only: the trade count, the arrays and the bar counters.
+void test_snapshot_restores_batch_gate() {
+    std::vector<pf_bar_t> bars;
+    for (int index = 0; index < 60; ++index) {
+        const double price = 100 + index % 7;
+        bars.push_back({price, price + 2, price - 1, price + 1, 5,
+                       1577836800000LL + static_cast<std::int64_t>(index) * 60000});
+    }
+    for (int mode = 0; mode < 2; ++mode) {
+        pf_strategy_t strategy = strategy_create(nullptr);
+        assert(strategy);
+        assert(strategy_stream_begin(strategy, bars.data(), 40, "1", "1") == 0);
+        for (int index = 40; index < 50; ++index)
+            assert(strategy_stream_push_bar(strategy, &bars[index]) == 0);
+        pf_report_t before{};
+        assert(strategy_stream_fill_report(strategy, &before) == 0);
+        assert(before.script_bars_processed > 0);
+        pf_report_t batch{};
+        run_backtest(strategy, bars.data(), 60, &batch);
+        assert(!std::string(strategy_get_last_error(strategy)).empty());
+        assert(batch.total_trades == 0 && !batch.trades && batch.script_bars_processed == 0);
+        report_free(&batch);
+        auto* engine = static_cast<pineforge::BacktestEngine*>(strategy);
+        auto batch_reader_is_empty = [&] {
+            pf_report_t gated{};
+            gated.total_trades = 99;
+            engine->fill_report(reinterpret_cast<pineforge::ReportC*>(&gated));
+            const bool empty = gated.total_trades == 0 && gated.trades_len == 0 && !gated.trades
+                               && gated.input_bars_processed == 0 && gated.script_bars_processed == 0
+                               && gated.equity_curve_len == 0 && !gated.equity_curve;
+            report_free(&gated);
+            return empty;
+        };
+        assert(batch_reader_is_empty());  // closed by the refused call
+        if (mode == 0) {
+            pf_report_t snapshot{};
+            assert(strategy_stream_fill_report(strategy, &snapshot) == 0);
+            assert(snapshot.script_bars_processed == before.script_bars_processed);
+            report_free(&snapshot);
+        } else {
+            allocation_failure = 1;
+            pf_report_t broken{};
+            const int broken_rc = strategy_stream_fill_report(strategy, &broken);
+            const int unconsumed = allocation_failure;
+            allocation_failure = 0;
+            assert(unconsumed == 0);  // the injected failure fired inside the snapshot read
+            assert(broken_rc != 0);
+            report_free(&broken);
+        }
+        assert(batch_reader_is_empty());  // still closed: nothing ran in between
+        pf_report_t again{};
+        assert(strategy_stream_fill_report(strategy, &again) == 0);
+        assert(again.script_bars_processed == before.script_bars_processed);
+        assert(again.total_trades == before.total_trades);
+        report_free(&again);
+        report_free(&before);
+        strategy_free(strategy);
+    }
+    std::cout << "stream snapshot, normal and throwing: batch gate stays closed with no run in between PASS\n";
+}
+
 std::string receipt_field(const std::string& document, const std::string& name,
                           const std::string& field) {
     const auto row = document.find("{\"name\":\"" + name + "\"");
@@ -507,5 +577,6 @@ int main(int argc, char** argv) {
     strategy_free(strategy);
     test_stream_snapshot_is_current();
     test_refused_batch_over_live_stream();
+    test_snapshot_restores_batch_gate();
     std::cout << "checked settings: validation, receipt and exception containment PASS\n";
 }
