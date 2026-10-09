@@ -31,15 +31,18 @@ version number follows semantic versioning over the surfaces the
   symbol are unchanged, and `PF_ABI_VERSION` stays 4. The new members enter
   `engine_script_run_v19` without an epoch; a C++ object compiled against an
   earlier v19 header is rebuilt with the library.
-- **A run's report belongs to the call that began it ([#361]).** A batch run
-  call returns the report of its own attempt. A call that does not begin a run
-  (a begin outside `Ready`, a refused bar array or run option, a calendar or
-  timezone refusal, a begin over a live stream) now gets the empty report
-  (every array `NULL`, every count 0) instead of the rows the handle kept from
-  an earlier call, and `strategy_native_run_v1` answers it
-  `PF_NATIVE_E_RUN_FAILED`, never `PF_NATIVE_OK`; the reason stays in
-  `strategy_get_last_error`. A run that began and then failed still publishes
-  its partial report, and `strategy_stream_fill_report`, the explicit stream
+- **A run's report belongs to the call that began it ([#361]).** Once a call
+  reaches the engine, its batch report belongs to that call's attempt. A call
+  the engine refuses before it begins a run (a begin outside `Ready`, a refused
+  bar array or run option, a calendar or timezone refusal, a begin over a live
+  stream) now gets the empty report (every array `NULL`, every count 0) instead
+  of the rows the handle kept from an earlier call, and
+  `strategy_native_run_v1` answers it `PF_NATIVE_E_RUN_FAILED`, never
+  `PF_NATIVE_OK`; the reason stays in `strategy_get_last_error`. The C entry's
+  `PF_NATIVE_E_HANDLE` and `PF_NATIVE_E_ARGUMENT` checks, and native-module
+  argument preflight, still return before the engine runs and leave caller
+  output untouched. A run that began and then failed still publishes its
+  partial report, and `strategy_stream_fill_report`, the explicit stream
   snapshot, still returns a live stream's rows, even after a batch call was
   refused over the stream. The gate is the engine's own report reader,
   `BacktestEngine::fill_report`, so the C and native-module entry points and
