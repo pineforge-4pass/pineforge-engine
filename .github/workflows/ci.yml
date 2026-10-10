@@ -170,6 +170,14 @@ jobs:
         with:
           python-version: '3.12'
 
+      # pytest for the CTest rows that run `python -m pytest` (tests/CMakeLists.txt:
+      # test_run_json_selected_window, test_compile_inventory_pipeline), the same
+      # hash-pinned wheels as the preflight job. A failed install fails the job.
+      - name: Install the CTest pytest runner
+        run: |
+          python3 -m pip install --disable-pip-version-check --no-input \
+            --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
+
       # tzdata-legacy carries the backward links test_native_calendar resolves
       # (US/Eastern, Japan, GB); noble split them out of tzdata, and the hosted
       # image happens to have it, so the row stays green on a bare runner too.
@@ -247,6 +255,14 @@ jobs:
         with:
           python-version: '3.12'
 
+      # pytest for the CTest rows that run `python -m pytest` (tests/CMakeLists.txt:
+      # test_run_json_selected_window, test_compile_inventory_pipeline), the same
+      # hash-pinned wheels as the preflight job. A failed install fails the job.
+      - name: Install the CTest pytest runner
+        run: |
+          python3 -m pip install --disable-pip-version-check --no-input \
+            --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -297,6 +313,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      # pytest for the CTest rows that run `python -m pytest` (tests/CMakeLists.txt:
+      # test_run_json_selected_window, test_compile_inventory_pipeline), the same
+      # hash-pinned wheels as the preflight job. A failed install fails the job.
+      - name: Install the CTest pytest runner
+        run: |
+          python3 -m pip install --disable-pip-version-check --no-input \
+            --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
 
       - name: Install dependencies
         run: |
