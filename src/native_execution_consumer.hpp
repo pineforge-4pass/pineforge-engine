@@ -5,10 +5,12 @@
 #include <pineforge/run_failure.hpp>
 
 #include "native_calendar_memo.hpp"
+#include "native_selected_epoch.hpp"
 #include "runtime_ambient.hpp"
 
 #include <array>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -43,6 +45,30 @@ public:
 
 private:
     const void* kind_ = nullptr;
+};
+// Opaque run state a host cannot rebuild by scanning, parked with the consumer
+// that serves it. Unlike NativeHostCache, which only shortcuts a scan the host
+// can repeat, the slot is mandatory: no switch, no fallback, and the host
+// allocates before it adopts, so an allocation failure surfaces in the host and
+// never silently drops the state. The consumer owns it through an ordinary
+// unique_ptr (no callback), drops it at every admitted run begin, and never
+// reads, hashes or records it: a host whose state is trading state folds it
+// itself.
+class NativeHostState {
+public:
+    // `kind` names the host's state type, so the host recognizes its own state
+    // with one comparison instead of a dynamic_cast. Any address the host owns
+    // will do; the consumer never reads it.
+    explicit NativeHostState(const void* kind) noexcept : kind_(kind) {}
+    NativeHostState(const NativeHostState&) = delete;
+    NativeHostState& operator=(const NativeHostState&) = delete;
+    NativeHostState(NativeHostState&&) = delete;
+    NativeHostState& operator=(NativeHostState&&) = delete;
+    virtual ~NativeHostState() noexcept = default;
+    const void* kind() const noexcept { return kind_; }
+
+private:
+    const void* kind_;
 };
 // The journal window's stress switch (NativeExecutionConsumer::
 // set_retire_every_point): a build compiled with
@@ -517,6 +543,47 @@ public:
         host_cache_enabled_ = enabled;
         if (!enabled) host_cache_.reset();
     }
+    // The host's opaque state (NativeHostState), or null. A host adopts one per
+    // run; it lives until the next adoption, the consumer's destruction, or the
+    // reset in begin_ready. That reset runs only after the final pre-host
+    // abort/projection check has passed, and before on_native_run_begin, so a
+    // host adopts from the run-begin hook or later. A state adopted earlier,
+    // including in prepare_native_begin, is dropped by that reset if the begin
+    // reaches it. Independent of set_host_cache: no switch, no fallback, and
+    // neither call allocates (the host allocates first, so a failure surfaces
+    // there). The consumer never reads, hashes or records it.
+    NativeHostState* host_state() const noexcept { return host_state_.get(); }
+    NativeHostState* adopt_host_state(std::unique_ptr<NativeHostState> state) noexcept {
+        host_state_ = std::move(state);
+        return host_state_.get();
+    }
+    // The open activation scope: a window inside one PreOpen callback, at an
+    // Open current frame, in which every request a successful submit or replace
+    // leaves live -- of any trigger kind -- is granted its activation at that
+    // Open. The grant is explicit, per handle and per point: it lives from the
+    // command that recorded it through the immediately following match of that
+    // exact Open (match_discrete clears it at the match's end), and the helper
+    // that reads it checks the exact handle, the point's ordinal and effective
+    // time and the Open phase, so it never applies at a later point. A
+    // successful replace outside the scope revokes the replaced handle's grant,
+    // a kept handle's included; a refused replace leaves it. Nothing but this
+    // consumer holds it: every core call that tests a birth gate is handed it
+    // afresh as a trailing bool (open_activation_granted answers it), and no
+    // installed member, vtable or epoch carries one.
+    //
+    // begin_open_activation answers false, and changes nothing, for anything
+    // but a running consumer inside its own PreOpen callback at an Open current
+    // frame, and for a scope already open: the caller turns that false into its
+    // typed failure. It resets the grants of any earlier scope. The three
+    // methods never dispatch to the host. end_open_activation closes the
+    // capture scope and only that: the grants it recorded stay for the Open
+    // match that follows. While the scope is open execute_current latches a
+    // Contract failure of the Command operation (engine_invariant) and throws,
+    // before it takes an ordinal or touches the book: a sequencing violation,
+    // so that no caller can carry on past it.
+    bool begin_open_activation(BacktestEngine& engine);
+    void end_open_activation() noexcept;
+    bool open_activation_active() const noexcept { return open_activation_scope_; }
     // V19-B: under NativeEventRetention::Window the journal retires what its
     // host acknowledged at every script-bar boundary. This switch retires at
     // every driver point instead -- the most any reader can lose -- so a run
@@ -1078,6 +1145,23 @@ private:
     bool seal_stale_script(BacktestEngine& engine, std::int64_t script_key);
     void seal_script(BacktestEngine& engine, NativeCompletionKind kind);
     bool final_script_session_closed() const noexcept;
+    // The selected window's consumption counts (pineforge/selected_window.h):
+    // facts of the primary input and script callbacks that actually completed,
+    // written into selected_epoch_.counts beside the two engine diagnostics they
+    // mirror, and only for an admitted selected generation (an OFF handle reads
+    // one flag and does nothing else). The input splits on the row's own
+    // timestamp against T, the script bar on its published label against T.
+    // Report bookkeeping like selected_epoch_: never hashed, never read by the
+    // run, and no setter or host can reach them.
+    void count_selected_input(const Bar& bar) noexcept;
+    void count_selected_script(std::int64_t label) noexcept;
+    // The accepted pre-roll horizon of a selected batch: seals the last pending
+    // script bucket whose label precedes T once, from the real aggregate its own
+    // inputs left (LazyComplete, the native lazy seal), and resets it. A window
+    // bucket is never forced and a natural seal that already ran is never
+    // repeated. True when nothing was pending or the sealed calculation
+    // succeeded.
+    bool complete_selected_preroll_horizon(BacktestEngine& engine);
     void deliver_confirmed_script(BacktestEngine& engine, const Bar& bar, const NativeCoordinate& base);
     void deliver_intrabar_script(BacktestEngine& engine, const Bar& bar,
                                  const NativeCoordinate& base);
@@ -1437,10 +1521,12 @@ private:
                            uint64_t ordinal);
     // install_execution for the core's direct form (R5 lane L3): the second
     // half of check_execution, after the settlement, failing the run exactly
-    // as an install that fails does.
+    // as an install that fails does. `open_activation_grant` is the one the
+    // check was handed: the apply makes the same birth test.
     bool apply_execution(BacktestEngine& engine, const native_order::RequestHandle& target,
                          const native_order::ExecutionProposal& proposal,
-                         const native_order::CommittedExecutionFacts& facts, uint64_t ordinal);
+                         const native_order::CommittedExecutionFacts& facts, uint64_t ordinal,
+                         bool open_activation_grant);
     native_order::SubmitResult submit_with_surface(
             BacktestEngine& engine, const native_order::Request& request,
             native_order::CommandSurface surface);
@@ -1545,6 +1631,19 @@ private:
     bool pre_open_birth_eligible(const native_order::RequestHandle&,
                                  const NativeDriverPoint&) const noexcept;
     void record_pre_open_birth(const native_order::Request&, const native_order::RequestHandle&);
+    // The open activation grant of one handle at one point (begin_open_
+    // activation): true only for a handle recorded under the scope, at the
+    // exact Open point the scope began at -- ordinal, effective time and phase.
+    // It is a separate list from pre_open_births_ and leaves that one's
+    // Market/Immediate meaning alone. The bool every core call that tests a
+    // birth gate is handed; false whenever no scope ever recorded a handle.
+    bool open_activation_granted(const native_order::RequestHandle&,
+                                 const NativeCoordinate&) const noexcept;
+    // Records the handle a submit or replace left live while the scope is open,
+    // whatever its trigger kind; a no-op outside the scope.
+    void record_activation_birth(BacktestEngine&, const native_order::RequestHandle&);
+    // Drops one handle's grant; a no-op for a handle holding none.
+    void revoke_activation_birth(const native_order::RequestHandle&);
     void note_committed_events(const native_order::EventRange& events) noexcept;
     void note_cohort_receipts() noexcept;
     void verify_closed_rows(const BacktestEngine& engine) const noexcept;
@@ -1606,6 +1705,14 @@ private:
     uint64_t pre_open_birth_point_ordinal_ = 0;
     int64_t pre_open_birth_time_ms_ = 0;
     std::vector<native_order::RequestHandle> pre_open_births_;
+    // The open activation scope (begin_open_activation). open_activation_scope_
+    // is call-stack state, never folded; the point and the handles recorded
+    // under the scope are durable until the Open's match ends, and fold into
+    // the continuation hash only while a handle is held.
+    bool open_activation_scope_ = false;
+    uint64_t activation_birth_point_ordinal_ = 0;
+    int64_t activation_birth_time_ms_ = 0;
+    std::vector<native_order::RequestHandle> activation_births_;
     std::vector<AppliedNotification> applied_notifications_;
     std::size_t notification_head_ = 0;
     bool processing_input_ = false;
@@ -1937,6 +2044,327 @@ private:
     bool settlement_carry_ = true;
     uint64_t carried_settlements_ = 0;
     uint64_t settlement_generation_ = 0;
+
+public:
+    // The selected-window query fence (pineforge/query_refusal.hpp): whether
+    // `engine` must refuse broker_state_hash(), stream_state_hash() and the two
+    // C exports that wrap them. It reads the engine's execution slot and, for a
+    // slot with selected provenance (`native` false), the open flag below --
+    // nothing else: no bound(), no execution_consumer() (which would create a
+    // consumer), no virtual, no hook, no allocation. `native` true is no
+    // selected-run provenance and is never closed. A selected engine is closed
+    // unless its current consumer holds positive open evidence, so a copy, which
+    // loses the consumer, reads closed and never reopens as OFF. Query and
+    // report-control eligibility only; no hash folds it.
+    static bool selected_query_closed(const BacktestEngine& engine) noexcept;
+
+    // The reentry barrier of a report read, asked by BacktestEngine::fill_report
+    // BEFORE its rows_are_current gate. A report read from inside a capture or
+    // an observer call (the epoch's `dispatching` is held) is refused: the
+    // helper latches dispatch_reentry_refused, writes the empty report whole and
+    // answers true, so no present_report recurses and the first cause stands. It
+    // answers false for every other read, including every OFF engine and a
+    // copied value. It reads the slot's pointer in place, allocates nothing and
+    // never creates a consumer. The observation getter is not a report read and
+    // stays allowed inside the dispatch.
+    static bool refuse_report_in_dispatch(const BacktestEngine& engine,
+                                          ReportC* out) noexcept;
+
+    // The selected-window report, asked by BacktestEngine::fill_report right
+    // after its rows_are_current gate. False when the caller must fill the report
+    // exactly as before: an OFF engine, a selected run still admitted-open, and a
+    // handle whose latest generation was admitted with neither a window nor an
+    // observer. True when the generation behind the engine is closed -- a
+    // selected window that has sealed, or a generation admitted with an observer
+    // (a window or not) that has sealed -- with `*out` written whole: the empty
+    // report (every array NULL, every count zero, never freed) unless the
+    // engine's own bound consumer holds a captured presentation whose results are
+    // open, which a failed, aborted or observer-faulted generation never does, so
+    // no present_report runs after any boundary. Then the capture is deep-copied
+    // into a local report, only the output-only suffix runs over it (metrics,
+    // security diagnostics, trace, recorded hashes: engine code that is handed
+    // no host pointer and dispatches nothing virtual), and the finished report
+    // is published by one struct assignment, so a throw frees the local and
+    // leaves `*out` alone. Repeated reads reuse the capture. It reads the slot's
+    // pointer in place and never creates a consumer: a copied value, which lost
+    // its consumer, reads empty.
+    static bool fill_selected_report(const BacktestEngine& engine, ReportC* out);
+
+    // The private bridges behind the four C accessors of
+    // pineforge/execution_observer.h and pineforge/selected_window.h. The free
+    // functions native_set_execution_observer_v1, native_execution_observation_v1,
+    // native_set_selected_window_v1 and native_selected_window_counts_v1 of this
+    // epoch delegate here, so the C shims neither allocate nor catch. Each one
+    // validates its raw pointers, struct_size and version before it reads
+    // another field or changes anything, and answers -1 for a failure of that
+    // kind: a null engine or output, a wrong size or version, a null
+    // before_results, or window bounds outside T < E within +-(2^53 - 1).
+    //
+    // A getter reads the engine's execution slot in place: it creates no
+    // consumer, calls no host code, builds its answer in a local and writes the
+    // caller's output once, whole, on success; a refusal leaves that output
+    // alone. execution_observation_v1 answers a fresh snapshot (struct_size and
+    // version set, everything else zero) when no consumer is bound, and is
+    // allowed inside a dispatch. selected_window_counts_v1 answers 0 only while
+    // the latest attempt owns successful selected results, and -2 otherwise,
+    // with no consumer bound included.
+    //
+    // A setter answers -2 for an execution contract other than the 2 that
+    // BacktestEngine::execution_contract() reports, -3 for a consumer that is
+    // busy (selected_epoch_busy) and -4 when a descriptor needs a consumer and
+    // none can be allocated. It copies or clears only its pending descriptor and
+    // registration flag (never phase_observed or admitted_selected), and a
+    // refusal changes nothing: the first cause, the run failure record and the
+    // slot's provenance included. A null descriptor with no consumer bound is
+    // accepted without allocating one. No exception leaves any of them.
+    static int set_execution_observer_v1(BacktestEngine* engine,
+                                         const pf_execution_observer_v1* observer) noexcept;
+    static int execution_observation_v1(const BacktestEngine* engine,
+                                        pf_execution_observation_v1* out) noexcept;
+    static int set_selected_window_v1(BacktestEngine* engine,
+                                      const pf_selected_window_config_v1* config) noexcept;
+    static int selected_window_counts_v1(const BacktestEngine* engine,
+                                         pf_selected_window_counts_v1* out) noexcept;
+
+    // The source adapter's read of the selected window, never a C export: the
+    // pending configuration (what the next admitted generation will take, read
+    // at prepare_native_begin) and the admitted one (what the running generation
+    // took, read inside the adapter's callbacks). Each reads the slot's pointer
+    // in place and copies the configuration to *out only when it exists,
+    // answering true; a null `out`, no consumer or an unset configuration
+    // answers false and leaves *out alone. No allocation, callback, mint,
+    // validation or mutation, and a true answer does not make a run admitted.
+    static bool selected_window_pending(const BacktestEngine& engine,
+                                        pf_selected_window_config_v1* out) noexcept;
+    static bool selected_window_admitted(const BacktestEngine& engine,
+                                         pf_selected_window_config_v1* out) noexcept;
+
+    // Frees the presentation capture (drop_presentation).
+    ~NativeExecutionConsumer() override;
+
+private:
+    // The lifecycle primitives, called only on `engine`'s own bound consumer.
+    // begin_admitted runs once admission has accepted the run and before its
+    // first execution hook, writes the slot's provenance (`native` is
+    // !selected) and this consumer's open flag together, and is never reached
+    // by a refused begin or configure. seal runs when the run ends Completed,
+    // Failed or Aborted: it clears the flag and leaves provenance alone, so a
+    // selected engine reads closed from then on.
+    void selected_query_begin_admitted(BacktestEngine& engine, bool selected) noexcept;
+    void selected_query_seal() noexcept;
+    // Positive evidence that this consumer's selected run is open. Never
+    // hashed, never a broker or trading-state input. Declared last so no member
+    // the consumer reads at every point changes offset.
+    bool selected_open_ = false;
+    // The presentation capture of a selected run. A selected success tail calls
+    // capture_presentation once, before the seal: it builds a local report with
+    // the trades, the nine diagnostic scalars and the equity copy -- the input
+    // BacktestEngine::present_report takes, in the order fill_report gives it --
+    // calls that virtual exactly once, frees the local if anything throws, and
+    // moves it into presentation_ only on success (replacing, and so freeing, any
+    // earlier capture), together with the equity length it took before that call
+    // (presentation_metric_equity_len_). Nothing after present_report is
+    // captured: the metrics, security diagnostics, trace and recorded hashes are
+    // output-only and run after the seal, in fill_selected_report. The terminal
+    // helper (terminal_success) is its one caller, under the epoch's dispatch
+    // barrier.
+    //
+    // For a selected generation the equity copy is the window's own curve, built
+    // here before the one presentation hook: the engine's recorded observations
+    // labelled in [T, E), in the order they were recorded, behind the anchor
+    // (report::build_selected_equity_curve), handed to the local report by one
+    // owned-array transfer. Their count M must equal the native window script
+    // count, and a position, fill or account change before T is a failure, never
+    // filtered out; each is a coded engine_invariant thrown before the hook.
+    void capture_presentation(BacktestEngine& engine);
+    // Frees and zeroes the capture and its metric equity length and closes both
+    // flags. The destructor calls it, and the selected lifecycle will at
+    // admission, so a new generation never inherits an old capture.
+    void drop_presentation() noexcept;
+    // The capture. Its arrays are the ones BacktestEngine::free_report deletes
+    // (new TradeC[] / new pf_equity_point_t[]), and it is freed only through it.
+    ReportC presentation_{};
+    // The equity length the metrics read: the engine's equity vector size taken
+    // before present_report ran (fill_metrics_section's `n`), which a
+    // presentation may leave behind in presentation_.equity_curve_len, the length
+    // a report reader sees. Published with the capture, only once the capture
+    // succeeded, and zeroed with it; the assembly never reads the engine's vector
+    // for it. A selected capture's is M + 1: the window anchor and its M
+    // observations. Its observation count, presentation_metric_observations_,
+    // is declared with the selected report facts at the end of the members.
+    int64_t presentation_metric_equity_len_ = 0;
+    bool presentation_ready_ = false;
+    // Whether the capture may be read: granted only after the execution observer
+    // has validated, and only by the lifecycle that owns the seal. Report-control
+    // state like selected_open_: never hashed, never a broker or trading-state
+    // input. Declared last, like the members above, so no member the consumer
+    // reads at every point changes offset.
+    bool selected_results_open_ = false;
+    // The setters' shared gate (set_execution_observer_v1 and
+    // set_selected_window_v1), run once their descriptors validated: -2 for an
+    // execution contract other than 2, then -3 when a bound consumer is busy.
+    // With no consumer bound it binds one through the engine's own
+    // execution_consumer() only when `bind_missing` (a descriptor is to be
+    // stored), answering -4 if that allocation throws; without it the gate
+    // answers 0 and leaves *out null, so a clear of nothing allocates nothing.
+    // On 0 a nonnull *out is the consumer to write. Nothing is written here.
+    static int gate_selected_setter(BacktestEngine* engine, bool bind_missing,
+                                    NativeExecutionConsumer** out) noexcept;
+    // Whether a setter must refuse as nonquiescent: the consumer is preparing a
+    // begin, inside a callback or an input, in an attempt call, running, held
+    // by a dispatch, or last observed Executing or Capturing (phase 1 or 2). A
+    // persisted Sealed or Results phase alone is not busy. Reads only.
+    bool selected_epoch_busy() const noexcept;
+    // The observer and selected-window bookkeeping (native_selected_epoch.hpp).
+    // Report and control state like selected_open_: never hashed, never a broker
+    // or trading-state input. Declared last, like the members above, so no
+    // member the consumer reads at every point changes offset.
+    NativeSelectedEpoch selected_epoch_{};
+    // The host's opaque state (adopt_host_state): dropped by the reset in
+    // begin_ready, which a begin reaches only after its final pre-host check has
+    // passed (see host_state()). Never read, hashed or recorded by the consumer.
+    // Declared last, like the members above, so no member the consumer reads at
+    // every point changes offset.
+    std::unique_ptr<NativeHostState> host_state_;
+    // The selected report's private facts, declared after every member above so
+    // none of them changes offset. Report bookkeeping like selected_epoch_: never
+    // hashed, never a broker or trading-state input, and no host can write them.
+    // The observation count the equity block divides exposure by, held beside
+    // presentation_metric_equity_len_ and apart from the presented report in the
+    // same way: M for a selected capture, the length itself for every other.
+    // Published and zeroed with the capture.
+    int64_t presentation_metric_observations_ = 0;
+    // A selected generation's buy-and-hold facts, written beside the native
+    // input count (count_selected_input) and reset at admission: the open of
+    // the first primary input at or after T and the close of the latest one. NaN
+    // until a window input is consumed, so an empty selected coverage never
+    // borrows a pre-roll price.
+    bool selected_has_window_input_ = false;
+    double selected_first_open_ = std::numeric_limits<double>::quiet_NaN();
+    double selected_last_close_ = std::numeric_limits<double>::quiet_NaN();
+
+    // The selected epoch's lifecycle: the admission, terminal and exit halves
+    // that write selected_epoch_.observation. The nine public entries are their
+    // only callers (run_simple, run_tf, run_rich, stream_begin, stream_push_bar,
+    // stream_push_tick, stream_push_ticks, stream_advance_time, stream_end), and
+    // begin_ready admits.
+    //
+    // A handle is tracked when a window or an observer is pending, or once it has
+    // minted an attempt or a generation (a counter is nonzero, and stays so).
+    // Every path below is gated on it: a handle that never was opted in keeps
+    // its callbacks, their order and its rendered texts exactly as before.
+    bool selected_epoch_tracked() const noexcept {
+        return selected_epoch_.window_configured || selected_epoch_.observer_registered
+            || selected_epoch_.attempt_counter != 0 || selected_epoch_.generation_counter != 0;
+    }
+
+    // The exit half, opened FIRST by every public entry, before AttemptScope, so
+    // it is destroyed after the AttemptScope and every pump and callback frame
+    // have unwound. The constructor records, before the entry runs anything,
+    // whether the handle is tracked, whether this call is nested under an
+    // attempt, a begin, a callback, an input or a dispatch (meaningful for a
+    // tracked handle only), and std::uncaught_exceptions(). `allow_live` lets a
+    // NORMAL return that leaves the run Running keep its generation open: true
+    // for stream_begin and the pushes and the time advance, false for the batch
+    // runs and stream_end. The destructor is noexcept and renders, dispatches,
+    // allocates and moves a NativeRunSpec never. It does nothing for an untracked
+    // handle or a nested call. Otherwise it closes an epoch that is STILL
+    // Executing or Capturing (close_open_epoch_at_exit) and leaves a Sealed or
+    // Results one alone, so a refused attempt that merely latched NativeFailed
+    // before admission never rewrites an earlier generation.
+    class EntryExitGuard {
+        NativeExecutionConsumer& c_;
+        BacktestEngine& engine_;
+        const bool tracked_;
+        const int uncaught_;
+        const bool nested_;
+        const bool allow_live_;
+    public:
+        // Inline: the stream pushes are per-input entries, and an untracked
+        // handle must pay only these loads.
+        EntryExitGuard(NativeExecutionConsumer& c, BacktestEngine& engine,
+                       bool allow_live) noexcept
+            : c_(c), engine_(engine), tracked_(c.selected_epoch_tracked()),
+              uncaught_(tracked_ ? std::uncaught_exceptions() : 0),
+              nested_(tracked_ && (c.in_attempt_call_ || c.preparing_begin_ || c.in_callback_
+                                   || c.processing_input_ || c.selected_epoch_.dispatching)),
+              allow_live_(allow_live) {}
+        ~EntryExitGuard() {
+            if (!tracked_ || nested_) return;
+            c_.close_open_epoch_at_exit(engine_, std::uncaught_exceptions() > uncaught_,
+                                        allow_live_);
+        }
+        EntryExitGuard(const EntryExitGuard&) = delete;
+        EntryExitGuard& operator=(const EntryExitGuard&) = delete;
+        bool nested() const noexcept { return nested_; }
+    };
+    // The reentry barrier of a public entry, checked after the guard and BEFORE
+    // AttemptScope in the four begin entries and before stream admission in the
+    // other five: while the epoch's `dispatching` is held (a capture or an
+    // observer call) it latches dispatch_reentry_refused and answers true, and
+    // the entry returns without an AttemptScope, a cache write, clear_rendered or
+    // a provider callback. rows_current_ and batch_current_ are not touched.
+    bool refuse_dispatch_reentry() const noexcept {
+        if (!selected_epoch_.dispatching) return false;
+        selected_epoch_.dispatch_reentry_refused = true;
+        return true;
+    }
+    // Mints the latest attempt serial once per outermost batch-run or
+    // stream-begin entry of a tracked handle, right after AttemptScope opens:
+    // attempt_generation 0 and outcome Refused until admission, owner_serial
+    // unchanged. A call over a live stream is a later attempt, not a new
+    // generation. At UINT64_MAX it refuses (engine_invariant, rendered here)
+    // before the provider is dispatched or anything is reset, and never wraps.
+    // False means the entry must return.
+    bool mint_attempt(BacktestEngine& engine, bool nested);
+    // Admission, called by begin_ready right after reset_run_state and the
+    // rows_current_/batch_current_ restore: drops the old capture, copies the
+    // pending window and the observer flag into the admitted state, mints the
+    // generation, makes the latest attempt its owner and opens the epoch
+    // (Executing, fault None, Live, boundary not delivered, counts reset), then
+    // tells the query fence. Only a tracked handle does anything.
+    void admit_selected_generation(BacktestEngine& engine) noexcept;
+    // The terminal-success helper: the last step of the four success tails
+    // (run_simple, run_tf, run_rich, stream_end), after verify_closed_rows and
+    // inside their try arms. Nothing for an epoch that is not Executing. For a
+    // generation with a window or an observer it captures the presentation once
+    // under the dispatch barrier, rechecks the abort, the first cause and the
+    // reentry latch, seals, calls the observer once and validates its receipt;
+    // only then does the phase become Results and the capture readable. A
+    // failure at any step latches the run, closes the epoch (Execution before
+    // the seal, AfterExecution after) and leaves no capture. `operation` is the
+    // entry's own (Input for the batch runs, Stream for stream_end).
+    void terminal_success(BacktestEngine& engine, NativeFailureOperation operation);
+    // The observer call and its frozen receipt contract (execution_observer.h).
+    // True when the receipt validated and boundary_delivered is 1. False after it
+    // has latched the failure, closed the epoch AfterExecution and rendered; an
+    // earlier cause keeps its code and text.
+    bool call_execution_observer(BacktestEngine& engine, NativeFailureOperation operation);
+    // Closes the open epoch as failed: query evidence sealed, capture dropped,
+    // phase Sealed, `fault_stage`, boundary not delivered, and the latest
+    // attempt's outcome Aborted (a recoverable abort) or Failed -- only when
+    // that attempt owns the epoch. Never renders or allocates.
+    void close_epoch_failed(std::uint32_t fault_stage) noexcept;
+    // The destructor's work (EntryExitGuard), also noexcept. A defensive close
+    // with no failure latched and no error text sets the run failure record to
+    // engine_unclassified_error with empty text, which failure_code_of reads, so
+    // the closed generation never reports success.
+    void close_open_epoch_at_exit(BacktestEngine& engine, bool unwinding,
+                                  bool allow_live) noexcept;
+    // The tracked catch arms of the nine entries. A tracked handle restores
+    // processing_input_ (false at every try's entry) and keeps a failure that is
+    // already latched -- its code and text stay -- where an untracked handle runs
+    // the two statements it always ran. fail_unclassified is the catch (...) arm
+    // for a tracked handle: engine_unclassified_error. An untracked handle's
+    // catch (...) rethrows.
+    void fail_from_exception(BacktestEngine& engine, NativeFailureOperation operation,
+                             const std::exception& error);
+    void fail_unclassified(BacktestEngine& engine, NativeFailureOperation operation);
+    // The two report-routing reads of fill_selected_report. A generation that
+    // was admitted with an observer and has closed (Sealed or Results), and a
+    // capture that may be read (Results, no fault, ready and open).
+    bool observed_epoch_sealed() const noexcept;
+    bool capture_readable() const noexcept;
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {

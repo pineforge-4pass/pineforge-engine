@@ -1999,10 +1999,13 @@ void PineExecutionAdapter::suspend_coof_declined_reversal_at_open(
 
 void PineExecutionAdapter::hold_reversal_pair_brackets(const SourceId& from_entry) {
     const auto point = detail::callback_point(require_host());
-    if (!point) return;
+    // The cause's ordinal is the kernel's own event number, the live frame's even
+    // where `point` is a retained one being replayed.
+    const auto live = detail::live_callback_point(require_host());
+    if (!point || !live) return;
     const auto domain = config_.calc_on_order_fills ? exit_legs::Domain::FillRecalc
                                                     : exit_legs::Domain::Ordinary;
-    const exit_legs::Frame cause{point->decision.coordinate.ordinal,
+    const exit_legs::Frame cause{live->decision.coordinate.ordinal,
         point->decision.coordinate.interval_index, domain, exit_legs::Phase::Observation};
     // As in suspend_brackets_for_reversal: no erased lifecycle is read again.
     PINEFORGE_AUDIT_PLACEMENT_SCAN(placement_,
@@ -2062,7 +2065,10 @@ void PineExecutionAdapter::retire_cancelled_exits(
         const SourceId* id,
         const std::vector<std::pair<std::uint64_t, std::uint64_t>>& cancelled) {
     const auto point = detail::callback_point(require_host());
-    if (!point) return;
+    // The sweep's event ordinal below is the kernel's own, the live frame's even
+    // where `point` is a retained one being replayed (the bar stays `point`'s).
+    const auto live = detail::live_callback_point(require_host());
+    if (!point || !live) return;
     const auto domain = config_.calc_on_order_fills ? exit_legs::Domain::FillRecalc
                                                     : exit_legs::Domain::Ordinary;
     const auto retire_legs = [&](PlacementSnapshot& candidate, std::uint64_t event) {
@@ -2095,7 +2101,7 @@ void PineExecutionAdapter::retire_cancelled_exits(
     for (auto row : placement_) {
         auto& candidate = row.second;
         if (id && candidate.source_id != *id) continue;
-        retire_legs(candidate, point->decision.coordinate.ordinal);
+        retire_legs(candidate, live->decision.coordinate.ordinal);
     }
 }
 
@@ -3225,7 +3231,9 @@ bool PineExecutionAdapter::core_sizing_price_matches(
         const PineSizingSnapshot& sizing, bool is_long) const {
     const double tick = staged_.syminfo.mintick;
     if (!finite_positive(tick) || !finite_positive(sizing.price)) return false;
-    const auto point = detail::callback_point(require_host());
+    // The core freezes at its own live frame, never at a retained one a replay
+    // is reading, so this prediction reads the live point.
+    const auto point = detail::live_callback_point(require_host());
     if (!point || !finite_positive(point->price)) return false;
     // The core freezes the quotient at the FX of the acceptance coordinate (a
     // script calculation's coordinate is the next bar's open); the source
@@ -21843,6 +21851,14 @@ void PineExecutionAdapter::order_open_marketable_limit_entries(
 
 void PineExecutionAdapter::apply_terminal_explicit_market_policy(
         const NativeDecisionContext& context) {
+    apply_terminal_explicit_market_policy(context, true);
+}
+
+// With `execute_now` false the pass only submits: the reconciled entries stay
+// working for the matcher, which fills them where a source replay of the last
+// pre-T bar opens. The cancellations and re-submissions are the same either way.
+void PineExecutionAdapter::apply_terminal_explicit_market_policy(
+        const NativeDecisionContext& context, bool execute_now) {
     if (!config_.process_orders_on_close
         || config_.pyramiding != 0 || !modeled_input()) {
         return;
@@ -21988,8 +22004,10 @@ void PineExecutionAdapter::apply_terminal_explicit_market_policy(
             replacement_key);
         if (accepted) {
             simulated_sign = requested_sign;
-            (void)require_host().execute_current(
-                {*accepted, NativeCurrentPriceRule::NearestTick});
+            if (execute_now) {
+                (void)require_host().execute_current(
+                    {*accepted, NativeCurrentPriceRule::NearestTick});
+            }
         }
     }
 }
@@ -26228,6 +26246,32 @@ void PineExecutionAdapter::set_risk_max_intraday_loss(double value, bool percent
     if (percent) risk_.max_intraday_loss_percent = true;
 }
 void PineExecutionAdapter::set_risk_max_position_size(double value) noexcept { risk_.max_position_size = value; }
+PineReplayRiskConfig PineExecutionAdapter::capture_replay_risk_config() const noexcept {
+    PineReplayRiskConfig snapshot;
+    snapshot.direction = risk_.direction;
+    snapshot.max_cons_loss_days = risk_.max_cons_loss_days;
+    snapshot.max_drawdown = risk_.max_drawdown;
+    snapshot.max_drawdown_percent = risk_.max_drawdown_percent;
+    snapshot.max_intraday_loss = risk_.max_intraday_loss;
+    snapshot.max_intraday_loss_percent = risk_.max_intraday_loss_percent;
+    snapshot.max_position_size = risk_.max_position_size;
+    snapshot.cap_attachment = cap.attachment();
+    snapshot.cap_configuration = cap.configuration();
+    snapshot.cap_declared = cap.declared();
+    return snapshot;
+}
+void PineExecutionAdapter::restore_replay_risk_config(
+    const PineReplayRiskConfig& snapshot) noexcept {
+    risk_.direction = snapshot.direction;
+    risk_.max_cons_loss_days = snapshot.max_cons_loss_days;
+    risk_.max_drawdown = snapshot.max_drawdown;
+    risk_.max_drawdown_percent = snapshot.max_drawdown_percent;
+    risk_.max_intraday_loss = snapshot.max_intraday_loss;
+    risk_.max_intraday_loss_percent = snapshot.max_intraday_loss_percent;
+    risk_.max_position_size = snapshot.max_position_size;
+    cap.restore_replay_configuration(snapshot.cap_attachment, snapshot.cap_configuration,
+                                     snapshot.cap_declared);
+}
 void PineExecutionAdapter::set_margin_call_enabled(bool enabled) noexcept {
     source_margin_call_enabled_ = enabled;
 }

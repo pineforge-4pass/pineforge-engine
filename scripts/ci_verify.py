@@ -318,7 +318,7 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #      tape converter, the loader, the harness's syminfo-metadata transport)
 # Both register in release too. 300 registered, 299 run after parser removal: the WebSocket row
 # still skips on a system libcurl. Lane SM-E1's rows follow EXCLUDED_REGISTERED_MIN below.
-KERNEL_MIN_TESTS = 305
+KERNEL_MIN_TESTS = 325
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -592,7 +592,7 @@ KERNEL_MIN_TESTS = 305
 #   +1 FIX-E1E2 test_aggregated_admission_receipt_tapes (an aggregated
 #               chart's admission receipts in their command's bar space)
 # No release row skips, so 792 registered is 792 run (SM-E1: below EXCLUDED_REGISTERED_MIN).
-RELEASE_MIN_TESTS = 799
+RELEASE_MIN_TESTS = 895
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
@@ -641,7 +641,7 @@ ADR_RULED_TEXTS_MIN = 59
 # counted the same way; 773/773/782 with lane FIX-E1E2's two rows of
 # RELEASE_MIN_TESTS in each, counted the same way.
 # An excluded run must still discover at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 780, 'sanitizers': 779, 'native': 789}
+EXCLUDED_REGISTERED_MIN = {'debug': 876, 'sanitizers': 867, 'native': 963}
 # Lane SM-E1 (recorded outputs, docs/outputs.md) raises the three floors
 # above, its comments kept here so that no line cited by line number moves.
 # Counted with ctest -N on the lane's tree:
@@ -661,6 +661,41 @@ EXCLUDED_REGISTERED_MIN = {'debug': 780, 'sanitizers': 779, 'native': 789}
 #   EXCLUDED_REGISTERED_MIN 780/779/789 = 773/773/782 plus the seven, counted
 #     the same way; the sanitizers profile builds no module that loads into
 #     the interpreter, so it registers six of them.
+# The 1.5.0-rc.1 selected-window backtests add fifteen rows,
+# counted with ctest -N, configure only, on 873b25da and on 9f53a56ab: each
+# profile configured with the definitions this file gives it, the runner-built
+# ones with the pinned curl 8.14.1 install (--curl-dir) and the corpus
+# submodule at its gitlink b40aa8ec, which both commits share:
+#   +1 test_compile_inventory_pipeline
+#   +1 test_request_feed_inventory_admission
+#   +1 test_run_execution_observer
+#   +1 test_run_json_selected_window
+#   +1 test_run_phase_transport
+#   +1 test_selected_primary_plan
+#   +1 test_selected_production_routes
+#   +1 test_selected_quote_seal
+#   +1 test_selected_report_view
+#   +1 test_selected_retained_count
+#   +1 test_selected_window_native_counts
+#   +1 test_selected_window_plan_c
+#   +1 test_selected_window_plan_python
+#   +1 test_selected_window_report_integration
+#   +1 test_selected_window_routes
+# All fifteen register in release, debug, sanitizers and native; the kernel
+# profile registers thirteen, every one but test_selected_quote_seal and
+# test_selected_window_routes, which are source-bound. The runner's own CTest
+# tree gains none, so its floor is unchanged. The other floors stood below the
+# counts registered at 873b25da (kernel 312 run, release 880,
+# debug/sanitizers/native 861/852/948), so each is set to its count at
+# 9f53a56ab, not summed onto its old value:
+#   RELEASE_MIN_TESTS 895 = the 880 rows registered at 873b25da plus the
+#     fifteen; no release row skips, so 895 registered is 895 run.
+#   KERNEL_MIN_TESTS 325 run = the 313 registered at 873b25da plus the
+#     thirteen = 326 registered, less the WebSocket row that still skips on a
+#     system libcurl.
+#   EXCLUDED_REGISTERED_MIN 876/867/963 = the 861/852/948 registered at
+#     873b25da plus the fifteen, counted before -LE (-LE slow selects
+#     847/838/934).
 # The ctest stage's bound. A full sanitizers run (push to main, a manual
 # dispatch, the maintainers' verification) ran out of its 30 minutes twice on
 # main's four-core runner before every row had finished, so it gets an hour; a

@@ -137,9 +137,9 @@ directly, so a Pine-layer symbol reaching one is a link error.
 
 The counts below include recorded outputs and describe the unreleased API targeted for 1.5.0; recorded outputs are not part of 1.4.0.
 
-The public C surface is **136 `PF_API` declarations** across two headers:
+The public C surface is **145 `PF_API` declarations** across the five installed headers that declare any:
 
-- `<pineforge/pineforge.h>` — **93**: 73 runtime implementations plus twenty
+- `<pineforge/pineforge.h>` — **94**: 74 of the 80 runtime implementations (the other six are declared in `execution_observer.h` and `selected_window.h`) plus twenty
   per-strategy generated exports (`strategy_declares_bar_magnifier` only in a
   script that declares `use_bar_magnifier = true`, the three recorded-outputs exports only in a module that records outputs). This is what a compiled
   strategy `.so` exports and what a harness calls. Older modules lack the six
@@ -149,8 +149,15 @@ The public C surface is **136 `PF_API` declarations** across two headers:
   direction, where the host drives the kernel itself. Submit, replace, cancel,
   execute, read the book, read the lots. Additive: no symbol, struct or
   behaviour of the first set changes.
+- `<pineforge/execution_observer.h>` and `<pineforge/selected_window.h>` —
+  three each: the six of the 80 runtime implementations that `pineforge.h`
+  does not declare (each header's version reader, the execution observer's
+  setter and observation reader, the selected window's setter and counts
+  reader).
+- `<pineforge/selected_window_plan.h>` — two: the selected-window planner's
+  version reader and `pf_plan_selected_primary_v1`.
 
-`scripts/check_c_abi_runtime.py` pins both symbol inventories (81 and 43);
+`scripts/check_c_abi_runtime.py` pins both symbol inventories (80 and 43);
 `scripts/check_native_c_api_surface.py` separately pins the host COVERAGE block.
 
 | Group | Symbols | Reference |

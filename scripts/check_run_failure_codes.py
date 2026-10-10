@@ -13,9 +13,12 @@ release it appeared in. The engine compiles two files generated from it:
 This guard fails closed when:
 
   1. the catalog is not canonical (sorted keys, one-space indent, a final
-     newline), names an unknown class or kind, a code or value outside
-     ^[a-z][a-z0-9_]{2,47}$ (a vocab value may also hold dots), a vocab arg
-     without values, or an arg kind/value list a code cannot carry;
+     newline), names an unknown class or kind, a code outside
+     ^[a-z][a-z0-9_]{2,47}$, a vocab value that is not lower snake_case
+     identifiers optionally joined by dots (VALUE, at most 64 characters), a
+     vocab arg without values, or an arg kind/value list a code cannot carry
+     (only a vocab arg carries values; string, nullable_string and scalar
+     take none);
   2. a generated file differs from what the catalog generates (run
      `--write-registry` and commit both);
   3. against the catalog of the newest release tag (`git show`), a code was
@@ -89,7 +92,7 @@ SCHEMA = "pineforge-run-failure-catalog/v1"
 CLASSES = ("strategy", "strategy_limit", "no_data", "symbol_metadata", "symbol_feeds",
            "input", "unsupported", "resource", "engine_fault")
 KINDS = ("identifier", "keyword", "vocab", "integer", "number", "pine_source", "symbol",
-         "timeframe")
+         "timeframe", "string", "nullable_string", "scalar")
 NAME = re.compile(r"^[a-z][a-z0-9_]{2,47}$")
 VALUE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
 CODE_FIELDS = {"class", "retryable", "args", "english", "since", "description",
@@ -742,6 +745,36 @@ def self_test() -> int:
     registry = render_registry(good)
     if '"one",' not in registry or "RunFailureArgKind::vocab, false, 0, 2" not in registry:
         failures.append("the registry is wrong")
+    # the generic text kinds and dotted vocab values
+    kinds_ok = json.loads(json.dumps(good))
+    kinds_ok["codes"]["alpha_code"]["args"].update({
+        "label": {"kind": "string"},
+        "session": {"kind": "nullable_string", "optional": True},
+        "value": {"kind": "scalar"},
+        "path": {"kind": "vocab", "values": ["counts.window_input_bars", "plain_value"]},
+    })
+    found = validate_catalog(kinds_ok, canonical(kinds_ok))
+    if found:
+        failures.append("the string, nullable_string and scalar kinds or a dotted vocab value "
+                        "were refused: " + repr(found))
+    for bad_value in ("Counts.window", "counts..window", "counts.", ".counts", "1counts", "a-b"):
+        bad = json.loads(json.dumps(kinds_ok))
+        bad["codes"]["alpha_code"]["args"]["path"]["values"] = [bad_value]
+        if not validate_catalog(bad):
+            failures.append(f"the vocab value {bad_value!r} passed")
+    bad = json.loads(json.dumps(kinds_ok))
+    bad["codes"]["alpha_code"]["args"]["label"]["values"] = ["x"]
+    if not validate_catalog(bad):
+        failures.append("values on a string arg passed")
+    bad = json.loads(json.dumps(kinds_ok))
+    bad["codes"]["alpha_code"]["args"]["label"]["kind"] = "text"
+    if not validate_catalog(bad):
+        failures.append("an unknown arg kind passed")
+    registry = render_registry(kinds_ok)
+    for needle in ("RunFailureArgKind::string, false", "RunFailureArgKind::nullable_string, true",
+                   "RunFailureArgKind::scalar, false"):
+        if needle not in registry:
+            failures.append("the registry lacks " + needle)
     # throw scan
     with tempfile.TemporaryDirectory(prefix="pf-run-failure-codes-") as temporary:
         root = Path(temporary)

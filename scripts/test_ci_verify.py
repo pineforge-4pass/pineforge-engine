@@ -1049,12 +1049,16 @@ class CAbiRuntimeInventory(unittest.TestCase):
             EXPECTED_PUBLIC_DECLARATIONS,
             EXPECTED_RUNTIME,
             EXPECTED_RUNTIME_IMPLEMENTATIONS,
+            RUNTIME_HEADERS,
             _pf_api_names,
         )
-        header = _pf_api_names(ROOT / 'include/pineforge/pineforge.h')
+        # The public count is read the way the script reads it: pineforge.h
+        # plus the two additive v1 headers.
+        header = [name for relative in RUNTIME_HEADERS
+                  for name in _pf_api_names(ROOT / 'include/pineforge' / relative)]
         runtime = _pf_api_names(ROOT / 'src/c_abi.cpp')
-        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 93)
-        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 73)
+        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 100)
+        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 80)
         self.assertEqual(len(EXPECTED_RUNTIME), EXPECTED_RUNTIME_IMPLEMENTATIONS)
         self.assertEqual(len(header), EXPECTED_PUBLIC_DECLARATIONS)
         self.assertEqual(len(header), len(set(header)))
@@ -1504,7 +1508,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
 
     def test_pr_exclusion_proves_registered_minus_labelled_equals_ran(self):
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
-                         {'debug': 780, 'sanitizers': 779, 'native': 789})
+                         {'debug': 876, 'sanitizers': 867, 'native': 963})
         for profile, registered in ci_verify.EXCLUDED_REGISTERED_MIN.items():
             with self.subTest(profile=profile):
                 code, summary, scripted, _ = self.run_profile(

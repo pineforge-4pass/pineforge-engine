@@ -117,6 +117,7 @@
 
 #include <pineforge/run_failure_codes.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <exception>
@@ -158,12 +159,22 @@ enum class RunFailureArgKind : std::uint8_t {
     pine_source,
     symbol,
     timeframe,
+    // The kinds below are appended, so every earlier kind keeps its value.
+    // string: text. nullable_string: text or a JSON null. scalar: text, an
+    // integer, a finite number, a boolean or a JSON null. None takes an array
+    // or an object.
+    string,
+    nullable_string,
+    scalar,
 };
 
 /// One typed argument as a raise site spells it. `name` is a literal; a text
 /// value is copied.
 struct RunFailureArg {
-    enum class Type : std::uint8_t { text, integer, number };
+    // boolean and null_value are appended, so the earlier values keep theirs. A
+    // boolean is held in `integer` (0 or 1) and serializes as true or false; a
+    // null_value holds nothing and serializes as null. Neither is ever a string.
+    enum class Type : std::uint8_t { text, integer, number, boolean, null_value };
     const char* name = "";
     Type type = Type::text;
     std::string text;
@@ -175,6 +186,16 @@ struct RunFailureArg {
     RunFailureArg(const char* arg_name, const char* value);
     RunFailureArg(const char* arg_name, std::string value)
         : name(arg_name), text(std::move(value)) {}
+    // A JSON null, spelled with the literal nullptr. A `const char*` variable
+    // that happens to be null still reads as the empty text, as it always did.
+    RunFailureArg(const char* arg_name, std::nullptr_t)
+        : name(arg_name), type(Type::null_value) {}
+    // A JSON true or false. Only an argument of exactly type bool takes it: no
+    // pointer or integer converts to a boolean here.
+    template <typename Boolean,
+              typename std::enable_if<std::is_same<Boolean, bool>::value, int>::type = 0>
+    RunFailureArg(const char* arg_name, Boolean value)
+        : name(arg_name), type(Type::boolean), integer(value ? 1 : 0) {}
     template <typename Integer,
               typename std::enable_if<std::is_integral<Integer>::value
                                       && !std::is_same<Integer, bool>::value, int>::type = 0>

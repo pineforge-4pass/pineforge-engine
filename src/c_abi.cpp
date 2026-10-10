@@ -17,6 +17,7 @@
  *     strategy_set_realtime_tail, strategy_set_probe_suppress_tail_logic,
  *     strategy_set_path_order, strategy_last_bar_dual_entry_path,
  *     strategy_set_broker_state_hash_recording, strategy_broker_state_hash,
+ *     strategy_state_query_status_v1,
  *     strategy_pending_orders_len, strategy_pending_order_get,
  *     strategy_pending_order_layout, strategy_pending_order_fill_qty,
  *     strategy_pending_order_level_resolved,
@@ -29,7 +30,10 @@
  *     pf_version_get/pf_version_string,
  *     pf_abi_version, strategy_execution_contract,
  *     strategy_configure_native_v1, strategy_configure_native_fx_curve_v1,
- *     strategy_configure_native_fx_curve_ext_v1 — the
+ *     strategy_configure_native_fx_curve_ext_v1,
+ *     pf_execution_observer_version, strategy_set_execution_observer_v1,
+ *     strategy_execution_observation_v1, pf_selected_window_version,
+ *     strategy_set_selected_window_v1, strategy_selected_window_counts_v1 — the
  *     authoritative list is EXPECTED_RUNTIME in
  *     scripts/check_c_abi_runtime.py, enforced by CI). The other
  *     `extern "C"` symbols listed in pineforge.h (strategy_create,
@@ -39,8 +43,11 @@
 
 // Include order is load-bearing: pineforge.h BEFORE engine.hpp keeps the
 // per-strategy declarations visible so definitions here are prototype-checked.
-// engine.hpp defines PINEFORGE_NO_STRATEGY_DECLS, which suppresses them.
+// engine.hpp defines PINEFORGE_NO_STRATEGY_DECLS, which suppresses them. The
+// two v1 headers follow pineforge.h for the same reason.
 #include <pineforge/pineforge.h>
+#include <pineforge/execution_observer.h>
+#include <pineforge/selected_window.h>
 #include <pineforge/engine.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
@@ -58,6 +65,16 @@ namespace pineforge {
 void clear_native_c_host_refusal_error(BacktestEngine* engine) noexcept;
 bool native_c_host_in_postrun_hook_frame(BacktestEngine* engine) noexcept;
 inline namespace engine_script_run_v19 { void native_stream_snapshot_report(BacktestEngine* engine, ReportC* out); }
+inline namespace engine_script_run_v19 { bool native_selected_query_closed(const BacktestEngine* engine) noexcept; }
+inline namespace engine_script_run_v19 {
+// The private bridges behind the execution observer and selected-window
+// exports at the end of this file. The native consumer defines them and owns
+// every null, size, version and state check; the exports only delegate.
+int native_set_execution_observer_v1(BacktestEngine*, const pf_execution_observer_v1*) noexcept;
+int native_execution_observation_v1(const BacktestEngine*, pf_execution_observation_v1*) noexcept;
+int native_set_selected_window_v1(BacktestEngine*, const pf_selected_window_config_v1*) noexcept;
+int native_selected_window_counts_v1(const BacktestEngine*, pf_selected_window_counts_v1*) noexcept;
+}
 }
 
 namespace {
@@ -568,10 +585,33 @@ PF_API void strategy_set_broker_state_hash_recording(pf_strategy_t s, int on) {
 
 /* ABI v4 live-runtime surface (task 6): the broker-state hash of the FINAL
  * state after the most recent run(), regardless of whether per-bar
- * recording was enabled. Returns 0 when @p s is NULL. */
+ * recording was enabled. Returns 0 when @p s is NULL, and 0 for a read the
+ * selected-window fence refuses (strategy_state_query_status_v1 names it):
+ * the C++ path throws that refusal, so it is prechecked here and never
+ * unwinds through C. A caller that needs a sealed selected run's terminal
+ * witness enables recording before the run and reads the last recorded row. */
 PF_API uint64_t strategy_broker_state_hash(pf_strategy_t s) {
     if (!s) return 0;
+    if (strategy_state_query_status_v1(s) != PF_STATE_QUERY_ALLOWED_V1) return 0;
     return static_cast<const pineforge::BacktestEngine*>(s)->broker_state_hash();
+}
+
+/* The current eligibility of both state queries on @p s (broker-state hash
+ * above, stream_state_hash below): the selected-window fence, read in place.
+ * NULL is INVALID_HANDLE, a handle whose selected window has sealed is
+ * SELECTED_WINDOW_AFTER_SEAL, every other handle is ALLOWED. A pure predicate
+ * on the handle: no allocation, no mutation, no host dispatch, and no touch of
+ * the last-error slot or the run's first cause. It is also the observable
+ * refusal of the report-only terminal-quote writers: strategy_set_syminfo_metadata
+ * (below) is void and pf_cabi_void swallows the SelectedWindowQueryAfterSeal the
+ * Pine host throws, before any store, for the two quote keys once the selected run
+ * has sealed, so a caller reads this status to learn that such a write stored
+ * nothing. */
+PF_API pf_state_query_status_v1_t strategy_state_query_status_v1(pf_strategy_t s) {
+    if (!s) return PF_STATE_QUERY_INVALID_HANDLE_V1;
+    return pineforge::native_selected_query_closed(static_cast<const pineforge::BacktestEngine*>(s))
+        ? PF_STATE_QUERY_SELECTED_WINDOW_AFTER_SEAL_V1
+        : PF_STATE_QUERY_ALLOWED_V1;
 }
 
 /* ABI v4 live-runtime surface (task 7, spec 3.6): the resting-order book
@@ -715,8 +755,13 @@ PF_API void strategy_stream_order_actions_clear(pf_strategy_t s) {
     if (s) static_cast<pineforge::BacktestEngine*>(s)->stream_order_actions_clear();
 }
 
+/* Returns 0 for NULL and for a read the selected-window fence refuses, the
+ * same precheck as strategy_broker_state_hash: the refusal is a C++ exception
+ * and never crosses this boundary. A broker-state row is not a stream-token
+ * value, so a refused read of this token leaves no recorded witness. */
 PF_API uint64_t strategy_stream_state_hash(pf_strategy_t s) {
     if (!s) return 0;
+    if (strategy_state_query_status_v1(s) != PF_STATE_QUERY_ALLOWED_V1) return 0;
     return static_cast<const pineforge::BacktestEngine*>(s)->stream_state_hash();
 }
 
@@ -844,7 +889,12 @@ PF_API void strategy_set_syminfo_pointvalue(pf_strategy_t s, double pointvalue) 
 
 /* Inject a fundamental/exchange metadata value (shares_outstanding_total,
  * recommendations_*, target_price_*, …) by Pine member name. Without an
- * injection the corresponding syminfo.* read returns na. NULL key ignored. */
+ * injection the corresponding syminfo.* read returns na. NULL key ignored.
+ * After a selected window's run has sealed, the Pine host refuses its two
+ * report-only quote keys (report_terminal_quote_time_ms, report_terminal_quote_close)
+ * by throwing SelectedWindowQueryAfterSeal before any store; this export keeps its
+ * void signature, swallows that exception and records nothing, and the refusal is
+ * observed through strategy_state_query_status_v1 (above). */
 PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
                                           double value) {
     pf_cabi_void([&] {
@@ -1168,6 +1218,87 @@ PF_API int strategy_outputs_constants_copy(pf_strategy_t s, double* out, int cap
         for (int i = 0; i < capacity && i < n; ++i) out[i] = engine->output_constant_value(i);
         return n;
     });
+}
+
+/* Execution observer and selected window, version 1 (execution_observer.h and
+ * selected_window.h). Natural alignment, fixed-width scalars, no packing. The
+ * sizes are the frozen LP64 numbers, and the observer descriptor holds two
+ * pointers, so these pins apply to 64-bit-pointer builds only. They pin the
+ * installed layouts and change none: a header edit that moves a size or an
+ * offset fails this build. */
+#if UINTPTR_MAX == UINT64_MAX
+static_assert(sizeof(pf_execution_boundary_v1) == 24, "pf_execution_boundary_v1 size moved");
+static_assert(sizeof(pf_boundary_receipt_v1) == 32, "pf_boundary_receipt_v1 size moved");
+static_assert(sizeof(pf_execution_observer_v1) == 24, "pf_execution_observer_v1 size moved");
+static_assert(sizeof(pf_execution_observation_v1) == 48, "pf_execution_observation_v1 size moved");
+static_assert(sizeof(pf_selected_window_config_v1) == 24, "pf_selected_window_config_v1 size moved");
+static_assert(sizeof(pf_selected_window_counts_v1) == 80, "pf_selected_window_counts_v1 size moved");
+static_assert(offsetof(pf_execution_boundary_v1, run_generation) == 8
+                  && offsetof(pf_execution_boundary_v1, attempt_serial) == 16,
+              "pf_execution_boundary_v1 field offset moved");
+static_assert(offsetof(pf_boundary_receipt_v1, run_generation) == 8
+                  && offsetof(pf_boundary_receipt_v1, frame_bytes) == 16
+                  && offsetof(pf_boundary_receipt_v1, handed_bytes) == 20
+                  && offsetof(pf_boundary_receipt_v1, export_requested) == 24
+                  && offsetof(pf_boundary_receipt_v1, reserved) == 28,
+              "pf_boundary_receipt_v1 field offset moved");
+static_assert(offsetof(pf_execution_observer_v1, context) == 8
+                  && offsetof(pf_execution_observer_v1, before_results) == 16,
+              "pf_execution_observer_v1 field offset moved");
+static_assert(offsetof(pf_execution_observation_v1, run_generation) == 8
+                  && offsetof(pf_execution_observation_v1, attempt_serial) == 16
+                  && offsetof(pf_execution_observation_v1, attempt_generation) == 24
+                  && offsetof(pf_execution_observation_v1, phase) == 32
+                  && offsetof(pf_execution_observation_v1, fault_stage) == 36
+                  && offsetof(pf_execution_observation_v1, attempt_outcome) == 40
+                  && offsetof(pf_execution_observation_v1, boundary_delivered) == 44,
+              "pf_execution_observation_v1 field offset moved");
+static_assert(offsetof(pf_selected_window_config_v1, start_ms) == 8
+                  && offsetof(pf_selected_window_config_v1, end_ms) == 16,
+              "pf_selected_window_config_v1 field offset moved");
+static_assert(offsetof(pf_selected_window_counts_v1, run_generation) == 8
+                  && offsetof(pf_selected_window_counts_v1, attempt_serial) == 16
+                  && offsetof(pf_selected_window_counts_v1, attempt_generation) == 24
+                  && offsetof(pf_selected_window_counts_v1, fed_input_bars) == 32
+                  && offsetof(pf_selected_window_counts_v1, fed_script_bars) == 40
+                  && offsetof(pf_selected_window_counts_v1, preroll_input_bars) == 48
+                  && offsetof(pf_selected_window_counts_v1, preroll_script_bars) == 56
+                  && offsetof(pf_selected_window_counts_v1, window_input_bars) == 64
+                  && offsetof(pf_selected_window_counts_v1, window_script_bars) == 72,
+              "pf_selected_window_counts_v1 field offset moved");
+#endif
+
+/* The version getters return 1. Every other export below hands its opaque
+ * handle to one private bridge, declared at the top of this file, and returns
+ * the bridge's code. The bridge owns every null, size, version and state check
+ * and the transactional output, so these exports validate, allocate, catch and
+ * relabel nothing and keep no state of their own. */
+PF_API uint32_t pf_execution_observer_version(void) { return 1; }
+
+PF_API int strategy_set_execution_observer_v1(
+        pf_strategy_t s, const pf_execution_observer_v1* observer) {
+    return pineforge::native_set_execution_observer_v1(
+        static_cast<pineforge::BacktestEngine*>(s), observer);
+}
+
+PF_API int strategy_execution_observation_v1(
+        pf_strategy_t s, pf_execution_observation_v1* out) {
+    return pineforge::native_execution_observation_v1(
+        static_cast<const pineforge::BacktestEngine*>(s), out);
+}
+
+PF_API uint32_t pf_selected_window_version(void) { return 1; }
+
+PF_API int strategy_set_selected_window_v1(
+        pf_strategy_t s, const pf_selected_window_config_v1* config) {
+    return pineforge::native_set_selected_window_v1(
+        static_cast<pineforge::BacktestEngine*>(s), config);
+}
+
+PF_API int strategy_selected_window_counts_v1(
+        pf_strategy_t s, pf_selected_window_counts_v1* out) {
+    return pineforge::native_selected_window_counts_v1(
+        static_cast<const pineforge::BacktestEngine*>(s), out);
 }
 
 } /* extern "C" */

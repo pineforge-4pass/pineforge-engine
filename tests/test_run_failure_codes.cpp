@@ -1281,17 +1281,542 @@ void check_code_args(RunFailureCode code, const std::string& name, const Json* a
             expect(spec.name + " outside its list", with({arg, "not_a_listed_value"}), invariant,
                    "{}");
             expect(spec.name + " as an integer", with({arg, std::int64_t{1}}), invariant, "{}");
+            expect(spec.name + " as a boolean", with({arg, true}), invariant, "{}");
+            expect(spec.name + " as a null", with({arg, nullptr}), invariant, "{}");
         } else if (spec.kind == "integer") {
             expect(spec.name + " as text", with({arg, "7"}), invariant, "{}");
             expect(spec.name + " as a number", with({arg, 7.5}), invariant, "{}");
+            expect(spec.name + " as a boolean", with({arg, true}), invariant, "{}");
+            expect(spec.name + " as a null", with({arg, nullptr}), invariant, "{}");
         } else if (spec.kind == "number") {
             expect(spec.name + " as text", with({arg, "1.5"}), invariant, "{}");
             expect(spec.name + " not finite",
                    with({arg, std::numeric_limits<double>::quiet_NaN()}), invariant, "{}");
+            expect(spec.name + " infinite",
+                   with({arg, std::numeric_limits<double>::infinity()}), invariant, "{}");
+            expect(spec.name + " as a boolean", with({arg, true}), invariant, "{}");
+            expect(spec.name + " as a null", with({arg, nullptr}), invariant, "{}");
+        } else if (spec.kind == "string") {
+            expect(spec.name + " as an integer", with({arg, std::int64_t{1}}), invariant, "{}");
+            expect(spec.name + " as a boolean", with({arg, true}), invariant, "{}");
+            expect(spec.name + " as a null", with({arg, nullptr}), invariant, "{}");
+        } else if (spec.kind == "nullable_string") {
+            expect(spec.name + " as an integer", with({arg, std::int64_t{1}}), invariant, "{}");
+            expect(spec.name + " as a boolean", with({arg, true}), invariant, "{}");
+            const RunFailureValue got = pineforge::make_run_failure(code, with({arg, nullptr}));
+            CHECK_EQ(at + spec.name + " as a null accepted", code_name(got.code), name);
+        } else if (spec.kind == "scalar") {
+            const auto accepts = [&](const std::string& what, RunFailureArg replacement) {
+                const RunFailureValue got =
+                    pineforge::make_run_failure(code, with(std::move(replacement)));
+                CHECK_EQ(at + spec.name + " as " + what + " accepted", code_name(got.code), name);
+            };
+            accepts("an integer", {arg, std::int64_t{-3}});
+            accepts("true", {arg, true});
+            accepts("false", {arg, false});
+            accepts("a null", {arg, nullptr});
+            accepts("a finite number", {arg, 2.5});
+            expect(spec.name + " as NaN", with({arg, std::numeric_limits<double>::quiet_NaN()}),
+                   invariant, "{}");
+            expect(spec.name + " as infinity",
+                   with({arg, std::numeric_limits<double>::infinity()}), invariant, "{}");
         } else {
             expect(spec.name + " as an integer", with({arg, std::int64_t{1}}), invariant, "{}");
+            expect(spec.name + " as a boolean", with({arg, true}), invariant, "{}");
+            expect(spec.name + " as a null", with({arg, nullptr}), invariant, "{}");
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// The selected-window vocabulary: the generic string, nullable_string and
+// scalar kinds, a boolean and a null written as JSON true/false/null (never as
+// strings), and the old kinds and codes keeping their bytes beside them. The
+// values here are written out, not read from the catalog, so a catalog edit
+// that changes a documented class or argument is caught.
+
+void wv_expect(const std::string& what, RunFailureCode code, const RunFailureArgs& args,
+               RunFailureCode want_code, const std::string& want_args) {
+    const RunFailureValue got = pineforge::make_run_failure(code, args);
+    CHECK_EQ(what + ": code", code_name(got.code), code_name(want_code));
+    CHECK_EQ(what + ": args", args_json(got), want_args);
+}
+
+void window_vocabulary_rows() {
+    using Code = RunFailureCode;
+    const Code invariant = Code::engine_invariant;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+
+    // The old kinds and types keep their values; the new ones are appended.
+    const auto number_of = [](auto value) { return std::to_string(static_cast<int>(value)); };
+    using Kind = pineforge::RunFailureArgKind;
+    using Type = RunFailureArg::Type;
+    CHECK_EQ("kind identifier", number_of(Kind::identifier), "0");
+    CHECK_EQ("kind keyword", number_of(Kind::keyword), "1");
+    CHECK_EQ("kind vocab", number_of(Kind::vocab), "2");
+    CHECK_EQ("kind integer", number_of(Kind::integer), "3");
+    CHECK_EQ("kind number", number_of(Kind::number), "4");
+    CHECK_EQ("kind pine_source", number_of(Kind::pine_source), "5");
+    CHECK_EQ("kind symbol", number_of(Kind::symbol), "6");
+    CHECK_EQ("kind timeframe", number_of(Kind::timeframe), "7");
+    CHECK_EQ("kind string", number_of(Kind::string), "8");
+    CHECK_EQ("kind nullable_string", number_of(Kind::nullable_string), "9");
+    CHECK_EQ("kind scalar", number_of(Kind::scalar), "10");
+    CHECK_EQ("type text", number_of(Type::text), "0");
+    CHECK_EQ("type integer", number_of(Type::integer), "1");
+    CHECK_EQ("type number", number_of(Type::number), "2");
+    CHECK_EQ("type boolean", number_of(Type::boolean), "3");
+    CHECK_EQ("type null_value", number_of(Type::null_value), "4");
+
+    // Every documented row: its name, class and retryable=false.
+    struct DocumentedRow {
+        RunFailureCode code;
+        const char* name;
+        RunFailureClass cls;
+    };
+    const DocumentedRow documented_rows[] = {
+        {Code::window_mode_unsupported, "window_mode_unsupported", RunFailureClass::unsupported},
+        {Code::window_request_invalid, "window_request_invalid", RunFailureClass::input},
+        {Code::window_range_invalid, "window_range_invalid", RunFailureClass::input},
+        {Code::window_preroll_out_of_range, "window_preroll_out_of_range", RunFailureClass::input},
+        {Code::window_legacy_flag_conflict, "window_legacy_flag_conflict", RunFailureClass::input},
+        {Code::window_calendar_unsupported, "window_calendar_unsupported",
+         RunFailureClass::unsupported},
+        {Code::window_boundary_unaligned, "window_boundary_unaligned", RunFailureClass::input},
+        {Code::window_feed_range_invalid, "window_feed_range_invalid", RunFailureClass::input},
+        {Code::window_input_cap_exceeded, "window_input_cap_exceeded", RunFailureClass::input},
+        {Code::window_no_observations, "window_no_observations", RunFailureClass::input},
+        {Code::window_prestart_state_violation, "window_prestart_state_violation",
+         RunFailureClass::engine_fault},
+        {Code::window_prestart_fill, "window_prestart_fill", RunFailureClass::engine_fault},
+        {Code::window_lineage_mismatch, "window_lineage_mismatch", RunFailureClass::input},
+        {Code::window_feed_identity_changed, "window_feed_identity_changed",
+         RunFailureClass::input},
+        {Code::window_report_mismatch, "window_report_mismatch", RunFailureClass::engine_fault},
+        {Code::report_shape_unsupported, "report_shape_unsupported", RunFailureClass::unsupported},
+        {Code::report_shape_request_invalid, "report_shape_request_invalid",
+         RunFailureClass::input},
+        {Code::results_digest_unsupported, "results_digest_unsupported",
+         RunFailureClass::unsupported},
+        {Code::report_platform_unavailable, "report_platform_unavailable",
+         RunFailureClass::engine_fault},
+        {Code::report_result_invalid, "report_result_invalid", RunFailureClass::engine_fault},
+        {Code::strategy_value_invalid, "strategy_value_invalid", RunFailureClass::strategy},
+    };
+    for (const DocumentedRow& row : documented_rows) {
+        CHECK_EQ(std::string("documented name ") + row.name, code_name(row.code), row.name);
+        CHECK_EQ(std::string("documented class of ") + row.name,
+                 class_name(pineforge::run_failure_code_class(row.code)), class_name(row.cls));
+        CHECK_EQ(std::string("documented retryable of ") + row.name,
+                 pineforge::run_failure_code_retryable(row.code) ? "true" : "false", "false");
+    }
+
+    // window_mode_unsupported: a required capability; the canonical timeframe and
+    // the pre-roll length are optional. The registry does not tie an optional
+    // argument to a capability (the trusted wrappers do), so each branch of the
+    // contract is shown to be expressible and nothing more.
+    wv_expect("chart timeframe", Code::window_mode_unsupported,
+              {{"capability", "selected_window_chart_timeframe"}, {"timeframe", "D"}},
+              Code::window_mode_unsupported,
+              R"({"capability":"selected_window_chart_timeframe","timeframe":"D"})");
+    wv_expect("feed timeframe", Code::window_mode_unsupported,
+              {{"capability", "selected_window_request_feed_timeframe"}, {"timeframe", "W"}},
+              Code::window_mode_unsupported,
+              R"({"capability":"selected_window_request_feed_timeframe","timeframe":"W"})");
+    wv_expect("incomplete inventory carries no token", Code::window_mode_unsupported,
+              {{"capability", "selected_window_request_feed_inventory"}},
+              Code::window_mode_unsupported,
+              R"({"capability":"selected_window_request_feed_inventory"})");
+    wv_expect("pre-roll length", Code::window_mode_unsupported,
+              {{"capability", "selected_window_preroll"}, {"requested", std::int64_t{5000}}},
+              Code::window_mode_unsupported,
+              R"({"capability":"selected_window_preroll","requested":5000})");
+    wv_expect("capability missing", Code::window_mode_unsupported,
+              {{"timeframe", "D"}}, invariant, "{}");
+    wv_expect("capability repeated", Code::window_mode_unsupported,
+              {{"capability", "a"}, {"capability", "b"}}, invariant, "{}");
+    wv_expect("undeclared argument", Code::window_mode_unsupported,
+              {{"capability", "a"}, {"token", "D"}}, invariant, "{}");
+    wv_expect("timeframe as an integer", Code::window_mode_unsupported,
+              {{"capability", "a"}, {"timeframe", std::int64_t{1}}}, invariant, "{}");
+    wv_expect("timeframe as a null", Code::window_mode_unsupported,
+              {{"capability", "a"}, {"timeframe", nullptr}}, invariant, "{}");
+    wv_expect("requested as text", Code::window_mode_unsupported,
+              {{"capability", "a"}, {"requested", "5000"}}, invariant, "{}");
+    wv_expect("requested as a boolean", Code::window_mode_unsupported,
+              {{"capability", "a"}, {"requested", true}}, invariant, "{}");
+
+    // window_calendar_unsupported: session is a nullable string.
+    const char* null_pointer = nullptr;
+    wv_expect("session null", Code::window_calendar_unsupported,
+              {{"session", nullptr}, {"timezone", "Etc/UTC"}}, Code::window_calendar_unsupported,
+              R"({"session":null,"timezone":"Etc/UTC"})");
+    wv_expect("session text", Code::window_calendar_unsupported,
+              {{"session", "0930-1600"}, {"timezone", "America/New_York"}},
+              Code::window_calendar_unsupported,
+              R"({"session":"0930-1600","timezone":"America/New_York"})");
+    wv_expect("a null const char* variable is still the empty text",
+              Code::window_calendar_unsupported,
+              {{"session", null_pointer}, {"timezone", "Etc/UTC"}},
+              Code::window_calendar_unsupported, R"({"session":"","timezone":"Etc/UTC"})");
+    wv_expect("session missing", Code::window_calendar_unsupported,
+              {{"timezone", "Etc/UTC"}}, invariant, "{}");
+    wv_expect("session as an integer", Code::window_calendar_unsupported,
+              {{"session", std::int64_t{0}}, {"timezone", "Etc/UTC"}}, invariant, "{}");
+    wv_expect("session as a boolean", Code::window_calendar_unsupported,
+              {{"session", false}, {"timezone", "Etc/UTC"}}, invariant, "{}");
+    wv_expect("timezone as a null", Code::window_calendar_unsupported,
+              {{"session", "x"}, {"timezone", nullptr}}, invariant, "{}");
+
+    // scalar: text, an integer, a finite number, true, false or null; the JSON
+    // literals are never strings.
+    const std::string shape = R"({"option":"curve_point_budget","value":)";
+    wv_expect("scalar true", Code::report_shape_request_invalid,
+              {{"option", "curve_point_budget"}, {"value", true}},
+              Code::report_shape_request_invalid, shape + "true}");
+    wv_expect("scalar false", Code::report_shape_request_invalid,
+              {{"option", "curve_point_budget"}, {"value", false}},
+              Code::report_shape_request_invalid, shape + "false}");
+    wv_expect("scalar null", Code::report_shape_request_invalid,
+              {{"option", "curve_point_budget"}, {"value", nullptr}},
+              Code::report_shape_request_invalid, shape + "null}");
+    wv_expect("scalar integer", Code::report_shape_request_invalid,
+              {{"option", "curve_point_budget"}, {"value", std::int64_t{2500}}},
+              Code::report_shape_request_invalid, shape + "2500}");
+    wv_expect("scalar number", Code::report_shape_request_invalid,
+              {{"option", "curve_point_budget"}, {"value", 1.5}},
+              Code::report_shape_request_invalid, shape + "1.5}");
+    wv_expect("scalar text", Code::report_shape_request_invalid,
+              {{"option", "curve_point_budget"}, {"value", "abc"}},
+              Code::report_shape_request_invalid, shape + "\"abc\"}");
+    wv_expect("scalar text that spells a literal stays text", Code::report_shape_request_invalid,
+              {{"option", "report_shape"}, {"value", "true"}}, Code::report_shape_request_invalid,
+              R"({"option":"report_shape","value":"true"})");
+    wv_expect("scalar NaN", Code::report_shape_request_invalid,
+              {{"option", "curve_point_budget"}, {"value", nan}}, invariant, "{}");
+    wv_expect("scalar infinity", Code::report_shape_request_invalid,
+              {{"option", "curve_point_budget"}, {"value", inf}}, invariant, "{}");
+    wv_expect("option outside its list", Code::report_shape_request_invalid,
+              {{"option", "report_policy"}, {"value", true}}, invariant, "{}");
+    wv_expect("option as a boolean", Code::report_shape_request_invalid,
+              {{"option", true}, {"value", true}}, invariant, "{}");
+    wv_expect("lineage scalars", Code::window_lineage_mismatch,
+              {{"actual", false}, {"expected", true}, {"field", "preroll_bars"}},
+              Code::window_lineage_mismatch,
+              R"({"actual":false,"expected":true,"field":"preroll_bars"})");
+    wv_expect("lineage field as a null", Code::window_lineage_mismatch,
+              {{"actual", 1}, {"expected", 2}, {"field", nullptr}}, invariant, "{}");
+
+    // integer and number reject the new types; number still takes an integer.
+    wv_expect("integer as text", Code::window_range_invalid,
+              {{"start_ms", "1"}, {"end_ms", 2}, {"fed_start_ms", 0}}, invariant, "{}");
+    wv_expect("integer as a boolean", Code::window_range_invalid,
+              {{"start_ms", true}, {"end_ms", 2}, {"fed_start_ms", 0}}, invariant, "{}");
+    wv_expect("integer as a null", Code::window_range_invalid,
+              {{"start_ms", nullptr}, {"end_ms", 2}, {"fed_start_ms", 0}}, invariant, "{}");
+    wv_expect("integer as a number", Code::window_range_invalid,
+              {{"start_ms", 1.5}, {"end_ms", 2}, {"fed_start_ms", 0}}, invariant, "{}");
+    wv_expect("range", Code::window_range_invalid,
+              {{"start_ms", std::int64_t{1}}, {"end_ms", std::int64_t{2}},
+               {"fed_start_ms", std::int64_t{0}}},
+              Code::window_range_invalid, R"({"end_ms":2,"fed_start_ms":0,"start_ms":1})");
+    wv_expect("number as an integer", Code::window_prestart_state_violation,
+              {{"position_size", 3}, {"resting_orders", 0}, {"time_ms", 5}},
+              Code::window_prestart_state_violation,
+              R"({"position_size":3,"resting_orders":0,"time_ms":5})");
+    wv_expect("number as a double", Code::window_prestart_state_violation,
+              {{"position_size", 2.5}, {"resting_orders", 0}, {"time_ms", 5}},
+              Code::window_prestart_state_violation,
+              R"({"position_size":2.5,"resting_orders":0,"time_ms":5})");
+    wv_expect("number NaN", Code::window_prestart_state_violation,
+              {{"position_size", nan}, {"resting_orders", 0}, {"time_ms", 5}}, invariant, "{}");
+    wv_expect("number infinity", Code::window_prestart_state_violation,
+              {{"position_size", -inf}, {"resting_orders", 0}, {"time_ms", 5}}, invariant, "{}");
+    wv_expect("number as a boolean", Code::window_prestart_state_violation,
+              {{"position_size", true}, {"resting_orders", 0}, {"time_ms", 5}}, invariant, "{}");
+    wv_expect("number as a null", Code::window_prestart_state_violation,
+              {{"position_size", nullptr}, {"resting_orders", 0}, {"time_ms", 5}}, invariant, "{}");
+    wv_expect("number as text", Code::window_prestart_state_violation,
+              {{"position_size", "3"}, {"resting_orders", 0}, {"time_ms", 5}}, invariant, "{}");
+
+    // Dotted vocab values are exact; the digests are plain strings.
+    for (const char* field : {"counts.window_input_bars", "counts.window_script_bars",
+                              "metering.billable_input_bars"}) {
+        wv_expect(std::string("report field ") + field, Code::window_report_mismatch,
+                  {{"field", field}, {"expected", std::int64_t{10}}, {"actual", std::int64_t{9}}},
+                  Code::window_report_mismatch,
+                  std::string(R"({"actual":9,"expected":10,"field":")") + field + "\"}");
+    }
+    wv_expect("report field outside its list", Code::window_report_mismatch,
+              {{"field", "counts.window_other"}, {"expected", 1}, {"actual", 1}}, invariant, "{}");
+    wv_expect("feed digests", Code::window_feed_identity_changed,
+              {{"feed_id", "primary"}, {"expected_sha256", std::string(64, 'a')},
+               {"actual_sha256", std::string(64, 'b')}},
+              Code::window_feed_identity_changed,
+              std::string(R"({"actual_sha256":")") + std::string(64, 'b')
+                  + R"(","expected_sha256":")" + std::string(64, 'a')
+                  + R"(","feed_id":"primary"})");
+    wv_expect("feed digest as an integer", Code::window_feed_identity_changed,
+              {{"feed_id", "primary"}, {"expected_sha256", 1}, {"actual_sha256", "b"}},
+              invariant, "{}");
+
+    // Old kinds and codes keep their bytes, and a string keeps the old escaping
+    // and replacement of invalid UTF-8.
+    wv_expect("old integer and vocab", Code::pine_runtime_limit,
+              {{"limit", "map_pairs"}, {"max", std::int64_t{100000}}}, Code::pine_runtime_limit,
+              R"({"limit":"map_pairs","max":100000})");
+    wv_expect("old integer rejects a boolean", Code::pine_runtime_limit,
+              {{"limit", "map_pairs"}, {"max", true}}, invariant, "{}");
+    wv_expect("old integer rejects a null", Code::pine_runtime_limit,
+              {{"limit", "map_pairs"}, {"max", nullptr}}, invariant, "{}");
+    wv_expect("old identifier", Code::pine_invalid_argument,
+              {{"function", "ta.sma"}, {"rule", "must_be_positive"}}, Code::pine_invalid_argument,
+              R"({"function":"ta.sma","rule":"must_be_positive"})");
+    wv_expect("old identifier rejects a boolean", Code::pine_invalid_argument,
+              {{"function", true}, {"rule", "must_be_positive"}}, invariant, "{}");
+    wv_expect("old vocab rejects a null", Code::pine_invalid_argument,
+              {{"rule", nullptr}}, invariant, "{}");
+    wv_expect("old optional and required", Code::chart_bars_rejected,
+              {{"reason", "not_finite"}, {"index", std::int64_t{3}}, {"field", "close"}},
+              Code::chart_bars_rejected, R"({"field":"close","index":3,"reason":"not_finite"})");
+    const std::string messy = std::string("a\"b\n") + "\xFF";
+    wv_expect("string escaping and U+FFFD", Code::window_legacy_flag_conflict,
+              {{"option", messy}}, Code::window_legacy_flag_conflict,
+              std::string("{\"option\":\"a\\\"b\\u000a") + "\xEF\xBF\xBD" + "\"}");
+}
+
+// ---------------------------------------------------------------------------
+// The three codes the documented contract adds to its base table:
+// report_post_execution_failed, engine_command_value_invalid and
+// window_pruner_unsupported. Each one's documented class, retryable
+// flag, since, English and arguments are written out here and held to the
+// registry and to the catalog file; every closed list is walked value by
+// value, a value outside it is refused, and the bytes of the canonical
+// arguments are pinned. This holds the catalog and the registry only: it says
+// nothing about whether any source path raises these codes.
+
+struct ChainArg {
+    std::string name;
+    std::string kind;
+    std::vector<std::string> values;  // the closed list of a vocab arg
+};
+
+struct ChainCode {
+    RunFailureCode code;
+    std::string name;
+    std::string cls;
+    std::string english;
+    std::vector<ChainArg> args;  // in catalog order (sorted by name), all required
+};
+
+std::string join_values(const std::vector<std::string>& items) {
+    std::string out;
+    for (const std::string& item : items) out += (out.empty() ? "" : ",") + item;
+    return out;
+}
+
+void chain_vocabulary_rows() {
+    using Code = RunFailureCode;
+    const Code invariant = Code::engine_invariant;
+    const std::vector<std::string> phases = {"result_assembly", "results_digest",
+                                             "serialization"};
+    const std::vector<std::string> post_reasons = {"deadline", "exception", "io", "resource"};
+    const std::vector<std::string> value_reasons = {"nonfinite", "invalid_unicode",
+                                                    "numeric_overflow"};
+    const std::vector<std::string> stages = {"sizing", "margin", "fee", "slippage",
+                                             "relative_price", "risk", "settlement"};
+    const std::vector<ChainCode> chain = {
+        {Code::report_post_execution_failed, "report_post_execution_failed", "engine_fault",
+         "The engine could not finish producing the result after strategy execution completed.",
+         {{"phase", "vocab", phases}, {"reason", "vocab", post_reasons}}},
+        {Code::engine_command_value_invalid, "engine_command_value_invalid", "engine_fault",
+         "The engine derived an invalid execution value.",
+         {{"field", "string", {}}, {"reason", "vocab", value_reasons},
+          {"stage", "vocab", stages}}},
+        {Code::window_pruner_unsupported, "window_pruner_unsupported", "unsupported",
+         "The selected window cannot be combined with this trial pruner.",
+         {{"pruner", "string", {}}}},
+    };
+
+    // The registry: the name, the class and retryable=false.
+    for (const ChainCode& row : chain) {
+        CHECK_EQ("chain name " + row.name, code_name(row.code), row.name);
+        CHECK_EQ("chain class of " + row.name,
+                 class_name(pineforge::run_failure_code_class(row.code)), row.cls);
+        CHECK_EQ("chain retryable of " + row.name,
+                 pineforge::run_failure_code_retryable(row.code) ? "true" : "false", "false");
+    }
+
+    // The catalog file: the same class, retryable=false, since 1.5.0, the one
+    // fixed English and the arguments with their kinds and closed lists.
+    std::ifstream in(PINEFORGE_RUN_FAILURE_CATALOG, std::ios::binary);
+    CHECK_EQ("chain: catalog readable", in ? "open" : "missing", "open");
+    if (in) {
+        const std::string text((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+        Json catalog;
+        bool parsed = true;
+        try {
+            catalog = JsonReader(text).document();
+        } catch (const std::exception& error) {
+            parsed = false;
+            CHECK_EQ("chain: catalog parses", error.what(), "");
+        }
+        const Json* codes = parsed ? catalog.find("codes") : nullptr;
+        for (const ChainCode& row : chain) {
+            const std::string at = "chain catalog " + row.name + ": ";
+            const Json* entry = codes != nullptr ? codes->find(row.name) : nullptr;
+            CHECK_EQ(at + "present", entry != nullptr ? "present" : "absent", "present");
+            if (entry == nullptr) continue;
+            const Json* cls = entry->find("class");
+            const Json* retryable = entry->find("retryable");
+            const Json* since = entry->find("since");
+            const Json* english = entry->find("english");
+            const Json* args = entry->find("args");
+            CHECK_EQ(at + "class", cls ? cls->string : "", row.cls);
+            const bool never_retry = retryable != nullptr
+                                     && retryable->kind == Json::Kind::boolean
+                                     && !retryable->boolean;
+            CHECK_EQ(at + "retryable false", never_retry ? "false" : "not false", "false");
+            CHECK_EQ(at + "since", since ? since->string : "", "1.5.0");
+            CHECK_EQ(at + "one English template",
+                     std::to_string(english ? english->array.size() : std::size_t{0}), "1");
+            CHECK_EQ(at + "English",
+                     english && !english->array.empty() ? english->array.front().string : "",
+                     row.english);
+            const std::size_t arg_count = args ? args->object.size() : std::size_t{0};
+            CHECK_EQ(at + "argument count", std::to_string(arg_count),
+                     std::to_string(row.args.size()));
+            if (args == nullptr || arg_count != row.args.size()) continue;
+            for (std::size_t i = 0; i < row.args.size(); ++i) {
+                const ChainArg& want = row.args[i];
+                const std::string& got_name = args->object[i].first;
+                const Json& arg = args->object[i].second;
+                CHECK_EQ(at + "argument " + std::to_string(i), got_name, want.name);
+                const Json* kind = arg.find("kind");
+                const Json* values = arg.find("values");
+                std::vector<std::string> got_values;
+                if (values != nullptr) {
+                    for (const Json& value : values->array) got_values.push_back(value.string);
+                }
+                CHECK_EQ(at + want.name + " kind", kind ? kind->string : "", want.kind);
+                CHECK_EQ(at + want.name + " is required",
+                         arg.find("optional") == nullptr ? "required" : "optional", "required");
+                CHECK_EQ(at + want.name + " closed list", join_values(got_values),
+                         join_values(want.values));
+            }
+        }
+    }
+
+    // report_post_execution_failed: every phase with every reason is accepted,
+    // raised in the reverse of key order; the bytes are the canonical JSON.
+    for (const std::string& phase : phases) {
+        for (const std::string& reason : post_reasons) {
+            wv_expect("post-execution " + phase + "/" + reason,
+                      Code::report_post_execution_failed,
+                      {{"reason", reason}, {"phase", phase}}, Code::report_post_execution_failed,
+                      R"({"phase":")" + phase + R"(","reason":")" + reason + R"("})");
+        }
+    }
+    wv_expect("post-execution phase outside its list", Code::report_post_execution_failed,
+              {{"phase", "completed"}, {"reason", "deadline"}}, invariant, "{}");
+    wv_expect("post-execution phase of the wire's logical phases but not of this list",
+              Code::report_post_execution_failed, {{"phase", "execution"}, {"reason", "io"}},
+              invariant, "{}");
+    wv_expect("post-execution phase in upper case", Code::report_post_execution_failed,
+              {{"phase", "Serialization"}, {"reason", "io"}}, invariant, "{}");
+    wv_expect("post-execution reason outside its list", Code::report_post_execution_failed,
+              {{"phase", "serialization"}, {"reason", "timeout"}}, invariant, "{}");
+    wv_expect("post-execution reason of the other code's list", Code::report_post_execution_failed,
+              {{"phase", "serialization"}, {"reason", "nonfinite"}}, invariant, "{}");
+    wv_expect("post-execution phase as an integer", Code::report_post_execution_failed,
+              {{"phase", std::int64_t{1}}, {"reason", "io"}}, invariant, "{}");
+    wv_expect("post-execution reason as a null", Code::report_post_execution_failed,
+              {{"phase", "serialization"}, {"reason", nullptr}}, invariant, "{}");
+    wv_expect("post-execution reason as a boolean", Code::report_post_execution_failed,
+              {{"phase", "serialization"}, {"reason", true}}, invariant, "{}");
+    wv_expect("post-execution without a phase", Code::report_post_execution_failed,
+              {{"reason", "io"}}, invariant, "{}");
+    wv_expect("post-execution without a reason", Code::report_post_execution_failed,
+              {{"phase", "serialization"}}, invariant, "{}");
+    wv_expect("post-execution without arguments", Code::report_post_execution_failed, {},
+              invariant, "{}");
+    wv_expect("post-execution phase repeated", Code::report_post_execution_failed,
+              {{"phase", "serialization"}, {"phase", "results_digest"}, {"reason", "io"}},
+              invariant, "{}");
+    wv_expect("post-execution undeclared argument", Code::report_post_execution_failed,
+              {{"phase", "serialization"}, {"reason", "io"}, {"detail", "x"}}, invariant, "{}");
+
+    // engine_command_value_invalid: every stage with every reason, and a free
+    // text field.
+    for (const std::string& stage : stages) {
+        for (const std::string& reason : value_reasons) {
+            wv_expect("command value " + stage + "/" + reason, Code::engine_command_value_invalid,
+                      {{"stage", stage}, {"reason", reason}, {"field", "quantity"}},
+                      Code::engine_command_value_invalid,
+                      R"({"field":"quantity","reason":")" + reason + R"(","stage":")" + stage
+                          + R"("})");
+        }
+    }
+    wv_expect("command value field is free text", Code::engine_command_value_invalid,
+              {{"field", "qty\"x"}, {"reason", "nonfinite"}, {"stage", "fee"}},
+              Code::engine_command_value_invalid,
+              R"({"field":"qty\"x","reason":"nonfinite","stage":"fee"})");
+    wv_expect("command value stage outside its list", Code::engine_command_value_invalid,
+              {{"field", "quantity"}, {"reason", "nonfinite"}, {"stage", "settle"}}, invariant,
+              "{}");
+    wv_expect("command value stage taken from the reason list", Code::engine_command_value_invalid,
+              {{"field", "quantity"}, {"reason", "nonfinite"}, {"stage", "nonfinite"}}, invariant,
+              "{}");
+    wv_expect("command value stage in upper case", Code::engine_command_value_invalid,
+              {{"field", "quantity"}, {"reason", "nonfinite"}, {"stage", "Sizing"}}, invariant,
+              "{}");
+    wv_expect("command value reason outside its list", Code::engine_command_value_invalid,
+              {{"field", "quantity"}, {"reason", "overflow"}, {"stage", "sizing"}}, invariant,
+              "{}");
+    wv_expect("command value reason of the post-execution list", Code::engine_command_value_invalid,
+              {{"field", "quantity"}, {"reason", "deadline"}, {"stage", "sizing"}}, invariant,
+              "{}");
+    wv_expect("command value field as an integer", Code::engine_command_value_invalid,
+              {{"field", std::int64_t{1}}, {"reason", "nonfinite"}, {"stage", "sizing"}},
+              invariant, "{}");
+    wv_expect("command value field as a null", Code::engine_command_value_invalid,
+              {{"field", nullptr}, {"reason", "nonfinite"}, {"stage", "sizing"}}, invariant, "{}");
+    wv_expect("command value field as a boolean", Code::engine_command_value_invalid,
+              {{"field", false}, {"reason", "nonfinite"}, {"stage", "sizing"}}, invariant, "{}");
+    wv_expect("command value without a stage", Code::engine_command_value_invalid,
+              {{"field", "quantity"}, {"reason", "nonfinite"}}, invariant, "{}");
+    wv_expect("command value without a reason", Code::engine_command_value_invalid,
+              {{"field", "quantity"}, {"stage", "sizing"}}, invariant, "{}");
+    wv_expect("command value without a field", Code::engine_command_value_invalid,
+              {{"reason", "nonfinite"}, {"stage", "sizing"}}, invariant, "{}");
+    wv_expect("command value undeclared argument", Code::engine_command_value_invalid,
+              {{"field", "quantity"}, {"reason", "nonfinite"}, {"stage", "sizing"},
+               {"phase", "serialization"}},
+              invariant, "{}");
+
+    // window_pruner_unsupported: one string, the pruner as the caller sent it.
+    wv_expect("pruner median", Code::window_pruner_unsupported, {{"pruner", "median"}},
+              Code::window_pruner_unsupported, R"({"pruner":"median"})");
+    wv_expect("pruner halving", Code::window_pruner_unsupported, {{"pruner", "halving"}},
+              Code::window_pruner_unsupported, R"({"pruner":"halving"})");
+    wv_expect("pruner name as the caller sent it", Code::window_pruner_unsupported,
+              {{"pruner", "Hyper\"band"}}, Code::window_pruner_unsupported,
+              R"({"pruner":"Hyper\"band"})");
+    wv_expect("pruner as an integer", Code::window_pruner_unsupported,
+              {{"pruner", std::int64_t{1}}}, invariant, "{}");
+    wv_expect("pruner as a number", Code::window_pruner_unsupported, {{"pruner", 1.5}}, invariant,
+              "{}");
+    wv_expect("pruner as a null", Code::window_pruner_unsupported, {{"pruner", nullptr}}, invariant,
+              "{}");
+    wv_expect("pruner as a boolean", Code::window_pruner_unsupported, {{"pruner", true}}, invariant,
+              "{}");
+    wv_expect("pruner missing", Code::window_pruner_unsupported, {}, invariant, "{}");
+    wv_expect("pruner repeated", Code::window_pruner_unsupported,
+              {{"pruner", "median"}, {"pruner", "halving"}}, invariant, "{}");
+    wv_expect("pruner undeclared argument", Code::window_pruner_unsupported,
+              {{"pruner", "median"}, {"capability", "x"}}, invariant, "{}");
 }
 
 void registry_rows() {
@@ -1376,6 +1901,8 @@ int main() {
     stream_refusal_rows(minute);
     run_spec_field_rows();
     registry_rows();
+    window_vocabulary_rows();
+    chain_vocabulary_rows();
     std::printf("test_run_failure_codes: %d checks, %d failed\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

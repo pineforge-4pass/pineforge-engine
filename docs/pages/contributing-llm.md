@@ -261,7 +261,7 @@ decision, and removing one is a regression:
 
 **kernel** — the Pine-agnostic half of the engine: matching, fills, sizing,
 margin, settlement, indicators, calendars. Buildable alone as
-`PineForge::kernel` CMakeLists.txt:156 with `PINEFORGE_BUILD_SOURCE_LAYER`
+`PineForge::kernel` CMakeLists.txt:158 with `PINEFORGE_BUILD_SOURCE_LAYER`
 CMakeLists.txt:43 off.
 
 **adapter** — `src/source/` and `src/compat/pine/`: the TradingView-parity

@@ -148,6 +148,8 @@ set(PINEFORGE_KERNEL_SOURCES
     src/native_calendar.cpp
     src/native_run_spec.cpp
     src/native_fx_curve.cpp
+    src/selected_report_view.cpp
+    src/selected_window_plan.cpp
 )
 
 # The kernel-only archive. Same objects, same flags as the kernel half of
@@ -259,6 +261,46 @@ foreach(_pf_library ${PINEFORGE_LIBRARY_TARGETS})
 
     target_link_libraries(${_pf_library} PUBLIC Eigen3::Eigen)
 endforeach()
+
+# === Selected primary planner C bridge =================================
+# A standalone shared helper for callers that cannot link C++ (Python ctypes):
+# the C bridge over pineforge::plan_selected_primary and nothing else. Its one
+# source is deliberately NOT in PINEFORGE_KERNEL_SOURCES, so neither
+# libpineforge.a nor PineForge::kernel gains a source or a symbol. It links the
+# kernel archive PRIVATE (the planner and the native calendar it stands on), so
+# no source layer, strategy or compiled-strategy export is part of it. PF_API
+# symbols are exported through the same hidden-visibility rule the runtime
+# uses. C++ callers keep linking PineForge::kernel and call the C++ planner
+# directly. Test registration is not here (tests/CMakeLists.txt).
+add_library(pineforge_window_plan SHARED src/selected_window_plan_c.cpp)
+add_library(PineForge::window_plan ALIAS pineforge_window_plan)
+set_target_properties(pineforge_window_plan PROPERTIES
+    EXPORT_NAME window_plan
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF
+)
+# PF_API is dllexport on Windows only under this definition.
+target_compile_definitions(pineforge_window_plan PRIVATE PINEFORGE_BUILD_SHARED)
+target_compile_options(pineforge_window_plan PRIVATE
+    $<$<NOT:$<CONFIG:Debug>>:-O2>
+    -fPIC
+    -fvisibility=hidden
+    -fvisibility-inlines-hidden
+    -Wall
+    -Wextra
+    -Wpedantic
+    -Wno-unused-parameter
+    # The kernel's rule, see the library loop above: no FMA contraction.
+    -ffp-contract=off
+)
+target_include_directories(pineforge_window_plan
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(pineforge_window_plan PRIVATE pineforge_kernel)
 
 # === Coverage instrumentation (opt-in) =================================
 # Build with:
@@ -408,7 +450,7 @@ endif()
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
-install(TARGETS pineforge pineforge_kernel
+install(TARGETS pineforge pineforge_kernel pineforge_window_plan
     EXPORT PineForgeTargets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

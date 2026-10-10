@@ -5,8 +5,11 @@
 
 #include "pine_host_reads.hpp"
 #include <pineforge/run_failure.hpp>
+#include <pineforge/selected_window.h>
+#include <pineforge/selected_window_plan.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -131,6 +134,45 @@ void PineScheduler::commit_coof_script_state(PineStrategyHost& host) {
     host.commit_script_state();
 }
 
+namespace {
+// The script bars a SELECTED admitted batch run executes over its retained
+// primary rows: the kernel's count_selected_executed_primary, which walks them as
+// the native consumer does (the groups that open before T, the last pending one
+// completed at the accepted T, and the window groups its seal rules execute; an
+// unsealed window tail adds none). The request is the run's own: its window (E
+// unchecked: it bounds no such group), its spec's timeframes, timezone and session,
+// the host's retained chart timezone and its slot-label policy. A refusal of the
+// count after admission, or a count the scheduler's int cannot hold, is the
+// engine's fault and fails as engine_invariant; no count is guessed.
+int selected_executed_source_bars(const PineStrategyHost& host, const NativeRunSpec* spec,
+                                  const pf_selected_window_config_v1& window,
+                                  const std::vector<Bar>& retained) {
+    if (spec == nullptr) {
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "selected run begin without a running spec for its "
+                                      "source tail count");
+    }
+    SelectedRetainedRequest request;
+    request.start_ms = window.start_ms;
+    request.end_ms = window.end_ms;
+    request.input_tf = spec->input_tf;
+    request.script_tf = spec->script_tf;
+    request.chart_timezone = host.chart_timezone();
+    request.engine_timezone = spec->timezone;
+    request.session = spec->session;
+    request.feed_tolerant = spec->slot_label_policy == NativeSlotLabelPolicy::FeedTolerant;
+    const SelectedRetainedCount counted =
+        count_selected_executed_primary(retained.data(), retained.size(), request);
+    if (counted.status != SelectedPlanStatus::Ok
+        || counted.script_bars > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "selected run source tail count refused or out of range "
+                                      "after admission");
+    }
+    return static_cast<int>(counted.script_bars);
+}
+}  // namespace
+
 void PineScheduler::run_begin(PineStrategyHost& host) {
     reset_language();
     const bool static_eligible = !retained_.is_stream && !retained_.bar_magnifier
@@ -156,6 +198,20 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
     expected_source_bars_ = 0;
     for (const auto complete : input_script_completes_) {
         expected_source_bars_ += complete != 0U ? 1 : 0;
+    }
+    // A selected admitted batch run executes the script bars of the consumer's
+    // own bucket walk, which the aggregator's per-input hint above does not
+    // model: the last pending pre-T group is completed at the accepted T and an
+    // unsealed window tail is never executed. The tail expectations
+    // (terminal_source_bar, the probe tail) read the executed count. An OFF run
+    // and a stream never reach this and keep the hint; the per-input completion
+    // vectors are unchanged either way.
+    if (!retained_.is_stream && state.phase == NativeRunPhase::Batch) {
+        pf_selected_window_config_v1 window{};
+        if (NativeExecutionConsumer::selected_window_admitted(host, &window)) {
+            expected_source_bars_ =
+                selected_executed_source_bars(host, state.spec, window, retained_.bars);
+        }
     }
     host.stream_warmup_mode_ = retained_.is_stream;
     host.scheduler_prepare_script_run(retained_.bars, static_eligible,

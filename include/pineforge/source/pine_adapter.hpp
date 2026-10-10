@@ -1452,6 +1452,25 @@ struct PineRiskState {
     bool intraday_cancel_pending = false;
 };
 
+// The source-risk CONFIGURATION alone, for the selected-window replay bracket
+// (PineExecutionAdapter::capture_replay_risk_config and
+// restore_replay_risk_config). It holds no runtime fact of PineRiskState
+// (halted, observed peak or drawdown, intraday block, cancel latch) and none
+// of the cap's consumed state. The percent flags are kept exactly because the
+// setters make them sticky.
+struct PineReplayRiskConfig {
+    int direction = 0; // 0 both, >0 long, <0 short
+    int max_cons_loss_days = 0;
+    double max_drawdown = 0.0;
+    bool max_drawdown_percent = false;
+    double max_intraday_loss = 0.0;
+    bool max_intraday_loss_percent = false;
+    double max_position_size = 0.0;
+    compat::pine::CapAttachment cap_attachment = compat::pine::CapAttachment::None;
+    compat::pine::CapConfiguration cap_configuration{};
+    std::uint8_t cap_declared = 0;
+};
+
 class PineExecutionAdapter;
 
 // Allocation-free view facade for Appendix C's later C projection. L2 does
@@ -1664,6 +1683,13 @@ public:
     void set_risk_max_drawdown(double value, bool percent) noexcept;
     void set_risk_max_intraday_loss(double value, bool percent) noexcept;
     void set_risk_max_position_size(double value) noexcept;
+    // Exact capture/restore of the source-risk configuration (replay seam).
+    // Restore writes the seven risk fields directly, because the setters above
+    // keep percent flags sticky, and restores the cap's three configuration
+    // fields through IntradayCap::restore_replay_configuration. No risk runtime
+    // fact and no cap accounting is read or written.
+    PineReplayRiskConfig capture_replay_risk_config() const noexcept;
+    void restore_replay_risk_config(const PineReplayRiskConfig&) noexcept;
     bool allows_risk_direction(bool is_long) const noexcept {
         return risk_.direction == 0 || (is_long ? risk_.direction > 0 : risk_.direction < 0);
     }
@@ -2440,6 +2466,7 @@ private:
         const Bar&, const NativeDecisionContext&);
     void order_open_marketable_limit_entries(const Bar&, const NativeDecisionContext&);
     void apply_terminal_explicit_market_policy(const NativeDecisionContext&);
+    void apply_terminal_explicit_market_policy(const NativeDecisionContext&, bool execute_now);
     bool enqueue_pooc_fifo_close(const SourceId&, const std::string&,
                                  std::uint64_t, std::uint64_t);
     void observe_close_ledger(const native_order::ExecutionAppliedEvent&,

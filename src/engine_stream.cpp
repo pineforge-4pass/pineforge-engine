@@ -3,6 +3,9 @@
  */
 
 #include "engine_internal.hpp"
+#include "native_execution_consumer.hpp"
+
+#include <pineforge/query_refusal.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -88,6 +91,11 @@ uint64_t BacktestEngine::stream_state_hash() const {
     // deliberately excludes the consumable action queue. Recovery replays the
     // same externally supplied input sequence into the same strategy/config/
     // version and checks every step. This does not predict live executions.
+    // A sealed selected window refuses the read before anything is folded
+    // (see broker_state_hash(), which this token also folds).
+    if (NativeExecutionConsumer::selected_query_closed(*this)) {
+        throw SelectedWindowQueryAfterSeal();
+    }
     uint64_t hash = 1469598103934665603ULL;
     auto bytes = [&hash](const void* data, size_t count) {
         const auto* p = static_cast<const unsigned char*>(data);

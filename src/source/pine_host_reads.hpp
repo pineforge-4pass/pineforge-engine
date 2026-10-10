@@ -19,6 +19,7 @@
 // Not installed API.
 
 #include "../native_execution_consumer.hpp"
+#include "pine_intent_state.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -66,9 +67,19 @@ inline NativePhysicalPosition run_position(const NativeStrategyHost& host) {
 }
 
 // current_execution_point(), by reference: null where it answers nullopt.
-// Valid inside the callback that asked.
-inline const NativeCurrentPointView* callback_point(const NativeStrategyHost& host) {
+// Valid inside the callback that asked. The consumer's own frame, which the
+// kernel acts on whether or not the source layer is replaying a retained one.
+inline const NativeCurrentPointView* live_callback_point(const NativeStrategyHost& host) {
     return run_consumer(host).current_point();
+}
+
+// The point the source layer reads at a callback: the retained point of the
+// row a selected run is replaying (selected_replay_point), else the live one.
+// With nothing replaying, as in every run with the selected window off, it is
+// live_callback_point's pointer itself.
+inline const NativeCurrentPointView* callback_point(const NativeStrategyHost& host) {
+    if (const NativeCurrentPointView* replayed = selected_replay_point(host)) return replayed;
+    return live_callback_point(host);
 }
 
 // The source layer's state parked with the consumer for one run (R5 lane
