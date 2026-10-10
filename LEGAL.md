@@ -45,7 +45,7 @@ If you run `bash benchmarks/run_all.sh`, `npm install`, or install the Python de
 
 ## TradingView trade-list exports (`tv_trades.csv`)
 
-The `corpus/` and `benchmarks/assets/` trees include TradingView **"List of Trades"** CSVs. These are produced by running our **own clean-room `strategy.pine`** files inside a TradingView account and exporting the result **manually** — no scraping, no TradingView API, no automated extraction. They are included as **factual parity reference records**.
+The `corpus/` and `benchmarks/assets/` trees include TradingView **"List of Trades"** CSVs. These are produced by running our **own clean-room `strategy.pine`** files in a TradingView account and exporting the strategy report. They are included as **factual parity reference records**.
 
 - **Our position:** the trade records are factual outcomes of our **own** strategies executed against public market data — factual data the author is free to keep and publish (facts are not copyrightable).
 - We do **not** Apache-relicense TradingView's export *format/columns* (those are TradingView's, not ours to license), so these files sit in-tree as **factual reference**, not as an Apache-2.0 work of ours.
