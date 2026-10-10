@@ -130,6 +130,22 @@ pipe, a full disk) ends with exit status 1 and no line after it (see _main).
 NaN convention: any metric with an empty/zero denominator is null (JSON has no
 NaN); a real computed 0 stays 0. See the report-schema + metrics reference docs
 for the per-field meaning of every metrics.* key.
+
+Selected-window mode (selected-window wire v1.3, full/v1 report, no digest). Opt in
+with --report-policy selected-window/v1, --window-start-ms T, --window-end-ms E,
+--preroll-bars N, --fed-start-ms F and an explicit --input-tf and --script-tf (the
+primary chart token); --request-feed-inventory names the inventory bound to --so.
+The request is admitted first, from the inventory and the build's candidate support
+constants, before any feed, library or strategy is touched. The native planner then
+plans the window; the engine runs the retained rows (pre-roll plus window) and
+supplies the selected trades, curve and metrics. The report gains report_window (R),
+report_shape, diagnostics.phase_timing, fingerprint.version 2 and
+fingerprint.provenance.schema_version 2; R is also applied_runtime.report_window and
+fingerprint.provenance.runtime.report_window. --validate-window-only prints
+{"validation_only": true, "report_window": R} with applied=false and runs nothing.
+--so LIB --capabilities-json prints this runtime's capabilities. --run-phase-fd N
+sends the phase records (selected and ordinary runs). Without any of these options a
+run is the ordinary run described above, byte for byte.
 """
 from __future__ import annotations
 
@@ -3629,10 +3645,12 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
         "input": {
             "ohlcv":      str(ohlcv_path),
             "bars":       n_bars,
-            "first_ts":   int(first_ts),
-            "last_ts":    int(last_ts),
-            "first_time": fmt_utc(first_ts),
-            "last_time":  fmt_utc(last_ts),
+            # None only for a selected-window run whose evaluated feed is empty
+            # (first_ts/last_ts None); an ordinary run always passes integers.
+            "first_ts":   None if first_ts is None else int(first_ts),
+            "last_ts":    None if last_ts is None else int(last_ts),
+            "first_time": None if first_ts is None else fmt_utc(first_ts),
+            "last_time":  None if last_ts is None else fmt_utc(last_ts),
         },
         "applied_inputs":    applied_inputs,
         "applied_overrides": applied_overrides,
@@ -3836,9 +3854,588 @@ def run_failure(lib, strat):
     return text or RUN_STATUS_FAILED_TEXT, "engine_unclassified_error", {}
 
 
+# --- Selected-window mode (selected-window/v1: full/v1 report, no digest) -------------------
+#
+# A request that names --report-policy selected-window/v1, a window option or
+# --validate-window-only is run by _selected_run. Every other request follows the ordinary body
+# of _main, which gains only the optional phase records of --run-phase-fd (they change no report
+# byte). docker/selected_window_report.py holds the pure pieces. The sibling modules
+# run_phase_transport, run_execution_observer, request_feed_inventory and selected_window_plan
+# are imported lazily, and only on the paths that need them, so an ordinary run never loads them
+# and never reads an inventory, a policy or the planner library.
+#
+# The order of a selected run; each step ends the run with its typed failure line:
+#   1. validate the flags and the request: nothing is read, nothing is loaded;
+#   2. open the phase writer (its descriptor is checked before any strategy code loads);
+#   3. ADMISSION from the request-feed inventory and the candidate support constants, before
+#      load_bars, load_symbol_feeds, any ctypes load (the planner included), any strategy
+#      construction and the first phase record;
+#   4. phase preflight; load the primary feed once; plan with the native planner; trim by a
+#      pointer offset; hash. --validate-window-only ends here, applied=false, no strategy run;
+#   5. phase execution, BEFORE the strategy library loads; load it, configure the selected-window
+#      ABI, attach the observer to the phase writer, run;
+#   6. the OBSERVER (never this file) moves the phase to result_assembly during the native call.
+#      Afterwards the retained callback exception is raised first, the native counts must equal
+#      the plan, the report is assembled (the engine supplies the selected trades, curve and
+#      metrics; nothing is recalculated here) and serialized once the serialization phase has
+#      begun; completed follows the stdout flush.
+
+_TYPED_ERROR_NAMES = frozenset({"SelectedWindowError", "InventoryAdmissionError",
+                                "PlanBridgeError", "ObserverBindingError",
+                                "PhaseTransportError"})
+
+
+def _typed_failure(error):
+    """The RunFailure for an exception raised by one of the selected-window helper modules
+    (code, message and the code's arguments as that module defines them), or None for any other
+    exception. Matched by class name so this file imports none of the modules at load."""
+    if type(error).__name__ not in _TYPED_ERROR_NAMES:
+        return None
+    code = getattr(error, "code", None)
+    if not isinstance(code, str) or _CODE_RE.fullmatch(code) is None:
+        return None
+    code_args = getattr(error, "code_args", None)
+    if code_args is None:
+        code_args = getattr(error, "detail", None)  # InventoryAdmissionError
+    text = getattr(error, "message", None) or str(error)
+    return RunFailure(text, code, dict(code_args) if isinstance(code_args, dict) else {})
+
+
+def _engine_invariant(text: str) -> RunFailure:
+    return RunFailure(text, "engine_invariant")
+
+
+def trusted_planner_path() -> str:
+    """The absolute path of the trusted standalone planner helper of this installation:
+    <prefix>/lib/libpineforge_window_plan.so, where <prefix> is the parent of the directory
+    this run_json.py is installed in (bin). Never a strategy library and never a path search."""
+    return str(Path(__file__).resolve().parent.parent / "lib" / "libpineforge_window_plan.so")
+
+
+def _selected_requested(args) -> bool:
+    """Whether the command line opts into selected-window mode: the policy, any of the four
+    window options or the validation-only switch. A window option without the policy is not
+    legacy: it is refused (window_request_invalid, option report_policy)."""
+    return (args.report_policy is not None or args.window_start_ms is not None
+            or args.window_end_ms is not None or args.preroll_bars is not None
+            or args.fed_start_ms is not None or bool(args.validate_window_only))
+
+
+class _Phases:
+    """The run's RunPhaseWriter with its error type: a transport failure of any advance() is
+    the typed harness fault (harness_internal_error), never a strategy outcome."""
+
+    def __init__(self, writer, error_type):
+        self.writer = writer
+        self._error_type = error_type
+
+    def advance(self, phase: str) -> None:
+        try:
+            self.writer.advance(phase)
+        except self._error_type as error:
+            raise _typed_failure(error) from None
+
+
+def _open_phases(fd_text, *, always: bool):
+    """The run's phase session, or None. fd_text is --run-phase-fd as written: None gives
+    None for an ordinary run (always=False) and a writer that exports nothing but still
+    tracks the phases for a selected run (always=True). A descriptor that is not a number or
+    not a usable socket is a preflight harness_internal_error (phase transport v1)."""
+    if fd_text is None and not always:
+        return None
+    import run_phase_transport
+    fd = None
+    if fd_text is not None:
+        if re.fullmatch(r"[0-9]{1,10}", fd_text) is None:
+            raise RunFailure(f"--run-phase-fd must be a descriptor number from 3 up, got "
+                             f"{_shown(fd_text)}", "harness_internal_error")
+        fd = int(fd_text)
+    try:
+        writer = run_phase_transport.RunPhaseWriter(fd)
+    except run_phase_transport.PhaseTransportError as error:
+        raise _typed_failure(error) from None
+    return _Phases(writer, run_phase_transport.PhaseTransportError)
+
+
+def _advance(phases, phase: str) -> None:
+    if phases is not None:
+        phases.advance(phase)
+
+
+def _require_result_assembly(phases) -> None:
+    """After a successful native run the engine's observer must have moved the writer to
+    result_assembly. It is never announced from here: anything else is a harness fault, not
+    a strategy outcome."""
+    if phases.writer.phase != "result_assembly":
+        raise RunFailure(
+            "the run ended without the engine announcing the end of execution (phase "
+            f"{phases.writer.phase!r})", "harness_internal_error")
+
+
+# Post-execution classification (the documented selected-window contract). Once the engine's
+# observer has moved the REAL phase writer to result_assembly, strategy execution is over: a
+# failure that is otherwise unclassified is the engine's, non-billable, and is
+# report_post_execution_failed{phase, reason}, never a strategy error or timeout. The phase is
+# read from the writer; it is never inferred from Python's _run returning. A specific typed
+# fault (a RunFailure, a helper module's typed error, an engine failure with its own code) keeps
+# its code, and a failure while the writer is still in `execution` is left to the rules that
+# applied before this section existed.
+_POST_BOUNDARY_PHASES = ("result_assembly", "results_digest", "serialization")
+POST_EXECUTION_TEXT = ("The engine could not finish producing the result after strategy "
+                       "execution completed.")
+
+
+def _boundary_phase(phases):
+    """The phase of the real writer when the end of execution has been acknowledged
+    (result_assembly or later), else None (no writer, or still executing)."""
+    if phases is None:
+        return None
+    phase = phases.writer.phase
+    return phase if phase in _POST_BOUNDARY_PHASES else None
+
+
+def _post_boundary_failure(error, phases):
+    """report_post_execution_failed for an exception that is neither a RunFailure nor a typed
+    helper error, raised after the acknowledged boundary: reason resource for MemoryError, io
+    for OSError, exception for everything else. None when the boundary was not acknowledged
+    or the error is a specific typed fault."""
+    phase = _boundary_phase(phases)
+    if phase is None or isinstance(error, RunFailure) or _typed_failure(error) is not None:
+        return None
+    if isinstance(error, MemoryError):
+        reason = "resource"
+    elif isinstance(error, OSError):
+        reason = "io"
+    else:
+        reason = "exception"
+    return RunFailure(POST_EXECUTION_TEXT, "report_post_execution_failed",
+                      {"phase": phase, "reason": reason})
+
+
+def _post_boundary_engine_failure(failure, phases):
+    """The (text, code, args) of an engine failure line. After the acknowledged boundary an
+    engine out_of_memory (reason resource) and an engine_unclassified_error (reason exception)
+    are report_post_execution_failed; every other engine code, and every failure
+    before the boundary (a strategy failure during execution included), is returned unchanged."""
+    phase = _boundary_phase(phases)
+    if phase is None:
+        return failure
+    code = failure[1]
+    if code == "out_of_memory":
+        reason = "resource"
+    elif code == "engine_unclassified_error":
+        reason = "exception"
+    else:
+        return failure
+    return POST_EXECUTION_TEXT, "report_post_execution_failed", {"phase": phase, "reason": reason}
+
+
+def _observer_binding(lib, state, writer):
+    import run_execution_observer
+    return run_execution_observer.ExecutionObserverBinding(lib, state, writer)
+
+
+def _detach_observer(binding):
+    """Unregister the observer in cleanup. The error, if any, is returned instead of raised:
+    the frees that follow must still run. The binding keeps its callback alive until the
+    caller lets go of it, after the state is freed."""
+    if binding is None:
+        return None
+    try:
+        binding.detach()
+    except Exception as error:
+        return error
+    return None
+
+
+def _read_observation(lib, state) -> dict:
+    """The identities (run_generation, attempt_serial, attempt_generation) of the latest
+    attempt from strategy_execution_observation_v1."""
+    import run_execution_observer as observer
+    observation = observer.ObservationC(ctypes.sizeof(observer.ObservationC),
+                                        observer.OBSERVER_VERSION)
+    status = lib.strategy_execution_observation_v1(state, ctypes.byref(observation))
+    if status != 0:
+        raise RunFailure(f"strategy_execution_observation_v1 returned {status}",
+                         "harness_internal_error")
+    return {"run_generation": int(observation.run_generation),
+            "attempt_serial": int(observation.attempt_serial),
+            "attempt_generation": int(observation.attempt_generation)}
+
+
+def _syminfo_clock(syminfo_path) -> tuple:
+    """(timezone, session) of the --syminfo file as text, "" for an absent or empty member:
+    read as data, with no library, in the shape apply_syminfo reads it (flat or wrapped under
+    "syminfo"; a member that is present is str()-ed, as apply_syminfo sends it). The planner
+    treats "" as UTC and 24x7. A file apply_syminfo would refuse has the same refusal here."""
+    def unreadable(text, reason):
+        return SyminfoError(text, "syminfo_unreadable", {"reason": reason})
+
+    try:
+        with open(syminfo_path) as f:
+            text = f.read()
+    except OSError as e:
+        raise unreadable(f"--syminfo: {syminfo_path}: {e.strerror or e}", "io") from None
+    except ValueError as e:
+        raise unreadable(f"--syminfo: {syminfo_path} is not JSON: {e}", "not_json") from None
+    try:
+        doc = json.loads(text)
+    except (ValueError, RecursionError) as e:
+        raise unreadable(f"--syminfo: {syminfo_path} is not JSON: {e}", "not_json") from None
+    si = doc.get("syminfo", doc) if isinstance(doc, dict) else None
+    if not isinstance(si, dict):
+        raise unreadable(f"--syminfo: {syminfo_path}: the syminfo is not a JSON object",
+                         "not_object")
+    clock = []
+    for key in ("timezone", "session"):
+        value = si.get(key)
+        value = str(value) if value else ""
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            raise unreadable(f"syminfo.{key} must be UTF-8 text", "value_type") from None
+        clock.append(value)
+    return clock[0], clock[1]
+
+
+def _write_report(text: str, phases=None) -> int:
+    """Write the whole document to stdout and flush: 0, or 1 when stdout cannot take it. No
+    failure line (no second JSON document) may follow part of a report, so the reason goes to
+    stderr, stdout is pointed at /dev/null, the exit status is 1 and the phase writer is left
+    where it is (serialization): the watchdog sees the terminal status and the last phase.
+    With a phase session (a run past the boundary) any exception from the write is that
+    outcome, and the stderr line names it as report_post_execution_failed with the real
+    phase and the reason (resource, io or exception); without one, only OSError and ValueError
+    are, and the line is the ordinary one."""
+    caught = (OSError, ValueError) if phases is None else Exception
+    try:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+    except caught as error:
+        _discard_stdout()
+        if phases is None:
+            print(f"run_json: the report could not be written: {error}", file=sys.stderr)
+        else:
+            reason = ("resource" if isinstance(error, MemoryError)
+                      else "io" if isinstance(error, (OSError, ValueError)) else "exception")
+            print("run_json: report_post_execution_failed (phase "
+                  f"{phases.writer.phase}, reason {reason}): the report could not be written "
+                  f"whole: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _runtime_supports_selected_window(lib) -> bool:
+    """Whether this runtime can run selected-window mode: the selected-window ABI and the
+    execution observer at version 1 on the given library, the phase transport and the trusted
+    planner helper loadable. False on any missing piece, never an exception for a missing
+    one; no feed is read and nothing runs."""
+    try:
+        import run_execution_observer
+        import run_phase_transport  # noqa: F401  (present is all the probe asks of it)
+        import selected_window_plan
+        import selected_window_report as swr
+        swr.SelectedWindowAbi(lib)
+        for name in ("pf_execution_observer_version", "strategy_set_execution_observer_v1",
+                     "strategy_execution_observation_v1"):
+            if not hasattr(lib, name):
+                return False
+        lib.pf_execution_observer_version.argtypes = []
+        lib.pf_execution_observer_version.restype = ctypes.c_uint32
+        if lib.pf_execution_observer_version() != run_execution_observer.OBSERVER_VERSION:
+            return False
+        selected_window_plan.SelectedPrimaryPlanner(trusted_planner_path())
+    except (ImportError, OSError):
+        return False
+    except Exception as error:
+        if _typed_failure(error) is not None:
+            return False
+        raise
+    return True
+
+
+def _capabilities_main(args) -> int:
+    """--so LIB --capabilities-json: what this runtime supports, without OHLCV and without a
+    run. LIB is the build's trusted canary library; it is loaded like any strategy library
+    (ABI check, required exports) and no strategy is constructed."""
+    import selected_window_report as swr
+    lib = load_strategy(args.so)
+    document = swr.capabilities_record(_runtime_supports_selected_window(lib))
+    return _write_report(json.dumps(document, separators=(",", ":")) + "\n")
+
+
+def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
+                  magnifier_samples, magnifier_dist) -> int:
+    import request_feed_inventory
+    import selected_window_report as swr
+
+    # 1. The request. Nothing is read or loaded until admission has passed.
+    request = swr.validate_request(
+        policy=args.report_policy, window_start_ms=args.window_start_ms,
+        window_end_ms=args.window_end_ms, preroll_bars=args.preroll_bars,
+        fed_start_ms=args.fed_start_ms, trade_start_ms=args.trade_start_ms,
+        input_tf=input_tf.decode("utf-8"), script_tf=script_tf.decode("utf-8"))
+    if args.bench:
+        raise _request_invalid(
+            "error: --bench cannot be combined with selected-window mode", "bench")
+    # 2. The phase transport is checked before any strategy code loads. Validation only runs
+    #    no strategy and has no phases.
+    phases = None if args.validate_window_only else _open_phases(args.run_phase_fd, always=True)
+    # 3. Admission: the candidate support constants against the primary chart token and the
+    #    artifact's request-feed inventory (this --so, hashed and never loaded; the inventory
+    #    beside it). Raises InventoryAdmissionError (window_mode_unsupported) before any feed,
+    #    ctypes library, strategy or phase record. The refusal keeps its code and detail.
+    try:
+        request_feed_inventory.admit_selected_request(
+            request.script_tf, args.request_feed_inventory, args.so, inputs,
+            swr.support_policy())
+    except request_feed_inventory.InventoryAdmissionError as error:
+        raise RunFailure(error.message, error.code, error.detail) from None
+
+    # 4. Preflight: the primary feed is read once and planned by the native planner.
+    _advance(phases, "preflight")
+    bars, n, source_values_sha256 = load_bars(args.ohlcv)
+    source_bytes_sha256 = _sha256_file(args.ohlcv)
+    if source_bytes_sha256 is None:
+        raise _bars_unreadable(f"--ohlcv: {args.ohlcv}: the file cannot be read", "io")
+    timezone_text, session_text = _syminfo_clock(args.syminfo) if args.syminfo else ("", "")
+    import selected_window_plan
+    planner = selected_window_plan.SelectedPrimaryPlanner(trusted_planner_path())
+    plan = planner.plan(
+        bars, n, start_ms=request.start_ms, end_ms=request.end_ms,
+        fed_start_ms=request.fed_start_ms, preroll_bars=request.preroll_bars,
+        input_tf=request.input_tf, script_tf=request.script_tf,
+        chart_timezone=args.chart_tz, engine_timezone=timezone_text, session=session_text,
+        feed_tolerant=True)
+    refusal = swr.refusal_for_plan(
+        plan, request, timezone=swr.calendar_timezone(args.chart_tz),
+        session=swr.calendar_session(session_text))
+    if refusal is not None:
+        raise refusal
+    # The retained rows are a view of the same allocation; the evaluated hash restarts the
+    # existing primary hash domain over them (equal to the supplied hash when nothing is cut).
+    retained, fed_count = swr.retained_rows(
+        bars, n, plan["trim_index"], plan["fed_input_bars"], BarC)
+    evaluated_values_sha256 = source_values_sha256
+    if plan["trim_index"]:
+        hasher = _new_source_feed_hasher()
+        swr.update_rows_hash(hasher, bars, plan["trim_index"], fed_count, BarC,
+                             _SOURCE_FEED_RECORD)
+        evaluated_values_sha256 = hasher.hexdigest()
+    feed = {
+        "input_tf_seconds": request.input_tf_seconds,
+        "source_bytes_sha256": source_bytes_sha256,
+        "source_values_sha256": source_values_sha256,
+        "evaluated_source_values_sha256": evaluated_values_sha256,
+    }
+    calendar = swr.calendar_record(args.chart_tz, session_text)
+    if args.validate_window_only:
+        # Not execution evidence: the counts are the plan's, no strategy was loaded or run.
+        window = swr.build_report_window(request, plan, applied=False, feed=feed,
+                                         calendar=calendar)
+        return _write_report(json.dumps(
+            {"engine": "pineforge", "validation_only": True, "report_window": window},
+            separators=(",", ":")) + "\n")
+    symbol_feeds = load_symbol_feeds(args.symbol_feeds) if args.symbol_feeds else None
+
+    # 5. Execution begins before the strategy library loads.
+    _advance(phases, "execution")
+    lib = load_strategy(args.so)
+    checked = uses_checked_settings(lib)
+    if args.outputs:
+        require_outputs(lib)
+    abi = swr.SelectedWindowAbi(lib)
+    vw_on = bool(args.magnifier_volume_weighted) and bar_magnifier == 1
+    syminfo_applied: dict = {}
+
+    def _make_state():
+        """A fresh, fully configured strategy state (the ordinary run's setup without the
+        legacy trade-start gate, which selected mode refuses); freed again if it fails."""
+        nonlocal syminfo_applied
+        st = create_strategy(lib, checked)
+        try:
+            apply_settings(lib, st, inputs, overrides, checked)
+            if args.syminfo:
+                r = apply_syminfo(lib, st, args.syminfo)
+                syminfo_applied = r if isinstance(r, dict) else {}
+            if symbol_feeds:
+                install_symbol_feeds(lib, st, symbol_feeds)
+            if args.chart_tz and hasattr(lib, "strategy_set_chart_timezone"):
+                lib.strategy_set_chart_timezone(st, args.chart_tz.encode())
+            if vw_on and hasattr(lib, "strategy_set_magnifier_volume_weighted"):
+                lib.strategy_set_magnifier_volume_weighted(st, 1)
+            if args.outputs:
+                enable_outputs(lib, st)
+        except BaseException:
+            lib.strategy_free(st)
+            raise
+        return st
+
+    state = _make_state()
+    for sym in symbol_feeds or ():
+        for feed_record in sym["feeds"]:
+            feed_record["bars"] = feed_record["close_ms"] = None
+    report = ReportC()
+    binding = None
+    started = time.time()
+    try:
+        settings_receipt = _release_settings_receipt(lib, state, checked)
+        abi.configure(state, request.start_ms, request.end_ms)
+        binding = _observer_binding(lib, state, phases.writer)
+        binding.attach()
+        lib.run_backtest_full(
+            state, retained, fed_count,
+            input_tf, script_tf,
+            bar_magnifier, magnifier_samples, magnifier_dist,
+            ctypes.byref(report))
+        elapsed = time.time() - started
+        # The callback's retained exception comes before any report access.
+        binding.raise_if_failed()
+        failure = run_failure(lib, state)
+        if failure is not None:
+            # After the acknowledged boundary an engine out_of_memory or unclassified failure
+            # is report_post_execution_failed; a failure during execution is unchanged.
+            write_failure(*_post_boundary_engine_failure(failure, phases))
+            return 1
+        _require_result_assembly(phases)
+        # The engine's own counts must equal the plan's, and belong to the observed attempt.
+        swr.check_native_counts(plan, abi.counts(state), _read_observation(lib, state))
+        if (int(report.input_bars_processed) != plan["fed_input_bars"]
+                or int(report.script_bars_processed) != plan["fed_script_bars"]):
+            raise _engine_invariant(
+                "the report's processed counts differ from the plan's evaluated-fed counts")
+        if int(report.input_tf_seconds) != request.input_tf_seconds:
+            raise _engine_invariant(
+                f"the engine reports input_tf_seconds {int(report.input_tf_seconds)}, the "
+                f"request's input timeframe is {request.input_tf_seconds} seconds")
+        if int(report.equity_curve_len) != plan["window_script_bars"] + 1:
+            raise _engine_invariant(
+                f"the engine's selected curve has {int(report.equity_curve_len)} points, the "
+                f"plan says {plan['window_script_bars'] + 1}")
+        # The report spells the evaluated first and last bar as UTC dates (fmt_utc).
+        for ts in (plan["fed_first_data_ms"], plan["fed_last_data_ms"]):
+            if ts is None:
+                continue
+            try:
+                fmt_utc(ts)
+            except (ValueError, OverflowError, OSError):
+                raise _bars_unreadable(
+                    f"--ohlcv: {args.ohlcv}: timestamp {ts} is out of the calendar's range",
+                    "value") from None
+        window = swr.build_report_window(request, plan, applied=True, feed=feed,
+                                         calendar=calendar)
+        applied_runtime = {
+            "input_tf":           input_tf.decode() if input_tf else "",
+            "script_tf":          script_tf.decode() if script_tf else "",
+            "input_tf_seconds":   int(report.input_tf_seconds),
+            "script_tf_seconds":  int(report.script_tf_seconds),
+            "script_tf_ratio":    int(report.script_tf_ratio),
+            "needs_aggregation":  bool(report.needs_aggregation),
+            "bar_magnifier":      bool(bar_magnifier),
+            "magnifier_samples":  magnifier_samples,
+            "magnifier_dist":     args.magnifier_dist.strip().lower() or "endpoints",
+            "magnifier_volume_weighted": vw_on,
+            "trade_start_ms":     None,
+            "chart_tz":           args.chart_tz or "",
+        }
+        if syminfo_applied:
+            applied_runtime["syminfo"] = syminfo_applied
+        if symbol_feeds:
+            applied_runtime["symbol_feeds"] = symbol_feeds_record(symbol_feeds)
+        outputs_block = None
+        if args.outputs:
+            outputs_block = build_outputs_block(make_outputs_reader(lib, state))
+            applied_runtime["outputs"] = True
+        # ONE R object, placed in all three required places (the third is
+        # fingerprint.provenance.runtime, which is applied_runtime itself).
+        applied_runtime["report_window"] = window
+        incarnation_accessor = getattr(lib, "strategy_closed_trade_entry_incarnation", None)
+        trade_entry_incarnations = (
+            [int(incarnation_accessor(state, i)) for i in range(report.trades_len)]
+            if incarnation_accessor is not None else None)
+        out = build_report_dict(
+            report, args.ohlcv, fed_count, plan["fed_first_data_ms"], plan["fed_last_data_ms"],
+            elapsed, inputs, overrides, applied_runtime, trade_entry_incarnations)
+        out["report_window"] = window
+        out["report_shape"] = swr.report_shape_full(len(out["equity_curve"]),
+                                                    len(out["trades"]))
+        if outputs_block is not None:
+            out["outputs"] = outputs_block
+        # The selected fingerprint MUST exist, as version 2. There is no best-effort null here
+        # (the ordinary report keeps its own): any failure below ends the run before anything is
+        # serialized, as its own typed code, or, when otherwise unclassified, as
+        # report_post_execution_failed of the except clause at the end of this try.
+        provenance = build_provenance(
+            engine_version(lib),
+            None,
+            parse_bool(args.transpiled),
+            inputs,
+            overrides,
+            applied_runtime,
+            source_feed_sha256=source_values_sha256,
+        )
+        provenance["codegen"]["generated_cpp_sha256"] = (
+            _sha256_file(args.generated_cpp) if args.generated_cpp else None)
+        cpp_text = ""
+        if args.generated_cpp:
+            with open(args.generated_cpp, encoding="utf-8", errors="replace") as source:
+                cpp_text = source.read()
+        provenance = normalize_release_provenance(
+            provenance, cpp_text, settings_receipt, checked)
+        provenance["schema_version"] = swr.FINGERPRINT_VERSION
+        fingerprint = build_fingerprint(provenance)
+        fingerprint["version"] = swr.FINGERPRINT_VERSION
+        out["fingerprint"] = fingerprint
+        # R in all three places, the v2 fingerprint over the same bytes, and the anchor of the
+        # native curve at the strategy's initial capital: all checked before serialization.
+        swr.check_report_placements(out, window)
+        swr.check_selected_curve(out["equity_curve"], request.start_ms,
+                                 plan["window_script_bars"],
+                                 provenance["strategy"].get("initial_capital"))
+        # 6. Serialization begins; the timing is known now and is outside the provenance.
+        _advance(phases, "serialization")
+        out["diagnostics"]["phase_timing"] = phases.writer.phase_timing()
+        buffer = io.StringIO()
+        json.dump(out, buffer, separators=(",", ":"))
+        buffer.write("\n")
+    except Exception as error:
+        # Once the engine has acknowledged result_assembly (the REAL writer phase), an
+        # unclassified failure is report_post_execution_failed{phase, reason}; typed faults,
+        # and anything while still executing, are raised unchanged.
+        classified = _post_boundary_failure(error, phases)
+        if classified is None:
+            raise
+        raise classified from error
+    finally:
+        # Unregister the observer, clear the selection and free, on every path; the binding
+        # (callback and descriptor) stays referenced until after the state is freed.
+        detach_error = _detach_observer(binding)
+        try:
+            abi.clear(state)
+        except Exception:
+            pass
+        lib.report_free(ctypes.byref(report))
+        lib.strategy_free(state)
+        if detach_error is not None and sys.exc_info()[1] is None:
+            raise _typed_failure(detach_error) or detach_error
+    status = _write_report(buffer.getvalue(), phases)
+    if status:
+        return status
+    try:
+        phases.advance("completed")  # only after the flush
+    except RunFailure as error:
+        # The whole report is already out, so no failure line may follow it, and nothing may
+        # claim success: this is the harness fault (exit status 1, stderr), never a result.
+        print(f"run_json: harness_internal_error: the completed phase record could not be "
+              f"handed over: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv=None) -> int:
     """Run the harness. Every failure ends as the one failure line on stdout:
-    run_json's own (RunFailure) with its code, and anything unexpected as
+    run_json's own (RunFailure) with its code, a selected-window helper's typed error
+    (_typed_failure) with its code, and anything unexpected as
     harness_internal_error (its traceback on stderr). Exit status 1, or 2 for a
     command line argparse refuses. The one exception is a success report stdout
     cannot take whole (_main): exit 1 with the reason on stderr and no line after
@@ -3849,17 +4446,49 @@ def main(argv=None) -> int:
         write_failure(str(failure), failure.code, failure.code_args)
         return failure.exit_status
     except Exception as error:
+        typed = _typed_failure(error)
+        if typed is not None:
+            write_failure(str(typed), typed.code, typed.code_args)
+            return typed.exit_status
         traceback.print_exc(file=sys.stderr)
         write_failure(f"harness internal error: {type(error).__name__}: {error}",
                       "harness_internal_error")
         return 1
 
 
+def _legacy_abbreviations(argv, legacy_long, all_long):
+    """argv (sys.argv[1:] when None) as a list, with every FORMERLY UNIQUE legacy long-option
+    prefix spelled in full. argparse accepts a prefix of a long option when exactly one option
+    begins with it; the selected-window flags (--report-policy, --window-start-ms, ...) make
+    some prefixes that were unique ambiguous (--r, --re and --rep for --repeats, --c for
+    --chart-tz, --w for --warmup), which would turn a working ordinary command line into an
+    argparse error. A token `--name[=value]` whose name is not itself an option of `all_long`
+    and is a prefix of exactly one option of `legacy_long` (the long options captured before
+    the new flags were added) becomes that option, `=value` kept exactly as written. A prefix
+    of several legacy options (ambiguous before, ambiguous still) and a prefix of none (an
+    abbreviation of a new flag, left to argparse) are not touched; neither is any token that
+    does not begin with `--`, any token after a bare `--`, or any value."""
+    tokens = list(sys.argv[1:] if argv is None else argv)
+    out = []
+    for index, token in enumerate(tokens):
+        if token == "--":
+            out.extend(tokens[index:])
+            break
+        if isinstance(token, str) and token.startswith("--"):
+            name, equals, value = token.partition("=")
+            if name not in all_long:
+                matches = [option for option in legacy_long if option.startswith(name)]
+                if len(matches) == 1:
+                    token = matches[0] + equals + value
+        out.append(token)
+    return out
+
+
 def _main(argv=None) -> int:
     ap = _ArgumentParser(description=__doc__,
                          formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--so",        type=Path, required=True, help="strategy.so path")
-    ap.add_argument("--ohlcv",     type=Path, required=True, help="OHLCV CSV path")
+    ohlcv_option = ap.add_argument("--ohlcv", type=Path, required=True, help="OHLCV CSV path")
     ap.add_argument("--inputs",    default="",
                     help='JSON object overriding input.*() values, e.g. \'{"Fast Length": "8"}\'')
     ap.add_argument("--overrides", default="",
@@ -3914,7 +4543,60 @@ def _main(argv=None) -> int:
                     help="Record the library's outputs (a library compiled to record "
                          "them) and write them as the report's \"outputs\" block; see "
                          "build_outputs_block. A failure on a library that records none.")
+    # The long options of the command line BEFORE the selected-window flags below; see
+    # _legacy_abbreviations (the option strings of the parser, captured here and not typed out).
+    legacy_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
+    # Selected-window mode (selected-window/v1; see the section above main). All of these are
+    # absent from an ordinary command line, which then behaves exactly as before.
+    ap.add_argument("--report-policy", default=None,
+                    help="selected-window/v1 opts into the selected-window report; absent = "
+                         "the ordinary report, unchanged.")
+    ap.add_argument("--window-start-ms", default=None,
+                    help="Selected window start T (unix ms, calendar-aligned).")
+    ap.add_argument("--window-end-ms", default=None,
+                    help="Selected window end E (unix ms, calendar-aligned), T < E.")
+    ap.add_argument("--preroll-bars", default=None,
+                    help="Requested pre-roll N in script bars (0..5000).")
+    ap.add_argument("--fed-start-ms", default=None,
+                    help="Frozen start F of the supplied primary feed (unix ms), F <= T.")
+    ap.add_argument("--capabilities-json", action="store_true",
+                    help="With --so only: print this runtime's selected-window capabilities "
+                         "as JSON. Reads no OHLCV and runs nothing.")
+    ap.add_argument("--validate-window-only", action="store_true",
+                    help="With the selected-window options: validate and plan the loaded "
+                         "feed and print report_window (applied=false); runs no strategy.")
+    ap.add_argument("--run-phase-fd", default=None,
+                    help="N >= 3: an inherited AF_UNIX SOCK_STREAM descriptor that receives "
+                         "the run's phase records (phase transport v1).")
+    ap.add_argument("--request-feed-inventory", type=Path, default=None,
+                    help="The request-feed inventory bound to --so; read only by a "
+                         "selected-window request, for its admission.")
+    ap.add_argument("--report-shape", default=None,
+                    help="This build offers full/v1 only, for selected-window requests.")
+    ap.add_argument("--curve-point-budget", default=None,
+                    help="Refused: only the compact shape takes a budget, which this build "
+                         "does not offer.")
+    ap.add_argument("--results-digest", default=None,
+                    help="Refused: this build offers no results digest.")
+    all_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
+    argv = _legacy_abbreviations(argv, legacy_long, all_long)
+    # --capabilities-json is a probe of the runtime: it needs --so and no OHLCV. Every other
+    # command line keeps --ohlcv required, exactly as before.
+    probe = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    probe.add_argument("--capabilities-json", action="store_true")
+    if probe.parse_known_args(argv)[0].capabilities_json:
+        ohlcv_option.required = False
     args = ap.parse_args(argv)
+
+    if args.capabilities_json:
+        return _capabilities_main(args)
+    selected = _selected_requested(args)
+    if (selected or args.report_shape is not None or args.curve_point_budget is not None
+            or args.results_digest is not None):
+        import selected_window_report
+        selected_window_report.check_unsupported_options(
+            selected=selected, report_shape=args.report_shape,
+            curve_point_budget=args.curve_point_budget, results_digest=args.results_digest)
 
     inputs    = parse_kv_json(args.inputs,    "--inputs")
     overrides = parse_kv_json(args.overrides, "--overrides")
@@ -3925,11 +4607,21 @@ def _main(argv=None) -> int:
     magnifier_samples = max(2, int(args.magnifier_samples))
     magnifier_dist = parse_magnifier_dist(args.magnifier_dist)
 
+    if selected:
+        return _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
+                             magnifier_samples, magnifier_dist)
+
+    # Ordinary mode. --run-phase-fd alone adds the run's phase records (preflight, execution,
+    # result_assembly through the engine's observer, serialization, completed after the
+    # flush); the report and every other output are unchanged. None without the flag.
+    phases = _open_phases(args.run_phase_fd, always=False)
+    _advance(phases, "preflight")
     bars, n, source_feed_sha256 = load_bars(args.ohlcv)
     if n == 0:
         raise _bars_unreadable(f"--ohlcv: {args.ohlcv}: no bars", "empty")
     first_ts, last_ts = bars[0].timestamp, bars[n - 1].timestamp
 
+    _advance(phases, "execution")
     lib = load_strategy(args.so)
     checked = uses_checked_settings(lib)
     if args.outputs:
@@ -4022,15 +4714,25 @@ def _main(argv=None) -> int:
         for feed in sym["feeds"]:
             feed["bars"] = feed["close_ms"] = None
     report = ReportC()
+    binding = None
     started = time.time()
     try:
         settings_receipt = _release_settings_receipt(lib, state, checked)
+        if phases is not None:
+            binding = _observer_binding(lib, state, phases.writer)
+            binding.attach()
         _run(state, report)
         elapsed = time.time() - started
+        if binding is not None:
+            binding.raise_if_failed()  # the callback's exception, before any report access
         failure = run_failure(lib, state)
         if failure is not None:
-            write_failure(*failure)
+            # Unchanged without --run-phase-fd; with it, an out_of_memory or unclassified engine
+            # failure after the acknowledged boundary is report_post_execution_failed.
+            write_failure(*_post_boundary_engine_failure(failure, phases))
             return 1
+        if phases is not None:
+            _require_result_assembly(phases)
         # The report spells the first and last bar as UTC dates (fmt_utc).
         # Checked after the run, so the engine's own refusal of the same tape
         # keeps its line.
@@ -4105,25 +4807,38 @@ def _main(argv=None) -> int:
             out["fingerprint"] = build_fingerprint(provenance)
         except Exception:
             out["fingerprint"] = None
+        _advance(phases, "serialization")  # phase records only: the report gains no field
         # Serialized whole before any byte is written (the same json.dump), so
         # a failure while it is built never follows half a report.
         buffer = io.StringIO()
         json.dump(out, buffer, separators=(",", ":"))
         buffer.write("\n")
+    except Exception as error:
+        # Without --run-phase-fd there is no boundary and this re-raises the error unchanged.
+        classified = _post_boundary_failure(error, phases)
+        if classified is None:
+            raise
+        raise classified from error
     finally:
+        detach_error = _detach_observer(binding)  # None without --run-phase-fd
         lib.report_free(ctypes.byref(report))
         lib.strategy_free(state)
-    try:
-        sys.stdout.write(buffer.getvalue())
-        sys.stdout.flush()
-    except (OSError, ValueError) as error:
-        # A closed pipe or a full disk while the report is written: a failure
-        # line now would follow part of a report, so none is written. The reason
-        # goes to stderr and stdout to /dev/null, so the interpreter's own flush
-        # at exit cannot fail again.
-        _discard_stdout()
-        print(f"run_json: the report could not be written: {error}", file=sys.stderr)
-        return 1
+        if detach_error is not None and sys.exc_info()[1] is None:
+            raise _typed_failure(detach_error) or detach_error
+    # A closed pipe or a full disk while the report is written: a failure line now would
+    # follow part of a report, so none is written (see _write_report).
+    status = _write_report(buffer.getvalue(), phases)
+    if status:
+        return status
+    if phases is not None:
+        try:
+            phases.advance("completed")  # only after the flush
+        except RunFailure as error:
+            # The whole report is already out: no failure line may follow it, and nothing may
+            # claim success; this is the harness fault, exit status 1 on stderr.
+            print(f"run_json: harness_internal_error: the completed phase record could not be "
+                  f"handed over: {error}", file=sys.stderr)
+            return 1
     return 0
 
 

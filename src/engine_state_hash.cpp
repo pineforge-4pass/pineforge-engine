@@ -5,6 +5,8 @@
 #include "broker_state_hash_internal.hpp"
 #include "native_execution_consumer.hpp"
 
+#include <pineforge/query_refusal.hpp>
+
 namespace pineforge {
 
 // A host that overrides nothing keeps the bytes it always folded: the generic
@@ -20,6 +22,12 @@ void BacktestEngine::hash_source_extension(BrokerStateHashSink& sink) const {
 }
 
 uint64_t BacktestEngine::broker_state_hash() const {
+    // The selected-window fence comes first, ahead of the projection (a
+    // virtual, so a host override) and of any fold: a read the window no longer
+    // owns is refused by name, never answered from state it left behind.
+    if (NativeExecutionConsumer::selected_query_closed(*this)) {
+        throw SelectedWindowQueryAfterSeal();
+    }
     return broker_state_hash_projection();
 }
 

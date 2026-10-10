@@ -189,6 +189,41 @@ void set_fused_settlement(bool enabled) noexcept;
 void count_settlement_paths(bool enabled) noexcept;
 SettlementPathCounts settlement_path_counts() noexcept;
 
+// ── Report metrics (defined in engine_report.cpp) ──
+// The four metric blocks of a report, computed from explicit values and no
+// engine or host pointer, so one computation serves both readers of a presented
+// report: BacktestEngine::fill_metrics_section, right after present_report, and
+// NativeExecutionConsumer::fill_selected_report, over a captured presentation
+// after the selected seal. The trade blocks (all, longs, shorts) read `trades`
+// over `trades_len`; the equity block reads `equity_curve` over `equity_len`
+// points -- the length the engine's equity vector had when the curve was copied
+// out, not script_bars_processed -- and `net_profit` as the presentation left
+// it. The blocks are written in that order, as fill_metrics_section always did.
+// compute_equity_stats takes the non-recursive global timezone lock when
+// `chart_timezone` is non-UTC: never call this while holding a ScopedTimezone.
+void compute_report_metrics(pf_metrics_t& result,
+                            const TradeC* trades, int trades_len,
+                            const pf_equity_point_t* equity_curve, int64_t equity_len,
+                            double net_profit, double initial_capital,
+                            const std::string& chart_timezone,
+                            double first_bar_open, double last_close,
+                            int64_t bars_in_market);
+// The same four blocks with the equity block's observation count stated
+// (metrics::compute_equity_stats' final parameter): the denominator of
+// time_in_market_pct and nothing else. The signature above is this one with
+// observation_count = equity_len, so every ordinary report computes exactly what
+// it computed. A selected-window capture is its window anchor followed by M
+// script-bar observations; its reader passes equity_len = M + 1 and
+// observation_count = M, both held by the consumer apart from the presented
+// report (NativeExecutionConsumer::fill_selected_report).
+void compute_report_metrics(pf_metrics_t& result,
+                            const TradeC* trades, int trades_len,
+                            const pf_equity_point_t* equity_curve, int64_t equity_len,
+                            double net_profit, double initial_capital,
+                            const std::string& chart_timezone,
+                            double first_bar_open, double last_close,
+                            int64_t bars_in_market, int64_t observation_count);
+
 
 }  // namespace internal
 }  // namespace pineforge

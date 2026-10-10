@@ -788,7 +788,14 @@ PF_API void strategy_stream_order_actions_clear(pf_strategy_t s);
  *  build and configuration. The fingerprint's recipe belongs to the script
  *  ABI epoch: from 1.0.0 it is fixed for every 1.x engine
  *  (engine_script_run_v19), and a new recipe is a new epoch; a value from a
- *  build before 1.0.0 is not comparable. Returns 0 for NULL. */
+ *  build before 1.0.0 is not comparable. Returns 0 for NULL.
+ *
+ *  A refused read also returns 0, so a 0 alone does not tell it from an
+ *  answer: a handle that carries selected-window provenance refuses this
+ *  query once its run has sealed, and #strategy_state_query_status_v1 names
+ *  that refusal. The recorded broker-state rows
+ *  (#strategy_set_broker_state_hash_recording) are not values of this token:
+ *  it has no recorded counterpart, so a refused read leaves no witness. */
 PF_API uint64_t strategy_stream_state_hash(pf_strategy_t s);
 
 /** Push one normalized realtime trade. Returns 0 on success, -1 on failure. */
@@ -1011,8 +1018,61 @@ PF_API void strategy_set_broker_state_hash_recording(pf_strategy_t s, int on);
  *  configuration: the recipe belongs to the script ABI epoch, fixed from 1.0.0
  *  for every 1.x engine (engine_script_run_v19), so two values differ only
  *  when the states they fold differ. This is not a serialized checkpoint.
- *  Returns 0 when @p s is NULL. */
+ *  Returns 0 when @p s is NULL.
+ *
+ *  A refused read also returns 0, so a 0 alone does not tell it from an
+ *  answer: once a handle that carries selected-window provenance has sealed
+ *  its run, this query is refused and #strategy_state_query_status_v1 names
+ *  it (#PF_STATE_QUERY_SELECTED_WINDOW_AFTER_SEAL_V1). A caller that needs
+ *  that run's terminal witness enables
+ *  #strategy_set_broker_state_hash_recording BEFORE the run and reads the last
+ *  pf_report_t::broker_state_hash row; no row means no witness. */
 PF_API uint64_t strategy_broker_state_hash(pf_strategy_t s);
+
+/** What #strategy_state_query_status_v1 answers: whether the two state queries,
+ *  #strategy_broker_state_hash and #strategy_stream_state_hash, may answer a
+ *  handle now, and whether the report-only terminal-quote writers may still
+ *  store. A fixed-width word rather than an enum, so its width does not
+ *  depend on the consumer's compiler flags. */
+typedef int32_t pf_state_query_status_v1_t;
+#define PF_STATE_QUERY_ALLOWED_V1                    0 /**< Both queries may answer, and the quote writers store. */
+#define PF_STATE_QUERY_SELECTED_WINDOW_AFTER_SEAL_V1 1 /**< Both are refused, and so are the quote writers: a selected window's run has sealed. */
+#define PF_STATE_QUERY_INVALID_HANDLE_V1             2 /**< The handle is NULL. */
+
+/** The current eligibility of BOTH #strategy_broker_state_hash and
+ *  #strategy_stream_state_hash on @p s, as a #pf_state_query_status_v1_t:
+ *  #PF_STATE_QUERY_ALLOWED_V1 when either may answer,
+ *  #PF_STATE_QUERY_SELECTED_WINDOW_AFTER_SEAL_V1 when the handle carries
+ *  selected-window provenance and its run has sealed (a refused query returns
+ *  0, which is also a legal hash value: this tells the two apart), and
+ *  #PF_STATE_QUERY_INVALID_HANDLE_V1 for a NULL @p s. A handle answers
+ *  #PF_STATE_QUERY_ALLOWED_V1 unless it was admitted as a selected-window run,
+ *  which only a separately documented export can do. This is the state of the
+ *  handle at the call, not a last-error slot: it allocates nothing, changes
+ *  nothing, runs no host code and never records, replaces or clears
+ *  #strategy_get_last_error or its code, so a run's first cause stays what the
+ *  run made it. To keep a selected run's terminal witness, enable
+ *  #strategy_set_broker_state_hash_recording BEFORE the run and read the last
+ *  pf_report_t::broker_state_hash row. A broker-state row is not a value of
+ *  the #strategy_stream_state_hash token, and no row means no witness.
+ *
+ *  The same status is the observable refusal of the report-only terminal-quote
+ *  writers (docs/report-terminal-quote.md), under the same condition: once a
+ *  selected-window run has sealed (completed, failed or aborted), the Pine
+ *  host stores neither reserved syminfo metadata key,
+ *  report_terminal_quote_time_ms and report_terminal_quote_close, whatever the
+ *  value, nor a clear of the quote. In C++ the host throws
+ *  pineforge::SelectedWindowQueryAfterSeal before any store; the C export
+ *  #strategy_set_syminfo_metadata keeps its void signature and swallows every
+ *  exception, so a caller learns of the refusal from this status:
+ *  #PF_STATE_QUERY_SELECTED_WINDOW_AFTER_SEAL_V1 means a quote-key write stored
+ *  nothing. Like the state queries, the refusal records, replaces and clears no
+ *  #strategy_get_last_error or its code, latches no run failure and leaves the
+ *  captured report as it was. A handle without selected-window provenance, and
+ *  a selected handle before its first admitted begin, accept the writes as
+ *  before. Proof: tests/test_selected_quote_seal.cpp. */
+PF_API pf_state_query_status_v1_t strategy_state_query_status_v1(pf_strategy_t s);
+
 /** Number of orders resting in the engine's pending-order book after the
  *  most recent run() (ABI v4 live-runtime surface, task 7, spec 3.6): the
  *  book in force for the NEXT bar. 0 when @p s is NULL. Read-only; a

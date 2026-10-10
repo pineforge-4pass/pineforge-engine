@@ -1,5 +1,6 @@
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/checked_settings.hpp>
+#include <pineforge/query_refusal.hpp>
 #include <pineforge/source/pine_policy_support.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
@@ -8,6 +9,7 @@
 #include "../timezone.hpp"
 #include "../native_execution_consumer.hpp"
 #include "pine_host_reads.hpp"
+#include "pine_intent_state.hpp"
 #include "pine_quiet_bar.hpp"
 #include "pine_run_failure.hpp"
 
@@ -378,6 +380,11 @@ void source::PineStrategyHost::on_native_run_begin() {
     // The spec facts the per-bar callbacks read, once for the run (R5 lane
     // D2-C, pine_host_reads.hpp).
     detail::take_run_facts(detail::run_consumer(*this), adapter_, adapter_.run_counter_);
+    // A selected window's pre-roll capture state is parked for this run alone
+    // (pine_intent_state.hpp). It sits outside the try below on purpose: an
+    // allocation failure fails the begin instead of becoming a script preparation
+    // failure, and nothing is dropped silently.
+    detail::adopt_selected_intents(*this);
     source_bar_index_ = -1;
     source_last_bar_index_ = -1;
     source_callback_count_ = 0;
@@ -557,6 +564,10 @@ void source::PineStrategyHost::on_native_bar_open(
         ? static_cast<std::int64_t>(context.driver_statistics.sub_bars_processed) : 0;
     diag_magnifier_sample_ticks_processed_ = bar_magnifier_enabled_
         ? static_cast<std::int64_t>(context.driver_statistics.sample_ticks_processed) : 0;
+    // A selected window's pre-roll rows are placed here, once, before the adapter
+    // reads the bar's open: it must see them as the prior bar's orders
+    // (selected_replay_at_open). Nothing happens for any other run.
+    selected_replay_at_open(bar, context);
     adapter_.on_bar_open(bar, context);
     scheduler_.bar_open(bar, context, *this);
 }
@@ -851,28 +862,37 @@ void source::PineStrategyHost::set_syminfo_session(const std::string& session) {
     BacktestEngine::set_syminfo_session(session);
 }
 
+// The six risk setters apply live as they always did. While a selected window's
+// pre-roll evaluation captures they also append an ordered row, so the replay
+// can set them again in the script's own order against the saved configuration.
 void source::PineStrategyHost::set_pine_risk_direction(int direction) {
+    detail::capture_risk_row(*this, config_, detail::IntentRiskDirection{direction});
     adapter_.set_risk_direction(direction);
 }
 
 void source::PineStrategyHost::set_pine_risk_max_cons_loss_days(int value) {
+    detail::capture_risk_row(*this, config_, detail::IntentRiskMaxConsLossDays{value});
     adapter_.set_risk_max_cons_loss_days(value);
 }
 
 void source::PineStrategyHost::set_pine_risk_max_drawdown(double value, bool percent) {
+    detail::capture_risk_row(*this, config_, detail::IntentRiskMaxDrawdown{value, percent});
     adapter_.set_risk_max_drawdown(value, percent);
 }
 
 void source::PineStrategyHost::set_pine_risk_max_intraday_loss(double value, bool percent) {
+    detail::capture_risk_row(*this, config_, detail::IntentRiskMaxIntradayLoss{value, percent});
     adapter_.set_risk_max_intraday_loss(value, percent);
 }
 
 void source::PineStrategyHost::set_pine_risk_max_intraday_filled_orders(int limit) {
+    detail::capture_risk_row(*this, config_, detail::IntentRiskMaxIntradayFilledOrders{limit});
     if (limit > 0) adapter_.cap.adopt_script_count();
     adapter_.cap = limit;
 }
 
 void source::PineStrategyHost::set_pine_risk_max_position_size(double value) {
+    detail::capture_risk_row(*this, config_, detail::IntentRiskMaxPositionSize{value});
     adapter_.set_risk_max_position_size(value);
 }
 
@@ -1111,12 +1131,18 @@ void source::PineStrategyHost::attach_pine_execution_adapter() {
 void source::PineStrategyHost::set_syminfo_metadata(
         const std::string& key, double value) {
     if (key == "report_terminal_quote_time_ms") {
+        if (NativeExecutionConsumer::selected_query_closed(*this)) {
+            throw SelectedWindowQueryAfterSeal();
+        }
         report_quote_time_ms_ = std::isfinite(value) && value >= 0.0
             && value <= 9007199254740991.0 && std::floor(value) == value
             ? static_cast<std::int64_t>(value) : -1;
         return;
     }
     if (key == "report_terminal_quote_close") {
+        if (NativeExecutionConsumer::selected_query_closed(*this)) {
+            throw SelectedWindowQueryAfterSeal();
+        }
         report_quote_close_ = std::isfinite(value) && value > 0.0
             ? value : std::numeric_limits<double>::quiet_NaN();
         return;
@@ -1183,14 +1209,17 @@ void source::PineStrategyHost::set_syminfo_metadata(
 }
 
 bool source::PineStrategyHost::set_report_terminal_quote(std::int64_t time_ms, double close) {
-    if (time_ms < 0 || time_ms > 9007199254740991LL
-        || !std::isfinite(close) || close <= 0.0) return false;
+    if (NativeExecutionConsumer::selected_query_closed(*this) || time_ms < 0
+        || time_ms > 9007199254740991LL || !std::isfinite(close) || close <= 0.0) return false;
     report_quote_time_ms_ = time_ms;
     report_quote_close_ = close;
     return true;
 }
 
 void source::PineStrategyHost::clear_report_terminal_quote() {
+    if (NativeExecutionConsumer::selected_query_closed(*this)) {
+        throw SelectedWindowQueryAfterSeal();
+    }
     report_quote_time_ms_ = -1;
     report_quote_close_ = std::numeric_limits<double>::quiet_NaN();
 }
@@ -2335,6 +2364,12 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     // A named-entry cancellation token has source-evaluation scope.  Clear a
     // prior callback before publishing receipts and entering this body.
     adapter_.begin_source_evaluation();
+    // A selected window's pre-roll evaluation records its commands and risk
+    // statements instead of placing them: the buffer is this evaluation's alone,
+    // reset here even if the body calls nothing, and the scope closes the bracket
+    // on every exit (pine_intent_state.hpp).
+    const bool capturing = selected_begin_evaluation(bar.timestamp);
+    const detail::IntentCaptureScope capture_scope(*this, capturing);
     // Publish terminal and group-adjustment receipts before the source body
     // reads its public pending projection at this decision boundary.
     if (same_bar_exit_group_possible(trades_)) {
@@ -2372,11 +2407,26 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     // source policy view synchronized at the callback boundary; the generic
     // NativeRunSpec remains immutable for the run.
     adapter_.set_configuration(config_);
+    if (capturing) selected_finish_evaluation();
     if (temporary_index) {
         --source_bar_index_;
         bar_index_ = previous_bar_index;
         barstate_islast_ = previous_barstate_islast;
     }
+    finish_adapter_evaluation();
+    if (advance_source_index) {
+        scheduler_mark_report_point(bar.timestamp);
+        prev_bar_timestamp_ = bar.timestamp;
+    }
+}
+
+// The drains that close one source evaluation once its body has run, in the
+// order they always ran in. The replay of a selected window's pre-roll rows ends
+// its evaluation with this same list (selected_replay_at_open).
+void source::PineStrategyHost::finish_adapter_evaluation() {
+    // Quiet-bar gates (pine_quiet_bar.hpp), as at the publication.
+    using detail::QuietHook;
+    using detail::skip_quiet;
     if (!skip_quiet(QuietHook::PendingCloses, adapter_.close_batch_callsites_.empty()))
         adapter_.flush_pending_closes();
 #if PINEFORGE_PINE_QUIET_BAR_GATES
@@ -2404,10 +2454,6 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
         adapter_.anchor_relative_exits();
     }
     adapter_.order_same_point_entries();
-    if (advance_source_index) {
-        scheduler_mark_report_point(bar.timestamp);
-        prev_bar_timestamp_ = bar.timestamp;
-    }
 }
 
 void source::PineStrategyHost::scheduler_publish_suppressed_tail(const Bar& bar) {
@@ -2422,9 +2468,261 @@ void source::PineStrategyHost::scheduler_publish_suppressed_tail(const Bar& bar)
         NativeExecutionConsumer::bound(*this).pump_ambient(),
         chart_day_partition_.empty() ? nullptr : &chart_day_partition_);
     adapter_.begin_source_evaluation();
+    // A selected pre-roll tail runs no body: it leaves an empty last-present
+    // evaluation, so no earlier bar's signal outlives it.
+    selected_clear_suppressed_evaluation(bar.timestamp);
     adapter_.observe_terminal_receipts();
     scheduler_mark_report_point(bar.timestamp);
     prev_bar_timestamp_ = bar.timestamp;
+}
+
+// The selected window's pre-roll capture hooks (pine_intent_state.hpp).
+bool source::PineStrategyHost::selected_begin_evaluation(std::int64_t label_ms) {
+    const detail::PreRollEvaluation pre_roll = detail::selected_pre_roll_evaluation(*this, label_ms);
+    if (pre_roll.state == nullptr) return false;
+    detail::reset_intent_evaluation(*pre_roll.state, label_ms, config_,
+                                    adapter_.capture_replay_risk_config(), *pre_roll.point);
+    pre_roll.state->capturing = true;
+    return true;
+}
+
+void source::PineStrategyHost::selected_finish_evaluation() noexcept {
+    detail::PineIntentState* const state = detail::selected_intents(*this);
+    if (state == nullptr || !state->capturing) return;
+    state->end_config = config_;
+    state->end_risk = adapter_.capture_replay_risk_config();
+    if (const NativeCurrentPointView* const point = detail::intent_live_point(*this))
+        state->terminal_point = *point;
+    state->capturing = false;
+}
+
+void source::PineStrategyHost::selected_clear_suppressed_evaluation(std::int64_t label_ms) {
+    const detail::PreRollEvaluation pre_roll = detail::selected_pre_roll_evaluation(*this, label_ms);
+    if (pre_roll.state == nullptr) return;
+    detail::reset_intent_evaluation(*pre_roll.state, label_ms, config_,
+                                    adapter_.capture_replay_risk_config(), *pre_roll.point);
+}
+
+namespace {
+
+// The selected window's replay (selected_replay_at_open) hands each retained
+// row to the adapter's own door with exactly the arguments the script passed.
+// The host's wrappers are never used: they would take the trading-window gate
+// again and copy the live configuration over the row's. The nine command doors
+// first, then the six risk setter statements.
+void replay_intent(source::PineExecutionAdapter& adapter,
+                   const source::detail::IntentEntry& row) {
+    adapter.entry(row.id, row.is_long, row.limit_price, row.stop_price, row.qty, row.comment,
+                  row.oca_name, row.oca_type, row.qty_type);
+}
+void replay_intent(source::PineExecutionAdapter& adapter,
+                   const source::detail::IntentClose& row) {
+    adapter.close(row.id, row.comment, row.qty, row.qty_percent, row.immediately);
+}
+void replay_intent(source::PineExecutionAdapter& adapter,
+                   const source::detail::IntentCloseToken& row) {
+    adapter.close(row.id, row.comment, row.qty, row.qty_percent, row.immediately,
+                  row.callsite_token);
+}
+void replay_intent(source::PineExecutionAdapter& adapter, const source::detail::IntentCloseAll&) {
+    adapter.close_all();
+}
+void replay_intent(source::PineExecutionAdapter& adapter,
+                   const source::detail::IntentExit& row) {
+    adapter.exit(row.id, row.from_entry, row.limit_price, row.stop_price, row.trail_points,
+                 row.trail_offset, row.trail_price, row.qty_percent, row.comment, row.qty,
+                 row.oca_name, row.profit_ticks, row.loss_ticks);
+}
+void replay_intent(source::PineExecutionAdapter& adapter,
+                   const source::detail::IntentExitCancelBracket& row) {
+    adapter.exit_cancel_bracket(row.exit_id, row.from_entry, row.comment);
+}
+void replay_intent(source::PineExecutionAdapter& adapter,
+                   const source::detail::IntentCancel& row) {
+    adapter.cancel(row.id);
+}
+void replay_intent(source::PineExecutionAdapter& adapter,
+                   const source::detail::IntentCancelAll&) {
+    adapter.cancel_all();
+}
+void replay_intent(source::PineExecutionAdapter& adapter,
+                   const source::detail::IntentOrder& row) {
+    adapter.order(row.id, row.is_long, row.qty, row.limit_price, row.stop_price, row.oca_name,
+                  row.oca_type);
+}
+void replay_intent(source::PineExecutionAdapter& adapter,
+                   const source::detail::IntentRiskDirection& row) {
+    adapter.set_risk_direction(row.direction);
+}
+void replay_intent(source::PineExecutionAdapter& adapter,
+                   const source::detail::IntentRiskMaxConsLossDays& row) {
+    adapter.set_risk_max_cons_loss_days(row.value);
+}
+void replay_intent(source::PineExecutionAdapter& adapter,
+                   const source::detail::IntentRiskMaxDrawdown& row) {
+    adapter.set_risk_max_drawdown(row.value, row.percent);
+}
+void replay_intent(source::PineExecutionAdapter& adapter,
+                   const source::detail::IntentRiskMaxIntradayLoss& row) {
+    adapter.set_risk_max_intraday_loss(row.value, row.percent);
+}
+// As the host setter: the script's own statement adopts the count switches first.
+void replay_intent(source::PineExecutionAdapter& adapter,
+                   const source::detail::IntentRiskMaxIntradayFilledOrders& row) {
+    if (row.limit > 0) adapter.cap.adopt_script_count();
+    adapter.cap = row.limit;
+}
+void replay_intent(source::PineExecutionAdapter& adapter,
+                   const source::detail::IntentRiskMaxPositionSize& row) {
+    adapter.set_risk_max_position_size(row.value);
+}
+
+// A selected replay the engine cannot take, or that a native failure cut short,
+// is the engine's fault and fails the run: it is never skipped quietly. After a
+// native failure the consumer already holds the first cause and keeps it (its
+// bar-open catch records only when nothing failed before).
+[[noreturn]] void replay_invariant(const char* what) {
+    throw coded<std::logic_error>(RunFailureCode::engine_invariant, {}, what);
+}
+
+// Ends a replay bracket on every exit, normal or by exception: the retained
+// point pointer cleared, the open activation scope closed (the grants it
+// recorded stay for the Open match that follows) and the adapter's
+// configuration back to the host's. Two stores, a noexcept end and a plain
+// copy: nothing here executes a command or allocates.
+class ReplayBracket {
+public:
+    ReplayBracket(source::detail::PineIntentState& state, NativeExecutionConsumer& consumer,
+                  source::PineExecutionAdapter& adapter,
+                  const source::PineStrategyConfig& config) noexcept
+        : state_(&state), consumer_(&consumer), adapter_(&adapter), config_(&config) {}
+    ReplayBracket(const ReplayBracket&) = delete;
+    ReplayBracket& operator=(const ReplayBracket&) = delete;
+    ~ReplayBracket() noexcept {
+        state_->replay_point = nullptr;
+        consumer_->end_open_activation();
+        adapter_->set_configuration(*config_);
+    }
+
+private:
+    source::detail::PineIntentState* state_;
+    NativeExecutionConsumer* consumer_;
+    source::PineExecutionAdapter* adapter_;
+    const source::PineStrategyConfig* config_;
+};
+
+}  // namespace
+
+// The selected window's replay (pine_intent_state.hpp): the last pre-roll
+// evaluation's rows, placed once at the window's first Open, before the adapter
+// reads that bar's open. They are placed as the evaluation placed them, in its
+// own order, each under the configuration and the retained point it was called
+// with, so the Open matcher that follows sees the prior bar's orders. Nothing of
+// the script runs again; nothing is published, matched or executed here.
+void source::PineStrategyHost::selected_replay_at_open(const Bar& bar,
+                                                      const NativeDecisionContext&) {
+    pf_selected_window_config_v1 window{};
+    if (!NativeExecutionConsumer::selected_window_admitted(*this, &window)
+        || bar.timestamp < window.start_ms) {
+        return;
+    }
+    detail::PineIntentState* const state = detail::selected_intents(*this);
+    if (state == nullptr) replay_invariant("selected replay without its intent state");
+    if (state->replayed) return;
+    if (!state->has_evaluation) {
+        state->replayed = true;
+        return;
+    }
+    // The bar before the window left the book as it was: nothing held, nothing
+    // working or queued in the source layer, no recalculation open.
+    if (state->capturing) replay_invariant("selected replay inside a pre-roll capture bracket");
+    if (state->label_ms >= window.start_ms)
+        replay_invariant("selected replay of an evaluation labelled inside the window");
+    if (detail::run_position(*this).signed_units != 0.0)
+        replay_invariant("selected replay over a held position");
+    if (adapter_.coof_recalc_active_)
+        replay_invariant("selected replay inside a calc_on_order_fills recalculation");
+    if (!adapter_.live_handles_.empty() || !adapter_.delayed_market_orders_.empty()
+        || !adapter_.pending_same_bar_commands_.empty() || !adapter_.pending_entries_.empty()
+        || !adapter_.close_batch_callsites_.empty() || !adapter_.pending_bracket_legs_.empty()
+        || !adapter_.anchored_relative_legs_.empty()
+        || !adapter_.pending_relative_exits_.empty()) {
+        replay_invariant("selected replay over live requests or queued source commands");
+    }
+    // Marked before the bracket opens: a failure inside it never retries.
+    state->replayed = true;
+    NativeExecutionConsumer& consumer = NativeExecutionConsumer::bound(*this);
+    if (!consumer.begin_open_activation(*this))
+        replay_invariant("selected replay without an open activation scope");
+    const ReplayBracket bracket(*state, consumer, adapter_, config_);
+    const auto stop_if_failed = [this] {
+        if (detail::run_kind(*this) == NativeLifecycleKind::Failed)
+            replay_invariant("selected replay stopped by a native failure");
+    };
+    using detail::QuietHook;
+    using detail::skip_quiet;
+
+    // The evaluation again, from its start: the configuration it began under,
+    // then its receipts and the legs staged before its body, as
+    // scheduler_publish_source_bar takes them.
+    state->replay_point = &state->terminal_point;
+    adapter_.restore_replay_risk_config(state->start_risk);
+    adapter_.set_configuration(state->start_config);
+    adapter_.begin_source_evaluation();
+    adapter_.observe_terminal_receipts();
+    stop_if_failed();
+    if (!skip_quiet(QuietHook::BracketLegs, adapter_.pending_bracket_legs_.empty())) {
+        adapter_.flush_pending_bracket_legs({}, /*post_calculation=*/false,
+                                           /*pre_script_drain=*/true);
+    }
+    stop_if_failed();
+
+    // Its statements, in the order the script made them.
+    for (detail::PineIntentRow& row : state->rows) {
+        state->replay_point = &row.point;
+        adapter_.set_configuration(row.config);
+        std::visit([this](const auto& payload) { replay_intent(adapter_, payload); },
+                   row.payload);
+        stop_if_failed();
+    }
+
+    // Its end: the configuration it ended under (the risk configuration alone,
+    // never a counter), then the drains every source evaluation ends with.
+    state->replay_point = &state->terminal_point;
+    adapter_.set_configuration(state->end_config);
+    adapter_.restore_replay_risk_config(state->end_risk);
+    finish_adapter_evaluation();
+    stop_if_failed();
+
+    // The terminal explicit-market policy of a process_orders_on_close pass,
+    // which the close of that bar would have run: submit-only here, so the
+    // reconciled entries stay working for the open matcher. The caller's own
+    // quiet and count gate, as PineExecutionAdapter::on_bar_close asks it; the
+    // policy keeps its own filters.
+    const NativeDecisionContext& terminal = state->terminal_point.decision;
+    const bool bound = adapter_.host_ != nullptr;
+    const int bar_index = adapter_.projection_bar_index(terminal);
+    std::size_t explicit_entries = 0;
+    if (adapter_.config_.process_orders_on_close && adapter_.config_.pyramiding == 0
+        && adapter_.modeled_input()) {
+        for (const auto& handle : adapter_.live_handles_) {
+            const auto found = adapter_.placement_.find(handle.incarnation);
+            if (found != adapter_.placement_.end() && found->second.opening
+                && found->second.family == PineOrderFamily::Entry
+                && found->second.projection_created_bar == bar_index
+                && std::isfinite(found->second.requested_qty)
+                && found->second.requested_qty > 0.0) {
+                ++explicit_entries;
+            }
+        }
+    }
+    if (!skip_quiet(QuietHook::TerminalExplicitMarket, bound && explicit_entries < 2))
+        adapter_.apply_terminal_explicit_market_policy(terminal, false);
+    stop_if_failed();
+
+    // Spent only once it all succeeded. The retained configurations, the terminal
+    // point and the replayed flag stay as the hash reads them.
+    state->rows.clear();
 }
 
 // The Pine report series has one point per SOURCE slot this host published,

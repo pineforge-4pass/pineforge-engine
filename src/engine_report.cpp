@@ -54,10 +54,20 @@ void BacktestEngine::trace(const std::string& name, double value) {
 // function asking for the rows' own owner (NativeExecutionConsumer::
 // fill_snapshot_report), so a live stream's rows survive such a refusal.
 void BacktestEngine::fill_report(ReportC* out) const {
+    // A read from inside a capture or an observer call is refused before any
+    // gate: the empty report, latched for the terminal helper, and no recursive
+    // present_report.
+    if (NativeExecutionConsumer::refuse_report_in_dispatch(*this, out)) return;
     if (!NativeExecutionConsumer::rows_are_current(*this)) {
         *out = ReportC{};
         return;
     }
+    // A selected window that has sealed, and a generation admitted with an
+    // observer that has sealed, answer from the captured presentation (or the
+    // empty report) and never reach present_report again; an OFF engine, a
+    // selected run still admitted-open and a generation admitted with neither a
+    // window nor an observer fall through unchanged.
+    if (NativeExecutionConsumer::fill_selected_report(*this, out)) return;
     fill_trades_section(out);
 
     out->input_bars_processed = diag_input_bars_processed_;
@@ -128,6 +138,49 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
 }
 
 
+namespace internal {
+
+// The metric blocks of a report from explicit values; see engine_internal.hpp.
+// The statements are the ones fill_metrics_section ran inline after
+// present_report, in the same order.
+void compute_report_metrics(pf_metrics_t& result,
+                            const TradeC* trades, int trades_len,
+                            const pf_equity_point_t* equity_curve, int64_t equity_len,
+                            double net_profit, double initial_capital,
+                            const std::string& chart_timezone,
+                            double first_bar_open, double last_close,
+                            int64_t bars_in_market, int64_t observation_count) {
+    using metrics::TradeFilter;
+    result.all = metrics::compute_trade_stats(
+        trades, trades_len, TradeFilter::ALL, initial_capital);
+    result.longs = metrics::compute_trade_stats(
+        trades, trades_len, TradeFilter::LONG, initial_capital);
+    result.shorts = metrics::compute_trade_stats(
+        trades, trades_len, TradeFilter::SHORT, initial_capital);
+    result.equity = metrics::compute_equity_stats(
+        equity_curve, equity_len, initial_capital, chart_timezone,
+        first_bar_open, last_close, bars_in_market,
+        net_profit,    // includes the range-end rows, like the trades
+        observation_count);
+}
+
+// The ordinary entry: every point of the curve is an observation, which is the
+// expression compute_equity_stats' own ordinary overload evaluates.
+void compute_report_metrics(pf_metrics_t& result,
+                            const TradeC* trades, int trades_len,
+                            const pf_equity_point_t* equity_curve, int64_t equity_len,
+                            double net_profit, double initial_capital,
+                            const std::string& chart_timezone,
+                            double first_bar_open, double last_close,
+                            int64_t bars_in_market) {
+    compute_report_metrics(result, trades, trades_len, equity_curve, equity_len,
+                           net_profit, initial_capital, chart_timezone,
+                           first_bar_open, last_close, bars_in_market, equity_len);
+}
+
+}  // namespace internal
+
+
 // Copy the equity curve out and compute all metric blocks. Must run AFTER
 // fill_trades_section (reads out->trades). Owns the curve allocation;
 // freed by free_report (which expects new pf_equity_point_t[n]).
@@ -146,17 +199,10 @@ void BacktestEngine::fill_metrics_section(ReportC* out) const {
         out->equity_curve = nullptr;
     }
     present_report(out);
-    using metrics::TradeFilter;
-    out->metrics.all = metrics::compute_trade_stats(
-        out->trades, out->trades_len, TradeFilter::ALL, initial_capital_);
-    out->metrics.longs = metrics::compute_trade_stats(
-        out->trades, out->trades_len, TradeFilter::LONG, initial_capital_);
-    out->metrics.shorts = metrics::compute_trade_stats(
-        out->trades, out->trades_len, TradeFilter::SHORT, initial_capital_);
-    out->metrics.equity = metrics::compute_equity_stats(
-        out->equity_curve, n, initial_capital_, chart_timezone_,
-        first_bar_open_, current_bar_.close, bars_in_market_,
-        out->net_profit);   // includes the range-end rows, like the trades
+    compute_report_metrics(out->metrics, out->trades, out->trades_len,
+                           out->equity_curve, n, out->net_profit,
+                           initial_capital_, chart_timezone_,
+                           first_bar_open_, current_bar_.close, bars_in_market_);
 }
 
 

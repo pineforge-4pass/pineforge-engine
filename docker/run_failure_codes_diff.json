@@ -8,14 +8,74 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "bd2b3dcbe1646275cb392e8f3408cccab21186671be4908fb72aa0d54f19d596"
+    "catalogSha256": "7d61bad51f1f624a83fe90abb64646758c89f6e23c099e52167f9f1c11994d26"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
     "after": "pineforge-run-failure-catalog/v1"
   },
-  "metadataChanges": [],
+  "metadataChanges": [
+    {
+      "path": "kinds.nullable_string",
+      "beforePresent": false,
+      "afterPresent": true,
+      "before": null,
+      "after": "UTF-8 text, or null when the request value is absent."
+    },
+    {
+      "path": "kinds.scalar",
+      "beforePresent": false,
+      "afterPresent": true,
+      "before": null,
+      "after": "A request value: UTF-8 text, an integer, a finite number, true, false or null."
+    },
+    {
+      "path": "kinds.string",
+      "beforePresent": false,
+      "afterPresent": true,
+      "before": null,
+      "after": "UTF-8 text the trusted raiser supplies (a request value or a fixed name)."
+    }
+  ],
   "added": [
+    {
+      "code": "engine_command_value_invalid",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "field": {
+            "kind": "string"
+          },
+          "reason": {
+            "kind": "vocab",
+            "values": [
+              "nonfinite",
+              "invalid_unicode",
+              "numeric_overflow"
+            ]
+          },
+          "stage": {
+            "kind": "vocab",
+            "values": [
+              "sizing",
+              "margin",
+              "fee",
+              "slippage",
+              "relative_price",
+              "risk",
+              "settlement"
+            ]
+          }
+        },
+        "class": "engine_fault",
+        "description": "The engine derived an invalid command value (non-finite, invalid text or an overflowing finite value) from its own book, equity, margin, sizing, fee, slippage or settlement state: an engine fault, never a strategy failure. stage names where it was derived.",
+        "english": [
+          "The engine derived an invalid execution value."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
     {
       "code": "outputs_limit",
       "collection": "codes",
@@ -64,6 +124,569 @@
           "outputs: bar {bar} was recalculated after its events were cleared",
           "outputs: recording cannot change during a run",
           "outputs: this module declares no outputs"
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "report_platform_unavailable",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "field": {
+            "kind": "vocab",
+            "values": [
+              "os",
+              "architecture",
+              "pointer_bits",
+              "endianness",
+              "engine_library_sha256",
+              "harness_sha256"
+            ]
+          }
+        },
+        "class": "engine_fault",
+        "description": "The runner cannot establish an execution-platform fact its report contract requires. A pre-load backstop for an image that claimed results-digest support, raised before any strategy code loads.",
+        "english": [
+          "The runner cannot establish required execution-platform identity."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "report_post_execution_failed",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "phase": {
+            "kind": "vocab",
+            "values": [
+              "result_assembly",
+              "results_digest",
+              "serialization"
+            ]
+          },
+          "reason": {
+            "kind": "vocab",
+            "values": [
+              "deadline",
+              "exception",
+              "io",
+              "resource"
+            ]
+          }
+        },
+        "class": "engine_fault",
+        "description": "The engine could not finish producing the result after strategy execution completed: a deadline or an otherwise unclassified failure in result assembly, the results digest or serialization. An engine fault, never a strategy failure; a specific typed engine fault keeps its own code.",
+        "english": [
+          "The engine could not finish producing the result after strategy execution completed."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "report_result_invalid",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "field": {
+            "kind": "string"
+          },
+          "reason": {
+            "kind": "vocab",
+            "values": [
+              "nonfinite",
+              "invalid_unicode",
+              "column_schema",
+              "type_schema"
+            ]
+          }
+        },
+        "class": "engine_fault",
+        "description": "The report producer generated an invalid canonical result: an engine or harness fault, never a strategy failure.",
+        "english": [
+          "The report producer generated an invalid canonical result."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "report_shape_request_invalid",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "option": {
+            "kind": "vocab",
+            "values": [
+              "report_shape",
+              "curve_point_budget"
+            ]
+          },
+          "value": {
+            "kind": "scalar"
+          }
+        },
+        "class": "input",
+        "description": "The report-shape request is invalid: the report shape or the curve point budget carries a value the runner refuses.",
+        "english": [
+          "The report-shape request is invalid."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "report_shape_unsupported",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "shape": {
+            "kind": "string"
+          }
+        },
+        "class": "unsupported",
+        "description": "The runner does not support the requested report shape. The first selected-window build supports the full shape only.",
+        "english": [
+          "This runner does not support the requested report shape."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "results_digest_unsupported",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "requested": {
+            "kind": "string"
+          }
+        },
+        "class": "unsupported",
+        "description": "The runner does not support the requested results digest. The first selected-window build declares no digest.",
+        "english": [
+          "This runner does not support the requested results digest."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "strategy_value_invalid",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "field": {
+            "kind": "string"
+          },
+          "reason": {
+            "kind": "vocab",
+            "values": [
+              "nonfinite",
+              "invalid_unicode",
+              "numeric_overflow"
+            ]
+          }
+        },
+        "class": "strategy",
+        "description": "The strategy supplied an invalid actionable value (a non-finite number, invalid text or an overflowing finite value) to a declaration, setting or command that needs a valid one.",
+        "english": [
+          "The strategy supplied an invalid execution value."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "window_boundary_unaligned",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "bound": {
+            "kind": "vocab",
+            "values": [
+              "start",
+              "end",
+              "fed_start"
+            ]
+          },
+          "next_boundary_ms": {
+            "kind": "integer"
+          },
+          "previous_boundary_ms": {
+            "kind": "integer"
+          },
+          "value_ms": {
+            "kind": "integer"
+          }
+        },
+        "class": "input",
+        "description": "A selected-window boundary (start, end or fed start) is not aligned to the script calendar; the adjacent boundaries are carried.",
+        "english": [
+          "A window boundary is not aligned to the script calendar."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "window_calendar_unsupported",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "session": {
+            "kind": "nullable_string"
+          },
+          "timezone": {
+            "kind": "string"
+          }
+        },
+        "class": "unsupported",
+        "description": "The timezone and session the selected window needs make a calendar the engine does not support; session may be null.",
+        "english": [
+          "The requested window calendar is unsupported."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "window_feed_identity_changed",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "actual_sha256": {
+            "kind": "string"
+          },
+          "expected_sha256": {
+            "kind": "string"
+          },
+          "feed_id": {
+            "kind": "string"
+          }
+        },
+        "class": "input",
+        "description": "The frozen primary feed's bytes differ from the SHA-256 the study recorded. The two digests are 64-character hexadecimal strings supplied by the trusted wrapper; the registry checks only that they are text.",
+        "english": [
+          "The frozen primary feed bytes have changed."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "window_feed_range_invalid",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "end_ms": {
+            "kind": "integer"
+          },
+          "fed_start_ms": {
+            "kind": "integer"
+          },
+          "time_ms": {
+            "kind": "integer"
+          }
+        },
+        "class": "input",
+        "description": "A primary-feed bar lies outside the frozen selected-window range.",
+        "english": [
+          "The primary feed lies outside the frozen range."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "window_input_cap_exceeded",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "actual": {
+            "kind": "integer"
+          },
+          "cap_name": {
+            "kind": "vocab",
+            "values": [
+              "run_input_bars",
+              "run_script_bars",
+              "native_input_bars",
+              "hpo_input_bars",
+              "hpo_script_bars",
+              "hpo_memory_bytes",
+              "symbol_feed_input_bars",
+              "symbol_feeds_total_input_bars"
+            ]
+          },
+          "limit": {
+            "kind": "integer"
+          }
+        },
+        "class": "input",
+        "description": "The supplied history exceeds a configured input cap; cap_name says which.",
+        "english": [
+          "The supplied history exceeds the configured input cap."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "window_legacy_flag_conflict",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "option": {
+            "kind": "string"
+          }
+        },
+        "class": "input",
+        "description": "The legacy trade-start option was combined with selected-window mode.",
+        "english": [
+          "The legacy trade-start option cannot be combined with selected-window mode."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "window_lineage_mismatch",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "actual": {
+            "kind": "scalar"
+          },
+          "expected": {
+            "kind": "scalar"
+          },
+          "field": {
+            "kind": "string"
+          }
+        },
+        "class": "input",
+        "description": "A requested window field differs from the study's lineage.",
+        "english": [
+          "The requested window differs from the study lineage."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "window_mode_unsupported",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "capability": {
+            "kind": "string"
+          },
+          "requested": {
+            "kind": "integer",
+            "optional": true
+          },
+          "timeframe": {
+            "kind": "string",
+            "optional": true
+          }
+        },
+        "class": "unsupported",
+        "description": "The runner does not support the requested selected-window mode or a limit its build declares on it. capability names what is unsupported; timeframe carries the offending canonical timeframe and requested the offending pre-roll length where the refusal names one. Which optional argument goes with which capability is the trusted raisers' duty, not the registry's.",
+        "english": [
+          "This runner does not support the requested window mode."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "window_no_observations",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "end_ms": {
+            "kind": "integer"
+          },
+          "start_ms": {
+            "kind": "integer"
+          }
+        },
+        "class": "input",
+        "description": "The selected window holds no observations to score.",
+        "english": [
+          "The study has no selected observations to score."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "window_preroll_out_of_range",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "requested": {
+            "kind": "integer"
+          }
+        },
+        "class": "input",
+        "description": "The requested pre-roll is outside the range of zero to 5000 script bars.",
+        "english": [
+          "Pre-roll must be between zero and 5000 script bars."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "window_prestart_fill",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "fill_ms": {
+            "kind": "integer"
+          },
+          "start_ms": {
+            "kind": "integer"
+          }
+        },
+        "class": "engine_fault",
+        "description": "A fill was dated before the selected window: an engine invariant failure.",
+        "english": [
+          "A fill was dated before the selected window."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "window_prestart_state_violation",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "position_size": {
+            "kind": "number"
+          },
+          "resting_orders": {
+            "kind": "integer"
+          },
+          "time_ms": {
+            "kind": "integer"
+          }
+        },
+        "class": "engine_fault",
+        "description": "A position or a resting order existed before the selected window started: an engine invariant failure.",
+        "english": [
+          "The selected-window pre-start state invariant failed."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "window_pruner_unsupported",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "pruner": {
+            "kind": "string"
+          }
+        },
+        "class": "unsupported",
+        "description": "A study that requests a selected window together with a trial pruner other than none is refused before any trial is allocated; pruner is the requested pruner's name as the caller sent it. Optimizer-only: run_json never raises it, because a backtest has no pruner.",
+        "english": [
+          "The selected window cannot be combined with this trial pruner."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "window_range_invalid",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "end_ms": {
+            "kind": "integer"
+          },
+          "fed_start_ms": {
+            "kind": "integer"
+          },
+          "start_ms": {
+            "kind": "integer"
+          }
+        },
+        "class": "input",
+        "description": "The selected-window range (start, end, fed start) is invalid.",
+        "english": [
+          "The selected-window range is invalid."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "window_report_mismatch",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "actual": {
+            "kind": "integer"
+          },
+          "expected": {
+            "kind": "integer"
+          },
+          "field": {
+            "kind": "vocab",
+            "values": [
+              "counts.window_input_bars",
+              "counts.window_script_bars",
+              "metering.billable_input_bars"
+            ]
+          }
+        },
+        "class": "engine_fault",
+        "description": "The report disagrees with the trusted window counts. Raised by the caller that compares them and never emitted by run_json.",
+        "english": [
+          "The report disagrees with trusted window counts."
+        ],
+        "retryable": false,
+        "since": "1.5.0"
+      }
+    },
+    {
+      "code": "window_request_invalid",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "option": {
+            "kind": "vocab",
+            "values": [
+              "report_policy",
+              "window_start_ms",
+              "window_end_ms",
+              "preroll_bars",
+              "fed_start_ms",
+              "feed_bytes_sha256",
+              "input_tf",
+              "script_tf",
+              "chart_tz",
+              "trade_start_ms",
+              "window",
+              "schema_version",
+              "objective"
+            ]
+          }
+        },
+        "class": "input",
+        "description": "The selected-window request is invalid: option names the missing, malformed or conflicting field.",
+        "english": [
+          "The selected-window request is invalid."
         ],
         "retryable": false,
         "since": "1.5.0"

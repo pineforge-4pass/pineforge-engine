@@ -2,6 +2,7 @@
 #include <pineforge/source/pine_native_host.hpp>
 
 #include "../broker_state_hash_internal.hpp"
+#include "pine_intent_state.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -894,6 +895,142 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     f.b(deferred_boundary_input_.active);
 }
 
+namespace {
+
+// The selected window's pre-roll capture (src/source/pine_intent_state.hpp), in
+// its own domain and folded only while a selected run parks the state, so every
+// run without one keeps the hash it had. Each payload folds its own argument
+// fields in declaration order; the configuration and point folds follow the ones
+// the adapter and the kernel already use.
+constexpr char kSourceIntentDomain[] = "pineforge-source-intent/v1";
+
+void hash_intent_config(BrokerStateHashSink& f, const source::PineStrategyConfig& config) {
+    f.b(config.process_orders_on_close); f.b(config.calc_on_order_fills);
+    f.d(config.initial_capital); f.i(config.default_qty_type); f.d(config.default_qty_value);
+    f.i(config.pyramiding); f.d(config.commission_value); f.i(config.commission_type);
+    f.i(config.slippage); f.d(config.margin_long); f.d(config.margin_short);
+    f.b(config.close_entries_rule_any); f.b(config.src_series_active);
+}
+
+// The saved risk configuration alone: the seven setter fields with their
+// sticky percent flags, and the cap's three configuration fields.
+void hash_intent_risk(BrokerStateHashSink& f, const source::PineReplayRiskConfig& risk) {
+    f.i(risk.direction); f.i(risk.max_cons_loss_days); f.d(risk.max_drawdown);
+    f.b(risk.max_drawdown_percent); f.d(risk.max_intraday_loss);
+    f.b(risk.max_intraday_loss_percent); f.d(risk.max_position_size);
+    f.i(static_cast<std::int64_t>(risk.cap_attachment)); f.i(risk.cap_configuration.limit);
+    f.b(risk.cap_configuration.skip_noop_market); f.b(risk.cap_configuration.defer_pooc_close);
+    f.b(risk.cap_configuration.count_pooc_full_close); f.u(risk.cap_declared);
+}
+
+void hash_intent_interval(BrokerStateHashSink& f, const native_calendar::NativeInterval& interval) {
+    f.i(interval.open_ms); f.i(interval.eligible_open_ms); f.i(interval.last_traded_close_ms);
+    f.i(interval.next_period_open_ms); f.i(interval.next_input_open_ms);
+}
+
+// A retained point, every value field in declaration order. The four session-day
+// facts are presentation to the kernel's own digests, but the replay reads the
+// retained point back, so the retained value folds whole.
+void hash_intent_point(BrokerStateHashSink& f, const NativeCurrentPointView& point) {
+    const NativeCoordinate& c = point.decision.coordinate;
+    f.u(c.ordinal); f.i(c.interval_index); f.i(c.input_interval_index); f.i(c.open_ms);
+    f.i(c.eligible_open_ms); f.i(c.last_traded_close_ms); f.i(c.next_period_open_ms);
+    f.i(c.next_input_open_ms); f.i(c.effective_time_ms); f.i(c.source_price_time_ms);
+    f.u(static_cast<std::uint64_t>(c.provenance)); f.u(static_cast<std::uint64_t>(c.path_phase));
+    f.u(static_cast<std::uint64_t>(c.completion));
+    f.i(point.decision.decision_floor_ms);
+    hash_intent_interval(f, point.decision.input_interval);
+    hash_intent_interval(f, point.decision.script_interval);
+    f.i(point.decision.sub_index); f.i(point.decision.sub_count);
+    f.b(point.decision.is_terminal_sub_bar);
+    f.b(point.decision.in_session); f.b(point.decision.opens_session_day);
+    f.b(point.decision.closes_session_day); f.b(point.decision.closes_session_day_open_ended);
+    f.i(point.decision.sub_bar_open_ms); f.i(point.decision.script_bar_open_ms);
+    const NativeDriverStatistics& statistics = point.decision.driver_statistics;
+    f.b(statistics.intrabar_path_enabled); f.i(statistics.sub_bars_per_script_bar);
+    f.i(statistics.samples_per_sub_bar); f.u(statistics.sub_bars_processed);
+    f.u(statistics.sample_ticks_processed);
+    f.d(point.price); f.u(static_cast<std::uint64_t>(point.quote_kind));
+    f.u(point.quote_origin_ordinal);
+}
+
+void hash_intent_payload(BrokerStateHashSink& f, const source::detail::IntentEntry& v) {
+    f.s(v.id); f.b(v.is_long); f.d(v.limit_price); f.d(v.stop_price); f.d(v.qty);
+    f.s(v.comment); f.s(v.oca_name); f.i(v.oca_type); f.i(v.qty_type);
+}
+void hash_intent_payload(BrokerStateHashSink& f, const source::detail::IntentClose& v) {
+    f.s(v.id); f.s(v.comment); f.d(v.qty); f.d(v.qty_percent); f.b(v.immediately);
+}
+void hash_intent_payload(BrokerStateHashSink& f, const source::detail::IntentCloseToken& v) {
+    f.s(v.id); f.s(v.comment); f.d(v.qty); f.d(v.qty_percent); f.b(v.immediately);
+    f.u(v.callsite_token);
+}
+void hash_intent_payload(BrokerStateHashSink&, const source::detail::IntentCloseAll&) {}
+void hash_intent_payload(BrokerStateHashSink& f, const source::detail::IntentExit& v) {
+    f.s(v.id); f.s(v.from_entry); f.d(v.limit_price); f.d(v.stop_price);
+    f.d(v.trail_points); f.d(v.trail_offset); f.d(v.trail_price); f.d(v.qty_percent);
+    f.s(v.comment); f.d(v.qty); f.s(v.oca_name); f.d(v.profit_ticks); f.d(v.loss_ticks);
+}
+void hash_intent_payload(BrokerStateHashSink& f,
+                         const source::detail::IntentExitCancelBracket& v) {
+    f.s(v.exit_id); f.s(v.from_entry); f.s(v.comment);
+}
+void hash_intent_payload(BrokerStateHashSink& f, const source::detail::IntentCancel& v) {
+    f.s(v.id);
+}
+void hash_intent_payload(BrokerStateHashSink&, const source::detail::IntentCancelAll&) {}
+void hash_intent_payload(BrokerStateHashSink& f, const source::detail::IntentOrder& v) {
+    f.s(v.id); f.b(v.is_long); f.d(v.qty); f.d(v.limit_price); f.d(v.stop_price);
+    f.s(v.oca_name); f.i(v.oca_type);
+}
+void hash_intent_payload(BrokerStateHashSink& f,
+                         const source::detail::IntentRiskDirection& v) {
+    f.i(v.direction);
+}
+void hash_intent_payload(BrokerStateHashSink& f,
+                         const source::detail::IntentRiskMaxConsLossDays& v) {
+    f.i(v.value);
+}
+void hash_intent_payload(BrokerStateHashSink& f,
+                         const source::detail::IntentRiskMaxDrawdown& v) {
+    f.d(v.value); f.b(v.percent);
+}
+void hash_intent_payload(BrokerStateHashSink& f,
+                         const source::detail::IntentRiskMaxIntradayLoss& v) {
+    f.d(v.value); f.b(v.percent);
+}
+void hash_intent_payload(BrokerStateHashSink& f,
+                         const source::detail::IntentRiskMaxIntradayFilledOrders& v) {
+    f.i(v.limit);
+}
+void hash_intent_payload(BrokerStateHashSink& f,
+                         const source::detail::IntentRiskMaxPositionSize& v) {
+    f.d(v.value);
+}
+
+void hash_selected_intents(BrokerStateHashSink& f, const source::detail::PineIntentState& state) {
+    f.s(kSourceIntentDomain);
+    // The native run follows the source identity normalization of a handle's run
+    // (hash_source_run_identity): it protects a stale state and is not a
+    // source-visible fact, so it is never a per-run nonce. The owner, the kind
+    // tag, the bracket flag and the replay pointer are addresses or transient and
+    // are not folded.
+    f.u(0);
+    f.b(state.has_evaluation); f.b(state.replayed); f.i(state.label_ms);
+    hash_intent_config(f, state.start_config); hash_intent_config(f, state.end_config);
+    hash_intent_risk(f, state.start_risk); hash_intent_risk(f, state.end_risk);
+    hash_intent_point(f, state.terminal_point);
+    f.u(state.rows.size());
+    for (const source::detail::PineIntentRow& row : state.rows) {
+        f.u(row.payload.index());
+        std::visit([&f](const auto& payload) { hash_intent_payload(f, payload); }, row.payload);
+        hash_intent_config(f, row.config);
+        hash_intent_point(f, row.point);
+    }
+}
+
+} // namespace
+
 void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const {
     f.s(kSourceAdapterDomain);
     f.b(config_.process_orders_on_close); f.b(config_.calc_on_order_fills);
@@ -1011,6 +1148,10 @@ void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const
             f.i(site.handed);
         }
     }
+    // The selected window's pre-roll capture, only while a selected run parks it
+    // (selected_intents allocates nothing and is null for every other run).
+    if (const source::detail::PineIntentState* const intents = detail::selected_intents(*this))
+        hash_selected_intents(f, *intents);
     adapter_.hash_state(f); scheduler_.hash_state(f);
 }
 

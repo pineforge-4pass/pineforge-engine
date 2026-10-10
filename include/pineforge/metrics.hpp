@@ -25,5 +25,21 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
                                        double first_open, double last_close,
                                        int64_t bars_in_market, double net_profit);
 
+// The same computation with the observation count stated, not read from the
+// curve length. observation_count is the denominator of time_in_market_pct
+// (bars_in_market / observation_count; NaN when it is not positive) and
+// nothing else: every walk, guard and formula runs over the n curve points as
+// above. The ordinary overload is this one with observation_count = n. A
+// selected-window curve is its window anchor followed by M script-bar
+// observations, so its caller passes n = M + 1 and observation_count = M: the
+// anchor is a curve point and the base of the first return, not a bar. Same
+// timezone-lock rule as above.
+pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n,
+                                       double initial_capital,
+                                       const std::string& chart_tz,
+                                       double first_open, double last_close,
+                                       int64_t bars_in_market, double net_profit,
+                                       int64_t observation_count);
+
 }  // namespace metrics
 }  // namespace pineforge

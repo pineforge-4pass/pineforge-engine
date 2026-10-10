@@ -17,7 +17,14 @@ From 1.0.0, within one `PINEFORGE_VERSION_MAJOR` (the
 - **`extern "C"` functions are append-only.** New functions may be added;
   existing ones are never removed or renamed.
 - **Enum values** are **stable**. New enumerators may be added; existing
-  values never change.
+  values never change. One exception, unreleased and targeted for 1.5.0:
+  `RunFailureCode` in the installed C++ header
+  `include/pineforge/run_failure_codes.hpp` is renumbered, and 36 of the 38
+  codes released in 1.4.0 get new numeric values (`none` and the first two
+  codes keep theirs). A run-failure code crosses the C boundary by its name,
+  never by its number, so a caller that reads code names is unaffected; C++
+  code that stores or compares the numbers must be rebuilt against the new
+  header.
 
 Before 1.0 a MINOR release could grow a caller-visible struct: v0.13.0
 appended `pf_trade_t::open_at_end`, and the ABI v4 fields of `pf_report_t`
@@ -62,9 +69,9 @@ Three layers:
 
 The counts below include recorded outputs and describe the unreleased API targeted for 1.5.0; recorded outputs are not part of 1.4.0.
 
-A built strategy `.so` exposes 89 compiled-strategy `PF_API` declarations
-(73 runtime implementations plus sixteen generated exports) plus 43 native-host
-declarations: 132 `PF_API` exports in total; a script that declares
+A built strategy `.so` exposes 96 compiled-strategy `PF_API` declarations
+(80 runtime implementations plus sixteen generated exports) plus 43 native-host
+declarations: 139 `PF_API` exports in total; a script that declares
 `use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, and a
 module that records outputs its three outputs exports. `nm -gU` also reports libc++'s
 `std::piecewise_construct`; no project-internal C++ symbol is exported. The grouped table below is a guide,
@@ -117,7 +124,7 @@ not the complete inventory:
 | `strategy_signal_safety_receipt` | @ref pf_outputs (a recording module's own) |
 
 Sixteen per-strategy exports include the five create/run/free lifecycle
-functions. The remaining 73 runtime implementations, including the
+functions. The remaining 80 runtime implementations, including the
 closed-trade incarnation accessor, are force-linked into each strategy library,
 so consumers resolve the same complete ABI from the strategy `.so`. All
 additions remain covered by the minor-version append-only guarantee.

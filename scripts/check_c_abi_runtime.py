@@ -3,11 +3,11 @@
 
 Two inventories, pinned independently so neither can drift into the other:
 
-  1. The compiled-strategy surface. include/pineforge/pineforge.h lists the
-     harness-facing symbols; only those in EXPECTED_RUNTIME are defined in the
-     static runtime (src/c_abi.cpp) — the rest are emitted per-strategy by the
-     transpiler (see comment in src/c_abi.cpp). If that split changes, update
-     EXPECTED_RUNTIME below and the comment block in c_abi.cpp together.
+  1. The compiled-strategy surface. pineforge.h plus the v1 headers named in
+     RUNTIME_HEADERS list the harness-facing symbols; only those in
+     EXPECTED_RUNTIME are defined in the static runtime (src/c_abi.cpp) — the
+     rest are emitted per-strategy by the transpiler. If that split changes,
+     update EXPECTED_RUNTIME below and the comment block in c_abi.cpp together.
 
   2. The C-level native host API (R5 lane L13). Its declarations live in
      include/pineforge/native_c_api.h and its implementations in
@@ -62,6 +62,7 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_last_bar_dual_entry_path",
     "strategy_set_broker_state_hash_recording",
     "strategy_broker_state_hash",
+    "strategy_state_query_status_v1",
     "strategy_pending_orders_len",
     "strategy_pending_order_get",
     "strategy_pending_order_layout",
@@ -104,10 +105,28 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_outputs_event_get",
     "strategy_outputs_events_clear",
     "strategy_outputs_constants_copy",
+    # Execution observer v1 (execution_observer.h) and selected window v1
+    # (selected_window.h): each header's version getter, setter and reader.
+    "pf_execution_observer_version",
+    "strategy_set_execution_observer_v1",
+    "strategy_execution_observation_v1",
+    "pf_selected_window_version",
+    "strategy_set_selected_window_v1",
+    "strategy_selected_window_counts_v1",
 })
 
-EXPECTED_PUBLIC_DECLARATIONS = 93
-EXPECTED_RUNTIME_IMPLEMENTATIONS = 73
+# The headers under include/pineforge/ whose PF_API declarations are read as one
+# set for the two counts below: pineforge.h plus the two additive v1 headers,
+# every symbol of which is defined in src/c_abi.cpp. native_c_api.h is not one
+# of them: it is the independent inventory pinned by EXPECTED_NATIVE_C_API.
+RUNTIME_HEADERS = (
+    "pineforge.h",
+    "execution_observer.h",
+    "selected_window.h",
+)
+
+EXPECTED_PUBLIC_DECLARATIONS = 100
+EXPECTED_RUNTIME_IMPLEMENTATIONS = 80
 
 # Runtime setters whose data a stream cannot take: the source host refuses
 # stream_begin() while any of them holds data (the native daily feed since its
@@ -124,7 +143,7 @@ HISTORICAL_ONLY_RUNTIME = frozenset({
 })
 HISTORICAL_ONLY_PHRASE = "stream_begin() fails closed"
 
-# The C-level native host API. Additive to the 73 above: every symbol here is
+# The C-level native host API. Additive to the 80 above: every symbol here is
 # declared in include/pineforge/native_c_api.h and implemented in
 # src/native_c_host.cpp, and neither file contributes to the two counts above.
 EXPECTED_NATIVE_C_API = frozenset({
@@ -189,13 +208,16 @@ def _pf_api_names(path: Path) -> list[str]:
 
 
 def main() -> int:
-    header = ROOT / "include" / "pineforge" / "pineforge.h"
+    include_dir = ROOT / "include" / "pineforge"
+    header = include_dir / "pineforge.h"
+    headers = [include_dir / name for name in RUNTIME_HEADERS]
+    declared_in = ", ".join(RUNTIME_HEADERS)
     c_abi = ROOT / "src" / "c_abi.cpp"
-    if not header.is_file() or not c_abi.is_file():
-        print("check_c_abi_runtime: missing pineforge.h or c_abi.cpp", file=sys.stderr)
+    if not all(path.is_file() for path in headers) or not c_abi.is_file():
+        print(f"check_c_abi_runtime: missing {declared_in} or c_abi.cpp", file=sys.stderr)
         return 2
 
-    header_funcs = _pf_api_names(header)
+    header_funcs = [name for path in headers for name in _pf_api_names(path)]
     c_abi_funcs = _pf_api_names(c_abi)
 
     hdr_set = set(header_funcs)
@@ -210,7 +232,8 @@ def main() -> int:
         return 1
 
     if len(header_funcs) != len(hdr_set):
-        print("check_c_abi_runtime: duplicate PF_API lines in pineforge.h", file=sys.stderr)
+        print(f"check_c_abi_runtime: duplicate PF_API lines across {declared_in}",
+              file=sys.stderr)
         return 1
 
     if len(c_abi_funcs) != len(abi_set):
@@ -219,7 +242,7 @@ def main() -> int:
 
     if len(header_funcs) != EXPECTED_PUBLIC_DECLARATIONS:
         print(
-            "check_c_abi_runtime: pineforge.h PF_API declaration count "
+            f"check_c_abi_runtime: {declared_in} PF_API declaration count "
             f"{len(header_funcs)} != {EXPECTED_PUBLIC_DECLARATIONS}",
             file=sys.stderr,
         )
@@ -244,7 +267,7 @@ def main() -> int:
     if not abi_set <= hdr_set:
         print(
             "check_c_abi_runtime: c_abi.cpp implements PF_API symbols "
-            f"not declared in pineforge.h: {sorted(abi_set - hdr_set)}",
+            f"not declared in {declared_in}: {sorted(abi_set - hdr_set)}",
             file=sys.stderr,
         )
         return 1

@@ -407,6 +407,18 @@ public:
     int short_seed_collision_role_v1(native_order::RequestHandle) const noexcept;
     void enable_pine_intraday_cap();
     void attach_pine_execution_adapter();
+    // The report-only terminal quote (docs/report-terminal-quote.md) has three
+    // writers, and none stores once a selected-window run has sealed
+    // (selected_window.h; the fence of query_refusal.hpp): set_syminfo_metadata,
+    // for the two reserved keys report_terminal_quote_time_ms and
+    // report_terminal_quote_close, and clear_report_terminal_quote throw
+    // pineforge::SelectedWindowQueryAfterSeal before any store, and
+    // set_report_terminal_quote returns false. The C export
+    // strategy_set_syminfo_metadata is void and swallows the throw, so its
+    // refusal is read through strategy_state_query_status_v1. The refusal latches
+    // no run failure and leaves the error, the status, the first cause and the
+    // captured report alone. A preset before the first admitted begin, and every
+    // handle without selected-window provenance, keep their original behaviour.
     void set_syminfo_metadata(const std::string&, double) override;
     bool set_report_terminal_quote(std::int64_t time_ms, double close);
     void clear_report_terminal_quote();
@@ -1003,6 +1015,30 @@ private:
     void scheduler_publish_source_bar(const Bar&, bool first_tick,
                                       bool advance_source_index = true);
     void scheduler_publish_suppressed_tail(const Bar&);
+    // The selected window's pre-roll capture hooks (src/source/pine_intent_state.hpp):
+    // nonvirtual, and no member of this class; the state is the consumer's host
+    // state. Begin resets the buffer to the evaluation labelled `label_ms` and
+    // opens its capture bracket; it answers false, doing nothing, unless the run is
+    // selected and the label precedes the window. Finish records the evaluation's
+    // end configuration and closes the bracket. A suppressed pre-roll tail runs no
+    // body and clears the buffer to an empty evaluation.
+    bool selected_begin_evaluation(std::int64_t label_ms);
+    void selected_finish_evaluation() noexcept;
+    void selected_clear_suppressed_evaluation(std::int64_t label_ms);
+    // The selected window's replay of that buffer, nonvirtual like the hooks above.
+    // At the first Open labelled inside the window, ahead of adapter_.on_bar_open,
+    // the last pre-roll evaluation's rows go to the adapter's own doors once, in
+    // their original order, each under its own configuration and retained point,
+    // inside the consumer's open activation scope; then the same drains a source
+    // evaluation ends with and the terminal explicit-market policy, submit-only.
+    // It does nothing, and allocates nothing, for a run that is not selected and
+    // for a label before the window. A broken precondition or a native failure
+    // throws engine_invariant: the replay is never skipped quietly.
+    void selected_replay_at_open(const Bar&, const NativeDecisionContext&);
+    // The drains that close a source evaluation once its body has run: pending
+    // closes, pending entries, bracket legs, relative exits and the same-point
+    // entry order. The one list scheduler_publish_source_bar and the replay share.
+    void finish_adapter_evaluation();
     void project_short_seed_report_rows(const native_order::ExecutionAppliedEvent&);
     void order_global_exit_children(const native_order::ExecutionAppliedEvent&);
     bool scheduler_coof_enabled() const noexcept { return config_.calc_on_order_fills; }

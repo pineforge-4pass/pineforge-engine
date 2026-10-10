@@ -349,7 +349,7 @@
     "predicate": "Modeled atomic bar-point transaction, not observed prints",
     "old": "        || config_.pyramiding != 0 || stream_mode_) {",
     "new": "        || config_.pyramiding != 0 || !modeled_input()) {",
-    "window": "void PineExecutionAdapter::apply_terminal_explicit_market_policy(\n        const NativeDecisionContext& context) {\n    if (!config_.process_orders_on_close\n        || config_.pyramiding != 0 || !modeled_input()) {\n        return;\n    }\n    struct Candidate {"
+    "window": "void PineExecutionAdapter::apply_terminal_explicit_market_policy(\n        const NativeDecisionContext& context, bool execute_now) {\n    if (!config_.process_orders_on_close\n        || config_.pyramiding != 0 || !modeled_input()) {\n        return;\n    }\n    struct Candidate {"
   },
   {
     "file": "src/source/pine_adapter.cpp",

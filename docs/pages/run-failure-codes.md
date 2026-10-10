@@ -40,9 +40,11 @@ if (code != NULL && code[0] != '\0') {
   `engine_unclassified_error`, never `""`.
 - #strategy_get_last_error_args answers the arguments as one canonical JSON
   object: UTF-8, keys sorted, no whitespace; an `integer` argument is a JSON
-  integer, a `number` the shortest round-trip double, every other kind a JSON
-  string. It is `"{}"` for a code without arguments and `""` when there is no
-  failure.
+  integer, a `number` the shortest round-trip double, a `nullable_string` a
+  JSON string or `null`, a `scalar` a JSON string, integer, finite number,
+  `true`, `false` or `null` (a boolean or a null is never written as a
+  string), every other kind a JSON string. It is `"{}"` for a code without
+  arguments and `""` when there is no failure.
 - Both pointers live as long as #strategy_get_last_error's: until the next run
   or setter on the handle.
 - Run each request on a fresh handle. A handle whose run failed, a script
@@ -91,7 +93,7 @@ codes it tested the text alone, so a script stopped by an empty
 
 The tables below list the catalog at this tree.
 
-The `outputs_limit` and `outputs_rejected` rows below are unreleased, targeted for 1.5.0, and not part of 1.4.0; the other 38 codes retain their released 1.4.0 status. The `strategy_library_incompatible` row counts the two unreleased 1.5.0 outputs reasons, `outputs_api_mismatch` and `outputs_manifest_invalid`, in addition to its six released 1.4.0 reasons.
+The `outputs_limit` and `outputs_rejected` rows below are unreleased, targeted for 1.5.0, and not part of 1.4.0; so are the 24 selected-window and report-contract rows described [after the tables](#run_failure_codes_selected_window). The other 38 codes retain their released 1.4.0 status. The `strategy_library_incompatible` row counts the two unreleased 1.5.0 outputs reasons, `outputs_api_mismatch` and `outputs_manifest_invalid`, in addition to its six released 1.4.0 reasons.
 
 <!-- BEGIN generated from docker/run_failure_codes.json: python3 scripts/test_gen_run_failure_catalog_diff.py --write-docs-tables -->
 
@@ -115,6 +117,7 @@ The `outputs_limit` and `outputs_rejected` rows below are unreleased, targeted f
 | --- | --- | --- | --- | --- |
 | `chart_bars_rejected` | `input` | no | `field` (vocab, 6 values, optional), `index` (integer, optional), `reason` (vocab, 12 values) | The run's chart bars (the request's OHLCV) were refused. |
 | `chart_bars_unreadable` | `input` | no | `reason` (vocab, 4 values) | The harness could not read the run's OHLCV file. |
+| `engine_command_value_invalid` | `engine_fault` | no | `field` (string), `reason` (vocab, 3 values), `stage` (vocab, 7 values) | The engine derived an invalid command value (non-finite, invalid text or an overflowing finite value) from its own book, equity, margin, sizing, fee, slippage or settlement state: an engine fault, never a strategy failure. stage names where it was derived. |
 | `engine_invariant` | `engine_fault` | no | none | An engine invariant failed: a PineForge bug. |
 | `engine_unclassified_error` | `engine_fault` | no | none | An error no coded site reported: a PineForge bug. |
 | `harness_internal_error` | `engine_fault` | no | none | The run harness failed: a PineForge bug. |
@@ -134,10 +137,16 @@ The `outputs_limit` and `outputs_rejected` rows below are unreleased, targeted f
 | `recalc_cap` | `strategy_limit` | no | none | The script's calc_on_order_fills recalculation loop reached its cap. |
 | `recorded_request_missing` | `no_data` | no | none | No recorded series is installed for a request the script reads. |
 | `recorded_request_refused` | `input` | no | `reason` (vocab, 5 values) | A recorded request series was refused. |
+| `report_platform_unavailable` | `engine_fault` | no | `field` (vocab, 6 values) | The runner cannot establish an execution-platform fact its report contract requires. A pre-load backstop for an image that claimed results-digest support, raised before any strategy code loads. |
+| `report_post_execution_failed` | `engine_fault` | no | `phase` (vocab, 3 values), `reason` (vocab, 4 values) | The engine could not finish producing the result after strategy execution completed: a deadline or an otherwise unclassified failure in result assembly, the results digest or serialization. An engine fault, never a strategy failure; a specific typed engine fault keeps its own code. |
+| `report_result_invalid` | `engine_fault` | no | `field` (string), `reason` (vocab, 4 values) | The report producer generated an invalid canonical result: an engine or harness fault, never a strategy failure. |
+| `report_shape_request_invalid` | `input` | no | `option` (vocab, 2 values), `value` (scalar) | The report-shape request is invalid: the report shape or the curve point budget carries a value the runner refuses. |
+| `report_shape_unsupported` | `unsupported` | no | `shape` (string) | The runner does not support the requested report shape. The first selected-window build supports the full shape only. |
 | `request_symbol_invalid` | `strategy` | no | none | A request.security symbol is not a valid symbol. |
 | `request_timeframe_invalid` | `strategy` | no | `api` (vocab, 2 values) | A request timeframe literal does not parse. |
 | `request_timeframe_unsupported` | `unsupported` | no | `input_tf` (timeframe, optional), `reason` (vocab, 7 values), `script_tf` (timeframe, optional) | A request timeframe cannot be served for this run's chart timeframe. |
 | `request_unsupported` | `unsupported` | no | `line` (integer, optional), `reason` (vocab, 2 values) | A request shape PineForge does not support. |
+| `results_digest_unsupported` | `unsupported` | no | `requested` (string) | The runner does not support the requested results digest. The first selected-window build declares no digest. |
 | `run_aborted` | `engine_fault` | yes | none | The run was aborted on request. |
 | `run_mode_unsupported` | `unsupported` | no | `feature` (vocab, 10 values) | A feature the requested run mode does not support. |
 | `run_options_rejected` | `input` | no | `input_tf` (timeframe, optional), `option` (vocab, 11 values), `script_tf` (timeframe, optional) | The run's own options (timeframes, intrabar path, magnifier, path order) were refused. |
@@ -149,10 +158,27 @@ The `outputs_limit` and `outputs_rejected` rows below are unreleased, targeted f
 | `strategy_library_incompatible` | `engine_fault` | no | `abi` (integer, optional), `missing` (vocab, 13 values, optional), `reason` (vocab, 8 values) | The compiled strategy library does not match the harness. |
 | `strategy_runtime_error` | `strategy` | no | none | The script stopped itself with runtime.error(); the message, possibly empty, is the text. |
 | `strategy_settings_rejected` | `strategy` | no | `field` (vocab, 30 values) | A strategy() declaration setting (or its override) is not a value the engine accepts. |
+| `strategy_value_invalid` | `strategy` | no | `field` (string), `reason` (vocab, 3 values) | The strategy supplied an invalid actionable value (a non-finite number, invalid text or an overflowing finite value) to a declaration, setting or command that needs a valid one. |
 | `stream_input_rejected` | `input` | no | none | A streaming input (bar, tick or auxiliary bar) was refused. |
 | `symbol_feeds_refused` | `symbol_feeds` | no | `field` (vocab, 6 values, optional), `input_tf` (timeframe, optional), `reason` (vocab, 41 values), `script_tf` (timeframe, optional) | Other symbols' bars installed for request.security were refused. |
 | `symbol_metadata_rejected` | `symbol_metadata` | yes | `field` (vocab, 14 values) | The symbol's catalog metadata (syminfo) is not a value the engine accepts. |
 | `syminfo_unreadable` | `symbol_metadata` | yes | `reason` (vocab, 4 values) | The harness could not read the run's syminfo file. |
+| `window_boundary_unaligned` | `input` | no | `bound` (vocab, 3 values), `next_boundary_ms` (integer), `previous_boundary_ms` (integer), `value_ms` (integer) | A selected-window boundary (start, end or fed start) is not aligned to the script calendar; the adjacent boundaries are carried. |
+| `window_calendar_unsupported` | `unsupported` | no | `session` (nullable_string), `timezone` (string) | The timezone and session the selected window needs make a calendar the engine does not support; session may be null. |
+| `window_feed_identity_changed` | `input` | no | `actual_sha256` (string), `expected_sha256` (string), `feed_id` (string) | The frozen primary feed's bytes differ from the SHA-256 the study recorded. The two digests are 64-character hexadecimal strings supplied by the trusted wrapper; the registry checks only that they are text. |
+| `window_feed_range_invalid` | `input` | no | `end_ms` (integer), `fed_start_ms` (integer), `time_ms` (integer) | A primary-feed bar lies outside the frozen selected-window range. |
+| `window_input_cap_exceeded` | `input` | no | `actual` (integer), `cap_name` (vocab, 8 values), `limit` (integer) | The supplied history exceeds a configured input cap; cap_name says which. |
+| `window_legacy_flag_conflict` | `input` | no | `option` (string) | The legacy trade-start option was combined with selected-window mode. |
+| `window_lineage_mismatch` | `input` | no | `actual` (scalar), `expected` (scalar), `field` (string) | A requested window field differs from the study's lineage. |
+| `window_mode_unsupported` | `unsupported` | no | `capability` (string), `requested` (integer, optional), `timeframe` (string, optional) | The runner does not support the requested selected-window mode or a limit its build declares on it. capability names what is unsupported; timeframe carries the offending canonical timeframe and requested the offending pre-roll length where the refusal names one. Which optional argument goes with which capability is the trusted raisers' duty, not the registry's. |
+| `window_no_observations` | `input` | no | `end_ms` (integer), `start_ms` (integer) | The selected window holds no observations to score. |
+| `window_preroll_out_of_range` | `input` | no | `requested` (integer) | The requested pre-roll is outside the range of zero to 5000 script bars. |
+| `window_prestart_fill` | `engine_fault` | no | `fill_ms` (integer), `start_ms` (integer) | A fill was dated before the selected window: an engine invariant failure. |
+| `window_prestart_state_violation` | `engine_fault` | no | `position_size` (number), `resting_orders` (integer), `time_ms` (integer) | A position or a resting order existed before the selected window started: an engine invariant failure. |
+| `window_pruner_unsupported` | `unsupported` | no | `pruner` (string) | A study that requests a selected window together with a trial pruner other than none is refused before any trial is allocated; pruner is the requested pruner's name as the caller sent it. Optimizer-only: run_json never raises it, because a backtest has no pruner. |
+| `window_range_invalid` | `input` | no | `end_ms` (integer), `fed_start_ms` (integer), `start_ms` (integer) | The selected-window range (start, end, fed start) is invalid. |
+| `window_report_mismatch` | `engine_fault` | no | `actual` (integer), `expected` (integer), `field` (vocab, 3 values) | The report disagrees with the trusted window counts. Raised by the caller that compares them and never emitted by run_json. |
+| `window_request_invalid` | `input` | no | `option` (vocab, 13 values) | The selected-window request is invalid: option names the missing, malformed or conflicting field. |
 
 ### Argument kinds
 
@@ -161,8 +187,11 @@ The `outputs_limit` and `outputs_rejected` rows below are unreleased, targeted f
 | `identifier` | A name the compiled strategy spells as a literal (a built-in, an argument). |
 | `integer` | A JSON integer. |
 | `keyword` | A fixed keyword. |
+| `nullable_string` | UTF-8 text, or null when the request value is absent. |
 | `number` | A JSON number (shortest round-trip double). |
 | `pine_source` | Source text the transpiler emitted as a literal (a call's spelling, an input title). |
+| `scalar` | A request value: UTF-8 text, an integer, a finite number, true, false or null. |
+| `string` | UTF-8 text the trusted raiser supplies (a request value or a fixed name). |
 | `symbol` | A symbol the script wrote as a literal. |
 | `timeframe` | A timeframe the run request supplied. |
 | `vocab` | One value of the arg's closed `values` list. |
@@ -183,6 +212,91 @@ configure refusal above) keeps its own text and carries that failure's code:
 `run_aborted` after an abort whose report was cleared, `engine_invariant` when
 nothing was recorded. A consumer reads the code and its arguments, never the
 English.
+
+## The selected-window and report-contract codes {#run_failure_codes_selected_window}
+
+Twenty-four rows are the failure vocabulary of the documented selected-window
+wire contract (v1.3). Twenty-one are its base table: the fifteen `window_*`
+codes, `report_platform_unavailable`, `report_result_invalid`,
+`report_shape_request_invalid`, `report_shape_unsupported`,
+`results_digest_unsupported` and `strategy_value_invalid`. The contract adds
+three: `report_post_execution_failed` (the phases after the strategy has
+finished), `engine_command_value_invalid` (an invalid command value the engine
+derived itself) and `window_pruner_unsupported` (the optimizer's trial pruner).
+Their classes, argument kinds and English are the contract's; all are
+`retryable: false` and `since: 1.5.0`, and none is released. The registry
+declares them and validates their arguments, which is all this page states
+about them: whether a build raises one is the build's own, and a row in the
+catalog is not proof that the source paths it names enforce anything.
+
+- **Argument kinds.** `string`, `nullable_string` and `scalar` are generic
+  kinds added for them (the contract's string, nullable string and scalar). An
+  `integer` argument is any 64-bit integer; the wire's i53 and u53 bounds are
+  enforced where the request is read, before a code is raised. The
+  64-hexadecimal-character digests of `window_feed_identity_changed` are plain
+  `string` arguments: the registry checks that they are text and the trusted
+  wrapper that raises the code owns their shape. A vocab value may hold dots
+  (`counts.window_input_bars`, `metering.billable_input_bars`).
+- **`window_mode_unsupported`** takes the required `capability` and the optional
+  `timeframe` and `requested`. The contract names four capabilities: for
+  `selected_window_chart_timeframe` and `selected_window_request_feed_timeframe`
+  `timeframe` is the canonical timeframe token refused; for
+  `selected_window_request_feed_inventory` there is no `timeframe` (an
+  incomplete inventory names no token, and none is invented); for
+  `selected_window_preroll` `requested` is the pre-roll length. The registry
+  does not tie an optional argument to a capability: the trusted wrappers that
+  raise the code do.
+- **`window_calendar_unsupported`** takes `session` as a `nullable_string`: a
+  JSON string, or `null` when the request names no session. `window_lineage_mismatch`
+  and `report_shape_request_invalid` carry request values as `scalar`.
+- **Caller-only.** `window_report_mismatch` is raised by the caller that
+  compares a report with its trusted window counts. `run_json` never emits it.
+- **Who raises the others.** The contract's route for each code is: the caller
+  or the deployed capability for `window_mode_unsupported`,
+  `report_shape_unsupported` and `results_digest_unsupported`; the caller's
+  request, bounds, calendar, feed or lineage for `window_request_invalid`,
+  `window_range_invalid`, `window_preroll_out_of_range`,
+  `window_legacy_flag_conflict`, `window_calendar_unsupported`,
+  `window_boundary_unaligned`, `window_feed_range_invalid`,
+  `window_no_observations`, `window_lineage_mismatch`,
+  `window_feed_identity_changed` and `report_shape_request_invalid`; the
+  caller's study configuration for `window_pruner_unsupported`; the
+  supplied-input cap for `window_input_cap_exceeded`; the engine's window
+  invariants for `window_prestart_state_violation` and `window_prestart_fill`;
+  a broken image before any strategy code loads for
+  `report_platform_unavailable`; a producer invariant defect for
+  `report_result_invalid`; and a value the script itself supplied to a source
+  sink for `strategy_value_invalid`. Two codes belong to the engine although a
+  valid script can lead up to them, because reachability does not confer
+  ownership: `report_post_execution_failed` (time or failure after the
+  strategy has finished, in result assembly, the digest or serialization) and
+  `engine_command_value_invalid` (a command value the engine derived from its
+  own book, equity, margin, sizing, fee, slippage or settlement state, as
+  opposed to one the script supplied).
+- **Producers in this tree.** Twelve of the 24 have a raise site here, all in
+  the Python wrappers under `docker/`: `window_mode_unsupported`; the
+  selected-window request refusals `window_request_invalid`,
+  `window_range_invalid`, `window_preroll_out_of_range`,
+  `window_legacy_flag_conflict`, `window_calendar_unsupported`,
+  `window_boundary_unaligned` and `window_feed_range_invalid`; the report-option
+  refusals `report_shape_request_invalid`, `report_shape_unsupported` and
+  `results_digest_unsupported`; and `report_post_execution_failed`, for a
+  failure after the strategy has finished. The other twelve have none:
+  `window_report_mismatch` is the caller's (above), and the producers of
+  `window_no_observations`, `window_lineage_mismatch`,
+  `window_feed_identity_changed`, `window_input_cap_exceeded`,
+  `window_prestart_state_violation`, `window_prestart_fill`,
+  `report_platform_unavailable`, `report_result_invalid`,
+  `strategy_value_invalid`, `engine_command_value_invalid` and
+  `window_pruner_unsupported` are not in this tree. `report_shape_unsupported`
+  and `results_digest_unsupported` are the typed refusals this build raises
+  for the compact shape and the digest it does not declare;
+  `report_platform_unavailable` is meaningful only in an image that claims the
+  digest. `window_pruner_unsupported` is optimizer-only:
+  `run_json` never raises it, because a backtest has no pruner. The contract
+  has both study admissions (the Python study specification and the native
+  command line) refuse a selected window combined with a pruner other than
+  `none` before any trial is allocated; no raise site for it is in this tree.
 
 ## The catalog {#run_failure_codes_catalog}
 

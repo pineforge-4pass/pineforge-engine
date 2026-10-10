@@ -24,6 +24,21 @@ manifest. No runtime C ABI export or codegen change is needed; reserved numeric
 metadata keys bridge generated strategies, and direct hosts have an explicit
 setter and clearer.
 
+A selected-window run (`strategy_set_selected_window_v1`) takes the quote as a
+pre-begin input only. Before its first admitted begin, and on every handle
+without a selected window, the writers behave as above. Once the selected run
+has sealed (completed, failed or aborted), none of them stores:
+`set_report_terminal_quote` returns false, and `set_syminfo_metadata` for the two
+reserved keys and `clear_report_terminal_quote` throw
+`SelectedWindowQueryAfterSeal` (`selected_window_query_after_seal`) before any
+store, whatever the value. The C export `strategy_set_syminfo_metadata` is void
+and swallows that exception, so a caller checks `strategy_state_query_status_v1`,
+which answers `PF_STATE_QUERY_SELECTED_WINDOW_AFTER_SEAL_V1` for exactly this
+condition. The refusal latches no run failure, changes no error, status or first
+cause, and leaves the captured report as it was, so a repeated read presents the
+quote the run was given. `tests/test_selected_quote_seal.cpp` forces every route
+and compares the host object's bytes across the rejected call.
+
 The accepted window has two chart-grid points: the completed mark itself or
 exactly one chart interval later. Off-grid timestamps and quotes beyond a
 session gap are inert. Direct hosts can inspect

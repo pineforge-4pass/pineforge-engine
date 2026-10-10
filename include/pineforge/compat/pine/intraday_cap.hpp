@@ -143,6 +143,18 @@ public:
             configuration_.count_pooc_full_close = true;
     }
     std::uint8_t declared() const { return declared_; }
+    // Selected-window replay seam (Pine compatibility, not a kernel policy):
+    // writes back exactly the three configuration-owner fields and nothing
+    // else. It is not attach(), adopt_script_count() or operator=(int), and it
+    // never touches budget_, due_cause_ or next_action_, so no consumed-count
+    // fact is rewound.
+    void restore_replay_configuration(CapAttachment attachment,
+                                      const CapConfiguration& configuration,
+                                      std::uint8_t declared) noexcept {
+        attachment_ = attachment;
+        configuration_ = configuration;
+        declared_ = declared;
+    }
     static bool uses_chart_clock(const std::string& session) {
         return !(session.size() >= 9 && session[4] == '-'
             && hhmm_to_minutes(session.substr(0, 4)) >= 0

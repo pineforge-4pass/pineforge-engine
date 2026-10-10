@@ -204,7 +204,8 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
                                        double initial_capital,
                                        const std::string& chart_tz,
                                        double first_open, double last_close,
-                                       int64_t bars_in_market, double net_profit) {
+                                       int64_t bars_in_market, double net_profit,
+                                       int64_t observation_count) {
     pf_equity_stats_t e{};
     e.sharpe_monthly = kNaN; e.sortino_monthly = kNaN; e.sharpe_bar = kNaN; e.sortino_bar = kNaN;
     e.cagr = kNaN; e.calmar = kNaN; e.recovery_factor = kNaN;
@@ -218,7 +219,11 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
     if (n <= 0 || curve == nullptr) return e;
 
     e.open_pl = curve[n - 1].open_profit;
-    e.time_in_market_pct = (double)bars_in_market / (double)n * 100.0;
+    // Exposure is over observations, not curve points: a selected-window curve
+    // carries its window anchor as point 0 (metrics.hpp), and the anchor is no
+    // bar. Every other statistic below walks the n curve points.
+    e.time_in_market_pct = observation_count > 0
+        ? (double)bars_in_market / (double)observation_count * 100.0 : kNaN;
 
     // --- Drawdown / runup walk. MUST mirror update_equity_extremes
     // (engine.hpp): trough resets to eq on every new peak. The walk over the
@@ -301,6 +306,16 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
                        &e.sharpe_bar, &e.sortino_bar);
     }
     return e;
+}
+
+// The ordinary entry: every point of the curve is an observation.
+pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n,
+                                       double initial_capital,
+                                       const std::string& chart_tz,
+                                       double first_open, double last_close,
+                                       int64_t bars_in_market, double net_profit) {
+    return compute_equity_stats(curve, n, initial_capital, chart_tz, first_open, last_close,
+                                bars_in_market, net_profit, n);
 }
 
 }  // namespace metrics

@@ -58,10 +58,30 @@ bool text_kind(RunFailureArgKind kind) noexcept {
     case RunFailureArgKind::pine_source:
     case RunFailureArgKind::symbol:
     case RunFailureArgKind::timeframe:
+    case RunFailureArgKind::string:
         return true;
     case RunFailureArgKind::integer:
     case RunFailureArgKind::number:
+    case RunFailureArgKind::nullable_string:
+    case RunFailureArgKind::scalar:
         return false;
+    }
+    return false;
+}
+
+// A scalar argument is text, an integer, a finite number, a boolean (held as 0
+// or 1) or a null. A non-finite number, a boolean outside 0 and 1 and any
+// type value this build does not know are refused.
+bool scalar_value_ok(const RunFailureArg& arg) noexcept {
+    switch (arg.type) {
+    case RunFailureArg::Type::text:
+    case RunFailureArg::Type::integer:
+    case RunFailureArg::Type::null_value:
+        return true;
+    case RunFailureArg::Type::number:
+        return std::isfinite(arg.number);
+    case RunFailureArg::Type::boolean:
+        return arg.integer == 0 || arg.integer == 1;
     }
     return false;
 }
@@ -173,10 +193,26 @@ RunFailureValue make_run_failure(RunFailureCode code, const RunFailureArgs& args
                 if (arg.type != RunFailureArg::Type::integer) return invariant();
                 break;
             case RunFailureArgKind::number:
-                if (arg.type == RunFailureArg::Type::text) return invariant();
+                // An integer or a finite number: never text, a boolean or a null.
+                if (arg.type != RunFailureArg::Type::integer
+                    && arg.type != RunFailureArg::Type::number) {
+                    return invariant();
+                }
                 if (arg.type == RunFailureArg::Type::number && !std::isfinite(arg.number)) {
                     return invariant();
                 }
+                break;
+            case RunFailureArgKind::string:
+                if (arg.type != RunFailureArg::Type::text) return invariant();
+                break;
+            case RunFailureArgKind::nullable_string:
+                if (arg.type != RunFailureArg::Type::text
+                    && arg.type != RunFailureArg::Type::null_value) {
+                    return invariant();
+                }
+                break;
+            case RunFailureArgKind::scalar:
+                if (!scalar_value_ok(arg)) return invariant();
                 break;
             case RunFailureArgKind::vocab: {
                 if (arg.type != RunFailureArg::Type::text) return invariant();
@@ -227,6 +263,16 @@ RunFailureValue make_run_failure(RunFailureCode code, const RunFailureArgs& args
                 break;
             case RunFailureArg::Type::text:
                 append_json_string(*json, arg->text);
+                break;
+            case RunFailureArg::Type::boolean:
+                if (arg->integer != 0) {
+                    *json += "true";
+                } else {
+                    *json += "false";
+                }
+                break;
+            case RunFailureArg::Type::null_value:
+                *json += "null";
                 break;
             }
         }

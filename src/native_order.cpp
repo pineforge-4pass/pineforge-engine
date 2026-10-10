@@ -479,11 +479,26 @@ bool same_p_continuation(const LiveRequest& live, const MatchCursor& cursor) noe
     return false;
 }
 
-bool trigger_cursor_eligible(const LiveRequest& live, const MatchCursor& cursor) noexcept {
+// The explicit open activation grant: a caller-scoped authorization that no
+// request, plan or token retains. It satisfies only the strict ordinal half of
+// the birth gate, as if the request had been born before this point, and only
+// at an Open cursor; the time half stands, so the point's effective time must
+// not precede the request's decision-time lower bound. Every other birth
+// exception stays as it was, and this adds one to them.
+bool open_grant_birth_ok(const LiveRequest& live, const MatchCursor& cursor,
+                         bool open_activation_grant) noexcept {
+    return open_activation_grant
+        && cursor.point.path_phase == NativePathPhase::Open
+        && cursor.point.effective_time_ms >= live.birth().decision_time_lower_bound;
+}
+
+bool trigger_cursor_eligible(const LiveRequest& live, const MatchCursor& cursor,
+                             bool open_activation_grant) noexcept {
     if (point_eligible(live.birth(), cursor.point.ordinal, cursor.point.effective_time_ms)) {
         return true;
     }
-    return same_p_continuation(live, cursor);
+    return same_p_continuation(live, cursor)
+        || open_grant_birth_ok(live, cursor, open_activation_grant);
 }
 
 const ExecutionAppliedEvent* as_applied(const CommandEvent& event) noexcept {
@@ -2033,6 +2048,12 @@ bool WorkingRequestCore::working_is_buy(const LiveRequest& live,
 
 EligibilityFacts WorkingRequestCore::eligibility_facts(
         const LiveRequest& live, const EvaluationContext& context) const noexcept {
+    return eligibility_facts(live, context, false);
+}
+
+EligibilityFacts WorkingRequestCore::eligibility_facts(
+        const LiveRequest& live, const EvaluationContext& context,
+        bool open_activation_grant) const noexcept {
     EligibilityFacts facts;
     facts.trigger = &live.request().trigger;
     facts.trigger_state = &live.trigger_state;
@@ -2066,7 +2087,8 @@ EligibilityFacts WorkingRequestCore::eligibility_facts(
         || (evaluated_at_point
             && context.cursor.point.effective_time_ms >= live.birth().decision_time_lower_bound)
         || ((pre_open_delivery || remaining_path_delivery)
-            && context.cursor.point.effective_time_ms >= live.birth().decision_time_lower_bound);
+            && context.cursor.point.effective_time_ms >= live.birth().decision_time_lower_bound)
+        || open_grant_birth_ok(live, context.cursor, open_activation_grant);
     if (facts.waiting) {
         facts.driver_ok = false;
         facts.ready_to_match = false;
@@ -2096,7 +2118,13 @@ EligibilityFacts WorkingRequestCore::eligibility_facts(
 
 bool WorkingRequestCore::evaluation_eligible(const LiveRequest& live,
                                              const EvaluationContext& context) const noexcept {
-    const EligibilityFacts facts = eligibility_facts(live, context);
+    return evaluation_eligible(live, context, false);
+}
+
+bool WorkingRequestCore::evaluation_eligible(const LiveRequest& live,
+                                             const EvaluationContext& context,
+                                             bool open_activation_grant) const noexcept {
+    const EligibilityFacts facts = eligibility_facts(live, context, open_activation_grant);
     return facts.ready_to_match;
 }
 
@@ -2800,24 +2828,39 @@ void WorkingRequestCore::refresh_point_allowances(uint64_t point,
 bool WorkingRequestCore::refresh_allowance(
         const RequestHandle& target, const EvaluationContext& context,
         const TargetObservation& observation) {
-    return refresh_allowance(target, context, observation, nullptr);
+    return refresh_allowance(target, context, observation, nullptr, false);
+}
+
+bool WorkingRequestCore::refresh_allowance(
+        const RequestHandle& target, const EvaluationContext& context,
+        const TargetObservation& observation, bool open_activation_grant) {
+    return refresh_allowance(target, context, observation, nullptr, open_activation_grant);
 }
 
 bool WorkingRequestCore::refresh_allowance(
         const RequestHandle& target, const EvaluationContext& context,
         const TargetObservation& observation, uint64_t& next_timeline_ordinal) {
-    return refresh_allowance(target, context, observation, &next_timeline_ordinal);
+    return refresh_allowance(target, context, observation, &next_timeline_ordinal, false);
 }
 
 bool WorkingRequestCore::refresh_allowance(
         const RequestHandle& target, const EvaluationContext& context,
-        const TargetObservation& observation, uint64_t* next_timeline_ordinal) {
+        const TargetObservation& observation, uint64_t& next_timeline_ordinal,
+        bool open_activation_grant) {
+    return refresh_allowance(target, context, observation, &next_timeline_ordinal,
+                             open_activation_grant);
+}
+
+bool WorkingRequestCore::refresh_allowance(
+        const RequestHandle& target, const EvaluationContext& context,
+        const TargetObservation& observation, uint64_t* next_timeline_ordinal,
+        bool open_activation_grant) {
     require_identity(identity_);
     std::size_t live_index = 0;
     if (classify(target, &live_index) != TargetKind::Live) return false;
     LiveRequest& live = live_[live_index];
     if (std::holds_alternative<Wait>(live.authority)) return false;
-    const EligibilityFacts facts = eligibility_facts(live, context);
+    const EligibilityFacts facts = eligibility_facts(live, context, open_activation_grant);
     if (!facts.birth_ok || !facts.driver_ok) return false;
     if (std::holds_alternative<CohortClose>(live.authority)) {
         if (!context.cohort_side) return false;
@@ -2925,6 +2968,15 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_evaluation(
         const EvaluationContext& context,
         const TargetObservation& observation,
         uint64_t& next_timeline_ordinal) {
+    return prepare_evaluation(target, context, observation, next_timeline_ordinal, false);
+}
+
+Preparation<PreparedMutation> WorkingRequestCore::prepare_evaluation(
+        const RequestHandle& target,
+        const EvaluationContext& context,
+        const TargetObservation& observation,
+        uint64_t& next_timeline_ordinal,
+        bool open_activation_grant) {
     require_identity(identity_);
     std::size_t live_index = 0;
     if (classify(target, &live_index) != TargetKind::Live) {
@@ -2934,7 +2986,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_evaluation(
     if (std::holds_alternative<Wait>(live.authority)) {
         return NoChange{NoChangeReason::StillWaiting};
     }
-    const EligibilityFacts facts = eligibility_facts(live, context);
+    const EligibilityFacts facts = eligibility_facts(live, context, open_activation_grant);
     if (!facts.birth_ok || !facts.driver_ok) return NoChange{NoChangeReason::NotEligible};
 
     if (std::holds_alternative<CohortClose>(live.authority)) {
@@ -3061,6 +3113,15 @@ Preparation<Installed> WorkingRequestCore::apply_evaluation(
         const EvaluationContext& context,
         const TargetObservation& observation,
         uint64_t& next_timeline_ordinal) {
+    return apply_evaluation(target, context, observation, next_timeline_ordinal, false);
+}
+
+Preparation<Installed> WorkingRequestCore::apply_evaluation(
+        const RequestHandle& target,
+        const EvaluationContext& context,
+        const TargetObservation& observation,
+        uint64_t& next_timeline_ordinal,
+        bool open_activation_grant) {
     require_identity(identity_);
     std::size_t live_index = 0;
     if (classify(target, &live_index) != TargetKind::Live) {
@@ -3070,7 +3131,7 @@ Preparation<Installed> WorkingRequestCore::apply_evaluation(
     if (std::holds_alternative<Wait>(live.authority)) {
         return NoChange{NoChangeReason::StillWaiting};
     }
-    const EligibilityFacts facts = eligibility_facts(live, context);
+    const EligibilityFacts facts = eligibility_facts(live, context, open_activation_grant);
     if (!facts.birth_ok || !facts.driver_ok) return NoChange{NoChangeReason::NotEligible};
 
     if (std::holds_alternative<CohortClose>(live.authority)) {
@@ -3168,6 +3229,18 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
         uint64_t& next_timeline_ordinal,
         std::optional<Side> cohort_side,
         const ActivationGrid& activation_grid) {
+    return prepare_trigger(target, transition, driver_class, next_timeline_ordinal,
+                           cohort_side, activation_grid, false);
+}
+
+Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
+        const RequestHandle& target,
+        const TriggerTransition& transition,
+        DriverEligibilityClass driver_class,
+        uint64_t& next_timeline_ordinal,
+        std::optional<Side> cohort_side,
+        const ActivationGrid& activation_grid,
+        bool open_activation_grant) {
     require_identity(identity_);
     std::size_t live_index = 0;
     if (classify(target, &live_index) != TargetKind::Live) {
@@ -3179,7 +3252,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
         return NoChange{NoChangeReason::NotEligible};
     }
     const MatchCursor& cursor = transition_cursor(transition);
-    if (!trigger_cursor_eligible(updated, cursor)
+    if (!trigger_cursor_eligible(updated, cursor, open_activation_grant)
         && !same_point_allowance(updated.allowance, cursor.point.ordinal)) {
         return NoChange{NoChangeReason::NotEligible};
     }
@@ -3360,6 +3433,18 @@ Preparation<Installed> WorkingRequestCore::apply_trigger(
         uint64_t& next_timeline_ordinal,
         std::optional<Side> cohort_side,
         const ActivationGrid& activation_grid) {
+    return apply_trigger(target, transition, driver_class, next_timeline_ordinal,
+                         cohort_side, activation_grid, false);
+}
+
+Preparation<Installed> WorkingRequestCore::apply_trigger(
+        const RequestHandle& target,
+        const TriggerTransition& transition,
+        DriverEligibilityClass driver_class,
+        uint64_t& next_timeline_ordinal,
+        std::optional<Side> cohort_side,
+        const ActivationGrid& activation_grid,
+        bool open_activation_grant) {
     require_identity(identity_);
     std::size_t live_index = 0;
     if (classify(target, &live_index) != TargetKind::Live) {
@@ -3371,7 +3456,7 @@ Preparation<Installed> WorkingRequestCore::apply_trigger(
         return NoChange{NoChangeReason::NotEligible};
     }
     const MatchCursor& cursor = transition_cursor(transition);
-    if (!trigger_cursor_eligible(live, cursor)
+    if (!trigger_cursor_eligible(live, cursor, open_activation_grant)
         && !same_point_allowance(live.allowance, cursor.point.ordinal)) {
         return NoChange{NoChangeReason::NotEligible};
     }
@@ -3969,6 +4054,14 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
         const RequestHandle& target,
         const ExecutionProposal& proposal,
         uint64_t& next_timeline_ordinal) {
+    return prepare_execution(target, proposal, next_timeline_ordinal, false);
+}
+
+Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
+        const RequestHandle& target,
+        const ExecutionProposal& proposal,
+        uint64_t& next_timeline_ordinal,
+        bool open_activation_grant) {
     require_identity(identity_);
     std::size_t live_index = 0;
     if (classify(target, &live_index) != TargetKind::Live) {
@@ -3993,7 +4086,8 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
             && std::holds_alternative<Market>(live.request().trigger)
             && std::holds_alternative<ImmediateRemaining>(live.request().capacity)
             && proposal.cursor.point.path_phase == NativePathPhase::Open
-            && proposal.cursor.point.effective_time_ms >= live.birth().decision_time_lower_bound);
+            && proposal.cursor.point.effective_time_ms >= live.birth().decision_time_lower_bound)
+        || open_grant_birth_ok(live, proposal.cursor, open_activation_grant);
     if (!birth_ok) {
         return NoChange{NoChangeReason::NotEligible};
     }
@@ -4434,7 +4528,8 @@ InstallResult WorkingRequestCore::install_execution(PreparedExecution&& prepared
 Preparation<WorkingRequestCore::ExecutionValues> WorkingRequestCore::execution_values(
         const RequestHandle& target,
         const ExecutionProposal& proposal,
-        uint64_t& next_timeline_ordinal) const {
+        uint64_t& next_timeline_ordinal,
+        bool open_activation_grant) const {
     require_identity(identity_);
     std::size_t live_index = 0;
     if (classify(target, &live_index) != TargetKind::Live) {
@@ -4459,7 +4554,8 @@ Preparation<WorkingRequestCore::ExecutionValues> WorkingRequestCore::execution_v
             && std::holds_alternative<Market>(live.request().trigger)
             && std::holds_alternative<ImmediateRemaining>(live.request().capacity)
             && proposal.cursor.point.path_phase == NativePathPhase::Open
-            && proposal.cursor.point.effective_time_ms >= live.birth().decision_time_lower_bound);
+            && proposal.cursor.point.effective_time_ms >= live.birth().decision_time_lower_bound)
+        || open_grant_birth_ok(live, proposal.cursor, open_activation_grant);
     if (!birth_ok) {
         return NoChange{NoChangeReason::NotEligible};
     }
@@ -4792,7 +4888,16 @@ Preparation<std::monostate> WorkingRequestCore::check_execution(
         const RequestHandle& target,
         const ExecutionProposal& proposal,
         uint64_t& next_timeline_ordinal) {
-    auto values = execution_values(target, proposal, next_timeline_ordinal);
+    return check_execution(target, proposal, next_timeline_ordinal, false);
+}
+
+Preparation<std::monostate> WorkingRequestCore::check_execution(
+        const RequestHandle& target,
+        const ExecutionProposal& proposal,
+        uint64_t& next_timeline_ordinal,
+        bool open_activation_grant) {
+    auto values = execution_values(target, proposal, next_timeline_ordinal,
+                                   open_activation_grant);
     if (const auto* none = std::get_if<NoChange>(&values)) return *none;
     if (const auto* error = std::get_if<PreparationError>(&values)) return *error;
     // prepare_execution's plan: begin_plan's checks, then seal_plan for the
@@ -4807,7 +4912,17 @@ InstallResult WorkingRequestCore::apply_execution(
         const ExecutionProposal& proposal,
         const CommittedExecutionFacts& facts,
         uint64_t& next_timeline_ordinal) {
-    auto computed = execution_values(target, proposal, next_timeline_ordinal);
+    return apply_execution(target, proposal, facts, next_timeline_ordinal, false);
+}
+
+InstallResult WorkingRequestCore::apply_execution(
+        const RequestHandle& target,
+        const ExecutionProposal& proposal,
+        const CommittedExecutionFacts& facts,
+        uint64_t& next_timeline_ordinal,
+        bool open_activation_grant) {
+    auto computed = execution_values(target, proposal, next_timeline_ordinal,
+                                     open_activation_grant);
     auto* values = std::get_if<ExecutionValues>(&computed);
     if (!values || epoch_ == std::numeric_limits<uint64_t>::max()) {
         return InstallError::StalePreparation;

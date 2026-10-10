@@ -1807,6 +1807,23 @@ public:
                                                      const EvaluationContext& context,
                                                      const TargetObservation& observation,
                                                      uint64_t& next_timeline_ordinal);
+    /// The same preparation under an explicit open activation grant: the caller
+    /// vouches, for this handle alone, that the request is to be read as born
+    /// before this point. The grant satisfies only the strict ordinal half of
+    /// the birth gate, and only at an Open cursor whose effective time is not
+    /// before the request's decision-time lower bound. It relaxes no time floor
+    /// and no trigger, driver, quantity, margin or price check, it leaves the
+    /// other birth exceptions as they stand, and it gives
+    /// EvaluationContext::pre_open_birth_eligible no new meaning (that bool stays
+    /// market/immediate only). Nothing retains it -- no request, plan or prepared
+    /// token -- so every call that tests the gate takes it afresh; the check and
+    /// the apply of an execution each do. The form above is this one with the
+    /// grant false.
+    Preparation<PreparedMutation> prepare_evaluation(const RequestHandle& target,
+                                                     const EvaluationContext& context,
+                                                     const TargetObservation& observation,
+                                                     uint64_t& next_timeline_ordinal,
+                                                     bool open_activation_grant);
     /// `grid` carries the run's activation grid (ActivationGrid); the default
     /// is the raw rule, so every existing caller keeps its meaning.
     Preparation<PreparedMutation> prepare_trigger(const RequestHandle& target,
@@ -1815,11 +1832,28 @@ public:
                                                   uint64_t& next_timeline_ordinal,
                                                   std::optional<Side> cohort_side = std::nullopt,
                                                   const ActivationGrid& grid = {});
+    /// prepare_trigger under the open activation grant of prepare_evaluation: the
+    /// cursor test every trigger transition makes (Stop, StopLimit and Trail
+    /// activation among them) takes the grant too. Every parameter is explicit,
+    /// so no earlier call can resolve to this form.
+    Preparation<PreparedMutation> prepare_trigger(const RequestHandle& target,
+                                                  const TriggerTransition& transition,
+                                                  DriverEligibilityClass driver_class,
+                                                  uint64_t& next_timeline_ordinal,
+                                                  std::optional<Side> cohort_side,
+                                                  const ActivationGrid& grid,
+                                                  bool open_activation_grant);
     InstallResult install_mutation(PreparedMutation&& prepared) noexcept;
 
     Preparation<PreparedExecution> prepare_execution(const RequestHandle& target,
                                                      const ExecutionProposal& proposal,
                                                      uint64_t& next_timeline_ordinal);
+    /// prepare_execution under the open activation grant of prepare_evaluation.
+    /// The token holds no grant: install_execution does not read the birth gate.
+    Preparation<PreparedExecution> prepare_execution(const RequestHandle& target,
+                                                     const ExecutionProposal& proposal,
+                                                     uint64_t& next_timeline_ordinal,
+                                                     bool open_activation_grant);
     InstallResult install_execution(PreparedExecution&& prepared,
                                     const CommittedExecutionFacts& facts) noexcept;
     Preparation<PreparedMutation> prepare_no_effect(const RequestHandle& target,
@@ -1862,6 +1896,11 @@ public:
     bool refresh_allowance(const RequestHandle& target,
                            const EvaluationContext& context,
                            const TargetObservation& observation);
+    /// refresh_allowance under the open activation grant of prepare_evaluation.
+    bool refresh_allowance(const RequestHandle& target,
+                           const EvaluationContext& context,
+                           const TargetObservation& observation,
+                           bool open_activation_grant);
     /// The same refresh, handed the run's timeline: an unbound close that
     /// carried a binding the book still has (ReplaceOptions::keep_binding) is
     /// bound here too, to the BookClose its CloseBoundEvent would install, and
@@ -1871,6 +1910,12 @@ public:
                            const EvaluationContext& context,
                            const TargetObservation& observation,
                            uint64_t& next_timeline_ordinal);
+    /// The timeline-handed refresh under the open activation grant.
+    bool refresh_allowance(const RequestHandle& target,
+                           const EvaluationContext& context,
+                           const TargetObservation& observation,
+                           uint64_t& next_timeline_ordinal,
+                           bool open_activation_grant);
     bool refresh_cohort_allowance(const RequestHandle& target,
                                   const EvaluationContext& context,
                                   const TargetObservation& observation);
@@ -1961,12 +2006,27 @@ public:
                                             const EvaluationContext& context,
                                             const TargetObservation& observation,
                                             uint64_t& next_timeline_ordinal);
+    /// apply_evaluation under the open activation grant of prepare_evaluation.
+    Preparation<Installed> apply_evaluation(const RequestHandle& target,
+                                            const EvaluationContext& context,
+                                            const TargetObservation& observation,
+                                            uint64_t& next_timeline_ordinal,
+                                            bool open_activation_grant);
     Preparation<Installed> apply_trigger(const RequestHandle& target,
                                          const TriggerTransition& transition,
                                          DriverEligibilityClass driver_class,
                                          uint64_t& next_timeline_ordinal,
                                          std::optional<Side> cohort_side = std::nullopt,
                                          const ActivationGrid& grid = {});
+    /// apply_trigger under the open activation grant of prepare_evaluation; every
+    /// parameter is explicit, like prepare_trigger's grant form.
+    Preparation<Installed> apply_trigger(const RequestHandle& target,
+                                         const TriggerTransition& transition,
+                                         DriverEligibilityClass driver_class,
+                                         uint64_t& next_timeline_ordinal,
+                                         std::optional<Side> cohort_side,
+                                         const ActivationGrid& grid,
+                                         bool open_activation_grant);
     Preparation<Installed> apply_no_effect(const RequestHandle& target,
                                            const EvaluationContext& context,
                                            uint64_t& next_timeline_ordinal);
@@ -2001,15 +2061,36 @@ public:
     Preparation<std::monostate> check_execution(const RequestHandle& target,
                                                 const ExecutionProposal& proposal,
                                                 uint64_t& next_timeline_ordinal);
+    /// check_execution and apply_execution under the open activation grant of
+    /// prepare_evaluation. The two make the same birth test, so a caller hands
+    /// both the grant its scope holds; an apply given a different one answers
+    /// StalePreparation like any check that no longer passes.
+    Preparation<std::monostate> check_execution(const RequestHandle& target,
+                                                const ExecutionProposal& proposal,
+                                                uint64_t& next_timeline_ordinal,
+                                                bool open_activation_grant);
     InstallResult apply_execution(const RequestHandle& target,
                                   const ExecutionProposal& proposal,
                                   const CommittedExecutionFacts& facts,
                                   uint64_t& next_timeline_ordinal);
+    InstallResult apply_execution(const RequestHandle& target,
+                                  const ExecutionProposal& proposal,
+                                  const CommittedExecutionFacts& facts,
+                                  uint64_t& next_timeline_ordinal,
+                                  bool open_activation_grant);
 
     EligibilityFacts eligibility_facts(const LiveRequest& live,
                                        const EvaluationContext& context) const noexcept;
+    /// eligibility_facts and evaluation_eligible under the open activation grant
+    /// of prepare_evaluation: the grant can only set birth_ok.
+    EligibilityFacts eligibility_facts(const LiveRequest& live,
+                                       const EvaluationContext& context,
+                                       bool open_activation_grant) const noexcept;
     bool evaluation_eligible(const LiveRequest& live,
                              const EvaluationContext& context) const noexcept;
+    bool evaluation_eligible(const LiveRequest& live,
+                             const EvaluationContext& context,
+                             bool open_activation_grant) const noexcept;
     bool trigger_permits_driver(const Trigger& trigger,
                                 const TriggerState& state,
                                 DriverEligibilityClass driver_class,
@@ -2079,10 +2160,11 @@ private:
     /// queue order (the priority repriced_ names, or the handle's own number).
     std::size_t repriced_position(uint64_t incarnation) const noexcept;
     /// refresh_allowance's body, and its bind for an unbound close that
-    /// carried a binding.
+    /// carried a binding, under the open activation grant (false for every
+    /// form that does not name one).
     bool refresh_allowance(const RequestHandle& target, const EvaluationContext& context,
                            const TargetObservation& observation,
-                           uint64_t* next_timeline_ordinal);
+                           uint64_t* next_timeline_ordinal, bool open_activation_grant);
     bool refresh_kept_binding(LiveRequest& live, const EvaluationContext& context,
                               const TargetObservation& observation,
                               uint64_t& next_timeline_ordinal);
@@ -2189,7 +2271,8 @@ private:
     };
     Preparation<ExecutionValues> execution_values(const RequestHandle& target,
                                                   const ExecutionProposal& proposal,
-                                                  uint64_t& next_timeline_ordinal) const;
+                                                  uint64_t& next_timeline_ordinal,
+                                                  bool open_activation_grant) const;
 
     RunIdentity identity_;
     std::shared_ptr<InstanceBinding> instance_;

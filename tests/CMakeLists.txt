@@ -1322,6 +1322,15 @@ list(APPEND TEST_SOURCES test_utc_month_key_arithmetic)
 # month, and compute_equity_stats bit for bit against the 6c081f5d walk.
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_utc_month_memo)
+# Pure report view: the selected window's equity curve (the window anchor,
+# then the M script-bar observations copied byte for byte) as one owned new[]
+# array that a report takes by release() and free_report frees, and the
+# observation count compute_equity_stats divides exposure by -- hand
+# arithmetic for 100 -> 110 -> 104.5, the first bar at T or after a gap, the
+# undefined domains, and the ordinary overload bit for bit against the
+# reference walk (tests/equity_stats_reference.hpp). Source-free, so it also
+# runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_selected_report_view)
 # R5 lane PERF-P5611 (P5): the adapter's chart-day key on a UTC chart by the
 # same arithmetic, swept against gmtime_r through the host. Source-bound.
 list(APPEND TEST_SOURCES test_chart_day_key_arithmetic)
@@ -1841,6 +1850,25 @@ list(APPEND TEST_SOURCES
     test_l8a_adapter_policy_delta
 )
 
+# Selected-window component TUs. test_selected_report_view is registered above
+# and is not repeated here. These are ordinary mandatory rows: their sources
+# are integrated before configure, and a missing
+# source fails configure rather than being skipped. Every TEST_SOURCES row links
+# pineforge with the FP and NDEBUG flags; the kernel-only reach filter further
+# down decides whether each one runs without the source layer.
+list(APPEND TEST_SOURCES
+    test_selected_primary_plan
+    test_selected_window_plan_c
+    test_selected_window_native_counts
+    test_selected_retained_count
+    test_selected_window_report_integration
+    test_selected_window_routes
+    test_selected_production_routes
+    # The source of test_selected_quote_seal is supplied by a separate change
+    # and integrated with this registration before configure.
+    test_selected_quote_seal
+)
+
 find_package(Threads REQUIRED)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -1946,6 +1974,28 @@ add_test(
     COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/scripts/test_aggregate_cpp_versions.py
 )
+
+# Selected-window Python unittest files, run as direct scripts under the
+# configured Python3 with -B (no bytecode written into the tree). Unconditional:
+# no source-layer or opt-in gate.
+add_test(NAME test_run_phase_transport
+    COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tests/test_run_phase_transport.py)
+add_test(NAME test_run_execution_observer
+    COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tests/test_run_execution_observer.py)
+add_test(NAME test_request_feed_inventory_admission
+    COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tests/test_request_feed_inventory_admission.py)
+add_test(NAME test_selected_window_plan_python
+    COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tests/test_selected_window_plan_python.py)
+
+# Selected-window files that use pytest: Python3 -B -m pytest on the literal
+# path, from the repository root. No check that pytest is installed: the test
+# environment must provide it, and a missing pytest fails these rows.
+add_test(NAME test_run_json_selected_window
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest ${PROJECT_SOURCE_DIR}/tests/test_run_json_selected_window.py
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+add_test(NAME test_compile_inventory_pipeline
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest ${PROJECT_SOURCE_DIR}/tests/test_compile_inventory_pipeline.py
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
 set(_pf_script_cpp_abi_flags)
 set(_pf_abi_receipt_mode --skip-if-receipt-missing)
@@ -2779,6 +2829,11 @@ foreach(test_name ${TEST_SOURCES})
         add_test(NAME ${test_name} COMMAND ${test_name})
     endif()
 endforeach()
+
+# The C bridge test also links the shared window-plan helper, whose bridge
+# (src/selected_window_plan_c.cpp) is not in the kernel archive. The loop above
+# supplies pineforge and the -ffp-contract=off and -UNDEBUG flags.
+target_link_libraries(test_selected_window_plan_c PRIVATE pineforge_window_plan)
 
 # R5 PERF-L4: the witness's two references. The source layer is compiled
 # twice more, with the kernel archive below it: once with every quiet-bar gate

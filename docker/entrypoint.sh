@@ -52,10 +52,39 @@
 #                        value is read. An index or feed the harness cannot install fails
 #                        the run (exit 4, one {"engine":"pineforge","error":...} line).
 #
+# Optional env vars (selected-window mode; unset PINEFORGE_REPORT_POLICY = the
+# unchanged path above, which reads no inventory):
+#   PINEFORGE_REPORT_POLICY   'selected-window/v1' turns the selected path on. A .pine is
+#                        transpiled with transpile_with_request_inventory, with no chart
+#                        timeframe binding; the generated C++ (exact UTF-8 bytes) and its
+#                        source-bound request-feed inventory are kept in the per-run work dir.
+#                        After g++ links the library, bind_compiled_inventory.py binds that
+#                        inventory to the C++ and library bytes (pinned codegen binder) and the
+#                        bound file goes to run_json.py as --request-feed-inventory. Any other
+#                        non-empty value is forwarded to run_json.py as --report-policy to be
+#                        refused there; no inventory is read or bound for it.
+#   PINEFORGE_WINDOW_START_MS / PINEFORGE_WINDOW_END_MS / PINEFORGE_PREROLL_BARS /
+#   PINEFORGE_FED_START_MS    forwarded, with the policy set and only when non-empty, as
+#                        --window-start-ms / --window-end-ms / --preroll-bars / --fed-start-ms,
+#                        raw. Nothing is defaulted or checked here: run_json.py validates them.
+#   PINEFORGE_REQUEST_FEED_INVENTORY   Path to the source-bound inventory of a pre-transpiled
+#                        /in/strategy.cpp, from the trusted caller; read only on the selected
+#                        path, and not used with a .pine (that run makes its own). Unset: no
+#                        inventory is passed to run_json.py, never an empty one, and run_json.py
+#                        refuses the run. A supplied file that is unreadable, not strict JSON or
+#                        not that of the C++ bytes compiled ends the run (exit 3).
+#                        On the selected path /in/strategy.cpp is copied once into the per-run
+#                        work dir, and that private copy is what g++ compiles, the binder reads
+#                        and run_json.py gets as --generated-cpp (--transpiled stays false), so a
+#                        change the caller makes to its file afterwards cannot change what was
+#                        bound. A copy that fails ends the run (exit 3). The digest the binder
+#                        checks is the inventory's own, never one read from the strategy code.
+#
 # Exit codes:
 #   0  success (JSON report, or C++ in transpile-only mode, on stdout)
 #   2  missing input mount
-#   3  compile failure
+#   3  compile failure (g++; on the selected path also copying a pre-transpiled strategy.cpp
+#      into the work dir, or binding the request-feed inventory)
 #   4  backtest failure
 #   5  transpile failure (unsupported Pine construct or syntax error)
 set -euo pipefail
@@ -94,6 +123,38 @@ else:
 PY
 }
 
+# Selected path: transpile $1 once with transpile_with_request_inventory, passing no
+# primary_chart_timeframe (the inventory stays chart-unbound). Writes the generated C++ to
+# $2 as exact UTF-8 bytes (the inventory's source_sha256 is over those bytes) and the
+# source-bound inventory (artifact_sha256 null) to $3. The C++ is the one run_transpile
+# writes. Any failure, an installed codegen without the inventory API included, is exit 5
+# with a message on stderr: there is no fallback to run_transpile.
+run_transpile_with_inventory() {
+    python3 - "$1" "$2" "$3" <<'PY'
+import json
+import sys
+
+pine, out, inventory_out = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    from pineforge_codegen import transpile_with_request_inventory
+    from pineforge_codegen.errors import CompileError
+except Exception as e:  # a codegen without the inventory API
+    sys.stderr.write(f"[pineforge] transpile error: no request-feed inventory API: {e}\n"); sys.exit(5)
+try:
+    result = transpile_with_request_inventory(open(pine).read(), filename="strategy.pine")
+    cpp = result["cpp"]
+    inventory = result["request_feed_inventory"]
+    with open(out, "wb") as handle:
+        handle.write(cpp.encode("utf-8"))
+    with open(inventory_out, "w", encoding="utf-8") as handle:
+        json.dump(inventory, handle, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
+except CompileError as e:
+    sys.stderr.write(f"[pineforge] transpile error: {e}\n"); sys.exit(5)
+except Exception as e:  # syntax / unexpected — still a transpile failure
+    sys.stderr.write(f"[pineforge] transpile error: {e}\n"); sys.exit(5)
+PY
+}
+
 # --- Transpile-only mode: emit C++ on stdout and exit. ---------------------
 if [[ "${PINEFORGE_TRANSPILE_ONLY:-}" == "1" || "${PINEFORGE_TRANSPILE_ONLY:-}" == "true" ]]; then
     if [[ ! -f "${PINE}" ]]; then
@@ -104,15 +165,37 @@ if [[ "${PINEFORGE_TRANSPILE_ONLY:-}" == "1" || "${PINEFORGE_TRANSPILE_ONLY:-}" 
     exit 0
 fi
 
+# --- Selected-window path on? Only this exact policy value (see the header). -
+SELECTED=false
+if [[ "${PINEFORGE_REPORT_POLICY:-}" == "selected-window/v1" ]]; then
+    SELECTED=true
+fi
+# The source-bound inventory the bind step will read; empty = none to bind.
+INVENTORY_IN=""
+
 # --- Resolve the translation unit: prefer .pine, fall back to .cpp. --------
 if [[ -f "${PINE}" ]]; then
     echo "[pineforge] transpiling strategy.pine ..." >&2
-    run_transpile "${PINE}" "${GEN}"   # set -e aborts (exit 5) on failure
+    if [[ "${SELECTED}" == "true" ]]; then
+        INVENTORY_IN="${WORK}/request_feed_inventory.source.json"
+        run_transpile_with_inventory "${PINE}" "${GEN}" "${INVENTORY_IN}"   # set -e aborts (exit 5)
+    else
+        run_transpile "${PINE}" "${GEN}"   # set -e aborts (exit 5) on failure
+    fi
     SRC="${GEN}"
     TRANSPILED=true
 elif [[ -f "${SRC_CPP}" ]]; then
     SRC="${SRC_CPP}"
     TRANSPILED=false
+    if [[ "${SELECTED}" == "true" ]]; then
+        INVENTORY_IN="${PINEFORGE_REQUEST_FEED_INVENTORY:-}"
+        # Freeze the caller's bytes once into the private work dir (GEN). From here g++, the
+        # binder and run_json.py's --generated-cpp all use that one file, so the caller's
+        # mutable file is read only here. A failed copy ends the run before compile and run.
+        cp -- "${SRC_CPP}" "${GEN}" \
+            || { echo "[pineforge] cannot snapshot strategy.cpp into the work dir" >&2; exit 3; }
+        SRC="${GEN}"
+    fi
 else
     echo "error: missing input — mount /in/strategy.pine (preferred) or /in/strategy.cpp" >&2
     exit 2
@@ -140,6 +223,27 @@ g++ -std=c++17 -O2 -ffp-contract=off -fPIC -shared \
     -o "${SO}" \
     || { echo "[pineforge] compile failed" >&2; exit 3; }
 
+# --- Selected path: bind the inventory to the C++ and library just built. ---
+# Reached only after g++ linked (a failed link exited 3 above). A refusal ends the
+# run: there is no fallback to the ordinary path and run_json.py is not started.
+# Without an inventory (a .cpp the caller gave none for) nothing is bound and none is
+# invented; run_json.py gets no --request-feed-inventory and refuses the run.
+BOUND_INVENTORY=""
+if [[ "${SELECTED}" == "true" ]]; then
+    if [[ -n "${INVENTORY_IN}" ]]; then
+        echo "[pineforge] binding request-feed inventory ..." >&2
+        BOUND_INVENTORY="${WORK}/request_feed_inventory.json"
+        python3 "${PREFIX}/bin/bind_compiled_inventory.py" \
+            --inventory "${INVENTORY_IN}" \
+            --cpp "${SRC}" \
+            --so "${SO}" \
+            --out "${BOUND_INVENTORY}" \
+            || { echo "[pineforge] request-feed inventory binding failed" >&2; exit 3; }
+    else
+        echo "[pineforge] no request-feed inventory for this strategy.cpp; none is passed on" >&2
+    fi
+fi
+
 echo "[pineforge] running backtest ..." >&2
 
 # Optional per-run knobs (mirror scripts/run_strategy.py). Built conditionally so
@@ -158,6 +262,26 @@ extra=()
 [[ -n "${PINEFORGE_SYMBOL_FEEDS:-}" ]]   && extra+=(--symbol-feeds "${PINEFORGE_SYMBOL_FEEDS}")
 if [[ "${PINEFORGE_BENCH:-}" =~ ^(1|true|yes|on)$ ]]; then
     extra+=(--bench --warmup "${PINEFORGE_WARMUP:-3}" --repeats "${PINEFORGE_REPEATS:-20}")
+fi
+# Selected-window flags (see the header): raw values for run_json.py to validate, none
+# defaulted here, and the inventory bound above.
+if [[ -n "${PINEFORGE_REPORT_POLICY:-}" ]]; then
+    extra+=(--report-policy "${PINEFORGE_REPORT_POLICY}")
+    if [[ -n "${PINEFORGE_WINDOW_START_MS:-}" ]]; then
+        extra+=(--window-start-ms "${PINEFORGE_WINDOW_START_MS}")
+    fi
+    if [[ -n "${PINEFORGE_WINDOW_END_MS:-}" ]]; then
+        extra+=(--window-end-ms "${PINEFORGE_WINDOW_END_MS}")
+    fi
+    if [[ -n "${PINEFORGE_PREROLL_BARS:-}" ]]; then
+        extra+=(--preroll-bars "${PINEFORGE_PREROLL_BARS}")
+    fi
+    if [[ -n "${PINEFORGE_FED_START_MS:-}" ]]; then
+        extra+=(--fed-start-ms "${PINEFORGE_FED_START_MS}")
+    fi
+fi
+if [[ -n "${BOUND_INVENTORY}" ]]; then
+    extra+=(--request-feed-inventory "${BOUND_INVENTORY}")
 fi
 
 python3 "${PREFIX}/bin/run_json.py" \

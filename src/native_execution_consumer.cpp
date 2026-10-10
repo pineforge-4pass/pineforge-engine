@@ -2,6 +2,7 @@
 #include "engine_internal.hpp"
 #include "engine_settlement_stage.hpp"
 #include "native_matching.hpp"
+#include "selected_report_view.hpp"
 
 #include <pineforge/execution_close_scope.hpp>
 #include <pineforge/market_driver.hpp>
@@ -1351,6 +1352,300 @@ NativeExecutionConsumer::AttemptScope::~AttemptScope() {
     c_.batch_current_ = !nested_ && !over_live_ && c_.rows_current_;
 }
 
+namespace {
+
+// Holds the epoch's dispatch barrier for the length of one host call the kernel
+// itself makes -- the capture's present_report and the observer -- and releases
+// it on every exit, normal or unwinding, before anything is validated or
+// rendered.
+class EpochDispatchScope {
+public:
+    explicit EpochDispatchScope(NativeSelectedEpoch& epoch) noexcept : epoch_(epoch) {
+        epoch_.dispatching = true;
+    }
+    ~EpochDispatchScope() { epoch_.dispatching = false; }
+    EpochDispatchScope(const EpochDispatchScope&) = delete;
+    EpochDispatchScope& operator=(const EpochDispatchScope&) = delete;
+
+private:
+    NativeSelectedEpoch& epoch_;
+};
+
+// The frozen receipt contract (execution_observer.h), judged after the
+// callback returned 0 without an exception: the boundary and the receipt keep
+// the size, version and generation the kernel gave them (and the boundary its
+// owner serial), reserved is 0, export_requested is exactly 0 or 1, the
+// callback overwrote the UINT32_MAX frame_bytes sentinel, a request for nothing
+// leaves both byte counts 0, and a request for a frame is a whole frame of
+// 1..1024 bytes all of which was handed over.
+bool observer_receipt_accepted(const pf_execution_boundary_v1& issued,
+                               const pf_execution_boundary_v1& boundary,
+                               const pf_boundary_receipt_v1& receipt) noexcept {
+    if (boundary.struct_size != issued.struct_size || boundary.version != issued.version
+        || boundary.run_generation != issued.run_generation
+        || boundary.attempt_serial != issued.attempt_serial) {
+        return false;
+    }
+    if (receipt.struct_size != sizeof(pf_boundary_receipt_v1) || receipt.version != 1
+        || receipt.run_generation != issued.run_generation || receipt.reserved != 0) {
+        return false;
+    }
+    if (receipt.export_requested == 0) {
+        return receipt.frame_bytes == 0 && receipt.handed_bytes == 0;
+    }
+    if (receipt.export_requested != 1) return false;
+    return receipt.frame_bytes >= 1 && receipt.frame_bytes <= 1024
+        && receipt.handed_bytes == receipt.frame_bytes;
+}
+
+}  // namespace
+
+// The selected epoch's lifecycle (declared after selected_epoch_ in the header,
+// with EntryExitGuard). Everything here is gated on selected_epoch_tracked(), so
+// a handle that never opted in takes none of it.
+
+bool NativeExecutionConsumer::mint_attempt(BacktestEngine& engine, bool nested) {
+    if (nested || !selected_epoch_tracked()) return true;
+    NativeSelectedEpoch& epoch = selected_epoch_;
+    if (epoch.attempt_counter == std::numeric_limits<std::uint64_t>::max()) {
+        present_refusal(engine, "native attempt serial counter exhausted");
+        return false;
+    }
+    pf_execution_observation_v1& seen = epoch.observation;
+    seen.attempt_serial = ++epoch.attempt_counter;
+    seen.attempt_generation = 0;
+    seen.attempt_outcome = kEpochOutcomeRefused;
+    return true;
+}
+
+void NativeExecutionConsumer::admit_selected_generation(BacktestEngine& engine) noexcept {
+    if (!selected_epoch_tracked()) return;
+    NativeSelectedEpoch& epoch = selected_epoch_;
+    // A new generation never inherits the capture, the latch or the counts of
+    // an older one.
+    drop_presentation();
+    epoch.admitted_selected = epoch.window_configured;
+    epoch.admitted_window = epoch.admitted_selected ? epoch.pending_window
+                                                    : pf_selected_window_config_v1{};
+    epoch.phase_observed = epoch.observer_registered;
+    epoch.dispatch_reentry_refused = false;
+    pf_execution_observation_v1& seen = epoch.observation;
+    epoch.owner_serial = seen.attempt_serial;
+    seen.run_generation = ++epoch.generation_counter;
+    seen.attempt_generation = seen.run_generation;
+    seen.phase = kEpochExecuting;
+    seen.fault_stage = kEpochFaultNone;
+    seen.attempt_outcome = kEpochOutcomeLive;
+    seen.boundary_delivered = 0;
+    epoch.counts = pf_selected_window_counts_v1{};
+    epoch.counts.struct_size = static_cast<std::uint32_t>(sizeof epoch.counts);
+    epoch.counts.version = 1;
+    // The selected-only buy-and-hold facts start empty with the counts.
+    selected_has_window_input_ = false;
+    selected_first_open_ = std::numeric_limits<double>::quiet_NaN();
+    selected_last_close_ = std::numeric_limits<double>::quiet_NaN();
+    selected_query_begin_admitted(engine, epoch.admitted_selected);
+}
+
+void NativeExecutionConsumer::close_epoch_failed(std::uint32_t fault_stage) noexcept {
+    pf_execution_observation_v1& seen = selected_epoch_.observation;
+    selected_query_seal();
+    drop_presentation();
+    seen.phase = kEpochSealed;
+    seen.fault_stage = fault_stage;
+    seen.boundary_delivered = 0;
+    // The observation's outcome row is the LATEST attempt's: a later refused
+    // attempt keeps its own Refused, and only the generation's phase, fault and
+    // boundary move.
+    if (seen.attempt_serial == selected_epoch_.owner_serial) {
+        seen.attempt_outcome = recoverable_abort() ? kEpochOutcomeAborted : kEpochOutcomeFailed;
+    }
+}
+
+void NativeExecutionConsumer::close_open_epoch_at_exit(BacktestEngine& engine, bool unwinding,
+                                                       bool allow_live) noexcept {
+    // Keyed on the generation's own open phase, never on state_: a refused
+    // attempt can latch NativeFailed before any admission, and must leave an
+    // earlier Sealed or Results generation as it was.
+    const std::uint32_t phase = selected_epoch_.observation.phase;
+    if (phase != kEpochExecuting && phase != kEpochCapturing) return;
+    // The one open exit: an admitted stream that returned normally still Running.
+    if (!unwinding && allow_live && std::holds_alternative<NativeRunning>(state_)) return;
+    close_epoch_failed(kEpochFaultExecution);
+    engine.last_run_status_ = 1;
+    // A close with no failure latched and no text (nothing reached fail() or
+    // render) still must not read as success: an empty-text record with a code
+    // is what failure_code_of answers as engine_unclassified_error. A failure
+    // that is already there -- a latched NativeFailed (an abort included), a
+    // code or any text -- keeps its code and text.
+    if (!failed() && run_failure_.code == RunFailureCode::none && engine.last_error_.empty()) {
+        run_failure_.code = RunFailureCode::engine_unclassified_error;
+        run_failure_.args.reset();
+        run_failure_.text.clear();
+    }
+}
+
+void NativeExecutionConsumer::terminal_success(BacktestEngine& engine,
+                                               NativeFailureOperation operation) {
+    NativeSelectedEpoch& epoch = selected_epoch_;
+    pf_execution_observation_v1& seen = epoch.observation;
+    if (seen.phase == kEpochSealed && seen.fault_stage != kEpochFaultNone) {
+        // The generation closed failed before its run completed: a stream_end
+        // that was refused without failing the run left the stream Running and
+        // its epoch closed (the exit guard), and a retry lands here. It can open
+        // no results, and the call must not acknowledge success.
+        if (!failed()) {
+            fail(engine, NativeFailure{NativeFailureCode::Contract, operation});
+            render(engine, "native generation was closed before its run completed");
+        }
+        return;
+    }
+    if (seen.phase != kEpochExecuting) return;
+    // Only a generation with a window or an observer is captured; any other
+    // tracked generation just seals and its original report path remains.
+    const bool capture = epoch.admitted_selected || epoch.phase_observed;
+    if (capture) {
+        seen.phase = kEpochCapturing;
+        {
+            const EpochDispatchScope dispatch(epoch);
+            capture_presentation(engine);
+        }
+        // The barrier is released. Abort and first cause first (check_abort
+        // answers false for either), then the reentry latch, which is consumed
+        // here whatever the answer.
+        const bool proceed = check_abort(engine, operation);
+        const bool reentered = epoch.dispatch_reentry_refused;
+        epoch.dispatch_reentry_refused = false;
+        if (!proceed) {
+            close_epoch_failed(kEpochFaultExecution);
+            return;
+        }
+        if (reentered) {
+            fail(engine, NativeFailure{NativeFailureCode::Contract, operation});
+            close_epoch_failed(kEpochFaultExecution);
+            render(engine, "native entry refused during the results dispatch");
+            return;
+        }
+    }
+    selected_query_seal();
+    seen.phase = kEpochSealed;
+    if (epoch.phase_observed && !call_execution_observer(engine, operation)) return;
+    seen.phase = kEpochResults;
+    if (seen.attempt_serial == epoch.owner_serial) seen.attempt_outcome = kEpochOutcomeResultsOpen;
+    if (capture) selected_results_open_ = true;
+}
+
+bool NativeExecutionConsumer::call_execution_observer(BacktestEngine& engine,
+                                                      NativeFailureOperation operation) {
+    NativeSelectedEpoch& epoch = selected_epoch_;
+    pf_execution_observation_v1& seen = epoch.observation;
+    const pf_before_results_fn_v1 callback = epoch.observer.before_results;
+    void* const context = epoch.observer.context;
+
+    // The exact frozen initialisation: the boundary carries the serial that
+    // OWNS the epoch (never a later refused attempt's), and the receipt starts
+    // with the sentinel the callback must overwrite.
+    pf_execution_boundary_v1 boundary{};
+    boundary.struct_size = static_cast<std::uint32_t>(sizeof boundary);
+    boundary.version = 1;
+    boundary.run_generation = seen.run_generation;
+    boundary.attempt_serial = epoch.owner_serial;
+    const pf_execution_boundary_v1 issued = boundary;
+    pf_boundary_receipt_v1 receipt{};
+    receipt.struct_size = static_cast<std::uint32_t>(sizeof receipt);
+    receipt.version = 1;
+    receipt.run_generation = seen.run_generation;
+    receipt.frame_bytes = std::numeric_limits<std::uint32_t>::max();
+    receipt.handed_bytes = 0;
+    receipt.export_requested = 0;
+    receipt.reserved = 0;
+
+    int rc = -1;
+    std::exception_ptr thrown;
+    if (callback != nullptr) {
+        const EpochDispatchScope dispatch(epoch);
+        try {
+            rc = callback(context, &boundary, &receipt);
+        } catch (...) {
+            thrown = std::current_exception();
+        }
+    }
+    // The barrier is released; nothing below runs host code.
+    const bool reentered = epoch.dispatch_reentry_refused;
+    epoch.dispatch_reentry_refused = false;
+
+    // The first cause wins, in the order it happened: a failure already latched,
+    // then a reentry the barrier refused during the call, then what the call
+    // itself did. `refusal` is the English of an engine_invariant refusal;
+    // `render_thrown` renders the callback's own exception, classified.
+    const char* refusal = nullptr;
+    bool render_thrown = false;
+    NativeFailure failure{NativeFailureCode::Contract, operation};
+    if (failed()) {
+        // An earlier cause is latched: its code and text stay.
+    } else if (reentered) {
+        refusal = "native entry refused during the results dispatch";
+    } else if (thrown) {
+        failure = NativeFailure{NativeFailureCode::CallbackException,
+                                NativeFailureOperation::Callback};
+        render_thrown = true;
+    } else if (rc != 0) {
+        failure = NativeFailure{NativeFailureCode::CallbackException,
+                                NativeFailureOperation::Callback};
+        refusal = "native execution observer returned non-zero";
+    } else if (!observer_receipt_accepted(issued, boundary, receipt)) {
+        refusal = "native execution observer receipt rejected";
+    } else {
+        seen.boundary_delivered = 1;
+        return true;
+    }
+    // Latch and close first (neither can throw), render last: a render that
+    // throws leaves the epoch already Sealed, faulted and without a capture.
+    fail(engine, failure);
+    close_epoch_failed(kEpochFaultAfterExecution);
+    if (refusal != nullptr) {
+        render(engine, refusal);
+    } else if (render_thrown) {
+        try {
+            std::rethrow_exception(thrown);
+        } catch (const std::exception& e) {
+            render_exception(engine, e);
+        } catch (...) {
+            render_unclassified(engine, "native execution observer exception");
+        }
+    }
+    return false;
+}
+
+void NativeExecutionConsumer::fail_from_exception(BacktestEngine& engine,
+                                                  NativeFailureOperation operation,
+                                                  const std::exception& error) {
+    if (selected_epoch_tracked()) {
+        // processing_input_ is false at every try's entry (admission refuses
+        // otherwise), so a throw that left it set is put back, and the
+        // nesting predicate of the next entry reads true again.
+        processing_input_ = false;
+        // The first latched cause stays: its code and text are not overwritten.
+        if (failed()) {
+            engine.last_run_status_ = 1;
+            return;
+        }
+    }
+    fail(engine, NativeFailure{NativeFailureCode::Unexpected, operation});
+    render_exception(engine, error);
+}
+
+void NativeExecutionConsumer::fail_unclassified(BacktestEngine& engine,
+                                                NativeFailureOperation operation) {
+    processing_input_ = false;
+    if (failed()) {
+        engine.last_run_status_ = 1;
+        return;
+    }
+    fail(engine, NativeFailure{NativeFailureCode::Unexpected, operation});
+    render_unclassified(engine, "native non-standard exception");
+}
+
 void NativeExecutionConsumer::present_refusal(BacktestEngine& engine, const char* text,
                                               RunFailureCode code,
                                               const RunFailureArgs& args) {
@@ -1517,6 +1812,10 @@ bool NativeExecutionConsumer::path_high_first(const Bar& bar) const {
 }
 
 bool NativeExecutionConsumer::commands_allowed() const {
+    // A command asked for from inside a capture or an observer call is refused
+    // and latched, so the terminal helper rejects that generation; every
+    // ordinary admission below is unchanged.
+    if (refuse_dispatch_reentry()) return false;
     if (failed() || consuming_request_) return false;
     const auto* running = std::get_if<NativeRunning>(&state_);
     if (!running) return false;
@@ -1697,6 +1996,18 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.i(pre_open_birth_time_ms_);
     f.u(pre_open_births_.size());
     for (const auto& handle : pre_open_births_) hash_handle(f, handle);
+    // The open activation grants fold only while one is held, a tag word first
+    // so their bits can never read as another optional fold's word: a run that
+    // never opens the scope, and every state after the Open the grants were
+    // recorded for, keeps its pre-scope continuation identity. The scope's own
+    // open bit is call-stack state and never folds.
+    if (!activation_births_.empty()) {
+        f.u(0x4f50454e41435456ULL);  // "OPENACTV"
+        f.u(activation_birth_point_ordinal_);
+        f.i(activation_birth_time_ms_);
+        f.u(activation_births_.size());
+        for (const auto& handle : activation_births_) hash_handle(f, handle);
+    }
     f.u(applied_notifications_.size() - notification_head_);
     for (std::size_t i = notification_head_; i < applied_notifications_.size(); ++i) {
         const auto& notification = applied_notifications_[i];
@@ -2492,9 +2803,22 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
                RunFailureCode::symbol_metadata_rejected, {{"field", "timezone"}});
         return false;
     }
+    // The selected epoch's last refusal, before anything is reset: a tracked
+    // handle whose generation counter is spent admits no run, so the counter
+    // never wraps and the previous closure stays as it was.
+    if (selected_epoch_tracked()
+        && selected_epoch_.generation_counter == std::numeric_limits<std::uint64_t>::max()) {
+        fail(engine,
+             NativeFailure{NativeFailureCode::CounterExhausted, NativeFailureOperation::Begin});
+        render(engine, "native run generation counter exhausted");
+        return false;
+    }
     engine.reset_run_state();
     // The rows are this attempt's from here on, whether it completes or fails.
     rows_current_ = batch_current_ = true;
+    // The generation is admitted here: after the reset and the last refusal,
+    // before the first host callback of the run.
+    admit_selected_generation(engine);
     // RULING A48: one generic capability, wired once per run. A host that
     // declares ownership supplies the closing-row magnitudes; the kernel then
     // keeps no excursion model of its own for this run.
@@ -2533,6 +2857,10 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     pre_open_birth_point_ordinal_ = 0;
     pre_open_birth_time_ms_ = 0;
     pre_open_births_.clear();
+    open_activation_scope_ = false;
+    activation_birth_point_ordinal_ = 0;
+    activation_birth_time_ms_ = 0;
+    activation_births_.clear();
     applied_notifications_.clear();
     notification_head_ = 0;
     consuming_request_ = false;
@@ -2623,6 +2951,11 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     state_ = NativeRunning{std::move(ready->spec), phase};
     cache_running_policy();
     if (!check_abort_or_projection(engine, NativeFailureOperation::Begin)) return false;
+    // The host's opaque state is dropped here: after the final pre-host check has
+    // passed and before the run-begin callback, so state the host adopts from
+    // on_native_run_begin or later survives this run. A begin that returns before
+    // this line never reaches it. Not hashed; no switch.
+    host_state_.reset();
     // The previous run's declared series are torn down BEFORE the host's
     // run-begin callback: whatever evaluator states that callback registers
     // -- even ones identical to the kernel's last registration, as a host
@@ -4161,8 +4494,10 @@ bool NativeExecutionConsumer::install_mutation(
 bool NativeExecutionConsumer::apply_execution(
         BacktestEngine& engine, const native_order::RequestHandle& target,
         const native_order::ExecutionProposal& proposal,
-        const native_order::CommittedExecutionFacts& facts, uint64_t ordinal) {
-    const auto result = requests_.apply_execution(target, proposal, facts, next_timeline_ordinal_);
+        const native_order::CommittedExecutionFacts& facts, uint64_t ordinal,
+        bool open_activation_grant) {
+    const auto result = requests_.apply_execution(target, proposal, facts, next_timeline_ordinal_,
+                                                  open_activation_grant);
     if (const auto* err = std::get_if<native_order::InstallError>(&result)) {
         fail(engine, NativeFailure{NativeFailureCode::Contract,
                                    NativeFailureOperation::Settlement, ordinal,
@@ -4509,7 +4844,10 @@ void NativeExecutionConsumer::observe_trails(
             && !evaluation.cohort_side) {
             continue;
         }
-        if (!requests_.evaluation_eligible(*live, evaluation)) continue;
+        // The open activation grant of this handle at this cursor, for the
+        // eligibility test and the trigger transition below.
+        const bool open_grant = open_activation_granted(handle, cursor.point);
+        if (!requests_.evaluation_eligible(*live, evaluation, open_grant)) continue;
         const auto* track = std::get_if<native_order::TrailTrack>(&live->trigger_state);
         if (!track) continue;
         const bool buy = scratch_request_is_buy(engine, *live);
@@ -4522,10 +4860,10 @@ void NativeExecutionConsumer::observe_trails(
             step = direct_mutation_
                 ? core_step(requests_.apply_trigger(
                       handle, extremum, evaluation.driver_class, next_timeline_ordinal_,
-                      evaluation.cohort_side, trigger_grid))
+                      evaluation.cohort_side, trigger_grid, open_grant))
                 : core_step(requests_.prepare_trigger(
                       handle, extremum, evaluation.driver_class, next_timeline_ordinal_,
-                      evaluation.cohort_side, trigger_grid));
+                      evaluation.cohort_side, trigger_grid, open_grant));
         } catch (const std::exception& e) {
             fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                        NativeFailureOperation::Settlement, cursor.point.ordinal});
@@ -4556,6 +4894,13 @@ void NativeExecutionConsumer::match_discrete(BacktestEngine& engine, const Nativ
         pre_open_birth_time_ms_ = 0;
         pre_open_births_.clear();
     }
+    // The open activation grants end with the match of the Open they were
+    // recorded for, exactly as the pre-open births above do.
+    if (activation_birth_point_ordinal_ == point.coordinate.ordinal) {
+        activation_birth_point_ordinal_ = 0;
+        activation_birth_time_ms_ = 0;
+        activation_births_.clear();
+    }
 }
 
 bool NativeExecutionConsumer::pre_open_birth_eligible(
@@ -4583,6 +4928,73 @@ void NativeExecutionConsumer::record_pre_open_birth(
         == pre_open_births_.end()) {
         pre_open_births_.push_back(handle);
     }
+}
+
+bool NativeExecutionConsumer::begin_open_activation(BacktestEngine& engine) {
+    // Every refusal is made before anything is written; the caller owns the
+    // typed failure. `current_point` is non-null exactly for a running
+    // consumer inside a callback with a frame, and the engine must be the one
+    // this run began on. Nothing here reaches the host.
+    const auto* point = current_point();
+    // One scope per Open: the first begin at this point set the marker, even when
+    // no command followed, and end_open_activation leaves it, so a second begin
+    // at the same Open is refused here -- before anything is written -- and the
+    // first scope's grants stay for the match of this Open, which clears the
+    // marker with them (match_discrete; begin_ready resets both for a new run).
+    // A later Open has another ordinal and begins normally.
+    if (open_activation_scope_ || point == nullptr || &engine != downcast_engine_
+        || callback_phase_ != CallbackPhase::PreOpen
+        || point->decision.coordinate.path_phase != NativePathPhase::Open
+        || activation_birth_point_ordinal_ == point->decision.coordinate.ordinal) {
+        return false;
+    }
+    // The grants of any earlier scope end here; the point is the one the open
+    // match will present, so the helper can match it exactly.
+    activation_births_.clear();
+    activation_birth_point_ordinal_ = point->decision.coordinate.ordinal;
+    activation_birth_time_ms_ = point->decision.coordinate.effective_time_ms;
+    open_activation_scope_ = true;
+    return true;
+}
+
+void NativeExecutionConsumer::end_open_activation() noexcept {
+    // The capture scope alone. The grants it recorded stay for the Open match
+    // that follows (match_discrete clears them at its end).
+    open_activation_scope_ = false;
+}
+
+bool NativeExecutionConsumer::open_activation_granted(
+        const native_order::RequestHandle& handle, const NativeCoordinate& at) const noexcept {
+    if (activation_births_.empty() || activation_birth_point_ordinal_ != at.ordinal
+        || activation_birth_time_ms_ != at.effective_time_ms
+        || at.path_phase != NativePathPhase::Open) {
+        return false;
+    }
+    return std::find(activation_births_.begin(), activation_births_.end(), handle)
+        != activation_births_.end();
+}
+
+void NativeExecutionConsumer::record_activation_birth(
+        BacktestEngine& engine, const native_order::RequestHandle& handle) {
+    if (!open_activation_scope_) return;
+    if (std::find(activation_births_.begin(), activation_births_.end(), handle)
+        != activation_births_.end()) {
+        return;
+    }
+    try {
+        activation_births_.push_back(handle);
+    } catch (const std::exception& e) {
+        fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
+        render_exception(engine, e);
+        throw;
+    }
+}
+
+void NativeExecutionConsumer::revoke_activation_birth(const native_order::RequestHandle& handle) {
+    if (activation_births_.empty()) return;
+    activation_births_.erase(
+        std::remove(activation_births_.begin(), activation_births_.end(), handle),
+        activation_births_.end());
 }
 
 void NativeExecutionConsumer::match_segment(
@@ -5502,6 +5914,12 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         native_order::ExecutionProposal proposal;
         proposal.cursor = evaluation.cursor;
         proposal.pre_open_birth_eligible = evaluation.pre_open_birth_eligible;
+        // The handle's open activation grant at this cursor, read once: the
+        // direct form's check and its apply, and the prepared form's prepare,
+        // each make the birth test, and each is handed this same bool (the
+        // token holds none: install_execution never reads the birth gate). A
+        // current execution's cursor is a point of its own, so it reads false.
+        const bool open_grant = open_activation_granted(handle, evaluation.cursor.point);
         proposal.raw_price = raw_price;
         proposal.resolved_price = resolved_price;
         proposal.physical_action = candidate.physical;
@@ -5527,7 +5945,8 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             return error.code == native_order::CoreFailure::NonrepresentableQuantity;
         };
         if (direct_mutation_) {
-            auto checked = requests_.check_execution(handle, proposal, next_timeline_ordinal_);
+            auto checked = requests_.check_execution(handle, proposal, next_timeline_ordinal_,
+                                                     open_grant);
             if (const auto* error = std::get_if<native_order::PreparationError>(&checked)) {
                 if (unrepresentable(*error)) {
                     return terminal(native_order::MatchRejectReason::UnrepresentableQuantity,
@@ -5538,7 +5957,8 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             }
             ready = std::holds_alternative<std::monostate>(checked);
         } else {
-            auto prepared = requests_.prepare_execution(handle, proposal, next_timeline_ordinal_);
+            auto prepared = requests_.prepare_execution(handle, proposal, next_timeline_ordinal_,
+                                                        open_grant);
             if (const auto* error = std::get_if<native_order::PreparationError>(&prepared)) {
                 if (unrepresentable(*error)) {
                     return terminal(native_order::MatchRejectReason::UnrepresentableQuantity,
@@ -5707,7 +6127,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         committed.post_target = std::move(candidate.target);
         committed.committed_action = candidate.physical;
         const bool installed = direct_mutation_
-            ? apply_execution(engine, handle, proposal, committed, P)
+            ? apply_execution(engine, handle, proposal, committed, P, open_grant)
             : install_execution(engine, std::move(*token), committed, P);
         if (!installed) return std::nullopt;
         const auto& applied = std::get<native_order::ExecutionAppliedEvent>(
@@ -6296,7 +6716,8 @@ void NativeExecutionConsumer::match_path(
             candidate_eval.pre_open_birth_eligible = pre_open_birth_eligible(handle, point)
                 || born_on_remaining_path(*live);
             candidate_eval.cohort_side = cohort_side;
-            const auto facts = requests_.eligibility_facts(*live, candidate_eval);
+            const auto facts = requests_.eligibility_facts(
+                *live, candidate_eval, open_activation_granted(handle, point.coordinate));
             if (!facts.birth_ok || facts.waiting || !facts.driver_ok) {
                 erase_provenance_for(handle);
                 continue;
@@ -6425,6 +6846,10 @@ void NativeExecutionConsumer::match_path(
         if (!live) continue;
         eval.pre_open_birth_eligible = pre_open_birth_eligible(winner->handle, point)
             || born_on_remaining_path(*live);
+        // The winner's open activation grant, read once for every core call
+        // this row makes below (refresh, evaluation, trigger, execution): the
+        // same bool each time, so a check and its apply never disagree.
+        const bool open_grant = open_activation_granted(winner->handle, point.coordinate);
         const auto* winner_target = cached_cohort_target(engine, *live);
         eval.cohort_side = winner_target ? side_from_target(*winner_target)
                                          : scratch_cohort_side(engine, *live);
@@ -6438,14 +6863,18 @@ void NativeExecutionConsumer::match_path(
             const bool reuse_after_refresh = keep_rows && cursor_unmoved;
             try {
                 if (winner_target) {
-                    if (requests_.refresh_allowance(winner->handle, eval, *winner_target)) {
+                    // The cohort refresh: the core's context-bearing form under
+                    // the grant (refresh_cohort_allowance forwards to the same
+                    // body without one).
+                    if (requests_.refresh_allowance(winner->handle, eval, *winner_target,
+                                                    open_grant)) {
                         rescan_winner_only = reuse_after_refresh;
                         continue;
                     }
                 } else if (std::holds_alternative<native_order::BookClose>(live->authority)) {
                     native_order::TargetObservation obs;
                     obs.current_position = read_position(engine);
-                    if (requests_.refresh_allowance(winner->handle, eval, obs)) {
+                    if (requests_.refresh_allowance(winner->handle, eval, obs, open_grant)) {
                         rescan_winner_only = reuse_after_refresh;
                         continue;
                     }
@@ -6455,7 +6884,7 @@ void NativeExecutionConsumer::match_path(
                     // binding the book still has binds here, taking an
                     // ordinal (ReplaceOptions::keep_binding, R5 lane V19-D).
                     if (requests_.refresh_allowance(winner->handle, eval, match_target_,
-                                                    next_timeline_ordinal_)) {
+                                                    next_timeline_ordinal_, open_grant)) {
                         catch_up_timeline();
                         rescan_winner_only = reuse_after_refresh;
                         continue;
@@ -6476,9 +6905,9 @@ void NativeExecutionConsumer::match_path(
                     winner_target ? *winner_target : match_target_;
                 step = direct_mutation_
                     ? core_step(requests_.apply_evaluation(
-                          winner->handle, eval, observed, next_timeline_ordinal_))
+                          winner->handle, eval, observed, next_timeline_ordinal_, open_grant))
                     : core_step(requests_.prepare_evaluation(
-                          winner->handle, eval, observed, next_timeline_ordinal_));
+                          winner->handle, eval, observed, next_timeline_ordinal_, open_grant));
             } catch (const std::exception& e) {
                 fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                            NativeFailureOperation::Settlement, P});
@@ -6528,10 +6957,11 @@ void NativeExecutionConsumer::match_path(
                 step = direct_mutation_
                     ? core_step(requests_.apply_trigger(winner->handle, transition, driver_class,
                                                         next_timeline_ordinal_, eval.cohort_side,
-                                                        trigger_grid))
+                                                        trigger_grid, open_grant))
                     : core_step(requests_.prepare_trigger(winner->handle, transition,
                                                           driver_class, next_timeline_ordinal_,
-                                                          eval.cohort_side, trigger_grid));
+                                                          eval.cohort_side, trigger_grid,
+                                                          open_grant));
             } catch (const std::exception& e) {
                 fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                            NativeFailureOperation::Settlement, P});
@@ -6959,6 +7389,24 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
         || !check_projection(engine, NativeFailureOperation::Command))
         throw coded<std::runtime_error>(recorded_cause(),
                                         "native current execution projection/abort failure");
+    // The open activation scope (begin_open_activation) is a capture window, not
+    // a point to execute at: a current execution inside it would take an ordinal
+    // and settle against a book the window has not finished building. That is
+    // the caller's sequencing violation, not a refusal it may ignore, so the run
+    // fails and the call throws, before an ordinal is taken or the book is
+    // touched. A cause the run already carries stays the first: it is not
+    // rendered over, and it is the one the thrown error carries.
+    if (open_activation_scope_) {
+        const bool first_cause = !failed();
+        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Command});
+        if (first_cause) {
+            render(engine,
+                   "native current execution is refused while the open activation scope is open",
+                   RunFailureCode::engine_invariant);
+        }
+        throw coded<std::runtime_error>(
+            recorded_cause(), "native current execution inside the open activation scope");
+    }
     try {
         if (auto refusal = validate_current_execution(engine, command)) return *refusal;
         consuming_request_ = true;
@@ -7571,6 +8019,9 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
     if (callback_context_.sub_index < 0) callback_context_.sub_index = 0;
     if (callback_context_.sub_bar_open_ms == 0) callback_context_.sub_bar_open_ms = coordinate.open_ms;
     if (callback_context_.script_bar_open_ms == 0) callback_context_.script_bar_open_ms = coordinate.open_ms;
+    // The label this script bar is published under, read before the host runs:
+    // the selected window's script counts split on it.
+    const std::int64_t published_label = callback_context_.script_bar_open_ms;
     // The quote kind and origin are the view's defaults, as they were.
     current_frame_.emplace(callback_context_, bar.close, NativeCurrentQuoteKind::MarketDecision,
                            uint64_t{0}, next_timeline_ordinal_ - 1);
@@ -7608,6 +8059,7 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
         return;
     }
     ++engine.diag_script_bars_processed_;
+    count_selected_script(published_label);
     calculation_margin_check(engine, coordinate, bar.close);
     // L9: the third risk evaluation point is the script bar's own close
     // calculation, inside this still-open frame, so a breach that first
@@ -8524,6 +8976,61 @@ bool NativeExecutionConsumer::final_script_session_closed() const noexcept {
             >= script_.interval.last_traded_close_ms;
 }
 
+// The selected window's consumption counts (declared with the seal helpers).
+// The flag load is all an OFF handle pays. The admission reset in
+// admit_selected_generation zeroes the counts per generation and the counts
+// getter alone attaches the three identities, so nothing here is copied from a
+// planner's expectation: each increment is one primary input or script callback
+// that actually completed. The window starts at T, the row or label at or after
+// it is window, any before it pre-roll.
+void NativeExecutionConsumer::count_selected_input(const Bar& bar) noexcept {
+    if (!selected_epoch_.admitted_selected) return;
+    pf_selected_window_counts_v1& counts = selected_epoch_.counts;
+    ++counts.fed_input_bars;
+    if (bar.timestamp < selected_epoch_.admitted_window.start_ms) {
+        ++counts.preroll_input_bars;
+    } else {
+        ++counts.window_input_bars;
+        // The selected report's buy-and-hold basis: the first window input's
+        // open and the latest window input's close, never a pre-roll price.
+        if (!selected_has_window_input_) {
+            selected_has_window_input_ = true;
+            selected_first_open_ = bar.open;
+        }
+        selected_last_close_ = bar.close;
+    }
+}
+
+void NativeExecutionConsumer::count_selected_script(std::int64_t label) noexcept {
+    if (!selected_epoch_.admitted_selected) return;
+    pf_selected_window_counts_v1& counts = selected_epoch_.counts;
+    ++counts.fed_script_bars;
+    if (label < selected_epoch_.admitted_window.start_ms) {
+        ++counts.preroll_script_bars;
+    } else {
+        ++counts.window_script_bars;
+    }
+}
+
+// The accepted pre-roll horizon. A pre-T script bucket is sealed by its own
+// last input or by the first input of a later interval; a feed that stops
+// short of the interval's end leaves the last one pending, so the source would
+// never see its final pre-roll intent (no window row at all), or only after the
+// first window input's own work. This seals it once at the accepted T from the
+// real aggregate its own inputs left, LazyComplete as the native lazy seal
+// does, and resets the bucket: the calculation reads no later input, price,
+// fill or order, a natural seal that already ran left nothing to seal here, and
+// a second call finds an empty bucket. Only a bucket whose label precedes T is
+// completed; a WINDOW bucket that is still incomplete is never forced.
+bool NativeExecutionConsumer::complete_selected_preroll_horizon(BacktestEngine& engine) {
+    if (!selected_epoch_.admitted_selected || !script_.has_data || script_.sealed) return true;
+    if (script_.interval.open_ms >= selected_epoch_.admitted_window.start_ms) return true;
+    seal_script(engine, NativeCompletionKind::LazyComplete);
+    if (failed()) return false;
+    script_ = ScriptBucket{};
+    return true;
+}
+
 bool NativeExecutionConsumer::contribute_input(
         BacktestEngine& engine, const Bar& bar,
         const native_calendar::NativeInterval& interval,
@@ -8589,8 +9096,10 @@ bool NativeExecutionConsumer::contribute_input(
     engine.bar_index_ = script_.has_data
         ? script_.script_index : std::max(0, next_script_index_ - 1);
     next_interval_index_ = index + 1;
-    if (!failed() && kind != InputContribution::QuietCarried)
+    if (!failed() && kind != InputContribution::QuietCarried) {
         ++engine.diag_input_bars_processed_;
+        count_selected_input(bar);
+    }
     return !failed();
 }
 
@@ -9553,6 +10062,20 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
     input_context.input_index = index;
     input_context.completes_script_interval =
         interval->next_period_open_ms >= script_interval->next_period_open_ms;
+    // The accepted pre-roll horizon of a selected batch: the first input at or
+    // after T finds the last pre-T bucket still pending when its own inputs
+    // stopped short of the script interval's end. It is completed here, ahead
+    // of this input's callback, bar open and matching work, so the source has
+    // produced its last pre-roll intent first. A bucket this very input would
+    // continue (the same script key) is never split, and a stream is untouched.
+    if (selected_epoch_.admitted_selected && running
+        && running->phase == NativeRunPhase::Batch
+        && bar.timestamp >= selected_epoch_.admitted_window.start_ms
+        && script_.has_data && script_.key != script_interval->open_ms
+        && !complete_selected_preroll_horizon(engine)) {
+        processing_input_ = false;
+        return false;
+    }
     if (!invoke_input_callback(engine, bar, input_context)) {
         processing_input_ = false;
         return false;
@@ -9725,12 +10248,24 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
             if (failed()) return;
             script_ = ScriptBucket{};
         }
+        // The accepted pre-roll horizon of a selected batch: with no later
+        // input to seal it, the last pending pre-T bucket is completed now,
+        // before the terminal capture, once the natural final seal above has
+        // had its say. An incomplete window bucket stays unsealed.
+        if (running && running->phase == NativeRunPhase::Batch
+            && selected_epoch_.admitted_selected
+            && !complete_selected_preroll_horizon(engine)) {
+            return;
+        }
     }
     (void)check_abort_or_projection(engine, NativeFailureOperation::Input);
 }
 
 void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars, int n) {
+    const EntryExitGuard exit_scope(*this, engine, false);
+    if (refuse_dispatch_reentry()) return;
     const AttemptScope attempt(*this);
+    if (!mint_attempt(engine, exit_scope.nested())) return;
     NativeBeginArgs args{bars, n, {}, {}, false, 4,
         MagnifierDistribution::ENDPOINTS, engine.magnifier_volume_weighted_, 2};
     args.simple_run = true;
@@ -9753,9 +10288,12 @@ void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars
         state_ = NativeCompleted{std::move(running->spec),
                                  NativeCompletion::BatchComplete};
         verify_closed_rows(engine);
+        terminal_success(engine, NativeFailureOperation::Input);
     } catch (const std::exception& e) {
-        fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
-        render_exception(engine, e);
+        fail_from_exception(engine, NativeFailureOperation::Input, e);
+    } catch (...) {
+        if (!selected_epoch_tracked()) throw;
+        fail_unclassified(engine, NativeFailureOperation::Input);
     }
 }
 
@@ -9765,7 +10303,10 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
                                      const std::string& script_tf,
                                      bool bar_magnifier, int magnifier_samples,
                                      MagnifierDistribution magnifier_dist) {
+    const EntryExitGuard exit_scope(*this, engine, false);
+    if (refuse_dispatch_reentry()) return;
     const AttemptScope attempt(*this);
+    if (!mint_attempt(engine, exit_scope.nested())) return;
     const NativeBeginArgs args{input_bars, n_input, input_tf, script_tf, bar_magnifier,
         magnifier_samples, magnifier_dist, engine.magnifier_volume_weighted_, 2};
     if (!prepare_public_begin(engine, args)) return;
@@ -9801,9 +10342,12 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
         state_ = NativeCompleted{std::move(running->spec),
                                  NativeCompletion::BatchComplete};
         verify_closed_rows(engine);
+        terminal_success(engine, NativeFailureOperation::Input);
     } catch (const std::exception& e) {
-        fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
-        render_exception(engine, e);
+        fail_from_exception(engine, NativeFailureOperation::Input, e);
+    } catch (...) {
+        if (!selected_epoch_tracked()) throw;
+        fail_unclassified(engine, NativeFailureOperation::Input);
     }
 }
 
@@ -9815,7 +10359,10 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
                                        const void* overrides,
                                        bool bar_magnifier, int magnifier_samples,
                                        MagnifierDistribution magnifier_dist) {
+    const EntryExitGuard exit_scope(*this, engine, false);
+    if (refuse_dispatch_reentry()) return;
     const AttemptScope attempt(*this);
+    if (!mint_attempt(engine, exit_scope.nested())) return;
     NativeBeginArgs args{input_bars, n_input, input_tf, script_tf, bar_magnifier,
         magnifier_samples, magnifier_dist, engine.magnifier_volume_weighted_, 2};
     args.inputs = &inputs;
@@ -9846,9 +10393,12 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
         state_ = NativeCompleted{std::move(running->spec),
                                  NativeCompletion::BatchComplete};
         verify_closed_rows(engine);
+        terminal_success(engine, NativeFailureOperation::Input);
     } catch (const std::exception& e) {
-        fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
-        render_exception(engine, e);
+        fail_from_exception(engine, NativeFailureOperation::Input, e);
+    } catch (...) {
+        if (!selected_epoch_tracked()) throw;
+        fail_unclassified(engine, NativeFailureOperation::Input);
     }
 }
 
@@ -9856,7 +10406,13 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
                                            const Bar* warmup_bars, int n_warmup,
                                            const std::string& input_tf,
                                            const std::string& script_tf) {
+    const EntryExitGuard exit_scope(*this, engine, true);
+    if (refuse_dispatch_reentry()) return false;
     const AttemptScope attempt(*this);
+    // The latest attempt is minted before any check below, so a refusal over a
+    // live stream is a later attempt of its own (owner_serial stays the live
+    // generation's).
+    if (!mint_attempt(engine, exit_scope.nested())) return false;
     // Preserve the live stream before asking the provider to stage/configure a
     // new run.  The legacy route diagnoses this state first; in particular,
     // no warmup copy, adapter reset, or broker/spec mutation may occur.
@@ -9964,13 +10520,18 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
         }
         return true;
     } catch (const std::exception& e) {
-        fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Stream});
-        render_exception(engine, e);
+        fail_from_exception(engine, NativeFailureOperation::Stream, e);
+        return false;
+    } catch (...) {
+        if (!selected_epoch_tracked()) throw;
+        fail_unclassified(engine, NativeFailureOperation::Stream);
         return false;
     }
 }
 
 bool NativeExecutionConsumer::stream_push_bar(BacktestEngine& engine, const Bar& bar) {
+    const EntryExitGuard exit_scope(*this, engine, true);
+    if (refuse_dispatch_reentry()) return false;
     if (!admit_public_stream_input(engine, NativeFailureOperation::Input)) return false;
     clear_rendered(engine);
     engine.last_run_status_ = 0;
@@ -9997,8 +10558,11 @@ bool NativeExecutionConsumer::stream_push_bar(BacktestEngine& engine, const Bar&
         if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return false;
         return !failed();
     } catch (const std::exception& e) {
-        fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
-        render_exception(engine, e);
+        fail_from_exception(engine, NativeFailureOperation::Input, e);
+        return false;
+    } catch (...) {
+        if (!selected_epoch_tracked()) throw;
+        fail_unclassified(engine, NativeFailureOperation::Input);
         return false;
     }
 }
@@ -10390,6 +10954,8 @@ bool NativeExecutionConsumer::deliver_tick(BacktestEngine& engine, const TradeTi
 }
 
 bool NativeExecutionConsumer::stream_push_tick(BacktestEngine& engine, const TradeTick& tick) {
+    const EntryExitGuard exit_scope(*this, engine, true);
+    if (refuse_dispatch_reentry()) return false;
     if (!admit_public_stream_input(engine, NativeFailureOperation::Input)) return false;
     clear_rendered(engine);
     engine.last_run_status_ = 0;
@@ -10403,13 +10969,18 @@ bool NativeExecutionConsumer::stream_push_tick(BacktestEngine& engine, const Tra
         return check_abort_or_projection(engine, NativeFailureOperation::Input);
     } catch (const std::exception& e) {
         processing_input_ = false;
-        fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
-        render_exception(engine, e);
+        fail_from_exception(engine, NativeFailureOperation::Input, e);
+        return false;
+    } catch (...) {
+        if (!selected_epoch_tracked()) throw;
+        fail_unclassified(engine, NativeFailureOperation::Input);
         return false;
     }
 }
 
 bool NativeExecutionConsumer::stream_push_ticks(BacktestEngine& engine, const TradeTick* ticks, int n) {
+    const EntryExitGuard exit_scope(*this, engine, true);
+    if (refuse_dispatch_reentry()) return false;
     if (!admit_public_stream_input(engine, NativeFailureOperation::Input)) return false;
     clear_rendered(engine);
     engine.last_run_status_ = 0;
@@ -10427,13 +10998,18 @@ bool NativeExecutionConsumer::stream_push_ticks(BacktestEngine& engine, const Tr
         return !failed();
     } catch (const std::exception& e) {
         processing_input_ = false;
-        fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
-        render_exception(engine, e);
+        fail_from_exception(engine, NativeFailureOperation::Input, e);
+        return false;
+    } catch (...) {
+        if (!selected_epoch_tracked()) throw;
+        fail_unclassified(engine, NativeFailureOperation::Input);
         return false;
     }
 }
 
 bool NativeExecutionConsumer::stream_advance_time(BacktestEngine& engine, int64_t timestamp_ms) {
+    const EntryExitGuard exit_scope(*this, engine, true);
+    if (refuse_dispatch_reentry()) return false;
     if (!admit_public_stream_input(engine, NativeFailureOperation::Stream)) return false;
     clear_rendered(engine);
     engine.last_run_status_ = 0;
@@ -10473,13 +11049,18 @@ bool NativeExecutionConsumer::stream_advance_time(BacktestEngine& engine, int64_
         raise_floor(timestamp_ms);
         return !failed();
     } catch (const std::exception& e) {
-        fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Stream});
-        render_exception(engine, e);
+        fail_from_exception(engine, NativeFailureOperation::Stream, e);
+        return false;
+    } catch (...) {
+        if (!selected_epoch_tracked()) throw;
+        fail_unclassified(engine, NativeFailureOperation::Stream);
         return false;
     }
 }
 
 bool NativeExecutionConsumer::stream_end(BacktestEngine& engine, bool finalize_partial_input_bar) {
+    const EntryExitGuard exit_scope(*this, engine, false);
+    if (refuse_dispatch_reentry()) return false;
     if (!admit_public_stream_input(engine, NativeFailureOperation::Stream)) return false;
     clear_rendered(engine);
     engine.last_run_status_ = 0;
@@ -10522,10 +11103,14 @@ bool NativeExecutionConsumer::stream_end(BacktestEngine& engine, bool finalize_p
         state_.emplace<NativeCompleted>(NativeCompleted{std::move(spec), NativeCompletion::StreamEnded});
         engine.stream_phase_ = BacktestEngine::StreamPhase::IDLE;
         verify_closed_rows(engine);
+        terminal_success(engine, NativeFailureOperation::Stream);
         return !failed();
     } catch (const std::exception& e) {
-        fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Stream});
-        render_exception(engine, e);
+        fail_from_exception(engine, NativeFailureOperation::Stream, e);
+        return false;
+    } catch (...) {
+        if (!selected_epoch_tracked()) throw;
+        fail_unclassified(engine, NativeFailureOperation::Stream);
         return false;
     }
 }
@@ -10572,7 +11157,12 @@ native_order::SubmitResult NativeExecutionConsumer::submit_with_surface(
     note_install(ok.events);
     if (ok.result.status == native_order::SubmitStatus::Accepted) {
         ++engine.next_order_incarnation_;
-        if (ok.result.handle) record_pre_open_birth(request, *ok.result.handle);
+        if (ok.result.handle) {
+            record_pre_open_birth(request, *ok.result.handle);
+            // Under the open activation scope every accepted request is
+            // granted, whatever its trigger kind.
+            record_activation_birth(engine, *ok.result.handle);
+        }
     }
     return std::move(ok.result);
 }
@@ -10640,6 +11230,14 @@ native_order::ReplaceResult NativeExecutionConsumer::replace_with_surface(
         pre_open_births_.erase(std::remove(pre_open_births_.begin(), pre_open_births_.end(), target),
                                pre_open_births_.end());
     }
+    // A replace is a new definition and a renewed birth, so a replace that
+    // lands outside the open activation scope ends the grant its old handle
+    // held, a kept handle's included. Inside the scope the old handle keeps
+    // its grant and the resulting handle is recorded below. A refused replace
+    // changed nothing, so it leaves the grant as it was.
+    if (predicted_status == native_order::ReplaceStatus::Replaced && !open_activation_scope_) {
+        revoke_activation_birth(target);
+    }
     if (predicted_status == native_order::ReplaceStatus::Replaced && ok.result.successor) {
         const auto* successor = requests_.find_live(*ok.result.successor);
         if (successor && std::holds_alternative<native_order::CohortClose>(successor->authority)) {
@@ -10659,7 +11257,10 @@ native_order::ReplaceResult NativeExecutionConsumer::replace_with_surface(
         // A re-price takes the number a successor would have been issued, so
         // the counter moves either way.
         ++engine.next_order_incarnation_;
-        if (ok.result.successor) record_pre_open_birth(request, *ok.result.successor);
+        if (ok.result.successor) {
+            record_pre_open_birth(request, *ok.result.successor);
+            record_activation_birth(engine, *ok.result.successor);
+        }
         // The request a re-price kept is still the parent its waiting
         // children wait on.
         if (!kept_handle) {
@@ -10746,6 +11347,9 @@ native_order::CancelResult NativeExecutionConsumer::cancel(
     const auto predicted_status = ok.result.status;
     note_install(ok.events);
     if (predicted_status == native_order::CancelStatus::Cancelled) {
+        // A cancelled request is a dead handle: its open activation grant, if
+        // it held one, goes with it.
+        revoke_activation_birth(target);
         try {
             drain_parent_terminal(engine, predicted, target, NativeFailureOperation::Command);
         } catch (const std::exception& e) {
@@ -11534,6 +12138,508 @@ void NativeExecutionConsumer::fill_snapshot_report(const BacktestEngine& engine,
 // C host's hooks, in the engine epoch: strategy_stream_fill_report reads through it.
 void native_stream_snapshot_report(BacktestEngine* engine, ReportC* out) {
     NativeExecutionConsumer::fill_snapshot_report(*engine, out);
+}
+
+// The selected-window query fence (include/pineforge/query_refusal.hpp). The
+// slot's boolean keeps its inline bodies and canonical values: true is no
+// selected-run provenance (the constructor's value, and every OFF path's), false
+// is selected provenance, and a selected value is query-open only while its
+// current consumer holds admitted-open evidence. The predicate reads the slot
+// and that one flag in place, so it allocates nothing and no host can see or
+// steer it; a null pointer (a copy, which discards the consumer) is closed.
+bool NativeExecutionConsumer::selected_query_closed(const BacktestEngine& engine) noexcept {
+    const auto& slot = engine.execution_consumer_slot_;
+    if (slot.native) return false;
+    const auto* consumer = static_cast<const NativeExecutionConsumer*>(slot.ptr.get());
+    return consumer == nullptr || !consumer->selected_open_;
+}
+
+// Called on the engine's own bound consumer, after admission has accepted the
+// run and before its first execution hook: the slot's provenance and this
+// consumer's evidence change together, here and nowhere else.
+void NativeExecutionConsumer::selected_query_begin_admitted(BacktestEngine& engine,
+                                                            bool selected) noexcept {
+    engine.execution_consumer_slot_.native = !selected;
+    selected_open_ = selected;
+}
+
+// The terminal seal (Completed, Failed or Aborted): the evidence closes and the
+// provenance stays, so a selected engine keeps reading closed.
+void NativeExecutionConsumer::selected_query_seal() noexcept {
+    selected_open_ = false;
+}
+
+// The C exports' read of the fence, declared in c_abi.cpp beside
+// native_stream_snapshot_report, in the engine epoch.
+bool native_selected_query_closed(const BacktestEngine* engine) noexcept {
+    return NativeExecutionConsumer::selected_query_closed(*engine);
+}
+
+// The destructor frees the presentation capture, the only state this consumer
+// owns outside its members' own destructors.
+NativeExecutionConsumer::~NativeExecutionConsumer() {
+    drop_presentation();
+}
+
+// Frees through BacktestEngine::free_report, which deletes exactly what
+// capture_presentation (and fill_trades_section before it) allocated, then
+// zeroes what free_report leaves (the scalars, the metrics, the lengths of
+// arrays that were never allocated) and the kept metric equity length, and
+// closes both flags.
+void NativeExecutionConsumer::drop_presentation() noexcept {
+    BacktestEngine::free_report(&presentation_);
+    presentation_ = ReportC{};
+    presentation_metric_equity_len_ = 0;
+    presentation_metric_observations_ = 0;
+    presentation_ready_ = false;
+    selected_results_open_ = false;
+}
+
+// A selected capture the engine's own records contradict is a call the engine
+// got wrong -- a coded engine_invariant, the way a broken recorder contract is
+// coded -- and not a strategy refusal. The five sites in capture_presentation
+// (a trade or an open lot entered before T, a pre-T observation that is not the
+// untouched account, observations that are not one run, a count that differs
+// from the native window script count) use it until the final catalog supplies
+// specialized codes for them.
+[[noreturn]] static void refuse_selected_capture(const char* text) {
+    throw coded<std::logic_error>(RunFailureCode::engine_invariant, {}, text);
+}
+
+// The input BacktestEngine::present_report takes, and nothing past it: the same
+// trades section, nine diagnostic scalars and equity copy, in the order
+// fill_report and fill_metrics_section write them, then the one virtual call. A
+// local report holds the work, so a throw (an allocation, or the host's own
+// override) frees it and rethrows with presentation_ as it was; only the final
+// move, which cannot throw, replaces the capture. The equity length the metrics
+// will read is fill_metrics_section's `n`, taken before the one virtual call and
+// held in a local the callback cannot reach; it is published beside the capture
+// after the last step that can throw, never read back from the report.
+//
+// A selected generation takes the second form of the equity copy below, and
+// nothing else changes order: the trades, the nine scalars, the curve, then the
+// one hook. The curve is the window's own, built from the engine's recorded
+// observations before the hook and never cut out of what the host presents: the
+// anchor at T with the initial capital, then the observations labelled in
+// [T, E) exactly as they were recorded (report::build_selected_equity_curve),
+// whose one new[] array is handed to the local report by release() and freed
+// the way any report's curve is, by BacktestEngine::free_report. Before the
+// build the engine's own records are held to the window, and a record that
+// contradicts it is refused (refuse_selected_capture), never filtered into an
+// apparent success: a trade or open lot entered before T, a pre-T observation
+// that is not the untouched account, an observation run that is not contiguous,
+// or an observation count that is not the native window script count.
+void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
+    ReportC local{};
+    int64_t metric_equity_len = 0;
+    int64_t metric_observations = 0;
+    try {
+        engine.fill_trades_section(&local);
+
+        local.input_bars_processed = engine.diag_input_bars_processed_;
+        local.script_bars_processed = engine.diag_script_bars_processed_;
+        local.magnifier_sub_bars_total = engine.diag_magnifier_sub_bars_processed_;
+        local.magnifier_sample_ticks_total = engine.diag_magnifier_sample_ticks_processed_;
+        local.input_tf_seconds = tf_to_seconds(engine.input_tf_);
+        local.script_tf_seconds = engine.script_tf_seconds_;
+        local.script_tf_ratio = engine.diag_script_tf_ratio_;
+        local.needs_aggregation = engine.diag_needs_aggregation_ ? 1 : 0;
+        local.bar_magnifier_enabled = engine.bar_magnifier_enabled_ ? 1 : 0;
+
+        if (selected_epoch_.admitted_selected) {
+            const int64_t window_start = selected_epoch_.admitted_window.start_ms;
+            const int64_t window_end = selected_epoch_.admitted_window.end_ms;
+            const std::vector<pf_equity_point_t>& recorded = engine.equity_curve_;
+            // No position, fill or account change may precede T: a trade row
+            // (closed, or the range-end row of an open lot) or an open lot
+            // entered before the window is a carry-in.
+            for (int i = 0; i < local.trades_len; ++i) {
+                if (local.trades[i].entry_time < window_start)
+                    refuse_selected_capture(
+                        "native selected report: a trade was entered before the window start");
+            }
+            for (const auto& lot : engine.pyramid_entries_) {
+                if (lot.time < window_start)
+                    refuse_selected_capture(
+                        "native selected report: a position was carried in before the window start");
+            }
+            // The observations labelled in [T, E), in recorded order, are one
+            // contiguous run; every earlier one is the untouched account.
+            std::size_t first = 0;
+            int64_t observed = 0;
+            bool contiguous = true;
+            for (std::size_t i = 0; i < recorded.size(); ++i) {
+                const pf_equity_point_t& point = recorded[i];
+                if (point.time_ms < window_start) {
+                    if (point.equity != engine.initial_capital_ || point.open_profit != 0.0)
+                        refuse_selected_capture(
+                            "native selected report: the account changed before the window start");
+                } else if (point.time_ms < window_end) {
+                    if (observed == 0) first = i;
+                    else if (i != first + static_cast<std::size_t>(observed)) contiguous = false;
+                    ++observed;
+                }
+            }
+            if (!contiguous)
+                refuse_selected_capture(
+                    "native selected report: the window's equity observations are not one run");
+            // The native script count and the observations are two records of the
+            // same bars, and must agree.
+            if (static_cast<uint64_t>(observed) != selected_epoch_.counts.window_script_bars)
+                refuse_selected_capture(
+                    "native selected report: the window's equity observations differ from its script bars");
+            report::SelectedEquityCurve curve = report::build_selected_equity_curve(
+                window_start, engine.initial_capital_,
+                observed > 0 ? recorded.data() + first : nullptr, observed);
+            metric_equity_len = curve.count;
+            metric_observations = observed;
+            local.equity_curve_len = curve.count;
+            // One transfer, after the last step that can throw: from here the
+            // local report owns the array and a throw below frees it.
+            local.equity_curve = curve.points.release();
+        } else {
+            const int64_t n = (int64_t)engine.equity_curve_.size();
+            metric_equity_len = n;
+            metric_observations = n;
+            local.equity_curve_len = n;
+            if (n > 0) {
+                local.equity_curve = new pf_equity_point_t[n];
+                std::copy(engine.equity_curve_.begin(), engine.equity_curve_.end(),
+                          local.equity_curve);
+            } else {
+                local.equity_curve = nullptr;
+            }
+        }
+        engine.present_report(&local);
+    } catch (...) {
+        BacktestEngine::free_report(&local);
+        throw;
+    }
+    drop_presentation();
+    presentation_ = local;
+    presentation_metric_equity_len_ = metric_equity_len;
+    presentation_metric_observations_ = metric_observations;
+    presentation_ready_ = true;
+}
+
+// The report read's reentry barrier (declared beside rows_are_current): asked
+// before the row gate. The slot is read in place and nothing is created; a read
+// from inside a capture or an observer call is refused whole, latched for the
+// terminal helper, and never reaches present_report again.
+bool NativeExecutionConsumer::refuse_report_in_dispatch(const BacktestEngine& engine,
+                                                        ReportC* out) noexcept {
+    const auto* consumer = static_cast<const NativeExecutionConsumer*>(
+        engine.execution_consumer_slot_.ptr.get());
+    if (consumer == nullptr || !consumer->selected_epoch_.dispatching) return false;
+    consumer->selected_epoch_.dispatch_reentry_refused = true;
+    *out = ReportC{};
+    return true;
+}
+
+// A generation admitted with an observer that has closed: Sealed (it failed, or
+// the observer or the receipt did) or Results. Its boundary is behind it, so a
+// report read must never dispatch the host's present_report again, selected
+// window or not.
+bool NativeExecutionConsumer::observed_epoch_sealed() const noexcept {
+    const std::uint32_t phase = selected_epoch_.observation.phase;
+    return selected_epoch_.phase_observed && (phase == kEpochSealed || phase == kEpochResults);
+}
+
+// The capture may be published only for the generation that opened its results:
+// phase Results with no fault, the capture ready and its results open. A
+// failed, aborted or observer-faulted generation is Sealed and holds neither.
+bool NativeExecutionConsumer::capture_readable() const noexcept {
+    return presentation_ready_ && selected_results_open_
+        && selected_epoch_.observation.phase == kEpochResults
+        && selected_epoch_.observation.fault_stage == kEpochFaultNone;
+}
+
+// The selected-window report (declared beside rows_are_current). The slot is
+// read in place, as selected_query_closed reads it, and no consumer is ever
+// created or asked for: a copied value has none and reads the empty report.
+// Two engines are served from here: one with closed selected provenance, and one
+// with no provenance (the OFF value of the slot) whose latest generation was
+// admitted with an observer and has closed -- observer-only, whose state-hash
+// queries stay open. Everything else, a handle that never opted in and a
+// generation admitted with neither a window nor an observer included, returns
+// false and reports exactly as it always did.
+bool NativeExecutionConsumer::fill_selected_report(const BacktestEngine& engine,
+                                                   ReportC* out) {
+    const auto& slot = engine.execution_consumer_slot_;
+    const auto* consumer = static_cast<const NativeExecutionConsumer*>(slot.ptr.get());
+    if (slot.native) {
+        if (consumer == nullptr || !consumer->observed_epoch_sealed()) return false;
+    } else if (!selected_query_closed(engine)) {
+        return false;
+    }
+    if (consumer == nullptr || !consumer->capture_readable()) {
+        *out = ReportC{};
+        return true;
+    }
+
+    // The capture's scalars come across by value; every array pointer starts
+    // null, so what a throw frees below is only what this call allocated and
+    // never the capture's own. The two arrays the capture owns are copied; the
+    // others are the suffix's to build, as fill_report builds them after
+    // present_report.
+    const ReportC& captured = consumer->presentation_;
+    // Two equity lengths, as OFF has them: the presented one
+    // (captured.equity_curve_len, whatever present_report left, published as it
+    // stands) and the metrics' own, the engine vector's size from before that
+    // call, kept beside the capture. OFF's buffer holds the second and a reader
+    // may take either, so the copy covers the larger.
+    const int64_t metric_equity_len = consumer->presentation_metric_equity_len_;
+    const int64_t equity_storage_len = std::max(captured.equity_curve_len, metric_equity_len);
+    ReportC local = captured;
+    local.trades = nullptr;
+    local.security_diag = nullptr;
+    local.trace = nullptr;
+    local.trace_names = nullptr;
+    local.equity_curve = nullptr;
+    local.broker_state_hash = nullptr;
+    try {
+        if (captured.trades != nullptr && captured.trades_len > 0) {
+            local.trades = new TradeC[captured.trades_len];
+            std::copy(captured.trades, captured.trades + captured.trades_len, local.trades);
+        }
+        if (captured.equity_curve != nullptr && equity_storage_len > 0) {
+            local.equity_curve = new pf_equity_point_t[equity_storage_len];
+            std::copy(captured.equity_curve, captured.equity_curve + equity_storage_len,
+                      local.equity_curve);
+        }
+
+        // The suffix, in fill_report's order. The metrics get the original
+        // length, as fill_metrics_section passes its `n`: never the presented
+        // length, script_bars_processed, or the engine's vector read now.
+        if (consumer->selected_epoch_.admitted_selected) {
+            // A selected window's own view: the curve is M + 1 points (the
+            // anchor and M observations) and exposure divides by the M the
+            // capture held, both from before the presentation; buy-and-hold
+            // runs from the first window input's open to the latest window
+            // input's close, undefined (NaN) while the window has none. The
+            // trade blocks and every other equity formula are the ordinary ones.
+            internal::compute_report_metrics(local.metrics, local.trades, local.trades_len,
+                                             local.equity_curve, metric_equity_len,
+                                             local.net_profit, engine.initial_capital_,
+                                             engine.chart_timezone_,
+                                             consumer->selected_first_open_,
+                                             consumer->selected_last_close_,
+                                             engine.bars_in_market_,
+                                             consumer->presentation_metric_observations_);
+        } else {
+            internal::compute_report_metrics(local.metrics, local.trades, local.trades_len,
+                                             local.equity_curve, metric_equity_len,
+                                             local.net_profit, engine.initial_capital_,
+                                             engine.chart_timezone_, engine.first_bar_open_,
+                                             engine.current_bar_.close, engine.bars_in_market_);
+        }
+        engine.fill_security_diag_section(&local);
+        engine.fill_trace_section(&local);
+
+        const int64_t hn = (int64_t)engine.broker_state_hashes_.size();
+        local.broker_state_hash_len = hn;
+        local.broker_state_hash = hn > 0 ? new uint64_t[hn] : nullptr;
+        if (hn > 0) {
+            std::copy(engine.broker_state_hashes_.begin(), engine.broker_state_hashes_.end(),
+                      local.broker_state_hash);
+        }
+    } catch (...) {
+        BacktestEngine::free_report(&local);
+        throw;
+    }
+    *out = local;
+    return true;
+}
+
+// The observer and selected-window accessors (declared beside
+// fill_selected_report; pineforge/execution_observer.h and selected_window.h
+// are their C faces). This is the storage and the four bridges, not the
+// lifecycle: nothing here mints a counter, moves a phase, admits a run,
+// captures, seals or calls an observer, so a consumer answers as a fresh one
+// does until the lifecycle writes selected_epoch_.
+//
+// Whether a setter must refuse as nonquiescent: the barriers the begin and
+// attempt paths already keep, the epoch's own dispatch flag, and the persisted
+// phases that say a run is Executing (1) or Capturing (2). A Sealed (3) or
+// Results (4) phase alone is not busy: that generation is over, and a setter
+// writes only the pending state. A refusal on this answer is an ordinary
+// accessor refusal -- it latches no failure and rewrites no outcome.
+bool NativeExecutionConsumer::selected_epoch_busy() const noexcept {
+    return preparing_begin_ || in_callback_ || processing_input_ || in_attempt_call_
+        || running_spec_ != nullptr || std::holds_alternative<NativeRunning>(state_)
+        || selected_epoch_.dispatching
+        || selected_epoch_.observation.phase == 1 || selected_epoch_.observation.phase == 2;
+}
+
+// The setters' gate (declared with selected_epoch_). The consumer is looked up
+// in the slot first; only a descriptor to store may bind a missing one, through
+// the engine's own lazy path, and a throw there leaves the slot as it was.
+int NativeExecutionConsumer::gate_selected_setter(BacktestEngine* engine, bool bind_missing,
+                                                  NativeExecutionConsumer** out) noexcept {
+    *out = nullptr;
+    if (engine->execution_contract() != PF_EXECUTION_CONTRACT_NATIVE_MARKET_V1) return -2;
+    auto* consumer =
+        static_cast<NativeExecutionConsumer*>(engine->execution_consumer_slot_.ptr.get());
+    if (consumer == nullptr) {
+        if (!bind_missing) return 0;
+        try {
+            consumer = static_cast<NativeExecutionConsumer*>(&engine->execution_consumer());
+        } catch (...) {
+            return -4;
+        }
+    }
+    if (consumer->selected_epoch_busy()) return -3;
+    *out = consumer;
+    return 0;
+}
+
+// Only a descriptor of exactly this layout is copied (size and version are read
+// first), the copy is judged whole, and the stored descriptor is replaced by one
+// assignment of that same copy after every refusal has been passed, so a refusal
+// leaves the registration as it was. A null descriptor stores a zero one and
+// clears the flag; it never touches phase_observed.
+int NativeExecutionConsumer::set_execution_observer_v1(
+    BacktestEngine* engine, const pf_execution_observer_v1* observer) noexcept {
+    if (engine == nullptr) return -1;
+    pf_execution_observer_v1 next{};
+    if (observer != nullptr) {
+        if (observer->struct_size != sizeof(pf_execution_observer_v1) || observer->version != 1)
+            return -1;
+        next = *observer;
+        if (next.before_results == nullptr) return -1;
+    }
+    NativeExecutionConsumer* consumer = nullptr;
+    const int refusal = gate_selected_setter(engine, observer != nullptr, &consumer);
+    if (refusal != 0) return refusal;
+    // No consumer and nothing to store: a clear of nothing, accepted as it is.
+    if (consumer == nullptr) return 0;
+    consumer->selected_epoch_.observer = next;
+    consumer->selected_epoch_.observer_registered = observer != nullptr;
+    return 0;
+}
+
+// The slot is read in place: a missing consumer reads as a fresh one, and no
+// consumer is created. The snapshot is built in a local and assigned once.
+int NativeExecutionConsumer::execution_observation_v1(
+    const BacktestEngine* engine, pf_execution_observation_v1* out) noexcept {
+    if (engine == nullptr || out == nullptr) return -1;
+    if (out->struct_size != sizeof(pf_execution_observation_v1) || out->version != 1) return -1;
+    pf_execution_observation_v1 local{};
+    local.struct_size = static_cast<std::uint32_t>(sizeof local);
+    local.version = 1;
+    const auto* consumer =
+        static_cast<const NativeExecutionConsumer*>(engine->execution_consumer_slot_.ptr.get());
+    if (consumer != nullptr) local = consumer->selected_epoch_.observation;
+    *out = local;
+    return 0;
+}
+
+// Same discipline as the observer setter, with the window's structural bounds
+// (calendar alignment and supplied feeds are the harness's preflight). Only T
+// and E are taken from the caller; the stored descriptor's header is the native
+// one. Clearing never touches admitted_selected.
+int NativeExecutionConsumer::set_selected_window_v1(
+    BacktestEngine* engine, const pf_selected_window_config_v1* config) noexcept {
+    if (engine == nullptr) return -1;
+    pf_selected_window_config_v1 next{};
+    if (config != nullptr) {
+        if (config->struct_size != sizeof(pf_selected_window_config_v1) || config->version != 1)
+            return -1;
+        // JSON-safe integer milliseconds, T < E: 2^53 - 1 is the largest integer
+        // a double, and so a JSON number, holds exactly.
+        constexpr std::int64_t kJsonSafeMs = 9007199254740991LL;
+        const std::int64_t start_ms = config->start_ms;
+        const std::int64_t end_ms = config->end_ms;
+        if (start_ms < -kJsonSafeMs || start_ms >= end_ms || end_ms > kJsonSafeMs) return -1;
+        next.struct_size = static_cast<std::uint32_t>(sizeof next);
+        next.version = 1;
+        next.start_ms = start_ms;
+        next.end_ms = end_ms;
+    }
+    NativeExecutionConsumer* consumer = nullptr;
+    const int refusal = gate_selected_setter(engine, config != nullptr, &consumer);
+    if (refusal != 0) return refusal;
+    if (consumer == nullptr) return 0;
+    consumer->selected_epoch_.pending_window = next;
+    consumer->selected_epoch_.window_configured = config != nullptr;
+    return 0;
+}
+
+// Latest-attempt access, not the explicit stream snapshot. The counts are
+// readable only while the latest attempt owns successful selected results: the
+// configuration was admitted, the capture is ready and open, the latest call
+// began, and the observation reads phase Results with outcome ResultsOpen for a
+// generation that is both the latest and this attempt's, under the serial that
+// owns the epoch. Anything else is -2 with the caller's output untouched. The
+// three identities are overwritten from the same observation that was judged,
+// so the snapshot is one.
+int NativeExecutionConsumer::selected_window_counts_v1(
+    const BacktestEngine* engine, pf_selected_window_counts_v1* out) noexcept {
+    if (engine == nullptr || out == nullptr) return -1;
+    if (out->struct_size != sizeof(pf_selected_window_counts_v1) || out->version != 1) return -1;
+    const auto* consumer =
+        static_cast<const NativeExecutionConsumer*>(engine->execution_consumer_slot_.ptr.get());
+    if (consumer == nullptr) return -2;
+    const NativeSelectedEpoch& epoch = consumer->selected_epoch_;
+    const pf_execution_observation_v1& seen = epoch.observation;
+    if (!epoch.admitted_selected || !consumer->selected_results_open_
+        || !consumer->presentation_ready_ || !consumer->batch_current_
+        || seen.phase != 4 || seen.attempt_outcome != 4
+        || seen.run_generation == 0 || seen.attempt_generation != seen.run_generation
+        || seen.attempt_serial != epoch.owner_serial) {
+        return -2;
+    }
+    pf_selected_window_counts_v1 local = epoch.counts;
+    local.run_generation = seen.run_generation;
+    local.attempt_serial = seen.attempt_serial;
+    local.attempt_generation = seen.attempt_generation;
+    *out = local;
+    return 0;
+}
+
+// The source adapter's reads (declared with the accessors above). The slot is
+// read in place; the configuration is copied only when its flag says it exists.
+bool NativeExecutionConsumer::selected_window_pending(
+    const BacktestEngine& engine, pf_selected_window_config_v1* out) noexcept {
+    const auto* consumer =
+        static_cast<const NativeExecutionConsumer*>(engine.execution_consumer_slot_.ptr.get());
+    if (out == nullptr || consumer == nullptr || !consumer->selected_epoch_.window_configured)
+        return false;
+    *out = consumer->selected_epoch_.pending_window;
+    return true;
+}
+
+bool NativeExecutionConsumer::selected_window_admitted(
+    const BacktestEngine& engine, pf_selected_window_config_v1* out) noexcept {
+    const auto* consumer =
+        static_cast<const NativeExecutionConsumer*>(engine.execution_consumer_slot_.ptr.get());
+    if (out == nullptr || consumer == nullptr || !consumer->selected_epoch_.admitted_selected)
+        return false;
+    *out = consumer->selected_epoch_.admitted_window;
+    return true;
+}
+
+// The C exports' bridges, in the engine epoch for c_abi.cpp to declare as it
+// does native_selected_query_closed. The shims validate, allocate and catch
+// nothing: all of it is above, so no exception crosses C.
+int native_set_execution_observer_v1(BacktestEngine* engine,
+                                     const pf_execution_observer_v1* observer) noexcept {
+    return NativeExecutionConsumer::set_execution_observer_v1(engine, observer);
+}
+
+int native_execution_observation_v1(const BacktestEngine* engine,
+                                    pf_execution_observation_v1* out) noexcept {
+    return NativeExecutionConsumer::execution_observation_v1(engine, out);
+}
+
+int native_set_selected_window_v1(BacktestEngine* engine,
+                                  const pf_selected_window_config_v1* config) noexcept {
+    return NativeExecutionConsumer::set_selected_window_v1(engine, config);
+}
+
+int native_selected_window_counts_v1(const BacktestEngine* engine,
+                                     pf_selected_window_counts_v1* out) noexcept {
+    return NativeExecutionConsumer::selected_window_counts_v1(engine, out);
 }
 
 }  // inline namespace engine_script_run_v19
