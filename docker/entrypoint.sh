@@ -96,7 +96,7 @@ SRC_CPP="${IN_DIR}/strategy.cpp"
 OHLCV="${IN_DIR}/ohlcv.csv"
 # Per-run work dir so parallel in-process invocations never collide on the
 # generated TU / shared object. Cleaned up on exit. (Was fixed /tmp/strategy.*)
-WORK="$(mktemp -d)"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/pf-work.XXXXXXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 GEN="${WORK}/strategy.cpp"
 SO="${WORK}/strategy.so"
