@@ -716,10 +716,14 @@ LIVE_SANITIZERS_MIN_TESTS = 12
 #           every private_fixtures row must RUN: with the overlay present a
 #           skip means the overlay did not reach the tree, so ctest-floor
 #           fails on it (a silently skipped row is a lost row here).
-#   unset   the overlay is absent, so its 361 placeholder rows SKIP in public
-#           CI. The two RUN floors are lowered by PRIVATE_FIXTURE_ROW_COUNT, so
-#           a green public run is not read as 361 lost rows; the floors are
-#           never lowered further than that.
+#   unset   the overlay is absent, so its placeholder rows SKIP in public CI.
+#           The two RUN floors are lowered by the pinned private-fixture rows
+#           THE RUN ITSELF recorded as skipped (capped at
+#           PRIVATE_FIXTURE_ROW_COUNT and never taken below
+#           PRIVATE_FIXTURE_FLOOR_MINIMUM), so a green public run is not read
+#           as lost rows, an unpinned row that starts skipping still trips the
+#           floor, and a pinned row that silently leaves the registry is not
+#           bought floor headroom by it.
 #
 # EXCLUDED_REGISTERED_MIN does not move in either mode: those counts come from
 # `ctest -N`, which lists a placeholder's row whether it skips or runs, so the
@@ -730,8 +734,8 @@ LIVE_SANITIZERS_MIN_TESTS = 12
 # 9a2727d455c1b470d515665428e2c6e090a22ac07f87255d1ca9c20d5528bd62, the same
 # manifest (l44/pr1-manifest.tsv) this campaign pins. The two floor constants
 # above stay the FULL count so the doc anchors at ci_verify.py:321 and
-# ci_verify.py:595 do not move; the lowering happens where the floor is read. It is 327 because 327 ctest rows register as private-fixture skip placeholders on the fixture-less tree (the rows labelled private_fixtures), so the two RUN floors are lowered by exactly those rows. The class-fix round added the three remaining split parents (test_coof_close_slippage_tapes, test_cross_mechanism_tapes, test_margin_rules_forward_replay): each reads its fixture data at run time, the private-fixture removals take the whole directory it reads (the removed file beside distributed ones in PR 1, the remaining files in PR 1b), and the row had stayed unconditionally registered -- the fixture-less tree would have run it against absent data. Each now pins whole beside its *_private half on the same EXISTS guard (tests/CMakeLists.txt), exactly as test_source_buying_power_tapes already did at 324; a two-world registration sweep over tests/CMakeLists.txt and runner/CMakeLists.txt closes at `duplicate names: 0` in both worlds. test_callback_lifecycle_tapes joined at 123: its tapes.txt is a distributed list the private-fixture PR leaves in the tree, but 60 of the cases it names are removed, so tests/CMakeLists.txt registers the row as a placeholder while the listed cases are incomplete. One of the 324, test_run_json_outputs, is registered only by the release-shaped profiles (the source layer gates its block), so on the kernel profile the lowering is one row deeper than the rows that profile actually skips. Six more joined at 129 (the fifth proof-box round): test_native_oracle_day_key_l2 and test_native_oracle_reversal_same_bar_tx_l2 (their twin source #includes oracle/test_oracle_*.cpp), test_adapter_in_place_reads, test_adapter_runtime_ambient and test_adapter_settlement_carry (tests/pine_d2c_scenarios_fixture.hpp), and test_coof_forced_waypoint_tapes (tests/fixtures/coof_forced_waypoint/cases.inc) -- each target now exists only while its removed include does, so the compile that killed the fifth configure-through run cannot recur. The PR 1b batch moved the remaining 6,242 fixture/probe files (l50/pr1b-inventory.tsv) and took the count to 319: 134 rows in tests/CMakeLists.txt (each a row whose source .cpp, quoted #include or runtime fixture the removal takes, or one of five fixture-fed targets) and 53 in runner/CMakeLists.txt (the strategy-capabilities and confirmed-capabilities e2e rows), and 3 rows whose fixture data the sources read at run time through their fixture-dir defines (test_color_tapes, test_session_transition_clock_tapes, test_source_buying_power_tapes); PR 1's fix round then pinned five rows of its own that PR 1b's 319 does not carry -- test_carried_trail_open_tapes, pinned whole, and the *_private halves of test_coof_close_slippage_tapes, test_cross_mechanism_tapes, test_source_buying_power_tapes and test_margin_rules_forward_replay (each parent row keeps replaying the distributed part, the *_private row beside it runs the same binary with --private-only) -- and the union of the two pin sets, sorted and de-duplicated, is 324; the pinned file header still names the PR 1 manifest sha. The stream-security round took it to 361: tests/CMakeLists.txt registered the fifteen test_stream_security_<case> targets, from fixtures/stream_security/<case>/generated.cpp, inside an unguarded bare-form foreach -- the shape the box's run 1 died on at configure (add_executable could not find the removed source), and the shape the four class sweeps' line walker did not expand -- so each case now sits on its own if(EXISTS ...) and, absent, registers its two rows plus the four test_stream_security_control_* rows as pinned SKIP placeholders: 327 + 34 = 361.
-PRIVATE_FIXTURE_ROW_COUNT = 361
+# ci_verify.py:595 do not move; the lowering happens where the floor is read. It is 327 because 327 ctest rows register as private-fixture skip placeholders on the fixture-less tree (the rows labelled private_fixtures), so the two RUN floors are lowered by exactly those rows. The class-fix round added the three remaining split parents (test_coof_close_slippage_tapes, test_cross_mechanism_tapes, test_margin_rules_forward_replay): each reads its fixture data at run time, the private-fixture removals take the whole directory it reads (the removed file beside distributed ones in PR 1, the remaining files in PR 1b), and the row had stayed unconditionally registered -- the fixture-less tree would have run it against absent data. Each now pins whole beside its *_private half on the same EXISTS guard (tests/CMakeLists.txt), exactly as test_source_buying_power_tapes already did at 324; a two-world registration sweep over tests/CMakeLists.txt and runner/CMakeLists.txt closes at `duplicate names: 0` in both worlds. test_callback_lifecycle_tapes joined at 123: its tapes.txt is a distributed list the private-fixture PR leaves in the tree, but 60 of the cases it names are removed, so tests/CMakeLists.txt registers the row as a placeholder while the listed cases are incomplete. One of the 324, test_run_json_outputs, is registered only by the release-shaped profiles (the source layer gates its block); the observed-skip lowering counts it only in the profiles it registers in, so the kernel profile is no longer lowered one row deeper than the rows it skips. Six more joined at 129 (the fifth proof-box round): test_native_oracle_day_key_l2 and test_native_oracle_reversal_same_bar_tx_l2 (their twin source #includes oracle/test_oracle_*.cpp), test_adapter_in_place_reads, test_adapter_runtime_ambient and test_adapter_settlement_carry (tests/pine_d2c_scenarios_fixture.hpp), and test_coof_forced_waypoint_tapes (tests/fixtures/coof_forced_waypoint/cases.inc) -- each target now exists only while its removed include does, so the compile that killed the fifth configure-through run cannot recur. The PR 1b batch moved the remaining 6,242 fixture/probe files (l50/pr1b-inventory.tsv) and took the count to 319: 134 rows in tests/CMakeLists.txt (each a row whose source .cpp, quoted #include or runtime fixture the removal takes, or one of five fixture-fed targets) and 53 in runner/CMakeLists.txt (the strategy-capabilities and confirmed-capabilities e2e rows), and 3 rows whose fixture data the sources read at run time through their fixture-dir defines (test_color_tapes, test_session_transition_clock_tapes, test_source_buying_power_tapes); PR 1's fix round then pinned five rows of its own that PR 1b's 319 does not carry -- test_carried_trail_open_tapes, pinned whole, and the *_private halves of test_coof_close_slippage_tapes, test_cross_mechanism_tapes, test_source_buying_power_tapes and test_margin_rules_forward_replay (each parent row keeps replaying the distributed part, the *_private row beside it runs the same binary with --private-only) -- and the union of the two pin sets, sorted and de-duplicated, is 324; the pinned file header still names the PR 1 manifest sha. The stream-security round took it to 361: tests/CMakeLists.txt registered the fifteen test_stream_security_<case> targets, from fixtures/stream_security/<case>/generated.cpp, inside an unguarded bare-form foreach -- the shape the box's run 1 died on at configure (add_executable could not find the removed source), and the shape the four class sweeps' line walker did not expand -- so each case now sits on its own if(EXISTS ...) and, absent, registers its two rows plus the four test_stream_security_control_* rows as pinned SKIP placeholders: 327 + 34 = 361. The kernel-python round (L6's S-73 two-mode round 4, class 4) took it to 364: three Python rows the kernel profile runs outside the placeholder loop now skip whole when their private input is gone instead of failing on read_text() -- test_native_cpp_abi (scripts/check_native_cpp_abi.py gates on tests/fixtures/native_cpp_abi/), test_pending_order_v1_full_prefix and test_pending_order_v1_compiler_prefix (the two check_pending_order_prefix* scripts gate on tests/fixtures/script_cpp_abi/basev8 and basev9) -- each printing the pinned literal and exiting 77 under SKIP_RETURN_CODE 77, each carrying LABELS private_fixtures so the pinned-vs-labelled self-test still closes at zero. The same round replaced the static lowering (floor minus PRIVATE_FIXTURE_ROW_COUNT, which read -36 for the kernel floor) with the observed-skip lowering above, bounded by PRIVATE_FIXTURE_FLOOR_MINIMUM.
+PRIVATE_FIXTURE_ROW_COUNT = 364
 PRIVATE_FIXTURE_LABEL = 'private_fixtures'
 PRIVATE_FIXTURE_ROWS_FILE = 'tests/private_fixture_rows.txt'
 # The literal every private-fixtures placeholder prints before CTest marks it
@@ -740,6 +744,14 @@ PRIVATE_FIXTURE_SKIP_LITERAL = 'SKIP private fixtures not present: '
 # The two RUN floors the absent overlay lowers. Named by value, so a profile
 # whose floor is not one of them (live-sanitizers) is never lowered.
 PRIVATE_FIXTURE_FLOOR_CONSTANTS = (KERNEL_MIN_TESTS, RELEASE_MIN_TESTS)
+# The floor's floor. The overlay-absent lowering is grounded in the run it
+# checks -- it subtracts the pinned private-fixture rows CTest recorded as
+# skipped in that very run, capped at PRIVATE_FIXTURE_ROW_COUNT -- but a
+# lowering that took a floor below this bound would produce a floor that can no
+# longer fail (KERNEL_MIN_TESTS - PRIVATE_FIXTURE_ROW_COUNT read -36 before the
+# bound existed, a count no 325-row run can fall under). The minimum enforced:
+# the floor after lowering always proves at least one row ran.
+PRIVATE_FIXTURE_FLOOR_MINIMUM = 1
 
 
 def private_fixtures_overlay() -> bool:
@@ -751,20 +763,31 @@ def private_fixtures_overlay() -> bool:
     return bool(os.environ.get('PINEFORGE_PRIVATE_FIXTURES', '').strip())
 
 
-def overlay_aware_floor(floor: 'int | None') -> 'int | None':
+def overlay_aware_floor(floor: 'int | None',
+                        pinned_skips: 'Sequence[str] | None' = None) -> 'int | None':
     """A RUN floor with the private-fixture overlay taken into account.
 
-    With the overlay present the floor is unchanged. Without it, a floor that
-    counts the private-fixture placeholder rows is lowered by exactly
-    PRIVATE_FIXTURE_ROW_COUNT (they register but SKIP, proving nothing, so they
-    are never in the rows-ran count). Every other floor -- None, and any value
-    that is not the kernel or release floor -- is returned unchanged.
+    With the overlay present the floor is unchanged. Without it, the floor is
+    lowered by the pinned private-fixture rows the run recorded as skipped
+    (`pinned_skips`: the intersection of CTest's skipped rows with the pinned
+    tests/private_fixture_rows.txt): those rows register but SKIP, proving
+    nothing, so they are never in the rows-ran count. A row that skips without
+    being pinned lowers nothing, so an unpinned row that stops running still
+    trips the floor, and a pinned row that vanishes from the registry never
+    appears as a skip, so its loss is not cancelled either. The lowering is
+    capped at PRIVATE_FIXTURE_ROW_COUNT (more pinned skips than the pin names
+    cannot be earned) and the result never drops below
+    PRIVATE_FIXTURE_FLOOR_MINIMUM. With no observed skips to lower by
+    (``pinned_skips`` None: profile defaults, --min-tests) the full floor is
+    returned. Every other floor -- None, and any value that is not the kernel
+    or release floor -- is returned unchanged.
     """
     if floor is None or floor not in PRIVATE_FIXTURE_FLOOR_CONSTANTS:
         return floor
-    if private_fixtures_overlay():
+    if private_fixtures_overlay() or pinned_skips is None:
         return floor
-    return floor - PRIVATE_FIXTURE_ROW_COUNT
+    lowering = min(len(set(pinned_skips)), PRIVATE_FIXTURE_ROW_COUNT)
+    return max(floor - lowering, PRIVATE_FIXTURE_FLOOR_MINIMUM)
 
 
 def private_fixture_rows(source: Path) -> 'frozenset[str]':
@@ -2218,6 +2241,29 @@ class Driver:
         if floor is None:
             self.write_summary()
             return
+        # The floor the run is held to. With the overlay absent it is lowered
+        # by the pinned private-fixture rows THIS run recorded as skipped --
+        # grounded in observed rows, capped at PRIVATE_FIXTURE_ROW_COUNT and
+        # never below PRIVATE_FIXTURE_FLOOR_MINIMUM (overlay_aware_floor). A
+        # pinned row that stayed away is not excused by it, and an unreadable
+        # pin file fails closed.
+        effective = floor
+        lowered_by = 0
+        if not unreadable and rows is not None and floor in PRIVATE_FIXTURE_FLOOR_CONSTANTS:
+            try:
+                pinned = private_fixture_rows(self.cfg.source)
+            except OSError as error:
+                self.fail_stage(
+                    'ctest-floor',
+                    f'{PRIVATE_FIXTURE_ROWS_FILE} is unreadable, so the '
+                    f'floor of {floor} rows cannot be lowered for this run ({error})')
+                return
+            lowered = overlay_aware_floor(
+                floor, [name for name in rows.skipped if name in pinned])
+            effective, lowered_by = lowered, floor - lowered
+            self.summary['minTests'] = effective
+        note = (f'; lowered by {lowered_by} pinned private-fixture placeholder skips'
+                if lowered_by else '')
         if unreadable:
             self.fail_stage(
                 'ctest-floor',
@@ -2227,15 +2273,16 @@ class Driver:
             self.fail_stage(
                 'ctest-floor',
                 f'ctest printed no row count; the floor of {floor} rows cannot be verified')
-        elif rows.ran < floor:
+        elif rows.ran < effective:
             self.fail_stage(
                 'ctest-floor',
-                f'ctest ran {rows.ran} rows, below the floor of {floor} for the '
-                f'{self.cfg.profile.name} profile{rows.not_counted()}; a registered row left '
+                f'ctest ran {rows.ran} rows, below the floor of {effective} for the '
+                f'{self.cfg.profile.name} profile{rows.not_counted()}{note}; a registered row left '
                 'the suite or stopped running, or lower the floor with --min-tests on purpose')
         else:
             self.pass_stage('ctest-floor',
-                            f'ctest ran {rows.ran} rows (floor {floor}){rows.not_counted()}')
+                            f'ctest ran {rows.ran} rows (floor {effective})'
+                            f'{rows.not_counted()}{note}')
 
     def reject_private_fixture_skips(self, rows: 'CTestRows | None') -> None:
         """With PINEFORGE_PRIVATE_FIXTURES set, refuse a skipped placeholder.

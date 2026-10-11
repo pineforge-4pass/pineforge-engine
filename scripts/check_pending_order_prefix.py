@@ -17,6 +17,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/script_cpp_abi/basev8"
+# The private-fixture PRs move tests/fixtures/script_cpp_abi/ out of the
+# public tree with the rest of the fixtures.  Absent, this control skips with
+# the project's pinned literal naming the missing path (ctest SKIP_RETURN_CODE
+# 77) instead of failing on read_text(); present, every check runs as before.
+PRIVATE_FIXTURE_SKIP_LITERAL = "SKIP private fixtures not present: "
 COMMIT = "79921099a9357cb5bbace907a9319479f6640d89"
 TREE = "e141657c572b4a3855dfee607f9951e331b961d6"
 
@@ -107,4 +112,8 @@ def check() -> None:
 
 
 if __name__ == "__main__":
+    absent = [path for path in (FIXTURE,) if not path.is_dir()]
+    if absent:
+        print(PRIVATE_FIXTURE_SKIP_LITERAL + str(absent[0].relative_to(ROOT)))
+        raise SystemExit(77)
     check()

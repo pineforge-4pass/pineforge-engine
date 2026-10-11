@@ -28,6 +28,17 @@ from prepare_settlement_cpp_abi_base import (
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/native_cpp_abi"
+# The private-fixture PRs move tests/fixtures/native_cpp_abi/ -- every
+# gzip-JSON header closure and frozen host tar this checker authenticates --
+# out of the public tree.  Absent, the checker skips with the project's pinned
+# literal naming the missing path (ctest SKIP_RETURN_CODE 77) instead of
+# failing on read_bytes(); present, every check below runs as before.
+PRIVATE_FIXTURE_SKIP_LITERAL = "SKIP private fixtures not present: "
+
+
+def missing_private_fixtures() -> list:
+    """The fixture root this checker reads when the tree lacks it."""
+    return [] if FIXTURE.exists() else [FIXTURE]
 
 ORDER_COMMIT = "1acaf33e0340f6ae09d9529a3b6a0c12742dcb0d"
 ORDER_TREE = "ced31532e86bd41bc8753330ea0abcf379fdc05f"
@@ -624,6 +635,11 @@ def main() -> int:
     parser.add_argument("--extra-flag", action="append", default=[])
     parser.add_argument("--receipt", type=Path)
     args = parser.parse_args()
+
+    absent = missing_private_fixtures()
+    if absent:
+        print(PRIVATE_FIXTURE_SKIP_LITERAL + str(absent[0].relative_to(ROOT)))
+        return 77
 
     include = Path(args.include).resolve()
     source_root = include.parent

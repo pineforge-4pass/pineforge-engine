@@ -2,7 +2,7 @@
 // when the private fixtures are absent (removed by the private-fixture PRs). The count also
 // covers the PR 1b batch, whose rows runner/CMakeLists.txt registers the same way.
 // manifest: l44/pr1-manifest.tsv sha256 9a2727d455c1b470d515665428e2c6e090a22ac07f87255d1ca9c20d5528bd62
-// rows: 361
+// rows: 364
 capabilities_equivalence_clock_flags
 capabilities_equivalence_close
 checked_settings_e2e
@@ -218,6 +218,7 @@ test_native_auto_path
 test_native_c_api_frozen_header
 test_native_c_api_int23_header
 test_native_calc_timing_twin
+test_native_cpp_abi
 test_native_daily_holiday_l4d
 test_native_host_repairs
 test_native_instrument_feed
@@ -249,6 +250,8 @@ test_oracle_stop_snapshot
 test_pending_entry_trail_tapes
 test_pending_order_v1_canary
 test_pending_order_v1_canary_l4d
+test_pending_order_v1_compiler_prefix
+test_pending_order_v1_full_prefix
 test_per_entry_exit_tapes
 test_percent_entry_reservation_tapes
 test_pine_dust_sweep_paired

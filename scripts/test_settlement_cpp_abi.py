@@ -12,12 +12,24 @@ from cpp_abi_pairing import PairingError, run_synthetic_pair
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# The private-fixture PRs move tests/fixtures/native_cpp_abi/ (both relocation
+# manifests checker.verify reads) out of the public tree.  Absent, every
+# control here skips with the project's pinned literal instead of failing
+# inside the checker; present, the suite runs exactly as before.
+PRIVATE_FIXTURE_SKIP_LITERAL = "SKIP private fixtures not present: "
+PRIVATE_FIXTURE_MANIFESTS = (checker.MANIFEST, checker.V16_V18_MANIFEST)
+requires_private_fixtures = unittest.skipUnless(
+    all(path.exists() for path in PRIVATE_FIXTURE_MANIFESTS),
+    PRIVATE_FIXTURE_SKIP_LITERAL + "tests/fixtures/native_cpp_abi")
+
 
 class SettlementAbi(unittest.TestCase):
+    @requires_private_fixtures
     def test_current_include_tree(self):
         result = checker.verify(ROOT / "include")
         self.assertEqual(result["transition"]["to"], "engine_script_run_v19")
 
+    @requires_private_fixtures
     def test_retired_header_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -29,6 +41,7 @@ class SettlementAbi(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 checker.verify(include)
 
+    @requires_private_fixtures
     def test_missing_hook_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -40,6 +53,7 @@ class SettlementAbi(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 checker.verify(include)
 
+    @requires_private_fixtures
     def test_real_link_accept_and_reject_pair(self) -> None:
         compiler = shutil.which("c++")
         self.assertIsNotNone(compiler)
@@ -50,6 +64,7 @@ class SettlementAbi(unittest.TestCase):
         with self.assertRaises(PairingError):
             _source("engine_script_run_v19", "unknown")
 
+    @requires_private_fixtures
     def test_v18_capability_macro_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -62,6 +77,7 @@ class SettlementAbi(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 checker.verify(include)
 
+    @requires_private_fixtures
     def test_v6_order_epoch_is_refused(self):
         # V19-B: the relocation manifest pins native_order_v6 -> v7, so a
         # tree whose request values are still v6 fails the surface audit.
@@ -75,6 +91,7 @@ class SettlementAbi(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 checker.verify(include)
 
+    @requires_private_fixtures
     def test_missing_tick_hook_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -86,6 +103,7 @@ class SettlementAbi(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 checker.verify(include)
 
+    @requires_private_fixtures
     def test_missing_host_hash_extension_is_refused(self):
         # N5: the generic hash extension and the deprecated spelling it
         # forwards to are both v19 BacktestEngine virtuals.
@@ -102,4 +120,7 @@ class SettlementAbi(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    absent = [path for path in PRIVATE_FIXTURE_MANIFESTS if not path.exists()]
+    if absent:
+        print(PRIVATE_FIXTURE_SKIP_LITERAL + str(absent[0].relative_to(ROOT)))
     unittest.main()

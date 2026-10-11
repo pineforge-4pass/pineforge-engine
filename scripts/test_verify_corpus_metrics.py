@@ -676,6 +676,20 @@ class FragmentConsolidationIdentityTests(unittest.TestCase):
         self.assertEqual(result.label, "strong")
 
 
+PRIVATE_FIXTURE_SKIP_LITERAL = "SKIP private fixtures not present: "
+
+# The private-fixture PRs move tests/fixtures/coof_cascade_identity/ out of
+# the public tree; the tape controls below skip with the project's pinned
+# literal when their input is absent, and every other control in this file --
+# the ones that read the tree or build their own world -- keeps running.
+_coof_cascade_tape = (Path(__file__).resolve().parents[1] / "tests" / "fixtures"
+                      / "coof_cascade_identity" / "w7-coof-cascade-identity")
+_coof_cascade_skip = unittest.skipUnless(
+    _coof_cascade_tape.exists(),
+    PRIVATE_FIXTURE_SKIP_LITERAL + "tests/fixtures/coof_cascade_identity/w7-coof-cascade-identity")
+
+
+@_coof_cascade_skip
 class CoofCascadeIdentityTapeTests(unittest.TestCase):
     """TradingView's tape of a calc_on_order_fills refill cascade and the
     engine's trades for it (tests/fixtures/coof_cascade_identity/README.md)."""
@@ -1028,4 +1042,7 @@ class DeclaredTierOverrideTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    if not _coof_cascade_tape.exists():
+        print(PRIVATE_FIXTURE_SKIP_LITERAL
+              + "tests/fixtures/coof_cascade_identity/w7-coof-cascade-identity")
     unittest.main()

@@ -12,7 +12,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from check_pending_order_prefix import FIXTURE, _header_from_fixture, _layout, _struct_fields
+from check_pending_order_prefix import (FIXTURE, PRIVATE_FIXTURE_SKIP_LITERAL,
+                                       _header_from_fixture, _layout, _struct_fields)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -63,4 +64,8 @@ def check() -> None:
 
 
 if __name__ == "__main__":
+    absent = [path for path in (FIXTURE.parent / "basev9",) if not path.is_dir()]
+    if absent:
+        print(PRIVATE_FIXTURE_SKIP_LITERAL + str(absent[0].relative_to(ROOT)))
+        raise SystemExit(77)
     check()

@@ -18,6 +18,16 @@ from check_native_cpp_versions import (
 
 DATA = load()
 
+# The private-fixture PRs move tests/fixtures/native_cpp_abi/ out of the
+# public tree.  The controls below that authenticate those fixtures skip with
+# the project's pinned literal instead of failing inside them; every control
+# that reads only the tree keeps running in both worlds.
+PRIVATE_FIXTURE_SKIP_LITERAL = "SKIP private fixtures not present: "
+PRIVATE_FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "tests/fixtures/native_cpp_abi"
+requires_private_fixtures = unittest.skipUnless(
+    PRIVATE_FIXTURE_ROOT.exists(),
+    PRIVATE_FIXTURE_SKIP_LITERAL + "tests/fixtures/native_cpp_abi")
+
 
 class NativeVersions(unittest.TestCase):
     def reject(self, path, before, after):
@@ -794,6 +804,7 @@ class NativeVersions(unittest.TestCase):
                     compiler_flags=[compiler, '-std=c++17'], generated_include=str(root),
                     scratch=root, original_header_sha256='x')
 
+    @requires_private_fixtures
     def test_v14_tar_authentication_rejects_archive_and_manifest_tampering(self):
         from check_native_cpp_abi import FIXTURE, authenticate_v14_fixture
         fixture = FIXTURE / 'host-f736676'
@@ -818,6 +829,7 @@ class NativeVersions(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 authenticate_v14_fixture(mislabeled, root / 'bad-manifest')
 
+    @requires_private_fixtures
     def test_v15_frozen_tar_authentication_rejects_archive_and_manifest_tampering(self):
         from check_native_cpp_abi import FIXTURE, authenticate_v15_frozen_fixture
         fixture = FIXTURE / 'host-e7cdf05'
@@ -842,6 +854,7 @@ class NativeVersions(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 authenticate_v15_frozen_fixture(mislabeled, root / 'bad-manifest')
 
+    @requires_private_fixtures
     def test_v16_frozen_tar_authentication_rejects_archive_and_manifest_tampering(self):
         from check_native_cpp_abi import FIXTURE, authenticate_v16_frozen_fixture
         fixture = FIXTURE / 'host-ab9714b'
@@ -1019,6 +1032,7 @@ class NativeFxCurveVersions(unittest.TestCase):
         with self.assertRaises(ValueError):
             check_texts(changed)
 
+    @requires_private_fixtures
     def test_introduced_at_authenticates_historical_host_closures(self):
         manifests = authenticate_historical_host_manifests()
         self.assertEqual(set(manifests), {'v13', 'v14'})
@@ -1036,6 +1050,7 @@ class NativeFxCurveVersions(unittest.TestCase):
                         check()
                     authenticate.assert_called_once_with(ROOT)
 
+    @requires_private_fixtures
     def test_introduced_at_cannot_skip_authentication_or_accept_wrong_identity(self):
         from prepare_settlement_cpp_abi_base import PROVIDERS
         with self.assertRaises(ValueError):
@@ -1046,6 +1061,7 @@ class NativeFxCurveVersions(unittest.TestCase):
             authenticate_historical_host_manifests(providers=providers)
 
 
+@requires_private_fixtures
 class FixtureAuthentication(unittest.TestCase):
     def test_authentic_fixtures_unpack(self):
         from check_native_cpp_abi import FIXTURE, authenticate_fixture
@@ -1142,4 +1158,6 @@ class NativeLayoutAssembly(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    if not PRIVATE_FIXTURE_ROOT.exists():
+        print(PRIVATE_FIXTURE_SKIP_LITERAL + "tests/fixtures/native_cpp_abi")
     unittest.main()

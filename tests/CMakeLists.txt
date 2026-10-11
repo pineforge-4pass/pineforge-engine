@@ -2062,7 +2062,11 @@ add_test(
             --receipt ${PROJECT_BINARY_DIR}/native-abi-receipt.json
             ${_pf_script_cpp_abi_flags}
 )
-set_tests_properties(test_native_cpp_abi PROPERTIES TIMEOUT 240)
+# The checker reads tests/fixtures/native_cpp_abi/ (the pinned header tars and
+# gzip-JSON closures): absent, its gate prints the pinned SKIP literal and
+# exits 77, so the row skips here and the private_fixtures label marks it in
+# tests/private_fixture_rows.txt; present, the row runs as before.
+set_tests_properties(test_native_cpp_abi PROPERTIES TIMEOUT 240 SKIP_RETURN_CODE 77 LABELS private_fixtures)
 
 # The actual historical archive is prepared explicitly before CTest so the
 # compatibility check itself stays offline and cannot silently use a stub.
@@ -2258,6 +2262,11 @@ add_test(
     COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/scripts/gen_pending_order_mirror.py --check
 )
+# Both prefix checkers read the frozen closure under
+# tests/fixtures/script_cpp_abi/: absent, each prints the pinned SKIP literal
+# naming the missing directory and exits 77, so the rows skip here and carry
+# the private_fixtures label (tests/private_fixture_rows.txt); present, both
+# run exactly as before.
 add_test(
     NAME test_pending_order_v1_full_prefix
     COMMAND ${Python3_EXECUTABLE}
@@ -2268,6 +2277,9 @@ add_test(
     COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/scripts/check_pending_order_prefix_compiler.py
 )
+set_tests_properties(test_pending_order_v1_full_prefix
+    test_pending_order_v1_compiler_prefix PROPERTIES
+    SKIP_RETURN_CODE 77 LABELS private_fixtures)
 add_test(
     NAME test_pending_intent_view_schema
     COMMAND ${Python3_EXECUTABLE}
