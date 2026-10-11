@@ -21,6 +21,12 @@ BASE_COMMIT = 'e60e57156a54bb1c74c0c0a4f5a338fd924c046d'
 BASE_TREE = 'e209c89035ec884774f8f3e68e1dc118f26aaf51'
 ROOT = Path(__file__).resolve().parents[1]
 HEADER_MANIFEST = ROOT / 'tests/fixtures/settlement_cpp_abi/e60e571/manifest.json'
+# The private-fixture PRs move every manifest this module maps -- the
+# settlement header manifests and tests/fixtures/native_cpp_abi/host-*/
+# manifest.json -- out of the public tree.  Absent, preparation skips with the
+# project's pinned literal (ctest SKIP_RETURN_CODE 77) instead of failing
+# inside authenticate_headers() later on; present, preparation is unchanged.
+PRIVATE_FIXTURE_SKIP_LITERAL = 'SKIP private fixtures not present: '
 PRIOR_COMMIT = '0e18690db3fb6bb4705841c2a86936dfa206380a'
 PRIOR_TREE = 'c29545d262bf6dcc22e46aa3382422f2e9c68378'
 PRIOR_HEADER_MANIFEST = ROOT / 'tests/fixtures/settlement_cpp_abi/0e18690/manifest.json'
@@ -250,6 +256,11 @@ def main() -> int:
                      if (pin['commit'], pin['tree']) == (args.commit, args.tree)), None)
     if provider is None:
         raise RuntimeError('unsupported historical ABI commit/tree pin')
+    absent = [path for path in (args.header_manifest, provider['manifest'])
+              if not path.exists()]
+    if absent:
+        print(PRIVATE_FIXTURE_SKIP_LITERAL + str(absent[0].relative_to(ROOT)))
+        return 77
     label = 'R2' if args.commit == BASE_COMMIT else args.commit[:7]
     repo, current, output = args.source_repo.resolve(), args.current_build.resolve(), args.output.resolve()
     if output.exists():
