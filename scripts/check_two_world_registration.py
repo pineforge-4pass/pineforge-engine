@@ -43,23 +43,31 @@ Modes
              pinned private rows: every recorded row is pinned, each list is
              sorted, no duplicates.
   --overlay  the overlay half. Without the overlay in the tree (the marker
-             file absent) it prints `SKIP private fixtures not present:
-             <marker>` and exits 77. With it (PINEFORGE_PRIVATE_FIXTURES set
-             and the tree holding the marker) it computes BOTH worlds for
-             every profile and file, requires absent-only names: 0 and
-             overlay-only names: 0, and re-derives the source-bound set from
-             the predicate over the live tree (a pinned row whose include
-             closure reaches a pineforge/source or pineforge/compat/pine
-             header) requiring it to EQUAL the recorded list exactly:
-             recorded-only: 0, derived-only: 0. The refusal-shard list is
-             re-derived the same way: the present branch's split over the
-             live tree (the refused_*.cpp glob, the family regex, the
-             8-library batches) must produce exactly the recorded rows --
-             recorded-only: 0, derived-only: 0.
+             file absent and PINEFORGE_PRIVATE_FIXTURES unset) it prints
+             `overlay half not run: private fixtures not present: <marker>`
+             and exits 0: this script has no skip path. With it (the tree
+             holding the marker) it computes BOTH worlds for every profile
+             and file, requires absent-only names: 0 and overlay-only names:
+             0, and re-derives the source-bound set from the predicate over
+             the live tree (a pinned row whose include closure reaches a
+             pineforge/source or pineforge/compat/pine header) requiring it
+             to EQUAL the recorded list exactly: recorded-only: 0,
+             derived-only: 0. The refusal-shard list is re-derived the same
+             way: the present branch's split over the live tree (the
+             refused_*.cpp glob, the family regex, the 8-library batches)
+             must produce exactly the recorded rows -- recorded-only: 0,
+             derived-only: 0.
+  --both     the ctest row: the absent half always runs and decides the exit
+             code, then the overlay half by the --overlay rule. With
+             PINEFORGE_PRIVATE_FIXTURES set and the marker absent the row
+             FAILS (an overlay run whose overlay half cannot run is a
+             failure, never a skip), and with neither it exits 0 and prints
+             the not-run line.
 
-Exit 0 when every invariant holds, 1 on a violation, 2 on a construct this
-evaluator cannot read, 77 for the overlay half without the overlay (after the
-skip literal).
+Exit 0 when every invariant holds, 1 on a violation (including an overlay
+half that cannot run although PINEFORGE_PRIVATE_FIXTURES says the fixtures
+are present), 2 on a construct this evaluator cannot read. No path exits 77:
+the row is registered without a SKIP_RETURN_CODE because it cannot skip.
 """
 from __future__ import annotations
 
@@ -76,7 +84,6 @@ REPO = Path(__file__).resolve().parent.parent
 
 PIN_PATHS = Path('tests/private_fixture_paths.txt')
 PIN_ROWS = Path('tests/private_fixture_rows.txt')
-SKIP_LITERAL = 'SKIP private fixtures not present: '
 # A removed file (an F line of the pin): present exactly when the
 # private-fixture overlay is in the tree. The overlay half skips on it and
 # fails when PINEFORGE_PRIVATE_FIXTURES is set without it.
@@ -1056,16 +1063,23 @@ def absent_half(root: Path, removed_dirs, removed_files, pin_rows, profiles, rel
 
 
 def overlay_half(root: Path, removed_dirs, removed_files, pin_rows, profiles,
-                 rel_files) -> None:
+                 rel_files) -> bool:
+    """The overlay half; True when it ran, False when the overlay is absent.
+
+    A missing overlay with PINEFORGE_PRIVATE_FIXTURES set is a failure: the
+    environment says the fixtures are in the tree, so a half that cannot run
+    is a broken input, never a skip (the ctest row carries no skip code)."""
     marker = os.environ.get('PINEFORGE_PRIVATE_FIXTURES', '').strip()
     present = (root / OVERLAY_MARKER).exists()
-    if not marker and not present:
-        print(SKIP_LITERAL + OVERLAY_MARKER)
-        raise SystemExit(77)
-    if marker and not present:
-        fail(f'PINEFORGE_PRIVATE_FIXTURES is set but {OVERLAY_MARKER} is not in '
-             f'the tree: the overlay did not reach it')
-        return
+    if not present:
+        if marker:
+            fail(f'PINEFORGE_PRIVATE_FIXTURES is set but {OVERLAY_MARKER} is '
+                 f'not in the tree: an overlay run whose overlay half cannot '
+                 f'run is a failure, never a skip')
+        else:
+            print(f'overlay half not run: private fixtures not present: '
+                  f'{OVERLAY_MARKER}')
+        return False
     for rel in rel_files:
         for profile_name in profiles:
             absent, overlay = absent_and_overlay(
@@ -1129,14 +1143,16 @@ def overlay_half(root: Path, removed_dirs, removed_files, pin_rows, profiles,
              f'{name}, which the recorded list does not name')
     print(f'  refusal-shard drift: recorded-only: {len(recorded_only)}, '
           f'derived-only: {len(derived_only)}')
+    return True
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--root', type=Path, default=REPO)
     parser.add_argument('--both', action='store_true',
-                        help='the ctest row: the absent half, then the overlay '
-                             'half (which skips, exit 77, without the overlay)')
+                        help='the ctest row: the absent half always runs and '
+                             'decides the exit code, then the overlay half '
+                             'runs when the tree holds the overlay')
     parser.add_argument('--overlay', action='store_true',
                         help='the overlay half: both worlds and the drift guard')
     parser.add_argument('--profile', action='append', default=None,
@@ -1146,7 +1162,7 @@ def main() -> int:
     root = args.root.resolve()
     profiles = args.profile or list(PROFILE_NAMES)
     rel_files = [Path(rel) for rel in (args.cmakelists or CMAKE_FILES)]
-    skip = False
+    overlay_ran = False
     try:
         try:
             removed_dirs, removed_files = load_removed(root)
@@ -1160,13 +1176,8 @@ def main() -> int:
                 for message in FAILURES:
                     print(f'check_two_world_registration: {message}')
                 return 1
-            try:
-                overlay_half(root, removed_dirs, removed_files, pin_rows,
-                             profiles, rel_files)
-            except SystemExit as end:
-                if end.code != 77:
-                    raise
-                skip = True
+            overlay_ran = overlay_half(root, removed_dirs, removed_files,
+                                       pin_rows, profiles, rel_files)
         else:
             absent_half(root, removed_dirs, removed_files, pin_rows, profiles,
                         rel_files)
@@ -1177,15 +1188,13 @@ def main() -> int:
         print(f'check_two_world_registration: {message}')
     if FAILURES:
         return 1
-    if (args.overlay or args.both) and not skip:
-        print('absent-only names: 0')
-        print('overlay-only names: 0')
-    elif not skip:
+    if args.overlay or args.both:
+        if overlay_ran:
+            print('absent-only names: 0')
+            print('overlay-only names: 0')
+    else:
         print('two-world registration: the absent world evaluated, the recorded '
               'list is pinned, sorted and duplicate-free')
-    if skip:
-        print(f'the overlay half skipped: {OVERLAY_MARKER} is not in the tree')
-        return 77
     return 0
 
 

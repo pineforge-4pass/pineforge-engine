@@ -4211,13 +4211,16 @@ set_tests_properties(test_private_fixture_reads_controls PROPERTIES
 add_test(NAME test_kernel_python_private_reads COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/check_kernel_python_private_reads.py)
 # The in-tree two-world registration invariant: the absent world is evaluated
-# on every tree (its evaluation, the recorded source-bound list against the
-# pin); the overlay half compares both worlds and runs the drift guard, and
-# skips with the pinned literal and 77 where the overlay is not present. It
-# names no private fixture in this file, so it is no pinned placeholder row.
+# on every tree (its evaluation, the recorded source-bound list and the
+# recorded refusal-shard list against the pin); the overlay half compares both
+# worlds and runs the drift guards, and where the overlay is not present it
+# prints `overlay half not run: private fixtures not present: <marker>` and
+# exits 0. The row never skips, so it carries no SKIP_RETURN_CODE; with
+# PINEFORGE_PRIVATE_FIXTURES set and the overlay absent it fails. It names no
+# private fixture in this file, so it is no pinned placeholder row.
 add_test(NAME test_two_world_registration COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/check_two_world_registration.py --both)
-set_tests_properties(test_two_world_registration PROPERTIES SKIP_RETURN_CODE 77)
+# (The row deliberately carries no set_tests_properties: no skip code.)
 add_test(NAME test_two_world_registration_controls COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/test_two_world_registration.py)
 set_tests_properties(test_two_world_registration_controls PROPERTIES
