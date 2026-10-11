@@ -2275,7 +2275,37 @@ class Driver:
                 self.fail_stage('ctest-exclusion',
                                 f'CTest registered {registered} rows and selected {selected}; '
                                 f'expected a nonempty {self.cfg.exclude_label} exclusion')
+            elif not private_fixtures_overlay():
+                # Overlay absent (the public PR jobs): the pinned private-fixture
+                # placeholders are the ONLY rows that may skip, and exactly as
+                # many of them as it registers must skip, so ran plus those
+                # skips must add back up to selected. Any other skip, a row
+                # that stopped running and a registry that lost a public row
+                # all fail here (N1).
+                pinned = self.pinned_private_fixture_rows('ctest-exclusion')
+                if pinned is None:
+                    return
+                skipped_pinned = [name for name in rows.skipped if name in pinned]
+                unpinned = [name for name in rows.skipped if name not in pinned]
+                if unpinned or rows.ran + len(skipped_pinned) != selected:
+                    self.fail_stage(
+                        'ctest-exclusion',
+                        f'CTest registered {registered}, labelled '
+                        f'{registered - selected}, selected {selected}, but ran '
+                        f'{rows.ran} beside {len(skipped_pinned)} pinned private-fixture '
+                        f'rows skipping (ran + pinned skips must equal selected, and only '
+                        f'pinned rows may skip without the overlay)'
+                        + (f'; skipped but not pinned: {", ".join(unpinned)}'
+                           if unpinned else ''))
+                else:
+                    self.pass_stage('ctest-exclusion',
+                                    f'ctest registered {registered}, labelled '
+                                    f'{registered - selected}, ran {rows.ran} '
+                                    f'(registered - labelled) with {len(skipped_pinned)} '
+                                    f'pinned private-fixture rows skipping')
             elif rows.ran != selected:
+                # Overlay present: every selected row must run; a skipped row is
+                # a lost row, pinned or not.
                 self.fail_stage('ctest-exclusion',
                                 f'CTest registered {registered}, labelled '
                                 f'{registered - selected}, selected {selected}, but ran '
@@ -2328,6 +2358,30 @@ class Driver:
                             f'ctest ran {rows.ran} rows (floor {effective})'
                             f'{rows.not_counted()}{note}')
 
+    def pinned_private_fixture_rows(self, stage: str) -> 'frozenset[str] | None':
+        """The pinned row names, or None after failing `stage` closed.
+
+        The pin file speaks for the pinned population only while it carries the
+        PRIVATE_FIXTURE_ROW_COUNT names its own header records: an unreadable or
+        truncated pin cannot clear the rows it lost, so both fail closed.
+        """
+        try:
+            pinned = private_fixture_rows(self.cfg.source)
+        except OSError as error:
+            self.fail_stage(
+                stage,
+                f'{PRIVATE_FIXTURE_ROWS_FILE} is unreadable, so the '
+                f'private_fixtures rows cannot be checked ({error})')
+            return None
+        if len(pinned) != PRIVATE_FIXTURE_ROW_COUNT:
+            self.fail_stage(
+                stage,
+                f'{PRIVATE_FIXTURE_ROWS_FILE} names {len(pinned)} rows, not the '
+                f'{PRIVATE_FIXTURE_ROW_COUNT} its own header records; a truncated pin '
+                'cannot clear the rows it lost')
+            return None
+        return pinned
+
     def reject_private_fixture_skips(self, rows: 'CTestRows | None') -> None:
         """With PINEFORGE_PRIVATE_FIXTURES set, refuse a placeholder that did not run.
 
@@ -2346,20 +2400,8 @@ class Driver:
                 'PINEFORGE_PRIVATE_FIXTURES is set but CTest printed no row lists this '
                 'run can read, so the ' + PRIVATE_FIXTURE_LABEL + ' rows cannot be checked')
             return
-        try:
-            pinned = private_fixture_rows(self.cfg.source)
-        except OSError as error:
-            self.fail_stage(
-                'ctest-private-fixtures',
-                f'{PRIVATE_FIXTURE_ROWS_FILE} is unreadable, so the '
-                f'private_fixtures rows cannot be checked ({error})')
-            return
-        if len(pinned) != PRIVATE_FIXTURE_ROW_COUNT:
-            self.fail_stage(
-                'ctest-private-fixtures',
-                f'{PRIVATE_FIXTURE_ROWS_FILE} names {len(pinned)} rows, not the '
-                f'{PRIVATE_FIXTURE_ROW_COUNT} its own header records; a truncated pin '
-                'cannot clear the rows it lost')
+        pinned = self.pinned_private_fixture_rows('ctest-private-fixtures')
+        if pinned is None:
             return
         offenders = ([name for name in rows.skipped if name in pinned]
                      + [name for name in rows.disabled if name in pinned]

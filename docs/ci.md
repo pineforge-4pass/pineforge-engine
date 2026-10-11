@@ -175,11 +175,15 @@ it is to be re-measured after the registration fix lands.
 
 For PR runs with `--exclude-label slow`, the verifier asks CTest to enumerate
 the registered rows both with `ctest -N` and with `ctest -N -LE slow`. It then
-requires the rows that actually ran to equal the second count, and records
+requires the rows that actually ran plus the pinned private-fixture rows that
+skipped to equal the second count, and every skipped row to be a pinned row,
+and records
 `registered`, `labelled = registered - selected`, and `ran` in
-`ctest-exclusion.log` and `ci-summary.json`. A skip, missing executable, lost
+`ctest-exclusion.log` and `ci-summary.json`. An unpinned skip, a public row
+that left the selection or could not start, a lost
 registration below the PR registration floor, unreadable enumeration, or
-missing label fails. The PR registration floors after lane FIX-E1E2 are 773
+missing label fails; with the overlay present every skip fails, as before.
+The PR registration floors after lane FIX-E1E2 are 773
 for Debug and sanitizers and 782 for native (653 and 662 at the INT24 base,
 plus wave G's six rows, wave H's twenty-four, INT26's own tape row, INT27's
 thirteen, XSYM-D's four, K-SESSION-WINDOWS' four, INT28's twenty-four,
