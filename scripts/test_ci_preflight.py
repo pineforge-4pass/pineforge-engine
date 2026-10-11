@@ -662,7 +662,12 @@ class PreflightFailures(unittest.TestCase):
         # pinned literal is a named skip; with PINEFORGE_PRIVATE_FIXTURES set
         # the same output is a failure, because the input the guard names is in
         # the tree then.
-        code, summary, logs = self.run_preflight([('guard', self.guard_witness())])
+        # Each half states the variable itself: the job's own environment (the
+        # overlay jobs export PINEFORGE_PRIVATE_FIXTURES) must not decide which
+        # world this control asserts.
+        with mock.patch.dict(os.environ) as own_env:
+            own_env.pop('PINEFORGE_PRIVATE_FIXTURES', None)
+            code, summary, logs = self.run_preflight([('guard', self.guard_witness())])
         self.assertEqual(code, 0)
         self.assertEqual(summary['stages'][0]['status'], 'skipped')
         self.assertEqual(summary['stages'][0]['exitCode'], 77)
