@@ -3291,6 +3291,7 @@ list(APPEND _pf_private_fixture_rows
     test_coof_drawing_rollback_tape
     test_coof_fill_bar_exit_tapes
     test_coof_inflight_cancel_tapes
+    test_coof_marketable_stop_tapes
     test_coof_open_limit_tapes
     test_coof_open_newborn_exit_tape
     test_coof_open_recalc_context_l4c
@@ -3371,8 +3372,10 @@ list(APPEND _pf_private_fixture_rows
     test_percent_entry_reservation_tapes
     test_pine_dust_sweep_paired
     test_pooc_add_close_tape
+    test_pooc_close_bar_fills_tapes
     test_pooc_margin_call_sizing_tapes
     test_pooc_pair_gross_tapes
+    test_pooc_pending_stop_tapes
     test_pooc_same_pass_close_tape
     test_pooc_short_slip_admission_tapes
     test_pyramiding_open_order_tape
@@ -5106,6 +5109,32 @@ if(NOT test_carried_trail_open_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "
 elseif(NOT test_carried_trail_open_tapes IN_LIST _pf_kernel_absent_rows)
     add_test(NAME test_carried_trail_open_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/carried_trail_open/bars.csv")
     set_tests_properties(test_carried_trail_open_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+# The three tape rows scripts/check_private_fixture_reads.py found running
+# against removed fixtures while unpinned: each composes the ORDER_PRINT
+# fixture root with case literals under a removed directory, so every case it
+# replays is gone on the fixture-less tree (the abort the release sweep hit).
+# Each pins whole on a removed file it reads -- no distributed half is left.
+if(NOT test_coof_marketable_stop_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_marketable_stop/bars.csv")
+    pineforge_add_unit_test(test_coof_marketable_stop_tapes)
+elseif(NOT test_coof_marketable_stop_tapes IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_coof_marketable_stop_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/coof_marketable_stop/bars.csv")
+    set_tests_properties(test_coof_marketable_stop_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+if(NOT test_pooc_close_bar_fills_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_close_bar_fills/README.md")
+    pineforge_add_unit_test(test_pooc_close_bar_fills_tapes)
+elseif(NOT test_pooc_close_bar_fills_tapes IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_pooc_close_bar_fills_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/pooc_close_bar_fills/README.md")
+    set_tests_properties(test_pooc_close_bar_fills_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+if(NOT test_pooc_pending_stop_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_pending_stop/bitcoin/bars.csv")
+    pineforge_add_unit_test(test_pooc_pending_stop_tapes)
+elseif(NOT test_pooc_pending_stop_tapes IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_pooc_pending_stop_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/pooc_pending_stop/bitcoin/bars.csv")
+    set_tests_properties(test_pooc_pending_stop_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
 if(NOT test_coof_close_slippage_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_close_slippage/bars.csv")

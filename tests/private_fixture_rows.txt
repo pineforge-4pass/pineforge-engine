@@ -2,7 +2,7 @@
 // when the private fixtures are absent (removed by the private-fixture PRs). The count also
 // covers the PR 1b batch, whose rows runner/CMakeLists.txt registers the same way.
 // manifest: l44/pr1-manifest.tsv sha256 9a2727d455c1b470d515665428e2c6e090a22ac07f87255d1ca9c20d5528bd62
-// rows: 351
+// rows: 354
 capabilities_equivalence_clock_flags
 capabilities_equivalence_close
 checked_settings_e2e
@@ -93,6 +93,7 @@ test_coof_forced_waypoint_tapes
 test_coof_immediate_close_final_tapes
 test_coof_immediate_close_tapes
 test_coof_inflight_cancel_tapes
+test_coof_marketable_stop_tapes
 test_coof_open_limit_tapes
 test_coof_open_newborn_exit_tape
 test_coof_open_recalc_context_l4c
@@ -248,12 +249,14 @@ test_pine_dust_sweep_paired
 test_pine_time_day_stamp_grid
 test_point_order_open_call
 test_pooc_add_close_tape
+test_pooc_close_bar_fills_tapes
 test_pooc_fill_stamp_aggregation
 test_pooc_gap_stop_tapes
 test_pooc_limit_close_tapes
 test_pooc_margin_call_sizing_tapes
 test_pooc_open_money_event_l4b
 test_pooc_pair_gross_tapes
+test_pooc_pending_stop_tapes
 test_pooc_reversing_stop_tapes
 test_pooc_same_pass_close_tape
 test_pooc_samepass_tapes

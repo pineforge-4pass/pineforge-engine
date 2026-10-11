@@ -1,0 +1,6 @@
+// Rows scripts/check_private_fixture_reads.py flags as naming removed data but
+// that cannot run without it: the cited line (file:line, token on that line)
+// is the proof. One record per line: row <TAB> file:line <TAB> token <TAB>
+// reason. The sweep re-reads every cited line and fails when the token no
+// longer sits there, so the proof cannot rot silently.
+test_pooc_close_fill_view_tapes	tests/CMakeLists.txt:3018	if(_pf_pcv_emitted GREATER 0 AND _pf_pcv_emitted EQUAL _pf_pcv_listed)	the module (and with it the add_test below at :3038) is built only when every tape the list names has its generated.cpp: _pf_pcv_emitted counts only tapes whose file exists (tests/CMakeLists.txt:3010-3014), so on the fixture-less tree the row never registers and never runs.
