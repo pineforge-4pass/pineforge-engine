@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -184,6 +185,17 @@ def prepare(source: Path, build_dir: Path, jobs: int,
             # pinned SKIP placeholders (tests/CMakeLists.txt). A skip, never
             # a failed preparation -- and never bought without the literal: a
             # bare 77 falls through to the failure below.
+            if private_fixtures_overlay():
+                # With PINEFORGE_PRIVATE_FIXTURES set the overlay IS in the
+                # tree, so a manifest the preparer cannot find means the
+                # overlay did not reach it: a failed preparation, refused
+                # like any other failure (N7; the skip is the absent world's
+                # answer only).
+                print(f'  {role}: refused: exit 77 with {PRIVATE_FIXTURE_SKIP_LITERAL!r} '
+                      f'while PINEFORGE_PRIVATE_FIXTURES is set, so the overlay did not '
+                      f'reach this provider', flush=True)
+                ready = False
+                continue
             reason = next((line.strip() for line in body.splitlines()
                            if PRIVATE_FIXTURE_SKIP_LITERAL in line), '')
             print(f'  {role}: skipped (exit 77): {reason}', flush=True)
@@ -191,6 +203,16 @@ def prepare(source: Path, build_dir: Path, jobs: int,
         if result.returncode:
             ready = False
     return ready
+
+
+def private_fixtures_overlay() -> bool:
+    """True when PINEFORGE_PRIVATE_FIXTURES is set and non-empty.
+
+    The same env signal scripts/ci_verify.py reads: Lab's overlay exports it
+    into the gate that runs with the fixtures present, where the preparer's
+    absent-manifest answer is a failure, not a skip.
+    """
+    return bool(os.environ.get('PINEFORGE_PRIVATE_FIXTURES', '').strip())
 
 
 def main(argv: list[str] | None = None) -> int:

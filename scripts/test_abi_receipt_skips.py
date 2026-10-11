@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import io
+import os
 from pathlib import Path
 import re
 import shutil
@@ -18,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import check_abi_receipt_skips as skips
 from ci_verify import ctest_rows
@@ -324,6 +326,26 @@ class PrivateFixtureManifests(unittest.TestCase):
             ok, out = self.prepare_with(Path(temporary), returncode=77, stdout='')
         self.assertFalse(ok, out)
         self.assertNotIn('skipped (exit 77)', out)
+
+    def test_the_overlay_refuses_the_preparer_skip(self):
+        # N7: with PINEFORGE_PRIVATE_FIXTURES set the overlay is in the tree,
+        # so the preparer's absent-manifest answer is a failure even though it
+        # carries the literal -- RED on the pre-fix code, which accepted it.
+        literal = 'SKIP private fixtures not present: ' + self.manifest('v18-frozen')
+        with tempfile.TemporaryDirectory() as temporary:
+            build = Path(temporary)
+            with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': '1'}):
+                ok, out = self.prepare_with(build, returncode=77, stdout=literal)
+        self.assertFalse(ok, out)
+        self.assertIn('refused: exit 77', out)
+        self.assertIn('the overlay did not reach this provider', out)
+        self.assertNotIn('skipped (exit 77)', out)
+        # The same shape without the overlay stays the absent world's skip.
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}):
+                ok, out = self.prepare_with(Path(temporary), returncode=77, stdout=literal)
+        self.assertTrue(ok, out)
+        self.assertIn('skipped (exit 77)', out)
 
     def prepare_with(self, build, *, returncode, stdout):
         def run(argv, **kwargs):
