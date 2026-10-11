@@ -168,9 +168,15 @@ def load_evidence(root: Path) -> dict[str, tuple[str, str, str]]:
 
 
 def is_removed(path: str, removed_dirs: set[str], removed_files: set[str]) -> bool:
-    """True when the repo-relative path names removed data."""
+    """True when the repo-relative path names removed data.
+
+    A path still carrying a `${...}` reference is a construct this sweep did
+    not resolve. The old form answered False for it, which silently cleared a
+    row that might name removed data; it is a loud failure instead."""
     path = path.strip('"').strip('/')
-    if not path or '$' in path:
+    if '$' in path:
+        raise Unparseable(f'a path this sweep never resolved: {path!r}')
+    if not path:
         return False
     if path in removed_files:
         return True
@@ -181,11 +187,41 @@ def is_removed(path: str, removed_dirs: set[str], removed_files: set[str]) -> bo
     return False
 
 
+# Variables an argv can carry that name no repo path: a command or an
+# interpreter. Bound to stated non-repo values, so a token like
+# ${CMAKE_COMMAND} resolves instead of arriving unresolved at is_removed (a
+# path this sweep could not resolve is a loud failure there).
+NON_REPO_VARIABLES = {
+    '${CMAKE_COMMAND}': '/usr/bin/cmake',
+    '${Python3_EXECUTABLE}': '/usr/bin/python3',
+    '${CMAKE_CURRENT_BINARY_DIR}': '/build/current',
+    '${CMAKE_BINARY_DIR}': '/build',
+    '${PROJECT_BINARY_DIR}': '/build',
+    '${CMAKE_CXX_COMPILER}': '/usr/bin/c++',
+}
+
+
 def resolve_cmake_path(value: str, cmake_dir: str) -> str:
     value = value.replace('${CMAKE_CURRENT_SOURCE_DIR}', cmake_dir)
     value = value.replace('${PROJECT_SOURCE_DIR}', '')
     value = value.replace('${CMAKE_SOURCE_DIR}', '')
+    for name, path in NON_REPO_VARIABLES.items():
+        value = value.replace(name, path)
     return value.strip('"').lstrip('/')
+
+
+def split_argument_elements(raw: str, table: 'Rows') -> list[str]:
+    """A define value's or argv token's path candidates: the walk's own
+    variables substituted (subst), CMake's list division applied, the
+    source-dir variables resolved. An element still carrying a ${...} or
+    $<...> reference is returned as it is -- the caller classifies it, so it
+    is never silently treated as a path or silently dropped."""
+    out = []
+    for part in subst(raw, table.vars).split(';'):
+        element = resolve_cmake_path(part.strip('"'), table.rel_dir)
+        if element:
+            out.append(element)
+    return out
 
 
 def subst(text: str, env: dict, depth: int = 0) -> str:
@@ -230,6 +266,7 @@ class Rows:
 
     def __init__(self, path: Path, root: Path):
         self.path = path
+        self.root = root
         self.rel_dir = str(path.parent.relative_to(root))
         self.text = strip_comments(path.read_text())
         self.lines = self.text.split('\n')
@@ -739,13 +776,19 @@ class Rows:
 
     # ---- what the sweep asks of a row --------------------------------------
     def python_script(self, row: str) -> Path | None:
+        """The row's Python driver, resolved the way CMake resolves it: the
+        argument's path against the tree root with the source-dir variables
+        substituted. The old form looked only beside the CMakeLists (and only
+        at the bare file name), so a script under scripts/ was never found
+        and the row's marker check silently did not run."""
         entry = self.rows.get(row)
         if not entry:
             return None
         for argv in entry['argvs']:
             for token in argv:
                 if token.strip('"').endswith('.py'):
-                    return (self.path.parent / Path(token.strip('"')).name)
+                    return self.root / resolve_cmake_path(token.strip('"'),
+                                                          self.rel_dir)
         return None
 
     def fixtures_arg(self, row: str) -> str | None:
@@ -801,12 +844,16 @@ def row_sources(path: Path) -> list[tuple[Path, int, str]]:
 
 
 def marker_expression(driver: Path) -> list[str] | None:
+    """The driver's private marker in the pinned form -- an ASSIGNMENT at
+    the start of a line: `_pf_private_marker = fixtures / \"...\" / \"...\"`.
+    The identifier inside a message or a comment is not a marker (this sweep's
+    own diagnostic text names the pinned form), so the search is anchored."""
     text = driver.read_text(errors='replace')
-    m = re.search(r'_pf_private_marker\s*=\s*fixtures\s*((?:/\s*"[^"]*"\s*)+)',
-                  text)
+    m = re.search(r'^[ \t]*_pf_private_marker\s*=\s*fixtures\s*'
+                  r'((?:/\s*\"[^\"]*\"\s*)+)', text, re.M)
     if not m:
         return None
-    return re.findall(r'"([^"]*)"', m.group(1))
+    return re.findall(r'\"([^\"]*)\"', m.group(1))
 
 
 def sweep(root: Path) -> int:
@@ -855,13 +902,28 @@ def sweep(root: Path) -> int:
 
     hits: dict[str, list[tuple[str, int, str]]] = {}
     markers: list[tuple[str, str, str]] = []
+    missing_scripts: list[tuple[str, str]] = []
+    unresolved_argv_tokens: list[tuple[str, str, int, str]] = []
     checked_paths = 0
 
     for row in sorted(rows):
         entry = rows[row]
         table: Rows = entry['table']
-        define_values = [resolve_cmake_path(v, table.rel_dir)
-                         for v in entry['defines'].values()]
+        define_values = []
+        for raw in entry['defines'].values():
+            for element in split_argument_elements(raw, table):
+                if '$' in element:
+                    # a reference the walk did not bind; the shape decides:
+                    # path-shaped -> this sweep cannot resolve it (exit 2),
+                    # not path-shaped -> named in the closing count
+                    if '/' in element:
+                        raise Unparseable(
+                            f'{table.path}: {row}: a compile definition '
+                            f'whose path the sweep never resolved: {element}')
+                    unresolved_argv_tokens.append(
+                        (row, str(table.path.relative_to(root)), 0, element))
+                    continue
+                define_values.append(element)
         named: list[tuple[str, int, str]] = []   # (where, lineno, path)
 
         for value in define_values:
@@ -900,19 +962,47 @@ def sweep(root: Path) -> int:
                 for value in define_values:
                     joined = value.rstrip('/') + '/' + lit.lstrip('/')
                     named.append((str(f.relative_to(root)), lineno, joined))
-        # the add_test command's own path arguments
+        # the add_test command's own path arguments. A ${...} token is first
+        # resolved through the walk's own variables and CMake's list division;
+        # an element that still carries a reference and is path-shaped (it
+        # holds a '/') is a construct this sweep cannot resolve -- exit 2 --
+        # while a reference that names no path (a command or a non-path
+        # variable, no '/') is counted and printed, never silently dropped.
         for argv in entry['argvs']:
             for token in argv:
                 if token.startswith(('tests/', 'fixtures/', '${')):
-                    named.append((str(table.path.relative_to(root)), entry['lineno'],
-                                  resolve_cmake_path(token, table.rel_dir)))
+                    where = str(table.path.relative_to(root))
+                    for element in split_argument_elements(token, table):
+                        if '$' in element:
+                            if '/' in element:
+                                raise Unparseable(
+                                    f'{where}:{entry["lineno"]}: {row}: an '
+                                    f'argument path the sweep never '
+                                    f'resolved: {element}')
+                            unresolved_argv_tokens.append(
+                                (row, where, entry['lineno'], element))
+                            continue
+                        named.append((where, entry['lineno'], element))
 
         # Python driver: the private marker and the skip literal.
         script = table.python_script(row)
-        if script and script.exists():
-            marked = '_pf_private_marker' in script.read_text(errors='replace')
+        if script is not None and not script.exists():
+            # A row whose driver the tree does not have at the path its own
+            # argv names: the marker check cannot run, and skipping it quietly
+            # is how 127 rows went unchecked. Counted, then failed.
+            missing_scripts.append((row, str(script.relative_to(root))))
+        elif script:
+            # A marker is an ASSIGNMENT to _pf_private_marker (the pinned form
+            # is `_pf_private_marker = fixtures / "..." / "..."`): a file that
+            # merely names the identifier -- a comment, a string the guard
+            # suite reads back, this sweep's own probe -- does not carry a
+            # marker, so the loud failure fires only on an assignment the
+            # pinned form cannot be read out of.
+            script_text = script.read_text(errors='replace')
             parts = marker_expression(script)
-            if marked and parts is None:
+            assigned = re.search(r'^[^\S\n]*_pf_private_marker\s*=',
+                                 script_text, re.M) is not None
+            if assigned and parts is None:
                 raise Unparseable(
                     f'{script}: {row} carries _pf_private_marker in a form '
                     f'this sweep cannot read (the pinned form is '
@@ -1073,6 +1163,15 @@ def sweep(root: Path) -> int:
           f'(pinned {len(pinned_hits) - len(resolved_guarded)}, '
           f'guard-only {len(resolved_guarded)})')
     print(f'skip markers checked: {len(markers)}')
+    print(f'row scripts not found: {len(missing_scripts)}')
+    for row, where in missing_scripts:
+        fail(f'{row} names the Python script {where} the tree does not have '
+             f'at that path: its marker check cannot run')
+    print(f'argv argument references that name no path: '
+          f'{len(unresolved_argv_tokens)}')
+    for row, where, lineno, element in unresolved_argv_tokens:
+        print(f'  argument reference not a path: {where}:{lineno}: {row}: '
+              f'{element}')
     for line in FAILURES:
         print(f'check_private_fixture_reads: {line}')
     if FAILURES:

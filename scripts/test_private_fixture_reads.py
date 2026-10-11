@@ -155,13 +155,22 @@ class TamperTree:
         self.root = directory
         (self.root / 'tests').mkdir(parents=True)
         (self.root / 'runner').mkdir(parents=True)
+        (self.root / 'scripts').mkdir(parents=True)
         shutil.copy(REPO / 'tests' / 'CMakeLists.txt', self.root / 'tests')
         shutil.copy(REPO / 'runner' / 'CMakeLists.txt', self.root / 'runner')
+        # the sweep resolves a row's Python driver against the tree root, so
+        # the tamper tree carries the scripts a real row names (the sweep
+        # fails when a named driver is absent -- that is what it now checks)
+        for driver in sorted((REPO / 'scripts').glob('*.py')):
+            shutil.copy(driver, self.root / 'scripts')
         for name in ('private_fixture_paths.txt', 'private_fixture_rows.txt',
                      'private_fixture_reads.evidence'):
             shutil.copy(REPO / 'tests' / name, self.root / 'tests')
-        for driver in sorted((REPO / 'tests').glob('*_tapes.py')):
+        for driver in sorted((REPO / 'tests').glob('*.py')):
             shutil.copy(driver, self.root / 'tests')
+        (self.root / 'benchmarks').mkdir()
+        shutil.copy(REPO / 'benchmarks' / 'check_provenance.py',
+                    self.root / 'benchmarks')
 
     def append(self, rel: str, text: str) -> None:
         with (self.root / rel).open('a') as handle:
@@ -274,6 +283,68 @@ add_test(NAME test_e2e_fb2_unset_pf_arg
         result = run_sweep(self.tree.root)
         self.assertEqual(1, result.returncode, result.stdout + result.stderr)
         self.assertIn('e2e_fb2_pinned_row_that_registers_nowhere', result.stdout)
+
+    # a driver whose marker names a file the removal did NOT take: the marker
+    # check must reject it (R3-P1-1's missing control -- the check needs a
+    # control that fails when the marker is not a removed file)
+    def test_a_marker_that_is_not_a_removed_file_is_caught(self):
+        self.tree.append('tests/CMakeLists.txt', '''
+add_test(NAME test_e2e_fm_marker_not_removed COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_e2e_fm_marker_not_removed.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures)
+''')
+        (self.tree.root / 'tests' / 'test_e2e_fm_marker_not_removed.py').write_text(
+            'from pathlib import Path\n'
+            'fixtures = Path(__file__).parent / "fixtures"\n'
+            '    _pf_private_marker = fixtures / "e2e_fm_kept" / "kept.csv"\n'
+            'if not _pf_private_marker.exists():\n'
+            '    raise SystemExit(77)\n')
+        result = run_sweep(self.tree.root)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn('tests/fixtures/e2e_fm_kept/kept.csv', result.stdout)
+        self.assertIn('is not a removed file', result.stdout)
+
+    # a row whose Python driver the tree does not have at the path its own
+    # argv names: the marker check cannot run, and the sweep must fail rather
+    # than skip it quietly (the old resolver looked only beside the CMakeLists
+    # and answered 'not found' for scripts the tree has, then skipped them)
+    def test_a_row_whose_driver_is_missing_is_caught(self):
+        self.tree.append('tests/CMakeLists.txt', '''
+add_test(NAME test_e2e_fm_missing_driver COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_e2e_fm_missing_driver.py)
+''')
+        result = run_sweep(self.tree.root)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn('row scripts not found: 1', result.stdout)
+        self.assertIn('test_e2e_fm_missing_driver names the Python script',
+                      result.stdout)
+
+    # a path-shaped argument the sweep cannot resolve is exit 2, named -- the
+    # old is_removed answered False for it, so the row was silently cleared
+    def test_an_unresolved_path_argument_exits_2(self):
+        self.tree.append('tests/CMakeLists.txt', '''
+add_test(NAME test_e2e_fm_unresolved_path COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/e2e_fm_unresolved.py
+    ${E2E_FM_UNRESOLVED_DIR}/fixtures/bars.csv)
+''')
+        result = run_sweep(self.tree.root)
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn('an argument path the sweep never resolved',
+                      result.stdout + result.stderr)
+        self.assertIn('E2E_FM_UNRESOLVED_DIR', result.stdout + result.stderr)
+
+    # a reference that names no path (no '/') is counted and printed, never a
+    # quiet FALSE and never a failure
+    def test_a_non_path_reference_is_counted_not_failed(self):
+        self.tree.append('tests/CMakeLists.txt', '''
+add_test(NAME test_e2e_fm_non_path_reference COMMAND ${E2E_FM_COMMAND}
+    -E echo ok)
+''')
+        result = run_sweep(self.tree.root)
+        self.assertNotIn('an argument path the sweep never resolved',
+                         result.stdout + result.stderr)
+        self.assertIn('argument reference not a path:', result.stdout)
+        self.assertIn('${E2E_FM_COMMAND}', result.stdout)
 
     # control 8: the value list(POP_FRONT) pops must reach the row's command
     # line: a sweep that ignores the subcommand leaves ${..} unresolved and
