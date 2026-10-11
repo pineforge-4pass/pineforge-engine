@@ -2568,13 +2568,20 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
    AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
     set(_pf_outputs_dir ${CMAKE_BINARY_DIR}/outputs_fixture)
     add_library(outputs_fixture_strategy MODULE outputs_fixture_strategy.cpp)
-    add_library(outputs_fixture_generated MODULE
-        ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/callback_lifecycle/carried-static-stop/generated.cpp)
-    target_include_directories(outputs_fixture_generated PRIVATE ${PROJECT_SOURCE_DIR}/src)
-    target_compile_options(outputs_fixture_generated PRIVATE -O0 -ffp-contract=off
-        -Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-parameter
-        -Wno-unused-function -Wno-sign-compare)
-    foreach(_pf_outputs_library outputs_fixture_strategy outputs_fixture_generated)
+    set(_pf_outputs_libraries outputs_fixture_strategy)
+    # The frozen generated strategy is a private fixture; only register its
+    # module -- and the process run that needs both modules -- when it is
+    # present, so a tree without the private fixtures still configures.
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/callback_lifecycle/carried-static-stop/generated.cpp")
+        add_library(outputs_fixture_generated MODULE
+            ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/callback_lifecycle/carried-static-stop/generated.cpp)
+        target_include_directories(outputs_fixture_generated PRIVATE ${PROJECT_SOURCE_DIR}/src)
+        target_compile_options(outputs_fixture_generated PRIVATE -O0 -ffp-contract=off
+            -Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-parameter
+            -Wno-unused-function -Wno-sign-compare)
+        list(APPEND _pf_outputs_libraries outputs_fixture_generated)
+    endif()
+    foreach(_pf_outputs_library IN LISTS _pf_outputs_libraries)
         target_link_libraries(${_pf_outputs_library} PRIVATE pineforge)
         if(APPLE)
             target_link_options(${_pf_outputs_library} PRIVATE
@@ -2586,10 +2593,15 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
         set_target_properties(${_pf_outputs_library} PROPERTIES
             LIBRARY_OUTPUT_DIRECTORY ${_pf_outputs_dir} PREFIX "" SUFFIX ".so")
     endforeach()
-    add_test(NAME test_run_json_outputs
-        COMMAND ${Python3_EXECUTABLE}
-            ${PROJECT_SOURCE_DIR}/scripts/test_run_json_outputs.py
-            $<TARGET_FILE:outputs_fixture_strategy> $<TARGET_FILE:outputs_fixture_generated>)
+    if(TARGET outputs_fixture_generated)
+        add_test(NAME test_run_json_outputs
+            COMMAND ${Python3_EXECUTABLE}
+                ${PROJECT_SOURCE_DIR}/scripts/test_run_json_outputs.py
+                $<TARGET_FILE:outputs_fixture_strategy> $<TARGET_FILE:outputs_fixture_generated>)
+    else()
+        add_test(NAME test_run_json_outputs COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/callback_lifecycle/carried-static-stop/generated.cpp")
+        set_tests_properties(test_run_json_outputs PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+    endif()
 endif()
 
 # TradingView's same-side exit tapes (tests/fixtures/same_side_exit): a

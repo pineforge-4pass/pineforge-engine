@@ -1,7 +1,7 @@
 // Pinned ctest rows that tests/CMakeLists.txt registers as SKIP placeholders
 // when the private fixtures are absent (removed by the private-fixture PR).
 // manifest: l44/pr1-manifest.tsv sha256 9a2727d455c1b470d515665428e2c6e090a22ac07f87255d1ca9c20d5528bd62
-// rows: 121
+// rows: 122
 test_aapl15_margin_brackets_l4a
 test_adapter_coof_relower
 test_adapter_magnifier_intrabar_tapes
@@ -94,6 +94,7 @@ test_risk_max_intraday_loss_tv_l4a
 test_rounded_carried_short_trail_l4c
 test_run_failure_codes
 test_run_harness_window_tapes
+test_run_json_outputs
 test_run_strategy_emit_window
 test_run_strategy_magnifier
 test_run_strategy_mincontract
