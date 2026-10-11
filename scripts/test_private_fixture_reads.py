@@ -52,12 +52,14 @@ REMOVED_EXAMPLE = 'tests/fixtures/whole_lot_tie'
 TRACE_MARKER = 'PF_PRIVATE_TRACE_CHILD'
 
 TRACER_SOURCE = '''\
-"""Record every open() under the real tree's private trees.
+"""Record every open() of a file the real private trees do NOT have.
 
 Imported as sitecustomize (PYTHONPATH), the hook below installs itself in
 this interpreter; run as __main__, this file runs one target script and
-reports the log its processes wrote (PF_PRIVATE_TRACE_LOG), exiting 3 when
-any open fell under PF_PRIVATE_TRACE_ROOT/tests/fixtures/ or .../tests/oracle/.
+reports the log its processes wrote (PF_PRIVATE_TRACE_LOG), exiting 3 when an
+open named a missing path under PF_PRIVATE_TRACE_ROOT/tests/fixtures/ or
+.../tests/oracle/ -- a read of a KEPT file there is not what the exemption is
+about.
 """
 import os
 import runpy
@@ -92,7 +94,11 @@ def _hook(event, args):
         return
     full = os.path.abspath(path)
     if any(full.startswith(prefix) for prefix in _PREFIXES):
-        _record(full)
+        # The exemption is about files the tree does NOT have: a read of a
+        # KEPT file under a private tree is what the checkers do on purpose,
+        # and copying tests/oracle/ for a control reads them all.
+        if not os.path.exists(full):
+            _record(full)
 
 
 sys.addaudithook(_hook)
@@ -382,7 +388,9 @@ class ExemptRowTraceControls(unittest.TestCase):
 
     The rows and their scripts come from the real checker (its EXEMPT table
     and its own row parse), so an exemption added there is traced here without
-    a second list to keep in step.
+    a second list to keep in step. The trace records opens of paths the real
+    private trees do NOT have: an exemption says the script never reads an
+    absent private file, and a kept file's read is nobody's finding.
     """
 
     def setUp(self):

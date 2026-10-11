@@ -193,6 +193,17 @@ EXEMPT = {
         'real tests/fixtures/ and tests/oracle/, in its own process and in the '
         'Python children it starts; control 12 of scripts/test_private_'
         'fixture_reads.py re-runs that trace'),
+    'test_oracle_fixture_checks': (
+        'the private paths it names are payloads of the synthetic roots its '
+        'controls build: the suite copies tests/oracle/ (the KEPT files) into '
+        'a temp root and writes the three private oracle sources there itself, '
+        'so it never opens an ABSENT private file of the real tree; under the '
+        'trace that records exactly those opens it comes out clean, and the '
+        'three of its controls that assert the checkers’ private-fixture '
+        'behaviour (the flag, the pin’s removal set) skip when the tree '
+        'holds the oracles, because the overlay world is not what they '
+        'assert. Control 12 of scripts/test_private_fixture_reads.py re-runs '
+        'the trace'),
 }
 GATED_BY_MODULE = re.compile(r'(?:return|Exit|exit)\s*\(?\s*77\b')
 

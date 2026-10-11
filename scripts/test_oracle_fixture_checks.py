@@ -34,8 +34,25 @@ import check_oracle_twin_census as census  # noqa: E402
 
 SCRIPTS = ("check_oracle_sha256.py", "check_oracle_twin_census.py")
 
+# The three oracle sources the private-fixture PRs remove (the pin's
+# privateFixtureAbsent names, read from the census so there is no second list).
+PRIVATE_ORACLES = tuple(census.PRIVATE_FIXTURE_ORACLES)
+
 
 class OracleFixtureChecks(unittest.TestCase):
+    def absent_world_only(self) -> None:
+        """The controls that assert the checkers' private-fixture behaviour
+        hold only where the private oracles are ABSENT: the overlay world puts
+        them back, and the assertion is not about that tree. Every other
+        control here builds its own synthetic root and runs in both worlds."""
+        for name in PRIVATE_ORACLES:
+            if (ROOT / "tests" / "oracle" / f"{name}.cpp").is_file():
+                self.skipTest(
+                    "this control asserts what the checkers do with the "
+                    "private oracles absent, and this tree holds "
+                    f"tests/oracle/{name}.cpp (the private-fixture overlay is "
+                    "present)")
+
     def fixture(self) -> Path:
         temporary = tempfile.TemporaryDirectory(prefix="pf-oracle-checks-")
         self.addCleanup(temporary.cleanup)
@@ -62,6 +79,7 @@ class OracleFixtureChecks(unittest.TestCase):
         self.assertIn(needle, result.stdout + result.stderr)
 
     def test_the_fixture_absent_tree_passes_and_names_the_private_oracles(self) -> None:
+        self.absent_world_only()
         root = self.fixture()
         for script in SCRIPTS:
             result = self.run_check(root, script)
@@ -95,6 +113,7 @@ class OracleFixtureChecks(unittest.TestCase):
         self.assert_fails(root, "check_oracle_twin_census.py", "missing oracle: test_oracle_coof")
 
     def test_a_pin_that_stops_allowing_a_private_oracle_fails(self) -> None:
+        self.absent_world_only()
         root = self.fixture()
         pin = json.loads((root / "tests" / "oracle.sha256").read_text())
         pin["privateFixtureAbsent"] = [name for name in pin["privateFixtureAbsent"]
@@ -104,6 +123,7 @@ class OracleFixtureChecks(unittest.TestCase):
                           "missing pinned file: test_oracle_day_key.cpp")
 
     def test_a_pin_allowing_a_file_outside_the_removal_set_fails(self) -> None:
+        self.absent_world_only()
         root = self.fixture()
         pin = json.loads((root / "tests" / "oracle.sha256").read_text())
         pin["privateFixtureAbsent"] = pin["privateFixtureAbsent"] + ["test_oracle_ghost.cpp"]
