@@ -24,6 +24,17 @@ ROOT = Path(__file__).resolve().parents[1]
 # added hooks the live tree must still show.
 MANIFEST = ROOT / "tests/fixtures/native_cpp_abi/host-fc7aad6/relocation-manifest-v18-v19.json"
 V16_V18_MANIFEST = ROOT / "tests/fixtures/native_cpp_abi/host-ab9714b/relocation-manifest-v16-v18.json"
+# The private-fixture PRs move both relocation manifests out of the public tree
+# with the rest of tests/fixtures/native_cpp_abi/.  Absent, the checker skips
+# with the project's pinned literal -- the one the private-fixture ctest rows
+# print and tests/CMakeLists.txt matches with SKIP_REGULAR_EXPRESSION -- rather
+# than failing on read_text(); present, every check below runs as before.
+PRIVATE_FIXTURE_SKIP_LITERAL = "SKIP private fixtures not present: "
+
+
+def missing_private_fixtures() -> list:
+    """The relocation manifests this checker reads that the tree lacks."""
+    return [path for path in (MANIFEST, V16_V18_MANIFEST) if not path.exists()]
 RETIRED_HEADER = "pineforge/source/pine_pending_intent.hpp"
 _OLD = "legacy"
 _RUN = _OLD + "_run_"
@@ -168,6 +179,10 @@ def main() -> int:
     receipt_mode.add_argument("--require-receipts", action="store_true")
     args = parser.parse_args()
     try:
+        absent = missing_private_fixtures()
+        if absent:
+            print(PRIVATE_FIXTURE_SKIP_LITERAL + str(absent[0].relative_to(ROOT)))
+            return 77
         mode = enforce_receipt_mode(
             (args.base_receipt, args.prior_receipt, args.v13_receipt,
              args.v14_receipt, args.v15_frozen_receipt, args.v16_frozen_receipt,

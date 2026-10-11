@@ -964,6 +964,9 @@ class CopyCacheIdentity(unittest.TestCase):
         receipt_matches_current(receipt, cache, compiler)
 
 
+@unittest.skipUnless((ROOT / 'tests/fixtures/native_cpp_abi').exists(),
+                     'private fixtures not present: the host-* header closures are '
+                     'moved out of the public tree (tests/private_fixture_rows.txt)')
 class HistoricalProviderPins(unittest.TestCase):
     def test_v18_frozen_preparation_uses_the_fc7aad6_header_closure(self):
         provider = PROVIDERS['v18-frozen']
