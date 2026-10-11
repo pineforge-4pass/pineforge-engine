@@ -4210,6 +4210,18 @@ set_tests_properties(test_private_fixture_reads_controls PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
 add_test(NAME test_kernel_python_private_reads COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/check_kernel_python_private_reads.py)
+# The in-tree two-world registration invariant: the absent world is evaluated
+# on every tree (its evaluation, the recorded source-bound list against the
+# pin); the overlay half compares both worlds and runs the drift guard, and
+# skips with the pinned literal and 77 where the overlay is not present. It
+# names no private fixture in this file, so it is no pinned placeholder row.
+add_test(NAME test_two_world_registration COMMAND ${Python3_EXECUTABLE} -B
+    ${PROJECT_SOURCE_DIR}/scripts/check_two_world_registration.py --both)
+set_tests_properties(test_two_world_registration PROPERTIES SKIP_RETURN_CODE 77)
+add_test(NAME test_two_world_registration_controls COMMAND ${Python3_EXECUTABLE} -B
+    ${PROJECT_SOURCE_DIR}/scripts/test_two_world_registration.py)
+set_tests_properties(test_two_world_registration_controls PROPERTIES
+    ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
 add_test(NAME test_oracle_fixture_checks COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/test_oracle_fixture_checks.py)
 # R5 P6: every NativeRunSpec field the Pine adapter's project() never assigns
