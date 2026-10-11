@@ -280,6 +280,11 @@ struct Case {
     int placements;
     int frozen;
     bool asserted;
+    // True for the one case whose fixture the private-fixture PR removes
+    // (batch_carried_trail). The default run replays the distributed cases
+    // only; --private-only replays the removed-fixture case, so the
+    // fixture-less tree still proves the public mechanisms.
+    bool private_fixture;
 };
 
 std::unique_ptr<CrossHost> make_host(Shape shape) {
@@ -422,26 +427,35 @@ bool replay(const Case& tape, bool record) {
 }
 
 int main(int argc, char** argv) {
-    const bool record = argc == 2 && std::string(argv[1]) == "--record";
-    if (argc > 1 && !record) return 2;
+    bool record = false;
+    bool private_only = false;
+    for (int index = 1; index < argc; ++index) {
+        const std::string argument = argv[index];
+        if (argument == "--record") record = true;
+        else if (argument == "--private-only") private_only = true;
+        else return 2;
+    }
     const Case cases[] = {
-        {"bracket_one", Shape::NamedBracket, 4, 3, 3, true},
-        {"bracket_all", Shape::GlobalBracket, 3, 3, 3, true},
-        {"cancel_pending", Shape::CancelPending, 2, 3, 3, true},
+        {"bracket_one", Shape::NamedBracket, 4, 3, 3, true, false},
+        {"bracket_all", Shape::GlobalBracket, 3, 3, 3, true, false},
+        {"cancel_pending", Shape::CancelPending, 2, 3, 3, true, false},
         // Recorded: both engine revisions emit an extra sub-step C fragment.
-        {"opposite_partial_fifo", Shape::OppositePartial, 4, 4, 4, false},
-        {"margin_batch_100", Shape::FullMargin, 5, 3, 0, true},
+        {"opposite_partial_fifo", Shape::OppositePartial, 4, 4, 4, false, false},
+        {"margin_batch_100", Shape::FullMargin, 5, 3, 0, true, false},
         // Recorded: neither revision reproduces all three TV margin checkpoints.
-        {"margin_batch_50", Shape::HalfMargin, 6, 3, 0, false},
+        {"margin_batch_50", Shape::HalfMargin, 6, 3, 0, false, false},
         // Recorded: both revisions liquidate C instead of only the A + B prefix.
-        {"margin_fractional_boundary", Shape::FractionalMargin, 3, 3, 0, false},
-        {"allin_percent_reversal", Shape::AllInPercent, 5, 2, 0, true},
-        {"batch_carried_trail", Shape::CarriedTrail, 3, 3, 3, true},
+        {"margin_fractional_boundary", Shape::FractionalMargin, 3, 3, 0, false, false},
+        {"allin_percent_reversal", Shape::AllInPercent, 5, 2, 0, true, false},
+        {"batch_carried_trail", Shape::CarriedTrail, 3, 3, 3, true, true},
     };
     int failures = 0;
     int asserted = 0;
+    int ran = 0;
     try {
         for (const auto& tape : cases) {
+            if (!record && tape.private_fixture != private_only) continue;
+            ++ran;
             if (tape.asserted) ++asserted;
             if (!replay(tape, record)) ++failures;
         }
@@ -449,9 +463,8 @@ int main(int argc, char** argv) {
         std::printf("FAIL cross-mechanism fixture: %s\n", error.what());
         return 1;
     }
-    std::printf("Cross-mechanism tapes: %zu cases, %d asserted, %zu recorded, %d failures%s\n",
-        sizeof(cases) / sizeof(cases[0]), asserted,
-        sizeof(cases) / sizeof(cases[0]) - asserted, failures,
+    std::printf("Cross-mechanism tapes: %d cases, %d asserted, %d recorded, %d failures%s\n",
+        ran, asserted, ran - asserted, failures,
         record ? " (observations only)" : "");
     return failures == 0 ? 0 : 1;
 }

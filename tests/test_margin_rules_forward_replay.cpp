@@ -116,31 +116,38 @@ struct Sample {
     const char* fixture;  // a directory under tests/fixtures
     const char* path;     // the tape's path in that fixture's cases.tsv
     const char* covers;
+    // True for the samples whose case dirs the private-fixture PR removes
+    // (margin_call_rules/boundary/long-admit-m1u, literals/literal-24,
+    // literals/literal-21 and every margin_ledger_rules sample, whose bars
+    // files the PR removes with them). The default run replays the
+    // distributed samples only, so the row still passes on the fixture-less
+    // tree; --private-only replays these, for the pinned row.
+    bool private_fixture;
 };
 
 const std::vector<Sample> kSamples = {
-    {"margin_call_rules", "sizing/size-btc-p3u", "sizing"},
-    {"margin_call_rules", "boundary/size-p1u", "sizing"},
-    {"margin_call_rules", "admit/admit-eur-short-ulp-p2u", "placement admission"},
-    {"margin_call_rules", "boundary/long-admit-m1u", "placement admission"},
-    {"margin_call_rules", "admit/admit-eth-nonpooc-s2-m04u", "fill admission"},
-    {"margin_call_rules", "admit/admit-eth-nonpooc-s2-gapup", "fill admission"},
-    {"margin_call_rules", "literals/literal-24", "long residual call"},
-    {"margin_call_rules", "coof/coof-low-call-on", "COOF next-point close"},
-    {"margin_call_rules", "sizing/size-eth-06-22-t1", "close-point sizing"},
-    {"margin_call_rules", "quantum/quantum-s5-m4", "short margin call"},
-    {"margin_call_rules", "stopband/stopband-stop-p10u", "stop entry"},
+    {"margin_call_rules", "sizing/size-btc-p3u", "sizing", false},
+    {"margin_call_rules", "boundary/size-p1u", "sizing", false},
+    {"margin_call_rules", "admit/admit-eur-short-ulp-p2u", "placement admission", false},
+    {"margin_call_rules", "boundary/long-admit-m1u", "placement admission", true},
+    {"margin_call_rules", "admit/admit-eth-nonpooc-s2-m04u", "fill admission", false},
+    {"margin_call_rules", "admit/admit-eth-nonpooc-s2-gapup", "fill admission", false},
+    {"margin_call_rules", "literals/literal-24", "long residual call", true},
+    {"margin_call_rules", "coof/coof-low-call-on", "COOF next-point close", false},
+    {"margin_call_rules", "sizing/size-eth-06-22-t1", "close-point sizing", false},
+    {"margin_call_rules", "quantum/quantum-s5-m4", "short margin call", false},
+    {"margin_call_rules", "stopband/stopband-stop-p10u", "stop entry", false},
     {"margin_call_rules", "short-cutoff-gate/cutoff-q78381-s1-d0280",
-     "short call at the high, lagged follow-up at the close"},
-    {"margin_call_rules", "short-cutoff-gate/gateedge-q78381-f5-d027200", "short call gate"},
+     "short call at the high, lagged follow-up at the close", false},
+    {"margin_call_rules", "short-cutoff-gate/gateedge-q78381-f5-d027200", "short call gate", false},
     {"margin_call_rules", "short-cutoff-gate/holdout-q12345-s5-f2-d023000",
-     "short call gate, slippage 5"},
-    {"margin_call_rules", "literals/literal-21", "close call's follow-up at the open"},
+     "short call gate, slippage 5", false},
+    {"margin_call_rules", "literals/literal-21", "close call's follow-up at the open", true},
     // Event-ledger tapes (LedgerHost, test_margin_ledger_rules_tapes' probe).
-    {"margin_ledger_rules", "c1-r1-exp-l2s-reject/r1", "rejected reversal"},
-    {"margin_ledger_rules", "c1-b1-exp-long-below-Tm1ulp/r1", "fill re-check"},
-    {"margin_ledger_rules", "c1-b2-exp-long-above-T/r1", "fill re-check"},
-    {"margin_ledger_rules", "f-antoni-history-k0-only/r1", "member boundary"},
+    {"margin_ledger_rules", "c1-r1-exp-l2s-reject/r1", "rejected reversal", true},
+    {"margin_ledger_rules", "c1-b1-exp-long-below-Tm1ulp/r1", "fill re-check", true},
+    {"margin_ledger_rules", "c1-b2-exp-long-above-T/r1", "fill re-check", true},
+    {"margin_ledger_rules", "f-antoni-history-k0-only/r1", "member boundary", true},
 };
 
 constexpr const char* kLedgerFixture = "margin_ledger_rules";
@@ -166,14 +173,17 @@ struct Refusal {
     const char* key;
     const char* error_fragment;
     const char* reason;
+    // True for the refusals whose tape the private-fixture PR removes; they
+    // are checked in the --private-only run only.
+    bool private_fixture;
 };
 const std::vector<Refusal> kStreamRefusals = {
     {"margin_call_rules/boundary/long-admit-m1u", "calc_on_order_fills is unsupported",
-     "calc_on_order_fills: a stream recalculates on bar close only"},
+     "calc_on_order_fills: a stream recalculates on bar close only", true},
     {"margin_call_rules/literals/literal-24", "calc_on_order_fills is unsupported",
-     "calc_on_order_fills: a stream recalculates on bar close only"},
+     "calc_on_order_fills: a stream recalculates on bar close only", true},
     {"margin_call_rules/coof/coof-low-call-on", "calc_on_order_fills is unsupported",
-     "calc_on_order_fills: a stream recalculates on bar close only"},
+     "calc_on_order_fills: a stream recalculates on bar close only", false},
 };
 
 std::string fixture(const std::string& name, const std::string& relative) {
@@ -1102,10 +1112,15 @@ void replay_sample(const Sample& sample, const C& c, const std::vector<Bar>& bar
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    const bool private_only = argc == 2 && std::string(argv[1]) == "--private-only";
+    if (argc > 1 && !private_only) return 2;
     std::printf("=== margin_rules_forward_replay: one engine, two modes, on TradingView's tapes ===\n");
     auto& switches = pineforge::source::detail::margin_rule_switches();
     const MarginRuleSwitches tree_defaults = switches;
+    std::size_t active_samples = 0;
+    for (const Sample& sample : kSamples)
+        if (sample.private_fixture == private_only) ++active_samples;
 
     Tables tables;
     for (const auto& [key, reason] : kBatchDiffersFromTv) {
@@ -1120,7 +1135,10 @@ int main() {
         CHECK(!reason.empty());
         CHECK(tables.shipped_differs_from_tv.emplace(key, reason).second);
     }
+    std::size_t active_refusals = 0;
     for (const Refusal& refusal : kStreamRefusals) {
+        if (refusal.private_fixture != private_only) continue;
+        ++active_refusals;
         CHECK(std::string(refusal.reason).size() > 0);
         CHECK(tables.refusals.emplace(refusal.key, &refusal).second);
     }
@@ -1138,6 +1156,7 @@ int main() {
     Totals totals;
 
     for (const Sample& sample : kSamples) {
+        if (sample.private_fixture != private_only) continue;
         const std::string key = std::string(sample.fixture) + "/" + sample.path;
         CHECK(sampled.insert(key).second);
         if (std::string(sample.fixture) == kLedgerFixture) {
@@ -1178,9 +1197,9 @@ int main() {
     CHECK(same_switches(switches, tree_defaults));
     std::printf("margin_rules_forward_replay: %zu samples, %zu streamed, %zu batch==tv, "
                 "splits %zu/%zu identical, rules move trades on %zu\n",
-                kSamples.size(), totals.streamed, totals.tv_matched, totals.splits_identical,
+                active_samples, totals.streamed, totals.tv_matched, totals.splits_identical,
                 totals.splits_total, totals.rules_move_trades);
-    CHECK(totals.streamed + kStreamRefusals.size() == kSamples.size());
+    CHECK(totals.streamed + active_refusals == active_samples);
     std::printf("shipped switches: %zu streamed, %zu batch==tv, splits %zu/%zu identical\n",
                 totals.shipped_streamed, totals.shipped_tv_matched,
                 totals.shipped_splits_identical, totals.shipped_splits_total);

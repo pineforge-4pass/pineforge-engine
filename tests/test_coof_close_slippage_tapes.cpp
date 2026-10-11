@@ -68,10 +68,21 @@ public:
     }
 };
 
-int main() {
-    CallbackCloseHost host;
-    PartialCallbackCloseHost partial;
-    const int failures = order_print_tape::compare(host, "coof_close_slippage", "1D", 0.25)
-        + order_print_tape::compare(partial, "coof_close_slippage/partial", "1D", 0.05);
+// The two hosts read different tapes: CallbackCloseHost reads
+// coof_close_slippage (removed by the private-fixture PR), the partial host
+// reads the distributed coof_close_slippage/partial. The default run keeps
+// only the distributed tape, so the public row passes on the fixture-less
+// tree; --private-only runs the removed-fixture tape for the pinned row.
+int main(int argc, char** argv) {
+    const bool private_only = argc == 2 && std::string(argv[1]) == "--private-only";
+    if (argc > 1 && !private_only) return 2;
+    int failures = 0;
+    if (private_only) {
+        CallbackCloseHost host;
+        failures += order_print_tape::compare(host, "coof_close_slippage", "1D", 0.25);
+    } else {
+        PartialCallbackCloseHost partial;
+        failures += order_print_tape::compare(partial, "coof_close_slippage/partial", "1D", 0.05);
+    }
     return failures == 0 ? 0 : 1;
 }
