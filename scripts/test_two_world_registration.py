@@ -3,19 +3,24 @@
 
 Every control runs the REAL check script against a tamper tree: the worktree
 by symlink, with the two CMakeLists as real copies a control edits, and -- when
-PF_PRIVATE_OVERLAY names the read-only private overlay (the pf-private clone) --
-the overlay's files linked into place, so the overlay half has the world it
-needs. The overlay is a CI input, not a repo path, so without that variable the
-three controls that need both worlds skip themselves with the reason printed.
+the overlay is available (PF_PRIVATE_OVERLAY names the read-only private
+clone, or the tree itself holds the overlay's marker file, which is the CI
+overlay job's shape) -- the overlay's files linked into place, so the overlay
+half has the world it needs. Where neither holds, the controls that need both
+worlds skip themselves with the reason printed -- unless
+PINEFORGE_PRIVATE_FIXTURES is set, which says the fixtures ARE in the tree, so
+a control that cannot run is then a FAILURE, never a skip. Controls 2 and 7
+fail through the absent half alone and carry no gate.
 
 Controls:
   1. a recorded row removed from the record -> the drift guard names it, 1
-  2. a name added to the record that is not source-bound -> 1
+  2. a name added to the record that is not source-bound -> 1 (no overlay)
   3. a row's absent-world placeholder deleted -> overlay-only names: 1 -> 1
   4. a construct the evaluator cannot read -> 2
   5. the tree as it is -> the absent world evaluated, 0, per-profile counts
   6. a refusal-shard row removed from the recorded list -> 1, named
-  7. a refusal-shard name the split does not produce, unpinned -> 1, named
+  7. a refusal-shard name the split does not produce, unpinned -> 1 (no
+     overlay)
   8. a pinned row that is not a refusal shard added to the list -> 1, named
   9. the tree as it is, overlay present -> 0, every profile 0/0, drift 0/0
  10. an execute_process the sweep does not bind -> 2, named
@@ -23,6 +28,7 @@ Controls:
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -35,6 +41,19 @@ REPO = Path(__file__).resolve().parent.parent
 CHECK = REPO / 'scripts' / 'check_two_world_registration.py'
 PY = sys.executable
 OVERLAY = os.environ.get('PF_PRIVATE_OVERLAY')
+
+
+def _load_check_module():
+    """The real check script as a module: its marker path and its tables are
+    read from the script itself, never copied into this file."""
+    spec = importlib.util.spec_from_file_location('e2e_two_world_check', CHECK)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+CHECK_MODULE = _load_check_module()
+OVERLAY_MARKER = REPO / CHECK_MODULE.OVERLAY_MARKER
 # A pinned row whose public TU the removals take: without its own record entry
 # the layer-off world walks no TU and the worlds' registrations differ.
 REMOVED_TU_ROW = 'test_trail_activation_tick_reach'
@@ -132,11 +151,27 @@ class TamperTree:
             handle.write(text)
 
 
+def overlay_available() -> bool:
+    """The overlay this control set needs: PF_PRIVATE_OVERLAY names the
+    read-only clone for local runs, or the tree itself holds the overlay's
+    marker file (the CI overlay jobs put the fixtures in the tree)."""
+    return bool(OVERLAY) or OVERLAY_MARKER.is_file()
+
+
 def needs_overlay(test):
     def wrapped(self):
-        if not OVERLAY:
-            self.skipTest('PF_PRIVATE_OVERLAY is not set: no overlay tree to '
-                          'link in, and this control needs both worlds')
+        if not overlay_available():
+            if os.environ.get('PINEFORGE_PRIVATE_FIXTURES', '').strip():
+                self.fail(
+                    'PINEFORGE_PRIVATE_FIXTURES is set but the overlay is not '
+                    f'in the tree ({CHECK_MODULE.OVERLAY_MARKER} absent, '
+                    'PF_PRIVATE_OVERLAY unset): this control cannot run, and '
+                    'an overlay run that cannot run its overlay controls is a '
+                    'failure, never a skip')
+            self.skipTest(
+                'no overlay to link in (PF_PRIVATE_OVERLAY unset and '
+                f'{CHECK_MODULE.OVERLAY_MARKER} not in the tree): this '
+                'control needs both worlds')
         return test(self)
     return wrapped
 
@@ -169,17 +204,19 @@ class TwoWorldControls(unittest.TestCase):
         self.assertIn(REMOVED_TU_ROW, result.stdout)
         self.assertIn('the record must name it', result.stdout)
 
-    # control 2: a name in the record that is not source-bound fails the guard
-    @needs_overlay
+    # control 2: a name in the record that is not source-bound fails the guard.
+    # Ungated: the record is checked by the absent half alone, so this needs no
+    # overlay (it must run in every CI job).
     def test_a_non_source_bound_record_entry_is_drift(self):
         anchor = 'set(_pf_source_bound_private_rows\n'
         self.assertIn(anchor, (self.root / TREES_DIR).read_text(),
                       'the recorded list changed shape')
         self.tree.edit(TREES_DIR, anchor,
                        anchor + '    e2e_two_world_not_bound\n')
-        result = self.run_check('--overlay', overlay=True)
+        result = self.run_check()
         self.assertEqual(1, result.returncode, result.stdout + result.stderr)
         self.assertIn('e2e_two_world_not_bound', result.stdout)
+        self.assertIn('is not a pinned row', result.stdout)
 
     # control 3: a row registered in the overlay world only is drift (a
     # registration whose absent-world half is missing, the else-branch
@@ -231,8 +268,9 @@ endif()
         self.assertIn(SHARD_ROW, result.stdout)
         self.assertIn('derived-only: 1', result.stdout)
 
-    # control 7: a name the split does not produce, and the pin does not name
-    @needs_overlay
+    # control 7: a name the split does not produce, and the pin does not name.
+    # Ungated: the recorded shard list is checked by the absent half alone, so
+    # this needs no overlay (it must run in every CI job).
     def test_an_unpinned_shard_row_is_drift(self):
         tail = ('            confirmed_capabilities_refusals_requests_3\n'
                 '        )')
@@ -242,8 +280,8 @@ endif()
                        '            confirmed_capabilities_refusals_requests_3\n'
                        '            confirmed_capabilities_refusals_requests_9\n'
                        '        )')
-        result = self.run_check('--overlay', '--cmakelists', RUNNER,
-                                '--profile', 'release', overlay=True)
+        result = self.run_check('--cmakelists', RUNNER,
+                                '--profile', 'release')
         self.assertEqual(1, result.returncode, result.stdout + result.stderr)
         self.assertIn('confirmed_capabilities_refusals_requests_9', result.stdout)
         self.assertIn('is not a pinned row', result.stdout)
