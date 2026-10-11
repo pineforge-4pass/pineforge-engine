@@ -21,6 +21,12 @@
     "test_oracle_short_seed_percent.cpp": "ba24c10847dc5b2364243274b09f488f75f0737951c754a6a809f8ab280ec591",
     "test_oracle_stop_snapshot.cpp": "d3a14a771538873144c8f03a9d8cf391256e9967ad31a03e29e1ed46359daf1d"
   },
-  "schema": "pineforge-r4-d-oracle-tree/v1",
-  "treeSha256": "0520c5450824512c7c6867e85a5e3f230ab04a5c5fe4898db3006e48401b6deb"
+  "schema": "pineforge-r4-d-oracle-tree/v2",
+  "treeSha256": "0520c5450824512c7c6867e85a5e3f230ab04a5c5fe4898db3006e48401b6deb",
+  "privateFixtureAbsent": [
+    "test_oracle_day_key.cpp",
+    "test_oracle_reversal_same_bar_tx.cpp",
+    "test_oracle_stop_snapshot.cpp"
+  ],
+  "treeSha256WithoutPrivate": "e25ef4f4b061db7af5eb6cd78bcabf361716b4a644985e641dee97c0f91dc8b5"
 }

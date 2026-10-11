@@ -364,6 +364,36 @@ def find_twin(tests: Path, name: str) -> Path:
     return matches[0]
 
 
+PRIVATE_FIXTURE_ROWS_FILE = "tests/private_fixture_rows.txt"
+
+
+def private_fixture_rows(root: Path) -> frozenset[str]:
+    """The pinned private-fixture ctest rows (tests/private_fixture_rows.txt)."""
+    path = root / PRIVATE_FIXTURE_ROWS_FILE
+    if not path.is_file():
+        return frozenset()
+    return frozenset(line.strip() for line in path.read_text().splitlines()
+                     if line.strip() and not line.startswith("//"))
+
+
+def removed_private_test(root: Path, name: str) -> bool:
+    """True when the private-fixture PR removed this family's base source.
+
+    tests/<name>.cpp is gone AND its row (or a _l4* switched-route twin row)
+    is pinned: the pair is named in the skip report and enforced exactly as
+    before whenever the file is present. A base source removed without a
+    pinned row -- or a tree with no pin file, as in the mutation self-test's
+    synthetic roots -- keeps failing closed.
+    """
+    if (root / "tests" / (name + ".cpp")).is_file():
+        return False
+    rows = private_fixture_rows(root)
+    if not rows:
+        return False
+    return bool(name in rows
+                or any(re.fullmatch(re.escape(name) + r"_l4\w*", row) for row in rows))
+
+
 def validate_covering_row(root: Path, row: LedgerLiteral | RangeLedgerLiteral) -> None:
     matches = list(COVERING_ROW.finditer(row.covering))
     if not matches:
@@ -420,7 +450,11 @@ def check_inventory(*, root: Path = ROOT, inventory: Path = INVENTORY,
     used_exact: set[tuple[str, str]] = set()
     used_ranges: set[tuple[str, int, int]] = set()
     restored_fingerprints: dict[str, str] = {}
+    skipped_private: list[str] = []
     for name in selected:
+        if removed_private_test(root, name):
+            skipped_private.append(name)
+            continue
         base_path = "tests/" + name + ".cpp"
         if base_reader is not None:
             base = extract_assertions(base_reader(name), base_path)
@@ -556,7 +590,10 @@ def check_inventory(*, root: Path = ROOT, inventory: Path = INVENTORY,
         total_ledgered += len(relevant) + sum(row.count for row in relevant_ranges.values())
         total_extra += extra
 
-    selected_paths = {"tests/" + name + ".cpp" for name in selected}
+    for name in skipped_private:
+        print("check_twin_parity: private fixtures not present: tests/" + name + ".cpp",
+              file=sys.stderr)
+    selected_paths = {"tests/" + name + ".cpp" for name in selected if name not in skipped_private}
     unused = {key for key in appendix if key[0].rsplit(":", 1)[0] in selected_paths} - used_exact
     if unused:
         first = next(iter(sorted(unused)))
