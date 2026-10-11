@@ -295,9 +295,26 @@ class Scripted:
                 stage = 'ctest-list-selected' if '-LE' in argv else 'ctest-list-all'
                 if self.exits.get(stage) == 'unreadable':
                     return Completed(0, b'CTest list has no total\n', b'')
+                if self.exits.get(stage) == 'names-less':
+                    # A listing whose count parses but carries no row names:
+                    # the registry the pinned-rows-that-ran rule reads.
+                    count = registered - labelled if '-LE' in argv else registered
+                    return Completed(0, f'Total Tests: {count}\n'.encode(), b'')
                 count = registered - labelled if '-LE' in argv else registered
+                # Every row a run scripts as skipped/not-run/disabled is
+                # registered by its own row, exactly as a real `ctest -N`
+                # lists it; the rest of the registry is filler names.
+                names = list(self.exits.get('ctest_registered_names', ()))
+                for implied in (self.exits.get('ctest_skipped', ()),
+                                self.exits.get('ctest_not_run', ()),
+                                self.exits.get('ctest_disabled', ())):
+                    names += [name for name in implied if name not in names]
+                while len(names) < count:
+                    names.append(f'test_row_{len(names) + 1}')
+                listing = ''.join(f'Test #{number}: {name}\n'
+                                  for number, name in enumerate(names[:count], 1))
                 return Completed(int(self.exits.get(stage, 0)),
-                                 f'Total Tests: {count}\n'.encode(), b'')
+                                 (listing + f'Total Tests: {count}\n').encode(), b'')
             env_ok = True
             if ci_verify.PROFILE[self.profile].sanitizers:
                 env_ok = extra_env == SANITIZER_RUN_ENV
@@ -2974,6 +2991,86 @@ class PrivateFixtureFloors(unittest.TestCase):
         error = next(item['error'] for item in summary['failures']
                      if item['stage'] == 'ctest-floor')
         self.assertIn(str(ABSENT_FLOOR['release']), error)
+
+    def test_red_absent_a_pinned_row_that_runs_fails_the_floor(self):
+        # N4: a pinned row that RAN without its fixtures is counted by the
+        # floor like any public row, so it hides the loss of one of them.
+        # Every registered pinned row must skip in the absent world.
+        pinned = self.pinned_probe(
+            ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS['kernel'][1])
+        with self.overlay_absent():
+            code, summary, _, _ = self.run_profile(
+                'kernel', ctest_registered=FULL_FLOOR['kernel'],
+                ctest_rows=FULL_FLOOR['kernel'], ctest_skipped=pinned[:-1],
+                ctest_registered_names=pinned)
+        self.assertEqual(code, 1)
+        self.assertIn('ctest-floor', failure_stages(summary))
+        error = next(item['error'] for item in summary['failures']
+                     if item['stage'] == 'ctest-floor')
+        self.assertIn('pinned rows that ran: 1', error)
+        self.assertIn(pinned[-1], error)
+        # 331 - 27 = 304 ran, one ABOVE the 303 floor: only this rule sees it.
+        self.assertEqual(summary['ctestRows'], ABSENT_FLOOR['kernel'] + 1)
+
+    def test_green_absent_every_registered_pinned_row_skips(self):
+        # N4 GREEN: the same registry with every pinned row skipping passes.
+        pinned = self.pinned_probe(
+            ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS['kernel'][1])
+        with self.overlay_absent():
+            code, summary, _, _ = self.run_profile(
+                'kernel', ctest_registered=FULL_FLOOR['kernel'],
+                ctest_rows=FULL_FLOOR['kernel'], ctest_skipped=pinned,
+                ctest_registered_names=pinned)
+        self.assertEqual(code, 0, summary['failures'])
+
+    def test_red_absent_a_listing_without_row_names_fails_closed(self):
+        # The rule reads the run's own registry: a listing whose count parses
+        # but which carries no names cannot answer, and must fail closed.
+        pinned = self.pinned_probe(
+            ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS['kernel'][1])
+        with self.overlay_absent():
+            code, summary, _, _ = self.run_profile(
+                'kernel', ctest_registered=FULL_FLOOR['kernel'],
+                ctest_rows=FULL_FLOOR['kernel'], ctest_skipped=pinned,
+                **{'ctest-list-all': 'names-less'})
+        self.assertEqual(code, 1)
+        error = next(item['error'] for item in summary['failures']
+                     if item['stage'] == 'ctest-floor')
+        self.assertIn('carried no row names', error)
+
+    def test_green_absent_the_named_websocket_skip_does_not_trip_the_floor(self):
+        # N6: main's kernel floor counted test_native_live_websocket's 77 as a
+        # run (its number sat one below the registered count). The table's full
+        # floor counts that row as running, so the one named row keeps the
+        # allowance: 331 registered, 28 pinned + 1 websocket skipping, 302 ran.
+        pinned = self.pinned_probe(
+            ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS['kernel'][1])
+        with self.overlay_absent():
+            code, summary, _, build_dir = self.run_profile(
+                'kernel', ctest_registered=FULL_FLOOR['kernel'],
+                ctest_rows=FULL_FLOOR['kernel'],
+                ctest_skipped=pinned + [ci_verify.WEBSOCKET_SKIP_ROW])
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertEqual(summary['ctestRows'], ABSENT_FLOOR['kernel'] - 1)
+        log = (build_dir / 'ci-logs' / 'ctest-floor.log').read_text()
+        self.assertIn('allowed as on main', log)
+        self.assertIn(ci_verify.WEBSOCKET_SKIP_ROW, log)
+
+    def test_red_absent_any_other_unpinned_skip_still_fails(self):
+        # N6: the allowance is exactly ONE named row; any other unpinned skip
+        # is still a loss with no margin to absorb it.
+        pinned = self.pinned_probe(
+            ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS['kernel'][1])
+        with self.overlay_absent():
+            code, summary, _, _ = self.run_profile(
+                'kernel', ctest_registered=FULL_FLOOR['kernel'],
+                ctest_rows=FULL_FLOOR['kernel'],
+                ctest_skipped=pinned + ['test_another_unpinned_row'])
+        self.assertEqual(code, 1)
+        self.assertIn('ctest-floor', failure_stages(summary))
+        error = next(item['error'] for item in summary['failures']
+                     if item['stage'] == 'ctest-floor')
+        self.assertIn('below the floor', error)
 
     def test_red_overlay_absent_an_unpinned_skip_is_a_loss(self):
         # RED (flag unset): a row that skips without being pinned is a loss --

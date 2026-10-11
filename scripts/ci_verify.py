@@ -642,6 +642,12 @@ ADR_RULED_TEXTS_MIN = 59
 # RELEASE_MIN_TESTS in each, counted the same way.
 # An excluded run must still discover at least this many rows before -LE.
 EXCLUDED_REGISTERED_MIN = {'debug': 876, 'sanitizers': 867, 'native': 963}
+# test_native_live_websocket exits 77 wherever the linked libcurl has no
+# WebSocket support (a system libcurl); main's kernel floor counted that skip
+# as a run -- its number sat exactly one below the registered count for this
+# row -- so the ONE named row may skip without failing the floor, overlay or
+# not, and without being pinned. Every other unpinned skip stays a loss.
+WEBSOCKET_SKIP_ROW = 'test_native_live_websocket'
 # Lane SM-E1 (recorded outputs, docs/outputs.md) raises the three floors
 # above, its comments kept here so that no line cited by line number moves.
 # Counted with ctest -N on the lane's tree:
@@ -857,6 +863,7 @@ CTEST_LISTED_ROW = re.compile(r'^\s*\d+ - (.+?) \(([^()\n]+)\)(?:[ \t]+[^\s()][^
 # A skipped row's own result line: ' 4/10 Test  #3: name .....***Skipped   0.01 sec'.
 CTEST_SKIPPED_RESULT = re.compile(r'^\s*\d+/\d+ Test\s+#\d+: .*\*\*\*Skipped\b', re.MULTILINE)
 CTEST_LIST_COUNT = re.compile(r'^Total Tests:\s*(\d+)\s*$', re.MULTILINE)
+CTEST_LIST_NAME = re.compile(r'^\s*Test\s+#(?P<number>\d+):\s*(?P<name>.+?)\s*$', re.MULTILINE)
 # LeakSanitizer is unavailable in Apple's ASan runtime.  Keep the Linux CI
 # lane strict, while allowing the local macOS ASan/UBSan profile to execute
 # its actual instrumented tests instead of failing during runtime startup.
@@ -1023,6 +1030,20 @@ def ctest_list_count(output: bytes) -> int | None:
     """Read CTest's own `ctest -N` discovery count, failing closed on ambiguity."""
     counts = CTEST_LIST_COUNT.findall(output.decode('utf-8', 'replace'))
     return int(counts[0]) if len(counts) == 1 else None
+
+
+def ctest_list_names(output: bytes) -> 'frozenset[str] | None':
+    """The row names a `ctest -N` listing carries, or None when it carries none.
+
+    CTest prints one ``Test #N: name`` line per registered row above its
+    ``Total Tests:`` line. The caller uses this registry to ask which pinned
+    rows a run registered; a listing with no readable names fails closed
+    rather than answering about an empty registry.
+    """
+    names = frozenset(match.group('name')
+                      for match in CTEST_LIST_NAME.finditer(
+                          output.decode('utf-8', 'replace')))
+    return names or None
 
 
 @dataclass(frozen=True)
@@ -2193,7 +2214,10 @@ class Driver:
                               junit=ctest_supports_junit(self.cfg.runner))
         ran = self.invoke('ctest', ctest, extra_env=self.sanitizer_env(),
                           timeout=ctest_timeout(self.cfg))
-        self.enforce_test_floor(ran, registered=registered, selected=selected)
+        registered_names = (ctest_list_names(all_rows.stdout + all_rows.stderr)
+                            if all_rows.returncode == 0 else None)
+        self.enforce_test_floor(ran, registered=registered, selected=selected,
+                                registered_names=registered_names)
         if self.cfg.profile.name in LIVE_ONLY_PROFILES:
             try:
                 rows = ctest_rows(ran.stdout + ran.stderr)
@@ -2233,7 +2257,8 @@ class Driver:
         return self.finish(status, 0 if status == 'passed' else 1)
 
     def enforce_test_floor(self, ran: Completed, *, registered: int | None = None,
-                           selected: int | None = None) -> None:
+                           selected: int | None = None,
+                           registered_names: 'frozenset[str] | None' = None) -> None:
         """Refuse a CTest run in which fewer rows ran than the profile's floor.
 
         The count is the rows whose test ran to a verdict, pass or fail. A row
@@ -2332,12 +2357,48 @@ class Driver:
         effective = floor
         note = ''
         entry = PRIVATE_FIXTURE_PROFILE_FLOORS.get(self.cfg.profile.name)
-        if entry is not None and not private_fixtures_overlay():
+        absent = entry is not None and not private_fixtures_overlay()
+        if absent:
             full, pinned = entry
             pinned = min(pinned, PRIVATE_FIXTURE_ROW_COUNT)
             if floor == full - pinned:
                 note = (f'; lowered by {pinned} pinned private-fixture '
                         f'placeholder rows (full floor {full})')
+            # N4: without the overlay every pinned row this run registers must
+            # have SKIPPED. The floor counts every row that ran, pinned or not,
+            # so a pinned row that ran without its fixtures -- or one that was
+            # disabled, or never started -- would hide the loss of a public
+            # row behind its own count. (A row registered only in one world is
+            # the two-world registration check's finding, not the floor's.)
+            if rows is not None:
+                pinned_names = self.pinned_private_fixture_rows('ctest-floor')
+                if pinned_names is not None:
+                    if registered_names is None:
+                        self.fail_stage(
+                            'ctest-floor',
+                            'the ctest -N listing carried no row names, so the pinned '
+                            'rows that ran cannot be checked in the fixtures-absent world')
+                    else:
+                        did_not_skip = [name for name in sorted(registered_names & pinned_names)
+                                        if name not in set(rows.skipped)]
+                        if did_not_skip:
+                            self.fail_stage(
+                                'ctest-floor',
+                                f'pinned rows that ran: {len(did_not_skip)} '
+                                f'({", ".join(did_not_skip)}); every registered pinned '
+                                f'private-fixture row must skip without the overlay')
+        # N6: test_native_live_websocket's 77 is not a lost row in the ABSENT
+        # world, where main's kernel floor counted that skip as a run (its
+        # number sat one below the registered population for this row). The
+        # one named row keeps that allowance there, without being pinned;
+        # with the overlay present every row must run, as before, nothing
+        # else changes.
+        tolerated = ([WEBSOCKET_SKIP_ROW]
+                     if rows is not None and WEBSOCKET_SKIP_ROW in rows.skipped
+                     and not private_fixtures_overlay() else [])
+        counted = rows.ran + len(tolerated) if rows is not None else 0
+        clause = (f' ({WEBSOCKET_SKIP_ROW} skipped: exit 77 without WebSocket '
+                  f'support, counted as run, allowed as on main)' if tolerated else '')
         if unreadable:
             self.fail_stage(
                 'ctest-floor',
@@ -2347,16 +2408,17 @@ class Driver:
             self.fail_stage(
                 'ctest-floor',
                 f'ctest printed no row count; the floor of {floor} rows cannot be verified')
-        elif rows.ran < effective:
+        elif counted < effective:
             self.fail_stage(
                 'ctest-floor',
                 f'ctest ran {rows.ran} rows, below the floor of {effective} for the '
-                f'{self.cfg.profile.name} profile{rows.not_counted()}{note}; a registered row left '
-                'the suite or stopped running, or lower the floor with --min-tests on purpose')
+                f'{self.cfg.profile.name} profile{rows.not_counted()}{note}{clause}; a registered '
+                'row left the suite or stopped running, or lower the floor with --min-tests '
+                'on purpose')
         else:
             self.pass_stage('ctest-floor',
                             f'ctest ran {rows.ran} rows (floor {effective})'
-                            f'{rows.not_counted()}{note}')
+                            f'{rows.not_counted()}{note}{clause}')
 
     def pinned_private_fixture_rows(self, stage: str) -> 'frozenset[str] | None':
         """The pinned row names, or None after failing `stage` closed.
