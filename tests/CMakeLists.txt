@@ -2309,8 +2309,15 @@ file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/test_native_market_vertical.cpp"
      PINEFORGE_NATIVE_MARKET_VERTICAL_SHA256)
 
 if(PINEFORGE_BUILD_SOURCE_LAYER)
+    # PR 1b (private fixtures): each case's frozen generated.cpp is removed by
+    # the second private-fixture removal. A case whose file is absent
+    # registers no target (a missing add_executable source fails configure),
+    # and its two rows register as the pinned SKIP placeholders instead
+    # (tests/private_fixture_rows.txt); with every case present the loop is
+    # the registration it always was.
     foreach(security_case htf5_close htf15_sma_pooc htf60_close daily_close heikinashi5 htf60_ema_gaps period_previous
             dual_stop pooc_dual_stop pooc_limit_reversal pooc_slipped_short slipped_short all_in_reversal whole_all_in_reversal pooc_short_exit)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/stream_security/${security_case}/generated.cpp")
         add_executable(test_stream_security_${security_case}
             test_stream_security_equivalence.cpp
             fixtures/stream_security/${security_case}/generated.cpp)
@@ -2333,11 +2340,40 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
             add_test(NAME test_stream_security_${security_case}_early
                 COMMAND test_stream_security_${security_case} 1 30)
         endif()
+    else()
+        add_test(NAME test_stream_security_${security_case} COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/stream_security/${security_case}/generated.cpp")
+        set_tests_properties(test_stream_security_${security_case} PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+        add_test(NAME test_stream_security_${security_case}_early COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/stream_security/${security_case}/generated.cpp")
+        set_tests_properties(test_stream_security_${security_case}_early PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+    endif()
     endforeach()
-    add_test(NAME test_stream_security_control_tf5 COMMAND test_stream_security_htf5_close 5 500)
-    add_test(NAME test_stream_security_control_tf15 COMMAND test_stream_security_htf60_close 15 500)
-    add_test(NAME test_stream_security_pooc_dual_stop_tf5 COMMAND test_stream_security_pooc_dual_stop 5 500)
-    add_test(NAME test_stream_security_daily_close_late COMMAND test_stream_security_daily_close 1 2000)
+    # The four control rows reuse the per-case targets, so each registers only
+    # while its case's generated.cpp is in the tree; absent, it is the pinned
+    # SKIP placeholder too.
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/stream_security/htf5_close/generated.cpp")
+        add_test(NAME test_stream_security_control_tf5 COMMAND test_stream_security_htf5_close 5 500)
+    else()
+        add_test(NAME test_stream_security_control_tf5 COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/stream_security/htf5_close/generated.cpp")
+        set_tests_properties(test_stream_security_control_tf5 PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+    endif()
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/stream_security/htf60_close/generated.cpp")
+        add_test(NAME test_stream_security_control_tf15 COMMAND test_stream_security_htf60_close 15 500)
+    else()
+        add_test(NAME test_stream_security_control_tf15 COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/stream_security/htf60_close/generated.cpp")
+        set_tests_properties(test_stream_security_control_tf15 PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+    endif()
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/stream_security/pooc_dual_stop/generated.cpp")
+        add_test(NAME test_stream_security_pooc_dual_stop_tf5 COMMAND test_stream_security_pooc_dual_stop 5 500)
+    else()
+        add_test(NAME test_stream_security_pooc_dual_stop_tf5 COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/stream_security/pooc_dual_stop/generated.cpp")
+        set_tests_properties(test_stream_security_pooc_dual_stop_tf5 PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+    endif()
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/stream_security/daily_close/generated.cpp")
+        add_test(NAME test_stream_security_daily_close_late COMMAND test_stream_security_daily_close 1 2000)
+    else()
+        add_test(NAME test_stream_security_daily_close_late COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/stream_security/daily_close/generated.cpp")
+        set_tests_properties(test_stream_security_daily_close_late PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+    endif()
 
     # PR 1b (private fixtures): the targets below compile the checked-settings
     # generated module and the strategy-capabilities fixture source, both of
