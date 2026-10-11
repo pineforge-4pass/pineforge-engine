@@ -376,22 +376,39 @@ def private_fixture_rows(root: Path) -> frozenset[str]:
                      if line.strip() and not line.startswith("//"))
 
 
-def removed_private_test(root: Path, name: str) -> bool:
-    """True when the private-fixture PR removed this family's base source.
+def removed_private_test(root: Path, name: str) -> str:
+    """The removed, pinned source this family reads; '' when nothing is removed.
 
-    tests/<name>.cpp is gone AND its row (or a _l4* switched-route twin row)
-    is pinned: the pair is named in the skip report and enforced exactly as
-    before whenever the file is present. A base source removed without a
-    pinned row -- or a tree with no pin file, as in the mutation self-test's
-    synthetic roots -- keeps failing closed.
+    Two shapes reach here, both pinned rows of tests/private_fixture_rows.txt:
+
+    - tests/<name>.cpp (the base source) is gone and the row's own name or a
+      <name>_l4* switched-route twin row is pinned; and
+    - tests/<name>.cpp survives but its only twin tests/<name>_l4*.cpp is
+      gone -- the private-fixture removals take whole family directories, so
+      a surviving base source can sit beside a removed twin -- and that twin's
+      row is pinned. The twin is the family's switched-route evidence; without
+      it the pair cannot be enforced, so the family is named in the skip
+      report exactly as a removed base source is.
+
+    The pair is enforced exactly as before whenever the file is present. A
+    removed file without a pinned row -- or a tree with no pin file, as in the
+    mutation self-test's synthetic roots -- keeps failing closed.
     """
-    if (root / "tests" / (name + ".cpp")).is_file():
-        return False
     rows = private_fixture_rows(root)
     if not rows:
-        return False
-    return bool(name in rows
-                or any(re.fullmatch(re.escape(name) + r"_l4\w*", row) for row in rows))
+        return ""
+    base = name + ".cpp"
+    if (root / "tests" / base).is_file():
+        if sorted((root / "tests").glob(name + "_l4*.cpp")):
+            return ""
+        twin_rows = sorted(row for row in rows
+                           if re.fullmatch(re.escape(name) + r"_l4\w*", row))
+        return "tests/" + twin_rows[0] + ".cpp" if twin_rows else ""
+    if name in rows:
+        return "tests/" + base
+    twin_rows = sorted(row for row in rows
+                       if re.fullmatch(re.escape(name) + r"_l4\w*", row))
+    return "tests/" + twin_rows[0] + ".cpp" if twin_rows else ""
 
 
 def validate_covering_row(root: Path, row: LedgerLiteral | RangeLedgerLiteral) -> None:
@@ -450,10 +467,11 @@ def check_inventory(*, root: Path = ROOT, inventory: Path = INVENTORY,
     used_exact: set[tuple[str, str]] = set()
     used_ranges: set[tuple[str, int, int]] = set()
     restored_fingerprints: dict[str, str] = {}
-    skipped_private: list[str] = []
+    skipped_private: list[tuple[str, str]] = []
     for name in selected:
-        if removed_private_test(root, name):
-            skipped_private.append(name)
+        removed = removed_private_test(root, name)
+        if removed:
+            skipped_private.append((name, removed))
             continue
         base_path = "tests/" + name + ".cpp"
         if base_reader is not None:
@@ -590,10 +608,12 @@ def check_inventory(*, root: Path = ROOT, inventory: Path = INVENTORY,
         total_ledgered += len(relevant) + sum(row.count for row in relevant_ranges.values())
         total_extra += extra
 
-    for name in skipped_private:
-        print("check_twin_parity: private fixtures not present: tests/" + name + ".cpp",
-              file=sys.stderr)
-    selected_paths = {"tests/" + name + ".cpp" for name in selected if name not in skipped_private}
+    for name, removed in skipped_private:
+        print(f"check_twin_parity: private fixtures not present: {removed} "
+              f"(family {name})", file=sys.stderr)
+    skipped_names = {name for name, _ in skipped_private}
+    selected_paths = {"tests/" + name + ".cpp"
+                      for name in selected if name not in skipped_names}
     unused = {key for key in appendix if key[0].rsplit(":", 1)[0] in selected_paths} - used_exact
     if unused:
         first = next(iter(sorted(unused)))

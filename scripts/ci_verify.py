@@ -716,9 +716,9 @@ LIVE_SANITIZERS_MIN_TESTS = 12
 #           every private_fixtures row must RUN: with the overlay present a
 #           skip means the overlay did not reach the tree, so ctest-floor
 #           fails on it (a silently skipped row is a lost row here).
-#   unset   the overlay is absent, so its 324 placeholder rows SKIP in public
+#   unset   the overlay is absent, so its 327 placeholder rows SKIP in public
 #           CI. The two RUN floors are lowered by PRIVATE_FIXTURE_ROW_COUNT, so
-#           a green public run is not read as 324 lost rows; the floors are
+#           a green public run is not read as 327 lost rows; the floors are
 #           never lowered further than that.
 #
 # EXCLUDED_REGISTERED_MIN does not move in either mode: those counts come from
@@ -726,12 +726,12 @@ LIVE_SANITIZERS_MIN_TESTS = 12
 # registered population is the same with and without the overlay.
 #
 # The count is pinned from tests/private_fixture_rows.txt (the row list P1-B
-# commits alongside the placeholders): 324 rows, that file's sha256
+# commits alongside the placeholders): 327 rows, that file's sha256
 # 9a2727d455c1b470d515665428e2c6e090a22ac07f87255d1ca9c20d5528bd62, the same
 # manifest (l44/pr1-manifest.tsv) this campaign pins. The two floor constants
 # above stay the FULL count so the doc anchors at ci_verify.py:321 and
-# ci_verify.py:595 do not move; the lowering happens where the floor is read. It is 324 because 324 ctest rows register as private-fixture skip placeholders on the fixture-less tree (the rows labelled private_fixtures), so the two RUN floors are lowered by exactly those rows. test_callback_lifecycle_tapes joined at 123: its tapes.txt is a distributed list the private-fixture PR leaves in the tree, but 60 of the cases it names are removed, so tests/CMakeLists.txt registers the row as a placeholder while the listed cases are incomplete. One of the 324, test_run_json_outputs, is registered only by the release-shaped profiles (the source layer gates its block), so on the kernel profile the lowering is one row deeper than the rows that profile actually skips. Six more joined at 129 (the fifth proof-box round): test_native_oracle_day_key_l2 and test_native_oracle_reversal_same_bar_tx_l2 (their twin source #includes oracle/test_oracle_*.cpp), test_adapter_in_place_reads, test_adapter_runtime_ambient and test_adapter_settlement_carry (tests/pine_d2c_scenarios_fixture.hpp), and test_coof_forced_waypoint_tapes (tests/fixtures/coof_forced_waypoint/cases.inc) -- each target now exists only while its removed include does, so the compile that killed the fifth configure-through run cannot recur. The PR 1b batch moved the remaining 6,242 fixture/probe files (l50/pr1b-inventory.tsv) and took the count to 319: 134 rows in tests/CMakeLists.txt (each a row whose source .cpp, quoted #include or runtime fixture the removal takes, or one of five fixture-fed targets) and 53 in runner/CMakeLists.txt (the strategy-capabilities and confirmed-capabilities e2e rows), and 3 rows whose fixture data the sources read at run time through their fixture-dir defines (test_color_tapes, test_session_transition_clock_tapes, test_source_buying_power_tapes); PR 1's fix round then pinned five rows of its own that PR 1b's 319 does not carry -- test_carried_trail_open_tapes, pinned whole, and the *_private halves of test_coof_close_slippage_tapes, test_cross_mechanism_tapes, test_source_buying_power_tapes and test_margin_rules_forward_replay (each parent row keeps replaying the distributed part, the *_private row beside it runs the same binary with --private-only) -- and the union of the two pin sets, sorted and de-duplicated, is 324; the pinned file header still names the PR 1 manifest sha.
-PRIVATE_FIXTURE_ROW_COUNT = 324
+# ci_verify.py:595 do not move; the lowering happens where the floor is read. It is 327 because 327 ctest rows register as private-fixture skip placeholders on the fixture-less tree (the rows labelled private_fixtures), so the two RUN floors are lowered by exactly those rows. The class-fix round added the three remaining split parents (test_coof_close_slippage_tapes, test_cross_mechanism_tapes, test_margin_rules_forward_replay): each reads its fixture data at run time, the private-fixture removals take the whole directory it reads (the removed file beside distributed ones in PR 1, the remaining files in PR 1b), and the row had stayed unconditionally registered -- the fixture-less tree would have run it against absent data. Each now pins whole beside its *_private half on the same EXISTS guard (tests/CMakeLists.txt), exactly as test_source_buying_power_tapes already did at 324; a two-world registration sweep over tests/CMakeLists.txt and runner/CMakeLists.txt closes at `duplicate names: 0` in both worlds. test_callback_lifecycle_tapes joined at 123: its tapes.txt is a distributed list the private-fixture PR leaves in the tree, but 60 of the cases it names are removed, so tests/CMakeLists.txt registers the row as a placeholder while the listed cases are incomplete. One of the 324, test_run_json_outputs, is registered only by the release-shaped profiles (the source layer gates its block), so on the kernel profile the lowering is one row deeper than the rows that profile actually skips. Six more joined at 129 (the fifth proof-box round): test_native_oracle_day_key_l2 and test_native_oracle_reversal_same_bar_tx_l2 (their twin source #includes oracle/test_oracle_*.cpp), test_adapter_in_place_reads, test_adapter_runtime_ambient and test_adapter_settlement_carry (tests/pine_d2c_scenarios_fixture.hpp), and test_coof_forced_waypoint_tapes (tests/fixtures/coof_forced_waypoint/cases.inc) -- each target now exists only while its removed include does, so the compile that killed the fifth configure-through run cannot recur. The PR 1b batch moved the remaining 6,242 fixture/probe files (l50/pr1b-inventory.tsv) and took the count to 319: 134 rows in tests/CMakeLists.txt (each a row whose source .cpp, quoted #include or runtime fixture the removal takes, or one of five fixture-fed targets) and 53 in runner/CMakeLists.txt (the strategy-capabilities and confirmed-capabilities e2e rows), and 3 rows whose fixture data the sources read at run time through their fixture-dir defines (test_color_tapes, test_session_transition_clock_tapes, test_source_buying_power_tapes); PR 1's fix round then pinned five rows of its own that PR 1b's 319 does not carry -- test_carried_trail_open_tapes, pinned whole, and the *_private halves of test_coof_close_slippage_tapes, test_cross_mechanism_tapes, test_source_buying_power_tapes and test_margin_rules_forward_replay (each parent row keeps replaying the distributed part, the *_private row beside it runs the same binary with --private-only) -- and the union of the two pin sets, sorted and de-duplicated, is 324; the pinned file header still names the PR 1 manifest sha.
+PRIVATE_FIXTURE_ROW_COUNT = 327
 PRIVATE_FIXTURE_LABEL = 'private_fixtures'
 PRIVATE_FIXTURE_ROWS_FILE = 'tests/private_fixture_rows.txt'
 # The literal every private-fixtures placeholder prints before CTest marks it
@@ -1590,7 +1590,7 @@ class Driver:
 
     def invoke(self, name: str, argv: list[str], *, extra_env: dict[str, str] | None = None,
                timeout: int = 600, combine_stderr: bool = True,
-               stream_output: bool | None = None) -> Completed:
+               stream_output: bool | None = None, accept_skip: bool = False) -> Completed:
         if self.cfg.profile.thread_sanitizers and name in {'ctest', 'native-help', 'require-websocket'}:
             argv = ['setarch', os.uname().machine, '-R', *argv]
         if self.cfg.ccache_path:
@@ -1618,12 +1618,23 @@ class Driver:
             result = Completed(1, b'', str(error).encode())
         body = result.stdout + (b'' if not result.stderr else b'\n' + result.stderr)
         log.write_bytes(header.encode() + body)
+        # A source guard that reads a private fixture input may exit 77 with
+        # the pinned literal naming the missing path (the absent-overlay
+        # contract).  The literal is required: a bare 77 without it stays a
+        # failure, so the skip can never become a silent pass.
+        skipped = (accept_skip and result.returncode == 77
+                   and PRIVATE_FIXTURE_SKIP_LITERAL.encode() in body)
         stage.update({
             'exitCode': result.returncode,
-            'status': 'passed' if result.returncode == 0 else 'failed',
+            'status': 'skipped' if skipped else ('passed' if result.returncode == 0
+                                                 else 'failed'),
             'durationSeconds': round(time.time() - started, 3),
         })
-        if result.returncode != 0:
+        if skipped:
+            reason = next((line for line in body.decode('utf-8', 'replace').splitlines()
+                           if PRIVATE_FIXTURE_SKIP_LITERAL in line), '')
+            print(f'ci_verify: {name}: skipped (exit 77): {reason}', flush=True)
+        if result.returncode != 0 and not skipped:
             self.failures.append({
                 'stage': name,
                 'exitCode': result.returncode,
@@ -1905,7 +1916,8 @@ class Driver:
             return self.finish('failed', 1)
         guard_failed = False
         for name, argv in source_guard_commands(self.cfg.source):
-            if self.invoke(name, argv, timeout=120).returncode != 0:
+            result = self.invoke(name, argv, timeout=120, accept_skip=True)
+            if result.returncode != 0 and self.stages[-1]['status'] != 'skipped':
                 guard_failed = True
         if self.cfg.profile.name in TWIN_PARITY_PROFILES:
             if self.invoke('source-guard-twin-parity',

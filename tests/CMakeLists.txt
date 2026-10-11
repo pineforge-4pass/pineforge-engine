@@ -4952,16 +4952,18 @@ endif()
 # removed fixture. All five are named by _pf_private_fixture_rows above, so
 # the TEST_SOURCES loop does not register them; each is registered here.
 #
-# test_carried_trail_open_tapes reads only removed files
-# (tests/fixtures/carried_trail_open/bars.csv and tv_trades.csv), so the whole
-# row is pinned: the real test on the PRESENT branch, the SKIP placeholder
-# otherwise.
+# All five read their fixture data at run time, and the private-fixture
+# removals take the whole fixture directories the rows read (the removed file
+# beside distributed ones in PR 1, the remaining files in PR 1b), so on the
+# fixture-less tree none of the five can run: every row is pinned whole, the
+# real test on the PRESENT branch and the pinned SKIP placeholder otherwise
+# (the literal names a removed file the row reads).
 #
-# The other four read a removed file beside distributed ones, so each SPLITS:
-# the default run replays the distributed part only and stays on the row's own
-# name on every tree, and the removed part is a pinned *_private row running
-# the same binary with --private-only (the literal names a removed file the
-# row reads).
+# The four rows whose binary carries a distributed half also SPLIT: beside the
+# row's own name (the default run, the distributed part) sits a <row>_private
+# row running the same binary with --private-only (the removed half). Both
+# names register on the SAME EXISTS guard so the *_private command never names
+# a target the tree did not create.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/carried_trail_open/bars.csv")
     pineforge_add_unit_test(test_carried_trail_open_tapes)
 else()
@@ -4969,34 +4971,44 @@ else()
     set_tests_properties(test_carried_trail_open_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
-pineforge_add_unit_test(test_coof_close_slippage_tapes)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_close_slippage/bars.csv")
+    pineforge_add_unit_test(test_coof_close_slippage_tapes)
     add_test(NAME test_coof_close_slippage_tapes_private COMMAND test_coof_close_slippage_tapes --private-only)
 else()
+    add_test(NAME test_coof_close_slippage_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/coof_close_slippage/partial/bars.csv")
+    set_tests_properties(test_coof_close_slippage_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
     add_test(NAME test_coof_close_slippage_tapes_private COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/coof_close_slippage/bars.csv")
     set_tests_properties(test_coof_close_slippage_tapes_private PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
-pineforge_add_unit_test(test_cross_mechanism_tapes)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cross_mechanism/batch_carried_trail/bars.csv")
+    pineforge_add_unit_test(test_cross_mechanism_tapes)
     add_test(NAME test_cross_mechanism_tapes_private COMMAND test_cross_mechanism_tapes --private-only)
 else()
+    add_test(NAME test_cross_mechanism_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/cross_mechanism/bracket_one/tv_trades.csv")
+    set_tests_properties(test_cross_mechanism_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
     add_test(NAME test_cross_mechanism_tapes_private COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/cross_mechanism/batch_carried_trail/bars.csv")
     set_tests_properties(test_cross_mechanism_tapes_private PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
-pineforge_add_unit_test(test_source_buying_power_tapes)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/source_buying_power/flat-under/bars.csv")
+# test_source_buying_power_tapes reads every variant through its fixture-dir
+# define at run time, so its whole row pins on the fixture directory marker.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/source_buying_power/README.md")
+    pineforge_add_unit_test(test_source_buying_power_tapes)
     add_test(NAME test_source_buying_power_tapes_private COMMAND test_source_buying_power_tapes --private-only)
 else()
+    add_test(NAME test_source_buying_power_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/source_buying_power/README.md")
+    set_tests_properties(test_source_buying_power_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
     add_test(NAME test_source_buying_power_tapes_private COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/source_buying_power/flat-under/bars.csv")
     set_tests_properties(test_source_buying_power_tapes_private PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
-pineforge_add_unit_test(test_margin_rules_forward_replay)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_ledger_rules/c1-r1-exp-l2s-reject/r1/tv_trades.csv")
+    pineforge_add_unit_test(test_margin_rules_forward_replay)
     add_test(NAME test_margin_rules_forward_replay_private COMMAND test_margin_rules_forward_replay --private-only)
 else()
+    add_test(NAME test_margin_rules_forward_replay COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/margin_call_rules/sizing/size-btc-p3u/tv_trades.csv")
+    set_tests_properties(test_margin_rules_forward_replay PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
     add_test(NAME test_margin_rules_forward_replay_private COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/margin_ledger_rules/c1-r1-exp-l2s-reject/r1/tv_trades.csv")
     set_tests_properties(test_margin_rules_forward_replay_private PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
@@ -5789,12 +5801,6 @@ else()
     set_tests_properties(test_short_seed_report_swap PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/source_buying_power/README.md")
-    pineforge_add_unit_test(test_source_buying_power_tapes)
-else()
-    add_test(NAME test_source_buying_power_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/source_buying_power/README.md")
-    set_tests_properties(test_source_buying_power_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_small_money_margin_residual_l4a.cpp")
     pineforge_add_unit_test(test_small_money_margin_residual_l4a)
 else()

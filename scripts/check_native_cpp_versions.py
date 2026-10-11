@@ -9,6 +9,15 @@ from check_aggregate_cpp_versions import body, clean, standalone_scope
 from prepare_settlement_cpp_abi_base import PROVIDERS, authenticate_headers, extract_tar
 
 ROOT = Path(__file__).resolve().parents[1]
+# The private-fixture PRs move tests/fixtures/native_cpp_abi/ out of the
+# public tree, where authenticate_historical_host_manifests() reads one
+# headers.tar per host closure.  Absent, the guard skips with the project's
+# pinned literal -- the one the private-fixture ctest rows print and
+# tests/CMakeLists.txt matches with SKIP_REGULAR_EXPRESSION; ci_verify and
+# ci_preflight read a source guard's 77 plus that literal as a named skip --
+# rather than failing on read_bytes(); present, every check below runs as
+# before.  The gate sits ahead of load(), so no work happens on the skip.
+PRIVATE_FIXTURE_SKIP_LITERAL = "SKIP private fixtures not present: "
 FILES = (
     "include/pineforge/native_order.hpp",
     "src/native_order.cpp",
@@ -256,6 +265,31 @@ def self_test_tempdir() -> None:
             extract_tar, authenticate_headers = original_extract, original_authenticate
         if 'fixture' not in manifests:
             raise ValueError('historical provider fixture did not execute')
+
+
+def historical_provider_inputs(root=ROOT, providers=PROVIDERS) -> list:
+    """The fixture files authenticate_historical_host_manifests() reads.
+
+    The same provider filter the manifest walk applies: the same-epoch
+    controls (v15/v16/v18) and any non host-* provider are never read.
+    """
+    inputs = []
+    for provider in providers.values():
+        if provider['engine_epoch'] in ('engine_script_run_v15', 'engine_script_run_v16',
+                                        'engine_script_run_v18'):
+            continue
+        manifest_path = provider['manifest']
+        if not manifest_path.parent.name.startswith('host-'):
+            continue
+        manifest_path = root / manifest_path.relative_to(ROOT)
+        inputs.append(manifest_path)
+        inputs.append(manifest_path.parent / provider['headers_name'])
+    return inputs
+
+
+def missing_private_fixtures(root=ROOT, providers=PROVIDERS) -> list:
+    """The historical-provider fixture inputs this checker reads that the tree lacks."""
+    return [path for path in historical_provider_inputs(root, providers) if not path.exists()]
 
 
 def authenticate_historical_host_manifests(root=ROOT, providers=PROVIDERS):
@@ -1131,6 +1165,10 @@ if __name__ == "__main__":
         raise SystemExit(0)
     if len(sys.argv) != 1:
         raise SystemExit('usage: check_native_cpp_versions.py [--self-test-tempdir]')
+    absent = missing_private_fixtures()
+    if absent:
+        print(PRIVATE_FIXTURE_SKIP_LITERAL + str(absent[0].relative_to(ROOT)))
+        raise SystemExit(77)
     check()
     print("native_order identity v1 / values v7, native_calendar_v2, native_run_spec_v3, "
           "native_driver_v5, native_fx_curve_v1 and host engine_script_run_v19 ownership verified")
