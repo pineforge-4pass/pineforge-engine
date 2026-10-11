@@ -137,6 +137,21 @@ class OracleFixtureChecks(unittest.TestCase):
                                                  "// include dropped"))
         self.assert_fails(root, "check_oracle_twin_census.py", "must include exactly")
 
+    def test_a_static_table_only_key_fails_the_census(self) -> None:
+        # An EXPECTED_CHECKS-only name, whose oracle the removals took, is
+        # invisible to the inventory arms (they read the files the tree has);
+        # main's pre-removal set(actual) - set(TWINS) caught it, and the
+        # static-table arm is what keeps that check alive.
+        root = self.fixture()
+        censusCopy = root / "scripts" / "check_oracle_twin_census.py"
+        text = censusCopy.read_text()
+        anchor = "EXPECTED_CHECKS = {\n"
+        self.assertIn(anchor, text)
+        censusCopy.write_text(
+            text.replace(anchor, anchor + '    "test_oracle_ghost": 1,\n', 1))
+        self.assert_fails(root, "check_oracle_twin_census.py",
+                          "test_oracle_ghost is in EXPECTED_CHECKS alone")
+
     def test_an_oracle_whose_check_count_moved_fails_the_census(self) -> None:
         root = self.fixture()
         target = root / "tests" / "oracle" / "test_oracle_coof.cpp"

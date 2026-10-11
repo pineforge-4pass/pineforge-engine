@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import re
 import sys
 
@@ -72,8 +73,22 @@ def check_count(path: Path) -> int:
 # are present (an overlay carrying the private tree is verified too). Any other
 # missing oracle, any unpinned oracle, a changed CHECK count or a twin that no
 # longer includes exactly its oracle still fails.
-PRIVATE_FIXTURE_ORACLES = ("test_oracle_day_key", "test_oracle_reversal_same_bar_tx",
-                           "test_oracle_stop_snapshot")
+def _private_fixture_oracles() -> tuple:
+    """The pin's own privateFixtureAbsent list, as row names (no .cpp).
+
+    The pin (tests/oracle.sha256) is the one source for which oracles the
+    removals take; a hand-written second copy of it is exactly the class that
+    drifts, so this reads the pin and dies loudly when it cannot."""
+    pin = ROOT / "tests" / "oracle.sha256"
+    try:
+        names = json.loads(pin.read_text())["privateFixtureAbsent"]
+    except (OSError, ValueError, KeyError) as error:
+        raise SystemExit(f"oracle twin census: {pin}: privateFixtureAbsent "
+                         f"unreadable ({error})")
+    return tuple(name[:-4] if name.endswith(".cpp") else name for name in names)
+
+
+PRIVATE_FIXTURE_ORACLES = _private_fixture_oracles()
 
 
 def main() -> int:
@@ -87,6 +102,15 @@ def main() -> int:
     if undeclared:
         raise SystemExit("oracle twin census: oracle/twin inventory drift (missing oracle: "
                          + undeclared[0] + ")")
+    # The two static tables are one surface: a name in either alone is drift.
+    # The inventory arms above read the files the tree HAS, so a name only
+    # EXPECTED_CHECKS knows is invisible for an oracle the removals took; this
+    # arm is what main's pre-removal `set(actual) - set(TWINS)` caught.
+    static_drift = sorted(set(EXPECTED_CHECKS) ^ set(TWINS))
+    if static_drift:
+        where = ("EXPECTED_CHECKS" if static_drift[0] in EXPECTED_CHECKS else "TWINS")
+        raise SystemExit("oracle twin census: the static tables disagree ("
+                         + static_drift[0] + " is in " + where + " alone)")
     total = 0
     for name, oracle in sorted(actual.items()):
         count = check_count(oracle)
