@@ -146,7 +146,15 @@ carries the same gate with `RELEASE_MIN_TESTS`, so a row deleted from the
 default build fails too; `debug` and `sanitizers` register a subset of the
 release rows. Raise the constant when a row lands, and pass `--min-tests N` to
 override it for one run (the flag gates any profile; `kernel` and `release`
-have a default).
+have a default). The two run floors are overlay-aware, keyed on
+`PINEFORGE_PRIVATE_FIXTURES`: with the variable set and non-empty (the
+private-fixture overlay is present in the tree) the full constants apply and
+every ctest row carrying the `private_fixtures` label must run, so a skip
+fails the run -- a skip there means the overlay did not reach the tree; with
+the variable unset (public CI, where the overlay's rows register as
+placeholders and skip) each floor is lowered by the pinned private-fixture row
+count recorded in `tests/private_fixture_rows.txt`. `EXCLUDED_REGISTERED_MIN`
+does not move: `ctest -N` lists a placeholder's row whether it runs or skips.
 
 For PR runs with `--exclude-label slow`, the verifier asks CTest to enumerate
 the registered rows both with `ctest -N` and with `ctest -N -LE slow`. It then
