@@ -272,8 +272,7 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
             htf60_ema_gaps period_previous pooc_dual_stop pooc_limit_reversal pooc_slipped_short
             pooc_short_exit constant_daily helper5 heikinashi_alias5 varip pooc_market pooc_close pooc_close_entry
             pooc_close_short pooc_close_short_entry)
-        file(GLOB _pf_confirmed_refusal_sources CONFIGURE_DEPENDS
-            "${PROJECT_SOURCE_DIR}/tests/fixtures/confirmed_capabilities/generated/refused_*.cpp")
+        include("${PROJECT_SOURCE_DIR}/tests/confirmed_capabilities_refusals.cmake")
         set(_pf_confirmed_refusals)
         foreach(refusal_source IN LISTS _pf_confirmed_refusal_sources)
             get_filename_component(refusal_case "${refusal_source}" NAME_WE)
