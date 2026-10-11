@@ -88,7 +88,7 @@ structs and enumerations, and the `PF_*` constants.
   sizes; `src/native_c_host.cpp` pins the published lengths of the native
   structs that grew by tails;
   `test_native_c_api_frozen_header` compiles the frozen `PF_NATIVE_API_VERSION`
-  1 header closure (`tests/fixtures/native_c_api/v1`) and runs it against the
+  1 header closure (the private fixture set `native_c_api/v1`) and runs it against the
   current runtime; `test_c_abi` and `test_native_c_api_c99` check the equity
   offsets from C. These pins are against the internal twins and the frozen v1
   closure; no checker compares `pf_report_t` or `pf_trade_t` with a 1.0.0
@@ -155,7 +155,7 @@ and `<pineforge/native_module.hpp>` (@ref native_engine).
   itself: no checker yet compiles a host written against 1.0.0's headers
   against a later release, so across releases review holds the promise, until
   a frozen 1.0.0 native header closure joins these rows the way
-  `tests/fixtures/native_c_api/v1` does for the C API.
+  the private fixture set `native_c_api/v1` does for the C API.
 - **It is not binary-compatible across releases.** Rebuild every C++ object
   that includes an engine header — a native host, a generated strategy —
   against the headers and the archive of the release it links. The C++

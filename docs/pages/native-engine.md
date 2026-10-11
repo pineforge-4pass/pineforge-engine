@@ -295,7 +295,7 @@ script bar:
 `is_none()`, `lower()` and `synthesized_path()` are the accessors. The C
 spelling is the `PF_NATIVE_SPEC_EXT_INTRABAR` block of
 `pf_native_run_spec_ext_v1`, and `PF_NATIVE_INTRABAR_LOWER_TF` is the only
-value that retains a feed. Pinned by `tests/test_native_auto_path.cpp` and
+value that retains a feed. Pinned by the private test `test_native_auto_path` and
 the sub-bar sections of `tests/test_native_calc_timing.cpp`.
 
 ### Validating a spec
@@ -419,7 +419,7 @@ never sets it, so Pine-compatible runs are unchanged.
   bar's calculation is first tested at the next point (its own birth print is
   excluded), so a `close_execution = AfterCalculation` leg reissued at the
   close and reached by that close's print fills at the next open
-  (tests/test_native_price_grid.cpp, sections L8b-1 to L8b-4).
+  (the private test `test_native_price_grid`, sections L8b-1 to L8b-4).
 - The Pine adapter's grid re-lowering is waived: measured-infeasible. The
   trial has the
   adapter submit raw levels (`source_trigger_threshold` answering the level
@@ -1002,7 +1002,7 @@ anchored: `exit()` starts that leg's running best at the activation
 (`Trail::best_seed`), the anchored child cannot carry the seed, so
 `anchorable_relative_exit` refuses the definition and the fill point submits
 the seeded leg. On the six tapes of that shape
-(`tests/test_pending_entry_trail_tapes.cpp`) the engine books TradingView's bar
+(the private test `test_pending_entry_trail_tapes`) the engine books TradingView's bar
 and price 41 of 41, the quantized arm 28 of 28 and the running best 13 of 13;
 the adopted unseeded child had exited 1 to 24 bars late on those 13 (lane
 PAR-ORDERS). Because the child is host-sized and
@@ -1019,7 +1019,7 @@ with its measurement (`tests/test_adapter_brackets_relower.cpp`):
 | --- | --- | --- |
 | explicit `qty=` (`rel-qty-explicit`) | `{0,0,0}` | `exit()` stages an explicit quantity per origin (`pending_bracket_legs_`) and submits it at a later flush: the fill point has no request for a child to be |
 | `strategy.cancel(exit id)` in the same evaluation (`rel-cancel-exit-id`) | `{0,0,0}` | the definition is gone before the evaluation ends: no leg exists |
-| an exit issued before its entry call (`rel-exit-before-entry`) | `{0,0,0}` | the call is void while its entry neither exists nor rests (TradingView's rule, `tests/fixtures/exit_queue`), so no leg waits for the entry's fill |
+| an exit issued before its entry call (`rel-exit-before-entry`) | `{0,0,0}` | the call is void while its entry neither exists nor rests (TradingView's rule, the private fixture set `exit_queue`), so no leg waits for the entry's fill |
 | `close_entries_rule = "ANY"`, stream runs | not anchored | the fill-point leg is cohort-bound (`BindCohort`), a scope the arm does not spell; a stream's fill point stages the leg |
 | a trailing offset of a tick or more (`rel-trail-offset`, `rel-short-trail`, `mag-rel-trail-offset`, `coof-rel-trail-offset`) | `{0,0,0}` | `exit()` starts the leg's running best at the activation (`Trail::best_seed`, TradingView's start); the kernel's anchor installs the arm level alone, so the child cannot carry the seed |
 | a parent re-issued, cancelled or declined (`rel-limit-parent` `{12,4,8}`, `rel-reissue-changed` `{18,2,16}`, `rel-breakout-pair` `{40,14,24}`, `rel-declined` `{2,0,2}`) | withdrawn | the kernel ends a waiting child with its parent (`OwnerGone`), a replaced parent included; keeping the children across a replace needs a re-parent transition in the event log, which is an epoch decision |
@@ -1304,7 +1304,7 @@ segment into it, so a limit filled on its way down to the bar's low still
 faces that low (a short filled on its way up, the high), while the waypoints
 the path already passed do not count (R5 lane PAR-MARGIN-2;
 `tests/test_native_margin_post_fill_path.cpp`; TradingView books those calls
-on the fill's bar, `tests/fixtures/margin_entry_bar/pm2-m7-lim-*`, `-slim-*`,
+on the fill's bar, private tapes `pm2-m7-lim-*` of `margin_entry_bar`, `-slim-*`,
 `-s1lim-*`). If that
 mark breaches, the kernel rests its own `Reduce` (or `Flatten`) with
 `Stop{L}`, bound to the live book. The reduction therefore *fills at the
@@ -1322,7 +1322,7 @@ and after fills only: a request armed at a discrete point is matched only at a
 later one, so a reduction re-armed at every sample would never be. The same
 money under the magnifier on TradingView books its call at the first
 lower-timeframe low that crosses, sized there
-(`tests/fixtures/intrabar_margin`). TradingView's lower timeframe is its own:
+(the private fixture set `intrabar_margin`). TradingView's lower timeframe is its own:
 on a 15-minute chart its bar magnifier walks 2-minute intrabars, each owned by
 the chart bar that holds its last minute, so the samples a run declares decide
 where its calls land. A compiled Pine strategy declares exactly those: its host
@@ -1488,7 +1488,7 @@ sub-lot restore — is not a generic policy the kernel could spell
 (`scripts/check_adapter_spec_shadowing.py` fails the gate if a shadowed field
 is ever declared again — a source guard of every `ci_verify.py` profile and of
 `ci_preflight.py`, before anything is configured, as well as a CTest row —
-and `tests/test_adapter_margin_relower.cpp` MG-F3 pins
+and the private test `test_adapter_margin_relower` MG-F3 pins
 the gridded case where the two orders of floor and multiple part: 4 lots, not
 5). The kernel then solves,
 schedules, places, re-prices, books and reports every resting liquidation; the
@@ -1514,10 +1514,10 @@ at all and fires on the favorable side of the path. The pre-open admission
 slice stays adapter-side as well, though the kernel's `AfterApplied` point
 after the open fill does reach its bar. Measured against the
 adapter as it stood before the re-lowering, on the same books, bit for bit:
-`tests/test_adapter_margin_relower.cpp`.
+the private test `test_adapter_margin_relower`.
 
 Measured against the kernel's own points (R5 lane H-MEASURE,
-`tests/test_adapter_margin_schedule_differential.cpp`): the same bars and
+the private test `test_adapter_margin_schedule_differential`): the same bars and
 orders through the adapter and through a bare host whose hooks answer
 TradingView's money and slice, so that only the kernel's own scheduling,
 check kinds and opening gate differ. A gap-open breach books the adapter's
@@ -1529,14 +1529,14 @@ that row. On the same money the pre-open slice and the kernel's
 `+1e-6` floor. They parted on the frozen units too until R5 lane PAR-MARGIN:
 a default-percent stop entry above 100 % was frozen at its signal but sized
 again at its fill, as `ab9714be` did. Eight TradingView tapes
-(`tests/fixtures/margin_entry_bar/pm-m10-*`) show TradingView freezes it at
+(private tapes `pm-m10-*` of `margin_entry_bar`) show TradingView freezes it at
 the snapped stop level, or at the signal close when the stop was already
 marketable, whatever the percentage, and books its margin calls on that
 book, so the adapter now does too. The opening gate parts both ways:
 the kernel declines a 1× long whose entry fee the adapter admits, and admits a
 gap-up add the adapter refuses against its signal-time equity. A leveraged
 opening (margin below 100 %) is checked on its own entry bar: four TradingView
-tapes (`tests/fixtures/margin_entry_bar`) book TradingView's margin call on
+tapes (the private fixture set `margin_entry_bar`) book TradingView's margin call on
 that bar at its low, as the kernel's `AfterApplied` point does, and since R5
 lane PAR-MARGIN the adapter admits that point for a leveraged opening's entry
 bar and books the tapes' rows (before it, the call came a bar late or not at
@@ -1544,7 +1544,7 @@ all). Since R5 lane PAR-MARGIN-2 the admission also covers a limit opening
 filled on its way down to the bar's low, `process_orders_on_close` and
 `calc_on_order_fills` runs, and an add to a book carried in from an earlier
 bar, on the combined book: twenty more tapes book the call on that bar at its
-low (`tests/fixtures/margin_entry_bar`: `pm2-m7-coof-*`, `pm2-m7-lim-*`,
+low (the private fixture set `margin_entry_bar`: `pm2-m7-coof-*`, `pm2-m7-lim-*`,
 `pm2-m7-poocl-*`, `pm2-m7b-*`). A magnified or timestamped-FX run keeps
 its own route, and a default-percent stop entry taken at its bar's open keeps
 the pre-open slice's verdict. Under the bar magnifier the adapter admits the
@@ -1552,8 +1552,8 @@ kernel's `IntrabarSample` points: TradingView's magnified broker books its call
 at the first lower-timeframe low that crosses and again at each later one that
 crosses the reduced book's line, on a leveraged long (plain, under
 `process_orders_on_close` or under `calc_on_order_fills`) and on a short at any
-margin, plain or under `calc_on_order_fills` (`tests/fixtures/intrabar_margin` and
-`tests/fixtures/margin_entry_bar/pm2-m7-mag-*`, 20 magnified tapes). It checks at its own 2-minute intrabars (above), which
+margin, plain or under `calc_on_order_fills` (the private fixture set `intrabar_margin` and
+private tapes `pm2-m7-mag-*` of `margin_entry_bar`, 20 magnified tapes). It checks at its own 2-minute intrabars (above), which
 TradingView's `request.security_lower_tf` prints. Since R5 lane MAG-INTRABAR
 the adapter walks those intrabars, built from its host's finer feed
 (@ref magnifier_intrabars), and books all 20 tapes' calls; walking the feed's
@@ -1563,7 +1563,7 @@ differently. A full-margin long (its one-contract money call) and a short under
 execution at the print it fired at, so an off-grid print books its nearest
 tick (12.105 books 12.11), as every TradingView market fill does, while a stop
 or limit crossed at its own off-grid level keeps its directional tick
-(`tests/fixtures/half_tick_rounding`).
+(the private fixture set `half_tick_rounding`).
 
 ### Risk limits
 
@@ -1860,7 +1860,7 @@ their new assertion digests. Every TradingView number those suites pin is
 unchanged.
 
 P9 left one ruling open, and lane E5 settled it with TradingView's own tapes
-(`tests/fixtures/offset_trail_arm`, replayed by
+(the private fixture set `offset_trail_arm`, replayed by
 `tests/test_offset_trail_quantized_arm.cpp`): a trail WITH a trailing offset
 arms on the tick-quantized path exactly like the one-shot. On NYSE:F 15m, six
 trades whose bar's raw extreme stops inside the activation's tick cell
@@ -1873,8 +1873,8 @@ with the raw path. The P9 row that asserted the hold in that window now
 asserts the fill, with its `expectation corrected:` note.
 
 Lane E9 closed the two findings E5 left
-(`tests/fixtures/trail_activation_tick_reach`, replayed by
-`tests/test_trail_activation_tick_reach.cpp`). A one-shot with a sub-tick
+(the private fixture set `trail_activation_tick_reach`, replayed by
+the private test `test_trail_activation_tick_reach`). A one-shot with a sub-tick
 `trail_price` books the tick the quantized path reaches — its resting half-tick
 level rounded away from the position (ETH fill 2550.85, level 2550.854,
 @2550.86) — where the adapter had booked the snap toward it, which the kernel's
@@ -1899,7 +1899,7 @@ an explicit-zero trail rests beside its `Trail` stays: a `Stop` is reached by
 a touch and a zero-distance ride needs a move strictly past the best, so they
 differ exactly on a print that lands ON the carried best. TradingView books
 the touch at the open: 16 of 16 taped trades of that shape, which a kernel
-host reproduces only with both legs (`tests/test_zero_trail_sibling_stop.cpp`).
+host reproduces only with both legs (the private test `test_zero_trail_sibling_stop`).
 
 Two kernel helpers went with it. `BacktestEngine::round_to_mintick_directional`
 and `BacktestEngine::apply_slippage` were the pre-R5 spelling of the
@@ -1993,7 +1993,7 @@ the same four, fills and fill recalculations included, and a C host reads
 the first three from `pf_native_decision_v1`'s session bytes
 (`native_c_api.h:1485`). The kernel resolves each session day once through
 `native_calendar::session_day_at` (`native_calendar.hpp:455`), which a host
-may call too. `tests/test_native_session_day_facts.cpp` replays the
+may call too. the private test `test_native_session_day_facts` replays the
 TradingView session tapes through a bare host. It is a presentation snapshot
 copied onto the callback stack: writing to it cannot move the floor, the
 matching time or the after-calculation coordinate, and the session-day facts
@@ -3890,7 +3890,7 @@ its own has passed:
 | `native_calc_on_fills_strategy.cpp` | `NativeCalculationTrigger::BarCloseAndFills`, `on_native_recalculate`, `current_partial_bar`, `NativeOpenBarView::OpenOnly` | `tests/test_native_calc_timing.cpp` |
 | `native_htf_strategy.cpp` | `declare_timeframe_subscriptions`, `on_native_timeframe_bar`, `native_series_bar`, `gaps`, a `LazyComplete` bucket | `tests/test_native_htf_subscriptions.cpp` |
 | `native_trail_risk_strategy.cpp` | `Trail` with `TrailTicks`, `trail_state`, `native_working_requests`, `cancel_where`; `NativeRiskLimits::max_fills_per_day`, `native_risk_state`, `NativeRiskEvent` | `tests/test_native_risk_limits.cpp`, `tests/test_native_trail_state_l5k.cpp` |
-| `native_price_grid_strategy.cpp` | `NativePriceGrid` `None` / `QuantizeFills` / `QuantizeFillsAndTriggers` and `NativeGridRounding` `HalfUp` / `Directional` on one sub-tick tape: raw against booked price per fill, a ladder level as a fixed point, the stop only the quantized path reaches, `GridRequiresPriceTick` | `tests/test_native_price_grid.cpp` |
+| `native_price_grid_strategy.cpp` | `NativePriceGrid` `None` / `QuantizeFills` / `QuantizeFillsAndTriggers` and `NativeGridRounding` `HalfUp` / `Directional` on one sub-tick tape: raw against booked price per fill, a ladder level as a fixed point, the stop only the quantized path reaches, `GridRequiresPriceTick` | the private test `test_native_price_grid` |
 | `native_price_grid_c.c` | the same four runs from C: `PF_NATIVE_SPEC_EXT_PRICE_GRID` through `strategy_configure_native_ext_v1`, fills read back from `strategy_native_events_v1` with the C++ host's numbers | `tests/test_native_c_api.c` |
 | `native_risk_limits_strategy.cpp` | the money limits: `max_intraday_loss` as a percent of the day's opening equity, `max_consecutive_loss_days`, `max_drawdown`; `FlattenAndBlock` and the kernel's own flatten (`RequestOrigin::KernelRisk`, ticket `__kernel_risk__`); `CalendarDayInTimezone`, the next-day re-arm, the ledger per day | `tests/test_native_risk_limits.cpp` |
 | `native_auxiliary_feed_strategy.cpp` | `NativeRunSpec::auxiliary_feed`: a `"5"` series over 15-minute inputs built from a 1-minute feed (`NativeSeriesSource::AuxiliaryFeed`), every bucket against its hand aggregation, routing by time, and the refusal without a feed (`SubscriptionWithoutAuxiliaryFeed`) | `tests/test_native_auxiliary_feed.cpp`, `tests/test_native_auxiliary_feed_stream.cpp` |
@@ -4470,7 +4470,7 @@ A C callback must not unwind; returning non-zero latches
 `NativeFailureCode::CallbackException` (`PF_NATIVE_FAILURE_CALLBACK`, 5) and
 the run ends `Failed`, readable through `strategy_native_state_v1`.
 `tests/test_native_c_api_frozen_header.cpp` compiles a fixture against the
-byte-frozen v1 copy of the header in `tests/fixtures/native_c_api/v1/` and
+byte-frozen v1 copy of the header in the private fixture set `native_c_api/v1` and
 links it against the current runtime, so an unnoticed layout change shows up
 as the refusal the header promises rather than as silent misreading.
 
@@ -4613,7 +4613,7 @@ own features, not only the rows that happened to be source-free.
 `python3 scripts/ci_verify.py kernel` is the profile that verifies the
 kernel-only build (Release, live runner ON, tutorial OFF, source layer OFF);
 CI runs it as the `kernel-only` job. The profile carries a **row floor**, its
-number in the `PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:788 table in
+number in the `PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:794 table in
 `scripts/ci_verify.py`: the count the kernel-only CTest set is
 expected to run with the private overlay present, minus the pinned
 private-fixture rows of `tests/private_fixture_rows.txt` it registers as SKIP

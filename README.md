@@ -94,7 +94,7 @@ bash tutorial/run.sh                            # MACD on BTC/USDT, end to end
 python3 tutorial/run_stream.py                  # OHLCV warm-up → realtime trades
 ```
 
-The [shared local/CI verifier](docs/ci.md) includes source guards, tests and installed-package smoke checks. Its ABI check links callers against both the current library and seven separately built, pinned historical libraries. Preparation uses local Git history and the configured compiler, fetching a pinned commit the clone lacks; see the [ABI fixture guide](tests/fixtures/settlement_cpp_abi/README.md) for repeated checks. The first run needs network (the verifier initialises the public `corpus` submodule itself; configure fetches Eigen when no system copy is found) and a full clone: a depth-1 clone fails the benchmark provenance row ([CI guide](docs/ci.md)). CTest itself stays offline.
+The [shared local/CI verifier](docs/ci.md) includes source guards, tests and installed-package smoke checks. Its ABI check links callers against both the current library and seven separately built, pinned historical libraries. Preparation uses local Git history and the configured compiler, fetching a pinned commit the clone lacks; see the ABI fixture guide (the README of the private fixture set `settlement_cpp_abi`) for repeated checks. The first run needs network (the verifier initialises the public `corpus` submodule itself; configure fetches Eigen when no system copy is found) and a full clone: a depth-1 clone fails the benchmark provenance row ([CI guide](docs/ci.md)). CTest itself stays offline.
 
 Prerequisites: CMake ≥ 3.16 to build (the verifier and `ctest --test-dir` need 3.20), a C++17 compiler whose standard library has floating-point `std::to_chars` (libstdc++ from GCC 11 or later, or libc++ 14 or later; on macOS a deployment target of 13.3 or later; CI builds with GCC on Ubuntu 24.04 and Apple Clang on macOS 26), Eigen 3.3+ (fetched automatically if absent), Python 3 for the tests (`-DPINEFORGE_BUILD_TESTS=OFF -DPINEFORGE_BUILD_TUTORIAL=OFF` for a library-only build). `cmake --install build --prefix /usr/local` installs `lib/libpineforge.a` and `lib/libpineforge_kernel.a`, `include/pineforge/`, and the `find_package(PineForge)` config.
 
@@ -325,7 +325,7 @@ a distinct-identity count mismatch.
 This projection does not change fragment consolidation, trade matching or
 any threshold. In particular, an extra engine entry at a nearby price must
 not be merged away to pass the count gate. The regression tape and tests
-are described in `tests/fixtures/coof_cascade_identity/README.md`.
+are described in the README of the private fixture set `coof_cascade_identity`.
 
 ### How a change is judged
 

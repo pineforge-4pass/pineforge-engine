@@ -159,7 +159,7 @@ What each gate refuses:
 
 `ci_verify.py` counts the CTest rows that actually **ran** and fails below a
 floor. The floors' numbers live in one place, the
-`PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:788 table: per profile, `full`
+`PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:794 table: per profile, `full`
 is its overlay-present registered population and `pinned` is how many rows of
 `tests/private_fixture_rows.txt` that registry registers, so with the private
 fixtures absent the floor is `full` minus `pinned`; every other profile
@@ -200,7 +200,7 @@ non-exact price must be within the strict entry tolerance of only one key
 to count there. Overlap with another key, missing identities and count
 mismatches refuse `excellent`. Fragment consolidation and all other gates
 remain unchanged. See [Distinct-entry identity](README.md#distinct-entry-identity)
-and `tests/fixtures/coof_cascade_identity/README.md` for the nearby-price
+and the private fixture set `coof_cascade_identity`'s README for the nearby-price
 regression and the extra-entry and ambiguity guards.
 
 A refresh is deliberate and carries its evidence in the same commit:

@@ -227,7 +227,7 @@ broader than the legacy engine's settle rule: `ab9714be` reset only a whole
 book at or under `kQtyEpsilon` and kept a dust lot beside a live one, where the
 sweep erases it inside a live book too. It is measured source-layer
 TradingView policy, not the kernel's: TradingView's decimal quantities leave no
-remnant row (tape `tests/fixtures/g232_decimal_dust/hm-g232-decimal-dust`), which the Pine host books
+remnant row (tape `hm-g232-decimal-dust` of the private fixture set `g232_decimal_dust`), which the Pine host books
 row for row while a bare host books four 2.8e-17-unit dust rows beside them
 (`tests/test_pine_dust_sweep_paired.cpp`). Since K-ULP3 an exact-sum close no
 longer leaves such a lot; a bare host can still leave one when a decimal sum
@@ -243,7 +243,7 @@ The physical roster matters because the Pine mirror can already have swept
 a sub-epsilon fragment. The same-bar market-transaction path, `immediately`
 closes and the ShortSeed placeholder are outside this ordinary normalization;
 the ANY entry rule is unchanged. The synthetic sources and TradingView tapes
-are pinned in `tests/fixtures/fifo_lot_boundary/README.md`.
+are pinned in the README of the private fixture set `fifo_lot_boundary`.
 The adapter does not declare the kernel's quantity tolerance (ADR-0001,
 "Kernel capabilities the Pine adapter does not declare"): its FIFO endpoint
 test on the batched POOC path settles a snapped prefix as a selected

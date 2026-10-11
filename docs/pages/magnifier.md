@@ -81,7 +81,7 @@ last one to the next bar, and the kernel walks such a bar as one point. The
 rows from 1 minute to 1 day were measured against TradingView's own
 `request.security_lower_tf` bars and magnified exports
 (`tests/test_adapter_magnifier_intrabar_tapes.cpp`,
-`tests/fixtures/magnifier_intrabars`).
+the private fixture set `magnifier_intrabars`).
 
 The host walks the input bars themselves when it cannot build TradingView's:
 an intrabar finer than the input or not a multiple of it (a 1- or 5-minute

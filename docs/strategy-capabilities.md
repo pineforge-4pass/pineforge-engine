@@ -137,7 +137,7 @@ comparing physical actions and every ABI report field bitwise after replay.
 Runner warmup splits include 30, 33 and 500; C++ coarse-chart splits scale
 the minute fixture's split to chart bars. Daily requests also exercise split
 1500 after the first daily boundary. The original #325 script-1 numerical pins
-remain unchanged. See `tests/fixtures/confirmed_capabilities/README.md`.
+remain unchanged. See the README of the private fixture set `confirmed_capabilities`.
 
 The runner defaults input to the script clock. Explicit one-minute input
 with a coarser script clock is refused before creating a ledger. Existing

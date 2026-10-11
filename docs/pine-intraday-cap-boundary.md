@@ -71,7 +71,7 @@ script's own `strategy.risk.max_intraday_filled_orders` statement
 (`PineStrategyHost::set_pine_risk_max_intraday_filled_orders`, which generated
 code calls) turns on each of the three its host did not declare through
 metadata, because together they are TradingView's count: TradingView's own
-tapes of synthetic probes (`tests/fixtures/intraday_cap_tv`, lane
+tapes of synthetic probes (the private fixture set `intraday_cap_tv`, lane
 W10-DIAG-UNKNOWN rule CAP-ON) charge neither a held-direction no-op entry nor
 anything but the fills, take the cap's process-on-close close at the next
 open, and charge a filled `strategy.close`. A declared switch keeps its value.

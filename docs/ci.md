@@ -285,7 +285,7 @@ directions must fail at link time with the expected epoch-qualified symbol.
 No ABI caller executable is run. The older receipts remain authenticated
 historical evidence; they are not presented as a live v13/v14/v15/v16 link
 matrix. The v16 archive is also the runtime budget's frozen baseline.
-The [ABI guide](../tests/fixtures/settlement_cpp_abi/README.md) describes the
+The ABI guide (the README of the private fixture set `settlement_cpp_abi`) describes the
 actual old/new library pairs and their immutable inputs.
 
 One row does run a caller of the frozen `ab9714b` archive:

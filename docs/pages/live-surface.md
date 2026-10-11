@@ -137,7 +137,7 @@ timestamp, as the same tape with the flag off. That row is the kernel's
 path liquidation; the close pass books its own: a carried 9.5 @ 100 short
 with a 0.1 % fee whose tail bar reaches 105 books the adapter's margin call
 1.7504761904761923 @ 105 at the post-script checkpoint, flag on or off
-(`tests/test_adapter_margin_schedule_differential.cpp`, E20 f1; `ab9714be`
+(the private test `test_adapter_margin_schedule_differential`, E20 f1; `ab9714be`
 booked neither route on the tail).
 
 This paragraph used to promise the opposite ("surfaces only at settlement")
@@ -188,7 +188,7 @@ Under `process_orders_on_close`, a carried position's margin checkpoints are
 not skipped on the suppressed last bar: the bar-open slice, the kernel's path
 liquidation and the adapter's post-script close pass all run there, as on any
 settled bar (the E20 f1 rows of
-`tests/test_adapter_margin_schedule_differential.cpp`). Only the script
+the private test `test_adapter_margin_schedule_differential`). Only the script
 calculation itself is suppressed.
 
 Default off (`on == 0`): every historical run stays byte-identical to

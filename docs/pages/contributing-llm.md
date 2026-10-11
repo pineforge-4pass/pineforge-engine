@@ -114,7 +114,7 @@ finding to report, not a step to take.
    refuse `Excellent`. Fragment consolidation, trade matching and all
    thresholds stay unchanged; a nearby extra entry must still fail the count
    gate. *Enforced:* `scripts/test_verify_corpus_metrics.py`, including
-   `tests/fixtures/coof_cascade_identity/README.md`'s regression tape.
+   the private fixture set `coof_cascade_identity`'s regression tape.
 
 8. **A frozen assertion is not rewritten to fit new behaviour.** The twin
    suites pin legacy `CHECK`s at a historical commit; changing one is arguing
@@ -133,7 +133,7 @@ finding to report, not a step to take.
 
 10. **A test row never silently disappears.** Each profile counts the rows that
     *ran* against a floor: the `PRIVATE_FIXTURE_PROFILE_FLOORS`
-    ci_verify.py:788 table. When rows land, re-measure the profile's own
+    ci_verify.py:794 table. When rows land, re-measure the profile's own
     overlay-present run and edit that table in the same commit.
 
 ## The recipe for a lane
@@ -250,8 +250,8 @@ decision, and removing one is a regression:
 | the kernel's price grid (`NativeRunSpec::price_grid`) and the adapter's own tick rules | TradingView quantizes per *order kind* — stop and limit legs on the quantized bar, the trail stop and the `calc_on_order_fills` cursors raw — and the kernel grid is one rule for the run. A per-kind mask would spell that inconsistency into the kernel. | ADR 0001 ruling table, row `price_grid`; design `native-feature-parity.md` §3.6.2 |
 | the kernel's risk limits (`NativeRunSpec::risk`) and the adapter's `strategy.risk.*` | structurally, Pine's risk calls are per-bar statements that arrive after the spec has been digested; substantively, four measured divergences in the latch, the streak, the close price and the day key. | ADR 0001 ruling table, row `risk`; design `native-feature-parity.md` §3.6.1 |
 | the kernel's `max_abs_units` and the adapter's `max_position_size` | the kernel caps the *resulting* book, TradingView gates the *live* book before the fill. | ADR 0001 ruling table, row `max_abs_units` |
-| the kernel's `max_open_lots` and Pine's `pyramiding` | the adapter counts *entries per cycle*, the kernel counts *physical lots*. Measured against TradingView the kernel's count is the closer one (14 of 15 tape scenarios against the adapter's 13, `tests/test_pyramiding_count_differential.cpp`): TradingView checks an entry once, at its first eligible point, against the trades then open. Lowered onto the cap, four corpus probes move away from TradingView, for want of that rule, so the adapter keeps its count. | ADR 0001 ruling table, row `max_open_lots` |
-| the kernel's margin model and the adapter's money admission | the adapter answers TradingView's ten-significant-digit admission itself and declares a *maintenance-only* model, because a positive initial requirement would decline openings TradingView takes and admit adds it refuses (measured both ways, `tests/test_adapter_margin_schedule_differential.cpp`). | ADR 0001 ruling table, row `initial_margin_fraction` |
+| the kernel's `max_open_lots` and Pine's `pyramiding` | the adapter counts *entries per cycle*, the kernel counts *physical lots*. Measured against TradingView the kernel's count is the closer one (14 of 15 tape scenarios against the adapter's 13, the private test `test_pyramiding_count_differential`): TradingView checks an entry once, at its first eligible point, against the trades then open. Lowered onto the cap, four corpus probes move away from TradingView, for want of that rule, so the adapter keeps its count. | ADR 0001 ruling table, row `max_open_lots` |
+| the kernel's margin model and the adapter's money admission | the adapter answers TradingView's ten-significant-digit admission itself and declares a *maintenance-only* model, because a positive initial requirement would decline openings TradingView takes and admit adds it refuses (measured both ways, the private test `test_adapter_margin_schedule_differential`). | ADR 0001 ruling table, row `initial_margin_fraction` |
 | `NativeRunSpec::report_open_position_at_end` and the adapter's range-end rows | TradingView's range-end report re-marks the curve's last point and re-folds every extreme from it: report *shape*, not a mark-to-market row. | ADR 0001 ruling table, row `report_open_position_at_end`; design `native-feature-parity.md` §3.7 |
 | `subscriptions` in the spec and the adapter's begin-time declaration | the adapter declares the same kernel subscriptions through a hook instead of the field, so a plain `request.security` site really is a kernel subscription. | ADR 0001 ruling table, row `subscriptions` |
 | the kernel's auxiliary feed and the adapter's auxiliary drive | the adapter's chart slice leaves pre-range coverage inert where the kernel folds by time, and evaluates after the bar's matching pass where the kernel delivers before it. | ADR 0001 ruling table, row `auxiliary_feed` |
@@ -281,7 +281,7 @@ measurement that produced it, so a later change to it is visible as a change to
 the record, not as an edit to a literal.
 
 **floor** — the minimum number of CTest rows a profile must actually run
-(the `PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:788 table: with the private
+(the `PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:794 table: with the private
 overlay present, the profile's full registered population; without it, that
 population minus the pinned private-fixture rows it registers as SKIP
 placeholders). It counts rows that ran, so a skipped row does not pad it.

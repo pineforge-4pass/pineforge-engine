@@ -181,7 +181,7 @@ unchanged.
 The floor moved two frozen oracle pins, 6.2789 to 6.279
 (`tests/oracle/test_oracle_frozen_size.cpp` and
 `tests/test_default_qty_signal_freeze.cpp`), on a TradingView control of the
-same operands (`tests/fixtures/margin_call_rules`
+same operands (the private fixture set `margin_call_rules`
 `sizing/sizing-decimal-floor-oracle-control`): an ETH long at 2525 on an
 equity of 15854.4750001, whose `sig10(E) / 2525` prints `6.279`, buys 6.279,
 in two byte-identical exports.
@@ -278,7 +278,7 @@ the new entry's own) only rule 2's exact tie is judged
 (`tie_reversal_beside_exits`): a default 100 % reversal at margin 100 on a
 whole-unit lot whose binary64 `E` is under `sig10(Q × c′)` while `sig10(E)`
 reaches it keeps only its closing leg, as on a clear book. TradingView does
-so whatever of those rests (`tests/fixtures/admission_rules/reversal_tie`, 36
+so whatever of those rests (the private fixture set `admission_rules`, its `reversal_tie` tapes, 36
 controls on NYSE:F: long and short, with and without
 process_orders_on_close; the equal tie and a cent off it fill the
 reversal). Off that tie, beside a limit leg and on a fractional lot such a
@@ -291,7 +291,7 @@ continuous quantity (no lot grid), calc_on_order_fills, the bar magnifier, a
 stop that reverses (only stops from flat are pinned), a default-sized stop
 with slippage (the slipped stop of the tapes is an explicit quantity), and an
 entry that meets at its fill another side than the one it was placed against
-(a same-open pair's later leg: `tests/fixtures/same_open_reversal`). So does
+(a same-open pair's later leg: the private fixture set `same_open_reversal`). So does
 the earlier money check of an explicit market long's next-bar fill on the
 unslipped quote outside the scope (a commission, pyramiding above 1, another
 order resting, a risk rule); inside it the fill check replaces that check.
@@ -432,8 +432,8 @@ order, not the consequences of the block above.
 
 `MarginScheduleSwitches` (same header and namespace, read through
 `margin_schedule_switches()`) holds the margin-call schedule rules the same
-way. Its tapes are `tests/fixtures/margin_schedule_rules` and the
-`short-cutoff-gate` tapes of `tests/fixtures/margin_call_rules`.
+way. Its tapes are the private fixture set `margin_schedule_rules` and the
+`short-cutoff-gate` tapes of the private fixture set `margin_call_rules`.
 
 | Switch | Default | Gates | Where |
 |---|---|---|---|
@@ -458,7 +458,7 @@ admission of an explicit quantity at the open, the refined lagged
 follow-up, the order of a market entry's opening check at its open fill
 against the exit legs it released, and the void strategy.exit without
 from_entry called before the entry. Its tapes are
-`tests/fixtures/margin_open_rules`.
+the private fixture set `margin_open_rules`.
 
 | Switch | Default | Gates | Where |
 |---|---|---|---|
@@ -487,8 +487,8 @@ the reason.
 
 | Format | Tapes | Fixture | Test |
 |---|---:|---|---|
-| single position (slippage, fees, stops, process_orders_on_close, calc_on_order_fills) | 182 | `tests/fixtures/margin_call_rules` | `test_margin_call_rules_tapes` |
-| event ledger (a trade history ahead of the decision) | 381 | `tests/fixtures/margin_ledger_rules` | `test_margin_ledger_rules_tapes` |
+| single position (slippage, fees, stops, process_orders_on_close, calc_on_order_fills) | 182 | the private fixture set `margin_call_rules` | `test_margin_call_rules_tapes` |
+| event ledger (a trade history ahead of the decision) | 381 | the private fixture set `margin_ledger_rules` | `test_margin_ledger_rules_tapes` |
 
 The single-position fixture also asserts 13 process_orders_on_close fee-sizing
 tapes, 3 commission-0 controls, the oracle control of §1.2, 10 order
@@ -505,7 +505,7 @@ book the same trades.
 
 | Format | Tapes | Fixture | Test |
 |---|---:|---|---|
-| close-first, entry-then-close and flat entries at session-open gaps (19 sources, 3 exports each); point-order, close-first reversal, exit-tombstone, add and pyramiding controls (13 sources, 3 exports each); 39 stop-priority and 3 coupled close + reversal tapes; an explicit-short control (3 exports); reversals at an exact rule-2 tie beside no exit, a resting stop, or stop + trail exits (36 sources, 3 exports each) | 111 | `tests/fixtures/admission_rules` | `test_admission_rules_tapes` |
+| close-first, entry-then-close and flat entries at session-open gaps (19 sources, 3 exports each); point-order, close-first reversal, exit-tombstone, add and pyramiding controls (13 sources, 3 exports each); 39 stop-priority and 3 coupled close + reversal tapes; an explicit-short control (3 exports); reversals at an exact rule-2 tie beside no exit, a resting stop, or stop + trail exits (36 sources, 3 exports each) | 111 | the private fixture set `admission_rules` | `test_admission_rules_tapes` |
 
 The engine reproduces all 111 (the 74 above, the explicit-short control
 `explicit_short/offset0-fill` and the 36 `reversal_tie` controls); each of
@@ -516,7 +516,7 @@ The engine reproduces all 111 (the 74 above, the explicit-short control
 97 NYSE:F tapes book the same trades as a backtest and as a stream (the test
 names the three it leaves out and why).
 `test_qty_step_lot_grid_case` replays the hosted lot-grid case
-(`tests/fixtures/qty_step_lot_grid`) with these rules on, with and without its
+(the private fixture set `qty_step_lot_grid`) with these rules on, with and without its
 1e-05 lot grid: 22 and 27 rows, every one exactly the recorded row.
 
 The admission split rests on a 13-source factorial: slippage 0, 1 or 2; a fill
@@ -664,7 +664,7 @@ fill first, it takes this for two shapes:
 
 A close placed after its reversal entry stays conditional on that entry's
 admission. Evidence: the stop-priority and coupled close + reversal tapes and
-`c1`, `c2`, `c3b`, `c4` of `tests/fixtures/admission_rules/point_order_and_book`.
+`c1`, `c2`, `c3b`, `c4` of the private `admission_rules/point_order_and_book` tapes.
 
 Two shapes keep the earlier order, and `test_point_order_open_call` pins both
 with a control of each:
@@ -718,7 +718,7 @@ Was `include/pineforge/engine.hpp:503-565`, next to storage that is the
 adapter's since the `engine_script_run_v18` relocation <!-- verified HEAD -->
 (`PineStrategyHost::id_unclosed_qty_`, which R4 slice C, #254, replaced with
 `PineExecutionAdapter::close_logical_units_`, and the same-bar close batches, see
-`tests/fixtures/native_cpp_abi/host-ab9714b/relocation-manifest-v16-v18.json`).
+the private `native_cpp_abi` manifest `host-ab9714b/relocation-manifest-v16-v18.json`).
 
 ### 2.1 Per-entry-id unclosed-quantity ledger
 
@@ -892,13 +892,13 @@ No callback or stable-frame ABI read occurs between its two fills.
 
 Since R5 lane PAR-MARGIN the adapter keeps the placement quantity above
 100 % as well: eight recorded reference tapes of a 390-400 % stop on NYSE:F
-(`tests/fixtures/margin_entry_bar/pm-m10-*`) open the placement quotient, never
-the fill's (`tests/test_adapter_margin_schedule_differential.cpp`, "M10 on
+(private tapes `pm-m10-*` of `margin_entry_bar`) open the placement quotient, never
+the fill's (the private test `test_adapter_margin_schedule_differential`, "M10 on
 tapes"). The margin call those tapes book at a half-cent low is TradingView's
 market execution at that print, so since R5 lane PAR-MARGIN-2 the pre-open
 slice books the print's nearest tick (12.105 books 12.11), where a stop or
 limit crossed at its own off-grid level keeps the directional tick
-(`tests/fixtures/half_tick_rounding`).
+(the private fixture set `half_tick_rounding`).
 
 ```text
 design-declined-reversal-close-leg: called at the KI-54 reversal-decline
@@ -1086,7 +1086,7 @@ double reserve_percent_commission(double cash) const {
 > fees charged) and leaves out the fee its own order pays: the value per order,
 > or the value per contract against the contract's notional. The adapter's
 > `default_sizing_cash` does so; the tapes are under
-> `tests/fixtures/cash_fee_sizing` and `docs/design/native-feature-parity.md`
+> the private fixture set `cash_fee_sizing` and `docs/design/native-feature-parity.md`
 > §3.10 records the measurement.
 
 ## 6. When a `strategy.exit` binds
@@ -1098,7 +1098,7 @@ survives `close_all`, a `strategy.close` of X or of a sibling, the flat and a
 `strategy.cancel(X)` with a later `strategy.entry(X)`, and binds to X's next
 fill. A call that finds neither is ignored. 36 synthetic controls (two
 byte-identical exports each) and the ten `pending-*` tapes of
-`tests/fixtures/global_exit_children` pin it; `tests/fixtures/exit_binding`
+the private fixture set `global_exit_children` pin it; the private fixture set `exit_binding`
 holds the controls and states the rule.
 
 `ExitBindingRuleSwitches` (`include/pineforge/source/pine_adapter.hpp`, read
@@ -1119,7 +1119,7 @@ stream.
 The first four parts' tapes run with margin requirements off (`margin_long =
 margin_short = 0`) and without `calc_on_order_fills`, and those parts act only
 there (`margins_disabled`). `global_exit_binds_held_position` is pinned by the
-15 synthetic tapes of `tests/fixtures/cross_side_exit`
+15 synthetic tapes of the private fixture set `cross_side_exit`
 (`test_cross_side_exit_tapes`), NYSE:F 15m, with and without
 `calc_on_order_fills`: TradingView books each script that rests an opposite
 entry beside its global exit exactly as the same script without that entry,
@@ -1131,7 +1131,7 @@ to the default-margin ones (the pin's evidence); the committed tape test runs
 the default margin.
 
 The same part is pinned for an entry order of the held side by the 56
-synthetic tapes of `tests/fixtures/same_side_exit`
+synthetic tapes of the private fixture set `same_side_exit`
 (`test_same_side_exit_tapes`), NYSE:F 15m, with and without
 `calc_on_order_fills`: TradingView books each of the 36 scripts that rest a
 same-side limit or stop add beside their global exit (profit, loss, both, or
@@ -1143,12 +1143,12 @@ rule's). Under `calc_on_order_fills` the resting add also counted as a
 competing order of the book for the profit-and-loss bracket the exit stages
 in the entry's fill recalculation, which took the bracket's chart-tick reach,
 so it acted one bar late. TradingView has no such competing exclusion,
-beside an add or any other order (`tests/fixtures/coof_competing_tick`,
+beside an add or any other order (the private fixture set `coof_competing_tick`,
 below), and the engine has none now.
 
 When the add fills while such an exit works, TradingView covers the
 position entry by entry (`global_exit_per_entry_levels`, the 66 synthetic
-tapes of `tests/fixtures/per_entry_exit`, `test_per_entry_exit_tapes`, NYSE:F
+tapes of the private fixture set `per_entry_exit`, `test_per_entry_exit_tapes`, NYSE:F
 15m): each entry has its own bracket at levels from its own fill price, the
 add's bracket is placed at its fill and acts in the rest of that bar, each
 bracket fills once (a re-issued exit gives a consumed entry no new one), every
@@ -1206,7 +1206,7 @@ bar's tick-quantized extreme reaches books on that bar: an on-grid level
 touched or crossed, in either binary spelling of its ladder point (`k / 100`
 or `k * syminfo.mintick`), absolute or relative, and an off-grid level the
 extreme reaches, including one between a sub-tick raw extreme and its chart
-tick. The 68 synthetic tapes of `tests/fixtures/coof_competing_tick`
+tick. The 68 synthetic tapes of the private fixture set `coof_competing_tick`
 (`test_coof_competing_tick_tapes`), NYSE:F 15m over two years, pin it: on
 TradingView every single-unit tape with a competing order is byte-identical
 to its one-exit control, and the engine books all 68 row for row. The engine
@@ -1242,7 +1242,7 @@ only tests change one.
 | `current_exit_keeps_average_price` | while that frozen view holds over the flat book, a generated `strategy.position_avg_price` read returns the pre-fill average | `hold_script_average_price`, `release_script_average_price` |
 
 The rule is pinned by the synthetic tapes of
-`tests/fixtures/pooc_close_fill_view` (`test_pooc_close_fill_view_tapes`),
+the private fixture set `pooc_close_fill_view` (`test_pooc_close_fill_view_tapes`),
 BINANCE:ETHUSDT.P 15m. They cover re-issued and first-issue exits,
 `strategy.close`, `strategy.close_all` and a long mirror, which all keep the
 pre-fill size. The re-issued exit, on its stop and on its limit leg, also
