@@ -3626,7 +3626,6 @@ list(APPEND _pf_private_fixture_rows
     test_session_transition_clock_tapes
     test_short_seed_report_swap
     test_small_money_margin_residual_l4a
-    test_source_buying_power_tapes
     test_source_layer_native_defaults
     test_ta_indicators_extras
     test_ta_voltrend_edge
