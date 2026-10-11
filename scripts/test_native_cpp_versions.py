@@ -1172,6 +1172,28 @@ class AbsentModeTextChecks(unittest.TestCase):
     the manifest half still reports the pinned skip.
     """
 
+    def test_only_the_fixture_reading_classes_carry_the_skip(self):
+        # N8: this suite is a ctest row of the fixtures-absent run, so nothing
+        # at file scope may stand the whole row down -- only the classes and
+        # methods that genuinely read tests/fixtures/native_cpp_abi skip, each
+        # stating that reason. The public text half and the tree-reading
+        # classes run in both worlds whatever this tree holds.
+        module = sys.modules[__name__]
+        classes = {name: obj for name, obj in vars(module).items()
+                   if isinstance(obj, type) and issubclass(obj, unittest.TestCase)}
+        self.assertGreaterEqual(len(classes), 5)
+        fixture_reading = {'FixtureAuthentication'}
+        for name, cls in sorted(classes.items()):
+            with self.subTest(cls=name):
+                marked = bool(getattr(cls, '__unittest_skip__', False))
+                if name in fixture_reading:
+                    self.assertTrue(marked or PRIVATE_FIXTURE_ROOT.exists(),
+                                    f'{name} reads the fixtures and must carry '
+                                    f'requires_private_fixtures')
+                else:
+                    self.assertFalse(marked, f'{name} must run in the fixtures-absent tree')
+        self.assertIn('AbsentModeTextChecks', classes)
+
     TAMPER = ('double price_tick = 0.0;', 'double price_tick = 1.0;')
 
     def scratch_tree(self, tamper: bool) -> Path:
@@ -1227,6 +1249,9 @@ class AbsentModeTextChecks(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    if not PRIVATE_FIXTURE_ROOT.exists():
-        print(PRIVATE_FIXTURE_SKIP_LITERAL + "tests/fixtures/native_cpp_abi")
+    # N8: no whole-file skip signal here. This row runs in the fixtures-absent
+    # CI; the classes that read tests/fixtures/native_cpp_abi skip THEMSELVES,
+    # each printing the pinned literal with its own path in its skip reason,
+    # and the public text half (AbsentModeTextChecks and every other
+    # tree-reading class) runs in both worlds.
     unittest.main()
