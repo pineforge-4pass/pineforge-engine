@@ -3025,16 +3025,21 @@ function(pineforge_add_unit_test test_name)
     endif()
 endfunction()
 
-# Rows whose source or fixture the private-fixture PR removes are registered
-# by the guarded blocks below (one per row in tests/private_fixture_rows.txt)
-# instead of by this loop, so a tree without the private fixtures still
-# configures and every affected row appears as a loud SKIP.
+# Rows whose source, fixture or quoted #include the private-fixture PR
+# removes are registered by guarded blocks (mostly below, or beside their
+# twin registration for the oracle rows; the coof tape row sits before the
+# define loop that consumes its target) instead of by this loop, so a tree
+# without the private fixtures still configures and every affected row
+# appears as a loud SKIP.
 set(_pf_private_fixture_rows
     test_aapl15_margin_brackets_l4a
     test_adapter_coof_relower
+    test_adapter_in_place_reads
     test_adapter_magnifier_intrabar_tapes
     test_adapter_margin_schedule_differential
     test_adapter_receipts_in_place
+    test_adapter_runtime_ambient
+    test_adapter_settlement_carry
     test_adapter_sizing_relower
     test_add_sibling_margin_tapes
     test_admission_rules_tapes
@@ -3043,6 +3048,7 @@ set(_pf_private_fixture_rows
     test_cash_fee_sizing_tapes
     test_chart_tf_security_split_feed
     test_coof_chart_tick_touch_l4c
+    test_coof_forced_waypoint_tapes
     test_coof_immediate_close_final_tapes
     test_coof_immediate_close_tapes
     test_coof_recalc_security_tapes
@@ -3086,6 +3092,8 @@ set(_pf_private_fixture_rows
     test_native_instrument_feed
     test_native_margin_hooks_twin
     test_native_margin_post_fill_path
+    test_native_oracle_day_key_l2
+    test_native_oracle_reversal_same_bar_tx_l2
     test_native_oracle_stop_snapshot_full_l2
     test_native_price_grid
     test_native_session_day_bar_open
@@ -3325,8 +3333,11 @@ pineforge_add_twin_test(test_oracle_relative_exit test_native_oracle_relative_ex
 pineforge_add_twin_test(test_oracle_reversal_close_only
                         test_native_oracle_reversal_close_only_l2)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/oracle/test_oracle_reversal_same_bar_tx.cpp")
+    pineforge_add_unit_test(test_native_oracle_reversal_same_bar_tx_l2)
     pineforge_add_twin_test(test_oracle_reversal_same_bar_tx test_native_oracle_reversal_same_bar_tx_l2)
 else()
+    add_test(NAME test_native_oracle_reversal_same_bar_tx_l2 COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/oracle/test_oracle_reversal_same_bar_tx.cpp")
+    set_tests_properties(test_native_oracle_reversal_same_bar_tx_l2 PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
     add_test(NAME test_oracle_reversal_same_bar_tx COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/oracle/test_oracle_reversal_same_bar_tx.cpp")
     set_tests_properties(test_oracle_reversal_same_bar_tx PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
@@ -3343,8 +3354,11 @@ pineforge_add_twin_test(test_oracle_pooc_immediate test_native_oracle_pooc_immed
 pineforge_add_twin_test(test_oracle_magnifier_distribution
                         test_native_oracle_magnifier_distribution_l2)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/oracle/test_oracle_day_key.cpp")
+    pineforge_add_unit_test(test_native_oracle_day_key_l2)
     pineforge_add_twin_test(test_oracle_day_key test_native_oracle_day_key_l2)
 else()
+    add_test(NAME test_native_oracle_day_key_l2 COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/oracle/test_oracle_day_key.cpp")
+    set_tests_properties(test_native_oracle_day_key_l2 PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
     add_test(NAME test_oracle_day_key COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/oracle/test_oracle_day_key.cpp")
     set_tests_properties(test_oracle_day_key PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
@@ -3696,6 +3710,15 @@ endif()
 if(TARGET test_session_transition_clock_tapes)
     target_compile_definitions(test_session_transition_clock_tapes PRIVATE
         PINEFORGE_SESSION_TRANSITION_CLOCK_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_transition_clock")
+endif()
+# test_coof_forced_waypoint_tapes #includes its per-case .inc, so the target
+# exists only while that include does; the define loop below must still see
+# the target when the fixture is present (the guard lives here, before it).
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_forced_waypoint/cases.inc")
+    pineforge_add_unit_test(test_coof_forced_waypoint_tapes)
+else()
+    add_test(NAME test_coof_forced_waypoint_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/coof_forced_waypoint/cases.inc")
+    set_tests_properties(test_coof_forced_waypoint_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 foreach(tape_target IN ITEMS test_cross_mechanism_tapes test_carried_trail_open_tapes test_pooc_pending_stop_tapes
                             test_coof_marketable_stop_tapes test_coof_close_slippage_tapes
@@ -4473,17 +4496,20 @@ set(PINEFORGE_PR_SLOW_TESTS
 # prefixed. The test also reads the published catalog
 # (docker/run_failure_codes.json) and holds the library's registry to it.
 if(PINEFORGE_BUILD_SOURCE_LAYER)
-    add_executable(test_run_failure_codes test_run_failure_codes.cpp)
-    target_link_libraries(test_run_failure_codes PRIVATE pineforge)
-    target_compile_options(test_run_failure_codes PRIVATE -UNDEBUG -ffp-contract=off
-        -Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-parameter
-        -Wno-unused-function -Wno-sign-compare)
-    target_compile_definitions(test_run_failure_codes PRIVATE
-        PINEFORGE_RUN_FAILURE_CATALOG="${PROJECT_SOURCE_DIR}/docker/run_failure_codes.json")
-    if(PINEFORGE_ENABLE_COVERAGE)
-        target_compile_options(test_run_failure_codes PRIVATE ${_pf_cov_test_flags})
-    endif()
+    # tests/run_failure_codes_strategies.hpp #includes every case's
+    # generated.cpp -- helper_stops among them -- so the target compiles only
+    # while that include does; the row is the pinned placeholder otherwise.
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/run_failure_codes/helper_stops/generated.cpp")
+        add_executable(test_run_failure_codes test_run_failure_codes.cpp)
+        target_link_libraries(test_run_failure_codes PRIVATE pineforge)
+        target_compile_options(test_run_failure_codes PRIVATE -UNDEBUG -ffp-contract=off
+            -Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-parameter
+            -Wno-unused-function -Wno-sign-compare)
+        target_compile_definitions(test_run_failure_codes PRIVATE
+            PINEFORGE_RUN_FAILURE_CATALOG="${PROJECT_SOURCE_DIR}/docker/run_failure_codes.json")
+        if(PINEFORGE_ENABLE_COVERAGE)
+            target_compile_options(test_run_failure_codes PRIVATE ${_pf_cov_test_flags})
+        endif()
         add_test(NAME test_run_failure_codes COMMAND test_run_failure_codes)
     else()
         add_test(NAME test_run_failure_codes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/run_failure_codes/helper_stops/generated.cpp")
@@ -4591,6 +4617,13 @@ else()
     set_tests_properties(test_adapter_coof_relower PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/pine_d2c_scenarios_fixture.hpp")
+    pineforge_add_unit_test(test_adapter_in_place_reads)
+else()
+    add_test(NAME test_adapter_in_place_reads COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/pine_d2c_scenarios_fixture.hpp")
+    set_tests_properties(test_adapter_in_place_reads PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/magnifier_intrabars/mi-ltf-f-1D/meta.json")
     pineforge_add_unit_test(test_adapter_magnifier_intrabar_tapes)
 else()
@@ -4610,6 +4643,20 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_reservation/es15_bars.inc")
 else()
     add_test(NAME test_adapter_receipts_in_place COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/exit_reservation/es15_bars.inc")
     set_tests_properties(test_adapter_receipts_in_place PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/pine_d2c_scenarios_fixture.hpp")
+    pineforge_add_unit_test(test_adapter_runtime_ambient)
+else()
+    add_test(NAME test_adapter_runtime_ambient COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/pine_d2c_scenarios_fixture.hpp")
+    set_tests_properties(test_adapter_runtime_ambient PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/pine_d2c_scenarios_fixture.hpp")
+    pineforge_add_unit_test(test_adapter_settlement_carry)
+else()
+    add_test(NAME test_adapter_settlement_carry COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/pine_d2c_scenarios_fixture.hpp")
+    set_tests_properties(test_adapter_settlement_carry PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_call_rules/bars/f-2025-09-17-2025-09-18.csv")
