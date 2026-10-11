@@ -200,9 +200,10 @@ void replay(const Variant& variant) {
 
 // The variants whose fixture dirs the private-fixture PR removes
 // (tests/fixtures/source_buying_power/{flat-under,flat-equal,pooc-under,
-// pooc-equal,whole-under,whole-equal}). The default run replays the
-// distributed variants only, so the row passes on the fixture-less tree;
-// --private-only replays these, for the pinned row.
+// pooc-equal,whole-under,whole-equal}). With the fixtures present the
+// default run replays the distributed variants and --private-only replays
+// these, for the pinned row; on the fixture-less tree neither runs -- the
+// row is a pinned SKIP placeholder (tests/CMakeLists.txt).
 bool private_variant(const std::string& name) {
     const char* const names[] = {"flat-under", "flat-equal", "pooc-under",
                                  "pooc-equal", "whole-under", "whole-equal"};

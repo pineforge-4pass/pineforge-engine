@@ -119,9 +119,10 @@ struct Sample {
     // True for the samples whose case dirs the private-fixture PR removes
     // (margin_call_rules/boundary/long-admit-m1u, literals/literal-24,
     // literals/literal-21 and every margin_ledger_rules sample, whose bars
-    // files the PR removes with them). The default run replays the
-    // distributed samples only, so the row still passes on the fixture-less
-    // tree; --private-only replays these, for the pinned row.
+    // files the PR removes with them). With the fixtures present the default
+    // run replays the distributed samples only and --private-only replays
+    // these, for the pinned row; on the fixture-less tree neither runs -- the
+    // row is a pinned SKIP placeholder (tests/CMakeLists.txt).
     bool private_fixture;
 };
 

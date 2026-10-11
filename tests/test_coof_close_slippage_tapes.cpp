@@ -70,9 +70,11 @@ public:
 
 // The two hosts read different tapes: CallbackCloseHost reads
 // coof_close_slippage (removed by the private-fixture PR), the partial host
-// reads the distributed coof_close_slippage/partial. The default run keeps
-// only the distributed tape, so the public row passes on the fixture-less
-// tree; --private-only runs the removed-fixture tape for the pinned row.
+// reads coof_close_slippage/partial (removed with it). With the fixtures
+// present the default run replays the partial tape and --private-only runs
+// the removed-fixture tape for the pinned row; on the fixture-less tree
+// neither half runs -- the row is the pinned SKIP placeholder
+// (tests/CMakeLists.txt), so nothing here proves the public mechanisms.
 int main(int argc, char** argv) {
     const bool private_only = argc == 2 && std::string(argv[1]) == "--private-only";
     if (argc > 1 && !private_only) return 2;

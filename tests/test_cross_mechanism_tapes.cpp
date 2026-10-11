@@ -281,9 +281,10 @@ struct Case {
     int frozen;
     bool asserted;
     // True for the one case whose fixture the private-fixture PR removes
-    // (batch_carried_trail). The default run replays the distributed cases
-    // only; --private-only replays the removed-fixture case, so the
-    // fixture-less tree still proves the public mechanisms.
+    // (batch_carried_trail). With the fixtures present the default run
+    // replays the distributed cases only and --private-only replays the
+    // removed-fixture case; on the fixture-less tree neither runs -- the row
+    // is the pinned SKIP placeholder (tests/CMakeLists.txt).
     bool private_fixture;
 };
 
