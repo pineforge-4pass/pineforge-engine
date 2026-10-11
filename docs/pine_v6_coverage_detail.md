@@ -7,7 +7,7 @@
 | **Generated** | 2026-05-17 (post Pine v6 HIGH+MEDIUM sprint) |
 | **Reconciled** | 2026-07-18 — vs codegen-oss `cefeec8` / engine `06bb724`; map type + 11 map functions moved from 🔧 to ✅ after bounded runtime integration |
 | **Audit trail** | `pine_v6_audit_master.md` (2026-05-21 audit + per-fix [RESOLVED] tags), pineforge-engine#122, pineforge-codegen-oss#78 |
-| **Pine v6 reference** | https://www.tradingview.com/pine-script-reference/v6/ (JS-rendered, scraped 2026-05-16) |
+| **Pine v6 reference** | https://www.tradingview.com/pine-script-reference/v6/ (checked 2026-05-16) |
 | **PineForge engine version** | v0.12.0-24-g06bb724 (commit `06bb724`) |
 | **Total Pine v6 identifiers** | 941 |
 
@@ -33,7 +33,7 @@
 
 ## Methodology
 
-**Step 1 — Pine v6 catalog:** Playwright navigated to `https://www.tradingview.com/pine-script-reference/v6/` (JS SPA). The full DOM was evaluated via `document.querySelectorAll('h3')` which returned 941 entries — every identifier in the reference, ordered as the site renders them (Types → Variables → Constants → Functions → Keywords → Operators → Annotations).
+**Step 1 — Pine v6 catalog:** the Pine v6 reference (`https://www.tradingview.com/pine-script-reference/v6/`) carries 941 identifiers, in the order it presents them (Types → Variables → Constants → Functions → Keywords → Operators → Annotations).
 
 **Step 2 — PineForge runtime inventory:** Read all public headers under `include/pineforge/*.hpp`, `src/engine_internal.hpp`, and `docs/coverage.md`. Extracted every exported class, free function, and inline.
 
@@ -1056,11 +1056,12 @@ vs pre-sprint baseline 227 excellent + 1 anomaly: **+6 excellent, 0 regressions*
 
 ## Reproducibility
 
-To re-derive the Pine v6 identifier list:
-1. Open a Playwright browser to `https://www.tradingview.com/pine-script-reference/v6/`
-2. Wait for the JS SPA to fully render (all sections must be in DOM)
-3. Execute: `Array.from(document.querySelectorAll('h3')).map(h => h.textContent.trim())`
-4. The result is the 941-entry flat list used above
+How the Pine v6 identifier list was checked:
+1. Open the Pine v6 reference at `https://www.tradingview.com/pine-script-reference/v6/`
+2. The identifier list is the 941 entries the reference carries (Types → Variables →
+   Constants → Functions → Keywords → Operators → Annotations)
+3. In the order the reference presents them, that is the flat list used above
+4. Re-check it against the reference when the reference changes
 
 To re-derive the PineForge runtime surface:
 1. Read all `*.hpp` under `include/pineforge/` and catalog every class, free function, and inline helper

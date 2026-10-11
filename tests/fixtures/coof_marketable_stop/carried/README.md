@@ -1,7 +1,7 @@
 # Callback Stop After A Carried Entry
 
-Independent synthetic on BINANCE:BTCUSDT 15m, exported October 3, 2026 through
-TradingView's WebSocket strategy report with `--no-note`. The prior short stops
+Independent synthetic on BINANCE:BTCUSDT 15m, recorded October 3, 2026 from a
+TradingView reference run. The prior short stops
 at 10:00 UTC. A market entry placed on the preceding bar fills at the same opening
 print, after that first fill. Its callback's buy stop below the market closes at
 83075.15 immediately; it is not a market newborn from the prior fill's callback.

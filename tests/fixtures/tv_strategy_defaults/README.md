@@ -17,15 +17,14 @@ emits all three for a v6 script that omits them (`PINE_V6_STRATEGY_DEFAULTS`),
 the same seven tapes being its end-to-end rows
 (`tests/test_e2e_strategy_defaults.py` there).
 
-Each directory is one `lab tv` export (channel `ws-report-v1`, `rangeProof`
+Each directory is one recorded TradingView reference run (`rangeProof`
 covered), byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8),
 `metrics.json`, `meta.json`. `metrics.json` `tvTradesCsvHash` is the sha256
 of `tv_trades.csv`. The probes are synthetic, written for this lane; no closed
-or scraped strategy is involved. Every probe trades the same signal (a
+or third-party strategy is involved. Every probe trades the same signal (a
 10/30-bar SMA cross, long only, entered from flat and closed on the opposite
 cross), so the tapes differ only in how TradingView sized each entry.
-Exported on BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-05-01, with `--no-note`
-(no campaign note was recorded).
+Recorded on BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-05-01 without a campaign note.
 
 | tape | trades | `strategy()` declares | first entry (2025-04-01 23:30 UTC+8, 1910) | tv_trades.csv sha256 |
 |---|---:|---|---|---|

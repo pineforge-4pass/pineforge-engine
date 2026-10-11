@@ -2,7 +2,7 @@
 """TradingView's per-entry exit tapes, replayed row for row.
 
 tests/fixtures/per_entry_exit holds independently authored synthetic
-strategies on NYSE:F 15m, exported with `lab tv --no-note`. Each script holds
+strategies on NYSE:F 15m, recorded as reference runs. Each script holds
 one lot (pyramiding 2) and calls strategy.exit with no from_entry and a
 relative leg (profit, loss, or both) on every bar it is held; on the first
 held bar it places, once, an add of the held side that the price reaches

@@ -17,7 +17,7 @@
  * of notional)". That last clause is an empirical claim about the ABSENCE of
  * sub-lot ground truth.
  *
- * WHAT FALSIFIED IT (reversal arm only). A scraped 13-month ETHUSDT.P row
+ * WHAT FALSIFIED IT (reversal arm only). A reference 13-month ETHUSDT.P row
  * (chartprime-power-order-blocks-chartprime; percent_of_equity = 100, margin
  * 100, qty_step 0.0001) carries 2,419 TradingView reversal decisions: 94
  * declines and 2,325 admits. 92 of the 94 declines have margins BELOW one lot
@@ -34,7 +34,7 @@
  *
  * Scope: the one-lot term was REMOVED ON THE REVERSAL ARM ONLY here. The
  * flat-open arm keeps it. The same-direction-add arm kept it until TradingView
- * falsified it too: on NYSE:F's whole shares, lab tv tapes w5b-pa-f-market-p50
+ * falsified it too: on NYSE:F's whole shares, reference tapes w5b-pa-f-market-p50
  * and -pooc-p50 (tests/fixtures/margin_residual, R5 lane
  * W5B-ENG-MARGIN-RESIDUAL) drop every add whose held-plus-own margin exceeds
  * the equity by less than one share's notional ($1.90 .. $9.95 against a
@@ -236,7 +236,7 @@ void test_reversal_above_lot_gap_still_declined() {
 //    E.1  C = 106: equity 10300, qty_add = floor_1(5150/106) = floor_1(48.58)
 //         = 48, required = 5088. Shortfall $88 against a $106 lot, so the add
 //         is DECLINED: TradingView drops a sub-lot shortfall add like any
-//         other (lab tv tapes tests/fixtures/margin_residual
+//         other (reference tapes tests/fixtures/margin_residual
 //         w5b-pa-f-market-p50 and -pooc-p50; R5 lane W5B-ENG-MARGIN-RESIDUAL,
 //         which moved this pin from ADMITTED).
 //    E.2  C = 108: equity 10400, qty_add = floor_1(5200/108) = 48,

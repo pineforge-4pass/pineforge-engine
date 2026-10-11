@@ -96,7 +96,7 @@ SKIP_BUILD=1 SKIP_SPEED=1 JOBS=8 bash benchmarks/run_all.sh
 cat benchmarks/results/summary.md
 ```
 
-**Maintainers: the full 201 slots.** Fetch the closed root from the maintainers' private evidence store (`lab evidence get`, a maintainer-only tool, with the campaign environment sourced). Its directory is gitignored, and every harness step picks it up when it exists:
+**Maintainers: the full 201 slots.** Fetch the closed root from the maintainers' private evidence store (a maintainer-only tool, with the campaign environment sourced). Its directory is gitignored, and every harness step picks it up when it exists:
 
 ```bash
 lab evidence get c77a9c70891b5e4e97405fe6673389c06652a0cc449b380a4d982f1709e62019 --out /tmp/bench-closed.tar.gz

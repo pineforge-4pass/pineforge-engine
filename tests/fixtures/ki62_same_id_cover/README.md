@@ -8,10 +8,10 @@ at its own fill price, a second fill of the same order. The adapter
 add after any such leg fill, even when the leg had reduced nothing but the add
 itself or (FIFO) another id's older lot. TradingView covers only behind the
 leg's reduction of an older lot of the id. Each rule is pinned by synthetic
-probes written for this lane; no closed or scraped strategy is involved.
+probes written for this lane; no closed or third-party strategy is involved.
 
-Each directory is one `lab tv --no-note` export (channel `ws-report-v1`,
-`rangeProof` covered), byte for byte: `strategy.pine`, `tv_trades.csv` (times
+Each directory is one recorded TradingView reference run
+(`rangeProof` covered), byte for byte: `strategy.pine`, `tv_trades.csv` (times
 at UTC+8), `metrics.json`, `meta.json`. `metrics.json` `tvTradesCsvHash` is the
 sha256 of `tv_trades.csv`. Every probe runs on BINANCE:ETHUSDT.P 15,
 2025-04-01 .. 2025-04-03, `pyramiding = 2`, a fixed default size of 1 and an

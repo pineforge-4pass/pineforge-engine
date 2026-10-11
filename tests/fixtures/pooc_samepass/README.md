@@ -1,9 +1,9 @@
 # process_orders_on_close decides the calculation's exits in its close pass (lane W4-ENG-POOC-SAMEPASS, F08)
 
 TradingView's own trades for exits a bar's close calculation places under
-`process_orders_on_close`, written for this lane (no closed or scraped strategy
-is involved). Each directory is one `lab tv --no-note` export (channel
-`ws-report-v1`, `rangeProof` covered), byte for byte: `strategy.pine`,
+`process_orders_on_close`, written for this lane (no closed or third-party strategy
+is involved). Each directory is one recorded TradingView reference run
+(`rangeProof` covered), byte for byte: `strategy.pine`,
 `tv_trades.csv` (times at UTC+8), `metrics.json`, `meta.json`. The ETH probes run
 on BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-05-01, with fixed
 `timestamp("UTC", ...)` cells on 2025-04-08 .. 2025-04-10 and a

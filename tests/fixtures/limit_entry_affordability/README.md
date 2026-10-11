@@ -14,14 +14,14 @@ The engine left LIMIT entries out of its placement check. A re-issue that
 TradingView rejected therefore kept its resting order alive, and that order
 filled later.
 
-The scraped `algotorma-algo-torma-orb-strategy` (BINANCE:BTCUSDT 15, strong)
+The reference `algotorma-algo-torma-orb-strategy` (BINANCE:BTCUSDT 15, strong)
 re-issues its breakout limit on every bar while it is armed. Its last
 re-issue was at 2026-01-14 23:45, on a close of 96951.78 over an equity of
 96846.71. TradingView rejected it; the engine filled the resting order on
 01-15 03:15, the probe's one engine-only trade.
 
-`w8a-btc15-limafford` is one `lab tv --no-note` export (maintainers' private pineforge-workflow,
-channel `ws-report-v1`, `rangeProof` covered), byte for byte:
+`w8a-btc15-limafford` is one recorded TradingView reference run
+(`rangeProof` covered), byte for byte:
 `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json` and
 `meta.json`. It runs on BINANCE:BTCUSDT 15 with an equity of 95000, a default
 fixed quantity of 1, margin 100 % and no commission, and every cell starts

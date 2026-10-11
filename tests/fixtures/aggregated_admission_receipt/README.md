@@ -5,12 +5,12 @@ run on its 60-minute chart and replayed by the engine on that chart's bars and
 on the same two days aggregated from 15- and 5-minute bars.
 `tests/test_aggregated_admission_receipt_tapes.cpp` replays every tape.
 
-Each directory is one `lab tv --no-note` export (pineforge-workflow, channel
-`ws-report-v1`, `rangeProof: covered`), byte for byte: `strategy.pine`,
+Each directory is one recorded TradingView reference run
+(`rangeProof: covered`), byte for byte: `strategy.pine`,
 `tv_trades.csv` (times at UTC+8), `metrics.json` (`tvTradesCsvHash` is the
 sha256 of `tv_trades.csv`), `meta.json`. Chart BINANCE:ETHUSDT.P 60, range
 2025-04-01 .. 2025-05-01; both scripts trade only on 2025-04-03 and 2025-04-04
-(UTC). No closed or scraped strategy is involved.
+(UTC). No closed or third-party strategy is involved.
 
 | tape | declares | trades | tv_trades.csv sha256 |
 |---|---|---:|---|

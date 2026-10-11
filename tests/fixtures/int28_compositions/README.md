@@ -6,12 +6,12 @@ lanes changed the same functions -- `on_applied` (TVDEF-DROPS R3, W3 rules B
 and C, W5 M2, C2 and MK, W8E C1), the exit-reservation functions (W3 rule A)
 beside W5's MR, and `entry` (W5 M1, W6 F10, W8D). The probes below are
 synthetic, written for INT28, in which two lanes' rules act in one run; no
-closed or scraped strategy is involved. The `entry` rules' scopes exclude one
+closed or third-party strategy is involved. The `entry` rules' scopes exclude one
 another (`tests/test_int28_rule_compositions.cpp` says how), so no probe
 combines them.
 
-Each directory is one `lab tv --no-note` export (channel `ws-report-v1`,
-`rangeProof` covered) on BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-04-17,
+Each directory is one recorded TradingView reference run
+(`rangeProof` covered) on BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-04-17,
 byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8),
 `metrics.json`, `meta.json`. `tests/test_int28_rule_compositions.cpp`
 replays each through the Pine host over the 15m bars of

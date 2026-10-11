@@ -5,7 +5,7 @@
 | **Audit date** | 2026-05-21 (initial); enriched same day with F1–F22 clarifications |
 | **Last update** | 2026-06-10 — audit-fix sweep (codegen-oss `7bd20eb` (orig. `974cda7`), engine `6aa1d13`): remaining class-A/H rejections + semantic emission fixes; corpus regenerated (`f143504`), parity unchanged 245 excellent + 1 anomaly |
 | **Audited doc** | `pine_v6_coverage_detail.md` (1039 lines, 941 identifiers) |
-| **Method** | 4 parallel C++/Pine v6 expert agents, line-by-line, Playwright MCP for Pine v6 ref + grep on engine + transpiler. Follow-up: 2 clarification agents with live transpile harness. |
+| **Method** | 4 parallel C++/Pine v6 expert agents, line-by-line, the Pine v6 reference + grep on engine + transpiler. Follow-up: 2 clarification agents with live transpile harness. |
 | **Status** | Historical record, not re-audited since 2026-06-10: where it disagrees with `pine_v6_coverage_detail.md` or `coverage.md`, those pages hold. Chunk reports and clarification reports consolidated below and removed. |
 
 ## Headline
@@ -179,7 +179,7 @@ Identifier resolves to a different runtime symbol than spec.
 ## Methodology
 
 Phase 1 — 4 parallel chunk agents:
-1. Loaded official Pine v6 reference via Playwright MCP (`https://www.tradingview.com/pine-script-reference/v6/` — JS SPA, `<h3>` enumeration).
+1. Loaded the official Pine v6 reference (`https://www.tradingview.com/pine-script-reference/v6/`) — 941 identifiers.
 2. Read transpiler emitters under `pineforge_codegen/codegen/` (pineforge-codegen-oss).
 3. Read engine headers under `include/pineforge/`.
 4. Verified bucket + backing + notes + emitted-value for EVERY row (no skipping, no spot-check exemption).

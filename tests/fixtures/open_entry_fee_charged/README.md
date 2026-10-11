@@ -6,10 +6,10 @@ partial close) are already out of `strategy.netprofit`, so out of
 `strategy.equity` and of `strategy.netprofit_percent` /
 `strategy.openprofit_percent` too; `strategy.openprofit` stays gross of them.
 Each rule is pinned by synthetic probes written for this lane; no closed or
-scraped strategy is involved.
+third-party strategy is involved.
 
-Each directory is one `lab tv --no-note` export (channel `ws-report-v1`,
-`rangeProof` covered), byte for byte: `strategy.pine`, `tv_trades.csv` (times
+Each directory is one recorded TradingView reference run
+(`rangeProof` covered), byte for byte: `strategy.pine`, `tv_trades.csv` (times
 at UTC+8), `metrics.json`, `meta.json`. `metrics.json` `tvTradesCsvHash` is the
 sha256 of `tv_trades.csv`. Every probe runs on BINANCE:ETHUSDT.P 15,
 2025-04-01 .. 2025-04-03, with an initial capital of 100000 and a fixed

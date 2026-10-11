@@ -21,13 +21,13 @@ TradingView fills: under `pyramiding=0` as a same-side add, and in every case
 when the queued close flattened the position, which cancelled the pass's
 same-side market entries whichever call came first.
 
-The scraped `pf-probe-concord-frangestate` (CME_MINI:NQ1! 15, strong) runs a
+The reference `pf-probe-concord-frangestate` (CME_MINI:NQ1! 15, strong) runs a
 `close_all` and then a same-side entry in one pass on 22 bars. TradingView
 re-enters on the 7 bars where (held + qty) x close x 20 fits the equity and
 drops the entry on the other 15; the engine re-entered on all 22.
 
-`w8a-pooc-sameside-closeall` is one `lab tv --no-note` export
-(maintainers' private pineforge-workflow, channel `ws-report-v1`, `rangeProof` covered), byte for
+`w8a-pooc-sameside-closeall` is one recorded TradingView reference run
+(`rangeProof` covered), byte for
 byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json`,
 `meta.json`. It runs on BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2026-05-01, with
 `process_orders_on_close`, `pyramiding=0`, margin 100/100, 10000 of capital
@@ -50,7 +50,7 @@ script closes it and then places one entry in the same pass:
 trades), `strategy.pine` sha256
 `575baae2d74db30e68fcd3fe832122d0b8ada22b85de94ea45b024d037a2dc44`.
 
-`w8a-pooc-close-reentry-pyr2` (same channel and chart, `pyramiding=2`, fixed 1,
+`w8a-pooc-close-reentry-pyr2` (same chart, `pyramiding=2`, fixed 1,
 100000 of capital) enters L at 10:00 UTC each day; at
 10:15 it calls `strategy.close("L")` then `strategy.entry("L_add")` on even
 days and the two in the other order on odd days, and cleans up at 11:00.

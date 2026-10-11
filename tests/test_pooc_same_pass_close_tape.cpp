@@ -15,12 +15,12 @@
  * cancelled every same-side market entry of the pass when a queued
  * strategy.close(id) flattened the position.
  *
- * The scraped pf-probe-concord-frangestate (CME_MINI:NQ1! 15) closes its
+ * The reference pf-probe-concord-frangestate (CME_MINI:NQ1! 15) closes its
  * position and re-enters on the same side in one pass: TradingView drops
  * the entry on 15 of those 22 bars, where (held + qty) x close x 20 exceeds
  * the equity, and the engine re-entered on all 22.
  *
- * One lab tv export (tests/fixtures/pooc_same_pass_close/
+ * One recorded reference run (tests/fixtures/pooc_same_pass_close/
  * w8a-pooc-sameside-closeall, BINANCE:ETHUSDT.P 15) replayed through the
  * Pine adapter under the configuration its generated constructor declares,
  * over the corpus 15m bars of bars.inc (2025-04-01 12:00 .. 04-09 00:00 UTC,

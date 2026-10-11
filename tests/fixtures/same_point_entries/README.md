@@ -1,13 +1,13 @@
 # Which order fills first at one fill point (lanes W6-ENG-FILL-ORDER, W6B-ENG-PAIRS)
 
-Each directory is one `lab tv --no-note` export (channel `ws-report-v1`,
-`rangeProof` covered) of a synthetic probe written for these lanes, byte for
+Each directory is one recorded TradingView reference run
+(`rangeProof` covered) of a synthetic probe written for these lanes, byte for
 byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8), `metrics.json`,
 `meta.json`. `metrics.json` `tvTradesCsvHash` is the sha256 of
 `tv_trades.csv`. Every probe runs on BINANCE:ETHUSDT.P 15, 2025-04-01 ..
 2025-05-01, with fixed `timestamp("UTC", ...)` cells on 2025-04-07 ..
 2025-04-10 and a cleanup (`strategy.cancel_all()` plus `strategy.close_all()`)
-after each cell. No closed or scraped strategy is involved.
+after each cell. No closed or third-party strategy is involved.
 
 `tests/test_same_point_entries_tapes.cpp` replays the tapes through the Pine
 adapter under the configuration the generated constructor declares for each

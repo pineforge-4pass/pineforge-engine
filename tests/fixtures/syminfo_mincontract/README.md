@@ -1,8 +1,8 @@
 # `syminfo.mincontract` on every campaign lane (lane RUN-HARNESS, item 3)
 
 What does TradingView report as `syminfo.mincontract` on the charts the campaign
-measures? Each directory is one `lab tv --no-note` export (channel
-`ws-report-v1`, `rangeProof: covered`) of one synthetic read-out script, byte
+measures? Each directory is one recorded TradingView reference run
+(`rangeProof: covered`) of one synthetic read-out script, byte
 for byte: `strategy.pine`, `tv_trades.csv` (times UTC+8), `metrics.json`,
 `meta.json`; `metrics.json` `tvTradesCsvHash` is the sha256 of `tv_trades.csv`.
 The script (`pf-w2-mincontract-readout`, identical in every directory) enters
@@ -37,7 +37,7 @@ Every value equals the lane's quantity step, the `PINEFORGE_VERIFY_QTY_STEP`
 its registry template (`lane_input_templates.environment`, read 2026-09-28)
 declares: aapl, es1, f, nifty, nq1 (15 and 1d) `1`; btcusdt-15/-1d `1e-05`;
 eurusd and xauusd (15 and 1d) `0.01`; ethusdtp-1d `0.0001`. The two ETH 15m
-templates (eth-scraped-15, eth-corpus-15) declare no step; the Lab verifier
+templates (the ETH 15 tape lane and the corpus ETH 15 lane) declare no step; the verifier
 substitutes ETHUSDT.P's 0.0001 there and records it as its default, not as lane
 evidence.
 

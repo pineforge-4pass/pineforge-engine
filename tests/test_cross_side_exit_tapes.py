@@ -2,7 +2,7 @@
 """TradingView's cross-side exit tapes, replayed row for row.
 
 tests/fixtures/cross_side_exit holds independently authored synthetic
-strategies on NYSE:F 15m, exported with `lab tv --no-note`. Each `*-opp-*`
+strategies on NYSE:F 15m, recorded as reference runs. Each `*-opp-*`
 script holds a position and, on every bar it is held, places an entry order of
 the OTHER side that rests and is never reached, then calls strategy.exit with
 no from_entry; its `*-ctl-*` twin is the same script without that entry.

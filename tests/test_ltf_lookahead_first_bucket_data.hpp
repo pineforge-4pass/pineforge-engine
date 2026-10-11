@@ -4,11 +4,11 @@
 // btcusdt-1d feeds.chart, feed-btcusdt-1d-chart, 111091 bytes) and the 1m finer
 // feed 787fd2e15bfeddb062cbb7905248ff4be2fe5c695bbe971f9322826f16528b86 (lane
 // btcusdt-1d feeds.finer, 153982613 bytes, read from the byte-identical local
-// copy pinescript-scrapper/ohlcv/BINANCE-BTCUSDT/1m.csv). Bars are
+// copy of the lane's own 1m feed). Bars are
 // {open, high, low, close, volume, timestamp_ms}; the chart bars are stamped at
 // 00:00 UTC (24x7 crypto), the window is TradingView's deep-backtest range
 // start of the pin (2025-04-01) so the requested 15m series seeds exactly as
-// TradingView's did (lab tv notrade-ltf-sample-btc1d, 2026-09-05).
+// TradingView's did (the reference run notrade-ltf-sample-btc1d, 2026-09-05).
 #pragma once
 #include <pineforge/bar.hpp>
 

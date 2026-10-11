@@ -4,10 +4,10 @@ TradingView checks a book at a bar's close after the script has run there,
 and a margin call or a close it has placed is an order sized when it was
 placed, executed as a plain market order: one whose book shrank before it
 filled opens the rest on the other side. Each directory is one
-`lab tv --no-note` export of a synthetic probe written for this lane (channel
-`ws-report-v1`, `rangeProof` covered), byte for byte: `strategy.pine`,
+recorded TradingView reference run of a synthetic probe written for this lane
+(`rangeProof` covered), byte for byte: `strategy.pine`,
 `tv_trades.csv` (times at UTC+8), `metrics.json`, `meta.json`; `metrics.json`
-`tvTradesCsvHash` is the sha256 of `tv_trades.csv`. No closed or scraped
+`tvTradesCsvHash` is the sha256 of `tv_trades.csv`. No closed or third-party
 strategy is involved.
 
 `tests/test_margin_opposite_tapes.cpp` replays every tape through the Pine

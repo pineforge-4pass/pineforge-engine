@@ -17,7 +17,7 @@
  * N; lane W8E-EXITS's rule).
  *
  * The lane W10 diag-w5r synthetic script (tests/fixtures/pooc_add_close, one
- * `lab tv` export, BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-05-01; cells on
+ * recorded reference run, BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-05-01; cells on
  * 2025-04-14 .. 04-16, each a market entry at t0 and orders at t0 + 15m,
  * fixed 1, slippage 3, commission 0.05 %). The row replays the tape through
  * the Pine adapter over the corpus 15m chart feed (bars.inc) and requires all
@@ -68,7 +68,7 @@ struct FeedBar {
 #include "fixtures/pooc_add_close/bars.inc"
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-// BINANCE:ETHUSDT.P's quantity step and price tick (lane eth-scraped-15).
+// BINANCE:ETHUSDT.P's quantity step and price tick.
 constexpr double kLot = 0.0001;
 constexpr double kTick = 0.01;
 

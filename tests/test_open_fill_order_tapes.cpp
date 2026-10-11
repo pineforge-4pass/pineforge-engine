@@ -11,12 +11,12 @@
  * with. The native matcher breaks a same-point tie by queue order, so the
  * engine filled them in placement order: a safety-order limit resting beside
  * a take-profit close_all opened and was closed by it at once, and limits
- * placed in descending order filled in that order. The scraped
+ * placed in descending order filled in that order. The reference
  * job-2712-3commas-3commas-gold-vault-long (BINANCE:ETHUSDT.P 1D) and
  * 3commas-3commas-silicon-vault-long-intc-dca-strategy keep their DCA limits
  * resting beside the take-profit close_all.
  *
- * Two lab tv --no-note exports (tests/fixtures/open_fill_order):
+ * Two recorded reference runs (tests/fixtures/open_fill_order):
  *
  *   w8a-dca-open (lane W8A-SIGSTATE-1, BINANCE:ETHUSDT.P 15, pyramiding=3, a
  *   cash default, an explicit qty on every call; a byte-identical copy of

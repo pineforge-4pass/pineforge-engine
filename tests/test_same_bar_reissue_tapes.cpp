@@ -17,7 +17,7 @@
  * first call had reached the native core (ab9714be's R18 pins); it reversed
  * a buy, a fixed or cash default, an explicit qty, and every reissue whose
  * first call waited in the callback's same-bar batch (every fixed default,
- * and a variable size over a single-lot short). The scraped
+ * and a variable size over a single-lot short). The reference
  * you970716-snrz-0-7-1 calls strategy.entry twice per signal, so its
  * reversals under percent_of_equity 10 opened whole positions where
  * TradingView opened slivers (BINANCE:BTCUSDT 15, 2025-10-19 08:30 UTC: TV
@@ -28,7 +28,7 @@
  * each is a control below.
  *
  * Each row replays TradingView's own tape of a synthetic probe
- * (tests/fixtures/same_bar_reissue, fifteen lab tv exports on
+ * (tests/fixtures/same_bar_reissue, fifteen recorded reference runs on
  * BINANCE:ETHUSDT.P 15: six w8a-* of lane W8A-SIGSTATE-1 and nine w8b-* of
  * lane W8B-SIGSTATE-2) through the Pine adapter under the configuration the
  * generated constructor declares for it, over the corpus 15m bars of

@@ -5,7 +5,7 @@ The engine books a position still open after its FINAL bar as TradingView's
 range-end close (open_at_end, at that bar's close). That final bar must be
 TV's last bar, not the feed's: the BINANCE:ETHUSDT.P 15 chart feed runs on
 to 2026-05-04 15:00 UTC while every ETH tape's range ends 2026-05-01 (228 of
-397 scrapper tapes with an Open row at 05-01 08:00 (+8) = 05-01 00:00 UTC @
+397 reference tapes with an Open row at 05-01 08:00 (+8) = 05-01 00:00 UTC @
 2261.44 = that bar's close). Unbounded, the row would be booked on 05-04
 15:00 @ 2365.09, a different bar ~4.6% off TV's, and fail exit/pnl against
 TV's Open row where it was previously simply absent.
@@ -13,7 +13,7 @@ TV's Open row where it was previously simply absent.
 run_strategy.py therefore bounds the feed (``ohlcv_end_ms``) to
 TradingView's RANGE END, read from the tape's metrics.json — the bars
 opening at or before ``to`` as 00:00 UTC (``wsProvenance.requestedRange.to``
-when the ws exporter recorded it, else the ``to`` date) — and writes the
+when the tape records it, else the ``to`` date) — and writes the
 range-end close rows, each marked "open" in the CSV's trailing ``Engine
 range-end`` column. Not the tape's last trade row: a first cut did that
 and the full-population gate failed hard.regression on
@@ -26,10 +26,10 @@ the fallback for a metrics.json with no range. Under this (v2) behaviour
 every unmarked lane measured was clean: f-1d 10/10 engine-0 -> excellent,
 waranyutrkm 110/110 at 100%, the 8 unmarked range-end ETH tapes unchanged.
 
-The same for every tape. The ws-report-v1 exporter prints the range-end
+The same for every tape. The reference tape prints the range-end
 position as an ordinary closed trade with an empty Signal (every 1D lane,
-most 15m); the browser export prints the same row with Signal "Open" (227
-of the 396 scraped ETH tapes). Under v4 a marked tape was measured as the
+most 15m); the date-only tape prints the same row with Signal "Open" (227
+of the 396 reference ETH tapes). Under v4 a marked tape was measured as the
 baseline had measured it — unbounded, the marks withheld — because the
 canonical grader paired the baseline's post-range closes with TV's Open
 rows on entry time, and v2 (bound + emit) moved pnlP90 on the three
@@ -81,7 +81,7 @@ def _utc_ms(y: int, m: int, d: int, hh: int = 0, mm: int = 0) -> int:
     return int(datetime(y, m, d, hh, mm, tzinfo=timezone.utc).timestamp() * 1000)
 
 
-# Every campaign tape: from 2025-04-01 to 2026-05-01, i.e. the ws exporter's
+# Every campaign tape: from 2025-04-01 to 2026-05-01, i.e. the tape's own
 # requestedRange {from: 1743465600000, to: 1777593600000}.
 RANGE_TO_MS = 1777593600000
 assert RANGE_TO_MS == _utc_ms(2026, 5, 1)
@@ -116,7 +116,7 @@ def _write_metrics(path: Path, metrics: dict) -> None:
     path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
 
-# The scrapper's browser export (ETH, AAPL 15, EURUSD): the range as dates.
+# The date-only reference (ETH, AAPL 15, EURUSD): the range as dates.
 BROWSER_METRICS = {
     "strategy": "waranyutrkm-asian-box-breakout-eda-tuned",
     "symbol": "BINANCE:ETHUSDT.P", "interval": "15",
@@ -125,7 +125,7 @@ BROWSER_METRICS = {
     "deepBacktesting": True, "trades": 110,
 }
 
-# The ws-report-v1 export (F, BTC, ES, NQ, XAU, NIFTY, AAPL 1D): the dates
+# The recorded reference run (F, BTC, ES, NQ, XAU, NIFTY, AAPL 1D): the dates
 # plus the exact window sent, and the range TV returned.
 WS_METRICS_F_1D = {
     "validationEligible": True, "strategy": "orb-lite",
@@ -173,7 +173,7 @@ class MetricsRangeEndTests(unittest.TestCase):
 
     def test_rule_matches_every_lanes_returned_range(self) -> None:
         # TradingView's own returnedRange.to on the ws tapes (survey of the
-        # scrapper's lane directories, 2026-09-02) is the open of the last
+        # reference lane directories, 2026-09-02) is the open of the last
         # bar at or before requestedRange.to = 05-01 00:00 UTC: the bar
         # OPENING at `to` is inside the range, the next one is not, and
         # `to` is UTC midnight even on CME's America/Chicago chart.
@@ -210,7 +210,7 @@ class LoadTvRangeEndTests(unittest.TestCase):
             self.assertNotEqual(_load_tv_range_end_ms(d, TZ8), LAST_EXIT)
 
     def test_open_position_row_sits_on_the_range_end(self) -> None:
-        # Browser export: the Open row at 05-01 08:00 (+8) IS the range end.
+        # Date-only reference: the Open row at 05-01 08:00 (+8) IS the range end.
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             _write_tape(d / "tv_trades.csv", [
@@ -248,7 +248,7 @@ class LoadTvRangeEndTests(unittest.TestCase):
     def test_no_metrics_falls_back_to_the_tapes_last_row(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
-            # Browser tape ending on its Open row: the fallback is the range end.
+            # Date-only tape ending on its Open row: the fallback is the range end.
             _write_tape(d / "tv_trades.csv", [
                 (1, "Exit long", "2026-04-29 10:15", "X", "2310.5"),
                 (1, "Entry long", "2026-04-28 09:00", "A", "2290.0"),
@@ -419,7 +419,7 @@ class FeedBoundTests(unittest.TestCase):
 
 # --- the range-end row and the tape's marker --------------------------
 
-# The 3commas grid-bot shape (browser export): closed lots, then the lots
+# The 3commas grid-bot shape (date-only reference): closed lots, then the lots
 # still open at the range end, each marked "Open" on its exit row at
 # 05-01 08:00 (+8) @ 2261.44.
 BROWSER_OPEN_TAPE = [
@@ -431,7 +431,7 @@ BROWSER_OPEN_TAPE = [
     (1, "Entry long", "2026-04-28 09:00", "A", "2290.0"),
 ]
 
-# The same position on a ws-report-v1 tape: the exit row has no Signal.
+# The same position on a reference tape: the exit row has no Signal.
 WS_OPEN_TAPE = [
     (3, "Exit long", "2026-05-01 08:00", "", "2261.44"),
     (3, "Entry long", "2026-04-30 20:45", "B", "2189.13"),
@@ -644,7 +644,7 @@ class RangeEndRegimeTests(unittest.TestCase):
             self.assertIn("rows written", why)
 
     def test_unmarked_browser_metrics_tape_is_bounded_at_the_to_date(self) -> None:
-        # A browser-export metrics.json (dates only) beside a tape with no
+        # A metrics.json without a range (dates only) beside a tape with no
         # Open rows: bounded at `to` as UTC midnight.
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)

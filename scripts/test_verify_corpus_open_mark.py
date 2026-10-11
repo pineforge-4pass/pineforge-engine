@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """A lot still open at the range's end is marked twice, and the two marks
-pair: TradingView's browser export writes its exit row with Signal "Open";
+pair: a date-only TradingView tape writes its exit row with Signal "Open";
 the engine, fed to TradingView's range end, books the same lot as its
 range-end close (open_at_end) and marks the exit row in the trailing
 ``Engine range-end`` column of engine_trades.csv. The pair is a matched
@@ -17,8 +17,8 @@ schedule path as ONE aggregate |sum(tv) - sum(eng)| / |sum(tv)|, and the
 marks' rounding summed into it moved the metric by itself (round 3,
 2026-09-02: 0.5536 -> 0.6675 on xlm with 21 of 22 marks exact to the cent).
 
-Why the exit must stay out: a browser export's Open row can carry the quote
-at EXPORT time, not a bar's print — all 12 sampled OANDA:EURUSD registry
+Why the exit must stay out: a reference Open row can carry the quote
+at recording time, not a bar's print — all 12 sampled OANDA:EURUSD registry
 tapes end with Open rows at 2026-05-01 08:00 (+8) @ 1.17256 while the
 feed's last bar is o 1.17289 h 1.17299 l 1.17282 c 1.1729; the engine's
 row is priced at that close, and the 0.029% is not parity information.
@@ -27,7 +27,7 @@ Unpaired marks are ordinary rows. A TV Open row the engine closed for real
 on an earlier bar keeps its exit/pnl deltas (TV held to the end, the
 engine did not); one the engine never opened leaves the coverage
 denominator as before. An engine range-end row for a lot the tape closed
-is matched by entry and gated like any close. A ws-report-v1 tape marks
+is matched by entry and gated like any close. A reference tape marks
 nothing and prices the row at the last bar's close — the engine's row —
 so it pairs as an ordinary closed trade and the grader is inert.
 """

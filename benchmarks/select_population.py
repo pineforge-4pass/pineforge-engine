@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select the benchmark population: 100 corpus probes + 100 closed scraped scripts.
+"""Select the benchmark population: 100 corpus probes + 100 closed reference scripts.
 
 Deterministic (``--seed``, default 20260921). Writes
 ``benchmarks/results/selection.json`` (machine manifest) and
@@ -19,12 +19,11 @@ Corpus half (public)
     member is drawn per bin.
 
 Closed half (private artifacts, public manifest)
-    Drawn from the campaign population document (``lab population show`` ->
-    ``lab evidence get <fileSha256>``): ``source == "scrapper"``,
+    Drawn from the campaign population document: ``source == "scrapper"``,
     ``symbol == "BINANCE:ETHUSDT.P"``, ``timeframe == "15"`` -- the only
     dataset the bench feed (Binance ETH/USDT-USDT perp 15m) and the TV tapes
     agree on -- with anomaly-surface probes excluded. The tape bytes are read
-    from the scrapper evidence tree and must hash to the population's
+    from the recorded evidence tree and must hash to the population's
     ``tvTradesSha256`` pin. A probe is excluded when its tape window is not
     inside the bench feed, or when the campaign's latest verify report ran it
     on the 1m feed (finer-TF ``request.security`` / ``request.security_lower_tf``:

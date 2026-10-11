@@ -1,7 +1,7 @@
 # Source-time buying power tapes
 
-These independently authored strategies were exported from TradingView's
-WebSocket strategy report on 2026-10-03. Each directory records the exact source,
+These independently authored strategies were recorded as TradingView reference
+runs on 2026-10-03. Each directory records the exact source,
 symbol, interval, UTC date range, report hashes, and export count in
 `provenance.json`. CSV trade timestamps are UTC+8. `bars.csv` contains the matching
 chart bars in UTC milliseconds; symbol tick and lot grids are set explicitly by

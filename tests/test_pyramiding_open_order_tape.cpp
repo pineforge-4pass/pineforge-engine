@@ -9,12 +9,12 @@
  * default quantity, refused a priced entry at its fill once the open trades
  * reached the cap.
  *
- * The scraped job-2712-3commas-3commas-gold-vault-long (BINANCE:BTCUSDT and
+ * The reference job-2712-3commas-3commas-gold-vault-long (BINANCE:BTCUSDT and
  * BINANCE:ETHUSDT.P 1D) rests its safety-order limits at the cap:
  * TradingView books five lots at pyramiding=4 where the engine refused the
  * fifth.
  *
- * One lab tv export (tests/fixtures/pyramiding_open_order/w8a-dca-open,
+ * One recorded reference run (tests/fixtures/pyramiding_open_order/w8a-dca-open,
  * BINANCE:ETHUSDT.P 15, pyramiding=3, a cash default, an explicit qty on
  * every call) replayed through the Pine adapter under the configuration its
  * generated constructor declares, over the corpus 15m bars of bars.inc

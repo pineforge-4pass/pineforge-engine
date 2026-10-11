@@ -16,7 +16,7 @@
  * all-in reversal SURVIVES a rule-5 whole drop (round 11 family AG; campaign
  * notes log-20260905t232805z-41661c90 and log-20260905t233556z-7f5ce2ed).
  *
- * The scrapper wrapper's reversal idiom is strategy.entry(opposite) THEN
+ * The wrapper's reversal idiom is strategy.entry(opposite) THEN
  * strategy.close(current) on one signal bar. When TradingView's price-scale
  * margin check (engine.hpp rule 5: P = sig10(sig10(E_s) / Q) < tick(close_S))
  * drops the reversal, the reversal order is gone at placement and the
@@ -27,8 +27,8 @@
  * suppress_declined_reversal_close_legs). Rule 2 (E_s < sig10(cost)) keeps
  * the reversal's own close leg, whose row carries the reversal's id.
  *
- * Pinned by 17 lab tv tapes on OANDA:EURUSD 15 (scratch ~/pf-scratch/pins on
- * the campaign machine; strategy.equity / position_size in every order
+ * Pinned by 17 recorded reference tapes on OANDA:EURUSD 15 (the campaign
+ * machine's pins; strategy.equity / position_size in every order
  * comment, the solved E_s read back to 1e-9), replayed here on the registry
  * feed's bars 2025-05-19..05-27 (test_famag_close_survives_data.hpp) ROW FOR
  * ROW — entry bar, side, fill price, quantity, exit bar, exit price, 'Margin

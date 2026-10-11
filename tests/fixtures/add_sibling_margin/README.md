@@ -4,7 +4,7 @@ A grid bot buys every level the close crossed, so one bar can place many
 MARKET entries on top of a position it already holds. TradingView's broker
 treats such a bar's adds as a group, and three rules follow from its tapes.
 Each is pinned here by synthetic probes written for this lane; no closed or
-scraped strategy is involved.
+third-party strategy is involved.
 
 - **AS (admission).** Each add is judged against the position held when it was
   placed plus its own units, not against a sibling that filled a moment earlier
@@ -33,8 +33,8 @@ money / close floored to 0.0001, never `strategy.equity`: under a commission
 TradingView's `strategy.equity` is net of the open trades' entry fees, which the
 engine's is not, and an equity-sized order would differ by that alone.
 
-Each directory is one `lab tv --no-note` export (channel `ws-report-v1`,
-`rangeProof` covered), byte for byte: `strategy.pine`, `tv_trades.csv` (times
+Each directory is one recorded TradingView reference run
+(`rangeProof` covered), byte for byte: `strategy.pine`, `tv_trades.csv` (times
 at UTC+8), `metrics.json`, `meta.json`. `metrics.json` `tvTradesCsvHash` is the
 sha256 of `tv_trades.csv`.
 

@@ -6,7 +6,7 @@
  * 12:00 holds the 12:30 reopen; on CBOT:ZC1! (1900-0745,0830-1320
  * America/Chicago) the one opening at 08:00 holds the 08:30 reopen.
  *
- * TradingView (tests/fixtures/session_windows, `lab tv --no-note` exports of
+ * TradingView (tests/fixtures/session_windows, recorded reference runs of
  * this lane): both bars are in market, neither pre- nor post-market, and
  * neither is a session day's first or last bar; its 60- and 240-minute bars
  * open at the same instants as the engine's aggregation of TradingView's own

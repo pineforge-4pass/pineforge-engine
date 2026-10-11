@@ -10,11 +10,11 @@
  * own realized P&L is not yet in the equity TradingView checks) also ran at
  * the open: it read the winner's whole open profit as a loss at least the
  * 1.5 % threshold, blocked the day and dropped every later order. The
- * scraped officialjackofalltrades-aureate-market-architecture-strategy-joat
+ * reference officialjackofalltrades-aureate-market-architecture-strategy-joat
  * (BINANCE:ETHUSDT.P 1D, 2026-02-07) lost TradingView's two re-entries of
  * that day this way.
  *
- * One lab tv export (tests/fixtures/intraday_loss_open_fill/w8a-ild-open,
+ * One recorded reference run (tests/fixtures/intraday_loss_open_fill/w8a-ild-open,
  * BINANCE:ETHUSDT.P 1D, 2025-04-01 .. 2026-05-01) replayed through the Pine
  * adapter under the configuration its generated constructor declares, over
  * the lane's own daily bars (bars.inc): every trade must be the engine's --

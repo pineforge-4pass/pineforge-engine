@@ -23,7 +23,7 @@ call had reached the native core (ab9714be's R18 pins,
 `tests/test_replaced_percent_short_market.cpp`); it reversed a buy, a fixed or
 cash default, an explicit qty, and every reissue whose first call waited in the
 callback's same-bar batch (every fixed default, and a variable size over a
-single-lot short). The scraped `you970716-snrz-0-7-1` calls `strategy.entry`
+single-lot short). The reference `you970716-snrz-0-7-1` calls `strategy.entry`
 twice per signal (its `execute_trade()` body is written twice), so every
 reversal it made under `percent_of_equity 10` opened a whole new position where
 TradingView opened a sliver: BINANCE:BTCUSDT 15, 2025-10-19 08:30 UTC, TV long
@@ -36,8 +36,7 @@ What keeps TradingView's full reversal (the controls):
 - a LIMIT first call re-issued as a MARKET order on the same bar (cell K);
 - a `strategy.cancel` of the id between the two calls (cell N).
 
-Each directory is one `lab tv --no-note` export (maintainers' private pineforge-workflow, channel
-`ws-report-v1`, `rangeProof` covered), byte for byte: `strategy.pine`,
+Each directory is one recorded TradingView reference run (`rangeProof` covered), byte for byte: `strategy.pine`,
 `tv_trades.csv` (times at UTC+8), `metrics.json`, `meta.json`. `metrics.json`
 `tvTradesCsvHash` is the sha256 of `tv_trades.csv`. Every probe runs on
 BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-05-01.

@@ -13,7 +13,7 @@
  * such a stop for the next bar (job-1856 DPO/MACD/DI/SMA on EURUSD and
  * ETHUSDT.P 1D).
  *
- * The lane's own synthetic script, one `lab tv --no-note` export
+ * The lane's own synthetic script, one recorded reference run
  * (BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-04-15), stateless per cell: an
  * 8-hour UTC cycle, the first entry placed at the hh:30 close and filled at
  * the hh:45 open;
@@ -71,7 +71,7 @@ struct FeedBar {
 #include "fixtures/coof_open_newborn_exit/bars.inc"
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-// BINANCE:ETHUSDT.P's quantity step and price tick (lane eth-scraped-15).
+// BINANCE:ETHUSDT.P's quantity step and price tick.
 constexpr double kLot = 0.0001;
 constexpr double kTick = 0.01;
 

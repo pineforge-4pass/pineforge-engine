@@ -8,7 +8,7 @@
 > `src/source/pine_strategy_host.cpp`) or in the surviving helpers of
 > `src/engine_orders.cpp`. None of it is a kernel contract, and a native host
 > that does not attach the Pine frontend sees none of it. The text is kept
-> verbatim so the measurement provenance (campaign notes, `lab tv` pins, tape
+> verbatim so the measurement provenance (campaign notes, reference pins, tape
 > names) survives the move.
 
 ## 1. TradingView's ten-significant-digit money rule
@@ -30,7 +30,7 @@ pinned and implemented, with the per-rule scopes described below:
   1. SIZING — a default percent_of_equity order is floored from the
      ROUNDED equity (calc_qty): the lot count flips one lot early/late
      when the exact equity is within half a money unit of a lot boundary
-     (~200 lab tv capital sweeps on OANDA:EURUSD 15 2025-04-01, scratch
+     (~200 reference capital sweeps on OANDA:EURUSD 15 2025-04-01, scratch
      famr-adm-*: revc 998763.3420484 -> 922832.66, 998763.3420503 ->
      922832.67; S2 1001759.6342676 -> one lot BELOW the exact floor).
      The divisor is the price AS TRADINGVIEW HOLDS IT — the tick count
@@ -479,7 +479,7 @@ from_entry called before the entry. Its tapes are
 
 One reference model of these rules reproduces all 563 tapes row for row, with
 no counterexample. Every tape is a synthetic script written for these rules
-and exported with the lab's TradingView exporter. The tapes are committed with
+and recorded as a TradingView reference tape. The tapes are committed with
 their scripts, parameters and bar windows. The tests replay each tape through
 `PineStrategyHost` and compare TradingView's rows with the engine's report
 rows; a tape the engine does not reproduce must be listed in its test, with
@@ -891,7 +891,7 @@ No callback or stable-frame ABI read occurs between its two fills.
 ```
 
 Since R5 lane PAR-MARGIN the adapter keeps the placement quantity above
-100 % as well: eight `lab tv` tapes of a 390-400 % stop on NYSE:F
+100 % as well: eight recorded reference tapes of a 390-400 % stop on NYSE:F
 (`tests/fixtures/margin_entry_bar/pm-m10-*`) open the placement quotient, never
 the fill's (`tests/test_adapter_margin_schedule_differential.cpp`, "M10 on
 tapes"). The margin call those tapes book at a half-cent low is TradingView's
@@ -1251,7 +1251,7 @@ clears each part, and exactly the re-issued short tapes depart. It also
 replays every tape as a stream with both parts on and off, and requires the
 per-bar broker-state hashes with the average part on and off to be equal
 wherever the trades are, so a held average that outlived its pass fails it.
-The scraped `job-2947` probe on BINANCE:ETHUSDT.P 15 lost its 2026-01-08
+The reference `job-2947` probe on BINANCE:ETHUSDT.P 15 lost its 2026-01-08
 23:30 UTC short and every later trade: a late exit observer behind a
 cooldown fired one bar early.
 

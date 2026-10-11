@@ -2,10 +2,10 @@
 
 TradingView's own `time()` / `time_close()` values with `bars_back` and
 `timeframe_bars_back` on every bar of six charts (R5 lane TAIL-E). Each
-directory is one `lab tv --no-note` export (channel `ws-report-v1`), byte for
-byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8, the exporter's
+directory is one recorded TradingView reference tape, byte for
+byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8, the reference
 rendering), `metrics.json` and `meta.json`. The probes are synthetic and
-public; no scraped or closed strategy is involved.
+public; no third-party or closed strategy is involved.
 
 Two probes, `te_time_bb_chart` (strategy.pine sha256
 `f99738effbfc0c7899be5236980ad40e58257efc0578a905046b5d4d346136d5`) and
@@ -24,7 +24,7 @@ chart bar's values are on the tape, its own open first.
 
 ## Where each tape comes from
 
-| tape | chart | window | rows | tv_trades.csv sha256 | exported (UTC) | rangeProof |
+| tape | chart | window | rows | tv_trades.csv sha256 | recorded (UTC) | rangeProof |
 |---|---|---|---|---|---|---|
 | `te-time-bb-chart-eth15` | BINANCE:ETHUSDT.P 15 | 2025-04-01..04-03 | 192 | `0999f59d862be6fb584e54b517c4fb138c0894cf709eaefed176bff551da3fa5` | 2026-09-28 23:43:13 | covered |
 | `te-time-bb-chart-aapl15` | NASDAQ:AAPL 15 | 2025-04-14..04-23 | 156 | `dc3d755c67c1acb8fa9f271ee635ef22bad7f65055054b469f1fceb01be9a459` | 2026-09-28 23:43:16 | covered |

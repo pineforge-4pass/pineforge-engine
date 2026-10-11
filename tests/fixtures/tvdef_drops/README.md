@@ -5,10 +5,10 @@ Pine v6's default order size is 100% of equity (lane TV-DEFAULTS,
 contract now size every entry from the account, and three Pine adapter rules
 that R4 slice C lost while lowering ab9714be's source broker onto the native
 kernel surfaced as population drops. Each rule is pinned by synthetic probes
-written for this lane; no closed or scraped strategy is involved.
+written for this lane; no closed or third-party strategy is involved.
 
-Each directory is one `lab tv --no-note` export (channel `ws-report-v1`,
-`rangeProof` covered), byte for byte: `strategy.pine`, `tv_trades.csv` (times
+Each directory is one recorded TradingView reference run
+(`rangeProof` covered), byte for byte: `strategy.pine`, `tv_trades.csv` (times
 at UTC+8), `metrics.json`, `meta.json`. `metrics.json` `tvTradesCsvHash` is the
 sha256 of `tv_trades.csv`. Every probe runs on BINANCE:ETHUSDT.P 15,
 2025-04-01 .. 2025-05-01, with fixed `timestamp("UTC", ...)` cells on

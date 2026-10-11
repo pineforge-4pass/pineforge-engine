@@ -16,14 +16,14 @@ observer, `strategy.position_size[1] < 0 and strategy.position_size == 0`,
 then fired one bar early. Behind an exit cooldown, it blocked the next bar's
 entry.
 
-The scraped `job-2947-seanvtran-svt-30m-options-swing-indicator` on
+The reference `job-2947-seanvtran-svt-30m-options-swing-indicator` on
 BINANCE:ETHUSDT.P 15 lost its 2026-01-08 23:30 UTC short and every trade after
 it (668 TradingView rows) to that cooldown.
 
 ## The tapes
 
-All are `lab tv --no-note` exports (maintainers' private pineforge-workflow,
-channel `ws-report-v1`) on BINANCE:ETHUSDT.P 15, 2026-01-08 .. 2026-01-10. Each
+All are recorded TradingView reference runs on BINANCE:ETHUSDT.P 15,
+2026-01-08 .. 2026-01-10. Each
 was exported twice, the two exports are byte-identical, and `rangeProof` is
 `covered` on both. Every prediction was written before its export, and
 TradingView equals it on every row. Each directory holds `strategy.pine`,

@@ -15,7 +15,7 @@
  * the magnifier).
  *
  * The lane's own synthetic script (tests/fixtures/magnified_coof_refill/
- * tailc-mag-coof-refill-leg, one `lab tv --no-note` export, BINANCE:ETHUSDT.P
+ * tailc-mag-coof-refill-leg, one recorded reference run, BINANCE:ETHUSDT.P
  * 15 magnified, 2025-04-01 .. 2025-05-01), stateless: P, a one-unit short on
  * every even UTC hour's first bar; X, its buy stop at the average + 3, P
  * closed after 8 bars; R, placed by the recalculation of X's fill and by that
@@ -72,7 +72,7 @@ struct FeedBar {
 #include "fixtures/magnified_coof_refill/bars_1m.inc"
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-// BINANCE:ETHUSDT.P's quantity step and price tick (lane eth-scraped-15).
+// BINANCE:ETHUSDT.P's quantity step and price tick.
 constexpr double kLot = 0.0001;
 constexpr double kTick = 0.01;
 constexpr std::int64_t kChartMs = 15 * 60'000;

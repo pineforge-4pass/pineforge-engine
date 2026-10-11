@@ -2,7 +2,7 @@
 """TradingView's calc_on_order_fills competing-order tapes, replayed row for row.
 
 tests/fixtures/coof_competing_tick holds independently authored synthetic
-strategies on NYSE:F 15m, exported with `lab tv --no-note` (two exports per
+strategies on NYSE:F 15m, recorded as reference runs (two runs per
 script, byte-identical). Each script holds one lot for at most two bars per
 event: a market entry fills at the open of the event's fill bar, and a
 strategy.exit stop or limit at a level chosen from that bar's own extreme

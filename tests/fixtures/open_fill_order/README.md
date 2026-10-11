@@ -12,7 +12,7 @@ the same price, closes 100 of the short and opens nothing.
 The native matcher breaks a same-point tie by queue order, so the engine
 filled such orders in placement order: a limit resting beside a close opened
 and was closed by it at once, and limits placed in descending order filled in
-that order. The scraped `job-2712-3commas-3commas-gold-vault-long` and
+that order. The reference `job-2712-3commas-3commas-gold-vault-long` and
 `3commas-3commas-silicon-vault-long-intc-dca-strategy` (BINANCE:ETHUSDT.P 1D)
 keep their DCA safety-order limits resting beside the take-profit
 `close_all`, and an open that gaps through them fills them with the close at
@@ -22,8 +22,7 @@ rank and pair rules do not order these books: W6's same-rank tie-break is
 placement order, and E1 is price order) and added `r1c-ra-prior-limit` for
 limits that rested since an earlier bar.
 
-Each directory is one `lab tv --no-note` export (maintainers' private pineforge-workflow, channel
-`ws-report-v1`), byte for byte: `strategy.pine`, `tv_trades.csv` (times at
+Each directory is one recorded TradingView reference run, byte for byte: `strategy.pine`, `tv_trades.csv` (times at
 UTC+8), `metrics.json`, `meta.json`.
 
 | tape | chart | cells | trades | tv_trades.csv sha256 |
@@ -44,7 +43,7 @@ range runs from the first session bar after the requested 00:00 UTC start
 adapter under the configuration each generated constructor declares, over
 the lane feeds embedded here (`eth15_bars.inc`: the corpus 15m chart feed
 rows 2025-04-14 00:00 .. 04-16 12:00 UTC; `f1d_bars.inc`: the NYSE:F 1D lane
-feed, `lab bars` sha256
+feed, the reference bars sha256
 `e3dd3a88e85bde802b65c26e1ad35cb17b3dcf66ad56f70e30a2ff711f2297bb`, rows
 2024-12-02 .. 2025-07-31), and requires cells E1, E2a and E2b of
 `w8a-dca-open` and E, X and O of `r1c-ra-prior-limit` to be TradingView's

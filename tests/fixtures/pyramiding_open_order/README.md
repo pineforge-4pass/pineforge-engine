@@ -9,12 +9,11 @@ exceeded. The engine counted every pending same-side entry at the call and,
 under a non-fixed default quantity, refused a priced entry at its fill once
 the open trades reached the cap.
 
-The scraped `job-2712-3commas-3commas-gold-vault-long` (BINANCE:BTCUSDT and
+The reference `job-2712-3commas-3commas-gold-vault-long` (BINANCE:BTCUSDT and
 BINANCE:ETHUSDT.P 1D) rests its safety-order limits at the cap: TradingView
 books five lots at `pyramiding=4` where the engine refused the fifth.
 
-`w8a-dca-open` is one `lab tv --no-note` export (maintainers' private pineforge-workflow, channel
-`ws-report-v1`, `rangeProof` covered), byte for byte: `strategy.pine`,
+`w8a-dca-open` is one recorded TradingView reference run (`rangeProof` covered), byte for byte: `strategy.pine`,
 `tv_trades.csv` (times at UTC+8), `metrics.json`, `meta.json`. It runs on
 BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2026-05-01, with `pyramiding=3`, a cash
 default of 100 and an explicit `qty` on every call, in fixed

@@ -11,13 +11,13 @@
  * its placement check, so a re-issue rejected by TradingView kept its
  * resting order alive.
  *
- * The scraped algotorma-algo-torma-orb-strategy (BINANCE:BTCUSDT 15, strong)
+ * The reference algotorma-algo-torma-orb-strategy (BINANCE:BTCUSDT 15, strong)
  * re-issues its breakout limit every bar while armed; the last re-issue
  * (2026-01-14 23:45, close 96951.78 over an equity of 96846.71) was
  * rejected in TradingView, and the engine filled the resting order on 01-15
  * 03:15 -- its one engine-only trade.
  *
- * One lab tv export (tests/fixtures/limit_entry_affordability/
+ * One recorded reference run (tests/fixtures/limit_entry_affordability/
  * w8a-btc15-limafford, BINANCE:BTCUSDT 15, equity 95000, a default fixed
  * quantity of 1, margin 100 %) replayed through the Pine adapter under the
  * configuration its generated constructor declares, over the lane's 15m bars

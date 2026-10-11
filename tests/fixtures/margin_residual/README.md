@@ -5,10 +5,10 @@ ways, so a strategy's margin calls and TradingView's entry admission decide
 most of its trades. Lane W5-ENG-MARGIN-V6 (`tests/fixtures/margin_v6`) fixed
 seven such rules; the Pine adapter rules below are the ones its residual
 probes still diverged on. Each is pinned here by synthetic probes written for
-this lane; no closed or scraped strategy is involved.
+this lane; no closed or third-party strategy is involved.
 
-Each directory is one `lab tv --no-note` export (channel `ws-report-v1`,
-`rangeProof` covered), byte for byte: `strategy.pine`, `tv_trades.csv` (times
+Each directory is one recorded TradingView reference run
+(`rangeProof` covered), byte for byte: `strategy.pine`, `tv_trades.csv` (times
 at UTC+8), `metrics.json`, `meta.json`. `metrics.json` `tvTradesCsvHash` is the
 sha256 of `tv_trades.csv`. Every BINANCE:ETHUSDT.P probe runs on 15-minute
 bars, 2025-04-01 .. 2025-05-06, every NYSE:F probe on 15-minute bars,
@@ -149,7 +149,7 @@ scope moves with it).
 
 `f15_bars.inc` is the NYSE:F 15m chart feed of the lab lane f-15 (evidence
 sha256 `80f404ae85ef0b6a0d8056a90997e92fa1236f1ae68b75c1b2d3a6f182558e32`),
-rows 2025-04-15 13:30 .. 2025-05-19 19:45 UTC copied as text; the lab tv
+rows 2025-04-15 13:30 .. 2025-05-19 19:45 UTC copied as text; the reference run
 window ends before 2025-05-20's session. `eur15_bars.inc` is the OANDA:EURUSD
 15m chart feed of the lab lane eurusd-15 (evidence sha256
 `f945f31a140aedc64ca24e2ace42b9885a914ce31a2531f74179b703c025a648`), rows

@@ -2,7 +2,7 @@
 """TradingView's same-side exit tapes, replayed row for row.
 
 tests/fixtures/same_side_exit holds independently authored synthetic
-strategies on NYSE:F 15m, exported with `lab tv --no-note`. Each script holds
+strategies on NYSE:F 15m, recorded as reference runs. Each script holds
 one lot and, on every bar it is held, calls strategy.exit with no from_entry
 (a profit, loss, profit and loss, or trail leg). Its add twins first place an
 entry order of the HELD side: a limit or a stop that rests and is never

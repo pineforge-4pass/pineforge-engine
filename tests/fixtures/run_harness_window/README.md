@@ -6,11 +6,11 @@ placed. TradingView's broker is live from the first bar it computes: jaysharma
 (×2, data) fills its first long at 2025-04-01 08:15 UTC from a supertrend stop
 placed before 08:00, and ki62 (eurusd-15, xauusd-15) arms phase A's stop once,
 long before its first fill. These tapes pin where that first bar is and what
-happens around it. Each directory is one `lab tv --no-note` export (channel
-`ws-report-v1`) of a synthetic script written for this lane, byte for byte:
+happens around it. Each directory is one recorded TradingView reference run
+of a synthetic script written for this lane, byte for byte:
 `strategy.pine`, `tv_trades.csv` (times UTC+8), `metrics.json`, `meta.json`;
 `metrics.json` `tvTradesCsvHash` is the sha256 of `tv_trades.csv`. No closed or
-scraped strategy is involved.
+third-party strategy is involved.
 
 ## TradingView's rule
 

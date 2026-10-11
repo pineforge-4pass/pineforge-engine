@@ -4,11 +4,11 @@ Pine v6's default order is 100% of equity and its default margin is 100% both
 ways (lane TV-DEFAULTS, `tests/fixtures/tv_strategy_defaults`), so a strategy's
 margin calls and TradingView's entry admission now decide most of its trades.
 The Pine adapter rules below were missing or wrong under those defaults. Each
-is pinned here by synthetic probes written for this lane; no closed or scraped
+is pinned here by synthetic probes written for this lane; no closed or third-party
 strategy is involved.
 
-Each directory is one `lab tv --no-note` export (channel `ws-report-v1`,
-`rangeProof` covered), byte for byte: `strategy.pine`, `tv_trades.csv` (times
+Each directory is one recorded TradingView reference run
+(`rangeProof` covered), byte for byte: `strategy.pine`, `tv_trades.csv` (times
 at UTC+8), `metrics.json`, `meta.json`. `metrics.json` `tvTradesCsvHash` is the
 sha256 of `tv_trades.csv`. Every probe but the two NYSE:F ones runs on
 BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-05-06, with fixed

@@ -20,7 +20,7 @@ and R is live from there (2025-04-05 02:30 UTC: X at the 1819.51 close print, R 
 the next bar's 1819.5 open).
 
 `tests/test_magnified_coof_refill_tape.cpp` replays 2025-04-05 through the Pine adapter on the
-eth-scraped-15 lane's 1-minute feed with the magnifier on (`bars_1m.inc`, 1440 bars) and
+the ETH 15 lane's 1-minute feed with the magnifier on (`bars_1m.inc`, 1440 bars) and
 requires every trade the tape opens and closes inside that day -- 15: 9 P, 4 RA filled at
 the leg-end print, the RB resting at its level and the RB filled at the next bar's open --
 to be the engine's, on its chart bars: entry and exit bar, side, price in ticks of 0.01,
@@ -31,8 +31,8 @@ on X's leg. Over the whole tape the engine books 534 of 534 trades.
 |---|---:|---|
 | `tailc-mag-coof-refill-leg` | 534 | `ec0b4db942cc4fb6d2d285727716d1c6a00923778881023c187949edc4181253` |
 
-The directory is one `lab tv --no-note` export (maintainers' private pineforge-workflow, channel `ws-report-v1`,
-`rangeProof` covered, BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-05-01) of a synthetic script
+The directory is one recorded TradingView reference run
+(`rangeProof` covered, BINANCE:ETHUSDT.P 15, 2025-04-01 .. 2025-05-01) of a synthetic script
 written for this lane, byte for byte: `strategy.pine`, `tv_trades.csv` (times at UTC+8),
 `metrics.json`, `meta.json`. The script's header comment names an adapter line of the
 lane's base; it is the exported text, left as exported.

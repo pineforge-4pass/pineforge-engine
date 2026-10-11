@@ -57,6 +57,6 @@ also pins the default, non-immediate, single-cohort close: LC books 24977.75
 callback prices. Its test continues to include both close cells.
 
 Each new directory includes exact independently authored Pine bytes, a fresh
-2026-10-03 TradingView WebSocket tape, and `provenance.json` with the source,
+2026-10-03 TradingView reference tape, and `provenance.json` with the source,
 tape, report, frame and chart-feed hashes. Its minimal `bars.csv` retains the
 exact chart rows from 2025-04-06 09:00 through 2025-04-07 01:15 UTC.

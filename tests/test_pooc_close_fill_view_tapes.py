@@ -2,7 +2,7 @@
 """TradingView's POOC same-pass position-view tapes, replayed row for row.
 
 tests/fixtures/pooc_close_fill_view holds independently authored synthetic
-strategies on BINANCE:ETHUSDT.P 15m, exported with `lab tv --no-note` (two
+strategies on BINANCE:ETHUSDT.P 15m, recorded as reference runs (two
 byte-identical exports each). Under process_orders_on_close and pyramiding=0,
 each holds a one-lot short (a long in one mirror) and, on 2026-01-08 23:15
 UTC, ends it with an order that fills at that bar's close: a strategy.exit
