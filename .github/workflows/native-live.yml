@@ -83,6 +83,14 @@ jobs:
         with:
           python-version: '3.12'
 
+      # pytest for the CTest rows that run `python -m pytest` (tests/CMakeLists.txt:
+      # test_run_json_selected_window, test_compile_inventory_pipeline), the same
+      # hash-pinned wheels as the preflight job. A failed install fails the job.
+      - name: Install the CTest pytest runner
+        run: |
+          python3 -m pip install --disable-pip-version-check --no-input \
+            --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
+
       - name: Install native build dependencies
         run: |
           sudo apt-get update
