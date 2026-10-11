@@ -3577,10 +3577,11 @@ endforeach()
 # Contract §3.4 / deferred-ANY pin witnesses retain their historical CTest
 # names while their executable twins make the switched route explicit.
 pineforge_add_twin_test(test_live_order_derived test_native_live_order_derived_l4d)
-pineforge_add_twin_test(test_pending_order_v1_canary
-                        test_native_pending_order_v1_canary_l4d)
 pineforge_add_twin_test(test_source_fifo_endpoints
                         test_native_source_fifo_endpoints_l4d)
+# The pending_order_v1 canary twin cannot register here: its base target is a
+# private-fixture row, created by the guarded block below (after the label
+# clear), because pineforge_add_twin_test registers only an existing target.
 
 # These restored twins already execute green through the switched route. Keep
 # their CTest rows in the required profile rather than hiding green evidence
@@ -3609,6 +3610,24 @@ test_native_pending_order_v1_canary_l4d
     test_settlement_observation_boundary_l4d
     test_stop_decline_continue_path_l4d
     test_taro_mc_close_residue_l4d)
+
+# The pending_order_v1 canary is one of the restored twins above, but its base
+# TU (#include of fixtures/pending_order_prefix/c45-fields.inc) was removed
+# with the private fixtures, so the base target and the twin register together
+# inside the base's own guard -- the test_oracle_day_key shape. The block sits
+# after the label clear above because the pinned SKIP placeholder the absent
+# branch registers must keep the private_fixtures label the pin file records
+# (tests/private_fixture_rows.txt), while the real base row, registered before
+# the clear in main, carries no pending-policy label at all.
+if(NOT test_native_pending_order_v1_canary_l4d IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pending_order_prefix/c45-fields.inc")
+    pineforge_add_unit_test(test_native_pending_order_v1_canary_l4d)
+    pineforge_add_twin_test(test_pending_order_v1_canary test_native_pending_order_v1_canary_l4d)
+elseif(NOT test_native_pending_order_v1_canary_l4d IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_native_pending_order_v1_canary_l4d COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/pending_order_prefix/c45-fields.inc")
+    set_tests_properties(test_native_pending_order_v1_canary_l4d PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+    add_test(NAME test_pending_order_v1_canary COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/pending_order_prefix/c45-fields.inc")
+    set_tests_properties(test_pending_order_v1_canary PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
 
 # R4-D L0 carriers are included verbatim by their switched-route twin targets.
 # There is deliberately no ORACLE_TEST_SOURCES list: a source list that does
@@ -3663,12 +3682,9 @@ pineforge_add_twin_test(test_oracle_more_than_64_fills
 # A20 fixture-facade projections preserve the original oracle literals while
 # replacing retired owner reads with the adapter's read-only view.
 pineforge_add_twin_test(test_oracle_short_seed test_native_oracle_short_seed_full_l2)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/oracle/test_oracle_stop_snapshot.cpp")
-    pineforge_add_twin_test(test_oracle_stop_snapshot test_native_oracle_stop_snapshot_full_l2)
-else()
-    add_test(NAME test_oracle_stop_snapshot COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/oracle/test_oracle_stop_snapshot.cpp")
-    set_tests_properties(test_oracle_stop_snapshot PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
+# test_oracle_stop_snapshot is registered with its base target below (the
+# block after the label clear): the twin's base TU is a private-fixture row,
+# so pineforge_add_twin_test cannot see its target here.
 
 # R4-D L5c/L6c: these assigned twins now reproduce their legacy source-policy
 # literals on the switched native route. L6c also completed the path-order,
@@ -3705,6 +3721,23 @@ test_aapl15_margin_brackets_l4a
     test_qty_step_epsilon_floor_l4b
     test_stop_entry_placement_open_qty_l4b
     test_oracle_stop_snapshot)
+
+# A20 stop-snapshot twin: both its base TU (test_native_oracle_stop_snapshot_
+# full_l2.cpp, which #includes oracle/test_oracle_stop_snapshot.cpp, a removed
+# private fixture) and the twin register inside the base's own guard -- the
+# test_oracle_day_key shape. The block sits after the label clear above for
+# the same reason as the canary block: the absent branch's pinned placeholder
+# must keep the private_fixtures label the pin file records, and the clear
+# list above names both rows because main registers them earlier.
+if(NOT test_native_oracle_stop_snapshot_full_l2 IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_native_oracle_stop_snapshot_full_l2.cpp")
+    pineforge_add_unit_test(test_native_oracle_stop_snapshot_full_l2)
+    pineforge_add_twin_test(test_oracle_stop_snapshot test_native_oracle_stop_snapshot_full_l2)
+elseif(NOT test_native_oracle_stop_snapshot_full_l2 IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_native_oracle_stop_snapshot_full_l2 COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_native_oracle_stop_snapshot_full_l2.cpp")
+    set_tests_properties(test_native_oracle_stop_snapshot_full_l2 PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+    add_test(NAME test_oracle_stop_snapshot COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_native_oracle_stop_snapshot_full_l2.cpp")
+    set_tests_properties(test_oracle_stop_snapshot PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
 add_test(NAME test_oracle_twin_census
          COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_oracle_twin_census.py)
 add_test(NAME test_oracle_sha256_pin
@@ -4731,13 +4764,6 @@ elseif(NOT test_native_margin_post_fill_path IN_LIST _pf_kernel_absent_rows)
     set_tests_properties(test_native_margin_post_fill_path PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
-if(NOT test_native_oracle_stop_snapshot_full_l2 IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_native_oracle_stop_snapshot_full_l2.cpp")
-    pineforge_add_unit_test(test_native_oracle_stop_snapshot_full_l2)
-elseif(NOT test_native_oracle_stop_snapshot_full_l2 IN_LIST _pf_kernel_absent_rows)
-    add_test(NAME test_native_oracle_stop_snapshot_full_l2 COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_native_oracle_stop_snapshot_full_l2.cpp")
-    set_tests_properties(test_native_oracle_stop_snapshot_full_l2 PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-
 if(NOT test_native_price_grid IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_native_price_grid.cpp")
     pineforge_add_unit_test(test_native_price_grid)
 elseif(NOT test_native_price_grid IN_LIST _pf_kernel_absent_rows)
@@ -5742,13 +5768,6 @@ if(NOT test_native_host_repairs IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMA
 elseif(NOT test_native_host_repairs IN_LIST _pf_kernel_absent_rows)
     add_test(NAME test_native_host_repairs COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_native_host_repairs.cpp")
     set_tests_properties(test_native_host_repairs PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-
-if(NOT test_native_pending_order_v1_canary_l4d IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pending_order_prefix/c45-fields.inc")
-    pineforge_add_unit_test(test_native_pending_order_v1_canary_l4d)
-elseif(NOT test_native_pending_order_v1_canary_l4d IN_LIST _pf_kernel_absent_rows)
-    add_test(NAME test_native_pending_order_v1_canary_l4d COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/pending_order_prefix/c45-fields.inc")
-    set_tests_properties(test_native_pending_order_v1_canary_l4d PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
 if(NOT test_native_price_grid_twin IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_native_price_grid_twin.cpp")
