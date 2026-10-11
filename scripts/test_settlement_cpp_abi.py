@@ -14,8 +14,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # The private-fixture PRs move tests/fixtures/native_cpp_abi/ (both relocation
 # manifests checker.verify reads) out of the public tree.  Absent, every
-# control here skips with the project's pinned literal instead of failing
-# inside the checker; present, the suite runs exactly as before.
+# control that reads a manifest skips with the project's pinned literal
+# instead of failing inside the checker; present, the suite runs exactly as
+# before.  test_real_link_accept_and_reject_pair is NOT one of them: it
+# compiles a synthetic pair through cpp_abi_pairing.run_synthetic_pair, reads
+# no fixture, and runs in both worlds.
 PRIVATE_FIXTURE_SKIP_LITERAL = "SKIP private fixtures not present: "
 PRIVATE_FIXTURE_MANIFESTS = (checker.MANIFEST, checker.V16_V18_MANIFEST)
 requires_private_fixtures = unittest.skipUnless(
@@ -53,7 +56,6 @@ class SettlementAbi(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 checker.verify(include)
 
-    @requires_private_fixtures
     def test_real_link_accept_and_reject_pair(self) -> None:
         compiler = shutil.which("c++")
         self.assertIsNotNone(compiler)

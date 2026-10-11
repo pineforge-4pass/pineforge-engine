@@ -313,11 +313,16 @@ def main(argv: list[str] | None = None) -> int:
     if findings:
         return 1
     counts = {kind: sum(len(r.fields) for r in rulings if r.kind == kind) for kind in RULING_KINDS}
+    skipped_paths = set(skipped)
+    without_consumer = sum(1 for ruling in rulings
+                           if any(path in skipped_paths for path in ruling.consumers))
     print(f"check_native_feature_rulings: {len(fields)} NativeRunSpec fields, {len(declared)} declared by "
           f"the adapter's project(), {len(fields) - len(declared)} ruled ("
           + ", ".join(f"{counts[kind]} {kind}" for kind in RULING_KINDS)
-          + "), every ruling backed by an executed native consumer"
-          + (", private fixtures not present: " + ", ".join(skipped) if skipped else ""))
+          + f"), {len(rulings) - without_consumer} of {len(rulings)} rulings backed by an "
+          "executed native consumer"
+          + (f"; {without_consumer} name consumers the tree does not carry (private "
+             "fixtures not present: " + ", ".join(skipped) + ")" if skipped else ""))
     return 0
 
 

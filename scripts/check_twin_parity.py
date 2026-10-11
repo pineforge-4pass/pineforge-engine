@@ -622,7 +622,8 @@ def check_inventory(*, root: Path = ROOT, inventory: Path = INVENTORY,
     if unused_ranges:
         first = next(iter(sorted(unused_ranges)))
         raise ParityError(f"Appendix 5 contains unused range: {first[0]}:{first[1]}-{first[2]}")
-    return {"tests": len(selected), "base": total_base, "matched": total_matched,
+    return {"tests": len(selected), "skipped": len(skipped_names),
+            "base": total_base, "matched": total_matched,
             "ledgered": total_ledgered, "rewritten": total_rewritten,
             "extra": total_extra}
 
@@ -637,10 +638,13 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, json.JSONDecodeError, ParityError) as error:
         print("check_twin_parity: " + str(error), file=sys.stderr)
         return 1
-    print("check_twin_parity: {tests} tests, {base} base assertions, "
+    print("check_twin_parity: {checked} tests checked, {skipped} families "
+          "skipped because their private fixtures are not present (named "
+          "above), {base} base assertions, "
           "{matched} literal-matched twin assertions, {ledgered} ledgered, "
           "{rewritten} pinned observable rewrites, {extra} additional twin "
-          "assertions, OK".format(**result))
+          "assertions, OK".format(checked=result["tests"] - result["skipped"],
+                                  **result))
     return 0
 
 

@@ -52,7 +52,7 @@ class TwinParity(unittest.TestCase):
             '| tests/test_case.cpp:4 | CHECK_NEAR(beta(2), 3, 0.1) | '
             'owner-private fixture | tests/test_case_l4d.cpp:2 public beta receipt |\n')
         self.assertEqual(result, {
-            "tests": 1, "base": 2, "matched": 1, "ledgered": 1,
+            "tests": 1, "skipped": 0, "base": 2, "matched": 1, "ledgered": 1,
             "rewritten": 0, "extra": 1})
 
     def test_same_count_check_true_mutation_is_rejected(self) -> None:
@@ -95,7 +95,7 @@ void test() {
             'no public projection | tests/test_case_l4d.cpp:2 public result |\n',
             base=base)
         self.assertEqual(result, {
-            "tests": 1, "base": 3, "matched": 1, "ledgered": 2,
+            "tests": 1, "skipped": 0, "base": 3, "matched": 1, "ledgered": 2,
             "rewritten": 0, "extra": 0})
 
     def test_range_count_cannot_exceed_source_rows(self) -> None:
