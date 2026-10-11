@@ -30,6 +30,12 @@ signal bar; a warmed or later-starting feed keeps the signal bar.
 """
 
 from __future__ import annotations
+import os as _pf_os
+import unittest as _pf_unittest
+
+_pf_private_fixture = _pf_os.path.join(_pf_os.path.dirname(_pf_os.path.dirname(_pf_os.path.abspath(__file__))), "run_harness_window", "rh-diag-firstbar2-es115", "meta.json")
+if not _pf_os.path.exists(_pf_private_fixture):
+    raise _pf_unittest.SkipTest("SKIP private fixtures not present: tests/fixtures/run_harness_window/rh-diag-firstbar2-es115/meta.json")
 
 import contextlib
 import csv

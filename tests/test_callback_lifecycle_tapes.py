@@ -288,6 +288,10 @@ def forward_refusals(fixtures, names, lib, strategy_class, load_bars):
 
 def main():
     fixtures, module, scripts = (Path(a).resolve() for a in sys.argv[1:4])
+    _pf_private_marker = fixtures / "callback_lifecycle" / "carried-static-stop/bars.csv"
+    if not _pf_private_marker.exists():
+        print("SKIP private fixtures not present: tests/fixtures/callback_lifecycle/carried-static-stop/bars.csv")
+        raise SystemExit(77)
     record = "--record" in sys.argv[4:]
     sys.path.insert(0, str(scripts))
     from run_strategy import Strategy, _check_abi, _load_bars, inputs_run_kwargs  # noqa: E402
