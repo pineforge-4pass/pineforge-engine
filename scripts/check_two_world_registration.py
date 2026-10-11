@@ -78,6 +78,7 @@ import re
 import sys
 from pathlib import Path
 
+import ci_verify
 from check_private_fixture_reads import (Unparseable, is_removed, load_removed,
                                          strip_comments)
 
@@ -90,7 +91,6 @@ PIN_ROWS = Path('tests/private_fixture_rows.txt')
 # fails when PINEFORGE_PRIVATE_FIXTURES is set without it.
 OVERLAY_MARKER = 'tests/fixtures/whole_lot_tie/bars.inc'
 CMAKE_FILES = (Path('tests/CMakeLists.txt'), Path('runner/CMakeLists.txt'))
-PROFILE_NAMES = ('release', 'debug', 'sanitizers', 'kernel-live')
 # The absent world cannot glob files that do not exist, so the refusal-shard
 # rows are a RECORDED list: runner/CMakeLists.txt pins the names the present
 # branch's split produces, and the drift guard requires the two to agree.
@@ -162,42 +162,70 @@ def split_values(argument: str) -> list[str]:
     return out
 
 
-PROFILES = {
-    'release': {'CMAKE_BUILD_TYPE': 'Release', 'PINEFORGE_BUILD_SOURCE_LAYER': 'ON',
-                'PINEFORGE_ENABLE_SANITIZERS': 'OFF', 'PINEFORGE_ENABLE_COVERAGE': 'OFF',
-                'PINEFORGE_BUILD_LIVE_RUNNER': 'OFF'},
-    'debug': {'CMAKE_BUILD_TYPE': 'Debug', 'PINEFORGE_BUILD_SOURCE_LAYER': 'ON',
-              'PINEFORGE_ENABLE_SANITIZERS': 'OFF', 'PINEFORGE_ENABLE_COVERAGE': 'OFF',
-              'PINEFORGE_BUILD_LIVE_RUNNER': 'OFF'},
-    'sanitizers': {'CMAKE_BUILD_TYPE': 'Debug', 'PINEFORGE_BUILD_SOURCE_LAYER': 'ON',
-                   'PINEFORGE_ENABLE_SANITIZERS': 'ON', 'PINEFORGE_ENABLE_COVERAGE': 'OFF',
-                   'PINEFORGE_BUILD_LIVE_RUNNER': 'OFF'},
-    'kernel': {'CMAKE_BUILD_TYPE': 'Release', 'PINEFORGE_BUILD_SOURCE_LAYER': 'OFF',
-               'PINEFORGE_ENABLE_SANITIZERS': 'OFF', 'PINEFORGE_ENABLE_COVERAGE': 'OFF',
-               'PINEFORGE_BUILD_LIVE_RUNNER': 'OFF'},
-    'kernel-live': {'CMAKE_BUILD_TYPE': 'Release', 'PINEFORGE_BUILD_SOURCE_LAYER': 'OFF',
-                    'PINEFORGE_ENABLE_SANITIZERS': 'OFF', 'PINEFORGE_ENABLE_COVERAGE': 'OFF',
-                    'PINEFORGE_BUILD_LIVE_RUNNER': 'ON'},
-    'live-runner': {'CMAKE_BUILD_TYPE': 'Release', 'PINEFORGE_BUILD_SOURCE_LAYER': 'ON',
-                    'PINEFORGE_ENABLE_SANITIZERS': 'OFF', 'PINEFORGE_ENABLE_COVERAGE': 'OFF',
-                    'PINEFORGE_BUILD_LIVE_RUNNER': 'ON'},
-    'coverage': {'CMAKE_BUILD_TYPE': 'Release', 'PINEFORGE_BUILD_SOURCE_LAYER': 'ON',
-                 'PINEFORGE_ENABLE_SANITIZERS': 'OFF', 'PINEFORGE_ENABLE_COVERAGE': 'ON',
-                 'PINEFORGE_BUILD_LIVE_RUNNER': 'OFF'},
-}
+# The profile table is DERIVED from scripts/ci_verify.py's own PROFILES -- the
+# configure line each evidence job runs -- never hand-copied: every ci_verify
+# profile is compared, in both worlds, so a row registered only under
+# SOURCE_LAYER AND LIVE_RUNNER (the native and live-* profiles) is compared
+# too. A profile ci_verify names without an entry, or an entry missing a field
+# this table needs, is a loud failure, not a guess.
+_PROFILE_FIELDS = ('build_type', 'sanitizers', 'live_runner', 'tutorial',
+                   'source_layer', 'thread_sanitizers')
+
+
+def profile_table() -> dict:
+    table = {}
+    for name in ci_verify.PROFILES:
+        entry = ci_verify.PROFILE.get(name)
+        if entry is None:
+            raise Unreadable(f'scripts/ci_verify.py names the profile {name!r} '
+                             f'without an entry in its PROFILE table')
+        missing = [field for field in _PROFILE_FIELDS
+                   if not hasattr(entry, field)]
+        if missing:
+            raise Unreadable(f'scripts/ci_verify.py PROFILE[{name!r}] is '
+                             f'missing the fields the two-world sweep needs: '
+                             f'{missing}')
+        table[name] = {
+            'CMAKE_BUILD_TYPE': entry.build_type,
+            'PINEFORGE_BUILD_SOURCE_LAYER':
+                'ON' if entry.source_layer else 'OFF',
+            'PINEFORGE_ENABLE_SANITIZERS':
+                'ON' if entry.sanitizers else 'OFF',
+            'PINEFORGE_BUILD_LIVE_RUNNER':
+                'ON' if entry.live_runner else 'OFF',
+            'PINEFORGE_LIVE_TSAN':
+                'ON' if entry.thread_sanitizers else 'OFF',
+            'PINEFORGE_BUILD_TUTORIAL':
+                'ON' if entry.tutorial else 'OFF',
+            # ci_verify's profiles never turn coverage on; the two files test
+            # the flag, so it is stated here rather than left unbound.
+            'PINEFORGE_ENABLE_COVERAGE': 'OFF',
+        }
+    return table
+
+
+PROFILES = profile_table()
+PROFILE_NAMES = tuple(ci_verify.PROFILES)
 
 # Flags the two files test that come from the configure line and are the same
 # in every evidence job; a flag that is not here raises rather than guessing.
+# PINEFORGE_BUILD_LIVE_RUNNER, PINEFORGE_LIVE_TSAN and
+# PINEFORGE_BUILD_TUTORIAL are NOT here: they differ per profile and every
+# derived profile entry states them, so a missing one is a loud failure.
 CONSTANTS = {
     'UNIX': True, 'APPLE': False, 'WIN32': False,
     'PINEFORGE_BUILD_TESTS': True, 'PINEFORGE_BUILD_EXAMPLES': False,
-    'PINEFORGE_BUILD_CORPUS_STRATEGIES': False, 'PINEFORGE_BUILD_TUTORIAL': True,
+    'PINEFORGE_BUILD_CORPUS_STRATEGIES': False,
     'PINEFORGE_STRICT_WARNINGS': False, 'PINEFORGE_REQUIRE_ABI_RECEIPTS': False,
-    'PINEFORGE_LIVE_TSAN': False, 'PINEFORGE_BUILD_SPEED_BENCH': False,
+    'PINEFORGE_BUILD_SPEED_BENCH': False,
     'PINEFORGE_BUILD_BENCH_STRATEGIES': False,
-    'PINEFORGE_BUILD_LIVE_RUNNER': False,
     'CMAKE_SYSTEM_NAME': 'Linux',
     'CMAKE_CXX_COMPILER_ID': 'GNU',
+    # The interpreter and the cmake binary name COMMAND elements of add_test()
+    # and of the list(APPEND)ed command lists (never a registration
+    # condition): stated absolute paths, since a name is all the row needs.
+    'Python3_EXECUTABLE': '/usr/bin/python3',
+    'CMAKE_COMMAND': '/usr/bin/cmake',
     # Read once, by runner/CMakeLists.txt and tests/CMakeLists.txt, to name a
     # sanitizer runtime library .so: never a registration condition, so one
     # value serves both worlds of the comparison (the CI jobs run x86_64).
@@ -317,7 +345,8 @@ class Machine:
                 return 'ON' if CONSTANTS[name] else 'OFF'
 
             raise Unreadable(
-                f'{self.path}: cannot expand ${{{name}}}')
+                f'{self.path}:{getattr(self, "line", 0)}: cannot expand '
+                f'${{{name}}}')
         out = token
         for _ in range(8):
             new = re.sub(r'\$\{(\w+)\}', repl, out)
@@ -573,6 +602,7 @@ class Machine:
         index = start
         while index < end:
             line, statement = self.wstatements[index]
+            self.line = line
             head = head_of(statement)
             if head == 'if':
                 for segment_start, segment_end, condition in self.branches(index):
@@ -1120,10 +1150,10 @@ def derive_record_need(root: Path, absent_world: World, overlay_world: World,
     whose overlay walk reaches the source layer at all -- recording a row
     that does not reach would drop a row the kernel profile must build."""
     overlay = Machine(root / 'tests' / 'CMakeLists.txt', overlay_world,
-                      PROFILES['kernel-live'], root, record=[])
+                      PROFILES['kernel'], root, record=[])
     overlay.run()
     without = Machine(root / 'tests' / 'CMakeLists.txt', absent_world,
-                      PROFILES['kernel-live'], root, record=[])
+                      PROFILES['kernel'], root, record=[])
     without.run()
     # The twin calls execute in the world that builds the source layer (there
     # the kernel-absent list is empty and every EXISTS guard with the overlay

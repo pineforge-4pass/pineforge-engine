@@ -31,6 +31,8 @@ Controls:
  14. a file(GLOB_RECURSE) -> the subdirectory is traversed (a row appears
      only when the nested file is seen)
  15. a glob form the sweep does not model (FOLLOW_SYMLINKS) -> 2, named
+ 16. the profile table is ci_verify's own; a copy with a profile removed from
+     the table is detected by the comparison
 """
 from __future__ import annotations
 
@@ -253,7 +255,7 @@ endif()
         result = self.run_check()
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn('tests/CMakeLists.txt [release] absent-world rows:', result.stdout)
-        self.assertIn('runner/CMakeLists.txt [kernel-live] absent-world rows:',
+        self.assertIn('runner/CMakeLists.txt [kernel] absent-world rows:',
                       result.stdout)
         self.assertIn('the recorded list is pinned, sorted and duplicate-free',
                       result.stdout)
@@ -312,12 +314,13 @@ endif()
         self.assertIn('recorded-only: 1', result.stdout)
 
     # control 9: the tree as it is, overlay present: both worlds and the split
-    # over the live tree agree, in every profile
+    # over the live tree agree, in every profile ci_verify runs
     @needs_overlay
     def test_the_tree_as_is_matches_in_both_worlds(self):
+        import ci_verify
         result = self.run_check('--overlay', '--cmakelists', RUNNER, overlay=True)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        for profile in ('release', 'debug', 'sanitizers', 'kernel-live'):
+        for profile in ci_verify.PROFILES:
             self.assertIn(f'runner/CMakeLists.txt [{profile}] absent-only names: 0',
                           result.stdout)
             self.assertIn(f'runner/CMakeLists.txt [{profile}] overlay-only names: 0',
@@ -420,6 +423,42 @@ file(GLOB_RECURSE _e2e_two_world_symlinked FOLLOW_SYMLINKS
         self.assertEqual(2, result.returncode, result.stdout + result.stderr)
         self.assertIn('FOLLOW_SYMLINKS', result.stdout + result.stderr)
         self.assertIn(RUNNER, result.stdout + result.stderr)
+
+    # the profile table is scripts/ci_verify.py's own: the compared profiles
+    # are printed for every ci_verify profile, the per-profile flags agree
+    # with its entries, and a copy with a profile removed from the table is
+    # detected by this comparison
+    def test_the_profile_table_is_derived_from_ci_verify(self):
+        import ci_verify
+        self.assertEqual(set(ci_verify.PROFILES), set(CHECK_MODULE.PROFILES))
+        for name in ci_verify.PROFILES:
+            entry = ci_verify.PROFILE[name]
+            table = CHECK_MODULE.PROFILES[name]
+            self.assertEqual(entry.build_type, table['CMAKE_BUILD_TYPE'], name)
+            self.assertEqual('ON' if entry.source_layer else 'OFF',
+                             table['PINEFORGE_BUILD_SOURCE_LAYER'], name)
+            self.assertEqual('ON' if entry.live_runner else 'OFF',
+                             table['PINEFORGE_BUILD_LIVE_RUNNER'], name)
+            self.assertEqual('ON' if entry.sanitizers else 'OFF',
+                             table['PINEFORGE_ENABLE_SANITIZERS'], name)
+        result = self.run_check('--cmakelists', RUNNER)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        for name in ci_verify.PROFILES:
+            self.assertIn(f'runner/CMakeLists.txt [{name}] absent-world rows:',
+                          result.stdout)
+        with tempfile.TemporaryDirectory() as temporary:
+            tampered = Path(temporary) / 'check_two_world_registration.py'
+            tampered.write_text(CHECK.read_text()
+                                + "\nPROFILES.pop('native', None)\n")
+            spec = importlib.util.spec_from_file_location(
+                'e2e_two_world_check_tampered', tampered)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            self.assertEqual(set(ci_verify.PROFILES) - {'native'},
+                             set(module.PROFILES),
+                             'the tampered copy must lose exactly one profile')
+            self.assertNotEqual(set(ci_verify.PROFILES), set(module.PROFILES),
+                                'a table an entry short must not compare equal')
 
 
 if __name__ == '__main__':
