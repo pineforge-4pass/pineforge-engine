@@ -2929,6 +2929,28 @@ class PrivateFixtureFloors(unittest.TestCase):
         self.assertEqual(code, 0, summary['failures'])
         self.assertEqual(summary['minTests'], 303)
 
+    def test_the_lowered_note_prints_only_for_the_tables_own_lowering(self):
+        # N5: an explicit --min-tests that happens to equal full minus pinned
+        # was not lowered by the table; the note must not claim it was. The
+        # default floor keeps printing it.
+        pinned = self.pinned_probe(
+            ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS['kernel'][1])
+        with self.overlay_absent():
+            code, summary, _, build_dir = self.run_profile(
+                'kernel', extra=['--min-tests', str(ABSENT_FLOOR['kernel'])],
+                ctest_registered=FULL_FLOOR['kernel'], ctest_rows=FULL_FLOOR['kernel'],
+                ctest_skipped=pinned)
+        self.assertEqual(code, 0, summary['failures'])
+        log = (build_dir / 'ci-logs' / 'ctest-floor.log').read_text()
+        self.assertNotIn('lowered by', log)
+        with self.overlay_absent():
+            code, summary, _, build_dir = self.run_profile(
+                'kernel', ctest_registered=FULL_FLOOR['kernel'],
+                ctest_rows=FULL_FLOOR['kernel'], ctest_skipped=pinned)
+        self.assertEqual(code, 0, summary['failures'])
+        log = (build_dir / 'ci-logs' / 'ctest-floor.log').read_text()
+        self.assertIn('lowered by', log)
+
     def test_the_old_controls_shape_registered_at_the_floor_still_behaves(self):
         # Control (e): the shape the replaced controls drove -- a run that
         # registers exactly the floor -- behaves the same way under the

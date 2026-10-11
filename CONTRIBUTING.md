@@ -159,7 +159,7 @@ What each gate refuses:
 
 `ci_verify.py` counts the CTest rows that actually **ran** and fails below a
 floor. The floors' numbers live in one place, the
-`PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:780 table: per profile, `full`
+`PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:788 table: per profile, `full`
 is its overlay-present registered population and `pinned` is how many rows of
 `tests/private_fixture_rows.txt` that registry registers, so with the private
 fixtures absent the floor is `full` minus `pinned`; every other profile

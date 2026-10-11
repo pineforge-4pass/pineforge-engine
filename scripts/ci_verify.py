@@ -318,7 +318,8 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #      tape converter, the loader, the harness's syminfo-metadata transport)
 # Both register in release too. 300 registered, 299 run after parser removal: the WebSocket row
 # still skips on a system libcurl. Lane SM-E1's rows follow EXCLUDED_REGISTERED_MIN below.
-KERNEL_MIN_TESTS = 325
+# KERNEL_MIN_TESTS itself is defined with RELEASE_MIN_TESTS below, both derived from
+# PRIVATE_FIXTURE_PROFILE_FLOORS (the one place the numbers live).
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -592,7 +593,8 @@ KERNEL_MIN_TESTS = 325
 #   +1 FIX-E1E2 test_aggregated_admission_receipt_tapes (an aggregated
 #               chart's admission receipts in their command's bar space)
 # No release row skips, so 792 registered is 792 run (SM-E1: below EXCLUDED_REGISTERED_MIN).
-RELEASE_MIN_TESTS = 895
+# RELEASE_MIN_TESTS itself is defined with KERNEL_MIN_TESTS below, both derived from
+# PRIVATE_FIXTURE_PROFILE_FLOORS (the one place the numbers live).
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
@@ -741,12 +743,14 @@ LIVE_SANITIZERS_MIN_TESTS = 12
 # 874/875 (overlay present/absent).
 #
 # The count is pinned from tests/private_fixture_rows.txt (the row list P1-B
-# commits alongside the placeholders): that file's own header records its 354
-# names and the same PR 1 manifest (l44/pr1-manifest.tsv, sha256
+# commits alongside the placeholders): that file's own header records the
+# count and the same PR 1 manifest (l44/pr1-manifest.tsv, sha256
 # 9a2727d455c1b470d515665428e2c6e090a22ac07f87255d1ca9c20d5528bd62) this
-# campaign pins -- a later reader can take the count from that header, not
-# from here. The count is NOT the population any one run lowers by: this
-# head's absent runs labelled 297 release rows and 120 kernel rows. The two
+# campaign pins -- a later reader takes the count from that header, and the
+# pinned names from the file itself, never from a number quoted here (a count
+# in this comment went stale once already). The count is NOT the population
+# any one profile lowers by: how many pinned rows each profile registers is a
+# measured quantity, stated only in PRIVATE_FIXTURE_PROFILE_FLOORS below. The two
 # floor constants above keep their values and their lines so the doc anchors
 # at ci_verify.py:321 and ci_verify.py:595 do not move; the campaign's own
 # gate is PRIVATE_FIXTURE_PROFILE_FLOORS below, the one place its numbers
@@ -785,6 +789,12 @@ PRIVATE_FIXTURE_PROFILE_FLOORS = {
     'release': (902, 297),
     'kernel': (331, 28),
 }
+# The two floors' long-standing names, derived from the table above so a
+# raised floor is one edit and the docs, tests and --help all follow. They
+# are read-only aliases: the numbers live in PRIVATE_FIXTURE_PROFILE_FLOORS,
+# and re-measuring for a landed row means editing that table, never these.
+KERNEL_MIN_TESTS = PRIVATE_FIXTURE_PROFILE_FLOORS['kernel'][0]
+RELEASE_MIN_TESTS = PRIVATE_FIXTURE_PROFILE_FLOORS['release'][0]
 
 
 def private_fixtures_overlay() -> bool:
@@ -982,6 +992,9 @@ class VerifyConfig:
     exclude_label: str | None = None
     # The effective CTest row floor: --min-tests, else the profile's own.
     min_tests: int | None = None
+    # True when --min-tests was given: the floor's own note keys on the table
+    # having lowered the profile floor, never on a value that merely matches.
+    min_tests_explicit: bool = False
     # Opt-in CI bounds. CTest's explicit TIMEOUT properties remain authoritative;
     # --test-timeout covers otherwise unbounded rows. Defaults are unchanged.
     test_timeout: int | None = None
@@ -1208,11 +1221,13 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
     parser.add_argument('--min-tests', type=int, default=None,
                         help='fail the ctest-floor stage unless at least N CTest rows ran '
                              '(a skipped or not-run row is listed, never counted); '
-                             f'the kernel profile defaults to {KERNEL_MIN_TESTS}, the release '
-                             f'profile to {RELEASE_MIN_TESTS}, runner sanitizer profiles to '
-                             f'{LIVE_SANITIZERS_MIN_TESTS} with transport.cpp or '
-                             f'{LIVE_SANITIZERS_MIN_TESTS - 1} without it, '
-                             'the others to no floor')
+                             'the defaults are the profiles\' own floors, held in '
+                             'PRIVATE_FIXTURE_PROFILE_FLOORS for kernel and release '
+                             '(the overlay-present full population, minus the pinned '
+                             'private-fixture rows while the overlay is absent), in '
+                             f'Profile.min_tests elsewhere, and at {LIVE_SANITIZERS_MIN_TESTS} '
+                             f'(or {LIVE_SANITIZERS_MIN_TESTS - 1} without transport.cpp) for '
+                             'the runner sanitizer profiles; every value here is used verbatim')
     args = parser.parse_args(argv)
     if args.build_dir is None:
         args.build_dir = default_build_dir(source, args.profile)
@@ -1275,6 +1290,7 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
         exclude_label=args.exclude_label,
         min_tests=(args.min_tests if args.min_tests is not None else
                    profile_min_tests(PROFILE[args.profile], source)),
+        min_tests_explicit=args.min_tests is not None,
         test_timeout=args.test_timeout,
         ctest_stage_timeout=args.ctest_timeout,
     )
@@ -2361,7 +2377,10 @@ class Driver:
         if absent:
             full, pinned = entry
             pinned = min(pinned, PRIVATE_FIXTURE_ROW_COUNT)
-            if floor == full - pinned:
+            if floor == full - pinned and not self.cfg.min_tests_explicit:
+                # Only the table's own lowering is reported: an explicit
+                # --min-tests that happens to equal full minus pinned was not
+                # lowered by anything (N5).
                 note = (f'; lowered by {pinned} pinned private-fixture '
                         f'placeholder rows (full floor {full})')
             # N4: without the overlay every pinned row this run registers must
