@@ -168,8 +168,8 @@ ExtremeRing::Result ExtremeRing::update(double src, bool advance, bool want_max)
             // cadence's ta.highest(-close, 10) answers 0 too, ta.highest(high,
             // 10) is unaffected) and re-pinned on OANDA:XAUUSD 1D for every
             // source kind (low, close - 2000, sma(close, 5), low[1], hl2, the
-            // sign-mixed sma(close, 5) - close: 13/13 each). Every scraped
-            // tape in the population is a deep-backtest export that starts
+            // sign-mixed sma(close, 5) - close: 13/13 each). Every reference
+            // tape in the population is a deep-backtest run that starts
             // cold at the range start, so this is the rule the campaign
             // grades against (the round-5 "skip" reading was wrong:
             // shiroi-qqe's stops on five 1D lanes are TV's SL = 0 from

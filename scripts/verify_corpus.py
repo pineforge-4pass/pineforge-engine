@@ -284,7 +284,7 @@ class TradePair:
     mfe: float = 0.0
     mae: float = 0.0
     # The exit leg is a mark of a position still open at the range's end,
-    # not a fill: TradingView's browser export says so with Signal "Open"
+    # not a fill: a date-only TradingView tape says so with Signal "Open"
     # on the exit row; the engine says so in the exit row's trailing
     # ``Engine range-end`` column (ENGINE_RANGE_END_COLUMN; its range-end
     # close, ``open_at_end``). pair_range_end_marks pairs the two marks of
@@ -423,8 +423,8 @@ def parse_dt(s: str, tz) -> int:
 # engine_trades.csv (run_strategy.py write_engine_trades_csv), "open" on the
 # exit row of a trade the engine booked as its range-end close of a position
 # still open after the final bar (pf_trade_t::open_at_end), empty elsewhere.
-# TradingView's browser export marks the same row Signal "Open"; its
-# ws-report-v1 export marks nothing and prices the row at the last bar's
+# A date-only TradingView tape marks the same row Signal "Open"; a
+# reference tape marks nothing and prices the row at the last bar's
 # close, which is exactly the engine's row, so an unmarked tape pairs the
 # engine's row as an ordinary closed trade and never sees this column.
 ENGINE_RANGE_END_COLUMN = "Engine range-end"
@@ -548,7 +548,7 @@ def pair_range_end_marks(
     return ``(pairs, tv_rest, eng_rest)`` — the raw rows of both sides with
     the paired marks taken out.
 
-    A browser export prints a position still open at the range's end as a
+    A date-only TradingView tape prints a position still open at the range's end as a
     trade whose exit row is Signal "Open", priced at the range end's last
     close and netted of commission on both legs, to the cent (3commas-xlm
     #615: qty 0.0912, entry 2189.13, mark 2261.44 -> 6.3511, TV 6.35). The

@@ -49,7 +49,7 @@ _deps/
 __pycache__/
 *.pyc
 
-# Playwright MCP traces
+# MCP tool traces
 .playwright-mcp/
 
 # Tutorial backtest output
@@ -74,6 +74,6 @@ docs/production-readiness-findings.md
 .ccache/
 ci-diagnostics/
 
-# Closed (TradingView-scraped, not redistributable) benchmark slots: maintainer-local only,
+# Closed (third-party TradingView, not redistributable) benchmark slots: maintainer-local only,
 # published to the maintainers' evidence store as a tarball (sha in benchmarks/results/selection.md).
 benchmarks/assets-closed/

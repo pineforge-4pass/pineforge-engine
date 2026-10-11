@@ -1348,7 +1348,7 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
         syminfo_metadata["qty_step"] = qty_step
     # syminfo.mincontract: on every campaign symbol TradingView's smallest
     # contract IS its quantity step (tests/fixtures/syminfo_mincontract: 18
-    # lab tv read-outs, one per lane -- BINANCE:ETHUSDT.P 0.0001,
+    # reference read-outs, one per lane -- BINANCE:ETHUSDT.P 0.0001,
     # BINANCE:BTCUSDT 0.00001, OANDA:EURUSD / OANDA:XAUUSD 0.01, NASDAQ:AAPL,
     # NYSE:F, NSE:NIFTY, CME_MINI:ES1! and NQ1! 1). The fact is the lane
     # template's: its environment's PINEFORGE_VERIFY_QTY_STEP
@@ -1465,7 +1465,7 @@ def _reads_derived_feed(params, strategy_dir: Path, ohlcv: Path,
 # PINEFORGE_REQUESTS_ROOT=<dir>, holding <dir>/<slug>/requests.json
 # (pineforge-probe-requests/v1) and <dir>/<slug>/files/<sha256> -- workflow
 # docs/xsym-requests.md, "The environment contract". The frozen verifier
-# (pineforge-lab 3bac0b7b scripts/verify-engine-local.py) names each probe's
+# (the external verifier that defines this contract) names each probe's
 # build directory ``bd = BUILD / slug`` (:1695) and hands ``str(bd)`` to this
 # script (:1593-1596, :1614-1617) through ``_run_timed`` (:190-193), whose
 # subprocess.run passes no env=, so the variable reaches this process and the
@@ -3137,10 +3137,8 @@ def _filter_trace_to_window(trace: list[dict], window: tuple[int, int] | None) -
 def _tv_metrics_path(strategy_dir: Path, meta: dict, tv_path: Path) -> Path:
     """Where the tape's metrics.json lives: ``tv_metrics_json`` from the
     probe's inputs.json when set (relative to ``strategy_dir``), else the
-    ``metrics.json`` beside the tape — the scrapper's probe directory, the
-    case runner's ``data/<group>/<slug>/`` copy and ``lab tv``'s export all
-    write the four files (strategy.pine, tv_trades.csv, metrics.json,
-    meta.json) side by side."""
+    ``metrics.json`` beside the tape — every producer writes the four files
+    (strategy.pine, tv_trades.csv, metrics.json, meta.json) side by side."""
     name = str(meta.get("tv_metrics_json", "")).strip()
     if name:
         return strategy_dir / name
@@ -3152,10 +3150,10 @@ def _tv_metrics_range_end(metrics: dict) -> tuple[int, str] | None:
     with the key it was read from: the ``to`` of the deep-backtest window,
     as 00:00 UTC of that date.
 
-    Two spellings carry it. The ws-report-v1 exporter records the exact
-    window it sent to TradingView as ``wsProvenance.requestedRange.to`` (ms
+    Two spellings carry it. One records the exact requested
+    window as ``wsProvenance.requestedRange.to`` (ms
     UTC), and every campaign tape's value is 1777593600000 = 2026-05-01
-    00:00 UTC for ``"to": "2026-05-01"``; the browser export (ETH, AAPL 15,
+    00:00 UTC for ``"to": "2026-05-01"``; the other (ETH, AAPL 15,
     EURUSD) carries only the date. They agree wherever both exist, and the
     integer is what TradingView actually saw, so it wins. None without a
     range (a hand-made metrics.json, or none)."""
@@ -3205,12 +3203,12 @@ def _tv_tape_marks_open_rows(strategy_dir: Path, meta: dict) -> bool:
     """True when the tape MARKS a position still open at the range's end:
     any row whose ``Signal`` is ``open`` (case- and space-insensitive).
 
-    Two exporters write the campaign's tapes, and they print the range-end
-    position differently. The ws-report-v1 exporter (286 of the 305 ETH
+    Two tape shapes appear in the campaign's tapes, and they print the range-end
+    position differently. One shape (286 of the 305 ETH
     tapes; no marker in metrics.json beyond ``tapeChannel``) reports it as
     an ordinary closed trade — exit row on the last bar at its close, EMPTY
     Signal, counted in closedTrades — which is the shape the engine's
-    ``open_at_end`` row emulates. The browser export (the scrapper's
+    ``open_at_end`` row emulates. The other shape (the
     3commas grid-bot tapes among them, 22/22/28 open lots each at
     2026-05-01 08:00 +8; metrics.json without ``tapeChannel``) writes the
     same row with Signal "Open". TV nets commission on BOTH legs of that row
@@ -3244,7 +3242,7 @@ def _load_tv_range_end(strategy_dir: Path, meta: dict) -> tuple[int, str] | None
     (_apply_range_end_regime), whichever way the tape spells its range-end
     row.
 
-    The rule is TradingView's own, read off the ws-report-v1 tapes'
+    The rule is TradingView's own, read off the reference tapes'
     ``returnedRange.to`` (the open of the last bar TV reported) against the
     ``requestedRange.to`` = 2026-05-01 00:00 UTC every campaign tape asked
     for, and off where each lane's open-position row sits:
@@ -3261,12 +3259,12 @@ def _load_tv_range_end(strategy_dir: Path, meta: dict) -> tuple[int, str] | None
       OANDA:XAUUSD 1D        returned.to = 04-30 21:00 UTC;
       NYSE:F 15              returned.to = 04-30 19:45 UTC;
 
-    and every open-position row (browser "Open" rows and ws rows with an
+    and every open-position row (date-only "Open" rows and unmarked rows with an
     empty Signal alike) sits on exactly that bar: BTC/ES/NQ/XAU/EURUSD 15
-    and BINANCE:ETHUSDT.P 15 at 05-01 00:00 UTC (ETH: 228 of 397 scrapper
+    and BINANCE:ETHUSDT.P 15 at 05-01 00:00 UTC (ETH: 228 of 397 reference
     tapes, @ 2261.44 = that bar's close), F 1D at 04-30 13:30 (@ 12.08),
     ES/NQ 1D at 04-30 22:00, XAU 1D at 04-30 21:00, NIFTY 1D at 04-30
-    03:45, AAPL 15 at 04-30 19:45. Survey of 2026-09-02 over the scrapper's
+    03:45, AAPL 15 at 04-30 19:45. Survey of 2026-09-02 over the campaign's
     17 lane directories (1,356 tapes; every one ``to: 2026-05-01``).
 
     This bounds the feed the engine measures. The engine books a position
@@ -3349,10 +3347,10 @@ def _apply_range_end_regime(strategy_dir: Path, meta: dict, run_kwargs: dict) ->
          rows leaves the feed as given.
 
     The tape's spelling of that row no longer picks a regime. The
-    ws-report-v1 exporter prints the range-end position as an ordinary
+    reference tape prints the range-end position as an ordinary
     closed trade (empty Signal, counted in closedTrades — the shape the
-    engine's ``open_at_end`` row emulates); the browser export prints the
-    same row with Signal "Open" (227 of the 396 scraped ETH tapes). Under
+    engine's ``open_at_end`` row emulates); the date-only tape prints the
+    same row with Signal "Open" (227 of the 396 reference ETH tapes). Under
     v4 a marked tape was measured as the baseline had measured it — feed
     unbounded three days past the range, the engine's marks withheld —
     because the canonical grader paired the baseline's post-range closes
@@ -3450,7 +3448,7 @@ def format_trade_qty(qty: float) -> str:
 # engine_orders.cpp record_range_end_close_trades) is
 # ENGINE_RANGE_END_OPEN; every other cell is empty. The grader
 # (scripts/verify_corpus.py ENGINE_RANGE_END_COLUMN) pairs such a row with
-# the tape's own mark of the same lot — the browser export's Signal "Open".
+# the tape's own mark of the same lot — the date-only tape's Signal "Open".
 ENGINE_RANGE_END_COLUMN = "Engine range-end"
 ENGINE_RANGE_END_OPEN = "open"
 
@@ -3468,13 +3466,13 @@ def write_engine_trades_csv(trades: list[dict], path: Path) -> None:
 
     A trade flagged ``open_at_end`` (the engine's range-end close of a
     position still open after the final bar) is written like any other
-    trade — TradingView's ws-report-v1 tape reports that position as an
+    trade — TradingView's reference tape reports that position as an
     ordinary closed trade whose exit row is the last bar at its close with
     an EMPTY Signal (orb-lite NYSE:F 1D — Exit short 2026-04-30 @ 12.08),
     so the row must look like every other exit for the verifier to pair
     it — with one addition: its exit row says so in the trailing
     ``Engine range-end`` column (ENGINE_RANGE_END_OPEN, "open"), the
-    engine's counterpart of the browser export's Signal "Open". The grader
+    engine's counterpart of the date-only tape's Signal "Open". The grader
     pairs the two marks of one lot and gates neither exit nor pnl on them
     (verify_corpus.py pair_range_end_marks); every other cell of the column
     is empty, and readers keyed by column name (verify_corpus.parse_trades,
@@ -3614,10 +3612,10 @@ def _tv_first_bar(strategy_dir: Path, meta: dict) -> tuple[int, str] | None:
     """TradingView's first computed chart bar for the tape (UTC ms), with
     where it was read: metrics.json ``wsProvenance.returnedRange.from``.
 
-    TradingView's deep backtest over the ws report channel computes the
+    TradingView's deep backtest in a recorded reference run computes the
     script from the first chart bar at or after the requested ``from`` and
     from no earlier bar, and records that bar's open as
-    ``returnedRange.from``. Pinned by ``lab tv --no-note`` tapes
+    ``returnedRange.from``. Pinned by recorded reference tapes
     (tests/fixtures/run_harness_window): a script reads bar_index 0 on it
     (rh-diag-firstbar, rh-diag-firstbar2 on BINANCE:ETHUSDT.P 15 over
     2025-04-01 .. 2025-04-08 and .. 2026-05-01, OANDA:EURUSD / OANDA:XAUUSD /
@@ -3627,7 +3625,7 @@ def _tv_first_bar(strategy_dir: Path, meta: dict) -> tuple[int, str] | None:
     runs: a stop, a limit and two market entries placed on 2025-03-31 bars
     yield no trade (rh-prerange-stop, rh-prerange-limit, rh-prerange-fills).
 
-    None for a tape without it: the browser export records no returned range
+    None for a tape without it: the date-only reference records no returned range
     (and its deep backtest computes bars before ``from``: an entry filled
     one bar before the range start is exported), a hand-made metrics.json,
     or none."""

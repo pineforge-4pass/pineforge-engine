@@ -6,12 +6,12 @@ sessions its feed holds no bar in -- the 17:00-18:00 ET hour every day, US
 holidays (Good Friday), the rest of an early-close day (July 4, the Friday
 after Thanksgiving) -- and TradingView reads that calendar for the bar after
 the current one: ``time("", "", -1)``, ``session.islastbar`` and
-``session.islastbar_regular`` (lab tv te_session_calendar_xau15-*, lane
+``session.islastbar_regular`` (reference te_session_calendar_xau15-*, lane
 TAIL-E). NASDAQ:AAPL's calendar carries the exchange's holidays and early
 closes, which its feed shows too.
 
 A calendar is captured from TradingView by a synthetic script
-(tests/fixtures/symbol_calendar/xc-cal-*/strategy.pine, ``lab tv --no-note``)
+(tests/fixtures/symbol_calendar/xc-cal-*/strategy.pine, recorded reference runs)
 whose first chart bar of every session day spells that day's ``time("D")`` and
 ``time_close("D")`` and the next three days', so a day the chart holds no bar
 of is read from the day before it. ``calendar_from_tape`` turns the tape into
@@ -79,7 +79,7 @@ def _sha256(path: Path) -> str:
 
 
 def calendar_document(tape_dir: Path) -> dict:
-    """The calendar document of a ``lab tv`` export directory."""
+    """The calendar document of a reference run directory."""
     metrics = json.loads((tape_dir / "metrics.json").read_text(encoding="utf-8"))
     provenance = metrics.get("wsProvenance") or {}
     sessions = calendar_from_tape(tape_dir / "tv_trades.csv")
