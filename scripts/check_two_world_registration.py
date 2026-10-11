@@ -15,6 +15,15 @@ helpers, file()/string()/math()/get_filename_component()) with a
 file-existence-driven condition evaluator, and it refuses (exit 2) on any
 construct it cannot read, so a silently smaller population is impossible.
 
+Arguments follow CMake's own rules (cmake-language(7), "Quoted Argument" /
+"Unquoted Argument"): a quoted argument is exactly one argument with its
+quotes stripped, an unquoted one divides like a list into elements and each
+non-empty element is an argument. Both files lean on that rule -- the
+refusal-shard split at runner/CMakeLists.txt passes a family list through
+`set(refusal_libraries ${...})` unquoted and appends quoted library entries
+-- so a list that keeps its quotes, or one that stays a single joined
+string, evaluates a DIFFERENT population than CMake's.
+
 The two worlds, with no overlay checkout
 ----------------------------------------
 The live tree is world X. `tests/private_fixture_paths.txt` pins every path
@@ -310,6 +319,21 @@ class Machine:
 
         return None
 
+    def elements(self, token: str) -> list[str]:
+        """One argument's contribution to a list, by CMake's own rule.
+
+        cmake-language(7): a quoted argument is always exactly one argument
+        (quotes stripped); an unquoted argument's value "is divided in the
+        same way Lists divide into elements", each NON-EMPTY element being an
+        argument -- so an empty expansion contributes none. Both files feed
+        lists through unquoted `${list}` expansions and quote single
+        elements, so collapsing either case evaluates a different
+        population than CMake's."""
+        resolved = self.substitute(token)
+        if token.startswith('"'):
+            return [resolved.strip('"')]
+        return [part for part in resolved.split(';') if part]
+
     def number(self, token: str) -> int:
         if not token.startswith('"') and not token.lstrip('-').isdigit():
             values = self.value(token)
@@ -566,7 +590,8 @@ class Machine:
             elif head == 'set':
                 values = split_values(arguments(statement))
                 name = values[0]
-                rest = [self.substitute(v).strip('"') for v in values[1:]]
+                rest = [element for token in values[1:]
+                        for element in self.elements(token)]
                 if name.startswith('CACHE'):
                     pass
                 self.vars[name] = rest
@@ -578,13 +603,14 @@ class Machine:
                 operation = values[0]
                 if operation == 'APPEND':
                     target = values[1]
-                    self.vars.setdefault(target, []).extend(
-                        self.substitute(v) for v in values[2:])
+                    appended = self.vars.setdefault(target, [])
+                    for token in values[2:]:
+                        appended.extend(self.elements(token))
                 elif operation == 'REMOVE_ITEM':
                     target = values[1]
                     remove = set()
-                    for value in values[2:]:
-                        remove.update(self.substitute(value).split(';'))
+                    for token in values[2:]:
+                        remove.update(self.elements(token))
                     current = self.vars.get(target, [])
                     self.vars[target] = [v for v in current if v not in remove]
                 elif operation == 'LENGTH':
@@ -622,7 +648,12 @@ class Machine:
                 index += 1
             elif head == 'get_filename_component':
                 values = split_values(arguments(statement))
-                path = self.substitute(values[1])
+                paths = self.elements(values[1])
+                if len(paths) != 1:
+                    raise Unreadable(
+                        f'{self.path}:{line}: get_filename_component got '
+                        f'{len(paths)} path arguments')
+                path = paths[0]
                 mode = values[2]
                 if mode == 'NAME_WE':
                     result = Path(path).stem
