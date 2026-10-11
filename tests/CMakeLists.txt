@@ -4197,6 +4197,17 @@ add_test(NAME test_kernel_profile_rows_controls COMMAND ${Python3_EXECUTABLE} -B
 # they register in every profile and in both fixture modes.
 add_test(NAME test_private_fixture_reads COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/check_private_fixture_reads.py)
+# The controls of both sweeps: each runs the REAL sweep script on tampered
+# copies of the tree under a temporary root, so the sweeps' own proof runs in
+# CI instead of surviving only in a lane's scratch. They build their tamper
+# trees through tempfile.TemporaryDirectory, which honours TMPDIR, so the
+# environment pins TMPDIR to a configure-time directory under the build dir
+# instead of letting the rows write into the host's /tmp.
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tmp")
+add_test(NAME test_private_fixture_reads_controls COMMAND ${Python3_EXECUTABLE} -B
+    ${PROJECT_SOURCE_DIR}/scripts/test_private_fixture_reads.py)
+set_tests_properties(test_private_fixture_reads_controls PROPERTIES
+    ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
 add_test(NAME test_kernel_python_private_reads COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/check_kernel_python_private_reads.py)
 add_test(NAME test_oracle_fixture_checks COMMAND ${Python3_EXECUTABLE} -B
