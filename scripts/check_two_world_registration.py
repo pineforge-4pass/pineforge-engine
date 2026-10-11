@@ -94,6 +94,11 @@ CMAKE_FILES = (Path('tests/CMakeLists.txt'), Path('runner/CMakeLists.txt'))
 # The absent world cannot glob files that do not exist, so the refusal-shard
 # rows are a RECORDED list: runner/CMakeLists.txt pins the names the present
 # branch's split produces, and the drift guard requires the two to agree.
+# if(<single argument>) constants (cmake-language(7), "if"): everything else
+# that is neither a defined variable nor a non-zero number is false.
+TRUE_CONSTANTS = frozenset(('1', 'ON', 'YES', 'TRUE', 'Y'))
+FALSE_CONSTANTS = frozenset(('0', 'OFF', 'NO', 'FALSE', 'N', 'IGNORE', 'NOTFOUND'))
+
 REFUSAL_SHARD_PREFIX = 'confirmed_capabilities_refusals_'
 REFUSAL_SHARD_RECORD = '_pf_refusal_shard_rows'
 REFUSAL_SHARD_MARKERS = '_pf_refusal_shard_first_library'
@@ -397,13 +402,29 @@ class Machine:
         return int(token.strip('"'))
 
     def truthy(self, token: str) -> bool:
+        """if(<single argument>), CMake's own rules: a defined variable
+        answers with its value; the named constants (and non-zero numbers)
+        answer; anything else -- an undefined variable or an arbitrary
+        string -- is FALSE. The old form read an undefined variable as true,
+        which is not what a configure does."""
         resolved = self.substitute(token)
         if resolved == token and not token.startswith('"'):
             values = self.value(token)
             if values is not None:
                 resolved = values[0] if values else ''
+            else:
+                stripped = token.strip('"')
+                if stripped.upper() in TRUE_CONSTANTS:
+                    return True
+                if re.fullmatch(r'-?\d+', stripped):
+                    return int(stripped) != 0
+                return False
         resolved = resolved.strip('"')
-        return resolved not in ('', '0', 'OFF', 'NO', 'FALSE', 'NOTFOUND')
+        if resolved.upper() in FALSE_CONSTANTS:
+            return False
+        if resolved.upper().endswith('-NOTFOUND'):
+            return False
+        return resolved != ''
 
     # ---- condition evaluation -------------------------------------------
     def condition(self, argument: str) -> bool:
@@ -460,10 +481,14 @@ class Machine:
                 container = []
             return subject in container
         if len(tokens) >= 3 and tokens[1] in ('STREQUAL', 'MATCHES'):
-            subject = self.substitute(tokens[0])
-            if subject == tokens[0] and not tokens[0].startswith('"'):
-                values = self.value(tokens[0])
-                subject = values[0] if values else ''
+            raw = tokens[0]
+            expanded = self.substitute(raw)
+            if expanded == raw and not raw.startswith('"'):
+                values = self.value(raw)
+                subject = values[0] if values else raw
+            else:
+                # a quoted operand is one argument with its quotes stripped
+                subject = expanded.strip('"')
             literal = tokens[2].strip('"')
             if tokens[1] == 'STREQUAL':
                 return subject == literal
@@ -636,10 +661,21 @@ class Machine:
                                 f'literal set() in the top-level CMakeLists.txt')
                         items.extend(values)
                 elif len(header) >= 3 and header[1] == 'IN' and header[2] == 'ITEMS':
-                    items = [self.substitute(i).strip('"') for i in header[3:]]
-                elif len(header) == 4 and header[1] == 'RANGE':
-                    items = [str(n) for n in range(int(header[2]),
-                                                   int(header[3]) + 1)]
+                    items = [element for token in header[3:]
+                             for element in self.elements(token)]
+                elif len(header) >= 3 and header[1] == 'RANGE':
+                    bounds = [int(self.substitute(t).strip('"'))
+                              for t in header[2:]]
+                    if len(bounds) == 1:
+                        start, stop, step = 0, bounds[0], 1
+                    elif len(bounds) == 2:
+                        start, stop, step = bounds[0], bounds[1], 1
+                    elif len(bounds) == 3:
+                        start, stop, step = bounds
+                    else:
+                        raise Unreadable(f'{self.path}:{line}: foreach RANGE '
+                                         f'with {len(bounds)} bounds')
+                    items = [str(n) for n in range(start, stop + 1, step)]
                 else:
                     items = []
                     for item in header[1:]:
@@ -662,10 +698,16 @@ class Machine:
             elif head == 'set':
                 values = split_values(arguments(statement))
                 name = values[0]
-                rest = [element for token in values[1:]
-                        for element in self.elements(token)]
-                if name.startswith('CACHE'):
-                    pass
+                tail = values[1:]
+                if 'CACHE' in tail:
+                    # set(<var> <value>... CACHE <type> <doc> [FORCE]): the
+                    # value part is what is set; the cache metadata is not
+                    tail = tail[:tail.index('CACHE')]
+                if 'PARENT_SCOPE' in tail:
+                    # the parent scope of a directory-level file (or of an
+                    # included one) is the same scope this walk holds
+                    tail = [token for token in tail if token != 'PARENT_SCOPE']
+                rest = [element for token in tail for element in self.elements(token)]
                 self.vars[name] = rest
                 if name == '_pf_source_bound_private_rows':
                     self.globals[name] = rest
@@ -712,14 +754,43 @@ class Machine:
                             self.vars.pop(out, None)
                     self.vars[target] = current[len(popped):]
                 elif operation in ('SORT', 'REVERSE'):
-                    pass
+                    target = values[1]
+                    current = list(self.vars.get(target, []))
+                    if operation == 'REVERSE':
+                        self.vars[target] = list(reversed(current))
+                    else:
+                        # lexicographic by default; the ORDER option is
+                        # modelled, COMPARE and anything else is refused
+                        order = 'ASCENDING'
+                        position = 2
+                        while position < len(values):
+                            if (values[position] == 'ORDER'
+                                    and position + 1 < len(values)):
+                                order = values[position + 1]
+                                position += 2
+                                continue
+                            raise Unreadable(
+                                f'{self.path}:{line}: list(SORT '
+                                f'{values[position]!r}) is not modelled')
+                        if order not in ('ASCENDING', 'DESCENDING'):
+                            raise Unreadable(
+                                f'{self.path}:{line}: list(SORT ORDER {order}) '
+                                f'is not modelled')
+                        self.vars[target] = sorted(
+                            current, reverse=order == 'DESCENDING')
                 else:
                     raise Unreadable(f'{self.path}:{line}: unmodelled list() {operation}')
                 index += 1
             elif head == 'math':
                 values = split_values(arguments(statement))
                 expression = self.substitute(' '.join(values[2:]))
-                self.vars[values[1]] = [str(self._math(expression, line))]
+                try:
+                    result = self._math(expression, line)
+                except (ValueError, IndexError):
+                    raise Unreadable(
+                        f'{self.path}:{line}: math(EXPR) in a form this sweep '
+                        f'cannot read: {expression!r}')
+                self.vars[values[1]] = [str(result)]
                 index += 1
             elif head == 'string':
                 head_tokens = split_values(arguments(statement))
@@ -882,6 +953,39 @@ class Machine:
                         f'real configure stops here and this sweep does not '
                         f'model a stopped configure')
                 index += 1
+            elif head == 'unset':
+                values = split_values(arguments(statement))
+                for token in values:
+                    if token == 'PARENT_SCOPE':
+                        continue
+                    if token.startswith('CACHE{'):
+                        raise Unreadable(
+                            f'{self.path}:{line}: unset(CACHE{{...}}) is not '
+                            f'modelled')
+                    self.vars.pop(token.strip('"'), None)
+                index += 1
+            elif head == 'return':
+                # At function/macro scope the bodies are skipped as text, so
+                # a reached return() is at file scope: CMake stops processing
+                # the file there and this sweep does not model a stopped walk.
+                raise Unreadable(
+                    f'{self.path}:{line}: return() at file scope stops a real '
+                    f'configure and this sweep does not model that')
+            elif head == 'option':
+                values = split_values(arguments(statement))
+                if not values:
+                    raise Unreadable(f'{self.path}:{line}: option() without a name')
+                name = values[0]
+                initial = 'OFF'
+                if len(values) >= 3:
+                    initial = values[2].strip('"')
+                elif len(values) == 2 and not values[1].startswith('"'):
+                    initial = values[1]
+                # option() defines the variable only when it is not defined
+                # already (a -D cache entry wins), so a profile value stays
+                if self.value(name) is None:
+                    self.vars[name] = [initial]
+                index += 1
             elif head in ('get_target_property',):
                 values = split_values(arguments(statement))
                 self.vars[values[1]] = ['NOTFOUND']
@@ -892,7 +996,7 @@ class Machine:
                           'set_target_properties', 'target_include_directories',
                           'find_package', 'add_custom_command',
                           'add_custom_target', 'install', 'configure_file',
-                          'option', 'return', 'add_dependencies',
+                          'add_dependencies',
                           'target_sources', 'set_property', 'get_property',
                           'enable_testing', 'add_subdirectory',
                           'target_compile_features', 'add_compile_definitions',
@@ -939,9 +1043,14 @@ class Machine:
             rest = self.substitute(tokens[2]).strip('"')
             self.vars[name] = subject.replace(tokens[1].strip('"'), rest).split(';')
         elif operation == 'JOIN':
-            name = tokens[1]
-            self.vars[name] = [tokens[2].strip('"').join(
-                self.vars.get(tokens[3], []))]
+            # string(JOIN <glue> <out-var> <input>...): the glue is first and
+            # the output variable second (the old order named the glue as the
+            # output and read a variable where the inputs are)
+            glue = self.substitute(tokens[1]).strip('"')
+            name = tokens[2]
+            values = [element for token in tokens[3:]
+                      for element in self.elements(token)]
+            self.vars[name] = [glue.join(values)]
         elif operation == 'LENGTH':
             self.vars[tokens[2]] = [str(len(self.substitute(tokens[1])))]
         else:

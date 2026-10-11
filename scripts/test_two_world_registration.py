@@ -34,6 +34,9 @@ Controls:
  16. the profile table is ci_verify's own; a copy with a profile removed from
      the table is detected by the comparison
  17. two first-library markers swapped -> the positional pairing is drift -> 1
+ 18. an undefined variable in if() is FALSE (a row behind it is not
+     registered), and a quoted STREQUAL pair matches with its quotes stripped
+ 19. a math(EXPR) in a form the sweep cannot read -> 2, named
 """
 from __future__ import annotations
 
@@ -433,6 +436,36 @@ file(GLOB_RECURSE _e2e_two_world_symlinked FOLLOW_SYMLINKS
         self.assertEqual(2, result.returncode, result.stdout + result.stderr)
         self.assertIn('FOLLOW_SYMLINKS', result.stdout + result.stderr)
         self.assertIn(RUNNER, result.stdout + result.stderr)
+
+    # control 18: an undefined variable is FALSE in CMake (a row behind it is
+    # not registered), and a quoted STREQUAL pair matches after the quotes
+    # are stripped (CMake: a quoted argument is one argument, de-quoted)
+    def test_conditions_follow_cmakes_rules(self):
+        baseline = self.row_count(RUNNER)
+        self.tree.append(RUNNER, '''
+if(E2E_TWO_WORLD_UNBOUND_FLAG)
+    add_test(NAME e2e_two_world_unbound_flag COMMAND ${CMAKE_COMMAND} -E echo ok)
+endif()
+''')
+        # an undefined variable registers NOTHING (each half counted on its
+        # own, so the two rules cannot cancel out)
+        self.assertEqual(baseline, self.row_count(RUNNER))
+        self.tree.append(RUNNER, '''
+if("yes" STREQUAL "yes")
+    add_test(NAME e2e_two_world_quoted_strequal COMMAND ${CMAKE_COMMAND} -E echo ok)
+endif()
+''')
+        self.assertEqual(baseline + 1, self.row_count(RUNNER))
+
+    # control 19: a math(EXPR) form the sweep cannot read is exit 2, named
+    def test_an_unreadable_math_expression_exits_2(self):
+        self.tree.append(RUNNER, '''
+math(EXPR _e2e_two_world_math "1 +")
+''')
+        result = self.run_check('--cmakelists', RUNNER, '--profile', 'release')
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn('math(EXPR) in a form this sweep cannot read',
+                      result.stdout + result.stderr)
 
     # control 17: two first-library markers swapped. Both still name removed
     # files, so only the derived side (the real split's own first library per
