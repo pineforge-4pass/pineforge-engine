@@ -785,16 +785,16 @@ PRIVATE_FIXTURE_SKIP_LITERAL = 'SKIP private fixtures not present: '
 # keyed by this table. The bound L5 states -- never below `full` minus
 # PRIVATE_FIXTURE_ROW_COUNT -- holds by construction: `pinned` is a subset of
 # that file's names.
+# The two overlay full floors are plain module-level integer literals (CORE's
+# proof kit reads them from the tree as one line each; the table below
+# references them and never replaces them). Re-measuring for a landed row
+# means editing these two lines and the `pinned` counts in the table.
+RELEASE_MIN_TESTS = 902
+KERNEL_MIN_TESTS = 331
 PRIVATE_FIXTURE_PROFILE_FLOORS = {
-    'release': (902, 297),
-    'kernel': (331, 28),
+    'release': (RELEASE_MIN_TESTS, 297),
+    'kernel': (KERNEL_MIN_TESTS, 28),
 }
-# The two floors' long-standing names, derived from the table above so a
-# raised floor is one edit and the docs, tests and --help all follow. They
-# are read-only aliases: the numbers live in PRIVATE_FIXTURE_PROFILE_FLOORS,
-# and re-measuring for a landed row means editing that table, never these.
-KERNEL_MIN_TESTS = PRIVATE_FIXTURE_PROFILE_FLOORS['kernel'][0]
-RELEASE_MIN_TESTS = PRIVATE_FIXTURE_PROFILE_FLOORS['release'][0]
 
 
 def private_fixtures_overlay() -> bool:
