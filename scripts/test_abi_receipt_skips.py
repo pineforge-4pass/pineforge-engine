@@ -12,6 +12,7 @@ import argparse
 import contextlib
 import io
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -227,6 +228,148 @@ class CTestSummarySpelling(unittest.TestCase):
                 self.assertEqual((rows.total, rows.ran), (4, 1))
                 self.assertEqual(rows.skipped, AgainstRealCTest.GATED)
                 self.assertEqual((rows.not_run, rows.disabled), ((), ()))
+
+
+class PrivateFixtureManifests(unittest.TestCase):
+    """The four receipt-gated rows in both private-fixture states (Item C).
+
+    The private-fixture PRs take the seven provider manifests out of the tree,
+    where the preparer answers the pinned SKIP literal and exit 77 and
+    tests/CMakeLists.txt registers each receipt-gated row as the pinned SKIP
+    placeholder instead of a row that would fail its missing receipt. Both
+    states are built here as the rows `ctest --show-only=json-v1` prints (this
+    suite's rows are hand-written, no ctest run), and the sweep at the end
+    reads the real tests/CMakeLists.txt to prove each row's guard names the
+    manifests of the receipts it reads.
+    """
+
+    ROWS = ('test_script_cpp_abi', 'test_settlement_cpp_abi',
+            'test_aggregate_cpp_versions_runtime', 'test_l4g_runtime_budget')
+    # The provider each --<stem>-receipt flag names, in the flag order
+    # tests/CMakeLists.txt gives each row.
+    ROW_PROVIDERS = {
+        'test_script_cpp_abi': ('v18-frozen',),
+        'test_settlement_cpp_abi': ('e60', '0e', 'v13', 'v14', 'v15-frozen',
+                                    'v16-frozen', 'v18-frozen'),
+        'test_aggregate_cpp_versions_runtime': ('v18-frozen',),
+        'test_l4g_runtime_budget': ('v16-frozen',),
+    }
+
+    def manifest(self, role):
+        return str(PROVIDERS[role]['manifest'].relative_to(skips.ROOT))
+
+    def placeholder(self, role):
+        """The row dict the pinned SKIP placeholder registers for a provider."""
+        manifest = self.manifest(role)
+        return ['cmake', '-E', 'echo', 'SKIP private fixtures not present: ' + manifest]
+
+    def gated(self, role, build, *, mode='--require-receipts'):
+        """The row dict the real registration gives provider `role`."""
+        stem = {'e60': 'base', '0e': 'prior'}.get(role, role)
+        return [sys.executable, 'check.py', f'--{stem}-receipt',
+                str(build / PROVIDERS[role]['default_output'] / 'receipt.json'), mode]
+
+    def test_absent_manifests_make_the_four_rows_pinned_skips_not_failures(self):
+        # Every manifest the tree would need is absent: each of the four rows
+        # is its pinned SKIP placeholder, so the checker sees no receipt-gated
+        # row at all -- none counted a failure, exit 0 -- while the placeholder
+        # output is exactly the pinned literal naming the missing manifest.
+        tests = [{'name': row, 'command': self.placeholder(
+            self.ROW_PROVIDERS[row][0])} for row in self.ROWS]
+        rows = skips.gated_rows(tests)
+        self.assertEqual(rows, [])
+        with tempfile.TemporaryDirectory() as temporary:
+            code, out = self.report(rows, Path(temporary))
+        self.assertEqual(code, 0, out)
+        self.assertIn('registers no receipt-gated CTest row', out)
+        for row in self.ROWS:
+            placeholder = tests[self.ROWS.index(row)]['command']
+            self.assertIn('SKIP private fixtures not present: ' + self.manifest(
+                self.ROW_PROVIDERS[row][0]), ' '.join(placeholder))
+        # And the whole pipeline: --prepare over a tree whose manifests are
+        # gone reports each provider skipped (exit 77), not failed.
+        literal = 'SKIP private fixtures not present: ' + self.manifest('v18-frozen')
+        with tempfile.TemporaryDirectory() as temporary:
+            ok, out = self.prepare_with(Path(temporary), returncode=77, stdout=literal)
+        self.assertTrue(ok, out)
+        for role in skips.PROVIDER_ROLES:
+            self.assertIn(f'  {role}: skipped (exit 77): {literal}', out)
+        self.assertNotIn('refused', out)
+
+    def test_present_manifests_leave_all_four_rows_running(self):
+        # Every manifest and every provider receipt present: the four rows are
+        # receipt-gated exactly as before and every one runs -- exit 0, four
+        # rows named, none skipped or failed.
+        with tempfile.TemporaryDirectory() as temporary:
+            build = Path(temporary)
+            for role in PROVIDERS:
+                receipt = build / PROVIDERS[role]['default_output'] / 'receipt.json'
+                receipt.parent.mkdir(parents=True, exist_ok=True)
+                receipt.write_text('{}\n')
+            tests = [{'name': row,
+                      'command': [flag
+                                  for role in self.ROW_PROVIDERS[row]
+                                  for flag in self.gated(role, build)]}
+                     for row in self.ROWS]
+            rows = skips.gated_rows(tests)
+            self.assertEqual([row.name for row in rows], list(self.ROWS))
+            self.assertEqual([row.verdict for row in rows], ['runs'] * 4)
+            code, out = self.report(rows, build)
+        self.assertEqual(code, 0, out)
+        self.assertIn('every receipt they read is present: all 4 run', out)
+
+    def test_a_bare_77_from_the_preparer_is_still_a_failure(self):
+        # The skip is bought by the literal, never by the exit code alone.
+        with tempfile.TemporaryDirectory() as temporary:
+            ok, out = self.prepare_with(Path(temporary), returncode=77, stdout='')
+        self.assertFalse(ok, out)
+        self.assertNotIn('skipped (exit 77)', out)
+
+    def prepare_with(self, build, *, returncode, stdout):
+        def run(argv, **kwargs):
+            if 'cat-file' in argv:
+                return subprocess.CompletedProcess(argv, 0, '', '')
+            return subprocess.CompletedProcess(argv, returncode, stdout, '')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ok = skips.prepare(skips.ROOT, build, 2, run=run)
+        return ok, out.getvalue()
+
+    def report(self, rows, build):
+        """check_abi_receipt_skips' own verdict for hand-written rows (no ctest)."""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = skips.report(rows, build, str(build))
+        return code, out.getvalue()
+
+    def test_the_four_guards_name_the_manifests_of_the_receipts_they_read(self):
+        # The preparer/row agreement, swept over the real tests/CMakeLists.txt:
+        # for every --<stem>-receipt flag a row carries, the manifest that
+        # gates the row's registration must be the manifest its provider
+        # gates on. The pairs found are named in the count below.
+        text = (skips.ROOT / 'tests' / 'CMakeLists.txt').read_text()
+        bindings = dict(re.findall(r'set\((_pf_manifest_\S+)\s+\$\{PROJECT_SOURCE_DIR\}/(\S+)\)',
+                                   text))
+        self.assertTrue(bindings, 'the manifest bindings must be readable')
+        pairs = 0
+        for row in self.ROWS:
+            start = text.index('NAME ' + row)
+            guard = text.rindex('if(EXISTS', 0, start)
+            guarded = {bindings[name] for name in re.findall(
+                r'EXISTS \$\{(_pf_manifest_\w+)\}', text[guard:start])}
+            block = text[start:text.index('set_tests_properties(' + row, start)]
+            wanted = {self.manifest(role) for role in self.ROW_PROVIDERS[row]}
+            with self.subTest(row=row):
+                self.assertEqual(guarded, wanted)
+            pairs += len(wanted)
+            placeholder = re.search(
+                r'NAME ' + row + r' COMMAND \$\{CMAKE_COMMAND\} -E echo '
+                r'"SKIP private fixtures not present: (\S+)"', text)
+            self.assertIsNotNone(placeholder, row)
+            self.assertEqual(placeholder.group(1), self.manifest(self.ROW_PROVIDERS[row][0]))
+            self.assertTrue(set(re.findall(r'--([a-z0-9-]+)-receipt', block))
+                            <= {'base', 'prior', *PROVIDERS}, row)
+        self.assertEqual(pairs, 10)
 
 
 class Preparation(unittest.TestCase):

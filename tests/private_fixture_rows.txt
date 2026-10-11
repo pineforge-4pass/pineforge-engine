@@ -2,7 +2,7 @@
 // when the private fixtures are absent (removed by the private-fixture PRs). The count also
 // covers the PR 1b batch, whose rows runner/CMakeLists.txt registers the same way.
 // manifest: l44/pr1-manifest.tsv sha256 9a2727d455c1b470d515665428e2c6e090a22ac07f87255d1ca9c20d5528bd62
-// rows: 347
+// rows: 351
 capabilities_equivalence_clock_flags
 capabilities_equivalence_close
 checked_settings_e2e
@@ -71,6 +71,7 @@ test_adapter_settlement_carry
 test_adapter_sizing_relower
 test_add_sibling_margin_tapes
 test_admission_rules_tapes
+test_aggregate_cpp_versions_runtime
 test_aggregated_admission_receipt_tapes
 test_aggregated_entry_bar_index_tape
 test_aggregated_path_regressions
@@ -179,6 +180,7 @@ test_l11a_host_excursion_twin
 test_l11b_same_bar_stopout_excursion
 test_l4b_policy_regressions
 test_l4f_security_magnifier
+test_l4g_runtime_budget
 test_l9a_carried_pooc_competing_checkpoint
 test_limit_entry_affordability_tape
 test_live_trade_accessors_l4d
@@ -276,6 +278,7 @@ test_same_open_reversal_tapes
 test_same_point_entries_tapes
 test_same_side_exit_tapes
 test_samebar_pyramiding_entries_tapes
+test_script_cpp_abi
 test_second_extreme_order_tapes
 test_security_multi_day_buckets_tapes
 test_session_break_open_bar_tape
@@ -288,6 +291,7 @@ test_session_ismarket_tape
 test_session_predicates
 test_session_prepost_windows_tape
 test_session_transition_clock_tapes
+test_settlement_cpp_abi
 test_short_seed_report_swap
 test_slipped_short_tapes
 test_small_money_margin_residual_l4a

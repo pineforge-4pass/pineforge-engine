@@ -1999,6 +1999,26 @@ add_test(NAME test_compile_inventory_pipeline
     COMMAND ${Python3_EXECUTABLE} -B -m pytest ${PROJECT_SOURCE_DIR}/tests/test_compile_inventory_pipeline.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
+# The seven ABI-provider manifests and the four receipt-gated rows. The
+# private-fixture PRs take every manifest below out of the public tree, and
+# scripts/prepare_settlement_cpp_abi_base.py answers a missing one with the
+# pinned SKIP literal and exit 77, so without them no provider can be
+# prepared and a row registered as usual would fail its receipt under
+# --require-receipts (PINEFORGE_REQUIRE_ABI_RECEIPTS=ON in every ci_verify
+# profile) -- scripts/check_abi_receipt_skips.py would then name it a failure
+# although its input is simply absent. Each receipt-gated row is therefore
+# registered on the same EXISTS guard its providers' manifests gate on:
+# present, the row is registered exactly as before; absent, it is the pinned
+# SKIP placeholder (the literal, the private_fixtures label, SKIP_RETURN_CODE
+# 77 kept), the shape every other private-fixture row in this file uses.
+set(_pf_manifest_v18_frozen ${PROJECT_SOURCE_DIR}/tests/fixtures/native_cpp_abi/host-fc7aad6/manifest.json)
+set(_pf_manifest_v16_frozen ${PROJECT_SOURCE_DIR}/tests/fixtures/native_cpp_abi/host-ab9714b/manifest.json)
+set(_pf_manifest_v15_frozen ${PROJECT_SOURCE_DIR}/tests/fixtures/native_cpp_abi/host-e7cdf05/manifest.json)
+set(_pf_manifest_v14 ${PROJECT_SOURCE_DIR}/tests/fixtures/native_cpp_abi/host-f736676/manifest.json)
+set(_pf_manifest_v13 ${PROJECT_SOURCE_DIR}/tests/fixtures/native_cpp_abi/host-c3ed455/manifest.json)
+set(_pf_manifest_base ${PROJECT_SOURCE_DIR}/tests/fixtures/settlement_cpp_abi/e60e571/manifest.json)
+set(_pf_manifest_prior ${PROJECT_SOURCE_DIR}/tests/fixtures/settlement_cpp_abi/0e18690/manifest.json)
+
 set(_pf_script_cpp_abi_flags)
 set(_pf_abi_receipt_mode --skip-if-receipt-missing)
 if(PINEFORGE_REQUIRE_ABI_RECEIPTS)
@@ -2017,19 +2037,24 @@ if(PINEFORGE_ENABLE_COVERAGE)
 endif()
 # The script ABI pair derives from pineforge::source::PineStrategyHost.
 if(PINEFORGE_BUILD_SOURCE_LAYER)
-    add_test(
-        NAME test_script_cpp_abi
-        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_script_cpp_abi.py
-                --compiler ${CMAKE_CXX_COMPILER}
-                --library $<TARGET_FILE:pineforge>
-                --include ${PROJECT_SOURCE_DIR}/include
-                --generated-include ${PROJECT_BINARY_DIR}/include
-                --v18-frozen-receipt ${PROJECT_BINARY_DIR}/native-abi-v18-frozen/receipt.json
-                --receipt ${PROJECT_BINARY_DIR}/script-abi-receipt.json
-                ${_pf_abi_receipt_mode}
-                ${_pf_script_cpp_abi_flags}
-    )
-    set_tests_properties(test_script_cpp_abi PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+    if(EXISTS ${_pf_manifest_v18_frozen})
+        add_test(
+            NAME test_script_cpp_abi
+            COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_script_cpp_abi.py
+                    --compiler ${CMAKE_CXX_COMPILER}
+                    --library $<TARGET_FILE:pineforge>
+                    --include ${PROJECT_SOURCE_DIR}/include
+                    --generated-include ${PROJECT_BINARY_DIR}/include
+                    --v18-frozen-receipt ${PROJECT_BINARY_DIR}/native-abi-v18-frozen/receipt.json
+                    --receipt ${PROJECT_BINARY_DIR}/script-abi-receipt.json
+                    ${_pf_abi_receipt_mode}
+                    ${_pf_script_cpp_abi_flags}
+        )
+        set_tests_properties(test_script_cpp_abi PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+    else()
+        add_test(NAME test_script_cpp_abi COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/native_cpp_abi/host-fc7aad6/manifest.json")
+        set_tests_properties(test_script_cpp_abi PROPERTIES SKIP_RETURN_CODE 77 SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+    endif()
 endif()
 
 add_test(
@@ -2091,25 +2116,34 @@ set(PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT
 set(PINEFORGE_NATIVE_ABI_V18_FROZEN_RECEIPT
     "${PROJECT_BINARY_DIR}/native-abi-v18-frozen/receipt.json"
     CACHE FILEPATH "Prepared actual fc7aad6 frozen epoch 18 ABI provider receipt")
-# Same pairing TU, against the frozen settlement providers.
+# Same pairing TU, against the frozen settlement providers. It reads every
+# provider's receipt, so its guard requires every provider's manifest.
 if(PINEFORGE_BUILD_SOURCE_LAYER)
-    add_test(NAME test_settlement_cpp_abi
-        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_settlement_cpp_abi.py
-            --compiler ${CMAKE_CXX_COMPILER}
-            --library $<TARGET_FILE:pineforge>
-            --include ${PROJECT_SOURCE_DIR}/include
-            --generated-include ${PROJECT_BINARY_DIR}/include
-            --base-receipt ${PINEFORGE_SETTLEMENT_ABI_BASE_RECEIPT}
-            --prior-receipt ${PINEFORGE_SETTLEMENT_ABI_PRIOR_RECEIPT}
-            --v13-receipt ${PINEFORGE_NATIVE_ABI_V13_RECEIPT}
-            --v14-receipt ${PINEFORGE_NATIVE_ABI_V14_RECEIPT}
-            --v15-frozen-receipt ${PINEFORGE_NATIVE_ABI_V15_FROZEN_RECEIPT}
-            --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
-            --v18-frozen-receipt ${PINEFORGE_NATIVE_ABI_V18_FROZEN_RECEIPT}
-            --receipt ${PROJECT_BINARY_DIR}/settlement-abi-receipt.json
-            ${_pf_abi_receipt_mode}
-            ${_pf_script_cpp_abi_flags})
-    set_tests_properties(test_settlement_cpp_abi PROPERTIES TIMEOUT 600 SKIP_RETURN_CODE 77)
+    if(EXISTS ${_pf_manifest_base} AND EXISTS ${_pf_manifest_prior}
+            AND EXISTS ${_pf_manifest_v13} AND EXISTS ${_pf_manifest_v14}
+            AND EXISTS ${_pf_manifest_v15_frozen} AND EXISTS ${_pf_manifest_v16_frozen}
+            AND EXISTS ${_pf_manifest_v18_frozen})
+        add_test(NAME test_settlement_cpp_abi
+            COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_settlement_cpp_abi.py
+                --compiler ${CMAKE_CXX_COMPILER}
+                --library $<TARGET_FILE:pineforge>
+                --include ${PROJECT_SOURCE_DIR}/include
+                --generated-include ${PROJECT_BINARY_DIR}/include
+                --base-receipt ${PINEFORGE_SETTLEMENT_ABI_BASE_RECEIPT}
+                --prior-receipt ${PINEFORGE_SETTLEMENT_ABI_PRIOR_RECEIPT}
+                --v13-receipt ${PINEFORGE_NATIVE_ABI_V13_RECEIPT}
+                --v14-receipt ${PINEFORGE_NATIVE_ABI_V14_RECEIPT}
+                --v15-frozen-receipt ${PINEFORGE_NATIVE_ABI_V15_FROZEN_RECEIPT}
+                --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
+                --v18-frozen-receipt ${PINEFORGE_NATIVE_ABI_V18_FROZEN_RECEIPT}
+                --receipt ${PROJECT_BINARY_DIR}/settlement-abi-receipt.json
+                ${_pf_abi_receipt_mode}
+                ${_pf_script_cpp_abi_flags})
+        set_tests_properties(test_settlement_cpp_abi PROPERTIES TIMEOUT 600 SKIP_RETURN_CODE 77)
+    else()
+        add_test(NAME test_settlement_cpp_abi COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/settlement_cpp_abi/e60e571/manifest.json")
+        set_tests_properties(test_settlement_cpp_abi PROPERTIES SKIP_RETURN_CODE 77 SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+    endif()
 endif()
 
 add_test(NAME test_settlement_cpp_abi_tooling
@@ -2125,17 +2159,22 @@ add_test(NAME test_abi_receipt_skips
         --ctest ${CMAKE_CTEST_COMMAND})
 # Same pairing TU, for the v18/v19 ownership control.
 if(PINEFORGE_BUILD_SOURCE_LAYER)
-    add_test(NAME test_aggregate_cpp_versions_runtime
-        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_aggregate_cpp_versions.py
-            --compiler ${CMAKE_CXX_COMPILER}
-            --library $<TARGET_FILE:pineforge>
-            --include ${PROJECT_SOURCE_DIR}/include
-            --generated-include ${PROJECT_BINARY_DIR}/include
-            --v18-frozen-receipt ${PINEFORGE_NATIVE_ABI_V18_FROZEN_RECEIPT}
-            --receipt ${PROJECT_BINARY_DIR}/aggregate-abi-receipt.json
-            ${_pf_abi_receipt_mode}
-            ${_pf_script_cpp_abi_flags})
-    set_tests_properties(test_aggregate_cpp_versions_runtime PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+    if(EXISTS ${_pf_manifest_v18_frozen})
+        add_test(NAME test_aggregate_cpp_versions_runtime
+            COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_aggregate_cpp_versions.py
+                --compiler ${CMAKE_CXX_COMPILER}
+                --library $<TARGET_FILE:pineforge>
+                --include ${PROJECT_SOURCE_DIR}/include
+                --generated-include ${PROJECT_BINARY_DIR}/include
+                --v18-frozen-receipt ${PINEFORGE_NATIVE_ABI_V18_FROZEN_RECEIPT}
+                --receipt ${PROJECT_BINARY_DIR}/aggregate-abi-receipt.json
+                ${_pf_abi_receipt_mode}
+                ${_pf_script_cpp_abi_flags})
+        set_tests_properties(test_aggregate_cpp_versions_runtime PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+    else()
+        add_test(NAME test_aggregate_cpp_versions_runtime COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/native_cpp_abi/host-fc7aad6/manifest.json")
+        set_tests_properties(test_aggregate_cpp_versions_runtime PROPERTIES SKIP_RETURN_CODE 77 SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+    endif()
 endif()
 
 add_test(
@@ -3431,18 +3470,23 @@ if(TARGET test_l4g_runtime_budget)
         # to 0 on every lane, so the relative gate runs on every Release build.
         set(_pf_runtime_budget_mode --candidate-only)
     endif()
-    add_test(NAME test_l4g_runtime_budget
-        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_runtime_budget.py
-            --candidate $<TARGET_FILE:test_l4g_runtime_budget>
-            --source ${CMAKE_CURRENT_SOURCE_DIR}/test_l4g_runtime_budget.cpp
-            --csv ${PROJECT_SOURCE_DIR}/tutorial/data/btcusdt_15m_7d.csv
-            --compiler ${CMAKE_CXX_COMPILER}
-            --generated-include ${PROJECT_BINARY_DIR}/include
-            --compile-commands ${PROJECT_BINARY_DIR}/compile_commands.json
-            --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
-            ${_pf_abi_receipt_mode}
-            ${_pf_runtime_budget_mode})
-    set_tests_properties(test_l4g_runtime_budget PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
+    if(EXISTS ${_pf_manifest_v16_frozen})
+        add_test(NAME test_l4g_runtime_budget
+            COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_runtime_budget.py
+                --candidate $<TARGET_FILE:test_l4g_runtime_budget>
+                --source ${CMAKE_CURRENT_SOURCE_DIR}/test_l4g_runtime_budget.cpp
+                --csv ${PROJECT_SOURCE_DIR}/tutorial/data/btcusdt_15m_7d.csv
+                --compiler ${CMAKE_CXX_COMPILER}
+                --generated-include ${PROJECT_BINARY_DIR}/include
+                --compile-commands ${PROJECT_BINARY_DIR}/compile_commands.json
+                --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
+                ${_pf_abi_receipt_mode}
+                ${_pf_runtime_budget_mode})
+        set_tests_properties(test_l4g_runtime_budget PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
+    else()
+        add_test(NAME test_l4g_runtime_budget COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/native_cpp_abi/host-ab9714b/manifest.json")
+        set_tests_properties(test_l4g_runtime_budget PROPERTIES SKIP_RETURN_CODE 77 SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+    endif()
 endif()
 
 add_test(NAME test_l4g_runtime_budget_mutations

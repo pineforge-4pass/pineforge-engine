@@ -36,7 +36,12 @@ import subprocess
 import sys
 from typing import Callable
 
-from prepare_settlement_cpp_abi_base import PROVIDERS, ROOT, reusable_prepared_base
+from prepare_settlement_cpp_abi_base import (
+    PRIVATE_FIXTURE_SKIP_LITERAL,
+    PROVIDERS,
+    ROOT,
+    reusable_prepared_base,
+)
 
 # The seven providers, in the order scripts/ci_verify.py prepares them.
 PROVIDER_ROLES = ('e60', '0e', 'v13', 'v14', 'v15-frozen', 'v16-frozen', 'v18-frozen')
@@ -168,7 +173,22 @@ def prepare(source: Path, build_dir: Path, jobs: int,
                 continue
         argv = prepare_argv(source, build_dir, role, jobs)
         print('  + ' + shlex.join(argv), flush=True)
-        if run(argv).returncode:
+        result = run(argv, capture_output=True, text=True)
+        body = (result.stdout or '') + (result.stderr or '')
+        if body:
+            print(body if body.endswith('\n') else body + '\n', end='', flush=True)
+        if result.returncode == 77 and PRIVATE_FIXTURE_SKIP_LITERAL in body:
+            # The preparer's absent-overlay answer: its private-fixture
+            # manifest is not in the tree, so this provider cannot be
+            # prepared and the rows that read its receipt are registered as
+            # pinned SKIP placeholders (tests/CMakeLists.txt). A skip, never
+            # a failed preparation -- and never bought without the literal: a
+            # bare 77 falls through to the failure below.
+            reason = next((line.strip() for line in body.splitlines()
+                           if PRIVATE_FIXTURE_SKIP_LITERAL in line), '')
+            print(f'  {role}: skipped (exit 77): {reason}', flush=True)
+            continue
+        if result.returncode:
             ready = False
     return ready
 
