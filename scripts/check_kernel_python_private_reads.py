@@ -175,12 +175,24 @@ def row_properties(cmake_text: str, row: str) -> str:
 # Rows whose closure names an absent private path that the row provably never
 # reads from the real tree. Each entry is printed on every run, with the
 # evidence that earned it, so an exemption is never silent. Regaining the
-# exemption requires re-running its evidence.
+# exemption requires re-running its evidence: scripts/test_private_fixture_
+# reads.py (ExemptRowTraceControls) re-runs it in-tree for every row this
+# table exempts -- it traces each row's script, fails when an open lands under
+# the real tests/fixtures/ or tests/oracle/, and fails a tampered copy that
+# does read, so a name on this table without a clean trace does not pass.
 EXEMPT = {
     'test_private_fixture_guards': (
         'the paths it names are temp-world payloads (PROBES), not reads: under '
         'a sys.addaudithook(open) trace it opens 0 files under the real '
-        'tests/fixtures/ and exits 0 on the fixture-less tree'),
+        'tests/fixtures/ and exits 0 on the fixture-less tree; the trace is '
+        're-run in-tree by control 12 of scripts/test_private_fixture_reads.py'),
+    'test_private_fixture_reads_controls': (
+        'the path it names is a tamper payload (REMOVED_EXAMPLE, the removed '
+        'directory the controls copy into their temp trees), not a read: under '
+        'a sys.addaudithook(open) trace the script opens 0 files under the '
+        'real tests/fixtures/ and tests/oracle/, in its own process and in the '
+        'Python children it starts; control 12 of scripts/test_private_'
+        'fixture_reads.py re-runs that trace'),
 }
 GATED_BY_MODULE = re.compile(r'(?:return|Exit|exit)\s*\(?\s*77\b')
 

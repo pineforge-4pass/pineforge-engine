@@ -17,6 +17,8 @@ to watch every control below fail against it.
 """
 from __future__ import annotations
 
+import importlib.util
+import os
 import shutil
 import subprocess
 import sys
@@ -25,12 +27,113 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-SWEEP = Path(__import__('os').environ.get(
+SWEEP = Path(os.environ.get(
     'PF_SWEEP_SCRIPT', REPO / 'scripts' / 'check_private_fixture_reads.py'))
 KERNEL_SWEEP = REPO / 'scripts' / 'check_kernel_python_private_reads.py'
 PY = sys.executable
 
 REMOVED_EXAMPLE = 'tests/fixtures/whole_lot_tie'
+
+# ---- the audit-hook trace the kernel sweep's exemptions must earn ----------
+# scripts/check_kernel_python_private_reads.py exempts a row when the absent
+# private path its script names is a payload rather than a read.  That claim
+# is re-earned here, not trusted: the exempt script is run under an
+# "open" audit hook that records every path under the real tests/fixtures/ or
+# tests/oracle/ and exits 3 when there is one.
+#
+# The hook is installed by the TRACER file below, which plays two roles: as
+# __main__ it runs one target script and reports the log, and as the
+# sitecustomize every child interpreter picks up from PYTHONPATH it installs
+# the same hook in those children, because a child's opens are invisible to
+# its parent's hook.  Coverage is therefore the script's own process plus
+# every Python child that inherits the environment; a child run with -I and a
+# scrubbed environment (not this suite's) is out of any in-process hook's
+# reach, and the exemption reason says so.
+TRACE_MARKER = 'PF_PRIVATE_TRACE_CHILD'
+
+TRACER_SOURCE = '''\
+"""Record every open() under the real tree's private trees.
+
+Imported as sitecustomize (PYTHONPATH), the hook below installs itself in
+this interpreter; run as __main__, this file runs one target script and
+reports the log its processes wrote (PF_PRIVATE_TRACE_LOG), exiting 3 when
+any open fell under PF_PRIVATE_TRACE_ROOT/tests/fixtures/ or .../tests/oracle/.
+"""
+import os
+import runpy
+import sys
+
+_PREFIXES = tuple(
+    os.path.join(os.environ.get('PF_PRIVATE_TRACE_ROOT', ''), tree) + os.sep
+    for tree in ('tests/fixtures', 'tests/oracle'))
+
+
+def _record(path):
+    log = os.environ.get('PF_PRIVATE_TRACE_LOG')
+    if not log:
+        return
+    try:
+        with open(log, 'a') as handle:
+            handle.write(path + "\\n")
+    except OSError:
+        pass
+
+
+def _hook(event, args):
+    if event != 'open' or not _PREFIXES[0] or not _PREFIXES[0].startswith(os.sep):
+        return
+    path = args[0]
+    if not isinstance(path, str):
+        try:
+            path = os.fspath(path)
+        except TypeError:
+            return
+    if not isinstance(path, str):
+        return
+    full = os.path.abspath(path)
+    if any(full.startswith(prefix) for prefix in _PREFIXES):
+        _record(full)
+
+
+sys.addaudithook(_hook)
+
+if __name__ == '__main__':
+    target = sys.argv[2]
+    os.environ['PF_PRIVATE_TRACE_CHILD'] = '1'
+    sys.argv = [target]
+    try:
+        runpy.run_path(target, run_name='__main__')
+    except SystemExit:
+        pass
+    except Exception as error:
+        print('trace: the traced script raised %r' % (error,))
+    try:
+        with open(os.environ['PF_PRIVATE_TRACE_LOG']) as handle:
+            opened = sorted({line.strip() for line in handle if line.strip()})
+    except OSError:
+        opened = []
+    for path in opened:
+        print('trace: opened %s' % (path,))
+    print('trace: opens under the real private trees: %d' % len(opened))
+    sys.exit(3 if opened else 0)
+'''
+
+
+def run_under_trace(root: Path, tmp: Path, target: Path):
+    """Run one script under the audit-hook trace, children included."""
+    tracer = tmp / 'sitecustomize.py'
+    tracer.write_text(TRACER_SOURCE)
+    log = tmp / 'opens.log'
+    log.unlink(missing_ok=True)
+    env = dict(os.environ)
+    env['PYTHONPATH'] = os.pathsep.join(
+        [str(tmp)] + ([env['PYTHONPATH']] if env.get('PYTHONPATH') else []))
+    env['PF_PRIVATE_TRACE_ROOT'] = str(root)
+    env['PF_PRIVATE_TRACE_LOG'] = str(log)
+    env[TRACE_MARKER] = '1'
+    return subprocess.run(
+        [PY, '-B', str(tracer), str(root), str(target)],
+        capture_output=True, text=True, timeout=900, env=env)
 
 
 def run_sweep(root: Path) -> subprocess.CompletedProcess:
@@ -258,6 +361,91 @@ class KernelPythonSweepControls(unittest.TestCase):
             timeout=600)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn('kernel python rows reading an absent private file: 0',
+                      result.stdout)
+
+
+TAMPER_READ = (
+    'import pathlib\n'
+    'try:\n'
+    '    pathlib.Path(%r).read_text()\n'
+    'except OSError:\n'
+    '    pass\n')
+
+TAMPER_CHILD_READ = (
+    'import subprocess, sys\n'
+    'subprocess.run([sys.executable, "-c",\n'
+    '    "import pathlib; pathlib.Path(%r).read_text()"])\n')
+
+
+class ExemptRowTraceControls(unittest.TestCase):
+    """Z2: the kernel sweep's EXEMPT rows re-earn it under the audit trace.
+
+    The rows and their scripts come from the real checker (its EXEMPT table
+    and its own row parse), so an exemption added there is traced here without
+    a second list to keep in step.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix='e2e-fb2-trace-')
+        self.tmp = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        if os.environ.get(TRACE_MARKER):
+            self.skipTest('a traced child run must not trace itself')
+
+    def _exempt_scripts(self) -> dict:
+        spec = importlib.util.spec_from_file_location(
+            'check_kernel_python_private_reads', KERNEL_SWEEP)
+        kernel = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(kernel)
+        self.assertTrue(kernel.EXEMPT, 'no exempt row: the control is vacuous')
+        rows = {name: script for name, script, _line in
+                kernel.python_rows(REPO / 'tests' / 'CMakeLists.txt')}
+        scripts = {}
+        for row in kernel.EXEMPT:
+            self.assertIn(row, rows,
+                          f'{row} is exempt but registers no Python row')
+            scripts[row] = rows[row]
+        return scripts
+
+    # control 12: every exempt row's script, traced, opens no file under the
+    # real tests/fixtures/ or tests/oracle/ -- the evidence its exemption
+    # cites, re-run in-tree instead of trusted
+    def test_exempt_rows_open_no_real_private_file(self):
+        for row, script in sorted(self._exempt_scripts().items()):
+            with self.subTest(row=row):
+                result = run_under_trace(REPO, self.tmp, script)
+                self.assertEqual(0, result.returncode,
+                                 result.stdout + result.stderr)
+                self.assertIn('trace: opens under the real private trees: 0',
+                              result.stdout)
+
+    def _tampered_copy(self, name: str, tamper: str) -> Path:
+        """The exempt script plus one real private-tree read: inserted after
+        the __future__ import so the copy still parses and really runs."""
+        source = (REPO / 'scripts' / 'test_private_fixture_reads.py').read_text()
+        future = 'from __future__ import annotations\n'
+        self.assertIn(future, source, 'the exempt script changed shape')
+        script = self.tmp / name
+        script.write_text(source.replace(
+            future, future + tamper % str(REPO / REMOVED_EXAMPLE / 'bars.csv'), 1))
+        return script
+
+    # control 13: the trace can fail -- a copy of an exempt script that reads
+    # a real private path is named and the trace exits 3
+    def test_a_tampered_copy_that_reads_a_fixture_is_failed(self):
+        script = self._tampered_copy('tampered_in_process.py', TAMPER_READ)
+        result = run_under_trace(REPO, self.tmp, script)
+        self.assertEqual(3, result.returncode, result.stdout + result.stderr)
+        self.assertIn(f'trace: opened {REPO}/{REMOVED_EXAMPLE}/bars.csv',
+                      result.stdout)
+
+    # control 14: the trace follows the script's children -- the same read in
+    # a child interpreter is still named, where a parent-only hook is blind
+    def test_a_child_process_read_is_still_failed(self):
+        script = self._tampered_copy('tampered_child.py', TAMPER_CHILD_READ)
+        result = run_under_trace(REPO, self.tmp, script)
+        self.assertEqual(3, result.returncode, result.stdout + result.stderr)
+        self.assertIn(f'trace: opened {REPO}/{REMOVED_EXAMPLE}/bars.csv',
                       result.stdout)
 
 
