@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The run-failure code registry, held to its published catalog.
 
-`docker/run_failure_codes.json` (schema pineforge-run-failure-catalog/v1) is
+`run_failure_codes.json` (schema pineforge-run-failure-catalog/v1) is
 the one source of the run-failure vocabulary: every code's class, retryable
 flag, arguments (kind, closed values, optional), English templates and the
 release it appeared in. The engine compiles two files generated from it:
