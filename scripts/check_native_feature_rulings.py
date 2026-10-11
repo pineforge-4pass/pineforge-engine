@@ -168,9 +168,47 @@ def parse_rulings(adr_text: str) -> list[Ruling]:
     return rulings
 
 
+def private_fixture_rows(root: Path) -> frozenset[str]:
+    """The pinned private-fixture ctest rows (tests/private_fixture_rows.txt)."""
+    path = root / "tests" / "private_fixture_rows.txt"
+    if not path.is_file():
+        return frozenset()
+    return frozenset(line.strip() for line in path.read_text().splitlines()
+                     if line.strip() and not line.startswith("//"))
+
+
+def private_consumer(root: Path, path: str) -> bool:
+    """True when a consumer path names a source the private-fixture PR removes.
+
+    A path like tests/test_native_price_grid.cpp is private when the row it
+    registers (test_native_price_grid, or its _l4* switched-route twin) is
+    pinned in tests/private_fixture_rows.txt. A tree without that file -- the
+    mutation self-test's synthetic inputs -- has no private consumers, so the
+    check keeps failing closed there.
+    """
+    rows = private_fixture_rows(root)
+    if not rows:
+        return False
+    stem = Path(path).stem
+    return bool(re.fullmatch(r"[A-Za-z0-9_]+", stem)) and (
+        stem in rows or any(re.fullmatch(re.escape(stem) + r"_l4\w*", row) for row in rows))
+
+
+def default_private_consumer(path: str) -> bool:
+    return private_consumer(ROOT, path)
+
+
 def check(header_text: str, adapter_text: str, adr_text: str, source_layer_text: str,
-          read_file: Callable[[str], str | None]) -> list[str]:
-    """Findings for one tree; shape errors propagate."""
+          read_file: Callable[[str], str | None],
+          is_private: Callable[[str], bool] = default_private_consumer) -> list[str]:
+    """Findings for one tree; shape errors propagate.
+
+    A ruled consumer the tree does not carry is named in the skip report, not
+    a finding, when it is one of the private-fixture rows; the same path is
+    checked exactly as before whenever it is present, and it still satisfies a
+    native-only ruling's tests/ requirement (the row that reads it is the
+    pinned private-fixture row).
+    """
     fields = spec_fields(header_text)
     declared = adapter_declared(adapter_text, fields)
     findings: list[str] = []
@@ -207,6 +245,8 @@ def check(header_text: str, adapter_text: str, adr_text: str, source_layer_text:
         for path in ruling.consumers:
             text = read_file(path)
             if text is None:
+                if is_private(path):
+                    continue  # named in the skip report, not a finding
                 findings.append(f"{name}: consumer {path} does not exist")
                 continue
             for field in ruling.fields:
@@ -254,10 +294,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         source_layer_text = read_source_layer(root)
-        findings = check(header_text, adapter_text, adr_text, source_layer_text, read_file)
+        findings = check(header_text, adapter_text, adr_text, source_layer_text, read_file,
+                         is_private=lambda path: private_consumer(root, path))
         fields = spec_fields(header_text)
         declared = adapter_declared(adapter_text, fields)
         rulings = parse_rulings(adr_text)
+        skipped = sorted({path for ruling in rulings for path in ruling.consumers
+                          if read_file(path) is None and private_consumer(root, path)})
     except ShapeError as error:
         print(f"check_native_feature_rulings: {error}", file=sys.stderr)
         return 1
@@ -273,7 +316,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"check_native_feature_rulings: {len(fields)} NativeRunSpec fields, {len(declared)} declared by "
           f"the adapter's project(), {len(fields) - len(declared)} ruled ("
           + ", ".join(f"{counts[kind]} {kind}" for kind in RULING_KINDS)
-          + "), every ruling backed by an executed native consumer")
+          + "), every ruling backed by an executed native consumer"
+          + (", private fixtures not present: " + ", ".join(skipped) if skipped else ""))
     return 0
 
 
