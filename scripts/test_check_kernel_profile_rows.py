@@ -158,16 +158,29 @@ class KernelProfileRows(unittest.TestCase):
     def test_a_missing_tu_is_counted_in_neither_profile(self):
         # A TU the tree does not have says nothing about the row: it is
         # named, and it is in neither the kernel nor the release count.
+        # The missing-file case is built in a tampered tree (real directories
+        # under TMPDIR), so the control does not change with the world: in the
+        # overlay world the real tree HAS this TU, and only the real tree's
+        # own answer (below) is what the world decides.
         code, out = run_sweep(REAL)
         self.assertEqual(code, 0, out)
         self.assertIn('whose TU the tree does not have (counted in neither profile)', out)
-        self.assertEqual('missing', sweep.source_bound(
-            sweep.REPO / 'tests' / 'test_trail_activation_tick_reach.cpp',
-            'test_trail_activation_tick_reach', set()))
-        self.assertEqual('bound', sweep.source_bound(
-            sweep.REPO / 'tests' / 'test_trail_activation_tick_reach.cpp',
-            'test_trail_activation_tick_reach',
-            {'test_trail_activation_tick_reach'}))
+        with tempfile.TemporaryDirectory() as temporary:
+            entry = Path(temporary) / 'tests' / 'test_trail_activation_tick_reach.cpp'
+            entry.parent.mkdir()
+            self.assertEqual('missing', sweep.source_bound(
+                entry, 'test_trail_activation_tick_reach', set()))
+            self.assertEqual('bound', sweep.source_bound(
+                entry, 'test_trail_activation_tick_reach',
+                {'test_trail_activation_tick_reach'}))
+            entry.write_text('// e2e-x4: the TU exists and records nothing\n')
+            self.assertEqual('clear', sweep.source_bound(
+                entry, 'test_trail_activation_tick_reach', set()))
+        real_tu = sweep.REPO / 'tests' / 'test_trail_activation_tick_reach.cpp'
+        self.assertEqual('missing' if not real_tu.is_file() else 'bound',
+                         sweep.source_bound(real_tu,
+                                            'test_trail_activation_tick_reach',
+                                            set()))
 
     def test_loud_fail_a_lost_predicate_definition_exits(self):
         with tempfile.TemporaryDirectory() as temporary:
