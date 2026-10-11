@@ -1,7 +1,7 @@
 // Pinned ctest rows that tests/CMakeLists.txt registers as SKIP placeholders
 // when the private fixtures are absent (removed by the private-fixture PR).
 // manifest: l44/pr1-manifest.tsv sha256 9a2727d455c1b470d515665428e2c6e090a22ac07f87255d1ca9c20d5528bd62
-// rows: 129
+// rows: 134
 test_aapl15_margin_brackets_l4a
 test_adapter_coof_relower
 test_adapter_in_place_reads
@@ -16,14 +16,17 @@ test_admission_rules_tapes
 test_aggregated_path_regressions
 test_callback_lifecycle_tapes
 test_carried_pooc_short_margin_state_l4a
+test_carried_trail_open_tapes
 test_cash_fee_sizing_tapes
 test_chart_tf_security_split_feed
 test_coof_chart_tick_touch_l4c
+test_coof_close_slippage_tapes_private
 test_coof_competing_tick_tapes
 test_coof_forced_waypoint_tapes
 test_coof_immediate_close_final_tapes
 test_coof_immediate_close_tapes
 test_coof_recalc_security_tapes
+test_cross_mechanism_tapes_private
 test_cross_side_exit_tapes
 test_default_flat_market_gross_admission_l4d
 test_default_pct_stop_sizing_l4b
@@ -59,6 +62,7 @@ test_margin_open_print_tapes
 test_margin_open_rules_tapes
 test_margin_opposite_tapes
 test_margin_residual_tapes
+test_margin_rules_forward_replay_private
 test_margin_schedule_rules_tapes
 test_margin_v6_tapes
 test_native_calc_timing_twin
@@ -119,6 +123,7 @@ test_session_ismarket_tape
 test_session_predicates
 test_session_prepost_windows_tape
 test_slipped_short_tapes
+test_source_buying_power_tapes_private
 test_split_feed_partial_bucket
 test_symbol_calendar
 test_symbol_calendar_tapes

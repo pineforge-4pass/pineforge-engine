@@ -3045,13 +3045,16 @@ set(_pf_private_fixture_rows
     test_admission_rules_tapes
     test_aggregated_path_regressions
     test_carried_pooc_short_margin_state_l4a
+    test_carried_trail_open_tapes
     test_cash_fee_sizing_tapes
     test_chart_tf_security_split_feed
     test_coof_chart_tick_touch_l4c
+    test_coof_close_slippage_tapes
     test_coof_forced_waypoint_tapes
     test_coof_immediate_close_final_tapes
     test_coof_immediate_close_tapes
     test_coof_recalc_security_tapes
+    test_cross_mechanism_tapes
     test_default_flat_market_gross_admission_l4d
     test_default_pct_stop_sizing_l4b
     test_default_qty_signal_freeze
@@ -3085,6 +3088,7 @@ set(_pf_private_fixture_rows
     test_margin_open_rules_tapes
     test_margin_opposite_tapes
     test_margin_residual_tapes
+    test_margin_rules_forward_replay
     test_margin_schedule_rules_tapes
     test_margin_v6_tapes
     test_native_calc_timing_twin
@@ -3134,6 +3138,7 @@ set(_pf_private_fixture_rows
     test_session_predicates
     test_session_prepost_windows_tape
     test_slipped_short_tapes
+    test_source_buying_power_tapes
     test_split_feed_partial_bucket
     test_symbol_calendar_tapes
     test_taro_price_gap_admission_l4d
@@ -3445,611 +3450,6 @@ endif()
 string(REPLACE ";" "|" PINEFORGE_SOURCE_LAYER_JOINED "${PINEFORGE_SOURCE_LAYER_FILES}")
 target_compile_definitions(test_native_sizing_bases PRIVATE
     PINEFORGE_SOURCE_LAYER_FILES="${PINEFORGE_SOURCE_LAYER_JOINED}")
-
-# R5 E9 reads its TradingView tapes from the fixture tree; source-bound too.
-if(TARGET test_trail_activation_tick_reach)
-    target_compile_definitions(test_trail_activation_tick_reach PRIVATE
-        PINEFORGE_E9_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/trail_activation_tick_reach")
-endif()
-
-# R5 R2's witness is the mirror image: the adapter DOES name the sizing basis
-# it was re-lowered onto, and the core files that own the basis name no source
-# language at all.
-string(REPLACE ";" "|" PINEFORGE_R2_CORE_JOINED
-       "${PROJECT_SOURCE_DIR}/include/pineforge/native_order.hpp;${PROJECT_SOURCE_DIR}/src/native_execution_consumer.cpp")
-# The witness is adapter-bound, so the kernel-only build never registers it.
-if(TARGET test_adapter_sizing_relower)
-    target_compile_definitions(test_adapter_sizing_relower PRIVATE
-        PINEFORGE_R2_ADAPTER_FILE="${PROJECT_SOURCE_DIR}/src/source/pine_adapter.cpp"
-        PINEFORGE_R2_CORE_FILES="${PINEFORGE_R2_CORE_JOINED}")
-endif()
-
-# R5 lane B-ADAPTER (item 5): the current-execution witness reads the kernel.
-if(TARGET test_native_current_execution_rate)
-    target_compile_definitions(test_native_current_execution_rate PRIVATE
-        PINEFORGE_B_ADAPTER_KERNEL_FILES="${PROJECT_SOURCE_DIR}/src/engine_execution.cpp|${PROJECT_SOURCE_DIR}/src/native_execution_consumer.cpp")
-endif()
-# R5 lane B-ADAPTER (item 3): the range-end witness reads the source layer.
-if(TARGET test_adapter_range_end_fx)
-    target_compile_definitions(test_adapter_range_end_fx PRIVATE
-        PINEFORGE_B_ADAPTER_SOURCE_DIR="${PROJECT_SOURCE_DIR}/src/source")
-endif()
-
-# R5 F7: the margin witness pins that no never-called predicate survives.
-if(TARGET test_adapter_margin_relower)
-    target_compile_definitions(test_adapter_margin_relower PRIVATE
-        PINEFORGE_F7_ADAPTER_FILE="${PROJECT_SOURCE_DIR}/src/source/pine_adapter.cpp")
-endif()
-
-# R5 F7 (M25): the path-order witness reads the two source files it pins.
-if(TARGET test_e19_excursion_path_order)
-    target_compile_definitions(test_e19_excursion_path_order PRIVATE
-        PINEFORGE_F7_ADAPTER_FILE="${PROJECT_SOURCE_DIR}/src/source/pine_adapter.cpp"
-        PINEFORGE_F7_PATH_RESOLVE_FILE="${PROJECT_SOURCE_DIR}/src/source/pine_path_resolve.cpp")
-endif()
-
-# R5 E5 reads its TradingView tapes from the fixture tree; source-bound too.
-if(TARGET test_offset_trail_quantized_arm)
-    target_compile_definitions(test_offset_trail_quantized_arm PRIVATE
-        PINEFORGE_E5_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/offset_trail_arm")
-endif()
-
-# R5 lane H-MEASURE: the rows that read TradingView tapes from the fixture tree.
-foreach(_pf_hm_row IN ITEMS
-        "test_pyramiding_count_differential|PINEFORGE_PYRAMIDING_FIXTURE_DIR|pyramiding_count"
-        "test_zero_trail_sibling_stop|PINEFORGE_ZERO_TRAIL_FIXTURE_DIR|zero_trail_sibling_stop"
-        "test_pending_entry_trail_tapes|PINEFORGE_PENDING_TRAIL_FIXTURE_DIR|pending_entry_trail"
-        "test_short_seed_report_swap|PINEFORGE_G221_FIXTURE_DIR|g221_short_seed"
-        "test_pine_dust_sweep_paired|PINEFORGE_G232_FIXTURE_DIR|g232_decimal_dust"
-        "test_session_ismarket_tape|PINEFORGE_G236_FIXTURE_DIR|session_ismarket"
-        "test_aggregated_entry_bar_index_tape|PINEFORGE_HM_F1E_FIXTURE_DIR|aggregated_entry_bar_index"
-        "test_magnified_aggregated_tape|PINEFORGE_HM_MAG_FIXTURE_DIR|magnified_aggregated"
-        "test_adapter_margin_schedule_differential|PINEFORGE_HM_M7A_FIXTURE_DIR|margin_entry_bar"
-        # R5 lane PAR-ORDERS-2's tape rows.
-        "test_flat_coof_exit_tapes|PINEFORGE_PA2_FLAT_COOF_FIXTURE_DIR|flat_coof_exit"
-        "test_second_extreme_order_tapes|PINEFORGE_PA2_SECOND_EXTREME_FIXTURE_DIR|second_extreme_orders"
-        "test_pooc_reversing_stop_tapes|PINEFORGE_PA2_REVERSING_STOP_FIXTURE_DIR|pooc_reversing_stop"
-        # R5 lane MAG-INTRABAR's tape row.
-        "test_adapter_magnifier_intrabar_tapes|PINEFORGE_MI_FIXTURE_DIR|magnifier_intrabars"
-        # R5 lane PAR-ORDERS-3's tape row.
-        "test_pooc_limit_close_tapes|PINEFORGE_PA3_POOC_LIMIT_FIXTURE_DIR|pooc_limit_close"
-        # R5 lane XAU-CAL's tape row.
-        "test_daily_magnifier_tapes|PINEFORGE_DAILY_MAGNIFIER_FIXTURE_DIR|daily_magnifier"
-        # R5 lane FIX-E1E2's tape row.
-        "test_aggregated_admission_receipt_tapes|PINEFORGE_FIX_E1E2_FIXTURE_DIR|aggregated_admission_receipt")
-    string(REPLACE "|" ";" _pf_hm_fields "${_pf_hm_row}")
-    list(GET _pf_hm_fields 0 _pf_hm_target)
-    list(GET _pf_hm_fields 1 _pf_hm_macro)
-    list(GET _pf_hm_fields 2 _pf_hm_dir)
-    if(TARGET ${_pf_hm_target})
-        target_compile_definitions(${_pf_hm_target} PRIVATE
-            ${_pf_hm_macro}="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/${_pf_hm_dir}")
-    endif()
-endforeach()
-
-# R5 lane PAR-CASHFEE reads its TradingView tapes from the fixture tree too.
-if(TARGET test_cash_fee_sizing_tapes)
-    target_compile_definitions(test_cash_fee_sizing_tapes PRIVATE
-        PINEFORGE_CASH_FEE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cash_fee_sizing")
-endif()
-# R5 lane INT26 (round 2) reads its TradingView tapes from the fixture tree too.
-if(TARGET test_pooc_stop_reentry_bracket_tapes)
-    target_compile_definitions(test_pooc_stop_reentry_bracket_tapes PRIVATE
-        PINEFORGE_INT26_REENTRY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_stop_reentry_bracket")
-endif()
-# R5 lane K-SESSION-WINDOWS reads TradingView's session-flag tapes.
-foreach(_pf_ksw_target IN ITEMS test_session_prepost_windows_tape
-        test_native_session_day_bar_open test_session_extended_day_tape
-        test_session_break_open_bar_tape)
-    if(TARGET ${_pf_ksw_target})
-        target_compile_definitions(${_pf_ksw_target} PRIVATE
-            PINEFORGE_KSW_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_windows")
-    endif()
-endforeach()
-
-# R5 E21 reads the kernel's own sources to prove BacktestEngine::marked_equity_at
-# is the one implementation of the marked equity. Kernel files only, so the
-# kernel-only profile runs the row too.
-file(GLOB PINEFORGE_E21_KERNEL_FILES CONFIGURE_DEPENDS
-     "${PROJECT_SOURCE_DIR}/src/*.cpp"
-     "${PROJECT_SOURCE_DIR}/src/*.hpp"
-     "${PROJECT_SOURCE_DIR}/include/pineforge/*.hpp")
-string(REPLACE ";" "|" PINEFORGE_E21_KERNEL_JOINED "${PINEFORGE_E21_KERNEL_FILES}")
-if(TARGET test_native_margin_fx_clock)
-    target_compile_definitions(test_native_margin_fx_clock PRIVATE
-        PINEFORGE_E21_KERNEL_FILES="${PINEFORGE_E21_KERNEL_JOINED}")
-endif()
-
-# R5 F3 reads the kernel's own code (headers included) to prove it carries no
-# source-adapter order-id sentinel. Kernel files only, like E21's set.
-file(GLOB PINEFORGE_F3_KERNEL_FILES CONFIGURE_DEPENDS
-     "${PROJECT_SOURCE_DIR}/src/*.cpp"
-     "${PROJECT_SOURCE_DIR}/src/*.hpp"
-     "${PROJECT_SOURCE_DIR}/include/pineforge/*.hpp"
-     "${PROJECT_SOURCE_DIR}/include/pineforge/*.h")
-string(REPLACE ";" "|" PINEFORGE_F3_KERNEL_JOINED "${PINEFORGE_F3_KERNEL_FILES}")
-if(TARGET test_native_bare_host_contracts)
-    target_compile_definitions(test_native_bare_host_contracts PRIVATE
-        PINEFORGE_F3_KERNEL_FILES="${PINEFORGE_F3_KERNEL_JOINED}")
-endif()
-
-# R5 E25 reads its TradingView tapes from the fixture tree; source-bound too.
-if(TARGET test_session_islastbar_aggregation)
-    target_compile_definitions(test_session_islastbar_aggregation PRIVATE
-        PINEFORGE_E25_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_islastbar")
-endif()
-
-# R5 E27 replays the same tape tree for the POOC fill stamp; source-bound too.
-if(TARGET test_pooc_fill_stamp_aggregation)
-    target_compile_definitions(test_pooc_fill_stamp_aggregation PRIVATE
-        PINEFORGE_E27_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_islastbar")
-endif()
-
-# Lane TV-DEFAULTS reads its TradingView tapes from the fixture tree; source-bound.
-if(TARGET test_tv_strategy_defaults)
-    target_compile_definitions(test_tv_strategy_defaults PRIVATE
-        PINEFORGE_TVD_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tv_strategy_defaults")
-endif()
-
-# Lane TVDEF-DROPS reads its TradingView tapes from the fixture tree; source-bound.
-if(TARGET test_tvdef_drops_tapes)
-    target_compile_definitions(test_tvdef_drops_tapes PRIVATE
-        PINEFORGE_TVDEF_DROPS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tvdef_drops")
-endif()
-
-# Lane W3-ENG-EXIT-ALLOC reads its TradingView tapes from the fixture tree; source-bound.
-if(TARGET test_exit_queue_tapes)
-    target_compile_definitions(test_exit_queue_tapes PRIVATE
-        PINEFORGE_EXIT_QUEUE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_queue")
-endif()
-
-# Lane W3B-ENG-GRID reads its TradingView tapes from the fixture tree; source-bound.
-if(TARGET test_grid_close_tapes)
-    target_compile_definitions(test_grid_close_tapes PRIVATE
-        PINEFORGE_GRID_CLOSE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/grid_close")
-endif()
-
-# Lane W5-ENG-MARGIN-V6 reads its TradingView tapes from the fixture tree;
-# source-bound.
-if(TARGET test_margin_v6_tapes)
-    target_compile_definitions(test_margin_v6_tapes PRIVATE
-        PINEFORGE_MARGIN_V6_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_v6")
-endif()
-
-# Lane W6-ENG-FILL-ORDER reads its TradingView tapes from the fixture tree; source-bound.
-if(TARGET test_same_point_entries_tapes)
-    target_compile_definitions(test_same_point_entries_tapes PRIVATE
-        PINEFORGE_SAME_POINT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/same_point_entries")
-endif()
-
-# Lane W8C-SECURITY reads its TradingView tapes from the fixture tree; source-bound.
-if(TARGET test_ltf_lookahead_calling_open_tapes)
-    target_compile_definitions(test_ltf_lookahead_calling_open_tapes PRIVATE
-        PINEFORGE_LTF_CALLING_OPEN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ltf_lookahead_calling_open")
-endif()
-
-# Lane TAIL-A reads its TradingView tapes from the fixture tree; source-bound.
-if(TARGET test_security_multi_day_buckets_tapes)
-    target_compile_definitions(test_security_multi_day_buckets_tapes PRIVATE
-        PINEFORGE_MULTI_DAY_BUCKETS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/multi_day_buckets")
-endif()
-
-# Lane W8D-NOTRADES reads its TradingView tapes from the fixture tree; source-bound.
-if(TARGET test_coof_refill_waypoint_tapes)
-    target_compile_definitions(test_coof_refill_waypoint_tapes PRIVATE
-        PINEFORGE_COOF_REFILL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_refill_waypoint")
-endif()
-
-# Lane TAIL-C reads its TradingView tapes from the fixture tree; source-bound.
-if(TARGET test_coof_w2_refill_tapes)
-    target_compile_definitions(test_coof_w2_refill_tapes PRIVATE
-        PINEFORGE_COOF_W2_REFILL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_w2_refill")
-endif()
-if(TARGET test_coof_open_newborn_exit_tape)
-    target_compile_definitions(test_coof_open_newborn_exit_tape PRIVATE
-        PINEFORGE_COOF_OPEN_NEWBORN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_open_newborn_exit")
-endif()
-if(TARGET test_magnified_coof_refill_tape)
-    target_compile_definitions(test_magnified_coof_refill_tape PRIVATE
-        PINEFORGE_MAGNIFIED_REFILL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/magnified_coof_refill")
-endif()
-
-if(TARGET test_pooc_add_close_tape)
-    target_compile_definitions(test_pooc_add_close_tape PRIVATE
-        PINEFORGE_POOC_ADD_CLOSE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_add_close")
-endif()
-
-# Lane W8E-EXITS reads its TradingView tapes from the fixture tree; source-bound.
-if(TARGET test_ki62_same_id_cover)
-    target_compile_definitions(test_ki62_same_id_cover PRIVATE
-        PINEFORGE_KI62_SAME_ID_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ki62_same_id_cover")
-endif()
-
-# Lane W4-ENG-POOC-SAMEPASS reads its TradingView tapes from the fixture tree;
-# source-bound.
-if(TARGET test_pooc_samepass_tapes)
-    target_compile_definitions(test_pooc_samepass_tapes PRIVATE
-        PINEFORGE_W4_POOC_SAMEPASS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_samepass")
-endif()
-if(TARGET test_global_exit_fill_size_tapes)
-    target_compile_definitions(test_global_exit_fill_size_tapes PRIVATE
-        PINEFORGE_W4_GLOBAL_EXIT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/global_exit_fill_size")
-endif()
-if(TARGET test_coof_immediate_close_tapes)
-    target_compile_definitions(test_coof_immediate_close_tapes PRIVATE
-        PINEFORGE_TAIL_D_IMMEDIATE_CLOSE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_immediate_close")
-endif()
-if(TARGET test_coof_same_point_exits_tapes)
-    target_compile_definitions(test_coof_same_point_exits_tapes PRIVATE
-        PINEFORGE_TAIL_D_SAME_POINT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_same_point_exits")
-endif()
-if(TARGET test_coof_inflight_cancel_tapes)
-    target_compile_definitions(test_coof_inflight_cancel_tapes PRIVATE
-        PINEFORGE_TAIL_D_INFLIGHT_CANCEL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_inflight_cancel")
-endif()
-if(TARGET test_coof_resting_bracket_tapes)
-    target_compile_definitions(test_coof_resting_bracket_tapes PRIVATE
-        PINEFORGE_TAIL_D_RESTING_BRACKET_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_resting_bracket")
-endif()
-if(TARGET test_coof_timeframe_change_tapes)
-    target_compile_definitions(test_coof_timeframe_change_tapes PRIVATE
-        PINEFORGE_TAIL_D_TF_CHANGE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_timeframe_change")
-endif()
-if(TARGET test_exit_fifo_cross_tapes)
-    target_compile_definitions(test_exit_fifo_cross_tapes PRIVATE
-        PINEFORGE_TAIL_D_FIFO_CROSS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_fifo_cross")
-endif()
-if(TARGET test_global_exit_children_tapes)
-    target_compile_definitions(test_global_exit_children_tapes PRIVATE
-        PINEFORGE_GLOBAL_EXIT_CHILDREN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/global_exit_children")
-endif()
-if(TARGET test_exit_binding_tapes)
-    target_compile_definitions(test_exit_binding_tapes PRIVATE
-        PINEFORGE_EXIT_BINDING_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_binding")
-endif()
-if(TARGET test_session_transition_clock_tapes)
-    target_compile_definitions(test_session_transition_clock_tapes PRIVATE
-        PINEFORGE_SESSION_TRANSITION_CLOCK_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_transition_clock")
-endif()
-# test_coof_forced_waypoint_tapes #includes its per-case .inc, so the target
-# exists only while that include does; the define loop below must still see
-# the target when the fixture is present (the guard lives here, before it).
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_forced_waypoint/cases.inc")
-    pineforge_add_unit_test(test_coof_forced_waypoint_tapes)
-else()
-    add_test(NAME test_coof_forced_waypoint_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/coof_forced_waypoint/cases.inc")
-    set_tests_properties(test_coof_forced_waypoint_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-foreach(tape_target IN ITEMS test_cross_mechanism_tapes test_carried_trail_open_tapes test_pooc_pending_stop_tapes
-                            test_coof_marketable_stop_tapes test_coof_close_slippage_tapes
-                            test_coof_forced_waypoint_tapes
-                            test_explicit_qty_floor_tapes test_pooc_close_bar_fills_tapes)
-    if(TARGET ${tape_target})
-        target_compile_definitions(${tape_target} PRIVATE
-            PINEFORGE_ORDER_PRINT_FIXTURE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
-    endif()
-endforeach()
-
-if(TARGET test_coof_open_limit_tapes)
-    target_compile_definitions(test_coof_open_limit_tapes PRIVATE
-        PINEFORGE_TAIL_D_OPEN_LIMIT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_open_limit")
-endif()
-if(TARGET test_exit_reissue_na_tapes)
-    target_compile_definitions(test_exit_reissue_na_tapes PRIVATE
-        PINEFORGE_TAIL_D_REISSUE_NA_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_reissue_na")
-endif()
-if(TARGET test_pooc_pair_gross_tapes)
-    target_compile_definitions(test_pooc_pair_gross_tapes PRIVATE
-        PINEFORGE_TAIL_D_PAIR_GROSS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_pair_gross")
-endif()
-if(TARGET test_whole_lot_tie_tapes)
-    target_compile_definitions(test_whole_lot_tie_tapes PRIVATE
-        PINEFORGE_TAIL_D_WHOLE_LOT_TIE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/whole_lot_tie")
-endif()
-if(TARGET test_source_buying_power_tapes)
-    target_compile_definitions(test_source_buying_power_tapes PRIVATE
-        PINEFORGE_BUYING_POWER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/source_buying_power")
-endif()
-if(TARGET test_coof_reissued_exit_tapes)
-    target_compile_definitions(test_coof_reissued_exit_tapes PRIVATE
-        PINEFORGE_W4_REISSUED_EXIT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_reissued_exit")
-endif()
-if(TARGET test_coof_fill_bar_exit_tapes)
-    target_compile_definitions(test_coof_fill_bar_exit_tapes PRIVATE
-        PINEFORGE_W4_COOF_FILL_BAR_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_fill_bar_exit")
-endif()
-if(TARGET test_pooc_margin_call_sizing_tapes)
-    target_compile_definitions(test_pooc_margin_call_sizing_tapes PRIVATE
-        PINEFORGE_W4_MC_SIZING_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_margin_call_sizing")
-endif()
-if(TARGET test_pooc_short_slip_admission_tapes)
-    target_compile_definitions(test_pooc_short_slip_admission_tapes PRIVATE
-        PINEFORGE_W4_SHORT_SLIP_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_short_slip_admission")
-endif()
-
-# Lane W8A-SIGSTATE-1 R4 reads its TradingView tape and daily bars from the
-# fixture tree; source-bound.
-if(TARGET test_intraday_loss_open_fill_tape)
-    target_compile_definitions(test_intraday_loss_open_fill_tape PRIVATE
-        PINEFORGE_INTRADAY_LOSS_OPEN_FILL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/intraday_loss_open_fill")
-endif()
-
-# Lane W8A-SIGSTATE-1 R-B and R-A read their TradingView tape and 15m bars
-# from the fixture tree; source-bound.
-if(TARGET test_pyramiding_open_order_tape)
-    target_compile_definitions(test_pyramiding_open_order_tape PRIVATE
-        PINEFORGE_PYRAMIDING_OPEN_ORDER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pyramiding_open_order")
-endif()
-
-# Lane W8A-SIGSTATE-1 R2 reads its TradingView tape and 15m bars from the
-# fixture tree; source-bound.
-if(TARGET test_pooc_same_pass_close_tape)
-    target_compile_definitions(test_pooc_same_pass_close_tape PRIVATE
-        PINEFORGE_POOC_SAME_PASS_CLOSE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_same_pass_close")
-endif()
-
-# Lane W8A-SIGSTATE-1 R3 reads its TradingView tape and 15m bars from the
-# fixture tree; source-bound.
-if(TARGET test_limit_entry_affordability_tape)
-    target_compile_definitions(test_limit_entry_affordability_tape PRIVATE
-        PINEFORGE_LIMIT_ENTRY_AFFORDABILITY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/limit_entry_affordability")
-endif()
-
-# Lane R1-CONSOLIDATE reads its TradingView tapes from the fixture tree (and the
-# bars of tests/fixtures/tvdef_drops); source-bound.
-if(TARGET test_same_bar_reissue_tapes)
-    target_compile_definitions(test_same_bar_reissue_tapes PRIVATE
-        PINEFORGE_SAME_BAR_REISSUE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/same_bar_reissue")
-endif()
-
-# Lane R1-CONSOLIDATE's R-A tapes and their lane feeds; source-bound.
-if(TARGET test_open_fill_order_tapes)
-    target_compile_definitions(test_open_fill_order_tapes PRIVATE
-        PINEFORGE_OPEN_FILL_ORDER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/open_fill_order")
-endif()
-
-# Lane RUN-HARNESS reads its TradingView tapes from the fixture tree; source-bound.
-if(TARGET test_run_harness_window_tapes)
-    target_compile_definitions(test_run_harness_window_tapes PRIVATE
-        PINEFORGE_RUN_HARNESS_WINDOW_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/run_harness_window")
-endif()
-
-# INT28 reads its TradingView tapes from the fixture tree (and lane
-# R1-CONSOLIDATE's w8a-dca-open); source-bound.
-if(TARGET test_int28_rule_compositions)
-    target_compile_definitions(test_int28_rule_compositions PRIVATE
-        PINEFORGE_INT28_COMPOSITIONS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/int28_compositions"
-        PINEFORGE_OPEN_FILL_ORDER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/open_fill_order")
-endif()
-
-# INT29 reads its TradingView tape from the fixture tree; source-bound.
-if(TARGET test_int29_rule_compositions)
-    target_compile_definitions(test_int29_rule_compositions PRIVATE
-        PINEFORGE_INT29_COMPOSITIONS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/int29_compositions")
-endif()
-
-# Lane INT28-FIX (CA) reads its TradingView tapes from the fixture tree and
-# the 15m bars of tests/fixtures/margin_v6; source-bound.
-if(TARGET test_reversal_close_all_tapes)
-    target_compile_definitions(test_reversal_close_all_tapes PRIVATE
-        PINEFORGE_REVERSAL_CLOSE_ALL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/reversal_close_all")
-endif()
-
-# Lane W5B-ENG-MARGIN-RESIDUAL reads its TradingView tapes from the fixture
-# tree; source-bound.
-if(TARGET test_margin_residual_tapes)
-    target_compile_definitions(test_margin_residual_tapes PRIVATE
-        PINEFORGE_MARGIN_RESIDUAL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_residual")
-endif()
-# The margin-call rules tapes are read from the fixture tree too; source-bound.
-if(TARGET test_margin_call_rules_tapes)
-    target_compile_definitions(test_margin_call_rules_tapes PRIVATE
-        PINEFORGE_MARGIN_CALL_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_call_rules")
-endif()
-# The margin-call schedule rules tapes are read from the fixture tree too.
-if(TARGET test_margin_schedule_rules_tapes)
-    target_compile_definitions(test_margin_schedule_rules_tapes PRIVATE
-        PINEFORGE_MARGIN_SCHEDULE_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_schedule_rules")
-endif()
-# The opening-call rules tapes are read from the fixture tree too.
-if(TARGET test_margin_open_rules_tapes)
-    target_compile_definitions(test_margin_open_rules_tapes PRIVATE
-        PINEFORGE_MARGIN_OPEN_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_open_rules")
-endif()
-# The forward replay reads its sampled tapes from the fixture tree; source-bound.
-if(TARGET test_margin_rules_forward_replay)
-    target_compile_definitions(test_margin_rules_forward_replay PRIVATE
-        PINEFORGE_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
-endif()
-# The event-ledger margin rules tapes are read from the fixture tree too;
-# source-bound.
-if(TARGET test_margin_ledger_rules_tapes)
-    target_compile_definitions(test_margin_ledger_rules_tapes PRIVATE
-        PINEFORGE_MARGIN_LEDGER_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_ledger_rules")
-endif()
-# The admission rules tapes are read from the fixture tree too; source-bound.
-if(TARGET test_admission_rules_tapes)
-    target_compile_definitions(test_admission_rules_tapes PRIVATE
-        PINEFORGE_ADMISSION_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/admission_rules")
-endif()
-if(TARGET test_kernel_trail_stop_replica)
-    target_compile_definitions(test_kernel_trail_stop_replica PRIVATE
-        PINEFORGE_CALLBACK_LIFECYCLE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/callback_lifecycle")
-endif()
-if(TARGET test_point_order_open_call)
-    target_compile_definitions(test_point_order_open_call PRIVATE
-        PINEFORGE_ADMISSION_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/admission_rules")
-endif()
-
-# Lane INT28-FIX reads its TradingView tapes from the fixture tree;
-# source-bound.
-if(TARGET test_slipped_short_tapes)
-    target_compile_definitions(test_slipped_short_tapes PRIVATE
-        PINEFORGE_SLIPPED_SHORT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/slipped_short")
-endif()
-
-# Lane W13-ENG-MARGIN-OPP reads its TradingView tapes from the fixture tree;
-# source-bound.
-if(TARGET test_margin_opposite_tapes)
-    target_compile_definitions(test_margin_opposite_tapes PRIVATE
-        PINEFORGE_MARGIN_OPPOSITE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_opposite"
-        PINEFORGE_SLIPPED_SHORT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/slipped_short")
-endif()
-if(TARGET test_explicit_market_admission_tapes)
-    target_compile_definitions(test_explicit_market_admission_tapes PRIVATE
-        PINEFORGE_EXPLICIT_ADMISSION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/explicit_market_admission")
-endif()
-if(TARGET test_margin_open_print_tapes)
-    target_compile_definitions(test_margin_open_print_tapes PRIVATE
-        PINEFORGE_MARGIN_OPEN_PRINT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_open_print")
-endif()
-if(TARGET test_nonfinite_entry_qty_tape)
-    target_compile_definitions(test_nonfinite_entry_qty_tape PRIVATE
-        PINEFORGE_NONFINITE_QTY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/nonfinite_entry_qty")
-endif()
-
-# Lane TAIL-B reads its TradingView tapes from the fixture tree; source-bound.
-if(TARGET test_add_sibling_margin_tapes)
-    target_compile_definitions(test_add_sibling_margin_tapes PRIVATE
-        PINEFORGE_ADD_SIBLING_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/add_sibling_margin")
-endif()
-
-# INT30 reads its TradingView tapes from the fixture tree and the 15m bars of
-# tests/fixtures/margin_v6; source-bound.
-if(TARGET test_int30_rule_compositions)
-    target_compile_definitions(test_int30_rule_compositions PRIVATE
-        PINEFORGE_INT30_COMPOSITIONS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/int30_compositions")
-endif()
-
-# Lane INT28-FIX (RC) reads its TradingView tape from the fixture tree;
-# source-bound.
-if(TARGET test_coof_recalc_security_tapes)
-    target_compile_definitions(test_coof_recalc_security_tapes PRIVATE
-        PINEFORGE_COOF_RECALC_SECURITY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_recalc_security")
-endif()
-
-# Lane W10-DIAG-UNKNOWN (COQ) reads its TradingView tapes from the fixture tree;
-# source-bound.
-if(TARGET test_coqueued_open_margin_tapes)
-    target_compile_definitions(test_coqueued_open_margin_tapes PRIVATE
-        PINEFORGE_COQ_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coqueued_open_margin")
-endif()
-
-# Lane W10-DIAG-UNKNOWN (CAP) reads its TradingView tapes from the fixture tree;
-# source-bound.
-if(TARGET test_intraday_cap_tv_tapes)
-    target_compile_definitions(test_intraday_cap_tv_tapes PRIVATE
-        PINEFORGE_CAP_TV_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/intraday_cap_tv")
-endif()
-
-# Lane W10-DIAG-UNKNOWN (GAPSTOP) reads its TradingView tapes from the fixture
-# tree; source-bound.
-if(TARGET test_pooc_gap_stop_tapes)
-    target_compile_definitions(test_pooc_gap_stop_tapes PRIVATE
-        PINEFORGE_GAPSTOP_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_gap_stop")
-endif()
-
-# Lane W10-DIAG-UNKNOWN (SAMEOPEN-REV) reads its TradingView tapes from the
-# fixture tree; source-bound.
-if(TARGET test_same_open_reversal_tapes)
-    target_compile_definitions(test_same_open_reversal_tapes PRIVATE
-        PINEFORGE_SAMEOPEN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/same_open_reversal")
-endif()
-
-# Lane W8E-EXITS reads its TradingView tapes from the fixture tree; source-bound.
-if(TARGET test_open_entry_fee_charged)
-    target_compile_definitions(test_open_entry_fee_charged PRIVATE
-        PINEFORGE_OPEN_ENTRY_FEE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/open_entry_fee_charged")
-endif()
-
-# K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape
-# through the Pine host; source-bound.
-if(TARGET test_coof_drawing_rollback_tape)
-    target_compile_definitions(test_coof_drawing_rollback_tape PRIVATE
-        PINEFORGE_K_DRAWSNAP_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_drawing_rollback")
-endif()
-
-# R5 F5 replays the same tapes through a bare host; kernel-only, so this row
-# exists in every profile.
-if(TARGET test_native_session_day_facts)
-    target_compile_definitions(test_native_session_day_facts PRIVATE
-        PINEFORGE_F5_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_islastbar")
-endif()
-if(TARGET test_session_day_facts_adapter)
-    target_compile_definitions(test_session_day_facts_adapter PRIVATE
-        PINEFORGE_F5_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_islastbar")
-endif()
-
-# Lane W11-ENG-TIME-COLOR: the rows that read TradingView tapes from the
-# fixture tree.
-foreach(_pf_w11_row IN ITEMS
-        "test_session_predicates|PINEFORGE_SESSION_CLOCK_FIXTURE_DIR|session_clock"
-        "test_color_tapes|PINEFORGE_COLOR_TV_FIXTURE_DIR|color_tv"
-        "test_ta_voltrend_edge|PINEFORGE_SUPERTREND_WARMUP_FIXTURE_DIR|supertrend_warmup"
-        "test_engine_trade_accessors|PINEFORGE_DAILY_BREAK_CLOSE_FIXTURE_DIR|daily_break_close")
-    string(REPLACE "|" ";" _pf_w11_fields "${_pf_w11_row}")
-    list(GET _pf_w11_fields 0 _pf_w11_target)
-    list(GET _pf_w11_fields 1 _pf_w11_macro)
-    list(GET _pf_w11_fields 2 _pf_w11_dir)
-    if(TARGET ${_pf_w11_target})
-        target_compile_definitions(${_pf_w11_target} PRIVATE
-            ${_pf_w11_macro}="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/${_pf_w11_dir}")
-    endif()
-endforeach()
-
-# Lane TAIL-E: the time() bars_back tapes.
-if(TARGET test_time_bars_back_tapes)
-    target_compile_definitions(test_time_bars_back_tapes PRIVATE
-        PINEFORGE_TIME_BARS_BACK_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/time_bars_back")
-endif()
-if(TARGET test_coof_immediate_close_final_tapes)
-    target_compile_definitions(test_coof_immediate_close_final_tapes PRIVATE
-        PINEFORGE_COOF_IMMEDIATE_CLOSE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_immediate_close")
-endif()
-# Lane XAU-CAL: TradingView's symbol calendar tapes, and lane TAIL-E's
-# bars_back tapes the same test replays with the calendar.
-if(TARGET test_symbol_calendar_tapes)
-    target_compile_definitions(test_symbol_calendar_tapes PRIVATE
-        PINEFORGE_SYMBOL_CALENDAR_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/symbol_calendar"
-        PINEFORGE_TIME_BARS_BACK_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/time_bars_back")
-endif()
-
-# Lane W12-ENG-TIME: the rows that read its TradingView tapes.
-foreach(_pf_w12_row IN ITEMS
-        "test_session_predicates|PINEFORGE_SESSION_PERIOD_FIXTURE_DIR|session_period"
-        "test_session_predicates|PINEFORGE_TIME_CLOSE_FUNCTION_FIXTURE_DIR|time_close_function"
-        "test_session_predicates|PINEFORGE_DST_DAY_CLOSE_FIXTURE_DIR|dst_day_close"
-        "test_engine_trade_accessors|PINEFORGE_DST_DAY_CLOSE_FIXTURE_DIR|dst_day_close"
-        "test_engine_trade_accessors|PINEFORGE_SESSION_PERIOD_FIXTURE_DIR|session_period")
-    string(REPLACE "|" ";" _pf_w12_fields "${_pf_w12_row}")
-    list(GET _pf_w12_fields 0 _pf_w12_target)
-    list(GET _pf_w12_fields 1 _pf_w12_macro)
-    list(GET _pf_w12_fields 2 _pf_w12_dir)
-    if(TARGET ${_pf_w12_target})
-        target_compile_definitions(${_pf_w12_target} PRIVATE
-            ${_pf_w12_macro}="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/${_pf_w12_dir}")
-    endif()
-endforeach()
-
-# Lane TAIL-G: the row that reads the daily-break request tapes.
-if(TARGET test_foreign_break_stamp_tapes)
-    target_compile_definitions(test_foreign_break_stamp_tapes PRIVATE
-        PINEFORGE_DAILY_BREAK_CLOSE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/daily_break_close")
-endif()
-
-# Lane TAIL-H: the rows that read its TradingView tapes.
-if(TARGET test_ta_indicators_extras)
-    target_compile_definitions(test_ta_indicators_extras PRIVATE
-        PINEFORGE_PERCENTILE_WINDOW_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/percentile_window")
-endif()
-if(TARGET test_exit_reservation_tapes)
-    target_compile_definitions(test_exit_reservation_tapes PRIVATE
-        PINEFORGE_EXIT_RESERVATION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_reservation")
-endif()
-if(TARGET test_percent_entry_reservation_tapes)
-    target_compile_definitions(test_percent_entry_reservation_tapes PRIVATE
-        PINEFORGE_PERCENT_ENTRY_RESERVATION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/percent_entry_reservation")
-endif()
 
 # std::thread needs an explicit pthread link on some toolchains.
 target_link_libraries(test_timezone_concurrency PRIVATE Threads::Threads)
@@ -5371,6 +4771,673 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_zero_trail_sibling_stop.cpp")
 else()
     add_test(NAME test_zero_trail_sibling_stop COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_zero_trail_sibling_stop.cpp")
     set_tests_properties(test_zero_trail_sibling_stop PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+# The five tape rows the PR-1 proof box caught running (and failing) against a
+# removed fixture. All five are named by _pf_private_fixture_rows above, so
+# the TEST_SOURCES loop does not register them; each is registered here.
+#
+# test_carried_trail_open_tapes reads only removed files
+# (tests/fixtures/carried_trail_open/bars.csv and tv_trades.csv), so the whole
+# row is pinned: the real test on the PRESENT branch, the SKIP placeholder
+# otherwise.
+#
+# The other four read a removed file beside distributed ones, so each SPLITS:
+# the default run replays the distributed part only and stays on the row's own
+# name on every tree, and the removed part is a pinned *_private row running
+# the same binary with --private-only (the literal names a removed file the
+# row reads).
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/carried_trail_open/bars.csv")
+    pineforge_add_unit_test(test_carried_trail_open_tapes)
+else()
+    add_test(NAME test_carried_trail_open_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/carried_trail_open/bars.csv")
+    set_tests_properties(test_carried_trail_open_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+pineforge_add_unit_test(test_coof_close_slippage_tapes)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_close_slippage/bars.csv")
+    add_test(NAME test_coof_close_slippage_tapes_private COMMAND test_coof_close_slippage_tapes --private-only)
+else()
+    add_test(NAME test_coof_close_slippage_tapes_private COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/coof_close_slippage/bars.csv")
+    set_tests_properties(test_coof_close_slippage_tapes_private PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+pineforge_add_unit_test(test_cross_mechanism_tapes)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cross_mechanism/batch_carried_trail/bars.csv")
+    add_test(NAME test_cross_mechanism_tapes_private COMMAND test_cross_mechanism_tapes --private-only)
+else()
+    add_test(NAME test_cross_mechanism_tapes_private COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/cross_mechanism/batch_carried_trail/bars.csv")
+    set_tests_properties(test_cross_mechanism_tapes_private PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+pineforge_add_unit_test(test_source_buying_power_tapes)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/source_buying_power/flat-under/bars.csv")
+    add_test(NAME test_source_buying_power_tapes_private COMMAND test_source_buying_power_tapes --private-only)
+else()
+    add_test(NAME test_source_buying_power_tapes_private COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/source_buying_power/flat-under/bars.csv")
+    set_tests_properties(test_source_buying_power_tapes_private PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+pineforge_add_unit_test(test_margin_rules_forward_replay)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_ledger_rules/c1-r1-exp-l2s-reject/r1/tv_trades.csv")
+    add_test(NAME test_margin_rules_forward_replay_private COMMAND test_margin_rules_forward_replay --private-only)
+else()
+    add_test(NAME test_margin_rules_forward_replay_private COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/margin_ledger_rules/c1-r1-exp-l2s-reject/r1/tv_trades.csv")
+    set_tests_properties(test_margin_rules_forward_replay_private PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+# The fixture-dir compile definitions. They apply to targets that exist,
+# so the pass runs here -- after every guarded registration above, including
+# the private-fixture rows and the split rows beside them. Before PR 1 the
+# if(TARGET ...) guards below ran ahead of those registrations, so a row
+# registered on a fixture-present branch compiled without its
+# PINEFORGE_*_FIXTURE_DIR definition and hit its own #error. Here each
+# pinned row's definition still runs after its target exists, and the
+# ORDER_PRINT loop sees every tape target it names.
+
+# R5 E9 reads its TradingView tapes from the fixture tree; source-bound too.
+if(TARGET test_trail_activation_tick_reach)
+    target_compile_definitions(test_trail_activation_tick_reach PRIVATE
+        PINEFORGE_E9_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/trail_activation_tick_reach")
+endif()
+
+# R5 R2's witness is the mirror image: the adapter DOES name the sizing basis
+# it was re-lowered onto, and the core files that own the basis name no source
+# language at all.
+string(REPLACE ";" "|" PINEFORGE_R2_CORE_JOINED
+       "${PROJECT_SOURCE_DIR}/include/pineforge/native_order.hpp;${PROJECT_SOURCE_DIR}/src/native_execution_consumer.cpp")
+# The witness is adapter-bound, so the kernel-only build never registers it.
+if(TARGET test_adapter_sizing_relower)
+    target_compile_definitions(test_adapter_sizing_relower PRIVATE
+        PINEFORGE_R2_ADAPTER_FILE="${PROJECT_SOURCE_DIR}/src/source/pine_adapter.cpp"
+        PINEFORGE_R2_CORE_FILES="${PINEFORGE_R2_CORE_JOINED}")
+endif()
+
+# R5 lane B-ADAPTER (item 5): the current-execution witness reads the kernel.
+if(TARGET test_native_current_execution_rate)
+    target_compile_definitions(test_native_current_execution_rate PRIVATE
+        PINEFORGE_B_ADAPTER_KERNEL_FILES="${PROJECT_SOURCE_DIR}/src/engine_execution.cpp|${PROJECT_SOURCE_DIR}/src/native_execution_consumer.cpp")
+endif()
+# R5 lane B-ADAPTER (item 3): the range-end witness reads the source layer.
+if(TARGET test_adapter_range_end_fx)
+    target_compile_definitions(test_adapter_range_end_fx PRIVATE
+        PINEFORGE_B_ADAPTER_SOURCE_DIR="${PROJECT_SOURCE_DIR}/src/source")
+endif()
+
+# R5 F7: the margin witness pins that no never-called predicate survives.
+if(TARGET test_adapter_margin_relower)
+    target_compile_definitions(test_adapter_margin_relower PRIVATE
+        PINEFORGE_F7_ADAPTER_FILE="${PROJECT_SOURCE_DIR}/src/source/pine_adapter.cpp")
+endif()
+
+# R5 F7 (M25): the path-order witness reads the two source files it pins.
+if(TARGET test_e19_excursion_path_order)
+    target_compile_definitions(test_e19_excursion_path_order PRIVATE
+        PINEFORGE_F7_ADAPTER_FILE="${PROJECT_SOURCE_DIR}/src/source/pine_adapter.cpp"
+        PINEFORGE_F7_PATH_RESOLVE_FILE="${PROJECT_SOURCE_DIR}/src/source/pine_path_resolve.cpp")
+endif()
+
+# R5 E5 reads its TradingView tapes from the fixture tree; source-bound too.
+if(TARGET test_offset_trail_quantized_arm)
+    target_compile_definitions(test_offset_trail_quantized_arm PRIVATE
+        PINEFORGE_E5_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/offset_trail_arm")
+endif()
+
+# R5 lane H-MEASURE: the rows that read TradingView tapes from the fixture tree.
+foreach(_pf_hm_row IN ITEMS
+        "test_pyramiding_count_differential|PINEFORGE_PYRAMIDING_FIXTURE_DIR|pyramiding_count"
+        "test_zero_trail_sibling_stop|PINEFORGE_ZERO_TRAIL_FIXTURE_DIR|zero_trail_sibling_stop"
+        "test_pending_entry_trail_tapes|PINEFORGE_PENDING_TRAIL_FIXTURE_DIR|pending_entry_trail"
+        "test_short_seed_report_swap|PINEFORGE_G221_FIXTURE_DIR|g221_short_seed"
+        "test_pine_dust_sweep_paired|PINEFORGE_G232_FIXTURE_DIR|g232_decimal_dust"
+        "test_session_ismarket_tape|PINEFORGE_G236_FIXTURE_DIR|session_ismarket"
+        "test_aggregated_entry_bar_index_tape|PINEFORGE_HM_F1E_FIXTURE_DIR|aggregated_entry_bar_index"
+        "test_magnified_aggregated_tape|PINEFORGE_HM_MAG_FIXTURE_DIR|magnified_aggregated"
+        "test_adapter_margin_schedule_differential|PINEFORGE_HM_M7A_FIXTURE_DIR|margin_entry_bar"
+        # R5 lane PAR-ORDERS-2's tape rows.
+        "test_flat_coof_exit_tapes|PINEFORGE_PA2_FLAT_COOF_FIXTURE_DIR|flat_coof_exit"
+        "test_second_extreme_order_tapes|PINEFORGE_PA2_SECOND_EXTREME_FIXTURE_DIR|second_extreme_orders"
+        "test_pooc_reversing_stop_tapes|PINEFORGE_PA2_REVERSING_STOP_FIXTURE_DIR|pooc_reversing_stop"
+        # R5 lane MAG-INTRABAR's tape row.
+        "test_adapter_magnifier_intrabar_tapes|PINEFORGE_MI_FIXTURE_DIR|magnifier_intrabars"
+        # R5 lane PAR-ORDERS-3's tape row.
+        "test_pooc_limit_close_tapes|PINEFORGE_PA3_POOC_LIMIT_FIXTURE_DIR|pooc_limit_close"
+        # R5 lane XAU-CAL's tape row.
+        "test_daily_magnifier_tapes|PINEFORGE_DAILY_MAGNIFIER_FIXTURE_DIR|daily_magnifier"
+        # R5 lane FIX-E1E2's tape row.
+        "test_aggregated_admission_receipt_tapes|PINEFORGE_FIX_E1E2_FIXTURE_DIR|aggregated_admission_receipt")
+    string(REPLACE "|" ";" _pf_hm_fields "${_pf_hm_row}")
+    list(GET _pf_hm_fields 0 _pf_hm_target)
+    list(GET _pf_hm_fields 1 _pf_hm_macro)
+    list(GET _pf_hm_fields 2 _pf_hm_dir)
+    if(TARGET ${_pf_hm_target})
+        target_compile_definitions(${_pf_hm_target} PRIVATE
+            ${_pf_hm_macro}="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/${_pf_hm_dir}")
+    endif()
+endforeach()
+
+# R5 lane PAR-CASHFEE reads its TradingView tapes from the fixture tree too.
+if(TARGET test_cash_fee_sizing_tapes)
+    target_compile_definitions(test_cash_fee_sizing_tapes PRIVATE
+        PINEFORGE_CASH_FEE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cash_fee_sizing")
+endif()
+# R5 lane INT26 (round 2) reads its TradingView tapes from the fixture tree too.
+if(TARGET test_pooc_stop_reentry_bracket_tapes)
+    target_compile_definitions(test_pooc_stop_reentry_bracket_tapes PRIVATE
+        PINEFORGE_INT26_REENTRY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_stop_reentry_bracket")
+endif()
+# R5 lane K-SESSION-WINDOWS reads TradingView's session-flag tapes.
+foreach(_pf_ksw_target IN ITEMS test_session_prepost_windows_tape
+        test_native_session_day_bar_open test_session_extended_day_tape
+        test_session_break_open_bar_tape)
+    if(TARGET ${_pf_ksw_target})
+        target_compile_definitions(${_pf_ksw_target} PRIVATE
+            PINEFORGE_KSW_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_windows")
+    endif()
+endforeach()
+
+# R5 E21 reads the kernel's own sources to prove BacktestEngine::marked_equity_at
+# is the one implementation of the marked equity. Kernel files only, so the
+# kernel-only profile runs the row too.
+file(GLOB PINEFORGE_E21_KERNEL_FILES CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/src/*.cpp"
+     "${PROJECT_SOURCE_DIR}/src/*.hpp"
+     "${PROJECT_SOURCE_DIR}/include/pineforge/*.hpp")
+string(REPLACE ";" "|" PINEFORGE_E21_KERNEL_JOINED "${PINEFORGE_E21_KERNEL_FILES}")
+if(TARGET test_native_margin_fx_clock)
+    target_compile_definitions(test_native_margin_fx_clock PRIVATE
+        PINEFORGE_E21_KERNEL_FILES="${PINEFORGE_E21_KERNEL_JOINED}")
+endif()
+
+# R5 F3 reads the kernel's own code (headers included) to prove it carries no
+# source-adapter order-id sentinel. Kernel files only, like E21's set.
+file(GLOB PINEFORGE_F3_KERNEL_FILES CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/src/*.cpp"
+     "${PROJECT_SOURCE_DIR}/src/*.hpp"
+     "${PROJECT_SOURCE_DIR}/include/pineforge/*.hpp"
+     "${PROJECT_SOURCE_DIR}/include/pineforge/*.h")
+string(REPLACE ";" "|" PINEFORGE_F3_KERNEL_JOINED "${PINEFORGE_F3_KERNEL_FILES}")
+if(TARGET test_native_bare_host_contracts)
+    target_compile_definitions(test_native_bare_host_contracts PRIVATE
+        PINEFORGE_F3_KERNEL_FILES="${PINEFORGE_F3_KERNEL_JOINED}")
+endif()
+
+# R5 E25 reads its TradingView tapes from the fixture tree; source-bound too.
+if(TARGET test_session_islastbar_aggregation)
+    target_compile_definitions(test_session_islastbar_aggregation PRIVATE
+        PINEFORGE_E25_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_islastbar")
+endif()
+
+# R5 E27 replays the same tape tree for the POOC fill stamp; source-bound too.
+if(TARGET test_pooc_fill_stamp_aggregation)
+    target_compile_definitions(test_pooc_fill_stamp_aggregation PRIVATE
+        PINEFORGE_E27_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_islastbar")
+endif()
+
+# Lane TV-DEFAULTS reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_tv_strategy_defaults)
+    target_compile_definitions(test_tv_strategy_defaults PRIVATE
+        PINEFORGE_TVD_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tv_strategy_defaults")
+endif()
+
+# Lane TVDEF-DROPS reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_tvdef_drops_tapes)
+    target_compile_definitions(test_tvdef_drops_tapes PRIVATE
+        PINEFORGE_TVDEF_DROPS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tvdef_drops")
+endif()
+
+# Lane W3-ENG-EXIT-ALLOC reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_exit_queue_tapes)
+    target_compile_definitions(test_exit_queue_tapes PRIVATE
+        PINEFORGE_EXIT_QUEUE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_queue")
+endif()
+
+# Lane W3B-ENG-GRID reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_grid_close_tapes)
+    target_compile_definitions(test_grid_close_tapes PRIVATE
+        PINEFORGE_GRID_CLOSE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/grid_close")
+endif()
+
+# Lane W5-ENG-MARGIN-V6 reads its TradingView tapes from the fixture tree;
+# source-bound.
+if(TARGET test_margin_v6_tapes)
+    target_compile_definitions(test_margin_v6_tapes PRIVATE
+        PINEFORGE_MARGIN_V6_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_v6")
+endif()
+
+# Lane W6-ENG-FILL-ORDER reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_same_point_entries_tapes)
+    target_compile_definitions(test_same_point_entries_tapes PRIVATE
+        PINEFORGE_SAME_POINT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/same_point_entries")
+endif()
+
+# Lane W8C-SECURITY reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_ltf_lookahead_calling_open_tapes)
+    target_compile_definitions(test_ltf_lookahead_calling_open_tapes PRIVATE
+        PINEFORGE_LTF_CALLING_OPEN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ltf_lookahead_calling_open")
+endif()
+
+# Lane TAIL-A reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_security_multi_day_buckets_tapes)
+    target_compile_definitions(test_security_multi_day_buckets_tapes PRIVATE
+        PINEFORGE_MULTI_DAY_BUCKETS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/multi_day_buckets")
+endif()
+
+# Lane W8D-NOTRADES reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_coof_refill_waypoint_tapes)
+    target_compile_definitions(test_coof_refill_waypoint_tapes PRIVATE
+        PINEFORGE_COOF_REFILL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_refill_waypoint")
+endif()
+
+# Lane TAIL-C reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_coof_w2_refill_tapes)
+    target_compile_definitions(test_coof_w2_refill_tapes PRIVATE
+        PINEFORGE_COOF_W2_REFILL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_w2_refill")
+endif()
+if(TARGET test_coof_open_newborn_exit_tape)
+    target_compile_definitions(test_coof_open_newborn_exit_tape PRIVATE
+        PINEFORGE_COOF_OPEN_NEWBORN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_open_newborn_exit")
+endif()
+if(TARGET test_magnified_coof_refill_tape)
+    target_compile_definitions(test_magnified_coof_refill_tape PRIVATE
+        PINEFORGE_MAGNIFIED_REFILL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/magnified_coof_refill")
+endif()
+
+if(TARGET test_pooc_add_close_tape)
+    target_compile_definitions(test_pooc_add_close_tape PRIVATE
+        PINEFORGE_POOC_ADD_CLOSE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_add_close")
+endif()
+
+# Lane W8E-EXITS reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_ki62_same_id_cover)
+    target_compile_definitions(test_ki62_same_id_cover PRIVATE
+        PINEFORGE_KI62_SAME_ID_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ki62_same_id_cover")
+endif()
+
+# Lane W4-ENG-POOC-SAMEPASS reads its TradingView tapes from the fixture tree;
+# source-bound.
+if(TARGET test_pooc_samepass_tapes)
+    target_compile_definitions(test_pooc_samepass_tapes PRIVATE
+        PINEFORGE_W4_POOC_SAMEPASS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_samepass")
+endif()
+if(TARGET test_global_exit_fill_size_tapes)
+    target_compile_definitions(test_global_exit_fill_size_tapes PRIVATE
+        PINEFORGE_W4_GLOBAL_EXIT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/global_exit_fill_size")
+endif()
+if(TARGET test_coof_immediate_close_tapes)
+    target_compile_definitions(test_coof_immediate_close_tapes PRIVATE
+        PINEFORGE_TAIL_D_IMMEDIATE_CLOSE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_immediate_close")
+endif()
+if(TARGET test_coof_same_point_exits_tapes)
+    target_compile_definitions(test_coof_same_point_exits_tapes PRIVATE
+        PINEFORGE_TAIL_D_SAME_POINT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_same_point_exits")
+endif()
+if(TARGET test_coof_inflight_cancel_tapes)
+    target_compile_definitions(test_coof_inflight_cancel_tapes PRIVATE
+        PINEFORGE_TAIL_D_INFLIGHT_CANCEL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_inflight_cancel")
+endif()
+if(TARGET test_coof_resting_bracket_tapes)
+    target_compile_definitions(test_coof_resting_bracket_tapes PRIVATE
+        PINEFORGE_TAIL_D_RESTING_BRACKET_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_resting_bracket")
+endif()
+if(TARGET test_coof_timeframe_change_tapes)
+    target_compile_definitions(test_coof_timeframe_change_tapes PRIVATE
+        PINEFORGE_TAIL_D_TF_CHANGE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_timeframe_change")
+endif()
+if(TARGET test_exit_fifo_cross_tapes)
+    target_compile_definitions(test_exit_fifo_cross_tapes PRIVATE
+        PINEFORGE_TAIL_D_FIFO_CROSS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_fifo_cross")
+endif()
+if(TARGET test_global_exit_children_tapes)
+    target_compile_definitions(test_global_exit_children_tapes PRIVATE
+        PINEFORGE_GLOBAL_EXIT_CHILDREN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/global_exit_children")
+endif()
+if(TARGET test_exit_binding_tapes)
+    target_compile_definitions(test_exit_binding_tapes PRIVATE
+        PINEFORGE_EXIT_BINDING_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_binding")
+endif()
+if(TARGET test_session_transition_clock_tapes)
+    target_compile_definitions(test_session_transition_clock_tapes PRIVATE
+        PINEFORGE_SESSION_TRANSITION_CLOCK_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_transition_clock")
+endif()
+# test_coof_forced_waypoint_tapes #includes its per-case .inc, so the target
+# exists only while that include does; the define loop below must still see
+# the target when the fixture is present (the guard lives here, before it).
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_forced_waypoint/cases.inc")
+    pineforge_add_unit_test(test_coof_forced_waypoint_tapes)
+else()
+    add_test(NAME test_coof_forced_waypoint_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/coof_forced_waypoint/cases.inc")
+    set_tests_properties(test_coof_forced_waypoint_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+foreach(tape_target IN ITEMS test_cross_mechanism_tapes test_carried_trail_open_tapes test_pooc_pending_stop_tapes
+                            test_coof_marketable_stop_tapes test_coof_close_slippage_tapes
+                            test_coof_forced_waypoint_tapes
+                            test_explicit_qty_floor_tapes test_pooc_close_bar_fills_tapes)
+    if(TARGET ${tape_target})
+        target_compile_definitions(${tape_target} PRIVATE
+            PINEFORGE_ORDER_PRINT_FIXTURE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+    endif()
+endforeach()
+
+if(TARGET test_coof_open_limit_tapes)
+    target_compile_definitions(test_coof_open_limit_tapes PRIVATE
+        PINEFORGE_TAIL_D_OPEN_LIMIT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_open_limit")
+endif()
+if(TARGET test_exit_reissue_na_tapes)
+    target_compile_definitions(test_exit_reissue_na_tapes PRIVATE
+        PINEFORGE_TAIL_D_REISSUE_NA_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_reissue_na")
+endif()
+if(TARGET test_pooc_pair_gross_tapes)
+    target_compile_definitions(test_pooc_pair_gross_tapes PRIVATE
+        PINEFORGE_TAIL_D_PAIR_GROSS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_pair_gross")
+endif()
+if(TARGET test_whole_lot_tie_tapes)
+    target_compile_definitions(test_whole_lot_tie_tapes PRIVATE
+        PINEFORGE_TAIL_D_WHOLE_LOT_TIE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/whole_lot_tie")
+endif()
+if(TARGET test_source_buying_power_tapes)
+    target_compile_definitions(test_source_buying_power_tapes PRIVATE
+        PINEFORGE_BUYING_POWER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/source_buying_power")
+endif()
+if(TARGET test_coof_reissued_exit_tapes)
+    target_compile_definitions(test_coof_reissued_exit_tapes PRIVATE
+        PINEFORGE_W4_REISSUED_EXIT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_reissued_exit")
+endif()
+if(TARGET test_coof_fill_bar_exit_tapes)
+    target_compile_definitions(test_coof_fill_bar_exit_tapes PRIVATE
+        PINEFORGE_W4_COOF_FILL_BAR_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_fill_bar_exit")
+endif()
+if(TARGET test_pooc_margin_call_sizing_tapes)
+    target_compile_definitions(test_pooc_margin_call_sizing_tapes PRIVATE
+        PINEFORGE_W4_MC_SIZING_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_margin_call_sizing")
+endif()
+if(TARGET test_pooc_short_slip_admission_tapes)
+    target_compile_definitions(test_pooc_short_slip_admission_tapes PRIVATE
+        PINEFORGE_W4_SHORT_SLIP_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_short_slip_admission")
+endif()
+
+# Lane W8A-SIGSTATE-1 R4 reads its TradingView tape and daily bars from the
+# fixture tree; source-bound.
+if(TARGET test_intraday_loss_open_fill_tape)
+    target_compile_definitions(test_intraday_loss_open_fill_tape PRIVATE
+        PINEFORGE_INTRADAY_LOSS_OPEN_FILL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/intraday_loss_open_fill")
+endif()
+
+# Lane W8A-SIGSTATE-1 R-B and R-A read their TradingView tape and 15m bars
+# from the fixture tree; source-bound.
+if(TARGET test_pyramiding_open_order_tape)
+    target_compile_definitions(test_pyramiding_open_order_tape PRIVATE
+        PINEFORGE_PYRAMIDING_OPEN_ORDER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pyramiding_open_order")
+endif()
+
+# Lane W8A-SIGSTATE-1 R2 reads its TradingView tape and 15m bars from the
+# fixture tree; source-bound.
+if(TARGET test_pooc_same_pass_close_tape)
+    target_compile_definitions(test_pooc_same_pass_close_tape PRIVATE
+        PINEFORGE_POOC_SAME_PASS_CLOSE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_same_pass_close")
+endif()
+
+# Lane W8A-SIGSTATE-1 R3 reads its TradingView tape and 15m bars from the
+# fixture tree; source-bound.
+if(TARGET test_limit_entry_affordability_tape)
+    target_compile_definitions(test_limit_entry_affordability_tape PRIVATE
+        PINEFORGE_LIMIT_ENTRY_AFFORDABILITY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/limit_entry_affordability")
+endif()
+
+# Lane R1-CONSOLIDATE reads its TradingView tapes from the fixture tree (and the
+# bars of tests/fixtures/tvdef_drops); source-bound.
+if(TARGET test_same_bar_reissue_tapes)
+    target_compile_definitions(test_same_bar_reissue_tapes PRIVATE
+        PINEFORGE_SAME_BAR_REISSUE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/same_bar_reissue")
+endif()
+
+# Lane R1-CONSOLIDATE's R-A tapes and their lane feeds; source-bound.
+if(TARGET test_open_fill_order_tapes)
+    target_compile_definitions(test_open_fill_order_tapes PRIVATE
+        PINEFORGE_OPEN_FILL_ORDER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/open_fill_order")
+endif()
+
+# Lane RUN-HARNESS reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_run_harness_window_tapes)
+    target_compile_definitions(test_run_harness_window_tapes PRIVATE
+        PINEFORGE_RUN_HARNESS_WINDOW_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/run_harness_window")
+endif()
+
+# INT28 reads its TradingView tapes from the fixture tree (and lane
+# R1-CONSOLIDATE's w8a-dca-open); source-bound.
+if(TARGET test_int28_rule_compositions)
+    target_compile_definitions(test_int28_rule_compositions PRIVATE
+        PINEFORGE_INT28_COMPOSITIONS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/int28_compositions"
+        PINEFORGE_OPEN_FILL_ORDER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/open_fill_order")
+endif()
+
+# INT29 reads its TradingView tape from the fixture tree; source-bound.
+if(TARGET test_int29_rule_compositions)
+    target_compile_definitions(test_int29_rule_compositions PRIVATE
+        PINEFORGE_INT29_COMPOSITIONS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/int29_compositions")
+endif()
+
+# Lane INT28-FIX (CA) reads its TradingView tapes from the fixture tree and
+# the 15m bars of tests/fixtures/margin_v6; source-bound.
+if(TARGET test_reversal_close_all_tapes)
+    target_compile_definitions(test_reversal_close_all_tapes PRIVATE
+        PINEFORGE_REVERSAL_CLOSE_ALL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/reversal_close_all")
+endif()
+
+# Lane W5B-ENG-MARGIN-RESIDUAL reads its TradingView tapes from the fixture
+# tree; source-bound.
+if(TARGET test_margin_residual_tapes)
+    target_compile_definitions(test_margin_residual_tapes PRIVATE
+        PINEFORGE_MARGIN_RESIDUAL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_residual")
+endif()
+# The margin-call rules tapes are read from the fixture tree too; source-bound.
+if(TARGET test_margin_call_rules_tapes)
+    target_compile_definitions(test_margin_call_rules_tapes PRIVATE
+        PINEFORGE_MARGIN_CALL_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_call_rules")
+endif()
+# The margin-call schedule rules tapes are read from the fixture tree too.
+if(TARGET test_margin_schedule_rules_tapes)
+    target_compile_definitions(test_margin_schedule_rules_tapes PRIVATE
+        PINEFORGE_MARGIN_SCHEDULE_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_schedule_rules")
+endif()
+# The opening-call rules tapes are read from the fixture tree too.
+if(TARGET test_margin_open_rules_tapes)
+    target_compile_definitions(test_margin_open_rules_tapes PRIVATE
+        PINEFORGE_MARGIN_OPEN_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_open_rules")
+endif()
+# The forward replay reads its sampled tapes from the fixture tree; source-bound.
+if(TARGET test_margin_rules_forward_replay)
+    target_compile_definitions(test_margin_rules_forward_replay PRIVATE
+        PINEFORGE_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+endif()
+# The event-ledger margin rules tapes are read from the fixture tree too;
+# source-bound.
+if(TARGET test_margin_ledger_rules_tapes)
+    target_compile_definitions(test_margin_ledger_rules_tapes PRIVATE
+        PINEFORGE_MARGIN_LEDGER_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_ledger_rules")
+endif()
+# The admission rules tapes are read from the fixture tree too; source-bound.
+if(TARGET test_admission_rules_tapes)
+    target_compile_definitions(test_admission_rules_tapes PRIVATE
+        PINEFORGE_ADMISSION_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/admission_rules")
+endif()
+if(TARGET test_kernel_trail_stop_replica)
+    target_compile_definitions(test_kernel_trail_stop_replica PRIVATE
+        PINEFORGE_CALLBACK_LIFECYCLE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/callback_lifecycle")
+endif()
+if(TARGET test_point_order_open_call)
+    target_compile_definitions(test_point_order_open_call PRIVATE
+        PINEFORGE_ADMISSION_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/admission_rules")
+endif()
+
+# Lane INT28-FIX reads its TradingView tapes from the fixture tree;
+# source-bound.
+if(TARGET test_slipped_short_tapes)
+    target_compile_definitions(test_slipped_short_tapes PRIVATE
+        PINEFORGE_SLIPPED_SHORT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/slipped_short")
+endif()
+
+# Lane W13-ENG-MARGIN-OPP reads its TradingView tapes from the fixture tree;
+# source-bound.
+if(TARGET test_margin_opposite_tapes)
+    target_compile_definitions(test_margin_opposite_tapes PRIVATE
+        PINEFORGE_MARGIN_OPPOSITE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_opposite"
+        PINEFORGE_SLIPPED_SHORT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/slipped_short")
+endif()
+if(TARGET test_explicit_market_admission_tapes)
+    target_compile_definitions(test_explicit_market_admission_tapes PRIVATE
+        PINEFORGE_EXPLICIT_ADMISSION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/explicit_market_admission")
+endif()
+if(TARGET test_margin_open_print_tapes)
+    target_compile_definitions(test_margin_open_print_tapes PRIVATE
+        PINEFORGE_MARGIN_OPEN_PRINT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_open_print")
+endif()
+if(TARGET test_nonfinite_entry_qty_tape)
+    target_compile_definitions(test_nonfinite_entry_qty_tape PRIVATE
+        PINEFORGE_NONFINITE_QTY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/nonfinite_entry_qty")
+endif()
+
+# Lane TAIL-B reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_add_sibling_margin_tapes)
+    target_compile_definitions(test_add_sibling_margin_tapes PRIVATE
+        PINEFORGE_ADD_SIBLING_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/add_sibling_margin")
+endif()
+
+# INT30 reads its TradingView tapes from the fixture tree and the 15m bars of
+# tests/fixtures/margin_v6; source-bound.
+if(TARGET test_int30_rule_compositions)
+    target_compile_definitions(test_int30_rule_compositions PRIVATE
+        PINEFORGE_INT30_COMPOSITIONS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/int30_compositions")
+endif()
+
+# Lane INT28-FIX (RC) reads its TradingView tape from the fixture tree;
+# source-bound.
+if(TARGET test_coof_recalc_security_tapes)
+    target_compile_definitions(test_coof_recalc_security_tapes PRIVATE
+        PINEFORGE_COOF_RECALC_SECURITY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_recalc_security")
+endif()
+
+# Lane W10-DIAG-UNKNOWN (COQ) reads its TradingView tapes from the fixture tree;
+# source-bound.
+if(TARGET test_coqueued_open_margin_tapes)
+    target_compile_definitions(test_coqueued_open_margin_tapes PRIVATE
+        PINEFORGE_COQ_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coqueued_open_margin")
+endif()
+
+# Lane W10-DIAG-UNKNOWN (CAP) reads its TradingView tapes from the fixture tree;
+# source-bound.
+if(TARGET test_intraday_cap_tv_tapes)
+    target_compile_definitions(test_intraday_cap_tv_tapes PRIVATE
+        PINEFORGE_CAP_TV_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/intraday_cap_tv")
+endif()
+
+# Lane W10-DIAG-UNKNOWN (GAPSTOP) reads its TradingView tapes from the fixture
+# tree; source-bound.
+if(TARGET test_pooc_gap_stop_tapes)
+    target_compile_definitions(test_pooc_gap_stop_tapes PRIVATE
+        PINEFORGE_GAPSTOP_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_gap_stop")
+endif()
+
+# Lane W10-DIAG-UNKNOWN (SAMEOPEN-REV) reads its TradingView tapes from the
+# fixture tree; source-bound.
+if(TARGET test_same_open_reversal_tapes)
+    target_compile_definitions(test_same_open_reversal_tapes PRIVATE
+        PINEFORGE_SAMEOPEN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/same_open_reversal")
+endif()
+
+# Lane W8E-EXITS reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_open_entry_fee_charged)
+    target_compile_definitions(test_open_entry_fee_charged PRIVATE
+        PINEFORGE_OPEN_ENTRY_FEE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/open_entry_fee_charged")
+endif()
+
+# K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape
+# through the Pine host; source-bound.
+if(TARGET test_coof_drawing_rollback_tape)
+    target_compile_definitions(test_coof_drawing_rollback_tape PRIVATE
+        PINEFORGE_K_DRAWSNAP_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_drawing_rollback")
+endif()
+
+# R5 F5 replays the same tapes through a bare host; kernel-only, so this row
+# exists in every profile.
+if(TARGET test_native_session_day_facts)
+    target_compile_definitions(test_native_session_day_facts PRIVATE
+        PINEFORGE_F5_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_islastbar")
+endif()
+if(TARGET test_session_day_facts_adapter)
+    target_compile_definitions(test_session_day_facts_adapter PRIVATE
+        PINEFORGE_F5_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_islastbar")
+endif()
+
+# Lane W11-ENG-TIME-COLOR: the rows that read TradingView tapes from the
+# fixture tree.
+foreach(_pf_w11_row IN ITEMS
+        "test_session_predicates|PINEFORGE_SESSION_CLOCK_FIXTURE_DIR|session_clock"
+        "test_color_tapes|PINEFORGE_COLOR_TV_FIXTURE_DIR|color_tv"
+        "test_ta_voltrend_edge|PINEFORGE_SUPERTREND_WARMUP_FIXTURE_DIR|supertrend_warmup"
+        "test_engine_trade_accessors|PINEFORGE_DAILY_BREAK_CLOSE_FIXTURE_DIR|daily_break_close")
+    string(REPLACE "|" ";" _pf_w11_fields "${_pf_w11_row}")
+    list(GET _pf_w11_fields 0 _pf_w11_target)
+    list(GET _pf_w11_fields 1 _pf_w11_macro)
+    list(GET _pf_w11_fields 2 _pf_w11_dir)
+    if(TARGET ${_pf_w11_target})
+        target_compile_definitions(${_pf_w11_target} PRIVATE
+            ${_pf_w11_macro}="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/${_pf_w11_dir}")
+    endif()
+endforeach()
+
+# Lane TAIL-E: the time() bars_back tapes.
+if(TARGET test_time_bars_back_tapes)
+    target_compile_definitions(test_time_bars_back_tapes PRIVATE
+        PINEFORGE_TIME_BARS_BACK_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/time_bars_back")
+endif()
+if(TARGET test_coof_immediate_close_final_tapes)
+    target_compile_definitions(test_coof_immediate_close_final_tapes PRIVATE
+        PINEFORGE_COOF_IMMEDIATE_CLOSE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_immediate_close")
+endif()
+# Lane XAU-CAL: TradingView's symbol calendar tapes, and lane TAIL-E's
+# bars_back tapes the same test replays with the calendar.
+if(TARGET test_symbol_calendar_tapes)
+    target_compile_definitions(test_symbol_calendar_tapes PRIVATE
+        PINEFORGE_SYMBOL_CALENDAR_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/symbol_calendar"
+        PINEFORGE_TIME_BARS_BACK_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/time_bars_back")
+endif()
+
+# Lane W12-ENG-TIME: the rows that read its TradingView tapes.
+foreach(_pf_w12_row IN ITEMS
+        "test_session_predicates|PINEFORGE_SESSION_PERIOD_FIXTURE_DIR|session_period"
+        "test_session_predicates|PINEFORGE_TIME_CLOSE_FUNCTION_FIXTURE_DIR|time_close_function"
+        "test_session_predicates|PINEFORGE_DST_DAY_CLOSE_FIXTURE_DIR|dst_day_close"
+        "test_engine_trade_accessors|PINEFORGE_DST_DAY_CLOSE_FIXTURE_DIR|dst_day_close"
+        "test_engine_trade_accessors|PINEFORGE_SESSION_PERIOD_FIXTURE_DIR|session_period")
+    string(REPLACE "|" ";" _pf_w12_fields "${_pf_w12_row}")
+    list(GET _pf_w12_fields 0 _pf_w12_target)
+    list(GET _pf_w12_fields 1 _pf_w12_macro)
+    list(GET _pf_w12_fields 2 _pf_w12_dir)
+    if(TARGET ${_pf_w12_target})
+        target_compile_definitions(${_pf_w12_target} PRIVATE
+            ${_pf_w12_macro}="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/${_pf_w12_dir}")
+    endif()
+endforeach()
+
+# Lane TAIL-G: the row that reads the daily-break request tapes.
+if(TARGET test_foreign_break_stamp_tapes)
+    target_compile_definitions(test_foreign_break_stamp_tapes PRIVATE
+        PINEFORGE_DAILY_BREAK_CLOSE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/daily_break_close")
+endif()
+
+# Lane TAIL-H: the rows that read its TradingView tapes.
+if(TARGET test_ta_indicators_extras)
+    target_compile_definitions(test_ta_indicators_extras PRIVATE
+        PINEFORGE_PERCENTILE_WINDOW_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/percentile_window")
+endif()
+if(TARGET test_exit_reservation_tapes)
+    target_compile_definitions(test_exit_reservation_tapes PRIVATE
+        PINEFORGE_EXIT_RESERVATION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_reservation")
+endif()
+if(TARGET test_percent_entry_reservation_tapes)
+    target_compile_definitions(test_percent_entry_reservation_tapes PRIVATE
+        PINEFORGE_PERCENT_ENTRY_RESERVATION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/percent_entry_reservation")
 endif()
 
 # Every row in PINEFORGE_PR_SLOW_TESTS (top of this file) must be a registered
