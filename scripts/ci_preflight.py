@@ -28,7 +28,8 @@ import shlex
 import subprocess
 import sys
 
-from ci_verify import ROOT, source_guard_commands
+from ci_verify import (ROOT, PRIVATE_FIXTURE_SKIP_LITERAL, private_fixtures_overlay,
+                       source_guard_commands)
 
 ACTIONLINT_VERSION = '1.7.12'
 # The names live only in tests/CMakeLists.txt. A digest pins that measured
@@ -801,11 +802,13 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
         (output / stage['log']).write_bytes(log)
         if log:
             print(log.decode('utf-8', 'replace'), end='', flush=True)
-        if (code == 77 and not advisory
-                and b'SKIP private fixtures not present: ' in log):
+        if (code == 77 and not advisory and not private_fixtures_overlay()
+                and PRIVATE_FIXTURE_SKIP_LITERAL.encode() in log):
             # A source guard whose private fixture input the tree lacks exits
             # 77 with the pinned literal naming the missing path.  The literal
-            # is required: a bare 77 without it stays a failure.
+            # is required: a bare 77 without it stays a failure -- and so does
+            # the literal itself while PINEFORGE_PRIVATE_FIXTURES is set, when
+            # the input the guard names is in the tree (R2-F3).
             print(f'ci_preflight: {name}: skipped (exit 77, private fixtures absent)',
                   flush=True)
             stage.update(status='skipped', exitCode=code)

@@ -11,7 +11,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
+import ci_preflight
+import ci_verify
 from ci_preflight import (CORES, DOCS_ONLY_SKIP, JOB_RUNNERS, LINUX_RUNNER, MATRIX_RUNNER, NATIVE_EXCLUSION, NATIVE_CACHE_SAVE, CURL_CACHE_SAVE,
                           PROOF_JOBS, STAGE_TIMEOUT_SECONDS, _jobs, check_commands,
                           ci_workflow_findings, native_workflow_findings, run_checks)
@@ -647,6 +650,48 @@ class PreflightFailures(unittest.TestCase):
         code, summary, _ = self.run_preflight([('missing', ['/nonexistent/pineforge-ci-tool'])])
         self.assertEqual(code, 1)
         self.assertEqual(summary['stages'][0]['exitCode'], 127)
+
+    def guard_witness(self) -> list:
+        """A stage that prints the pinned skip literal and exits 77."""
+        return [sys.executable, '-c',
+                'import sys; print("SKIP private fixtures not present: '
+                'tests/fixtures/private/witness.csv"); sys.exit(77)']
+
+    def test_a_guard_skip_is_a_skip_only_without_the_overlay(self):
+        # R2-F3 (F7): the skip branch. Absent the overlay, exit 77 with the
+        # pinned literal is a named skip; with PINEFORGE_PRIVATE_FIXTURES set
+        # the same output is a failure, because the input the guard names is in
+        # the tree then.
+        code, summary, logs = self.run_preflight([('guard', self.guard_witness())])
+        self.assertEqual(code, 0)
+        self.assertEqual(summary['stages'][0]['status'], 'skipped')
+        self.assertEqual(summary['stages'][0]['exitCode'], 77)
+        # The stage's log keeps the guard's own output, literal included.
+        self.assertIn('SKIP private fixtures not present:',
+                      (logs / 'guard.log').read_text())
+        with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': '1'}):
+            code, summary, _ = self.run_preflight([('guard', self.guard_witness())])
+        self.assertEqual(code, 1)
+        self.assertEqual(summary['status'], 'failed')
+        self.assertEqual(summary['stages'][0]['status'], 'failed')
+        self.assertEqual(summary['stages'][0]['exitCode'], 77)
+
+    def test_a_bare_77_is_a_failure_in_both_worlds(self):
+        # The literal is required: 77 alone is never a skip.
+        bare = [sys.executable, '-c', 'import sys; sys.exit(77)']
+        for flag in ('', '1'):
+            with self.subTest(overlay=flag), \
+                    mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': flag}):
+                code, summary, _ = self.run_preflight([('guard', bare)])
+                self.assertEqual(code, 1)
+                self.assertEqual(summary['stages'][0]['status'], 'failed')
+
+    def test_the_skip_literal_has_one_home(self):
+        # R2-F7: the branch reads ci_verify's literal, not a second copy.
+        self.assertIs(ci_preflight.PRIVATE_FIXTURE_SKIP_LITERAL,
+                      ci_verify.PRIVATE_FIXTURE_SKIP_LITERAL)
+        source = (ROOT / 'scripts' / 'ci_preflight.py').read_text()
+        self.assertEqual(source.count('SKIP private fixtures not present: '), 0)
 
     def test_empty_check_plan_cannot_pass(self):
         code, summary, _ = self.run_preflight([])
