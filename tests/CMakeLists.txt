@@ -3672,12 +3672,12 @@ elseif(NOT test_native_oracle_day_key_l2 IN_LIST _pf_kernel_absent_rows)
     add_test(NAME test_oracle_day_key COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/oracle/test_oracle_day_key.cpp")
     set_tests_properties(test_oracle_day_key PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_call_rules/bars/f-2025-09-17-2025-09-18.csv")
-    pineforge_add_twin_test(test_oracle_frozen_size test_native_oracle_frozen_size_full_l2)
-else()
-    add_test(NAME test_oracle_frozen_size COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/margin_call_rules/bars/f-2025-09-17-2025-09-18.csv")
-    set_tests_properties(test_oracle_frozen_size PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
+# The frozen-size twin is NOT a private-fixture row: its base
+# (test_native_oracle_frozen_size_full_l2) is a public TEST_SOURCES row whose
+# sources read no margin_call_rules file, so main registers this twin
+# unconditionally and the row runs -- not skips -- on the fixture-less tree
+# (the guard it used to carry named a file neither of its sources reads).
+pineforge_add_twin_test(test_oracle_frozen_size test_native_oracle_frozen_size_full_l2)
 pineforge_add_twin_test(test_oracle_deferred_any_witnesses
                         test_native_oracle_deferred_any_witnesses_l2)
 pineforge_add_twin_test(test_oracle_magnifier_barstate
