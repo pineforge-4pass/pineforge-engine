@@ -72,6 +72,7 @@ the row is registered without a SKIP_RETURN_CODE because it cannot skip.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import os
 import re
 import sys
@@ -265,9 +266,6 @@ class World:
     def read_text(self, path) -> str:
         return Path(path).read_text(errors='replace')
 
-    def glob(self, pattern: str) -> list[Path]:
-        return sorted(p for p in self.root.glob(pattern) if not self.removed(p))
-
 
 class Machine:
     """One evaluation of one CMakeLists under one world and profile.
@@ -277,7 +275,7 @@ class Machine:
     world would register without the record."""
 
     def __init__(self, path: Path, world: World, profile: dict, root: Path,
-                 record: list | None = None):
+                 record: list | None = None, source_dir: Path | None = None):
         self.path = path
         self.text = strip_comments(path.read_text())
         self.wstatements = statements(self.text)
@@ -285,6 +283,10 @@ class Machine:
         self.profile = profile
         self.root = root
         self.record = record
+        # CMAKE_CURRENT_SOURCE_DIR: the directory being processed, which
+        # include() does NOT change (CMAKE_CURRENT_LIST_DIR is the one it
+        # changes; the evaluator does not model that variable).
+        self.source_dir = Path(source_dir) if source_dir is not None else path.parent
         self.vars: dict[str, list[str]] = {}
         self.targets: set[str] = set()
         self.rows: set[str] = set()
@@ -298,7 +300,7 @@ class Machine:
             if name == 'PROJECT_SOURCE_DIR':
                 return str(self.root)
             if name == 'CMAKE_CURRENT_SOURCE_DIR':
-                return str(self.path.parent)
+                return str(self.source_dir)
             if name == 'CMAKE_CURRENT_BINARY_DIR':
                 return '/build/current'
             if name == 'PROJECT_BINARY_DIR':
@@ -747,7 +749,14 @@ class Machine:
                 included = Path(target)
                 if not self.world.exists(included):
                     raise Unreadable(f'{self.path}:{line}: include({target}) missing')
-                sub = Machine(included, self.world, self.profile, self.root)
+                # include() runs the file in the including scope: the shared
+                # containers carry the walk's state, `source_dir` stays the
+                # including file's (only CMAKE_CURRENT_LIST_DIR changes, which
+                # this evaluator does not model), and the record override rides
+                # along -- an included file must read the same record the
+                # including walk was given.
+                sub = Machine(included, self.world, self.profile, self.root,
+                              record=self.record, source_dir=self.source_dir)
                 sub.vars = self.vars
                 sub.globals = self.globals
                 sub.targets = self.targets
@@ -777,16 +786,19 @@ class Machine:
                 # The ONE probed command the tree runs: the compiler asked for
                 # its own sanitizer runtime file name. This sweep runs no
                 # command -- it is text over a tree -- so the probe is BOUND
-                # with a stated value: the file name the compiler prints for a
-                # runtime it cannot find (the argument echoed back) and result
-                # 0. The binding is sound for this sweep because neither
-                # variable can reach a registration condition: the site's only
-                # uses are a message(FATAL_ERROR) and a
-                # set_tests_properties ENVIRONMENT. (A real configure on a
-                # tree whose compiler lacks that runtime dies on the
-                # FATAL_ERROR; a row-level sweep does not model a failed
-                # configure, and the tree's CI jobs have the runtime.) Any
-                # other execute_process is a construct this sweep cannot bind.
+                # with a stated value under which the guard it feeds HOLDS, the
+                # state a real configure runs under when the compiler ships the
+                # runtime: RESULT_VARIABLE 0 and an existing path in the
+                # OUTPUT_VARIABLE. The sweep cannot know the host's runtime
+                # path, so it binds the output to the runner listfile of the
+                # world -- a file the world has -- which keeps the site's
+                # `NOT EXISTS` arm (and with it the message(FATAL_ERROR) that
+                # would stop a real configure) from firing. Neither variable
+                # can reach a registration condition: the site's uses are that
+                # FATAL_ERROR and a set_tests_properties ENVIRONMENT. Any other
+                # execute_process, and any probe shape other than the
+                # compiler's -print-file-name, is a construct this sweep cannot
+                # bind.
                 values = split_values(arguments(statement))
                 command = []
                 for position, value in enumerate(values):
@@ -805,11 +817,25 @@ class Machine:
                         f'{self.path}:{line}: execute_process in a shape this '
                         f'sweep does not bind (only the compiler\'s '
                         f'-print-file-name probe is, with a stated value)')
+                bound_runtime = self.world.root / 'runner' / 'CMakeLists.txt'
                 for position, value in enumerate(values):
                     if value == 'OUTPUT_VARIABLE' and position + 1 < len(values):
-                        self.vars[values[position + 1]] = [probed]
+                        self.vars[values[position + 1]] = [str(bound_runtime)]
                     elif value == 'RESULT_VARIABLE' and position + 1 < len(values):
                         self.vars[values[position + 1]] = ['0']
+                index += 1
+            elif head == 'message':
+                # message(STATUS ...)/plain forms print and continue; a reached
+                # FATAL_ERROR or SEND_ERROR stops a real configure, and this
+                # sweep does not model a stopped configure -- so reaching one
+                # is exit 2 with the file and line, never a quiet line.
+                values = split_values(arguments(statement))
+                mode = values[0].strip('"') if values else ''
+                if mode in ('FATAL_ERROR', 'SEND_ERROR'):
+                    raise Unreadable(
+                        f'{self.path}:{line}: message({mode}) was reached: a '
+                        f'real configure stops here and this sweep does not '
+                        f'model a stopped configure')
                 index += 1
             elif head in ('get_target_property',):
                 values = split_values(arguments(statement))
@@ -819,7 +845,7 @@ class Machine:
                           'target_compile_definitions', 'target_compile_options',
                           'target_link_libraries', 'target_link_options',
                           'set_target_properties', 'target_include_directories',
-                          'message', 'unset', 'find_package', 'add_custom_command',
+                          'find_package', 'add_custom_command',
                           'add_custom_target', 'install', 'configure_file',
                           'option', 'return', 'add_dependencies',
                           'target_sources', 'set_property', 'get_property',
@@ -880,18 +906,7 @@ class Machine:
         tokens = split_values(arguments(statement))
         operation = tokens[0]
         if operation in ('GLOB', 'GLOB_RECURSE'):
-            name = tokens[1]
-            if name == 'CONFIGURE_DEPENDS':
-                name = tokens[2]
-            pattern = tokens[-1].strip('"')
-            if pattern.startswith('${PROJECT_SOURCE_DIR}/'):
-                pattern = pattern.replace('${PROJECT_SOURCE_DIR}/', '')
-            elif pattern.startswith('${CMAKE_CURRENT_SOURCE_DIR}/'):
-                pattern = pattern.replace('${CMAKE_CURRENT_SOURCE_DIR}/',
-                                          self.rel_dir + '/')
-            matches = [str(p.relative_to(self.world.root))
-                       for p in self.world.glob(pattern)]
-            self.vars[name] = sorted(matches)
+            self._glob(operation, tokens, line)
         elif operation == 'STRINGS':
             source = Path(self.substitute(tokens[1]))
             name = tokens[2]
@@ -909,10 +924,129 @@ class Machine:
         else:
             raise Unreadable(f'{self.path}:{line}: unmodelled file() {operation}')
 
+    def _glob(self, operation: str, tokens: list[str], line: int) -> None:
+        """file(GLOB/GLOB_RECURSE), CMake's own shape (file(1) docs).
+
+        Every globbing expression is matched -- the old model read only the
+        last one. A GLOB_RECURSE expression recurses into the subdirectories
+        of the directory it names (CMP0009 NEW: a symlinked subdirectory is
+        listed but not traversed, and FOLLOW_SYMLINKS -- which would traverse
+        it -- is refused). LIST_DIRECTORIES and RELATIVE are modelled; a
+        GLOB lists directories unless told otherwise while a GLOB_RECURSE
+        omits them unless told otherwise; CONFIGURE_DEPENDS only affects
+        build-system regeneration. The result is ordered lexicographically,
+        as CMake documents for both operations."""
+        name, position = None, 1
+        list_directories = operation == 'GLOB'
+        relative = None
+        while position < len(tokens):
+            token = tokens[position]
+            if token == 'CONFIGURE_DEPENDS':
+                position += 1
+            elif token == 'LIST_DIRECTORIES':
+                if position + 1 >= len(tokens):
+                    raise Unreadable(f'{self.path}:{line}: file({operation}) '
+                                     f'LIST_DIRECTORIES without a value')
+                value = tokens[position + 1].strip('"').lower()
+                if value not in ('true', 'false'):
+                    raise Unreadable(f'{self.path}:{line}: file({operation}) '
+                                     f'LIST_DIRECTORIES {tokens[position + 1]}: '
+                                     f'expected true or false')
+                list_directories = value == 'true'
+                position += 2
+            elif token == 'RELATIVE':
+                if position + 1 >= len(tokens):
+                    raise Unreadable(f'{self.path}:{line}: file({operation}) '
+                                     f'RELATIVE without a path')
+                relative = tokens[position + 1]
+                position += 2
+            elif token == 'FOLLOW_SYMLINKS':
+                raise Unreadable(
+                    f'{self.path}:{line}: file({operation}) FOLLOW_SYMLINKS is '
+                    f'not modelled: it changes which subdirectories a '
+                    f'recursive glob traverses')
+            elif name is None:
+                name = token
+                position += 1
+            else:
+                break
+        patterns = tokens[position:]
+        if name is None or not patterns:
+            raise Unreadable(f'{self.path}:{line}: file({operation}) without a '
+                             f'variable and at least one globbing expression')
+        matches: list[str] = []
+        for pattern_token in patterns:
+            pattern = self.substitute(pattern_token).strip('"')
+            matches.extend(self._glob_matches(pattern, operation == 'GLOB_RECURSE',
+                                              line))
+        if not list_directories:
+            matches = [m for m in matches
+                       if (self.world.root / m).is_file()]
+        if relative is not None:
+            base = self._tree_relative(self.substitute(relative).strip('"'),
+                                       line).rstrip('/')
+            matches = [m[len(base) + 1:] if base and m.startswith(base + '/')
+                       else m for m in matches]
+        self.vars[name] = sorted(matches)
+
+    def _glob_matches(self, pattern: str, recurse: bool, line: int) -> list[str]:
+        """One globbing expression, tree-relative, over the world's files.
+
+        A relative expression is relative to CMAKE_CURRENT_SOURCE_DIR; an
+        expression whose directory part carries a wildcard is a construct this
+        sweep does not model (none in the tree). Returns root-relative paths
+        with the world's removed paths filtered, like every other read."""
+        if not pattern:
+            raise Unreadable(f'{self.path}:{line}: an empty globbing expression')
+        head, _, tail = pattern.rpartition('/')
+        base = head or '.'
+        if not os.path.isabs(base):
+            base = os.path.join(str(self.source_dir), base)
+        base = os.path.normpath(base)
+        for component in Path(base).parts:
+            if any(ch in component for ch in '*?['):
+                raise Unreadable(
+                    f'{self.path}:{line}: the globbing expression {pattern!r} '
+                    f'has a wildcard in its directory part, which this sweep '
+                    f'does not model')
+        rel = self.world.relative(base)
+        if rel is None:
+            raise Unreadable(f'{self.path}:{line}: the globbing expression '
+                             f'{pattern!r} leaves the tree')
+        base_path = self.world.root / rel
+        if not base_path.is_dir():
+            return []
+        found = []
+        if recurse:
+            for dirpath, dirnames, filenames in os.walk(base_path,
+                                                        followlinks=False):
+                for entry in dirnames + filenames:
+                    if fnmatch.fnmatchcase(entry, tail):
+                        found.append(Path(dirpath) / entry)
+        else:
+            for entry in sorted(os.listdir(base_path)):
+                if fnmatch.fnmatchcase(entry, tail):
+                    found.append(base_path / entry)
+        out = []
+        for match in found:
+            matchrel = self.world.relative(match)
+            if matchrel is not None and not self.world.removed(match):
+                out.append(matchrel)
+        return out
+
+    def _tree_relative(self, path: str, line: int) -> str:
+        """A path argument's tree-relative form, else a refused construct."""
+        if not os.path.isabs(path):
+            path = os.path.join(str(self.source_dir), path)
+        rel = self.world.relative(os.path.normpath(path))
+        if rel is None:
+            raise Unreadable(f'{self.path}:{line}: {path} leaves the tree')
+        return rel
+
     @property
     def rel_dir(self) -> str:
         try:
-            return str(self.path.parent.relative_to(self.root))
+            return str(self.source_dir.relative_to(self.root))
         except ValueError:
             return '.'
 

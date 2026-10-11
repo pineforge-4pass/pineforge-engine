@@ -25,11 +25,18 @@ Controls:
   9. the tree as it is, overlay present -> 0, every profile 0/0, drift 0/0
  10. an execute_process the sweep does not bind -> 2, named
  11. a foreach over a parent list it cannot read -> 2, named
+ 12. a reached message(FATAL_ERROR) -> 2, naming file and line
+ 13. a two-pattern file(GLOB) -> both patterns matched (a row appears only
+     when the evaluator sees both files)
+ 14. a file(GLOB_RECURSE) -> the subdirectory is traversed (a row appears
+     only when the nested file is seen)
+ 15. a glob form the sweep does not model (FOLLOW_SYMLINKS) -> 2, named
 """
 from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -344,6 +351,75 @@ endforeach()
         result = self.run_check('--cmakelists', RUNNER, '--profile', 'release')
         self.assertEqual(2, result.returncode, result.stdout + result.stderr)
         self.assertIn('E2E_TWO_WORLD_PARENT_LIST', result.stdout + result.stderr)
+
+    def row_count(self, rel: str) -> int:
+        """The absent-world row count the sweep prints for one file."""
+        result = self.run_check('--cmakelists', rel, '--profile', 'release')
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        match = re.search(r'\[release\] absent-world rows: (\d+)', result.stdout)
+        if match is None:
+            raise AssertionError(f'no row count in:\n{result.stdout}')
+        return int(match.group(1))
+
+    # control 12: a reached message(FATAL_ERROR) stops a real configure; the
+    # sweep must say so (exit 2, file:line), never walk past it
+    def test_a_reached_fatal_error_exits_2(self):
+        self.tree.append(TREES_DIR, '''
+message(FATAL_ERROR "e2e-two-world: the tampered tree reached a fatal error")
+''')
+        result = self.run_check('--cmakelists', TREES_DIR, '--profile', 'release')
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn('message(FATAL_ERROR) was reached',
+                      result.stdout + result.stderr)
+        self.assertIn(TREES_DIR, result.stdout + result.stderr)
+
+    # control 13: a two-pattern glob; the registered row appears only when
+    # BOTH patterns are matched (one file each, in two directories)
+    def test_a_two_pattern_glob_matches_both_patterns(self):
+        for name in ('e2e-two-world-a', 'e2e-two-world-b'):
+            directory = self.root / 'tests' / name
+            directory.mkdir()
+            (directory / 'present.txt').write_text('e2e-two-world\n')
+        baseline = self.row_count(TREES_DIR)
+        self.tree.append(TREES_DIR, '''
+file(GLOB _e2e_two_world_two_patterns
+     "${CMAKE_CURRENT_SOURCE_DIR}/e2e-two-world-a/*.txt"
+     "${CMAKE_CURRENT_SOURCE_DIR}/e2e-two-world-b/*.txt")
+list(LENGTH _e2e_two_world_two_patterns _e2e_two_world_two_count)
+if(_e2e_two_world_two_count EQUAL 2)
+    add_test(NAME e2e_two_world_two_pattern_glob COMMAND ${CMAKE_COMMAND} -E echo ok)
+endif()
+''')
+        self.assertEqual(baseline + 1, self.row_count(TREES_DIR))
+
+    # control 14: a recursive glob; the registered row appears only when the
+    # nested file (one directory deeper) is matched too
+    def test_a_recursive_glob_traverses_subdirectories(self):
+        base = self.root / 'tests' / 'e2e-two-world-r'
+        (base / 'sub').mkdir(parents=True)
+        (base / 'present.txt').write_text('e2e-two-world\n')
+        (base / 'sub' / 'nested.txt').write_text('e2e-two-world\n')
+        baseline = self.row_count(TREES_DIR)
+        self.tree.append(TREES_DIR, '''
+file(GLOB_RECURSE _e2e_two_world_recursive
+     "${CMAKE_CURRENT_SOURCE_DIR}/e2e-two-world-r/*.txt")
+list(LENGTH _e2e_two_world_recursive _e2e_two_world_recursive_count)
+if(_e2e_two_world_recursive_count EQUAL 2)
+    add_test(NAME e2e_two_world_recursive_glob COMMAND ${CMAKE_COMMAND} -E echo ok)
+endif()
+''')
+        self.assertEqual(baseline + 1, self.row_count(TREES_DIR))
+
+    # control 15: a glob form the sweep does not model is exit 2, named
+    def test_an_unmodelled_glob_form_exits_2(self):
+        self.tree.append(RUNNER, '''
+file(GLOB_RECURSE _e2e_two_world_symlinked FOLLOW_SYMLINKS
+     "${CMAKE_CURRENT_SOURCE_DIR}/*.py")
+''')
+        result = self.run_check('--cmakelists', RUNNER, '--profile', 'release')
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn('FOLLOW_SYMLINKS', result.stdout + result.stderr)
+        self.assertIn(RUNNER, result.stdout + result.stderr)
 
 
 if __name__ == '__main__':
