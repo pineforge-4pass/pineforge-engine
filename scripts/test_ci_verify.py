@@ -2928,6 +2928,23 @@ class PrivateFixtureFloors(unittest.TestCase):
                 self.assertIn('ctest-floor', failure_stages(summary))
                 self.assertEqual(summary['ctestRows'], ABSENT_FLOOR[profile] - 1)
 
+    def test_red_overlay_present_any_skipped_row_fails_the_run(self):
+        # Control (d): with the overlay present the profile's whole population
+        # must run, so ANY row that skips is a lost row -- a pinned one on the
+        # label rule and on the floor, an unpinned one on the floor alone.
+        for skipped, stages in (
+                (['test_aapl15_margin_brackets_l4a'],
+                 ['ctest-private-fixtures', 'ctest-floor']),
+                (['test_native_live_websocket'], ['ctest-floor'])):
+            with self.subTest(skipped=skipped):
+                with self.overlay_present():
+                    code, summary, _, _ = self.run_profile(
+                        'kernel', ctest_rows=FULL_FLOOR['kernel'],
+                        ctest_skipped=skipped)
+                self.assertEqual(code, 1)
+                self.assertEqual(failure_stages(summary), stages)
+                self.assertEqual(summary['ctestRows'], FULL_FLOOR['kernel'] - 1)
+
     def test_green_overlay_absent_the_profiles_own_population_passes(self):
         # GREEN (flag unset): the profile's real overlay-present registration,
         # in the absent world, with exactly its pinned rows skipping, meets the
