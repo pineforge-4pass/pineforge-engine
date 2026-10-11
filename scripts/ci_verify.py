@@ -716,9 +716,9 @@ LIVE_SANITIZERS_MIN_TESTS = 12
 #           every private_fixtures row must RUN: with the overlay present a
 #           skip means the overlay did not reach the tree, so ctest-floor
 #           fails on it (a silently skipped row is a lost row here).
-#   unset   the overlay is absent, so its 112 placeholder rows SKIP in public
+#   unset   the overlay is absent, so its 121 placeholder rows SKIP in public
 #           CI. The two RUN floors are lowered by PRIVATE_FIXTURE_ROW_COUNT, so
-#           a green public run is not read as 112 lost rows; the floors are
+#           a green public run is not read as 121 lost rows; the floors are
 #           never lowered further than that.
 #
 # EXCLUDED_REGISTERED_MIN does not move in either mode: those counts come from
@@ -726,12 +726,12 @@ LIVE_SANITIZERS_MIN_TESTS = 12
 # registered population is the same with and without the overlay.
 #
 # The count is pinned from tests/private_fixture_rows.txt (the row list P1-B
-# commits alongside the placeholders): 112 rows, that file's sha256
+# commits alongside the placeholders): 121 rows, that file's sha256
 # 9a2727d455c1b470d515665428e2c6e090a22ac07f87255d1ca9c20d5528bd62, the same
 # manifest (l44/pr1-manifest.tsv) this campaign pins. The two floor constants
 # above stay the FULL count so the doc anchors at ci_verify.py:321 and
 # ci_verify.py:595 do not move; the lowering happens where the floor is read.
-PRIVATE_FIXTURE_ROW_COUNT = 112
+PRIVATE_FIXTURE_ROW_COUNT = 121
 PRIVATE_FIXTURE_LABEL = 'private_fixtures'
 PRIVATE_FIXTURE_ROWS_FILE = 'tests/private_fixture_rows.txt'
 # The literal every private-fixtures placeholder prints before CTest marks it
