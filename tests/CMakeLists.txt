@@ -2122,7 +2122,6 @@ set(_pf_source_bound_private_rows
     test_slipped_short_tapes
     test_small_money_margin_residual_l4a
     test_source_buying_power_tapes
-    test_source_buying_power_tapes
     test_split_feed_partial_bucket
     test_symbol_calendar_tapes
     test_taro_price_gap_admission_l4d
