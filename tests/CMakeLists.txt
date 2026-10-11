@@ -2230,6 +2230,16 @@ add_test(
 )
 set_tests_properties(test_symbol_calendar PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 
+# L5 control for the four private-fixture probe guards above: it builds both
+# worlds itself (fixture absent -> the skip literal and exit 77; fixture
+# present -> the guard does not fire), so it needs no fixture and carries no
+# label -- it runs on every tree.
+add_test(
+    NAME test_private_fixture_guards
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_private_fixture_guards.py
+)
+
 # The live-flags lane's own pure bookkeeping (strip_open_at_end,
 # interior_diff, hash_diff_reason, fold_reasons) against synthetic
 # rows/hash arrays -- complements test_live_flags_lane_positive's engine-
