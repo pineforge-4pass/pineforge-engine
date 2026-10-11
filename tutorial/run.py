@@ -163,7 +163,7 @@ def error_code(lib: ctypes.CDLL, state) -> str:
 def run_error(lib: ctypes.CDLL, state) -> str | None:
     """'<text> (<code> <args JSON>)' when the run just made on state failed, else
     None. A run failed when the engine reports a text, a code or a run status of 1
-    (strategy_last_run_status), as docker/run_json.py decides, so a script stopped
+    (strategy_last_run_status), as the release harness decides, so a script stopped
     by runtime.error("") fails instead of printing a result."""
     text = ""
     if hasattr(lib, "strategy_get_last_error"):

@@ -8,7 +8,7 @@
 // typed arguments as one canonical JSON object
 // (strategy_get_last_error_args()). The vocabulary, its classes, its argument
 // kinds and closed value lists, and the English each code is written with,
-// are published as docker/run_failure_codes.json (schema
+// are published as run_failure_codes.json (schema
 // pineforge-run-failure-catalog/v1); include/pineforge/run_failure_codes.hpp
 // and src/run_failure_registry.inc are generated from it
 // (scripts/check_run_failure_codes.py --write-registry) and the source guard
