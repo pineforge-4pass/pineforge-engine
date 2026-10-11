@@ -43,32 +43,45 @@ Modes
              pinned private rows: every recorded row is pinned, each list is
              sorted, no duplicates.
   --overlay  the overlay half. Without the overlay in the tree (the marker
-             file absent) it prints `SKIP private fixtures not present:
-             <marker>` and exits 77. With it (PINEFORGE_PRIVATE_FIXTURES set
-             and the tree holding the marker) it computes BOTH worlds for
-             every profile and file, requires absent-only names: 0 and
-             overlay-only names: 0, and re-derives the source-bound set from
-             the predicate over the live tree (a pinned row whose include
-             closure reaches a pineforge/source or pineforge/compat/pine
-             header) requiring it to EQUAL the recorded list exactly:
-             recorded-only: 0, derived-only: 0. The refusal-shard list is
-             re-derived the same way: the present branch's split over the
-             live tree (the refused_*.cpp glob, the family regex, the
-             8-library batches) must produce exactly the recorded rows --
-             recorded-only: 0, derived-only: 0.
+             file absent and PINEFORGE_PRIVATE_FIXTURES unset) it prints
+             `overlay half not run: private fixtures not present: <marker>`
+             and exits 0: this script has no skip path. With it (the tree
+             holding the marker) it computes BOTH worlds for every profile
+             and file, requires absent-only names: 0 and overlay-only names:
+             0, and re-derives the source-bound set from the predicate over
+             the live tree (a pinned row whose include closure reaches a
+             pineforge/source or pineforge/compat/pine header). Two bounds
+             hold on it: every row the record names must be one the predicate
+             reaches, and every row whose registration the record changes must
+             be named by it (or inherit a recorded base) -- the printed
+             recorded-only and not-recorded counts are both 0 then. The
+             refusal-shard list is re-derived the same
+             way: the present branch's split over the live tree (the
+             refused_*.cpp glob, the family regex, the 8-library batches)
+             must produce exactly the recorded rows -- recorded-only: 0,
+             derived-only: 0.
+  --both     the ctest row: the absent half always runs and decides the exit
+             code, then the overlay half by the --overlay rule. With
+             PINEFORGE_PRIVATE_FIXTURES set and the marker absent the row
+             FAILS (an overlay run whose overlay half cannot run is a
+             failure, never a skip), and with neither it exits 0 and prints
+             the not-run line.
 
-Exit 0 when every invariant holds, 1 on a violation, 2 on a construct this
-evaluator cannot read, 77 for the overlay half without the overlay (after the
-skip literal).
+Exit 0 when every invariant holds, 1 on a violation (including an overlay
+half that cannot run although PINEFORGE_PRIVATE_FIXTURES says the fixtures
+are present), 2 on a construct this evaluator cannot read. No path exits 77:
+the row is registered without a SKIP_RETURN_CODE because it cannot skip.
 """
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import os
 import re
 import sys
 from pathlib import Path
 
+import ci_verify
 from check_private_fixture_reads import (Unparseable, is_removed, load_removed,
                                          strip_comments)
 
@@ -76,20 +89,27 @@ REPO = Path(__file__).resolve().parent.parent
 
 PIN_PATHS = Path('tests/private_fixture_paths.txt')
 PIN_ROWS = Path('tests/private_fixture_rows.txt')
-SKIP_LITERAL = 'SKIP private fixtures not present: '
 # A removed file (an F line of the pin): present exactly when the
 # private-fixture overlay is in the tree. The overlay half skips on it and
 # fails when PINEFORGE_PRIVATE_FIXTURES is set without it.
 OVERLAY_MARKER = 'tests/fixtures/whole_lot_tie/bars.inc'
 CMAKE_FILES = (Path('tests/CMakeLists.txt'), Path('runner/CMakeLists.txt'))
-PROFILE_NAMES = ('release', 'debug', 'sanitizers', 'kernel-live')
 # The absent world cannot glob files that do not exist, so the refusal-shard
 # rows are a RECORDED list: runner/CMakeLists.txt pins the names the present
 # branch's split produces, and the drift guard requires the two to agree.
+# if(<single argument>) constants (cmake-language(7), "if"): everything else
+# that is neither a defined variable nor a non-zero number is false.
+TRUE_CONSTANTS = frozenset(('1', 'ON', 'YES', 'TRUE', 'Y'))
+FALSE_CONSTANTS = frozenset(('0', 'OFF', 'NO', 'FALSE', 'N', 'IGNORE', 'NOTFOUND'))
+
 REFUSAL_SHARD_PREFIX = 'confirmed_capabilities_refusals_'
 REFUSAL_SHARD_RECORD = '_pf_refusal_shard_rows'
+REFUSAL_SHARD_MARKERS = '_pf_refusal_shard_first_library'
 
 FAILURES: list[str] = []
+# absent-only/overlay-only names summed over every profile and file the
+# overlay half compared; the closing lines print these, never a literal zero.
+TOTALS = {'absent_only': 0, 'overlay_only': 0}
 
 
 class Unreadable(Exception):
@@ -154,42 +174,70 @@ def split_values(argument: str) -> list[str]:
     return out
 
 
-PROFILES = {
-    'release': {'CMAKE_BUILD_TYPE': 'Release', 'PINEFORGE_BUILD_SOURCE_LAYER': 'ON',
-                'PINEFORGE_ENABLE_SANITIZERS': 'OFF', 'PINEFORGE_ENABLE_COVERAGE': 'OFF',
-                'PINEFORGE_BUILD_LIVE_RUNNER': 'OFF'},
-    'debug': {'CMAKE_BUILD_TYPE': 'Debug', 'PINEFORGE_BUILD_SOURCE_LAYER': 'ON',
-              'PINEFORGE_ENABLE_SANITIZERS': 'OFF', 'PINEFORGE_ENABLE_COVERAGE': 'OFF',
-              'PINEFORGE_BUILD_LIVE_RUNNER': 'OFF'},
-    'sanitizers': {'CMAKE_BUILD_TYPE': 'Debug', 'PINEFORGE_BUILD_SOURCE_LAYER': 'ON',
-                   'PINEFORGE_ENABLE_SANITIZERS': 'ON', 'PINEFORGE_ENABLE_COVERAGE': 'OFF',
-                   'PINEFORGE_BUILD_LIVE_RUNNER': 'OFF'},
-    'kernel': {'CMAKE_BUILD_TYPE': 'Release', 'PINEFORGE_BUILD_SOURCE_LAYER': 'OFF',
-               'PINEFORGE_ENABLE_SANITIZERS': 'OFF', 'PINEFORGE_ENABLE_COVERAGE': 'OFF',
-               'PINEFORGE_BUILD_LIVE_RUNNER': 'OFF'},
-    'kernel-live': {'CMAKE_BUILD_TYPE': 'Release', 'PINEFORGE_BUILD_SOURCE_LAYER': 'OFF',
-                    'PINEFORGE_ENABLE_SANITIZERS': 'OFF', 'PINEFORGE_ENABLE_COVERAGE': 'OFF',
-                    'PINEFORGE_BUILD_LIVE_RUNNER': 'ON'},
-    'live-runner': {'CMAKE_BUILD_TYPE': 'Release', 'PINEFORGE_BUILD_SOURCE_LAYER': 'ON',
-                    'PINEFORGE_ENABLE_SANITIZERS': 'OFF', 'PINEFORGE_ENABLE_COVERAGE': 'OFF',
-                    'PINEFORGE_BUILD_LIVE_RUNNER': 'ON'},
-    'coverage': {'CMAKE_BUILD_TYPE': 'Release', 'PINEFORGE_BUILD_SOURCE_LAYER': 'ON',
-                 'PINEFORGE_ENABLE_SANITIZERS': 'OFF', 'PINEFORGE_ENABLE_COVERAGE': 'ON',
-                 'PINEFORGE_BUILD_LIVE_RUNNER': 'OFF'},
-}
+# The profile table is DERIVED from scripts/ci_verify.py's own PROFILES -- the
+# configure line each evidence job runs -- never hand-copied: every ci_verify
+# profile is compared, in both worlds, so a row registered only under
+# SOURCE_LAYER AND LIVE_RUNNER (the native and live-* profiles) is compared
+# too. A profile ci_verify names without an entry, or an entry missing a field
+# this table needs, is a loud failure, not a guess.
+_PROFILE_FIELDS = ('build_type', 'sanitizers', 'live_runner', 'tutorial',
+                   'source_layer', 'thread_sanitizers')
+
+
+def profile_table() -> dict:
+    table = {}
+    for name in ci_verify.PROFILES:
+        entry = ci_verify.PROFILE.get(name)
+        if entry is None:
+            raise Unreadable(f'scripts/ci_verify.py names the profile {name!r} '
+                             f'without an entry in its PROFILE table')
+        missing = [field for field in _PROFILE_FIELDS
+                   if not hasattr(entry, field)]
+        if missing:
+            raise Unreadable(f'scripts/ci_verify.py PROFILE[{name!r}] is '
+                             f'missing the fields the two-world sweep needs: '
+                             f'{missing}')
+        table[name] = {
+            'CMAKE_BUILD_TYPE': entry.build_type,
+            'PINEFORGE_BUILD_SOURCE_LAYER':
+                'ON' if entry.source_layer else 'OFF',
+            'PINEFORGE_ENABLE_SANITIZERS':
+                'ON' if entry.sanitizers else 'OFF',
+            'PINEFORGE_BUILD_LIVE_RUNNER':
+                'ON' if entry.live_runner else 'OFF',
+            'PINEFORGE_LIVE_TSAN':
+                'ON' if entry.thread_sanitizers else 'OFF',
+            'PINEFORGE_BUILD_TUTORIAL':
+                'ON' if entry.tutorial else 'OFF',
+            # ci_verify's profiles never turn coverage on; the two files test
+            # the flag, so it is stated here rather than left unbound.
+            'PINEFORGE_ENABLE_COVERAGE': 'OFF',
+        }
+    return table
+
+
+PROFILES = profile_table()
+PROFILE_NAMES = tuple(ci_verify.PROFILES)
 
 # Flags the two files test that come from the configure line and are the same
 # in every evidence job; a flag that is not here raises rather than guessing.
+# PINEFORGE_BUILD_LIVE_RUNNER, PINEFORGE_LIVE_TSAN and
+# PINEFORGE_BUILD_TUTORIAL are NOT here: they differ per profile and every
+# derived profile entry states them, so a missing one is a loud failure.
 CONSTANTS = {
     'UNIX': True, 'APPLE': False, 'WIN32': False,
     'PINEFORGE_BUILD_TESTS': True, 'PINEFORGE_BUILD_EXAMPLES': False,
-    'PINEFORGE_BUILD_CORPUS_STRATEGIES': False, 'PINEFORGE_BUILD_TUTORIAL': True,
+    'PINEFORGE_BUILD_CORPUS_STRATEGIES': False,
     'PINEFORGE_STRICT_WARNINGS': False, 'PINEFORGE_REQUIRE_ABI_RECEIPTS': False,
-    'PINEFORGE_LIVE_TSAN': False, 'PINEFORGE_BUILD_SPEED_BENCH': False,
+    'PINEFORGE_BUILD_SPEED_BENCH': False,
     'PINEFORGE_BUILD_BENCH_STRATEGIES': False,
-    'PINEFORGE_BUILD_LIVE_RUNNER': False,
     'CMAKE_SYSTEM_NAME': 'Linux',
     'CMAKE_CXX_COMPILER_ID': 'GNU',
+    # The interpreter and the cmake binary name COMMAND elements of add_test()
+    # and of the list(APPEND)ed command lists (never a registration
+    # condition): stated absolute paths, since a name is all the row needs.
+    'Python3_EXECUTABLE': '/usr/bin/python3',
+    'CMAKE_COMMAND': '/usr/bin/cmake',
     # Read once, by runner/CMakeLists.txt and tests/CMakeLists.txt, to name a
     # sanitizer runtime library .so: never a registration condition, so one
     # value serves both worlds of the comparison (the CI jobs run x86_64).
@@ -258,9 +306,6 @@ class World:
     def read_text(self, path) -> str:
         return Path(path).read_text(errors='replace')
 
-    def glob(self, pattern: str) -> list[Path]:
-        return sorted(p for p in self.root.glob(pattern) if not self.removed(p))
-
 
 class Machine:
     """One evaluation of one CMakeLists under one world and profile.
@@ -270,7 +315,7 @@ class Machine:
     world would register without the record."""
 
     def __init__(self, path: Path, world: World, profile: dict, root: Path,
-                 record: list | None = None):
+                 record: list | None = None, source_dir: Path | None = None):
         self.path = path
         self.text = strip_comments(path.read_text())
         self.wstatements = statements(self.text)
@@ -278,11 +323,19 @@ class Machine:
         self.profile = profile
         self.root = root
         self.record = record
+        # CMAKE_CURRENT_SOURCE_DIR: the directory being processed, which
+        # include() does NOT change (CMAKE_CURRENT_LIST_DIR is the one it
+        # changes; the evaluator does not model that variable).
+        self.source_dir = Path(source_dir) if source_dir is not None else path.parent
         self.vars: dict[str, list[str]] = {}
         self.targets: set[str] = set()
         self.rows: set[str] = set()
         self.globals: dict[str, str] = {}
         self.twins: dict[str, str] = {}
+        # The sequence list(POP_FRONT <list> ...) removed from each list, in
+        # order: the consumer of a popped list (the runner's marker-per-row
+        # pairing) reads it even though the list itself ends up empty.
+        self.popped: dict[str, list[str]] = {}
 
     # ---- value handling -------------------------------------------------
     def substitute(self, token: str) -> str:
@@ -291,7 +344,7 @@ class Machine:
             if name == 'PROJECT_SOURCE_DIR':
                 return str(self.root)
             if name == 'CMAKE_CURRENT_SOURCE_DIR':
-                return str(self.path.parent)
+                return str(self.source_dir)
             if name == 'CMAKE_CURRENT_BINARY_DIR':
                 return '/build/current'
             if name == 'PROJECT_BINARY_DIR':
@@ -308,7 +361,8 @@ class Machine:
                 return 'ON' if CONSTANTS[name] else 'OFF'
 
             raise Unreadable(
-                f'{self.path}: cannot expand ${{{name}}}')
+                f'{self.path}:{getattr(self, "line", 0)}: cannot expand '
+                f'${{{name}}}')
         out = token
         for _ in range(8):
             new = re.sub(r'\$\{(\w+)\}', repl, out)
@@ -354,13 +408,29 @@ class Machine:
         return int(token.strip('"'))
 
     def truthy(self, token: str) -> bool:
+        """if(<single argument>), CMake's own rules: a defined variable
+        answers with its value; the named constants (and non-zero numbers)
+        answer; anything else -- an undefined variable or an arbitrary
+        string -- is FALSE. The old form read an undefined variable as true,
+        which is not what a configure does."""
         resolved = self.substitute(token)
         if resolved == token and not token.startswith('"'):
             values = self.value(token)
             if values is not None:
                 resolved = values[0] if values else ''
+            else:
+                stripped = token.strip('"')
+                if stripped.upper() in TRUE_CONSTANTS:
+                    return True
+                if re.fullmatch(r'-?\d+', stripped):
+                    return int(stripped) != 0
+                return False
         resolved = resolved.strip('"')
-        return resolved not in ('', '0', 'OFF', 'NO', 'FALSE', 'NOTFOUND')
+        if resolved.upper() in FALSE_CONSTANTS:
+            return False
+        if resolved.upper().endswith('-NOTFOUND'):
+            return False
+        return resolved != ''
 
     # ---- condition evaluation -------------------------------------------
     def condition(self, argument: str) -> bool:
@@ -417,10 +487,14 @@ class Machine:
                 container = []
             return subject in container
         if len(tokens) >= 3 and tokens[1] in ('STREQUAL', 'MATCHES'):
-            subject = self.substitute(tokens[0])
-            if subject == tokens[0] and not tokens[0].startswith('"'):
-                values = self.value(tokens[0])
-                subject = values[0] if values else ''
+            raw = tokens[0]
+            expanded = self.substitute(raw)
+            if expanded == raw and not raw.startswith('"'):
+                values = self.value(raw)
+                subject = values[0] if values else raw
+            else:
+                # a quoted operand is one argument with its quotes stripped
+                subject = expanded.strip('"')
             literal = tokens[2].strip('"')
             if tokens[1] == 'STREQUAL':
                 return subject == literal
@@ -564,6 +638,7 @@ class Machine:
         index = start
         while index < end:
             line, statement = self.wstatements[index]
+            self.line = line
             head = head_of(statement)
             if head == 'if':
                 for segment_start, segment_end, condition in self.branches(index):
@@ -592,10 +667,21 @@ class Machine:
                                 f'literal set() in the top-level CMakeLists.txt')
                         items.extend(values)
                 elif len(header) >= 3 and header[1] == 'IN' and header[2] == 'ITEMS':
-                    items = [self.substitute(i).strip('"') for i in header[3:]]
-                elif len(header) == 4 and header[1] == 'RANGE':
-                    items = [str(n) for n in range(int(header[2]),
-                                                   int(header[3]) + 1)]
+                    items = [element for token in header[3:]
+                             for element in self.elements(token)]
+                elif len(header) >= 3 and header[1] == 'RANGE':
+                    bounds = [int(self.substitute(t).strip('"'))
+                              for t in header[2:]]
+                    if len(bounds) == 1:
+                        start, stop, step = 0, bounds[0], 1
+                    elif len(bounds) == 2:
+                        start, stop, step = bounds[0], bounds[1], 1
+                    elif len(bounds) == 3:
+                        start, stop, step = bounds
+                    else:
+                        raise Unreadable(f'{self.path}:{line}: foreach RANGE '
+                                         f'with {len(bounds)} bounds')
+                    items = [str(n) for n in range(start, stop + 1, step)]
                 else:
                     items = []
                     for item in header[1:]:
@@ -618,10 +704,16 @@ class Machine:
             elif head == 'set':
                 values = split_values(arguments(statement))
                 name = values[0]
-                rest = [element for token in values[1:]
-                        for element in self.elements(token)]
-                if name.startswith('CACHE'):
-                    pass
+                tail = values[1:]
+                if 'CACHE' in tail:
+                    # set(<var> <value>... CACHE <type> <doc> [FORCE]): the
+                    # value part is what is set; the cache metadata is not
+                    tail = tail[:tail.index('CACHE')]
+                if 'PARENT_SCOPE' in tail:
+                    # the parent scope of a directory-level file (or of an
+                    # included one) is the same scope this walk holds
+                    tail = [token for token in tail if token != 'PARENT_SCOPE']
+                rest = [element for token in tail for element in self.elements(token)]
                 self.vars[name] = rest
                 if name == '_pf_source_bound_private_rows':
                     self.globals[name] = rest
@@ -653,19 +745,58 @@ class Machine:
                     source = self.vars.get(values[1], [])
                     self.vars[values[3]] = [source[int(self.substitute(values[2]))]]
                 elif operation == 'POP_FRONT':
-                    current = self.vars.get(values[1], [])
-                    if current:
-                        self.vars.setdefault(values[2], []).append(current[0])
-                        self.vars[values[1]] = current[1:]
+                    # CMake SETS each out-var (it does not append), unsetting
+                    # a surplus one; with no out-var exactly one element is
+                    # removed. The popped sequence is recorded either way.
+                    target = values[1]
+                    current = list(self.vars.get(target, []))
+                    out_vars = values[2:]
+                    popped = current[:len(out_vars) if out_vars else 1]
+                    self.popped.setdefault(target, []).extend(popped)
+                    for position, out in enumerate(out_vars):
+                        if position < len(popped):
+                            self.vars[out] = [popped[position]]
+                        else:
+                            self.vars.pop(out, None)
+                    self.vars[target] = current[len(popped):]
                 elif operation in ('SORT', 'REVERSE'):
-                    pass
+                    target = values[1]
+                    current = list(self.vars.get(target, []))
+                    if operation == 'REVERSE':
+                        self.vars[target] = list(reversed(current))
+                    else:
+                        # lexicographic by default; the ORDER option is
+                        # modelled, COMPARE and anything else is refused
+                        order = 'ASCENDING'
+                        position = 2
+                        while position < len(values):
+                            if (values[position] == 'ORDER'
+                                    and position + 1 < len(values)):
+                                order = values[position + 1]
+                                position += 2
+                                continue
+                            raise Unreadable(
+                                f'{self.path}:{line}: list(SORT '
+                                f'{values[position]!r}) is not modelled')
+                        if order not in ('ASCENDING', 'DESCENDING'):
+                            raise Unreadable(
+                                f'{self.path}:{line}: list(SORT ORDER {order}) '
+                                f'is not modelled')
+                        self.vars[target] = sorted(
+                            current, reverse=order == 'DESCENDING')
                 else:
                     raise Unreadable(f'{self.path}:{line}: unmodelled list() {operation}')
                 index += 1
             elif head == 'math':
                 values = split_values(arguments(statement))
                 expression = self.substitute(' '.join(values[2:]))
-                self.vars[values[1]] = [str(self._math(expression, line))]
+                try:
+                    result = self._math(expression, line)
+                except (ValueError, IndexError):
+                    raise Unreadable(
+                        f'{self.path}:{line}: math(EXPR) in a form this sweep '
+                        f'cannot read: {expression!r}')
+                self.vars[values[1]] = [str(result)]
                 index += 1
             elif head == 'string':
                 head_tokens = split_values(arguments(statement))
@@ -740,7 +871,14 @@ class Machine:
                 included = Path(target)
                 if not self.world.exists(included):
                     raise Unreadable(f'{self.path}:{line}: include({target}) missing')
-                sub = Machine(included, self.world, self.profile, self.root)
+                # include() runs the file in the including scope: the shared
+                # containers carry the walk's state, `source_dir` stays the
+                # including file's (only CMAKE_CURRENT_LIST_DIR changes, which
+                # this evaluator does not model), and the record override rides
+                # along -- an included file must read the same record the
+                # including walk was given.
+                sub = Machine(included, self.world, self.profile, self.root,
+                              record=self.record, source_dir=self.source_dir)
                 sub.vars = self.vars
                 sub.globals = self.globals
                 sub.targets = self.targets
@@ -770,16 +908,19 @@ class Machine:
                 # The ONE probed command the tree runs: the compiler asked for
                 # its own sanitizer runtime file name. This sweep runs no
                 # command -- it is text over a tree -- so the probe is BOUND
-                # with a stated value: the file name the compiler prints for a
-                # runtime it cannot find (the argument echoed back) and result
-                # 0. The binding is sound for this sweep because neither
-                # variable can reach a registration condition: the site's only
-                # uses are a message(FATAL_ERROR) and a
-                # set_tests_properties ENVIRONMENT. (A real configure on a
-                # tree whose compiler lacks that runtime dies on the
-                # FATAL_ERROR; a row-level sweep does not model a failed
-                # configure, and the tree's CI jobs have the runtime.) Any
-                # other execute_process is a construct this sweep cannot bind.
+                # with a stated value under which the guard it feeds HOLDS, the
+                # state a real configure runs under when the compiler ships the
+                # runtime: RESULT_VARIABLE 0 and an existing path in the
+                # OUTPUT_VARIABLE. The sweep cannot know the host's runtime
+                # path, so it binds the output to the runner listfile of the
+                # world -- a file the world has -- which keeps the site's
+                # `NOT EXISTS` arm (and with it the message(FATAL_ERROR) that
+                # would stop a real configure) from firing. Neither variable
+                # can reach a registration condition: the site's uses are that
+                # FATAL_ERROR and a set_tests_properties ENVIRONMENT. Any other
+                # execute_process, and any probe shape other than the
+                # compiler's -print-file-name, is a construct this sweep cannot
+                # bind.
                 values = split_values(arguments(statement))
                 command = []
                 for position, value in enumerate(values):
@@ -798,11 +939,58 @@ class Machine:
                         f'{self.path}:{line}: execute_process in a shape this '
                         f'sweep does not bind (only the compiler\'s '
                         f'-print-file-name probe is, with a stated value)')
+                bound_runtime = self.world.root / 'runner' / 'CMakeLists.txt'
                 for position, value in enumerate(values):
                     if value == 'OUTPUT_VARIABLE' and position + 1 < len(values):
-                        self.vars[values[position + 1]] = [probed]
+                        self.vars[values[position + 1]] = [str(bound_runtime)]
                     elif value == 'RESULT_VARIABLE' and position + 1 < len(values):
                         self.vars[values[position + 1]] = ['0']
+                index += 1
+            elif head == 'message':
+                # message(STATUS ...)/plain forms print and continue; a reached
+                # FATAL_ERROR or SEND_ERROR stops a real configure, and this
+                # sweep does not model a stopped configure -- so reaching one
+                # is exit 2 with the file and line, never a quiet line.
+                values = split_values(arguments(statement))
+                mode = values[0].strip('"') if values else ''
+                if mode in ('FATAL_ERROR', 'SEND_ERROR'):
+                    raise Unreadable(
+                        f'{self.path}:{line}: message({mode}) was reached: a '
+                        f'real configure stops here and this sweep does not '
+                        f'model a stopped configure')
+                index += 1
+            elif head == 'unset':
+                values = split_values(arguments(statement))
+                for token in values:
+                    if token == 'PARENT_SCOPE':
+                        continue
+                    if token.startswith('CACHE{'):
+                        raise Unreadable(
+                            f'{self.path}:{line}: unset(CACHE{{...}}) is not '
+                            f'modelled')
+                    self.vars.pop(token.strip('"'), None)
+                index += 1
+            elif head == 'return':
+                # At function/macro scope the bodies are skipped as text, so
+                # a reached return() is at file scope: CMake stops processing
+                # the file there and this sweep does not model a stopped walk.
+                raise Unreadable(
+                    f'{self.path}:{line}: return() at file scope stops a real '
+                    f'configure and this sweep does not model that')
+            elif head == 'option':
+                values = split_values(arguments(statement))
+                if not values:
+                    raise Unreadable(f'{self.path}:{line}: option() without a name')
+                name = values[0]
+                initial = 'OFF'
+                if len(values) >= 3:
+                    initial = values[2].strip('"')
+                elif len(values) == 2 and not values[1].startswith('"'):
+                    initial = values[1]
+                # option() defines the variable only when it is not defined
+                # already (a -D cache entry wins), so a profile value stays
+                if self.value(name) is None:
+                    self.vars[name] = [initial]
                 index += 1
             elif head in ('get_target_property',):
                 values = split_values(arguments(statement))
@@ -812,9 +1000,9 @@ class Machine:
                           'target_compile_definitions', 'target_compile_options',
                           'target_link_libraries', 'target_link_options',
                           'set_target_properties', 'target_include_directories',
-                          'message', 'unset', 'find_package', 'add_custom_command',
+                          'find_package', 'add_custom_command',
                           'add_custom_target', 'install', 'configure_file',
-                          'option', 'return', 'add_dependencies',
+                          'add_dependencies',
                           'target_sources', 'set_property', 'get_property',
                           'enable_testing', 'add_subdirectory',
                           'target_compile_features', 'add_compile_definitions',
@@ -861,9 +1049,14 @@ class Machine:
             rest = self.substitute(tokens[2]).strip('"')
             self.vars[name] = subject.replace(tokens[1].strip('"'), rest).split(';')
         elif operation == 'JOIN':
-            name = tokens[1]
-            self.vars[name] = [tokens[2].strip('"').join(
-                self.vars.get(tokens[3], []))]
+            # string(JOIN <glue> <out-var> <input>...): the glue is first and
+            # the output variable second (the old order named the glue as the
+            # output and read a variable where the inputs are)
+            glue = self.substitute(tokens[1]).strip('"')
+            name = tokens[2]
+            values = [element for token in tokens[3:]
+                      for element in self.elements(token)]
+            self.vars[name] = [glue.join(values)]
         elif operation == 'LENGTH':
             self.vars[tokens[2]] = [str(len(self.substitute(tokens[1])))]
         else:
@@ -873,18 +1066,7 @@ class Machine:
         tokens = split_values(arguments(statement))
         operation = tokens[0]
         if operation in ('GLOB', 'GLOB_RECURSE'):
-            name = tokens[1]
-            if name == 'CONFIGURE_DEPENDS':
-                name = tokens[2]
-            pattern = tokens[-1].strip('"')
-            if pattern.startswith('${PROJECT_SOURCE_DIR}/'):
-                pattern = pattern.replace('${PROJECT_SOURCE_DIR}/', '')
-            elif pattern.startswith('${CMAKE_CURRENT_SOURCE_DIR}/'):
-                pattern = pattern.replace('${CMAKE_CURRENT_SOURCE_DIR}/',
-                                          self.rel_dir + '/')
-            matches = [str(p.relative_to(self.world.root))
-                       for p in self.world.glob(pattern)]
-            self.vars[name] = sorted(matches)
+            self._glob(operation, tokens, line)
         elif operation == 'STRINGS':
             source = Path(self.substitute(tokens[1]))
             name = tokens[2]
@@ -902,10 +1084,129 @@ class Machine:
         else:
             raise Unreadable(f'{self.path}:{line}: unmodelled file() {operation}')
 
+    def _glob(self, operation: str, tokens: list[str], line: int) -> None:
+        """file(GLOB/GLOB_RECURSE), CMake's own shape (file(1) docs).
+
+        Every globbing expression is matched -- the old model read only the
+        last one. A GLOB_RECURSE expression recurses into the subdirectories
+        of the directory it names (CMP0009 NEW: a symlinked subdirectory is
+        listed but not traversed, and FOLLOW_SYMLINKS -- which would traverse
+        it -- is refused). LIST_DIRECTORIES and RELATIVE are modelled; a
+        GLOB lists directories unless told otherwise while a GLOB_RECURSE
+        omits them unless told otherwise; CONFIGURE_DEPENDS only affects
+        build-system regeneration. The result is ordered lexicographically,
+        as CMake documents for both operations."""
+        name, position = None, 1
+        list_directories = operation == 'GLOB'
+        relative = None
+        while position < len(tokens):
+            token = tokens[position]
+            if token == 'CONFIGURE_DEPENDS':
+                position += 1
+            elif token == 'LIST_DIRECTORIES':
+                if position + 1 >= len(tokens):
+                    raise Unreadable(f'{self.path}:{line}: file({operation}) '
+                                     f'LIST_DIRECTORIES without a value')
+                value = tokens[position + 1].strip('"').lower()
+                if value not in ('true', 'false'):
+                    raise Unreadable(f'{self.path}:{line}: file({operation}) '
+                                     f'LIST_DIRECTORIES {tokens[position + 1]}: '
+                                     f'expected true or false')
+                list_directories = value == 'true'
+                position += 2
+            elif token == 'RELATIVE':
+                if position + 1 >= len(tokens):
+                    raise Unreadable(f'{self.path}:{line}: file({operation}) '
+                                     f'RELATIVE without a path')
+                relative = tokens[position + 1]
+                position += 2
+            elif token == 'FOLLOW_SYMLINKS':
+                raise Unreadable(
+                    f'{self.path}:{line}: file({operation}) FOLLOW_SYMLINKS is '
+                    f'not modelled: it changes which subdirectories a '
+                    f'recursive glob traverses')
+            elif name is None:
+                name = token
+                position += 1
+            else:
+                break
+        patterns = tokens[position:]
+        if name is None or not patterns:
+            raise Unreadable(f'{self.path}:{line}: file({operation}) without a '
+                             f'variable and at least one globbing expression')
+        matches: list[str] = []
+        for pattern_token in patterns:
+            pattern = self.substitute(pattern_token).strip('"')
+            matches.extend(self._glob_matches(pattern, operation == 'GLOB_RECURSE',
+                                              line))
+        if not list_directories:
+            matches = [m for m in matches
+                       if (self.world.root / m).is_file()]
+        if relative is not None:
+            base = self._tree_relative(self.substitute(relative).strip('"'),
+                                       line).rstrip('/')
+            matches = [m[len(base) + 1:] if base and m.startswith(base + '/')
+                       else m for m in matches]
+        self.vars[name] = sorted(matches)
+
+    def _glob_matches(self, pattern: str, recurse: bool, line: int) -> list[str]:
+        """One globbing expression, tree-relative, over the world's files.
+
+        A relative expression is relative to CMAKE_CURRENT_SOURCE_DIR; an
+        expression whose directory part carries a wildcard is a construct this
+        sweep does not model (none in the tree). Returns root-relative paths
+        with the world's removed paths filtered, like every other read."""
+        if not pattern:
+            raise Unreadable(f'{self.path}:{line}: an empty globbing expression')
+        head, _, tail = pattern.rpartition('/')
+        base = head or '.'
+        if not os.path.isabs(base):
+            base = os.path.join(str(self.source_dir), base)
+        base = os.path.normpath(base)
+        for component in Path(base).parts:
+            if any(ch in component for ch in '*?['):
+                raise Unreadable(
+                    f'{self.path}:{line}: the globbing expression {pattern!r} '
+                    f'has a wildcard in its directory part, which this sweep '
+                    f'does not model')
+        rel = self.world.relative(base)
+        if rel is None:
+            raise Unreadable(f'{self.path}:{line}: the globbing expression '
+                             f'{pattern!r} leaves the tree')
+        base_path = self.world.root / rel
+        if not base_path.is_dir():
+            return []
+        found = []
+        if recurse:
+            for dirpath, dirnames, filenames in os.walk(base_path,
+                                                        followlinks=False):
+                for entry in dirnames + filenames:
+                    if fnmatch.fnmatchcase(entry, tail):
+                        found.append(Path(dirpath) / entry)
+        else:
+            for entry in sorted(os.listdir(base_path)):
+                if fnmatch.fnmatchcase(entry, tail):
+                    found.append(base_path / entry)
+        out = []
+        for match in found:
+            matchrel = self.world.relative(match)
+            if matchrel is not None and not self.world.removed(match):
+                out.append(matchrel)
+        return out
+
+    def _tree_relative(self, path: str, line: int) -> str:
+        """A path argument's tree-relative form, else a refused construct."""
+        if not os.path.isabs(path):
+            path = os.path.join(str(self.source_dir), path)
+        rel = self.world.relative(os.path.normpath(path))
+        if rel is None:
+            raise Unreadable(f'{self.path}:{line}: {path} leaves the tree')
+        return rel
+
     @property
     def rel_dir(self) -> str:
         try:
-            return str(self.path.parent.relative_to(self.root))
+            return str(self.source_dir.relative_to(self.root))
         except ValueError:
             return '.'
 
@@ -939,6 +1240,8 @@ def report_worlds(root: Path, rel: Path, profile_name: str, absent, overlay) -> 
     only_overlay = sorted(overlay.rows - absent.rows)
     print(f'  {rel} [{profile_name}] absent {len(absent.rows)} rows, '
           f'overlay {len(overlay.rows)} rows')
+    TOTALS['absent_only'] += len(only_absent)
+    TOTALS['overlay_only'] += len(only_overlay)
     print(f'  {rel} [{profile_name}] absent-only names: {len(only_absent)}')
     for name in only_absent:
         fail(f'{rel} [{profile_name}] registers {name} only with the fixtures absent')
@@ -979,10 +1282,10 @@ def derive_record_need(root: Path, absent_world: World, overlay_world: World,
     whose overlay walk reaches the source layer at all -- recording a row
     that does not reach would drop a row the kernel profile must build."""
     overlay = Machine(root / 'tests' / 'CMakeLists.txt', overlay_world,
-                      PROFILES['kernel-live'], root, record=[])
+                      PROFILES['kernel'], root, record=[])
     overlay.run()
     without = Machine(root / 'tests' / 'CMakeLists.txt', absent_world,
-                      PROFILES['kernel-live'], root, record=[])
+                      PROFILES['kernel'], root, record=[])
     without.run()
     # The twin calls execute in the world that builds the source layer (there
     # the kernel-absent list is empty and every EXISTS guard with the overlay
@@ -1006,10 +1309,12 @@ def derive_record_need(root: Path, absent_world: World, overlay_world: World,
     return overlay.rows, without.rows, reaching, twins
 
 
-def recorded_refusal_shards(root: Path, removed_dirs, removed_files) -> list[str]:
-    """The recorded refusal-shard list, read from the absent world's own walk
-    of runner/CMakeLists.txt: the branch that registers the placeholders is
-    the one that sets the record."""
+def recorded_refusal_shards(root: Path, removed_dirs, removed_files):
+    """The recorded refusal-shard rows and their first-library markers, read
+    from the absent world's own walk of runner/CMakeLists.txt: the branch that
+    registers the placeholders is the one that sets both records, and the
+    marker sequence is the one POP_FRONT consumed, one per row, in the row
+    list's order -- the positional pairing the row's SKIP literal relies on."""
     machine = registered(root / 'runner/CMakeLists.txt',
                          World(root, removed_dirs, removed_files, virtual=True),
                          PROFILES['release'], root)
@@ -1017,10 +1322,34 @@ def recorded_refusal_shards(root: Path, removed_dirs, removed_files) -> list[str
     if recorded is None:
         raise Unreadable(f'runner/CMakeLists.txt: {REFUSAL_SHARD_RECORD} was '
                          f'never set on the fixture-less branch')
-    return list(recorded)
+    markers = machine.popped.get(REFUSAL_SHARD_MARKERS)
+    if markers is None:
+        raise Unreadable(f'runner/CMakeLists.txt: {REFUSAL_SHARD_MARKERS} was '
+                         f'never popped on the fixture-less branch, so the '
+                         f'shard rows have no first-library markers')
+    return list(recorded), list(markers)
 
 
-def check_recorded_refusal_shards(recorded: list[str], pinned: list[str]) -> None:
+def derived_refusal_shard_markers(machine: Machine) -> dict[str, str]:
+    """The first library of every shard row the present branch's split really
+    produces: each family's library list, cut into the same 8-library batches
+    the while() registers, each batch named by its family and shard number.
+    The marker is the library's case name -- the left side of its `case=`."""
+    markers = {}
+    for family in ('requests', 'pooc'):
+        libraries = machine.vars.get(f'_pf_confirmed_refusal_{family}')
+        if libraries is None:
+            raise Unreadable(f'runner/CMakeLists.txt: '
+                             f'_pf_confirmed_refusal_{family} was never set on '
+                             f'the present branch')
+        for offset in range(0, len(libraries), 8):
+            row = f'{REFUSAL_SHARD_PREFIX}{family}_{offset // 8 + 1}'
+            markers[row] = libraries[offset].split('=', 1)[0]
+    return markers
+
+
+def check_recorded_refusal_shards(recorded: list[str], markers: list[str],
+                                  pinned: list[str]) -> None:
     unsorted = recorded != sorted(recorded)
     if unsorted:
         fail('the recorded refusal-shard list is not sorted')
@@ -1032,9 +1361,20 @@ def check_recorded_refusal_shards(recorded: list[str], pinned: list[str]) -> Non
     for name in unpinned:
         fail(f'the recorded refusal-shard row {name} is not a pinned row '
              f'({PIN_ROWS})')
+    marker_duplicates = sorted({m for m in markers if markers.count(m) > 1})
+    empty = [m for m in markers if not m]
+    for name in marker_duplicates:
+        fail(f'the recorded refusal-shard marker list names {name} twice')
+    if len(markers) != len(recorded):
+        fail(f'the recorded refusal-shard marker list has {len(markers)} '
+             f'entries for {len(recorded)} rows: the positional pairing is '
+             f'incomplete')
     print(f'the recorded refusal-shard rows: {len(recorded)}; not a pinned row: '
           f'{len(unpinned)}; unsorted: {1 if unsorted else 0}; '
           f'duplicated: {len(duplicates)}')
+    print(f'the recorded refusal-shard first-library markers: {len(markers)} '
+          f'for {len(recorded)} rows; duplicated: {len(marker_duplicates)}; '
+          f'empty: {len(empty)}')
 
 
 def absent_half(root: Path, removed_dirs, removed_files, pin_rows, profiles, rel_files) -> None:
@@ -1049,23 +1389,31 @@ def absent_half(root: Path, removed_dirs, removed_files, pin_rows, profiles, rel
         PROFILES['release'], root))
     check_recorded_rows(root, recorded, pin_rows)
     print(f'  (the recorded list was read from {CMAKE_FILES[0]}, release profile)')
-    check_recorded_refusal_shards(
-        recorded_refusal_shards(root, removed_dirs, removed_files), pin_rows)
+    shard_rows, shard_markers = recorded_refusal_shards(
+        root, removed_dirs, removed_files)
+    check_recorded_refusal_shards(shard_rows, shard_markers, pin_rows)
     print(f'  (the recorded refusal-shard list was read from '
           f'{CMAKE_FILES[1]}, release profile, fixture-less branch)')
 
 
 def overlay_half(root: Path, removed_dirs, removed_files, pin_rows, profiles,
-                 rel_files) -> None:
+                 rel_files) -> bool:
+    """The overlay half; True when it ran, False when the overlay is absent.
+
+    A missing overlay with PINEFORGE_PRIVATE_FIXTURES set is a failure: the
+    environment says the fixtures are in the tree, so a half that cannot run
+    is a broken input, never a skip (the ctest row carries no skip code)."""
     marker = os.environ.get('PINEFORGE_PRIVATE_FIXTURES', '').strip()
     present = (root / OVERLAY_MARKER).exists()
-    if not marker and not present:
-        print(SKIP_LITERAL + OVERLAY_MARKER)
-        raise SystemExit(77)
-    if marker and not present:
-        fail(f'PINEFORGE_PRIVATE_FIXTURES is set but {OVERLAY_MARKER} is not in '
-             f'the tree: the overlay did not reach it')
-        return
+    if not present:
+        if marker:
+            fail(f'PINEFORGE_PRIVATE_FIXTURES is set but {OVERLAY_MARKER} is '
+                 f'not in the tree: an overlay run whose overlay half cannot '
+                 f'run is a failure, never a skip')
+        else:
+            print(f'overlay half not run: private fixtures not present: '
+                  f'{OVERLAY_MARKER}')
+        return False
     for rel in rel_files:
         for profile_name in profiles:
             absent, overlay = absent_and_overlay(
@@ -1110,12 +1458,14 @@ def overlay_half(root: Path, removed_dirs, removed_files, pin_rows, profiles,
     # 8-library batches) is run for real and its shard rows must be exactly
     # the recorded ones. Comparing the list with itself is impossible here --
     # the derived side is a registration the walk performed, not a literal.
-    recorded_shards = recorded_refusal_shards(root, removed_dirs, removed_files)
+    recorded_shards, recorded_markers = recorded_refusal_shards(
+        root, removed_dirs, removed_files)
+    overlay_runner = registered(root / 'runner/CMakeLists.txt', overlay_world,
+                                PROFILES['release'], root)
     derived_shards = sorted(
-        name for name in registered(root / 'runner/CMakeLists.txt',
-                                    overlay_world, PROFILES['release'],
-                                    root).rows
+        name for name in overlay_runner.rows
         if name.startswith(REFUSAL_SHARD_PREFIX))
+    derived_markers = derived_refusal_shard_markers(overlay_runner)
     recorded_only = sorted(set(recorded_shards) - set(derived_shards))
     derived_only = sorted(set(derived_shards) - set(recorded_shards))
     print(f'  refusal-shard drift: recorded {len(recorded_shards)} rows; the '
@@ -1129,14 +1479,28 @@ def overlay_half(root: Path, removed_dirs, removed_files, pin_rows, profiles,
              f'{name}, which the recorded list does not name')
     print(f'  refusal-shard drift: recorded-only: {len(recorded_only)}, '
           f'derived-only: {len(derived_only)}')
+    # Each marker (the first library of its shard) is paired with its row by
+    # POSITION, so a mis-paired marker still names a removed file and only
+    # this comparison can catch it: the derived side is the real split's own
+    # first library for that row.
+    mismatched = [(row, marker, derived_markers.get(row))
+                  for row, marker in zip(recorded_shards, recorded_markers)
+                  if derived_markers.get(row) != marker]
+    print(f'  refusal-shard drift: marker pairs checked: '
+          f'{len(recorded_shards)}; mismatched: {len(mismatched)}')
+    for row, marker, expected in mismatched:
+        fail(f'the recorded first-library marker of {row} is {marker}, but the '
+             f'split over the live tree puts {expected} first in that shard')
+    return True
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--root', type=Path, default=REPO)
     parser.add_argument('--both', action='store_true',
-                        help='the ctest row: the absent half, then the overlay '
-                             'half (which skips, exit 77, without the overlay)')
+                        help='the ctest row: the absent half always runs and '
+                             'decides the exit code, then the overlay half '
+                             'runs when the tree holds the overlay')
     parser.add_argument('--overlay', action='store_true',
                         help='the overlay half: both worlds and the drift guard')
     parser.add_argument('--profile', action='append', default=None,
@@ -1146,7 +1510,7 @@ def main() -> int:
     root = args.root.resolve()
     profiles = args.profile or list(PROFILE_NAMES)
     rel_files = [Path(rel) for rel in (args.cmakelists or CMAKE_FILES)]
-    skip = False
+    overlay_ran = False
     try:
         try:
             removed_dirs, removed_files = load_removed(root)
@@ -1160,13 +1524,8 @@ def main() -> int:
                 for message in FAILURES:
                     print(f'check_two_world_registration: {message}')
                 return 1
-            try:
-                overlay_half(root, removed_dirs, removed_files, pin_rows,
-                             profiles, rel_files)
-            except SystemExit as end:
-                if end.code != 77:
-                    raise
-                skip = True
+            overlay_ran = overlay_half(root, removed_dirs, removed_files,
+                                       pin_rows, profiles, rel_files)
         else:
             absent_half(root, removed_dirs, removed_files, pin_rows, profiles,
                         rel_files)
@@ -1177,15 +1536,13 @@ def main() -> int:
         print(f'check_two_world_registration: {message}')
     if FAILURES:
         return 1
-    if (args.overlay or args.both) and not skip:
-        print('absent-only names: 0')
-        print('overlay-only names: 0')
-    elif not skip:
+    if args.overlay or args.both:
+        if overlay_ran:
+            print(f'absent-only names: {TOTALS["absent_only"]}')
+            print(f'overlay-only names: {TOTALS["overlay_only"]}')
+    else:
         print('two-world registration: the absent world evaluated, the recorded '
               'list is pinned, sorted and duplicate-free')
-    if skip:
-        print(f'the overlay half skipped: {OVERLAY_MARKER} is not in the tree')
-        return 77
     return 0
 
 

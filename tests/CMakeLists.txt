@@ -3645,9 +3645,9 @@ list(APPEND _pf_private_fixture_rows
 # no target, no row, no placeholder, no label -- which is main's own
 # kernel-only behaviour; every profile that builds the layer registers them
 # through their private-fixture guard as today. The list is computed from the
-# tree configure sees, so in the fixture-less tree a private row whose public
-# TU the removal took is not listed (it registers its placeholder as before),
-# while with the private fixtures overlaid its restored TU is read and listed.
+# tree configure sees: in the fixture-less tree a private row whose public TU
+# the removal took is listed through the recorded source-bound list that names
+# it, and with the private fixtures overlaid its restored TU is read and listed.
 set(_pf_kernel_absent_rows)
 if(NOT PINEFORGE_BUILD_SOURCE_LAYER)
     foreach(_pf_kernel_row IN LISTS _pf_private_fixture_rows)
@@ -4211,13 +4211,16 @@ set_tests_properties(test_private_fixture_reads_controls PROPERTIES
 add_test(NAME test_kernel_python_private_reads COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/check_kernel_python_private_reads.py)
 # The in-tree two-world registration invariant: the absent world is evaluated
-# on every tree (its evaluation, the recorded source-bound list against the
-# pin); the overlay half compares both worlds and runs the drift guard, and
-# skips with the pinned literal and 77 where the overlay is not present. It
-# names no private fixture in this file, so it is no pinned placeholder row.
+# on every tree (its evaluation, the recorded source-bound list and the
+# recorded refusal-shard list against the pin); the overlay half compares both
+# worlds and runs the drift guards, and where the overlay is not present it
+# prints `overlay half not run: private fixtures not present: <marker>` and
+# exits 0. The row never skips, so it carries no SKIP_RETURN_CODE; with
+# PINEFORGE_PRIVATE_FIXTURES set and the overlay absent it fails. It names no
+# private fixture in this file, so it is no pinned placeholder row.
 add_test(NAME test_two_world_registration COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/check_two_world_registration.py --both)
-set_tests_properties(test_two_world_registration PROPERTIES SKIP_RETURN_CODE 77)
+# (The row deliberately carries no set_tests_properties: no skip code.)
 add_test(NAME test_two_world_registration_controls COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/test_two_world_registration.py)
 set_tests_properties(test_two_world_registration_controls PROPERTIES

@@ -222,7 +222,8 @@ def check_blocks(lines: list[str], private: list[str], source: Path,
     pinned = set(private)
     bound: dict[str, str] = {}
     counts = {'guarded_blocks': 0, 'kernel_registered': [], 'release_registered': [],
-              'kernel_absent': [], 'missing_tu': []}
+              'kernel_absent': [], 'missing_tu': [], 'unmatched': [],
+              'blocks_without_predicate': 0, 'placeholder_without_predicate': 0}
     for i, else_at, end in blocks(lines, source):
         body = '\n'.join(lines[i:(else_at if else_at is not None else end)])
         absent_body = '\n'.join(lines[(else_at + 1):end]) if else_at is not None else ''
@@ -235,10 +236,12 @@ def check_blocks(lines: list[str], private: list[str], source: Path,
         guard_line = lines[i]
         wants = ' AND '.join(f'NOT {row} IN_LIST _pf_kernel_absent_rows' for row in owners)
         if wants not in guard_line:
+            counts['blocks_without_predicate'] += 1
             fail(source, i + 1, f'the block registers {", ".join(owners)} without reading '
                                 f'_pf_kernel_absent_rows: a source-bound row would build '
                                 f'against the kernel-only archive')
         elif else_at is None or f'elseif({wants})' not in lines[else_at]:
+            counts['placeholder_without_predicate'] += 1
             fail(source, (else_at or i) + 1,
                  f'the placeholder branch does not read _pf_kernel_absent_rows for '
                  f'{", ".join(owners)}: the row would keep a skip row in a profile that '
@@ -263,6 +266,7 @@ def check_blocks(lines: list[str], private: list[str], source: Path,
     # Every pinned private row must be registered by one of those blocks: a
     # bare registration would build against the kernel-only archive.
     unmatched = sorted(pinned - set(counts['release_registered']))
+    counts['unmatched'] = unmatched
     for row in unmatched:
         fail(source, 0, f'the private-row pin names {row}, and no guarded '
                         f'private block registers it: a bare registration '
@@ -341,12 +345,19 @@ def main() -> int:
           f'{len(counts["kernel_registered"])}, and '
           f'{len(counts["missing_tu"])} whose TU the tree does not have '
           f'(counted in neither profile)')
-    print(f'pinned rows no guarded private block registers: 0')
+    print(f'pinned rows no guarded private block registers: '
+          f'{len(counts["unmatched"])}')
     for row in sorted(counts['missing_tu']):
         print(f'  TU the tree does not have: {row} (not counted in either profile)')
     print(f'preparer/row pairs checked: {pairs}')
-    print('kernel targets linking without their prerequisites: 0')
-    print('blocks not reading the predicate list: 0')
+    # Both closing counts are COMPUTED from their own fail sites: a guard line
+    # that does not name the predicate list (blocks not reading it), and a
+    # placeholder branch that does not (the rows that would keep a skip row in
+    # a profile that cannot link them).
+    print(f'kernel targets linking without their prerequisites: '
+          f'{counts["placeholder_without_predicate"]}')
+    print(f'blocks not reading the predicate list: '
+          f'{counts["blocks_without_predicate"]}')
     return 0
 
 
