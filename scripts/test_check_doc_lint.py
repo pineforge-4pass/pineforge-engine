@@ -105,8 +105,14 @@ C_ABI_RUNTIME = """EXPECTED_RUNTIME = frozenset({
     "pf_abi_version",
 })
 """
-CI_VERIFY = """KERNEL_MIN_TESTS = 202
-RELEASE_MIN_TESTS = 572
+# The floors' one source is the table; KERNEL_MIN_TESTS / RELEASE_MIN_TESTS
+# are derived aliases (the doc-lint reads the table).
+CI_VERIFY = """PRIVATE_FIXTURE_PROFILE_FLOORS = {
+    'release': (572, 6),
+    'kernel': (202, 5),
+}
+KERNEL_MIN_TESTS = PRIVATE_FIXTURE_PROFILE_FLOORS['kernel'][0]
+RELEASE_MIN_TESTS = PRIVATE_FIXTURE_PROFILE_FLOORS['release'][0]
 """
 INDEPENDENCE = """NATIVE_EXAMPLES = (
     ("hello-kernel", "examples/native/hello_kernel.cpp"),
