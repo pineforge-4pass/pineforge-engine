@@ -4061,6 +4061,11 @@ add_executable(test_native_c_api
     test_native_c_api.c)
 target_link_libraries(test_native_c_api PRIVATE pineforge)
 target_compile_options(test_native_c_api PRIVATE -UNDEBUG -ffp-contract=off)
+# The row has no private input, so its coverage flags sit outside the frozen-
+# header guard below: a fixture-absent coverage build instruments it too.
+if(PINEFORGE_ENABLE_COVERAGE)
+    target_compile_options(test_native_c_api PRIVATE ${_pf_cov_test_flags})
+endif()
 
 # The frozen v1 header closure, compiled against the current runtime.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/native_c_api/v1/native_c_api.h")
@@ -4069,7 +4074,6 @@ target_link_libraries(test_native_c_api_frozen_header PRIVATE pineforge)
 target_compile_options(test_native_c_api_frozen_header PRIVATE -UNDEBUG -ffp-contract=off)
 
 if(PINEFORGE_ENABLE_COVERAGE)
-    target_compile_options(test_native_c_api PRIVATE ${_pf_cov_test_flags})
     target_compile_options(test_native_c_api_frozen_header PRIVATE ${_pf_cov_test_flags})
 endif()
 else()
