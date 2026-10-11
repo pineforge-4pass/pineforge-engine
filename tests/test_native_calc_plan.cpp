@@ -605,6 +605,141 @@ void test_timebase_without_time_boundaries() {
     expect_without_boundaries("no boundaries, an interval offered", offering);
 }
 
+// The two clocks of the frozen no-boundaries case, by name, for the raw-label
+// rulings below: one that only says the timebase is unbounded, as the consumer's
+// own does, and one that offers a minute interval besides, which the derivation
+// must not use.
+BarClock unbounded_clock() {
+    return [](std::int64_t, Slot& slot) {
+        slot.bounded = false;
+        return true;
+    };
+}
+
+BarClock unbounded_clock_offering() {
+    return [](std::int64_t at, Slot& slot) {
+        slot.end_ms = at + kMinute;
+        slot.next_open_ms = at + kMinute;
+        slot.tradable = true;
+        slot.bounded = false;
+        return true;
+    };
+}
+
+// Ruling 1 of the raw-label semantics (P-E, ENGINE-TOP 10-11 13:51): a Tick on a
+// timebase without time boundaries opens a lifecycle when none is open and plans
+// one POST provisional row at the event's own time when the cadence carries the
+// tick bit; the bar it leaves open takes the next calculation of its lifecycle.
+// The row follows A1 (a tick update ran after the payload: POST) and A2 (POST is
+// t(e)); no PRE row can exist on this timebase (c-boundary.md section 12 PXR-A2).
+void expect_raw_label_tick(const char* label, const BarClock& clock) {
+    // (a) Nothing open. By hand: the tick opens key 0 with no end (an unbounded
+    // lifecycle keeps none) and plans calculation 0 of it at t(e). The state the
+    // call produced has event 1 consumed (trace 2, previous event kT0), leaves
+    // the bar open under key 0 with no end and one calculation, cursor 0.
+    const Event tick{EventKind::Tick, kT0};
+    const Plan opened = plan_schedule(State{}, kBarCloseAndTick, &tick, 1, clock, true);
+    expect_rows(label, opened, {{0, 1, 0, 0, 0, kT0, kPost, kProvisional}});
+    CHECK(label, same_state(opened.after, make_state(2, true, kT0, true, 0, true, 0, 1, 0)));
+
+    // (b) A lifecycle already open under key 4 with two calculations. By hand:
+    // the tick plans the bar's third calculation (in_bar 2 before, 3 after) at
+    // t(e), keeps the key, and leaves the bar open with no end although the
+    // event's time lies two minutes past the opening: no boundary exists for
+    // time to close it at.
+    const State open = make_state(6, true, kT0, true, 4, true, 0, 2, 0);
+    const Event later{EventKind::Tick, kT0 + 2 * kMinute};
+    const Plan updated = plan_schedule(open, kBarCloseAndTick, &later, 1, clock, true);
+    expect_rows(label, updated, {{0, 6, 4, 2, 0, kT0 + 2 * kMinute, kPost, kProvisional}});
+    CHECK(label, same_state(updated.after,
+                            make_state(7, true, kT0 + 2 * kMinute, true, 4, true, 0, 3, 0)));
+}
+
+// Ruling 2 of the raw-label semantics (P-E, ENGINE-TOP 10-11 13:51): an
+// AdvanceTime on a timebase without time boundaries plans one POST provisional
+// row at the event's own time when a bar is open and the cadence carries the
+// advance-time bit, and closes NOTHING by time; with no bar open it plans
+// nothing.
+void expect_raw_label_advance(const char* label, const BarClock& clock) {
+    // (a) An open raw-label bar (key 3, no end, cursor 0 as ruling 5 keeps it)
+    // two minutes on, its third calculation due. By hand: one POST provisional
+    // point at t(e) with in_bar 2. The state the call produced has event 9
+    // consumed (trace 10, previous event t(e)), and the bar stays open under the
+    // same key with the same end, the same cursor and one more calculation.
+    const State open = make_state(9, true, kT0, true, 3, true, 0, 2, 0);
+    const Event advance{EventKind::AdvanceTime, kT0 + 2 * kMinute};
+    const Plan planned =
+        plan_schedule(open, kBarCloseOnly | kCadenceAdvanceTime, &advance, 1, clock, true);
+    expect_rows(label, planned, {{0, 9, 3, 2, 0, kT0 + 2 * kMinute, kPost, kProvisional}});
+    CHECK(label, same_state(planned.after,
+                            make_state(10, true, kT0 + 2 * kMinute, true, 3, true, 0, 3, 0)));
+
+    // (b) Closed at the advance (bar 5 closed, cursor 0). By hand: no bar to
+    // update, so no row at all; the event still takes its trace ordinal and
+    // records its time, and nothing else moves.
+    const State closed = make_state(7, true, kT0, true, 5, false, 0, 0, 0);
+    const Plan idle =
+        plan_schedule(closed, kBarCloseOnly | kCadenceAdvanceTime, &advance, 1, clock, true);
+    expect_rows(label, idle, {});
+    CHECK(label, same_state(idle.after,
+                            make_state(8, true, kT0 + 2 * kMinute, true, 5, false, 0, 0, 0)));
+}
+
+// Ruling 3 of the raw-label semantics (P-E, ENGINE-TOP 10-11 13:51): a quiet
+// interval on a timebase without time boundaries plans NOTHING. The walk over
+// the quiet intervals is asked once at the cursor, is told the timebase is
+// unbounded, and stops: no carry-forward row exists and the cursor does not
+// move. By hand: the state stands after a bar event at the epoch (key 2 closed,
+// no end, the cursor ruling 5 keeps at 0) and the advance comes four minutes
+// later, which a bounded clock asked from 0 turns into the carry-forward PRE
+// bars at +1, +2, +3 and +4 minutes.
+void expect_raw_label_quiet(const char* label, const BarClock& clock) {
+    int asked = 0;
+    const BarClock counted = [&asked, &clock](std::int64_t at, Slot& slot) {
+        ++asked;
+        return clock(at, slot);
+    };
+    const State closed = make_state(4, true, 0, true, 2, false, 0, 0, 0);
+    const Event advance{EventKind::AdvanceTime, 4 * kMinute};
+    const Plan quiet = plan_schedule(closed, kBarCloseOnly, &advance, 1, counted, true);
+    expect_rows(label, quiet, {});
+    CHECK(label, same_state(quiet.after,
+                            make_state(5, true, 4 * kMinute, true, 2, false, 0, 0, 0)));
+    CHECK(label, asked == 1);
+}
+
+// The three rulings as tests, each on both clocks of the frozen no-boundaries
+// case: the planned rows and the state must not depend on what the unbounded
+// clock offers besides saying it is unbounded. The bounded control inside the
+// quiet test is the same state and event on the minute grid, so the silence the
+// ruling pins is the timebase's, not the intervals'.
+void test_raw_label_tick() {
+    expect_raw_label_tick("raw-label tick, no interval offered", unbounded_clock());
+    expect_raw_label_tick("raw-label tick, an interval offered", unbounded_clock_offering());
+}
+
+void test_raw_label_advance() {
+    expect_raw_label_advance("raw-label advance, no interval offered", unbounded_clock());
+    expect_raw_label_advance("raw-label advance, an interval offered", unbounded_clock_offering());
+}
+
+void test_raw_label_quiet() {
+    const State closed = make_state(4, true, 0, true, 2, false, 0, 0, 0);
+    const Event advance{EventKind::AdvanceTime, 4 * kMinute};
+    const Plan bounded = plan_schedule(closed, kBarCloseOnly, &advance, 1, grid(kMinute), true);
+    expect_rows("quiet interval on the bounded grid", bounded,
+                {{0, 4, 3, 0, 0, kMinute, kPre, kConfirmed},
+                 {0, 4, 4, 0, 1, 2 * kMinute, kPre, kConfirmed},
+                 {0, 4, 5, 0, 2, 3 * kMinute, kPre, kConfirmed},
+                 {0, 4, 6, 0, 3, 4 * kMinute, kPre, kConfirmed}});
+    CHECK("quiet interval on the bounded grid",
+          same_state(bounded.after,
+                     make_state(5, true, 4 * kMinute, true, 6, false, 0, 0, 4 * kMinute)));
+    expect_raw_label_quiet("raw-label quiet interval, no interval offered", unbounded_clock());
+    expect_raw_label_quiet("raw-label quiet interval, an interval offered",
+                           unbounded_clock_offering());
+}
+
 }  // namespace
 
 int main() {
@@ -621,6 +756,9 @@ int main() {
     test_every_field_counts();
     test_walk_terminations();
     test_timebase_without_time_boundaries();
+    test_raw_label_tick();
+    test_raw_label_advance();
+    test_raw_label_quiet();
     std::printf("test_native_calc_plan: %d failure(s) in %d checks\n", failures, checks);
     return failures == 0 ? 0 : 1;
 }
