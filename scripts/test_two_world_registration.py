@@ -20,6 +20,8 @@ Controls:
   9. the tree as it is, overlay present -> 0, every profile 0/0, drift 0/0
  10. an execute_process the sweep does not bind -> 2, named
  11. a foreach over a parent list it cannot read -> 2, named
+ 12. the ctest row's TMPDIR shape (an untracked build dir inside the source
+     tree) is a legal write area; tracked paths stay refused -> no raise / raise
 """
 from __future__ import annotations
 
@@ -30,6 +32,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parent.parent
 CHECK = REPO / 'scripts' / 'check_two_world_registration.py'
@@ -53,7 +56,8 @@ class TamperTree:
     would carry the write through into the worktree -- a first version of this
     class did exactly that -- so `_mirror` builds real directories for the two
     private trees and `_write_target` refuses any path that resolves into the
-    repository."""
+    repository's own (tracked) content; the one in-tree path it lets through
+    is the resolved TMPDIR's untracked build tree, the ctest row's shape."""
 
     def __init__(self, dest: Path):
         self.root = dest
@@ -92,11 +96,34 @@ class TamperTree:
 
     @staticmethod
     def _refuse_repo(path: Path) -> None:
+        """Refuse a write that could reach the worktree's own content.
+
+        Two shapes are legal: a path outside the worktree, and a path under
+        the resolved TMPDIR whose worktree-relative top-level name git does
+        NOT track. The second is the CI shape this class must survive: the
+        ctest row pins TMPDIR to ``<build>/tests/tmp`` (tests/CMakeLists.txt,
+        ENVIRONMENT) and the build dir sits inside the source tree, so the
+        temp area resolves into the worktree while being no part of it. Every
+        other path into the worktree is refused -- tracked content above all,
+        including a TMPDIR that points into a tracked top-level path.
+        """
         resolved = path.resolve()
-        if resolved == REPO or REPO in resolved.parents:
-            raise AssertionError(
-                f'{path} resolves into the worktree ({resolved}): refusing to '
-                f'write through a symlink')
+        if resolved != REPO and REPO not in resolved.parents:
+            return
+        tmpdir = _resolved_tmpdir()
+        if tmpdir is not None and (resolved == tmpdir or tmpdir in resolved.parents):
+            relative = resolved.relative_to(REPO)
+            if relative.parts and relative.parts[0] not in _tracked_top_level():
+                return
+            reason = (f'the TMPDIR area ({tmpdir}) lies inside the tracked '
+                      f'top-level path {relative.parts[0] + "/" if relative.parts else REPO}')
+        elif tmpdir is None:
+            reason = 'no TMPDIR is set, so it is no temporary area'
+        else:
+            reason = f'the TMPDIR area ({tmpdir}) is not one it lies under'
+        raise AssertionError(
+            f'{path} resolves into the worktree ({resolved}): refusing to '
+            f'write there because {reason}')
 
     def _write_target(self, rel: str) -> Path:
         path = self.root / rel
@@ -130,6 +157,36 @@ class TamperTree:
     def append(self, rel: str, text: str) -> None:
         with self._write_target(rel).open('a') as handle:
             handle.write(text)
+
+
+_TRACKED_TOP_LEVEL: 'frozenset[str] | None' = None
+
+
+def _tracked_top_level() -> frozenset[str]:
+    """The worktree's tracked top-level names, read from git once.
+
+    git is the only source of truth for what the worktree's own content is; a
+    path inside REPO whose first component is one of these names is tree
+    content (or a new file beside it), never a temporary area. When git cannot
+    answer at all, every entry of REPO is treated as tracked, so the guard
+    fails closed instead of opening the tree.
+    """
+    global _TRACKED_TOP_LEVEL
+    if _TRACKED_TOP_LEVEL is None:
+        result = subprocess.run(['git', '-C', str(REPO), 'ls-files', '-z'],
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            names = {entry.name for entry in REPO.iterdir()}
+        else:
+            names = {path.split('/', 1)[0]
+                     for path in result.stdout.split('\0') if path}
+        _TRACKED_TOP_LEVEL = frozenset(names)
+    return _TRACKED_TOP_LEVEL
+
+
+def _resolved_tmpdir() -> 'Path | None':
+    raw = os.environ.get('TMPDIR', '').strip()
+    return Path(raw).resolve() if raw else None
 
 
 def needs_overlay(test):
@@ -306,6 +363,33 @@ endforeach()
         result = self.run_check('--cmakelists', RUNNER, '--profile', 'release')
         self.assertEqual(2, result.returncode, result.stdout + result.stderr)
         self.assertIn('E2E_TWO_WORLD_PARENT_LIST', result.stdout + result.stderr)
+
+    # control 12: the ctest row's TMPDIR shape is a legal temp area while
+    # tracked content stays refused (N9). RED on the old guard: the first
+    # _refuse_repo call below raised, which is exactly how the row failed in
+    # every profile (the build dir sits inside the source tree in CI).
+    def test_the_ctest_tmpdir_shape_is_legal_and_tracked_content_is_refused(self):
+        with tempfile.TemporaryDirectory(prefix='build-e2e-two-world-',
+                                         dir=REPO) as build:
+            tmp = Path(build) / 'tests' / 'tmp'
+            tmp.mkdir(parents=True)
+            with mock.patch.dict(os.environ, {'TMPDIR': str(tmp)}):
+                # The exact shape: <build>/tests/tmp/e2e-two-world-*/tree/tests.
+                TamperTree._refuse_repo(tmp / 'e2e-two-world-abc' / 'tree' / 'tests')
+                TamperTree._refuse_repo(tmp)
+                for tracked in (REPO / 'tests', REPO / 'runner' / 'CMakeLists.txt',
+                                REPO / 'tests' / 'tmp', REPO / 'build-e2e-two-world-x'):
+                    with self.subTest(tracked=tracked.name), \
+                            self.assertRaises(AssertionError):
+                        TamperTree._refuse_repo(tracked)
+            # A TMPDIR pointed into a tracked path opens nothing there.
+            with mock.patch.dict(os.environ, {'TMPDIR': str(REPO / 'tests')}):
+                with self.assertRaises(AssertionError):
+                    TamperTree._refuse_repo(REPO / 'tests' / 'e2e-two-world-new')
+        # No TMPDIR: no path into the worktree is a temporary area.
+        with mock.patch.dict(os.environ, {'TMPDIR': ''}):
+            with self.assertRaises(AssertionError):
+                TamperTree._refuse_repo(REPO / 'build-e2e-two-world-x')
 
 
 if __name__ == '__main__':
