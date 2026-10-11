@@ -2977,12 +2977,12 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
    AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
     set(_pf_pcv_fixtures ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_close_fill_view)
     set(_pf_pcv_dir ${CMAKE_BINARY_DIR}/pooc_close_fill_view)
-    # tapes.txt is a distributed list, so it survives the private-fixture PR;
-    # a listed tape whose generated.cpp is not in the tree is skipped either
-    # way, and the module is registered only when every listed tape is present
-    # (the run reads the whole list, so a partial module would name tapes it
-    # cannot bind). The row follows the module: it exists whenever the module
-    # does, and this fixture is fully distributed, so it never has to skip.
+    # tapes.txt and every tape's generated.cpp are private fixtures (PR 1b
+    # removes this whole directory); a listed tape whose generated.cpp is not
+    # in the tree is skipped either way, and the module is registered only
+    # when every listed tape is present (the run reads the whole list, so a
+    # partial module would name tapes it cannot bind). The row follows the
+    # module, and the block below pins the row as a SKIP when no module is.
     set(_pf_pcv_emitted 0)
     set(_pf_pcv_listed 0)
     if(EXISTS "${_pf_pcv_fixtures}/tapes.txt")
@@ -3040,6 +3040,9 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
                 ${CMAKE_CURRENT_SOURCE_DIR}/test_pooc_close_fill_view_tapes.py
                 ${_pf_pcv_fixtures} $<TARGET_FILE:pooc_close_fill_view_tapes>
                 ${PROJECT_SOURCE_DIR}/scripts)
+    else()
+        add_test(NAME test_pooc_close_fill_view_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/pooc_close_fill_view/tapes.txt")
+        set_tests_properties(test_pooc_close_fill_view_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
     endif()
 endif()
 
@@ -3128,6 +3131,9 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
                 ${CMAKE_CURRENT_SOURCE_DIR}/test_script_rule_tapes.py
                 ${_pf_srt_fixtures} $<TARGET_FILE:script_rule_tapes>
                 ${PROJECT_SOURCE_DIR}/scripts --root pooc_close_bar_fills)
+    else()
+        add_test(NAME test_pooc_close_bar_fills_generated_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/pooc_close_bar_fills/tapes.txt")
+        set_tests_properties(test_pooc_close_bar_fills_generated_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
     endif()
 endif()
 

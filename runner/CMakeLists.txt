@@ -415,6 +415,47 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
             add_test(NAME confirmed_capabilities_${confirmed_control}_tf${_pf_confirmed_clock}_equivalence COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/confirmed_capabilities/generated/${confirmed_control}.cpp")
             set_tests_properties(confirmed_capabilities_${confirmed_control}_tf${_pf_confirmed_clock}_equivalence PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
         endforeach()
+        # The refusal shard rows above split the fixture-backed refusal
+        # libraries into 8-library batches: 3 request shards and 9 pooc shards
+        # over the pinned inventory (the 22 _pf_confirmed_cases plus the 67
+        # generated/refused_*.cpp files the fixture removal takes, partitioned
+        # by the same regex the present branch uses). The libraries cannot
+        # build here, so the shard names that inventory yields are pinned
+        # literally, once, each with the removed generated.cpp of its first
+        # library, so the row set does not shrink with the fixtures.
+        set(_pf_refusal_shard_rows
+            confirmed_capabilities_refusals_requests_1
+            confirmed_capabilities_refusals_requests_2
+            confirmed_capabilities_refusals_requests_3
+            confirmed_capabilities_refusals_pooc_1
+            confirmed_capabilities_refusals_pooc_2
+            confirmed_capabilities_refusals_pooc_3
+            confirmed_capabilities_refusals_pooc_4
+            confirmed_capabilities_refusals_pooc_5
+            confirmed_capabilities_refusals_pooc_6
+            confirmed_capabilities_refusals_pooc_7
+            confirmed_capabilities_refusals_pooc_8
+            confirmed_capabilities_refusals_pooc_9
+        )
+        set(_pf_refusal_shard_first_library
+            htf5_close
+            constant_daily
+            refused_clock_W
+            htf15_sma_pooc
+            pooc_close_short
+            refused_pooc_close_rule
+            refused_pooc_entry_alert
+            refused_pooc_fixed_limit
+            refused_pooc_mixed_market_bracket
+            refused_pooc_pending_bracket
+            refused_pooc_risk_direction
+            refused_pooc_varip
+        )
+        foreach(_pf_refusal_shard IN LISTS _pf_refusal_shard_rows)
+            list(POP_FRONT _pf_refusal_shard_first_library _pf_refusal_shard_marker)
+            add_test(NAME ${_pf_refusal_shard} COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/confirmed_capabilities/generated/${_pf_refusal_shard_marker}.cpp")
+            set_tests_properties(${_pf_refusal_shard} PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+        endforeach()
     endif()
 endif()
 

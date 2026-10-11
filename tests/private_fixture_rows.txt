@@ -2,7 +2,7 @@
 // when the private fixtures are absent (removed by the private-fixture PRs). The count also
 // covers the PR 1b batch, whose rows runner/CMakeLists.txt registers the same way.
 // manifest: l44/pr1-manifest.tsv sha256 9a2727d455c1b470d515665428e2c6e090a22ac07f87255d1ca9c20d5528bd62
-// rows: 354
+// rows: 368
 capabilities_equivalence_clock_flags
 capabilities_equivalence_close
 checked_settings_e2e
@@ -53,6 +53,18 @@ confirmed_capabilities_pooc_short_exit_refusal_e2e
 confirmed_capabilities_pooc_slipped_short_equivalence
 confirmed_capabilities_pooc_slipped_short_refusal_e2e
 confirmed_capabilities_receipt_versions
+confirmed_capabilities_refusals_pooc_1
+confirmed_capabilities_refusals_pooc_2
+confirmed_capabilities_refusals_pooc_3
+confirmed_capabilities_refusals_pooc_4
+confirmed_capabilities_refusals_pooc_5
+confirmed_capabilities_refusals_pooc_6
+confirmed_capabilities_refusals_pooc_7
+confirmed_capabilities_refusals_pooc_8
+confirmed_capabilities_refusals_pooc_9
+confirmed_capabilities_refusals_requests_1
+confirmed_capabilities_refusals_requests_2
+confirmed_capabilities_refusals_requests_3
 confirmed_capabilities_same_calc_bracket_e2e
 confirmed_capabilities_varip_e2e
 confirmed_capabilities_varip_equivalence
@@ -249,7 +261,9 @@ test_pine_dust_sweep_paired
 test_pine_time_day_stamp_grid
 test_point_order_open_call
 test_pooc_add_close_tape
+test_pooc_close_bar_fills_generated_tapes
 test_pooc_close_bar_fills_tapes
+test_pooc_close_fill_view_tapes
 test_pooc_fill_stamp_aggregation
 test_pooc_gap_stop_tapes
 test_pooc_limit_close_tapes
