@@ -288,7 +288,7 @@ def forward_refusals(fixtures, names, lib, strategy_class, load_bars):
 
 def main():
     fixtures, module, scripts = (Path(a).resolve() for a in sys.argv[1:4])
-    _pf_private_marker = fixtures / "callback_lifecycle" / "carried-static-stop/bars.csv"
+    _pf_private_marker = fixtures / "carried-static-stop/bars.csv"
     if not _pf_private_marker.exists():
         print("SKIP private fixtures not present: tests/fixtures/callback_lifecycle/carried-static-stop/bars.csv")
         raise SystemExit(77)

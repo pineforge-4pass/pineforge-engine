@@ -268,7 +268,7 @@ def forward_refusals(fixtures, names, lib, strategy_class, load_bars):
 
 def main():
     fixtures, module, scripts = (Path(a).resolve() for a in sys.argv[1:4])
-    _pf_private_marker = fixtures / "same_side_exit" / "README.md"
+    _pf_private_marker = fixtures / "README.md"
     if not _pf_private_marker.exists():
         print("SKIP private fixtures not present: tests/fixtures/same_side_exit/README.md")
         raise SystemExit(77)
