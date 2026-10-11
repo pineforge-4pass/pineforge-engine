@@ -37,6 +37,24 @@ could not read, or read twice, exits 2). Every row pinned in
 tests/private_fixture_rows.txt must be swept: a pinned row no registration
 matched exits 1.
 
+The list() subcommands the two files use are modelled, and the model is
+printed as a table (subcommand, uses, modelled). APPEND and REMOVE_ITEM edit
+the tracked list; LENGTH writes the tracked length into its out-var; GET,
+SUBLIST and POP_FRONT write the element(s) they select, so a value a row gets
+through them is swept like any other. POP_FRONT follows CMake: N out-vars take
+the first N elements (the rest of the list is removed), no out-var removes
+exactly one element, and out-vars with no element left are undefined. A
+subcommand outside the modelled set is a construct the sweep cannot read:
+exit 2, in or out of a function() body, never a silent skip. GET, SUBLIST and
+POP_FRONT read only a list this walk saw built; a list it never saw is exit 2,
+never a guessed value. LENGTH is the one soft case: its result is a count,
+which cannot name a path, and the two files take its inputs from
+file(STRINGS) (a file the fixture-less tree does not have), so an input the
+walk did not see built prints an "input not tracked" line and writes nothing
+-- the closing summary counts those lines. string(REPLACE "|" ";" <out>
+<input>) is modelled in that one shape for the same reason: it is how the
+foreach items the list(GET) sites split are produced.
+
 Loud-fail: a construct it cannot parse (a missing pin file, a driver whose
 marker expression it cannot read, a row whose add_test arguments it cannot
 resolve) prints file:line and exits 2; it never counts what it cannot read as
@@ -224,7 +242,10 @@ class Rows:
         self.site_lines: set[int] = set()
         self.add_test_sites_skipped = 0
         self.dynamic_names: list[tuple[int, str]] = []
+        self.list_uses: dict[str, int] = {}
+        self.unresolved_list_inputs: list[tuple[int, str, str, str]] = []
         self._check_sites_readable()
+        self._scan_list_subcommands()
         top_env: dict[str, list[str]] = {}
         self._walk(0, len(self.lines), top_env, ())
         self.vars = top_env
@@ -292,6 +313,36 @@ class Rows:
             if not re.match(r'add_test\(\s*NAME\s+[^\s)]+', self.text[m.start():]):
                 raise Unparseable(
                     f'{self.path}:{lineno}: an add_test( whose NAME this sweep cannot read')
+
+    # list() subcommands this sweep models, and what each does to the tracked
+    # variables. Any other subcommand is a construct it cannot read.
+    LIST_MODELLED = ('APPEND', 'GET', 'LENGTH', 'POP_FRONT', 'REMOVE_ITEM',
+                     'SUBLIST')
+
+    def _scan_list_subcommands(self) -> None:
+        """Count every list(<subcommand>) the file has -- in or out of a
+        function() body, since only the call sites of a template register --
+        and refuse any form whose effect on the tracked lists is not modelled.
+        The counts are what the printed table shows, so a subcommand that
+        appeared since the model was written cannot hide behind the walk."""
+        for m in re.finditer(r'\blist\s*\(', self.text):
+            lineno = self._line_of(m.start()) + 1
+            before = m.start() - 1
+            while before >= 0 and self.text[before] in ' \t':
+                before -= 1
+            if before >= 0 and self.text[before] not in ')\n':
+                raise Unparseable(
+                    f'{self.path}:{lineno}: a list( this sweep cannot classify '
+                    f'(not at a command position, or inside a string)')
+            body, _ = self._paren_body(self.text, m.start() + len(m.group(0)) - 1)
+            head = re.match(r'\s*(\w+)', body)
+            subcommand = head.group(1) if head else ''
+            if subcommand not in self.LIST_MODELLED:
+                raise Unparseable(
+                    f'{self.path}:{lineno}: list({subcommand}) is not a '
+                    f'subcommand this sweep models: its effect on the tracked '
+                    f'lists would be skipped, and skipped is not clean')
+            self.list_uses[subcommand] = self.list_uses.get(subcommand, 0) + 1
 
     # ---- rows --------------------------------------------------------------
     def _entry(self, row: str, lineno: int, conditions: tuple, table) -> dict:
@@ -363,7 +414,9 @@ class Rows:
             if name == 'set':
                 self._do_set(body, env)
             elif name == 'list':
-                self._do_list(body, env)
+                self._do_list(body, i, env)
+            elif name == 'string':
+                self._do_string(body, i, env)
             elif name == 'include':
                 pass
             elif name == 'add_test':
@@ -459,25 +512,175 @@ class Rows:
             if value not in values:
                 values.append(value)
 
-    def _do_list(self, body: str, env: dict) -> None:
-        m = re.match(r'\s*(APPEND|REMOVE_ITEM)\s+(\w+)\s+(.*)$', body, re.S)
+    def _do_list(self, body: str, line_i: int, env: dict) -> None:
+        """Model the list() subcommands the two files use. What the walk does
+        not model is exit 2 (see _scan_list_subcommands): a list() whose
+        effect is skipped would let a value a row names go unswept."""
+        head = re.match(r'\s*(\w+)\b(.*)$', body, re.S)
+        if not head:
+            raise Unparseable(
+                f'{self.path}:{line_i + 1}: a list( whose subcommand this '
+                f'sweep cannot read')
+        action, rest = head.group(1), head.group(2).strip()
+        if action not in self.LIST_MODELLED:
+            raise Unparseable(
+                f'{self.path}:{line_i + 1}: list({action}) is not a '
+                f'subcommand this sweep models')
+        if action in ('APPEND', 'REMOVE_ITEM'):
+            m = re.match(r'\s*(\w+)\s+(.*)$', rest, re.S)
+            if not m:
+                raise Unparseable(
+                    f'{self.path}:{line_i + 1}: a list({action}) whose list '
+                    f'name this sweep cannot read')
+            name, tail = m.groups()
+            values = env.setdefault(name, [])
+            for token in tail.split():
+                value = token.strip('"')
+                splice = re.fullmatch(r'\$\{(\w+)\}', value)
+                if splice:                  # list(APPEND X ${Y}) splices Y
+                    items = env.get(splice.group(1), [])
+                else:
+                    items = [value]
+                for item in items:
+                    if action == 'APPEND':
+                        if item not in values:
+                            values.append(item)
+                    elif item in values:
+                        values.remove(item)
+            return
+
+        tokens = rest.split()
+        unreadable = [
+            token for token in tokens
+            if not re.fullmatch(r'\w+', token) and not token.startswith('${')]
+        if unreadable:
+            raise Unparseable(
+                f'{self.path}:{line_i + 1}: list({action}) names '
+                f'{unreadable[0]}, a value this sweep cannot read')
+
+        if action == 'LENGTH':
+            if len(tokens) != 2:
+                raise Unparseable(
+                    f'{self.path}:{line_i + 1}: a list(LENGTH) this sweep '
+                    f'cannot read (needs a list and an out-var)')
+            name, out = tokens
+            values = env.get(name)
+            if values is None:
+                # A count, so it can never be the path a row names; the files
+                # take these inputs from file(STRINGS), which this sweep does
+                # not model. Recorded loudly instead of guessed.
+                self.unresolved_list_inputs.append(
+                    (line_i + 1, action, name, out))
+                return
+            env[out] = [str(len(values))]
+            return
+
+        if action == 'GET':
+            if len(tokens) < 3 or not re.fullmatch(r'\w+', tokens[-1]):
+                raise Unparseable(
+                    f'{self.path}:{line_i + 1}: a list(GET) this sweep cannot '
+                    f'read (needs a list, an index and an out-var)')
+            name, index_tokens, out = tokens[0], tokens[1:-1], tokens[-1]
+            values = env.get(name)
+            if values is None:
+                raise Unparseable(
+                    f'{self.path}:{line_i + 1}: list(GET {name} ...) reads a '
+                    f'list this sweep never saw built: {out} would keep a '
+                    f'value the sweep cannot resolve')
+            picked = []
+            for token in index_tokens:
+                index = self._list_index(token, env, line_i, name)
+                if not -len(values) <= index < len(values):
+                    raise Unparseable(
+                        f'{self.path}:{line_i + 1}: list(GET {name} {token} '
+                        f'...) is out of range: {len(values)} element(s)')
+                picked.append(values[index])
+            env[out] = picked
+            return
+
+        if action == 'SUBLIST':
+            if len(tokens) != 4 or not re.fullmatch(r'\w+', tokens[3]):
+                raise Unparseable(
+                    f'{self.path}:{line_i + 1}: a list(SUBLIST) this sweep '
+                    f'cannot read (needs a list, a begin, a length and an '
+                    f'out-var)')
+            name, begin_token, length_token, out = tokens
+            values = env.get(name)
+            if values is None:
+                raise Unparseable(
+                    f'{self.path}:{line_i + 1}: list(SUBLIST {name} ...) '
+                    f'reads a list this sweep never saw built: {out} would '
+                    f'keep a value the sweep cannot resolve')
+            begin = self._list_index(begin_token, env, line_i, name)
+            length = self._list_index(length_token, env, line_i, name)
+            if begin < 0 or begin > len(values):
+                raise Unparseable(
+                    f'{self.path}:{line_i + 1}: list(SUBLIST {name} '
+                    f'{begin_token} ...) begins out of range: {len(values)} '
+                    f'element(s)')
+            if length < -1:
+                raise Unparseable(
+                    f'{self.path}:{line_i + 1}: list(SUBLIST {name} ... '
+                    f'{length_token} {out}) has a length CMake refuses')
+            if length == -1:
+                length = len(values) - begin
+            # CMake writes the empty string for an empty sublist.
+            env[out] = values[begin:begin + length] or ['']
+            return
+
+        # POP_FRONT: N out-vars take the first N elements and CMake removes
+        # them from the list; no out-var removes exactly one; an out-var with
+        # no element left is left undefined, not emptied.
+        if not tokens or not re.fullmatch(r'\w+', tokens[0]):
+            raise Unparseable(
+                f'{self.path}:{line_i + 1}: a list(POP_FRONT) whose list name '
+                f'this sweep cannot read')
+        name, outs = tokens[0], tokens[1:]
+        values = env.get(name)
+        if values is None:
+            raise Unparseable(
+                f'{self.path}:{line_i + 1}: list(POP_FRONT {name} ...) reads '
+                f'a list this sweep never saw built: the popped value cannot '
+                f'be resolved')
+        count = len(outs) if outs else 1
+        popped = values[:count]
+        del values[:count]
+        for position, out in enumerate(outs):
+            if position < len(popped):
+                env[out] = [popped[position]]
+            else:
+                env.pop(out, None)
+
+    def _list_index(self, token: str, env: dict, line_i: int, name: str) -> int:
+        """An index argument of list(GET)/list(SUBLIST): a literal or a ${var}
+        this walk bound, never anything else."""
+        text = subst(token, env)
+        if not re.fullmatch(r'-?\d+', text):
+            raise Unparseable(
+                f'{self.path}:{line_i + 1}: a list( command on {name} uses '
+                f'{token} as an index, which this sweep cannot resolve')
+        return int(text)
+
+    def _do_string(self, body: str, line_i: int, env: dict) -> None:
+        """string(REPLACE <sep> <glue> <out> <input>...) in the one shape the
+        two files use: splitting a '|'-joined foreach item into the fields
+        the list(GET) sites then read. Inputs this walk did not see built
+        leave <out> unknown -- the standing treatment of a value the sweep
+        never saw -- and every other string() form is left alone."""
+        m = re.match(r'\s*REPLACE\s+(\S+)\s+(\S+)\s+(\w+)\s+(.*)$', body, re.S)
         if not m:
             return
-        action, name, rest = m.groups()
-        values = env.setdefault(name, [])
-        for token in rest.split():
-            value = token.strip('"')
-            splice = re.fullmatch(r'\$\{(\w+)\}', value)
-            if splice:                      # list(APPEND X ${Y}) splices Y
-                items = env.get(splice.group(1), [])
-            else:
-                items = [value]
-            for item in items:
-                if action == 'APPEND':
-                    if item not in values:
-                        values.append(item)
-                elif item in values:
-                    values.remove(item)
+        separator = m.group(1).strip('"')
+        out, tail = m.group(3), m.group(4)
+        if not separator:
+            return
+        fields: list[str] = []
+        for token in tail.split():
+            text = subst(token, env)
+            if '${' in text:
+                return                      # input not tracked: out stays unknown
+            fields.extend(text.strip('"').split(separator))
+        env[out] = fields or ['']
 
     def _do_add_test(self, body: str, line_i: int, env: dict,
                      conditions: tuple) -> None:
@@ -618,6 +821,8 @@ def sweep(root: Path) -> int:
     add_test_sites = 0
     add_test_sites_skipped = 0
     dynamic_names: list[tuple[str, int, str]] = []
+    list_uses: dict[str, int] = {}
+    unresolved_list_inputs: list[tuple[str, int, str, str, str]] = []
     for cmake in cmake_files:
         if not cmake.exists():
             raise Unparseable(f'{cmake}: missing')
@@ -626,6 +831,11 @@ def sweep(root: Path) -> int:
         add_test_sites_skipped += table.add_test_sites_skipped
         for lineno, raw in table.dynamic_names:
             dynamic_names.append((str(cmake.relative_to(root)), lineno, raw))
+        for subcommand, count in table.list_uses.items():
+            list_uses[subcommand] = list_uses.get(subcommand, 0) + count
+        for lineno, subcommand, name, out in table.unresolved_list_inputs:
+            unresolved_list_inputs.append(
+                (str(cmake.relative_to(root)), lineno, subcommand, name, out))
         for name, entry in table.rows.items():
             entry['cmake'] = cmake
             rows.setdefault(name, entry)
@@ -838,6 +1048,20 @@ def sweep(root: Path) -> int:
 
     print(f'add_test sites walked: {add_test_sites} '
           f'(+{add_test_sites_skipped} function() templates) of {site_total}')
+    print('list() subcommands (tests/CMakeLists.txt + runner/CMakeLists.txt):')
+    unmodelled = 0
+    for subcommand in sorted(Rows.LIST_MODELLED):
+        print(f'  {subcommand:<12} {list_uses.get(subcommand, 0):>4} uses  '
+              f'modelled yes')
+    for subcommand in sorted(set(list_uses) - set(Rows.LIST_MODELLED)):
+        unmodelled += 1
+        print(f'  {subcommand:<12} {list_uses[subcommand]:>4} uses  '
+              f'modelled no')
+    print(f'list() subcommands not modelled: {unmodelled}')
+    print(f'list() inputs not tracked: {len(unresolved_list_inputs)}')
+    for where, lineno, subcommand, name, out in unresolved_list_inputs:
+        print(f'  input not tracked: {where}:{lineno}: list({subcommand} '
+              f'{name} {out}) -- {out} left unknown, never guessed')
     print(f'rows swept: {len(rows)}; pinned rows swept: '
           f'{pinned_total - len(unswept)} of {pinned_total}; '
           f'rows the sweep could not name: {len(dynamic_names)}')

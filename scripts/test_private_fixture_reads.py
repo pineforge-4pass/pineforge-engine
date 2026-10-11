@@ -166,6 +166,51 @@ add_test(NAME test_e2e_fb2_unset_pf_arg
         self.assertEqual(1, result.returncode, result.stdout + result.stderr)
         self.assertIn('e2e_fb2_pinned_row_that_registers_nowhere', result.stdout)
 
+    # control 8: the value list(POP_FRONT) pops must reach the row's command
+    # line: a sweep that ignores the subcommand leaves ${..} unresolved and
+    # exits 0, a sweep that models it names the popped removed path and exits 1
+    def test_pop_front_popped_value_is_swept(self):
+        self.tree.append('tests/CMakeLists.txt', f'''
+set(e2e_fb2c_shards {REMOVED_EXAMPLE}/bars.csv filler)
+list(POP_FRONT e2e_fb2c_shards e2e_fb2c_popped)
+add_test(NAME e2e_fb2c_pop_front_flow
+    COMMAND ${{CMAKE_COMMAND}} -E echo ${{e2e_fb2c_popped}})
+''')
+        result = run_sweep(self.tree.root)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn('e2e_fb2c_pop_front_flow', result.stdout)
+        self.assertIn(f'{REMOVED_EXAMPLE}/bars.csv', result.stdout)
+
+    # control 9: a list() subcommand outside the modelled set is a construct
+    # the sweep cannot read: exit 2, never a walk that skips its effect
+    def test_unmodelled_list_subcommand_exits_2(self):
+        self.tree.append('tests/CMakeLists.txt',
+                         '\nlist(SORT e2e_fb2c_unmodelled)\n')
+        result = run_sweep(self.tree.root)
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn('list(SORT)', result.stdout + result.stderr)
+
+    # control 10: POP_FRONT reads a list the walk saw built; a list it never
+    # saw is exit 2 rather than a guessed (or dropped) popped value
+    def test_untracked_pop_front_input_exits_2(self):
+        self.tree.append('tests/CMakeLists.txt',
+                         '\nlist(POP_FRONT e2e_fb2c_never_set e2e_fb2c_out)\n')
+        result = run_sweep(self.tree.root)
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn('e2e_fb2c_never_set', result.stdout + result.stderr)
+
+    # control 11: LENGTH is the soft case -- its result is a count that cannot
+    # name a path, and the files take its inputs from file(STRINGS) -- so an
+    # input the walk never saw is printed and left unknown, not guessed
+    def test_untracked_length_input_is_printed(self):
+        self.tree.append('tests/CMakeLists.txt',
+                         '\nlist(LENGTH e2e_fb2c_never_set e2e_fb2c_len)\n')
+        result = run_sweep(self.tree.root)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn('list(LENGTH e2e_fb2c_never_set e2e_fb2c_len) -- '
+                      'e2e_fb2c_len left unknown', result.stdout)
+        self.assertIn('list() inputs not tracked: 1', result.stdout)
+
 
 class KernelPythonSweepControls(unittest.TestCase):
     """Controls for check_kernel_python_private_reads.py: its population is a
