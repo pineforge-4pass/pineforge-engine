@@ -1913,19 +1913,255 @@ function(pineforge_test_reaches_source_layer out_var entry)
     set(${out_var} FALSE PARENT_SCOPE)
 endfunction()
 
+# The private rows whose TU reaches the pineforge/source or
+# pineforge/compat/pine layer, RECORDED from the fixture-complete (overlay)
+# tree -- the one world where every private TU is present to be walked. The
+# predicate below answers BOUND for a row in this list whatever the tree
+# holds, so the kernel-only filter and every guarded block read the same
+# answer in both worlds: without the record, a fixture-less tree cannot read
+# a removed TU (or a header in its closure), answers "not source-bound", and
+# re-registers source-layer rows the kernel profile must not build -- the
+# fixture-absent kernel run registered 93 rows the overlay run did not (91
+# private rows plus the two oracle twins that follow their base). One list,
+# read by the one predicate both the filter and the guarded blocks call.
+# Public rows keep the include-closure walk below; their TUs are always in
+# the tree, so the world cannot change the walk's answer for them.
+set(_pf_source_bound_private_rows
+    test_aapl15_margin_brackets_l4a
+    test_adapter_coof_relower
+    test_adapter_fifo_lot_boundary
+    test_adapter_in_place_reads
+    test_adapter_magnifier_intrabar_tapes
+    test_adapter_margin_relower
+    test_adapter_margin_revival_cancel
+    test_adapter_margin_schedule_differential
+    test_adapter_receipts_in_place
+    test_adapter_runtime_ambient
+    test_adapter_settlement_carry
+    test_adapter_sizing_relower
+    test_add_sibling_margin_tapes
+    test_admission_rules_tapes
+    test_aggregated_admission_receipt_tapes
+    test_aggregated_entry_bar_index_tape
+    test_aggregated_path_regressions
+    test_aux_security_feed_l4d
+    test_carried_pooc_short_margin_state_l4a
+    test_carried_trail_open_tapes
+    test_cash_fee_sizing_tapes
+    test_chart_tf_security_split_feed
+    test_coof_chart_tick_touch_l4c
+    test_coof_close_slippage_tapes
+    test_coof_drawing_rollback_tape
+    test_coof_fill_bar_exit_tapes
+    test_coof_forced_waypoint_tapes
+    test_coof_immediate_close_final_tapes
+    test_coof_immediate_close_tapes
+    test_coof_inflight_cancel_tapes
+    test_coof_marketable_stop_tapes
+    test_coof_open_limit_tapes
+    test_coof_open_newborn_exit_tape
+    test_coof_open_recalc_context_l4c
+    test_coof_recalc_security_tapes
+    test_coof_refill_waypoint_tapes
+    test_coof_reissued_exit_tapes
+    test_coof_resting_bracket_tapes
+    test_coof_resting_stop_siblings_l4c
+    test_coof_same_point_exits_tapes
+    test_coof_timeframe_change_tapes
+    test_coof_w2_refill_tapes
+    test_coqueued_open_margin_tapes
+    test_cross_mechanism_tapes
+    test_daily_magnifier_tapes
+    test_default_flat_market_gross_admission_l4d
+    test_default_pct_stop_sizing_l4b
+    test_default_qty_signal_freeze
+    test_dropped_reversal_mc_first_l4c
+    test_dual_stop_transactions_l4d
+    test_e19_excursion_tape
+    test_engine_trade_accessors
+    test_entry_bar_margin_path_l4a
+    test_exit_binding_tapes
+    test_exit_fifo_cross_tapes
+    test_exit_queue_tapes
+    test_exit_reissue_na_tapes
+    test_exit_reservation_tapes
+    test_explicit_market_admission_tapes
+    test_explicit_qty_fill_admission_l4b
+    test_explicit_qty_floor_tapes
+    test_famae_declined_reversal_trail_gap_l4c
+    test_famae_lot_sizing_ten_digit_equity
+    test_famag_close_survives_l4d
+    test_famx_declined_reversal_trail_leg_l4c
+    test_flat_coof_exit_tapes
+    test_foreign_break_stamp_tapes
+    test_global_exit_children_tapes
+    test_global_exit_fill_size_tapes
+    test_grid_close_tapes
+    test_high_value_signal_cost_l4d
+    test_htf_weekly_lookahead
+    test_int28_rule_compositions
+    test_int29_rule_compositions
+    test_int30_rule_compositions
+    test_intraday_cap_tv_tapes
+    test_intraday_loss_open_fill_tape
+    test_kernel_trail_stop_replica
+    test_ki62_same_id_cover
+    test_l10ab_same_bar_reentry_exit_level
+    test_l10ac_full_equity_single_lot
+    test_l10ad_tick_bracket_stuck_entry
+    test_l10ag_reversal_close_cycle
+    test_l10aj_margin_full_exit_flat
+    test_l10al_reversal_single_lot
+    test_l10am_entry_bar_priced_exit
+    test_l10ao_percent_equity_first_lot
+    test_l10ap_coof_chained_fill_price
+    test_l10ar_priced_entry_fill
+    test_l10as_priced_exit_fill
+    test_l10b_excursion_parity
+    test_l10d_entry_bar_excursion_masks
+    test_l10e_opposite_entry_close_same_pass
+    test_l10f_sizing_basis_stop_limit
+    test_l10g_oca_reduce_deferred_flip
+    test_l10h_corpus_parity
+    test_l10j_corpus_parity
+    test_l10k_corpus_parity
+    test_l10l_corpus_parity
+    test_l10m_corpus_parity
+    test_l10p_three_way_entry_bar_exit
+    test_l10q_pyramid_terrace_exit
+    test_l10r_dual_stop_same_bar_order
+    test_l10recon1_merge_fill_liveness
+    test_l10s_pyramiding_same_bar_ids
+    test_l10t_partial_exit_residual
+    test_l10v_first_partial_leg_timing
+    test_l10w_zero_qty_entry
+    test_l10x_reissued_limit_touch_bar
+    test_l10y_full_equity_entry_split
+    test_l10z_review_fixes
+    test_l11a_host_excursion_twin
+    test_l11b_same_bar_stopout_excursion
+    test_l4b_policy_regressions
+    test_l4f_security_magnifier
+    test_l9a_carried_pooc_competing_checkpoint
+    test_limit_entry_affordability_tape
+    test_live_trade_accessors_l4d
+    test_ltf_lookahead_calling_open_tapes
+    test_ltf_lookahead_first_bucket
+    test_m_admission_36_l4d
+    test_magnified_aggregated_tape
+    test_magnified_coof_refill_tape
+    test_magnifier_tradingview_intrabars
+    test_margin_call_1x_long_entry_fill_l4a
+    test_margin_call_rules_tapes
+    test_margin_ledger_rules_tapes
+    test_margin_open_print_tapes
+    test_margin_open_rules_tapes
+    test_margin_opposite_tapes
+    test_margin_residual_resolved_fill
+    test_margin_residual_tapes
+    test_margin_rules_forward_replay
+    test_margin_schedule_rules_tapes
+    test_margin_v6_tapes
+    test_market_admission_commission_l4b
+    test_native_auto_path
+    test_native_calc_timing_twin
+    test_native_daily_holiday_l4d
+    test_native_margin_hooks_twin
+    test_native_oracle_day_key_l2
+    test_native_oracle_reversal_same_bar_tx_l2
+    test_native_oracle_stop_snapshot_full_l2
+    test_native_pending_order_v1_canary_l4d
+    test_native_price_grid_twin
+    test_native_wm_buckets_l4d
+    test_nonfinite_entry_qty_tape
+    test_o_close_pct_day_anchor
+    test_oanda_lazy_close
+    test_offset_trail_quantized_arm
+    test_open_entry_fee_charged
+    test_open_fill_order_tapes
+    test_pending_entry_trail_tapes
+    test_pending_order_v1_canary_l4d
+    test_percent_entry_reservation_tapes
+    test_pine_dust_sweep_paired
+    test_point_order_open_call
+    test_pooc_add_close_tape
+    test_pooc_close_bar_fills_tapes
+    test_pooc_fill_stamp_aggregation
+    test_pooc_gap_stop_tapes
+    test_pooc_limit_close_tapes
+    test_pooc_margin_call_sizing_tapes
+    test_pooc_open_money_event_l4b
+    test_pooc_pair_gross_tapes
+    test_pooc_pending_stop_tapes
+    test_pooc_reversing_stop_tapes
+    test_pooc_same_pass_close_tape
+    test_pooc_samepass_tapes
+    test_pooc_short_slip_admission_tapes
+    test_pooc_stop_reentry_bracket_tapes
+    test_publication_witness
+    test_pyramiding_count_differential
+    test_pyramiding_open_order_tape
+    test_reversal_admission_float_guard_l4c
+    test_reversal_close_all_tapes
+    test_risk_max_intraday_loss_tv_l4a
+    test_rounded_carried_short_trail_l4c
+    test_run_harness_window_tapes
+    test_same_bar_reissue_tapes
+    test_same_open_reversal_tapes
+    test_same_point_entries_tapes
+    test_samebar_pyramiding_entries_tapes
+    test_second_extreme_order_tapes
+    test_security_multi_day_buckets_tapes
+    test_session_break_open_bar_tape
+    test_session_day_facts_adapter
+    test_session_extended_day_tape
+    test_session_islastbar_aggregation
+    test_session_ismarket_tape
+    test_session_transition_clock_tapes
+    test_short_seed_report_swap
+    test_slipped_short_tapes
+    test_small_money_margin_residual_l4a
+    test_source_buying_power_tapes
+    test_source_buying_power_tapes
+    test_split_feed_partial_bucket
+    test_symbol_calendar_tapes
+    test_taro_price_gap_admission_l4d
+    test_time_bars_back_tapes
+    test_trail_activation_tick_bar_l4c
+    test_trail_activation_tick_reach
+    test_trail_close_restart_no_fold_l4c
+    test_trail_fill_snap_l4c
+    test_trail_ref_entry_bar_extreme_l4c
+    test_tv_money_band_l4b
+    test_tv_money_carried_pooc_l4b
+    test_tv_money_long_margin_call_eth_l4a
+    test_tv_money_precision_l4b
+    test_tv_strategy_defaults
+    test_tvdef_drops_tapes
+    test_whole_lot_tie_tapes
+    test_zero_offset_trail_rides_l4c
+    test_zero_trail_sibling_stop
+)
+
 # The one source-bound predicate the kernel-only filter below and every
-# private-row re-registration block read: the same reach test, resolved once
-# per entry and memoised for the rest of configure, so the filter and the
-# guarded blocks can never drift into two lists. TRUE when the entry's include
-# closure reaches a pineforge/source or pineforge/compat/pine header.
+# private-row re-registration block read: resolved once per entry and
+# memoised for the rest of configure, so the filter and the guarded blocks
+# can never drift into two lists. TRUE when the entry is one of the recorded
+# private rows above, else when the entry's include closure (walked live)
+# reaches a pineforge/source or pineforge/compat/pine header.
 function(pineforge_test_is_source_bound out_var entry)
     get_property(_pf_bound_answer GLOBAL PROPERTY "pf_source_bound::${entry}")
     if(NOT _pf_bound_answer)
-        pineforge_test_reaches_source_layer(_pf_reaches "${entry}")
-        if(_pf_reaches)
+        get_filename_component(_pf_bound_row "${entry}" NAME_WE)
+        if(_pf_bound_row IN_LIST _pf_source_bound_private_rows)
             set(_pf_bound_answer BOUND)
         else()
-            set(_pf_bound_answer CLEAR)
+            pineforge_test_reaches_source_layer(_pf_reaches "${entry}")
+            if(_pf_reaches)
+                set(_pf_bound_answer BOUND)
+            else()
+                set(_pf_bound_answer CLEAR)
+            endif()
         endif()
         set_property(GLOBAL PROPERTY "pf_source_bound::${entry}"
             "${_pf_bound_answer}")
