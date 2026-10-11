@@ -4312,14 +4312,12 @@ set(PINEFORGE_PR_SLOW_TESTS
     test_native_script_bucket_completions
     test_native_settlement_carry
 )
-foreach(_pf_slow_test IN LISTS PINEFORGE_PR_SLOW_TESTS)
-    if(PINEFORGE_BUILD_SOURCE_LAYER AND NOT TEST ${_pf_slow_test})
-        message(FATAL_ERROR "PR slow row is no longer registered: ${_pf_slow_test}")
-    endif()
-    if(TEST ${_pf_slow_test})
-        set_property(TEST ${_pf_slow_test} APPEND PROPERTY LABELS slow)
-    endif()
-endforeach()
+
+# The guard and the slow label for PINEFORGE_PR_SLOW_TESTS run near the end of
+# this file, after the guarded private-fixture re-registrations: a slow row
+# whose source or fixture the private-fixture PR removes (test_local_time_fields)
+# is registered by its own conditional block, not by the TEST_SOURCES loop, so
+# the guard must run once that block has run.
 
 # Stable run-failure codes (include/pineforge/run_failure.hpp) through real
 # generated strategies and the C ABI. tests/fixtures/run_failure_codes holds
@@ -5181,6 +5179,21 @@ else()
     add_test(NAME test_zero_trail_sibling_stop COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_zero_trail_sibling_stop.cpp")
     set_tests_properties(test_zero_trail_sibling_stop PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
+
+# Every row in PINEFORGE_PR_SLOW_TESTS (top of this file) must be a registered
+# ctest row on every profile: real, or the private-fixture SKIP placeholder its
+# own guarded block above registered.  The check and the `slow` label therefore
+# run here, after those blocks: test_local_time_fields is registered by the block
+# above, not by the TEST_SOURCES loop, and the guard would fire on it if it ran
+# before that block.
+foreach(_pf_slow_test IN LISTS PINEFORGE_PR_SLOW_TESTS)
+    if(PINEFORGE_BUILD_SOURCE_LAYER AND NOT TEST ${_pf_slow_test})
+        message(FATAL_ERROR "PR slow row is no longer registered: ${_pf_slow_test}")
+    endif()
+    if(TEST ${_pf_slow_test})
+        set_property(TEST ${_pf_slow_test} APPEND PROPERTY LABELS slow)
+    endif()
+endforeach()
 
 # Ctest-registered Python rows (Python tape drivers and scripts/test_*.py
 # unittest files). The script prints the same SKIP literal on stdout and exits
