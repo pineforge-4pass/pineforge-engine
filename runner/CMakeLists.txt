@@ -422,11 +422,12 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
         # by the same regex the present branch uses). The libraries cannot
         # build here, so the shard names that inventory yields are pinned
         # literally, once, each with the removed generated.cpp of its first
-        # library, so the row set does not shrink with the fixtures.
+        # library, so the row set does not shrink with the fixtures. Both
+        # lists are sorted (drift guard: check_two_world_registration.py
+        # re-derives the names from the split over the live tree and requires
+        # them to equal this list); the marker list pairs with the row list by
+        # position, POP_FRONT consuming one per row.
         set(_pf_refusal_shard_rows
-            confirmed_capabilities_refusals_requests_1
-            confirmed_capabilities_refusals_requests_2
-            confirmed_capabilities_refusals_requests_3
             confirmed_capabilities_refusals_pooc_1
             confirmed_capabilities_refusals_pooc_2
             confirmed_capabilities_refusals_pooc_3
@@ -436,11 +437,11 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
             confirmed_capabilities_refusals_pooc_7
             confirmed_capabilities_refusals_pooc_8
             confirmed_capabilities_refusals_pooc_9
+            confirmed_capabilities_refusals_requests_1
+            confirmed_capabilities_refusals_requests_2
+            confirmed_capabilities_refusals_requests_3
         )
         set(_pf_refusal_shard_first_library
-            htf5_close
-            constant_daily
-            refused_clock_W
             htf15_sma_pooc
             pooc_close_short
             refused_pooc_close_rule
@@ -450,6 +451,9 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
             refused_pooc_pending_bracket
             refused_pooc_risk_direction
             refused_pooc_varip
+            htf5_close
+            constant_daily
+            refused_clock_W
         )
         foreach(_pf_refusal_shard IN LISTS _pf_refusal_shard_rows)
             list(POP_FRONT _pf_refusal_shard_first_library _pf_refusal_shard_marker)
