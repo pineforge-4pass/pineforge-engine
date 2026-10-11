@@ -54,7 +54,7 @@ The `corpus/` and `benchmarks/assets/` trees include TradingView **"List of Trad
 
 ## Data not distributed
 
-Some tests replay price series for US-listed instruments that come from a third-party source. Those bar files are not distributed in this repository or in its submodules; the maintainers keep them in a private repository. Tests that need them report themselves as skipped, naming the missing file, when it is absent. Nothing in this repository depends on them for the correctness of the engine: the public corpus, the unit tests and the kernel suites run without them.
+Some tests replay price series and other test inputs that are not part of the public corpus. Those files are not distributed in this repository or in its submodules; the maintainers keep them in a private repository. Tests that need them report themselves as skipped, naming the missing file, when it is absent. Nothing in this repository depends on them for the correctness of the engine: the public corpus, the unit tests and the kernel suites run without them.
 
 ## Trademarks and affiliation
 
