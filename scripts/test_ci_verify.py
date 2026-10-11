@@ -233,6 +233,13 @@ class Scripted:
             }
             for key, needle in needles.items():
                 if key in self.exits and any(needle in part for part in argv):
+                    if self.exits[key] == 'skip-77':
+                        # The absent-overlay shape: exit 77 with the pinned
+                        # literal naming the missing fixture path.
+                        return Completed(77,
+                                         b'SKIP private fixtures not present: '
+                                         b'tests/fixtures/native_cpp_abi/host-fixture/headers.tar\n',
+                                         b'')
                     return Completed(int(self.exits[key]), b'', b'injected source-guard failure\n')
             return default_runner(argv, extra_env=None, timeout=timeout,
                                   combine_stderr=True, stream_output=False)
@@ -1342,6 +1349,18 @@ class DriverOrderingAndAggregation(unittest.TestCase):
             with self.subTest(name=name):
                 result = default_runner(argv, extra_env=None, timeout=120,
                                         combine_stderr=True, stream_output=False)
+                if result.returncode == 77:
+                    # A guard whose private fixture input the tree lacks skips
+                    # with the pinned literal naming the missing path -- and
+                    # only that: the named file must really be absent.
+                    output = (result.stdout + result.stderr).decode('utf-8', 'replace')
+                    literal = ci_verify.PRIVATE_FIXTURE_SKIP_LITERAL
+                    self.assertIn(literal, output, output[-2000:])
+                    named = output.split(literal, 1)[1].strip().splitlines()[0]
+                    self.assertGreater(len(named), 0, 'the skip must name a path')
+                    self.assertFalse((ROOT / named).exists(),
+                                     named + ' exists, so the skip is not earned')
+                    continue
                 self.assertEqual(result.returncode, 0, result.stdout[-2000:])
 
     def test_corpus_submodule_is_initialized_before_source_guards(self):
@@ -1378,6 +1397,24 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn('source-guard-c-abi', failure_stages(summary))
         self.assertFalse(any(argv[0] == 'cmake' and '-S' in argv for argv in scripted.calls))
+
+    def test_source_guard_77_without_the_literal_is_a_failure(self):
+        # The private-fixture skip is the pinned literal; a bare 77 is not one.
+        code, summary, scripted, _ = self.run_profile(**{'source-guard-c-abi': 77})
+        self.assertEqual(code, 1)
+        self.assertIn('source-guard-c-abi', failure_stages(summary))
+        self.assertFalse(any(argv[0] == 'cmake' and '-S' in argv for argv in scripted.calls))
+
+    def test_source_guard_77_with_the_pinned_literal_is_a_named_skip(self):
+        code, summary, scripted, _ = self.run_profile(
+            **{'source-guard-native-versions': 'skip-77'})
+        self.assertEqual(code, 0, summary['failures'])
+        stage = next(stage for stage in summary['stages']
+                     if stage['name'] == 'source-guard-native-versions')
+        self.assertEqual(stage['status'], 'skipped')
+        self.assertEqual(stage['exitCode'], 77)
+        self.assertFalse(failure_stages(summary))
+        self.assertTrue(any(argv[0] == 'cmake' and '-S' in argv for argv in scripted.calls))
 
     def test_adapter_spec_shadowing_guard_failure_skips_configure(self):
         # R5 N11 registered this check as a CTest row only, so a shadowed spec

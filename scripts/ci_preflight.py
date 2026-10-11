@@ -801,7 +801,15 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
         (output / stage['log']).write_bytes(log)
         if log:
             print(log.decode('utf-8', 'replace'), end='', flush=True)
-        if code and advisory:
+        if (code == 77 and not advisory
+                and b'SKIP private fixtures not present: ' in log):
+            # A source guard whose private fixture input the tree lacks exits
+            # 77 with the pinned literal naming the missing path.  The literal
+            # is required: a bare 77 without it stays a failure.
+            print(f'ci_preflight: {name}: skipped (exit 77, private fixtures absent)',
+                  flush=True)
+            stage.update(status='skipped', exitCode=code)
+        elif code and advisory:
             print(f'ci_preflight: {name}: exit {code}, reported only '
                   '(this stage is declared advisory)', flush=True)
             stage.update(status='reported', exitCode=code)
@@ -809,6 +817,7 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
             stage.update(status='passed' if code == 0 else 'failed', exitCode=code)
         record()
     passed = bool(commands) and all(stage['exitCode'] == 0 or stage['advisory']
+                                    or stage['status'] == 'skipped'
                                     for stage in summary['stages'])
     summary.update(status='passed' if passed else 'failed', exitCode=0 if passed else 1)
     record()

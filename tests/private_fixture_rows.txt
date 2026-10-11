@@ -2,7 +2,7 @@
 // when the private fixtures are absent (removed by the private-fixture PRs). The count also
 // covers the PR 1b batch, whose rows runner/CMakeLists.txt registers the same way.
 // manifest: l44/pr1-manifest.tsv sha256 9a2727d455c1b470d515665428e2c6e090a22ac07f87255d1ca9c20d5528bd62
-// rows: 324
+// rows: 327
 capabilities_equivalence_clock_flags
 capabilities_equivalence_close
 checked_settings_e2e
@@ -84,6 +84,7 @@ test_chart_tf_security_split_feed
 test_checked_settings
 test_color_tapes
 test_coof_chart_tick_touch_l4c
+test_coof_close_slippage_tapes
 test_coof_close_slippage_tapes_private
 test_coof_competing_tick_tapes
 test_coof_drawing_rollback_tape
@@ -106,6 +107,7 @@ test_coof_same_point_exits_tapes
 test_coof_timeframe_change_tapes
 test_coof_w2_refill_tapes
 test_coqueued_open_margin_tapes
+test_cross_mechanism_tapes
 test_cross_mechanism_tapes_private
 test_cross_side_exit_tapes
 test_daily_magnifier_tapes
@@ -205,6 +207,7 @@ test_margin_open_rules_tapes
 test_margin_opposite_tapes
 test_margin_residual_resolved_fill
 test_margin_residual_tapes
+test_margin_rules_forward_replay
 test_margin_rules_forward_replay_private
 test_margin_schedule_rules_tapes
 test_margin_v6_tapes
