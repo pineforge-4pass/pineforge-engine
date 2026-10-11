@@ -9,7 +9,9 @@
 //      the calendar's, the frozen frames T4 c12 and T2 c21 come out as frozen,
 //      and one trace cut two ways ends in one state;
 //   4. a refusal commits nothing;
-//   5. the group belongs to its run: the next begin leaves it disengaged.
+//   5. the group belongs to its run: the next begin leaves it disengaged;
+//   6. a timebase without time boundaries (a raw-label partition) is planned on
+//      data alone: bars and POST rows, no PRE row, no refusal.
 #include <pineforge/native_host.hpp>
 
 #include "../src/native_execution_consumer.hpp"
@@ -19,6 +21,7 @@
 #include <cstdio>
 #include <limits>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace pineforge {
@@ -175,8 +178,9 @@ void test_identity() {
         {"calc_in_bar", [](State& s) { s.calc_in_bar += 1; }},
         {"cursor_ms", [](State& s) { s.cursor_ms += 1; }},
     };
-    CHECK("nine fields", sizeof(perturbations) / sizeof(perturbations[0]) == 9);
-    std::size_t perturbed = 0;
+    static_assert(sizeof(perturbations) / sizeof(perturbations[0])
+                      == std::tuple_size<decltype(State{}.tie())>::value,
+                  "a State field was added or dropped: extend the perturbations above");
     for (const Perturbation& perturbation : perturbations) {
         State& state = NativeExecutionConsumerProbe::state(plain.consumer());
         const State saved = state;
@@ -184,9 +188,7 @@ void test_identity() {
         CHECK(perturbation.name, plain.native_continuation_hash() != engaged_hash);
         state = saved;
         CHECK(perturbation.name, plain.native_continuation_hash() == engaged_hash);
-        ++perturbed;
     }
-    CHECK("every field was perturbed", perturbed == 9);
 }
 
 // 3: the derivation over the consumer's calendar (24x7, one-minute script bars).
@@ -339,6 +341,53 @@ void test_group_belongs_to_its_run() {
           engaged_once.native_continuation_hash() == never_engaged.native_continuation_hash());
 }
 
+// 6: a timebase without time boundaries. Frozen contract: c-boundary.md section
+// 12 PXR-A2 ("a timebase without time boundaries has no PRE calculations") and
+// proof-matrix.md AV-META case (5) ("no PRE calculation exists"). The packet holds
+// no vector for this case, so every expectation below is derived from that rule
+// alone: each bar event opens a lifecycle and closes it in the same event, a
+// POST row confirmed at the event's own time; bar keys 0, 1, 2 in order; nothing
+// planned for the ninety minutes between the first two events; no bar end kept
+// and no cursor moved. What a tick, a time advance or a quiet interval does on
+// such a timebase is not stated by the rule, and is not tested. Both ways to a
+// raw-label partition: an undetected timeframe, and tolerant labels over a
+// passthrough pairing (the second keeps a valid script timeframe whose calendar
+// intervals must not be used).
+void test_raw_label_timebase() {
+    const Event events[3] = {{EventKind::WarmupBar, kT0},
+                             {EventKind::Bar, kT0 + 5400000},
+                             {EventKind::Bar, kT0 + 5400001}};
+    const std::uint64_t event_numbers[3] = {1, 2, 3};
+    const std::uint64_t keys[3] = {0, 1, 2};
+    const std::int64_t times[3] = {kT0, kT0 + 5400000, kT0 + 5400001};
+    for (const bool undetected : {true, false}) {
+        const char* label = undetected ? "undetected timeframe" : "tolerant labels";
+        NativeRunSpec spec = calc_spec();
+        if (undetected) {
+            spec.input_tf.clear();
+            spec.script_tf.clear();
+            spec.timeframe_undetected = true;
+        } else {
+            spec.slot_label_policy = NativeSlotLabelPolicy::FeedTolerant;
+        }
+        Host host;
+        CHECK(label, host.configure_native(spec).status == NativeSetupStatus::Applied);
+        host.consumer().calc_group_enable();
+        const Plan applied = host.consumer().calc_schedule_apply(kBarClose, events, 3);
+        CHECK(label, applied.status == Status::Ok);
+        CHECK(label, applied.count == 3 && applied.points.size() == 3);
+        for (std::size_t i = 0; i < applied.points.size() && i < 3; ++i) {
+            const native_calc::Point& row = applied.points[i];
+            CHECK(label, row.event_index == i && row.event == event_numbers[i]);
+            CHECK(label, row.bar_key == keys[i] && row.calc_ordinal == 0 && row.calc == 0);
+            CHECK(label, row.at_ms == times[i]);
+            CHECK(label, row.phase == Phase::Post && row.finality == Finality::Confirmed);
+        }
+        CHECK(label, same_state(NativeExecutionConsumerProbe::state(host.consumer()),
+                                make_state(4, true, kT0 + 5400001, true, 2, false, 0, 0, 0)));
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -347,6 +396,7 @@ int main() {
     test_refusals_commit_nothing();
     test_not_engaged();
     test_group_belongs_to_its_run();
+    test_raw_label_timebase();
     std::printf("test_native_calc_identity: %d failure(s) in %d checks\n", failures, checks);
     return failures == 0 ? 0 : 1;
 }

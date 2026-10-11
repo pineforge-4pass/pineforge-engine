@@ -47,6 +47,14 @@ Plan plan_schedule(const State& before, std::uint32_t cadence, const Event* even
     std::uint64_t planned = 0;
     std::vector<Point> rows;
 
+    // Whether the timebase holds time boundaries at an instant. A clock with no
+    // slot there says nothing against it, so such an instant keeps the bounded
+    // rules; only a slot that says it is unbounded lifts them.
+    const auto has_boundaries = [&clock](std::int64_t instant) {
+        Slot slot;
+        return !clock(instant, slot) || slot.bounded;
+    };
+
     for (std::size_t index = 0; index < count; ++index) {
         const Event& event = events[index];
         if (!is_known(event.kind)) return refused(Status::UnknownEventKind);
@@ -88,6 +96,8 @@ Plan plan_schedule(const State& before, std::uint32_t cadence, const Event* even
 
         // A bar lifecycle opens at the event: the next ordinal, in the interval
         // the timebase holds at the event's time, whose end must come after it.
+        // A timebase without time boundaries holds no interval: the lifecycle
+        // opens all the same and keeps no end.
         const auto open_bar = [&]() -> bool {
             if (s.has_last_key && s.last_bar_key == kMaxOrdinal) {
                 failure = Status::BarKeyExhausted;
@@ -98,23 +108,28 @@ Plan plan_schedule(const State& before, std::uint32_t cadence, const Event* even
                 failure = Status::NoBarSlot;
                 return false;
             }
-            if (slot.end_ms <= at) {
+            if (slot.bounded && slot.end_ms <= at) {
                 failure = Status::BarEndNotAfterEvent;
                 return false;
             }
             s.last_bar_key = s.has_last_key ? s.last_bar_key + 1 : 0;
             s.has_last_key = true;
             s.bar_open = true;
-            s.open_end_ms = slot.end_ms;
-            s.cursor_ms = slot.next_open_ms;
+            if (slot.bounded) {
+                s.open_end_ms = slot.end_ms;
+                s.cursor_ms = slot.next_open_ms;
+            } else {
+                s.open_end_ms = 0;
+            }
             s.calc_in_bar = 0;
             return true;
         };
 
         // Time reaching the end of the open bar closes it before the event's own
         // payload is applied, and ends its lifecycle: whatever the event does
-        // next belongs to a bar opened after it.
-        if (s.bar_open && at >= s.open_end_ms) {
+        // next belongs to a bar opened after it. A timebase without time
+        // boundaries keeps no end: its bars close on data alone.
+        if (s.bar_open && at >= s.open_end_ms && has_boundaries(at)) {
             if (!emit(Phase::Pre, s.open_end_ms, s.last_bar_key, s.calc_in_bar,
                       Finality::Confirmed)) {
                 return refused(failure);
@@ -126,10 +141,12 @@ Plan plan_schedule(const State& before, std::uint32_t cadence, const Event* even
 
         // Quiet intervals the event passes over: each one that ends by the event
         // and that the timebase says yields a bar is a bar lifecycle of its own,
-        // opened and closed by time alone. Closed time yields none.
+        // opened and closed by time alone. Closed time yields none, and neither
+        // does a timebase without time boundaries.
         while (s.has_last_key && !s.bar_open) {
             Slot slot;
             if (!clock(s.cursor_ms, slot)) break;
+            if (!slot.bounded) break;
             if (slot.end_ms > at || slot.next_open_ms <= s.cursor_ms) break;
             if (slot.tradable) {
                 if (s.last_bar_key == kMaxOrdinal) return refused(Status::BarKeyExhausted);
@@ -221,10 +238,15 @@ bool NativeExecutionConsumer::calc_group_engaged() const noexcept {
 
 // The script timeframe's interval at an instant, read from the calendar the
 // sealing path reads: its next period open is the exclusive end that path
-// compares time against. A raw-label partition has no time boundaries, so no
-// slot (its degenerate interval would end where it began).
+// compares time against. A raw-label partition has no time boundaries (its
+// degenerate interval would end where it began): the slot says so, and its bars
+// are planned on data alone.
 bool NativeExecutionConsumer::calc_slot_at(std::int64_t at_ms, native_calc::Slot& slot) const {
-    if (!script_tf_.valid() || uses_raw_label_partition()) return false;
+    if (uses_raw_label_partition()) {
+        slot.bounded = false;
+        return true;
+    }
+    if (!script_tf_.valid()) return false;
     const auto interval = native_calendar::interval_containing(
         calendar_, script_tf_, day_label_origin(at_ms), calendar_memo_);
     if (!interval) return false;

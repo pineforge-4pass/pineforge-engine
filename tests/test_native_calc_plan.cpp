@@ -96,7 +96,6 @@ void expect_rows(const char* label, const Plan& plan, const std::vector<Want>& w
     CHECK(label, plan.count == want.size());
     CHECK(label, plan.points.size() == want.size());
     if (plan.points.size() != want.size()) return;
-    std::size_t compared = 0;
     for (std::size_t i = 0; i < want.size(); ++i) {
         const Point& p = plan.points[i];
         const Want& w = want[i];
@@ -108,9 +107,7 @@ void expect_rows(const char* label, const Plan& plan, const std::vector<Want>& w
         CHECK(label, p.at_ms == w.at_ms);
         CHECK(label, p.phase == w.phase);
         CHECK(label, p.finality == w.finality);
-        ++compared;
     }
-    CHECK(label, compared == want.size());
 }
 
 bool same_ignoring_index(const Point& a, const Point& b) {
@@ -500,6 +497,114 @@ void test_every_field_counts() {
           plan_schedule(at_580, kBarCloseOnly, &advance, 1, clock, false).count == 3);
 }
 
+// The quiet-interval walk ends on its own two guards, whatever the clock says.
+// A clock that answers false holds no interval, even when it left a good-looking
+// one in the slot it was given; and a slot whose next lookup does not lie after
+// the cursor cannot move the walk, which would otherwise never end. Both start
+// from bar 7 closed with the cursor at kT0 + 1 minute (kT0 is a whole minute),
+// and one time advance to kT0 + 6 minutes that passes over the quiet minutes.
+void test_walk_terminations() {
+    const State before = make_state(5, true, kT0, true, 7, false, 0, 0, kT0 + kMinute);
+    const Event advance{EventKind::AdvanceTime, kT0 + 6 * kMinute};
+
+    // (a) The timebase holds minute intervals up to the one opening at kT0 + 2
+    // minutes, then none; either way the slot it fills in is that of the minute it
+    // was asked about, so only the return value says the interval is missing. By
+    // hand: the lookups at kT0 + 1 and kT0 + 2 minutes plan bars 8 and 9, ending
+    // at kT0 + 2 and kT0 + 3 minutes; the lookup at kT0 + 3 minutes is answered
+    // false, and the walk stops with the cursor on it.
+    const BarClock ends_after_two = [](std::int64_t at, Slot& slot) {
+        const std::int64_t open = at - ((at % kMinute) + kMinute) % kMinute;
+        slot.end_ms = open + kMinute;
+        slot.next_open_ms = open + kMinute;
+        slot.tradable = true;
+        return open <= kT0 + 2 * kMinute;
+    };
+    const Plan stopped = plan_schedule(before, kBarCloseOnly, &advance, 1, ends_after_two, true);
+    expect_rows("walk stops when the clock has no slot", stopped,
+                {{0, 5, 8, 0, 0, kT0 + 2 * kMinute, kPre, kConfirmed},
+                 {0, 5, 9, 0, 1, kT0 + 3 * kMinute, kPre, kConfirmed}});
+    CHECK("walk stops when the clock has no slot",
+          same_state(stopped.after, make_state(6, true, kT0 + 6 * kMinute, true, 9, false, 0, 0,
+                                               kT0 + 3 * kMinute)));
+
+    // (b) A slot that ends by the event but whose next lookup is at the cursor
+    // (back 0) or before it (back 1). By hand: the first answer ends the walk, so
+    // the schedule plans nothing, leaves the key and the cursor where they were
+    // (bar 7, kT0 + 1 minute), and the clock was asked once. The clock gives up
+    // after a hundred answers, so a walk without this guard ends in a wrong count
+    // and a wrong number of questions, not in a hang.
+    for (const std::int64_t back : {0, 1}) {
+        int asked = 0;
+        const BarClock stuck = [&asked, back](std::int64_t at, Slot& slot) {
+            if (++asked > 100) return false;
+            slot.end_ms = at + 1;
+            slot.next_open_ms = at - back;
+            slot.tradable = true;
+            return true;
+        };
+        const Plan stalled = plan_schedule(before, kBarCloseOnly, &advance, 1, stuck, true);
+        expect_rows("walk stops on a slot that does not move the cursor", stalled, {});
+        CHECK("walk stops on a slot that does not move the cursor",
+              same_state(stalled.after, make_state(6, true, kT0 + 6 * kMinute, true, 7, false, 0, 0,
+                                                   kT0 + kMinute)));
+        CHECK("walk stops on a slot that does not move the cursor", asked == 1);
+    }
+}
+
+// The trace a timebase without time boundaries plans, whatever its clock offers
+// besides saying it is unbounded. By hand from the rule (see below): a warm-up
+// bar and two bars, the second ninety minutes after the first, each opens its
+// lifecycle and closes it in the same event, a POST confirmed row at its own
+// time; keys 0, 1, 2; nothing for the ninety minutes; no end and no cursor kept.
+// Then a bar already open with no end (calculation 2 of bar 4) and a bar event
+// three days later: the bar closes on data alone, in its own lifecycle, with its
+// next calculation ordinal and no PRE row.
+void expect_without_boundaries(const char* label, const BarClock& clock) {
+    const std::int64_t late = kT0 + 90 * kMinute;
+    const Event trace[3] = {{EventKind::WarmupBar, kT0},
+                            {EventKind::Bar, late},
+                            {EventKind::Bar, late + 1}};
+    const Plan whole = plan_schedule(State{}, kBarCloseOnly, trace, 3, clock, true);
+    expect_rows(label, whole,
+                {{0, 1, 0, 0, 0, kT0, kPost, kConfirmed},
+                 {1, 2, 1, 0, 0, late, kPost, kConfirmed},
+                 {2, 3, 2, 0, 0, late + 1, kPost, kConfirmed}});
+    CHECK(label, same_state(whole.after, make_state(4, true, late + 1, true, 2, false, 0, 0, 0)));
+
+    const std::int64_t later = kT0 + 3 * 1440 * kMinute;
+    const State open = make_state(10, true, kT0, true, 4, true, 0, 2, 0);
+    const Event bar{EventKind::Bar, later};
+    const Plan closed = plan_schedule(open, kBarCloseAndTick, &bar, 1, clock, true);
+    expect_rows(label, closed, {{0, 10, 4, 2, 0, later, kPost, kConfirmed}});
+    CHECK(label, same_state(closed.after, make_state(11, true, later, true, 4, false, 0, 0, 0)));
+}
+
+// Frozen contract: c-boundary.md section 12 PXR-A2 ("a timebase without time
+// boundaries has no PRE calculations") and proof-matrix.md AV-META case (5) ("no
+// PRE calculation exists"). The packet holds no vector for this case, so the
+// expectations in expect_without_boundaries are derived from that rule alone
+// (A1: a bar event's own close and a data-driven close are POST; A2: POST is
+// t(e)). What a tick, a time advance or a quiet interval does on such a timebase
+// is not stated by the rule, and is not tested. The clocks: one that only says
+// the timebase is unbounded, as the consumer's does, and one that offers an
+// interval besides, which the derivation must not use.
+void test_timebase_without_time_boundaries() {
+    const BarClock plain = [](std::int64_t, Slot& slot) {
+        slot.bounded = false;
+        return true;
+    };
+    const BarClock offering = [](std::int64_t at, Slot& slot) {
+        slot.end_ms = at + kMinute;
+        slot.next_open_ms = at + kMinute;
+        slot.tradable = true;
+        slot.bounded = false;
+        return true;
+    };
+    expect_without_boundaries("no boundaries, no interval offered", plain);
+    expect_without_boundaries("no boundaries, an interval offered", offering);
+}
+
 }  // namespace
 
 int main() {
@@ -514,6 +619,8 @@ int main() {
     test_windows();
     test_refusals();
     test_every_field_counts();
+    test_walk_terminations();
+    test_timebase_without_time_boundaries();
     std::printf("test_native_calc_plan: %d failure(s) in %d checks\n", failures, checks);
     return failures == 0 ? 0 : 1;
 }

@@ -33,6 +33,9 @@ struct Slot {
     std::int64_t next_open_ms = 0;
     /// Whether a quiet interval here yields a carry-forward bar.
     bool tradable = false;
+    /// False for a timebase without time boundaries (a raw-label partition,
+    /// whose bars close on data alone): the other three fields then mean nothing.
+    bool bounded = true;
 };
 
 /// The slot that holds an instant, or false when the timebase has none there.
@@ -51,7 +54,8 @@ struct State {
     bool has_last_key = false;
     std::uint64_t last_bar_key = 0;
     /// Whether the lifecycle of last_bar_key is still open, the exclusive end the
-    /// kernel derived for it when it opened (zero while none is open) and how
+    /// kernel derived for it when it opened (zero while none is open, and zero
+    /// for a bar of a timebase without time boundaries, which has none) and how
     /// many calculations it has had.
     bool bar_open = false;
     std::int64_t open_end_ms = 0;
