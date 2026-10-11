@@ -10,7 +10,7 @@ The PineForge **runtime** (C/C++ sources under `src/`, `include/`, `tests/`, `cm
 
 See [LICENSE](LICENSE) for the full Apache License 2.0 text.
 
-The `corpus/` and `benchmarks/assets/` git submodules are **public** companion repositories, also under **Apache-2.0** for the PineForge-authored material they contain. Each carries its own `LEGAL.md` (the corpus also a `LICENSE` and `NOTICE`); the per-file scope notes there control (in particular, the TradingView trade-list exports described below are *not* PineForge-licensed works — see "TradingView trade-list exports").
+The `corpus/` and `benchmarks/assets/` git submodules are **public** companion repositories, also under **Apache-2.0** for the PineForge-authored material they contain. Each carries its own `LEGAL.md` (the corpus also a `LICENSE` and `NOTICE`); the per-file scope notes there control (in particular, the TradingView trade-list exports described below are *not* PineForge-licensed works — see "TradingView trade-list exports"). Some test inputs are not distributed in any public repository; see "Data not distributed" below.
 
 ## The transpiler is a separate, source-available repository
 
@@ -51,6 +51,10 @@ The `corpus/` and `benchmarks/assets/` trees include TradingView **"List of Trad
 - We do **not** Apache-relicense TradingView's export *format/columns* (those are TradingView's, not ours to license), so these files sit in-tree as **factual reference**, not as an Apache-2.0 work of ours.
 - The one open item is **contractual**: whether public redistribution of the exports is permitted under TradingView's **Terms of Service** (separate from copyright). This is being confirmed by **US + Taiwan counsel** (opinion targeted Q3 2026).
 - Either way, parity does **not depend on shipping them**: `strategy.pine` + `generated.cpp` + public OHLCV regenerate `engine_trades.csv`, which you can diff against a TradingView export you produce yourself. If the reference CSVs are ever removed, the result stays reproducible.
+
+## Data not distributed
+
+Some tests replay price series for US-listed instruments that come from a third-party source. Those bar files are not distributed in this repository or in its submodules; the maintainers keep them in a private repository. Tests that need them report themselves as skipped, naming the missing file, when it is absent. Nothing in this repository depends on them for the correctness of the engine: the public corpus, the unit tests and the kernel suites run without them.
 
 ## Trademarks and affiliation
 
