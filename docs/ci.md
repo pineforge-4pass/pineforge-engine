@@ -70,13 +70,13 @@ instead ([Run-failure codes](pages/run-failure-codes.md)).
 
 | Profile | Build | Additional coverage |
 | --- | --- | --- |
-| `release` | Release, tutorial enabled | Standard CI checks behind a row floor (`RELEASE_MIN_TESTS`; `--min-tests N` overrides it), installed package, and installed native include-independence proof |
+| `release` | Release, tutorial enabled | Standard CI checks behind a row floor (`PRIVATE_FIXTURE_PROFILE_FLOORS`; `--min-tests N` overrides it), installed package, and installed native include-independence proof |
 | `debug` | Debug, tutorial enabled | The standard checks and installed package without Release optimization; no default row floor, examples, include-independence proof or twin-parity guard |
 | `sanitizers` | Debug, ASan and UBSan | Instrumented library, tests and installed consumer; Linux CI also requires leak detection |
 | `native` | Release, live runner enabled | JSON, journal, transport tests, installed runner help, and installed native include-independence proof |
 | `live-sanitizers` | Debug, live runner enabled, ASan and UBSan | Every runner target instrumented and audited from compile commands; all runner CTest rows, Python E2Es and installed runner help; WebSocket-enabled curl mandatory while `runner/transport.cpp` exists, no skips accepted |
 | `live-tsan` | Debug, live runner enabled, ThreadSanitizer | Separate build instruments every runner target, audits compile commands and runs all runner rows and Python E2Es; WebSocket-enabled curl is mandatory and skips are refused |
-| `kernel` | Release, live runner enabled, Pine source layer OFF | The source-free CTest set behind a row floor (`KERNEL_MIN_TESTS`; `--min-tests N` overrides it), installed package, and the `nm` half of the include-independence proof over `libpineforge_kernel.a` |
+| `kernel` | Release, live runner enabled, Pine source layer OFF | The source-free CTest set behind a row floor (`PRIVATE_FIXTURE_PROFILE_FLOORS`; `--min-tests N` overrides it), installed package, and the `nm` half of the include-independence proof over `libpineforge_kernel.a` |
 
 By default each profile uses `build-ci-<profile>`. Keep separate build directories
 for different profiles and toolchains. The verifier never deletes a build tree
@@ -134,27 +134,44 @@ Only the native cell accepts the caller's existing PR-only slow-label exclusion.
 The kernel profile also gates the CTest row count: `tests/CMakeLists.txt`
 drops every test TU whose include closure reaches `pineforge/source/` or
 `compat/pine/`, so a lane whose native witnesses shared a TU with an adapter
-twin would leave the kernel-only gate without any failure. `KERNEL_MIN_TESTS`
-in `scripts/ci_verify.py` pins the expected row count; the `ctest-floor`
-stage fails when fewer rows ran or CTest printed no count it can read. Only
-rows whose test ran count: a row CTest skipped or could not start is listed
-beside the count (`ctest-floor.log`, `ctestSkipped` / `ctestNotRun` in
-`ci-summary.json`), never counted, so the unsupported-WebSocket skip above is
-reported rather than counted, and a row that stops executing fails the floor
-too. The release profile
-carries the same gate with `RELEASE_MIN_TESTS`, so a row deleted from the
-default build fails too; `debug` and `sanitizers` register a subset of the
-release rows. Raise the constant when a row lands, and pass `--min-tests N` to
-override it for one run (the flag gates any profile; `kernel` and `release`
-have a default). The two run floors are overlay-aware, keyed on
-`PINEFORGE_PRIVATE_FIXTURES`: with the variable set and non-empty (the
-private-fixture overlay is present in the tree) the full constants apply and
-every ctest row carrying the `private_fixtures` label must run, so a skip
-fails the run -- a skip there means the overlay did not reach the tree; with
-the variable unset (public CI, where the overlay's rows register as
-placeholders and skip) each floor is lowered by the pinned private-fixture row
-count recorded in `tests/private_fixture_rows.txt`. `EXCLUDED_REGISTERED_MIN`
-does not move: `ctest -N` lists a placeholder's row whether it runs or skips.
+twin would leave the kernel-only gate without any failure. The campaign's
+per-profile row floors live in ONE table in `scripts/ci_verify.py`,
+`PRIVATE_FIXTURE_PROFILE_FLOORS`, which states for each of `release` and
+`kernel` the profile's full overlay-present population and how many pinned
+private-fixture rows that population registers; the `ctest-floor` stage fails
+when fewer rows ran than the floor, or when CTest printed no count it can
+read. Only rows whose test ran count: a row CTest skipped, disabled or could
+not start is listed beside the count (`ctest-floor.log`, `ctestSkipped` /
+`ctestNotRun` / `ctestDisabled` in `ci-summary.json`), never counted. The
+release profile carries the same gate, so a row deleted from the default build
+fails too; `debug` and `sanitizers` register a subset of the release rows and
+have no row floor of their own. Raise the table's `full` number when a row
+lands, and pass `--min-tests N` to override it for one run (the flag gates any
+profile; `kernel` and `release` have a default).
+
+The two run floors are overlay-aware, keyed on `PINEFORGE_PRIVATE_FIXTURES`.
+Both numbers are constants of the profile, measured on the campaign's
+two-world runs; they never move with the run's own `ctest -N` count or its
+observed skips:
+
+| profile | floor, overlay present | floor, overlay absent | registered (present / absent) |
+|---|---|---|---|
+| `release` | 902 | 605 | 902 / 901 |
+| `kernel` | 331 | 303 | 331 / 424 |
+
+With the variable set and non-empty (the private-fixture overlay is present in
+the tree) the floor is the full population and EVERY row of it must run: a row
+that skips, is disabled or cannot start fails the run -- a skip there means the
+overlay did not reach the tree. With the variable unset (public CI, where the
+pinned rows register as placeholders and skip) the floor is that profile's
+full population minus the pinned rows it registers, so a public row that
+leaves the registry or stops running falls under the floor either way, an
+unpinned skip is a loss with no margin to absorb it, and an explicit
+`--min-tests N` is used verbatim in both modes and is never lowered. The
+registered column is why the absent floor is not the absent registration, and
+it is to be re-measured after the registration fix lands.
+`EXCLUDED_REGISTERED_MIN` is a registered floor, read only on an
+`--exclude-label` run, and stays out of the overlay rule entirely.
 
 For PR runs with `--exclude-label slow`, the verifier asks CTest to enumerate
 the registered rows both with `ctest -N` and with `ctest -N -LE slow`. It then
@@ -168,7 +185,8 @@ plus wave G's six rows, wave H's twenty-four, INT26's own tape row, INT27's
 thirteen, XSYM-D's four, K-SESSION-WINDOWS' four, INT28's twenty-four,
 INT28-FIX's four, INT29's seven, W15-KERNEL-CAL's two, INT30's twenty-four,
 TAIL-I's one, XAU-CAL's four and FIX-E1E2's two). The full-run release and
-kernel floors are 792 and 299 rows that ran; full runs do not exclude a label.
+kernel floors are the table's own numbers above (605 and 303 rows absent, 902
+and 331 with the overlay present); full runs do not exclude a label.
 
 Preflight also runs the detached-comment census of the kernel compile closure
 (`detached-comments`: `scripts/measure_detached_comments.py --check-ceiling`)

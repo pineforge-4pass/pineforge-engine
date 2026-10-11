@@ -11,12 +11,16 @@ from prepare_settlement_cpp_abi_base import PROVIDERS, authenticate_headers, ext
 ROOT = Path(__file__).resolve().parents[1]
 # The private-fixture PRs move tests/fixtures/native_cpp_abi/ out of the
 # public tree, where authenticate_historical_host_manifests() reads one
-# headers.tar per host closure.  Absent, the guard skips with the project's
-# pinned literal -- the one the private-fixture ctest rows print and
+# headers.tar per host closure.  Absent, the guard prints the project's pinned
+# literal -- the one the private-fixture ctest rows print and
 # tests/CMakeLists.txt matches with SKIP_REGULAR_EXPRESSION; ci_verify and
 # ci_preflight read a source guard's 77 plus that literal as a named skip --
-# rather than failing on read_bytes(); present, every check below runs as
-# before.  The gate sits ahead of load(), so no work happens on the skip.
+# and exits 77 rather than failing on read_bytes().  The skip is PARTIAL: the
+# text half (check_texts) reads only public sources and runs first, so it
+# enforces the same ownership checks in the fixture-absent tree it always
+# enforced, and its failure is that failure -- exit 1, no skip. Only the
+# historical-manifest half is skipped. Present, every check below runs as
+# before (R2-F4).
 PRIVATE_FIXTURE_SKIP_LITERAL = "SKIP private fixtures not present: "
 FILES = (
     "include/pineforge/native_order.hpp",
@@ -1167,7 +1171,16 @@ if __name__ == "__main__":
         raise SystemExit('usage: check_native_cpp_versions.py [--self-test-tempdir]')
     absent = missing_private_fixtures()
     if absent:
+        # R2-F4: the text half reads only public sources, so it runs in the
+        # fixture-absent tree TOO -- an unqualified 77 here silently dropped
+        # every check_texts check from public PR CI. It runs first and its
+        # failure is this guard's failure (exit 1, traceback, no skip); only
+        # the manifest half -- which cannot run without the private headers --
+        # is reported as the pinned skip.
+        check_texts(load(ROOT))
         print(PRIVATE_FIXTURE_SKIP_LITERAL + str(absent[0].relative_to(ROOT)))
+        print('native-version text checks ran and passed; the historical host '
+              'manifests cannot be authenticated without that input')
         raise SystemExit(77)
     check()
     print("native_order identity v1 / values v7, native_calendar_v2, native_run_spec_v3, "
