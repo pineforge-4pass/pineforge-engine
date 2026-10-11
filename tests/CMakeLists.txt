@@ -4191,6 +4191,16 @@ add_test(NAME test_kernel_profile_rows COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/check_kernel_profile_rows.py)
 add_test(NAME test_kernel_profile_rows_controls COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/test_check_kernel_profile_rows.py)
+# The private-fixture class sweeps: every registered row that names removed
+# data is pinned or guarded, no Python row reads an absent private file, and
+# the two oracle tree checks keep their controls. They only read the tree, so
+# they register in every profile and in both fixture modes.
+add_test(NAME test_private_fixture_reads COMMAND ${Python3_EXECUTABLE} -B
+    ${PROJECT_SOURCE_DIR}/scripts/check_private_fixture_reads.py)
+add_test(NAME test_kernel_python_private_reads COMMAND ${Python3_EXECUTABLE} -B
+    ${PROJECT_SOURCE_DIR}/scripts/check_kernel_python_private_reads.py)
+add_test(NAME test_oracle_fixture_checks COMMAND ${Python3_EXECUTABLE} -B
+    ${PROJECT_SOURCE_DIR}/scripts/test_oracle_fixture_checks.py)
 # R5 P6: every NativeRunSpec field the Pine adapter's project() never assigns
 # has a ruling row in ADR-0001 naming executed native consumers (the price grid
 # and the risk limits are native-only by ruling), plus the check's mutation
