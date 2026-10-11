@@ -132,9 +132,9 @@ finding to report, not a step to take.
    `scripts/check_doc_reverts.py`.
 
 10. **A test row never silently disappears.** Each profile counts the rows that
-    *ran* against a floor: `KERNEL_MIN_TESTS` ci_verify.py:321 and
-    `RELEASE_MIN_TESTS` ci_verify.py:595. Adding rows means raising the floor
-    in the same commit.
+    *ran* against a floor: the `PRIVATE_FIXTURE_PROFILE_FLOORS`
+    ci_verify.py:780 table. When rows land, re-measure the profile's own
+    overlay-present run and edit that table in the same commit.
 
 ## The recipe for a lane
 
@@ -281,8 +281,10 @@ measurement that produced it, so a later change to it is visible as a change to
 the record, not as an edit to a literal.
 
 **floor** — the minimum number of CTest rows a profile must actually run
-(`KERNEL_MIN_TESTS` ci_verify.py:321, `RELEASE_MIN_TESTS` ci_verify.py:595). It
-counts rows that ran, so a skipped row does not pad it.
+(the `PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:780 table: with the private
+overlay present, the profile's full registered population; without it, that
+population minus the pinned private-fixture rows it registers as SKIP
+placeholders). It counts rows that ran, so a skipped row does not pad it.
 
 **receipt** — the recorded evidence an ABI-comparison row needs (a prepared
 historical provider). Under `PINEFORGE_REQUIRE_ABI_RECEIPTS`

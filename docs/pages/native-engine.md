@@ -4612,9 +4612,13 @@ own features, not only the rows that happened to be source-free.
 
 `python3 scripts/ci_verify.py kernel` is the profile that verifies the
 kernel-only build (Release, live runner ON, tutorial OFF, source layer OFF);
-CI runs it as the `kernel-only` job. The profile carries a **row floor**: `KERNEL_MIN_TESTS` in
-`scripts/ci_verify.py` is the count the kernel-only CTest set is
-expected to run, and the `ctest-floor` stage fails the run when fewer rows
+CI runs it as the `kernel-only` job. The profile carries a **row floor**, its
+number in the `PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:780 table in
+`scripts/ci_verify.py`: the count the kernel-only CTest set is
+expected to run with the private overlay present, minus the pinned
+private-fixture rows of `tests/private_fixture_rows.txt` it registers as SKIP
+placeholders while the overlay is absent. The `ctest-floor` stage fails the
+run when fewer rows
 ran or CTest printed no count it can read, so a test TU that silently becomes
 source-bound (or a filter that empties the suite) is a refusal rather than a
 smaller green. A row counts only when its test ran to a verdict: a row CTest
@@ -4622,9 +4626,10 @@ skipped (`test_native_live_websocket` exits 77 wherever libcurl lacks
 WebSocket support) or could not start is listed beside the count, in
 `ci-logs/ctest-floor.log` and as `ctestSkipped` / `ctestNotRun` in
 `ci-summary.json`, and never counted, so a row that stops executing fails the
-floor as well. The `release` profile carries the same gate with
-`RELEASE_MIN_TESTS`, so a row that leaves the default build fails CI too.
-Raise the constant when a row lands; `--min-tests N` overrides it for one run
+floor as well. The `release` profile carries the same gate with its own row in
+the table, so a row that leaves the default build fails CI too.
+When a row lands, re-measure the profile's own overlay-present Lab run and
+edit the table; `--min-tests N` overrides the floor for one run
 of any profile (`debug`, `sanitizers` and `native` carry no default floor).
 
 ### What the kernel-only archive still names

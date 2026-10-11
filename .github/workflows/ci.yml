@@ -202,8 +202,9 @@ jobs:
           restore-keys: |
             ccache-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-
 
-      # The release profile fails below its CTest row floor (RELEASE_MIN_TESTS in
-      # scripts/ci_verify.py); debug registers a subset of those rows.
+      # The release profile fails below its CTest row floor (its row of the
+      # PRIVATE_FIXTURE_PROFILE_FLOORS table in scripts/ci_verify.py);
+      # debug registers a subset of those rows.
       - name: Verify (${{ matrix.build_type }})
         env:
           # A40 rev 7: the relative runtime witness gates on process CPU time,

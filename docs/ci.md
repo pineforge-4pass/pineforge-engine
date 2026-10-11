@@ -579,7 +579,7 @@ domain, a relative markdown link whose file or `#anchor` is missing, a cited
 exist, a `PF_ABI_VERSION` / `PF_NATIVE_API_VERSION` number the headers do not
 define or a "current release" that is not `VERSION`'s, a count the
 tree derives stated wrong (the `PF_API` declarations of the two C headers,
-`KERNEL_MIN_TESTS` / `RELEASE_MIN_TESTS`, the example manifest of
+the `PRIVATE_FIXTURE_PROFILE_FLOORS` floor counts, the example manifest of
 `check_native_include_independence.py`), and the marker itself sitting on a
 sentence that states a non-live epoch as today's. The
 marker on the line above is the escape hatch itself: this sentence names the

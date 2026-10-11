@@ -9,6 +9,7 @@ ordering can be asserted. Root must still run the actual profiles.
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 from pathlib import Path
@@ -3103,6 +3104,75 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         self.assertIn('a truncated pin cannot clear the rows it lost',
                       driver.stages[0]['error'])
         self.assertEqual(driver.stages[0]['name'], 'ctest-exclusion')
+
+
+class FloorDocsPointAtTheTable(unittest.TestCase):
+    """N3: the floors have ONE source, and the prose says where it is.
+
+    KERNEL_MIN_TESTS / RELEASE_MIN_TESTS were a dead second copy: the
+    --min-tests help quoted 325 and 895 (false), and six doc places told
+    contributors to raise the constants. Both names now derive from
+    PRIVATE_FIXTURE_PROFILE_FLOORS, and this control fails when the help
+    text or a doc place goes back to a number of its own.
+    """
+
+    STALE_INSTRUCTIONS = (
+        'raise the floor in the same commit',
+        'Raise the constant when a row lands',
+        'Adding rows means raising the floor',
+        'raise the floor',
+    )
+    DOC_PLACES = ('CONTRIBUTING.md', 'docs/pages/contributing-llm.md',
+                  'docs/pages/native-engine.md', 'docs/ci.md',
+                  '.github/workflows/ci.yml')
+
+    def test_the_two_names_derive_from_the_table(self):
+        # AST teeth: the right-hand sides must subscript the table, so
+        # writing a number back into either name fails here.
+        module = ast.parse((ROOT / 'scripts' / 'ci_verify.py').read_text())
+        assigned = {}
+        for node in module.body:
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target = node.targets[0]
+                if isinstance(target, ast.Name) and target.id in (
+                        'KERNEL_MIN_TESTS', 'RELEASE_MIN_TESTS'):
+                    assigned[target.id] = node.value
+        self.assertEqual(set(assigned), {'KERNEL_MIN_TESTS', 'RELEASE_MIN_TESTS'})
+        for name, value in assigned.items():
+            with self.subTest(name=name):
+                self.assertIsInstance(value, ast.Subscript)
+                base = value
+                while isinstance(base, ast.Subscript):
+                    base = base.value
+                self.assertIsInstance(base, ast.Name)
+                self.assertEqual(base.id, 'PRIVATE_FIXTURE_PROFILE_FLOORS')
+        self.assertEqual(ci_verify.KERNEL_MIN_TESTS,
+                         ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS['kernel'][0])
+        self.assertEqual(ci_verify.RELEASE_MIN_TESTS,
+                         ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS['release'][0])
+
+    def test_the_help_text_names_the_table_and_no_stale_number(self):
+        result = subprocess.run(
+            [sys.executable, '-B', str(ROOT / 'scripts' / 'ci_verify.py'), '--help'],
+            capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('PRIVATE_FIXTURE_PROFILE_FLOORS', result.stdout)
+        self.assertNotIn('defaults to 325', result.stdout)
+        self.assertNotIn('895', result.stdout)
+
+    def test_every_doc_place_points_at_the_table(self):
+        for rel in self.DOC_PLACES:
+            text = (ROOT / rel).read_text()
+            with self.subTest(place=rel):
+                self.assertIn('PRIVATE_FIXTURE_PROFILE_FLOORS', text)
+                for stale in self.STALE_INSTRUCTIONS:
+                    self.assertNotIn(stale, text)
+        for rel in ('docs/pages/contributing-llm.md', 'docs/pages/native-engine.md',
+                    'CONTRIBUTING.md', '.github/workflows/ci.yml'):
+            with self.subTest(place=rel):
+                text = (ROOT / rel).read_text()
+                self.assertNotIn('KERNEL_MIN_TESTS', text)
+                self.assertNotIn('RELEASE_MIN_TESTS', text)
 
 
 class ExamplesAssertLive(unittest.TestCase):
