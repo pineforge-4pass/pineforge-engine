@@ -296,7 +296,8 @@ endif()
         self.assertIn('confirmed_capabilities_refusals_requests_9', result.stdout)
         self.assertIn('is not a pinned row', result.stdout)
 
-    # control 8: a pinned row that is not a refusal shard, added to the list:
+    # control 8: a pinned row that is not a refusal shard, added to the list
+    # with a marker of its own (the positional pairing stays complete):
     # pinned, sorted and duplicate-free, so only the derived side rejects it
     @needs_overlay
     def test_a_pinned_non_shard_row_is_drift(self):
@@ -307,6 +308,14 @@ endif()
         self.tree.edit(RUNNER, tail,
                        '            confirmed_capabilities_refusals_requests_3\n'
                        f'            {NOT_A_SHARD_ROW}\n'
+                       '        )')
+        marker_tail = ('            refused_clock_W\n'
+                       '        )')
+        self.assertIn(marker_tail, (self.root / RUNNER).read_text(),
+                      'the marker list changed shape')
+        self.tree.edit(RUNNER, marker_tail,
+                       '            refused_clock_W\n'
+                       '            pooc_close_fill_view\n'
                        '        )')
         result = self.run_check('--overlay', '--cmakelists', RUNNER,
                                 '--profile', 'release', overlay=True)
