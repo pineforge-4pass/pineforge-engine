@@ -9,11 +9,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import subprocess
+import sys
+
 from check_aggregate_cpp_versions import body
 from check_native_cpp_versions import (
     DRIVER_FORWARD, FILES, NATIVE_FX_CURVE_HEADER, NATIVE_FX_CURVE_SOURCE,
-    ROOT, authenticate_historical_host_manifests, check, check_fx_curve_introduced_at,
-    check_texts, load,
+    ROOT, PRIVATE_FIXTURE_SKIP_LITERAL as SCRIPT_SKIP_LITERAL,
+    authenticate_historical_host_manifests, check, check_fx_curve_introduced_at,
+    check_texts, historical_provider_inputs, load,
 )
 
 DATA = load()
@@ -1155,6 +1159,71 @@ class NativeLayoutAssembly(unittest.TestCase):
                         "abi_layout_extra:\n.quad 80\n.quad 240\n"):
             with self.assertRaises(RuntimeError):
                 assembly_layout_values(emitted, 2)
+
+
+class AbsentModeTextChecks(unittest.TestCase):
+    """R2-F4: the text half runs in the fixture-absent tree.
+
+    The controls run the REAL script as a subprocess over a scratch tree: the
+    three modules it imports and the twelve public sources, with no
+    tests/fixtures/native_cpp_abi. Before the fix the script exited 77 ahead
+    of check_texts, so a tampered public source passed in the absent tree; now
+    the text checks run first and their failure is the script's failure, while
+    the manifest half still reports the pinned skip.
+    """
+
+    TAMPER = ('double price_tick = 0.0;', 'double price_tick = 1.0;')
+
+    def scratch_tree(self, tamper: bool) -> Path:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        # The whole scripts directory: the script's imports are transitive and
+        # a subset would fail on whichever module it reaches next.
+        shutil.copytree(ROOT / 'scripts', root / 'scripts',
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        for relative in FILES:
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            text = (ROOT / relative).read_text()
+            if tamper and relative == FILES[0]:
+                self.assertIn(self.TAMPER[0], text)
+                text = text.replace(*self.TAMPER, 1)
+            target.write_text(text)
+        return root
+
+    def run_script(self, root: Path) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, '-B', str(root / 'scripts' / 'check_native_cpp_versions.py')],
+            cwd=root, capture_output=True, text=True, timeout=300)
+
+    def test_green_absent_untampered_the_partial_skip_still_prints(self):
+        result = self.run_script(self.scratch_tree(tamper=False))
+        self.assertEqual(result.returncode, 77, result.stdout + result.stderr)
+        self.assertIn(SCRIPT_SKIP_LITERAL, result.stdout)
+        self.assertIn('text checks ran and passed', result.stdout)
+
+    def test_red_absent_a_tampered_public_source_fails_the_script(self):
+        # The check the absent tree used to skip: the ActivationGrid default is
+        # a check_texts pin, and a tree without fixtures must still refuse a
+        # changed one.
+        result = self.run_script(self.scratch_tree(tamper=True))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertNotIn(SCRIPT_SKIP_LITERAL, result.stdout)
+        self.assertIn('ActivationGrid', result.stderr)
+
+    def test_green_present_inputs_the_gate_opens_into_the_manifest_half(self):
+        # With the provider inputs nominally in place the script leaves the
+        # gate: the text half passes and the manifest half runs (and fails
+        # loudly on the empty stand-ins) -- never the skip.
+        root = self.scratch_tree(tamper=False)
+        for path in historical_provider_inputs(root):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'')
+        result = self.run_script(root)
+        self.assertNotEqual(result.returncode, 77, result.stdout)
+        self.assertNotIn(SCRIPT_SKIP_LITERAL, result.stdout)
+        self.assertIn('Traceback', result.stderr)
 
 
 if __name__ == "__main__":
