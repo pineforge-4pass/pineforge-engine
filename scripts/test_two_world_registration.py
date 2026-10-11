@@ -33,6 +33,7 @@ Controls:
  15. a glob form the sweep does not model (FOLLOW_SYMLINKS) -> 2, named
  16. the profile table is ci_verify's own; a copy with a profile removed from
      the table is detected by the comparison
+ 17. two first-library markers swapped -> the positional pairing is drift -> 1
 """
 from __future__ import annotations
 
@@ -423,6 +424,25 @@ file(GLOB_RECURSE _e2e_two_world_symlinked FOLLOW_SYMLINKS
         self.assertEqual(2, result.returncode, result.stdout + result.stderr)
         self.assertIn('FOLLOW_SYMLINKS', result.stdout + result.stderr)
         self.assertIn(RUNNER, result.stdout + result.stderr)
+
+    # control 17: two first-library markers swapped. Both still name removed
+    # files, so only the derived side (the real split's own first library per
+    # row) can catch the mis-paired markers
+    @needs_overlay
+    def test_a_swapped_marker_pair_is_drift(self):
+        head = ('            htf15_sma_pooc\n'
+                '            pooc_close_short\n')
+        self.assertIn(head, (self.root / RUNNER).read_text(),
+                      'the marker list changed shape')
+        self.tree.edit(RUNNER, head,
+                       '            pooc_close_short\n'
+                       '            htf15_sma_pooc\n')
+        result = self.run_check('--overlay', '--cmakelists', RUNNER,
+                                '--profile', 'release', overlay=True)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn('confirmed_capabilities_refusals_pooc_1', result.stdout)
+        self.assertIn('confirmed_capabilities_refusals_pooc_2', result.stdout)
+        self.assertIn('mismatched: 2', result.stdout)
 
     # the profile table is scripts/ci_verify.py's own: the compared profiles
     # are printed for every ci_verify profile, the per-profile flags agree

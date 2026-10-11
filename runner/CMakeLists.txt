@@ -422,11 +422,11 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
         # by the same regex the present branch uses). The libraries cannot
         # build here, so the shard names that inventory yields are pinned
         # literally, once, each with the removed generated.cpp of its first
-        # library, so the row set does not shrink with the fixtures. Both
-        # lists are sorted (drift guard: check_two_world_registration.py
-        # re-derives the names from the split over the live tree and requires
-        # them to equal this list); the marker list pairs with the row list by
-        # position, POP_FRONT consuming one per row.
+        # library, so the row set does not shrink with the fixtures. The ROW
+        # list is sorted; the MARKER list is the first library of each shard in
+        # the row list's order, and it pairs with the rows by position,
+        # POP_FRONT consuming one per row. Drift guard: the two-world check
+        # re-derives both from the split over the live tree and requires them.
         set(_pf_refusal_shard_rows
             confirmed_capabilities_refusals_pooc_1
             confirmed_capabilities_refusals_pooc_2

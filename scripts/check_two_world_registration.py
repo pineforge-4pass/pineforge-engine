@@ -96,6 +96,7 @@ CMAKE_FILES = (Path('tests/CMakeLists.txt'), Path('runner/CMakeLists.txt'))
 # branch's split produces, and the drift guard requires the two to agree.
 REFUSAL_SHARD_PREFIX = 'confirmed_capabilities_refusals_'
 REFUSAL_SHARD_RECORD = '_pf_refusal_shard_rows'
+REFUSAL_SHARD_MARKERS = '_pf_refusal_shard_first_library'
 
 FAILURES: list[str] = []
 
@@ -320,6 +321,10 @@ class Machine:
         self.rows: set[str] = set()
         self.globals: dict[str, str] = {}
         self.twins: dict[str, str] = {}
+        # The sequence list(POP_FRONT <list> ...) removed from each list, in
+        # order: the consumer of a popped list (the runner's marker-per-row
+        # pairing) reads it even though the list itself ends up empty.
+        self.popped: dict[str, list[str]] = {}
 
     # ---- value handling -------------------------------------------------
     def substitute(self, token: str) -> str:
@@ -692,10 +697,20 @@ class Machine:
                     source = self.vars.get(values[1], [])
                     self.vars[values[3]] = [source[int(self.substitute(values[2]))]]
                 elif operation == 'POP_FRONT':
-                    current = self.vars.get(values[1], [])
-                    if current:
-                        self.vars.setdefault(values[2], []).append(current[0])
-                        self.vars[values[1]] = current[1:]
+                    # CMake SETS each out-var (it does not append), unsetting
+                    # a surplus one; with no out-var exactly one element is
+                    # removed. The popped sequence is recorded either way.
+                    target = values[1]
+                    current = list(self.vars.get(target, []))
+                    out_vars = values[2:]
+                    popped = current[:len(out_vars) if out_vars else 1]
+                    self.popped.setdefault(target, []).extend(popped)
+                    for position, out in enumerate(out_vars):
+                        if position < len(popped):
+                            self.vars[out] = [popped[position]]
+                        else:
+                            self.vars.pop(out, None)
+                    self.vars[target] = current[len(popped):]
                 elif operation in ('SORT', 'REVERSE'):
                     pass
                 else:
@@ -1177,10 +1192,12 @@ def derive_record_need(root: Path, absent_world: World, overlay_world: World,
     return overlay.rows, without.rows, reaching, twins
 
 
-def recorded_refusal_shards(root: Path, removed_dirs, removed_files) -> list[str]:
-    """The recorded refusal-shard list, read from the absent world's own walk
-    of runner/CMakeLists.txt: the branch that registers the placeholders is
-    the one that sets the record."""
+def recorded_refusal_shards(root: Path, removed_dirs, removed_files):
+    """The recorded refusal-shard rows and their first-library markers, read
+    from the absent world's own walk of runner/CMakeLists.txt: the branch that
+    registers the placeholders is the one that sets both records, and the
+    marker sequence is the one POP_FRONT consumed, one per row, in the row
+    list's order -- the positional pairing the row's SKIP literal relies on."""
     machine = registered(root / 'runner/CMakeLists.txt',
                          World(root, removed_dirs, removed_files, virtual=True),
                          PROFILES['release'], root)
@@ -1188,10 +1205,34 @@ def recorded_refusal_shards(root: Path, removed_dirs, removed_files) -> list[str
     if recorded is None:
         raise Unreadable(f'runner/CMakeLists.txt: {REFUSAL_SHARD_RECORD} was '
                          f'never set on the fixture-less branch')
-    return list(recorded)
+    markers = machine.popped.get(REFUSAL_SHARD_MARKERS)
+    if markers is None:
+        raise Unreadable(f'runner/CMakeLists.txt: {REFUSAL_SHARD_MARKERS} was '
+                         f'never popped on the fixture-less branch, so the '
+                         f'shard rows have no first-library markers')
+    return list(recorded), list(markers)
 
 
-def check_recorded_refusal_shards(recorded: list[str], pinned: list[str]) -> None:
+def derived_refusal_shard_markers(machine: Machine) -> dict[str, str]:
+    """The first library of every shard row the present branch's split really
+    produces: each family's library list, cut into the same 8-library batches
+    the while() registers, each batch named by its family and shard number.
+    The marker is the library's case name -- the left side of its `case=`."""
+    markers = {}
+    for family in ('requests', 'pooc'):
+        libraries = machine.vars.get(f'_pf_confirmed_refusal_{family}')
+        if libraries is None:
+            raise Unreadable(f'runner/CMakeLists.txt: '
+                             f'_pf_confirmed_refusal_{family} was never set on '
+                             f'the present branch')
+        for offset in range(0, len(libraries), 8):
+            row = f'{REFUSAL_SHARD_PREFIX}{family}_{offset // 8 + 1}'
+            markers[row] = libraries[offset].split('=', 1)[0]
+    return markers
+
+
+def check_recorded_refusal_shards(recorded: list[str], markers: list[str],
+                                  pinned: list[str]) -> None:
     unsorted = recorded != sorted(recorded)
     if unsorted:
         fail('the recorded refusal-shard list is not sorted')
@@ -1203,9 +1244,20 @@ def check_recorded_refusal_shards(recorded: list[str], pinned: list[str]) -> Non
     for name in unpinned:
         fail(f'the recorded refusal-shard row {name} is not a pinned row '
              f'({PIN_ROWS})')
+    marker_duplicates = sorted({m for m in markers if markers.count(m) > 1})
+    empty = [m for m in markers if not m]
+    for name in marker_duplicates:
+        fail(f'the recorded refusal-shard marker list names {name} twice')
+    if len(markers) != len(recorded):
+        fail(f'the recorded refusal-shard marker list has {len(markers)} '
+             f'entries for {len(recorded)} rows: the positional pairing is '
+             f'incomplete')
     print(f'the recorded refusal-shard rows: {len(recorded)}; not a pinned row: '
           f'{len(unpinned)}; unsorted: {1 if unsorted else 0}; '
           f'duplicated: {len(duplicates)}')
+    print(f'the recorded refusal-shard first-library markers: {len(markers)} '
+          f'for {len(recorded)} rows; duplicated: {len(marker_duplicates)}; '
+          f'empty: {len(empty)}')
 
 
 def absent_half(root: Path, removed_dirs, removed_files, pin_rows, profiles, rel_files) -> None:
@@ -1220,8 +1272,9 @@ def absent_half(root: Path, removed_dirs, removed_files, pin_rows, profiles, rel
         PROFILES['release'], root))
     check_recorded_rows(root, recorded, pin_rows)
     print(f'  (the recorded list was read from {CMAKE_FILES[0]}, release profile)')
-    check_recorded_refusal_shards(
-        recorded_refusal_shards(root, removed_dirs, removed_files), pin_rows)
+    shard_rows, shard_markers = recorded_refusal_shards(
+        root, removed_dirs, removed_files)
+    check_recorded_refusal_shards(shard_rows, shard_markers, pin_rows)
     print(f'  (the recorded refusal-shard list was read from '
           f'{CMAKE_FILES[1]}, release profile, fixture-less branch)')
 
@@ -1288,12 +1341,14 @@ def overlay_half(root: Path, removed_dirs, removed_files, pin_rows, profiles,
     # 8-library batches) is run for real and its shard rows must be exactly
     # the recorded ones. Comparing the list with itself is impossible here --
     # the derived side is a registration the walk performed, not a literal.
-    recorded_shards = recorded_refusal_shards(root, removed_dirs, removed_files)
+    recorded_shards, recorded_markers = recorded_refusal_shards(
+        root, removed_dirs, removed_files)
+    overlay_runner = registered(root / 'runner/CMakeLists.txt', overlay_world,
+                                PROFILES['release'], root)
     derived_shards = sorted(
-        name for name in registered(root / 'runner/CMakeLists.txt',
-                                    overlay_world, PROFILES['release'],
-                                    root).rows
+        name for name in overlay_runner.rows
         if name.startswith(REFUSAL_SHARD_PREFIX))
+    derived_markers = derived_refusal_shard_markers(overlay_runner)
     recorded_only = sorted(set(recorded_shards) - set(derived_shards))
     derived_only = sorted(set(derived_shards) - set(recorded_shards))
     print(f'  refusal-shard drift: recorded {len(recorded_shards)} rows; the '
@@ -1307,6 +1362,18 @@ def overlay_half(root: Path, removed_dirs, removed_files, pin_rows, profiles,
              f'{name}, which the recorded list does not name')
     print(f'  refusal-shard drift: recorded-only: {len(recorded_only)}, '
           f'derived-only: {len(derived_only)}')
+    # Each marker (the first library of its shard) is paired with its row by
+    # POSITION, so a mis-paired marker still names a removed file and only
+    # this comparison can catch it: the derived side is the real split's own
+    # first library for that row.
+    mismatched = [(row, marker, derived_markers.get(row))
+                  for row, marker in zip(recorded_shards, recorded_markers)
+                  if derived_markers.get(row) != marker]
+    print(f'  refusal-shard drift: marker pairs checked: '
+          f'{len(recorded_shards)}; mismatched: {len(mismatched)}')
+    for row, marker, expected in mismatched:
+        fail(f'the recorded first-library marker of {row} is {marker}, but the '
+             f'split over the live tree puts {expected} first in that shard')
     return True
 
 
