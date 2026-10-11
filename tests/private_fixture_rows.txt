@@ -2,7 +2,7 @@
 // when the private fixtures are absent (removed by the private-fixture PRs). The count also
 // covers the PR 1b batch, whose rows runner/CMakeLists.txt registers the same way.
 // manifest: l44/pr1-manifest.tsv sha256 9a2727d455c1b470d515665428e2c6e090a22ac07f87255d1ca9c20d5528bd62
-// rows: 364
+// rows: 347
 capabilities_equivalence_clock_flags
 capabilities_equivalence_close
 checked_settings_e2e
@@ -74,7 +74,6 @@ test_admission_rules_tapes
 test_aggregated_admission_receipt_tapes
 test_aggregated_entry_bar_index_tape
 test_aggregated_path_regressions
-test_aux_security_feed
 test_aux_security_feed_l4d
 test_callback_lifecycle_tapes
 test_carried_pooc_short_margin_state_l4a
@@ -95,13 +94,11 @@ test_coof_immediate_close_tapes
 test_coof_inflight_cancel_tapes
 test_coof_open_limit_tapes
 test_coof_open_newborn_exit_tape
-test_coof_open_recalc_context
 test_coof_open_recalc_context_l4c
 test_coof_recalc_security_tapes
 test_coof_refill_waypoint_tapes
 test_coof_reissued_exit_tapes
 test_coof_resting_bracket_tapes
-test_coof_resting_stop_siblings
 test_coof_resting_stop_siblings_l4c
 test_coof_same_point_exits_tapes
 test_coof_timeframe_change_tapes
@@ -115,16 +112,12 @@ test_default_flat_market_gross_admission_l4d
 test_default_pct_stop_sizing_l4b
 test_default_qty_signal_freeze
 test_dropped_reversal_mc_first_l4c
-test_dual_stop_transactions
 test_dual_stop_transactions_l4d
 test_e19_excursion_tape
 test_engine_trade_accessors
-test_entry_bar_margin_path
 test_entry_bar_margin_path_l4a
 test_exit_binding_tapes
 test_exit_fifo_cross_tapes
-test_exit_leg_activation
-test_exit_lifecycle_reflection
 test_exit_queue_tapes
 test_exit_reissue_na_tapes
 test_exit_reservation_tapes
@@ -134,7 +127,6 @@ test_explicit_qty_floor_generated_tapes
 test_explicit_qty_floor_tapes
 test_famae_declined_reversal_trail_gap_l4c
 test_famae_lot_sizing_ten_digit_equity
-test_famag_close_survives
 test_famag_close_survives_l4d
 test_famx_declined_reversal_trail_leg_l4c
 test_flat_coof_exit_tapes
@@ -194,7 +186,6 @@ test_local_time_fields
 test_ltf_lookahead_calling_open_tapes
 test_ltf_lookahead_first_bucket
 test_lv_d8_tick_stop_equivalence
-test_m_admission_36
 test_m_admission_36_l4d
 test_magnified_aggregated_tape
 test_magnified_coof_refill_tape
@@ -211,9 +202,7 @@ test_margin_rules_forward_replay
 test_margin_rules_forward_replay_private
 test_margin_schedule_rules_tapes
 test_margin_v6_tapes
-test_market_admission_commission
 test_market_admission_commission_l4b
-test_market_admission_matrix
 test_native_auto_path
 test_native_c_api_frozen_header
 test_native_c_api_int23_header
@@ -248,7 +237,6 @@ test_oracle_frozen_size
 test_oracle_reversal_same_bar_tx
 test_oracle_stop_snapshot
 test_pending_entry_trail_tapes
-test_pending_order_v1_canary
 test_pending_order_v1_canary_l4d
 test_pending_order_v1_compiler_prefix
 test_pending_order_v1_full_prefix
@@ -350,17 +338,12 @@ test_taro_price_gap_admission_l4d
 test_time_bars_back_tapes
 test_trail_activation_tick_bar_l4c
 test_trail_activation_tick_reach
-test_trail_close_restart_no_fold
 test_trail_close_restart_no_fold_l4c
 test_trail_fill_snap_l4c
-test_trail_ref_entry_bar_extreme
 test_trail_ref_entry_bar_extreme_l4c
-test_tv_money_band
 test_tv_money_band_l4b
 test_tv_money_carried_pooc_l4b
-test_tv_money_long_margin_call_eth
 test_tv_money_long_margin_call_eth_l4a
-test_tv_money_precision
 test_tv_money_precision_l4b
 test_tv_strategy_defaults
 test_tvdef_drops_tapes

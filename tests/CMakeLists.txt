@@ -3223,7 +3223,6 @@ list(APPEND _pf_private_fixture_rows
     test_adapter_margin_revival_cancel
     test_aggregated_admission_receipt_tapes
     test_aggregated_entry_bar_index_tape
-    test_aux_security_feed
     test_aux_security_feed_l4d
     test_color_tapes
     test_coof_drawing_rollback_tape
@@ -3231,12 +3230,10 @@ list(APPEND _pf_private_fixture_rows
     test_coof_inflight_cancel_tapes
     test_coof_open_limit_tapes
     test_coof_open_newborn_exit_tape
-    test_coof_open_recalc_context
     test_coof_open_recalc_context_l4c
     test_coof_refill_waypoint_tapes
     test_coof_reissued_exit_tapes
     test_coof_resting_bracket_tapes
-    test_coof_resting_stop_siblings
     test_coof_resting_stop_siblings_l4c
     test_coof_same_point_exits_tapes
     test_coof_timeframe_change_tapes
@@ -3244,17 +3241,12 @@ list(APPEND _pf_private_fixture_rows
     test_coqueued_open_margin_tapes
     test_daily_magnifier_tapes
     test_dropped_reversal_mc_first_l4c
-    test_dual_stop_transactions
     test_dual_stop_transactions_l4d
     test_e19_excursion_tape
-    test_entry_bar_margin_path
     test_entry_bar_margin_path_l4a
     test_exit_fifo_cross_tapes
-    test_exit_leg_activation
-    test_exit_lifecycle_reflection
     test_exit_queue_tapes
     test_exit_reissue_na_tapes
-    test_famag_close_survives
     test_famag_close_survives_l4d
     test_global_exit_children_tapes
     test_global_exit_fill_size_tapes
@@ -3300,13 +3292,10 @@ list(APPEND _pf_private_fixture_rows
     test_l4f_security_magnifier
     test_limit_entry_affordability_tape
     test_ltf_lookahead_first_bucket
-    test_m_admission_36
     test_m_admission_36_l4d
     test_magnified_coof_refill_tape
     test_margin_residual_resolved_fill
-    test_market_admission_commission
     test_market_admission_commission_l4b
-    test_market_admission_matrix
     test_native_auto_path
     test_native_host_repairs
     test_native_pending_order_v1_canary_l4d
@@ -3315,7 +3304,6 @@ list(APPEND _pf_private_fixture_rows
     test_native_settlement_projection
     test_nonfinite_entry_qty_tape
     test_open_entry_fee_charged
-    test_pending_order_v1_canary
     test_pending_order_v1_canary_l4d
     test_percent_entry_reservation_tapes
     test_pine_dust_sweep_paired
@@ -3335,15 +3323,10 @@ list(APPEND _pf_private_fixture_rows
     test_source_layer_native_defaults
     test_ta_indicators_extras
     test_ta_voltrend_edge
-    test_trail_close_restart_no_fold
     test_trail_close_restart_no_fold_l4c
-    test_trail_ref_entry_bar_extreme
     test_trail_ref_entry_bar_extreme_l4c
-    test_tv_money_band
     test_tv_money_band_l4b
-    test_tv_money_long_margin_call_eth
     test_tv_money_long_margin_call_eth_l4a
-    test_tv_money_precision
     test_tv_money_precision_l4b
     test_tv_strategy_defaults
     test_tvdef_drops_tapes
@@ -5102,13 +5085,6 @@ else()
     set_tests_properties(test_aggregated_entry_bar_index_tape PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_aux_security_feed.cpp")
-    pineforge_add_unit_test(test_aux_security_feed)
-else()
-    add_test(NAME test_aux_security_feed COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_aux_security_feed.cpp")
-    set_tests_properties(test_aux_security_feed PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/color_tv/w11-color-alpha-eth15/meta.json")
     pineforge_add_unit_test(test_color_tapes)
 else()
@@ -5158,13 +5134,6 @@ else()
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_coof_open_recalc_context_data.hpp")
-    pineforge_add_unit_test(test_coof_open_recalc_context)
-else()
-    add_test(NAME test_coof_open_recalc_context COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_coof_open_recalc_context_data.hpp")
-    set_tests_properties(test_coof_open_recalc_context PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_coof_open_recalc_context_data.hpp")
     pineforge_add_unit_test(test_coof_open_recalc_context_l4c)
 else()
     add_test(NAME test_coof_open_recalc_context_l4c COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_coof_open_recalc_context_data.hpp")
@@ -5190,13 +5159,6 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_resting_bracket/bars.inc")
 else()
     add_test(NAME test_coof_resting_bracket_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/coof_resting_bracket/bars.inc")
     set_tests_properties(test_coof_resting_bracket_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_coof_resting_stop_siblings.cpp")
-    pineforge_add_unit_test(test_coof_resting_stop_siblings)
-else()
-    add_test(NAME test_coof_resting_stop_siblings COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_coof_resting_stop_siblings.cpp")
-    set_tests_properties(test_coof_resting_stop_siblings PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_coof_resting_stop_siblings_l4c.cpp")
@@ -5248,13 +5210,6 @@ else()
     set_tests_properties(test_dropped_reversal_mc_first_l4c PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_dual_stop_transactions.cpp")
-    pineforge_add_unit_test(test_dual_stop_transactions)
-else()
-    add_test(NAME test_dual_stop_transactions COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_dual_stop_transactions.cpp")
-    set_tests_properties(test_dual_stop_transactions PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_dual_stop_transactions_l4d.cpp")
     pineforge_add_unit_test(test_dual_stop_transactions_l4d)
 else()
@@ -5267,13 +5222,6 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/e19_excursion_tape/bars.inc")
 else()
     add_test(NAME test_e19_excursion_tape COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/e19_excursion_tape/bars.inc")
     set_tests_properties(test_e19_excursion_tape PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_entry_bar_margin_path.cpp")
-    pineforge_add_unit_test(test_entry_bar_margin_path)
-else()
-    add_test(NAME test_entry_bar_margin_path COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_entry_bar_margin_path.cpp")
-    set_tests_properties(test_entry_bar_margin_path PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_entry_bar_margin_path_l4a.cpp")
@@ -5290,20 +5238,6 @@ else()
     set_tests_properties(test_exit_fifo_cross_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/leg_activation/149f77c_pending_mirror.hpp")
-    pineforge_add_unit_test(test_exit_leg_activation)
-else()
-    add_test(NAME test_exit_leg_activation COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/leg_activation/149f77c_pending_mirror.hpp")
-    set_tests_properties(test_exit_leg_activation PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_lifecycle/f60_fields.inc")
-    pineforge_add_unit_test(test_exit_lifecycle_reflection)
-else()
-    add_test(NAME test_exit_lifecycle_reflection COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/exit_lifecycle/f60_fields.inc")
-    set_tests_properties(test_exit_lifecycle_reflection PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_queue/bars.inc")
     pineforge_add_unit_test(test_exit_queue_tapes)
 else()
@@ -5316,13 +5250,6 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_reissue_na/bars.inc")
 else()
     add_test(NAME test_exit_reissue_na_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/exit_reissue_na/bars.inc")
     set_tests_properties(test_exit_reissue_na_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_famag_close_survives_data.hpp")
-    pineforge_add_unit_test(test_famag_close_survives)
-else()
-    add_test(NAME test_famag_close_survives COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_famag_close_survives_data.hpp")
-    set_tests_properties(test_famag_close_survives PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_famag_close_survives_data.hpp")
@@ -5641,13 +5568,6 @@ else()
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_m_admission_36_data.hpp")
-    pineforge_add_unit_test(test_m_admission_36)
-else()
-    add_test(NAME test_m_admission_36 COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_m_admission_36_data.hpp")
-    set_tests_properties(test_m_admission_36 PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_m_admission_36_data.hpp")
     pineforge_add_unit_test(test_m_admission_36_l4d)
 else()
     add_test(NAME test_m_admission_36_l4d COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_m_admission_36_data.hpp")
@@ -5669,24 +5589,10 @@ else()
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_market_admission_commission_data.hpp")
-    pineforge_add_unit_test(test_market_admission_commission)
-else()
-    add_test(NAME test_market_admission_commission COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_market_admission_commission_data.hpp")
-    set_tests_properties(test_market_admission_commission PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_market_admission_commission_data.hpp")
     pineforge_add_unit_test(test_market_admission_commission_l4b)
 else()
     add_test(NAME test_market_admission_commission_l4b COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_market_admission_commission_data.hpp")
     set_tests_properties(test_market_admission_commission_l4b PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/market_admission/cc0_fields.inc")
-    pineforge_add_unit_test(test_market_admission_matrix)
-else()
-    add_test(NAME test_market_admission_matrix COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/market_admission/cc0_fields.inc")
-    set_tests_properties(test_market_admission_matrix PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_native_auto_path.cpp")
@@ -5743,13 +5649,6 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/open_entry_fee_charged/bars.inc"
 else()
     add_test(NAME test_open_entry_fee_charged COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/open_entry_fee_charged/bars.inc")
     set_tests_properties(test_open_entry_fee_charged PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pending_order_prefix/c45-fields.inc")
-    pineforge_add_unit_test(test_pending_order_v1_canary)
-else()
-    add_test(NAME test_pending_order_v1_canary COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/pending_order_prefix/c45-fields.inc")
-    set_tests_properties(test_pending_order_v1_canary PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pending_order_prefix/c45-fields.inc")
@@ -5878,24 +5777,10 @@ else()
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_trail_close_restart_no_fold_data.hpp")
-    pineforge_add_unit_test(test_trail_close_restart_no_fold)
-else()
-    add_test(NAME test_trail_close_restart_no_fold COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_trail_close_restart_no_fold_data.hpp")
-    set_tests_properties(test_trail_close_restart_no_fold PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_trail_close_restart_no_fold_data.hpp")
     pineforge_add_unit_test(test_trail_close_restart_no_fold_l4c)
 else()
     add_test(NAME test_trail_close_restart_no_fold_l4c COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_trail_close_restart_no_fold_data.hpp")
     set_tests_properties(test_trail_close_restart_no_fold_l4c PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_trail_ref_entry_bar_extreme.cpp")
-    pineforge_add_unit_test(test_trail_ref_entry_bar_extreme)
-else()
-    add_test(NAME test_trail_ref_entry_bar_extreme COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_trail_ref_entry_bar_extreme.cpp")
-    set_tests_properties(test_trail_ref_entry_bar_extreme PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_trail_ref_entry_bar_extreme_l4c.cpp")
@@ -5906,24 +5791,10 @@ else()
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_tv_money_band_data.hpp")
-    pineforge_add_unit_test(test_tv_money_band)
-else()
-    add_test(NAME test_tv_money_band COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_tv_money_band_data.hpp")
-    set_tests_properties(test_tv_money_band PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_tv_money_band_data.hpp")
     pineforge_add_unit_test(test_tv_money_band_l4b)
 else()
     add_test(NAME test_tv_money_band_l4b COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_tv_money_band_data.hpp")
     set_tests_properties(test_tv_money_band_l4b PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_tv_money_long_margin_call_eth.cpp")
-    pineforge_add_unit_test(test_tv_money_long_margin_call_eth)
-else()
-    add_test(NAME test_tv_money_long_margin_call_eth COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_tv_money_long_margin_call_eth.cpp")
-    set_tests_properties(test_tv_money_long_margin_call_eth PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_tv_money_long_margin_call_eth_l4a.cpp")
@@ -5931,13 +5802,6 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_tv_money_long_margin_call_eth_l4a.cp
 else()
     add_test(NAME test_tv_money_long_margin_call_eth_l4a COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_tv_money_long_margin_call_eth_l4a.cpp")
     set_tests_properties(test_tv_money_long_margin_call_eth_l4a PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-endif()
-
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_tv_money_precision_data.hpp")
-    pineforge_add_unit_test(test_tv_money_precision)
-else()
-    add_test(NAME test_tv_money_precision COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_tv_money_precision_data.hpp")
-    set_tests_properties(test_tv_money_precision PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_tv_money_precision_data.hpp")
