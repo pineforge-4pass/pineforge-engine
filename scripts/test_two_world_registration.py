@@ -18,6 +18,8 @@ Controls:
   7. a refusal-shard name the split does not produce, unpinned -> 1, named
   8. a pinned row that is not a refusal shard added to the list -> 1, named
   9. the tree as it is, overlay present -> 0, every profile 0/0, drift 0/0
+ 10. an execute_process the sweep does not bind -> 2, named
+ 11. a foreach over a parent list it cannot read -> 2, named
 """
 from __future__ import annotations
 
@@ -213,6 +215,8 @@ endif()
                       result.stdout)
         self.assertIn('the recorded refusal-shard rows: 12; not a pinned row: '
                       '0; unsorted: 0; duplicated: 0', result.stdout)
+        # No construct is left unbound: the sweep either reads it or exits 2.
+        self.assertNotIn('could not bind', result.stdout)
 
     # control 6: a refusal-shard row removed from the recorded list is drift
     @needs_overlay
@@ -276,6 +280,32 @@ endif()
         self.assertIn('refusal-shard drift: recorded-only: 0, derived-only: 0',
                       result.stdout)
         self.assertNotIn('could not bind', result.stdout)
+
+    # control 10: an execute_process the sweep does not bind is exit 2, never
+    # a quiet line in a passing run
+    def test_an_unbound_probe_exits_2(self):
+        self.tree.append(RUNNER, '''
+
+execute_process(COMMAND echo hi
+    OUTPUT_VARIABLE _e2e_two_world_probe)
+''')
+        result = self.run_check('--cmakelists', RUNNER, '--profile', 'release')
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn('execute_process in a shape this sweep does not bind',
+                      result.stdout + result.stderr)
+        self.assertIn(RUNNER, result.stdout + result.stderr)
+
+    # control 11: a foreach over a parent list the sweep cannot read is exit 2
+    def test_an_unreadable_parent_list_exits_2(self):
+        self.tree.append(RUNNER, '''
+
+foreach(_e2e_two_world_item IN LISTS E2E_TWO_WORLD_PARENT_LIST)
+    set(_e2e_two_world_seen 1)
+endforeach()
+''')
+        result = self.run_check('--cmakelists', RUNNER, '--profile', 'release')
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn('E2E_TWO_WORLD_PARENT_LIST', result.stdout + result.stderr)
 
 
 if __name__ == '__main__':

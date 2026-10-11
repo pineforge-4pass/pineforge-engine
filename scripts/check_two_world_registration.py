@@ -283,7 +283,6 @@ class Machine:
         self.rows: set[str] = set()
         self.globals: dict[str, str] = {}
         self.twins: dict[str, str] = {}
-        self.unknown: list[str] = []
 
     # ---- value handling -------------------------------------------------
     def substitute(self, token: str) -> str:
@@ -479,6 +478,29 @@ class Machine:
             return True
         return self.reaches_source_layer(Path(self.substitute(entry)))
 
+    def parent_list(self, name: str):
+        """A parent-scope list read from the tree's own top-level CMakeLists.
+
+        `foreach(... IN LISTS <name>)` over a variable neither CMakeLists
+        sets is the one shape whose value lives in the parent scope. When the
+        top-level file sets it as a literal `set(<name> ...)`, the sweep
+        reads that literal -- the real list, not a stand-in. The first such
+        set() in the file wins; a name the top-level file does not set
+        literally is a construct this sweep cannot bind and the walk refuses
+        it (exit 2) rather than running the loop over an empty list."""
+        top = self.root / 'CMakeLists.txt'
+        if not top.exists():
+            return None
+        for _line, statement in statements(strip_comments(
+                top.read_text(errors='replace'))):
+            if head_of(statement) != 'set':
+                continue
+            values = split_values(arguments(statement))
+            if values and values[0] == name:
+                return [element for token in values[1:]
+                        for element in self.elements(token)]
+        return None
+
     # ---- block walk ------------------------------------------------------
     def branches(self, index: int):
         """[(start, end, condition)] for an if/elseif/else chain; the else
@@ -558,21 +580,16 @@ class Machine:
                     for name in header[3:]:
                         values = self.value(name)
                         if values is None:
-                            # A parent-scope list (defined by the top-level
-                            # CMakeLists, outside this file). Only accepted
-                            # when the loop body registers no row: otherwise the
-                            # walk would under-count a population it cannot see.
-                            body = '\n'.join(s for _, s in
-                                             self.wstatements[index + 1:body_end])
-                            if re.search(r'add_test\(|pineforge_add_unit_test\('
-                                         r'|pineforge_add_twin_test\(|list\(APPEND '
-                                         r'TEST_SOURCES|add_executable\(test_',
-                                         body):
-                                raise Unreadable(
-                                    f'{self.path}:{line}: foreach over unbound '
-                                    f'{name} whose body registers rows')
-                            self.unknown.append(f'{name} (line {line})')
-                            values = []
+                            values = self.parent_list(name)
+                        if values is None:
+                            # A parent-scope list this sweep cannot read. The
+                            # loop is NOT run over an empty stand-in: a
+                            # construct the evaluator cannot bind exits 2
+                            # rather than quietly evaluating a smaller world.
+                            raise Unreadable(
+                                f'{self.path}:{line}: foreach over unbound '
+                                f'{name}: a parent-scope list that is not a '
+                                f'literal set() in the top-level CMakeLists.txt')
                         items.extend(values)
                 elif len(header) >= 3 and header[1] == 'IN' and header[2] == 'ITEMS':
                     items = [self.substitute(i).strip('"') for i in header[3:]]
@@ -750,12 +767,19 @@ class Machine:
                     raise Unreadable(f'{self.path}:{line}: unclosed {head}')
                 index = cursor + 1
             elif head == 'execute_process':
-                # A probe (the compiler asked for its own sanitizer runtime
-                # name). This evaluator runs no command, so the output
-                # variable gets the probed name and RESULT_VARIABLE 0; neither
-                # feeds a registration condition -- the site's uses are a
-                # message(FATAL_ERROR) and a set_tests_properties ENVIRONMENT
-                # -- and the site is recorded as one the walk could not bind.
+                # The ONE probed command the tree runs: the compiler asked for
+                # its own sanitizer runtime file name. This sweep runs no
+                # command -- it is text over a tree -- so the probe is BOUND
+                # with a stated value: the file name the compiler prints for a
+                # runtime it cannot find (the argument echoed back) and result
+                # 0. The binding is sound for this sweep because neither
+                # variable can reach a registration condition: the site's only
+                # uses are a message(FATAL_ERROR) and a
+                # set_tests_properties ENVIRONMENT. (A real configure on a
+                # tree whose compiler lacks that runtime dies on the
+                # FATAL_ERROR; a row-level sweep does not model a failed
+                # configure, and the tree's CI jobs have the runtime.) Any
+                # other execute_process is a construct this sweep cannot bind.
                 values = split_values(arguments(statement))
                 command = []
                 for position, value in enumerate(values):
@@ -765,14 +789,20 @@ class Machine:
                                                 'OUTPUT_STRIP_TRAILING_WHITESPACE',
                                                 'RESULT_VARIABLE')]
                         break
-                probed = next((t.split('=', 1)[1] for t in command if '=' in t),
-                              command[-1] if command else '')
+                probed = next((t.split('=', 1)[1].rstrip('"')
+                               for t in command
+                               if t.startswith('"-print-file-name=')
+                               or t.startswith('-print-file-name=')), None)
+                if probed is None:
+                    raise Unreadable(
+                        f'{self.path}:{line}: execute_process in a shape this '
+                        f'sweep does not bind (only the compiler\'s '
+                        f'-print-file-name probe is, with a stated value)')
                 for position, value in enumerate(values):
                     if value == 'OUTPUT_VARIABLE' and position + 1 < len(values):
-                        self.vars[values[position + 1]] = [probed.strip('"')]
+                        self.vars[values[position + 1]] = [probed]
                     elif value == 'RESULT_VARIABLE' and position + 1 < len(values):
                         self.vars[values[position + 1]] = ['0']
-                self.unknown.append(f'execute_process (line {line})')
                 index += 1
             elif head in ('get_target_property',):
                 values = split_values(arguments(statement))
@@ -1013,9 +1043,6 @@ def absent_half(root: Path, removed_dirs, removed_files, pin_rows, profiles, rel
             world = World(root, removed_dirs, removed_files, virtual=True)
             machine = registered(root / rel, world, PROFILES[profile_name], root)
             print(f'  {rel} [{profile_name}] absent-world rows: {len(machine.rows)}')
-            if machine.unknown:
-                print(f'  {rel} [{profile_name}] lists this sweep could not bind: '
-                      + ', '.join(machine.unknown))
     recorded = read_source_bound_recorded(registered(
         root / 'tests' / 'CMakeLists.txt',
         World(root, removed_dirs, removed_files, virtual=True),
