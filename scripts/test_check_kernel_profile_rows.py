@@ -9,6 +9,10 @@ States exercised (each one asserts the exit code and the file:line message):
   pairs agreeing.
 * RED, a source-layer row re-added to the kernel profile: the guard removed
   from one source-bound block -> exit 1 naming the block.
+* RED, a source-bound row behind an if(EXISTS) block that ignores the predicate
+  list, while its pin-list entry carries the list's closing paren (the shape
+  that linked the kernel profile against the kernel-only archive): the block
+  reverted to its pre-fix form -> exit 1 naming the row.
 * RED, a pair disagreement: a receipt row's guard naming the wrong provider
   manifest -> exit 1 naming both lists.
 * LOUD-FAIL, a construct the walk cannot read (an unterminated if(EXISTS)) ->
@@ -72,6 +76,27 @@ class KernelProfileRows(unittest.TestCase):
             code, out = run_sweep(target)
         self.assertEqual(code, 1, out)
         self.assertIn('test_native_oracle_day_key_l2 without reading '
+                      '_pf_kernel_absent_rows', out)
+
+    def test_red_a_paren_pinned_row_behind_an_unread_guard_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            target = self.copy(temporary)
+            text = target.read_text()
+            fixed = ('if(NOT test_zero_trail_sibling_stop IN_LIST '
+                     '_pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}'
+                     '/test_zero_trail_sibling_stop.cpp")\n'
+                     '    pineforge_add_unit_test(test_zero_trail_sibling_stop)\n'
+                     'elseif(NOT test_zero_trail_sibling_stop IN_LIST '
+                     '_pf_kernel_absent_rows)')
+            self.assertEqual(text.count(fixed), 1)
+            target.write_text(text.replace(fixed,
+                'if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}'
+                '/test_zero_trail_sibling_stop.cpp")\n'
+                '    pineforge_add_unit_test(test_zero_trail_sibling_stop)\n'
+                'else()'))
+            code, out = run_sweep(target)
+        self.assertEqual(code, 1, out)
+        self.assertIn('test_zero_trail_sibling_stop without reading '
                       '_pf_kernel_absent_rows', out)
 
     def test_red_a_missing_placeholder_guard_fails(self):

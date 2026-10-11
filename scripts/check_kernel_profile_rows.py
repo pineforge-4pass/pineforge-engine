@@ -99,7 +99,12 @@ def read_private_rows(text: str, source: Path) -> list[str]:
         end = text.index('list(REMOVE_ITEM TEST_SOURCES ${_pf_private_fixture_rows})')
     except ValueError:
         raise Unparseable(f'{source}: the private-row pin list or its REMOVE_ITEM is gone')
-    rows = re.findall(r'^\s*(test_\w+)\s*$', text[start:end], re.M)
+    # The closing paren of a set()/list(APPEND) may sit on its last entry's
+    # line -- `test_zero_trail_sibling_stop)` was, and the row it named left
+    # the pinned set unseen, so its block was never checked (the kernel
+    # profile then linked it against the kernel-only archive). Read the
+    # optional paren as part of the entry.
+    rows = re.findall(r'^\s*(test_\w+)\)?\s*$', text[start:end], re.M)
     if not rows:
         raise Unparseable(f'{source}: the private-row pin list parsed empty')
     return rows
