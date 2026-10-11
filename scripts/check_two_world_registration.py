@@ -38,8 +38,10 @@ Modes
   (default)  the absent world only. Evaluates it for every profile and file,
              prints the per-profile row counts, and checks the recorded
              source-bound list (`_pf_source_bound_private_rows` in
-             tests/CMakeLists.txt) against the pinned private rows: every
-             recorded row is pinned, the list is sorted, no duplicates.
+             tests/CMakeLists.txt) and the recorded refusal-shard list
+             (`_pf_refusal_shard_rows` in runner/CMakeLists.txt) against the
+             pinned private rows: every recorded row is pinned, each list is
+             sorted, no duplicates.
   --overlay  the overlay half. Without the overlay in the tree (the marker
              file absent) it prints `SKIP private fixtures not present:
              <marker>` and exits 77. With it (PINEFORGE_PRIVATE_FIXTURES set
@@ -49,6 +51,10 @@ Modes
              the predicate over the live tree (a pinned row whose include
              closure reaches a pineforge/source or pineforge/compat/pine
              header) requiring it to EQUAL the recorded list exactly:
+             recorded-only: 0, derived-only: 0. The refusal-shard list is
+             re-derived the same way: the present branch's split over the
+             live tree (the refused_*.cpp glob, the family regex, the
+             8-library batches) must produce exactly the recorded rows --
              recorded-only: 0, derived-only: 0.
 
 Exit 0 when every invariant holds, 1 on a violation, 2 on a construct this
@@ -77,6 +83,11 @@ SKIP_LITERAL = 'SKIP private fixtures not present: '
 OVERLAY_MARKER = 'tests/fixtures/whole_lot_tie/bars.inc'
 CMAKE_FILES = (Path('tests/CMakeLists.txt'), Path('runner/CMakeLists.txt'))
 PROFILE_NAMES = ('release', 'debug', 'sanitizers', 'kernel-live')
+# The absent world cannot glob files that do not exist, so the refusal-shard
+# rows are a RECORDED list: runner/CMakeLists.txt pins the names the present
+# branch's split produces, and the drift guard requires the two to agree.
+REFUSAL_SHARD_PREFIX = 'confirmed_capabilities_refusals_'
+REFUSAL_SHARD_RECORD = '_pf_refusal_shard_rows'
 
 FAILURES: list[str] = []
 
@@ -907,17 +918,19 @@ def report_worlds(root: Path, rel: Path, profile_name: str, absent, overlay) -> 
 
 
 def check_recorded_rows(root: Path, recorded: list[str], pinned: list[str]) -> None:
-    if recorded != sorted(recorded):
+    unsorted = recorded != sorted(recorded)
+    if unsorted:
         fail('the recorded source-bound list is not sorted')
     duplicates = sorted({name for name in recorded if recorded.count(name) > 1})
     for name in duplicates:
         fail(f'the recorded source-bound list names {name} twice')
     pinned_set = set(pinned)
-    for name in recorded:
-        if name not in pinned_set:
-            fail(f'the recorded source-bound row {name} is not a pinned row ({PIN_ROWS})')
-    print(f'the recorded source-bound rows: {len(recorded)}; not a pinned row: 0; '
-          f'unsorted: 0; duplicated: 0')
+    unpinned = [name for name in recorded if name not in pinned_set]
+    for name in unpinned:
+        fail(f'the recorded source-bound row {name} is not a pinned row ({PIN_ROWS})')
+    print(f'the recorded source-bound rows: {len(recorded)}; not a pinned row: '
+          f'{len(unpinned)}; unsorted: {1 if unsorted else 0}; '
+          f'duplicated: {len(duplicates)}')
 
 
 def derive_record_need(root: Path, absent_world: World, overlay_world: World,
@@ -963,6 +976,37 @@ def derive_record_need(root: Path, absent_world: World, overlay_world: World,
     return overlay.rows, without.rows, reaching, twins
 
 
+def recorded_refusal_shards(root: Path, removed_dirs, removed_files) -> list[str]:
+    """The recorded refusal-shard list, read from the absent world's own walk
+    of runner/CMakeLists.txt: the branch that registers the placeholders is
+    the one that sets the record."""
+    machine = registered(root / 'runner/CMakeLists.txt',
+                         World(root, removed_dirs, removed_files, virtual=True),
+                         PROFILES['release'], root)
+    recorded = machine.vars.get(REFUSAL_SHARD_RECORD)
+    if recorded is None:
+        raise Unreadable(f'runner/CMakeLists.txt: {REFUSAL_SHARD_RECORD} was '
+                         f'never set on the fixture-less branch')
+    return list(recorded)
+
+
+def check_recorded_refusal_shards(recorded: list[str], pinned: list[str]) -> None:
+    unsorted = recorded != sorted(recorded)
+    if unsorted:
+        fail('the recorded refusal-shard list is not sorted')
+    duplicates = sorted({name for name in recorded if recorded.count(name) > 1})
+    for name in duplicates:
+        fail(f'the recorded refusal-shard list names {name} twice')
+    pinned_set = set(pinned)
+    unpinned = [name for name in recorded if name not in pinned_set]
+    for name in unpinned:
+        fail(f'the recorded refusal-shard row {name} is not a pinned row '
+             f'({PIN_ROWS})')
+    print(f'the recorded refusal-shard rows: {len(recorded)}; not a pinned row: '
+          f'{len(unpinned)}; unsorted: {1 if unsorted else 0}; '
+          f'duplicated: {len(duplicates)}')
+
+
 def absent_half(root: Path, removed_dirs, removed_files, pin_rows, profiles, rel_files) -> None:
     for rel in rel_files:
         for profile_name in profiles:
@@ -978,6 +1022,10 @@ def absent_half(root: Path, removed_dirs, removed_files, pin_rows, profiles, rel
         PROFILES['release'], root))
     check_recorded_rows(root, recorded, pin_rows)
     print(f'  (the recorded list was read from {CMAKE_FILES[0]}, release profile)')
+    check_recorded_refusal_shards(
+        recorded_refusal_shards(root, removed_dirs, removed_files), pin_rows)
+    print(f'  (the recorded refusal-shard list was read from '
+          f'{CMAKE_FILES[1]}, release profile, fixture-less branch)')
 
 
 def overlay_half(root: Path, removed_dirs, removed_files, pin_rows, profiles,
@@ -1030,6 +1078,30 @@ def overlay_half(root: Path, removed_dirs, removed_files, pin_rows, profiles,
     print(f'  recorded rows the record does not change (it names the '
           f'world-dependent set plus {len(redundant)} the absent walk reaches '
           f'anyway)')
+    # The recorded refusal-shard list, the same way: the present branch's
+    # split over the live tree (the refused_*.cpp glob, the family regex, the
+    # 8-library batches) is run for real and its shard rows must be exactly
+    # the recorded ones. Comparing the list with itself is impossible here --
+    # the derived side is a registration the walk performed, not a literal.
+    recorded_shards = recorded_refusal_shards(root, removed_dirs, removed_files)
+    derived_shards = sorted(
+        name for name in registered(root / 'runner/CMakeLists.txt',
+                                    overlay_world, PROFILES['release'],
+                                    root).rows
+        if name.startswith(REFUSAL_SHARD_PREFIX))
+    recorded_only = sorted(set(recorded_shards) - set(derived_shards))
+    derived_only = sorted(set(derived_shards) - set(recorded_shards))
+    print(f'  refusal-shard drift: recorded {len(recorded_shards)} rows; the '
+          f'split over the live tree (runner/CMakeLists.txt, release profile, '
+          f'present branch) produces {len(derived_shards)}')
+    for name in recorded_only:
+        fail(f'the recorded refusal-shard row {name} is not produced by the '
+             f'split over the live tree')
+    for name in derived_only:
+        fail(f'the split over the live tree registers the refusal-shard row '
+             f'{name}, which the recorded list does not name')
+    print(f'  refusal-shard drift: recorded-only: {len(recorded_only)}, '
+          f'derived-only: {len(derived_only)}')
 
 
 def main() -> int:

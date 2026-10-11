@@ -14,6 +14,10 @@ Controls:
   3. a row's absent-world placeholder deleted -> overlay-only names: 1 -> 1
   4. a construct the evaluator cannot read -> 2
   5. the tree as it is -> the absent world evaluated, 0, per-profile counts
+  6. a refusal-shard row removed from the recorded list -> 1, named
+  7. a refusal-shard name the split does not produce, unpinned -> 1, named
+  8. a pinned row that is not a refusal shard added to the list -> 1, named
+  9. the tree as it is, overlay present -> 0, every profile 0/0, drift 0/0
 """
 from __future__ import annotations
 
@@ -33,6 +37,11 @@ OVERLAY = os.environ.get('PF_PRIVATE_OVERLAY')
 # the layer-off world walks no TU and the worlds' registrations differ.
 REMOVED_TU_ROW = 'test_trail_activation_tick_reach'
 TREES_DIR = 'tests/CMakeLists.txt'
+RUNNER = 'runner/CMakeLists.txt'
+SHARD_ROW = 'confirmed_capabilities_refusals_pooc_5'
+# A pinned private row that is no refusal shard: added to the list it is
+# pinned and sorted, so only the drift guard can reject it.
+NOT_A_SHARD_ROW = 'test_pooc_close_fill_view_tapes'
 
 
 class TamperTree:
@@ -202,6 +211,71 @@ endif()
                       result.stdout)
         self.assertIn('the recorded list is pinned, sorted and duplicate-free',
                       result.stdout)
+        self.assertIn('the recorded refusal-shard rows: 12; not a pinned row: '
+                      '0; unsorted: 0; duplicated: 0', result.stdout)
+
+    # control 6: a refusal-shard row removed from the recorded list is drift
+    @needs_overlay
+    def test_a_removed_shard_row_is_drift(self):
+        row_line = f'            {SHARD_ROW}\n'
+        self.assertIn(row_line, (self.root / RUNNER).read_text(),
+                      'the recorded shard list changed shape')
+        self.tree.edit(RUNNER, row_line, '')
+        result = self.run_check('--overlay', '--cmakelists', RUNNER,
+                                '--profile', 'release', overlay=True)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn(SHARD_ROW, result.stdout)
+        self.assertIn('derived-only: 1', result.stdout)
+
+    # control 7: a name the split does not produce, and the pin does not name
+    @needs_overlay
+    def test_an_unpinned_shard_row_is_drift(self):
+        tail = ('            confirmed_capabilities_refusals_requests_3\n'
+                '        )')
+        self.assertIn(tail, (self.root / RUNNER).read_text(),
+                      'the recorded shard list changed shape')
+        self.tree.edit(RUNNER, tail,
+                       '            confirmed_capabilities_refusals_requests_3\n'
+                       '            confirmed_capabilities_refusals_requests_9\n'
+                       '        )')
+        result = self.run_check('--overlay', '--cmakelists', RUNNER,
+                                '--profile', 'release', overlay=True)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn('confirmed_capabilities_refusals_requests_9', result.stdout)
+        self.assertIn('is not a pinned row', result.stdout)
+
+    # control 8: a pinned row that is not a refusal shard, added to the list:
+    # pinned, sorted and duplicate-free, so only the derived side rejects it
+    @needs_overlay
+    def test_a_pinned_non_shard_row_is_drift(self):
+        tail = ('            confirmed_capabilities_refusals_requests_3\n'
+                '        )')
+        self.assertIn(tail, (self.root / RUNNER).read_text(),
+                      'the recorded shard list changed shape')
+        self.tree.edit(RUNNER, tail,
+                       '            confirmed_capabilities_refusals_requests_3\n'
+                       f'            {NOT_A_SHARD_ROW}\n'
+                       '        )')
+        result = self.run_check('--overlay', '--cmakelists', RUNNER,
+                                '--profile', 'release', overlay=True)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn(NOT_A_SHARD_ROW, result.stdout)
+        self.assertIn('recorded-only: 1', result.stdout)
+
+    # control 9: the tree as it is, overlay present: both worlds and the split
+    # over the live tree agree, in every profile
+    @needs_overlay
+    def test_the_tree_as_is_matches_in_both_worlds(self):
+        result = self.run_check('--overlay', '--cmakelists', RUNNER, overlay=True)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        for profile in ('release', 'debug', 'sanitizers', 'kernel-live'):
+            self.assertIn(f'runner/CMakeLists.txt [{profile}] absent-only names: 0',
+                          result.stdout)
+            self.assertIn(f'runner/CMakeLists.txt [{profile}] overlay-only names: 0',
+                          result.stdout)
+        self.assertIn('refusal-shard drift: recorded-only: 0, derived-only: 0',
+                      result.stdout)
+        self.assertNotIn('could not bind', result.stdout)
 
 
 if __name__ == '__main__':
