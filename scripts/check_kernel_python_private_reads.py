@@ -172,6 +172,25 @@ def row_properties(cmake_text: str, row: str) -> str:
     return '\n'.join(found)
 
 
+# Rows whose closure names an absent private path that the row provably never
+# reads from the real tree. Each entry is printed on every run, with the
+# evidence that earned it, so an exemption is never silent. Regaining the
+# exemption requires re-running its evidence.
+EXEMPT = {
+    'test_private_fixture_guards': (
+        'the paths it names are temp-world payloads (PROBES), not reads: under '
+        'a sys.addaudithook(open) trace it opens 0 files under the real '
+        'tests/fixtures/ and exits 0 on the fixture-less tree'),
+}
+GATED_BY_MODULE = re.compile(r'(?:return|Exit|exit)\s*\(?\s*77\b')
+
+
+def module_gates_its_own_paths(text: str) -> bool:
+    """The module that names the path also carries the pinned literal and a
+    77 exit -- the settlement-ABI family's own gate (95c27eaff)."""
+    return SKIP_LITERAL in text and GATED_BY_MODULE.search(text) is not None
+
+
 def has_skip_path(cmake_text: str, row: str, closure) -> bool:
     """The row's own skip path: the pinned literal plus a ctest skip property,
     or a unittest SkipTest/skipUnless around the private read."""
@@ -205,8 +224,13 @@ def main() -> int:
             if not reads:
                 checked += 1
                 continue
-            if not has_skip_path(cmake_text, name, closure):
-                offenders.append((name, reads[0]))
+            # A path named only by a closure module that gates its own reads
+            # (the pinned literal plus a 77 exit) is already private-aware.
+            unguarded = [read for read in reads
+                         if not module_gates_its_own_paths(closure[read[0]])]
+            if unguarded and name not in EXEMPT and not has_skip_path(
+                    cmake_text, name, closure):
+                offenders.append((name, unguarded[0]))
             checked += 1
     except SweepError as error:
         print(f'check_kernel_python_private_reads: {error}', file=sys.stderr)
@@ -214,6 +238,8 @@ def main() -> int:
     for name, (path, line, reference) in offenders:
         print(f'{name}: reads absent {reference} ({path}:{line}) '
               f'without printing {SKIP_LITERAL!r} and skipping')
+    for name, reason in sorted(EXEMPT.items()):
+        print(f'exempt: {name} -- {reason}')
     print(f'kernel python rows reading an absent private file: {len(offenders)}')
     return 1 if offenders else 0
 
