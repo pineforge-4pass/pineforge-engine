@@ -7,7 +7,7 @@
 #include "native_calendar_memo.hpp"
 #include "native_selected_epoch.hpp"
 #include "runtime_ambient.hpp"
-
+#include "native_calc_plan.hpp"
 #include <array>
 #include <cstdint>
 #include <exception>
@@ -2365,6 +2365,37 @@ private:
     // capture that may be read (Results, no fault, ready and open).
     bool observed_epoch_sealed() const noexcept;
     bool capture_readable() const noexcept;
+
+public:
+    // The named-stream schedule group (native_calc_plan.hpp): the optional
+    // qualified bar-lifecycle key and the calculation schedule derived with it.
+    // Opt-in and per run: the group is engaged from calc_group_enable until the
+    // next run begin, and a consumer that never enables it keeps every
+    // continuation value it had. Enable it at the admitted trace origin, before
+    // the first event of the trace is planned.
+    void calc_group_enable() noexcept;
+    bool calc_group_engaged() const noexcept;
+    // The calculations `events` make a binding with `cadence` perform, derived
+    // from the group's state and this consumer's own calendar. The plan reads
+    // and changes nothing; the apply commits the state a successful plan leaves.
+    // Both answer NotEngaged until the group is enabled for the run.
+    native_calc::Plan calc_schedule_plan(std::uint32_t cadence,
+                                         const native_calc::Event* events,
+                                         std::size_t count, bool want_points) const;
+    native_calc::Plan calc_schedule_apply(std::uint32_t cadence,
+                                          const native_calc::Event* events,
+                                          std::size_t count);
+    // native_continuation_hash's value: continuation_hash() while the group is
+    // not engaged, that identity folded with the group's state once it is.
+    std::uint64_t calc_continuation_hash() const noexcept;
+
+private:
+    struct CalcGroup {
+        native_calc::State state;
+        std::uint64_t run_generation = 0;
+    };
+    std::optional<CalcGroup> calc_group_;
+    bool calc_slot_at(std::int64_t at_ms, native_calc::Slot& slot) const;
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {

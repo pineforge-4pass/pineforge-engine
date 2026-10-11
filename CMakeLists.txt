@@ -133,6 +133,7 @@ set(PINEFORGE_KERNEL_SOURCES
     src/engine_consumer.cpp
     src/market_driver.cpp
     src/native_execution_consumer.cpp
+    src/native_calc_plan.cpp
     src/magnifier.cpp
     src/math.cpp
     src/matrix.cpp
@@ -151,7 +152,6 @@ set(PINEFORGE_KERNEL_SOURCES
     src/selected_report_view.cpp
     src/selected_window_plan.cpp
 )
-
 # The kernel-only archive. Same objects, same flags as the kernel half of
 # libpineforge.a — a consumer that never speaks Pine links this one.
 add_library(pineforge_kernel STATIC ${PINEFORGE_KERNEL_SOURCES})

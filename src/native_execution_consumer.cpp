@@ -12076,7 +12076,7 @@ uint64_t NativeStrategyHost::native_consumed_high_water() const {
 
 uint64_t NativeStrategyHost::native_continuation_hash() const {
     return NativeExecutionConsumer::bound(*this)
-        .continuation_hash();
+        .calc_continuation_hash();
 }
 
 void NativeStrategyHost::native_closed_rows_amended(std::size_t first_row) {
