@@ -15,6 +15,9 @@ sources, the CMake arguments and the data headers, against the pinned removed
 set (tests/private_fixture_paths.txt), and requires each hit to be either
 
   * a pinned private-fixture row (tests/private_fixture_rows.txt), or
+  * a row whose every registration site is either the then-branch of an
+    EXISTS guard naming removed data (present exactly when the data is) or
+    the pinned SKIP placeholder the absent branch registers, or
   * reported as a violation.
 
 It also checks the class the overlay-mode round found (A-release,
@@ -25,13 +28,22 @@ literal and exits 77 in every mode, and the overlay-mode refusal stage blames
 the overlay. The marker a driver tests must resolve to a REMOVED path: present
 exactly when the private fixtures are overlaid.
 
+Every registration is walked, not pattern-matched per form: the two CMakeLists
+are read command by command so that a row registered through add_test (also
+multi-line, also inside foreach loops the file expands), pineforge_add_unit_
+test, pineforge_add_twin_test or add_executable is swept, and the count of
+add_test sites walked is compared with the count present (a site this sweep
+could not read, or read twice, exits 2). Every row pinned in
+tests/private_fixture_rows.txt must be swept: a pinned row no registration
+matched exits 1.
+
 Loud-fail: a construct it cannot parse (a missing pin file, a driver whose
 marker expression it cannot read, a row whose add_test arguments it cannot
 resolve) prints file:line and exits 2; it never counts what it cannot read as
 clean.
 
-Exit 0 when every hit is pinned and every marker names a removed path, 1 on a
-violation, 2 on a construct it cannot parse.
+Exit 0 when every hit is pinned or guard/placeholder-resolved and every marker
+names a removed path, 1 on a violation, 2 on a construct it cannot parse.
 """
 from __future__ import annotations
 
@@ -139,8 +151,8 @@ def load_evidence(root: Path) -> dict[str, tuple[str, str, str]]:
 
 def is_removed(path: str, removed_dirs: set[str], removed_files: set[str]) -> bool:
     """True when the repo-relative path names removed data."""
-    path = path.strip('/')
-    if not path:
+    path = path.strip('"').strip('/')
+    if not path or '$' in path:
         return False
     if path in removed_files:
         return True
@@ -152,7 +164,47 @@ def is_removed(path: str, removed_dirs: set[str], removed_files: set[str]) -> bo
 
 
 def resolve_cmake_path(value: str, cmake_dir: str) -> str:
-    return value.replace('${CMAKE_CURRENT_SOURCE_DIR}', cmake_dir).lstrip('/')
+    value = value.replace('${CMAKE_CURRENT_SOURCE_DIR}', cmake_dir)
+    value = value.replace('${PROJECT_SOURCE_DIR}', '')
+    value = value.replace('${CMAKE_SOURCE_DIR}', '')
+    return value.strip('"').lstrip('/')
+
+
+def subst(text: str, env: dict, depth: int = 0) -> str:
+    """Substitute every ${var} the walk bound, one configured value each."""
+    if depth > 10 or '${' not in text:
+        return text
+    def replace(m: re.Match) -> str:
+        values = env.get(m.group(1))
+        if not values:
+            return m.group(0)
+        return values[0]
+    return subst(re.sub(r'\$\{(\w+)\}', replace, text), env, depth + 1)
+
+
+def expand_names(raw: str, env: dict, limit: int = 64) -> set[str]:
+    """Every literal name a registration's raw name token can resolve to."""
+    names = {raw}
+    for _ in range(10):
+        nxt: set[str] = set()
+        grew = False
+        for name in names:
+            m = re.search(r'\$\{(\w+)\}', name)
+            if not m or m.group(1) not in env:
+                nxt.add(name)
+                continue
+            for value in env[m.group(1)]:
+                grown = name[:m.start()] + value + name[m.end():]
+                if len(nxt) < limit:
+                    nxt.add(grown)
+                grew = True
+        names = nxt
+        if not grew:
+            break
+    resolved = {n for n in names if '${' not in n and not n.startswith('$<')}
+    if len(resolved) != len(names):
+        return set()
+    return resolved
 
 
 class Rows:
@@ -161,54 +213,37 @@ class Rows:
     def __init__(self, path: Path, root: Path):
         self.path = path
         self.rel_dir = str(path.parent.relative_to(root))
-        raw = path.read_text()
-        self.text = strip_comments(raw)
-        self.lines = self.text.splitlines()
-        self.vars: dict[str, str] = {}
+        self.text = strip_comments(path.read_text())
+        self.lines = self.text.split('\n')
+        self.line_starts = [0]
+        for line in self.lines[:-1]:
+            self.line_starts.append(self.line_starts[-1] + len(line) + 1)
+        self.vars: dict[str, list[str]] = {}
         self.rows: dict[str, dict] = {}
-        self._parse()
+        self.target_sources: dict[str, set] = {}
+        self.site_lines: set[int] = set()
+        self.add_test_sites_skipped = 0
+        self.dynamic_names: list[tuple[int, str]] = []
+        self._check_sites_readable()
+        top_env: dict[str, list[str]] = {}
+        self._walk(0, len(self.lines), top_env, ())
+        self.vars = top_env
 
-    def resolve(self, token: str) -> str:
-        token = token.strip('"')
-        m = re.fullmatch(r'\$\{(_pf_\w+)\}', token)
-        if m:
-            if m.group(1) not in self.vars:
-                raise Unparseable(f'{self.path}: ${{{m.group(1)}}} is not set')
-            return self.vars[m.group(1)]
-        return token
+    @property
+    def add_test_sites(self) -> int:
+        return len(self.site_lines)
 
-    def _entry(self, row: str, lineno: int, conditions: tuple = ()) -> dict:
-        entry = self.rows.get(row)
-        if entry is None:
-            entry = {'defines': {}, 'lineno': lineno, 'argvs': [],
-                     'conditions': []}
-            self.rows[row] = entry
-        elif not entry['lineno']:
-            entry['lineno'] = lineno
-        if conditions and conditions not in entry['conditions']:
-            entry['conditions'].append(conditions)
-        return entry
-
-    def _condition_stack(self) -> dict[int, tuple]:
-        """line index -> the enclosing top-level if() conditions."""
-        stack: list[str] = []
-        conditions: dict[int, tuple] = {}
-        for index, line in enumerate(self.lines):
-            stripped = line.strip()
-            if stripped.startswith('endif('):
-                if stack:
-                    stack.pop()
-                conditions[index] = tuple(stack)
-                continue
-            if stripped == 'else()' or stripped.startswith('elseif('):
-                conditions[index] = tuple(stack)
-                continue
-            if not line.startswith((' ', '\t')) and re.match(r'^if\(', line):
-                conditions[index] = tuple(stack)
-                stack.append(line.strip())
-                continue
-            conditions[index] = tuple(stack)
-        return conditions
+    # ---- command location helpers -----------------------------------------
+    def _line_of(self, index: int) -> int:
+        line, lo, hi = 0, 0, len(self.line_starts)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if self.line_starts[mid] <= index:
+                line = mid
+                lo = mid + 1
+            else:
+                hi = mid
+        return line
 
     @staticmethod
     def _paren_body(text: str, open_index: int) -> tuple[str, int]:
@@ -228,62 +263,278 @@ class Rows:
             i += 1
         raise Unparseable('an unclosed ( while reading the CMake text')
 
-    def _scan(self, text: str, base: int, cond_of: dict[int, tuple] | None = None) -> None:
-        def lineno(index: int) -> int:
-            return base + text[:index].count('\n')
+    def _command_at(self, line_index: int):
+        m = re.match(r'\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(', self.lines[line_index])
+        if not m:
+            return None
+        open_index = self.line_starts[line_index] + m.end() - 1
+        body, close = self._paren_body(self.text, open_index)
+        return m.group(1), body, self._line_of(close)
 
-        def conds(index: int) -> tuple:
-            if cond_of is None:
-                return ()
-            return cond_of.get(lineno(index) - 1, ())
+    def _block_end(self, start_line: int, opener: str, closer: str) -> int:
+        """Line index of the closer() that ends the block opening at start."""
+        depth = 0
+        for i in range(start_line, len(self.lines)):
+            stripped = self.lines[i].strip()
+            if re.match(rf'\s*{opener}\(', self.lines[i]) or stripped.startswith(f'{opener}('):
+                depth += 1
+            if re.match(rf'\s*{closer}\(', self.lines[i]) or stripped.startswith(f'{closer}('):
+                depth -= 1
+                if depth == 0:
+                    return i
+        raise Unparseable(f'{self.path}: {opener}( at line {start_line + 1} has no {closer}()')
 
-        for m in re.finditer(r'add_test\(NAME\s+(test_\w+)\s+COMMAND', text):
-            row = m.group(1)
-            body, _ = self._paren_body(text, text.index('(', m.start()))
-            entry = self._entry(row, lineno(m.start()), conds(m.start()))
-            entry['argvs'].append(body.split())
-        for m in re.finditer(r'(?:pineforge_add_unit_test|add_executable)\((test_\w+)',
-                             text):
-            self._entry(m.group(1), lineno(m.start()), conds(m.start()))
-        for launch in re.finditer(r'list\(APPEND TEST_SOURCES\b', text):
-            body, _ = self._paren_body(text, text.index('(', launch.start()))
-            for name in re.findall(r'(test_\w+)', body):
-                self._entry(name, lineno(launch.start()), conds(launch.start()))
-        for m in re.finditer(r'target_compile_definitions\((\S+?)\s+PRIVATE', text):
-            target = m.group(1)
-            row = target if target.startswith('test_') else None
-            body, _ = self._paren_body(text, text.index('(', m.start()))
-            if row is None:
+    def _check_sites_readable(self) -> None:
+        """Every add_test( site must name its row; one this sweep cannot read
+        is exit 2, never a silent skip."""
+        for m in re.finditer(r'add_test\(', self.text):
+            lineno = self._line_of(m.start()) + 1
+            if not re.match(r'add_test\(\s*NAME\s+[^\s)]+', self.text[m.start():]):
+                raise Unparseable(
+                    f'{self.path}:{lineno}: an add_test( whose NAME this sweep cannot read')
+
+    # ---- rows --------------------------------------------------------------
+    def _entry(self, row: str, lineno: int, conditions: tuple, table) -> dict:
+        entry = self.rows.get(row)
+        if entry is None:
+            entry = {'defines': {}, 'lineno': lineno, 'argvs': [],
+                     'conditions': [], 'sites': [], 'table': table}
+            self.rows[row] = entry
+        elif not entry['lineno']:
+            entry['lineno'] = lineno
+        return entry
+
+    def _site(self, row: str, lineno: int, conditions: tuple, placeholder: bool,
+              table) -> dict:
+        entry = self._entry(row, lineno, conditions, table)
+        if conditions and conditions not in entry['conditions']:
+            entry['conditions'].append(conditions)
+        entry['sites'].append({'lineno': lineno, 'conditions': conditions,
+                               'placeholder': placeholder})
+        return entry
+
+    def _register(self, raw: str, lineno: int, env: dict, conditions: tuple,
+                  table, argv=None, placeholder: bool = False,
+                  sources=None, twin_target: str | None = None) -> None:
+        names = expand_names(raw.strip('"'), env)
+        if not names:
+            self.dynamic_names.append((lineno + 1, raw))
+            names = {raw}
+        for name in names:
+            entry = self._site(name, lineno + 1, conditions, placeholder, table)
+            if argv is not None:
+                entry['argvs'].append([subst(t, env) for t in argv])
+            if sources:
+                entry.setdefault('sources', set()).update(sources)
+            if twin_target:
+                entry.setdefault('twin_targets', set()).add(twin_target)
+
+    # ---- the walker --------------------------------------------------------
+    def _walk(self, start: int, end: int, env: dict, conditions: tuple) -> None:
+        i = start
+        while i < end:
+            command = self._command_at(i)
+            if command is None:
+                i += 1
                 continue
-            entry = self._entry(row, lineno(m.start()), conds(m.start()))
-            for dm in re.finditer(r'(\w+)\s*=\s*"([^"]+)"', body):
-                entry['defines'][dm.group(1)] = dm.group(2)
+            name, body, close_line = command
+            if name == 'function':
+                # A function() body is a template: the add_test sites in it
+                # register nothing themselves; the call sites do.
+                block_end = self._block_end(i, 'function', 'endfunction')
+                block_text = '\n'.join(self.lines[close_line + 1:block_end])
+                self.add_test_sites_skipped += len(re.findall(r'add_test\(', block_text))
+                i = block_end + 1
+                continue
+            if name == 'if':
+                i = self._walk_if(i, body, close_line, env, conditions)
+                continue
+            if name == 'foreach':
+                block_end = self._block_end(i, 'foreach', 'endforeach')
+                self._walk_foreach(body, close_line + 1, block_end, env,
+                                   conditions)
+                i = block_end + 1
+                continue
+            if name == 'while':
+                block_end = self._block_end(i, 'while', 'endwhile')
+                self._walk(close_line + 1, block_end, dict(env), conditions)
+                i = block_end + 1
+                continue
+            if name == 'set':
+                self._do_set(body, env)
+            elif name == 'list':
+                self._do_list(body, env)
+            elif name == 'include':
+                pass
+            elif name == 'add_test':
+                self.site_lines.add(i)
+                self._do_add_test(body, i, env, conditions)
+            elif name == 'target_compile_definitions':
+                self._do_defines(body, i, env, conditions)
+            elif name in ('add_executable', 'pineforge_add_unit_test',
+                          'pineforge_add_twin_test'):
+                self._do_register_call(name, body, i, env, conditions)
+            i = close_line + 1
 
-    def _parse(self) -> None:
-        text = self.text
-        for m in re.finditer(r'set\((_pf_\w+)\s+(\S+)\)', text):
-            value = m.group(2).replace('${CMAKE_CURRENT_SOURCE_DIR}',
-                                       self.rel_dir)
-            self.vars.setdefault(m.group(1), value)
-        cond_of = self._condition_stack()
-        self._scan(text, 0, cond_of)
-        # foreach(<var> IN ITEMS <items>) blocks register and define per item;
-        # expand each item's substituted body and scan it too.
-        for m in re.finditer(r'foreach\((\w+)\s+IN\s+ITEMS\s+([^)]*)\)', text):
-            var, items = m.group(1), m.group(2).split()
-            body_start = m.end()
-            body_end = text.find('endforeach()', body_start)
-            if body_end < 0:
-                raise Unparseable('a bare foreach( with no endforeach()')
-            body = text[body_start:body_end]
-            base = text[:body_start].count('\n') + 1
-            outer = cond_of.get(text[:m.start()].count('\n'), ())
-            item_conds = {line: outer
-                          for line in range(base - 1, base + body.count('\n') + 1)}
+    def _walk_if(self, line_i: int, body: str, close_line: int, env: dict,
+                 conditions: tuple) -> int:
+        """Walk every branch, each with its own condition polarity: the then
+        branch of if(BODY) runs only when BODY holds, else()/elseif branches
+        only when it does not. Variables a branch sets stay multi-valued."""
+        block_end = self._block_end(line_i, 'if', 'endif')
+        if_body = body
+        segments: list[tuple[int, int, tuple]] = []   # (first, last, conds)
+        segment_start, depth = close_line + 1, 1
+        pending: list[tuple[str, bool]] = [(if_body, True)]
+        for i in range(close_line + 1, block_end + 1):
+            stripped = self.lines[i].strip()
+            if re.match(r'if\(', stripped):
+                depth += 1
+            elif stripped.startswith('endif('):
+                depth -= 1
+                if depth == 0:
+                    segments.append((segment_start, i, conditions + tuple(pending)))
+                    break
+            elif depth == 1 and stripped == 'else()':
+                segments.append((segment_start, i, conditions + tuple(pending)))
+                segment_start = i + 1
+                pending = [(if_body, False)]
+            elif depth == 1 and stripped.startswith('elseif('):
+                segments.append((segment_start, i, conditions + tuple(pending)))
+                segment_start = i + 1
+                m = re.match(r'elseif\s*\((.*)\)\s*$', stripped)
+                pending = [(if_body, False),
+                           (m.group(1) if m else stripped, True)]
+        merged: dict[str, list[str]] = {}
+        for first, last, conds in segments:
+            branch_env = dict(env)
+            self._walk(first, last, branch_env, conds)
+            for name, values in branch_env.items():
+                if name in env and values == env[name]:
+                    continue
+                out = merged.setdefault(name, list(env.get(name, [])))
+                for value in values:
+                    if value not in out:
+                        out.append(value)
+        env.update(merged)
+        return block_end + 1
+
+    def _walk_foreach(self, body: str, first: int, last: int, env: dict,
+                      conditions: tuple) -> None:
+        head = re.match(r'\s*(\w+)\s+(.*)$', body, re.S)
+        if not head:
+            raise Unparseable(f'{self.path}:{first + 1}: a foreach header this sweep cannot read')
+        var, rest = head.group(1), head.group(2).strip()
+        m = re.match(r'IN\s+LISTS\s+(.*)$', rest, re.S)
+        if m:
+            items: list[str | None] = []
+            for list_name in m.group(1).split():
+                values = env.get(list_name)
+                items.extend(values if values else [None])
+        else:
+            # bare foreach(<var> <items...>), IN ITEMS or IN ${list}
+            m = re.match(r'IN\s+(?:ITEMS\s+)?(.*)$', rest, re.S)
+            item_text = (m.group(1) if m else rest).strip()
+            single = re.fullmatch(r'\$\{(\w+)\}', item_text)
+            if single:
+                items = env.get(single.group(1)) or [None]
+            else:
+                items = [subst(t, env) if '${' in t else t
+                         for t in item_text.split()]
+        for item in items:
+            if item is None:
+                item = '${' + var + '}'
+            item_env = dict(env)
+            item_env[var] = [subst(item, env)]
+            self._walk(first, last, item_env, conditions)
+
+    def _do_set(self, body: str, env: dict) -> None:
+        m = re.match(r'\s*(\w+)\s+(.*)$', body, re.S)
+        if not m:
+            return
+        name, rest = m.group(1), m.group(2)
+        values = env.setdefault(name, [])
+        for token in rest.split():
+            value = token.strip('"')
+            if value not in values:
+                values.append(value)
+
+    def _do_list(self, body: str, env: dict) -> None:
+        m = re.match(r'\s*(APPEND|REMOVE_ITEM)\s+(\w+)\s+(.*)$', body, re.S)
+        if not m:
+            return
+        action, name, rest = m.groups()
+        values = env.setdefault(name, [])
+        for token in rest.split():
+            value = token.strip('"')
+            splice = re.fullmatch(r'\$\{(\w+)\}', value)
+            if splice:                      # list(APPEND X ${Y}) splices Y
+                items = env.get(splice.group(1), [])
+            else:
+                items = [value]
             for item in items:
-                self._scan(re.sub(r'\$\{' + var + r'\}', item, body), base,
-                           item_conds)
+                if action == 'APPEND':
+                    if item not in values:
+                        values.append(item)
+                elif item in values:
+                    values.remove(item)
 
+    def _do_add_test(self, body: str, line_i: int, env: dict,
+                     conditions: tuple) -> None:
+        m = re.match(r'\s*NAME\s+([^\s)]+)', body)
+        if not m:
+            raise Unparseable(
+                f'{self.path}:{line_i + 1}: an add_test( whose NAME this sweep cannot read')
+        argv = body.split()
+        for token in argv:
+            for var in re.findall(r'\$\{(_pf_\w+)\}', token):
+                if var not in env:
+                    raise Unparseable(
+                        f'{self.path}:{line_i + 1}: an add_test argument names '
+                        f'${{{var}}}, which this sweep cannot resolve')
+        placeholder = SKIP_LITERAL in ' '.join(argv)
+        self._register(m.group(1), line_i, env, conditions, self, argv=argv,
+                       placeholder=placeholder)
+
+    def _do_defines(self, body: str, line_i: int, env: dict,
+                    conditions: tuple) -> None:
+        m = re.match(r'\s*(\S+?)\s+PRIVATE\s+(.*)$', body, re.S)
+        if not m or not m.group(1).startswith('test_'):
+            return
+        target = subst(m.group(1), env)
+        entry = self._site(target, line_i + 1, conditions, False, self)
+        for dm in re.finditer(r'(\w+)\s*=\s*"([^"]+)"', m.group(2)):
+            entry['defines'][dm.group(1)] = subst(dm.group(2), env)
+
+    def _do_register_call(self, command: str, body: str, line_i: int, env: dict,
+                          conditions: tuple) -> None:
+        tokens = body.split()
+        if not tokens:
+            return
+        raw = tokens[0]
+        if command == 'add_executable':
+            if not re.match(r'(test_|\$\{)', raw):
+                return
+            names = expand_names(subst(raw, env), env) or {raw}
+            sources = {subst(t, env) for t in tokens[1:]
+                       if not t.startswith('$') and t.endswith(('.cpp', '.c'))}
+            for name in names:
+                self.target_sources.setdefault(name, set()).update(sources)
+                self._register(name, line_i, env, conditions, self,
+                               sources=sources)
+            return
+        if command == 'pineforge_add_twin_test':
+            if len(tokens) < 2:
+                return
+            self._register(raw, line_i, env, conditions, self,
+                           twin_target=subst(tokens[1], env))
+            return
+        name = subst(raw, env)
+        sources = {f'{name}.cpp'}
+        self.target_sources.setdefault(name, set()).update(sources)
+        self._register(raw, line_i, env, conditions, self, sources=sources)
+
+    # ---- what the sweep asks of a row --------------------------------------
     def python_script(self, row: str) -> Path | None:
         entry = self.rows.get(row)
         if not entry:
@@ -305,7 +556,7 @@ class Rows:
                     seen_script = True
                     continue
                 if seen_script:
-                    return self.resolve(token)
+                    return token
         return None
 
 
@@ -358,19 +609,39 @@ def marker_expression(driver: Path) -> list[str] | None:
 def sweep(root: Path) -> int:
     removed_dirs, removed_files = load_removed(root)
     pinned = load_pinned_rows(root)
+    pinned_total = len(pinned)
     evidence = load_evidence(root)
     cmake_files = [root / 'tests' / 'CMakeLists.txt',
                    root / 'runner' / 'CMakeLists.txt']
 
     rows: dict[str, dict] = {}
+    add_test_sites = 0
+    add_test_sites_skipped = 0
+    dynamic_names: list[tuple[str, int, str]] = []
     for cmake in cmake_files:
         if not cmake.exists():
             raise Unparseable(f'{cmake}: missing')
         table = Rows(cmake, root)
+        add_test_sites += table.add_test_sites
+        add_test_sites_skipped += table.add_test_sites_skipped
+        for lineno, raw in table.dynamic_names:
+            dynamic_names.append((str(cmake.relative_to(root)), lineno, raw))
         for name, entry in table.rows.items():
             entry['cmake'] = cmake
-            entry['table'] = table
             rows.setdefault(name, entry)
+
+    # Every add_test( site the tree has must have been walked (sites inside a
+    # function() are templates; their call sites register the rows).
+    site_total = 0
+    for cmake in cmake_files:
+        text = strip_comments(cmake.read_text())
+        site_total += len(re.findall(r'add_test\(', text))
+    walked_total = site_total - add_test_sites_skipped
+    if walked_total != add_test_sites:
+        raise Unparseable(
+            f'add_test sites walked: {add_test_sites} of {walked_total} '
+            f'outside function() templates ({site_total} present): a site this '
+            f'sweep did not walk')
 
     hits: dict[str, list[tuple[str, int, str]]] = {}
     markers: list[tuple[str, str, str]] = []
@@ -386,9 +657,23 @@ def sweep(root: Path) -> int:
         for value in define_values:
             named.append((str(table.path.relative_to(root)), 0, value))
 
-        src = root / table.rel_dir / f'{row}.cpp'
+        src_names = set(entry.get('sources') or ())
+        for target in entry.get('twin_targets') or ():
+            src_names |= table.target_sources.get(target, set())
+        if not src_names:
+            src_names = {f'{row}.cpp'}
         files = []
-        if src.exists():
+        base = (root / table.rel_dir).resolve()
+        for src_name in sorted(src_names):
+            resolved = resolve_cmake_path(src_name, table.rel_dir)
+            src = (base / resolved).resolve()
+            if '..' in Path(resolved).parts or (
+                    src != base and base not in src.parents):
+                raise Unparseable(
+                    f'{table.path}: {row} names a source outside the tree: '
+                    f'{src_name}')
+            if not src.exists() or src.suffix not in ('.cpp', '.c'):
+                continue
             files.append(src)
             for holder, lineno, inc in row_sources(src):
                 files.append(holder)
@@ -409,17 +694,19 @@ def sweep(root: Path) -> int:
         for argv in entry['argvs']:
             for token in argv:
                 if token.startswith(('tests/', 'fixtures/', '${')):
-                    try:
-                        value = table.resolve(token)
-                    except Unparseable:
-                        continue
                     named.append((str(table.path.relative_to(root)), entry['lineno'],
-                                  resolve_cmake_path(value, table.rel_dir)))
+                                  resolve_cmake_path(token, table.rel_dir)))
 
         # Python driver: the private marker and the skip literal.
         script = table.python_script(row)
         if script and script.exists():
+            marked = '_pf_private_marker' in script.read_text(errors='replace')
             parts = marker_expression(script)
+            if marked and parts is None:
+                raise Unparseable(
+                    f'{script}: {row} carries _pf_private_marker in a form '
+                    f'this sweep cannot read (the pinned form is '
+                    f'_pf_private_marker = fixtures / "..." / "...")')
             if parts is not None:
                 fixtures_arg = table.fixtures_arg(row)
                 if fixtures_arg is None:
@@ -451,42 +738,64 @@ def sweep(root: Path) -> int:
     # guard that names removed data (then they cannot run without it).
     resolved_guarded: set[str] = set()
 
-    def condition_paths(condition: str, table: Rows) -> list[str]:
-        out = []
-        for m in re.finditer(r'\$\{(\w+)\}([^" )\n]*)', condition):
-            var, suffix = m.group(1), m.group(2)
-            if var == 'CMAKE_CURRENT_SOURCE_DIR':
-                value = table.rel_dir
-            else:
-                value = table.vars.get(var)
-            if value is None:
-                continue
-            out.append(resolve_cmake_path(value, table.rel_dir).rstrip('/') + suffix)
-        for m in re.finditer(r'"([^"]+)"', condition):
-            cand = re.sub(r'\$\{(\w+)\}',
-                          lambda mm: table.vars.get(mm.group(1), mm.group(0)),
-                          m.group(1))
-            out.append(resolve_cmake_path(cand, table.rel_dir))
+    def condition_paths(condition: str, table: Rows) -> list[tuple[str, bool]]:
+        """(path, from_exists) for every path a condition names."""
+        out: list[tuple[str, bool]] = []
+        env = table.vars
+        for m in re.finditer(r'EXISTS\s+("(?:[^"]*)"|[^\s")]+)', condition):
+            before = condition[:m.start()].rstrip()
+            candidate = resolve_cmake_path(subst(m.group(1).strip('"'), env),
+                                           table.rel_dir)
+            out.append((candidate, not before.upper().endswith('NOT')))
+        head = condition.strip()
+        if not head or head.upper().startswith('NOT'):
+            return out
+        m = re.match(r'("(?:[^"]*)"|\$\{\w+\}[^\s")]*|[^\s")]+)', head)
+        if m and not re.match(r'EXISTS\s', head):
+            candidate = resolve_cmake_path(
+                subst(m.group(1).strip('"'), env), table.rel_dir)
+            if candidate:
+                out.append((candidate, True))
         return out
 
+    def site_guarded(site: dict, table: Rows) -> bool:
+        """True when this registration site runs only with removed data
+        present: a positive EXISTS guard naming it, and no enclosing condition
+        that names removed data negatively (else()/NOT/elseif of it)."""
+        guard = False
+        for condition, positive in site['conditions']:
+            for candidate, from_exists in condition_paths(condition, table):
+                if not is_removed(candidate, removed_dirs, removed_files):
+                    continue
+                if positive and from_exists:
+                    guard = True
+                else:
+                    return False
+        return guard
+
     def guarded_entry(entry: dict) -> str | None:
-        sites = entry.get('conditions') or []
+        table = entry['table']
+        sites = list(entry.get('sites') or [])
+        # pineforge_add_twin_test registers the row through if(TARGET ...):
+        # the row exists exactly when the target does, so the target's own
+        # registration sites are the row's guard.
+        for target in sorted(entry.get('twin_targets') or ()):
+            target_entry = table.rows.get(target)
+            if not target_entry or not target_entry.get('sites'):
+                return None
+            sites.extend(target_entry['sites'])
         if not sites:
             return None
-        table = entry['table']
         found = None
         for site in sites:
-            guard = None
-            for condition in site:
-                for cand in condition_paths(condition, table):
-                    if is_removed(cand, removed_dirs, removed_files):
-                        guard = condition
-                        break
-                if guard:
-                    break
-            if guard is None:
-                return None          # a site without the removed-data guard
-            found = found or guard
+            if site['placeholder']:
+                continue          # the pinned SKIP shape of the absent branch
+            if not site['conditions'] and entry.get('twin_targets'):
+                continue          # the twin call itself: the target's sites,
+                # appended above, carry the guard the call inherits.
+            if not site_guarded(site, table):
+                return None       # a site that registers without the data
+            found = found or site['conditions'][-1][0]
         return found
 
     for row in sorted(hits):
@@ -519,7 +828,22 @@ def sweep(root: Path) -> int:
         print(f'pinned hit: {row} ({ROW_PIN}:{pinned[row]}) reads {path} '
               f'({where}:{lineno})')
 
-    print(f'rows swept: {len(rows)}')
+    # ---- section 3: every pinned row must have been swept: a pinned row no
+    # registration matched means the sweep parsed fewer rows than are
+    # registered.
+    unswept = sorted(set(pinned) - set(rows) - resolved_guarded)
+    for row in unswept:
+        fail(f'{ROW_PIN}:{pinned[row]}: {row} is pinned but no registration '
+             f'this sweep parsed names it: rows swept != rows registered')
+
+    print(f'add_test sites walked: {add_test_sites} '
+          f'(+{add_test_sites_skipped} function() templates) of {site_total}')
+    print(f'rows swept: {len(rows)}; pinned rows swept: '
+          f'{pinned_total - len(unswept)} of {pinned_total}; '
+          f'rows the sweep could not name: {len(dynamic_names)}')
+    for where, lineno, raw in dynamic_names:
+        print(f'  unnamed row: {where}:{lineno}: {raw} (swept under its raw '
+              f'name; no registration resolves it)')
     print(f'named paths checked: {checked_paths}')
     print(f'rows naming removed data: {len(hits)} '
           f'(pinned {len(pinned_hits) - len(resolved_guarded)}, '
