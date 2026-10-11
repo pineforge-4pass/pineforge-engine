@@ -34,6 +34,12 @@ What it checks
    registers are derived by the same predicate (source-bound rows: release
    only; the rest: release and kernel) and printed; the kernel count is the
    rows whose guard can register there, and zero of them are source-bound.
+   The predicate reads the recorded `_pf_source_bound_private_rows` list
+   first, so a private row whose TU the removals took is BOUND, not silent;
+   a row whose TU is missing and is not recorded is counted in NEITHER
+   profile, and named as such -- a missing TU is not "not source-bound".
+   Every pinned row must be registered by one of the guarded blocks: a row
+   the pin names that no block registers is a violation.
 4. PREPARER/ROW AGREEMENT (d): every (row, provider-manifest) pair the
    guarded receipt blocks name is checked against the providers the
    preparer list gives that row, and both states are required in the block:
@@ -132,6 +138,38 @@ def reaches_source_layer(entry: Path) -> bool:
     return False
 
 
+def read_recorded_source_bound(text: str, source: Path) -> set[str]:
+    """The recorded source-bound private rows the predicate reads first.
+
+    The predicate answers BOUND for a row in `_pf_source_bound_private_rows`
+    before it walks anything, so this checker must read the SAME list: a
+    private row whose public TU the removals took cannot be walked at all, and
+    the walk's silence is not the predicate's answer."""
+    start = text.find('set(_pf_source_bound_private_rows')
+    if start < 0:
+        raise Unparseable(f'{source}: _pf_source_bound_private_rows is gone')
+    end = text.find('\n)', start)
+    if end < 0:
+        raise Unparseable(f'{source}: _pf_source_bound_private_rows never closes')
+    recorded = set(re.findall(r'^\s*(test_\w+)\s*$', text[start:end], re.M))
+    if not recorded:
+        raise Unparseable(f'{source}: _pf_source_bound_private_rows parsed empty')
+    return recorded
+
+
+def source_bound(entry: Path, row: str, recorded: set[str]) -> str:
+    """BOUND / CLEAR / MISSING for one private row, the predicate's own order.
+
+    MISSING is not CLEAR: a translation unit the tree does not have says
+    nothing about the row, and counting it as kernel-registered would report a
+    profile that never configured it."""
+    if row in recorded:
+        return 'bound'
+    if not entry.is_file():
+        return 'missing'
+    return 'bound' if reaches_source_layer(entry) else 'clear'
+
+
 def blocks(lines: list[str], source: Path):
     """Every top-level if(EXISTS ...) block: (lineno, guard line, else lineno, end)."""
     blocks_found = []
@@ -179,11 +217,12 @@ def check_single_source(text: str, source: Path) -> None:
         fail(source, 0, 'the kernel-only filter does not call pineforge_test_is_source_bound')
 
 
-def check_blocks(lines: list[str], private: list[str], source: Path) -> dict:
+def check_blocks(lines: list[str], private: list[str], source: Path,
+                 recorded: set[str]) -> dict:
     pinned = set(private)
-    bound: dict[str, bool] = {}
+    bound: dict[str, str] = {}
     counts = {'guarded_blocks': 0, 'kernel_registered': [], 'release_registered': [],
-              'kernel_absent': []}
+              'kernel_absent': [], 'missing_tu': []}
     for i, else_at, end in blocks(lines, source):
         body = '\n'.join(lines[i:(else_at if else_at is not None else end)])
         absent_body = '\n'.join(lines[(else_at + 1):end]) if else_at is not None else ''
@@ -206,7 +245,8 @@ def check_blocks(lines: list[str], private: list[str], source: Path) -> dict:
                  f'cannot link it')
         for row in owners:
             if row not in bound:
-                bound[row] = reaches_source_layer(REPO / 'tests' / f'{row}.cpp')
+                bound[row] = source_bound(REPO / 'tests' / f'{row}.cpp', row,
+                                          recorded)
         if not absent_body.strip():
             raise Unparseable(f'{source}:{i + 1}: no placeholder branch to read')
         if 'SKIP private fixtures not present: ' not in absent_body:
@@ -214,10 +254,19 @@ def check_blocks(lines: list[str], private: list[str], source: Path) -> dict:
                  f'the absent branch of {", ".join(owners)} has no pinned SKIP literal')
         counts['release_registered'].extend(owners)
         for row in owners:
-            if bound[row]:
+            if bound[row] == 'bound':
                 counts['kernel_absent'].append(row)
+            elif bound[row] == 'missing':
+                counts['missing_tu'].append(row)
             else:
                 counts['kernel_registered'].append(row)
+    # Every pinned private row must be registered by one of those blocks: a
+    # bare registration would build against the kernel-only archive.
+    unmatched = sorted(pinned - set(counts['release_registered']))
+    for row in unmatched:
+        fail(source, 0, f'the private-row pin names {row}, and no guarded '
+                        f'private block registers it: a bare registration '
+                        f'would build against the kernel-only archive')
     return counts
 
 
@@ -272,8 +321,9 @@ def main() -> int:
         text = strip_comments(source.read_text())
         lines = text.splitlines()
         private = read_private_rows(text, source)
+        recorded = read_recorded_source_bound(text, source)
         check_single_source(text, source)
-        counts = check_blocks(lines, private, source)
+        counts = check_blocks(lines, private, source, recorded)
         pairs = check_preparer_pairs(text, source)
     except Unparseable as error:
         print(f'check_kernel_profile_rows: {error}')
@@ -288,7 +338,12 @@ def main() -> int:
           f'kernel-absent {len(counts["kernel_absent"])} '
           f'(source-bound rows) -> release registers '
           f'{len(counts["release_registered"])} pinned rows, kernel registers '
-          f'{len(counts["kernel_registered"])}')
+          f'{len(counts["kernel_registered"])}, and '
+          f'{len(counts["missing_tu"])} whose TU the tree does not have '
+          f'(counted in neither profile)')
+    print(f'pinned rows no guarded private block registers: 0')
+    for row in sorted(counts['missing_tu']):
+        print(f'  TU the tree does not have: {row} (not counted in either profile)')
     print(f'preparer/row pairs checked: {pairs}')
     print('kernel targets linking without their prerequisites: 0')
     print('blocks not reading the predicate list: 0')
