@@ -12,11 +12,11 @@ unchanged.
 
 from __future__ import annotations
 import os as _pf_os
-import unittest as _pf_unittest
 
-_pf_private_fixture = _pf_os.path.join(_pf_os.path.dirname(_pf_os.path.dirname(_pf_os.path.abspath(__file__))), "symbol_calendar", "xc-cal-aapl15", "calendar.json")
+_pf_private_fixture = _pf_os.path.join(_pf_os.path.dirname(_pf_os.path.dirname(_pf_os.path.abspath(__file__))), "tests", "fixtures", "symbol_calendar", "xc-cal-aapl15", "calendar.json")
 if not _pf_os.path.exists(_pf_private_fixture):
-    raise _pf_unittest.SkipTest("SKIP private fixtures not present: tests/fixtures/symbol_calendar/xc-cal-aapl15/calendar.json")
+    print("SKIP private fixtures not present: tests/fixtures/symbol_calendar/xc-cal-aapl15/calendar.json")
+    raise SystemExit(77)
 
 import hashlib
 import json
