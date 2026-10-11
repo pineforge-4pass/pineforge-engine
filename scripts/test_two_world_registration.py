@@ -265,8 +265,9 @@ endif()
                       result.stdout)
         self.assertIn('the recorded refusal-shard rows: 12; not a pinned row: '
                       '0; unsorted: 0; duplicated: 0', result.stdout)
-        # No construct is left unbound: the sweep either reads it or exits 2.
-        self.assertNotIn('could not bind', result.stdout)
+        # No construct is left unbound: a clean run prints no refusal line
+        # (every refusal and failure line carries the script's own prefix).
+        self.assertNotIn('check_two_world_registration:', result.stdout)
 
     # control 6: a refusal-shard row removed from the recorded list is drift
     @needs_overlay
@@ -340,7 +341,7 @@ endif()
                           result.stdout)
         self.assertIn('refusal-shard drift: recorded-only: 0, derived-only: 0',
                       result.stdout)
-        self.assertNotIn('could not bind', result.stdout)
+        self.assertNotIn('check_two_world_registration:', result.stdout)
 
     # control 10: an execute_process the sweep does not bind is exit 2, never
     # a quiet line in a passing run

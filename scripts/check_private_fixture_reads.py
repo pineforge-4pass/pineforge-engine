@@ -1099,6 +1099,16 @@ def sweep(root: Path) -> int:
         return found
 
     for row in sorted(hits):
+        if row in evidence:
+            # Before the pin: the evidence record's whole point is that its
+            # cited line IS re-read (load_evidence checked it once already),
+            # so a record for a row the pin also covers is not dead weight.
+            cite, token, reason = evidence[row]
+            print(f'evidence hit: {row} names removed data ({hits[row][0][2]}); '
+                  f'{cite} carries "{token}": {reason}')
+            pinned.setdefault(row, 0)
+            resolved_guarded.add(row)
+            continue
         if row in pinned:
             continue
         guard = guarded_entry(rows[row])
@@ -1106,13 +1116,6 @@ def sweep(root: Path) -> int:
             print(f'guarded hit: {row} registers only under {guard} '
                   f'and names {hits[row][0][2]}')
             pinned.setdefault(row, 0)   # counted as resolved below
-            resolved_guarded.add(row)
-            continue
-        if row in evidence:
-            cite, token, reason = evidence[row]
-            print(f'evidence hit: {row} names removed data ({hits[row][0][2]}); '
-                  f'{cite} carries "{token}": {reason}')
-            pinned.setdefault(row, 0)
             resolved_guarded.add(row)
             continue
         for where, lineno, path in hits[row][:4]:
@@ -1176,8 +1179,12 @@ def sweep(root: Path) -> int:
         print(f'check_private_fixture_reads: {line}')
     if FAILURES:
         return 1
-    print('unpinned rows naming removed data: 0')
-    print('skip markers not naming a removed file: 0')
+    unpinned_hits = [row for row in hits
+                     if row not in pinned and row not in resolved_guarded]
+    bad_markers = [marker for _, marker, _ in markers
+                   if marker not in removed_files]
+    print(f'unpinned rows naming removed data: {len(unpinned_hits)}')
+    print(f'skip markers not naming a removed file: {len(bad_markers)}')
     return 0
 
 

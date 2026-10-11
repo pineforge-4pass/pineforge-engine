@@ -50,9 +50,12 @@ Modes
              and file, requires absent-only names: 0 and overlay-only names:
              0, and re-derives the source-bound set from the predicate over
              the live tree (a pinned row whose include closure reaches a
-             pineforge/source or pineforge/compat/pine header) requiring it
-             to EQUAL the recorded list exactly: recorded-only: 0,
-             derived-only: 0. The refusal-shard list is re-derived the same
+             pineforge/source or pineforge/compat/pine header). Two bounds
+             hold on it: every row the record names must be one the predicate
+             reaches, and every row whose registration the record changes must
+             be named by it (or inherit a recorded base) -- the printed
+             recorded-only and not-recorded counts are both 0 then. The
+             refusal-shard list is re-derived the same
              way: the present branch's split over the live tree (the
              refused_*.cpp glob, the family regex, the 8-library batches)
              must produce exactly the recorded rows -- recorded-only: 0,
@@ -104,6 +107,9 @@ REFUSAL_SHARD_RECORD = '_pf_refusal_shard_rows'
 REFUSAL_SHARD_MARKERS = '_pf_refusal_shard_first_library'
 
 FAILURES: list[str] = []
+# absent-only/overlay-only names summed over every profile and file the
+# overlay half compared; the closing lines print these, never a literal zero.
+TOTALS = {'absent_only': 0, 'overlay_only': 0}
 
 
 class Unreadable(Exception):
@@ -1234,6 +1240,8 @@ def report_worlds(root: Path, rel: Path, profile_name: str, absent, overlay) -> 
     only_overlay = sorted(overlay.rows - absent.rows)
     print(f'  {rel} [{profile_name}] absent {len(absent.rows)} rows, '
           f'overlay {len(overlay.rows)} rows')
+    TOTALS['absent_only'] += len(only_absent)
+    TOTALS['overlay_only'] += len(only_overlay)
     print(f'  {rel} [{profile_name}] absent-only names: {len(only_absent)}')
     for name in only_absent:
         fail(f'{rel} [{profile_name}] registers {name} only with the fixtures absent')
@@ -1530,8 +1538,8 @@ def main() -> int:
         return 1
     if args.overlay or args.both:
         if overlay_ran:
-            print('absent-only names: 0')
-            print('overlay-only names: 0')
+            print(f'absent-only names: {TOTALS["absent_only"]}')
+            print(f'overlay-only names: {TOTALS["overlay_only"]}')
     else:
         print('two-world registration: the absent world evaluated, the recorded '
               'list is pinned, sorted and duplicate-free')

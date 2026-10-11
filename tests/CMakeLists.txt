@@ -3645,9 +3645,9 @@ list(APPEND _pf_private_fixture_rows
 # no target, no row, no placeholder, no label -- which is main's own
 # kernel-only behaviour; every profile that builds the layer registers them
 # through their private-fixture guard as today. The list is computed from the
-# tree configure sees, so in the fixture-less tree a private row whose public
-# TU the removal took is not listed (it registers its placeholder as before),
-# while with the private fixtures overlaid its restored TU is read and listed.
+# tree configure sees: in the fixture-less tree a private row whose public TU
+# the removal took is listed through the recorded source-bound list that names
+# it, and with the private fixtures overlaid its restored TU is read and listed.
 set(_pf_kernel_absent_rows)
 if(NOT PINEFORGE_BUILD_SOURCE_LAYER)
     foreach(_pf_kernel_row IN LISTS _pf_private_fixture_rows)
