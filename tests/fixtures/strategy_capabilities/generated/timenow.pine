@@ -1,4 +1,0 @@
-//@version=6
-strategy("join")
-if timenow > time
-    strategy.entry("entry", strategy.long)
