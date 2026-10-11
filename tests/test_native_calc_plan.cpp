@@ -585,8 +585,7 @@ void expect_without_boundaries(const char* label, const BarClock& clock) {
 // PRE calculation exists"). The packet holds no vector for this case, so the
 // expectations in expect_without_boundaries are derived from that rule alone
 // (A1: a bar event's own close and a data-driven close are POST; A2: POST is
-// t(e)). What a tick, a time advance or a quiet interval does on such a timebase
-// is not stated by the rule, and is not tested. The clocks: one that only says
+// t(e)). The clocks: one that only says
 // the timebase is unbounded, as the consumer's does, and one that offers an
 // interval besides, which the derivation must not use.
 void test_timebase_without_time_boundaries() {
@@ -685,6 +684,47 @@ void expect_raw_label_advance(const char* label, const BarClock& clock) {
                             make_state(8, true, kT0 + 2 * kMinute, true, 5, false, 0, 0, 0)));
 }
 
+// Ruling 1, the bit absent (P-E, ENGINE-TOP 10-11 13:51; closes ns-k1-04-review
+// finding 12): on a timebase without time boundaries a Tick whose cadence
+// carries no tick bit still opens the lifecycle when none is open (the POST row
+// is granted only when the cadence has the tick bit) and plans no row; the bar
+// stays open. By hand: the lifecycle opens under key 0 with no
+// end, the representation native_calc_plan.hpp:56-59 documents for a bar of a
+// timebase without time boundaries; the cursor stays 0 (ruling 5); the bar has
+// no calculation; the event only takes its trace ordinal and records its time.
+// The same bit-absent case on the bounded grid is at :322-328.
+void expect_raw_label_tick_bit_absent(const char* label, const BarClock& clock) {
+    const Event tick{EventKind::Tick, kT0};
+    const Plan silent = plan_schedule(State{}, kBarCloseOnly, &tick, 1, clock, true);
+    expect_rows(label, silent, {});
+    CHECK(label, same_state(silent.after, make_state(2, true, kT0, true, 0, true, 0, 0, 0)));
+}
+
+// Ruling 2, the bit absent (P-E, ENGINE-TOP 10-11 13:51; closes ns-k1-04-review
+// finding 12): an AdvanceTime whose cadence carries no advance-time bit plans
+// no row on a timebase without time boundaries and closes nothing. With a bar
+// open it leaves the bar open under the same key, the same end, the same
+// cursor and the same calculation count; with no bar open it plans nothing at
+// all. By hand on the open bar: the event takes its trace ordinal and records
+// its time and nothing else moves. By hand on the closed bar: the quiet walk is
+// asked once at the cursor, is told the timebase is unbounded, and stops, so
+// nothing else moves there either. The same bit-absent case on the bounded grid
+// is at :330-334.
+void expect_raw_label_advance_bit_absent(const char* label, const BarClock& clock) {
+    const Event advance{EventKind::AdvanceTime, kT0 + 2 * kMinute};
+    const State open = make_state(9, true, kT0, true, 3, true, 0, 2, 0);
+    const Plan idle = plan_schedule(open, kBarCloseOnly, &advance, 1, clock, true);
+    expect_rows(label, idle, {});
+    CHECK(label, same_state(idle.after,
+                            make_state(10, true, kT0 + 2 * kMinute, true, 3, true, 0, 2, 0)));
+
+    const State closed = make_state(7, true, kT0, true, 5, false, 0, 0, 0);
+    const Plan none = plan_schedule(closed, kBarCloseOnly, &advance, 1, clock, true);
+    expect_rows(label, none, {});
+    CHECK(label, same_state(none.after,
+                            make_state(8, true, kT0 + 2 * kMinute, true, 5, false, 0, 0, 0)));
+}
+
 // Ruling 3 of the raw-label semantics (P-E, ENGINE-TOP 10-11 13:51): a quiet
 // interval on a timebase without time boundaries plans NOTHING. The walk over
 // the quiet intervals is asked once at the cursor, is told the timebase is
@@ -723,6 +763,25 @@ void test_raw_label_advance() {
     expect_raw_label_advance("raw-label advance, an interval offered", unbounded_clock_offering());
 }
 
+// The bit-absent halves of rulings 1 and 2 as tests, on both clocks of the
+// frozen no-boundaries case like the three tests above: the planned rows and
+// the state must not depend on what the unbounded clock offers besides saying
+// it is unbounded.
+void test_raw_label_tick_bit_absent() {
+    expect_raw_label_tick_bit_absent("raw-label tick without the tick bit, no interval offered",
+                                     unbounded_clock());
+    expect_raw_label_tick_bit_absent("raw-label tick without the tick bit, an interval offered",
+                                     unbounded_clock_offering());
+}
+
+void test_raw_label_advance_bit_absent() {
+    expect_raw_label_advance_bit_absent(
+        "raw-label advance without the advance bit, no interval offered", unbounded_clock());
+    expect_raw_label_advance_bit_absent(
+        "raw-label advance without the advance bit, an interval offered",
+        unbounded_clock_offering());
+}
+
 void test_raw_label_quiet() {
     const State closed = make_state(4, true, 0, true, 2, false, 0, 0, 0);
     const Event advance{EventKind::AdvanceTime, 4 * kMinute};
@@ -758,6 +817,8 @@ int main() {
     test_timebase_without_time_boundaries();
     test_raw_label_tick();
     test_raw_label_advance();
+    test_raw_label_tick_bit_absent();
+    test_raw_label_advance_bit_absent();
     test_raw_label_quiet();
     std::printf("test_native_calc_plan: %d failure(s) in %d checks\n", failures, checks);
     return failures == 0 ? 0 : 1;
