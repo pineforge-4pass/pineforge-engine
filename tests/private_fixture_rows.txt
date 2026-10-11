@@ -1,12 +1,15 @@
 // Pinned ctest rows that tests/CMakeLists.txt registers as SKIP placeholders
 // when the private fixtures are absent (removed by the private-fixture PR).
 // manifest: l44/pr1-manifest.tsv sha256 9a2727d455c1b470d515665428e2c6e090a22ac07f87255d1ca9c20d5528bd62
-// rows: 123
+// rows: 129
 test_aapl15_margin_brackets_l4a
 test_adapter_coof_relower
+test_adapter_in_place_reads
 test_adapter_magnifier_intrabar_tapes
 test_adapter_margin_schedule_differential
 test_adapter_receipts_in_place
+test_adapter_runtime_ambient
+test_adapter_settlement_carry
 test_adapter_sizing_relower
 test_add_sibling_margin_tapes
 test_admission_rules_tapes
@@ -17,6 +20,7 @@ test_cash_fee_sizing_tapes
 test_chart_tf_security_split_feed
 test_coof_chart_tick_touch_l4c
 test_coof_competing_tick_tapes
+test_coof_forced_waypoint_tapes
 test_coof_immediate_close_final_tapes
 test_coof_immediate_close_tapes
 test_coof_recalc_security_tapes
@@ -62,6 +66,8 @@ test_native_daily_holiday_l4d
 test_native_instrument_feed
 test_native_margin_hooks_twin
 test_native_margin_post_fill_path
+test_native_oracle_day_key_l2
+test_native_oracle_reversal_same_bar_tx_l2
 test_native_oracle_stop_snapshot_full_l2
 test_native_price_grid
 test_native_session_day_bar_open

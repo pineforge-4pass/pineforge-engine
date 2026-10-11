@@ -716,9 +716,9 @@ LIVE_SANITIZERS_MIN_TESTS = 12
 #           every private_fixtures row must RUN: with the overlay present a
 #           skip means the overlay did not reach the tree, so ctest-floor
 #           fails on it (a silently skipped row is a lost row here).
-#   unset   the overlay is absent, so its 123 placeholder rows SKIP in public
+#   unset   the overlay is absent, so its 129 placeholder rows SKIP in public
 #           CI. The two RUN floors are lowered by PRIVATE_FIXTURE_ROW_COUNT, so
-#           a green public run is not read as 123 lost rows; the floors are
+#           a green public run is not read as 129 lost rows; the floors are
 #           never lowered further than that.
 #
 # EXCLUDED_REGISTERED_MIN does not move in either mode: those counts come from
@@ -726,12 +726,12 @@ LIVE_SANITIZERS_MIN_TESTS = 12
 # registered population is the same with and without the overlay.
 #
 # The count is pinned from tests/private_fixture_rows.txt (the row list P1-B
-# commits alongside the placeholders): 123 rows, that file's sha256
+# commits alongside the placeholders): 129 rows, that file's sha256
 # 9a2727d455c1b470d515665428e2c6e090a22ac07f87255d1ca9c20d5528bd62, the same
 # manifest (l44/pr1-manifest.tsv) this campaign pins. The two floor constants
 # above stay the FULL count so the doc anchors at ci_verify.py:321 and
-# ci_verify.py:595 do not move; the lowering happens where the floor is read. It is 123 because 123 ctest rows register as private-fixture skip placeholders on the fixture-less tree (the rows labelled private_fixtures), so the two RUN floors are lowered by exactly those rows. test_callback_lifecycle_tapes joined at 123: its tapes.txt is a distributed list the private-fixture PR leaves in the tree, but 60 of the cases it names are removed, so tests/CMakeLists.txt registers the row as a placeholder while the listed cases are incomplete. One of the 123, test_run_json_outputs, is registered only by the release-shaped profiles (the source layer gates its block), so on the kernel profile the lowering is one row deeper than the rows that profile actually skips.
-PRIVATE_FIXTURE_ROW_COUNT = 123
+# ci_verify.py:595 do not move; the lowering happens where the floor is read. It is 129 because 129 ctest rows register as private-fixture skip placeholders on the fixture-less tree (the rows labelled private_fixtures), so the two RUN floors are lowered by exactly those rows. test_callback_lifecycle_tapes joined at 123: its tapes.txt is a distributed list the private-fixture PR leaves in the tree, but 60 of the cases it names are removed, so tests/CMakeLists.txt registers the row as a placeholder while the listed cases are incomplete. One of the 129, test_run_json_outputs, is registered only by the release-shaped profiles (the source layer gates its block), so on the kernel profile the lowering is one row deeper than the rows that profile actually skips. Six more joined at 129 (the fifth proof-box round): test_native_oracle_day_key_l2 and test_native_oracle_reversal_same_bar_tx_l2 (their twin source #includes oracle/test_oracle_*.cpp), test_adapter_in_place_reads, test_adapter_runtime_ambient and test_adapter_settlement_carry (tests/pine_d2c_scenarios_fixture.hpp), and test_coof_forced_waypoint_tapes (tests/fixtures/coof_forced_waypoint/cases.inc) -- each target now exists only while its removed include does, so the compile that killed the fifth configure-through run cannot recur.
+PRIVATE_FIXTURE_ROW_COUNT = 129
 PRIVATE_FIXTURE_LABEL = 'private_fixtures'
 PRIVATE_FIXTURE_ROWS_FILE = 'tests/private_fixture_rows.txt'
 # The literal every private-fixtures placeholder prints before CTest marks it
