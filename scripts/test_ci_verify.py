@@ -2193,6 +2193,271 @@ class RowFloorDriver(unittest.TestCase):
                 self.assertIn('ctest-floor', stage_names(summary))
 
 
+PRIVATE_FIXTURE_LABEL_CALL = re.compile(
+    r'set_tests_properties\(\s*(?P<rows>[^()]*?)\s+PROPERTIES\b[^()]*?\bLABELS\s+'
+    + re.escape(ci_verify.PRIVATE_FIXTURE_LABEL) + r'\b')
+ROW_VARIABLE = re.compile(r'\$\{([A-Za-z_]\w*)\}')
+CMAKE_HEAD = re.compile(r'^\s*([A-Za-z_]\w*)\s*\(')
+
+
+def _cmake_statements(text: str):
+    """Split CMake text into (line number, statement) pairs at balanced parens."""
+    statements, buffer, depth, line = [], [], 0, 0
+    for number, raw in enumerate(text.splitlines(), 1):
+        stripped = raw.strip()
+        if not buffer and (not stripped or stripped.startswith('#')):
+            continue
+        if not buffer:
+            line = number
+        buffer.append(raw)
+        depth += raw.count('(') - raw.count(')')
+        if depth <= 0:
+            statements.append((line, '\n'.join(buffer)))
+            buffer, depth = [], 0
+    if buffer:
+        statements.append((line, '\n'.join(buffer)))
+    return statements
+
+
+def _statement_arguments(statement: str) -> str:
+    return statement[statement.index('(') + 1:statement.rindex(')')]
+
+
+def _split_values(fragment: str):
+    return [token for token in fragment.replace('\n', ' ').split() if token]
+
+
+def _substitute(token: str, bindings: dict, environment: dict, *, path, line: int, text: str,
+                depth: int = 0):
+    """One token with every ${variable} resolved from the surrounding walk.
+
+    set() values stay raw in the environment and are resolved here on use, so
+    a variable that never reaches a row name cannot fail the walk; one that
+    does reach a row name raises ValueError naming file:line -- the walk never
+    emits a row name it cannot read.
+    """
+    def resolve(match):
+        name = match.group(1)
+        if name in bindings:
+            return str(bindings[name])
+        if name in environment and depth < 8:
+            return ';'.join(_substitute(item, bindings, environment, path=path,
+                                        line=line, text=text, depth=depth + 1)
+                            for item in environment[name])
+        raise ValueError(
+            f'{path}:{line}: cannot expand ${{{name}}} in {token!r}; the '
+            'private_fixtures label walk does not skip what it cannot read')
+    return ROW_VARIABLE.sub(resolve, token)
+
+
+class _LabelWalk:
+    """Expands the row names of LABELS private_fixtures calls, or raises.
+
+    The walk models set(), list(APPEND), foreach (literal / IN ITEMS /
+    IN LISTS over a bound list) and if(<bound variable> STREQUAL "<literal>"),
+    which are the forms tests/CMakeLists.txt and runner/CMakeLists.txt use to
+    bind a labelled row's name. A foreach or include() whose list it cannot
+    resolve, or a row name carrying a variable it cannot resolve, raises with
+    file:line -- never a silently smaller population. An if() whose condition
+    it does not model is walked on BOTH branches: the pinned file is the union
+    over both worlds (fixtures present / absent), so union is the right
+    reading there, while a STREQUAL on a bound loop variable must pick one
+    branch because the branch bodies bind different clock values.
+    """
+
+    def __init__(self):
+        self.names = set()
+        self.path = Path('.')
+        self.text = ''
+        self.statements = []
+
+    def walk_file(self, path: Path) -> None:
+        self.visited = set()
+        self._walk_into(Path(path), {}, {})
+
+    def _walk_into(self, path: Path, bindings: dict, environment: dict) -> None:
+        """Run one CMake file's statements in the current scope (include() is
+        CMake semantics: same scope, and a label inside the included file
+        counts exactly like one here)."""
+        path = Path(path).resolve()
+        if path in self.visited:
+            return
+        self.visited.add(path)
+        previous = self.path, self.text, self.statements
+        self.path, self.text = path, path.read_text()
+        self.statements = _cmake_statements(self.text)
+        self._run(0, len(self.statements), bindings, environment)
+        self.path, self.text, self.statements = previous
+
+    def _body_carries_labels(self, start: int, end: int) -> bool:
+        return any(ci_verify.PRIVATE_FIXTURE_LABEL in self.statements[index][1]
+                   for index in range(start, end))
+
+    def _statement_carries_labels(self, statement: str) -> bool:
+        return (statement.lstrip().startswith('set_tests_properties')
+                and ci_verify.PRIVATE_FIXTURE_LABEL in statement)
+
+    def _block_bounds(self, index: int):
+        """(body_end, else_index, block_end) for the if/foreach at `index`."""
+        depth, else_index = 0, None
+        for cursor in range(index, len(self.statements)):
+            head = CMAKE_HEAD.match(self.statements[cursor][1])
+            head = head.group(1) if head else ''
+            if head in ('if', 'foreach'):
+                depth += 1
+            elif head in ('endif', 'endforeach'):
+                depth -= 1
+                if depth == 0:
+                    return cursor, else_index, cursor
+            elif head == 'else' and depth == 1:
+                else_index = cursor
+        raise ValueError(f'{self.path}:{self.statements[index][0]}: unclosed block')
+
+    def _run(self, start: int, end: int, bindings: dict, environment: dict) -> None:
+        index = start
+        while index < end:
+            line, statement = self.statements[index]
+            head = CMAKE_HEAD.match(statement)
+            head = head.group(1) if head else ''
+            if head == 'set':
+                values = _split_values(_statement_arguments(statement))
+                environment[values[0].strip('"')] = list(values[1:])
+                index += 1
+            elif head == 'list' and _split_values(_statement_arguments(statement))[:1] == ['APPEND']:
+                values = _split_values(_statement_arguments(statement))
+                environment.setdefault(values[1].strip('"'), []).extend(values[2:])
+                index += 1
+            elif head == 'foreach':
+                body_end, _, block_end = self._block_bounds(index)
+                header = _split_values(_statement_arguments(statement))
+                variable, items = None, []
+                if len(header) >= 3 and header[1] == 'IN' and header[2] == 'LISTS':
+                    variable = header[0]
+                    try:
+                        for list_name in header[3:]:
+                            items.extend(environment[list_name])
+                    except KeyError as error:
+                        if self._body_carries_labels(index + 1, body_end):
+                            raise ValueError(
+                                f'{self.path}:{line}: cannot resolve the foreach list '
+                                f'{error.args[0]!r} in a block carrying a '
+                                f'{ci_verify.PRIVATE_FIXTURE_LABEL} label') from error
+                        index = block_end + 1
+                        continue
+                elif len(header) >= 2 and header[1] == 'IN' and header[2] == 'ITEMS':
+                    variable, items = header[0], header[3:]
+                elif header:
+                    variable, items = header[0], header[1:]
+                else:
+                    raise ValueError(f'{self.path}:{line}: unreadable foreach header')
+                for item in items:
+                    try:
+                        bindings[variable] = _substitute(item, bindings, environment,
+                                                         path=self.path, line=line,
+                                                         text=self.text)
+                    except ValueError:
+                        if self._body_carries_labels(index + 1, body_end):
+                            raise
+                        continue
+                    self._run(index + 1, body_end, bindings, environment)
+                bindings.pop(variable, None)
+                index = block_end + 1
+            elif head == 'if':
+                body_end, else_index, block_end = self._block_bounds(index)
+                taken = _condition_value(_statement_arguments(statement), bindings,
+                                         environment)
+                if self._statement_carries_labels(statement):
+                    raise ValueError(f'{self.path}:{line}: unreadable condition {statement!r}')
+                then_end = else_index if else_index is not None else body_end
+                if taken is True or taken is None:
+                    self._run(index + 1, then_end, bindings, environment)
+                if taken is False or taken is None:
+                    if else_index is not None:
+                        self._run(else_index + 1, block_end, bindings, environment)
+                index = block_end + 1
+            elif head == 'set_tests_properties':
+                if ci_verify.PRIVATE_FIXTURE_LABEL in statement:
+                    match = PRIVATE_FIXTURE_LABEL_CALL.search(statement)
+                    if not match:
+                        raise ValueError(
+                            f'{self.path}:{line}: a {ci_verify.PRIVATE_FIXTURE_LABEL} '
+                            'call in a shape this walk cannot read')
+                    for token in _split_values(match.group('rows')):
+                        self.names.add(_substitute(token, bindings, environment,
+                                                   path=self.path, line=line,
+                                                   text=self.text))
+                index += 1
+            elif head == 'include':
+                arguments = _split_values(_statement_arguments(statement))
+                if not arguments:
+                    raise ValueError(f'{self.path}:{line}: unreadable include()')
+                target = arguments[0].strip('"')
+                target = target.replace('${PROJECT_SOURCE_DIR}', str(_project_root(self.path)))
+                target = target.replace('${CMAKE_CURRENT_SOURCE_DIR}', str(self.path.parent))
+                if ROW_VARIABLE.search(target):
+                    raise ValueError(
+                        f'{self.path}:{line}: cannot resolve {target!r}; the walk '
+                        'refuses rather than skipping the include')
+                included = Path(target)
+                if not included.is_file():
+                    raise ValueError(
+                        f'{self.path}:{line}: include({target!r}) names no file; '
+                        'the walk refuses rather than skipping it')
+                self._walk_into(included, bindings, environment)
+                index += 1
+            else:
+                index += 1
+
+
+def _condition_value(argument: str, bindings: dict, environment: dict):
+    """True/False when the condition is decidable on loop bindings, else None.
+
+    The forms the two files use on labelled rows are `VAR STREQUAL "lit"` and
+    `VAR MATCHES "re"` (OR-connected) on a bound loop variable; those decide
+    exactly which name a per-case branch registers, so they must be evaluated,
+    not union-walked. Every other condition (EXISTS/TARGET/flags) depends on
+    the world, and there both branches register the SAME row name, so the walk
+    takes both (the pinned file is the union over both worlds).
+    """
+    terms = [term for term in re.split(r'\s+OR\s+', argument.strip()) if term]
+    values = []
+    for term in terms:
+        tokens = _split_values(term)
+        value = None
+        if len(tokens) == 3 and tokens[1] in ('STREQUAL', 'MATCHES') \
+                and tokens[0] in bindings:
+            subject, literal = str(bindings[tokens[0]]), tokens[2].strip('"')
+            if tokens[1] == 'STREQUAL':
+                value = subject == literal
+            else:
+                value = re.search(literal, subject) is not None
+        values.append(value)
+    if any(value is True for value in values):
+        return True
+    return None if any(value is None for value in values) else False
+
+
+def _project_root(path: Path) -> Path:
+    # The two files that register rows sit one directory under the source root.
+    return path.parent.parent if path.parent.name in ('tests', 'runner') else path.parent
+
+
+def labelled_private_fixture_rows(*cmake_paths):
+    """The ctest rows a CMake file labels ``private_fixtures``.
+
+    Every ``set_tests_properties(... PROPERTIES ... LABELS private_fixtures)``
+    call contributes every row name it lists, expanded through the loops the
+    file binds them with (see _LabelWalk). A variable, foreach list or
+    include() the walk cannot resolve raises ValueError with file:line -- the
+    comparison fails loudly instead of comparing against a silently smaller
+    labelled set (the T7 hole: the population was a quiet subset).
+    """
+    walk = _LabelWalk()
+    for path in cmake_paths:
+        walk.walk_file(path)
+    return walk.names
+
+
 class PrivateFixtureFloors(unittest.TestCase):
     """The overlay-aware floors and the private_fixtures skip rule.
 
@@ -2214,31 +2479,103 @@ class PrivateFixtureFloors(unittest.TestCase):
 
     def test_pinned_rows_are_exactly_the_labelled_ctest_rows(self):
         # The skip rule reads the rows by their label, and the label's
-        # population is the pinned file P1-B commits. Prove the two agree, so a
-        # labelled row cannot be missed and an unlabelled one cannot be refused.
-        cmake = (ROOT / 'tests' / 'CMakeLists.txt').read_text()
-        labelled = set(re.findall(
-            r'^\s*set_tests_properties\(\s*([A-Za-z_]\w*)\b[^)]*\bLABELS\s+private_fixtures\b',
-            cmake, re.MULTILINE))
+        # population is the pinned file P1-B commits. Prove the two agree over
+        # BOTH files that register rows, so a labelled row cannot be missed and
+        # an unlabelled one cannot be refused. The reader expands the literal
+        # foreach forms it finds and raises on a row name it cannot resolve, so
+        # a label it cannot read fails here instead of shrinking the set
+        # silently (the T7 hole: the population must never be a quiet subset).
+        labelled = labelled_private_fixture_rows(
+            ROOT / 'tests' / 'CMakeLists.txt', ROOT / 'runner' / 'CMakeLists.txt')
         pinned = set(ci_verify.private_fixture_rows(ROOT))
         self.assertEqual(len(pinned), ci_verify.PRIVATE_FIXTURE_ROW_COUNT)
         self.assertEqual(pinned, labelled)
 
+    def test_red_the_comparison_fails_on_a_real_mismatch(self):
+        # RED control for the test above: the same reader over tampered copies.
+        # A labelled row the pin does not carry, a pinned row whose label is
+        # gone, and a row name the reader cannot expand must each surface --
+        # an extra name, a missing name, and a loud ValueError -- never a
+        # silently equal set.
+        tests_text = (ROOT / 'tests' / 'CMakeLists.txt').read_text()
+        runner_text = (ROOT / 'runner' / 'CMakeLists.txt').read_text()
+        pinned = set(ci_verify.private_fixture_rows(ROOT))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'tests').mkdir()
+            (root / 'runner').mkdir()
+            (root / 'runner' / 'CMakeLists.txt').write_text(runner_text)
+            # The walk follows include(); the labs file the runner includes must
+            # sit beside the copies, or the walk correctly refuses.
+            shutil.copyfile(ROOT / 'tests' / 'confirmed_capabilities_refusals.cmake',
+                            root / 'tests' / 'confirmed_capabilities_refusals.cmake')
+            label = 'LABELS ' + ci_verify.PRIVATE_FIXTURE_LABEL
+
+            labelled_extra = label + '\n'
+            (root / 'tests' / 'CMakeLists.txt').write_text(
+                tests_text + '\nset_tests_properties(test_row_not_in_the_pin PROPERTIES '
+                + label + ')\n')
+            labelled = labelled_private_fixture_rows(
+                root / 'tests' / 'CMakeLists.txt', root / 'runner' / 'CMakeLists.txt')
+            self.assertIn('test_row_not_in_the_pin', labelled - pinned)
+            self.assertNotEqual(pinned, labelled)
+
+            first_label = tests_text.index(label)
+            (root / 'tests' / 'CMakeLists.txt').write_text(
+                tests_text.replace(label, 'LABELS private_fixture_typo', 1))
+            labelled = labelled_private_fixture_rows(
+                root / 'tests' / 'CMakeLists.txt', root / 'runner' / 'CMakeLists.txt')
+            self.assertTrue(pinned - labelled)
+            self.assertNotEqual(pinned, labelled)
+
+            (root / 'tests' / 'CMakeLists.txt').write_text(
+                tests_text + '\nset_tests_properties(test_${never_bound_variable} PROPERTIES '
+                + label + ')\n')
+            with self.assertRaises(ValueError) as caught:
+                labelled_private_fixture_rows(
+                    root / 'tests' / 'CMakeLists.txt', root / 'runner' / 'CMakeLists.txt')
+            self.assertIn('never_bound_variable', str(caught.exception))
+            self.assertIn('CMakeLists.txt:', str(caught.exception))
+            self.assertIn(first_label and 'tests', str(caught.exception))
+
     def test_overlay_absent_lowers_only_the_two_run_floors(self):
+        # Without observed skips (profile defaults, --min-tests) the floor is
+        # the full count; the lowering is driven by the pinned rows the run
+        # reports as skipped, capped at the pinned population and never taken
+        # below PRIVATE_FIXTURE_FLOOR_MINIMUM, so it cannot read a count no run
+        # can fall under (it read KERNEL_MIN_TESTS - 364 = -39 before the
+        # bound).
+        skips = ['test_row_1', 'test_row_2']
         with self.overlay_absent():
             self.assertFalse(ci_verify.private_fixtures_overlay())
             self.assertIsNone(ci_verify.overlay_aware_floor(None))
             self.assertEqual(ci_verify.overlay_aware_floor(LIVE_SANITIZERS_MIN_TESTS),
                              LIVE_SANITIZERS_MIN_TESTS)
-            self.assertEqual(ci_verify.overlay_aware_floor(KERNEL_MIN_TESTS),
-                             KERNEL_MIN_TESTS - ci_verify.PRIVATE_FIXTURE_ROW_COUNT)
-            self.assertEqual(ci_verify.overlay_aware_floor(RELEASE_MIN_TESTS),
-                             RELEASE_MIN_TESTS - ci_verify.PRIVATE_FIXTURE_ROW_COUNT)
+            self.assertEqual(ci_verify.overlay_aware_floor(KERNEL_MIN_TESTS), KERNEL_MIN_TESTS)
+            self.assertEqual(ci_verify.overlay_aware_floor(RELEASE_MIN_TESTS), RELEASE_MIN_TESTS)
+            self.assertEqual(ci_verify.overlay_aware_floor(KERNEL_MIN_TESTS, skips),
+                             KERNEL_MIN_TESTS - 2)
+            # The cap: more pinned skips than the pin names cannot be earned.
+            self.assertEqual(
+                ci_verify.overlay_aware_floor(
+                    RELEASE_MIN_TESTS,
+                    [f'test_row_{number}'
+                     for number in range(ci_verify.PRIVATE_FIXTURE_ROW_COUNT + 100)]),
+                RELEASE_MIN_TESTS - ci_verify.PRIVATE_FIXTURE_ROW_COUNT)
+            # The floor's floor: the kernel lowering alone would read -39.
+            self.assertEqual(
+                ci_verify.overlay_aware_floor(
+                    KERNEL_MIN_TESTS,
+                    [f'test_row_{number}'
+                     for number in range(ci_verify.PRIVATE_FIXTURE_ROW_COUNT + 100)]),
+                ci_verify.PRIVATE_FIXTURE_FLOOR_MINIMUM)
+            self.assertEqual(
+                ci_verify.overlay_aware_floor(RELEASE_MIN_TESTS, skips),
+                RELEASE_MIN_TESTS - 2)
             self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
                              {'debug': 876, 'sanitizers': 867, 'native': 963})
             self.assertEqual(ci_verify.profile_min_tests(
-                ci_verify.PROFILE['kernel'], ROOT),
-                KERNEL_MIN_TESTS - ci_verify.PRIVATE_FIXTURE_ROW_COUNT)
+                ci_verify.PROFILE['kernel'], ROOT), KERNEL_MIN_TESTS)
 
     def test_overlay_present_keeps_the_full_floors(self):
         with self.overlay_present():
@@ -2280,10 +2617,13 @@ class PrivateFixtureFloors(unittest.TestCase):
         self.assertNotIn('ctest-private-fixtures', failure_stages(summary))
 
     def test_green_overlay_absent_the_lowered_floor_is_met(self):
-        # GREEN (flag unset): the public run counts full minus the pinned rows.
+        # GREEN (flag unset): the public run registers the full suite and the
+        # pinned placeholder rows skip; the floor it is held to is the full
+        # suite minus exactly those observed skips.
+        pinned = sorted(ci_verify.private_fixture_rows(ROOT))
         with self.overlay_absent():
             code, summary, _, _ = self.run_profile(
-                'release', ctest_rows=RELEASE_MIN_TESTS - ci_verify.PRIVATE_FIXTURE_ROW_COUNT)
+                'release', ctest_rows=RELEASE_MIN_TESTS, ctest_skipped=pinned)
         self.assertEqual(code, 0, summary['failures'])
         self.assertEqual(summary['ctestRows'],
                          RELEASE_MIN_TESTS - ci_verify.PRIVATE_FIXTURE_ROW_COUNT)
@@ -2292,9 +2632,10 @@ class PrivateFixtureFloors(unittest.TestCase):
 
     def test_red_overlay_absent_one_row_below_the_lowered_floor_fails(self):
         # RED (flag unset): one row under the overlay-aware floor fails closed.
+        pinned = sorted(ci_verify.private_fixture_rows(ROOT))
         with self.overlay_absent():
             code, summary, _, _ = self.run_profile(
-                'release', ctest_rows=RELEASE_MIN_TESTS - ci_verify.PRIVATE_FIXTURE_ROW_COUNT - 1)
+                'release', ctest_rows=RELEASE_MIN_TESTS - 1, ctest_skipped=pinned)
         self.assertEqual(code, 1)
         self.assertIn('ctest-floor', failure_stages(summary))
         self.assertEqual(summary['minTests'],
@@ -2302,6 +2643,28 @@ class PrivateFixtureFloors(unittest.TestCase):
         error = next(item['error'] for item in summary['failures']
                      if item['stage'] == 'ctest-floor')
         self.assertIn(str(RELEASE_MIN_TESTS - ci_verify.PRIVATE_FIXTURE_ROW_COUNT), error)
+
+    def test_red_overlay_absent_an_unpinned_skip_does_not_lower_the_floor(self):
+        # RED (flag unset): a row that skips without being pinned buys no floor
+        # headroom -- and a pinned row that silently left the registry is not
+        # cancelled by a skip that never happened, because the lowering counts
+        # only skips it observed.
+        pinned = sorted(ci_verify.private_fixture_rows(ROOT))
+        with self.overlay_absent():
+            code, summary, _, _ = self.run_profile(
+                'release', ctest_rows=RELEASE_MIN_TESTS,
+                ctest_skipped=pinned + ['test_quietly_skipping'])
+        self.assertEqual(code, 1)
+        self.assertIn('ctest-floor', failure_stages(summary))
+        self.assertEqual(summary['ctestRows'],
+                         RELEASE_MIN_TESTS - ci_verify.PRIVATE_FIXTURE_ROW_COUNT - 1)
+        with self.overlay_absent():
+            code, summary, _, _ = self.run_profile(
+                'release', ctest_rows=RELEASE_MIN_TESTS - 1, ctest_skipped=pinned[1:])
+        self.assertEqual(code, 1)
+        self.assertIn('ctest-floor', failure_stages(summary))
+        self.assertEqual(summary['ctestRows'],
+                         RELEASE_MIN_TESTS - 1 - (ci_verify.PRIVATE_FIXTURE_ROW_COUNT - 1))
 
 
 class ExamplesAssertLive(unittest.TestCase):
