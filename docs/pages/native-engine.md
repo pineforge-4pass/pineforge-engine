@@ -3918,8 +3918,8 @@ units and mark and the step-free run's zero margin calls; one hash row per
 script bar, all of them moved by the extension, none shared between a batch
 and a stream. CTest cannot assert both on one row (`PASS_REGULAR_EXPRESSION`
 replaces the exit-code check), so every row runs its host through
-`examples/native/run_example.cmake`, which fails on a nonzero exit, a signal, a
-timeout or a missing line; an example registered without a summary line is a
+`examples/native/run_example.cmake`, which fails on a nonzero exit, a signal or a
+missing line; an example registered without a summary line is a
 configure error. The `test_example_runner` row
 (`scripts/test_example_runner.py`) proves the runner fails in each of those
 ways and that no `example_*` row sets a property that would override its
@@ -4613,7 +4613,7 @@ own features, not only the rows that happened to be source-free.
 `python3 scripts/ci_verify.py kernel` is the profile that verifies the
 kernel-only build (Release, live runner ON, tutorial OFF, source layer OFF);
 CI runs it as the `kernel-only` job. The profile carries a **row floor**, its
-number in the `PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:794 table in
+number in the `PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:789 table in
 `scripts/ci_verify.py`: the count the kernel-only CTest set is
 expected to run with the private overlay present, minus the pinned
 private-fixture rows of `tests/private_fixture_rows.txt` it registers as SKIP

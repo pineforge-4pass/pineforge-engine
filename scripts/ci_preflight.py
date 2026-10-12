@@ -418,9 +418,9 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
                 "${{ matrix.profile == 'native' && '--require-websocket' || '' }} " + NATIVE_EXCLUSION)
     if (len(command) != 1 or command[0].replace('--jobs=', '--jobs ') != expected
             or _step_values(verify, 'if')
-            or _step_values(verify, 'timeout-minutes') != ['360']
+            or _step_values(verify, 'timeout-minutes')
             or job.count('--exclude-label') != 1 or job.count('scripts/ci_verify.py ') != 1):
-        findings.append('native-live must verify each full profile with no timeout flag and '
+        findings.append('native-live must verify each full profile with no step deadline or timeout flag and '
                         'native-only PR exclusion')
     if (_step_values(save, 'if') != [NATIVE_CACHE_SAVE]
             or _step_values(save, 'uses') != ['actions/cache/save@v4']

@@ -830,6 +830,7 @@ class IndependentNativeProfiles(unittest.TestCase):
             ('--require-websocket', '--min-tests 1'),
             (NATIVE_EXCLUSION, "${{ inputs.exclude_slow && '--exclude-label slow' || '' }}"),
             ('id: verify\n', 'id: verify\n        if: success()\n'),
+            ('id: verify\n', 'id: verify\n        timeout-minutes: 360\n'),
             ('      - name: Stage and summarize diagnostics\n        if: always()',
              '      - name: Stage and summarize diagnostics\n        if: success()'),
             ('      - name: Retain CI diagnostics\n        if: always()',
@@ -889,7 +890,8 @@ class IndependentNativeProfiles(unittest.TestCase):
         for profile in ('native', 'live-sanitizers', 'live-tsan'):
             self.assertIn(f'- profile: {profile}\n', job)
         # 360 minutes: GitHub's own job maximum, the only hang catcher left.
-        self.assertEqual(job.count('timeout-minutes: 360'), 2)
+        self.assertEqual(job.count('timeout-minutes: 360'), 1)
+        self.assertNotRegex(job, r'(?m)^        timeout-minutes:')
         for budget in ('matrix.job_minutes', 'matrix.verify_minutes',
                        '--test-timeout', '--ctest-timeout'):
             self.assertNotIn(budget, job)

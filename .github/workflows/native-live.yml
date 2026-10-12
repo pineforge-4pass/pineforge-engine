@@ -109,7 +109,6 @@ jobs:
 
       - name: Verify (${{ matrix.profile }})
         id: verify
-        timeout-minutes: 360
         run: python3 scripts/ci_verify.py ${{ matrix.profile }} --build-dir ${{ matrix.build_dir }} --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" --ccache ${{ matrix.profile == 'native' && '--require-websocket' || '' }} ${{ matrix.profile == 'native' && inputs.exclude_slow && '--exclude-label slow' || '' }}
 
       - name: Stage and summarize diagnostics

@@ -104,7 +104,7 @@ does not declare" and the design record's §3.6
 `scripts/check_native_feature_rulings.py`.
 
 Every example named here is a CTest row: `ctest --test-dir build -R example_`
-runs all of them, and each fails on a nonzero exit, a signal, a timeout or a
+runs all of them, and each fails on a nonzero exit, a signal or a
 missing summary line (examples/native/run_example.cmake:1).
 
 @anchor pine_to_native_map
@@ -1015,7 +1015,7 @@ ctest --test-dir build -R example_          # every host on this page
 
 `PINEFORGE_BUILD_EXAMPLES` CMakeLists.txt:37 builds every host under
 `examples/native/`, and each gets a CTest row that fails on a nonzero exit, a
-signal, a timeout or a missing summary line — the row's assertion is the
+signal or a missing summary line — the row's assertion is the
 `_pf_example_line_hello_kernel` beside it (examples/native/CMakeLists.txt:101).
 
 A kernel-only build drops the Pine layer entirely:

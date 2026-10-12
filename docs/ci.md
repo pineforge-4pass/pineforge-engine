@@ -231,21 +231,13 @@ test failure as well as on success; neither cache depends on a cancelled job's
 post step. Compiler and dependency caches remain separate from verification
 receipts, and saving a cache cannot turn a failed verification into success.
 
-The opt-in `--test-timeout N` gives CTest a default per-test deadline in
-seconds and `--ctest-timeout N` sets the CTest stage's own deadline. Neither is
-set anywhere in CI any more (owner rule, 2026-10-12: no time limit may fail a
-run for slowness). With no explicit stage deadline the driver refuses no row
-for its speed; it gives CTest the platform's own job maximum, 21600 s, as the
-per-test deadline unless `--test-timeout` overrides it (a CTest tree that
-includes `CTest` carries a 1500 s default per-test timeout; this tree calls
-`enable_testing()` only, so whether a built-in default applies was not confirmed
-by a run, and passing the deadline explicitly removes the question), and an explicit
-`TIMEOUT` property on a row is untouched. `--test-timeout` alone is accepted;
-both flags together still refuse a run whose per-test deadline is not shorter
-than the stage deadline. The native workflow passes neither flag. The summary
-records both bounds (`null` when unset), discovered and selected row counts,
-executed rows, skipped or not-run rows, and stage timings, including when a
-test fails.
+The verifier accepts no row or stage deadline options (owner rule,
+2026-10-12: no time limit may fail a run for slowness). It passes
+`ctest --timeout 0` to request no default per-test deadline; an explicit
+`TIMEOUT` property on a row remains untouched. The native workflow retains
+only its 360-minute job envelopes, with no verification-step deadline.
+The summary records discovered and selected row counts, executed rows,
+skipped or not-run rows, and stage timings, including when a test fails.
 
 For an explicit cold proof, dispatch `native-live.yml` with `cold_cache: true`,
 or dispatch `ci.yml` with `cold_native_cache: true`. The reusable workflow also
@@ -748,9 +740,9 @@ sanitizers).
 
 A push to `main` that changes more than documentation and a manual dispatch of
 `ci.yml` run every profile without the exclusion. Their sanitizers CTest stage
-gets no bound of its own any more: main's full set ran out of the old 30-minute
-default twice, and the owner rule of 2026-10-12 removed the stage and row
-bounds rather than raising them again. Standalone manual dispatch of `native-live.yml` is also full.
+has no verifier deadline: main's full set ran out of the old 30-minute
+default twice, and the owner rule of 2026-10-12 removes stage and row
+deadlines rather than raising them again. Standalone manual dispatch of `native-live.yml` is also full.
 The maintainers run the full `ci_verify.py` profiles on their x86-64 build
 hosts before the PR merge gate and post `pineforge/verify` to the PR head.
 Their parity verdict posts `pineforge/parity`, reporting no regression or that
@@ -843,8 +835,8 @@ the aggregate's own shell, the latter over every outcome of every lane.
 The INT24 PR run `36105656107` measured 9.1 min preflight, 30.2/27.8 min
 macOS/Ubuntu Debug, 25.1 min native, 20.5/16.5 min Ubuntu/macOS Release,
 15.8 min kernel, and 3.8 min parity subset. Its sanitizer job ran 61.5 min
-and hit the verifier's then-30-minute CTest stage timeout (no stage carries a
-bound of ours any more). The complete INT23 sanitizer
+and hit the verifier's then-30-minute CTest stage timeout (the verifier now
+supplies no stage deadline). The complete INT23 sanitizer
 job `107895095058` measured 42.1 min: 20.0 min CTest and 22.1 min outside
 CTest, including a 21.1 min build. The 27 labelled rows consumed 34.8 and
 42.3 min of summed test time in the INT24 Ubuntu and macOS Debug jobs. The
@@ -945,7 +937,7 @@ preflight. At that tree it takes 475 s on the maintainers' verification hosts
 1a0e7ea1): about 15 min there. The full corpus sweep's run phase is serial as
 well.
 
-No bound of the verifier's own is left to bind first. Until the owner rule of
+The verifier supplies no stage or default per-test deadline. Until the owner rule of
 2026-10-12 the driver gave CTest 30 minutes by default (60 for a full
 sanitizers run), the native workflow pinned 2700/2820 and 900/1200 seconds per
 profile, and rows carried `TIMEOUT` properties up to 3600 s -- the collision
@@ -953,10 +945,12 @@ that rule removed: the `test_ci_verify` row's 3600 s property outlived main's
 2820 s native-live stage deadline, and main's own native-live job refused its
 row set with `TIMEOUT 3600 must be positive and less than stage deadline
 2820`. The hosted kernel-only job lost the same day's run the other way, to a
-1800 s stage bound (exit 124). Now no stage, row, step, profile or matrix entry
-carries a time limit of this repository's: every row runs until it finishes,
-and the only hang catcher is the platform's own 360-minute job maximum, which
-every job below carries. Historically, `test_ci_verify` alone took up to 1288 s
+1800 s stage bound (exit 124). Under the owner rule, no required-check stage,
+row, step, profile or matrix entry may carry a time limit of this repository's;
+the only hang catcher is the platform's own 360-minute job maximum, which
+every job below carries. A job stopped by the platform at that maximum must
+be recorded as a HANG to re-run, not as a failed check. Exit-code, signal,
+missing-summary and diagnostic failures still fail. Historically, `test_ci_verify` alone took up to 1288 s
 at 0d76a099 (Ubuntu Debug), most of the 30-minute stage it then had, and a
 fork's sanitizers compile took 1277-1335 s; those measurements now inform the
 job-level maximum alone.
@@ -974,13 +968,13 @@ bounds the M2 from above.
 
 | Job | Limit (min) | Measured basis |
 | --- | --- | --- |
-| `preflight` | 360 (was 45) | 7.3-9.8 min on the standard runner through 1a0e7ea1; cancelled at 10.3 min at 0d76a099, 593 s into `verifier-tests`, which takes about 15 min there at that tree (above), so preflight about 16 min. 4.8-8.2 min on the verification hosts. Its stages carry no timeout of their own any more -- the old 2400 s stage bound is gone (owner rule, 2026-10-12), so 360 minutes is all the room a slow verifier gets. |
+| `preflight` | 360 (was 45) | 7.3-9.8 min on the standard runner through 1a0e7ea1; cancelled at 10.3 min at 0d76a099, 593 s into `verifier-tests`, which takes about 15 min there at that tree (above), so preflight about 16 min. 4.8-8.2 min on the verification hosts. Preflight supplies no stage deadline -- the old 2400 s stage bound is gone (owner rule, 2026-10-12); a job stopped at the platform's 360-minute maximum must be recorded as a HANG to re-run. |
 | `build` | 360 (was 75) | A Release leg runs its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets 17.2-17.7 min. On the larger Linux runner a full leg is its build plus the serial `test_ci_verify` row, 976-1288 s: about 30 min. The M1's 37.0 min bounds the M2. 11.1-18.4 min on the verification hosts. |
 | `sanitizers` | 360 (was 120; the verifier's CTest stage bound was 60 min full, 30 min PR) | A fork's pull-request set took 35.2 min on the standard runner, whose compile alone took 1277-1335 s (pull-request run 36139176292, and main at 0d76a099). Full runs now land only on the larger runner; on the standard runner they took 34.0-69.4 min (at 0d76a099 30 min of build and ABI providers, then 39 min of CTest, 1768 s of it the serial `test_ci_verify` row), so about 40 min there with a faster build, and 18.2-19.0 min on the verification hosts. |
 | `kernel-only` | 360 (was 60) | Every event runs the whole kernel set: 7.9-22.3 min on the standard runner, 6.5-9.8 min on the verification hosts. The hosted kernel-only run of 2026-10-12 lost its job to the old 1800 s stage bound (exit 124). |
-| `native-live (native)` | 360 (was 75; verification step 65) | Main runs 37398893123, 37461653250 and 37478400505 spent 35.40–40.65 min in native, including 25.32–29.53 min in full CTest. Their matching PRs took 2.39–5.67 min in native CTest with the existing slow exclusion. The longest measured `test_ci_verify` row was 1695 s there and 2178 s on a c5.4xlarge Spot host, cut off by a trial deadline. No row, stage or step bound remains: its old 3600 s row bound is what collided with the 2820 s stage deadline on main's push run 38217844683. These are observed GitHub and Spot timings; final-head cold proof remains required. |
-| `native-live (live-sanitizers)` | 360 (was 45; verification step 35) | The same three main runs spent 15.10–16.33 min in this profile after native. Its old per-row 900 s and stage 1200 s deadlines are gone; a row now runs until it finishes. |
-| `native-live (live-tsan)` | 360 (was 45; verification step 35) | The old shared 60-min job left only 9.20, 4.67 and 2.67 min for TSan before cancellation. Matching passing PR profiles took 10.87, 10.93 and 7.70 min. Its old 900/1200-s row/stage bounds are gone like live-sanitizers'. |
+| `native-live (native)` | 360 (was 75; verification step 65) | Main runs 37398893123, 37461653250 and 37478400505 spent 35.40–40.65 min in native, including 25.32–29.53 min in full CTest. Their matching PRs took 2.39–5.67 min in native CTest with the existing slow exclusion. The longest measured `test_ci_verify` row was 1695 s there and 2178 s on a c5.4xlarge Spot host, cut off by a trial deadline. The verifier supplies no default row or stage deadline and the workflow supplies no step deadline: its old 3600 s row bound is what collided with the 2820 s stage deadline on main's push run 38217844683. These are observed GitHub and Spot timings; final-head cold proof remains required. |
+| `native-live (live-sanitizers)` | 360 (was 45; verification step 35) | The same three main runs spent 15.10–16.33 min in this profile after native. Its old per-row 900 s and stage 1200 s deadlines are gone; the verifier supplies no replacement, and the platform's job maximum catches a hang. |
+| `native-live (live-tsan)` | 360 (was 45; verification step 35) | The old shared 60-min job left only 9.20, 4.67 and 2.67 min for TSan before cancellation. Matching passing PR profiles took 10.87, 10.93 and 7.70 min. Its old 900/1200-s row/stage bounds are gone like live-sanitizers'; the verifier supplies no replacement. |
 | `native-live-gate` | 360 (was 5) | Seconds; failure, cancellation and unexpected skip all fail the aggregate. |
 | `corpus-parity` | 360 (was 120) | 16.3-26.2 min on the standard runner, 10.1-10.3 min on the verification hosts. |
 | `corpus-parity-subset` | 360 (was 30) | 1.8-4.7 min on the standard runner, 2.4-3.8 min on the verification hosts. |
