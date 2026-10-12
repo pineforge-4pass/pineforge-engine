@@ -87,6 +87,39 @@ ABSENT_FLOOR = {name: entry[0] - entry[1]
                 for name, entry in ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS.items()}
 
 
+def guard_environment() -> dict:
+    """The environment the harness hands a REAL source guard (`extra_env`).
+
+    The ctest row pins TMPDIR to ``<build>/tmp`` (tests/CMakeLists.txt,
+    ENVIRONMENT), and a ctest build dir is a child of the source tree, so the
+    pin resolves inside the repository. check_native_cpp_versions.py refuses
+    that -- 'system temporary directory is inside the repository', raised
+    before it extracts a historical provider -- and the Scripted harness
+    executes that guard for real against ROOT, so in the OVERLAY world every
+    scripted Driver test died at source-guard-native-versions; only there,
+    because with the overlay absent the same guard answers its pinned 77
+    before it ever needs a temp area, which is why the absent world never saw
+    this. A real guard therefore runs with a temp area its own contract
+    allows: the environment's own when it already lies outside the tree (a
+    dev shell's TMPDIR under /var/folders), else the platform temp dir the
+    row's pin replaced. The row's pinned TMPDIR still governs the harness's
+    own tamper trees, which never leave the build dir.
+    """
+    repository = ROOT.resolve()
+    current = Path(tempfile.gettempdir()).resolve()
+    if current != repository and repository not in current.parents:
+        return {'TMPDIR': str(current)}
+    saved = tempfile.tempdir
+    masked = {name: os.environ.pop(name)
+              for name in ('TMPDIR', 'TEMP', 'TMP') if name in os.environ}
+    try:
+        tempfile.tempdir = None
+        return {'TMPDIR': tempfile.gettempdir()}
+    finally:
+        tempfile.tempdir = saved
+        os.environ.update(masked)
+
+
 def setUpModule():
     # The module describes the tree it runs on: the fixture-absent public
     # world. PINEFORGE_PRIVATE_FIXTURES must be absent for it, because the
@@ -258,7 +291,7 @@ class Scripted:
                                          b'tests/fixtures/native_cpp_abi/host-fixture/headers.tar\n',
                                          b'')
                     return Completed(int(self.exits[key]), b'', b'injected source-guard failure\n')
-            return default_runner(argv, extra_env=None, timeout=timeout,
+            return default_runner(argv, extra_env=guard_environment(), timeout=timeout,
                                   combine_stderr=True, stream_output=False)
         if argv[0] == 'cmake' and '-S' in argv and 'smoke_consumer' in joined:
             return Completed(int(self.exits.get('smoke-configure', 0)), b'ok\n', b'')
@@ -1427,7 +1460,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
     def test_source_guards_are_real_and_pass_on_this_tree(self):
         for name, argv in source_guard_commands(ROOT):
             with self.subTest(name=name):
-                result = default_runner(argv, extra_env=None, timeout=120,
+                result = default_runner(argv, extra_env=guard_environment(), timeout=120,
                                         combine_stderr=True, stream_output=False)
                 if result.returncode == 77:
                     # A guard whose private fixture input the tree lacks skips
