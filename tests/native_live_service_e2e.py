@@ -272,7 +272,7 @@ try:
         process, ledger, health = start("delivery", routed, env=environment)
         process.stdin.write(batch)
         process.stdin.flush()
-        assert delivery_started.wait()
+        delivery_started.wait()
         finish(process)
         assert not receiver_release.is_set()
         assert status(health)["state"] == "stopped"
@@ -281,7 +281,7 @@ try:
         assert export(ledger)["report"] == expected_report
         assert query(ledger, "SELECT count(*) FROM events")[0][0] > 0
         assert secret not in health.read_text() and endpoint not in health.read_text()
-        print("PASS SIGTERM mid-delivery within 10 s while receiver remains blocked, with durable outbox", flush=True)
+        print("PASS SIGTERM mid-delivery while receiver remains blocked, with durable outbox", flush=True)
 
         receiver_mode = "fail"
         receipts.clear()
@@ -412,7 +412,7 @@ try:
         process = subprocess.Popen([runner] + list(map(str, keepalive_command)),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         children.append(process)
-        assert keepalive_started.wait()
+        keepalive_started.wait()
         initial = wait_for(lambda: status(keepalive_health)["liveness"]["control_loop_heartbeat_ms"])
         wait_for(lambda: status(keepalive_health)["liveness"]["control_loop_heartbeat_ms"] >= initial + 6000)
         assert process.poll() is None and status(keepalive_health)["metrics"]["committed_input"] == 0

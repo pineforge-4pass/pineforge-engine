@@ -69,11 +69,9 @@ class Receiver:
                             self.send_error(503, 'delivery concurrency barrier broken')
                             return
                     if mode == 'reset-first' and action['sequence'] == 1:
-                        if not newer_arrived.wait():
-                            raise AssertionError('newer action did not reach the receiver')
+                        newer_arrived.wait()
                     if mode == 'retry-hold' and action['sequence'] == 1 and sequence_receipts > 1:
-                        if not newer_actions_arrived.wait():
-                            raise AssertionError('newer actions were parked behind a retry')
+                        newer_actions_arrived.wait()
                     if (mode == 'reset' or (mode == 'keepalive-replay' and self.request_count > 1) or
                             (mode == 'reset-first' and action['sequence'] == 1) or
                             (mode == 'retry-hold' and action['sequence'] == 1 and sequence_receipts == 1)):
@@ -612,7 +610,7 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
             finally:
                 if fatal.poll() is None:
                     fatal.kill(); fatal.communicate()
-        print('PASS fatal feed drains four same-target actions below a 3x global-timeout guard without retries and reports every unsent action; one-versus-two-timeout distinction untested', flush=True)
+        print('PASS fatal feed drains four same-target actions without retries and reports every unsent action; one-versus-two-timeout distinction untested', flush=True)
 
         entries.mode = exits.mode = 'ok'
         main_receiver.clear(); main_receiver.mode = 'hang'
@@ -645,7 +643,7 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
         finally:
             if redelivery.poll() is None:
                 redelivery.kill(); redelivery.communicate()
-        print('PASS SIGTERM cancels EOF drain and redelivery within 10 s; live redelivery is explicitly refused', flush=True)
+        print('PASS SIGTERM cancels EOF drain and redelivery; live redelivery is explicitly refused', flush=True)
 
         for receiver in receivers:
             assert not receiver.errors, receiver.errors

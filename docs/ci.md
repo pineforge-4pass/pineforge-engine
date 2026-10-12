@@ -948,8 +948,8 @@ row set with `TIMEOUT 3600 must be positive and less than stage deadline
 1800 s stage bound (exit 124). Under the owner rule, no required-check stage,
 row, step, profile or matrix entry may carry a time limit of this repository's;
 the only hang catcher is the platform's own 360-minute job maximum, which
-every job below carries. A job stopped by the platform at that maximum must
-be recorded as a HANG to re-run, not as a failed check. Exit-code, signal,
+every job below carries. The native-live aggregate job names a stop at that maximum
+`HANG (re-run)` in its log; the check still fails. Exit-code, signal,
 missing-summary and diagnostic failures still fail. Historically, `test_ci_verify` alone took up to 1288 s
 at 0d76a099 (Ubuntu Debug), most of the 30-minute stage it then had, and a
 fork's sanitizers compile took 1277-1335 s; those measurements now inform the
@@ -968,7 +968,7 @@ bounds the M2 from above.
 
 | Job | Limit (min) | Measured basis |
 | --- | --- | --- |
-| `preflight` | 360 (was 45) | 7.3-9.8 min on the standard runner through 1a0e7ea1; cancelled at 10.3 min at 0d76a099, 593 s into `verifier-tests`, which takes about 15 min there at that tree (above), so preflight about 16 min. 4.8-8.2 min on the verification hosts. Preflight supplies no stage deadline -- the old 2400 s stage bound is gone (owner rule, 2026-10-12); a job stopped at the platform's 360-minute maximum must be recorded as a HANG to re-run. |
+| `preflight` | 360 (was 45) | 7.3-9.8 min on the standard runner through 1a0e7ea1; cancelled at 10.3 min at 0d76a099, 593 s into `verifier-tests`, which takes about 15 min there at that tree (above), so preflight about 16 min. 4.8-8.2 min on the verification hosts. Preflight supplies no stage deadline -- the old 2400 s stage bound is gone (owner rule, 2026-10-12); the native-live aggregate job names a stop at the platform's 360-minute maximum `HANG (re-run)` in its log; the check still fails. |
 | `build` | 360 (was 75) | A Release leg runs its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets 17.2-17.7 min. On the larger Linux runner a full leg is its build plus the serial `test_ci_verify` row, 976-1288 s: about 30 min. The M1's 37.0 min bounds the M2. 11.1-18.4 min on the verification hosts. |
 | `sanitizers` | 360 (was 120; the verifier's CTest stage bound was 60 min full, 30 min PR) | A fork's pull-request set took 35.2 min on the standard runner, whose compile alone took 1277-1335 s (pull-request run 36139176292, and main at 0d76a099). Full runs now land only on the larger runner; on the standard runner they took 34.0-69.4 min (at 0d76a099 30 min of build and ABI providers, then 39 min of CTest, 1768 s of it the serial `test_ci_verify` row), so about 40 min there with a faster build, and 18.2-19.0 min on the verification hosts. |
 | `kernel-only` | 360 (was 60) | Every event runs the whole kernel set: 7.9-22.3 min on the standard runner, 6.5-9.8 min on the verification hosts. The hosted kernel-only run of 2026-10-12 lost its job to the old 1800 s stage bound (exit 124). |

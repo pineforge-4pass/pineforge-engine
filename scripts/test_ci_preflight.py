@@ -624,7 +624,7 @@ class PreflightFailures(unittest.TestCase):
             ci.write_text(in_job(ci.read_text(), *mutation))
         result = subprocess.run(
             [sys.executable, str(tree / 'scripts/ci_preflight.py'), '--check-ci-workflow'],
-            cwd=tree, capture_output=True, text=True, timeout=120)
+            cwd=tree, capture_output=True, text=True)
         return result.returncode, result.stdout + result.stderr
 
     def test_the_preflight_stage_fails_a_slow_or_fork_reachable_runner(self):
@@ -880,8 +880,10 @@ class IndependentNativeProfiles(unittest.TestCase):
         for result in ('success', 'failure', 'cancelled', 'skipped', ''):
             with self.subTest(result=result):
                 ran = subprocess.run(['bash', '-e', '-c', script], capture_output=True,
-                                     env={**os.environ, 'PROFILES_RESULT': result}, timeout=10)
+                                     env={**os.environ, 'PROFILES_RESULT': result})
                 self.assertEqual(ran.returncode == 0, result == 'success', ran.stdout)
+                if result != 'success':
+                    self.assertEqual(ran.returncode, 1, ran.stdout)
                 # A cancelled profile job is how the platform stops a hang at the job maximum: the
                 # aggregate still fails, and the log names it as a HANG to re-run (EN-116).
                 self.assertEqual(b'HANG (re-run)' in ran.stdout, result == 'cancelled', ran.stdout)
