@@ -153,4 +153,7 @@ jobs:
           PROFILES_RESULT: ${{ needs.native-live.result }}
         run: |
           printf 'native profiles: %s\n' "$PROFILES_RESULT"
+          if test "$PROFILES_RESULT" = cancelled; then
+            printf 'HANG (re-run): a native profile job was cancelled, which is how the platform stops a job at its 360-minute maximum\n'
+          fi
           test "$PROFILES_RESULT" = success

@@ -882,6 +882,9 @@ class IndependentNativeProfiles(unittest.TestCase):
                 ran = subprocess.run(['bash', '-e', '-c', script], capture_output=True,
                                      env={**os.environ, 'PROFILES_RESULT': result}, timeout=10)
                 self.assertEqual(ran.returncode == 0, result == 'success', ran.stdout)
+                # A cancelled profile job is how the platform stops a hang at the job maximum: the
+                # aggregate still fails, and the log names it as a HANG to re-run (EN-116).
+                self.assertEqual(b'HANG (re-run)' in ran.stdout, result == 'cancelled', ran.stdout)
 
     def test_three_profiles_share_the_platform_maximum_and_no_fail_fast(self):
         native = (ROOT / '.github/workflows/native-live.yml').read_text()
