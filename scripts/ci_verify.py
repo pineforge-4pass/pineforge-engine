@@ -766,33 +766,33 @@ PRIVATE_FIXTURE_SKIP_LITERAL = 'SKIP private fixtures not present: '
 # overlay-present REGISTERED population -- the RUN floor while the overlay is
 # present, where every one of those rows must run -- and `pinned` is how many
 # rows of tests/private_fixture_rows.txt that overlay-present registry
-# registers. With the overlay absent those pinned rows register as SKIP
+# registers; absent the overlay those pinned rows register as SKIP
 # placeholders, so the absent floor is `full - pinned`.
 #
-# Measured on 6d7b2bf4e from the campaign's two-world runs (the release and
-# kernel Lab jobs, overlay-present and overlay-absent), the commands being the
-# jobs' own:
-#   release  overlay present: `ctest` printed '100% tests passed out of 902'
-#            with 0 skipped; 297 of those 902 names are in the pinned file.
-#   kernel   overlay present: '100% tests passed out of 331', 0 skipped;
-#            28 of the 331 are in the pinned file.
-# Both numbers come from the OVERLAY-PRESENT registry only: never from the
-# mode's own `ctest -N`, never from a run's observed skips. That is what makes
-# an absent run's floor unable to sink with the registry it is meant to check.
-# Raising the full floor for a landed row is a one-line edit here. debug,
-# sanitizers, native and the live profiles carry no row floor of this kind
-# (their Profile.min_tests is None or LIVE_SANITIZERS_MIN_TESTS) and are not
-# keyed by this table. The bound L5 states -- never below `full` minus
+# Re-measured at 024fdf92c from that head's four Lab jobs, each job's own
+# `ctest`. Release overlay rj-20261012t003156-430909: 910 tests, 0 skipped,
+# 4 failed (this lane's harness rows plus test_doc_lint), 300 pinned. Release
+# absent rj-20261012t003153-098c2a: 910 registered, 610 ran, those 300
+# skipped. Kernel overlay rj-20261012t003157-d19ae9: 337 tests, 0 skipped,
+# the same four failed, 28 pinned. Kernel absent rj-20261012t003154-1c9988:
+# 337 registered, 309 ran, those 28 skipped. No row skipped in either overlay
+# job, so those four failures are that head's own red rows, not floor losses.
+# Both `full` numbers come from the OVERLAY-PRESENT registry only: never from
+# the mode's own `ctest -N`, never from a run's observed skips. That is what
+# makes an absent run's floor unable to sink with the registry it is meant to
+# check. debug, sanitizers, native and the live profiles carry no row floor of
+# this kind (their Profile.min_tests is None or LIVE_SANITIZERS_MIN_TESTS) and
+# are not keyed by this table. The bound L5 states -- never below `full` minus
 # PRIVATE_FIXTURE_ROW_COUNT -- holds by construction: `pinned` is a subset of
 # that file's names.
 # The two overlay full floors are plain module-level integer literals (CORE's
 # proof kit reads them from the tree as one line each; the table below
 # references them and never replaces them). Re-measuring for a landed row
 # means editing these two lines and the `pinned` counts in the table.
-RELEASE_MIN_TESTS = 902
-KERNEL_MIN_TESTS = 331
+RELEASE_MIN_TESTS = 910
+KERNEL_MIN_TESTS = 337
 PRIVATE_FIXTURE_PROFILE_FLOORS = {
-    'release': (RELEASE_MIN_TESTS, 297),
+    'release': (RELEASE_MIN_TESTS, 300),
     'kernel': (KERNEL_MIN_TESTS, 28),
 }
 

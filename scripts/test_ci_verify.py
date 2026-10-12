@@ -2689,9 +2689,9 @@ class PrivateFixtureFloors(unittest.TestCase):
         # feeds them. A profile outside the table keeps its declared value, and
         # PRIVATE_FIXTURE_ROW_COUNT bounds the pinned half by construction.
         self.assertEqual(ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS,
-                         {'release': (902, 297), 'kernel': (331, 28)})
-        self.assertEqual(FULL_FLOOR, {'release': 902, 'kernel': 331})
-        self.assertEqual(ABSENT_FLOOR, {'release': 605, 'kernel': 303})
+                         {'release': (910, 300), 'kernel': (337, 28)})
+        self.assertEqual(FULL_FLOOR, {'release': 910, 'kernel': 337})
+        self.assertEqual(ABSENT_FLOOR, {'release': 610, 'kernel': 309})
         for name, (full, pinned) in ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS.items():
             with self.subTest(profile=name):
                 self.assertEqual(ci_verify.PROFILE[name].min_tests, full)
@@ -2801,7 +2801,7 @@ class PrivateFixtureFloors(unittest.TestCase):
                 ['kernel', '--build-dir', str(source / 'build')], source=source,
                 runner=default_runner, stream_output=False)
             driver = ci_verify.Driver(cfg)
-            driver.reject_private_fixture_skips(ci_verify.CTestRows(331))
+            driver.reject_private_fixture_skips(ci_verify.CTestRows(337))
         self.assertEqual([stage['status'] for stage in driver.stages], ['failed'])
         self.assertIn('a truncated pin cannot clear the rows it lost',
                       driver.stages[0]['error'])
@@ -2887,15 +2887,16 @@ class PrivateFixtureFloors(unittest.TestCase):
                               f'placeholder rows (full floor {FULL_FLOOR[profile]})', log)
 
     def test_the_heads_real_absent_shapes_at_the_fixed_rule(self):
-        # The two runs the review measured on this head, driven through the
-        # real Driver. Kernel absent registered 424 rows with its 121 pinned
-        # placeholders skipping: 303 ran, exactly the constant floor (331 - 28),
-        # so it passes. Release absent registered 901 with 298 pinned skips:
-        # 603 ran, below the 605 (902 - 297) the rule states, and the floor
-        # FAILS it -- the two rows the twin guards drop (R2-F2) are not bought
-        # back by a registry that shrank with them. That is the RED the old
-        # observed-skip floor could not show (it passed 603 against 602).
-        code, summary, _, _ = self.absent_run('kernel', 424, self.pinned_probe(121))
+        # Two absent-world shapes driven through the real Driver. The head's
+        # own kernel absent run (rj-20261012t003154-1c9988) registered 337 rows
+        # with its 28 pinned placeholders skipping: 309 ran, exactly the
+        # constant floor (337 - 28), so it passes. The shrunken registry the
+        # R2 review measured registered 901 with 298 pinned skips: 603 ran,
+        # below the 610 (910 - 300) the rule states, and the floor FAILS it --
+        # the two rows the twin guards drop (R2-F2) are not bought back by a
+        # registry that shrank with them. That is the RED the old observed-skip
+        # floor could not show (it passed 603 against 602).
+        code, summary, _, _ = self.absent_run('kernel', 337, self.pinned_probe(28))
         self.assertEqual(code, 0, summary['failures'])
         self.assertEqual(summary['minTests'], ABSENT_FLOOR['kernel'])
         self.assertEqual(summary['ctestRows'], ABSENT_FLOOR['kernel'])
@@ -2908,26 +2909,26 @@ class PrivateFixtureFloors(unittest.TestCase):
     def test_min_tests_values_are_never_lowered(self):
         # R2-F8: the lowering keys on the PROFILE, not on the floor's value, so
         # an explicit --min-tests 325 is used verbatim in the absent world --
-        # where the profile's own floor is 303 -- and fails a 303-row run the
+        # where the profile's own floor is 309 -- and fails a 309-row run the
         # default accepts. The replaced code lowered an explicit 325 by the
         # observed skips (204) and passed it.
-        pinned = self.pinned_probe(121)
-        code, summary, _, _ = self.absent_run('kernel', 424, pinned)
+        pinned = self.pinned_probe(28)
+        code, summary, _, _ = self.absent_run('kernel', 337, pinned)
         self.assertEqual(code, 0, summary['failures'])
         self.assertEqual(summary['minTests'], ABSENT_FLOOR['kernel'])
         with self.overlay_absent():
             code, summary, _, _ = self.run_profile(
-                'kernel', extra=['--min-tests', '325'], ctest_registered=424,
-                ctest_rows=424, ctest_skipped=pinned)
+                'kernel', extra=['--min-tests', '325'], ctest_registered=337,
+                ctest_rows=337, ctest_skipped=pinned)
         self.assertEqual(code, 1)
         self.assertIn('ctest-floor', failure_stages(summary))
         self.assertEqual(summary['minTests'], 325)
         with self.overlay_absent():
             code, summary, _, _ = self.run_profile(
-                'kernel', extra=['--min-tests', '303'], ctest_registered=424,
-                ctest_rows=424, ctest_skipped=pinned)
+                'kernel', extra=['--min-tests', '309'], ctest_registered=337,
+                ctest_rows=337, ctest_skipped=pinned)
         self.assertEqual(code, 0, summary['failures'])
-        self.assertEqual(summary['minTests'], 303)
+        self.assertEqual(summary['minTests'], 309)
 
     def test_the_lowered_note_prints_only_for_the_tables_own_lowering(self):
         # N5: an explicit --min-tests that happens to equal full minus pinned
@@ -3031,7 +3032,7 @@ class PrivateFixtureFloors(unittest.TestCase):
                      if item['stage'] == 'ctest-floor')
         self.assertIn('pinned rows that ran: 1', error)
         self.assertIn(pinned[-1], error)
-        # 331 - 27 = 304 ran, one ABOVE the 303 floor: only this rule sees it.
+        # 337 - 27 = 310 ran, one ABOVE the 309 floor: only this rule sees it.
         self.assertEqual(summary['ctestRows'], ABSENT_FLOOR['kernel'] + 1)
 
     def test_green_absent_every_registered_pinned_row_skips(self):
@@ -3064,7 +3065,7 @@ class PrivateFixtureFloors(unittest.TestCase):
         # N6: main's kernel floor counted test_native_live_websocket's 77 as a
         # run (its number sat one below the registered count). The table's full
         # floor counts that row as running, so the one named row keeps the
-        # allowance: 331 registered, 28 pinned + 1 websocket skipping, 302 ran.
+        # allowance: 337 registered, 28 pinned + 1 websocket skipping, 308 ran.
         pinned = self.pinned_probe(
             ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS['kernel'][1])
         with self.overlay_absent():
