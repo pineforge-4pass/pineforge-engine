@@ -65,27 +65,21 @@ static void test_dmi_recompute_prev_close_consistent() {
 //
 // TradingView's `up > down` / `down > up` / `up > 0` inside ta.dmi are Pine
 // float relationals: |a - b| <= 1e-10 is EQUAL (inclusive, absolute), so an
-// exact-decimal tie books NEITHER directional movement. Pinned on NYSE:F 15m
-// (`lab tv` f15-plusdm-perbar-0714, one qty-encoded lot per bar over
-// 2025-07-14..18; f15-dmi-internals-0718 / f15-wma-adx-sense-0718 for the
-// smoothed terms): the 07-15 19:30Z bar (prev 19:15Z h 11.565 l 11.54;
-// 19:30Z h 11.58 l 11.525) has up = 11.58 - 11.565 and down = 11.54 - 11.525,
-// both 0.015 in decimal and 1.78e-15 apart as doubles; TV's plusDM is 0
-// (qty 1 = round(0 * 1e6) + 1) where the strict compare booked 0.015, and
-// TV's rma(plusDM, 18) at 07-18 14:15Z is 0.006907 (strict model 0.006939),
-// +DI 16.92562 (17.00417), ADX 24.22236 (23.571) — the bar that fires the
-// boztilkiserhan ADX > 24 short on TV only.
+// exact-decimal tie books NEITHER directional movement. Pinned against
+// TradingView behaviour (recorded tapes are kept outside this repository).
+// The invented pair straddles the binary exponent boundary at 64: two
+// decimal 0.2 moves differ by one low-side ulp, well inside the absolute band.
 static void test_dmi_exact_decimal_tie_books_neither_dm() {
     std::printf("test_dmi_exact_decimal_tie_books_neither_dm\n");
     // di_length 1: rma(1) is the value itself, so +DI / -DI read the bar's
     // own plusDM / minusDM over its true range.
     ta::DMI dmi(1, 1);
-    dmi.compute(11.565, 11.54, 11.545);            // 2025-07-15 19:15Z
-    ta::DMIResult r = dmi.compute(11.58, 11.525, 11.575);  // 19:30Z
-    // The strict compare hands 0.015 to one side (here up > down in IEEE:
-    // 11.58 - 11.565 = 0.015000000000000568 > 11.54 - 11.525 =
-    // 0.014999999999998792); Pine's tolerant compare books a tie.
-    CHECK((11.58 - 11.565) != (11.54 - 11.525));
+    dmi.compute(64.125, 63.9, 64.0);
+    ta::DMIResult r = dmi.compute(64.325, 63.7, 64.225);
+    // up = 64.325 - 64.125 = 0.20000000000000284; down =
+    // 63.9 - 63.7 = 0.19999999999999574. A strict comparison books up,
+    // while a tolerant tie yields DM+ = DM- = 0 and hence both DIs / ADX = 0.
+    CHECK((64.325 - 64.125) != (63.9 - 63.7));
     CHECK((r.diplus == 0.0));
     CHECK((r.diminus == 0.0));
     CHECK((r.adx == 0.0));
@@ -93,20 +87,20 @@ static void test_dmi_exact_decimal_tie_books_neither_dm() {
 
 static void test_dmi_clear_difference_is_unchanged() {
     std::printf("test_dmi_clear_difference_is_unchanged\n");
-    // Control: up = 0.025, down = 0.015 -> plusDM 0.025, minusDM 0; TR =
-    // max(11.59 - 11.525, |11.59 - 11.545|, |11.525 - 11.545|) = 0.065.
+    // Control: up = 0.3 > down = 0.2; TR = 64.425 - 63.7 = 0.725.
+    // DI+ = 100 * 0.3 / 0.725, DI- = 0, ADX = 100 (only one side moves).
     ta::DMI dmi(1, 1);
-    dmi.compute(11.565, 11.54, 11.545);
-    ta::DMIResult r = dmi.compute(11.59, 11.525, 11.575);
-    CHECK(near(r.diplus, 100.0 * (11.59 - 11.565) / (11.59 - 11.525), 1e-9));
+    dmi.compute(64.125, 63.9, 64.0);
+    ta::DMIResult r = dmi.compute(64.425, 63.7, 64.225);
+    CHECK(near(r.diplus, 100.0 * (64.425 - 64.125) / (64.425 - 63.7), 1e-9));
     CHECK((r.diminus == 0.0));
     CHECK(near(r.adx, 100.0, 1e-9));
-    // And the mirror: down clearly larger -> minusDM only.
+    // Mirror: down = 0.5 > up = 0.1; TR = 0.825, so DI- = 100 * 0.5 / 0.825.
     ta::DMI dmi2(1, 1);
-    dmi2.compute(11.565, 11.54, 11.545);
-    ta::DMIResult r2 = dmi2.compute(11.575, 11.51, 11.52);
+    dmi2.compute(64.125, 63.9, 64.0);
+    ta::DMIResult r2 = dmi2.compute(64.225, 63.4, 63.6);
     CHECK((r2.diplus == 0.0));
-    CHECK(near(r2.diminus, 100.0 * (11.54 - 11.51) / (11.575 - 11.51), 1e-9));
+    CHECK(near(r2.diminus, 100.0 * (63.9 - 63.4) / (64.225 - 63.4), 1e-9));
 }
 
 static void test_dmi_up_within_band_of_zero_is_not_up() {
@@ -127,9 +121,7 @@ static void test_dmi_up_within_band_of_zero_is_not_up() {
     CHECK((r2.diminus == 0.0));
 }
 
-// The band itself, replayed from the two `lab tv` sensor tapes on NYSE:F 15m
-// 2025-07-10..18 (scratchpad/r7/pins/f15-eps-abs / f15-eps-rel, qty = 1000 +
-// 100*(a>b) + 10*(a==b) + (a<b) + 10000*k): 20/20 decisions.
+// Absolute-band boundary controls at invented bases, including the DMI tie.
 static void test_float_compare_band_replays_the_sensor_tapes() {
     std::printf("test_float_compare_band_replays_the_sensor_tapes\n");
     auto code = [](double a, double b) {
@@ -138,10 +130,10 @@ static void test_float_compare_band_replays_the_sensor_tapes() {
              + (float_band_lt(a, b) ? 1 : 0);
     };
     // abs: a = m + d, b = m.
-    const double m = 11.5;
+    const double m = 64.0;
     CHECK(code(m + 1e-8, m) == 100);     // k0
     CHECK(code(m + 1e-9, m) == 100);     // k1
-    CHECK(code(m + 1e-10, m) == 100);    // k2: the double diff is 1e-10 + 1 ulp
+    CHECK(code(m + 1e-10, m) == 100);    // k2: double diff = 1.0000178463e-10 > band
     CHECK(code(m + 1e-11, m) == 10);     // k3
     CHECK(code(m + 1e-12, m) == 10);     // k4
     CHECK(code(m + 1e-13, m) == 10);     // k5
@@ -155,7 +147,7 @@ static void test_float_compare_band_replays_the_sensor_tapes() {
     CHECK(code(100.0 * (1 + 1e-11), 100.0) == 100);      // k2 diff 1e-9
     CHECK(code(10000.0 * (1 + 1e-11), 10000.0) == 100);  // k3
     CHECK(code(1000000.0 * (1 + 1e-11), 1000000.0) == 100);  // k4
-    CHECK(code(11.58 - 11.565, 11.54 - 11.525) == 10);   // k5: the DMI tie
+    CHECK(code(64.325 - 64.125, 63.9 - 63.7) == 10);   // k5: the DMI tie
     CHECK(code(0.1 + 0.2, 0.3) == 10);                   // k6
     CHECK(code(1e-10, 0.0) == 10);                       // k7: inclusive edge
     CHECK(code(1.1e-10, 0.0) == 100);                    // k8

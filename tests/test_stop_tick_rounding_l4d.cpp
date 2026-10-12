@@ -12,51 +12,14 @@
 #define coof_cursor_is_bar_close_ l4d_coof_cursor_is_bar_close()
 
 /*
- * test_stop_tick_rounding.cpp — round 6, design-stop-tick-rounding:
- * TradingView's broker emulator tests a resting stop / limit against the
- * bar's OHLC QUANTIZED to the tick (nearest, floor(p / mintick + 0.5)) while
- * the order LEVEL stays raw; the fill keeps its directional / limit-or-better
- * snap. The engine used to compare the RAW bar prices, so a sell-stop at
- * 13.74624 fired on a 13.745 low that TradingView (low -> 13.75) walks past.
+ * test_stop_tick_rounding.cpp — resting stop / limit touches use OHLC
+ * quantized to the nearest tick (floor(p / mintick + 0.5)); order levels
+ * stay raw and fills keep their directional / limit-or-better snap.
+ * Trailing extremes and bar-leg order retain the raw path.
  *
- * Every case below is a `lab tv` tape on NYSE:F 1D (mintick 0.01, sub-penny
- * prints; scratchpad/r6/pins/stopround-*, 2026-09-04) replayed on the feed's
- * own bars (tape times are UTC+8 evenings of the same trading day):
- *
- *   stopround-xs-L-{1374624,137451,137449,13745}  long sell-stop, entry
- *       01-28 @13.88: every one SKIPS the 02-02 bar (low 13.745) and fills
- *       02-03 @13.74.
- *   stopround-xs-L-133449   long sell-stop 13.3449, entry 01-22 @13.78:
- *       fills 01-26 (low 13.3448) @13.34 — so the level is NOT floored
- *       before the compare (13.34 vs 13.3448 would not fire) and the bar is
- *       NOT raw (02-02 would fire): only the quantized low explains both.
- *   stopround-xs-S-{140349,1403505,140352}  short buy-stop, entry 01-30
- *       @13.91: all fill 02-03 (high 14.0351 -> 14.04) @14.04.
- *   stopround-xs-S-140351   short buy-stop 14.0351, entry 02-19 @13.77:
- *       fills 02-20 (high 14.035 -> 14.04) @14.04.
- *   stopround-xs-S-13225-high  short buy-stop 13.225, entry 12-08 @13.07:
- *       skips 12-09 (high 13.2202 -> 13.22), fills 12-10 @13.23 — the
- *       high rounds to NEAREST, not up.
- *   stopround-xs-L-13776-open  long sell-stop 13.776, entry 02-19 @13.77:
- *       the 02-20 open 13.775 (-> 13.78) is NOT a gap; fills at the level
- *       13.77, not at the open.
- *   stopround-xl-L-{140349,1403505,140352}  long sell-limit -> 02-03 @14.04;
- *   stopround-xl-S-{137451,137449} short buy-limit -> 02-03 @13.74;
- *   stopround-xl-S-133449  short buy-limit -> 01-26 @13.34.
- *   stopround-es-L-{140349,1403505,140352} / stopround-eo-L-1403505
- *       strategy.entry / strategy.order long stop placed 01-30 -> fill
- *       02-03 @14.04; stopround-es-S-{137451,137449} short stop -> 02-03
- *       @13.74.
- *   stopround-el-L-{137451,137449} long limit entry placed 01-30 -> 02-03
- *       @13.74; stopround-el-S-{1403505,140352} short limit entry -> 02-03
- *       @14.04.
- *   stopround-xt-L-trail  long entry 02-19 @13.77, trail_points 20 /
- *       trail_offset 3: exits 02-23 at the open 13.98 — the raw-extreme
- *       trail behaviour the engine already had (a quantized 14.04 best
- *       would have filled 02-20 @14.01). The trail is NOT quantized.
- *   stopround-ohlc-{0,1}  Pine's own low / high (encoded in the trade qty)
- *       are the raw prints 13.745 / 13.3448 / 14.0351 — the feed's values —
- *       so the quantization is the broker's, not the data's.
+ * Pinned against TradingView behaviour (recorded tapes are kept outside
+ * this repository). Invented bars place sub-tick lows / highs on both sides
+ * of a rounding boundary, with separate open-gap and raw-trail controls.
  */
 
 #include <cmath>
@@ -111,28 +74,32 @@ static int64_t ts(int i) { return 1000 * (i + 1); }
 
 namespace {
 
-// NYSE:F daily bars (registry feed e3dd3a88e85b, UTC-day labels).
-const Bar kDec05 = mk_bar(0, 13.15, 13.28, 13.0, 13.03);
-const Bar kDec08 = mk_bar(0, 13.07, 13.16, 12.945, 13.14);
-const Bar kDec09 = mk_bar(0, 13.13, 13.2202, 13.06, 13.08);
-const Bar kDec10 = mk_bar(0, 13.08, 13.42, 13.07, 13.41);
-const Bar kJan21 = mk_bar(0, 13.405, 13.77, 13.405, 13.77);
-const Bar kJan22 = mk_bar(0, 13.78, 13.84, 13.7, 13.71);
-const Bar kJan23 = mk_bar(0, 13.7, 13.7, 13.55, 13.56);
-const Bar kJan26 = mk_bar(0, 13.56, 13.655, 13.3448, 13.44);
-const Bar kJan27 = mk_bar(0, 13.64, 13.945, 13.51, 13.93);
-const Bar kJan28 = mk_bar(0, 13.88, 13.89, 13.76, 13.82);
-const Bar kJan29 = mk_bar(0, 13.89, 14.09, 13.795, 14.0);
-const Bar kJan30 = mk_bar(0, 13.91, 13.98, 13.79, 13.88);
-const Bar kFeb02 = mk_bar(0, 13.86, 13.895, 13.745, 13.81);
-const Bar kFeb03 = mk_bar(0, 13.82, 14.0351, 13.61, 13.73);
-const Bar kFeb04 = mk_bar(0, 13.72, 14.0, 13.69, 13.82);
-const Bar kFeb05 = mk_bar(0, 13.75, 13.82, 13.53, 13.72);
-const Bar kFeb18 = mk_bar(0, 14.11, 14.14, 13.805, 13.85);
-const Bar kFeb19 = mk_bar(0, 13.77, 13.945, 13.69, 13.78);
-const Bar kFeb20 = mk_bar(0, 13.775, 14.035, 13.72, 14.01);
-const Bar kFeb23 = mk_bar(0, 13.98, 14.04, 13.57, 13.64);
-const Bar kFeb24 = mk_bar(0, 13.77, 14.325, 13.73, 14.2);
+// Invented waypoints, grouped by scenario rather than calendar dates.
+// A..D: a high just above 79.91 must not touch a 79.915 buy stop.
+// E..H: a low 79.8242 rounds down to 79.82 and touches raw level 79.8246.
+// I..P: low 80.245 rounds up and misses; a later low / high crosses levels.
+// Q..U: an open rounds up, while a raw trailing best must remain unsnapped.
+const Bar kA = mk_bar(0, 79.65, 79.85, 79.50, 79.70);
+const Bar kB = mk_bar(0, 79.70, 79.82, 79.55, 79.75);
+const Bar kC = mk_bar(0, 79.76, 79.9103, 79.65, 79.80);
+const Bar kD = mk_bar(0, 79.80, 80.05, 79.72, 80.00);
+const Bar kE = mk_bar(0, 80.00, 80.25, 79.95, 80.20);
+const Bar kF = mk_bar(0, 80.20, 80.28, 80.00, 80.10);
+const Bar kG = mk_bar(0, 80.10, 80.20, 79.90, 80.05);
+const Bar kH = mk_bar(0, 80.05, 80.15, 79.8242, 79.95);
+const Bar kI = mk_bar(0, 80.35, 80.65, 80.25, 80.60);
+const Bar kJ = mk_bar(0, 80.52, 80.62, 80.40, 80.48);
+const Bar kK = mk_bar(0, 80.55, 80.75, 80.35, 80.70);
+const Bar kL = mk_bar(0, 80.50, 80.60, 80.30, 80.45);
+const Bar kM = mk_bar(0, 80.46, 80.60, 80.245, 80.35);
+const Bar kN = mk_bar(0, 80.38, 80.6351, 80.10, 80.28);
+const Bar kO = mk_bar(0, 80.30, 80.65, 80.20, 80.40);
+const Bar kP = mk_bar(0, 80.25, 80.40, 80.05, 80.30);
+const Bar kQ = mk_bar(0, 80.70, 80.80, 80.45, 80.50);
+const Bar kR = mk_bar(0, 80.41, 80.56, 80.32, 80.44);
+const Bar kS = mk_bar(0, 80.415, 80.635, 80.35, 80.61);
+const Bar kT = mk_bar(0, 80.58, 80.70, 80.20, 80.30);
+const Bar kU = mk_bar(0, 80.45, 80.95, 80.35, 80.80);
 
 std::vector<Bar> series(std::initializer_list<Bar> bars) {
     std::vector<Bar> out;
@@ -145,8 +112,8 @@ std::vector<Bar> series(std::initializer_list<Bar> bars) {
     return out;
 }
 
-// NYSE:F — pointvalue 1, mintick 0.01, whole shares, fixed 100 shares, no
-// commission / slippage, one position at a time (the pins' strategy()).
+// Invented instrument: pointvalue 1, mintick 0.01, whole lots, fixed 100,
+// no commission / slippage, one position at a time.
 // Script chars (indexed by bar_index_), all on entry id "E":
 //   'L' / 'S'  market entry long / short
 //   'e'        strategy.entry(stop = entry_level_)   in entry_long_ direction
@@ -156,7 +123,7 @@ std::vector<Bar> series(std::initializer_list<Bar> bars) {
 //   '.'        nothing
 // While a position is open the bracket strategy.exit("X", "E", limit =
 // exit_limit_, stop = exit_stop_, trail_points_, trail_offset_) is re-issued
-// every bar, exactly like the pins' `if strategy.position_size != 0`.
+// every bar, like a script's `if strategy.position_size != 0`.
 class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe() {
@@ -236,255 +203,262 @@ void expect_single_trade(const Probe& eng, bool is_long,
 void test_tick_grid_price() {
     std::printf("-- tick_grid_price: nearest tick, half up, literal-exact --\n");
     Probe eng;
-    CHECK(eng.grid(13.745) == 13.75);      // 1374.5 exact -> up
-    CHECK(eng.grid(14.035) == 14.04);
-    CHECK(eng.grid(13.3448) == 13.34);
-    CHECK(eng.grid(14.0351) == 14.04);
-    CHECK(eng.grid(13.2202) == 13.22);     // nearest, not ceil
-    CHECK(eng.grid(13.775) == 13.78);
-    CHECK(eng.grid(13.61) == 13.61);       // on-grid input is a fixed point
-    CHECK(eng.grid(14.04) == 14.04);
+    CHECK(eng.grid(80.245) == 80.25);      // 8024.5 exact -> up
+    CHECK(eng.grid(80.635) == 80.64);
+    CHECK(eng.grid(79.8242) == 79.82);
+    CHECK(eng.grid(80.6351) == 80.64);
+    CHECK(eng.grid(79.9103) == 79.91);     // nearest, not ceil
+    CHECK(eng.grid(80.415) == 80.42);
+    CHECK(eng.grid(80.10) == 80.10);       // on-grid input is a fixed point
+    CHECK(eng.grid(80.64) == 80.64);
     CHECK(std::isnan(eng.grid(kNaN)));
     // Every grid point is the double its decimal literal parses to, so an
-    // on-grid level compares equal bit-for-bit (k * 0.01 would give
-    // 14.040000000000001 for k = 1404).
-    CHECK(eng.grid(1404.0 * 0.01) == 14.04);
-    // The finding-446 binary-midpoint artifacts are preserved: 228.765 sits
-    // just under its midpoint and rounds DOWN, 214.385 sits on it and rounds
-    // up (the census the fill rounding was fitted to).
-    CHECK(eng.grid(228.765) == 228.76);
-    CHECK(eng.grid(214.385) == 214.39);
+    // on-grid level compares equal bit-for-bit (8007 * 0.01 gives
+    // 80.07000000000001, while 8007 / 100 parses as the literal 80.07).
+    CHECK(eng.grid(8007.0 * 0.01) == 80.07);
+    // Invented binary-midpoint controls: 80.005 / 0.01 is just below
+    // 8000.5 (rounds down); 80.015 / 0.01 is exactly 8001.5 (rounds up).
+    CHECK(eng.grid(80.005) == 80.00);
+    CHECK(eng.grid(80.015) == 80.02);
     // No tick, no quantization.
     eng.syminfo_mintick_ = 0.0;
-    CHECK(eng.grid(13.745) == 13.745);
-    // A binary tick (1/128) has an integral inverse and takes the k / 128
-    // branch: 13.7451 / 0.0078125 = 1759.37 -> k = 1759.
+    CHECK(eng.grid(80.245) == 80.245);
+    // Binary tick: 82.4147 * 128 = 10549.0816 -> k = 10549.
     eng.syminfo_mintick_ = 0.0078125;
-    CHECK(eng.grid(13.7451) == 1759.0 * 0.0078125);
-    // A tick whose inverse is not integral (2.5 -> 0.4) falls back to
-    // k * mintick: 13.7451 / 2.5 = 5.498 -> k = 5.
+    CHECK(eng.grid(82.4147) == 10549.0 * 0.0078125);
+    // Non-integral inverse: 82.4147 / 2.5 = 32.96588 -> k = 33.
     eng.syminfo_mintick_ = 2.5;
-    CHECK(eng.grid(13.7451) == 5.0 * 2.5);
-    CHECK(eng.grid(13.75) == 6.0 * 2.5);        // 5.5 exact -> half up -> 15
+    CHECK(eng.grid(82.4147) == 33.0 * 2.5);
+    CHECK(eng.grid(83.75) == 34.0 * 2.5);       // 33.5 exact -> half up -> 85
 }
 
 // --- (a) long sell-stop -----------------------------------------------------
 void test_long_sell_stop_skips_subtick_low() {
-    std::printf("-- long sell-stop: 13.745 low -> 13.75 is not a touch (xs-L-*) --\n");
-    // bars: 0 Jan27 (signal) 1 Jan28 (fill 13.88) 2 Jan29 3 Jan30 4 Feb02 5 Feb03
-    for (double stop : {13.74624, 13.7451, 13.7449, 13.745}) {
+    std::printf("-- long sell-stop: 80.245 low -> 80.25 is not a touch (boundary control) --\n");
+    // bars: 0 I (signal) 1 J (fill 80.52) 2 K 3 L 4 M 5 N
+    for (double stop : {80.2468, 80.2452, 80.2447, 80.245}) {
         Probe eng;
         eng.script = "L.....";
         eng.exit_stop_ = stop;
-        auto bars = series({kJan27, kJan28, kJan29, kJan30, kFeb02, kFeb03});
+        auto bars = series({kI, kJ, kK, kL, kM, kN});
         eng.run(bars.data(), (int)bars.size());
-        // pre-fix: 13.74624 / 13.7451 exited on Feb02 (bar 4) — the
-        // jayentriken NYSE:F trade-1 defect.
-        expect_single_trade(eng, true, 1, 13.88, 5, 13.74);
+        // M low 80.245 -> 80.25 > every stop; N low 80.10 touches.
+        // Entry = J open 80.52; each raw level floors to exit 80.24.
+        expect_single_trade(eng, true, 1, 80.52, 5, 80.24);
     }
 }
 
 void test_long_sell_stop_fires_on_rounded_down_low() {
-    std::printf("-- long sell-stop 13.3449: 13.3448 low -> 13.34 IS a touch (xs-L-133449) --\n");
-    // bars: 0 Jan21 (signal) 1 Jan22 (fill 13.78) 2 Jan23 3 Jan26 (low 13.3448)
+    std::printf("-- long sell-stop 79.8246: 79.8242 low -> 79.82 IS a touch (boundary control) --\n");
+    // bars: 0 E (signal) 1 F (fill 80.20) 2 G 3 H (low 79.8242)
     Probe eng;
     eng.script = "L...";
-    eng.exit_stop_ = 13.3449;
-    auto bars = series({kJan21, kJan22, kJan23, kJan26});
+    eng.exit_stop_ = 79.8246;
+    auto bars = series({kE, kF, kG, kH});
     eng.run(bars.data(), (int)bars.size());
-    expect_single_trade(eng, true, 1, 13.78, 3, 13.34);
+    // Entry = F open 80.20; floor(79.8246 / 0.01) / 100 = 79.82.
+    // Entry F.open = 80.20; H.low rounds to 79.82, level floors to 79.82.
+    expect_single_trade(eng, true, 1, 80.20, 3, 79.82);
 }
 
 void test_long_sell_stop_open_is_quantized() {
-    std::printf("-- long sell-stop 13.776: 13.775 open -> 13.78 is no gap (xs-L-13776-open) --\n");
-    // bars: 0 Feb18 (signal) 1 Feb19 (fill 13.77) 2 Feb20 (open 13.775, low 13.72)
+    std::printf("-- long sell-stop 80.416: 80.415 open -> 80.42 is no gap (boundary control) --\n");
+    // bars: 0 Q (signal) 1 R (fill 80.41) 2 S (open 80.415, low 80.35)
     Probe eng;
     eng.script = "L..";
-    eng.exit_stop_ = 13.776;
-    auto bars = series({kFeb18, kFeb19, kFeb20});
+    eng.exit_stop_ = 80.416;
+    auto bars = series({kQ, kR, kS});
     eng.run(bars.data(), (int)bars.size());
-    // Level fill 13.77 (floor of 13.776), not the gap fill at the open 13.78.
-    expect_single_trade(eng, true, 1, 13.77, 2, 13.77);
+    // Level fill 80.41 (floor of 80.416), not the gap fill at the open 80.42.
+    // R.open = 80.41; S.open rounds above level; floor(80.416*100)/100 = 80.41.
+    expect_single_trade(eng, true, 1, 80.41, 2, 80.41);
 }
 
 // --- (b) short buy-stop -----------------------------------------------------
 void test_short_buy_stop_fires_on_rounded_up_high() {
-    std::printf("-- short buy-stop: 14.0351 high -> 14.04 touches 14.0352 (xs-S-*) --\n");
-    // bars: 0 Jan29 (signal) 1 Jan30 (fill 13.91) 2 Feb02 3 Feb03 (high 14.0351)
-    for (double stop : {14.0349, 14.03505, 14.0352}) {
+    std::printf("-- short buy-stop: 80.6351 high -> 80.64 touches 80.6353 (boundary control) --\n");
+    // bars: 0 K (signal) 1 L (fill 80.50) 2 M 3 N (high 80.6351)
+    for (double stop : {80.6347, 80.63508, 80.6353}) {
         Probe eng;
         eng.script = "S...";
         eng.exit_stop_ = stop;
-        auto bars = series({kJan29, kJan30, kFeb02, kFeb03});
+        auto bars = series({kK, kL, kM, kN});
         eng.run(bars.data(), (int)bars.size());
-        // pre-fix: 14.0352 > 14.0351 never fired here.
-        expect_single_trade(eng, false, 1, 13.91, 3, 14.04);
+        // pre-fix: 80.6353 > 80.6351 never fired here.
+        // L.open = 80.50; N.high rounds to 80.64; ceil(stop*100)/100 = 80.64.
+        expect_single_trade(eng, false, 1, 80.50, 3, 80.64);
     }
-    // The exact half-tick high 14.035 -> 14.04 touches 14.0351 too
-    // (xs-S-140351): bars 0 Feb18 (signal) 1 Feb19 (fill 13.77) 2 Feb20.
+    // The exact half-tick high 80.635 -> 80.64 touches 80.6351 too
+    // (boundary control): bars 0 Q (signal) 1 R (fill 80.41) 2 S.
     {
         Probe eng;
         eng.script = "S..";
-        eng.exit_stop_ = 14.0351;
-        auto bars = series({kFeb18, kFeb19, kFeb20});
+        eng.exit_stop_ = 80.6351;
+        auto bars = series({kQ, kR, kS});
         eng.run(bars.data(), (int)bars.size());
-        expect_single_trade(eng, false, 1, 13.77, 2, 14.04);
+        // R.open = 80.41; S.high rounds to 80.64; ceil(80.6351*100)/100 = 80.64.
+        expect_single_trade(eng, false, 1, 80.41, 2, 80.64);
     }
 }
 
 void test_short_buy_stop_high_rounds_nearest_not_up() {
-    std::printf("-- short buy-stop 13.225: 13.2202 high -> 13.22 is no touch (xs-S-13225-high) --\n");
-    // bars: 0 Dec05 (signal) 1 Dec08 (fill 13.07) 2 Dec09 (high 13.2202) 3 Dec10
+    std::printf("-- short buy-stop 79.915: 79.9103 high -> 79.91 is no touch (boundary control) --\n");
+    // bars: 0 A (signal) 1 B (fill 79.70) 2 C (high 79.9103) 3 D
     Probe eng;
     eng.script = "S...";
-    eng.exit_stop_ = 13.225;
-    auto bars = series({kDec05, kDec08, kDec09, kDec10});
+    eng.exit_stop_ = 79.915;
+    auto bars = series({kA, kB, kC, kD});
     eng.run(bars.data(), (int)bars.size());
-    expect_single_trade(eng, false, 1, 13.07, 3, 13.23);
+    // B.open = 79.70; C.high rounds below level; D touches, ceil(79.915*100)/100 = 79.92.
+    expect_single_trade(eng, false, 1, 79.70, 3, 79.92);
 }
 
 // --- (c) strategy.exit(limit=) ---------------------------------------------
 void test_exit_limits() {
-    std::printf("-- exit limits: sell-limit on the 14.0351 high, buy-limit on the 13.745 / 13.3448 lows (xl-*) --\n");
-    for (double limit : {14.0349, 14.03505, 14.0352}) {
+    std::printf("-- exit limits: sell-limit on the 80.6351 high, buy-limit on the 80.245 / 79.8242 lows (boundary control) --\n");
+    for (double limit : {80.6347, 80.63508, 80.6353}) {
         Probe eng;
         eng.script = "L...";
         eng.exit_limit_ = limit;
-        auto bars = series({kJan29, kJan30, kFeb02, kFeb03});
+        auto bars = series({kK, kL, kM, kN});
         eng.run(bars.data(), (int)bars.size());
-        expect_single_trade(eng, true, 1, 13.91, 3, 14.04);
+        // L.open = 80.50; N.high rounds to 80.64, satisfying each sell-limit at its ceil.
+        expect_single_trade(eng, true, 1, 80.50, 3, 80.64);
     }
-    for (double limit : {13.7451, 13.7449}) {
+    for (double limit : {80.2452, 80.2447}) {
         Probe eng;
         eng.script = "S.....";
         eng.exit_limit_ = limit;
-        auto bars = series({kJan27, kJan28, kJan29, kJan30, kFeb02, kFeb03});
+        auto bars = series({kI, kJ, kK, kL, kM, kN});
         eng.run(bars.data(), (int)bars.size());
-        expect_single_trade(eng, false, 1, 13.88, 5, 13.74);
+        // J.open = 80.52; M.low rounds above the buy-limit; N touches, floor(limit*100)/100 = 80.24.
+        expect_single_trade(eng, false, 1, 80.52, 5, 80.24);
     }
     {
         Probe eng;
         eng.script = "S...";
-        eng.exit_limit_ = 13.3449;
-        auto bars = series({kJan21, kJan22, kJan23, kJan26});
+        eng.exit_limit_ = 79.8246;
+        auto bars = series({kE, kF, kG, kH});
         eng.run(bars.data(), (int)bars.size());
-        expect_single_trade(eng, false, 1, 13.78, 3, 13.34);
+        // Entry = F open 80.20; the buy-limit floor gives 79.82.
+        // F.open = 80.20; H.low and the buy-limit floor both give 79.82.
+        expect_single_trade(eng, false, 1, 80.20, 3, 79.82);
     }
 }
 
 // --- (d) stop / limit entries ----------------------------------------------
-// bars: 0 Jan30 (placed) 1 Feb02 2 Feb03 3 Feb04 (close_all) 4 Feb05 (exit 13.75)
+// bars: 0 L (placed) 1 M 2 N 3 O (close_all) 4 P (exit 80.25)
 void test_stop_entries() {
-    std::printf("-- entry stops: long on the 14.0351 high, short on the 13.745 low (es-*, eo-*) --\n");
-    for (double level : {14.0349, 14.03505, 14.0352}) {
+    std::printf("-- entry stops: long on the 80.6351 high, short on the 80.245 low (boundary control) --\n");
+    for (double level : {80.6347, 80.63508, 80.6353}) {
         for (char kind : {'e', 'o'}) {
             Probe eng;
             eng.script = std::string(1, kind) + "..C.";
             eng.entry_long_ = true;
             eng.entry_level_ = level;
-            auto bars = series({kJan30, kFeb02, kFeb03, kFeb04, kFeb05});
+            auto bars = series({kL, kM, kN, kO, kP});
             eng.run(bars.data(), (int)bars.size());
-            expect_single_trade(eng, true, 2, 14.04, 4, 13.75);
+            // M.high misses; N.high touches -> ceil(level*100)/100 = 80.64; close fills P.open = 80.25.
+            expect_single_trade(eng, true, 2, 80.64, 4, 80.25);
         }
     }
-    for (double level : {13.7451, 13.7449}) {
+    for (double level : {80.2452, 80.2447}) {
         for (char kind : {'e', 'o'}) {
             Probe eng;
             eng.script = std::string(1, kind) + "..C.";
             eng.entry_long_ = false;
             eng.entry_level_ = level;
-            auto bars = series({kJan30, kFeb02, kFeb03, kFeb04, kFeb05});
+            auto bars = series({kL, kM, kN, kO, kP});
             eng.run(bars.data(), (int)bars.size());
-            // pre-fix: 13.7451 filled on Feb02 (bar 1).
-            expect_single_trade(eng, false, 2, 13.74, 4, 13.75);
+            // pre-fix: 80.2452 filled on M (bar 1).
+            // M.low misses; N.low touches -> floor(level*100)/100 = 80.24; close fills P.open = 80.25.
+            expect_single_trade(eng, false, 2, 80.24, 4, 80.25);
         }
     }
 }
 
 void test_limit_entries() {
-    std::printf("-- entry limits: long on the 13.745 low, short on the 14.0351 high (el-*) --\n");
-    for (double level : {13.7451, 13.7449}) {
+    std::printf("-- entry limits: long on the 80.245 low, short on the 80.6351 high (boundary control) --\n");
+    for (double level : {80.2452, 80.2447}) {
         Probe eng;
         eng.script = "m..C.";
         eng.entry_long_ = true;
         eng.entry_level_ = level;
-        auto bars = series({kJan30, kFeb02, kFeb03, kFeb04, kFeb05});
+        auto bars = series({kL, kM, kN, kO, kP});
         eng.run(bars.data(), (int)bars.size());
-        expect_single_trade(eng, true, 2, 13.74, 4, 13.75);
+        // N.low first touches the buy-limit; floor(level*100)/100 = 80.24; close fills P.open = 80.25.
+        expect_single_trade(eng, true, 2, 80.24, 4, 80.25);
     }
-    for (double level : {14.03505, 14.0352}) {
+    for (double level : {80.63508, 80.6353}) {
         Probe eng;
         eng.script = "m..C.";
         eng.entry_long_ = false;
         eng.entry_level_ = level;
-        auto bars = series({kJan30, kFeb02, kFeb03, kFeb04, kFeb05});
+        auto bars = series({kL, kM, kN, kO, kP});
         eng.run(bars.data(), (int)bars.size());
-        expect_single_trade(eng, false, 2, 14.04, 4, 13.75);
+        // N.high first touches the sell-limit; ceil(level*100)/100 = 80.64; close fills P.open = 80.25.
+        expect_single_trade(eng, false, 2, 80.64, 4, 80.25);
     }
 }
 
 // --- trail: not quantized (raw extremes, unchanged) -------------------------
 void test_trail_keeps_raw_path() {
-    std::printf("-- trail 20/3 over the 14.035 high: exits at the next open 13.98 (xt-L-trail) --\n");
-    // bars: 0 Feb18 (signal) 1 Feb19 (fill 13.77) 2 Feb20 (high 14.035) 3 Feb23 (open 13.98)
+    std::printf("-- trail 20/3 over the 80.635 high: exits at the next open 80.58 (boundary control) --\n");
+    // bars: 0 Q (signal) 1 R (fill 80.41) 2 S (high 80.635) 3 T (open 80.58)
     Probe eng;
     eng.script = "L...";
     eng.trail_points_ = 20.0;
     eng.trail_offset_ = 3.0;
-    auto bars = series({kFeb18, kFeb19, kFeb20, kFeb23});
+    auto bars = series({kQ, kR, kS, kT});
     eng.run(bars.data(), (int)bars.size());
-    // raw best 14.035 - 0.03 = 14.005 > close 14.01 on Feb20: no fill; the
-    // Feb23 open 13.98 gaps through -> 13.98. (A quantized best 14.04 would
-    // have filled Feb20 @14.01, which TradingView does not do.)
-    expect_single_trade(eng, true, 1, 13.77, 3, 13.98);
+    // raw best 80.635 - 0.03 = 80.605 < close 80.61 on S: no fill; the
+    // T open 80.58 gaps through -> 80.58. (A quantized best 80.64 would
+    // have filled S @80.61, which TradingView does not do.)
+    expect_single_trade(eng, true, 1, 80.41, 3, 80.58);
 }
 
 // --- leg order: the raw bar's, on every path coordinate ---------------------
 void test_leg_order_is_the_raw_bars() {
     std::printf("-- leg order: quantization flips the O->H / O->L proximity tie, the cursor stays in the raw bar's order --\n");
-    // Raw bar: O 13.7749 H 13.7846 L 13.7649 C 13.775 — |H-O| 0.0097 <
-    // |O-L| 0.0100, so the raw path is O -> H -> L -> C (high first).
-    // Tick twin: O 13.77 H 13.78 L 13.76 C 13.78 — a 0.01 / 0.01 tie, which
-    // bar_path_uses_high_first resolves LOW first. A long stop entry at
-    // 13.7751 fires on the raw first leg (tick high 13.78 >= 13.7751, tick
-    // open 13.77 is no gap) and fills at ceil -> 13.78; its same-bar bracket
-    // stop 13.766 then sits on the H -> L leg (tick 13.78 -> 13.76) and
-    // fills at floor -> 13.76 on the SAME bar. Had the entry's path cursor
-    // been taken in the twin's own (low-first) order it would read 1.755 —
-    // past the H waypoint of the raw walk — and the bracket would miss the
-    // H -> L leg entirely (no exit this bar), a regression the pre-round-6
-    // raw walk never had.
-    const Bar flip = mk_bar(0, 13.7749, 13.7846, 13.7649, 13.775);
+    // Raw distances: H-O = 0.0096 < O-L = 0.0100, hence HIGH first.
+    // Tick twin: O 82.42 H 82.43 L 82.41 C 82.43. Its exactly equal
+    // distances choose LOW first. Entry and bracket must share the RAW
+    // leg order: entry ceil(82.4252 / 0.01) / 100 = 82.43 on O->H,
+    // then stop floor(82.4162 / 0.01) / 100 = 82.41 on H->L, same bar.
+    // Taking the entry cursor from the low-first twin skips that retrace.
+    const Bar flip = mk_bar(0, 82.4248, 82.4344, 82.4148, 82.425);
     Probe probe;
-    CHECK(probe.grid(flip.open) == 13.77);
-    CHECK(probe.grid(flip.high) == 13.78);
-    CHECK(probe.grid(flip.low) == 13.76);
-    CHECK(probe.grid(flip.close) == 13.78);
+    CHECK(probe.grid(flip.open) == 82.42);
+    CHECK(probe.grid(flip.high) == 82.43);
+    CHECK(probe.grid(flip.low) == 82.41);
+    CHECK(probe.grid(flip.close) == 82.43);
 
-    const Bar placement = mk_bar(0, 13.70, 13.75, 13.65, 13.72);
-    const Bar after = mk_bar(0, 13.80, 13.85, 13.79, 13.84);
+    const Bar placement = mk_bar(0, 82.30, 82.40, 82.20, 82.35);
+    const Bar after = mk_bar(0, 82.50, 82.65, 82.45, 82.60);
     Probe eng;
     eng.script = "e..";
     eng.entry_long_ = true;
-    eng.entry_level_ = 13.7751;
-    eng.exit_stop_ = 13.766;
+    eng.entry_level_ = 82.4252;
+    eng.exit_stop_ = 82.4162;
     eng.arm_exit_flat_ = true;
     auto bars = series({placement, flip, after});
     eng.run(bars.data(), (int)bars.size());
-    expect_single_trade(eng, true, 1, 13.78, 1, 13.76);
+    // Same raw H->L leg: entry ceil(82.4252*100)/100 = 82.43; exit floor(82.4162*100)/100 = 82.41.
+    expect_single_trade(eng, true, 1, 82.43, 1, 82.41);
 }
 
 // --- control: the quantization is the tick's doing --------------------------
 void test_no_tick_no_quantization() {
-    std::printf("-- control: mintick 0 keeps the raw compare (13.7451 fires on the 13.745 low) --\n");
+    std::printf("-- control: mintick 0 keeps the raw compare (80.2452 fires on the 80.245 low) --\n");
     Probe eng;
     eng.syminfo_mintick_ = 0.0;
     eng.script = "L.....";
-    eng.exit_stop_ = 13.7451;
-    auto bars = series({kJan27, kJan28, kJan29, kJan30, kFeb02, kFeb03});
+    eng.exit_stop_ = 80.2452;
+    auto bars = series({kI, kJ, kK, kL, kM, kN});
     eng.run(bars.data(), (int)bars.size());
     // No tick: raw compare AND raw fill (no snap either).
-    expect_single_trade(eng, true, 1, 13.88, 4, 13.7451);
+    // J.open = 80.52; M.raw_low = 80.245 < raw stop; no tick means unsnapped fill 80.2452.
+    expect_single_trade(eng, true, 1, 80.52, 4, 80.2452);
 }
 
 }  // namespace
