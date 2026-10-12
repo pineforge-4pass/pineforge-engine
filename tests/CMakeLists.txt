@@ -2225,8 +2225,6 @@ set_tests_properties(test_benchmark_harness test_benchmark_provenance PROPERTIES
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 add_test(NAME test_docs_doxygen_retry
     COMMAND bash ${PROJECT_SOURCE_DIR}/docs/build.sh --self-test-retry)
-add_test(NAME test_docs_seo
-    COMMAND bash ${PROJECT_SOURCE_DIR}/docs/build.sh --self-test-seo)
 add_test(NAME test_twin_parity_mutations
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_twin_parity.py)
 
@@ -6968,3 +6966,10 @@ set_tests_properties(test_ci_verify PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
 set_tests_properties(test_ci_preflight PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
+
+# Registered here, at the end of the file, so no earlier line moves: the private
+# fixture read evidence (tests/private_fixture_reads.evidence) pins CMake lines
+# by number. docs/build.sh --self-test-seo runs docs/seo_postprocess.py on a
+# synthetic site (standard library only; no Doxygen).
+add_test(NAME test_docs_seo
+    COMMAND bash ${PROJECT_SOURCE_DIR}/docs/build.sh --self-test-seo)
