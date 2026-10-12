@@ -16,9 +16,9 @@
  * frozen 100%-of-equity true-flat MARKET entry whose gapped fill price pushes
  * the frozen-quantity notional past the sizing equity at all.
  *
- * Rule (design-cntvxiao-gap-reject, PANEL-CLEARED; widened to commissioned
- * entries by the round-7 market-entry-admission pin): a pending MARKET entry
- * created by high-level strategy.entry with omitted qty (frozen default sizing,
+ * Pinned against TradingView behaviour (recorded tapes are kept outside
+ * this repository). The rule also covers commissioned entries. A pending
+ * MARKET entry created by high-level strategy.entry with omitted qty (frozen default sizing,
  * percent_of_equity == 100%), direction-appropriate margin == 100, placed
  * TRUE-FLAT (created flat, not a same-bar paired close/reentry) and still FLAT
  * at fill, is silently dropped (no trade row) at fill when:
@@ -29,11 +29,8 @@
  *
  * Direction-symmetric (long AND short). ANY positive shortfall rejects — there
  * is NO one-lot amnesty and the opening commission is NOT part of the test
- * (campaign notes log-20260905t071818z-e57e7235 / log-20260905t071819z-
- * ece9b623, lab tv tapes scratchpad/r7/pins/macd1d-mktadmit-*: 0.1%
- * commission, 206 placements, 0 violations; replayed on the registry bars by
- * test_market_admission_commission). pct<100 or gap-DOWN entries are
- * untouched, and a commissioned entry whose cost fits but whose cost + fee
+ * (also covered by test_market_admission_commission). pct<100 or gap-DOWN
+ * entries are untouched, and a commissioned entry whose cost fits but whose cost + fee
  * does not keeps the KI-61 fill-then-trim path. See the gate in
  * engine_fills.cpp apply_filled_order_to_state for the evidence trail.
  *
@@ -45,8 +42,7 @@
  * GREEN-B strategy.exit bracket bound to a flat-dropped entry id is inert
  *        (no phantom exit fill, no crash).
  * RED-7  commissioned twin of RED-6 (10% fee, 9 x 120 = 1080 > 1000): rejected
- *        (FLAT, no rows) — re-pinned by the round-7 tapes; it used to fill
- *        and take a 4-lot Margin-call trim.
+ *        (FLAT, no rows); it used to fill and take a 4-lot Margin-call trim.
  * GREEN-C commissioned fee-only shortfall (9 x 110 = 990 <= 1000 < 990 + 99):
  *        fills then takes the KI-61 one-lot Margin-call trim.
  * GREEN-D pct=99 twin: fills (rule requires EXACTLY 100).
@@ -189,9 +185,7 @@ void test_rejected_short_emits_no_margin_call_rows() {
 // 100; fill 100.5 -> notional 10050, a shortfall of 50 over equity 10000 —
 // positive but under one lot (qty_step*fill = 100.5). TV re-checks the frozen
 // margin against the sizing-equity snapshot at fill and cancels on ANY
-// positive shortfall — no one-lot amnesty. Evidence: ycelestine77 33/33
-// true-flat sub-lot-shortfall rejects on open-uptick fill bars (+0.01..+0.32);
-// cntvxiao census 0/556 TV positive-shortfall admissions.
+// positive shortfall — no one-lot amnesty.
 void test_sub_lot_positive_shortfall_rejected() {
     std::printf("-- RED-5: sub-lot positive shortfall rejects --\n");
     Probe eng(/*pct=*/100.0, /*capital=*/10000.0, /*qty_step=*/1.0,
@@ -230,10 +224,10 @@ void test_dangling_exit_bracket_is_inert() {
 }
 
 // RED-7. Commissioned twin of RED-6. Signal sizing reserves the 10% fee:
-// floor(1000/1.1/100) = 9. The 120 fill costs 9 x 120 = 1080 > 1000, and the
-// round-7 tapes show the commission is not part of TV's test: the entry is
-// REJECTED outright — no fill, no entry-bar trim. (Before the pin the engine
-// filled 9 @ 120 and trimmed 4, the shape TV's z8830 probes never show.)
+// floor(1000/1.1/100) = 9. The 120 fill costs 9 x 120 = 1080 > 1000.
+// Commission is excluded from the admission test: the entry is REJECTED
+// outright — no fill, no entry-bar trim. Before the fix the engine filled
+// 9 @ 120 and trimmed 4.
 // Mirrors test_commissioned_frozen_all_in_true_flat_gap_is_rejected.
 void test_commissioned_all_in_gap_rejected() {
     std::printf("-- RED-7: commissioned all-in gap over equity rejected --\n");
@@ -254,8 +248,7 @@ void test_commissioned_all_in_gap_rejected() {
 // cost 990 <= 1000 (admitted, the fee excluded), but 990 + the 99 opening fee
 // is unaffordable, so the KI-61 entry-bar affordability trim fires: restore
 // 9 - (1000 - 99)/110 = 0.809 -> floors to 0 -> the opening event's one-lot
-// fallback closes 1 @ 110, leaving 8. (Tape shape: NYSE:F 2025-07-29 896 @
-// 11.29 vs equity 10125.50, trimmed on the entry bar.)
+// fallback closes 1 @ 110, leaving 8.
 void test_commissioned_fee_only_shortfall_fills_then_trims() {
     std::printf("-- GREEN-C: commissioned fee-only shortfall fills then trims --\n");
     Probe eng(/*pct=*/100.0, /*capital=*/1000.0, /*qty_step=*/1.0,

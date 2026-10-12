@@ -2,17 +2,14 @@
  * test_sparse_atr_prev_close.cpp — issue #178: ta.atr() / ta.tr() called
  * inside a block that does not execute every bar.
  *
- * TradingView rule (pinned 2026-09-06, lab tv tape i178-sparse-atr-sense,
- * BINANCE:BTCUSDT 60 2025-04-01..07-01, ws-report-v1 rangeProof covered,
- * tv_trades.csv sha256 93147961ed5540bb6a413475e3db102869b63455d4bab1a331ca683218ec9960):
- * four qty-encoded sensors on every sparse execution (398 executions of
- * `if close[1] > open[1] and close < open`):
+ * TradingView rule (recorded tapes are kept outside this repository):
+ * compare four calculations at a sparse call site:
  *   B = ta.atr(3) inside the block
  *   C = ta.rma(chartTR, 3) inside the block, chartTR = ta.tr(true) EVERY bar
  *   A = ta.rma(trA, 3) inside the block, trA built from the close of the
  *       PREVIOUS EXECUTION of the block (the engine's per-object prev_close)
  *   T = ta.rma(ta.tr(true), 3) with ta.tr(true) itself inside the block
- * Result: B == C == T on 398/398 executions, B == A on 0/398. So the RMA
+ * B, C and T agree; A differs when skipped bars change the close. The RMA
  * advances on the executions only, but the true range always reads the
  * previous CHART bar's close (close[1]) — never the previous execution's.
  *
@@ -55,7 +52,7 @@ static bool near(double a, double b, double tol = 1e-12) {
 
 namespace {
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-constexpr int64_t kT0 = 1743465600000LL;  // 2025-04-01 00:00 UTC
+constexpr int64_t kT0 = 1743465600000LL;  // Fixed epoch anchor for constructed bars.
 constexpr int64_t k1h = 3'600'000LL;
 
 static Bar mk(int i, double o, double h, double l, double c) {
@@ -229,22 +226,18 @@ static void test_engine_prev_chart_close_tracker() {
 }
 
 
-// 5. issue #178 follow-up (round 9: the first cut of this fix regressed JOAT
-//    aureate on NASDAQ:AAPL / NYSE:F / OANDA:EURUSD @15 — an UNCONDITIONAL
-//    ta.atr(14) under calc_on_order_fills = true). Under COOF every historical
-//    fill recalculation and the ordinary close execution of a bar start from
+// 5. issue #178 follow-up: unconditional ATR under calc_on_order_fills.
+//    Under COOF every historical fill recalculation and the ordinary close
+//    execution of a bar start from
 //    the bar-start checkpoint and push the bar's history slot again, so the
 //    chart-close tracker must roll back with that checkpoint: the close
 //    execution of a bar whose open filled an order still reads the previous
 //    CHART bar's close, never the recalc's own close (which turns the true
 //    range max(h-l, |h-close[1]|, |l-close[1]|) into h-l and drops the gap —
-//    exactly what an overnight gap on a stock lane exposes).
-//    Pinned on TradingView 2026-09-06 (lab tv i178-joat-coof-atr-aapl15,
-//    NASDAQ:AAPL 15, 2025-04-01..07-01, rangeProof covered, tv_trades.csv
-//    sha256 4c7ac673dd35d1c290e51cc4d1ccf076ef315ef3bd013c6988b8f9b9c3198caa):
-//    the qty-encoded ta.atr(14) at the close execution of every fill bar
-//    equals the every-bar RMA over chart-close true ranges (e.g. 2025-05-02
-//    13:30Z, the post-earnings gap: atr 1.596219 with close[1] = 212.85).
+//    exactly what the constructed up/down gaps below expose).
+//    Pinned against TradingView behaviour (recorded tapes are kept outside
+//    this repository): ATR at each fill bar's close execution equals the
+//    every-bar RMA over chart-close true ranges.
 static std::vector<Bar> gapped_chart() {
     return {
         mk(0, 100, 101,  99, 100),
@@ -347,15 +340,15 @@ static void test_engine_prev_chart_close_rolls_back_with_coof_checkpoint() {
     CHECK(second_run_ok);
 }
 
-// 6. The same rollback with a fill recalculation on EVERY bar (round 9, JOAT aureate): the tracker is
+// 6. The same rollback with a fill recalculation on EVERY bar: the tracker is
 //    bar history and rolls back with the COOF checkpoint. On a bar whose open
 //    fills the previous close's market order, the fill recalculation AND the
 //    ordinary close execution both read prev_chart_close() == close[1] of
 //    the chart, so an every-bar ta.atr fed with it reproduces the chart-close
 //    RMA on every close execution. Before the fix the close execution read
-//    the recalc's own close (the full script bar), i.e. true range high - low
-//    (TradingView pin: lab tv i178-coof-atr-sense-aapl15, ta.atr(14) ==
-//    ta.rma(ta.tr(true), 14) on 4315/4315 executions).
+//    the recalc's own close (the full script bar), i.e. true range high - low.
+//    Pinned against TradingView behaviour: ATR equals RMA of chart-close
+//    true ranges on every close execution.
 class CoofEveryBarAtrProbe : public pineforge::source::PineStrategyHost {
 public:
     ta::ATR atr_{3};
@@ -382,8 +375,8 @@ public:
             ? atr_.compute(current_bar_.high, current_bar_.low, current_bar_.close, prev_chart_close())
             : atr_.recompute(current_bar_.high, current_bar_.low, current_bar_.close, prev_chart_close());
         seen.push_back({bar_index_, coof_fill_recalc_active_, prev_chart_close(), v});
-        // JOAT's shape reduced to its sensor: a reversing market order at every
-        // close-time execution, so every bar's open carries a fill recalc.
+        // A reversing market order at every close-time execution, so
+        // every bar's open carries a fill recalc.
         if (!coof_fill_recalc_active_) {
             if (bar_index_ % 2 == 0) strategy_entry("L", true);
             else strategy_entry("S", false);
