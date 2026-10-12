@@ -38,8 +38,10 @@ env:
 # bills the organization even for a public repository, so every other event --
 # a fork's pull request above all -- runs on the free standard runner.
 # Each verification sizes its parallelism to the runner that took it.
-# scripts/ci_preflight.py pins every runner, time limit and job count, and
-# docs/ci.md gives each limit's measured basis.
+# scripts/ci_preflight.py pins every runner, time limit and job count; every
+# job's limit is the platform's own 360-minute maximum, the only hang catcher
+# (owner rule, 2026-10-12), and docs/ci.md records why no bound of our own
+# remains.
 jobs:
   # Whether the change is documentation only; scripts/ci_docs_only.py holds the
   # rule, and every doubt answers no. On a docs-only pull request or push the
@@ -49,7 +51,7 @@ jobs:
   # runner, for every event.
   changes:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 360
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
     steps:
@@ -78,11 +80,12 @@ jobs:
 
   preflight:
     runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
-    # Its verifier-tests stage is one serial process: 475 s at 0d76a099's tree
-    # on the maintainers' verification hosts, which ran it 1.93-1.95 times as
-    # fast as the standard runner on the same trees, so about 15 min here. Ten
-    # minutes cancelled main's run at 0d76a099 593 s into it.
-    timeout-minutes: 45
+    # 360 minutes is GitHub's job maximum and deliberately the only limit:
+    # its verifier-tests stage is one serial process, and no stage of this
+    # preflight carries a timeout of its own any more (owner rule,
+    # 2026-10-12). A hang reaches the platform maximum; a slow stage never
+    # fails the run.
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
         with:
@@ -140,11 +143,11 @@ jobs:
     # accepts; a failed or unanswered classification runs it.
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    # A full-set leg waits on the test_ci_verify CTest row, 976-1288 s on the
-    # standard runners at 0d76a099, which more cores do not shorten. There the
-    # Release legs, which a fork's pull request runs in full, took 30.3 and
-    # 32.0 min, and the macOS Debug leg 37.0 min.
-    timeout-minutes: 75
+    # 360 minutes (the platform maximum): a full-set leg waits on the
+    # test_ci_verify CTest row, 976-1288 s on the standard runners at
+    # 0d76a099, which more cores do not shorten. No bound of ours may fail a
+    # slow leg (owner rule, 2026-10-12).
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -238,11 +241,11 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
-    # A full run (push to main, manual dispatch) gives its CTest stage an hour
-    # after the build; the PR set keeps its 30-minute stage, after about 30
-    # minutes of build and ABI providers on the standard runner a fork's pull
-    # request gets.
-    timeout-minutes: 120
+    # 360 minutes (the platform maximum). No CTest stage bound remains: main's
+    # full set ran out of the old 30- and 60-minute stage bounds twice, and
+    # the owner rule of 2026-10-12 removed the bounds rather than raising
+    # them again.
+    timeout-minutes: 360
     env:
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
@@ -303,8 +306,9 @@ jobs:
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
     # 22.3 min on the standard runner at 0d76a099, where a fork's pull request
-    # still runs the whole kernel set.
-    timeout-minutes: 60
+    # still runs the whole kernel set; 360 minutes is the platform maximum, the
+    # only hang catcher (owner rule, 2026-10-12).
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
         with:
@@ -384,7 +388,7 @@ jobs:
     if: always()
     # A few seconds of shell: the standard runner, for every event.
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 360
     steps:
       - name: Require every verification lane to have passed
         shell: bash

@@ -133,7 +133,9 @@ if(PINEFORGE_BUILD_TESTS)
                 "-DEXAMPLE=$<TARGET_FILE:example_${example}>"
                 "-DEXPECT=${_pf_example_line_${example}}"
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/run_example.cmake)
-        set_tests_properties(example_${example} PROPERTIES TIMEOUT 60)
+        # No TIMEOUT property: the row's host runs until it finishes and only
+        # its exit code and summary line decide the row (owner rule,
+        # 2026-10-12: no time limit may fail a run for slowness).
     endforeach()
 
     # The runner's mutation self-test: a host that prints its line and then

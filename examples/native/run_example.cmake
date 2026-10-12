@@ -10,6 +10,11 @@
 #
 #   cmake -DEXAMPLE=<host> -DEXPECT=<regex> [-DTIMEOUT=<seconds>] -P run_example.cmake
 #
+# No timeout is applied unless the caller passes -DTIMEOUT: with the row's own
+# CTest TIMEOUT property gone (owner rule, 2026-10-12) the host runs until it
+# finishes, and only a hang reaches the platform's job maximum. The mutation
+# self-test below passes -DTIMEOUT=1 to exercise the hang path.
+#
 # scripts/test_example_runner.py is this script's mutation self-test.
 
 cmake_minimum_required(VERSION 3.16)
@@ -17,16 +22,17 @@ cmake_minimum_required(VERSION 3.16)
 if(NOT DEFINED EXAMPLE OR EXAMPLE STREQUAL "" OR NOT DEFINED EXPECT OR EXPECT STREQUAL "")
     message(FATAL_ERROR "run_example.cmake: pass -DEXAMPLE=<host> and -DEXPECT=<regex>")
 endif()
-# Below the row's own CTest TIMEOUT (60 s), so a hang is reported here.
-if(NOT DEFINED TIMEOUT)
-    set(TIMEOUT 50)
+if(DEFINED TIMEOUT AND NOT TIMEOUT STREQUAL "")
+    set(_pf_timeout_args TIMEOUT "${TIMEOUT}")
+else()
+    set(_pf_timeout_args "")
 endif()
 
 execute_process(COMMAND "${EXAMPLE}"
     RESULT_VARIABLE status
     OUTPUT_VARIABLE output
     ERROR_VARIABLE output
-    TIMEOUT ${TIMEOUT})
+    ${_pf_timeout_args})
 if(NOT output STREQUAL "")
     message("${output}")
 endif()

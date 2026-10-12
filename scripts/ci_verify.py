@@ -704,13 +704,13 @@ WEBSOCKET_SKIP_ROW = 'test_native_live_websocket'
 #   EXCLUDED_REGISTERED_MIN 876/867/963 = the 861/852/948 registered at
 #     873b25da plus the fifteen, counted before -LE (-LE slow selects
 #     847/838/934).
-# The ctest stage's bound. A full sanitizers run (push to main, a manual
-# dispatch, the maintainers' verification) ran out of its 30 minutes twice on
-# main's four-core runner before every row had finished, so it gets an hour; a
-# run that excludes a label (the PR set) and every other profile keep 30
-# minutes.
-CTEST_TIMEOUT = 1800
-SANITIZERS_FULL_CTEST_TIMEOUT = 3600
+# Every CTest row runs under the platform's own maximum instead of a bound of
+# ours (owner rule, 2026-10-12: no time limit may fail a run for slowness --
+# a stage bound killed the hosted kernel-only job at 1800 s and a row bound
+# 3600 s collided with main's native-live stage deadline). 21600 s (6 h) is
+# GitHub's 360-minute job maximum, whose job limit is therefore the only hang
+# catcher; an explicit --test-timeout still wins.
+PLATFORM_JOB_MAX_SECONDS = 21600
 LIVE_SANITIZERS_MIN_TESTS = 12
 # Overlay-aware row floors. The private-fixture campaign splits the tree in
 # two: the private-fixture PR removes the private fixture data, and P1-B
@@ -852,12 +852,13 @@ def private_fixture_rows(source: Path) -> 'frozenset[str]':
     return frozenset(names)
 
 
-def ctest_timeout(cfg: 'VerifyConfig') -> int:
-    if cfg.ctest_stage_timeout is not None:
-        return cfg.ctest_stage_timeout
-    if cfg.profile.sanitizers and not cfg.exclude_label:
-        return SANITIZERS_FULL_CTEST_TIMEOUT
-    return CTEST_TIMEOUT
+def ctest_timeout(cfg: 'VerifyConfig') -> int | None:
+    """The CTest stage's own bound: None unless --ctest-timeout pinned one.
+
+    By default no stage, row or profile carries a bound of ours, so a slow row
+    can never fail a run (owner rule, 2026-10-12).
+    """
+    return cfg.ctest_stage_timeout
 
 
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
@@ -995,8 +996,10 @@ class VerifyConfig:
     # True when --min-tests was given: the floor's own note keys on the table
     # having lowered the profile floor, never on a value that merely matches.
     min_tests_explicit: bool = False
-    # Opt-in CI bounds. CTest's explicit TIMEOUT properties remain authoritative;
-    # --test-timeout covers otherwise unbounded rows. Defaults are unchanged.
+    # Opt-in CI bounds, None by default: no time limit may fail a run for
+    # slowness (owner rule, 2026-10-12). --test-timeout gives CTest a default
+    # per-test deadline and --ctest-timeout the stage's own; with neither flag
+    # no stage subprocess is bounded and every row runs to a verdict.
     test_timeout: int | None = None
     ctest_stage_timeout: int | None = None
 
@@ -1019,7 +1022,7 @@ def default_build_dir(source: Path, profile: str) -> Path:
 
 
 def call_runner(runner: Runner, argv: list[str], *, extra_env: dict[str, str] | None = None,
-                timeout: int = 600, combine_stderr: bool = True,
+                timeout: int | None = None, combine_stderr: bool = True,
                 stream_output: bool = False) -> Completed:
     return runner(argv, extra_env=extra_env, timeout=timeout,
                   combine_stderr=combine_stderr, stream_output=stream_output)
@@ -1117,7 +1120,7 @@ def ctest_rows(output: bytes) -> CTestRows | None:
 
 def ctest_supports_junit(runner: Runner) -> bool:
     try:
-        result = call_runner(runner, ['ctest', '--help'], timeout=30, stream_output=False)
+        result = call_runner(runner, ['ctest', '--help'], stream_output=False)
     except (OSError, subprocess.TimeoutExpired):
         return False
     return '--output-junit' in (result.stdout + result.stderr).decode('utf-8', 'replace')
@@ -1214,10 +1217,11 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
                         help='exclude one CTest label; verify the run count against '
                              'CTest discovery with and without -LE')
     parser.add_argument('--test-timeout', type=int, default=None,
-                        help='CTest default per-test deadline in seconds; explicit TIMEOUT '
-                             'properties are preserved and must fit inside the stage deadline')
+                        help='opt-in CTest default per-test deadline in seconds; no limit by '
+                             'default, and an explicit TIMEOUT property is preserved')
     parser.add_argument('--ctest-timeout', type=int, default=None,
-                        help='CTest stage deadline in seconds; default keeps the profile bound')
+                        help='opt-in CTest stage deadline in seconds; no limit by default, so '
+                             'only the platform job maximum stops a hung stage')
     parser.add_argument('--min-tests', type=int, default=None,
                         help='fail the ctest-floor stage unless at least N CTest rows ran '
                              '(a skipped or not-run row is listed, never counted); '
@@ -1242,10 +1246,12 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
         value = getattr(args, name)
         if value is not None and value < 1:
             raise ConfigError(f'--{name.replace("_", "-")} must be at least 1 second')
-    stage_timeout = args.ctest_timeout or (
-        SANITIZERS_FULL_CTEST_TIMEOUT if PROFILE[args.profile].sanitizers
-        and not args.exclude_label else CTEST_TIMEOUT)
-    if args.test_timeout is not None and args.test_timeout >= stage_timeout:
+    # A refusal here needs BOTH explicit flags: a row bound only outlives the
+    # collecting CTest process when a stage deadline was pinned too. With no
+    # --ctest-timeout there is no deadline to outlive and no run is refused
+    # for a slow row (owner rule, 2026-10-12).
+    if (args.ctest_timeout is not None and args.test_timeout is not None
+            and args.test_timeout >= args.ctest_timeout):
         raise ConfigError('--test-timeout must be shorter than the CTest stage deadline')
     if args.require_websocket and args.profile not in {'native', 'live-sanitizers', 'live-tsan'}:
         raise ConfigError('--require-websocket is only valid with the native or '
@@ -1299,8 +1305,15 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
 def ctest_command(cfg: VerifyConfig, test_dir: Path, *, jobs: int, junit: bool) -> list[str]:
     argv = ['ctest', '--test-dir', str(test_dir), '--output-on-failure',
             '--no-tests=error', '--parallel', str(jobs)]
-    if cfg.test_timeout is not None:
-        argv += ['--timeout', str(cfg.test_timeout)]
+    # Always pass a per-test deadline, and by default the platform's own
+    # maximum rather than a bound of ours: CTest's own default per-test
+    # timeout (1500 s: include(CTest)'s DART_TESTING_TIMEOUT, the figure the
+    # repository's comments used; this tree calls enable_testing() only, so
+    # the built-in default is not confirmed by a run here) must never decide a run,
+    # while a bound of ours must never fail a run for slowness (owner rule,
+    # 2026-10-12). An explicit --test-timeout still wins.
+    argv += ['--timeout', str(cfg.test_timeout if cfg.test_timeout is not None
+                              else PLATFORM_JOB_MAX_SECONDS)]
     if cfg.exclude_label:
         argv += ['-LE', cfg.exclude_label]
     if junit:
@@ -1309,22 +1322,36 @@ def ctest_command(cfg: VerifyConfig, test_dir: Path, *, jobs: int, junit: bool) 
 
 
 def ctest_deadline_errors(inventory: dict, cfg: VerifyConfig) -> list[str]:
-    """Name a row whose own timeout would outlive the collecting CTest process."""
+    """Name a row whose own timeout would outlive the collecting CTest process.
+
+    Only meaningful under an EXPLICIT stage deadline: without --ctest-timeout
+    no stage bound exists for a row to outlive, so no row, however slow, is
+    refused and this answers no error under the owner rule of 2026-10-12.
+    With one, every selected row's effective deadline -- its own TIMEOUT
+    property, else the --test-timeout default, else nothing to check -- must be
+    positive and shorter than that deadline.
+    """
+    stage_deadline = ctest_timeout(cfg)
+    if stage_deadline is None:
+        return []
     errors = []
     for test in inventory['tests']:
         properties = {p['name']: p['value'] for p in test.get('properties', [])}
         if cfg.exclude_label and any(re.search(cfg.exclude_label, label)
                                      for label in properties.get('LABELS', [])):
             continue
-        seconds = float(properties.get('TIMEOUT', cfg.test_timeout))
-        if not 0 < seconds < ctest_timeout(cfg):
+        seconds = properties.get('TIMEOUT', cfg.test_timeout)
+        if seconds is None:
+            continue
+        seconds = float(seconds)
+        if not 0 < seconds < stage_deadline:
             errors.append(f'{test["name"]}: TIMEOUT {seconds:g} must be positive and '
-                          f'less than stage deadline {ctest_timeout(cfg)}')
+                          f'less than stage deadline {stage_deadline}')
     return errors
 
 
 def default_runner(argv: list[str], *, extra_env: dict[str, str] | None = None,
-                   timeout: int = 600, combine_stderr: bool = True,
+                   timeout: int | None = None, combine_stderr: bool = True,
                    stream_output: bool = True) -> Completed:
     env = os.environ.copy()
     if extra_env:
@@ -1588,7 +1615,7 @@ def smoke_prefix(cache: dict[str, str], install_prefix: Path) -> str:
 def pinned_object_present(source: Path, runner: Runner, commit: str = BASE_COMMIT) -> bool:
     result = call_runner(
         runner, ['git', '-C', str(source), 'cat-file', '-e', commit + '^{commit}'],
-        timeout=30, stream_output=False)
+        stream_output=False)
     return result.returncode == 0
 
 
@@ -1682,7 +1709,7 @@ class Driver:
         self.summary_path.write_text(json.dumps(self.summary, indent=2, sort_keys=True) + '\n')
 
     def invoke(self, name: str, argv: list[str], *, extra_env: dict[str, str] | None = None,
-               timeout: int = 600, combine_stderr: bool = True,
+               timeout: int | None = None, combine_stderr: bool = True,
                stream_output: bool | None = None, accept_skip: bool = False) -> Completed:
         if self.cfg.profile.thread_sanitizers and name in {'ctest', 'native-help', 'require-websocket'}:
             argv = ['setarch', os.uname().machine, '-R', *argv]
@@ -1779,7 +1806,7 @@ class Driver:
         failed = False
         for argv in tool_version_commands(self.cfg):
             result = call_runner(
-                self.cfg.runner, argv, timeout=30, stream_output=False)
+                self.cfg.runner, argv, stream_output=False)
             chunks.append('+ ' + shlex.join(argv))
             chunks.append((result.stdout + result.stderr).decode('utf-8', 'replace'))
             if result.returncode != 0 and Path(argv[0]).name in {'cmake', 'ctest', 'git'}:
@@ -1805,12 +1832,11 @@ class Driver:
             'git', '-C', str(self.cfg.source), 'submodule', 'update', '--init',
             '--depth', '1', '--', 'corpus',
         ]
-        if self.invoke('corpus-submodule-init', update, timeout=600).returncode != 0:
+        if self.invoke('corpus-submodule-init', update).returncode != 0:
             return False
         status = self.invoke(
             'corpus-submodule-status',
-            ['git', '-C', str(self.cfg.source), 'submodule', 'status', '--', 'corpus'],
-            timeout=60)
+            ['git', '-C', str(self.cfg.source), 'submodule', 'status', '--', 'corpus'])
         if status.returncode != 0:
             return False
         value = status.stdout.decode('utf-8', 'replace').strip()
@@ -1937,7 +1963,7 @@ class Driver:
         if not pinned_object_present(self.cfg.source, self.cfg.runner, commit):
             fetch = ['git', '-C', str(self.cfg.source), 'fetch', '--no-tags', '--depth=1',
                      'origin', commit]
-            fetched = self.invoke(fetch_stage, fetch, timeout=120)
+            fetched = self.invoke(fetch_stage, fetch)
             if fetched.returncode != 0:
                 return 'failed'
         # The preparer answers a missing private-fixture manifest with the
@@ -1947,7 +1973,7 @@ class Driver:
         # means the overlay did not reach it and is a failure (R2-F3). A bare
         # 77 without the literal is a failure in both modes: invoke's
         # accept_skip requires the literal.
-        prepared = self.invoke(stage, prepare, timeout=1800,
+        prepared = self.invoke(stage, prepare,
                                accept_skip=not private_fixtures_overlay())
         if prepared.returncode == 0:
             return 'prepared'
@@ -1963,17 +1989,16 @@ class Driver:
         ]
         if cache.get('Eigen3_DIR'):
             configure.append(f'-DEigen3_DIR={cache["Eigen3_DIR"]}')
-        if self.invoke('smoke-configure', configure, timeout=120).returncode != 0:
+        if self.invoke('smoke-configure', configure).returncode != 0:
             return
-        if self.invoke(
-                'smoke-build',
-                ['cmake', '--build', str(self.smoke_dir), '--parallel', str(self.cfg.jobs)],
-                timeout=300).returncode != 0:
+        smoke_build = [
+            'cmake', '--build', str(self.smoke_dir), '--parallel', str(self.cfg.jobs)]
+        if self.invoke('smoke-build', smoke_build).returncode != 0:
             return
         binary = self.smoke_dir / 'smoke_version'
         ran = self.invoke(
             'smoke-version', [str(binary)], extra_env=self.sanitizer_env(),
-            timeout=60, combine_stderr=False)
+            combine_stderr=False)
         actual = ran.stdout.decode('utf-8', 'replace').strip()
         self.actual_version = actual
         self.summary['actualVersion'] = actual
@@ -2000,14 +2025,13 @@ class Driver:
         with tempfile.TemporaryDirectory(prefix='pineforge-native-include-') as temporary:
             result = self.invoke(
                 'native-include-independence',
-                native_include_independence_command(self.cfg, Path(temporary)),
-                timeout=300)
+                native_include_independence_command(self.cfg, Path(temporary)))
         return result.returncode == 0
 
     def enforce_kernel_residuals(self) -> bool:
         if self.cfg.profile.name not in KERNEL_RESIDUALS_PROFILES:
             return True
-        result = self.invoke('kernel-residuals', kernel_residuals_command(self.cfg), timeout=300)
+        result = self.invoke('kernel-residuals', kernel_residuals_command(self.cfg))
         return result.returncode == 0
 
     def run(self) -> int:
@@ -2024,17 +2048,17 @@ class Driver:
         # tree, so its skip means the overlay did not reach it and is a
         # failure (R2-F3), not a smaller green run.
         for name, argv in source_guard_commands(self.cfg.source):
-            result = self.invoke(name, argv, timeout=120,
+            result = self.invoke(name, argv,
                                  accept_skip=not private_fixtures_overlay())
             if result.returncode != 0 and self.stages[-1]['status'] != 'skipped':
                 guard_failed = True
         if self.cfg.profile.name in TWIN_PARITY_PROFILES:
             if self.invoke('source-guard-twin-parity',
-                           twin_parity_command(self.cfg.source), timeout=120).returncode != 0:
+                           twin_parity_command(self.cfg.source)).returncode != 0:
                 guard_failed = True
         if guard_failed:
             return self.finish('failed', 1)
-        if self.invoke('configure', cmake_configure_argv(self.cfg), timeout=180).returncode != 0:
+        if self.invoke('configure', cmake_configure_argv(self.cfg)).returncode != 0:
             return self.finish('failed', 1)
         cache_path = self.cfg.build_dir / 'CMakeCache.txt'
         if not cache_path.is_file():
@@ -2103,10 +2127,8 @@ class Driver:
             self.pass_stage('examples-assert-live',
                             f'assert() is live in all {len(targets)} targets built from '
                             'examples/native sources: ' + ', '.join(targets))
-        if self.invoke(
-                'build',
-                ['cmake', '--build', str(self.cfg.build_dir), '--parallel', str(self.cfg.jobs)],
-                timeout=1800).returncode != 0:
+        build_argv = ['cmake', '--build', str(self.cfg.build_dir), '--parallel', str(self.cfg.jobs)]
+        if self.invoke('build', build_argv).returncode != 0:
             return self.finish('failed', 1)
         archives = [self.cfg.build_dir / 'lib' / f'lib{target}.a' for target in ARCHIVE_TARGETS]
         for archive in archives:
@@ -2174,7 +2196,7 @@ class Driver:
             test_dir /= 'runner'
             inventory = self.invoke('live-test-inventory',
                                     ['ctest', '--test-dir', str(test_dir), '--show-only=json-v1'],
-                                    timeout=120, stream_output=False)
+                                    stream_output=False)
             try:
                 names = {test['name'] for test in json.loads(inventory.stdout)['tests']}
                 required = {'native_live_help', 'test_live_json',
@@ -2193,7 +2215,7 @@ class Driver:
             self.pass_stage('live-test-inventory-required',
                             'all required runner rows registered: ' + ', '.join(sorted(names)))
         listing = ['ctest', '--test-dir', str(test_dir), '-N']
-        all_rows = self.invoke('ctest-list-all', listing, timeout=120,
+        all_rows = self.invoke('ctest-list-all', listing,
                                stream_output=False)
         registered = (ctest_list_count(all_rows.stdout + all_rows.stderr)
                       if all_rows.returncode == 0 else None)
@@ -2201,7 +2223,7 @@ class Driver:
         if self.cfg.exclude_label:
             selected_rows = self.invoke('ctest-list-selected',
                                         listing + ['-LE', self.cfg.exclude_label],
-                                        timeout=120, stream_output=False)
+                                        stream_output=False)
             selected = (ctest_list_count(selected_rows.stdout + selected_rows.stderr)
                         if selected_rows.returncode == 0 else None)
         self.summary['ctestRegistered'] = registered
@@ -2209,11 +2231,13 @@ class Driver:
         if registered is None or selected is None:
             self.fail_stage('ctest-discovery', 'could not read registered/selected CTest counts')
         self.write_summary()
-        if self.cfg.test_timeout is not None:
+        if self.cfg.ctest_stage_timeout is not None:
+            # Only an explicit stage deadline can be outlived: with none, the
+            # stage is skipped and no slow row is refused (owner rule).
             deadline_inventory = self.invoke(
                 'ctest-deadline-inventory',
                 ['ctest', '--test-dir', str(test_dir), '--show-only=json-v1'],
-                timeout=120, stream_output=False)
+                stream_output=False)
             try:
                 if deadline_inventory.returncode != 0:
                     raise ValueError('CTest deadline discovery failed')
@@ -2224,8 +2248,8 @@ class Driver:
                 self.fail_stage('ctest-deadlines', str(error))
                 return self.finish('failed', 1)
             self.pass_stage('ctest-deadlines',
-                            f'default per-test {self.cfg.test_timeout}s; explicit TIMEOUT '
-                            f'properties preserved; every row bounded below {ctest_timeout(self.cfg)}s')
+                            f'every selected row shorter than the explicit stage deadline '
+                            f'{ctest_timeout(self.cfg)}s')
         ctest = ctest_command(self.cfg, test_dir, jobs=ctest_jobs,
                               junit=ctest_supports_junit(self.cfg.runner))
         ran = self.invoke('ctest', ctest, extra_env=self.sanitizer_env(),
@@ -2270,8 +2294,7 @@ class Driver:
 
         installed = self.invoke(
             'install',
-            ['cmake', '--install', str(self.cfg.build_dir), '--prefix', str(self.install_prefix)],
-            timeout=180)
+            ['cmake', '--install', str(self.cfg.build_dir), '--prefix', str(self.install_prefix)])
         if installed.returncode == 0:
             self.run_smoke(cache)
             if self.cfg.profile.live_runner:
@@ -2280,7 +2303,7 @@ class Driver:
                     self.fail_stage('native-help', f'installed native executable missing: {help_bin}')
                 else:
                     self.invoke('native-help', [str(help_bin), '--help'],
-                                extra_env=self.sanitizer_env(), timeout=30)
+                                extra_env=self.sanitizer_env())
         if self.cfg.require_websocket:
             ws = self.cfg.build_dir / 'bin' / 'test_native_live_websocket'
             if not ws.is_file():
@@ -2289,7 +2312,7 @@ class Driver:
                     f'--require-websocket cannot accept skip: missing {ws}')
             else:
                 ran = self.invoke(
-                    'require-websocket', [str(ws)], extra_env=self.sanitizer_env(), timeout=120)
+                    'require-websocket', [str(ws)], extra_env=self.sanitizer_env())
                 if ran.returncode == 77:
                     self.fail_stage(
                         'require-websocket-skip',
