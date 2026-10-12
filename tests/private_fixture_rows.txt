@@ -2,7 +2,7 @@
 // when the private fixtures are absent (removed by the private-fixture PRs). The count also
 // covers the PR 1b batch, whose rows runner/CMakeLists.txt registers the same way.
 // manifest: l44/pr1-manifest.tsv sha256 9a2727d455c1b470d515665428e2c6e090a22ac07f87255d1ca9c20d5528bd62
-// rows: 368
+// rows: 374
 capabilities_equivalence_clock_flags
 capabilities_equivalence_close
 checked_settings_e2e
@@ -354,7 +354,12 @@ test_stream_security_whole_all_in_reversal_early
 test_symbol_calendar
 test_symbol_calendar_tapes
 test_ta_indicators_extras
+test_ta_series_length_extremes
+test_ta_series_length_supertrend
+test_ta_simple_length
 test_ta_voltrend_edge
+test_ta_window_round10
+test_ta_window_underapplied
 test_taro_price_gap_admission_l4d
 test_time_bars_back_tapes
 test_trail_activation_tick_bar_l4c
@@ -362,6 +367,7 @@ test_trail_activation_tick_reach
 test_trail_close_restart_no_fold_l4c
 test_trail_fill_snap_l4c
 test_trail_ref_entry_bar_extreme_l4c
+test_tv_fill_rounding_l4d
 test_tv_money_band_l4b
 test_tv_money_carried_pooc_l4b
 test_tv_money_long_margin_call_eth_l4a

@@ -263,12 +263,7 @@ set(TEST_SOURCES
     test_ta_sma_exact_order
     test_ta_sma_window_residual
     test_ta_sma_stochrsi_ties
-    test_ta_window_underapplied
-    test_ta_window_round10
     test_ta_na_source_rules
-    test_ta_series_length_extremes
-    test_ta_series_length_supertrend
-    test_ta_simple_length
     test_matrix
     test_matrix_identity
     test_matrix_na
@@ -784,7 +779,6 @@ list(APPEND TEST_SOURCES
     test_range_end_close_l4d
     test_session_predicates_daily_chart_l4d
     test_stop_tick_rounding_l4d
-    test_tv_fill_rounding_l4d
     test_cancellation_mirror_coverage_l4d
     test_default_flat_market_gross_admission_l4d
     test_explicit_market_price_admission_l4d
@@ -2124,6 +2118,9 @@ set(_pf_source_bound_private_rows
     test_source_buying_power_tapes
     test_split_feed_partial_bucket
     test_symbol_calendar_tapes
+    test_ta_series_length_extremes
+    test_ta_series_length_supertrend
+    test_ta_simple_length
     test_taro_price_gap_admission_l4d
     test_time_bars_back_tapes
     test_trail_activation_tick_bar_l4c
@@ -2131,6 +2128,7 @@ set(_pf_source_bound_private_rows
     test_trail_close_restart_no_fold_l4c
     test_trail_fill_snap_l4c
     test_trail_ref_entry_bar_extreme_l4c
+    test_tv_fill_rounding_l4d
     test_tv_money_band_l4b
     test_tv_money_carried_pooc_l4b
     test_tv_money_long_margin_call_eth_l4a
@@ -3628,9 +3626,15 @@ list(APPEND _pf_private_fixture_rows
     test_small_money_margin_residual_l4a
     test_source_layer_native_defaults
     test_ta_indicators_extras
+    test_ta_series_length_extremes
+    test_ta_series_length_supertrend
+    test_ta_simple_length
     test_ta_voltrend_edge
+    test_ta_window_round10
+    test_ta_window_underapplied
     test_trail_close_restart_no_fold_l4c
     test_trail_ref_entry_bar_extreme_l4c
+    test_tv_fill_rounding_l4d
     test_tv_money_band_l4b
     test_tv_money_long_margin_call_eth_l4a
     test_tv_money_precision_l4b
@@ -6196,11 +6200,46 @@ elseif(NOT test_ta_indicators_extras IN_LIST _pf_kernel_absent_rows)
     set_tests_properties(test_ta_indicators_extras PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
+if(NOT test_ta_series_length_extremes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_ta_series_length_extremes.cpp")
+    pineforge_add_unit_test(test_ta_series_length_extremes)
+elseif(NOT test_ta_series_length_extremes IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_ta_series_length_extremes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_ta_series_length_extremes.cpp")
+    set_tests_properties(test_ta_series_length_extremes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+if(NOT test_ta_series_length_supertrend IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_ta_series_length_supertrend.cpp")
+    pineforge_add_unit_test(test_ta_series_length_supertrend)
+elseif(NOT test_ta_series_length_supertrend IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_ta_series_length_supertrend COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_ta_series_length_supertrend.cpp")
+    set_tests_properties(test_ta_series_length_supertrend PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+if(NOT test_ta_simple_length IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_ta_simple_length.cpp")
+    pineforge_add_unit_test(test_ta_simple_length)
+elseif(NOT test_ta_simple_length IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_ta_simple_length COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_ta_simple_length.cpp")
+    set_tests_properties(test_ta_simple_length PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
 if(NOT test_ta_voltrend_edge IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/supertrend_warmup/bars.inc")
     pineforge_add_unit_test(test_ta_voltrend_edge)
 elseif(NOT test_ta_voltrend_edge IN_LIST _pf_kernel_absent_rows)
     add_test(NAME test_ta_voltrend_edge COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/supertrend_warmup/bars.inc")
     set_tests_properties(test_ta_voltrend_edge PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+if(NOT test_ta_window_round10 IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_ta_window_round10.cpp")
+    pineforge_add_unit_test(test_ta_window_round10)
+elseif(NOT test_ta_window_round10 IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_ta_window_round10 COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_ta_window_round10.cpp")
+    set_tests_properties(test_ta_window_round10 PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+if(NOT test_ta_window_underapplied IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_ta_window_underapplied.cpp")
+    pineforge_add_unit_test(test_ta_window_underapplied)
+elseif(NOT test_ta_window_underapplied IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_ta_window_underapplied COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_ta_window_underapplied.cpp")
+    set_tests_properties(test_ta_window_underapplied PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
 if(NOT test_trail_close_restart_no_fold_l4c IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_trail_close_restart_no_fold_data.hpp")
@@ -6215,6 +6254,13 @@ if(NOT test_trail_ref_entry_bar_extreme_l4c IN_LIST _pf_kernel_absent_rows AND E
 elseif(NOT test_trail_ref_entry_bar_extreme_l4c IN_LIST _pf_kernel_absent_rows)
     add_test(NAME test_trail_ref_entry_bar_extreme_l4c COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_trail_ref_entry_bar_extreme_l4c.cpp")
     set_tests_properties(test_trail_ref_entry_bar_extreme_l4c PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+if(NOT test_tv_fill_rounding_l4d IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_tv_fill_rounding_l4d.cpp")
+    pineforge_add_unit_test(test_tv_fill_rounding_l4d)
+elseif(NOT test_tv_fill_rounding_l4d IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_tv_fill_rounding_l4d COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_tv_fill_rounding_l4d.cpp")
+    set_tests_properties(test_tv_fill_rounding_l4d PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
 if(NOT test_tv_money_band_l4b IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_tv_money_band_data.hpp")
@@ -6900,8 +6946,8 @@ foreach(_pf_python_row IN ITEMS
     endif()
 endforeach()
 
-# The two gate suites (registered unconditionally at tests/CMakeLists.txt:2217
-# and :2219) drive the real ci_verify Driver over the floor, exclusion, overlay
+# The two gate suites (registered unconditionally at tests/CMakeLists.txt:2215
+# and :2217) drive the real ci_verify Driver over the floor, exclusion, overlay
 # and live-profile paths, and build their tamper trees through
 # tempfile.TemporaryDirectory, which honours TMPDIR: pin TMPDIR to a
 # configure-time directory under the build dir, the shape the private-fixture
