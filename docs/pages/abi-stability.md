@@ -17,7 +17,7 @@ From 1.0.0, within one `PINEFORGE_VERSION_MAJOR` (the
 - **`extern "C"` functions are append-only.** New functions may be added;
   existing ones are never removed or renamed.
 - **Enum values** are **stable**. New enumerators may be added; existing
-  values never change. One exception, unreleased and targeted for 1.5.0:
+  values never change. One exception, released in 1.5.0:
   `RunFailureCode` in the installed C++ header
   `include/pineforge/run_failure_codes.hpp` is renumbered, and 36 of the 38
   codes released in 1.4.0 get new numeric values (`none` and the first two
@@ -67,7 +67,7 @@ Three layers:
 
 ## Symbol inventory
 
-The counts below include recorded outputs and describe the unreleased API targeted for 1.5.0; recorded outputs are not part of 1.4.0.
+The counts below include recorded outputs and describe the released 1.5.0 API; recorded outputs are not part of 1.4.0.
 
 A built strategy `.so` exposes 96 compiled-strategy `PF_API` declarations
 (80 runtime implementations plus sixteen generated exports) plus 43 native-host
@@ -229,7 +229,7 @@ a run with no symbol data folds nothing new. The C side is append-only -- four
 functions, each behind its own `PINEFORGE_HAS_…_V1` probe -- so
 `PF_ABI_VERSION` stays 4.
 
-Recorded outputs are unreleased, targeted for 1.5.0, and not part of 1.4.0.
+Recorded outputs are released in 1.5.0, and not part of 1.4.0.
 
 Recorded outputs (lane SM-E1, `docs/outputs.md`) adds the recorder to
 `BacktestEngine` inside v19, without an epoch: data members outside both

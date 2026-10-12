@@ -73,6 +73,7 @@ does not update a statically linked strategy library.
   `PINEFORGE_PRIVATE_FIXTURES` — the verification requires every pinned row to
   run: a row that skips there fails the run. Without the overlay, those rows
   skip in public runs and the row floors account for them.
+- **HPO.** pineforge-hpo 0.13.2 pins pineforge-codegen <1.4; HPO support for codegen 1.4 and 1.5 (enum options as Enum.member tags) comes in pineforge-hpo 0.14.0.
 
 [#361]: https://github.com/pineforge-4pass/pineforge-engine/pull/361
 
