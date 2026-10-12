@@ -16,7 +16,9 @@
 #
 # Honours these env vars:
 #   SKIP_BUILD          — skip the runtime + bench-strategy build step
-#   SKIP_PYNE           — skip PyneCore strategy + indicator runs
+#   SKIP_PYNE           — skip PyneCore strategy + indicator runs and timing
+#   PYNECORE_HARNESS_DIR — private harness directory containing runners/run_pynecore.py
+#                         and speed/time_pynecore.py (unset = skip PyneCore)
 #   SKIP_PINETS         — skip PineTS indicator run
 #   SKIP_PINEFORGE      — skip PineForge trade regeneration and its canonical indicator run
 #   SKIP_SPEED          — skip the per-strategy speed sweep (pineforge_bench + timers)
@@ -66,6 +68,18 @@ cd "${ROOT_DIR}"
 log()  { printf '\033[1;34m[bench]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[bench]\033[0m %s\n' "$*" >&2; }
 fail() { printf '\033[1;31m[bench]\033[0m %s\n' "$*" >&2; exit 1; }
+
+pynecore_available() {
+    [[ "${SKIP_PYNE:-0}" != "1" && -n "${PYNECORE_HARNESS_DIR:-}" \
+        && -f "${PYNECORE_HARNESS_DIR:-}/$1" ]]
+}
+skip_pynecore() {
+    warn "PyneCore harness not present (set PYNECORE_HARNESS_DIR to the private harness); skipping the PyneCore leg"
+}
+# Resolve a relative harness directory before timing commands change directory.
+if [[ -n "${PYNECORE_HARNESS_DIR:-}" && -d "${PYNECORE_HARNESS_DIR:-}" ]]; then
+    PYNECORE_HARNESS_DIR="$(cd "${PYNECORE_HARNESS_DIR}" && pwd)"
+fi
 
 if ! compgen -G "${STRATEGIES_DIR}/[0-9]*-*/strategy.pine" >/dev/null; then
     fail "benchmark fixtures missing (expected ${STRATEGIES_DIR}/<NNN-slug>/strategy.pine).
@@ -120,8 +134,9 @@ if [[ ! -f "${LIVE_CSV}" ]] || ! cmp -s "${SNAPSHOT_CSV}" "${LIVE_CSV}"; then
     cp "${SNAPSHOT_CSV}" "${LIVE_CSV}"
 fi
 # Re-convert to PyneCore .ohlcv if missing or stale.
-if [[ ! -f "${LIVE_CSV%.csv}.ohlcv" ]] \
-   || [[ "${LIVE_CSV}" -nt "${LIVE_CSV%.csv}.ohlcv" ]]; then
+if { pynecore_available runners/run_pynecore.py || pynecore_available speed/time_pynecore.py; } \
+   && { [[ ! -f "${LIVE_CSV%.csv}.ohlcv" ]] \
+        || [[ "${LIVE_CSV}" -nt "${LIVE_CSV%.csv}.ohlcv" ]]; }; then
     pyne -w "${WORKDIR}" data convert-from \
         --provider pineforge --symbol ETHUSDT --timezone UTC \
         "${LIVE_CSV}" >/dev/null
@@ -175,15 +190,22 @@ run_pineforge_one() {
 }
 run_pynecore_one() {
     local s="$1"
+    if ! pynecore_available runners/run_pynecore.py; then
+        skip_pynecore
+        return 0
+    fi
     rm -f "$s/pynecore_trades.csv"
-    if python3 "${BENCH_DIR}/runners/run_pynecore.py" "$s" >/dev/null 2>"$s/_pynecore_error.log"; then
+    if python3 "${PYNECORE_HARNESS_DIR}/runners/run_pynecore.py" "$s" >/dev/null 2>"$s/_pynecore_error.log"; then
         rm -f "$s/_pynecore_error.log"
     else
         rm -f "$s/pynecore_trades.csv"
     fi
 }
 export -f run_pineforge_one run_pynecore_one
-export ROOT_DIR BENCH_DIR SNAPSHOT_CSV
+export -f pynecore_available skip_pynecore warn
+# The private harness finds this checkout through PINEFORGE_REPO_ROOT (it no longer sits inside it).
+export PINEFORGE_REPO_ROOT="${ROOT_DIR}"
+export ROOT_DIR BENCH_DIR SNAPSHOT_CSV PYNECORE_HARNESS_DIR
 
 # --- 3c) regenerate PineForge trades on the extended OHLCV ----------
 # Reads strategy.dylib built by cmake --target bench_strategies (step 1).
@@ -200,20 +222,26 @@ fi
 
 # --- 3d) run all strategies through PyneCore ------------------------
 
-if [[ "${SKIP_PYNE:-0}" != "1" ]]; then
+if pynecore_available runners/run_pynecore.py; then
     log "running $(slot_dirs | wc -l | tr -d ' ') strategies through PyneCore (JOBS=${JOBS:-1})"
     slot_dirs | xargs -P "${JOBS:-1}" -I{} bash -c 'run_pynecore_one "$1"' _ {}
     failed=$(slot_dirs | while read -r s; do [[ -f "$s/_pynecore_error.log" ]] && basename "$s"; done || true)
     if [[ -n "${failed}" ]]; then
         warn "PyneCore runtime failed on $(wc -l <<<"${failed}" | tr -d ' ') strategies: $(tr '\n' ' ' <<<"${failed}")"
     fi
+else
+    skip_pynecore
 fi
-if [[ "${SKIP_PYNE:-0}" != "1" && "${SKIP_INDICATORS:-0}" != "1" ]]; then
-    log "running canonical indicators through PyneCore"
-    pyne -w "${WORKDIR}" run \
-        "${STRATEGIES_DIR}/_indicators/canonical_pyne.py" \
-        "${WORKDIR}/data/ETHUSDT_15.ohlcv" \
-        --plot "${STRATEGIES_DIR}/_indicators/canonical_pyne.csv" >/dev/null
+if [[ "${SKIP_INDICATORS:-0}" != "1" ]]; then
+    if pynecore_available runners/run_pynecore.py; then
+        log "running canonical indicators through PyneCore"
+        pyne -w "${WORKDIR}" run \
+            "${STRATEGIES_DIR}/_indicators/canonical_pyne.py" \
+            "${WORKDIR}/data/ETHUSDT_15.ohlcv" \
+            --plot "${STRATEGIES_DIR}/_indicators/canonical_pyne.csv" >/dev/null
+    else
+        skip_pynecore
+    fi
 fi
 
 # --- 3e) vectorbt trades (slots that ship a strategy_vbt.py port) ------
@@ -310,8 +338,15 @@ if [[ "${SKIP_SPEED:-0}" != "1" ]]; then
             --benchmark_format=json > "${WORKDIR}/pf_speed.json"
         PF_FMT=gbench
     fi
-    quiet_gate pynecore
-    (cd "${BENCH_DIR}" && uv run python speed/time_pynecore.py) > "${WORKDIR}/pc_speed.json" 2>"${WORKDIR}/pc_speed.err"
+    PC_ARGS=()
+    if pynecore_available speed/time_pynecore.py; then
+        quiet_gate pynecore
+        (cd "${BENCH_DIR}" && uv run python "${PYNECORE_HARNESS_DIR}/speed/time_pynecore.py") \
+            > "${WORKDIR}/pc_speed.json" 2>"${WORKDIR}/pc_speed.err"
+        PC_ARGS=(--pynecore "${WORKDIR}/pc_speed.json")
+    else
+        skip_pynecore
+    fi
     quiet_gate pinets
     (cd "${BENCH_DIR}" && node speed/time_pinets.mjs) > "${WORKDIR}/pt_speed.json" 2>"${WORKDIR}/pt_speed.err"
     VBT_ARGS=()
@@ -324,7 +359,7 @@ if [[ "${SKIP_SPEED:-0}" != "1" ]]; then
     (cd "${BENCH_DIR}" && uv run python speed/aggregate.py \
         --pineforge "${WORKDIR}/pf_speed.json" \
         --pineforge-format "${PF_FMT}" \
-        --pynecore  "${WORKDIR}/pc_speed.json" \
+        ${PC_ARGS[@]+"${PC_ARGS[@]}"} \
         --pinets    "${WORKDIR}/pt_speed.json" \
         --loads     "${WORKDIR}/speed_loads.tsv" ${VBT_ARGS[@]+"${VBT_ARGS[@]}"})
 fi
@@ -334,8 +369,13 @@ fi
 if [[ "${SKIP_REPORTS:-0}" != "1" ]]; then
     log "generating trade-list comparison"
     (cd "${BENCH_DIR}" && python3 compare.py)
-    log "generating indicator comparison"
-    (cd "${BENCH_DIR}" && python3 compare_indicators.py)
+    if ! pynecore_available runners/run_pynecore.py \
+       && [[ ! -f "${STRATEGIES_DIR}/_indicators/canonical_pyne.csv" ]]; then
+        warn "PyneCore indicator output not present; skipping the three-way indicator comparison"
+    else
+        log "generating indicator comparison"
+        (cd "${BENCH_DIR}" && python3 compare_indicators.py)
+    fi
 fi
 
 log "done."

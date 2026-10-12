@@ -6,6 +6,8 @@ This directory compares **PineForge** with two open-source PineScript runtimes a
 - [**PineTS**](https://github.com/LuxAlgo/PineTS): a TypeScript transpiler and runtime that runs raw `.pine` source in Node.js or browsers. AGPL-3.0. It has shipped a `strategy.*` namespace since 0.9.17, but this harness runs only its indicator layer, through the canonical indicator script.
 - [**vectorbt**](https://github.com/polakowo/vectorbt): a vectorized Pandas/NumPy/Numba backtester. It runs the hand-written `strategy_vbt.py` ports that some slots ship.
 
+The PyneCore harness is kept outside this repository; set PYNECORE_HARNESS_DIR to reproduce the PyneCore leg.
+
 ## Headline
 
 Last refresh **2026-09-29**. Versions: engine `main` `35db01c8` running the committed `generated.cpp` (codegen `121b3e6a`), PyneCore 6.10.3, PineTS 0.9.34 and vectorbt 0.28.2, on an AWS c7a.8xlarge (AMD EPYC 9R14, 32 cores, SMT off) running Ubuntu 24.04.
@@ -109,12 +111,12 @@ SKIP_BUILD=1 SKIP_PYNE=1 SKIP_PINETS=1 SKIP_SPEED=1 SKIP_REPORTS=1 JOBS=8 SLOTS=
 SKIP_BUILD=1 SKIP_PYNE=1 SKIP_PINETS=1 SKIP_SPEED=1 SKIP_REPORTS=1 SKIP_VECTORBT=1 SKIP_INDICATORS=1 JOBS=8 SLOTS=101-201 bash benchmarks/run_all.sh
 python3 benchmarks/compare.py && python3 benchmarks/compare_indicators.py   # results/{summary,trade_comparison,indicator_comparison}.md
 
-# speed on a quiet host (1-min load < 6, no cmake --build / ctest / ci_verify), all engines in one command
-QUIET_LOAD_MAX=6 SKIP_BUILD=1 SKIP_PINEFORGE=1 SKIP_PYNE=1 SKIP_PINETS=1 SKIP_REPORTS=1 bash benchmarks/run_all.sh
+# speed on a quiet host (1-min load < 6, no cmake --build / ctest / ci_verify), PyneCore when PYNECORE_HARNESS_DIR is set
+QUIET_LOAD_MAX=6 SKIP_BUILD=1 SKIP_PINEFORGE=1 SKIP_PINETS=1 SKIP_REPORTS=1 bash benchmarks/run_all.sh
 #   or in chunks, re-checking the gate before each; the closed PyneCore slots run 1-72 s per backtest:
 ./build/bin/pineforge_bench --benchmark_filter='/throughput/with_magnifier' --benchmark_format=json > benchmarks/_workdir/pf_speed.json
 #   (or per slot range, e.g. --benchmark_filter='^(0[0-9][0-9]|100)-[^/]*/throughput/with_magnifier', then merge the "benchmarks" arrays)
-(cd benchmarks && uv run python speed/time_pynecore.py --n 20 --workers 8 \
+(cd benchmarks && uv run python "${PYNECORE_HARNESS_DIR}/speed/time_pynecore.py" --n 20 --workers 8 \
     --first 178,162,164,163,165,132,114,171,181,168,189,105 --out _workdir/pc_speed.json)
 #   (--first starts the longest slots first, so the pool stays 8 wide; one batch took an hour on the AWS host)
 (cd benchmarks && N=20 node speed/time_pinets.mjs > _workdir/pt_speed.json)
@@ -173,11 +175,9 @@ benchmarks/
 ├── assets-closed/                   maintainers only (gitignored): the 101 closed slots, from the evidence store
 ├── runners/
 │   ├── run_pineforge_canonical.cpp  PineForge canonical indicator runner (links libpineforge)
-│   ├── run_pinets_canonical.mjs     PineTS canonical indicator runner (Node)
-│   └── run_pynecore.py              PyneCore strategy runner (wraps `pyne run` + TV-schema normalize)
+│   └── run_pinets_canonical.mjs     PineTS canonical indicator runner (Node)
 ├── speed/
 │   ├── pineforge_bench.cpp          Google Benchmark harness for PineForge (in-process; both slot roots)
-│   ├── time_pynecore.py             subprocess wall-time timer for PyneCore (--slots/--out for chunks)
 │   ├── time_pinets.mjs              subprocess wall-time timer for PineTS canonical
 │   ├── time_vectorbt.py             in-process timer (and trade writer) for the vectorbt ports
 │   ├── aggregate.py                 combine the timing JSONs + host loads -> results/speed.md
@@ -203,7 +203,7 @@ benchmarks/
 For each slot:
 
 1. **PineForge:** CMake builds `strategy.dylib` from the committed `generated.cpp`. `scripts/run_strategy.py` loads it through ctypes, runs the feed with the slot's `inputs.json` and emits `pineforge_trades.csv` in TradingView's schema.
-2. **PyneCore:** `pyne run` executes the committed `strategy_pyne.py` against the same feed. Same-symbol daily, weekly and monthly `request.security` contexts are served from the chart feed. `runners/run_pynecore.py` normalizes the output to TradingView's schema as `pynecore_trades.csv`.
+2. **PyneCore:** `pyne run` executes the committed `strategy_pyne.py` against the same feed. Same-symbol daily, weekly and monthly `request.security` contexts are served from the chart feed. The external harness's `runners/run_pynecore.py` normalizes the output to TradingView's schema as `pynecore_trades.csv`.
 3. **vectorbt:** `speed/time_vectorbt.py --write-trades` runs every port that loads and writes `vectorbt_trades.csv`.
 4. **Ground truth:** `tv_trades.csv` is exported from TradingView's broker emulator running the same `.pine` source on the same market and timeframe.
 
@@ -224,7 +224,7 @@ A single canonical script ([`assets/strategies/_indicators/canonical.pine`](http
 ### Speed measurement
 
 - **PineForge** is timed with Google Benchmark's in-process hot loop, with the bar magnifier on (1→4 ENDPOINTS sub-bar sampling), which is the engine's most expensive configuration. The strategy library is `dlopen`ed once, outside the timed region. Each timed iteration runs `strategy_create`, applies the slot's `inputs.json` `strategy_overrides` (the settings the graded run uses), and runs `run_backtest_full` over the whole feed; the figure is the per-iteration mean over 20 iterations, and each benchmark also reports its run's trade count.
-- **PyneCore** is timed as the subprocess wall time of `uv run python runners/run_pynecore.py <slot> --no-write`, which includes Python startup and framework import. The figures are the median and p95 over 20 invocations, with 8 slots timed concurrently.
+- **PyneCore** is timed with a harness kept outside this repository, as subprocess wall time including Python startup and framework import. The figures are the median and p95 over 20 invocations, with 8 slots timed concurrently.
 - **vectorbt** is timed in-process: the median over 20 iterations of each port.
 - **PineTS** is timed as the subprocess wall time of `node runners/run_pinets_canonical.mjs`. The harness has no PineTS strategy runner, so the canonical indicator script stands in for its indicator-layer cost.
 - **The quiet-host gate:** before every timing batch, the 1-minute load average must be below 6 with no `cmake --build`, `ctest` or `ci_verify` process running, counted by executable name. `speed.md` lists the load at every batch.

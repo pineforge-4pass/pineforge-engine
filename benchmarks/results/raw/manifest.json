@@ -447,11 +447,6 @@
       "what": "1/5/15-min load every 10 s during batch pinets: UTC, load1, load5, load15",
       "origin": "the timing host's benchmarks/_workdir/timing/pinets-load.tsv"
     },
-    "2026-09-29-35db01c8/loads/pynecore-load.tsv": {
-      "sha256": "a2af505e704c5553e358281c33befd9d55610253f335ce10cd3722add8ea8174",
-      "what": "1/5/15-min load every 10 s during batch pynecore: UTC, load1, load5, load15",
-      "origin": "the timing host's benchmarks/_workdir/timing/pynecore-load.tsv"
-    },
     "2026-09-29-35db01c8/throughput/r1-load.tsv": {
       "sha256": "b7f531f23272c9f2ad4729158d2b19d71c07655069632f08a898254dc5d59d66",
       "what": "1/5/15-min load every 10 s during batch tp-r1: UTC, load1, load5, load15",

@@ -2,7 +2,7 @@
 """run_all.sh stops on a PineForge slot failure and never leaves a stale trade list.
 
 Each case copies benchmarks/run_all.sh into a scratch tree whose engine runners
-are stubs (scripts/run_strategy.py, benchmarks/runners/run_pynecore.py,
+are stubs (scripts/run_strategy.py, a private harness's runners/run_pynecore.py,
 benchmarks/speed/time_vectorbt.py behind a stub uv): a slot named *-fails
 makes the stub fail, any other slot gets a fresh trade list. Every slot starts
 with a STALE trade list from an earlier run, the committed assets' situation.
@@ -68,7 +68,11 @@ class RunAllFailures(unittest.TestCase):
         (bench / "runners").mkdir(parents=True)
         (bench / "speed").mkdir()
         shutil.copy2(RUN_ALL, bench / "run_all.sh")
-        (bench / "runners" / "run_pynecore.py").write_text(STUB_RUN_PYNECORE)
+        self.harness = self.root / "private-harness"
+        (self.harness / "runners").mkdir(parents=True)
+        (self.harness / "runners" / "run_pynecore.py").write_text(STUB_RUN_PYNECORE)
+        (self.harness / "speed").mkdir()
+        (self.harness / "speed" / "time_pynecore.py").write_text('print("{}")\n')
         (bench / "speed" / "time_vectorbt.py").write_text(STUB_TIME_VECTORBT)
         (self.root / "scripts").mkdir()
         (self.root / "scripts" / "run_strategy.py").write_text(STUB_RUN_STRATEGY)
@@ -107,11 +111,18 @@ class RunAllFailures(unittest.TestCase):
             (s / csv).write_text("STALE\n")
         return s
 
-    def run_all(self, **env: str) -> subprocess.CompletedProcess:
+    def run_all(self, **env: str | None) -> subprocess.CompletedProcess:
         path = f"{self.root / 'bin'}{os.pathsep}{os.environ['PATH']}"
+        run_env = {**os.environ, **QUIET, "PATH": path, "JOBS": "2",
+                   "SKIP_PYNE": "0", "PYNECORE_HARNESS_DIR": str(self.harness)}
+        for name, value in env.items():
+            if value is None:
+                run_env.pop(name, None)
+            else:
+                run_env[name] = value
         return subprocess.run(
             ["bash", str(self.root / "benchmarks" / "run_all.sh")],
-            env={**os.environ, **QUIET, "PATH": path, "JOBS": "2", **env},
+            env=run_env,
             capture_output=True, text=True)
 
     def assert_output(self, slot: Path, csv: str, content: str | None) -> None:
@@ -165,6 +176,57 @@ class RunAllFailures(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assert_output(ok, "vectorbt_trades.csv", "fresh\n")
         self.assert_output(bad, "vectorbt_trades.csv", None)
+
+    def test_absent_pynecore_harness_completes_without_pynecore_outputs(self) -> None:
+        ok = self.slot("001-ok")
+        # Start without a PyneCore result, as a fresh run without the harness does.
+        (ok / "pynecore_trades.csv").unlink()
+        bench = self.root / "benchmarks"
+        # No conversion is needed by the other engines; a missing .ohlcv must
+        # not invoke pyne when the harness is absent.
+        (bench / "_workdir" / "data" / "ETHUSDT_15.ohlcv").unlink()
+        (bench / "speed" / "time_pineforge_docker.py").write_text('print("{}")\n')
+        node = self.root / "bin" / "node"
+        node.write_text('#!/bin/sh\nprintf "{}\\n"\n')
+        node.chmod(0o755)
+        (self.strategies / "_indicators").mkdir()
+        canonical = bench / "runners" / "run_pineforge_canonical"
+        canonical.write_text('#!/bin/sh\nprintf "fresh\\n" > "$2"\n')
+        canonical.chmod(0o755)
+        (bench / "speed" / "aggregate.py").write_text(
+            'import sys\nfrom pathlib import Path\n'
+            'Path("_workdir/aggregate_args.txt").write_text("\\n".join(sys.argv[1:]))\n')
+        (bench / "compare.py").write_text(
+            'from pathlib import Path\nPath("_workdir/trade_report.called").touch()\n')
+        (bench / "compare_indicators.py").write_text(
+            'from pathlib import Path\nPath("_workdir/indicator_report.called").touch()\n')
+        for harness_dir, skip in ((None, "0"), (str(self.root / "missing-harness"), "0"),
+                                  (str(self.harness), "1")):
+            with self.subTest(harness_dir=harness_dir, skip=skip):
+                res = self.run_all(PYNECORE_HARNESS_DIR=harness_dir, SKIP_PYNE=skip,
+                                   SKIP_SPEED="0", SKIP_VECTORBT="0", SKIP_REPORTS="0",
+                                   SKIP_INDICATORS="0", SKIP_PINETS="0",
+                                   RUNNER="docker", QUIET_LOAD_MAX="")
+                self.assertEqual(res.returncode, 0, res.stderr)
+                self.assertIn(
+                    "PyneCore harness not present (set PYNECORE_HARNESS_DIR to the private harness); "
+                    "skipping the PyneCore leg", res.stderr)
+                self.assertIn("done.", res.stdout)
+                self.assert_output(ok, "pineforge_trades.csv", "fresh\n")
+                self.assert_output(ok, "vectorbt_trades.csv", "fresh\n")
+                self.assert_output(self.strategies / "_indicators", "canonical_pineforge.csv", "fresh\n")
+                self.assert_output(ok, "pynecore_trades.csv", None)
+                self.assertFalse((ok / "_pynecore_error.log").exists())
+                self.assertFalse((bench / "_workdir" / "pc_speed.json").exists())
+                self.assertFalse((bench / "_workdir" / "pc_speed.err").exists())
+                self.assertFalse((bench / "_workdir" / "data" / "ETHUSDT_15.ohlcv").exists())
+                self.assertFalse((self.strategies / "_indicators" / "canonical_pyne.csv").exists())
+                args = (bench / "_workdir" / "aggregate_args.txt").read_text().splitlines()
+                self.assertNotIn("--pynecore", args)
+                for engine in ("--pineforge", "--pinets", "--vectorbt"):
+                    self.assertIn(engine, args)
+                self.assertTrue((bench / "_workdir" / "trade_report.called").exists())
+                self.assertFalse((bench / "_workdir" / "indicator_report.called").exists())
 
 
 if __name__ == "__main__":
