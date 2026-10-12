@@ -640,6 +640,64 @@ class ExemptRowTraceControls(unittest.TestCase):
         self.assertIn(f'trace: opened {REPO}/{REMOVED_EXAMPLE}/bars.csv',
                       result.stdout)
 
+    def _two_world_copy(self, name: str, tamper: str) -> Path:
+        """A copy of scripts/check_two_world_registration.py under the scratch
+        dir's scripts/, with the local modules its imports need (ci_verify,
+        its own prepare_settlement_cpp_abi_base, check_private_fixture_reads
+        -- read off the script's import lines), plus `tamper`: a source
+        snippet (one %r) inserted after the __future__ import, so the copy
+        parses and really runs. The copy runs with --root REPO: its __file__
+        is the scratch dir, so the REPO it computes would be the scratch
+        tree, and the row's evaluation is about the real one."""
+        siblings = self.tmp / 'scripts'
+        siblings.mkdir(exist_ok=True)
+        for sibling in ('ci_verify.py', 'prepare_settlement_cpp_abi_base.py',
+                        'check_private_fixture_reads.py'):
+            if not (siblings / sibling).exists():
+                shutil.copy(REPO / 'scripts' / sibling, siblings / sibling)
+        source = (REPO / 'scripts' / 'check_two_world_registration.py').read_text()
+        future = 'from __future__ import annotations\n'
+        self.assertIn(future, source, 'the two-world script changed shape')
+        script = siblings / name
+        script.write_text(source.replace(future, future + tamper, 1))
+        return script
+
+    # control 15: the two-world exemption's own RED and GREEN (lane FR made
+    # it exempt with a trace that never ran it: the copy stopped at `import
+    # ci_verify`). The RED copy is the real script plus one open of a private
+    # path the tree does not have: the trace must name that path and exit
+    # TRACE_PRIVATE_OPEN_EXIT while the copy still records its own exit 0, so
+    # the RED fails for the OPEN, never for an import error. The GREEN copy,
+    # the same shape without the open, must trace clean.
+    def test_two_world_copy_open_is_red_and_clean_is_green(self):
+        # tests/fixtures/whole_lot_tie/bars.csv is absent in BOTH worlds and
+        # that is what the hook records: the pin empties the directory (`D
+        # tests/fixtures/whole_lot_tie`) and bars.csv is not one of its F
+        # lines, so the private overlay restores no such file; a present
+        # path's read would not be recorded at all (a kept file is nobody's
+        # finding), so a pinned removed path that the overlay DID restore
+        # could not carry this control in the overlay world.
+        probe = REPO / REMOVED_EXAMPLE / 'bars.csv'
+        argv = ('--both', '--root', str(REPO))
+
+        red = run_under_trace(REPO, self.tmp, self._two_world_copy(
+            'two_world_tampered.py', TAMPER_READ % str(probe)), argv)
+        self.assertTraceCompleted(red, 'the tampered two-world copy')
+        self.assertIn('trace: the traced script exited 0',
+                      red.stdout, red.stdout + red.stderr)
+        self.assertEqual(TRACE_PRIVATE_OPEN_EXIT, red.returncode,
+                         red.stdout + red.stderr)
+        self.assertIn(f'trace: opened {probe}', red.stdout)
+
+        green = run_under_trace(REPO, self.tmp, self._two_world_copy(
+            'two_world_clean.py', ''), argv)
+        self.assertTraceCompleted(green, 'the untampered two-world copy')
+        self.assertIn('trace: the traced script exited 0',
+                      green.stdout, green.stdout + green.stderr)
+        self.assertEqual(0, green.returncode, green.stdout + green.stderr)
+        self.assertIn('trace: opens under the real private trees: 0',
+                      green.stdout)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
