@@ -7,7 +7,10 @@ rewritten with it and this tool re-records that test's assertions, line numbers 
 ``tests/``. Every other row of the manifest stays as it was, and ``BASE_MANIFEST_SHA256`` in check_twin_parity.py is
 re-pinned to the new bytes.
 
-usage: python3 scripts/refresh_twin_parity_base.py test_name [test_name ...]
+A name is refused unless it is a row of the manifest AND its tests/<name>.cpp differs from the same file at the --since
+commit, so a test that was not rewritten can never have its recorded literals replaced by this tool.
+
+usage: python3 scripts/refresh_twin_parity_base.py --since <commit> test_name [test_name ...]
 """
 from __future__ import annotations
 
@@ -15,6 +18,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 import check_twin_parity as parity
@@ -24,14 +28,23 @@ ROOT = Path(__file__).resolve().parents[1]
 PIN = re.compile(r'^(BASE_MANIFEST_SHA256 = ")[0-9a-f]{64}(")$', re.M)
 
 
-def main(names: list[str]) -> int:
-    if not names:
+def main(args: list[str]) -> int:
+    if len(args) < 3 or args[0] != "--since":
         raise SystemExit(__doc__)
+    since, names = args[1], args[2:]
+    if len(set(names)) != len(names):
+        raise SystemExit("duplicate test name")
     path = ROOT / "tests/twin_parity_base.json"
     manifest = json.loads(path.read_text())
     for name in names:
         if name not in manifest["tests"]:
             raise SystemExit("not in the twin base manifest: " + name)
+        if not (ROOT / "tests" / (name + ".cpp")).is_file():
+            raise SystemExit("tests/" + name + ".cpp does not exist: its row is not re-recorded")
+        shown = subprocess.run(["git", "-C", str(ROOT), "show", f"{since}:tests/{name}.cpp"],
+                               capture_output=True, text=True)
+        if shown.returncode == 0 and shown.stdout == (ROOT / "tests" / (name + ".cpp")).read_text():
+            raise SystemExit(name + " is unchanged since " + since + ": its row is not re-recorded")
         source = (ROOT / "tests" / (name + ".cpp")).read_text()
         rows = parity.extract_assertions(source, "tests/" + name + ".cpp")
         manifest["tests"][name] = {
