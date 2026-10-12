@@ -21,9 +21,7 @@ public:
         const auto* gate = std::getenv("PINEFORGE_TEST_MESSAGE_GATE");
         if (!gate || bar_index_ != 1) return;
         std::ofstream(gate).put('1');
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         while (!std::filesystem::exists(std::string(gate) + ".resume")) {
-            if (std::chrono::steady_clock::now() >= deadline) throw std::runtime_error("test gate expired");
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
     }

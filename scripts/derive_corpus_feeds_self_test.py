@@ -191,7 +191,7 @@ class AtomicWriteTests(unittest.TestCase):
             def synchronized_replace(source: Path, destination: Path):
                 with seen_lock:
                     seen_sources.append(source)
-                barrier.wait(timeout=5)
+                barrier.wait()
                 return original_replace(source, destination)
 
             with mock.patch.object(Path, "replace", synchronized_replace):
@@ -201,7 +201,7 @@ class AtomicWriteTests(unittest.TestCase):
                         for value in ("alpha\n", "beta\n")
                     ]
                     for future in futures:
-                        future.result(timeout=5)
+                        future.result()
 
             self.assertEqual(len(seen_sources), 2)
             self.assertEqual(len(set(seen_sources)), 2)

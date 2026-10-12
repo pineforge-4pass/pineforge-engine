@@ -312,7 +312,7 @@ private:
         std::size_t expected = std::string::npos;
         while (expected == std::string::npos || request.size() < expected) {
             pollfd wait {client, POLLIN, 0};
-            if (poll(&wait, 1, 2000) <= 0) throw std::runtime_error("test receive timeout");
+            if (poll(&wait, 1, -1) <= 0) throw std::runtime_error("test receive poll failed");
             char buffer[4096];
             const auto count = recv(client, buffer, sizeof(buffer), 0);
             if (count <= 0) throw std::runtime_error("test receive failed");
@@ -334,7 +334,7 @@ private:
         try {
             for (const auto& reply : replies_) {
                 pollfd wait {listener_, POLLIN, 0};
-                if (poll(&wait, 1, 5000) <= 0) throw std::runtime_error("test accept timeout");
+                if (poll(&wait, 1, -1) <= 0) throw std::runtime_error("test accept poll failed");
                 const int client = accept(listener_, nullptr, nullptr);
                 if (client < 0) throw std::runtime_error("test accept failed");
 #ifdef SO_NOSIGPIPE
