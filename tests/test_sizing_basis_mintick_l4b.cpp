@@ -1,62 +1,14 @@
 /*
- * test_sizing_basis_mintick.cpp — TradingView's broker sizes DEFAULT (qty=na)
- * percent_of_equity / cash market orders on the MINTICK-ROUNDED signal close:
+ * test_sizing_basis_mintick.cpp — default percent-of-equity / cash market
+ * orders size on the mintick-rounded signal close, with equity marked there.
+ * Pine's signal calculations still read the raw close. Pinned against
+ * TradingView behaviour (recorded tapes are kept outside this repository).
  *
- *   basis(S) = round_to_mintick(close(S))            (census form, no epsilon)
- *   qty      = floor_step( E / basis(S) ),  E marked at basis(S) as well
- *
- * Pine's own signal path (ta.*, crossovers) keeps reading the RAW feed close;
- * only the broker's sizing snapshot and the fill are on-tick. Evidence (the
- * replay this file pins): 674/674 NYSE:F and 832/832 NASDAQ:AAPL reversals of
- * taro-s-c-c-ma-simplified-2-color fit the rounded basis while the raw close
- * fits 476/674 on F; drgunjan-F trade 1 is TV qty 10460 = floor(100000/9.56)
- * on a 9.565 close where the raw divisor gave 10454; and the raw basis
- * DECLINED entries TV filled whenever an x.xx5 close rounded UP at the fill
- * (qty floored on the lower raw price times the higher rounded fill overshot
- * the sizing equity by ~qty*mintick/2 and tripped the true-flat gap-reject /
- * reversal float-guard arms): 463/463 missing taro-F entries predicted, 0
- * counterexamples; 26/26 drgunjan-F and 6/6 mazi-F missing entries sit on
- * sub-penny signal closes.
- *
- * Pins:
- *   A.  9.565 close, mintick 0.01, capital 100000, pct 100, next open 9.56:
- *       frozen qty == 10460 (drgunjan-F trade 1) and the entry FILLS.
- *   A2. 9.585 close (rounds UP to 9.59), next open 9.59: the entry FILLS with
- *       qty 10427. Pre-fix: qty 10432 floored on 9.585, 10432*9.59 = 100042.88
- *       > 100000 -> the true-flat zero-commission gap-reject arm DROPPED it on
- *       a zero-gap open (the 463/463 mechanism).
- *   A3. The reversal twin of A2: a held long, short signal on a 9.585 close,
- *       reversal fills at 9.59. Pre-fix the equity mark at the raw 9.585 left
- *       free_funds 100894.71 against a required 10526*9.59 = 100944.34 and the
- *       float-guard reversal arm DECLINED; on-tick the mark is 9.59, free
- *       funds 100947.34, admitted.
- *   B.  A penny close (9.56) is unchanged in every quantity and verdict:
- *       basis == close to within one ulp (double(0.01) is inexact, so
- *       round_to_mintick is not a bit-for-bit identity on decimal ticks —
- *       the ulp is absorbed by apply_qty_step's 1e-6 nudge and the
- *       admission float guards), qty 10460, fills.
- *   C.  mintick 0.25 (futures): a 5000.125 close sizes on 5000.25 (nearest,
- *       floor(x/tick + 0.5)); capital 100003 floors to 19 lots where the raw
- *       basis gave 20.
- *   D.  Slippage ticks are added AFTER rounding: 9.565 with slippage 2 sizes
- *       a buy on 9.58 and a sell on 9.54 (pre-fix 9.585 / 9.545).
- *   E1. SHORT margin-call cascade marks at the ROUNDED high (medium evidence:
- *       32 vs 0 reproduced slices on the F tape): a sub-tick excursion the
- *       on-tick ledger cannot see (high 100.004 on a short at liq 100.00)
- *       fires NO slice; pre-fix the raw mark produced a phantom one.
- *   E2. The slice quantity at a 105.005 high is the 105.01-marked 3.8167794
- *       (pre-fix 3.8131518 from the raw mark); the fill price was already
- *       105.01 both ways (bar_fill_price, finding-446).
- *   E3. The chronological copy of the cascade (margin_call_slice_before_
- *       priced_exit, the slice taken BEFORE a same-bar priced exit) marks at
- *       the same rounded high: E1's 100.004 excursion with a TP limit
- *       resting on the bar fires NO slice and the TP closes the full lot
- *       (pre-fix that path marked raw and fired a phantom 0.0016 slice only
- *       when an exit happened to be resting); the on-tick control high
- *       100.01 with the same TP slices 4*(10 - 999.9/100.01) @ 100.01 first
- *       and the TP closes the remainder, proving the path is live.
- *   F.  Sanity on the helper itself: round_to_mintick on the drgunjan close
- *       and idempotence on its own output.
+ * The decimal-tick fixtures below are hand-designed around a base of 64:
+ * binary midpoint rounding down/up, flat and reversal admission, an on-tick
+ * control, and slippage applied after rounding. Larger invented midpoints
+ * also check the helper. The quarter-tick and 100-price margin-cascade
+ * controls retain their separate rounding and chronological-exit checks.
  */
 
 #include <cmath>
@@ -168,152 +120,132 @@ public:
     const std::vector<Trade>& all_trades() const { return trades_; }
 };
 
-// A. drgunjan-F trade 1. The signal bar closes at 9.565; 9.565 / 0.01 lands
-//    at 956.49999... in binary, so the census form rounds it DOWN to 9.56
-//    (the same way 228.765 -> 228.76). TV sized floor(100000 / 9.56) =
-//    10460; the raw divisor gave floor(100000 / 9.565) = 10454. The next bar
-//    opens exactly on the rounded close, so the fill is 9.56 and the frozen
-//    lot is affordable on both bases (10460 * 9.56 = 99997.60 <= 100000).
-//
-//    Pre-fix expectation (kept for the record): qty 10454 @ 9.56, filled.
-//    This bar shape does not reach the decline arms — a DOWN-rounded close
-//    leaves qty * fill below equity; A2/A3 cover the UP-rounded shape that
-//    declined.
+// A. Invented midpoint: 64.035 / 0.01 = 6403.499999999999, so the
+// floor(p / tick + 0.5) rounds DOWN to 64.03 without an epsilon. Rounded sizing gives
+// floor(640000 / 64.03) = 9995, versus floor(640000 / 64.035) = 9994 raw.
+// The zero-gap fill costs 9995 * 64.03 = 639979.85 <= 640000; it must fill.
+// A2/A3 separately exercise the admission failures caused by rounding UP.
 void test_sub_penny_close_rounds_down_sizes_on_tick() {
-    std::printf("-- A: 9.565 close sizes on 9.56 -> 10460, fills --\n");
-    Probe eng(100000.0, 0.01, 0);
+    std::printf("-- A: invented DOWN midpoint sizes on 64.03 -> 9995, fills --\n");
+    Probe eng(640000.0, 0.01, 0);
     eng.script = "L.C.";
     std::vector<Bar> bars = {
-        mk_bar(1000, 9.50, 9.60, 9.45, 9.565),   // S: basis 9.56, qty 10460
-        mk_bar(2000, 9.56, 9.60, 9.50, 9.58),    // fill @ open 9.56
-        mk_bar(3000, 9.58, 9.60, 9.55, 9.58),    // close_all
-        mk_bar(4000, 9.58, 9.60, 9.55, 9.58),    // exit @ 9.58
+        mk_bar(1000, 64.00, 64.10, 63.50, 64.035),   // S: basis 64.03, qty 9995
+        mk_bar(2000, 64.03, 64.10, 64.00, 64.05),    // fill @ open 64.03
+        mk_bar(3000, 64.05, 64.10, 63.90, 64.05),    // close_all
+        mk_bar(4000, 64.05, 64.10, 63.90, 64.05),    // exit @ 64.05
     };
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.basis_buy.size() == 1);
     if (!eng.basis_buy.empty()) {
-        CHECK_NEAR(eng.basis_buy[0], 9.56, 1e-12);
-        CHECK_NEAR(eng.frozen_qty[0], 10460.0, 1e-9);   // pre-fix: 10454
+        CHECK_NEAR(eng.basis_buy[0], 64.03, 1e-12);
+        CHECK_NEAR(eng.frozen_qty[0], 9995.0, 1e-9);   // pre-fix: 9994
     }
     CHECK(eng.trade_count() == 1);
     if (eng.trade_count() == 1) {
         const Trade& t = eng.all_trades()[0];
         CHECK(t.is_long);
-        CHECK_NEAR(t.entry_price, 9.56, 1e-9);
-        CHECK_NEAR(t.qty, 10460.0, 1e-9);
-        CHECK_NEAR(t.exit_price, 9.58, 1e-9);
+        CHECK_NEAR(t.entry_price, 64.03, 1e-9);
+        CHECK_NEAR(t.qty, 9995.0, 1e-9);
+        CHECK_NEAR(t.exit_price, 64.05, 1e-9);
     }
     CHECK(eng.position_side_ == PositionSide::FLAT);
 }
 
-// A2. The declining shape. 9.585 / 0.01 = 958.5000... rounds UP to 9.59.
-//     On-tick: qty = floor(100000 / 9.59) = 10427, fill @ 9.59 ->
-//     10427 * 9.59 = 99994.93 <= 100000, admitted (flat arm prices at the
-//     sizing notional; gap-reject sees a zero gap).
-//     Pre-fix: qty = floor(100000 / 9.585) = 10432 and the fill rounded to
-//     9.59 -> 10432 * 9.59 = 100042.88 > 100000 + float_guard, so the
-//     true-flat zero-commission gap-reject arm silently DROPPED the entry
-//     (position FLAT, no trade row) although the open did not gap at all.
+// A2. Invented midpoint: 64.025 / 0.01 = 6402.5 rounds UP to 64.03.
+// Rounded qty = floor(640000 / 64.03) = 9995; its 639979.85 notional fits.
+// Raw qty = floor(640000 / 64.025) = 9996, whose rounded fill would cost
+// 9996 * 64.03 = 640043.88 > 640000. Thus a raw divisor would incorrectly
+// trigger true-flat gap rejection even though the open equals the basis.
 void test_sub_penny_close_rounds_up_fills_instead_of_gap_reject() {
-    std::printf("-- A2: 9.585 close (-> 9.59) fills, no phantom gap-reject --\n");
-    Probe eng(100000.0, 0.01, 0);
+    std::printf("-- A2: 64.025 close (-> 64.03) fills, no phantom gap-reject --\n");
+    Probe eng(640000.0, 0.01, 0);
     eng.script = "L.C.";
     std::vector<Bar> bars = {
-        mk_bar(1000, 9.50, 9.60, 9.45, 9.585),   // S: basis 9.59, qty 10427
-        mk_bar(2000, 9.59, 9.62, 9.55, 9.60),    // fill @ open 9.59 (no gap)
-        mk_bar(3000, 9.60, 9.62, 9.58, 9.60),
-        mk_bar(4000, 9.60, 9.62, 9.58, 9.60),
+        mk_bar(1000, 64.00, 64.10, 63.50, 64.025),   // S: basis 64.03, qty 9995
+        mk_bar(2000, 64.03, 64.20, 63.90, 64.10),    // fill @ open 64.03 (no gap)
+        mk_bar(3000, 64.10, 64.20, 64.05, 64.10),
+        mk_bar(4000, 64.10, 64.20, 64.05, 64.10),
     };
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.basis_buy.size() == 1);
     if (!eng.basis_buy.empty()) {
-        CHECK_NEAR(eng.basis_buy[0], 9.59, 1e-12);
-        CHECK_NEAR(eng.frozen_qty[0], 10427.0, 1e-9);   // pre-fix: 10432
+        CHECK_NEAR(eng.basis_buy[0], 64.03, 1e-12);
+        CHECK_NEAR(eng.frozen_qty[0], 9995.0, 1e-9);   // pre-fix: 9996
     }
     CHECK(eng.trade_count() == 1);                      // pre-fix: 0 (dropped)
     if (eng.trade_count() == 1) {
         const Trade& t = eng.all_trades()[0];
         CHECK(t.is_long);
-        CHECK_NEAR(t.entry_price, 9.59, 1e-9);
-        CHECK_NEAR(t.qty, 10427.0, 1e-9);
+        CHECK_NEAR(t.entry_price, 64.03, 1e-9);
+        CHECK_NEAR(t.qty, 9995.0, 1e-9);
     }
     CHECK(eng.position_side_ == PositionSide::FLAT);
 }
 
-// A3. Reversal twin (design-reversal-admission-float-guard arm).
-//   bar0  9.50/9.55/9.45/9.50   on_bar: L — basis 9.50, qty floor(100000/9.5)
-//                               = 10526
-//   bar1  9.50/9.60/9.45/9.585  long fills @ 9.50 x 10526. on_bar: S — the
-//                               SIGNAL bar. On-tick: E = 100000 +
-//                               (9.59 - 9.50) * 10526 = 100947.34, qty =
-//                               floor(100947.34 / 9.59) = 10526.
-//   bar2  9.59/9.62/9.55/9.60   reversal @ 9.59: long closes (+947.34),
-//                               short admission on the float-guard arm:
-//                               required 10526 * 9.59 = 100944.34 <=
-//                               free_funds 100947.34 -> ADMITTED.
-//                               Pre-fix: E marked at the raw 9.585 =
-//                               100894.71 (same qty 10526), required
-//                               100944.34 > 100894.71 + 1e-7 -> DECLINED,
-//                               the close leg suppressed, the long held.
-//   bar3  close_all; bar4 exit.
+// A3. Reversal admission at the same UP midpoint. Entry at 64.00 uses
+// floor(640000 / 64.00) = 10000 shares, leaving no uninvested cash.
+// Signal close 64.025 marks at 64.03: E = 640000 + 0.03 * 10000 = 640300;
+// short qty = floor(640300 / 64.03) = 10000 and required funds = 640300.
+// A raw mark instead gives E = 640000 + 0.025 * 10000 = 640250 while
+// retaining qty 10000; required 640300 exceeds it, declining the reversal.
+// The bars close the long at 64.03 and the short at the invented 64.10.
 void test_sub_penny_reversal_admitted_on_float_guard_arm() {
     std::printf("-- A3: sub-penny reversal admitted on the float-guard arm --\n");
-    Probe eng(100000.0, 0.01, 0);
+    Probe eng(640000.0, 0.01, 0);
     eng.script = "LS.C.";
     std::vector<Bar> bars = {
-        mk_bar(1000, 9.50, 9.55, 9.45, 9.50),
-        mk_bar(2000, 9.50, 9.60, 9.45, 9.585),
-        mk_bar(3000, 9.59, 9.62, 9.55, 9.60),
-        mk_bar(4000, 9.60, 9.62, 9.58, 9.60),
-        mk_bar(5000, 9.60, 9.62, 9.58, 9.60),
+        mk_bar(1000, 64.00, 64.25, 63.50, 64.00),
+        mk_bar(2000, 64.00, 64.10, 63.50, 64.025),
+        mk_bar(3000, 64.03, 64.20, 63.90, 64.10),
+        mk_bar(4000, 64.10, 64.20, 64.05, 64.10),
+        mk_bar(5000, 64.10, 64.20, 64.05, 64.10),
     };
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.basis_sell.size() == 2);
     if (eng.basis_sell.size() == 2) {
-        CHECK_NEAR(eng.basis_sell[1], 9.59, 1e-12);
-        CHECK_NEAR(eng.frozen_qty[1], 10526.0, 1e-9);
+        CHECK_NEAR(eng.basis_sell[1], 64.03, 1e-12);
+        CHECK_NEAR(eng.frozen_qty[1], 10000.0, 1e-9);
     }
     CHECK(eng.trade_count() == 2);                      // pre-fix: 1 (declined)
     if (eng.trade_count() == 2) {
         const Trade& t0 = eng.all_trades()[0];
         CHECK(t0.is_long);
-        CHECK_NEAR(t0.entry_price, 9.50, 1e-9);
-        CHECK_NEAR(t0.qty, 10526.0, 1e-9);
-        CHECK_NEAR(t0.exit_price, 9.59, 1e-9);
+        CHECK_NEAR(t0.entry_price, 64.00, 1e-9);
+        CHECK_NEAR(t0.qty, 10000.0, 1e-9);
+        CHECK_NEAR(t0.exit_price, 64.03, 1e-9);
         const Trade& t1 = eng.all_trades()[1];
         CHECK(!t1.is_long);
-        CHECK_NEAR(t1.entry_price, 9.59, 1e-9);
-        CHECK_NEAR(t1.qty, 10526.0, 1e-9);
-        CHECK_NEAR(t1.exit_price, 9.60, 1e-9);
+        CHECK_NEAR(t1.entry_price, 64.03, 1e-9);
+        CHECK_NEAR(t1.qty, 10000.0, 1e-9);
+        CHECK_NEAR(t1.exit_price, 64.10, 1e-9);
     }
     CHECK(eng.position_side_ == PositionSide::FLAT);
 }
 
-// B. A penny close is unchanged: the basis IS the close (to within one ulp —
-//    double(0.01) is inexact, so round_to_mintick is not bit-for-bit on a
-//    decimal tick; the 1e-12 tolerance below is the honest statement) and
-//    the quantity is the pre-fix number.
+// B. On-tick control: 64.03 stays the sizing basis to within one ulp.
+// floor(640000 / 64.03) = 9995 shares on either the raw or rounded basis.
 void test_penny_close_unchanged() {
     std::printf("-- B: penny close unchanged --\n");
-    Probe eng(100000.0, 0.01, 0);
+    Probe eng(640000.0, 0.01, 0);
     eng.script = "L.C.";
     std::vector<Bar> bars = {
-        mk_bar(1000, 9.50, 9.60, 9.45, 9.56),
-        mk_bar(2000, 9.56, 9.60, 9.50, 9.58),
-        mk_bar(3000, 9.58, 9.60, 9.55, 9.58),
-        mk_bar(4000, 9.58, 9.60, 9.55, 9.58),
+        mk_bar(1000, 64.00, 64.10, 63.50, 64.03),
+        mk_bar(2000, 64.03, 64.10, 64.00, 64.05),
+        mk_bar(3000, 64.05, 64.10, 63.90, 64.05),
+        mk_bar(4000, 64.05, 64.10, 63.90, 64.05),
     };
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.basis_buy.size() == 1);
     if (!eng.basis_buy.empty()) {
-        CHECK_NEAR(eng.basis_buy[0], 9.56, 1e-12);
-        CHECK_NEAR(eng.basis_sell[0], 9.56, 1e-12);
-        CHECK_NEAR(eng.frozen_qty[0], 10460.0, 1e-9);
+        CHECK_NEAR(eng.basis_buy[0], 64.03, 1e-12);
+        CHECK_NEAR(eng.basis_sell[0], 64.03, 1e-12);
+        CHECK_NEAR(eng.frozen_qty[0], 9995.0, 1e-9);
     }
     CHECK(eng.trade_count() == 1);
     if (eng.trade_count() == 1) {
-        CHECK_NEAR(eng.all_trades()[0].qty, 10460.0, 1e-9);
-        CHECK_NEAR(eng.all_trades()[0].entry_price, 9.56, 1e-9);
+        CHECK_NEAR(eng.all_trades()[0].qty, 9995.0, 1e-9);
+        CHECK_NEAR(eng.all_trades()[0].entry_price, 64.03, 1e-9);
     }
 }
 
@@ -346,31 +278,31 @@ void test_quarter_tick_basis() {
     }
 }
 
-// D. Slippage ticks ride on the ROUNDED basis: 9.565 -> 9.56, then +/-2
-//    ticks -> 9.58 (buy) / 9.54 (sell). Pre-fix: 9.585 / 9.545. The frozen
-//    buy qty is floor(100000 / 9.58) = 10438 and the slipped fill at the
-//    9.56 open is 9.58, so the lot is affordable and fills.
+// D. Round 64.035 DOWN to 64.03, then apply two 0.01 slippage ticks:
+// buy basis/fill = 64.05, sell basis = 64.01,
+// buy qty = floor(640000 / 64.05) = 9992. Its notional is 639987.60.
+// A raw slipped divisor would be 64.055, giving only 9991 shares.
 void test_slippage_added_after_rounding() {
     std::printf("-- D: slippage ticks added after rounding --\n");
-    Probe eng(100000.0, 0.01, 2);
+    Probe eng(640000.0, 0.01, 2);
     eng.script = "L.C.";
     std::vector<Bar> bars = {
-        mk_bar(1000, 9.50, 9.60, 9.45, 9.565),
-        mk_bar(2000, 9.56, 9.60, 9.50, 9.58),
-        mk_bar(3000, 9.58, 9.60, 9.55, 9.58),
-        mk_bar(4000, 9.58, 9.60, 9.55, 9.58),
+        mk_bar(1000, 64.00, 64.10, 63.50, 64.035),
+        mk_bar(2000, 64.03, 64.10, 64.00, 64.05),
+        mk_bar(3000, 64.05, 64.10, 63.90, 64.05),
+        mk_bar(4000, 64.05, 64.10, 63.90, 64.05),
     };
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.basis_buy.size() == 1);
     if (!eng.basis_buy.empty()) {
-        CHECK_NEAR(eng.basis_buy[0], 9.58, 1e-12);      // pre-fix: 9.585
-        CHECK_NEAR(eng.basis_sell[0], 9.54, 1e-12);     // pre-fix: 9.545
-        CHECK_NEAR(eng.frozen_qty[0], 10438.0, 1e-9);   // pre-fix: 10432
+        CHECK_NEAR(eng.basis_buy[0], 64.05, 1e-12);      // raw slipped buy basis: 64.055
+        CHECK_NEAR(eng.basis_sell[0], 64.01, 1e-12);     // raw slipped sell basis: 64.015
+        CHECK_NEAR(eng.frozen_qty[0], 9992.0, 1e-9);   // pre-fix: 9991
     }
     CHECK(eng.trade_count() == 1);
     if (eng.trade_count() == 1) {
-        CHECK_NEAR(eng.all_trades()[0].entry_price, 9.58, 1e-9);
-        CHECK_NEAR(eng.all_trades()[0].qty, 10438.0, 1e-9);
+        CHECK_NEAR(eng.all_trades()[0].entry_price, 64.05, 1e-9);
+        CHECK_NEAR(eng.all_trades()[0].qty, 9992.0, 1e-9);
     }
 }
 
@@ -507,15 +439,15 @@ void test_short_chronological_slice_marks_at_rounded_high() {
     }
 }
 
-// F. The helper on the census closes: the rounding this file depends on.
+// F. Invented decimal midpoints at two scales plus a fixed-point check.
 void test_helper_census_values() {
-    std::printf("-- F: round_to_mintick on the census closes --\n");
-    Probe eng(100000.0, 0.01, 0);
-    CHECK_NEAR(eng.nearest(9.565), 9.56, 1e-12);        // down (binary quotient)
-    CHECK_NEAR(eng.nearest(9.585), 9.59, 1e-12);        // up
-    CHECK_NEAR(eng.nearest(228.765), 228.76, 1e-12);    // the AAPL down case
-    CHECK_NEAR(eng.nearest(214.385), 214.39, 1e-12);    // the AAPL up case
-    CHECK(eng.nearest(9.56) == eng.nearest(eng.nearest(9.56)));   // idempotent
+    std::printf("-- F: round_to_mintick on invented midpoints --\n");
+    Probe eng(640000.0, 0.01, 0);
+    CHECK_NEAR(eng.nearest(64.035), 64.03, 1e-12);        // 6403.499999999999 -> 64.03
+    CHECK_NEAR(eng.nearest(64.025), 64.03, 1e-12);        // 6402.5 -> 64.03
+    CHECK_NEAR(eng.nearest(512.035), 512.03, 1e-12);    // 51203.49999999999 -> 512.03
+    CHECK_NEAR(eng.nearest(1024.045), 1024.05, 1e-12);    // 102404.5 -> 1024.05
+    CHECK(eng.nearest(64.03) == eng.nearest(eng.nearest(64.03)));   // idempotent
 }
 
 }  // namespace

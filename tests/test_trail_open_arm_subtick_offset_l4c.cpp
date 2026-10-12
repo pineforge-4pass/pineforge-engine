@@ -4,46 +4,22 @@
 #include "oracle_fixture_config_shim.hpp"
 /*
  * test_trail_open_arm_subtick_offset.cpp — two trailing-exit rules pinned
- * from TradingView tapes (winthetrade-ema-9-vwap-strategy-with-atr-trailing-
- * stop family: strategy.exit("x", trail_points = atr*2, trail_offset = atr*2),
- * a price-unit ATR passed as TICKS; 7 lanes, entry/exit timestamps exact,
- * exit PRICE wrong on the same bar).
+ * against TradingView behaviour (recorded tapes are kept outside this
+ * repository). Legacy test function names stay fixed; cent-tick fixtures
+ * use invented prices and timestamps.
  *
- * (B) The bar's OPEN is the first price a resting trail observes. A trail
- *     whose activation the open already sits past arms AT the open with
- *     best = open, so an adverse-first leg fills at open -/+ offset. The
- *     engine only folded prices in at the END of each path segment, stayed
- *     dormant through the retrace, armed at the favourable extreme and
- *     filled at extreme -/+ offset.
- *       OANDA:XAUUSD 15m long 2025-04-04 10:45Z @3110.31 (POOC close fill);
- *         11:00Z bar O 3110.40 H 3136.775 L 3109.24 C 3134.46, 15t/15t,
- *         mintick 0.001: TV 3110.385 (open - 0.015), engine 3136.76.
- *       NASDAQ:AAPL 15m short 2025-04-02 18:45Z @222.93; 04-03 13:30Z bar
- *         O 205.54 L 202.52: TV 205.55 (open + 1t), engine 202.53 (low + 1t).
- *       NYSE:F 1D long 2025-04-21 @9.47; 04-22 O 9.55 H 9.72: TV 9.54,
- *         engine 9.71.
+ * (B) A resting trail observes the OPEN first. An open past activation arms
+ * at best = open, so an adverse-first leg fills at open -/+ offset rather
+ * than waiting for the favourable extreme. The cent-tick short and long
+ * below independently construct high-first and low-first paths.
  *
- * (A) A trail_offset whose floor is ZERO ticks (any value in [0, 1)) is
- *     TV's explicit-zero trail: an activation first reached intrabar is the
- *     one-shot fill AT the activation; armed (at the placement close, by an
- *     open past the activation, or by a path extreme) it is a zero-distance
- *     trailing stop on the raw running best (round 10 family AC,
- *     test_zero_offset_trail_rides). `lab tv` pin on OANDA:EURUSD 15m
- *     2025-04-01 -> 05-01: strategy.exit("x", "L", trail_points=3,
- *     trail_offset=0 / 0.5 / 0.9) produce byte-identical tapes (190 rows,
- *     sha256 36aa80ac...).
- *       EURUSD 15m short 2025-03-31 03:45Z @1.08330, atr*2 ~ 0.0006 ticks
- *         (activation ceil -> 1t = 1.08329, offset floor -> 0); exit bar
- *         O 1.08330 L 1.08314: TV 1.08329 (activation), engine 1.08314 (low)
- *         — the old finite-zero distance armed at the low and filled there
- *         although the activation was first reached intrabar.
+ * (A) trail_offset in [0, 1) floors to zero ticks. Activation first reached
+ * intrabar gives a one-shot fill at activation; an already-armed trail
+ * follows the raw running best. Open prints versus directional levels and
+ * carried placement closes distinguish zero distance from an omitted offset.
  *
- * One-bar pins run the product probe (tests/trail_exit_product_probe.hpp:
- * the adapter's own lowering of strategy.exit, the kernel consumer's walk of
- * the bar's synthesized path, and the fill read back from the kernel's public
- * event record — R5 lane P9 retired the TradingView exit-path resolver these
- * rows used to call); engine-level pins run the host end to end, including
- * the POOC close-fill entry whose carried best is the entry price itself.
+ * One-bar fixtures exercise the product adapter and kernel event projection.
+ * Engine fixtures include POOC entry, whose carried best starts at its close.
  */
 
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -127,38 +103,40 @@ void test_open_arms_trail_xauusd_long() {
     CHECK(near(f.path_position, 0.015 / 1.16, 1e-6));
 }
 
-void test_open_arms_trail_aapl_short() {
-    std::printf("test_open_arms_trail_aapl_short\n");
-    // atr*2 ~ 1.7 ticks: activation ceil -> 2t = 222.91 >= open 205.54 ->
-    // armed at the open; offset floor -> 1t = 0.01. |H-O| = 1.46 <
-    // |O-L| = 3.02 -> high-first path; the O->H leg crosses open + 0.01.
-    Bar aapl = mk(205.54, 207.00, 202.52, 204.00);
-    TrailExitProjection f = trail_fill(aapl, PositionSide::SHORT,
+void test_open_arms_trail_stock_short() {
+    std::printf("test_open_arms_trail_stock_short\n");
+    // Invented short entry 256.00: ceil(1.7) = 2 ticks activates at 255.98.
+    // Open 240.00 is past activation; floor(1.7) = 1 tick offset = 0.01.
+    // |H-O| = 1.00 < |O-L| = 3.00: high-first, crossing 240.00 + 0.01.
+    Bar short_bar = mk(240.00, 241.00, 237.00, 239.50);
+    TrailExitProjection f = trail_fill(short_bar, PositionSide::SHORT,
                                        /*trail_points=*/1.7, /*trail_offset=*/1.7,
-                                       /*entry=*/222.93, /*best_start=*/222.93,
+                                       /*entry=*/256.00, /*best_start=*/256.00,
                                        /*mintick=*/0.01);
     CHECK(f.filled == true);
-    CHECK(near(f.exit_price, 205.55));
-    CHECK(near(f.raw_price, 205.55));
+    CHECK(near(f.exit_price, 240.01));
+    CHECK(near(f.raw_price, 240.01));
     CHECK(f.leg_is_trail == true);
     CHECK(f.at_bar_open == false);
-    // On the O->H leg: (205.55 - 205.54) / (207.00 - 205.54).
-    CHECK(near(f.path_position, 0.01 / 1.46, 1e-6));
+    // On O->H: (240.01 - 240.00) / (241.00 - 240.00) = 0.01.
+    CHECK(near(f.path_position, 0.01 / 1.00, 1e-6));
 }
 
 void test_open_arms_trail_ford_daily_long() {
     std::printf("test_open_arms_trail_ford_daily_long\n");
-    // activation = 9.47 + 2*0.01 = 9.49 <= open 9.55; offset 1t. Adverse-first
-    // path (|O-L| = 0.05 < |H-O| = 0.17) crosses open - 0.01 = 9.54.
-    Bar ford = mk(9.55, 9.72, 9.50, 9.70);
-    TrailExitProjection f = trail_fill(ford, PositionSide::LONG,
+    // Invented long entry 128.00: ceil(1.5) = 2 ticks activates at 128.02.
+    // Open 128.10 arms with a one-tick offset. |O-L| = 0.08 < |H-O| = 0.50,
+    // so the low-first path crosses 128.10 - 0.01 = 128.09 before its high.
+    Bar long_bar = mk(128.10, 128.60, 128.02, 128.40);
+    TrailExitProjection f = trail_fill(long_bar, PositionSide::LONG,
                                        /*trail_points=*/1.5, /*trail_offset=*/1.5,
-                                       /*entry=*/9.47, /*best_start=*/9.47,
+                                       /*entry=*/128.00, /*best_start=*/128.00,
                                        /*mintick=*/0.01);
     CHECK(f.filled == true);
-    CHECK(near(f.exit_price, 9.54));
+    CHECK(near(f.exit_price, 128.09));
     CHECK(f.leg_is_trail == true);
-    CHECK(near(f.path_position, 0.01 / 0.05, 1e-6));
+    // On O->L: (128.10 - 128.09) / (128.10 - 128.02) = 0.125.
+    CHECK(near(f.path_position, 0.01 / 0.08, 1e-6));
 }
 
 void test_open_is_a_new_best_for_an_armed_trail() {
@@ -274,11 +252,8 @@ void test_subtick_offset_gapped_open_arms_and_rides() {
         CHECK(f.at_bar_open == true);
         CHECK(near(f.path_position, 0.0));
     }
-    // High-first twin, same on-grid open: same fill. The path never gets to
-    // matter. (Before pins4 this fixture asserted a ride to the 1.08305 low
-    // on the low-first bar and a level fill at the open on the high-first
-    // one; the ride is what a SUB-TICK open does — the twin below — and the
-    // 11 on-grid tapes in test_zero_offset_trail_rides refute it here.)
+    // High-first twin with the same on-grid open: the open is already a
+    // touch, so neither path order changes the fill or cursor at the open.
     Bar gap_hf = mk(1.08320, 1.08330, 1.08300, 1.08310);
     for (double off : offsets) {
         TrailExitProjection f = trail_fill(gap_hf, PositionSide::SHORT,
@@ -298,8 +273,7 @@ void test_subtick_offset_gapped_open_arms_and_rides() {
     // nothing is touched at the open and the trail rides the raw running
     // best — on this low-first bar (|O-L| = 0.000155 < |H-O| = 0.000195) the
     // O->L leg lowers the best to the 1.08305 low and the L->H leg crosses
-    // it. NYSE:F g2-0321-S-tp5 (open 9.915 -> TV fills the 9.86 low) and
-    // s-dsub-0313-tp2 (9.575 -> the 9.51 low) are the tapes this stands for.
+    // it. The invented cent-tick fixtures above independently test open arming.
     //
     // expectation corrected: the kernel cursor is the L->H leg's start
     // (is_trail, path position 1.0) -> the bar's OPEN point (path position
@@ -320,9 +294,7 @@ void test_subtick_offset_gapped_open_arms_and_rides() {
     }
     // 1.083215 / 0.00001 = 108321.5 prints 1.08322 = the ceiled level: the
     // print sits AT the short's stop and the exit fills at the open, a level
-    // fill the consumer ceils to 1.08322, whatever the path (NASDAQ:AAPL
-    // 04-29 13:30Z short open 208.955 -> TV 208.96, 02-04 227.125 -> 227.13;
-    // NYSE:F 03-06 14:30Z 9.515 -> 9.52: round 10 family AC pins4 / pins5).
+    // fill the consumer ceils to 1.08322, whatever the path.
     Bar gap_sub_at = mk(1.083215, 1.08340, 1.08305, 1.08330);
     for (double off : offsets) {
         TrailExitProjection f = trail_fill(gap_sub_at, PositionSide::SHORT,
@@ -478,12 +450,14 @@ void test_engine_pooc_xauusd_long_exit_at_open_minus_offset() {
     CHECK(near(eng.position_size(), 0.0));
 }
 
-void test_engine_pooc_aapl_short_exit_at_open_plus_tick() {
-    std::printf("test_engine_pooc_aapl_short_exit_at_open_plus_tick\n");
+void test_engine_pooc_stock_short_exit_at_open_plus_tick() {
+    std::printf("test_engine_pooc_stock_short_exit_at_open_plus_tick\n");
+    // POOC close fills at 256.00. The next open 240.00 is below 255.98;
+    // its high-first leg crosses open + one tick before visiting low 237.00.
     std::vector<Bar> bars = {
-        mk(222.93, 222.93, 222.93, 222.93, 1000),
-        mk(205.54, 207.00, 202.52, 204.00, 2000),
-        mk(204.00, 204.50, 203.50, 204.20, 3000),
+        mk(256.00, 256.00, 256.00, 256.00, 1000),
+        mk(240.00, 241.00, 237.00, 239.50, 2000),
+        mk(239.50, 240.00, 239.00, 239.75, 3000),
     };
     PoocAtrTrailProbe eng(/*is_long=*/false, 1.7, 1.7, /*mintick=*/0.01);
     eng.run(bars.data(), (int)bars.size());
@@ -491,8 +465,8 @@ void test_engine_pooc_aapl_short_exit_at_open_plus_tick() {
     CHECK(eng.last_error().empty());
     CHECK(eng.trade_count() == 1);
     if (eng.trade_count() == 1) {
-        CHECK(near(eng.entry_price(0), 222.93));
-        CHECK(near(eng.exit_price(0), 205.55));     // TV; was 202.53
+        CHECK(near(eng.entry_price(0), 256.00));
+        CHECK(near(eng.exit_price(0), 240.01));     // 240.00 + floor(1.7) * 0.01 = 240.01
         CHECK(eng.exit_bar(0) == 1);
     }
     CHECK(near(eng.position_size(), 0.0));
@@ -587,9 +561,8 @@ void test_engine_subtick_offset_arms_from_the_placement_close() {
     // for a short; bar 2 opens ABOVE that level and never trades down to it.
     // Every zero-tick offset (0 / 0.5 / 0.9) is armed at the placement close
     // and the open gaps through its level -> the open print 100.20, exactly
-    // like the omitted offset (round 10 family AC, test_zero_offset_trail_rides
-    // f-gapdown-0404-1600-tp4 / 0423-1345-tp7b; test_margin_call_trail_exit_
-    // chronology fixture D). The old one-shot reading HELD here.
+    // like the omitted offset. A dormant one-shot would incorrectly HOLD
+    // because the event bar never reaches activation after its open.
     std::vector<Bar> bars = {
         mk(100.00, 100.00, 100.00, 100.00, 1000),
         mk(100.00, 100.00, 99.50, 99.60, 2000),
@@ -617,7 +590,7 @@ int main() {
     std::printf("=== test_trail_open_arm_subtick_offset ===\n");
 
     test_open_arms_trail_xauusd_long();
-    test_open_arms_trail_aapl_short();
+    test_open_arms_trail_stock_short();
     test_open_arms_trail_ford_daily_long();
     test_open_is_a_new_best_for_an_armed_trail();
     test_open_below_activation_does_not_arm();
@@ -629,7 +602,7 @@ int main() {
     test_subtick_offset_arms_from_the_carried_best();
 
     test_engine_pooc_xauusd_long_exit_at_open_minus_offset();
-    test_engine_pooc_aapl_short_exit_at_open_plus_tick();
+    test_engine_pooc_stock_short_exit_at_open_plus_tick();
     test_engine_subtick_offsets_match_explicit_zero();
     test_engine_subtick_offset_arms_from_the_placement_close();
 
