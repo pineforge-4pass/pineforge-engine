@@ -81,7 +81,33 @@ does not update a statically linked strategy library.
   include/pineforge ...)` rule); it is part of the native C++ host surface.
 - **HPO.** pineforge-hpo 0.13.2 pins pineforge-codegen <1.4; HPO support for codegen 1.4 and 1.5 (enum options as Enum.member tags) comes in pineforge-hpo 0.14.0.
 
+### Additions to the 1.5.0 notes
+
+Both changes below shipped in 1.5.0 and were missing from the notes above.
+
+- **Selected-window backtests (opt-in).** A run can evaluate retained bars
+  from before the requested window to initialize strategy state, then report
+  only the activity inside the window ([#363]). The last pre-roll evaluation
+  may produce an order that fills at the first bar of the window, never
+  earlier. The selected report starts flat at initial capital, carries a
+  separate anchor and reports retained, pre-roll and window bar counts
+  separately. Request it in `docker/run_json.py` with
+  `--report-policy selected-window/v1`, `--window-start-ms`, `--window-end-ms`,
+  `--preroll-bars` and `--fed-start-ms`, with explicit `--input-tf` and
+  `--script-tf`; `--validate-window-only` ends after validation with no
+  strategy run. With the mode off, every existing output is unchanged. This
+  is a development-only parity candidate: it advertises the selected-window
+  contract revision `1.3-parity` only, makes no claim of complete
+  value-ownership coverage, and cannot be promoted to stable.
+- **Typed failures from the selected-window helpers.** In
+  `docker/run_json.py`, `_typed_failure` maps exceptions with the class names
+  `SelectedWindowError`, `InventoryAdmissionError`, `PlanBridgeError`,
+  `ObserverBindingError` or `PhaseTransportError` to a `RunFailure` carrying
+  that helper module's own stable code, message and code arguments, provided
+  the code has valid syntax. Any other exception is not mapped by it.
+
 [#361]: https://github.com/pineforge-4pass/pineforge-engine/pull/361
+[#363]: https://github.com/pineforge-4pass/pineforge-engine/pull/363
 
 ## 1.4.0 — 2026-10-08
 
