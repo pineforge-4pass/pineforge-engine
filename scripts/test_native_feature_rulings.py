@@ -203,20 +203,41 @@ class PrivateTestCitations(unittest.TestCase):
             .count(PRIVATE_TEST_NAME) >= 1)
         source = rulings.private_test_source(ROOT, PRIVATE_TEST_NAME)
         self.assertEqual(source, 'tests/test_native_price_grid.cpp')
-        self.assertFalse((ROOT / source).exists())
+        unit = ROOT / source
+        if unit.is_file():
+            # The overlay world: the unit the pin files name is in the tree, so
+            # the citation resolves through the file itself -- and the file
+            # really is the consumer the ruling rules (it spells both fields),
+            # which is what the pinned-unit branch below turns on.
+            text = unit.read_text(errors='replace')
+            for field in ('price_grid', 'grid_rounding'):
+                self.assertIn(field, text)
+        else:
+            # The public world: the unit is gone, the pin files are the whole
+            # authority for the citation (asserted just above), and a file left
+            # behind at this path would be a removal that missed one.
+            self.assertFalse(unit.exists())
         ruled = {field: ruling for ruling in rulings.parse_rulings(ADR)
                  for field in ruling.fields}
         self.assertEqual(ruled['price_grid'].private_tests, (PRIVATE_TEST_NAME,))
 
     def test_green_the_pinned_private_unit_passes_with_the_private_consumer_note(self):
         # Control (a): the tree as it is -- the ruling passes, and the summary
-        # does not claim an executed consumer for it: the note names the count
-        # and the path it could not check.
+        # counts what the check could execute. Which count is the tree's own
+        # world: with the overlay the pinned private unit is in the tree and is
+        # read like any other consumer (every ruling backed, no note); without
+        # it the pin files alone carry the citation, so the note names the one
+        # path the check could not read.
         self.assertEqual(findings(), [])
         code, output = run_main()
         self.assertEqual(code, 0, output)
-        self.assertIn('9 of 10 rulings backed by an executed native consumer', output)
-        self.assertIn('private consumers: 1: tests/test_native_price_grid.cpp', output)
+        if (ROOT / 'tests' / 'test_native_price_grid.cpp').is_file():
+            self.assertIn('10 of 10 rulings backed by an executed native consumer', output)
+            self.assertNotIn('name consumers the tree does not carry', output)
+            self.assertNotIn('private consumers:', output)
+        else:
+            self.assertIn('9 of 10 rulings backed by an executed native consumer', output)
+            self.assertIn('private consumers: 1: tests/test_native_price_grid.cpp', output)
 
     def test_red_a_name_that_is_neither_public_nor_pinned_fails(self):
         # Control (b): renaming the citation to a name the tree does not hold
