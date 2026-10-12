@@ -30,7 +30,16 @@ It adds two runtime failure getters and the feature probe
 resolution/failure fields. The repository's
 [CHANGELOG.md](../../CHANGELOG.md#140--2026-10-08), under
 *1.4.0 — 2026-10-08*, inventories the state-hash additions and report migration.
-Use the same-version 1.4.0 pair, with regeneration and relinking as below.
+
+1.5.0 followed on 2026-10-12: engine v1.5.0 with pineforge-codegen 1.5.0.
+It adds recorded outputs — doubles in named per-bar slots, run-level doubles
+and events, through the nine `pf_outputs` runtime exports of
+`<pineforge/pineforge.h>`, recorded only when a caller turns them on — and
+gives each run's report to the call that began it. The repository's
+[CHANGELOG.md](../../CHANGELOG.md#150--2026-10-12), under
+*1.5.0 — 2026-10-12*, inventories both and the test inputs' move to a
+private repository.
+Use the same-version 1.5.0 pair, with regeneration and relinking as below.
 
 ## Versions
 

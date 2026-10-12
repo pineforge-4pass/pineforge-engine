@@ -5,7 +5,15 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
-## 1.5.0 — Unreleased
+## 1.5.0 — 2026-10-12
+
+**[1.5.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.5.0)**,
+paired with [pineforge-codegen 1.5.0](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.5.0).
+This minor release adds recorded outputs and the call-scoped report rule
+below, and moves the engine's test inputs and strategy scripts out of this
+repository. Regenerate strategy C++ with the matching codegen and relink
+against the matching engine headers and archive; replacing the archive alone
+does not update a statically linked strategy library.
 
 - **Recorded outputs.** A module can record what it computes on each bar
   besides its trades: doubles in named slots per bar, doubles kept once per
@@ -48,6 +56,23 @@ version number follows semantic versioning over the surfaces the
   `BacktestEngine::fill_report`, so the C and native-module entry points and
   the generated `run_backtest` / `run_backtest_full` wrappers all obey it, with
   no change to emitted source.
+- **The test inputs and strategy scripts moved to a private repository.** The
+  engine's non-public test inputs — price series, strategy scripts and the
+  sources generated from them, and some test programs — are no longer in this
+  repository; the maintainers keep them in a private repository. A test that
+  needs one skips, naming the missing file with the pinned message
+  `SKIP private fixtures not present:` followed by that file's path, so a tree
+  without them still configures and runs the rest of the suite.
+- **LEGAL.md, "Data not distributed".** LEGAL.md now carries a *Data not
+  distributed* section — pointed to from its submodule paragraph — recording
+  that some test inputs are not distributed in this repository or in its
+  submodules, and that the engine does not depend on them: it builds without
+  them, and the public corpus and the kernel suites run without them.
+- **A private-fixture overlay for the maintainers' verification.** With the
+  private inputs overlaid back into the tree — signalled by
+  `PINEFORGE_PRIVATE_FIXTURES` — the verification requires every pinned row to
+  run: a row that skips there fails the run. Without the overlay, those rows
+  skip in public runs and the row floors account for them.
 
 [#361]: https://github.com/pineforge-4pass/pineforge-engine/pull/361
 
