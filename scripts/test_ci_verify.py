@@ -3351,9 +3351,11 @@ class FloorDocsPointAtTheTable(unittest.TestCase):
 
     KERNEL_MIN_TESTS / RELEASE_MIN_TESTS were a dead second copy: the
     --min-tests help quoted 325 and 895 (false), and six doc places told
-    contributors to raise the constants. Both names now derive from
-    PRIVATE_FIXTURE_PROFILE_FLOORS, and this control fails when the help
-    text or a doc place goes back to a number of its own.
+    contributors to raise the constants. The two names are now plain
+    module-level integer literals that the table references (the campaign's
+    proof kit reads each one from the tree as a single line), and this
+    control fails when the help text or a doc place goes back to a number of
+    its own, or when the literals and the table move apart.
     """
 
     STALE_INSTRUCTIONS = (
@@ -3366,26 +3368,37 @@ class FloorDocsPointAtTheTable(unittest.TestCase):
                   'docs/pages/native-engine.md', 'docs/ci.md',
                   '.github/workflows/ci.yml')
 
-    def test_the_two_names_derive_from_the_table(self):
-        # AST teeth: the right-hand sides must subscript the table, so
-        # writing a number back into either name fails here.
+    def test_the_two_names_are_literals_the_table_references(self):
+        # AST teeth, in the direction the tree now fixes: the right-hand sides
+        # must be plain integer literals (CORE's proof kit reads each from the
+        # tree as one line), and the table's `full` entries must reference the
+        # NAMES -- writing a number into the table, or deriving a name from it,
+        # fails here.
         module = ast.parse((ROOT / 'scripts' / 'ci_verify.py').read_text())
-        assigned = {}
+        assigned, table = {}, None
         for node in module.body:
             if isinstance(node, ast.Assign) and len(node.targets) == 1:
                 target = node.targets[0]
-                if isinstance(target, ast.Name) and target.id in (
-                        'KERNEL_MIN_TESTS', 'RELEASE_MIN_TESTS'):
+                if not isinstance(target, ast.Name):
+                    continue
+                if target.id in ('KERNEL_MIN_TESTS', 'RELEASE_MIN_TESTS'):
                     assigned[target.id] = node.value
+                elif target.id == 'PRIVATE_FIXTURE_PROFILE_FLOORS':
+                    table = node.value
         self.assertEqual(set(assigned), {'KERNEL_MIN_TESTS', 'RELEASE_MIN_TESTS'})
         for name, value in assigned.items():
             with self.subTest(name=name):
-                self.assertIsInstance(value, ast.Subscript)
-                base = value
-                while isinstance(base, ast.Subscript):
-                    base = base.value
-                self.assertIsInstance(base, ast.Name)
-                self.assertEqual(base.id, 'PRIVATE_FIXTURE_PROFILE_FLOORS')
+                self.assertIsInstance(value, ast.Constant)
+                self.assertIsInstance(value.value, int)
+        self.assertIsInstance(table, ast.Dict)
+        entries = {}
+        for key, value in zip(table.keys, table.values):
+            self.assertIsInstance(key, ast.Constant)
+            self.assertIsInstance(value, ast.Tuple)
+            entries[key.value] = value.elts[0]
+        self.assertEqual(set(entries), {'release', 'kernel'})
+        self.assertEqual(sorted(node.id for node in entries.values()),
+                         ['KERNEL_MIN_TESTS', 'RELEASE_MIN_TESTS'])
         self.assertEqual(ci_verify.KERNEL_MIN_TESTS,
                          ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS['kernel'][0])
         self.assertEqual(ci_verify.RELEASE_MIN_TESTS,
