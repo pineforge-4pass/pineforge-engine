@@ -2225,6 +2225,8 @@ set_tests_properties(test_benchmark_harness test_benchmark_provenance PROPERTIES
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 add_test(NAME test_docs_doxygen_retry
     COMMAND bash ${PROJECT_SOURCE_DIR}/docs/build.sh --self-test-retry)
+add_test(NAME test_docs_seo
+    COMMAND bash ${PROJECT_SOURCE_DIR}/docs/build.sh --self-test-seo)
 add_test(NAME test_twin_parity_mutations
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_twin_parity.py)
 

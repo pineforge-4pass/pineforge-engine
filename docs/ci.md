@@ -787,14 +787,16 @@ The first job of `ci.yml`, `changes`, decides with
 documentation when it is a Markdown file (`*.md`) or lies under `docs/`,
 unless it lies under `.github/`, `benchmarks/`, `scripts/` or `tests/`, is a
 CMake file or a git control file such as `.gitattributes`, or is one of the
-four files a proof job reads:
+five files a proof job reads:
 `docs/pages/pine-to-native.md` and `docs/pages/native-engine.md`, whose code
 blocks `test_pine_to_native_worked` and `test_native_engine_complete_host`
 compile and run; `docs/adr/0001-kernel-adapter-boundary.md`, which
 `test_kernel_residuals`, `test_native_feature_rulings` and the kernel
-profile's `kernel-residuals` stage hold the kernel against; and
-`docs/build.sh`, whose retry self-test is `test_docs_doxygen_retry`. A change
-to one of those four runs every job. A change is documentation only when every
+profile's `kernel-residuals` stage hold the kernel against;
+`docs/build.sh`, whose self-tests are `test_docs_doxygen_retry` and
+`test_docs_seo`; and `docs/seo_postprocess.py`, which `test_docs_seo` executes
+on synthetic pages. A change
+to one of those five runs every job. A change is documentation only when every
 path it changes, both sides of a rename, is documentation. The change is the
 checked-out commit against its first parent: for a pull request, the merge
 GitHub tests against the base it merged into; for a push, the pushed commit
@@ -831,7 +833,7 @@ full run on `main` holds the code's verdict.
 holds the rule against real git histories, pull request merges and pushes
 alike. It also fails when a CMake file names, through `${PROJECT_SOURCE_DIR}`
 or a sibling source-directory variable, a path the rule would call
-documentation. The four files above were found by reading every CMake file,
+documentation. The five files above were found by reading every CMake file,
 every `ci_verify.py` stage and every script a CTest row runs; a reader added
 outside CMake must list its file in `PROOF_READS` by hand. The
 `ci-workflow-contract` stage pins the wiring, the classification step

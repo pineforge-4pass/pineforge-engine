@@ -112,7 +112,8 @@ class RuleTests(unittest.TestCase):
     def test_what_a_proof_job_reads_is_not_documentation(self) -> None:
         self.assertEqual(sorted(PROOF_READS), [
             'docs/adr/0001-kernel-adapter-boundary.md', 'docs/build.sh',
-            'docs/pages/native-engine.md', 'docs/pages/pine-to-native.md'])
+            'docs/pages/native-engine.md', 'docs/pages/pine-to-native.md',
+            'docs/seo_postprocess.py'])
         for path in PROOF_READS:
             with self.subTest(path=path):
                 self.assertFalse(is_documentation(path))
