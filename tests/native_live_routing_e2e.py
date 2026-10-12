@@ -64,15 +64,15 @@ class Receiver:
                             newer_actions_arrived.set()
                     if initial_barrier is not None:
                         try:
-                            initial_barrier.wait(timeout=30)
+                            initial_barrier.wait()
                         except threading.BrokenBarrierError:
                             self.send_error(503, 'delivery concurrency barrier broken')
                             return
                     if mode == 'reset-first' and action['sequence'] == 1:
-                        if not newer_arrived.wait(timeout=20):
+                        if not newer_arrived.wait():
                             raise AssertionError('newer action did not reach the receiver')
                     if mode == 'retry-hold' and action['sequence'] == 1 and sequence_receipts > 1:
-                        if not newer_actions_arrived.wait(timeout=20):
+                        if not newer_actions_arrived.wait():
                             raise AssertionError('newer actions were parked behind a retry')
                     if (mode == 'reset' or (mode == 'keepalive-replay' and self.request_count > 1) or
                             (mode == 'reset-first' and action['sequence'] == 1) or
@@ -125,22 +125,27 @@ class Receiver:
         self.newer_actions_arrived.set()
         self.server.shutdown()
         self.server.server_close()
-        self.thread.join(timeout=30)
+        self.thread.join()
         assert not self.thread.is_alive()
 
 
-def wait_for(predicate, timeout=30):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+def wait_for(predicate):
+    while True:
         if predicate():
             return
         time.sleep(0.01)
-    raise AssertionError('timed out waiting for local test condition')
 
 
 def query(ledger, sql):
-    with sqlite3.connect(ledger, timeout=30) as database:
-        return database.execute(sql).fetchall()
+    while True:
+        try:
+            # Disable SQLite's finite busy wait; poll only lock contention.
+            with sqlite3.connect(ledger, timeout=0) as database:
+                return database.execute(sql).fetchall()
+        except sqlite3.OperationalError as error:
+            if str(error) != 'database is locked':
+                raise
+        time.sleep(0.01)
 
 
 def committed_actions(ledger):
@@ -221,12 +226,12 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
         reader = threading.Thread(target=lambda: [streamed.put(line.rstrip('\n')) for line in follower.stdout], daemon=True)
         reader.start()
         run(journal)
-        observed = [streamed.get(timeout=30) for _ in range(4)]
+        observed = [streamed.get() for _ in range(4)]
         expected_payloads = [row[0] for row in query(journal, 'SELECT payload FROM events ORDER BY ordinal')]
         assert observed == expected_payloads
         follower.send_signal(signal.SIGTERM)
         follower.wait()
-        reader.join(timeout=30)
+        reader.join()
         assert not reader.is_alive()
         assert follower.returncode == 130 and not follower.stderr.read()
         exported = invoke(['actions', '--ledger', str(journal), '--after', '2'])

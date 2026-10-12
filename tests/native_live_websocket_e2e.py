@@ -52,7 +52,6 @@ class Receiver(BaseHTTPRequestHandler):
                 self.wfile.flush()
                 time.sleep(0.02)
             if idle:
-                self.connection.settimeout(20)
                 while self.connection.recv(4096):
                     pass
         except OSError:

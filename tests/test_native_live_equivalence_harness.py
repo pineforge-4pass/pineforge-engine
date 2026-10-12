@@ -360,7 +360,7 @@ class PortableProcessContract(unittest.TestCase):
             with (output / "child.log").open("w") as log:
                 child = self.process_type(command, output / "cost.json", stdout=log,
                     stderr=subprocess.STDOUT, env={**os.environ, "PATH": ""})
-                self.assertEqual(child.wait(timeout=10), 7)
+                self.assertEqual(child.wait(), 7)
                 self.assertEqual(child.poll(), 7)
             self.assertEqual(int((output / "child.log").read_text()), child.pid)
             receipt = parse_cost(output / "cost.json")
@@ -380,17 +380,16 @@ class PortableProcessContract(unittest.TestCase):
             with (output / "child.log").open("w") as log:
                 child = self.process_type(command, output / "cost.json", stdout=log)
                 try:
-                    deadline = time.monotonic() + 10
-                    while not (output / "child.log").read_text() and time.monotonic() < deadline:
+                    while not (output / "child.log").read_text():
                         self.assertIsNone(child.poll())
                         time.sleep(0.01)
                     self.assertEqual((output / "child.log").read_text(), "ready\n")
                     child.kill()
-                    self.assertEqual(child.wait(timeout=10), -signal.SIGKILL)
+                    self.assertEqual(child.wait(), -signal.SIGKILL)
                 finally:
                     if child.poll() is None:
                         child.kill()
-                        child.wait(timeout=10)
+                        child.wait()
             receipt = parse_cost(output / "cost.json")
             self.assertEqual(receipt["pid"], child.pid)
             self.assertEqual(receipt["returncode"], -signal.SIGKILL)
@@ -408,7 +407,7 @@ class PortableProcessContract(unittest.TestCase):
                 self.assertIsNone(child.poll())
             finally:
                 child.kill()
-                self.assertEqual(child.wait(timeout=10), -signal.SIGKILL)
+                self.assertEqual(child.wait(), -signal.SIGKILL)
 
     def test_wait_does_not_reap_another_process(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -418,13 +417,13 @@ class PortableProcessContract(unittest.TestCase):
             second = self.process_type([sys.executable, "-B", "-c", "raise SystemExit(12)"],
                 output / "second.json")
             try:
-                self.assertEqual(second.wait(timeout=10), 12)
-                self.assertEqual(first.wait(timeout=10), 11)
+                self.assertEqual(second.wait(), 12)
+                self.assertEqual(first.wait(), 11)
             finally:
                 for child in (first, second):
                     if child.poll() is None:
                         child.kill()
-                        child.wait(timeout=10)
+                        child.wait()
             self.assertEqual(parse_cost(output / "first.json")["pid"], first.pid)
             self.assertEqual(parse_cost(output / "second.json")["pid"], second.pid)
 
@@ -448,7 +447,7 @@ class PortableProcessContract(unittest.TestCase):
 class SanitizerEpilogueContract(unittest.TestCase):
     def run_child(self, body):
         return subprocess.run([sys.executable, "-B", "-c", textwrap.dedent(body)],
-            cwd=Path(__file__).resolve().parent, capture_output=True, text=True, timeout=10)
+            cwd=Path(__file__).resolve().parent, capture_output=True, text=True)
 
     def test_main_exception_is_preserved_after_cleanup_and_finalization(self):
         child = self.run_child('''

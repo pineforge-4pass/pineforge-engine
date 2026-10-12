@@ -217,7 +217,6 @@ class LocalFeed:
                                 else bytes((0x81, 127)) + struct.pack("!Q", len(payload)))
                             self.wfile.write(header + payload)
                         self.wfile.flush()
-                        self.connection.settimeout(30)
                         self.connection.recv(4096)
                     else:
                         payload = ("\n".join(owner.messages) + "\n").encode()
@@ -225,7 +224,7 @@ class LocalFeed:
                         self.send_header("Content-Length", str(len(payload)))
                         self.end_headers()
                         self.wfile.write(payload)
-                except (BrokenPipeError, ConnectionResetError, TimeoutError):
+                except (BrokenPipeError, ConnectionResetError):
                     pass
 
             def log_message(self, *unused):

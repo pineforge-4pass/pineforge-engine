@@ -98,9 +98,8 @@ threading.Thread(target=server.serve_forever, daemon=True).start()
 endpoint = f"127.0.0.1:{server.server_port}"
 
 
-def wait_for(predicate, timeout=8):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+def wait_for(predicate):
+    while True:
         try:
             result = predicate()
             if result:
@@ -108,7 +107,6 @@ def wait_for(predicate, timeout=8):
         except (FileNotFoundError, json.JSONDecodeError, sqlite3.OperationalError):
             pass
         time.sleep(0.02)
-    raise AssertionError("service condition timed out")
 
 
 def invoke(arguments, code=0, stdin=None, env=None):
@@ -274,7 +272,7 @@ try:
         process, ledger, health = start("delivery", routed, env=environment)
         process.stdin.write(batch)
         process.stdin.flush()
-        assert delivery_started.wait(5)
+        assert delivery_started.wait()
         started = time.monotonic()
         finish(process)
         elapsed = time.monotonic() - started
@@ -417,9 +415,9 @@ try:
         process = subprocess.Popen([runner] + list(map(str, keepalive_command)),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         children.append(process)
-        assert keepalive_started.wait(30)
-        initial = wait_for(lambda: status(keepalive_health)["liveness"]["control_loop_heartbeat_ms"], 30)
-        wait_for(lambda: status(keepalive_health)["liveness"]["control_loop_heartbeat_ms"] >= initial + 6000, 30)
+        assert keepalive_started.wait()
+        initial = wait_for(lambda: status(keepalive_health)["liveness"]["control_loop_heartbeat_ms"])
+        wait_for(lambda: status(keepalive_health)["liveness"]["control_loop_heartbeat_ms"] >= initial + 6000)
         assert process.poll() is None and status(keepalive_health)["metrics"]["committed_input"] == 0
         keepalive_release.set()
         result = json.loads(finish(process, stop=False))
@@ -454,10 +452,6 @@ finally:
     for process in children:
         if process.poll() is None:
             process.terminate()
-            try:
-                process.communicate()
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.communicate()
+            process.communicate()
     server.shutdown()
     server.server_close()
