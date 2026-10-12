@@ -1590,6 +1590,65 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                 self.assertEqual(code, 0, summary['failures'])
                 self.assertEqual('native-include-independence' in stage_names(summary), expected)
 
+    def test_slow_native_include_compile_passes_real_verifier_stage(self):
+        """Slowness must never fail a required check; takes about two minutes on purpose."""
+        from shlex import quote
+
+        compiler = shutil.which('c++') or shutil.which('clang++') or shutil.which('g++')
+        if not compiler:
+            self.skipTest('C++ compiler not found')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / 'slow.cpp'
+            output = root / 'slow.o'
+            depfile = root / 'slow.d'
+            source.write_text('int slow_native_include_probe() { return 0; }\n')
+            wrapper = root / 'slow-c++'
+            wrapper.write_text(
+                '#!/bin/sh\nset -e\nsleep 122\n'
+                f'exec {quote(compiler)} "$@"\n')
+            wrapper.chmod(0o755)
+            fixture = root / 'compile_fixture.py'
+            fixture.write_text(
+                'from pathlib import Path\n'
+                'import sys\n'
+                'sys.path.insert(0, sys.argv[1])\n'
+                'from check_native_include_independence import compile_object\n'
+                'root = Path(sys.argv[2])\n'
+                'result = compile_object(\n'
+                '    compiler=str(root / "slow-c++"), flags=["-std=c++17"],\n'
+                '    source=root / "slow.cpp", output=root / "slow.o",\n'
+                '    depfile=root / "slow.d", include_root=root,\n'
+                '    label="slow native include compile")\n'
+                'sys.stdout.write(result.stdout)\n'
+                'sys.stderr.write(result.stderr)\n'
+                'print(f"compile_object exit code: {result.returncode}", flush=True)\n'
+                'raise SystemExit(result.returncode)\n')
+            cfg = ci_verify.build_config(
+                ['release', '--build-dir', str(root / 'build')],
+                runner=default_runner, stream_output=False)
+            driver = ci_verify.Driver(cfg)
+            result = driver.invoke(
+                'native-include-independence',
+                [sys.executable, str(fixture), str(ROOT / 'scripts'), str(root)])
+            diagnostic = (result.stdout + result.stderr).decode('utf-8', 'replace')
+            summary = load_summary(cfg.build_dir)
+            stage = summary['stages'][0]
+            stage_log = (cfg.build_dir / stage['log']).read_text()
+            self.assertEqual(result.returncode, 0, diagnostic)
+            self.assertIn('compile_object exit code: 0', diagnostic, diagnostic)
+            self.assertTrue(output.is_file(), diagnostic)
+            self.assertTrue(depfile.is_file(), diagnostic)
+            self.assertEqual(stage['exitCode'], 0, diagnostic)
+            self.assertEqual(stage['status'], 'passed', diagnostic)
+            self.assertEqual(driver.failures, [], diagnostic)
+            self.assertEqual(summary['failures'], [], diagnostic)
+            for captured in (diagnostic, stage_log):
+                for forbidden in ('TIMEOUT', 'TimeoutExpired', 'timed out'):
+                    self.assertNotIn(forbidden, captured, diagnostic)
+                self.assertNotRegex(captured, r'(?i)\bdeadline\b|\btime\s*limit\b',
+                                    diagnostic)
+
     def test_kernel_asserts_the_kernel_archive_and_others_do_not(self):
         for profile, expected in (("kernel", True), ("release", False), ("native", False)):
             with self.subTest(profile=profile):
