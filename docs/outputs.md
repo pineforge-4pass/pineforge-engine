@@ -42,7 +42,9 @@ constant means is not the engine's business; the module's manifest
   message (0 without a message). A C reader receives the message as
   NUL-terminated text, so a message holding a NUL byte reads to its first NUL
   while its hash covers all of it: re-hash the bytes you recorded, not the
-  text you read back.
+  text you read back. The hash is standard FNV-1a 64 (offset basis
+  `0xcbf29ce484222325`, prime `0x100000001b3`): the message `a` hashes to
+  `0xaf63dc4c8601ec8c`.
 - **Run constants.** One double per index per run, for a value fixed for the
   whole run, such as a level read from an input. NaN until written; the
   run's first write stores it and a later write must be equal (bit for bit,
