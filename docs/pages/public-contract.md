@@ -144,6 +144,7 @@ the arguments #strategy_get_last_error_args answers (@ref run_failure_codes).
 The native C++ API is the kernel's host surface: `<pineforge/native_host.hpp>`,
 `<pineforge/native_run_spec.hpp>`, `<pineforge/native_fx_curve.hpp>`,
 `<pineforge/native_order.hpp>`, `<pineforge/native_calendar.hpp>`,
+`<pineforge/native_calc_point.hpp>` (new in 1.5.0),
 `<pineforge/market_driver.hpp>`, `<pineforge/order_action.hpp>`,
 `<pineforge/execution.hpp>`, the header-only `<pineforge/native_toolkit.hpp>`
 and `<pineforge/native_module.hpp>` (@ref native_engine).
