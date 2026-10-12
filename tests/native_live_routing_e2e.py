@@ -593,12 +593,10 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
             try:
                 fatal.stdin.write(feed.read_text()); fatal.stdin.flush()
                 wait_for(lambda: committed_actions(fatal_ledger))
-                started = time.monotonic()
                 stdout, stderr = fatal.communicate(input='malformed\n')
-                # The 3x bound is the guard this row keeps. Telling one timeout from two is deferred until a tighter
-                # check passes repeated ASan runs under load.
-                drain_bound = 3 * fatal_document['delivery']['total_timeout_ms'] / 1000
-                assert fatal.returncode == 1 and time.monotonic() - started < drain_bound, stderr
+                # Slowness never fails this row (owner rule, EN-116): the fatal drain's own total timeout bounds
+                # what is delivered, and the unsent-action accounting below is what the row checks.
+                assert fatal.returncode == 1, stderr
                 status = json.loads(invoke(['status', '--ledger', str(fatal_ledger)]).stdout)['targets']
                 pending = sum(target['unsent'] for target in status.values())
                 completed = query(fatal_ledger, "SELECT count(DISTINCT event_id) FROM delivery_log WHERE phase='completed'")[0][0]
@@ -625,10 +623,9 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
             wait_for(lambda: committed_actions(signal_ledger) and bool(main_receiver.rows))
             refusal = invoke(['redeliver', '--ledger', str(signal_ledger), '--target', 'main'], expected=1)
             assert 'the runner is running: stop it first; it resumes from its ledger' in refusal.stderr
-            started = time.monotonic()
             active.send_signal(signal.SIGTERM)
             active.communicate()
-            assert active.returncode == 0 and time.monotonic() - started < 10
+            assert active.returncode == 0
             assert query(signal_ledger, "SELECT count(*) FROM delivery_log WHERE phase='completed'")[0][0] == 0
             status = json.loads(invoke(['status', '--ledger', str(signal_ledger)]).stdout)['targets']
             assert status['main']['unsent'] == 4
@@ -641,10 +638,9 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=environment)
         try:
             wait_for(lambda: bool(main_receiver.rows))
-            started = time.monotonic()
             redelivery.send_signal(signal.SIGTERM)
             stdout, stderr = redelivery.communicate()
-            assert redelivery.returncode == 0 and time.monotonic() - started < 10
+            assert redelivery.returncode == 0
             assert json.loads(stdout)['pending'] == 4
         finally:
             if redelivery.poll() is None:

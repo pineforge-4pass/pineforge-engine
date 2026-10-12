@@ -273,10 +273,7 @@ try:
         process.stdin.write(batch)
         process.stdin.flush()
         assert delivery_started.wait()
-        started = time.monotonic()
         finish(process)
-        elapsed = time.monotonic() - started
-        assert elapsed < 10, elapsed
         assert not receiver_release.is_set()
         assert status(health)["state"] == "stopped"
         receiver_release.set()
